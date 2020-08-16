@@ -40,6 +40,7 @@
 #include "dht/i_partitioner.hh"
 #include "dht/token-sharding.hh"
 #include "cdc/cdc_extension.hh"
+#include "db/paxos_grace_seconds_extension.hh"
 
 constexpr int32_t schema::NAME_LENGTH;
 
@@ -489,6 +490,7 @@ bool operator==(const schema& x, const schema& y)
         && x._raw._is_compound == y._raw._is_compound
         && x._raw._type == y._raw._type
         && x._raw._gc_grace_seconds == y._raw._gc_grace_seconds
+        && x.paxos_grace_seconds() == y.paxos_grace_seconds()
         && x._raw._dc_local_read_repair_chance == y._raw._dc_local_read_repair_chance
         && x._raw._read_repair_chance == y._raw._read_repair_chance
         && x._raw._min_compaction_threshold == y._raw._min_compaction_threshold
@@ -1178,6 +1180,13 @@ schema_ptr schema_builder::build() {
     }
 
     prepare_dense_schema(new_raw);
+
+    // cache `paxos_grace_seconds` value for fast access through the schema object, which is immutable
+    if (auto it = new_raw._extensions.find(db::paxos_grace_seconds_extension::NAME); it != new_raw._extensions.end()) {
+        new_raw._paxos_grace_seconds =
+            dynamic_pointer_cast<db::paxos_grace_seconds_extension>(it->second)->get_paxos_grace_seconds();
+    }
+
     return make_lw_shared<schema>(schema(new_raw, _view_info));
 }
 
@@ -1194,6 +1203,19 @@ const cdc::options& schema::cdc_options() const {
 schema_builder& schema_builder::with_cdc_options(const cdc::options& opts) {
     add_extension(cdc::cdc_extension::NAME, ::make_shared<cdc::cdc_extension>(opts));
     return *this;
+}
+
+schema_builder& schema_builder::set_paxos_grace_seconds(int32_t seconds) {
+    add_extension(db::paxos_grace_seconds_extension::NAME, ::make_shared<db::paxos_grace_seconds_extension>(seconds));
+    return *this;
+}
+
+gc_clock::duration schema::paxos_grace_seconds() const {
+    return std::chrono::duration_cast<gc_clock::duration>(
+        std::chrono::seconds(
+            _raw._paxos_grace_seconds ? *_raw._paxos_grace_seconds : DEFAULT_GC_GRACE_SECONDS
+        )
+    );
 }
 
 schema_ptr schema_builder::build(compact_storage cp) {

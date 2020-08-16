@@ -71,7 +71,7 @@ prepare_summary::replicas_missing_most_recent_commit(schema_ptr s, std::chrono::
     // explained on CASSANDRA-12043. To avoid that, we ignore a MRC that is too old, i.e. older than the TTL we set
     // on paxos tables. For such old commit, we rely on repair to ensure the commit has indeed be
     // propagated to all nodes.
-    auto paxos_ttl_sec = static_cast<std::chrono::seconds>(std::max(s->gc_grace_seconds(), std::chrono::seconds(3600 * 3)));
+    const std::chrono::seconds paxos_ttl_sec(s->paxos_grace_seconds());
     if (!most_recent_commit ||
             utils::UUID_gen::unix_timestamp_in_sec(most_recent_commit->ballot) + paxos_ttl_sec < now_in_sec) {
         return replicas;

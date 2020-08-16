@@ -2089,10 +2089,10 @@ future<service::paxos::paxos_state> load_paxos_state(partition_key_view key, sch
 }
 
 static int32_t paxos_ttl_sec(const schema& s) {
-    // Keep paxos state around for at least 3h or gc_grace_seconds. If one of the Paxos participants
-    // is down for longer than gc_grace_seconds it is considered to be dead and must rebootstrap.
+    // Keep paxos state around for paxos_grace_seconds. If one of the Paxos participants
+    // is down for longer than paxos_grace_seconds it is considered to be dead and must rebootstrap.
     // Otherwise its Paxos table state will be repaired by nodetool repair or Paxos repair.
-    return std::max<int32_t>(3 * 3600, std::chrono::duration_cast<std::chrono::seconds>(s.gc_grace_seconds()).count());
+    return std::chrono::duration_cast<std::chrono::seconds>(s.paxos_grace_seconds()).count();
 }
 
 future<> save_paxos_promise(const schema& s, const partition_key& key, const utils::UUID& ballot, db::timeout_clock::time_point timeout) {

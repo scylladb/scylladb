@@ -89,6 +89,8 @@ public:
         return _raw._gc_grace_seconds;
     }
 
+    schema_builder& set_paxos_grace_seconds(int32_t seconds);
+
     schema_builder& set_dc_local_read_repair_chance(double chance) {
         _raw._dc_local_read_repair_chance = chance;
         return *this;

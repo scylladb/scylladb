@@ -34,6 +34,7 @@
 #include "types/list.hh"
 #include "types/set.hh"
 #include "db/config.hh"
+#include "db/paxos_grace_seconds_extension.hh"
 #include "cql3/cql_config.hh"
 #include "cql3/type_json.hh"
 #include "test/lib/exception_utils.hh"
@@ -119,6 +120,7 @@ void repl(seastar::app_template& app) {
     auto ext = std::make_shared<db::extensions>();
     ext->add_schema_extension<alternator::tags_extension>(alternator::tags_extension::NAME);
     ext->add_schema_extension<cdc::cdc_extension>(cdc::cdc_extension::NAME);
+    ext->add_schema_extension<db::paxos_grace_seconds_extension>(db::paxos_grace_seconds_extension::NAME);
     auto db_cfg = ::make_shared<db::config>(std::move(ext));
     db_cfg->enable_user_defined_functions({true}, db::config::config_source::CommandLine);
     db_cfg->experimental_features(db::experimental_features_t::all(), db::config::config_source::CommandLine);

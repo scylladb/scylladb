@@ -57,6 +57,7 @@ const sstring cf_prop_defs::KW_COMMENT = "comment";
 const sstring cf_prop_defs::KW_READREPAIRCHANCE = "read_repair_chance";
 const sstring cf_prop_defs::KW_DCLOCALREADREPAIRCHANCE = "dclocal_read_repair_chance";
 const sstring cf_prop_defs::KW_GCGRACESECONDS = "gc_grace_seconds";
+const sstring cf_prop_defs::KW_PAXOSGRACESECONDS = "paxos_grace_seconds";
 const sstring cf_prop_defs::KW_MINCOMPACTIONTHRESHOLD = "min_threshold";
 const sstring cf_prop_defs::KW_MAXCOMPACTIONTHRESHOLD = "max_threshold";
 const sstring cf_prop_defs::KW_CACHING = "caching";
@@ -105,7 +106,7 @@ void cf_prop_defs::validate(const database& db, const schema::extensions_map& sc
         KW_GCGRACESECONDS, KW_CACHING, KW_DEFAULT_TIME_TO_LIVE,
         KW_MIN_INDEX_INTERVAL, KW_MAX_INDEX_INTERVAL, KW_SPECULATIVE_RETRY,
         KW_BF_FP_CHANCE, KW_MEMTABLE_FLUSH_PERIOD, KW_COMPACTION,
-        KW_COMPRESSION, KW_CRC_CHECK_CHANCE, KW_ID
+        KW_COMPRESSION, KW_CRC_CHECK_CHANCE, KW_ID, KW_PAXOSGRACESECONDS
     });
     static std::set<sstring> obsolete_keywords({
         sstring("index_interval"),
@@ -195,6 +196,10 @@ int32_t cf_prop_defs::get_gc_grace_seconds() const
     return get_int(KW_GCGRACESECONDS, DEFAULT_GC_GRACE_SECONDS);
 }
 
+int32_t cf_prop_defs::get_paxos_grace_seconds() const {
+    return get_int(KW_PAXOSGRACESECONDS, DEFAULT_GC_GRACE_SECONDS);
+}
+
 std::optional<utils::UUID> cf_prop_defs::get_id() const {
     auto id = get_simple(KW_ID);
     if (id) {
@@ -244,6 +249,10 @@ void cf_prop_defs::apply_to_builder(schema_builder& builder, schema::extensions_
 
     if (has_property(KW_GCGRACESECONDS)) {
         builder.set_gc_grace_seconds(get_int(KW_GCGRACESECONDS, builder.get_gc_grace_seconds()));
+    }
+
+    if (has_property(KW_PAXOSGRACESECONDS)) {
+        builder.set_paxos_grace_seconds(get_paxos_grace_seconds());
     }
 
     std::optional<sstring> tmp_value = {};

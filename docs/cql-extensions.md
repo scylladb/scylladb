@@ -20,3 +20,25 @@ clause:
     WHERE ...
     ALLOW FILTERING          -- optional
     BYPASS CACHE
+
+## "Paxos grace seconds" per-table option
+
+The `paxos_grace_seconds` option is used to set the amount of seconds which
+are used to TTL data in paxos tables when using LWT queries against the base
+table.
+
+This value is intentionally decoupled from `gc_grace_seconds` since,
+in general, the base table could use completely different strategy to garbage
+collect entries, e.g. can set `gc_grace_seconds` to 0 if it doesn't use
+deletions and hence doesn't need to repair.
+
+However, paxos tables still rely on repair to achieve consistency, and
+the user is required to execute repair within `paxos_grace_seconds`.
+
+Default value is equal to `DEFAULT_GC_GRACE_SECONDS`, which is 10 days.
+
+The option can be specified at `CREATE TABLE` or `ALTER TABLE` queries in the same
+way as other options by using `WITH` clause:
+
+    CREATE TABLE tbl ...
+    WITH paxos_grace_seconds=1234
