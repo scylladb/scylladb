@@ -19,6 +19,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <seastar/core/on_internal_error.hh>
 #include <map>
 #include "utils/UUID_gen.hh"
 #include "cql3/column_identifier.hh"
@@ -41,6 +42,8 @@
 #include "cdc/cdc_extension.hh"
 
 constexpr int32_t schema::NAME_LENGTH;
+
+extern logging::logger dblog;
 
 sstring to_sstring(column_kind k) {
     switch (k) {
@@ -1367,8 +1370,9 @@ schema::column_name_type(const column_definition& def) const {
 
 const column_definition&
 schema::regular_column_at(column_id id) const {
-    if (id > regular_columns_count()) {
-        throw std::out_of_range("column_id");
+    if (id >= regular_columns_count()) {
+        on_internal_error(dblog, format("{}.{}@{}: regular column id {:d} >= {:d}",
+            ks_name(), cf_name(), version(), id, regular_columns_count()));
     }
     return _raw._columns.at(column_offset(column_kind::regular_column) + id);
 }
@@ -1376,15 +1380,17 @@ schema::regular_column_at(column_id id) const {
 const column_definition&
 schema::clustering_column_at(column_id id) const {
     if (id >= clustering_key_size()) {
-        throw std::out_of_range(format("clustering column id {:d} >= {:d}", id, clustering_key_size()));
+        on_internal_error(dblog, format("{}.{}@{}: clustering column id {:d} >= {:d}",
+            ks_name(), cf_name(), version(), id, clustering_key_size()));
     }
     return _raw._columns.at(column_offset(column_kind::clustering_key) + id);
 }
 
 const column_definition&
 schema::static_column_at(column_id id) const {
-    if (id > static_columns_count()) {
-        throw std::out_of_range("column_id");
+    if (id >= static_columns_count()) {
+        on_internal_error(dblog, format("{}.{}@{}: static column id {:d} >= {:d}",
+            ks_name(), cf_name(), version(), id, static_columns_count()));
     }
     return _raw._columns.at(column_offset(column_kind::static_column) + id);
 }
