@@ -1441,7 +1441,7 @@ with open(buildfile_tmp, 'w') as f:
             command = $in > $out
             description = GEN $out
         rule copy
-            command = cp $in $out
+            command = cp --reflink=auto $in $out
             description = COPY $out
         rule package
             command = scripts/create-relocatable-package.py --mode $mode $out
@@ -1696,9 +1696,10 @@ with open(buildfile_tmp, 'w') as f:
         f.write(textwrap.dedent('''\
             build $builddir/{mode}/iotune: copy $builddir/{mode}/seastar/apps/iotune/iotune
             ''').format(**locals()))
-        f.write('build $builddir/{mode}/scylla-package.tar.gz: package $builddir/{mode}/scylla $builddir/{mode}/iotune $builddir/SCYLLA-RELEASE-FILE $builddir/SCYLLA-VERSION-FILE $builddir/debian/debian | always\n'.format(**locals()))
+        f.write('build $builddir/dist/{mode}/tar/scylla-package.tar.gz: package $builddir/{mode}/scylla $builddir/{mode}/iotune $builddir/SCYLLA-RELEASE-FILE $builddir/SCYLLA-VERSION-FILE $builddir/debian/debian | always\n'.format(**locals()))
         f.write('  pool = submodule_pool\n')
         f.write('  mode = {mode}\n'.format(**locals()))
+        f.write(f'build $builddir/{mode}/scylla-package.tar.gz: copy $builddir/dist/{mode}/tar/scylla-package.tar.gz\n')
         f.write(f'build $builddir/dist/{mode}/redhat: rpmbuild $builddir/{mode}/scylla-package.tar.gz\n')
         f.write(f'  pool = submodule_pool\n')
         f.write(f'  mode = {mode}\n')
@@ -1736,7 +1737,8 @@ with open(buildfile_tmp, 'w') as f:
     f.write(textwrap.dedent(f'''\
         build dist-server-deb: phony {' '.join(['$builddir/dist/{mode}/debian'.format(mode=mode) for mode in build_modes])}
         build dist-server-rpm: phony {' '.join(['$builddir/dist/{mode}/redhat'.format(mode=mode) for mode in build_modes])}
-        build dist-server: phony dist-server-rpm dist-server-deb
+        build dist-server-tar: phony {' '.join(['$builddir/{mode}/scylla-package.tar.gz'.format(mode=mode) for mode in build_modes])}
+        build dist-server: phony dist-server-tar dist-server-rpm dist-server-deb
 
         rule build-submodule-reloc
           command = cd $reloc_dir && ./reloc/build_reloc.sh --nodeps
@@ -1753,7 +1755,8 @@ with open(buildfile_tmp, 'w') as f:
         build dist-jmx-deb: build-submodule-deb tools/jmx/build/scylla-jmx-package.tar.gz
           dir = tools/jmx
           artifact = $builddir/scylla-jmx-package.tar.gz
-        build dist-jmx: phony dist-jmx-rpm dist-jmx-deb
+        build dist-jmx-tar: phony {' '.join(['$builddir/dist/{mode}/tar/scylla-jmx-package.tar.gz'.format(mode=mode) for mode in build_modes])}
+        build dist-jmx: phony dist-jmx-tar dist-jmx-rpm dist-jmx-deb
 
         build tools/java/build/scylla-tools-package.tar.gz: build-submodule-reloc
           reloc_dir = tools/java
@@ -1763,7 +1766,8 @@ with open(buildfile_tmp, 'w') as f:
         build dist-tools-deb: build-submodule-deb tools/java/build/scylla-tools-package.tar.gz
           dir = tools/java
           artifact = $builddir/scylla-tools-package.tar.gz
-        build dist-tools: phony dist-tools-rpm dist-tools-deb
+        build dist-tools-tar: phony {' '.join(['$builddir/dist/{mode}/tar/scylla-tools-package.tar.gz'.format(mode=mode) for mode in build_modes])}
+        build dist-tools: phony dist-tools-tar dist-tools-rpm dist-tools-deb
 
         rule build-python-reloc
           command = ./reloc/python3/build_reloc.sh
@@ -1775,9 +1779,13 @@ with open(buildfile_tmp, 'w') as f:
         build $builddir/release/scylla-python3-package.tar.gz: build-python-reloc
         build dist-python-rpm: build-python-rpm $builddir/release/scylla-python3-package.tar.gz
         build dist-python-deb: build-python-deb $builddir/release/scylla-python3-package.tar.gz
+        build dist-python-tar: phony {' '.join(['$builddir/dist/{mode}/tar/scylla-python3-package.tar.gz'.format(mode=mode) for mode in build_modes])}
         build dist-python: phony dist-python-rpm dist-python-deb
+
         build dist-deb: phony dist-server-deb dist-python-deb dist-jmx-deb dist-tools-deb
         build dist-rpm: phony dist-server-rpm dist-python-rpm dist-jmx-rpm dist-tools-rpm
+        build dist-tar: phony dist-server-tar dist-python-tar dist-jmx-tar dist-tools-tar
+
         build dist: phony dist-server dist-python dist-jmx dist-tools
         '''))
 
@@ -1788,6 +1796,10 @@ with open(buildfile_tmp, 'w') as f:
         '''))
     for mode in build_modes:
         f.write(textwrap.dedent(f'''\
+        build $builddir/dist/{mode}/tar/scylla-python3-package.tar.gz: copy build/release/scylla-python3-package.tar.gz
+        build $builddir/dist/{mode}/tar/scylla-tools-package.tar.gz: copy tools/java/build/scylla-tools-package.tar.gz
+        build $builddir/dist/{mode}/tar/scylla-jmx-package.tar.gz: copy tools/jmx/build/scylla-jmx-package.tar.gz
+
         build dist-{mode}: phony dist-server-{mode} dist-python dist-tools dist-jmx
         build dist-check-{mode}: dist-check
           mode = {mode}
