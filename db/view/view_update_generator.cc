@@ -42,16 +42,17 @@ future<> view_update_generator::start() {
                 _pending_sstables.wait().get();
             }
 
+            // To ensure we don't race with updates, move the entire content
+            // into a local variable.
+            auto sstables_with_tables = std::exchange(_sstables_with_tables, {});
+
             // If we got here, we will process all tables we know about so far eventually so there
             // is no starvation
-            for (auto table_it = _sstables_with_tables.begin(); table_it != _sstables_with_tables.end(); table_it = _sstables_with_tables.erase(table_it)) {
-                auto& [t, t_sstables] = *table_it;
+            for (auto table_it = sstables_with_tables.begin(); table_it != sstables_with_tables.end(); table_it = sstables_with_tables.erase(table_it)) {
+                auto& [t, sstables] = *table_it;
                 schema_ptr s = t->schema();
 
-                vug_logger.trace("Processing {}.{}: {} sstables", s->ks_name(), s->cf_name(), t_sstables.size());
-
-                // Copy what we have so far so we don't miss new updates
-                auto sstables = std::exchange(t_sstables, {});
+                vug_logger.trace("Processing {}.{}: {} sstables", s->ks_name(), s->cf_name(), sstables.size());
 
                 const auto num_sstables = sstables.size();
 

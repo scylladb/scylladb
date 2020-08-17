@@ -573,6 +573,118 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_deadlock) {
     }, std::move(test_cfg)).get();
 }
 
+// Test that registered sstables (and semaphore units) are not leaked when
+// sstables are register *while* a batch of sstables are processed.
+SEASTAR_THREAD_TEST_CASE(test_view_update_generator_register_semaphore_unit_leak) {
+    cql_test_config test_cfg;
+    auto& db_cfg = *test_cfg.db_config;
+
+    db_cfg.enable_cache(false);
+    db_cfg.enable_commitlog(false);
+
+    do_with_cql_env([] (cql_test_env& e) -> future<> {
+        e.execute_cql("create table t (p text, c text, v text, primary key (p, c))").get();
+        e.execute_cql("create materialized view tv as select * from t "
+                      "where p is not null and c is not null and v is not null "
+                      "primary key (v, c, p)").get();
+
+        auto msb = e.local_db().get_config().murmur3_partitioner_ignore_msb_bits();
+        auto key1 = token_generation_for_shard(1, this_shard_id(), msb).front().first;
+
+        for (auto i = 0; i < 1024; ++i) {
+            e.execute_cql(fmt::format("insert into t (p, c, v) values ('{}', 'c{}', 'x')", key1, i)).get();
+        }
+
+        // We need data on the disk so that the pre-image reader is forced to go to disk.
+        e.db().invoke_on_all([] (database& db) {
+            return db.flush_all_memtables();
+        }).get();
+
+        auto& view_update_generator = e.local_view_update_generator();
+        auto s = test_table_schema();
+
+        lw_shared_ptr<table> t = e.local_db().find_column_family("ks", "t").shared_from_this();
+
+        auto key = partition_key::from_exploded(*s, {to_bytes(key1)});
+
+        auto make_sstable = [&] {
+            mutation m(s, key);
+            auto col = s->get_column_definition("v");
+            const auto val = sstring(10, 'a');
+            for (int i = 0; i < 1024; ++i) {
+                auto& row = m.partition().clustered_row(*s, clustering_key::from_exploded(*s, {to_bytes(fmt::format("c{}", i))}));
+                row.cells().apply(*col, atomic_cell::make_live(*col->type, 2345, col->type->decompose(val)));
+            }
+
+            auto sst = t->make_streaming_staging_sstable();
+            sstables::sstable_writer_config sst_cfg = test_sstables_manager.configure_writer();
+            auto& pc = service::get_local_streaming_priority();
+
+            sst->write_components(flat_mutation_reader_from_mutations({m}), 1ul, s, sst_cfg, {}, pc).get();
+            sst->open_data().get();
+            t->add_sstable_and_update_cache(sst).get();
+            return sst;
+        };
+
+        std::vector<sstables::shared_sstable> prepared_sstables;
+
+        // We need 2 * N + 1 sstables. N should be at least 5 (number of units
+        // on the register semaphore) + 1 (just to make sure the returned future
+        // blocks). While the initial batch is processed we want to register N
+        // more sstables, + 1 to detect the leak (N units will be returned from
+        // the initial batch). See below for more details.
+        const auto num_sstables = (view_update_generator.available_register_units() + 1) * 2 + 1;
+        for (auto i = 0; i < num_sstables; ++i) {
+            prepared_sstables.push_back(make_sstable());
+        }
+
+        // First batch: register N sstables.
+        while (view_update_generator.available_register_units()) {
+            auto fut = view_update_generator.register_staging_sstable(std::move(prepared_sstables.back()), t);
+            prepared_sstables.pop_back();
+            BOOST_REQUIRE(fut.available());
+        }
+
+        // Make sure we consumed all units and thus the register future blocks.
+        auto fut1 = view_update_generator.register_staging_sstable(std::move(prepared_sstables.back()), t);
+        prepared_sstables.pop_back();
+        BOOST_REQUIRE(!fut1.available());
+
+        std::vector<future<>> futures;
+        futures.reserve(prepared_sstables.size());
+
+        // While the first batch is processed, concurrently register the
+        // remaining N + 1 sstables, yielding in-between so the first batch
+        // processing can progress.
+        while (!prepared_sstables.empty()) {
+            thread::yield();
+            futures.emplace_back(view_update_generator.register_staging_sstable(std::move(prepared_sstables.back()), t));
+            prepared_sstables.pop_back();
+        }
+
+        // Make sure the first batch is processed.
+        fut1.get();
+
+        auto fut_res = when_all_succeed(futures.begin(), futures.end());
+
+        // Watchdog timer which will break out of the deadlock and fail the test.
+        timer watchdog_timer([&view_update_generator] {
+            // Re-start it so stop() on shutdown doesn't crash.
+            (void)view_update_generator.stop().then([&] { return view_update_generator.start(); });
+        });
+
+        watchdog_timer.arm(std::chrono::seconds(60));
+
+        // Wait on the second batch, will fail if the watchdog timer fails.
+        fut_res.get();
+
+        watchdog_timer.cancel();
+
+        return make_ready_future<>();
+
+    }, std::move(test_cfg)).get();
+}
+
 SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering) {
     using partition_size_map = std::map<dht::decorated_key, size_t, dht::ring_position_less_comparator>;
 
