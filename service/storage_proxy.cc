@@ -2584,14 +2584,13 @@ future<> storage_proxy::send_hint_to_endpoint(frozen_mutation_and_schema fm_a_s,
 }
 
 future<> storage_proxy::send_hint_to_all_replicas(frozen_mutation_and_schema fm_a_s) {
-    const auto timeout = db::timeout_clock::now() + 1h;
     if (!_features.cluster_supports_hinted_handoff_separate_connection()) {
         std::array<mutation, 1> ms{fm_a_s.fm.unfreeze(fm_a_s.s)};
-        return mutate_internal(std::move(ms), db::consistency_level::ALL, false, nullptr, empty_service_permit(), timeout);
+        return mutate_internal(std::move(ms), db::consistency_level::ALL, false, nullptr, empty_service_permit());
     }
 
     std::array<hint_wrapper, 1> ms{hint_wrapper { std::move(fm_a_s.fm.unfreeze(fm_a_s.s)) }};
-    return mutate_internal(std::move(ms), db::consistency_level::ALL, false, nullptr, empty_service_permit(), timeout);
+    return mutate_internal(std::move(ms), db::consistency_level::ALL, false, nullptr, empty_service_permit());
 }
 
 /**
