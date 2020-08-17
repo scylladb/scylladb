@@ -244,7 +244,7 @@ abstract_replication_strategy::get_primary_ranges_within_dc(inet_address ep) {
 }
 
 std::unordered_multimap<inet_address, dht::token_range>
-abstract_replication_strategy::get_address_ranges(token_metadata& tm) const {
+abstract_replication_strategy::get_address_ranges(const token_metadata& tm) const {
     std::unordered_multimap<inet_address, dht::token_range> ret;
     for (auto& t : tm.sorted_tokens()) {
         dht::token_range_vector r = tm.get_primary_ranges_for(t);
@@ -260,7 +260,7 @@ abstract_replication_strategy::get_address_ranges(token_metadata& tm) const {
 }
 
 std::unordered_map<dht::token_range, std::vector<inet_address>>
-abstract_replication_strategy::get_range_addresses(token_metadata& tm) const {
+abstract_replication_strategy::get_range_addresses(const token_metadata& tm) const {
     std::unordered_map<dht::token_range, std::vector<inet_address>> ret;
     for (auto& t : tm.sorted_tokens()) {
         dht::token_range_vector ranges = tm.get_primary_ranges_for(t);
@@ -273,12 +273,12 @@ abstract_replication_strategy::get_range_addresses(token_metadata& tm) const {
 }
 
 dht::token_range_vector
-abstract_replication_strategy::get_pending_address_ranges(token_metadata& tm, token pending_token, inet_address pending_address) {
+abstract_replication_strategy::get_pending_address_ranges(const token_metadata& tm, token pending_token, inet_address pending_address) const {
     return get_pending_address_ranges(tm, std::unordered_set<token>{pending_token}, pending_address);
 }
 
 dht::token_range_vector
-abstract_replication_strategy::get_pending_address_ranges(token_metadata& tm, std::unordered_set<token> pending_tokens, inet_address pending_address) {
+abstract_replication_strategy::get_pending_address_ranges(const token_metadata& tm, std::unordered_set<token> pending_tokens, inet_address pending_address) const {
     dht::token_range_vector ret;
     auto temp = tm.clone_only_token_map();
     temp.update_normal_tokens(pending_tokens, pending_address);
