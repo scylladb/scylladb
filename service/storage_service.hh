@@ -173,7 +173,7 @@ public:
         return _token_metadata;
     }
 
-    locator::token_metadata& get_token_metadata() {
+    locator::token_metadata& get_mutable_token_metadata() {
         return _token_metadata;
     }
 

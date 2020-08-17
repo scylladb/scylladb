@@ -100,19 +100,19 @@ public:
 struct db_context final {
     service::storage_proxy& _proxy;
     service::migration_notifier& _migration_notifier;
-    locator::token_metadata& _token_metadata;
+    const locator::token_metadata& _token_metadata;
     cdc::metadata& _cdc_metadata;
 
     class builder final {
         service::storage_proxy& _proxy;
         std::optional<std::reference_wrapper<service::migration_notifier>> _migration_notifier;
-        std::optional<std::reference_wrapper<locator::token_metadata>> _token_metadata;
+        std::optional<std::reference_wrapper<const locator::token_metadata>> _token_metadata;
         std::optional<std::reference_wrapper<cdc::metadata>> _cdc_metadata;
     public:
         builder(service::storage_proxy& proxy);
 
         builder& with_migration_notifier(service::migration_notifier& migration_notifier);
-        builder& with_token_metadata(locator::token_metadata& token_metadata);
+        builder& with_token_metadata(const locator::token_metadata& token_metadata);
         builder& with_cdc_metadata(cdc::metadata&);
 
         db_context build();
