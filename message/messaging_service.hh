@@ -54,6 +54,8 @@ namespace gms {
     class gossip_digest_syn;
     class gossip_digest_ack;
     class gossip_digest_ack2;
+    class gossip_get_endpoint_states_request;
+    class gossip_get_endpoint_states_response;
 }
 
 namespace utils {
@@ -140,7 +142,8 @@ enum class messaging_verb : int32_t {
     PAXOS_LEARN = 41,
     HINT_MUTATION = 42,
     PAXOS_PRUNE = 43,
-    LAST = 44,
+    GOSSIP_GET_ENDPOINT_STATES = 44,
+    LAST = 45,
 };
 
 } // namespace netw
@@ -416,6 +419,11 @@ public:
     void register_gossip_digest_ack2(std::function<rpc::no_wait_type (gms::gossip_digest_ack2)>&& func);
     future<> unregister_gossip_digest_ack2();
     future<> send_gossip_digest_ack2(msg_addr id, gms::gossip_digest_ack2 msg);
+
+    // Wrapper for GOSSIP_GET_ENDPOINT_STATES
+    void register_gossip_get_endpoint_states(std::function<future<gms::gossip_get_endpoint_states_response> (const rpc::client_info& cinfo, gms::gossip_get_endpoint_states_request request)>&& func);
+    future<> unregister_gossip_get_endpoint_states();
+    future<gms::gossip_get_endpoint_states_response> send_gossip_get_endpoint_states(msg_addr id, std::chrono::milliseconds timeout, gms::gossip_get_endpoint_states_request request);
 
     // Wrapper for DEFINITIONS_UPDATE
     void register_definitions_update(std::function<rpc::no_wait_type (const rpc::client_info& cinfo, std::vector<frozen_mutation> fm,

@@ -303,12 +303,14 @@ private:
 
     // Tokens and the CDC streams timestamp of the replaced node.
     using replacement_info = std::pair<std::unordered_set<token>, std::optional<db_clock::time_point>>;
-    future<replacement_info> prepare_replacement_info(const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features);
+    future<replacement_info> prepare_replacement_info(std::unordered_set<gms::inet_address> initial_contact_nodes,
+            const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features, bind_messaging_port do_bind = bind_messaging_port::yes);
 
 public:
     future<bool> is_initialized();
 
-    future<> check_for_endpoint_collision(const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features);
+    future<> check_for_endpoint_collision(std::unordered_set<gms::inet_address> initial_contact_nodes,
+            const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features, bind_messaging_port do_bind = bind_messaging_port::yes);
 
     /*!
      * \brief Init the messaging service part of the service.
@@ -345,8 +347,13 @@ public:
     void flush_column_families();
 
 private:
-    bool should_bootstrap() const;
-    void prepare_to_join(std::vector<inet_address> loaded_endpoints, const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features, bind_messaging_port do_bind = bind_messaging_port::yes);
+    bool should_bootstrap();
+    bool is_first_node();
+    void prepare_to_join(
+            std::unordered_set<gms::inet_address> initial_contact_nodes,
+            std::unordered_set<gms::inet_address> loaded_endpoints,
+            std::unordered_map<gms::inet_address, sstring> loaded_peer_features,
+            bind_messaging_port do_bind = bind_messaging_port::yes);
     void join_token_ring(int delay);
     void maybe_start_sys_dist_ks();
 public:

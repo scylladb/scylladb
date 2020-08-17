@@ -81,6 +81,8 @@ class gossip_digest_ack2;
 class gossip_digest;
 class inet_address;
 class i_endpoint_state_change_subscriber;
+class gossip_get_endpoint_states_request;
+class gossip_get_endpoint_states_response;
 
 class feature_service;
 
@@ -129,6 +131,7 @@ private:
     future<> handle_shutdown_msg(inet_address from);
     future<> do_send_ack_msg(msg_addr from, gossip_digest_syn syn_msg);
     future<> do_send_ack2_msg(msg_addr from, utils::chunked_vector<gossip_digest> ack_msg_digest);
+    future<gossip_get_endpoint_states_response> handle_get_endpoint_states_msg(gossip_get_endpoint_states_request request);
     static constexpr uint32_t _default_cpuid = 0;
     msg_addr get_msg_addr(inet_address to);
     void do_sort(utils::chunked_vector<gossip_digest>& g_digest_list);
@@ -195,9 +198,10 @@ private:
      */
     atomic_vector<shared_ptr<i_endpoint_state_change_subscriber>> _subscribers;
 
+    std::list<std::vector<inet_address>> _endpoints_to_talk_with;
+
     /* live member set */
     utils::chunked_vector<inet_address> _live_endpoints;
-    std::list<inet_address> _live_endpoints_just_added;
 
     /* nodes are being marked as alive */
     std::unordered_set<inet_address> _pending_mark_alive_endpoints;
@@ -381,9 +385,6 @@ private:
     /* Sends a Gossip message to an unreachable member */
     future<> do_gossip_to_unreachable_member(gossip_digest_syn message);
 
-    /* Gossip to a seed for facilitating partition healing */
-    future<> do_gossip_to_seed(gossip_digest_syn prod);
-
     void do_status_check();
 
 public:
@@ -443,6 +444,9 @@ public:
     future<> apply_state_locally(std::map<inet_address, endpoint_state> map);
 
 private:
+    void do_apply_state_locally(gms::inet_address node, const endpoint_state& remote_state, bool listener_notification);
+    void apply_state_locally_without_listener_notification(std::unordered_map<inet_address, endpoint_state> map);
+
     void apply_new_states(inet_address addr, endpoint_state& local_state, const endpoint_state& remote_state);
 
     // notify that a local application state is going to change (doesn't get triggered for remote changes)
@@ -481,7 +485,7 @@ public:
      *  Do a single 'shadow' round of gossip, where we do not modify any state
      *  Only used when replacing a node, to get and assume its states
      */
-    future<> do_shadow_round();
+    future<> do_shadow_round(std::unordered_set<gms::inet_address> nodes = {}, bind_messaging_port do_bind = bind_messaging_port::yes);
 
 private:
     void build_seeds_list();
@@ -548,7 +552,6 @@ private:
     uint64_t _nr_run = 0;
     uint64_t _msg_processing = 0;
     bool _ms_registered = false;
-    bool _gossiped_to_seed = false;
     bool _gossip_settled = false;
 
     class msg_proc_guard;
@@ -647,5 +650,13 @@ inline future<std::map<inet_address, arrival_window>> get_arrival_samples() {
     });
 }
 
+struct gossip_get_endpoint_states_request {
+    // Application states the sender requested
+    std::unordered_set<gms::application_state> application_states;
+};
+
+struct gossip_get_endpoint_states_response {
+    std::unordered_map<gms::inet_address, gms::endpoint_state> endpoint_state_map;
+};
 
 } // namespace gms
