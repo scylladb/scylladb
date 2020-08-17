@@ -44,7 +44,6 @@
 #include "schema.hh"
 
 #include "cql3/expr/expression.hh"
-#include "cql3/operator.hh"
 #include "database_fwd.hh"
 
 #include <vector>

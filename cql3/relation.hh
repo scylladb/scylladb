@@ -41,7 +41,6 @@
 
 #pragma once
 
-#include "operator.hh"
 #include "schema_fwd.hh"
 #include "column_identifier.hh"
 #include "variable_specifications.hh"

@@ -27,7 +27,6 @@
 #include <variant>
 
 #include "bytes.hh"
-#include "cql3/operator.hh"
 #include "cql3/query_options.hh"
 #include "cql3/selection/selection.hh"
 #include "cql3/statements/bound.hh"
