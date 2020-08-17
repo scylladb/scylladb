@@ -749,7 +749,4 @@ inline shared_ptr<storage_proxy> get_local_shared_storage_proxy() {
     return _the_storage_proxy.local_shared();
 }
 
-dht::partition_range_vector get_restricted_ranges(locator::token_metadata&,
-    const schema&, dht::partition_range);
-
 }
