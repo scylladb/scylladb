@@ -895,7 +895,7 @@ keyspace::set_replication_strategy(std::unique_ptr<locator::abstract_replication
     _replication_strategy = std::move(replication_strategy);
 }
 
-void keyspace::update_from(locator::token_metadata& tm, ::lw_shared_ptr<keyspace_metadata> ksm) {
+void keyspace::update_from(const locator::token_metadata& tm, ::lw_shared_ptr<keyspace_metadata> ksm) {
     _metadata = std::move(ksm);
    create_replication_strategy(tm, _metadata->strategy_options());
 }
@@ -1044,7 +1044,7 @@ keyspace_metadata::keyspace_metadata(std::string_view name,
     }
 }
 
-void keyspace_metadata::validate(locator::token_metadata& tm) const {
+void keyspace_metadata::validate(const locator::token_metadata& tm) const {
     using namespace locator;
     abstract_replication_strategy::validate_replication_strategy(name(), strategy_name(), tm, strategy_options());
 }

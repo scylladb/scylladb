@@ -1080,7 +1080,7 @@ public:
                  std::map<sstring, sstring> options,
                  bool durables_writes,
                  std::vector<schema_ptr> cf_defs = std::vector<schema_ptr>{});
-    void validate(locator::token_metadata& tm) const;
+    void validate(const locator::token_metadata& tm) const;
     const sstring& name() const {
         return _name;
     }
@@ -1150,7 +1150,7 @@ private:
 public:
     explicit keyspace(lw_shared_ptr<keyspace_metadata> metadata, config cfg);
 
-    void update_from(locator::token_metadata& tm, lw_shared_ptr<keyspace_metadata>);
+    void update_from(const locator::token_metadata& tm, lw_shared_ptr<keyspace_metadata>);
 
     /** Note: return by shared pointer value, since the meta data is
      * semi-volatile. I.e. we could do alter keyspace at any time, and
