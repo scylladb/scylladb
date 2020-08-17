@@ -140,12 +140,18 @@ docker_common_args=()
 docker_common_args+=("${SCYLLADB_DBUILD[@]}")
 
 if [ -z "$is_podman" ]; then
+    unset TMP_PASSWD
     docker_common_args+=(
        -u "$(id -u):$(id -g)"
        "${group_args[@]}"
        -v /etc/passwd:/etc/passwd:ro
        -v /etc/group:/etc/group:ro
        )
+else
+    TMP_PASSWD=$(mktemp --tmpdir passwd.XXXXXX)
+    FULLNAME=$(getent passwd $USER | cut -d ':' -f 5)
+    echo "$USER:x:0:0:$FULLNAME:$HOME:/bin/bash" > "$TMP_PASSWD"
+    docker_common_args+=(-v "$TMP_PASSWD:/etc/passwd:ro")
 fi
 
 if [ "$PWD" != "$toplevel" ]; then
@@ -172,6 +178,13 @@ docker_common_args+=(
        "${args[@]}"
 )
 
+cleanup() {
+    rm -rf "$tmpdir"
+    if [ -v TMP_PASSWD ]; then
+        rm -f "$TMP_PASSWD"
+    fi
+}
+
 if [[ -n "$interactive" || -n "$is_podman" ]]; then
     # If --interactive was given on the command line, we can't run in detached mode
     # as it will be impossible to interact with the container.
@@ -180,7 +193,7 @@ if [[ -n "$interactive" || -n "$is_podman" ]]; then
     # (it does not proxy SIGTERM) and doesn't work well with it.
     $tool run --rm "${docker_common_args[@]}"
     ret=$?
-    rm -rf "$tmpdir"
+    cleanup
     exit $ret
 fi
 
@@ -195,7 +208,7 @@ kill_it() {
         docker rm -f "$container" > /dev/null
         container=
     fi
-    rm -rf "$tmpdir"
+    cleanup
 }
 
 trap kill_it SIGTERM SIGINT SIGHUP EXIT
