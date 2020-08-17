@@ -1337,7 +1337,7 @@ private:
 
     service::migration_notifier& _mnotifier;
     gms::feature_service& _feat;
-    locator::token_metadata& _token_metadata;
+    const locator::token_metadata& _token_metadata;
 
     bool _supports_infinite_bound_range_deletions = false;
     gms::feature::listener_registration _infinite_bound_range_deletions_reg;
@@ -1377,7 +1377,7 @@ public:
     void set_enable_incremental_backups(bool val) { _enable_incremental_backups = val; }
 
     future<> parse_system_tables(distributed<service::storage_proxy>&, distributed<service::migration_manager>&);
-    database(const db::config&, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat, locator::token_metadata& tm, abort_source& as);
+    database(const db::config&, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat, const locator::token_metadata& tm, abort_source& as);
     database(database&&) = delete;
     ~database();
 
@@ -1403,7 +1403,6 @@ public:
     }
 
     const locator::token_metadata& get_token_metadata() const { return _token_metadata; }
-    locator::token_metadata& get_token_metadata() { return _token_metadata; }
 
     service::migration_notifier& get_notifier() { return _mnotifier; }
     const service::migration_notifier& get_notifier() const { return _mnotifier; }
