@@ -294,7 +294,7 @@ public:
      * NOTE: This is heavy and ineffective operation. This will be done only once when a node
      * changes state in the cluster, so it should be manageable.
      */
-    future<> calculate_pending_ranges(const abstract_replication_strategy& strategy, const sstring& keyspace_name);
+    future<> update_pending_ranges(const abstract_replication_strategy& strategy, const sstring& keyspace_name);
     future<> calculate_pending_ranges_for_leaving(
         const abstract_replication_strategy& strategy,
         lw_shared_ptr<std::unordered_multimap<range<token>, inet_address>> new_pending_ranges,

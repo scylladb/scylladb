@@ -2780,9 +2780,9 @@ future<> storage_service::do_update_pending_ranges() {
         return do_for_each(keyspaces, [this] (auto& keyspace_name) {
             auto& ks = this->_db.local().find_keyspace(keyspace_name);
             auto& strategy = ks.get_replication_strategy();
-            slogger.debug("Calculating pending ranges for keyspace={} starts", keyspace_name);
-            return get_token_metadata().calculate_pending_ranges(strategy, keyspace_name).finally([&keyspace_name] {
-                slogger.debug("Calculating pending ranges for keyspace={} ends", keyspace_name);
+            slogger.debug("Updating pending ranges for keyspace={} starts", keyspace_name);
+            return get_token_metadata().update_pending_ranges(strategy, keyspace_name).finally([&keyspace_name] {
+                slogger.debug("Updating pending ranges for keyspace={} ends", keyspace_name);
             });
         });
     });
@@ -2792,7 +2792,7 @@ future<> storage_service::do_update_pending_ranges() {
 future<> storage_service::update_pending_ranges() {
     return get_storage_service().invoke_on(0, [] (auto& ss){
         return ss._update_pending_ranges_action.trigger_later().then([&ss] {
-            // calculate_pending_ranges will modify token_metadata, we need to repliate to other cores
+            // update_pending_ranges will modify token_metadata, we need to replicate to other cores
             return ss.replicate_to_all_cores().then([s = ss.shared_from_this()] { });
         });
     });

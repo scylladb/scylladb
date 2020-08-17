@@ -483,7 +483,7 @@ public:
      * NOTE: This is heavy and ineffective operation. This will be done only once when a node
      * changes state in the cluster, so it should be manageable.
      */
-    future<> calculate_pending_ranges(
+    future<> update_pending_ranges(
             const token_metadata& unpimplified_this,
             const abstract_replication_strategy& strategy, const sstring& keyspace_name);
     future<> calculate_pending_ranges_for_leaving(
@@ -1469,7 +1469,7 @@ void token_metadata_impl::calculate_pending_ranges_for_bootstrap(
     }
 }
 
-future<> token_metadata_impl::calculate_pending_ranges(
+future<> token_metadata_impl::update_pending_ranges(
         const token_metadata& unpimplified_this,
         const abstract_replication_strategy& strategy, const sstring& keyspace_name) {
     auto new_pending_ranges = make_lw_shared<std::unordered_multimap<range<token>, inet_address>>();
@@ -1874,8 +1874,8 @@ token_metadata::get_pending_ranges(sstring keyspace_name, inet_address endpoint)
 }
 
 future<>
-token_metadata::calculate_pending_ranges(const abstract_replication_strategy& strategy, const sstring& keyspace_name) {
-    return _impl->calculate_pending_ranges(*this, strategy, keyspace_name);
+token_metadata::update_pending_ranges(const abstract_replication_strategy& strategy, const sstring& keyspace_name) {
+    return _impl->update_pending_ranges(*this, strategy, keyspace_name);
 }
 
 future<>
