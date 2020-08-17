@@ -66,6 +66,7 @@ public:
     const column_definition* view_column(const schema& base, column_id base_id) const;
     const column_definition* view_column(const column_definition& base_def) const;
     const std::vector<column_id>& base_non_pk_columns_in_view_pk() const;
+    bool has_base_non_pk_columns_in_view_pk() const;
     void initialize_base_dependent_fields(const schema& base);
 
     friend bool operator==(const view_info& x, const view_info& y) {

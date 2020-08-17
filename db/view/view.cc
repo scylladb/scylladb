@@ -151,6 +151,10 @@ void view_info::initialize_base_dependent_fields(const schema& base) {
     }
 }
 
+bool view_info::has_base_non_pk_columns_in_view_pk() const {
+    return !_base_non_pk_columns_in_view_pk.empty();
+}
+
 namespace db {
 
 namespace view {

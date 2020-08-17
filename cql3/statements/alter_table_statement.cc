@@ -222,7 +222,7 @@ void alter_table_statement::add_column(const schema& schema, const table& cf, sc
             schema_builder builder(view);
             if (view->view_info()->include_all_columns()) {
                 builder.with_column(column_name.name(), type);
-            } else if (view->view_info()->base_non_pk_columns_in_view_pk().empty()) {
+            } else if (!view->view_info()->has_base_non_pk_columns_in_view_pk()) {
                 db::view::create_virtual_column(builder, column_name.name(), type);
             }
             view_updates.push_back(view_ptr(builder.build()));
