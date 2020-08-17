@@ -43,6 +43,27 @@ namespace db {
 
 namespace view {
 
+// Part of the view description which depends on the base schema version.
+//
+// This structure may change even though the view schema doesn't change, so
+// it needs to live outside view_ptr.
+struct base_dependent_view_info {
+    schema_ptr base_schema;
+
+    // Id of a regular base table column included in the view's PK, if any.
+    // Scylla views only allow one such column, alternator can have up to two.
+    std::vector<column_id> base_non_pk_columns_in_view_pk;
+};
+
+// Immutable snapshot of view's base-schema-dependent part.
+using base_info_ptr = lw_shared_ptr<const base_dependent_view_info>;
+
+// Snapshot of the view schema and its base-schema-dependent part.
+struct view_and_base {
+    view_ptr view;
+    base_info_ptr base;
+};
+
 /**
  * Whether the view filter considers the specified partition key.
  *
@@ -94,7 +115,7 @@ bool clustering_prefix_matches(const schema& base, const partition_key& key, con
 
 future<std::vector<frozen_mutation_and_schema>> generate_view_updates(
         const schema_ptr& base,
-        std::vector<view_ptr>&& views_to_update,
+        std::vector<view_and_base>&& views_to_update,
         flat_mutation_reader&& updates,
         flat_mutation_reader_opt&& existings,
         gc_clock::time_point now);
@@ -103,7 +124,7 @@ query::clustering_row_ranges calculate_affected_clustering_ranges(
         const schema& base,
         const dht::decorated_key& key,
         const mutation_partition& mp,
-        const std::vector<view_ptr>& views,
+        const std::vector<view_and_base>& views,
         gc_clock::time_point now);
 
 struct wait_for_all_updates_tag {};
@@ -132,6 +153,13 @@ future<> mutate_MV(
  *        When type is a multi-cell collection, so will be the virtual column.
  */
  void create_virtual_column(schema_builder& builder, const bytes& name, const data_type& type);
+
+/**
+ * Converts a collection of view schema snapshots into a collection of
+ * view_and_base objects, which are snapshots of both the view schema
+ * and the base-schema-dependent part of view description.
+ */
+std::vector<view_and_base> with_base_info_snapshot(std::vector<view_ptr>);
 
 }
 

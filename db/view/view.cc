@@ -138,21 +138,22 @@ const column_definition* view_info::view_column(const column_definition& base_de
     return _schema.get_column_definition(base_def.name());
 }
 
-const std::vector<column_id>& view_info::base_non_pk_columns_in_view_pk() const {
-    return _base_non_pk_columns_in_view_pk;
-}
-
 void view_info::initialize_base_dependent_fields(const schema& base) {
+    std::vector<column_id> base_non_pk_columns_in_view_pk;
     for (auto&& view_col : boost::range::join(_schema.partition_key_columns(), _schema.clustering_key_columns())) {
         auto* base_col = base.get_column_definition(view_col.name());
         if (base_col && !base_col->is_primary_key()) {
-            _base_non_pk_columns_in_view_pk.push_back(base_col->id);
+            base_non_pk_columns_in_view_pk.push_back(base_col->id);
         }
     }
+    _base_info = make_lw_shared<db::view::base_dependent_view_info>({
+        .base_schema = base.shared_from_this(),
+        .base_non_pk_columns_in_view_pk = std::move(base_non_pk_columns_in_view_pk)
+    });
 }
 
 bool view_info::has_base_non_pk_columns_in_view_pk() const {
-    return !_base_non_pk_columns_in_view_pk.empty();
+    return !_base_info->base_non_pk_columns_in_view_pk.empty();
 }
 
 namespace db {
@@ -203,12 +204,12 @@ bool may_be_affected_by(const schema& base, const view_info& view, const dht::de
 }
 
 static bool update_requires_read_before_write(const schema& base,
-        const std::vector<view_ptr>& views,
+        const std::vector<view_and_base>& views,
         const dht::decorated_key& key,
         const rows_entry& update,
         gc_clock::time_point now) {
     for (auto&& v : views) {
-        view_info& vf = *v->view_info();
+        view_info& vf = *v.view->view_info();
         if (may_be_affected_by(base, vf, key, update, now)) {
             return true;
         }
@@ -256,12 +257,14 @@ class view_updates final {
     view_ptr _view;
     const view_info& _view_info;
     schema_ptr _base;
+    base_info_ptr _base_info;
     std::unordered_map<partition_key, mutation_partition, partition_key::hashing, partition_key::equality> _updates;
 public:
-    explicit view_updates(view_ptr view, schema_ptr base)
-            : _view(std::move(view))
+    explicit view_updates(view_and_base vab)
+            : _view(std::move(vab.view))
             , _view_info(*_view->view_info())
-            , _base(std::move(base))
+            , _base(vab.base->base_schema)
+            , _base_info(vab.base)
             , _updates(8, partition_key::hashing(*_view), partition_key::equality(*_view)) {
     }
 
@@ -323,7 +326,7 @@ row_marker view_updates::compute_row_marker(const clustering_row& base_row) cons
     // they share liveness information. It's true especially in the only case currently allowed by CQL,
     // which assumes there's up to one non-pk column in the view key. It's also true in alternator,
     // which does not carry TTL information.
-    const auto& col_ids = _view_info.base_non_pk_columns_in_view_pk();
+    const auto& col_ids = _base_info->base_non_pk_columns_in_view_pk;
     if (!col_ids.empty()) {
         auto& def = _base->regular_column_at(col_ids[0]);
         // Note: multi-cell columns can't be part of the primary key.
@@ -554,7 +557,7 @@ void view_updates::delete_old_entry(const partition_key& base_key, const cluster
 
 void view_updates::do_delete_old_entry(const partition_key& base_key, const clustering_row& existing, const clustering_row& update, gc_clock::time_point now) {
     auto& r = get_view_row(base_key, existing);
-    const auto& col_ids = _view_info.base_non_pk_columns_in_view_pk();
+    const auto& col_ids = _base_info->base_non_pk_columns_in_view_pk;
     if (!col_ids.empty()) {
         // We delete the old row using a shadowable row tombstone, making sure that
         // the tombstone deletes everything in the row (or it might still show up).
@@ -695,7 +698,7 @@ void view_updates::generate_update(
         return;
     }
 
-    const auto& col_ids = _view_info.base_non_pk_columns_in_view_pk();
+    const auto& col_ids = _base_info->base_non_pk_columns_in_view_pk;
     if (col_ids.empty()) {
         // The view key is necessarily the same pre and post update.
         if (existing && existing->is_live(*_base)) {
@@ -950,12 +953,17 @@ future<stop_iteration> view_update_builder::on_results() {
 
 future<std::vector<frozen_mutation_and_schema>> generate_view_updates(
         const schema_ptr& base,
-        std::vector<view_ptr>&& views_to_update,
+        std::vector<view_and_base>&& views_to_update,
         flat_mutation_reader&& updates,
         flat_mutation_reader_opt&& existings,
         gc_clock::time_point now) {
-    auto vs = boost::copy_range<std::vector<view_updates>>(views_to_update | boost::adaptors::transformed([&] (auto&& v) {
-        return view_updates(std::move(v), base);
+    auto vs = boost::copy_range<std::vector<view_updates>>(views_to_update | boost::adaptors::transformed([&] (view_and_base v) {
+        if (base->version() != v.base->base_schema->version()) {
+            on_internal_error(vlogger, format("Schema version used for view updates ({}) does not match the current"
+                                              " base schema version of the view ({}) for view {}.{} of {}.{}",
+                base->version(), v.base->base_schema->version(), v.view->ks_name(), v.view->cf_name(), base->ks_name(), base->cf_name()));
+        }
+        return view_updates(std::move(v));
     }));
     auto builder = std::make_unique<view_update_builder>(base, std::move(vs), std::move(updates), std::move(existings), now);
     auto f = builder->build();
@@ -965,7 +973,7 @@ future<std::vector<frozen_mutation_and_schema>> generate_view_updates(
 query::clustering_row_ranges calculate_affected_clustering_ranges(const schema& base,
         const dht::decorated_key& key,
         const mutation_partition& mp,
-        const std::vector<view_ptr>& views,
+        const std::vector<view_and_base>& views,
         gc_clock::time_point now) {
     std::vector<nonwrapping_range<clustering_key_prefix_view>> row_ranges;
     std::vector<nonwrapping_range<clustering_key_prefix_view>> view_row_ranges;
@@ -973,11 +981,11 @@ query::clustering_row_ranges calculate_affected_clustering_ranges(const schema& 
     if (mp.partition_tombstone() || !mp.row_tombstones().empty()) {
         for (auto&& v : views) {
             // FIXME: #2371
-            if (v->view_info()->select_statement().get_restrictions()->has_unrestricted_clustering_columns()) {
+            if (v.view->view_info()->select_statement().get_restrictions()->has_unrestricted_clustering_columns()) {
                 view_row_ranges.push_back(nonwrapping_range<clustering_key_prefix_view>::make_open_ended_both_sides());
                 break;
             }
-            for (auto&& r : v->view_info()->partition_slice().default_row_ranges()) {
+            for (auto&& r : v.view->view_info()->partition_slice().default_row_ranges()) {
                 view_row_ranges.push_back(r.transform(std::mem_fn(&clustering_key_prefix::view)));
             }
         }
@@ -1984,6 +1992,12 @@ view_updating_consumer::view_updating_consumer(schema_ptr schema, table& table, 
         return table->stream_view_replica_updates(std::move(s), std::move(m), db::no_timeout, excluded_sstables);
     })
 { }
+
+std::vector<db::view::view_and_base> with_base_info_snapshot(std::vector<view_ptr> vs) {
+    return boost::copy_range<std::vector<db::view::view_and_base>>(vs | boost::adaptors::transformed([] (const view_ptr& v) {
+        return db::view::view_and_base{v, v->view_info()->base_info()};
+    }));
+}
 
 } // namespace view
 } // namespace db
