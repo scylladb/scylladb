@@ -101,7 +101,7 @@ public:
         }
     };
 
-    range_streamer(distributed<database>& db, token_metadata& tm, abort_source& abort_source, std::unordered_set<token> tokens, inet_address address, sstring description, streaming::stream_reason reason)
+    range_streamer(distributed<database>& db, const token_metadata& tm, abort_source& abort_source, std::unordered_set<token> tokens, inet_address address, sstring description, streaming::stream_reason reason)
         : _db(db)
         , _metadata(tm)
         , _abort_source(abort_source)
@@ -113,7 +113,7 @@ public:
         _abort_source.check();
     }
 
-    range_streamer(distributed<database>& db, token_metadata& tm, abort_source& abort_source, inet_address address, sstring description, streaming::stream_reason reason)
+    range_streamer(distributed<database>& db, const token_metadata& tm, abort_source& abort_source, inet_address address, sstring description, streaming::stream_reason reason)
         : range_streamer(db, tm, abort_source, std::unordered_set<token>(), address, description, reason) {
     }
 
@@ -165,7 +165,7 @@ public:
     size_t nr_ranges_to_stream();
 private:
     distributed<database>& _db;
-    token_metadata& _metadata;
+    const token_metadata& _metadata;
     abort_source& _abort_source;
     std::unordered_set<token> _tokens;
     inet_address _address;
