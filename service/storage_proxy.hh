@@ -126,10 +126,10 @@ class query_ranges_to_vnodes_generator {
     dht::partition_range_vector _ranges;
     dht::partition_range_vector::iterator _i; // iterator to current range in _ranges
     bool _local;
-    locator::token_metadata& _tm;
+    const locator::token_metadata& _tm;
     void process_one_range(size_t n, dht::partition_range_vector& ranges);
 public:
-    query_ranges_to_vnodes_generator(locator::token_metadata& tm, schema_ptr s, dht::partition_range_vector ranges, bool local = false);
+    query_ranges_to_vnodes_generator(const locator::token_metadata& tm, schema_ptr s, dht::partition_range_vector ranges, bool local = false);
     query_ranges_to_vnodes_generator(const query_ranges_to_vnodes_generator&) = delete;
     query_ranges_to_vnodes_generator(query_ranges_to_vnodes_generator&&) = default;
     // generate next 'n' vnodes, may return less than requested number of ranges
@@ -245,7 +245,6 @@ public:
     const gms::feature_service& features() const { return _features; }
 
     const locator::token_metadata& get_token_metadata() const { return _token_metadata; }
-    locator::token_metadata& get_token_metadata() { return _token_metadata; }
 
     query::max_result_size get_max_result_size(const query::partition_slice& slice) const;
 
