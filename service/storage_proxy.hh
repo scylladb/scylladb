@@ -250,7 +250,7 @@ public:
 
 private:
     distributed<database>& _db;
-    locator::token_metadata& _token_metadata;
+    const locator::token_metadata& _token_metadata;
     smp_service_group _read_smp_service_group;
     smp_service_group _write_smp_service_group;
     smp_service_group _write_ack_smp_service_group;
@@ -435,7 +435,7 @@ private:
     future<> mutate_counters(Range&& mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state, service_permit permit, clock_type::time_point timeout);
 public:
     storage_proxy(distributed<database>& db, config cfg, db::view::node_update_backlog& max_view_update_backlog,
-            scheduling_group_key stats_key, gms::feature_service& feat, locator::token_metadata& tokens);
+            scheduling_group_key stats_key, gms::feature_service& feat, const locator::token_metadata& tokens);
     ~storage_proxy();
     const distributed<database>& get_db() const {
         return _db;
