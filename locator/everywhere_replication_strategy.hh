@@ -44,7 +44,7 @@
 namespace locator {
 class everywhere_replication_strategy : public abstract_replication_strategy {
 public:
-    everywhere_replication_strategy(const sstring& keyspace_name, token_metadata& token_metadata, snitch_ptr& snitch, const std::map<sstring,sstring>& config_options);
+    everywhere_replication_strategy(const sstring& keyspace_name, const token_metadata& token_metadata, snitch_ptr& snitch, const std::map<sstring,sstring>& config_options);
 
     virtual std::vector<inet_address> calculate_natural_endpoints(const token& search_token, const token_metadata& tm) const override {
         return tm.get_all_endpoints();

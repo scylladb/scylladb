@@ -30,7 +30,7 @@ logging::logger abstract_replication_strategy::logger("replication_strategy");
 
 abstract_replication_strategy::abstract_replication_strategy(
     const sstring& ks_name,
-    token_metadata& token_metadata,
+    const token_metadata& token_metadata,
     snitch_ptr& snitch,
     const std::map<sstring, sstring>& config_options,
     replication_strategy_type my_type)
@@ -40,12 +40,12 @@ abstract_replication_strategy::abstract_replication_strategy(
         , _snitch(snitch)
         , _my_type(my_type) {}
 
-std::unique_ptr<abstract_replication_strategy> abstract_replication_strategy::create_replication_strategy(const sstring& ks_name, const sstring& strategy_name, token_metadata& tk_metadata, const std::map<sstring, sstring>& config_options) {
+std::unique_ptr<abstract_replication_strategy> abstract_replication_strategy::create_replication_strategy(const sstring& ks_name, const sstring& strategy_name, const token_metadata& tk_metadata, const std::map<sstring, sstring>& config_options) {
     assert(locator::i_endpoint_snitch::get_local_snitch_ptr());
     try {
         return create_object<abstract_replication_strategy,
                              const sstring&,
-                             token_metadata&,
+                             const token_metadata&,
                              snitch_ptr&,
                              const std::map<sstring, sstring>&>
             (strategy_name, ks_name, tk_metadata,
@@ -57,7 +57,7 @@ std::unique_ptr<abstract_replication_strategy> abstract_replication_strategy::cr
 
 void abstract_replication_strategy::validate_replication_strategy(const sstring& ks_name,
                                                                   const sstring& strategy_name,
-                                                                  token_metadata& token_metadata,
+                                                                  const token_metadata& token_metadata,
                                                                   const std::map<sstring, sstring>& config_options)
 {
     auto strategy = create_replication_strategy(ks_name, strategy_name, token_metadata, config_options);

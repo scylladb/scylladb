@@ -1157,7 +1157,7 @@ public:
      * boom, it is replaced.
      */
     lw_shared_ptr<keyspace_metadata> metadata() const;
-    void create_replication_strategy(locator::token_metadata& tm, const std::map<sstring, sstring>& options);
+    void create_replication_strategy(const locator::token_metadata& tm, const std::map<sstring, sstring>& options);
     /**
      * This should not really be return by reference, since replication
      * strategy is also volatile in that it could be replaced at "any" time.

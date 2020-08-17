@@ -871,7 +871,7 @@ bool database::column_family_exists(const utils::UUID& uuid) const {
 }
 
 void
-keyspace::create_replication_strategy(locator::token_metadata& tm, const std::map<sstring, sstring>& options) {
+keyspace::create_replication_strategy(const locator::token_metadata& tm, const std::map<sstring, sstring>& options) {
     using namespace locator;
 
     _replication_strategy =
@@ -1011,7 +1011,7 @@ const column_family& database::find_column_family(const schema_ptr& schema) cons
 using strategy_class_registry = class_registry<
     locator::abstract_replication_strategy,
     const sstring&,
-    locator::token_metadata&,
+    const locator::token_metadata&,
     locator::snitch_ptr&,
     const std::map<sstring, sstring>&>;
 
