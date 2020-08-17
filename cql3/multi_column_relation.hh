@@ -41,6 +41,7 @@
 
 #pragma once
 
+#include "cql3/expr/expression.hh"
 #include "cql3/relation.hh"
 #include "cql3/term.hh"
 #include "cql3/tuples.hh"
@@ -67,7 +68,7 @@ private:
 public:
 
     multi_column_relation(std::vector<shared_ptr<column_identifier::raw>> entities,
-        const operator_type& relation_type, shared_ptr<term::multi_column_raw> values_or_marker,
+        expr::oper_t relation_type, shared_ptr<term::multi_column_raw> values_or_marker,
         std::vector<shared_ptr<term::multi_column_raw>> in_values, shared_ptr<tuples::in_raw> in_marker)
         : relation(relation_type)
         , _entities(std::move(entities))
@@ -77,7 +78,7 @@ public:
     { }
 
     static shared_ptr<multi_column_relation> create_multi_column_relation(
-        std::vector<shared_ptr<column_identifier::raw>> entities, const operator_type& relation_type,
+        std::vector<shared_ptr<column_identifier::raw>> entities, expr::oper_t relation_type,
         shared_ptr<term::multi_column_raw> values_or_marker, std::vector<shared_ptr<term::multi_column_raw>> in_values,
         shared_ptr<tuples::in_raw> in_marker) {
         return ::make_shared<multi_column_relation>(std::move(entities), relation_type, std::move(values_or_marker),
@@ -93,8 +94,8 @@ public:
      * @return a new <code>MultiColumnRelation</code> instance
      */
     static shared_ptr<multi_column_relation> create_non_in_relation(std::vector<shared_ptr<column_identifier::raw>> entities,
-                                                                    const operator_type& relation_type, shared_ptr<term::multi_column_raw> values_or_marker) {
-        assert(relation_type != operator_type::IN);
+                                                                    expr::oper_t relation_type, shared_ptr<term::multi_column_raw> values_or_marker) {
+        assert(relation_type != expr::oper_t::IN);
         return create_multi_column_relation(std::move(entities), relation_type, std::move(values_or_marker), {}, {});
     }
 
@@ -109,14 +110,14 @@ public:
                                                                 std::vector<shared_ptr<tuples::literal>> in_values) {
         std::vector<shared_ptr<term::multi_column_raw>> values(in_values.size());
         std::copy(in_values.begin(), in_values.end(), values.begin());
-        return create_multi_column_relation(std::move(entities), operator_type::IN, {}, std::move(values), {});
+        return create_multi_column_relation(std::move(entities), expr::oper_t::IN, {}, std::move(values), {});
     }
 
     static shared_ptr<multi_column_relation> create_in_relation(std::vector<shared_ptr<column_identifier::raw>> entities,
                                                                 std::vector<shared_ptr<tuples::raw>> in_values) {
         std::vector<shared_ptr<term::multi_column_raw>> values(in_values.size());
         std::copy(in_values.begin(), in_values.end(), values.begin());
-        return create_multi_column_relation(std::move(entities), operator_type::IN, {}, std::move(values), {});
+        return create_multi_column_relation(std::move(entities), expr::oper_t::IN, {}, std::move(values), {});
     }
 
     /**
@@ -128,7 +129,7 @@ public:
      */
     static shared_ptr<multi_column_relation> create_single_marker_in_relation(std::vector<shared_ptr<column_identifier::raw>> entities,
                                                                               shared_ptr<tuples::in_raw> in_marker) {
-        return create_multi_column_relation(std::move(entities), operator_type::IN, {}, {}, std::move(in_marker));
+        return create_multi_column_relation(std::move(entities), expr::oper_t::IN, {}, {}, std::move(in_marker));
     }
 
     const std::vector<shared_ptr<column_identifier::raw>>& get_entities() const {
@@ -141,7 +142,7 @@ private:
      * @return a Tuples.Literal for non-IN relations or Tuples.Raw marker for a single tuple.
      */
     shared_ptr<term::multi_column_raw> get_value() {
-        return _relation_type == operator_type::IN ? _in_marker : _values_or_marker;
+        return _relation_type == expr::oper_t::IN ? _in_marker : _values_or_marker;
     }
 public:
     virtual bool is_multi_column() const override { return true; }
@@ -248,9 +249,7 @@ protected:
             str += !_in_marker ? "?" : tuples::tuple_to_string(_in_values);
             return str;
         }
-        str += sstring(" ") + _relation_type.to_string() + " ";
-        str += _values_or_marker->to_string();
-        return str;
+        return format("{} {} {}", str, _relation_type, _values_or_marker->to_string());
     }
 };
 

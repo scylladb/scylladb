@@ -48,6 +48,7 @@
 #include "cql3/restrictions/single_column_primary_key_restrictions.hh"
 #include "cql3/constants.hh"
 #include "cql3/lists.hh"
+#include "cql3/expr/expression.hh"
 #include <boost/algorithm/cxx11/any_of.hpp>
 
 namespace cql3 {
@@ -564,7 +565,7 @@ private:
         using namespace expr;
         if (!bound){
             auto r = ::make_shared<cql3::restrictions::single_column_restriction>(*_column_defs[column_pos]);
-            r->expression = make_column_op(_column_defs[column_pos], operator_type::EQ, std::move(term));
+            r->expression = make_column_op(_column_defs[column_pos], expr::oper_t::EQ, std::move(term));
             return r;
         } else {
             auto r = ::make_shared<cql3::restrictions::single_column_restriction>(*_column_defs[column_pos]);

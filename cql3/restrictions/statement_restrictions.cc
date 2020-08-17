@@ -178,7 +178,7 @@ statement_restrictions::statement_restrictions(database& db,
      */
     if (!where_clause.empty()) {
         for (auto&& relation : where_clause) {
-            if (relation->get_operator() == cql3::operator_type::IS_NOT) {
+            if (relation->get_operator() == cql3::expr::oper_t::IS_NOT) {
                 single_column_relation* r =
                         dynamic_cast<single_column_relation*>(relation.get());
                 // The "IS NOT NULL" restriction is only supported (and

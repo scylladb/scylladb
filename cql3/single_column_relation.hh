@@ -50,6 +50,7 @@
 
 #include "cql3/relation.hh"
 #include "cql3/column_identifier.hh"
+#include "cql3/expr/expression.hh"
 #include "cql3/term.hh"
 #include "types/collection.hh"
 
@@ -68,7 +69,7 @@ private:
     std::vector<::shared_ptr<term::raw>> _in_values;
 public:
     single_column_relation(::shared_ptr<column_identifier::raw> entity, ::shared_ptr<term::raw> map_key,
-        const operator_type& type, ::shared_ptr<term::raw> value, std::vector<::shared_ptr<term::raw>> in_values)
+        expr::oper_t type, ::shared_ptr<term::raw> value, std::vector<::shared_ptr<term::raw>> in_values)
             : relation(type)
             , _entity(std::move(entity))
             , _map_key(std::move(map_key))
@@ -85,7 +86,7 @@ public:
      * @param value the value being compared.
      */
     single_column_relation(::shared_ptr<column_identifier::raw> entity, ::shared_ptr<term::raw> map_key,
-        const operator_type& type, ::shared_ptr<term::raw> value)
+        expr::oper_t type, ::shared_ptr<term::raw> value)
             : single_column_relation(std::move(entity), std::move(map_key), type, std::move(value), {})
     { }
 
@@ -96,13 +97,13 @@ public:
      * @param type the type that describes how this entity relates to the value.
      * @param value the value being compared.
      */
-    single_column_relation(::shared_ptr<column_identifier::raw> entity, const operator_type& type, ::shared_ptr<term::raw> value)
+    single_column_relation(::shared_ptr<column_identifier::raw> entity, expr::oper_t type, ::shared_ptr<term::raw> value)
         : single_column_relation(std::move(entity), {}, type, std::move(value))
     { }
 
     static ::shared_ptr<single_column_relation> create_in_relation(::shared_ptr<column_identifier::raw> entity,
                                                                    std::vector<::shared_ptr<term::raw>> in_values) {
-        return ::make_shared<single_column_relation>(std::move(entity), nullptr, operator_type::IN, nullptr, std::move(in_values));
+        return ::make_shared<single_column_relation>(std::move(entity), nullptr, expr::oper_t::IN, nullptr, std::move(in_values));
     }
 
     ::shared_ptr<column_identifier::raw> get_entity() {
@@ -123,8 +124,8 @@ protected:
     {
         switch (relationType)
         {
-            case GT: return new SingleColumnRelation(entity, operator_type.GTE, value);
-            case LT: return new SingleColumnRelation(entity, operator_type.LTE, value);
+            case GT: return new SingleColumnRelation(entity, expr::oper_t.GTE, value);
+            case LT: return new SingleColumnRelation(entity, expr::oper_t.LTE, value);
             default: return this;
         }
     }
@@ -181,7 +182,7 @@ protected:
         auto term = to_term(to_receivers(*schema, column_def), *_value, db, schema->ks_name(), bound_names);
         auto r = ::make_shared<restrictions::single_column_restriction>(column_def);
         r->expression = expr::make_column_op(
-                &column_def, is_key ? operator_type::CONTAINS_KEY : operator_type::CONTAINS, std::move(term));
+                &column_def, is_key ? expr::oper_t::CONTAINS_KEY : expr::oper_t::CONTAINS, std::move(term));
         return r;
     }
 

@@ -49,6 +49,7 @@
 #include "column_identifier.hh"
 #include "term.hh"
 #include "restrictions/restriction.hh"
+#include "expr/expression.hh"
 
 namespace cql3 {
 
@@ -86,7 +87,7 @@ private:
 
 public:
     token_relation(std::vector<::shared_ptr<column_identifier::raw>> entities,
-            const operator_type& type, ::shared_ptr<term::raw> value)
+            expr::oper_t type, ::shared_ptr<term::raw> value)
             : relation(type), _entities(std::move(entities)), _value(
                     std::move(value)) {
     }

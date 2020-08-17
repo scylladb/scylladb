@@ -885,27 +885,6 @@ expression replace_column_def(const expression& expr, const column_definition* n
         }, expr);
 }
 
-expression make_column_op(const column_definition* cdef, const operator_type& op, ::shared_ptr<term> value) {
-    const std::unordered_map<const operator_type*, oper_t> opmap{
-        {&operator_type::EQ, oper_t::EQ},
-        {&operator_type::NEQ, oper_t::NEQ},
-        {&operator_type::LT, oper_t::LT},
-        {&operator_type::LTE, oper_t::LTE},
-        {&operator_type::GT, oper_t::GT},
-        {&operator_type::GTE, oper_t::GTE},
-        {&operator_type::IN, oper_t::IN},
-        {&operator_type::CONTAINS, oper_t::CONTAINS},
-        {&operator_type::CONTAINS_KEY, oper_t::CONTAINS_KEY},
-        {&operator_type::IS_NOT, oper_t::IS_NOT},
-        {&operator_type::LIKE, oper_t::LIKE},
-    };
-    const auto found = opmap.find(&op);
-    if (found == opmap.end()) {
-        throw std::logic_error(format("make_column_op: Unrecognized operator_type: {}", op));
-    }
-    return binary_operator{column_value(cdef), found->second, std::move(value)};
-}
-
 std::ostream& operator<<(std::ostream& s, oper_t op) {
     switch (op) {
     case oper_t::EQ:
