@@ -2593,7 +2593,9 @@ class scylla_fiber(gdb.Command):
         # We can't just merge them as `info symbol` might return mangled names too.
         self._whitelist = scylla_fiber._make_symbol_matchers([
                 ("seastar", "continuation"),
-                ("seastar", "future", "thread_wake_task"),
+                ("seastar", "future", "thread_wake_task"), # backward compatibility with older versions
+                ("seastar", "(anonymous namespace)", "thread_wake_task"),
+                ("seastar", "thread_context"),
                 ("seastar", "internal", "do_until_state"),
                 ("seastar", "internal", "do_with_state"),
                 ("seastar", "internal", "do_for_each_state"),
