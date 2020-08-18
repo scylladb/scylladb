@@ -125,7 +125,7 @@ void hash3_x64_128(InputIterator in, uint32_t length, uint64_t seed, std::array<
     typename std::iterator_traits<InputIterator>::value_type tmp[15];
     std::copy_n(in, length & 15, tmp);
 
-    switch(length & 15)
+    switch (length & 15)
     {
         case 15: k2 ^= ((uint64_t) tmp[14]) << 48;
         case 14: k2 ^= ((uint64_t) tmp[13]) << 40;

@@ -1669,7 +1669,7 @@ database::make_keyspace_config(const keyspace_metadata& ksm) {
 namespace db {
 
 std::ostream& operator<<(std::ostream& os, const write_type& t) {
-    switch(t) {
+    switch (t) {
         case write_type::SIMPLE: return os << "SIMPLE";
         case write_type::BATCH: return os << "BATCH";
         case write_type::UNLOGGED_BATCH: return os << "UNLOGGED_BATCH";

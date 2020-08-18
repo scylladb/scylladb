@@ -101,7 +101,7 @@ partition_key partition_key::from_nodetool_style_string(const schema_ptr s, cons
 }
 
 std::ostream& operator<<(std::ostream& out, const bound_kind k) {
-    switch(k) {
+    switch (k) {
     case bound_kind::excl_end:
         return out << "excl end";
     case bound_kind::incl_start:
@@ -115,7 +115,7 @@ std::ostream& operator<<(std::ostream& out, const bound_kind k) {
 }
 
 bound_kind invert_kind(bound_kind k) {
-    switch(k) {
+    switch (k) {
     case bound_kind::excl_start: return bound_kind::incl_end;
     case bound_kind::incl_start: return bound_kind::excl_end;
     case bound_kind::excl_end:   return bound_kind::incl_start;
@@ -125,7 +125,7 @@ bound_kind invert_kind(bound_kind k) {
 }
 
 int32_t weight(bound_kind k) {
-    switch(k) {
+    switch (k) {
     case bound_kind::excl_end:
         return -2;
     case bound_kind::incl_start:

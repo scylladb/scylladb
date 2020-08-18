@@ -207,7 +207,7 @@ void hash3_x64_128(bytes_view key, uint64_t seed, std::array<uint64_t,2> &result
     uint64_t k1 = 0;
     uint64_t k2 = 0;
 
-    switch(length & 15)
+    switch (length & 15)
     {
     case 15: k2 ^= ((uint64_t) key[14]) << 48;
     case 14: k2 ^= ((uint64_t) key[13]) << 40;

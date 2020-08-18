@@ -1365,7 +1365,7 @@ private:
         return partition_key::from_exploded(composite.values());
     }
     static db::consistency_level cl_from_thrift(const ConsistencyLevel::type consistency_level) {
-        switch(consistency_level) {
+        switch (consistency_level) {
         case ConsistencyLevel::type::ONE: return db::consistency_level::ONE;
         case ConsistencyLevel::type::QUORUM: return db::consistency_level::QUORUM;
         case ConsistencyLevel::type::LOCAL_QUORUM: return db::consistency_level::LOCAL_QUORUM;
