@@ -955,8 +955,9 @@ public:
         return *_config.sstables_manager;
     }
 
+    // Reader's schema must be the same as the base schema of each of the views.
     future<> populate_views(
-            std::vector<view_ptr>,
+            std::vector<db::view::view_and_base>,
             dht::token base_token,
             flat_mutation_reader&&,
             gc_clock::time_point);

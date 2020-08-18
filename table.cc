@@ -1791,16 +1791,14 @@ table::local_base_lock(
  * @return a future that resolves when the updates have been acknowledged by the view replicas
  */
 future<> table::populate_views(
-        std::vector<view_ptr> views,
+        std::vector<db::view::view_and_base> views,
         dht::token base_token,
         flat_mutation_reader&& reader,
         gc_clock::time_point now) {
-    // FIXME: Handle schema version mismatch between view's base_dependent_view_info and reader's schema.
-    // Currently, generate_view_updates() will throw on schema version mismatch.
     auto& schema = reader.schema();
     return db::view::generate_view_updates(
             schema,
-            db::view::with_base_info_snapshot(views),
+            std::move(views),
             std::move(reader),
             { },
             now).then([base_token = std::move(base_token), this] (std::vector<frozen_mutation_and_schema>&& updates) mutable {

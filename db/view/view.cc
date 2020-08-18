@@ -1774,7 +1774,7 @@ public:
             return stop_iteration::yes;
         }
 
-        _fragments_memory_usage += cr.memory_usage(*_step.base->schema());
+        _fragments_memory_usage += cr.memory_usage(*_step.reader.schema());
         _fragments.push_back(std::move(cr));
         if (_fragments_memory_usage > batch_memory_max) {
             // Although we have not yet completed the batch of base rows that
@@ -1796,10 +1796,14 @@ public:
         _builder._as.check();
         if (!_fragments.empty()) {
             _fragments.push_front(partition_start(_step.current_key, tombstone()));
+            auto base_schema = _step.base->schema();
+            auto views = with_base_info_snapshot(_views_to_build);
+            auto reader = make_flat_mutation_reader_from_fragments(_step.reader.schema(), std::move(_fragments));
+            reader.upgrade_schema(base_schema);
             _step.base->populate_views(
-                    _views_to_build,
+                    std::move(views),
                     _step.current_token(),
-                    make_flat_mutation_reader_from_fragments(_step.base->schema(), std::move(_fragments)),
+                    std::move(reader),
                     _now).get();
             _fragments.clear();
             _fragments_memory_usage = 0;
