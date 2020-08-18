@@ -1151,7 +1151,7 @@ future<std::unordered_set<sstring>> table::get_sstables_by_partition_key(const s
             [this] (std::unordered_set<sstring>& filenames, lw_shared_ptr<sstables::sstable_set::incremental_selector>& sel, partition_key& pk) {
         return do_with(dht::decorated_key(dht::decorate_key(*_schema, pk)),
                 [this, &filenames, &sel, &pk](dht::decorated_key& dk) mutable {
-            auto sst = sel->select(dk).sstables;
+            const auto& sst = sel->select(dk).sstables;
             auto hk = sstables::sstable::make_hashed_key(*_schema, dk.key());
 
             return do_for_each(sst, [this, &filenames, &dk, hk = std::move(hk)] (std::vector<sstables::shared_sstable>::const_iterator::reference s) mutable {
