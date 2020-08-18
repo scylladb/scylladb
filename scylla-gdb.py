@@ -994,6 +994,19 @@ def find_vptrs():
         idx += pages[idx]['span_size']
 
 
+def find_vptrs_of_type(vptr=None, typename=None):
+    """
+    Return virtual objects whose vtable pointer equals vptr and/or matches typename.
+    typename has to be a prefix of the fully qualified name of the type
+    """
+    for obj_addr, vtable_addr in find_vptrs():
+        if vptr is not None and vtable_addr != vptr:
+            continue
+        symbol_name = resolve(vtable_addr, startswith=typename)
+        if symbol_name is not None:
+            yield obj_addr, vtable_addr, symbol_name
+
+
 def find_single_sstable_readers():
     def _lookup_type(type_name):
         return {'name': type_name, 'ptr_type': gdb.lookup_type(type_name).pointer()}
