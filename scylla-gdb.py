@@ -75,6 +75,9 @@ class intrusive_list:
     def __bool__(self):
         return self.__nonzero__()
 
+    def __len__(self):
+        return len(list(self))
+
 
 class std_optional:
     def __init__(self, ref):
