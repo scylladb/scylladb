@@ -26,6 +26,7 @@
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/file.hh>
 #include <seastar/core/enum.hh>
+#include <seastar/util/bool_class.hh>
 
 #include "seastarx.hh"
 

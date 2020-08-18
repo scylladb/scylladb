@@ -38,6 +38,7 @@
 #include <seastar/core/rwlock.hh>
 #include <seastar/core/metrics.hh>
 #include <seastar/core/execution_stage.hh>
+#include <seastar/util/bool_class.hh>
 #include <seastar/util/defer.hh>
 #include <boost/algorithm/string/classification.hpp>
 #include <boost/algorithm/string/split.hpp>

@@ -20,6 +20,7 @@
  */
 
 #include "integrity_checked_file_impl.hh"
+#include <seastar/core/do_with.hh>
 #include <seastar/core/print.hh>
 #include <boost/algorithm/cxx11/all_of.hpp>
 
