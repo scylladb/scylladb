@@ -138,11 +138,11 @@ bool bounds_ck_symmetrically(const expression& expr) {
             if (col && !col->is_clustering_key()) {
                 return;
             }
-            if (*oper.op == operator_type::EQ) {
+            if (oper.op == oper_t::EQ) {
                 _found_bounds[col] = UPPER | LOWER;
-            } else if (*oper.op == operator_type::LT || *oper.op == operator_type::LTE) {
+            } else if (oper.op == oper_t::LT || oper.op == oper_t::LTE) {
                 _found_bounds[col] |= UPPER;
-            } else if (*oper.op == operator_type::GTE || *oper.op == operator_type::GT) {
+            } else if (oper.op == oper_t::GTE || oper.op == oper_t::GT) {
                 _found_bounds[col] |= LOWER;
             }
         }

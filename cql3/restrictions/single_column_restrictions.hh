@@ -151,7 +151,7 @@ public:
      * @throws InvalidRequestException if the new restriction cannot be added
      */
     void add_restriction(::shared_ptr<single_column_restriction> restriction) {
-        if (!find(restriction->expression, operator_type::EQ)) {
+        if (!find(restriction->expression, expr::oper_t::EQ)) {
             _is_all_eq = false;
         }
 

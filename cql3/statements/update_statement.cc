@@ -335,7 +335,7 @@ insert_statement::prepare_internal(database& db, schema_ptr schema,
         auto&& value = _column_values[i];
 
         if (def->is_primary_key()) {
-            relations.push_back(::make_shared<single_column_relation>(col, operator_type::EQ, value));
+            relations.push_back(::make_shared<single_column_relation>(col, expr::oper_t::EQ, value));
         } else {
             auto operation = operation::set_value(value).prepare(db, keyspace(), *def);
             operation->collect_marker_specification(bound_names);

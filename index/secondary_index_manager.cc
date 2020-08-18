@@ -64,8 +64,8 @@ bool index::depends_on(const column_definition& cdef) const {
     return cdef.name_as_text() == _target_column;
 }
 
-bool index::supports_expression(const column_definition& cdef, const cql3::operator_type& op) const {
-    return cdef.name_as_text() == _target_column && op == cql3::operator_type::EQ;
+bool index::supports_expression(const column_definition& cdef, const cql3::expr::oper_t op) const {
+    return cdef.name_as_text() == _target_column && op == cql3::expr::oper_t::EQ;
 }
 
 const index_metadata& index::metadata() const {
