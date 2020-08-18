@@ -29,10 +29,10 @@ The `dist` target generates the following tarballs (*relocatable packages*), whi
 
 ### Relocatable package artifacts
 
-* `build/<mode>/scylla-package.tar.gz`
-* `build/release/scylla-python3-package.tar.gz`
-* `scylla-jmx/build/scylla-jmx-package.tar.gz`
-* `scylla-tools/build/scylla-tools-package.tar.gz`
+* `build/<mode>/dist/tar/scylla-package.tar.gz`
+* `build/<mode>/dist/tar/scylla-python3-package.tar.gz`
+* `build/<mode>/dist/tar/scylla-jmx-package.tar.gz`
+* `build/<mode>/dist/tar/scylla-tools-package.tar.gz`
 
 ### RPM package artifacts
 
