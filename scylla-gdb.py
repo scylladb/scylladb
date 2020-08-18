@@ -2701,6 +2701,7 @@ class scylla_fiber(gdb.Command):
         this_task = self._probe_pointer(ptr, scanned_region_size, using_seastar_allocator, verbose)
         if this_task is None:
             gdb.write("Provided pointer 0x{:016x} is not an object managed by seastar or not a task pointer\n".format(ptr))
+            return this_task, []
 
         i = 0
         tptr_meta = this_task[0]
