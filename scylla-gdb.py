@@ -99,6 +99,29 @@ class std_optional:
             return bool(self.ref['_M_engaged']) # Scylla 3.0 compatibility
 
 
+class std_tuple:
+    def __init__(self, ref):
+        self.ref = ref
+        self.members = []
+
+        t = self.ref[self.ref.type.fields()[0]]
+        while len(t.type.fields()) == 2:
+            tail, head = t.type.fields()
+            self.members.append(t[head]['_M_head_impl'])
+            t = t[tail]
+
+        self.members.append(t[t.type.fields()[0]]['_M_head_impl'])
+
+    def __len__(self):
+        return len(self.members)
+
+    def __iter__(self):
+        return iter(self.members)
+
+    def __getitem__(self, item):
+        return self.members[item]
+
+
 class intrusive_set:
     size_t = gdb.lookup_type('size_t')
 
@@ -3753,6 +3776,8 @@ class scylla_gdb_func_collection_element(gdb.Function):
             typ = typ.target().strip_typedefs()
         if typ.name.startswith('std::vector<'):
             return std_vector(collection)[int(key)]
+        elif typ.name.startswith('std::tuple<'):
+            return std_tuple(collection)[int(key)]
         elif typ.name.startswith('std::__cxx11::list<'):
             return std_list(collection)[int(key)]
         elif typ.name.startswith('seastar::circular_buffer<'):
