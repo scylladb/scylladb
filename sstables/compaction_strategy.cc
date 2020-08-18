@@ -1020,7 +1020,7 @@ bool compaction_strategy::use_interposer_consumer() const {
 compaction_strategy make_compaction_strategy(compaction_strategy_type strategy, const std::map<sstring, sstring>& options) {
     ::shared_ptr<compaction_strategy_impl> impl;
 
-    switch(strategy) {
+    switch (strategy) {
     case compaction_strategy_type::null:
         impl = ::make_shared<null_compaction_strategy>();
         break;

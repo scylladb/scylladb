@@ -33,7 +33,7 @@ static thread_local std::unordered_map<cause, bool> _warnings;
 static logging::logger ulogger("unimplemented");
 
 std::ostream& operator<<(std::ostream& out, cause c) {
-    switch(c) {
+    switch (c) {
         case cause::INDEXES: return out << "INDEXES";
         case cause::LWT: return out << "LWT";
         case cause::PAGING: return out << "PAGING";

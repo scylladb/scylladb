@@ -207,7 +207,7 @@ castas_fctn get_castas_fctn(data_type to_type, data_type from_type) {
     }
 
     using kind = abstract_type::kind;
-    switch(cast_switch_case_val(to_type->get_kind(), from_type->get_kind())) {
+    switch (cast_switch_case_val(to_type->get_kind(), from_type->get_kind())) {
     case cast_switch_case_val(kind::byte, kind::short_kind):
         return castas_fctn_simple<int8_t, int16_t>;
     case cast_switch_case_val(kind::byte, kind::int32):

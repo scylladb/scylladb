@@ -336,7 +336,7 @@ public:
 
     mutation_fragment(const schema& s, const mutation_fragment& o)
         : _kind(o._kind), _data(std::make_unique<data>()) {
-        switch(_kind) {
+        switch (_kind) {
             case kind::static_row:
                 new (&_data->_static_row) static_row(s, o._data->_static_row);
                 break;
@@ -476,7 +476,7 @@ public:
         if (other._kind != _kind) {
             return false;
         }
-        switch(_kind) {
+        switch (_kind) {
         case kind::static_row:
             return as_static_row().equal(s, other.as_static_row());
         case kind::clustering_row:

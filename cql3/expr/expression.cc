@@ -49,7 +49,7 @@ std::optional<atomic_cell_value_view> do_get_value(const schema& schema,
         const clustering_key_prefix& ckey,
         const row& cells,
         gc_clock::time_point now) {
-    switch(cdef.kind) {
+    switch (cdef.kind) {
         case column_kind::partition_key:
             return atomic_cell_value_view(key.get_component(schema, cdef.component_index()));
         case column_kind::clustering_key:

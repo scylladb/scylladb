@@ -674,7 +674,7 @@ rjson::value calculate_value(const parsed::value& v,
 // either a single value, or v1+v2 or v1-v2.
 rjson::value calculate_value(const parsed::set_rhs& rhs,
         const rjson::value* previous_item) {
-    switch(rhs._op) {
+    switch (rhs._op) {
     case 'v':
         return calculate_value(rhs._v1, calculate_value_caller::UpdateExpression, previous_item);
     case '+': {
