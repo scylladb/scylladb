@@ -31,6 +31,7 @@
 #include "cdc/generation.hh"
 #include "cdc/split.hh"
 #include "cdc/cdc_options.hh"
+#include "cdc/change_visitor.hh"
 #include "bytes.hh"
 #include "database.hh"
 #include "db/config.hh"
@@ -733,6 +734,109 @@ auto make_maybe_back_inserter(Container& c, const abstract_type& type, collectio
     return maybe_back_insert_iterator<Container, T>(c, type, s);
 }
 
+static size_t collection_size(const bytes_opt& bo) {
+    if (bo) {
+        bytes_view bv(*bo);
+        return read_collection_size(bv, cql_serialization_format::internal());
+    }
+    return 0;
+}
+template<typename Func>
+static void udt_for_each(const bytes_opt& bo, Func&& f) {
+    if (bo) {
+        bytes_view bv(*bo);
+        std::for_each(tuple_deserializing_iterator::start(bv), tuple_deserializing_iterator::finish(bv), std::forward<Func>(f));
+    }
+}
+static bytes merge(const collection_type_impl& ctype, const bytes_opt& prev, const bytes_opt& next, const bytes_opt& deleted) {
+    std::vector<std::pair<bytes_view, bytes_view>> res;
+    res.reserve(collection_size(prev) + collection_size(next));
+    auto type = ctype.name_comparator();
+    auto cmp = [&type = *type](const std::pair<bytes_view, bytes_view>& p1, const std::pair<bytes_view, bytes_view>& p2) {
+        return type.compare(p1.first, p2.first) < 0;
+    };
+    collection_iterator<std::pair<bytes_view, bytes_view>> e, i(prev), j(next);
+    // note order: set_union, when finding doubles, use value from first1 (j here). So
+    // since this is next, it has prio
+    std::set_union(j, e, i, e, make_maybe_back_inserter(res, *type, collection_iterator<bytes_view>(deleted)), cmp);
+    return map_type_impl::serialize_partially_deserialized_form(res, cql_serialization_format::internal());
+}
+static bytes merge(const set_type_impl& ctype, const bytes_opt& prev, const bytes_opt& next, const bytes_opt& deleted) {
+    std::vector<bytes_view> res;
+    res.reserve(collection_size(prev) + collection_size(next));
+    auto type = ctype.name_comparator();
+    auto cmp = [&type = *type](bytes_view k1, bytes_view k2) {
+        return type.compare(k1, k2) < 0;
+    };
+    collection_iterator<bytes_view> e, i(prev), j(next), d(deleted);
+    std::set_union(j, e, i, e, make_maybe_back_inserter(res, *type, d), cmp);
+    return set_type_impl::serialize_partially_deserialized_form(res, cql_serialization_format::internal());
+}
+static bytes merge(const user_type_impl& type, const bytes_opt& prev, const bytes_opt& next, const bytes_opt& deleted) {
+    std::vector<bytes_view_opt> res(type.size());
+    udt_for_each(prev, [&res, i = res.begin()](bytes_view_opt k) mutable {
+        *i++ = k;
+    });
+    udt_for_each(next, [&res, i = res.begin()](bytes_view_opt k) mutable {
+        if (k) {
+            *i = k;
+        }
+        ++i;
+    });
+    collection_iterator<bytes_view> e, d(deleted);
+    std::for_each(d, e, [&res](bytes_view k) {
+        auto index = deserialize_field_index(k);
+        res[index] = std::nullopt;
+    });
+    return type.build_value(res);
+}
+static bytes merge(const abstract_type& type, const bytes_opt& prev, const bytes_opt& next, const bytes_opt& deleted) {
+    throw std::runtime_error(format("cdc merge: unknown type {}", type.name()));
+}
+
+using cell_map = std::unordered_map<const column_definition*, bytes_opt>;
+using row_states_map = std::unordered_map<clustering_key, cell_map, clustering_key::hashing, clustering_key::equality>;
+
+static bytes_opt get_col_from_row_state(const cell_map* state, const column_definition& cdef) {
+    if (state) {
+        if (auto it = state->find(&cdef); it != state->end()) {
+            return it->second;
+        }
+    }
+    return std::nullopt;
+}
+
+static cell_map* get_row_state(row_states_map& row_states, const clustering_key& ck) {
+    auto it = row_states.find(ck);
+    return it == row_states.end() ? nullptr : &it->second;
+}
+
+static bytes_opt get_preimage_col_value(const column_definition& cdef, const cql3::untyped_result_set_row *pirow) {
+    if (!pirow || !pirow->has(cdef.name_as_text())) {
+        return std::nullopt;
+    }
+    return cdef.is_atomic()
+        ? pirow->get_blob(cdef.name_as_text())
+        : visit(*cdef.type, make_visitor(
+            // flatten set
+            [&] (const set_type_impl& type) {
+                auto v = pirow->get_view(cdef.name_as_text());
+                auto f = cql_serialization_format::internal();
+                auto n = read_collection_size(v, f);
+                std::vector<bytes_view> tmp;
+                tmp.reserve(n);
+                while (n--) {
+                    tmp.emplace_back(read_collection_value(v, f)); // key
+                    read_collection_value(v, f); // value. ignore.
+                }
+                return set_type_impl::serialize_partially_deserialized_form(tmp, f);
+            },
+            [&] (const abstract_type& o) -> bytes {
+                return pirow->get_blob(cdef.name_as_text());
+            }
+        ));
+}
+
 /* Given a timestamp, generates a timeuuid with the following properties:
  * 1. `t1` < `t2` implies timeuuid_type->less(timeuuid_type->decompose(generate_timeuuid(`t1`)),
  *                                            timeuuid_type->decompose(generate_timeuuid(`t2`))),
@@ -828,7 +932,7 @@ public:
     }
 
     // Each regular and static column in the base schema has a corresponding column in the log schema
-    // with boolean type and the name constructed by prefixing the original name with ,,cdc$deleted_''
+    // with boolean type and the name constructed by prefixing the original name with ``cdc$deleted_''
     // Given a reference to such a column from the base schema, this function sets the corresponding column
     // in the log to `true` for the given row. If not called, the column will be `null`.
     void set_deleted(const clustering_key& log_ck, const column_definition& base_cdef) {
@@ -837,7 +941,7 @@ public:
 
     // Each regular and static non-atomic column in the base schema has a corresponding column in the log schema
     // whose type is a frozen `set` of keys (the types of which depend on the base type) and whose name is constructed
-    // by prefixing the original name with ,,cdc$deleted_elements_''.
+    // by prefixing the original name with ``cdc$deleted_elements_''.
     // Given a reference to such a column from the base schema, this function sets the corresponding column
     // in the log to the given set of keys for the given row.
     void set_deleted_elements(const clustering_key& log_ck, const column_definition& base_cdef, bytes deleted_elements) {
@@ -857,6 +961,350 @@ private:
             ++pos;
         }
     }
+};
+
+static bytes get_bytes(const atomic_cell_view& acv) {
+    return acv.value().linearize();
+}
+
+static bytes_view get_bytes_view(const atomic_cell_view& acv, std::vector<bytes>& buf) {
+    return acv.value().is_fragmented()
+        ? bytes_view{buf.emplace_back(acv.value().linearize())}
+        : acv.value().first_fragment();
+}
+
+static ttl_opt get_ttl(const atomic_cell_view& acv) {
+    return acv.is_live_and_has_ttl() ? std::optional{acv.ttl()} : std::nullopt;
+}
+
+static ttl_opt get_ttl(const row_marker& rm) {
+    return rm.is_expiring() ? std::optional{rm.ttl()} : std::nullopt;
+}
+
+/* Visits the cells and tombstones of a single base mutation row and constructs corresponding delta-row cells
+ * for the corresponding log mutation.
+ *
+ * Additionally updates state required to produce pre/post-image if configured to do so (`enable_updating_state`).
+ */
+struct process_row_visitor {
+    const clustering_key& _log_ck;
+
+    stats::part_type_set& _touched_parts;
+
+    // The base row being visited gets a single corresponding log delta row.
+    // This is the value of the "cdc$ttl" column for that delta row.
+    ttl_opt _ttl_column = std::nullopt;
+
+    // Used to create cells in the corresponding delta row in the log mutation.
+    log_mutation_builder& _builder;
+
+    /* Images-related state */
+    const bool _enable_updating_state = false;
+
+    // Null for the static row, non-null for clustered rows.
+    const clustering_key* const _base_ck;
+
+    // The state required to produce pre/post-image for the row being visited.
+    // Might be null if the preimage query didn't return a result for this row.
+    cell_map* _row_state;
+
+    // The state required to produce pre/post-image for all rows.
+    // We need to keep a reference to it since we might insert new row_states during the visitation.
+    row_states_map& _clustering_row_states;
+
+    process_row_visitor(
+            const clustering_key& log_ck, stats::part_type_set& touched_parts, log_mutation_builder& builder,
+            bool enable_updating_state, const clustering_key* base_ck, cell_map* row_state,
+            row_states_map& clustering_row_states)
+        : _log_ck(log_ck), _touched_parts(touched_parts), _builder(builder),
+          _enable_updating_state(enable_updating_state), _base_ck(base_ck), _row_state(row_state),
+          _clustering_row_states(clustering_row_states)
+    {}
+
+    void update_row_state(const column_definition& cdef, bytes_opt value) {
+        if (!_row_state) {
+            // static row always has a valid state, so this must be a clustering row missing
+            assert(_base_ck);
+            auto [it, _] = _clustering_row_states.try_emplace(*_base_ck);
+            _row_state = &it->second;
+        }
+        (*_row_state)[&cdef] = std::move(value);
+    }
+
+    void live_atomic_cell(const column_definition& cdef, const atomic_cell_view& cell) {
+        _ttl_column = get_ttl(cell);
+        bytes value = get_bytes(cell);
+
+        // delta
+        _builder.set_value(_log_ck, cdef, value);
+
+        // images
+        if (_enable_updating_state) {
+            update_row_state(cdef, std::move(value));
+        }
+    }
+
+    void dead_atomic_cell(const column_definition& cdef, const atomic_cell_view&) {
+        // delta
+        _builder.set_deleted(_log_ck, cdef);
+
+        // images
+        if (_enable_updating_state) {
+            update_row_state(cdef, std::nullopt);
+        }
+    }
+
+    void collection_column(const column_definition& cdef, auto&& visit_collection) {
+        // The handling of dead cells and the tombstone is common for all collection types,
+        // but we need separate visitors for different collection types to handle the live cells.
+        // See `set_visitor`, `udt_visitior`, and `map_or_list_visitor` below.
+        struct collection_visitor {
+            bool _is_column_delete = false;
+            std::vector<bytes_view> _deleted_keys;
+
+            ttl_opt& _ttl_column;
+
+            collection_visitor(ttl_opt& ttl_column) : _ttl_column(ttl_column) {}
+
+            void collection_tombstone(const tombstone&) {
+                _is_column_delete = true;
+            }
+
+            void dead_collection_cell(bytes_view key, const atomic_cell_view&) {
+                _deleted_keys.push_back(key);
+            }
+
+            constexpr bool finished() const { return false; }
+        };
+
+
+        // cdc$deleted_col, cdc$deleted_elements_col, col
+        using result_t = std::tuple<bool, std::vector<bytes_view>, bytes_opt>;
+        auto [is_column_delete, deleted_keys, added_cells] = visit(*cdef.type, make_visitor(
+            [&] (const set_type_impl&) -> result_t {
+                _touched_parts.set<stats::part_type::SET>();
+
+                struct set_visitor : public collection_visitor {
+                    std::vector<bytes_view> _added_keys;
+
+                    set_visitor(ttl_opt& ttl_column) : collection_visitor(ttl_column) {}
+
+                    void live_collection_cell(bytes_view key, const atomic_cell_view& cell) {
+                        this->_ttl_column = get_ttl(cell);
+                        _added_keys.push_back(key);
+                    }
+                } v(_ttl_column);
+
+                visit_collection(v);
+
+                bytes_opt added_keys = v._added_keys.empty() ? std::nullopt :
+                    std::optional{set_type_impl::serialize_partially_deserialized_form(v._added_keys, cql_serialization_format::internal())};
+
+                return {
+                    v._is_column_delete,
+                    std::move(v._deleted_keys),
+                    std::move(added_keys)
+                };
+            },
+            [&] (const user_type_impl& type) -> result_t  {
+                _touched_parts.set<stats::part_type::UDT>();
+
+                struct udt_visitor : public collection_visitor {
+                    std::vector<bytes_opt> _added_cells;
+                    std::vector<bytes>& _buf;
+
+                    udt_visitor(ttl_opt& ttl_column, size_t num_keys, std::vector<bytes>& buf)
+                        : collection_visitor(ttl_column), _added_cells(num_keys), _buf(buf) {}
+
+                    void live_collection_cell(bytes_view key, const atomic_cell_view& cell) {
+                        this->_ttl_column = get_ttl(cell);
+                        _added_cells[deserialize_field_index(key)].emplace(get_bytes_view(cell, _buf));
+                    }
+                };
+
+                std::vector<bytes> buf;
+                udt_visitor v(_ttl_column, type.size(), buf);
+
+                visit_collection(v);
+
+                bytes_opt added_cells = v._added_cells.empty() ? std::nullopt :
+                    std::optional{type.build_value(v._added_cells)};
+
+                return {
+                    v._is_column_delete,
+                    std::move(v._deleted_keys),
+                    std::move(added_cells)
+                };
+            },
+            [&] (const collection_type_impl& type) -> result_t {
+                _touched_parts.set(type.is_list() ? stats::part_type::LIST : stats::part_type::MAP);
+
+                struct map_or_list_visitor : public collection_visitor {
+                    std::vector<std::pair<bytes_view, bytes_view>> _added_cells;
+                    std::vector<bytes>& _buf;
+
+                    map_or_list_visitor(ttl_opt& ttl_column, std::vector<bytes>& buf)
+                        : collection_visitor(ttl_column), _buf(buf) {}
+
+                    void live_collection_cell(bytes_view key, const atomic_cell_view& cell) {
+                        this->_ttl_column = get_ttl(cell);
+                        _added_cells.emplace_back(key, get_bytes_view(cell, _buf));
+                    }
+                };
+
+                std::vector<bytes> buf;
+                map_or_list_visitor v(_ttl_column, buf);
+
+                visit_collection(v);
+
+                bytes_opt added_cells = v._added_cells.empty() ? std::nullopt :
+                    std::optional{map_type_impl::serialize_partially_deserialized_form(v._added_cells, cql_serialization_format::internal())};
+
+                return {
+                    v._is_column_delete,
+                    std::move(v._deleted_keys),
+                    std::move(added_cells)
+                };
+            },
+            [&] (const abstract_type& o) -> result_t {
+                throw std::runtime_error(format("cdc process_change: unknown type {}", o.name()));
+            }
+        ));
+
+        // FIXME: we're doing redundant work: first we serialize the set of deleted keys into a blob,
+        // then we deserialize again when merging images below
+        bytes_opt deleted_elements = std::nullopt;
+        if (!deleted_keys.empty()) {
+            deleted_elements = set_type_impl::serialize_partially_deserialized_form(deleted_keys, cql_serialization_format::internal());
+        }
+
+        // delta
+        if (is_column_delete) {
+            _builder.set_deleted(_log_ck, cdef);
+        }
+
+        if (deleted_elements) {
+            _builder.set_deleted_elements(_log_ck, cdef, *deleted_elements);
+        }
+
+        if (added_cells) {
+            _builder.set_value(_log_ck, cdef, *added_cells);
+        }
+
+        // images
+        if (_enable_updating_state) {
+            // A column delete overwrites any data we gathered until now.
+            bytes_opt prev = is_column_delete ? std::nullopt : get_col_from_row_state(_row_state, cdef);
+
+            bytes_opt next;
+            if (added_cells || (deleted_elements && prev)) {
+                next = visit(*cdef.type, [&] (const auto& type) -> bytes {
+                    return merge(type, prev, added_cells, deleted_elements);
+                });
+            }
+
+            update_row_state(cdef, std::move(next));
+        }
+    }
+
+    constexpr bool finished() const { return false; }
+};
+
+struct process_change_visitor {
+    stats::part_type_set& _touched_parts;
+
+    log_mutation_builder& _builder;
+
+    /* Images-related state */
+    const bool _enable_updating_state = false;
+
+    row_states_map& _clustering_row_states;
+    cell_map& _static_row_state;
+
+    void static_row_cells(auto&& visit_row_cells) {
+        _touched_parts.set<stats::part_type::STATIC_ROW>();
+
+        auto log_ck = _builder.allocate_new_log_row(operation::update);
+
+        process_row_visitor v(
+                log_ck, _touched_parts, _builder,
+                _enable_updating_state, nullptr, &_static_row_state, _clustering_row_states);
+        visit_row_cells(v);
+
+        _builder.set_ttl(log_ck, v._ttl_column);
+    }
+
+    void clustered_row_cells(const clustering_key& ckey, auto&& visit_row_cells) {
+        _touched_parts.set<stats::part_type::CLUSTERING_ROW>();
+
+        auto log_ck = _builder.allocate_new_log_row();
+
+        _builder.set_clustering_columns(log_ck, ckey);
+
+        struct clustering_row_cells_visitor : public process_row_visitor {
+            operation _cdc_op = operation::update;
+
+            clustering_row_cells_visitor(
+                    const clustering_key& log_ck, stats::part_type_set& touched_parts, log_mutation_builder& builder,
+                    bool enable_updating_state, const clustering_key* base_ck, cell_map* row_state,
+                    row_states_map& clustering_row_states)
+                : process_row_visitor(
+                        log_ck, touched_parts, builder,
+                        enable_updating_state, base_ck, row_state, clustering_row_states)
+            {}
+
+            void marker(const row_marker& rm) {
+                _ttl_column = get_ttl(rm);
+                _cdc_op = operation::insert;
+            }
+        };
+
+        clustering_row_cells_visitor v(
+                log_ck, _touched_parts, _builder,
+                _enable_updating_state, &ckey, get_row_state(_clustering_row_states, ckey),
+                _clustering_row_states);
+        visit_row_cells(v);
+
+        _builder.set_operation(log_ck, v._cdc_op);
+        _builder.set_ttl(log_ck, v._ttl_column);
+    }
+
+    void clustered_row_delete(const clustering_key& ckey, const tombstone&) {
+        _touched_parts.set<stats::part_type::ROW_DELETE>();
+
+        auto log_ck = _builder.allocate_new_log_row(operation::row_delete);
+        _builder.set_clustering_columns(log_ck, ckey);
+
+        if (_enable_updating_state && get_row_state(_clustering_row_states, ckey)) {
+            _clustering_row_states.erase(ckey);
+        }
+    }
+
+    void range_delete(const range_tombstone& rt) {
+        _touched_parts.set<stats::part_type::RANGE_TOMBSTONE>();
+        {
+            const auto start_operation = rt.start_kind == bound_kind::incl_start
+                    ? operation::range_delete_start_inclusive
+                    : operation::range_delete_start_exclusive;
+            auto log_ck = _builder.allocate_new_log_row(start_operation);
+            _builder.set_clustering_columns(log_ck, rt.start);
+        }
+        {
+            const auto end_operation = rt.end_kind == bound_kind::incl_end
+                    ? operation::range_delete_end_inclusive
+                    : operation::range_delete_end_exclusive;
+            auto log_ck = _builder.allocate_new_log_row(end_operation);
+            _builder.set_clustering_columns(log_ck, rt.end);
+        }
+    }
+
+    void partition_delete(const tombstone&) {
+        _touched_parts.set<stats::part_type::PARTITION_DELETE>();
+
+        auto log_ck = _builder.allocate_new_log_row(operation::partition_delete);
+    }
+
+    constexpr bool finished() const { return false; }
 };
 
 class transformer final : public change_processor {
@@ -940,18 +1388,16 @@ private:
      * its post-image will still show {1:1} for the collection column. Good.
      */
 
-    stats::part_type_set _touched_parts;
-
-    using cell_map = std::unordered_map<const column_definition*, bytes_opt>;
-    std::unordered_map<clustering_key, cell_map, clustering_key::hashing, clustering_key::equality> _clustering_row_states;
+    row_states_map _clustering_row_states;
     cell_map _static_row_state;
 
     std::vector<mutation> _result_mutations;
-
     std::optional<log_mutation_builder> _builder;
 
     // When enabled, process_change will update _clustering_row_states and _static_row_state
     bool _enable_updating_state = false;
+
+    stats::part_type_set _touched_parts;
 
     // Remove non-key columns or entire delta rows, according to `delta` setting in `cdc` options.
     void adjust_or_delete_deltas() {
@@ -1014,66 +1460,6 @@ public:
     {
     }
 
-    static size_t collection_size(const bytes_opt& bo) {
-        if (bo) {
-            bytes_view bv(*bo);
-            return read_collection_size(bv, cql_serialization_format::internal());
-        }
-        return 0;
-    }
-    template<typename Func>
-    static void udt_for_each(const bytes_opt& bo, Func&& f) {
-        if (bo) {
-            bytes_view bv(*bo);
-            std::for_each(tuple_deserializing_iterator::start(bv), tuple_deserializing_iterator::finish(bv), std::forward<Func>(f));
-        }
-    }
-    static bytes merge(const collection_type_impl& ctype, const bytes_opt& prev, const bytes_opt& next, const bytes_opt& deleted) {
-        std::vector<std::pair<bytes_view, bytes_view>> res;
-        res.reserve(collection_size(prev) + collection_size(next));
-        auto type = ctype.name_comparator();
-        auto cmp = [&type = *type](const std::pair<bytes_view, bytes_view>& p1, const std::pair<bytes_view, bytes_view>& p2) {
-            return type.compare(p1.first, p2.first) < 0;
-        };
-        collection_iterator<std::pair<bytes_view, bytes_view>> e, i(prev), j(next);
-        // note order: set_union, when finding doubles, use value from first1 (j here). So 
-        // since this is next, it has prio
-        std::set_union(j, e, i, e, make_maybe_back_inserter(res, *type, collection_iterator<bytes_view>(deleted)), cmp);
-        return map_type_impl::serialize_partially_deserialized_form(res, cql_serialization_format::internal());
-    }
-    static bytes merge(const set_type_impl& ctype, const bytes_opt& prev, const bytes_opt& next, const bytes_opt& deleted) {
-        std::vector<bytes_view> res;
-        res.reserve(collection_size(prev) + collection_size(next));
-        auto type = ctype.name_comparator();
-        auto cmp = [&type = *type](bytes_view k1, bytes_view k2) {
-            return type.compare(k1, k2) < 0;
-        };
-        collection_iterator<bytes_view> e, i(prev), j(next), d(deleted);
-        std::set_union(j, e, i, e, make_maybe_back_inserter(res, *type, d), cmp);
-        return set_type_impl::serialize_partially_deserialized_form(res, cql_serialization_format::internal());
-    }
-    static bytes merge(const user_type_impl& type, const bytes_opt& prev, const bytes_opt& next, const bytes_opt& deleted) {
-        std::vector<bytes_view_opt> res(type.size());
-        udt_for_each(prev, [&res, i = res.begin()](bytes_view_opt k) mutable {
-            *i++ = k;
-        });
-        udt_for_each(next, [&res, i = res.begin()](bytes_view_opt k) mutable {
-            if (k) {
-                *i = k;
-            }
-            ++i;
-        });
-        collection_iterator<bytes_view> e, d(deleted);
-        std::for_each(d, e, [&res](bytes_view k) {
-            auto index = deserialize_field_index(k);
-            res[index] = std::nullopt;
-        });
-        return type.build_value(res);
-    }
-    static bytes merge(const abstract_type& type, const bytes_opt& prev, const bytes_opt& next, const bytes_opt& deleted) {
-        throw std::runtime_error(format("cdc merge: unknown type {}", type.name()));
-    }
-
     // DON'T move the transformer after this
     void begin_timestamp(api::timestamp_type ts, bool is_last) override {
         const auto stream_id = _ctx._cdc_metadata.get_stream(ts, _dk.token());
@@ -1105,7 +1491,7 @@ public:
 
         cell_map* row_state;
         if (ck) {
-            row_state = get_current_clustering_row_state(*ck);
+            row_state = get_row_state(_clustering_row_states, *ck);
             if (!row_state) {
                 // We have no data for this row, we can stop here
                 return;
@@ -1138,231 +1524,14 @@ public:
     // more details like tombstones/ttl? Probably not but keep in mind.
     void process_change(const mutation& m) override {
         assert(_builder);
-        auto& p = m.partition();
-        if (p.partition_tombstone()) {
-            // Partition deletion
-            _touched_parts.set<stats::part_type::PARTITION_DELETE>();
-            _builder->allocate_new_log_row(operation::partition_delete);
-        } else if (!p.row_tombstones().empty()) {
-            // range deletion
-            _touched_parts.set<stats::part_type::RANGE_TOMBSTONE>();
-            for (auto& rt : p.row_tombstones()) {
-                {
-                    const auto start_operation = rt.start_kind == bound_kind::incl_start
-                            ? operation::range_delete_start_inclusive
-                            : operation::range_delete_start_exclusive;
-                    auto log_ck = _builder->allocate_new_log_row(start_operation);
-                    _builder->set_clustering_columns(log_ck, rt.start);
-                }
-                {
-                    const auto end_operation = rt.end_kind == bound_kind::incl_end
-                            ? operation::range_delete_end_inclusive
-                            : operation::range_delete_end_exclusive;
-                    auto log_ck = _builder->allocate_new_log_row(end_operation);
-                    _builder->set_clustering_columns(log_ck, rt.end);
-                }
-            }
-        } else {
-            // should be insert, update or deletion
-            auto process_cells = [&](const row& r, column_kind ckind, const clustering_key& log_ck, const clustering_key* base_ck, cell_map* row_state) -> std::optional<gc_clock::duration> {
-                std::optional<gc_clock::duration> ttl;
-                std::unordered_set<column_id> columns_assigned;
-                r.for_each_cell([&](column_id id, const atomic_cell_or_collection& cell) {
-                    auto& cdef = _schema->column_at(ckind, id);
-                    bool is_column_delete = true;
-                    bytes_opt value;
-                    bytes_opt deleted_elements = std::nullopt;
-                    if (cdef.is_atomic()) {
-                        value = std::nullopt;
-                        auto view = cell.as_atomic_cell(cdef);
-                        if (view.is_live()) {
-                            is_column_delete = false;
-                            value = view.value().linearize();
-                            if (view.is_live_and_has_ttl()) {
-                                ttl = view.ttl();
-                            }
-                        }
-                    } else {
-                        auto mv = cell.as_collection_mutation();
-                        is_column_delete = false;
-                        std::vector<bytes> buf;
-                        value = mv.with_deserialized(*cdef.type, [&](collection_mutation_view_description view) -> bytes_opt {
-                            if (view.tomb) {
-                                // there is a tombstone with timestamp before this mutation.
-                                // this is how a assign collection = <value> is represented.
-                                // for non-atomics, a column delete + values in data column
-                                // simply means "replace values"
-                                is_column_delete = true;
-                            }
-                            auto process_collection = [&](auto value_callback) {
-                                for (auto& [key, value] : view.cells) {
-                                    // note: we are assuming that all mutations coming here adhere to
-                                    // / are created by the cql machinery or similar, i.e. if we have
-                                    // the tombstone above, it preceeds the actual cells, and is in
-                                    // fact an "assign" marker. So we only check for explicitly
-                                    // dead cells, i.e. null markers.
-                                    auto live = value.is_live();
-                                    if (!live) {
-                                        value_callback(key, bytes_view{}, live);
-                                        continue;
-                                    }
-                                    auto val = value.value().is_fragmented()
-                                        ? bytes_view{buf.emplace_back(value.value().linearize())}
-                                        : value.value().first_fragment()
-                                        ;
-                                    value_callback(key, val, live);
-                                    if (value.is_live_and_has_ttl()) {
-                                        ttl = value.ttl();
-                                    }
-                                }
-                            };
-
-                            std::vector<bytes_view> deleted;
-
-                            return visit(*cdef.type, make_visitor(
-                                // maps and lists are just flattened
-                                [&] (const collection_type_impl& type) -> bytes_opt {
-                                    _touched_parts.set(type.is_list() ? stats::part_type::LIST : stats::part_type::MAP);
-                                    std::vector<std::pair<bytes_view, bytes_view>> result;
-                                    process_collection([&](const bytes_view& key, const bytes_view& value, bool live) {
-                                        if (live) {
-                                            result.emplace_back(key, value);
-                                        } else {
-                                            deleted.emplace_back(key);
-                                        }
-                                    });
-                                    if (!deleted.empty()) {
-                                        deleted_elements = set_type_impl::serialize_partially_deserialized_form(deleted, cql_serialization_format::internal());
-                                    }
-                                    if (result.empty()) {
-                                        return std::nullopt;
-                                    }
-                                    return map_type_impl::serialize_partially_deserialized_form(result, cql_serialization_format::internal());
-                                },
-                                // set need to transform from mutation view
-                                [&] (const set_type_impl& type) -> bytes_opt  {
-                                    _touched_parts.set<stats::part_type::SET>();
-                                    std::vector<bytes_view> result;
-                                    process_collection([&](const bytes_view& key, const bytes_view& value, bool live) {
-                                        if (live) {
-                                            result.emplace_back(key);
-                                        } else {
-                                            deleted.emplace_back(key);
-                                        }
-                                    });
-                                    if (!deleted.empty()) {
-                                        deleted_elements = set_type_impl::serialize_partially_deserialized_form(deleted, cql_serialization_format::internal());
-                                    }
-                                    if (result.empty()) {
-                                        return std::nullopt;
-                                    }
-                                    return set_type_impl::serialize_partially_deserialized_form(result, cql_serialization_format::internal());
-                                },
-                                // for user type we collect the fields in the mutation and set to
-                                // tuple of value or tuple of null in case of delete.
-                                // fields not in the mutation are null in the enclosing tuple, signifying "no info"
-                                [&](const user_type_impl& type) -> bytes_opt  {
-                                    _touched_parts.set<stats::part_type::UDT>();
-                                    std::vector<bytes_opt> result(type.size());
-                                    process_collection([&](const bytes_view& key, const bytes_view& value, bool live) {
-                                        if (live) {
-                                            auto idx = deserialize_field_index(key);
-                                            result[idx].emplace(value);
-                                        } else {
-                                            deleted.emplace_back(key);
-                                        }
-                                    });
-                                    if (!deleted.empty()) {
-                                        deleted_elements = set_type_impl::serialize_partially_deserialized_form(deleted, cql_serialization_format::internal());
-                                    }
-                                    if (result.empty()) {
-                                        return std::nullopt;
-                                    }
-                                    return type.build_value(result);
-                                },
-                                [&] (const abstract_type& o) -> bytes_opt {
-                                    throw std::runtime_error(format("cdc transform: unknown type {}", o.name()));
-                                }
-                            ));
-                        });
-
-                        if (deleted_elements) {
-                            _builder->set_deleted_elements(log_ck, cdef, *deleted_elements);
-                        }
-                    }
-
-                    if (is_column_delete) {
-                        _builder->set_deleted(log_ck, cdef);
-                    }
-
-                    if (value) {
-                        _builder->set_value(log_ck, cdef, *value);
-                    }
-
-                    if (_enable_updating_state) {
-                        // don't merge with pre-image iff column delete
-                        bytes_opt prev = is_column_delete ? std::nullopt : get_col_from_row_state(row_state, cdef);
-
-                        bytes_opt next;
-                        if (cdef.is_atomic() && !is_column_delete && value) {
-                            next = std::move(value);
-                        } else if (!cdef.is_atomic() && (value || (deleted_elements && prev))) {
-                            next = visit(*cdef.type, [&] (const auto& type) -> bytes {
-                                return merge(type, prev, value, deleted_elements);
-                            });
-                        }
-                        if (!row_state) {
-                            // static row always has a valid state, so this must be
-                            // a clustering row missing
-                            assert(base_ck);
-                            auto [it, inserted] = _clustering_row_states.try_emplace(*base_ck);
-                            row_state = &it->second;
-                        }
-                        (*row_state)[&cdef] = std::move(next);
-                    }
-                });
-
-                return ttl;
-            };
-
-            if (!p.static_row().empty()) {
-                _touched_parts.set<stats::part_type::STATIC_ROW>();
-
-                auto log_ck = _builder->allocate_new_log_row(operation::update);
-                auto ttl = process_cells(p.static_row().get(), column_kind::static_column, log_ck, nullptr, &_static_row_state);
-                _builder->set_ttl(log_ck, ttl);
-            } else {
-                _touched_parts.set_if<stats::part_type::CLUSTERING_ROW>(!p.clustered_rows().empty());
-                for (const rows_entry& r : p.clustered_rows()) {
-                    auto* row_state = get_current_clustering_row_state(r.key());
-
-                    auto log_ck = _builder->allocate_new_log_row();
-                    _builder->set_clustering_columns(log_ck, r.key());
-                    
-                    operation cdc_op;
-                    if (r.row().deleted_at()) {
-                        _touched_parts.set<stats::part_type::ROW_DELETE>();
-                        cdc_op = operation::row_delete;
-
-                        if (_enable_updating_state && row_state) {
-                            // Erase so that postimage will be empty
-                            _clustering_row_states.erase(r.key());
-                        }
-                    } else {
-                        auto ttl = process_cells(r.row().cells(), column_kind::regular_column, log_ck, &r.key(), row_state);
-                        const auto& marker = r.row().marker();
-                        if (marker.is_live() && marker.is_expiring()) {
-                            ttl = marker.ttl();
-                        }
-
-                        cdc_op = marker.is_live() ? operation::insert : operation::update;
-
-                        _builder->set_ttl(log_ck, ttl);
-                    }
-                    _builder->set_operation(log_ck, cdc_op);
-                }
-            }
-        }
+        process_change_visitor v {
+            ._touched_parts = _touched_parts,
+            ._builder = *_builder,
+            ._enable_updating_state = _enable_updating_state,
+            ._clustering_row_states = _clustering_row_states,
+            ._static_row_state = _static_row_state
+        };
+        cdc::inspect_mutation(m, v);
     }
 
     // Takes and returns generated cdc log mutations and associated statistics about parts touched during transformer's lifetime.
@@ -1370,46 +1539,6 @@ public:
     std::tuple<std::vector<mutation>, stats::part_type_set> finish() && {
         adjust_or_delete_deltas();
         return std::make_pair<std::vector<mutation>, stats::part_type_set>(std::move(_result_mutations), std::move(_touched_parts));
-    }
-
-    bytes_opt get_col_from_row_state(const cell_map* state, const column_definition& cdef) const {
-        if (state) {
-            if (auto it = state->find(&cdef); it != state->end()) {
-                return it->second;
-            }
-        }
-        return std::nullopt;
-    }
-
-    cell_map* get_current_clustering_row_state(const clustering_key& ck) {
-        auto it = _clustering_row_states.find(ck);
-        return it == _clustering_row_states.end() ? nullptr : &it->second;
-    }
-
-    bytes_opt get_preimage_col_value(const column_definition& cdef, const cql3::untyped_result_set_row *pirow) {
-        if (!pirow || !pirow->has(cdef.name_as_text())) {
-            return std::nullopt;
-        }
-        return cdef.is_atomic()
-            ? pirow->get_blob(cdef.name_as_text())
-            : visit(*cdef.type, make_visitor(
-                // flatten set
-                [&] (const set_type_impl& type) {
-                    auto v = pirow->get_view(cdef.name_as_text());
-                    auto f = cql_serialization_format::internal();
-                    auto n = read_collection_size(v, f);
-                    std::vector<bytes_view> tmp;
-                    tmp.reserve(n);
-                    while (n--) {
-                        tmp.emplace_back(read_collection_value(v, f)); // key
-                        read_collection_value(v, f); // value. ignore.
-                    }
-                    return set_type_impl::serialize_partially_deserialized_form(tmp, f);
-                },
-                [&] (const abstract_type& o) -> bytes {
-                    return pirow->get_blob(cdef.name_as_text());
-                }
-            ));
     }
 
     static db::timeout_clock::time_point default_timeout() {
