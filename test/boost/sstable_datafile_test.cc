@@ -3165,6 +3165,8 @@ SEASTAR_TEST_CASE(time_window_strategy_correctness_test) {
             sstables.push_back(make_sstable_containing(sst_gen, {std::move(mut)}));
         }
 
+        std::map<sstring, sstring> options;
+        time_window_compaction_strategy twcs(options);
         std::map<api::timestamp_type, std::vector<shared_sstable>> buckets;
 
         // We'll put 3 sstables into the newest bucket
@@ -3174,13 +3176,13 @@ SEASTAR_TEST_CASE(time_window_strategy_correctness_test) {
         }
         sstables::size_tiered_compaction_strategy_options stcs_options;
         auto now = api::timestamp_clock::now().time_since_epoch().count();
-        auto new_bucket = time_window_compaction_strategy::newest_bucket(buckets, 4, 32, duration_cast<seconds>(hours(1)),
+        auto new_bucket = twcs.newest_bucket(buckets, 4, 32, duration_cast<seconds>(hours(1)),
             time_window_compaction_strategy::get_window_lower_bound(duration_cast<seconds>(hours(1)), now), stcs_options);
         // incoming bucket should not be accepted when it has below the min threshold SSTables
         BOOST_REQUIRE(new_bucket.empty());
 
         now = api::timestamp_clock::now().time_since_epoch().count();
-        new_bucket = time_window_compaction_strategy::newest_bucket(buckets, 2, 32, duration_cast<seconds>(hours(1)),
+        new_bucket = twcs.newest_bucket(buckets, 2, 32, duration_cast<seconds>(hours(1)),
             time_window_compaction_strategy::get_window_lower_bound(duration_cast<seconds>(hours(1)), now), stcs_options);
         // incoming bucket should be accepted when it is larger than the min threshold SSTables
         BOOST_REQUIRE(!new_bucket.empty());
@@ -3215,10 +3217,85 @@ SEASTAR_TEST_CASE(time_window_strategy_correctness_test) {
         }
 
         now = api::timestamp_clock::now().time_since_epoch().count();
-        new_bucket = time_window_compaction_strategy::newest_bucket(buckets, 4, 32, duration_cast<seconds>(hours(1)),
+        new_bucket = twcs.newest_bucket(buckets, 4, 32, duration_cast<seconds>(hours(1)),
             time_window_compaction_strategy::get_window_lower_bound(duration_cast<seconds>(hours(1)), now), stcs_options);
         // new bucket should be trimmed to max threshold of 32
         BOOST_REQUIRE(new_bucket.size() == size_t(32));
+    });
+}
+
+// Check that TWCS will only perform size-tiered on the current window and also
+// the past windows that were already previously compacted into a single SSTable.
+SEASTAR_TEST_CASE(time_window_strategy_size_tiered_behavior_correctness) {
+    using namespace std::chrono;
+
+    return test_env::do_with_async([] (test_env& env) {
+        storage_service_for_tests ssft;
+        auto s = schema_builder("tests", "time_window_strategy")
+                .with_column("id", utf8_type, column_kind::partition_key)
+                .with_column("value", int32_type).build();
+
+        auto tmp = tmpdir();
+        auto sst_gen = [&env, s, &tmp, gen = make_lw_shared<unsigned>(1)] () mutable {
+            return env.make_sstable(s, tmp.path().string(), (*gen)++, la, big);
+        };
+
+        auto make_insert = [&] (partition_key key, api::timestamp_type t) {
+            mutation m(s, key);
+            m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(1)), t);
+            return m;
+        };
+
+        std::map<sstring, sstring> options;
+        sstables::size_tiered_compaction_strategy_options stcs_options;
+        time_window_compaction_strategy twcs(options);
+        std::map<api::timestamp_type, std::vector<shared_sstable>> buckets; // windows
+        int min_threshold = 4;
+        int max_threshold = 32;
+        auto window_size = duration_cast<seconds>(hours(1));
+
+        auto add_new_sstable_to_bucket = [&] (api::timestamp_type ts, api::timestamp_type window_ts) {
+            auto key = partition_key::from_exploded(*s, {to_bytes("key" + to_sstring(ts))});
+            auto mut = make_insert(std::move(key), ts);
+            auto sst = make_sstable_containing(sst_gen, {std::move(mut)});
+            auto bound = time_window_compaction_strategy::get_window_lower_bound(window_size, window_ts);
+            buckets[bound].push_back(std::move(sst));
+        };
+
+        api::timestamp_type current_window_ts = api::timestamp_clock::now().time_since_epoch().count();
+        api::timestamp_type past_window_ts = current_window_ts - duration_cast<microseconds>(seconds(2L * 3600L)).count();
+
+        // create 1 sstable into past time window and let the strategy know about it
+        add_new_sstable_to_bucket(0, past_window_ts);
+
+        auto now = time_window_compaction_strategy::get_window_lower_bound(window_size, past_window_ts);
+
+        // past window cannot be compacted because it has a single SSTable
+        BOOST_REQUIRE(twcs.newest_bucket(buckets, min_threshold, max_threshold, window_size, now, stcs_options).size() == 0);
+
+        // create min_threshold-1 sstables into current time window
+        for (api::timestamp_type t = 0; t < min_threshold - 1; t++) {
+            add_new_sstable_to_bucket(t, current_window_ts);
+        }
+        // add 1 sstable into past window.
+        add_new_sstable_to_bucket(1, past_window_ts);
+
+        now = time_window_compaction_strategy::get_window_lower_bound(window_size, current_window_ts);
+
+        // past window can now be compacted into a single SSTable because it was the previous current (active) window.
+        // current window cannot be compacted because it has less than min_threshold SSTables
+        BOOST_REQUIRE(twcs.newest_bucket(buckets, min_threshold, max_threshold, window_size, now, stcs_options).size() == 2);
+
+        // now past window cannot be compacted again, because it was already compacted into a single SSTable, now it switches to STCS mode.
+        BOOST_REQUIRE(twcs.newest_bucket(buckets, min_threshold, max_threshold, window_size, now, stcs_options).size() == 0);
+
+        // make past window contain more than min_threshold similar-sized SSTables, allowing it to be compacted again.
+        for (api::timestamp_type t = 2; t < min_threshold; t++) {
+            add_new_sstable_to_bucket(t, past_window_ts);
+        }
+
+        // now past window can be compacted again because it switched to STCS mode and has more than min_threshold SSTables.
+        BOOST_REQUIRE(twcs.newest_bucket(buckets, min_threshold, max_threshold, window_size, now, stcs_options).size() == size_t(min_threshold));
     });
 }
 
