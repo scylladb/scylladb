@@ -885,6 +885,10 @@ public:
           _log_mut(log_mut)
     {}
 
+    const schema& base_schema() const {
+        return _base_schema;
+    }
+
     // Creates a new clustering row in the mutation, assigning it the next `cdc$batch_seq_no`.
     // The numbering of batch sequence numbers starts from 0.
     clustering_key allocate_new_log_row() {
@@ -1296,12 +1300,31 @@ struct process_change_visitor {
             auto log_ck = _builder.allocate_new_log_row(end_operation);
             _builder.set_clustering_columns(log_ck, rt.end);
         }
+
+        // #6900 - remove stored row data (for postimage)
+        // if it falls inside the clustering range of the
+        // tombstone.
+        if (!_enable_updating_state) {
+            return;
+        }
+
+        bound_view::compare cmp(_builder.base_schema());
+        auto sb = rt.start_bound();
+        auto eb = rt.end_bound();
+
+        std::erase_if(_clustering_row_states, [&](auto& p) {
+            auto& ck = p.first;
+            return cmp(sb, ck) && !cmp(eb, ck);
+        });
     }
 
     void partition_delete(const tombstone&) {
         _touched_parts.set<stats::part_type::PARTITION_DELETE>();
 
         auto log_ck = _builder.allocate_new_log_row(operation::partition_delete);
+        if (_enable_updating_state) {
+            _clustering_row_states.clear();
+        }
     }
 
     constexpr bool finished() const { return false; }
