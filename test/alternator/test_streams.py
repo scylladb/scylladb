@@ -696,6 +696,28 @@ def test_streams_updateitem_old_image(test_table_ss_old_image, dynamodbstreams):
         return events
     do_test(test_table_ss_old_image, dynamodbstreams, do_updates, 'OLD_IMAGE')
 
+# Above we verified that if an item did not previously exist, the OLD_IMAGE
+# would be missing, but if the item did previously exist, OLD_IMAGE should
+# be present and must include the key. Here we confirm the special case the
+# latter case - the case of a pre-existing *empty* item, which has just the
+# key - in this case since the item did exist, OLD_IMAGE should be returned -
+# and include just the key. This is a special case of reproducing #6935 -
+# the first patch for this issue failed in this special case.
+@pytest.mark.xfail(reason="Currently fails - see issue #6935")
+def test_streams_updateitem_old_image_empty_item(test_table_ss_old_image, dynamodbstreams):
+    def do_updates(table, p, c):
+        events = []
+        # Create an *empty* item, with nothing except a key:
+        table.update_item(Key={'p': p, 'c': c})
+        events.append(['*', {'p': p, 'c': c}, None, {'p': p, 'c': c}])
+        table.update_item(Key={'p': p, 'c': c},
+            UpdateExpression='SET y = :val1', ExpressionAttributeValues={':val1': 3})
+        # Note that OLD_IMAGE should be present and be the empty item,
+        # with just a key, not entirely missing.
+        events.append(['MODIFY', {'p': p, 'c': c}, {'p': p, 'c': c}, {'p': p, 'c': c, 'y': 3}])
+        return events
+    do_test(test_table_ss_old_image, dynamodbstreams, do_updates, 'OLD_IMAGE')
+
 # Test that OLD_IMAGE indeed includes the entire old item and not just the
 # modified attributes, in the special case of attributes which are a key of
 # a secondary index.
