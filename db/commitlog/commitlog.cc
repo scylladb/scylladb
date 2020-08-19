@@ -1425,11 +1425,9 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
                 promise<> p;
                 _segment_allocating.emplace(p.get_future());
                 auto f = _segment_allocating->get_future(timeout);
-                futurize_invoke([this] {
-                    return with_gate(_gate, [this] {
-                        return new_segment().discard_result().finally([this]() {
-                            _segment_allocating = std::nullopt;
-                        });
+                try_with_gate(_gate, [this] {
+                    return new_segment().discard_result().finally([this]() {
+                        _segment_allocating = std::nullopt;
                     });
                 }).forward_to(std::move(p));
                 return f;
