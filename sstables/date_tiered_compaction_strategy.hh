@@ -97,13 +97,6 @@ public:
 
     date_tiered_compaction_strategy_options();
 private:
-    static std::optional<sstring> get_value(const std::map<sstring, sstring>& options, const sstring& name) {
-        auto it = options.find(name);
-        if (it == options.end()) {
-            return std::nullopt;
-        }
-        return it->second;
-    }
 
     friend class date_tiered_manifest;
 };
