@@ -60,6 +60,7 @@
 #include "db/system_keyspace.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "db/sstables-format-selector.hh"
+#include "debug.hh"
 
 using namespace std::chrono_literals;
 
@@ -386,6 +387,10 @@ public:
             abort_sources.start().get();
             auto stop_abort_sources = defer([&] { abort_sources.stop().get(); });
             sharded<database> db;
+            debug::db = &db;
+            auto reset_db_ptr = defer([] {
+                debug::db = nullptr;
+            });
             auto cfg = cfg_in.db_config;
             tmpdir data_dir;
             auto data_dir_path = data_dir.path().string();
@@ -656,4 +661,10 @@ future<> do_with_cql_env_thread(std::function<void(cql_test_env&)> func, cql_tes
             return func(e);
         });
     }, std::move(cfg_in));
+}
+
+namespace debug {
+
+seastar::sharded<database>* db;
+
 }
