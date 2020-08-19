@@ -138,7 +138,11 @@ const column_definition* view_info::view_column(const column_definition& base_de
     return _schema.get_column_definition(base_def.name());
 }
 
-void view_info::initialize_base_dependent_fields(const schema& base) {
+void view_info::set_base_info(db::view::base_info_ptr base_info) {
+    _base_info = std::move(base_info);
+}
+
+db::view::base_info_ptr view_info::make_base_dependent_view_info(const schema& base) const {
     std::vector<column_id> base_non_pk_columns_in_view_pk;
     for (auto&& view_col : boost::range::join(_schema.partition_key_columns(), _schema.clustering_key_columns())) {
         auto* base_col = base.get_column_definition(view_col.name());
@@ -146,7 +150,7 @@ void view_info::initialize_base_dependent_fields(const schema& base) {
             base_non_pk_columns_in_view_pk.push_back(base_col->id);
         }
     }
-    _base_info = make_lw_shared<db::view::base_dependent_view_info>({
+    return make_lw_shared<db::view::base_dependent_view_info>({
         .base_schema = base.shared_from_this(),
         .base_non_pk_columns_in_view_pk = std::move(base_non_pk_columns_in_view_pk)
     });
