@@ -208,7 +208,7 @@ public:
         return *this;
     }
 
-    schema_builder& set_compaction_strategy_options(std::map<sstring, sstring> options);
+    schema_builder& set_compaction_strategy_options(std::map<sstring, sstring>&& options);
 
     schema_builder& set_caching_options(caching_options c) {
         _raw._caching_options = std::move(c);

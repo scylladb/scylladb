@@ -893,7 +893,7 @@ bool thrift_schema::is_dynamic() const {
     return _is_dynamic;
 }
 
-schema_builder& schema_builder::set_compaction_strategy_options(std::map<sstring, sstring> options) {
+schema_builder& schema_builder::set_compaction_strategy_options(std::map<sstring, sstring>&& options) {
     _raw._compaction_strategy_options = std::move(options);
     return *this;
 }

@@ -6444,7 +6444,7 @@ SEASTAR_TEST_CASE(test_bug_6472) {
             { time_window_compaction_strategy_options::COMPACTION_WINDOW_UNIT_KEY, "HOURS" },
             { time_window_compaction_strategy_options::COMPACTION_WINDOW_SIZE_KEY, "1" },
         };
-        builder.set_compaction_strategy_options(opts);
+        builder.set_compaction_strategy_options(std::move(opts));
         builder.set_gc_grace_seconds(0);
         auto s = builder.build();
 
@@ -6570,7 +6570,7 @@ SEASTAR_TEST_CASE(test_twcs_partition_estimate) {
             { time_window_compaction_strategy_options::COMPACTION_WINDOW_UNIT_KEY, "HOURS" },
             { time_window_compaction_strategy_options::COMPACTION_WINDOW_SIZE_KEY, "1" },
         };
-        builder.set_compaction_strategy_options(opts);
+        builder.set_compaction_strategy_options(std::move(opts));
         builder.set_gc_grace_seconds(0);
         auto s = builder.build();
 

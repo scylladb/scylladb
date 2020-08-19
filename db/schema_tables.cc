@@ -2183,7 +2183,7 @@ static void prepare_builder_from_table_row(const schema_ctxt& ctxt, schema_build
             builder.set_compaction_enabled(boost::algorithm::iequals(map["enabled"], "true"));
         }
 
-        builder.set_compaction_strategy_options(map);
+        builder.set_compaction_strategy_options(std::move(map));
     }
 
     if (auto map = get_map<sstring, sstring>(table_row, "compression")) {
