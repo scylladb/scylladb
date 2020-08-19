@@ -239,7 +239,8 @@ lists::marker::bind(const query_options& options) {
                 return make_shared<lists::value>(value::from_serialized(v, ltype, options.get_cql_serialization_format()));
             });
         } catch (marshal_exception& e) {
-            throw exceptions::invalid_request_exception(e.what());
+            throw exceptions::invalid_request_exception(
+                    format("Exception while binding column {:s}: {:s}", _receiver->name->to_cql_string(), e.what()));
         }
     }
 }

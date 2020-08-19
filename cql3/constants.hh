@@ -185,7 +185,8 @@ public:
                 }
                 return value;
             } catch (const marshal_exception& e) {
-                throw exceptions::invalid_request_exception(e.what());
+                throw exceptions::invalid_request_exception(
+                        format("Exception while binding column {:s}: {:s}", _receiver->name->to_cql_string(), e.what()));
             }
         }
 

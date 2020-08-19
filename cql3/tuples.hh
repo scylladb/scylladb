@@ -321,7 +321,8 @@ public:
                         type.validate(v, options.get_cql_serialization_format());
                     });
                 } catch (marshal_exception& e) {
-                    throw exceptions::invalid_request_exception(e.what());
+                    throw exceptions::invalid_request_exception(
+                            format("Exception while binding column {:s}: {:s}", _receiver->name->to_cql_string(), e.what()));
                 }
                 return make_shared<tuples::value>(value::from_serialized(*value, type));
             }
