@@ -42,8 +42,6 @@ class migration_manager;
 
 namespace auth {
 
-std::string_view standard_role_manager_name() noexcept;
-
 class standard_role_manager final : public role_manager {
     cql3::query_processor& _qp;
     ::service::migration_manager& _migration_manager;

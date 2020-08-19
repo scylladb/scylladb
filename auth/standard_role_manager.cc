@@ -120,13 +120,8 @@ static bool has_can_login(const cql3::untyped_result_set_row& row) {
     return row.has("can_login") && !(boolean_type->deserialize(row.get_blob("can_login")).is_null());
 }
 
-std::string_view standard_role_manager_name() noexcept {
-    static const sstring instance = make_sstring(meta::AUTH_PACKAGE_NAME, "CassandraRoleManager");
-    return instance;
-}
-
 std::string_view standard_role_manager::qualified_java_name() const noexcept {
-    return standard_role_manager_name();
+    return "org.apache.cassandra.auth.CassandraRoleManager";
 }
 
 const resource_set& standard_role_manager::protected_resources() const {
