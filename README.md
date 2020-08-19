@@ -24,6 +24,7 @@ the required compilers, libraries and build tools. Using the frozen toolchain
 allows you to avoid changing anything in your build machine to meet Scylla's
 requirements - you just need to meet the frozen toolchain's prerequisites
 (mostly, Docker or Podman being available).
+Notice that ScyllaDB maintains the current and previous releases of Scylla Open Source.
 
 ## Building Scylla
 
@@ -70,7 +71,7 @@ See [test.py manual](docs/testing.md).
 ## Scylla APIs and compatibility
 By default, Scylla is compatible with Apache Cassandra and its APIs - CQL and
 Thrift. There is also support for the API of Amazon DynamoDB™,
-which needs to be enabled and configured in order to be used. For more
+which needs to be enabled and configured to be used. For more
 information on how to enable the DynamoDB™ API in Scylla,
 and the current compatibility of this feature as well as Scylla-specific extensions, see
 [Alternator](docs/alternator/alternator.md) and
@@ -80,7 +81,7 @@ and the current compatibility of this feature as well as Scylla-specific extensi
 
 Documentation can be found in [./docs](./docs) and on the
 [wiki](https://github.com/scylladb/scylla/wiki). There is currently no clear
-definition of what goes where, so when looking for something be sure to check
+definition of what goes where, so when looking for something, be sure to check
 both.
 Seastar documentation can be found [here](http://docs.seastar.io/master/index.html).
 User documentation can be found [here](https://docs.scylladb.com/).
@@ -88,9 +89,9 @@ User documentation can be found [here](https://docs.scylladb.com/).
 ## Training 
 
 Training material and online courses can be found at [Scylla University](https://university.scylladb.com/). 
-The courses are free, self-paced and include hands-on examples. They cover a variety of topics including Scylla data modeling, 
+The courses are free, self-paced, and include hands-on examples. They cover a variety of topics, including Scylla data modeling, 
 administration, architecture, basic NoSQL concepts, using drivers for application development, Scylla setup, failover, compactions, 
-multi-datacenters and how Scylla integrates with third-party applications.
+multi-datacenters, and how Scylla integrates with third-party applications.
 
 ## Contributing to Scylla
 
@@ -106,7 +107,7 @@ If you are a developer working on Scylla, please read the [developer guidelines]
 * The [users mailing list] and [Slack channel] are for users to discuss configuration, management, and operations of the ScyllaDB open source.
 * The [developers mailing list] is for developers and people interested in following the development of ScyllaDB to discuss technical topics.
 
-[Users mailing list]: https://groups.google.com/forum/#!forum/scylladb-users
+[Users' mailing list]: https://groups.google.com/forum/#!forum/scylladb-users
 
 [Slack channel]: http://slack.scylladb.com/
 
