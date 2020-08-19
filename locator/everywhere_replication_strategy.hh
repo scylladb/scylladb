@@ -46,9 +46,7 @@ class everywhere_replication_strategy : public abstract_replication_strategy {
 public:
     everywhere_replication_strategy(const sstring& keyspace_name, const token_metadata& token_metadata, snitch_ptr& snitch, const std::map<sstring,sstring>& config_options);
 
-    virtual std::vector<inet_address> calculate_natural_endpoints(const token& search_token, const token_metadata& tm) const override {
-        return tm.get_all_endpoints();
-    }
+    virtual std::vector<inet_address> calculate_natural_endpoints(const token& search_token, const token_metadata& tm) const override;
     std::vector<inet_address> get_natural_endpoints(const token& search_token) override;
 
     virtual void validate_options() const override { /* noop */ }
@@ -58,9 +56,7 @@ public:
         return std::nullopt;
     }
 
-    virtual size_t get_replication_factor() const override {
-        return _token_metadata.get_all_endpoints_count();
-    }
+    virtual size_t get_replication_factor() const override;
 
     virtual bool allow_remove_node_being_replaced_from_natural_endpoints() const override {
         return true;
