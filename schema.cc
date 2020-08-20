@@ -699,7 +699,7 @@ std::ostream& operator<<(std::ostream& os, const schema& s) {
     return os;
 }
 
-std::ostream& map_as_cql_param(std::ostream& os, const std::map<sstring, sstring>& map, bool first = true) {
+static std::ostream& map_as_cql_param(std::ostream& os, const std::map<sstring, sstring>& map, bool first = true) {
     for (auto i: map) {
         if (first) {
             first = false;
@@ -712,7 +712,7 @@ std::ostream& map_as_cql_param(std::ostream& os, const std::map<sstring, sstring
     return os;
 }
 
-std::ostream& column_definition_as_cql_key(std::ostream& os, const column_definition & cd) {
+static std::ostream& column_definition_as_cql_key(std::ostream& os, const column_definition & cd) {
     os << cd.name_as_cql_string();
     os << " " << cd.type->cql3_type_name();
 
@@ -891,6 +891,11 @@ bool thrift_schema::has_compound_comparator() const {
 
 bool thrift_schema::is_dynamic() const {
     return _is_dynamic;
+}
+
+schema_builder& schema_builder::set_compaction_strategy_options(std::map<sstring, sstring>&& options) {
+    _raw._compaction_strategy_options = std::move(options);
+    return *this;
 }
 
 schema_builder& schema_builder::with_partitioner(sstring name) {
