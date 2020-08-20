@@ -318,7 +318,8 @@ public:
 
 
     sstring print_pending_ranges();
-    std::vector<gms::inet_address> pending_endpoints_for(const token& token, const sstring& keyspace_name);
+    // returns empty vector if keyspace_name not found.
+    std::vector<gms::inet_address> pending_endpoints_for(const token& token, const sstring& keyspace_name) const;
 
     /** @return an endpoint to token multimap representation of tokenToEndpointMap (a copy) */
     std::multimap<inet_address, token> get_endpoint_to_token_map_for_reading();

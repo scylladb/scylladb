@@ -729,7 +729,8 @@ public:
 #endif
     sstring print_pending_ranges();
 public:
-    std::vector<gms::inet_address> pending_endpoints_for(const token& token, const sstring& keyspace_name);
+    // returns empty vector if keyspace_name not found.
+    std::vector<gms::inet_address> pending_endpoints_for(const token& token, const sstring& keyspace_name) const;
 #if 0
     /**
      * @deprecated retained for benefit of old tests
@@ -1553,22 +1554,24 @@ token_metadata_impl token_metadata_impl::clone_after_all_settled() {
     return metadata;
 }
 
-std::vector<gms::inet_address> token_metadata_impl::pending_endpoints_for(const token& token, const sstring& keyspace_name) {
-    // Fast path 0: no pending ranges at all
-    if (_pending_ranges_interval_map.empty()) {
+std::vector<gms::inet_address> token_metadata_impl::pending_endpoints_for(const token& token, const sstring& keyspace_name) const {
+    // Fast path 0: pending ranges not found for this keyspace_name
+    const auto pr_it = _pending_ranges_interval_map.find(keyspace_name);
+    if (pr_it == _pending_ranges_interval_map.end()) {
         return {};
     }
 
-    // Fast path 1: no pending ranges for this keyspace_name
-    if (_pending_ranges_interval_map[keyspace_name].empty()) {
+    // Fast path 1: empty pending ranges for this keyspace_name
+    const auto& ks_map = pr_it->second;
+    if (ks_map.empty()) {
         return {};
     }
 
     // Slow path: lookup pending ranges
     std::vector<gms::inet_address> endpoints;
     auto interval = range_to_interval(range<dht::token>(token));
-    auto it = _pending_ranges_interval_map[keyspace_name].find(interval);
-    if (it != _pending_ranges_interval_map[keyspace_name].end()) {
+    const auto it = ks_map.find(interval);
+    if (it != ks_map.end()) {
         // interval_map does not work with std::vector, convert to std::vector of ips
         endpoints = std::vector<gms::inet_address>(it->second.begin(), it->second.end());
     }
@@ -1917,7 +1920,7 @@ token_metadata::print_pending_ranges() {
 }
 
 std::vector<gms::inet_address>
-token_metadata::pending_endpoints_for(const token& token, const sstring& keyspace_name) {
+token_metadata::pending_endpoints_for(const token& token, const sstring& keyspace_name) const {
     return _impl->pending_endpoints_for(token, keyspace_name);
 }
 
