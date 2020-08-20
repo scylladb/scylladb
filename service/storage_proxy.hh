@@ -126,10 +126,10 @@ class query_ranges_to_vnodes_generator {
     dht::partition_range_vector _ranges;
     dht::partition_range_vector::iterator _i; // iterator to current range in _ranges
     bool _local;
-    locator::token_metadata& _tm;
+    const locator::token_metadata& _tm;
     void process_one_range(size_t n, dht::partition_range_vector& ranges);
 public:
-    query_ranges_to_vnodes_generator(locator::token_metadata& tm, schema_ptr s, dht::partition_range_vector ranges, bool local = false);
+    query_ranges_to_vnodes_generator(const locator::token_metadata& tm, schema_ptr s, dht::partition_range_vector ranges, bool local = false);
     query_ranges_to_vnodes_generator(const query_ranges_to_vnodes_generator&) = delete;
     query_ranges_to_vnodes_generator(query_ranges_to_vnodes_generator&&) = default;
     // generate next 'n' vnodes, may return less than requested number of ranges
@@ -245,13 +245,12 @@ public:
     const gms::feature_service& features() const { return _features; }
 
     const locator::token_metadata& get_token_metadata() const { return _token_metadata; }
-    locator::token_metadata& get_token_metadata() { return _token_metadata; }
 
     query::max_result_size get_max_result_size(const query::partition_slice& slice) const;
 
 private:
     distributed<database>& _db;
-    locator::token_metadata& _token_metadata;
+    const locator::token_metadata& _token_metadata;
     smp_service_group _read_smp_service_group;
     smp_service_group _write_smp_service_group;
     smp_service_group _write_ack_smp_service_group;
@@ -437,7 +436,7 @@ private:
     future<> mutate_counters(Range&& mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state, service_permit permit, clock_type::time_point timeout);
 public:
     storage_proxy(distributed<database>& db, config cfg, db::view::node_update_backlog& max_view_update_backlog,
-            scheduling_group_key stats_key, gms::feature_service& feat, locator::token_metadata& tokens, netw::messaging_service& ms);
+            scheduling_group_key stats_key, gms::feature_service& feat, const locator::token_metadata& tokens, netw::messaging_service& ms);
     ~storage_proxy();
     const distributed<database>& get_db() const {
         return _db;
@@ -750,8 +749,5 @@ inline storage_proxy& get_local_storage_proxy() {
 inline shared_ptr<storage_proxy> get_local_shared_storage_proxy() {
     return _the_storage_proxy.local_shared();
 }
-
-dht::partition_range_vector get_restricted_ranges(locator::token_metadata&,
-    const schema&, dht::partition_range);
 
 }

@@ -423,7 +423,7 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
     // TODO: label
     // TODO: creation time
 
-    auto& tm = _proxy.get_token_metadata();
+    const auto& tm = _proxy.get_token_metadata();
     // cannot really "resume" query, must iterate all data. because we cannot query neither "time" (pk) > something,
     // or on expired...
     // TODO: maybe add secondary index to topology table to enable this?

@@ -30,7 +30,7 @@ logging::logger abstract_replication_strategy::logger("replication_strategy");
 
 abstract_replication_strategy::abstract_replication_strategy(
     const sstring& ks_name,
-    token_metadata& token_metadata,
+    const token_metadata& token_metadata,
     snitch_ptr& snitch,
     const std::map<sstring, sstring>& config_options,
     replication_strategy_type my_type)
@@ -40,12 +40,12 @@ abstract_replication_strategy::abstract_replication_strategy(
         , _snitch(snitch)
         , _my_type(my_type) {}
 
-std::unique_ptr<abstract_replication_strategy> abstract_replication_strategy::create_replication_strategy(const sstring& ks_name, const sstring& strategy_name, token_metadata& tk_metadata, const std::map<sstring, sstring>& config_options) {
+std::unique_ptr<abstract_replication_strategy> abstract_replication_strategy::create_replication_strategy(const sstring& ks_name, const sstring& strategy_name, const token_metadata& tk_metadata, const std::map<sstring, sstring>& config_options) {
     assert(locator::i_endpoint_snitch::get_local_snitch_ptr());
     try {
         return create_object<abstract_replication_strategy,
                              const sstring&,
-                             token_metadata&,
+                             const token_metadata&,
                              snitch_ptr&,
                              const std::map<sstring, sstring>&>
             (strategy_name, ks_name, tk_metadata,
@@ -57,7 +57,7 @@ std::unique_ptr<abstract_replication_strategy> abstract_replication_strategy::cr
 
 void abstract_replication_strategy::validate_replication_strategy(const sstring& ks_name,
                                                                   const sstring& strategy_name,
-                                                                  token_metadata& token_metadata,
+                                                                  const token_metadata& token_metadata,
                                                                   const std::map<sstring, sstring>& config_options)
 {
     auto strategy = create_replication_strategy(ks_name, strategy_name, token_metadata, config_options);
@@ -177,17 +177,17 @@ abstract_replication_strategy::get_ranges_in_thread(inet_address ep) const {
 }
 
 dht::token_range_vector
-abstract_replication_strategy::get_ranges(inet_address ep, token_metadata& tm) const {
+abstract_replication_strategy::get_ranges(inet_address ep, const token_metadata& tm) const {
     return do_get_ranges(ep, tm, false);
 }
 
 dht::token_range_vector
-abstract_replication_strategy::get_ranges_in_thread(inet_address ep, token_metadata& tm) const {
+abstract_replication_strategy::get_ranges_in_thread(inet_address ep, const token_metadata& tm) const {
     return do_get_ranges(ep, tm, true);
 }
 
 dht::token_range_vector
-abstract_replication_strategy::do_get_ranges(inet_address ep, token_metadata& tm, bool can_yield) const {
+abstract_replication_strategy::do_get_ranges(inet_address ep, const token_metadata& tm, bool can_yield) const {
     dht::token_range_vector ret;
     auto prev_tok = tm.sorted_tokens().back();
     for (auto tok : tm.sorted_tokens()) {
@@ -244,7 +244,7 @@ abstract_replication_strategy::get_primary_ranges_within_dc(inet_address ep) {
 }
 
 std::unordered_multimap<inet_address, dht::token_range>
-abstract_replication_strategy::get_address_ranges(token_metadata& tm) const {
+abstract_replication_strategy::get_address_ranges(const token_metadata& tm) const {
     std::unordered_multimap<inet_address, dht::token_range> ret;
     for (auto& t : tm.sorted_tokens()) {
         dht::token_range_vector r = tm.get_primary_ranges_for(t);
@@ -260,7 +260,7 @@ abstract_replication_strategy::get_address_ranges(token_metadata& tm) const {
 }
 
 std::unordered_map<dht::token_range, std::vector<inet_address>>
-abstract_replication_strategy::get_range_addresses(token_metadata& tm) const {
+abstract_replication_strategy::get_range_addresses(const token_metadata& tm) const {
     std::unordered_map<dht::token_range, std::vector<inet_address>> ret;
     for (auto& t : tm.sorted_tokens()) {
         dht::token_range_vector ranges = tm.get_primary_ranges_for(t);
@@ -273,12 +273,12 @@ abstract_replication_strategy::get_range_addresses(token_metadata& tm) const {
 }
 
 dht::token_range_vector
-abstract_replication_strategy::get_pending_address_ranges(token_metadata& tm, token pending_token, inet_address pending_address) {
+abstract_replication_strategy::get_pending_address_ranges(const token_metadata& tm, token pending_token, inet_address pending_address) const {
     return get_pending_address_ranges(tm, std::unordered_set<token>{pending_token}, pending_address);
 }
 
 dht::token_range_vector
-abstract_replication_strategy::get_pending_address_ranges(token_metadata& tm, std::unordered_set<token> pending_tokens, inet_address pending_address) {
+abstract_replication_strategy::get_pending_address_ranges(const token_metadata& tm, std::unordered_set<token> pending_tokens, inet_address pending_address) const {
     dht::token_range_vector ret;
     auto temp = tm.clone_only_token_map();
     temp.update_normal_tokens(pending_tokens, pending_address);

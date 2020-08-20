@@ -39,11 +39,11 @@ struct http_context {
     distributed<database>& db;
     distributed<service::storage_proxy>& sp;
     service::load_meter& lmeter;
-    sharded<locator::token_metadata>& token_metadata;
+    const sharded<locator::token_metadata>& token_metadata;
 
     http_context(distributed<database>& _db,
             distributed<service::storage_proxy>& _sp,
-            service::load_meter& _lm, sharded<locator::token_metadata>& _tm)
+            service::load_meter& _lm, const sharded<locator::token_metadata>& _tm)
             : db(_db), sp(_sp), lmeter(_lm), token_metadata(_tm) {
     }
 };

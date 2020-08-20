@@ -587,7 +587,7 @@ db_context::builder& db_context::builder::with_migration_notifier(service::migra
     return *this;
 }
 
-db_context::builder& db_context::builder::with_token_metadata(locator::token_metadata& token_metadata) {
+db_context::builder& db_context::builder::with_token_metadata(const locator::token_metadata& token_metadata) {
     _token_metadata = token_metadata;
     return *this;
 }

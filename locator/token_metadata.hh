@@ -113,6 +113,13 @@ public:
         return _dc_racks;
     }
 
+    const std::unordered_map<sstring,
+                       std::unordered_map<sstring,
+                                          std::unordered_set<inet_address>>>&
+    get_datacenter_racks() const {
+        return _dc_racks;
+    }
+
     const endpoint_dc_rack& get_location(const inet_address& ep) const;
 private:
     /** multi-map: DC -> endpoints in that DC */
@@ -190,7 +197,7 @@ public:
 
     topology& get_topology();
     const topology& get_topology() const;
-    void debug_show();
+    void debug_show() const;
 
     /**
      * Store an end-point to host ID mapping.  Each ID must be unique, and
@@ -223,15 +230,15 @@ public:
 
     void remove_endpoint(inet_address endpoint);
 
-    bool is_member(inet_address endpoint);
+    bool is_member(inet_address endpoint) const;
 
-    bool is_leaving(inet_address endpoint);
+    bool is_leaving(inet_address endpoint) const;
 
     // Is this node being replaced by another node
-    bool is_being_replaced(inet_address endpoint);
+    bool is_being_replaced(inet_address endpoint) const;
 
     // Is any node being replaced by another node
-    bool is_any_node_being_replaced();
+    bool is_any_node_being_replaced() const;
 
     void add_replacing_endpoint(inet_address existing_node, inet_address replacing_node);
 
@@ -241,31 +248,29 @@ public:
      * Create a copy of TokenMetadata with only tokenToEndpointMap. That is, pending ranges,
      * bootstrap tokens and leaving endpoints are not included in the copy.
      */
-    token_metadata clone_only_token_map();
+    token_metadata clone_only_token_map() const;
     /**
      * Create a copy of TokenMetadata with tokenToEndpointMap reflecting situation after all
      * current leave operations have finished.
      *
      * @return new token metadata
      */
-    token_metadata clone_after_all_left();
+    token_metadata clone_after_all_left() const;
     /**
      * Create a copy of TokenMetadata with tokenToEndpointMap reflecting situation after all
      * current leave, and move operations have finished.
      *
      * @return new token metadata
      */
-    token_metadata clone_after_all_settled();
-    dht::token_range_vector get_primary_ranges_for(std::unordered_set<token> tokens);
+    token_metadata clone_after_all_settled() const;
+    dht::token_range_vector get_primary_ranges_for(std::unordered_set<token> tokens) const;
 
-    dht::token_range_vector get_primary_ranges_for(token right);
+    dht::token_range_vector get_primary_ranges_for(token right) const;
     static boost::icl::interval<token>::interval_type range_to_interval(range<dht::token> r);
     static range<dht::token> interval_to_range(boost::icl::interval<token>::interval_type i);
 
-    /** a mutable map may be returned but caller should not modify it */
-    const std::unordered_map<range<token>, std::unordered_set<inet_address>>& get_pending_ranges(sstring keyspace_name);
-
-    std::vector<range<token>> get_pending_ranges(sstring keyspace_name, inet_address endpoint);
+    // returns an empty vector if keyspace_name not found
+    std::vector<range<token>> get_pending_ranges(sstring keyspace_name, inet_address endpoint) const;
      /**
      * Calculate pending ranges according to bootsrapping and leaving nodes. Reasoning is:
      *
@@ -289,20 +294,20 @@ public:
      * NOTE: This is heavy and ineffective operation. This will be done only once when a node
      * changes state in the cluster, so it should be manageable.
      */
-    future<> calculate_pending_ranges(abstract_replication_strategy& strategy, const sstring& keyspace_name);
+    future<> update_pending_ranges(const abstract_replication_strategy& strategy, const sstring& keyspace_name);
     future<> calculate_pending_ranges_for_leaving(
-        abstract_replication_strategy& strategy,
+        const abstract_replication_strategy& strategy,
         lw_shared_ptr<std::unordered_multimap<range<token>, inet_address>> new_pending_ranges,
-        lw_shared_ptr<token_metadata> all_left_metadata);
+        lw_shared_ptr<token_metadata> all_left_metadata) const;
     void calculate_pending_ranges_for_bootstrap(
-        abstract_replication_strategy& strategy,
+        const abstract_replication_strategy& strategy,
         lw_shared_ptr<std::unordered_multimap<range<token>, inet_address>> new_pending_ranges,
-        lw_shared_ptr<token_metadata> all_left_metadata);
+        lw_shared_ptr<token_metadata> all_left_metadata) const;
     future<> calculate_pending_ranges_for_replacing(
             abstract_replication_strategy& strategy,
-            lw_shared_ptr<std::unordered_multimap<range<token>, inet_address>> new_pending_ranges);
+            lw_shared_ptr<std::unordered_multimap<range<token>, inet_address>> new_pending_ranges) const;
 
-    token get_predecessor(token t);
+    token get_predecessor(token t) const;
 
     std::vector<inet_address> get_all_endpoints() const;
     size_t get_all_endpoints_count() const;
@@ -312,16 +317,17 @@ public:
     size_t count_normal_token_owners() const;
 
 
-    sstring print_pending_ranges();
-    std::vector<gms::inet_address> pending_endpoints_for(const token& token, const sstring& keyspace_name);
+    sstring print_pending_ranges() const;
+    // returns empty vector if keyspace_name not found.
+    std::vector<gms::inet_address> pending_endpoints_for(const token& token, const sstring& keyspace_name) const;
 
     /** @return an endpoint to token multimap representation of tokenToEndpointMap (a copy) */
-    std::multimap<inet_address, token> get_endpoint_to_token_map_for_reading();
+    std::multimap<inet_address, token> get_endpoint_to_token_map_for_reading() const;
     /**
      * @return a (stable copy, won't be modified) Token to Endpoint map for all the normal and bootstrapping nodes
      *         in the cluster.
      */
-    std::map<token, inet_address> get_normal_and_bootstrapping_token_to_endpoint_map();
+    std::map<token, inet_address> get_normal_and_bootstrapping_token_to_endpoint_map() const;
 
     long get_ring_version() const;
     void invalidate_cached_rings();

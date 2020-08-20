@@ -231,7 +231,7 @@ future<> gossiping_property_file_snitch::reload_configuration() {
                 parallel_for_each(cpus.begin(), cpus.end(), [] (unsigned int c) {
                     return smp::submit_to(c, [] {
                         if (service::get_storage_service().local_is_initialized()) {
-                            auto& tmd = service::get_local_storage_service().get_token_metadata();
+                            auto& tmd = service::get_local_storage_service().get_mutable_token_metadata();
 
                             // initiate the token metadata endpoints cache reset
                             tmd.invalidate_cached_rings();

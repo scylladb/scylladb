@@ -1080,7 +1080,7 @@ public:
                  std::map<sstring, sstring> options,
                  bool durables_writes,
                  std::vector<schema_ptr> cf_defs = std::vector<schema_ptr>{});
-    void validate(locator::token_metadata& tm) const;
+    void validate(const locator::token_metadata& tm) const;
     const sstring& name() const {
         return _name;
     }
@@ -1150,14 +1150,14 @@ private:
 public:
     explicit keyspace(lw_shared_ptr<keyspace_metadata> metadata, config cfg);
 
-    void update_from(locator::token_metadata& tm, lw_shared_ptr<keyspace_metadata>);
+    void update_from(const locator::token_metadata& tm, lw_shared_ptr<keyspace_metadata>);
 
     /** Note: return by shared pointer value, since the meta data is
      * semi-volatile. I.e. we could do alter keyspace at any time, and
      * boom, it is replaced.
      */
     lw_shared_ptr<keyspace_metadata> metadata() const;
-    void create_replication_strategy(locator::token_metadata& tm, const std::map<sstring, sstring>& options);
+    void create_replication_strategy(const locator::token_metadata& tm, const std::map<sstring, sstring>& options);
     /**
      * This should not really be return by reference, since replication
      * strategy is also volatile in that it could be replaced at "any" time.
@@ -1337,7 +1337,7 @@ private:
 
     service::migration_notifier& _mnotifier;
     gms::feature_service& _feat;
-    locator::token_metadata& _token_metadata;
+    const locator::token_metadata& _token_metadata;
 
     bool _supports_infinite_bound_range_deletions = false;
     gms::feature::listener_registration _infinite_bound_range_deletions_reg;
@@ -1377,7 +1377,7 @@ public:
     void set_enable_incremental_backups(bool val) { _enable_incremental_backups = val; }
 
     future<> parse_system_tables(distributed<service::storage_proxy>&, distributed<service::migration_manager>&);
-    database(const db::config&, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat, locator::token_metadata& tm, abort_source& as);
+    database(const db::config&, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat, const locator::token_metadata& tm, abort_source& as);
     database(database&&) = delete;
     ~database();
 
@@ -1403,7 +1403,6 @@ public:
     }
 
     const locator::token_metadata& get_token_metadata() const { return _token_metadata; }
-    locator::token_metadata& get_token_metadata() { return _token_metadata; }
 
     service::migration_notifier& get_notifier() { return _mnotifier; }
     const service::migration_notifier& get_notifier() const { return _mnotifier; }

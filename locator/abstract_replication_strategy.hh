@@ -59,7 +59,7 @@ protected:
     // TODO: Do we need this member at all?
     //keyspace* _keyspace = nullptr;
     std::map<sstring, sstring> _config_options;
-    token_metadata& _token_metadata;
+    const token_metadata& _token_metadata;
     snitch_ptr& _snitch;
     replication_strategy_type _my_type;
 
@@ -83,16 +83,16 @@ protected:
 public:
     abstract_replication_strategy(
         const sstring& keyspace_name,
-        token_metadata& token_metadata,
+        const token_metadata& token_metadata,
         snitch_ptr& snitch,
         const std::map<sstring, sstring>& config_options,
         replication_strategy_type my_type);
-    virtual std::vector<inet_address> calculate_natural_endpoints(const token& search_token, token_metadata& tm) const = 0;
+    virtual std::vector<inet_address> calculate_natural_endpoints(const token& search_token, const token_metadata& tm) const = 0;
     virtual ~abstract_replication_strategy() {}
-    static std::unique_ptr<abstract_replication_strategy> create_replication_strategy(const sstring& ks_name, const sstring& strategy_name, token_metadata& token_metadata, const std::map<sstring, sstring>& config_options);
+    static std::unique_ptr<abstract_replication_strategy> create_replication_strategy(const sstring& ks_name, const sstring& strategy_name, const token_metadata& token_metadata, const std::map<sstring, sstring>& config_options);
     static void validate_replication_strategy(const sstring& ks_name,
                                               const sstring& strategy_name,
-                                              token_metadata& token_metadata,
+                                              const token_metadata& token_metadata,
                                               const std::map<sstring, sstring>& config_options);
     virtual std::vector<inet_address> get_natural_endpoints(const token& search_token);
     virtual std::vector<inet_address> get_natural_endpoints_without_node_being_replaced(const token& search_token);
@@ -116,10 +116,10 @@ public:
     dht::token_range_vector get_ranges_in_thread(inet_address ep) const;
 
     // Use the token_metadata provided by the caller instead of _token_metadata
-    dht::token_range_vector get_ranges(inet_address ep, token_metadata& tm) const;
-    dht::token_range_vector get_ranges_in_thread(inet_address ep, token_metadata& tm) const;
+    dht::token_range_vector get_ranges(inet_address ep, const token_metadata& tm) const;
+    dht::token_range_vector get_ranges_in_thread(inet_address ep, const token_metadata& tm) const;
 private:
-    dht::token_range_vector do_get_ranges(inet_address ep, token_metadata& tm, bool can_yield) const;
+    dht::token_range_vector do_get_ranges(inet_address ep, const token_metadata& tm, bool can_yield) const;
 
 public:
     // get_primary_ranges() returns the list of "primary ranges" for the given
@@ -134,13 +134,13 @@ public:
     // instead of one node globally.
     dht::token_range_vector get_primary_ranges_within_dc(inet_address ep);
 
-    std::unordered_multimap<inet_address, dht::token_range> get_address_ranges(token_metadata& tm) const;
+    std::unordered_multimap<inet_address, dht::token_range> get_address_ranges(const token_metadata& tm) const;
 
-    std::unordered_map<dht::token_range, std::vector<inet_address>> get_range_addresses(token_metadata& tm) const;
+    std::unordered_map<dht::token_range, std::vector<inet_address>> get_range_addresses(const token_metadata& tm) const;
 
-    dht::token_range_vector get_pending_address_ranges(token_metadata& tm, token pending_token, inet_address pending_address);
+    dht::token_range_vector get_pending_address_ranges(const token_metadata& tm, token pending_token, inet_address pending_address) const;
 
-    dht::token_range_vector get_pending_address_ranges(token_metadata& tm, std::unordered_set<token> pending_tokens, inet_address pending_address);
+    dht::token_range_vector get_pending_address_ranges(const token_metadata& tm, std::unordered_set<token> pending_tokens, inet_address pending_address) const;
 };
 
 }
