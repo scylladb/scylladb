@@ -656,9 +656,6 @@ void gossiper::apply_state_locally_without_listener_notification(std::unordered_
     for (auto& x : map) {
         const inet_address& node = x.first;
         const endpoint_state& remote_state = x.second;
-        if (node == this->get_broadcast_address()) {
-            continue;
-        }
         do_apply_state_locally(node, remote_state, false);
     }
 }
