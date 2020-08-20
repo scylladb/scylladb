@@ -26,7 +26,6 @@
 #include <seastar/core/metrics.hh>
 #include <seastar/util/defer.hh>
 #include "memtable.hh"
-#include "partition_snapshot_reader.hh"
 #include <chrono>
 #include <boost/version.hpp>
 #include <sys/sdt.h>

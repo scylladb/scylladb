@@ -28,7 +28,6 @@
 #include "partition_version.hh"
 #include "utils/logalloc.hh"
 #include "query-request.hh"
-#include "partition_snapshot_reader.hh"
 #include "partition_snapshot_row_cursor.hh"
 #include "read_context.hh"
 #include "flat_mutation_reader.hh"

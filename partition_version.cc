@@ -25,7 +25,6 @@
 #include "partition_version.hh"
 #include "row_cache.hh"
 #include "partition_snapshot_row_cursor.hh"
-#include "partition_snapshot_reader.hh"
 #include "utils/coroutine.hh"
 #include "real_dirty_memory_accounter.hh"
 
