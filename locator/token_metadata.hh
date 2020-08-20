@@ -269,7 +269,8 @@ public:
     static boost::icl::interval<token>::interval_type range_to_interval(range<dht::token> r);
     static range<dht::token> interval_to_range(boost::icl::interval<token>::interval_type i);
 
-    std::vector<range<token>> get_pending_ranges(sstring keyspace_name, inet_address endpoint);
+    // returns an empty vector if keyspace_name not found
+    std::vector<range<token>> get_pending_ranges(sstring keyspace_name, inet_address endpoint) const;
      /**
      * Calculate pending ranges according to bootsrapping and leaving nodes. Reasoning is:
      *

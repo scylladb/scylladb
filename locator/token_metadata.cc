@@ -455,11 +455,11 @@ public:
     static range<dht::token> interval_to_range(boost::icl::interval<token>::interval_type i);
 
 private:
-    std::unordered_multimap<range<token>, inet_address>& get_pending_ranges_mm(sstring keyspace_name);
     void set_pending_ranges(const sstring& keyspace_name, std::unordered_multimap<range<token>, inet_address> new_pending_ranges);
 
 public:
-    std::vector<range<token>> get_pending_ranges(sstring keyspace_name, inet_address endpoint);
+    // returns an empty vector if keyspace_name not found
+    std::vector<range<token>> get_pending_ranges(sstring keyspace_name, inet_address endpoint) const;
      /**
      * Calculate pending ranges according to bootsrapping and leaving nodes. Reasoning is:
      *
@@ -1358,20 +1358,18 @@ void token_metadata_impl::set_pending_ranges(const sstring& keyspace_name,
     _pending_ranges_map[keyspace_name] = std::move(map);
 }
 
-std::unordered_multimap<range<token>, inet_address>&
-token_metadata_impl::get_pending_ranges_mm(sstring keyspace_name) {
-    return _pending_ranges[keyspace_name];
-}
-
 std::vector<range<token>>
-token_metadata_impl::get_pending_ranges(sstring keyspace_name, inet_address endpoint) {
+token_metadata_impl::get_pending_ranges(sstring keyspace_name, inet_address endpoint) const {
     std::vector<range<token>> ret;
-    for (auto x : get_pending_ranges_mm(keyspace_name)) {
+    const auto it = _pending_ranges.find(keyspace_name);
+    if (it != _pending_ranges.end()) {
+      for (auto x : it->second) {
         auto& range_token = x.first;
         auto& ep = x.second;
         if (ep == endpoint) {
             ret.push_back(range_token);
         }
+      }
     }
     return ret;
 }
@@ -1868,7 +1866,7 @@ token_metadata::interval_to_range(boost::icl::interval<token>::interval_type i) 
 }
 
 std::vector<range<token>>
-token_metadata::get_pending_ranges(sstring keyspace_name, inet_address endpoint) {
+token_metadata::get_pending_ranges(sstring keyspace_name, inet_address endpoint) const {
     return _impl->get_pending_ranges(std::move(keyspace_name), endpoint);
 }
 
