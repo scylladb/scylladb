@@ -269,9 +269,6 @@ public:
     static boost::icl::interval<token>::interval_type range_to_interval(range<dht::token> r);
     static range<dht::token> interval_to_range(boost::icl::interval<token>::interval_type i);
 
-    /** a mutable map may be returned but caller should not modify it */
-    const std::unordered_map<range<token>, std::unordered_set<inet_address>>& get_pending_ranges(sstring keyspace_name);
-
     std::vector<range<token>> get_pending_ranges(sstring keyspace_name, inet_address endpoint);
      /**
      * Calculate pending ranges according to bootsrapping and leaving nodes. Reasoning is:

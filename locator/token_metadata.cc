@@ -459,9 +459,6 @@ private:
     void set_pending_ranges(const sstring& keyspace_name, std::unordered_multimap<range<token>, inet_address> new_pending_ranges);
 
 public:
-    /** a mutable map may be returned but caller should not modify it */
-    const std::unordered_map<range<token>, std::unordered_set<inet_address>>& get_pending_ranges(sstring keyspace_name);
-
     std::vector<range<token>> get_pending_ranges(sstring keyspace_name, inet_address endpoint);
      /**
      * Calculate pending ranges according to bootsrapping and leaving nodes. Reasoning is:
@@ -1366,11 +1363,6 @@ token_metadata_impl::get_pending_ranges_mm(sstring keyspace_name) {
     return _pending_ranges[keyspace_name];
 }
 
-const std::unordered_map<range<token>, std::unordered_set<inet_address>>&
-token_metadata_impl::get_pending_ranges(sstring keyspace_name) {
-    return _pending_ranges_map[keyspace_name];
-}
-
 std::vector<range<token>>
 token_metadata_impl::get_pending_ranges(sstring keyspace_name, inet_address endpoint) {
     std::vector<range<token>> ret;
@@ -1873,11 +1865,6 @@ token_metadata::range_to_interval(range<dht::token> r) {
 range<dht::token>
 token_metadata::interval_to_range(boost::icl::interval<token>::interval_type i) {
     return token_metadata_impl::interval_to_range(std::move(i));
-}
-
-const std::unordered_map<range<token>, std::unordered_set<inet_address>>&
-token_metadata::get_pending_ranges(sstring keyspace_name) {
-    return _impl->get_pending_ranges(std::move(keyspace_name));
 }
 
 std::vector<range<token>>
