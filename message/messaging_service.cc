@@ -280,8 +280,7 @@ future<> messaging_service::unregister_handler(messaging_verb verb) {
 }
 
 messaging_service::messaging_service(gms::inet_address ip, uint16_t port)
-    : messaging_service(std::move(ip), port, encrypt_what::none, compress_what::none, tcp_nodelay_what::all, 0, nullptr, memory_config{1'000'000},
-            scheduling_config{{{{}, "$default"}}, {}, {}}, false)
+    : messaging_service(config{std::move(ip), port}, scheduling_config{{{{}, "$default"}}, {}, {}}, nullptr)
 {}
 
 static
@@ -312,9 +311,9 @@ future<> messaging_service::start_listen() {
 }
 
 void messaging_service::do_start_listen() {
-    bool listen_to_bc = _should_listen_to_broadcast_address && _listen_address != utils::fb_utilities::get_broadcast_address();
+    bool listen_to_bc = _cfg.listen_on_broadcast_address && _cfg.ip != utils::fb_utilities::get_broadcast_address();
     rpc::server_options so;
-    if (_compress_what != compress_what::none) {
+    if (_cfg.compress != compress_what::none) {
         so.compressor_factory = &compressor_factory;
     }
     so.load_balancing_algorithm = server_socket::load_balancing_algorithm::port;
@@ -322,7 +321,7 @@ void messaging_service::do_start_listen() {
     // FIXME: we don't set so.tcp_nodelay, because we can't tell at this point whether the connection will come from a
     //        local or remote datacenter, and whether or not the connection will be used for gossip. We can fix
     //        the first by wrapping its server_socket, but not the second.
-    auto limits = rpc_resource_limits(_mcfg.rpc_memory_limit);
+    auto limits = rpc_resource_limits(_cfg.rpc_memory_limit);
     limits.isolate_connection = [this] (sstring isolation_cookie) {
         rpc::isolation_config cfg;
         cfg.sched_group = scheduling_group_for_isolation_cookie(isolation_cookie);
@@ -331,11 +330,11 @@ void messaging_service::do_start_listen() {
     if (!_server[0]) {
         auto listen = [&] (const gms::inet_address& a, rpc::streaming_domain_type sdomain) {
             so.streaming_domain = sdomain;
-            auto addr = socket_address{a, _port};
+            auto addr = socket_address{a, _cfg.port};
             return std::unique_ptr<rpc_protocol_server_wrapper>(new rpc_protocol_server_wrapper(*_rpc,
                     so, addr, limits));
         };
-        _server[0] = listen(_listen_address, rpc::streaming_domain_type(0x55AA));
+        _server[0] = listen(_cfg.ip, rpc::streaming_domain_type(0x55AA));
         if (listen_to_bc) {
             _server[1] = listen(utils::fb_utilities::get_broadcast_address(), rpc::streaming_domain_type(0x66BB));
         }
@@ -346,7 +345,7 @@ void messaging_service::do_start_listen() {
             so.streaming_domain = sdomain;
             return std::unique_ptr<rpc_protocol_server_wrapper>(
                     [this, &so, &a, limits] () -> std::unique_ptr<rpc_protocol_server_wrapper>{
-                if (_encrypt_what == encrypt_what::none) {
+                if (_cfg.encrypt == encrypt_what::none) {
                     return nullptr;
                 }
                 if (!_credentials) {
@@ -355,12 +354,12 @@ void messaging_service::do_start_listen() {
                 listen_options lo;
                 lo.reuse_address = true;
                 lo.lba =  server_socket::load_balancing_algorithm::port;
-                auto addr = socket_address{a, _ssl_port};
+                auto addr = socket_address{a, _cfg.ssl_port};
                 return std::make_unique<rpc_protocol_server_wrapper>(*_rpc,
                         so, seastar::tls::listen(_credentials, addr, lo), limits);
             }());
         };
-        _server_tls[0] = listen(_listen_address, rpc::streaming_domain_type(0x77CC));
+        _server_tls[0] = listen(_cfg.ip, rpc::streaming_domain_type(0x77CC));
         if (listen_to_bc) {
             _server_tls[1] = listen(utils::fb_utilities::get_broadcast_address(), rpc::streaming_domain_type(0x88DD));
         }
@@ -368,33 +367,17 @@ void messaging_service::do_start_listen() {
     // Do this on just cpu 0, to avoid duplicate logs.
     if (this_shard_id() == 0) {
         if (_server_tls[0]) {
-            mlogger.info("Starting Encrypted Messaging Service on SSL port {}", _ssl_port);
+            mlogger.info("Starting Encrypted Messaging Service on SSL port {}", _cfg.ssl_port);
         }
-        mlogger.info("Starting Messaging Service on port {}", _port);
+        mlogger.info("Starting Messaging Service on port {}", _cfg.port);
     }
 }
 
-messaging_service::messaging_service(gms::inet_address ip
-        , uint16_t port
-        , encrypt_what ew
-        , compress_what cw
-        , tcp_nodelay_what tnw
-        , uint16_t ssl_port
-        , std::shared_ptr<seastar::tls::credentials_builder> credentials
-        , messaging_service::memory_config mcfg
-        , scheduling_config scfg
-        , bool sltba)
-    : _listen_address(ip)
-    , _port(port)
-    , _ssl_port(ssl_port)
-    , _encrypt_what(ew)
-    , _compress_what(cw)
-    , _tcp_nodelay_what(tnw)
-    , _should_listen_to_broadcast_address(sltba)
+messaging_service::messaging_service(config cfg, scheduling_config scfg, std::shared_ptr<seastar::tls::credentials_builder> credentials)
+    : _cfg(std::move(cfg))
     , _rpc(new rpc_protocol_wrapper(serializer { }))
     , _credentials_builder(credentials ? std::make_unique<seastar::tls::credentials_builder>(*credentials) : nullptr)
     , _clients(2 + scfg.statement_tenants.size() * 2)
-    , _mcfg(mcfg)
     , _scheduling_config(scfg)
     , _scheduling_info_for_connection_index(initial_scheduling_info())
 {
@@ -426,11 +409,11 @@ msg_addr messaging_service::get_source(const rpc::client_info& cinfo) {
 messaging_service::~messaging_service() = default;
 
 uint16_t messaging_service::port() {
-    return _port;
+    return _cfg.port;
 }
 
 gms::inet_address messaging_service::listen_address() {
-    return _listen_address;
+    return _cfg.ip;
 }
 
 static future<> stop_servers(std::array<std::unique_ptr<messaging_service::rpc_protocol_server_wrapper>, 2>& servers) {
@@ -455,9 +438,14 @@ future<> messaging_service::stop_client() {
     });
 }
 
-future<> messaging_service::stop() {
-    _stopping = true;
+future<> messaging_service::shutdown() {
+    _shutting_down = true;
     return when_all(stop_nontls_server(), stop_tls_server(), stop_client()).discard_result();
+}
+
+future<> messaging_service::stop() {
+    // FIXME -- make sure all _rpc handlers are unregistered
+    return make_ready_future<>();
 }
 
 rpc::no_wait_type messaging_service::no_wait() {
@@ -642,7 +630,7 @@ void messaging_service::cache_preferred_ip(gms::inet_address ep, gms::inet_addre
 }
 
 shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::get_rpc_client(messaging_verb verb, msg_addr id) {
-    assert(!_stopping);
+    assert(!_shutting_down);
     auto idx = get_rpc_client_idx(verb);
     auto it = _clients[idx].find(id);
 
@@ -655,16 +643,16 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
     }
 
     auto must_encrypt = [&id, this] {
-        if (_encrypt_what == encrypt_what::none) {
+        if (_cfg.encrypt == encrypt_what::none) {
             return false;
         }
-        if (_encrypt_what == encrypt_what::all) {
+        if (_cfg.encrypt == encrypt_what::all) {
             return true;
         }
 
         auto& snitch_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
 
-        if (_encrypt_what == encrypt_what::dc) {
+        if (_cfg.encrypt == encrypt_what::dc) {
             return snitch_ptr->get_datacenter(id.addr)
                             != snitch_ptr->get_datacenter(utils::fb_utilities::get_broadcast_address());
         }
@@ -673,11 +661,11 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
     }();
 
     auto must_compress = [&id, this] {
-        if (_compress_what == compress_what::none) {
+        if (_cfg.compress == compress_what::none) {
             return false;
         }
 
-        if (_compress_what == compress_what::dc) {
+        if (_cfg.compress == compress_what::dc) {
             auto& snitch_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
             return snitch_ptr->get_datacenter(id.addr)
                             != snitch_ptr->get_datacenter(utils::fb_utilities::get_broadcast_address());
@@ -690,7 +678,7 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
         if (idx == 1) {
             return true; // gossip
         }
-        if (_tcp_nodelay_what == tcp_nodelay_what::local) {
+        if (_cfg.tcp_nodelay == tcp_nodelay_what::local) {
             auto& snitch_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
             return snitch_ptr->get_datacenter(id.addr)
                             == snitch_ptr->get_datacenter(utils::fb_utilities::get_broadcast_address());
@@ -698,7 +686,7 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
         return true;
     }();
 
-    auto remote_addr = socket_address(get_preferred_ip(id.addr), must_encrypt ? _ssl_port : _port);
+    auto remote_addr = socket_address(get_preferred_ip(id.addr), must_encrypt ? _cfg.ssl_port : _cfg.port);
 
     rpc::client_options opts;
     // send keepalive messages each minute if connection is idle, drop connection after 10 failures
@@ -732,7 +720,7 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
 }
 
 bool messaging_service::remove_rpc_client_one(clients_map& clients, msg_addr id, bool dead_only) {
-    if (_stopping) {
+    if (_shutting_down) {
         // if messaging service is in a processed of been stopped no need to
         // stop and remove connection here since they are being stopped already
         // and we'll just interfere
@@ -783,7 +771,7 @@ rpc::sink<int32_t> messaging_service::make_sink_for_stream_mutation_fragments(rp
 future<std::tuple<rpc::sink<frozen_mutation_fragment, streaming::stream_mutation_fragments_cmd>, rpc::source<int32_t>>>
 messaging_service::make_sink_and_source_for_stream_mutation_fragments(utils::UUID schema_id, utils::UUID plan_id, utils::UUID cf_id, uint64_t estimated_partitions, streaming::stream_reason reason, msg_addr id) {
     using value_type = std::tuple<rpc::sink<frozen_mutation_fragment, streaming::stream_mutation_fragments_cmd>, rpc::source<int32_t>>;
-    if (is_stopping()) {
+    if (is_shutting_down()) {
         return make_exception_future<value_type>(rpc::closed_error());
     }
     auto rpc_client = get_rpc_client(messaging_verb::STREAM_MUTATION_FRAGMENTS, id);
@@ -823,7 +811,7 @@ do_make_sink_source(messaging_verb verb, uint32_t repair_meta_id, shared_ptr<mes
 future<std::tuple<rpc::sink<repair_hash_with_cmd>, rpc::source<repair_row_on_wire_with_cmd>>>
 messaging_service::make_sink_and_source_for_repair_get_row_diff_with_rpc_stream(uint32_t repair_meta_id, msg_addr id) {
     auto verb = messaging_verb::REPAIR_GET_ROW_DIFF_WITH_RPC_STREAM;
-    if (is_stopping()) {
+    if (is_shutting_down()) {
         return make_exception_future<std::tuple<rpc::sink<repair_hash_with_cmd>, rpc::source<repair_row_on_wire_with_cmd>>>(rpc::closed_error());
     }
     auto rpc_client = get_rpc_client(verb, id);
@@ -845,7 +833,7 @@ future<> messaging_service::unregister_repair_get_row_diff_with_rpc_stream() {
 future<std::tuple<rpc::sink<repair_row_on_wire_with_cmd>, rpc::source<repair_stream_cmd>>>
 messaging_service::make_sink_and_source_for_repair_put_row_diff_with_rpc_stream(uint32_t repair_meta_id, msg_addr id) {
     auto verb = messaging_verb::REPAIR_PUT_ROW_DIFF_WITH_RPC_STREAM;
-    if (is_stopping()) {
+    if (is_shutting_down()) {
         return make_exception_future<std::tuple<rpc::sink<repair_row_on_wire_with_cmd>, rpc::source<repair_stream_cmd>>>(rpc::closed_error());
     }
     auto rpc_client = get_rpc_client(verb, id);
@@ -867,7 +855,7 @@ future<> messaging_service::unregister_repair_put_row_diff_with_rpc_stream() {
 future<std::tuple<rpc::sink<repair_stream_cmd>, rpc::source<repair_hash_with_cmd>>>
 messaging_service::make_sink_and_source_for_repair_get_full_row_hashes_with_rpc_stream(uint32_t repair_meta_id, msg_addr id) {
     auto verb = messaging_verb::REPAIR_GET_FULL_ROW_HASHES_WITH_RPC_STREAM;
-    if (is_stopping()) {
+    if (is_shutting_down()) {
         return make_exception_future<std::tuple<rpc::sink<repair_stream_cmd>, rpc::source<repair_hash_with_cmd>>>(rpc::closed_error());
     }
     auto rpc_client = get_rpc_client(verb, id);
@@ -889,7 +877,7 @@ future<> messaging_service::unregister_repair_get_full_row_hashes_with_rpc_strea
 template <typename MsgIn, typename... MsgOut>
 auto send_message(messaging_service* ms, messaging_verb verb, msg_addr id, MsgOut&&... msg) {
     auto rpc_handler = ms->rpc()->make_client<MsgIn(MsgOut...)>(verb);
-    if (ms->is_stopping()) {
+    if (ms->is_shutting_down()) {
         using futurator = futurize<std::result_of_t<decltype(rpc_handler)(rpc_protocol::client&, MsgOut...)>>;
         return futurator::make_exception_future(rpc::closed_error());
     }
@@ -918,7 +906,7 @@ auto send_message(messaging_service* ms, messaging_verb verb, msg_addr id, MsgOu
 template <typename MsgIn, typename Timeout, typename... MsgOut>
 auto send_message_timeout(messaging_service* ms, messaging_verb verb, msg_addr id, Timeout timeout, MsgOut&&... msg) {
     auto rpc_handler = ms->rpc()->make_client<MsgIn(MsgOut...)>(verb);
-    if (ms->is_stopping()) {
+    if (ms->is_shutting_down()) {
         using futurator = futurize<std::result_of_t<decltype(rpc_handler)(rpc_protocol::client&, MsgOut...)>>;
         return futurator::make_exception_future(rpc::closed_error());
     }
@@ -1416,6 +1404,46 @@ future<> messaging_service::send_hint_mutation(msg_addr id, clock_type::time_poi
         inet_address reply_to, unsigned shard, response_id_type response_id, std::optional<tracing::trace_info> trace_info) {
     return send_message_oneway_timeout(this, timeout, messaging_verb::HINT_MUTATION, std::move(id), fm, std::move(forward),
         std::move(reply_to), shard, std::move(response_id), std::move(trace_info));
+}
+
+void init_messaging_service(sharded<messaging_service>& ms,
+                messaging_service::config mscfg, netw::messaging_service::scheduling_config scfg,
+                sstring ms_trust_store, sstring ms_cert, sstring ms_key, sstring ms_tls_prio, bool ms_client_auth) {
+    using encrypt_what = messaging_service::encrypt_what;
+    using namespace seastar::tls;
+
+    std::shared_ptr<credentials_builder> creds;
+
+    if (mscfg.encrypt != encrypt_what::none) {
+        creds = std::make_shared<credentials_builder>();
+        creds->set_dh_level(dh_params::level::MEDIUM);
+
+        creds->set_x509_key_file(ms_cert, ms_key, x509_crt_format::PEM).get();
+        if (ms_trust_store.empty()) {
+            creds->set_system_trust().get();
+        } else {
+            creds->set_x509_trust_file(ms_trust_store, x509_crt_format::PEM).get();
+        }
+
+        creds->set_priority_string(db::config::default_tls_priority);
+
+        if (!ms_tls_prio.empty()) {
+            creds->set_priority_string(ms_tls_prio);
+        }
+        if (ms_client_auth) {
+            creds->set_client_auth(seastar::tls::client_auth::REQUIRE);
+        }
+    }
+
+    // Init messaging_service
+    // Delay listening messaging_service until gossip message handlers are registered
+
+    ms.start(mscfg, scfg, creds).get();
+}
+
+future<> uninit_messaging_service(sharded<messaging_service>& ms) {
+    // Do not destroy instances for real, as other services need them, just call .stop()
+    return ms.invoke_on_all(&messaging_service::stop);
 }
 
 } // namespace net

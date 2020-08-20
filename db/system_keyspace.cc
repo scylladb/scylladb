@@ -1157,8 +1157,8 @@ schema_ptr aggregates() {
 
 } //</legacy>
 
-static future<> setup_version(distributed<gms::feature_service>& feat) {
-    return gms::inet_address::lookup(qctx->db().get_config().rpc_address()).then([&feat](gms::inet_address a) {
+static future<> setup_version(distributed<gms::feature_service>& feat, sharded<netw::messaging_service>& ms) {
+    return gms::inet_address::lookup(qctx->db().get_config().rpc_address()).then([&feat, &ms](gms::inet_address a) {
         sstring req = sprint("INSERT INTO system.%s (key, release_version, cql_version, thrift_version, native_protocol_version, data_center, rack, partitioner, rpc_address, broadcast_address, listen_address, supported_features) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                         , db::system_keyspace::LOCAL);
         auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
@@ -1173,7 +1173,7 @@ static future<> setup_version(distributed<gms::feature_service>& feat) {
                              sstring(qctx->db().get_config().partitioner()),
                              a.addr(),
                              utils::fb_utilities::get_broadcast_address().addr(),
-                             netw::get_local_messaging_service().listen_address().addr(),
+                             ms.local().listen_address().addr(),
                              ::join(",", feat.local().supported_feature_set())
         ).discard_result();
     });
@@ -1263,9 +1263,10 @@ static future<> cache_truncation_record(distributed<database>& db);
 
 future<> setup(distributed<database>& db,
                distributed<cql3::query_processor>& qp,
-               distributed<gms::feature_service>& feat) {
+               distributed<gms::feature_service>& feat,
+               sharded<netw::messaging_service>& ms) {
     minimal_setup(db, qp);
-    return setup_version(feat).then([&db] {
+    return setup_version(feat, ms).then([&db] {
         return update_schema_version(db.local().get_version());
     }).then([] {
         return init_local_cache();
@@ -1282,8 +1283,8 @@ future<> setup(distributed<database>& db,
         return db::schema_tables::save_system_schema(NAME);
     }).then([&db] {
         return cache_truncation_record(db);
-    }).then([] {
-        return netw::get_messaging_service().invoke_on_all([] (auto& ms){
+    }).then([&ms] {
+        return ms.invoke_on_all([] (auto& ms){
             return ms.init_local_preferred_ip_cache();
         });
     });

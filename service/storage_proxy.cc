@@ -220,11 +220,10 @@ public:
     virtual future<> apply_remotely(storage_proxy& sp, gms::inet_address ep, std::vector<gms::inet_address>&& forward,
             storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
             tracing::trace_state_ptr tr_state) override {
-        auto& ms = netw::get_local_messaging_service();
         auto m = _mutations[ep];
         if (m) {
             tracing::trace(tr_state, "Sending a mutation to /{}", ep);
-            return ms.send_mutation(netw::messaging_service::msg_addr{ep, 0}, timeout, *m,
+            return sp._messaging.send_mutation(netw::messaging_service::msg_addr{ep, 0}, timeout, *m,
                                     std::move(forward), utils::fb_utilities::get_broadcast_address(), this_shard_id(),
                                     response_id, tracing::make_trace_info(tr_state));
         }
@@ -270,8 +269,7 @@ public:
             storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
             tracing::trace_state_ptr tr_state) override {
         tracing::trace(tr_state, "Sending a mutation to /{}", ep);
-        auto& ms = netw::get_local_messaging_service();
-        return ms.send_mutation(netw::messaging_service::msg_addr{ep, 0}, timeout, *_mutation,
+        return sp._messaging.send_mutation(netw::messaging_service::msg_addr{ep, 0}, timeout, *_mutation,
                 std::move(forward), utils::fb_utilities::get_broadcast_address(), this_shard_id(),
                 response_id, tracing::make_trace_info(tr_state));
     }
@@ -300,8 +298,7 @@ public:
             storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
             tracing::trace_state_ptr tr_state) override {
         tracing::trace(tr_state, "Sending a hint to /{}", ep);
-        auto& ms = netw::get_local_messaging_service();
-        return ms.send_hint_mutation(netw::messaging_service::msg_addr{ep, 0}, timeout, *_mutation,
+        return sp._messaging.send_hint_mutation(netw::messaging_service::msg_addr{ep, 0}, timeout, *_mutation,
                 std::move(forward), utils::fb_utilities::get_broadcast_address(), this_shard_id(),
                 response_id, tracing::make_trace_info(tr_state));
     }
@@ -328,8 +325,7 @@ public:
             storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
             tracing::trace_state_ptr tr_state) override {
         tracing::trace(tr_state, "Sending a learn to /{}", ep);
-        auto& ms = netw::get_local_messaging_service();
-        return ms.send_paxos_learn(netw::messaging_service::msg_addr{ep, 0}, timeout,
+        return sp._messaging.send_paxos_learn(netw::messaging_service::msg_addr{ep, 0}, timeout,
                                 *_proposal, std::move(forward), utils::fb_utilities::get_broadcast_address(),
                                 this_shard_id(), response_id, tracing::make_trace_info(tr_state));
     }
@@ -951,8 +947,7 @@ future<paxos::prepare_summary> paxos_response_handler::prepare_ballot(utils::UUI
                     return paxos::paxos_state::prepare(tr_state, _schema, *_cmd, _key.key(), ballot, only_digest, da, _timeout);
                 } else {
                     tracing::trace(tr_state, "prepare_ballot: sending prepare {} to {}", ballot, peer);
-                    netw::messaging_service& ms = netw::get_local_messaging_service();
-                    return ms.send_paxos_prepare(peer, _timeout, *_cmd, _key.key(), ballot, only_digest, da,
+                    return _proxy->_messaging.send_paxos_prepare(peer, _timeout, *_cmd, _key.key(), ballot, only_digest, da,
                             tracing::make_trace_info(tr_state));
                 }
             }).then_wrapped([this, &summary, &request_tracker, peer, ballot]
@@ -1111,8 +1106,7 @@ future<bool> paxos_response_handler::accept_proposal(lw_shared_ptr<paxos::propos
                     return paxos::paxos_state::accept(tr_state, _schema, proposal->update.decorated_key(*_schema).token(), *proposal, _timeout);
                 } else {
                     tracing::trace(tr_state, "accept_proposal: send accept {} to {}", *proposal, peer);
-                    netw::messaging_service& ms = netw::get_local_messaging_service();
-                    return ms.send_paxos_accept(peer, _timeout, *proposal, tracing::make_trace_info(tr_state));
+                    return _proxy->_messaging.send_paxos_accept(peer, _timeout, *proposal, tracing::make_trace_info(tr_state));
                 }
             }).then_wrapped([this, &request_tracker, timeout_if_partially_accepted, proposal, peer] (future<bool> accepted_f) {
                 if (!request_tracker.p) {
@@ -1270,8 +1264,7 @@ void paxos_response_handler::prune(utils::UUID ballot) {
             return paxos::paxos_state::prune(_schema, _key.key(), ballot, _timeout, tr_state);
         } else {
             tracing::trace(tr_state, "prune: send prune of {} to {}", ballot, peer);
-            netw::messaging_service& ms = netw::get_local_messaging_service();
-            return ms.send_paxos_prune(peer, _timeout, _schema->version(), _key.key(), ballot, tracing::make_trace_info(tr_state));
+            return _proxy->_messaging.send_paxos_prune(peer, _timeout, _schema->version(), _key.key(), ballot, tracing::make_trace_info(tr_state));
         }
     }).finally([h = shared_from_this()] {
         h->_proxy->get_stats().cas_now_pruning--;
@@ -1781,7 +1774,7 @@ using namespace std::literals::chrono_literals;
 
 storage_proxy::~storage_proxy() {}
 storage_proxy::storage_proxy(distributed<database>& db, storage_proxy::config cfg, db::view::node_update_backlog& max_view_update_backlog,
-        scheduling_group_key stats_key, gms::feature_service& feat, locator::token_metadata& tm)
+        scheduling_group_key stats_key, gms::feature_service& feat, locator::token_metadata& tm, netw::messaging_service& ms)
     : _db(db)
     , _token_metadata(tm)
     , _read_smp_service_group(cfg.read_smp_service_group)
@@ -1792,6 +1785,7 @@ storage_proxy::storage_proxy(distributed<database>& db, storage_proxy::config cf
     , _hints_for_views_manager(_db.local().get_config().view_hints_directory(), {}, _db.local().get_config().max_hint_window_in_ms(), _hints_resource_manager, _db)
     , _stats_key(stats_key)
     , _features(feat)
+    , _messaging(ms)
     , _background_write_throttle_threahsold(cfg.available_memory / 10)
     , _mutate_stage{"storage_proxy_mutate", &storage_proxy::do_mutate}
     , _max_view_update_backlog(max_view_update_backlog)
@@ -2202,10 +2196,9 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
                 return std::move(m.fm);
             }));
 
-            auto& ms = netw::get_local_messaging_service();
             auto msg_addr = netw::messaging_service::msg_addr{ endpoint_and_mutations.first, 0 };
             tracing::trace(tr_state, "Enqueuing counter update to {}", msg_addr);
-            f = ms.send_counter_mutation(msg_addr, timeout, std::move(fms), cl, tracing::make_trace_info(tr_state));
+            f = _messaging.send_counter_mutation(msg_addr, timeout, std::move(fms), cl, tracing::make_trace_info(tr_state));
         }
         return f.handle_exception(std::move(handle_error));
     });
@@ -3424,9 +3417,8 @@ protected:
             tracing::trace(_trace_state, "read_mutation_data: querying locally");
             return _proxy->query_mutations_locally(_schema, cmd, _partition_range, timeout, _trace_state);
         } else {
-            auto& ms = netw::get_local_messaging_service();
             tracing::trace(_trace_state, "read_mutation_data: sending a message to /{}", ep);
-            return ms.send_read_mutation_data(netw::messaging_service::msg_addr{ep, 0}, timeout, *cmd, _partition_range).then([this, ep](rpc::tuple<reconcilable_result, rpc::optional<cache_temperature>> result_and_hit_rate) {
+            return _proxy->_messaging.send_read_mutation_data(netw::messaging_service::msg_addr{ep, 0}, timeout, *cmd, _partition_range).then([this, ep](rpc::tuple<reconcilable_result, rpc::optional<cache_temperature>> result_and_hit_rate) {
                 auto&& [result, hit_rate] = result_and_hit_rate;
                 tracing::trace(_trace_state, "read_mutation_data: got response from /{}", ep);
                 return make_ready_future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>>(rpc::tuple(make_foreign(::make_lw_shared<reconcilable_result>(std::move(result))), hit_rate.value_or(cache_temperature::invalid())));
@@ -3442,9 +3434,8 @@ protected:
             tracing::trace(_trace_state, "read_data: querying locally");
             return _proxy->query_result_local(_schema, _cmd, _partition_range, opts, _trace_state, timeout);
         } else {
-            auto& ms = netw::get_local_messaging_service();
             tracing::trace(_trace_state, "read_data: sending a message to /{}", ep);
-            return ms.send_read_data(netw::messaging_service::msg_addr{ep, 0}, timeout, *_cmd, _partition_range, opts.digest_algo).then([this, ep](rpc::tuple<query::result, rpc::optional<cache_temperature>> result_hit_rate) {
+            return _proxy->_messaging.send_read_data(netw::messaging_service::msg_addr{ep, 0}, timeout, *_cmd, _partition_range, opts.digest_algo).then([this, ep](rpc::tuple<query::result, rpc::optional<cache_temperature>> result_hit_rate) {
                 auto&& [result, hit_rate] = result_hit_rate;
                 tracing::trace(_trace_state, "read_data: got response from /{}", ep);
                 return make_ready_future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>>(rpc::tuple(make_foreign(::make_lw_shared<query::result>(std::move(result))), hit_rate.value_or(cache_temperature::invalid())));
@@ -3458,9 +3449,8 @@ protected:
             return _proxy->query_result_local_digest(_schema, _cmd, _partition_range, _trace_state,
                         timeout, digest_algorithm(*_proxy));
         } else {
-            auto& ms = netw::get_local_messaging_service();
             tracing::trace(_trace_state, "read_digest: sending a message to /{}", ep);
-            return ms.send_read_digest(netw::messaging_service::msg_addr{ep, 0}, timeout, *_cmd,
+            return _proxy->_messaging.send_read_digest(netw::messaging_service::msg_addr{ep, 0}, timeout, *_cmd,
                         _partition_range, digest_algorithm(*_proxy)).then([this, ep] (
                     rpc::tuple<query::result_digest, rpc::optional<api::timestamp_type>, rpc::optional<cache_temperature>> digest_timestamp_hit_rate) {
                 auto&& [d, t, hit_rate] = digest_timestamp_hit_rate;
@@ -4725,7 +4715,7 @@ future<> storage_proxy::truncate_blocking(sstring keyspace, sstring cfname) {
     }
 
     auto all_endpoints = gossiper.get_live_token_owners();
-    auto& ms = netw::get_local_messaging_service();
+    auto& ms = _messaging;
     auto timeout = std::chrono::milliseconds(_db.local().get_config().truncate_request_timeout_in_ms());
 
     slogger.trace("Enqueuing truncate messages to hosts {}", all_endpoints);
@@ -4745,8 +4735,8 @@ future<> storage_proxy::truncate_blocking(sstring keyspace, sstring cfname) {
 }
 
 void storage_proxy::init_messaging_service() {
-    auto& ms = netw::get_local_messaging_service();
-    ms.register_counter_mutation([] (const rpc::client_info& cinfo, rpc::opt_time_point t, std::vector<frozen_mutation> fms, db::consistency_level cl, std::optional<tracing::trace_info> trace_info) {
+    auto& ms = _messaging;
+    ms.register_counter_mutation([&ms] (const rpc::client_info& cinfo, rpc::opt_time_point t, std::vector<frozen_mutation> fms, db::consistency_level cl, std::optional<tracing::trace_info> trace_info) {
         auto src_addr = netw::messaging_service::get_source(cinfo);
 
         tracing::trace_state_ptr trace_state_ptr;
@@ -4757,11 +4747,11 @@ void storage_proxy::init_messaging_service() {
         }
 
         return do_with(std::vector<frozen_mutation_and_schema>(),
-                       [cl, src_addr, timeout = *t, fms = std::move(fms), trace_state_ptr = std::move(trace_state_ptr)] (std::vector<frozen_mutation_and_schema>& mutations) mutable {
-            return parallel_for_each(std::move(fms), [&mutations, src_addr] (frozen_mutation& fm) {
+                       [cl, src_addr, timeout = *t, fms = std::move(fms), trace_state_ptr = std::move(trace_state_ptr), &ms] (std::vector<frozen_mutation_and_schema>& mutations) mutable {
+            return parallel_for_each(std::move(fms), [&mutations, src_addr, &ms] (frozen_mutation& fm) {
                 // FIXME: optimise for cases when all fms are in the same schema
                 auto schema_version = fm.schema_version();
-                return get_schema_for_write(schema_version, std::move(src_addr)).then([&mutations, fm = std::move(fm)] (schema_ptr s) mutable {
+                return get_schema_for_write(schema_version, std::move(src_addr), ms).then([&mutations, fm = std::move(fm)] (schema_ptr s) mutable {
                     mutations.emplace_back(frozen_mutation_and_schema { std::move(fm), std::move(s) });
                 });
             }).then([trace_state_ptr = std::move(trace_state_ptr), &mutations, cl, timeout] {
@@ -4803,19 +4793,18 @@ void storage_proxy::init_messaging_service() {
                 futurize_invoke([timeout, &p, &m, reply_to, shard, src_addr = std::move(src_addr), schema_version,
                                       apply_fn = std::move(apply_fn), trace_state_ptr] () mutable {
                     // FIXME: get_schema_for_write() doesn't timeout
-                    return get_schema_for_write(schema_version, netw::messaging_service::msg_addr{reply_to, shard})
+                    return get_schema_for_write(schema_version, netw::messaging_service::msg_addr{reply_to, shard}, p->_messaging)
                                          .then([&m, &p, timeout, apply_fn = std::move(apply_fn), trace_state_ptr] (schema_ptr s) mutable {
                         return apply_fn(p, trace_state_ptr, std::move(s), m, timeout);
                     });
                 }).then([&p, reply_to, shard, response_id, trace_state_ptr] () {
-                    auto& ms = netw::get_local_messaging_service();
                     // We wait for send_mutation_done to complete, otherwise, if reply_to is busy, we will accumulate
                     // lots of unsent responses, which can OOM our shard.
                     //
                     // Usually we will return immediately, since this work only involves appending data to the connection
                     // send buffer.
                     tracing::trace(trace_state_ptr, "Sending mutation_done to /{}", reply_to);
-                    return ms.send_mutation_done(
+                    return p->_messaging.send_mutation_done(
                             netw::messaging_service::msg_addr{reply_to, shard},
                             shard,
                             response_id,
@@ -4839,7 +4828,7 @@ void storage_proxy::init_messaging_service() {
                 parallel_for_each(forward.begin(), forward.end(), [reply_to, shard, response_id, &m, &p, trace_state_ptr,
                                   timeout, &errors, forward_fn = std::move(forward_fn)] (gms::inet_address forward) {
                     tracing::trace(trace_state_ptr, "Forwarding a mutation to /{}", forward);
-                    return forward_fn(netw::messaging_service::msg_addr{forward, 0}, timeout, m, reply_to, shard, response_id,
+                    return forward_fn(p, netw::messaging_service::msg_addr{forward, 0}, timeout, m, reply_to, shard, response_id,
                                       tracing::make_trace_info(trace_state_ptr))
                             .then_wrapped([&p, &errors] (future<> f) {
                         if (f.failed()) {
@@ -4855,8 +4844,7 @@ void storage_proxy::init_messaging_service() {
                 if (errors) {
                     if (p->features().cluster_supports_write_failure_reply()) {
                         tracing::trace(trace_state_ptr, "Sending mutation_failure with {} failures to /{}", errors, reply_to);
-                        auto& ms = netw::get_local_messaging_service();
-                        fut = ms.send_mutation_failed(
+                        fut = p->_messaging.send_mutation_failed(
                                 netw::messaging_service::msg_addr{reply_to, shard},
                                 shard,
                                 response_id,
@@ -4886,11 +4874,10 @@ void storage_proxy::init_messaging_service() {
                         clock_type::time_point timeout) {
                     return p->mutate_locally(std::move(s), m, std::move(tr_state), db::commitlog::force_sync::no, timeout);
                 },
-                /* forward_fn */ [] (netw::messaging_service::msg_addr addr, clock_type::time_point timeout, const frozen_mutation& m,
+                /* forward_fn */ [] (shared_ptr<storage_proxy>& p, netw::messaging_service::msg_addr addr, clock_type::time_point timeout, const frozen_mutation& m,
                         gms::inet_address reply_to, unsigned shard, response_id_type response_id,
                         std::optional<tracing::trace_info> trace_info) {
-                    auto& ms = netw::get_local_messaging_service();
-                    return ms.send_mutation(addr, timeout, m, {}, reply_to, shard, response_id, std::move(trace_info));
+                    return p->_messaging.send_mutation(addr, timeout, m, {}, reply_to, shard, response_id, std::move(trace_info));
                 });
     };
     ms.register_mutation(receive_mutation_handler);
@@ -4909,11 +4896,10 @@ void storage_proxy::init_messaging_service() {
                        const paxos::proposal& decision, clock_type::time_point timeout) {
                      return paxos::paxos_state::learn(std::move(s), decision, timeout, tr_state);
               },
-              /* forward_fn */ [] (netw::messaging_service::msg_addr addr, clock_type::time_point timeout, const paxos::proposal& m,
+              /* forward_fn */ [] (shared_ptr<storage_proxy>& p, netw::messaging_service::msg_addr addr, clock_type::time_point timeout, const paxos::proposal& m,
                       gms::inet_address reply_to, unsigned shard, response_id_type response_id,
                       std::optional<tracing::trace_info> trace_info) {
-                    auto& ms = netw::get_local_messaging_service();
-                    return ms.send_paxos_learn(addr, timeout, m, {}, reply_to, shard, response_id, std::move(trace_info));
+                    return p->_messaging.send_paxos_learn(addr, timeout, m, {}, reply_to, shard, response_id, std::move(trace_info));
               });
     });
     ms.register_mutation_done([this] (const rpc::client_info& cinfo, unsigned shard, storage_proxy::response_id_type response_id, rpc::optional<db::view::update_backlog> backlog) {
@@ -4947,7 +4933,7 @@ void storage_proxy::init_messaging_service() {
         return do_with(std::move(pr), get_local_shared_storage_proxy(), std::move(trace_state_ptr), [&cinfo, cmd = make_lw_shared<query::read_command>(std::move(cmd)), src_addr = std::move(src_addr), da, t] (::compat::wrapping_partition_range& pr, shared_ptr<storage_proxy>& p, tracing::trace_state_ptr& trace_state_ptr) mutable {
             p->get_stats().replica_data_reads++;
             auto src_ip = src_addr.addr;
-            return get_schema_for_read(cmd->schema_version, std::move(src_addr)).then([cmd, da, &pr, &p, &trace_state_ptr, t] (schema_ptr s) {
+            return get_schema_for_read(cmd->schema_version, std::move(src_addr), p->_messaging).then([cmd, da, &pr, &p, &trace_state_ptr, t] (schema_ptr s) {
                 auto pr2 = ::compat::unwrap(std::move(pr), *s);
                 if (pr2.second) {
                     // this function assumes singular queries but doesn't validate
@@ -4985,7 +4971,7 @@ void storage_proxy::init_messaging_service() {
                                ::compat::one_or_two_partition_ranges& unwrapped) mutable {
             p->get_stats().replica_mutation_data_reads++;
             auto src_ip = src_addr.addr;
-            return get_schema_for_read(cmd->schema_version, std::move(src_addr)).then([cmd, &pr, &p, &trace_state_ptr, &unwrapped, t] (schema_ptr s) mutable {
+            return get_schema_for_read(cmd->schema_version, std::move(src_addr), p->_messaging).then([cmd, &pr, &p, &trace_state_ptr, &unwrapped, t] (schema_ptr s) mutable {
                 unwrapped = ::compat::unwrap(std::move(pr), *s);
                 auto timeout = t ? *t : db::no_timeout;
                 return p->query_mutations_locally(std::move(s), std::move(cmd), unwrapped, timeout, trace_state_ptr);
@@ -5009,7 +4995,7 @@ void storage_proxy::init_messaging_service() {
         return do_with(std::move(pr), get_local_shared_storage_proxy(), std::move(trace_state_ptr), [&cinfo, cmd = make_lw_shared<query::read_command>(std::move(cmd)), src_addr = std::move(src_addr), da, t] (::compat::wrapping_partition_range& pr, shared_ptr<storage_proxy>& p, tracing::trace_state_ptr& trace_state_ptr) mutable {
             p->get_stats().replica_digest_reads++;
             auto src_ip = src_addr.addr;
-            return get_schema_for_read(cmd->schema_version, std::move(src_addr)).then([cmd, &pr, &p, &trace_state_ptr, t, da] (schema_ptr s) {
+            return get_schema_for_read(cmd->schema_version, std::move(src_addr), p->_messaging).then([cmd, &pr, &p, &trace_state_ptr, t, da] (schema_ptr s) {
                 auto pr2 = ::compat::unwrap(std::move(pr), *s);
                 if (pr2.second) {
                     // this function assumes singular queries but doesn't validate
@@ -5031,15 +5017,6 @@ void storage_proxy::init_messaging_service() {
         });
     });
 
-    ms.register_get_schema_version([this] (unsigned shard, table_schema_version v) {
-        get_stats().replica_cross_shard_ops += shard != this_shard_id();
-        // FIXME: should this get an smp_service_group? Probably one separate from reads and writes.
-        return container().invoke_on(shard, [v] (auto&& sp) {
-            slogger.debug("Schema version request for {}", v);
-            return local_schema_registry().get_frozen(v);
-        });
-    });
-
     // Register PAXOS verb handlers
     ms.register_paxos_prepare([this] (const rpc::client_info& cinfo, rpc::opt_time_point timeout,
                 query::read_command cmd, partition_key key, utils::UUID ballot, bool only_digest, query::digest_algorithm da,
@@ -5056,7 +5033,7 @@ void storage_proxy::init_messaging_service() {
             cmd.max_result_size.emplace(cinfo.retrieve_auxiliary<uint64_t>("max_result_size"));
         }
 
-        return get_schema_for_read(cmd.schema_version, src_addr).then([this, cmd = std::move(cmd), key = std::move(key), ballot,
+        return get_schema_for_read(cmd.schema_version, src_addr, _messaging).then([this, cmd = std::move(cmd), key = std::move(key), ballot,
                          only_digest, da, timeout, tr_state = std::move(tr_state), src_ip] (schema_ptr schema) mutable {
             dht::token token = dht::get_token(*schema, key);
             unsigned shard = dht::shard_of(*schema, token);
@@ -5084,7 +5061,7 @@ void storage_proxy::init_messaging_service() {
             tracing::trace(tr_state, "paxos_accept: message received from /{} ballot {}", src_ip, proposal);
         }
 
-        auto f = get_schema_for_read(proposal.update.schema_version(), src_addr).then([this, tr_state = std::move(tr_state),
+        auto f = get_schema_for_read(proposal.update.schema_version(), src_addr, _messaging).then([this, tr_state = std::move(tr_state),
                                                               proposal = std::move(proposal), timeout] (schema_ptr schema) mutable {
             dht::token token = proposal.update.decorated_key(*schema).token();
             unsigned shard = dht::shard_of(*schema, token);
@@ -5125,7 +5102,7 @@ void storage_proxy::init_messaging_service() {
 
         pruning++;
         auto d = defer([] { pruning--; });
-        return get_schema_for_read(schema_id, src_addr).then([this, key = std::move(key), ballot,
+        return get_schema_for_read(schema_id, src_addr, _messaging).then([this, key = std::move(key), ballot,
                          timeout, tr_state = std::move(tr_state), src_ip, d = std::move(d)] (schema_ptr schema) mutable {
             dht::token token = dht::get_token(*schema, key);
             unsigned shard = dht::shard_of(*schema, token);
@@ -5144,7 +5121,7 @@ void storage_proxy::init_messaging_service() {
 }
 
 future<> storage_proxy::uninit_messaging_service() {
-    auto& ms = netw::get_local_messaging_service();
+    auto& ms = _messaging;
     return when_all_succeed(
         ms.unregister_counter_mutation(),
         ms.unregister_mutation(),
@@ -5155,7 +5132,6 @@ future<> storage_proxy::uninit_messaging_service() {
         ms.unregister_read_mutation_data(),
         ms.unregister_read_digest(),
         ms.unregister_truncate(),
-        ms.unregister_get_schema_version(),
         ms.unregister_paxos_prepare(),
         ms.unregister_paxos_accept(),
         ms.unregister_paxos_learn(),

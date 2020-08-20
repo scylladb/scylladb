@@ -418,6 +418,10 @@ static auto defer_verbose_shutdown(const char* what, Func&& func) {
     return ::make_shared<decltype(ret)>(std::move(ret));
 }
 
+namespace debug {
+sharded<netw::messaging_service>* the_messaging_service;
+}
+
 int main(int ac, char** av) {
     // Allow core dumps. The would be disabled by default if
     // CAP_SYS_NICE was added to the binary, as is suggested by the
@@ -495,6 +499,7 @@ int main(int ac, char** av) {
     utils::directories dirs;
     sharded<gms::feature_service> feature_service;
     sharded<db::snapshot_ctl> snapshot_ctl;
+    sharded<netw::messaging_service> messaging;
 
     return app.run(ac, av, [&] () -> future<int> {
 
@@ -523,7 +528,7 @@ int main(int ac, char** av) {
 
         return seastar::async([cfg, ext, &db, &qp, &proxy, &mm, &mm_notifier, &ctx, &opts, &dirs,
                 &prometheus_server, &cf_cache_hitrate_calculator, &load_meter, &feature_service,
-                &token_metadata, &snapshot_ctl] {
+                &token_metadata, &snapshot_ctl, &messaging] {
           try {
             ::stop_signal stop_signal; // we can move this earlier to support SIGINT during initialization
             read_config(opts, *cfg).get();
@@ -727,24 +732,6 @@ int main(int ac, char** av) {
                 return ctx.http_server.listen(socket_address{ip, api_port});
             }).get();
             startlog.info("Scylla API server listening on {}:{} ...", api_address, api_port);
-            static sharded<auth::service> auth_service;
-            static sharded<db::system_distributed_keyspace> sys_dist_ks;
-            static sharded<db::view::view_update_generator> view_update_generator;
-            static sharded<cql3::cql_config> cql_config;
-            static sharded<::cql_config_updater> cql_config_updater;
-            cql_config.start().get();
-            //FIXME: discarded future
-            (void)cql_config_updater.start(std::ref(cql_config), std::ref(*cfg));
-            auto stop_cql_config_updater = defer([&] { cql_config_updater.stop().get(); });
-            auto& gossiper = gms::get_gossiper();
-            gossiper.start(std::ref(stop_signal.as_sharded_abort_source()), std::ref(feature_service), std::ref(token_metadata), std::ref(*cfg)).get();
-            // #293 - do not stop anything
-            //engine().at_exit([]{ return gms::get_gossiper().stop(); });
-            supervisor::notify("initializing storage service");
-            service::storage_service_config sscfg;
-            sscfg.available_memory = memory::stats().total_memory();
-            service::init_storage_service(stop_signal.as_sharded_abort_source(), db, gossiper, sys_dist_ks, view_update_generator, feature_service, sscfg, mm_notifier, token_metadata).get();
-            supervisor::notify("starting per-shard database core");
 
             // Note: changed from using a move here, because we want the config object intact.
             database_config dbcfg;
@@ -755,6 +742,72 @@ int main(int ac, char** av) {
             dbcfg.memtable_scheduling_group = make_sched_group("memtable", 1000);
             dbcfg.memtable_to_cache_scheduling_group = make_sched_group("memtable_to_cache", 200);
             dbcfg.available_memory = memory::stats().total_memory();
+
+            const auto& ssl_opts = cfg->server_encryption_options();
+            auto encrypt_what = get_or_default(ssl_opts, "internode_encryption", "none");
+            auto trust_store = get_or_default(ssl_opts, "truststore");
+            auto cert = get_or_default(ssl_opts, "certificate", db::config::get_conf_sub("scylla.crt").string());
+            auto key = get_or_default(ssl_opts, "keyfile", db::config::get_conf_sub("scylla.key").string());
+            auto prio = get_or_default(ssl_opts, "priority_string", sstring());
+            auto clauth = is_true(get_or_default(ssl_opts, "require_client_auth", "false"));
+
+            netw::messaging_service::config mscfg;
+
+            mscfg.ip = gms::inet_address::lookup(listen_address, family).get0();
+            mscfg.port = cfg->storage_port();
+            mscfg.ssl_port = cfg->ssl_storage_port();
+            mscfg.listen_on_broadcast_address = cfg->listen_on_broadcast_address();
+            mscfg.rpc_memory_limit = std::max<size_t>(0.08 * memory::stats().total_memory(), mscfg.rpc_memory_limit);
+
+            if (encrypt_what == "all") {
+                mscfg.encrypt = netw::messaging_service::encrypt_what::all;
+            } else if (encrypt_what == "dc") {
+                mscfg.encrypt = netw::messaging_service::encrypt_what::dc;
+            } else if (encrypt_what == "rack") {
+                mscfg.encrypt = netw::messaging_service::encrypt_what::rack;
+            }
+
+            sstring compress_what = cfg->internode_compression();
+            if (compress_what == "all") {
+                mscfg.compress = netw::messaging_service::compress_what::all;
+            } else if (compress_what == "dc") {
+                mscfg.compress = netw::messaging_service::compress_what::dc;
+            }
+
+            if (!cfg->inter_dc_tcp_nodelay()) {
+                mscfg.tcp_nodelay = netw::messaging_service::tcp_nodelay_what::local;
+            }
+
+            netw::messaging_service::scheduling_config scfg;
+            scfg.statement_tenants = { {dbcfg.statement_scheduling_group, "$user"}, {default_scheduling_group(), "$system"} };
+            scfg.streaming = dbcfg.streaming_scheduling_group;
+            scfg.gossip = scheduling_group();
+
+            debug::the_messaging_service = &messaging;
+            netw::init_messaging_service(messaging, std::move(mscfg), std::move(scfg), trust_store, cert, key, prio, clauth);
+            auto stop_ms = defer_verbose_shutdown("messaging service", [&messaging] {
+                netw::uninit_messaging_service(messaging).get();
+            });
+
+            static sharded<auth::service> auth_service;
+            static sharded<db::system_distributed_keyspace> sys_dist_ks;
+            static sharded<db::view::view_update_generator> view_update_generator;
+            static sharded<cql3::cql_config> cql_config;
+            static sharded<::cql_config_updater> cql_config_updater;
+            cql_config.start().get();
+            //FIXME: discarded future
+            (void)cql_config_updater.start(std::ref(cql_config), std::ref(*cfg));
+            auto stop_cql_config_updater = defer([&] { cql_config_updater.stop().get(); });
+            auto& gossiper = gms::get_gossiper();
+            gossiper.start(std::ref(stop_signal.as_sharded_abort_source()), std::ref(feature_service), std::ref(token_metadata), std::ref(messaging), std::ref(*cfg)).get();
+            // #293 - do not stop anything
+            //engine().at_exit([]{ return gms::get_gossiper().stop(); });
+            supervisor::notify("initializing storage service");
+            service::storage_service_config sscfg;
+            sscfg.available_memory = memory::stats().total_memory();
+            service::init_storage_service(stop_signal.as_sharded_abort_source(), db, gossiper, sys_dist_ks, view_update_generator, feature_service, sscfg, mm_notifier, token_metadata, messaging).get();
+            supervisor::notify("starting per-shard database core");
+
             db.start(std::ref(*cfg), dbcfg, std::ref(mm_notifier), std::ref(feature_service), std::ref(token_metadata), std::ref(stop_signal.as_sharded_abort_source())).get();
             start_large_data_handler(db).get();
             auto stop_database_and_sstables = defer_verbose_shutdown("database", [&db] {
@@ -793,48 +846,14 @@ int main(int ac, char** av) {
             supervisor::notify("starting gossip");
             // Moved local parameters here, esp since with the
             // ssl stuff it gets to be a lot.
-            uint16_t storage_port = cfg->storage_port();
-            uint16_t ssl_storage_port = cfg->ssl_storage_port();
-            double phi = cfg->phi_convict_threshold();
             auto seed_provider= cfg->seed_provider();
             sstring cluster_name = cfg->cluster_name();
-
-            const auto& ssl_opts = cfg->server_encryption_options();
-            auto tcp_nodelay_inter_dc = cfg->inter_dc_tcp_nodelay();
-            auto encrypt_what = get_or_default(ssl_opts, "internode_encryption", "none");
-            auto trust_store = get_or_default(ssl_opts, "truststore");
-            auto cert = get_or_default(ssl_opts, "certificate", db::config::get_conf_sub("scylla.crt").string());
-            auto key = get_or_default(ssl_opts, "keyfile", db::config::get_conf_sub("scylla.key").string());
-            auto prio = get_or_default(ssl_opts, "priority_string", sstring());
-            auto clauth = is_true(get_or_default(ssl_opts, "require_client_auth", "false"));
             if (cluster_name.empty()) {
                 cluster_name = "Test Cluster";
                 startlog.warn("Using default cluster name is not recommended. Using a unique cluster name will reduce the chance of adding nodes to the wrong cluster by mistake");
             }
-            init_scheduling_config scfg;
-            scfg.statement = dbcfg.statement_scheduling_group;
-            scfg.streaming = dbcfg.streaming_scheduling_group;
-            scfg.gossip = scheduling_group();
-            init_ms_fd_gossiper(gossiper
-                    , feature_service
-                    , *cfg
-                    , listen_address
-                    , storage_port
-                    , ssl_storage_port
-                    , tcp_nodelay_inter_dc
-                    , encrypt_what
-                    , trust_store
-                    , cert
-                    , key
-                    , prio
-                    , clauth
-                    , cfg->internode_compression()
-                    , seed_provider
-                    , memory::stats().total_memory()
-                    , scfg
-                    , cluster_name
-                    , phi
-                    , cfg->listen_on_broadcast_address());
+
+            init_gossiper(gossiper, *cfg, listen_address, seed_provider, cluster_name);
             supervisor::notify("starting storage proxy");
             service::storage_proxy::config spcfg;
             spcfg.hinted_handoff_enabled = hinted_handoff_enabled;
@@ -854,11 +873,12 @@ int main(int ac, char** av) {
                 reinterpret_cast<service::storage_proxy_stats::stats*>(ptr)->register_split_metrics_local();
             };
             proxy.start(std::ref(db), spcfg, std::ref(node_backlog),
-                    scheduling_group_key_create(storage_proxy_stats_cfg).get0(), std::ref(feature_service), std::ref(token_metadata)).get();
+                    scheduling_group_key_create(storage_proxy_stats_cfg).get0(),
+                    std::ref(feature_service), std::ref(token_metadata), std::ref(messaging)).get();
             // #293 - do not stop anything
             // engine().at_exit([&proxy] { return proxy.stop(); });
             supervisor::notify("starting migration manager");
-            mm.start(std::ref(mm_notifier), std::ref(feature_service)).get();
+            mm.start(std::ref(mm_notifier), std::ref(feature_service), std::ref(messaging)).get();
             auto stop_migration_manager = defer_verbose_shutdown("migration manager", [&mm] {
                 mm.stop().get();
             });
@@ -919,11 +939,11 @@ int main(int ac, char** av) {
             }).get();
 
             // register connection drop notification to update cf's cache hit rate data
-            db.invoke_on_all([] (database& db) {
-                db.register_connection_drop_notifier(netw::get_local_messaging_service());
+            db.invoke_on_all([&messaging] (database& db) {
+                db.register_connection_drop_notifier(messaging.local());
             }).get();
             supervisor::notify("setting up system keyspace");
-            db::system_keyspace::setup(db, qp, feature_service).get();
+            db::system_keyspace::setup(db, qp, feature_service, messaging).get();
             supervisor::notify("starting commit log");
             auto cl = db.local().commitlog();
             if (cl != nullptr) {
@@ -984,7 +1004,7 @@ int main(int ac, char** av) {
             });
 
             supervisor::notify("starting streaming service");
-            streaming::stream_session::init_streaming_service(db, sys_dist_ks, view_update_generator).get();
+            streaming::stream_session::init_streaming_service(db, sys_dist_ks, view_update_generator, messaging).get();
             auto stop_streaming_service = defer_verbose_shutdown("streaming service", [] {
                 streaming::stream_session::uninit_streaming_service().get();
             });
@@ -1005,7 +1025,7 @@ int main(int ac, char** av) {
 
             supervisor::notify("starting messaging service");
             // Start handling REPAIR_CHECKSUM_RANGE messages
-            netw::get_messaging_service().invoke_on_all([&db] (auto& ms) {
+            messaging.invoke_on_all([&db] (auto& ms) {
                 ms.register_repair_checksum_range([&db] (sstring keyspace, sstring cf, dht::token_range range, rpc::optional<repair_checksum> hash_version) {
                     auto hv = hash_version ? *hash_version : repair_checksum::legacy;
                     return do_with(std::move(keyspace), std::move(cf), std::move(range),
@@ -1019,15 +1039,22 @@ int main(int ac, char** av) {
             auto stop_repair_service = defer_verbose_shutdown("repair service", [&rs] {
                 rs.stop().get();
             });
-            repair_init_messaging_service_handler(rs, sys_dist_ks, view_update_generator).get();
+            repair_init_messaging_service_handler(rs, sys_dist_ks, view_update_generator, messaging).get();
             auto stop_repair_messages = defer_verbose_shutdown("repair message handlers", [] {
                 repair_uninit_messaging_service_handler().get();
             });
             supervisor::notify("starting storage service", true);
             auto& ss = service::get_local_storage_service();
             ss.init_messaging_service_part().get();
-            api::set_server_messaging_service(ctx).get();
+            api::set_server_messaging_service(ctx, messaging).get();
+            auto stop_messaging_api = defer_verbose_shutdown("messaging service API", [&ctx] {
+                api::unset_server_messaging_service(ctx).get();
+            });
             api::set_server_storage_service(ctx).get();
+            api::set_server_repair(ctx, messaging).get();
+            auto stop_repair_api = defer_verbose_shutdown("repair API", [&ctx] {
+                api::unset_server_repair(ctx).get();
+            });
 
             gossiper.local().register_(ss.shared_from_this());
             auto stop_listening = defer_verbose_shutdown("storage service notifications", [&gossiper, &ss] {

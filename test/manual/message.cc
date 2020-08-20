@@ -40,9 +40,7 @@ private:
     gms::inet_address _server;
     uint32_t _cpuid;
 public:
-    tester()
-       : ms(get_local_messaging_service()) {
-    }
+    tester(netw::messaging_service& ms_) : ms(ms_) {}
     using msg_addr = netw::messaging_service::msg_addr;
     using inet_address = gms::inet_address;
     using endpoint_state = gms::endpoint_state;
@@ -59,6 +57,8 @@ public:
         return make_ready_future<>();
     }
     promise<> digest_test_done;
+
+    uint16_t port() const { return ms.port(); }
 public:
     void init_handler() {
         ms.register_gossip_digest_syn([this] (const rpc::client_info& cinfo, gms::gossip_digest_syn msg) {
@@ -183,14 +183,14 @@ int main(int ac, char ** av) {
         }
         const gms::inet_address listen = gms::inet_address(config["listen-address"].as<std::string>());
         utils::fb_utilities::set_broadcast_address(listen);
-        return netw::get_messaging_service().start(listen).then([config, api_port, stay_alive] () {
+        seastar::sharded<netw::messaging_service> messaging;
+        return messaging.start(listen).then([config, api_port, stay_alive, &messaging] () {
             auto testers = new distributed<tester>;
-            return testers->start().then([testers]{
-                auto& server = netw::get_local_messaging_service();
-                auto port = server.port();
+            return testers->start(std::ref(messaging)).then([testers]{
+                auto port = testers->local().port();
                 std::cout << "Messaging server listening on port " << port << " ...\n";
                 return testers->invoke_on_all(&tester::init_handler);
-            }).then([testers, config, stay_alive] {
+            }).then([testers, config, stay_alive, &messaging] {
                 auto t = &testers->local();
                 if (!config.contains("server")) {
                     return make_ready_future<>();
@@ -205,14 +205,14 @@ int main(int ac, char ** av) {
                     return t->test_gossip_shutdown();
                 }).then([testers, t] {
                     return t->test_echo();
-                }).then([testers, t, stay_alive] {
+                }).then([testers, t, stay_alive, &messaging] {
                     if (stay_alive) {
                         return make_ready_future<>();
                     }
                     fmt::print("=============TEST DONE===========\n");
-                    return testers->stop().then([testers] {
+                    return testers->stop().then([testers, &messaging] {
                         delete testers;
-                        return netw::get_messaging_service().stop().then([]{
+                        return messaging.stop().then([]{
                             engine().exit(0);
                         });
                     });

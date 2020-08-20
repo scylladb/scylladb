@@ -166,7 +166,7 @@ struct schema_pull_options {
     bool remote_supports_canonical_mutation_retval = true;
 };
 
-class messaging_service : public seastar::async_sharded_service<messaging_service> {
+class messaging_service : public seastar::async_sharded_service<messaging_service>, public peering_sharded_service<messaging_service> {
 public:
     struct rpc_protocol_wrapper;
     struct rpc_protocol_client_wrapper;
@@ -217,7 +217,14 @@ public:
         all,
     };
 
-    struct memory_config {
+    struct config {
+        gms::inet_address ip;
+        uint16_t port;
+        uint16_t ssl_port = 0;
+        encrypt_what encrypt = encrypt_what::none;
+        compress_what compress = compress_what::none;
+        tcp_nodelay_what tcp_nodelay = tcp_nodelay_what::all;
+        bool listen_on_broadcast_address = false;
         size_t rpc_memory_limit = 1'000'000;
     };
 
@@ -247,13 +254,7 @@ private:
         unsigned cliend_idx;
     };
 private:
-    gms::inet_address _listen_address;
-    uint16_t _port;
-    uint16_t _ssl_port;
-    encrypt_what _encrypt_what;
-    compress_what _compress_what;
-    tcp_nodelay_what _tcp_nodelay_what;
-    bool _should_listen_to_broadcast_address;
+    config _cfg;
     // map: Node broadcast address -> Node internal IP for communication within the same data center
     std::unordered_map<gms::inet_address, gms::inet_address> _preferred_ip_cache;
     std::unique_ptr<rpc_protocol_wrapper> _rpc;
@@ -263,32 +264,30 @@ private:
     std::array<std::unique_ptr<rpc_protocol_server_wrapper>, 2> _server_tls;
     std::vector<clients_map> _clients;
     uint64_t _dropped_messages[static_cast<int32_t>(messaging_verb::LAST)] = {};
-    bool _stopping = false;
+    bool _shutting_down = false;
     std::list<std::function<void(gms::inet_address ep)>> _connection_drop_notifiers;
-    memory_config _mcfg;
     scheduling_config _scheduling_config;
     std::vector<scheduling_info_for_connection_index> _scheduling_info_for_connection_index;
     std::vector<tenant_connection_index> _connection_index_for_tenant;
-public:
-    using clock_type = lowres_clock;
-public:
-    messaging_service(gms::inet_address ip = gms::inet_address("0.0.0.0"),
-            uint16_t port = 7000);
-    messaging_service(gms::inet_address ip, uint16_t port, encrypt_what, compress_what, tcp_nodelay_what,
-            uint16_t ssl_port, std::shared_ptr<seastar::tls::credentials_builder>,
-            memory_config mcfg, scheduling_config scfg, bool sltba = false);
-    ~messaging_service();
-public:
-    future<> start_listen();
-    uint16_t port();
-    gms::inet_address listen_address();
+
     future<> stop_tls_server();
     future<> stop_nontls_server();
     future<> stop_client();
+public:
+    using clock_type = lowres_clock;
+
+    messaging_service(gms::inet_address ip = gms::inet_address("0.0.0.0"),
+            uint16_t port = 7000);
+    messaging_service(config cfg, scheduling_config scfg, std::shared_ptr<seastar::tls::credentials_builder>);
+    ~messaging_service();
+
+    future<> start_listen();
+    uint16_t port();
+    gms::inet_address listen_address();
+    future<> shutdown();
     future<> stop();
     static rpc::no_wait_type no_wait();
-    bool is_stopping() { return _stopping; }
-public:
+    bool is_shutting_down() { return _shutting_down; }
     gms::inet_address get_preferred_ip(gms::inet_address ep);
     future<> init_local_preferred_ip_cache();
     void cache_preferred_ip(gms::inet_address ep, gms::inet_address ip);
@@ -562,14 +561,9 @@ public:
     unsigned get_rpc_client_idx(messaging_verb verb) const;
 };
 
-extern distributed<messaging_service> _the_messaging_service;
-
-inline distributed<messaging_service>& get_messaging_service() {
-    return _the_messaging_service;
-}
-
-inline messaging_service& get_local_messaging_service() {
-    return _the_messaging_service.local();
-}
+void init_messaging_service(sharded<messaging_service>& ms,
+        messaging_service::config cfg, messaging_service::scheduling_config scheduling_config,
+        sstring ms_trust_store, sstring ms_cert, sstring ms_key, sstring ms_tls_prio, bool ms_client_auth);
+future<> uninit_messaging_service(sharded<messaging_service>& ms);
 
 } // namespace netw

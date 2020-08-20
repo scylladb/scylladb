@@ -61,11 +61,11 @@ struct repair_uniq_id {
 std::ostream& operator<<(std::ostream& os, const repair_uniq_id& x);
 
 // The tokens are the tokens assigned to the bootstrap node.
-future<> bootstrap_with_repair(seastar::sharded<database>& db, locator::token_metadata tm, std::unordered_set<dht::token> bootstrap_tokens);
-future<> decommission_with_repair(seastar::sharded<database>& db, locator::token_metadata tm);
-future<> removenode_with_repair(seastar::sharded<database>& db, locator::token_metadata tm, gms::inet_address leaving_node);
-future<> rebuild_with_repair(seastar::sharded<database>& db, locator::token_metadata tm, sstring source_dc);
-future<> replace_with_repair(seastar::sharded<database>& db, locator::token_metadata tm, std::unordered_set<dht::token> replacing_tokens);
+future<> bootstrap_with_repair(seastar::sharded<database>& db, seastar::sharded<netw::messaging_service>& ms, locator::token_metadata tm, std::unordered_set<dht::token> bootstrap_tokens);
+future<> decommission_with_repair(seastar::sharded<database>& db, seastar::sharded<netw::messaging_service>& ms, locator::token_metadata tm);
+future<> removenode_with_repair(seastar::sharded<database>& db, seastar::sharded<netw::messaging_service>& ms, locator::token_metadata tm, gms::inet_address leaving_node);
+future<> rebuild_with_repair(seastar::sharded<database>& db, seastar::sharded<netw::messaging_service>& ms, locator::token_metadata tm, sstring source_dc);
+future<> replace_with_repair(seastar::sharded<database>& db, seastar::sharded<netw::messaging_service>& ms, locator::token_metadata tm, std::unordered_set<dht::token> replacing_tokens);
 
 // NOTE: repair_start() can be run on any node, but starts a node-global
 // operation.
@@ -74,8 +74,8 @@ future<> replace_with_repair(seastar::sharded<database>& db, locator::token_meta
 // repair_get_status(). The returned future<int> becomes available quickly,
 // as soon as repair_get_status() can be used - it doesn't wait for the
 // repair to complete.
-future<int> repair_start(seastar::sharded<database>& db, sstring keyspace,
-        std::unordered_map<sstring, sstring> options);
+future<int> repair_start(seastar::sharded<database>& db, seastar::sharded<netw::messaging_service>& ms,
+        sstring keyspace, std::unordered_map<sstring, sstring> options);
 
 // TODO: Have repair_progress contains a percentage progress estimator
 // instead of just "RUNNING".
@@ -191,6 +191,7 @@ public:
 class repair_info {
 public:
     seastar::sharded<database>& db;
+    seastar::sharded<netw::messaging_service>& messaging;
     const dht::sharder& sharder;
     sstring keyspace;
     dht::token_range_vector ranges;
@@ -229,6 +230,7 @@ public:
     std::unordered_set<sstring> dropped_tables;
 public:
     repair_info(seastar::sharded<database>& db_,
+            seastar::sharded<netw::messaging_service>& ms_,
             const sstring& keyspace_,
             const dht::token_range_vector& ranges_,
             std::vector<utils::UUID> table_ids_,

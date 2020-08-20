@@ -88,7 +88,7 @@ future<> await_background_jobs_on_all_shards();
 
 static const sstring testing_superuser = "tester";
 
-static future<> tst_init_ms_fd_gossiper(sharded<gms::feature_service>& features, sharded<locator::token_metadata>& tm, db::config& cfg, db::seed_provider_type seed_provider,
+static future<> tst_init_ms_fd_gossiper(sharded<gms::feature_service>& features, sharded<locator::token_metadata>& tm, sharded<netw::messaging_service>& ms, db::config& cfg, db::seed_provider_type seed_provider,
             sharded<abort_source>& abort_sources, sstring cluster_name = "Test Cluster") {
         // Init gossiper
         std::set<gms::inet_address> seeds;
@@ -104,7 +104,7 @@ static future<> tst_init_ms_fd_gossiper(sharded<gms::feature_service>& features,
         if (seeds.empty()) {
             seeds.emplace(gms::inet_address("127.0.0.1"));
         }
-        return gms::get_gossiper().start(std::ref(abort_sources), std::ref(features), std::ref(tm), std::ref(cfg)).then([seeds, cluster_name] {
+        return gms::get_gossiper().start(std::ref(abort_sources), std::ref(features), std::ref(tm), std::ref(ms), std::ref(cfg)).then([seeds, cluster_name] {
             auto& gossiper = gms::get_local_gossiper();
             gossiper.set_seeds(seeds);
             gossiper.set_cluster_name(cluster_name);
@@ -432,7 +432,8 @@ public:
 
             set_abort_on_internal_error(true);
             const gms::inet_address listen("127.0.0.1");
-            auto& ms = netw::get_messaging_service();
+
+            sharded<netw::messaging_service> ms;
             // don't start listening so tests can be run in parallel
             ms.start(listen, std::move(7000)).get();
             auto stop_ms = defer([&ms] { ms.stop().get(); });
@@ -454,7 +455,7 @@ public:
             auto stop_feature_service = defer([&] { feature_service.stop().get(); });
 
             // FIXME: split
-            tst_init_ms_fd_gossiper(feature_service, token_metadata, *cfg, db::config::seed_provider_type(), abort_sources).get();
+            tst_init_ms_fd_gossiper(feature_service, token_metadata, ms, *cfg, db::config::seed_provider_type(), abort_sources).get();
 
             distributed<service::storage_proxy>& proxy = service::get_storage_proxy();
             distributed<service::migration_manager>& mm = service::get_migration_manager();
@@ -468,7 +469,7 @@ public:
             auto& ss = service::get_storage_service();
             service::storage_service_config sscfg;
             sscfg.available_memory = memory::stats().total_memory();
-            ss.start(std::ref(abort_sources), std::ref(db), std::ref(gms::get_gossiper()), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(feature_service), sscfg, std::ref(mm_notif), std::ref(token_metadata), true).get();
+            ss.start(std::ref(abort_sources), std::ref(db), std::ref(gms::get_gossiper()), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(feature_service), sscfg, std::ref(mm_notif), std::ref(token_metadata), std::ref(ms), true).get();
             auto stop_storage_service = defer([&ss] { ss.stop().get(); });
 
             database_config dbcfg;
@@ -499,10 +500,10 @@ public:
             db::view::node_update_backlog b(smp::count, 10ms);
             scheduling_group_key_config sg_conf =
                     make_scheduling_group_key_config<service::storage_proxy_stats::stats>();
-            proxy.start(std::ref(db), spcfg, std::ref(b), scheduling_group_key_create(sg_conf).get0(), std::ref(feature_service), std::ref(token_metadata)).get();
+            proxy.start(std::ref(db), spcfg, std::ref(b), scheduling_group_key_create(sg_conf).get0(), std::ref(feature_service), std::ref(token_metadata), std::ref(ms)).get();
             auto stop_proxy = defer([&proxy] { proxy.stop().get(); });
 
-            mm.start(std::ref(mm_notif), std::ref(feature_service)).get();
+            mm.start(std::ref(mm_notif), std::ref(feature_service), std::ref(ms)).get();
             auto stop_mm = defer([&mm] { mm.stop().get(); });
 
             auto& qp = cql3::get_query_processor();

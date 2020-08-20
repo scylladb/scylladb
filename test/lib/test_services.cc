@@ -41,6 +41,7 @@ class storage_service_for_tests::impl {
     sharded<service::migration_notifier> _mnotif;
     sharded<db::system_distributed_keyspace> _sys_dist_ks;
     sharded<db::view::view_update_generator> _view_update_generator;
+    sharded<netw::messaging_service> _messaging;
 public:
     impl() {
         auto thread = seastar::thread_impl::get();
@@ -52,18 +53,18 @@ public:
         _token_metadata.start().get();
         _mnotif.start().get();
         _feature_service.start(gms::feature_config_from_db_config(_cfg)).get();
-        _gossiper.start(std::ref(_abort_source), std::ref(_feature_service), std::ref(_token_metadata), std::ref(_cfg)).get();
-        netw::get_messaging_service().start(gms::inet_address("127.0.0.1"), 7000).get();
+        _messaging.start(gms::inet_address("127.0.0.1"), 7000).get();
+        _gossiper.start(std::ref(_abort_source), std::ref(_feature_service), std::ref(_token_metadata), std::ref(_messaging), std::ref(_cfg)).get();
         service::storage_service_config sscfg;
         sscfg.available_memory = memory::stats().total_memory();
-        service::get_storage_service().start(std::ref(_abort_source), std::ref(_db), std::ref(_gossiper), std::ref(_sys_dist_ks), std::ref(_view_update_generator), std::ref(_feature_service), sscfg, std::ref(_mnotif), std::ref(_token_metadata), true).get();
+        service::get_storage_service().start(std::ref(_abort_source), std::ref(_db), std::ref(_gossiper), std::ref(_sys_dist_ks), std::ref(_view_update_generator), std::ref(_feature_service), sscfg, std::ref(_mnotif), std::ref(_token_metadata), std::ref(_messaging), true).get();
         service::get_storage_service().invoke_on_all([] (auto& ss) {
             ss.enable_all_features();
         }).get();
     }
     ~impl() {
         service::get_storage_service().stop().get();
-        netw::get_messaging_service().stop().get();
+        _messaging.stop().get();
         _db.stop().get();
         _gossiper.stop().get();
         _mnotif.stop().get();

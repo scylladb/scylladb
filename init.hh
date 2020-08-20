@@ -24,9 +24,7 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/distributed.hh>
 #include <seastar/core/abort_source.hh>
-#include "auth/service.hh"
-#include "db/system_distributed_keyspace.hh"
-#include "database_fwd.hh"
+#include "db/config.hh"
 #include "log.hh"
 #include "seastarx.hh"
 
@@ -47,32 +45,11 @@ extern logging::logger startlog;
 
 class bad_configuration_error : public std::exception {};
 
-struct init_scheduling_config {
-    scheduling_group streaming;
-    scheduling_group statement;
-    scheduling_group gossip;
-};
-
-void init_ms_fd_gossiper(sharded<gms::gossiper>& gossiper
-                , sharded<gms::feature_service>& features
+void init_gossiper(sharded<gms::gossiper>& gossiper
                 , db::config& cfg
                 , sstring listen_address
-                , uint16_t storage_port
-                , uint16_t ssl_storage_port
-                , bool tcp_nodelay_inter_dc
-                , sstring ms_encrypt_what
-                , sstring ms_trust_store
-                , sstring ms_cert
-                , sstring ms_key
-                , sstring ms_tls_prio
-                , bool ms_client_auth
-                , sstring ms_compress
                 , db::seed_provider_type seed_provider
-                , size_t available_memory
-                , init_scheduling_config scheduling_config
-                , sstring cluster_name = "Test Cluster"
-                , double phi = 8
-                , bool sltba = false);
+                , sstring cluster_name = "Test Cluster");
 
 /**
  * Very simplistic config registry. Allows hooking in a config object

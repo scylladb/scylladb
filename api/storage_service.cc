@@ -150,6 +150,104 @@ void unset_rpc_controller(http_context& ctx, routes& r) {
     ss::is_rpc_server_running.unset(r);
 }
 
+void set_repair(http_context& ctx, routes& r, sharded<netw::messaging_service>& ms) {
+    ss::repair_async.set(r, [&ctx, &ms](std::unique_ptr<request> req) {
+        static std::vector<sstring> options = {"primaryRange", "parallelism", "incremental",
+                "jobThreads", "ranges", "columnFamilies", "dataCenters", "hosts", "trace",
+                "startToken", "endToken" };
+        std::unordered_map<sstring, sstring> options_map;
+        for (auto o : options) {
+            auto s = req->get_query_param(o);
+            if (s != "") {
+                options_map[o] = s;
+            }
+        }
+
+        // The repair process is asynchronous: repair_start only starts it and
+        // returns immediately, not waiting for the repair to finish. The user
+        // then has other mechanisms to track the ongoing repair's progress,
+        // or stop it.
+        return repair_start(ctx.db, ms, validate_keyspace(ctx, req->param),
+                options_map).then([] (int i) {
+                    return make_ready_future<json::json_return_type>(i);
+                });
+    });
+
+    ss::get_active_repair_async.set(r, [&ctx](std::unique_ptr<request> req) {
+        return get_active_repairs(ctx.db).then([] (std::vector<int> res){
+            return make_ready_future<json::json_return_type>(res);
+        });
+    });
+
+    ss::repair_async_status.set(r, [&ctx](std::unique_ptr<request> req) {
+        return repair_get_status(ctx.db, boost::lexical_cast<int>( req->get_query_param("id")))
+                .then_wrapped([] (future<repair_status>&& fut) {
+            ss::ns_repair_async_status::return_type_wrapper res;
+            try {
+                res = fut.get0();
+            } catch(std::runtime_error& e) {
+                throw httpd::bad_param_exception(e.what());
+            }
+            return make_ready_future<json::json_return_type>(json::json_return_type(res));
+        });
+    });
+
+    ss::repair_await_completion.set(r, [&ctx](std::unique_ptr<request> req) {
+        int id;
+        using clock = std::chrono::steady_clock;
+        clock::time_point expire;
+        try {
+            id = boost::lexical_cast<int>(req->get_query_param("id"));
+            // If timeout is not provided, it means no timeout.
+            sstring s = req->get_query_param("timeout");
+            int64_t timeout = s.empty() ? int64_t(-1) : boost::lexical_cast<int64_t>(s);
+            if (timeout < 0 && timeout != -1) {
+                return make_exception_future<json::json_return_type>(
+                        httpd::bad_param_exception("timeout can only be -1 (means no timeout) or non negative integer"));
+            }
+            if (timeout < 0) {
+                expire = clock::time_point::max();
+            } else {
+                expire = clock::now() + std::chrono::seconds(timeout);
+            }
+        } catch (std::exception& e) {
+            return make_exception_future<json::json_return_type>(httpd::bad_param_exception(e.what()));
+        }
+        return repair_await_completion(ctx.db, id, expire)
+                .then_wrapped([] (future<repair_status>&& fut) {
+            ss::ns_repair_async_status::return_type_wrapper res;
+            try {
+                res = fut.get0();
+            } catch (std::exception& e) {
+                return make_exception_future<json::json_return_type>(httpd::server_error_exception(e.what()));
+            }
+            return make_ready_future<json::json_return_type>(json::json_return_type(res));
+        });
+    });
+
+    ss::force_terminate_all_repair_sessions.set(r, [](std::unique_ptr<request> req) {
+        return repair_abort_all(service::get_local_storage_service().db()).then([] {
+            return make_ready_future<json::json_return_type>(json_void());
+        });
+    });
+
+    ss::force_terminate_all_repair_sessions_new.set(r, [](std::unique_ptr<request> req) {
+        return repair_abort_all(service::get_local_storage_service().db()).then([] {
+            return make_ready_future<json::json_return_type>(json_void());
+        });
+    });
+
+}
+
+void unset_repair(http_context& ctx, routes& r) {
+    ss::repair_async.unset(r);
+    ss::get_active_repair_async.unset(r);
+    ss::repair_async_status.unset(r);
+    ss::repair_await_completion.unset(r);
+    ss::force_terminate_all_repair_sessions.unset(r);
+    ss::force_terminate_all_repair_sessions_new.unset(r);
+}
+
 void set_storage_service(http_context& ctx, routes& r) {
     ss::local_hostid.set(r, [](std::unique_ptr<request> req) {
         return db::system_keyspace::get_local_host_id().then([](const utils::UUID& id) {
@@ -361,92 +459,6 @@ void set_storage_service(http_context& ctx, routes& r) {
         });
     });
 
-
-    ss::repair_async.set(r, [&ctx](std::unique_ptr<request> req) {
-        static std::vector<sstring> options = {"primaryRange", "parallelism", "incremental",
-                "jobThreads", "ranges", "columnFamilies", "dataCenters", "hosts", "trace",
-                "startToken", "endToken" };
-        std::unordered_map<sstring, sstring> options_map;
-        for (auto o : options) {
-            auto s = req->get_query_param(o);
-            if (s != "") {
-                options_map[o] = s;
-            }
-        }
-
-        // The repair process is asynchronous: repair_start only starts it and
-        // returns immediately, not waiting for the repair to finish. The user
-        // then has other mechanisms to track the ongoing repair's progress,
-        // or stop it.
-        return repair_start(ctx.db, validate_keyspace(ctx, req->param),
-                options_map).then([] (int i) {
-                    return make_ready_future<json::json_return_type>(i);
-                });
-    });
-
-    ss::get_active_repair_async.set(r, [&ctx](std::unique_ptr<request> req) {
-        return get_active_repairs(ctx.db).then([] (std::vector<int> res){
-            return make_ready_future<json::json_return_type>(res);
-        });
-    });
-
-    ss::repair_async_status.set(r, [&ctx](std::unique_ptr<request> req) {
-        return repair_get_status(ctx.db, boost::lexical_cast<int>( req->get_query_param("id")))
-                .then_wrapped([] (future<repair_status>&& fut) {
-            ss::ns_repair_async_status::return_type_wrapper res;
-            try {
-                res = fut.get0();
-            } catch(std::runtime_error& e) {
-                throw httpd::bad_param_exception(e.what());
-            }
-            return make_ready_future<json::json_return_type>(json::json_return_type(res));
-        });
-    });
-
-    ss::repair_await_completion.set(r, [&ctx](std::unique_ptr<request> req) {
-        int id;
-        using clock = std::chrono::steady_clock;
-        clock::time_point expire;
-        try {
-            id = boost::lexical_cast<int>(req->get_query_param("id"));
-            // If timeout is not provided, it means no timeout.
-            sstring s = req->get_query_param("timeout");
-            int64_t timeout = s.empty() ? int64_t(-1) : boost::lexical_cast<int64_t>(s);
-            if (timeout < 0 && timeout != -1) {
-                return make_exception_future<json::json_return_type>(
-                        httpd::bad_param_exception("timeout can only be -1 (means no timeout) or non negative integer"));
-            }
-            if (timeout < 0) {
-                expire = clock::time_point::max();
-            } else {
-                expire = clock::now() + std::chrono::seconds(timeout);
-            }
-        } catch (std::exception& e) {
-            return make_exception_future<json::json_return_type>(httpd::bad_param_exception(e.what()));
-        }
-        return repair_await_completion(ctx.db, id, expire)
-                .then_wrapped([] (future<repair_status>&& fut) {
-            ss::ns_repair_async_status::return_type_wrapper res;
-            try {
-                res = fut.get0();
-            } catch (std::exception& e) {
-                return make_exception_future<json::json_return_type>(httpd::server_error_exception(e.what()));
-            }
-            return make_ready_future<json::json_return_type>(json::json_return_type(res));
-        });
-    });
-
-    ss::force_terminate_all_repair_sessions.set(r, [](std::unique_ptr<request> req) {
-        return repair_abort_all(service::get_local_storage_service().db()).then([] {
-            return make_ready_future<json::json_return_type>(json_void());
-        });
-    });
-
-    ss::force_terminate_all_repair_sessions_new.set(r, [](std::unique_ptr<request> req) {
-        return repair_abort_all(service::get_local_storage_service().db()).then([] {
-            return make_ready_future<json::json_return_type>(json_void());
-        });
-    });
 
     ss::decommission.set(r, [](std::unique_ptr<request> req) {
         return service::get_local_storage_service().decommission().then([] {

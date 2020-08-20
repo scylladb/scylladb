@@ -96,12 +96,14 @@ static logging::logger slogger("storage_service");
 distributed<storage_service> _the_storage_service;
 
 storage_service::storage_service(abort_source& abort_source, distributed<database>& db, gms::gossiper& gossiper, sharded<db::system_distributed_keyspace>& sys_dist_ks,
-        sharded<db::view::view_update_generator>& view_update_generator, gms::feature_service& feature_service, storage_service_config config, sharded<service::migration_notifier>& mn, locator::token_metadata& tm, bool for_testing)
+        sharded<db::view::view_update_generator>& view_update_generator, gms::feature_service& feature_service, storage_service_config config, sharded<service::migration_notifier>& mn,
+        locator::token_metadata& tm, sharded<netw::messaging_service>& ms, bool for_testing)
         : _abort_source(abort_source)
         , _feature_service(feature_service)
         , _db(db)
         , _gossiper(gossiper)
         , _mnotifier(mn)
+        , _messaging(ms)
         , _service_memory_total(config.available_memory / 10)
         , _service_memory_limiter(_service_memory_total)
         , _for_testing(for_testing)
@@ -932,9 +934,9 @@ void storage_service::bootstrap() {
     set_mode(mode::JOINING, "Starting to bootstrap...", true);
     if (is_repair_based_node_ops_enabled()) {
         if (db().local().is_replacing()) {
-            replace_with_repair(_db, _token_metadata, _bootstrap_tokens).get();
+            replace_with_repair(_db, _messaging, _token_metadata, _bootstrap_tokens).get();
         } else {
-            bootstrap_with_repair(_db, _token_metadata, _bootstrap_tokens).get();
+            bootstrap_with_repair(_db, _messaging, _token_metadata, _bootstrap_tokens).get();
         }
     } else {
         dht::boot_strapper bs(_db, _abort_source, get_broadcast_address(), _bootstrap_tokens, _token_metadata);
@@ -1949,8 +1951,9 @@ static constexpr auto UNREACHABLE = "UNREACHABLE";
 future<std::unordered_map<sstring, std::vector<sstring>>> storage_service::describe_schema_versions() {
     auto live_hosts = _gossiper.get_live_members();
     std::unordered_map<sstring, std::vector<sstring>> results;
-    return map_reduce(std::move(live_hosts), [] (auto host) {
-        auto f0 = netw::get_messaging_service().local().send_schema_check(netw::msg_addr{ host, 0 });
+    netw::messaging_service& ms = _messaging.local();
+    return map_reduce(std::move(live_hosts), [&ms] (auto host) {
+        auto f0 = ms.send_schema_check(netw::msg_addr{ host, 0 });
         return std::move(f0).then_wrapped([host] (auto f) {
             if (f.failed()) {
                 f.ignore_ready_future();
@@ -2039,8 +2042,8 @@ future<> storage_service::do_stop_ms() {
         return make_ready_future<>();
     }
     _ms_stopped = true;
-    return netw::get_messaging_service().invoke_on_all([] (auto& ms) {
-        return ms.stop();
+    return _messaging.invoke_on_all([] (auto& ms) {
+        return ms.shutdown();
     }).then([] {
         slogger.info("messaging_service stopped");
     });
@@ -2296,7 +2299,7 @@ future<> storage_service::rebuild(sstring source_dc) {
     return run_with_api_lock(sstring("rebuild"), [source_dc] (storage_service& ss) {
         slogger.info("rebuild from dc: {}", source_dc == "" ? "(any dc)" : source_dc);
         if (ss.is_repair_based_node_ops_enabled()) {
-            return rebuild_with_repair(ss._db, ss._token_metadata, std::move(source_dc));
+            return rebuild_with_repair(ss._db, ss._messaging, ss._token_metadata, std::move(source_dc));
         } else {
             auto streamer = make_lw_shared<dht::range_streamer>(ss._db, ss._token_metadata, ss._abort_source,
                     ss.get_broadcast_address(), "Rebuild", streaming::stream_reason::rebuild);
@@ -2406,7 +2409,7 @@ std::unordered_multimap<dht::token_range, inet_address> storage_service::get_cha
 void storage_service::unbootstrap() {
     db::get_local_batchlog_manager().do_batch_log_replay().get();
     if (is_repair_based_node_ops_enabled()) {
-        decommission_with_repair(_db, _token_metadata).get();
+        decommission_with_repair(_db, _messaging, _token_metadata).get();
     } else {
         std::unordered_map<sstring, std::unordered_multimap<dht::token_range, inet_address>> ranges_to_stream;
 
@@ -2448,7 +2451,7 @@ void storage_service::unbootstrap() {
 
 future<> storage_service::restore_replica_count(inet_address endpoint, inet_address notify_endpoint) {
     if (is_repair_based_node_ops_enabled()) {
-        return removenode_with_repair(_db, _token_metadata, endpoint).finally([this, notify_endpoint] () {
+        return removenode_with_repair(_db, _messaging, _token_metadata, endpoint).finally([this, notify_endpoint] () {
             return send_replication_notification(notify_endpoint);
         });
     }
@@ -2517,11 +2520,10 @@ future<> storage_service::send_replication_notification(inet_address remote) {
             // the number of retries.
             return *done || !_gossiper.is_alive(remote) || *sent >= 3;
         },
-        [done, sent, remote, local] {
-            auto& ms = netw::get_local_messaging_service();
+        [this, done, sent, remote, local] {
             netw::msg_addr id{remote, 0};
             (*sent)++;
-            return ms.send_replication_finished(id, local).then_wrapped([id, done] (auto&& f) {
+            return _messaging.local().send_replication_finished(id, local).then_wrapped([id, done] (auto&& f) {
                 try {
                     f.get();
                     *done = true;
@@ -2806,15 +2808,13 @@ future<> storage_service::keyspace_changed(const sstring& ks_name) {
 }
 
 void storage_service::init_messaging_service() {
-    auto& ms = netw::get_local_messaging_service();
-    ms.register_replication_finished([] (gms::inet_address from) {
+    _messaging.local().register_replication_finished([] (gms::inet_address from) {
         return get_local_storage_service().confirm_replication(from);
     });
 }
 
 future<> storage_service::uninit_messaging_service() {
-    auto& ms = netw::get_local_messaging_service();
-    return ms.unregister_replication_finished();
+    return _messaging.local().unregister_replication_finished();
 }
 
 void storage_service::do_isolate_on_error(disk_error type)
@@ -3011,8 +3011,9 @@ storage_service::view_build_statuses(sstring keyspace, sstring view_name) const 
 future<> init_storage_service(sharded<abort_source>& abort_source, distributed<database>& db, sharded<gms::gossiper>& gossiper,
         sharded<db::system_distributed_keyspace>& sys_dist_ks,
         sharded<db::view::view_update_generator>& view_update_generator, sharded<gms::feature_service>& feature_service,
-        storage_service_config config, sharded<service::migration_notifier>& mn, sharded<locator::token_metadata>& tm) {
-    return service::get_storage_service().start(std::ref(abort_source), std::ref(db), std::ref(gossiper), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(feature_service), config, std::ref(mn), std::ref(tm));
+        storage_service_config config, sharded<service::migration_notifier>& mn, sharded<locator::token_metadata>& tm,
+        sharded<netw::messaging_service>& ms) {
+    return service::get_storage_service().start(std::ref(abort_source), std::ref(db), std::ref(gossiper), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(feature_service), config, std::ref(mn), std::ref(tm), std::ref(ms));
 }
 
 future<> deinit_storage_service() {
@@ -3021,7 +3022,7 @@ future<> deinit_storage_service() {
 
 void storage_service::notify_down(inet_address endpoint) {
     get_storage_service().invoke_on_all([endpoint] (auto&& ss) {
-        netw::get_local_messaging_service().remove_rpc_client(netw::msg_addr{endpoint, 0});
+        ss._messaging.local().remove_rpc_client(netw::msg_addr{endpoint, 0});
         return seastar::async([&ss, endpoint] {
             for (auto&& subscriber : ss._lifecycle_subscribers) {
                 try {

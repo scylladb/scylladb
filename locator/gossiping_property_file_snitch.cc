@@ -138,7 +138,7 @@ future<> gossiping_property_file_snitch::gossiper_starting() {
     //
     auto& g = get_local_gossiper();
 
-    auto local_internal_addr = netw::get_local_messaging_service().listen_address();
+    auto local_internal_addr = g.get_local_messaging().listen_address();
     std::ostringstream ostrm;
 
     ostrm<<local_internal_addr<<std::flush;

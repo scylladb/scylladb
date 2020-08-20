@@ -28,6 +28,7 @@ namespace locator { class token_metadata; }
 namespace cql_transport { class controller; }
 class thrift_controller;
 namespace db { class snapshot_ctl; }
+namespace netw { class messaging_service; }
 
 namespace api {
 
@@ -51,6 +52,8 @@ future<> set_server_init(http_context& ctx);
 future<> set_server_config(http_context& ctx);
 future<> set_server_snitch(http_context& ctx);
 future<> set_server_storage_service(http_context& ctx);
+future<> set_server_repair(http_context& ctx, sharded<netw::messaging_service>& ms);
+future<> unset_server_repair(http_context& ctx);
 future<> set_transport_controller(http_context& ctx, cql_transport::controller& ctl);
 future<> unset_transport_controller(http_context& ctx);
 future<> set_rpc_controller(http_context& ctx, thrift_controller& ctl);
@@ -59,7 +62,8 @@ future<> set_server_snapshot(http_context& ctx, sharded<db::snapshot_ctl>& snap_
 future<> unset_server_snapshot(http_context& ctx);
 future<> set_server_gossip(http_context& ctx);
 future<> set_server_load_sstable(http_context& ctx);
-future<> set_server_messaging_service(http_context& ctx);
+future<> set_server_messaging_service(http_context& ctx, sharded<netw::messaging_service>& ms);
+future<> unset_server_messaging_service(http_context& ctx);
 future<> set_server_storage_proxy(http_context& ctx);
 future<> set_server_stream_manager(http_context& ctx);
 future<> set_server_gossip_settle(http_context& ctx);

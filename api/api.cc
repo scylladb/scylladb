@@ -113,6 +113,14 @@ future<> set_server_storage_service(http_context& ctx) {
     return register_api(ctx, "storage_service", "The storage service API", set_storage_service);
 }
 
+future<> set_server_repair(http_context& ctx, sharded<netw::messaging_service>& ms) {
+    return ctx.http_server.set_routes([&ctx, &ms] (routes& r) { set_repair(ctx, r, ms); });
+}
+
+future<> unset_server_repair(http_context& ctx) {
+    return ctx.http_server.set_routes([&ctx] (routes& r) { unset_repair(ctx, r); });
+}
+
 future<> set_server_snapshot(http_context& ctx, sharded<db::snapshot_ctl>& snap_ctl) {
     return ctx.http_server.set_routes([&ctx, &snap_ctl] (routes& r) { set_snapshot(ctx, r, snap_ctl); });
 }
@@ -135,9 +143,14 @@ future<> set_server_load_sstable(http_context& ctx) {
                 "The column family API", set_column_family);
 }
 
-future<> set_server_messaging_service(http_context& ctx) {
+future<> set_server_messaging_service(http_context& ctx, sharded<netw::messaging_service>& ms) {
     return register_api(ctx, "messaging_service",
-                "The messaging service API", set_messaging_service);
+                "The messaging service API", [&ms] (http_context& ctx, routes& r) {
+                    set_messaging_service(ctx, r, ms);
+                });
+}
+future<> unset_server_messaging_service(http_context& ctx) {
+    return ctx.http_server.set_routes([&ctx] (routes& r) { unset_messaging_service(ctx, r); });
 }
 
 future<> set_server_storage_proxy(http_context& ctx) {

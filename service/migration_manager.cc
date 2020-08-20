@@ -64,8 +64,8 @@ using namespace std::chrono_literals;
 
 const std::chrono::milliseconds migration_manager::migration_delay = 60000ms;
 
-migration_manager::migration_manager(migration_notifier& notifier, gms::feature_service& feat) :
-        _notifier(notifier), _feat(feat)
+migration_manager::migration_manager(migration_notifier& notifier, gms::feature_service& feat, netw::messaging_service& ms) :
+        _notifier(notifier), _feat(feat), _messaging(ms)
 {
 }
 
@@ -108,8 +108,7 @@ void migration_manager::init_messaging_service()
         _wait_cluster_upgraded.broadcast();
     }));
 
-    auto& ms = netw::get_local_messaging_service();
-    ms.register_definitions_update([this] (const rpc::client_info& cinfo, std::vector<frozen_mutation> fm, rpc::optional<std::vector<canonical_mutation>> cm) {
+    _messaging.register_definitions_update([this] (const rpc::client_info& cinfo, std::vector<frozen_mutation> fm, rpc::optional<std::vector<canonical_mutation>> cm) {
         auto src = netw::messaging_service::get_source(cinfo);
         auto f = make_ready_future<>();
         if (cm) {
@@ -131,7 +130,7 @@ void migration_manager::init_messaging_service()
         });
         return netw::messaging_service::no_wait();
     });
-    ms.register_migration_request([this] (const rpc::client_info& cinfo, rpc::optional<netw::schema_pull_options> options) {
+    _messaging.register_migration_request([this] (const rpc::client_info& cinfo, rpc::optional<netw::schema_pull_options> options) {
         using frozen_mutations = std::vector<frozen_mutation>;
         using canonical_mutations = std::vector<canonical_mutation>;
         const auto cm_retval_supported = options && options->remote_supports_canonical_mutation_retval;
@@ -156,18 +155,26 @@ void migration_manager::init_messaging_service()
             // keep local proxy alive
         });
     });
-    ms.register_schema_check([] {
+    _messaging.register_schema_check([] {
         return make_ready_future<utils::UUID>(service::get_local_storage_proxy().get_db().local().get_version());
+    });
+    _messaging.register_get_schema_version([this] (unsigned shard, table_schema_version v) {
+        get_local_storage_proxy().get_stats().replica_cross_shard_ops += shard != this_shard_id();
+        // FIXME: should this get an smp_service_group? Probably one separate from reads and writes.
+        return container().invoke_on(shard, [v] (auto&& sp) {
+            mlogger.debug("Schema version request for {}", v);
+            return local_schema_registry().get_frozen(v);
+        });
     });
 }
 
 future<> migration_manager::uninit_messaging_service()
 {
-    auto& ms = netw::get_local_messaging_service();
     return when_all_succeed(
-        ms.unregister_migration_request(),
-        ms.unregister_definitions_update(),
-        ms.unregister_schema_check()
+        _messaging.unregister_migration_request(),
+        _messaging.unregister_definitions_update(),
+        _messaging.unregister_schema_check(),
+        _messaging.unregister_get_schema_version()
     ).discard_result();
 }
 
@@ -285,9 +292,8 @@ future<> migration_manager::submit_migration_task(const gms::inet_address& endpo
 
 future<> migration_manager::do_merge_schema_from(netw::messaging_service::msg_addr id)
 {
-    auto& ms = netw::get_local_messaging_service();
     mlogger.info("Pulling schema from {}", id);
-    return ms.send_migration_request(std::move(id), netw::schema_pull_options{}).then([this, id] (
+    return _messaging.send_migration_request(std::move(id), netw::schema_pull_options{}).then([this, id] (
             rpc::tuple<std::vector<frozen_mutation>, rpc::optional<std::vector<canonical_mutation>>> frozen_and_canonical_mutations) {
         auto&& [mutations, canonical_mutations] = frozen_and_canonical_mutations;
         if (canonical_mutations) {
@@ -342,9 +348,9 @@ future<> migration_manager::merge_schema_from(netw::messaging_service::msg_addr 
 future<> migration_manager::merge_schema_from(netw::messaging_service::msg_addr src, const std::vector<frozen_mutation>& mutations)
 {
     mlogger.debug("Applying schema mutations from {}", src);
-    return map_reduce(mutations, [src](const frozen_mutation& fm) {
+    return map_reduce(mutations, [this, src](const frozen_mutation& fm) {
         // schema table's schema is not syncable so just use get_schema_definition()
-        return get_schema_definition(fm.schema_version(), src).then([&fm](schema_ptr s) {
+        return get_schema_definition(fm.schema_version(), src, _messaging).then([&fm](schema_ptr s) {
             s->registry_entry()->mark_synced();
             return fm.unfreeze(std::move(s));
         });
@@ -963,25 +969,26 @@ future<> migration_manager::announce(std::vector<mutation> mutations, bool annou
 future<> migration_manager::push_schema_mutation(const gms::inet_address& endpoint, const std::vector<mutation>& schema)
 {
     netw::messaging_service::msg_addr id{endpoint, 0};
-    auto schema_features = get_local_migration_manager()._feat.cluster_schema_features();
+    auto schema_features = _feat.cluster_schema_features();
     auto adjusted_schema = db::schema_tables::adjust_schema_for_schema_features(schema, schema_features);
     auto fm = std::vector<frozen_mutation>(adjusted_schema.begin(), adjusted_schema.end());
     auto cm = std::vector<canonical_mutation>(adjusted_schema.begin(), adjusted_schema.end());
-    return netw::get_local_messaging_service().send_definitions_update(id, std::move(fm), std::move(cm));
+    return _messaging.send_definitions_update(id, std::move(fm), std::move(cm));
 }
 
 // Returns a future on the local application of the schema
 future<> migration_manager::announce(std::vector<mutation> schema) {
-    auto f = db::schema_tables::merge_schema(get_storage_proxy(), get_local_migration_manager()._feat, schema);
+    migration_manager& mm = get_local_migration_manager();
+    auto f = db::schema_tables::merge_schema(get_storage_proxy(), mm._feat, schema);
 
-    return do_with(std::move(schema), [live_members = gms::get_local_gossiper().get_live_members()](auto && schema) {
-        return parallel_for_each(live_members.begin(), live_members.end(), [&schema](auto& endpoint) {
+    return do_with(std::move(schema), [live_members = gms::get_local_gossiper().get_live_members(), &mm](auto && schema) {
+        return parallel_for_each(live_members.begin(), live_members.end(), [&schema, &mm](auto& endpoint) {
             // only push schema to nodes with known and equal versions
             if (endpoint != utils::fb_utilities::get_broadcast_address() &&
-                netw::get_local_messaging_service().knows_version(endpoint) &&
-                netw::get_local_messaging_service().get_raw_version(endpoint) ==
+                mm._messaging.knows_version(endpoint) &&
+                mm._messaging.get_raw_version(endpoint) ==
                 netw::messaging_service::current_version) {
-                return push_schema_mutation(endpoint, schema);
+                return mm.push_schema_mutation(endpoint, schema);
             } else {
                 return make_ready_future<>();
             }
@@ -1100,20 +1107,19 @@ static future<> maybe_sync(const schema_ptr& s, netw::messaging_service::msg_add
     });
 }
 
-future<schema_ptr> get_schema_definition(table_schema_version v, netw::messaging_service::msg_addr dst) {
-    return local_schema_registry().get_or_load(v, [dst] (table_schema_version v) {
+future<schema_ptr> get_schema_definition(table_schema_version v, netw::messaging_service::msg_addr dst, netw::messaging_service& ms) {
+    return local_schema_registry().get_or_load(v, [&ms, dst] (table_schema_version v) {
         mlogger.debug("Requesting schema {} from {}", v, dst);
-        auto& ms = netw::get_local_messaging_service();
         return ms.send_get_schema_version(dst, v);
     });
 }
 
-future<schema_ptr> get_schema_for_read(table_schema_version v, netw::messaging_service::msg_addr dst) {
-    return get_schema_definition(v, dst);
+future<schema_ptr> get_schema_for_read(table_schema_version v, netw::messaging_service::msg_addr dst, netw::messaging_service& ms) {
+    return get_schema_definition(v, dst, ms);
 }
 
-future<schema_ptr> get_schema_for_write(table_schema_version v, netw::messaging_service::msg_addr dst) {
-    return get_schema_definition(v, dst).then([dst] (schema_ptr s) {
+future<schema_ptr> get_schema_for_write(table_schema_version v, netw::messaging_service::msg_addr dst, netw::messaging_service& ms) {
+    return get_schema_definition(v, dst, ms).then([dst] (schema_ptr s) {
         return maybe_sync(s, dst).then([s] {
             return s;
         });
@@ -1124,7 +1130,7 @@ future<> migration_manager::sync_schema(const database& db, const std::vector<gm
     using schema_and_hosts = std::unordered_map<utils::UUID, std::vector<gms::inet_address>>;
     return do_with(schema_and_hosts(), db.get_version(), [this, &nodes] (schema_and_hosts& schema_map, utils::UUID& my_version) {
         return parallel_for_each(nodes, [this, &schema_map, &my_version] (const gms::inet_address& node) {
-            return netw::get_messaging_service().local().send_schema_check(netw::msg_addr(node)).then([node, &schema_map, &my_version] (utils::UUID remote_version) {
+            return _messaging.send_schema_check(netw::msg_addr(node)).then([node, &schema_map, &my_version] (utils::UUID remote_version) {
                 if (my_version != remote_version) {
                     schema_map[remote_version].emplace_back(node);
                 }

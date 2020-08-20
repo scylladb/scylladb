@@ -215,7 +215,7 @@ void reconnectable_snitch_helper::reconnect(gms::inet_address public_address, co
 }
 
 void reconnectable_snitch_helper::reconnect(gms::inet_address public_address, gms::inet_address local_address) {
-    auto& ms = netw::get_local_messaging_service();
+    netw::messaging_service& ms = gms::get_local_gossiper().get_local_messaging();
     auto& sn_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
 
     if (sn_ptr->get_datacenter(public_address) == _local_dc &&
@@ -229,7 +229,7 @@ void reconnectable_snitch_helper::reconnect(gms::inet_address public_address, gm
         // ...then update messaging_service cache and reset the currently
         // open connections to this endpoint on all shards...
         //
-        netw::get_messaging_service().invoke_on_all([public_address, local_address] (auto& local_ms) {
+        ms.container().invoke_on_all([public_address, local_address] (auto& local_ms) {
             local_ms.cache_preferred_ip(public_address, local_address);
             local_ms.remove_rpc_client(netw::msg_addr(public_address));
         }).get();

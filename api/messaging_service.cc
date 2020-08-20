@@ -53,8 +53,8 @@ std::vector<message_counter> map_to_message_counters(
  * according to a function that it gets as a parameter.
  *
  */
-future_json_function get_client_getter(std::function<uint64_t(const shard_info&)> f) {
-    return [f](std::unique_ptr<request> req) {
+future_json_function get_client_getter(sharded<netw::messaging_service>& ms, std::function<uint64_t(const shard_info&)> f) {
+    return [&ms, f](std::unique_ptr<request> req) {
         using map_type = std::unordered_map<gms::inet_address, uint64_t>;
         auto get_shard_map = [f](messaging_service& ms) {
             std::unordered_map<gms::inet_address, unsigned long> map;
@@ -63,15 +63,15 @@ future_json_function get_client_getter(std::function<uint64_t(const shard_info&)
             });
             return map;
         };
-        return  get_messaging_service().map_reduce0(get_shard_map, map_type(), map_sum<map_type>).
+        return ms.map_reduce0(get_shard_map, map_type(), map_sum<map_type>).
                 then([](map_type&& map) {
             return make_ready_future<json::json_return_type>(map_to_message_counters(map));
         });
     };
 }
 
-future_json_function get_server_getter(std::function<uint64_t(const rpc::stats&)> f) {
-    return [f](std::unique_ptr<request> req) {
+future_json_function get_server_getter(sharded<netw::messaging_service>& ms, std::function<uint64_t(const rpc::stats&)> f) {
+    return [&ms, f](std::unique_ptr<request> req) {
         using map_type = std::unordered_map<gms::inet_address, uint64_t>;
         auto get_shard_map = [f](messaging_service& ms) {
             std::unordered_map<gms::inet_address, unsigned long> map;
@@ -80,53 +80,53 @@ future_json_function get_server_getter(std::function<uint64_t(const rpc::stats&)
             });
             return map;
         };
-        return  get_messaging_service().map_reduce0(get_shard_map, map_type(), map_sum<map_type>).
+        return ms.map_reduce0(get_shard_map, map_type(), map_sum<map_type>).
                 then([](map_type&& map) {
             return make_ready_future<json::json_return_type>(map_to_message_counters(map));
         });
     };
 }
 
-void set_messaging_service(http_context& ctx, routes& r) {
-    get_timeout_messages.set(r, get_client_getter([](const shard_info& c) {
+void set_messaging_service(http_context& ctx, routes& r, sharded<netw::messaging_service>& ms) {
+    get_timeout_messages.set(r, get_client_getter(ms, [](const shard_info& c) {
         return c.get_stats().timeout;
     }));
 
-    get_sent_messages.set(r, get_client_getter([](const shard_info& c) {
+    get_sent_messages.set(r, get_client_getter(ms, [](const shard_info& c) {
         return c.get_stats().sent_messages;
     }));
 
-    get_dropped_messages.set(r, get_client_getter([](const shard_info& c) {
+    get_dropped_messages.set(r, get_client_getter(ms, [](const shard_info& c) {
         // We don't have the same drop message mechanism
         // as origin has.
         // hence we can always return 0
         return 0;
     }));
 
-    get_exception_messages.set(r, get_client_getter([](const shard_info& c) {
+    get_exception_messages.set(r, get_client_getter(ms, [](const shard_info& c) {
         return c.get_stats().exception_received;
     }));
 
-    get_pending_messages.set(r, get_client_getter([](const shard_info& c) {
+    get_pending_messages.set(r, get_client_getter(ms, [](const shard_info& c) {
         return c.get_stats().pending;
     }));
 
-    get_respond_pending_messages.set(r, get_server_getter([](const rpc::stats& c) {
+    get_respond_pending_messages.set(r, get_server_getter(ms, [](const rpc::stats& c) {
         return c.pending;
     }));
 
-    get_respond_completed_messages.set(r, get_server_getter([](const rpc::stats& c) {
+    get_respond_completed_messages.set(r, get_server_getter(ms, [](const rpc::stats& c) {
         return c.sent_messages;
     }));
 
-    get_version.set(r, [](const_req req) {
-        return netw::get_local_messaging_service().get_raw_version(req.get_query_param("addr"));
+    get_version.set(r, [&ms](const_req req) {
+        return ms.local().get_raw_version(req.get_query_param("addr"));
     });
 
-    get_dropped_messages_by_ver.set(r, [](std::unique_ptr<request> req) {
+    get_dropped_messages_by_ver.set(r, [&ms](std::unique_ptr<request> req) {
         shared_ptr<std::vector<uint64_t>> map = make_shared<std::vector<uint64_t>>(num_verb);
 
-        return netw::get_messaging_service().map_reduce([map](const uint64_t* local_map) mutable {
+        return ms.map_reduce([map](const uint64_t* local_map) mutable {
             for (auto i = 0; i < num_verb; i++) {
                 (*map)[i]+= local_map[i];
             }
@@ -151,5 +151,18 @@ void set_messaging_service(http_context& ctx, routes& r) {
         });
     });
 }
+
+void unset_messaging_service(http_context& ctx, routes& r) {
+    get_timeout_messages.unset(r);
+    get_sent_messages.unset(r);
+    get_dropped_messages.unset(r);
+    get_exception_messages.unset(r);
+    get_pending_messages.unset(r);
+    get_respond_pending_messages.unset(r);
+    get_respond_completed_messages.unset(r);
+    get_version.unset(r);
+    get_dropped_messages_by_ver.unset(r);
+}
+
 }
 
