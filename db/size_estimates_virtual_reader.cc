@@ -226,8 +226,7 @@ future<std::vector<token_range>> test_get_local_ranges(database& db) {
 }
 
 size_estimates_mutation_reader::size_estimates_mutation_reader(schema_ptr schema, const dht::partition_range& prange, const query::partition_slice& slice, streamed_mutation::forwarding fwd)
-            : impl(schema)
-            , _schema(std::move(schema))
+            : impl(std::move(schema))
             , _prange(&prange)
             , _slice(slice)
             , _fwd(fwd)

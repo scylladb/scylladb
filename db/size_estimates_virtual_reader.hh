@@ -34,7 +34,6 @@ struct token_range {
 };
 
 class size_estimates_mutation_reader final : public flat_mutation_reader::impl {
-    schema_ptr _schema;
     const dht::partition_range* _prange;
     const query::partition_slice& _slice;
     using ks_range = std::vector<sstring>;
@@ -66,7 +65,7 @@ struct virtual_reader {
             tracing::trace_state_ptr trace_state,
             streamed_mutation::forwarding fwd,
             mutation_reader::forwarding fwd_mr) {
-        return make_flat_mutation_reader<size_estimates_mutation_reader>(schema, range, slice, fwd);
+        return make_flat_mutation_reader<size_estimates_mutation_reader>(std::move(schema), range, slice, fwd);
     }
 };
 
