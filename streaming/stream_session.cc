@@ -178,7 +178,7 @@ void stream_session::init_messaging_service_handler(netw::messaging_service& ms)
             };
             //FIXME: discarded future.
             (void)mutation_writer::distribute_reader_and_consume_on_shards(s,
-                make_generating_reader(s, std::move(get_next_mutation_fragment)),
+                make_generating_reader(s, cf.streaming_read_concurrency_semaphore().make_permit(), std::move(get_next_mutation_fragment)),
                 [plan_id, estimated_partitions, reason] (flat_mutation_reader reader) {
                     auto& cf = get_local_db().find_column_family(reader.schema());
                     return db::view::check_needs_view_update_path(_sys_dist_ks->local(), cf, reason).then([cf = cf.shared_from_this(), estimated_partitions, reader = std::move(reader)] (bool use_view_update_path) mutable {

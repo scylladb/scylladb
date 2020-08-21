@@ -1217,7 +1217,7 @@ class scrub_compaction final : public regular_compaction {
 
     public:
         reader(flat_mutation_reader underlying, bool skip_corrupted)
-            : impl(underlying.schema())
+            : impl(underlying.schema(), underlying.permit())
             , _skip_corrupted(skip_corrupted)
             , _reader(std::move(underlying))
             , _validator(*_schema)

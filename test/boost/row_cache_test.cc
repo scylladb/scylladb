@@ -112,7 +112,7 @@ snapshot_source make_decorated_snapshot_source(snapshot_source src, std::functio
 mutation_source make_source_with(mutation m) {
     return mutation_source([m] (schema_ptr s, reader_permit, const dht::partition_range&, const query::partition_slice&, const io_priority_class&, tracing::trace_state_ptr, streamed_mutation::forwarding fwd) {
         assert(m.schema() == s);
-        return flat_mutation_reader_from_mutations({m}, std::move(fwd));
+        return flat_mutation_reader_from_mutations(tests::make_permit(), {m}, std::move(fwd));
     });
 }
 
@@ -218,7 +218,7 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_empty_full_range)
                 const io_priority_class&,
                 tracing::trace_state_ptr,
                 streamed_mutation::forwarding fwd) {
-            return make_counting_reader(make_empty_flat_reader(s), secondary_calls_count);
+            return make_counting_reader(make_empty_flat_reader(s, tests::make_permit()), secondary_calls_count);
         })), tracker);
 
         assert_that(cache.make_reader(s, tests::make_permit(), query::full_partition_range))
@@ -249,7 +249,7 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_empty_single_part
                 const io_priority_class&,
                 tracing::trace_state_ptr,
                 streamed_mutation::forwarding fwd) {
-            return make_counting_reader(make_empty_flat_reader(s), secondary_calls_count);
+            return make_counting_reader(make_empty_flat_reader(s, tests::make_permit()), secondary_calls_count);
         })), tracker);
         auto range = make_single_partition_range(s, 100);
         assert_that(cache.make_reader(s, tests::make_permit(), range))
@@ -274,7 +274,7 @@ SEASTAR_TEST_CASE(test_cache_uses_continuity_info_for_single_partition_query) {
                 const io_priority_class&,
                 tracing::trace_state_ptr,
                 streamed_mutation::forwarding fwd) {
-            return make_counting_reader(make_empty_flat_reader(s), secondary_calls_count);
+            return make_counting_reader(make_empty_flat_reader(s, tests::make_permit()), secondary_calls_count);
         })), tracker);
 
         assert_that(cache.make_reader(s, tests::make_permit(), query::full_partition_range))
@@ -305,9 +305,9 @@ void test_cache_delegates_to_underlying_only_once_with_single_partition(schema_p
             streamed_mutation::forwarding fwd) {
         assert(m.schema() == s);
         if (range.contains(dht::ring_position(m.decorated_key()), dht::ring_position_comparator(*s))) {
-            return make_counting_reader(flat_mutation_reader_from_mutations({m}, std::move(fwd)), secondary_calls_count);
+            return make_counting_reader(flat_mutation_reader_from_mutations(tests::make_permit(), {m}, std::move(fwd)), secondary_calls_count);
         } else {
-            return make_counting_reader(make_empty_flat_reader(s), secondary_calls_count);
+            return make_counting_reader(make_empty_flat_reader(s, tests::make_permit()), secondary_calls_count);
         }
     })), tracker);
 

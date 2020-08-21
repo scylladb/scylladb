@@ -2914,7 +2914,7 @@ void run_compaction_data_stream_split_test(const schema& schema, gc_clock::time_
 
     testlog.info("Original data: {}", create_stats(expected_mutations_summary));
 
-    auto reader = flat_mutation_reader_from_mutations(std::move(mutations));
+    auto reader = flat_mutation_reader_from_mutations(tests::make_permit(), std::move(mutations));
     auto get_max_purgeable = [] (const dht::decorated_key&) {
         return api::max_timestamp;
     };

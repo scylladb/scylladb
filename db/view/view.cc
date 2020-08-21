@@ -1228,7 +1228,8 @@ future<> mutate_MV(
 view_builder::view_builder(database& db, db::system_distributed_keyspace& sys_dist_ks, service::migration_notifier& mn)
         : _db(db)
         , _sys_dist_ks(sys_dist_ks)
-        , _mnotifier(mn) {
+        , _mnotifier(mn)
+        , _permit(_db.get_reader_concurrency_semaphore().make_permit()) {
     setup_metrics();
 }
 
@@ -1360,10 +1361,9 @@ view_builder::build_step& view_builder::get_or_create_build_step(utils::UUID bas
 void view_builder::initialize_reader_at_current_token(build_step& step) {
     step.pslice = make_partition_slice(*step.base->schema());
     step.prange = dht::partition_range(dht::ring_position::starting_at(step.current_token()), dht::ring_position::max());
-    auto permit = _db.get_reader_concurrency_semaphore().make_permit();
     step.reader = make_local_shard_sstable_reader(
             step.base->schema(),
-            std::move(permit),
+            _permit,
             make_lw_shared<sstables::sstable_set>(step.base->get_sstable_set()),
             step.prange,
             step.pslice,
@@ -1836,7 +1836,7 @@ public:
             _fragments.push_front(partition_start(_step.current_key, tombstone()));
             auto base_schema = _step.base->schema();
             auto views = with_base_info_snapshot(_views_to_build);
-            auto reader = make_flat_mutation_reader_from_fragments(_step.reader.schema(), std::move(_fragments));
+            auto reader = make_flat_mutation_reader_from_fragments(_step.reader.schema(), _builder._permit, std::move(_fragments));
             reader.upgrade_schema(base_schema);
             _step.base->populate_views(
                     std::move(views),

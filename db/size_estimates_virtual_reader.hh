@@ -42,7 +42,7 @@ class size_estimates_mutation_reader final : public flat_mutation_reader::impl {
     streamed_mutation::forwarding _fwd;
     flat_mutation_reader_opt _partition_reader;
 public:
-    size_estimates_mutation_reader(schema_ptr, const dht::partition_range&, const query::partition_slice&, streamed_mutation::forwarding);
+    size_estimates_mutation_reader(schema_ptr, reader_permit, const dht::partition_range&, const query::partition_slice&, streamed_mutation::forwarding);
 
     virtual future<> fill_buffer(db::timeout_clock::time_point) override;
     virtual void next_partition() override;
@@ -58,14 +58,14 @@ private:
 
 struct virtual_reader {
     flat_mutation_reader operator()(schema_ptr schema,
-            reader_permit,
+            reader_permit permit,
             const dht::partition_range& range,
             const query::partition_slice& slice,
             const io_priority_class& pc,
             tracing::trace_state_ptr trace_state,
             streamed_mutation::forwarding fwd,
             mutation_reader::forwarding fwd_mr) {
-        return make_flat_mutation_reader<size_estimates_mutation_reader>(std::move(schema), range, slice, fwd);
+        return make_flat_mutation_reader<size_estimates_mutation_reader>(std::move(schema), std::move(permit), range, slice, fwd);
     }
 };
 

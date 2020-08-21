@@ -25,6 +25,12 @@
 #include "partition_snapshot_reader.hh"
 #include "partition_builder.hh"
 
+namespace {
+
+thread_local reader_concurrency_semaphore _flush_semaphore(reader_concurrency_semaphore::no_limits{}, "memtable_flush_semaphore"); // only for accounting
+
+}
+
 void memtable::memtable_encoding_stats_collector::update_timestamp(api::timestamp_type ts) {
     if (ts != api::missing_timestamp) {
         encoding_stats_collector::update_timestamp(ts);
@@ -377,7 +383,6 @@ protected:
 class scanning_reader final : public flat_mutation_reader::impl, private iterator_reader {
     std::optional<dht::partition_range> _delegate_range;
     std::optional<flat_mutation_reader> _delegate;
-    std::optional<reader_permit> _permit;
     const io_priority_class& _pc;
     const query::partition_slice& _slice;
     mutation_reader::forwarding _fwd_mr;
@@ -406,14 +411,13 @@ class scanning_reader final : public flat_mutation_reader::impl, private iterato
 public:
      scanning_reader(schema_ptr s,
                      lw_shared_ptr<memtable> m,
-                     std::optional<reader_permit> permit, // not needed when used for flushing
+                     reader_permit permit,
                      const dht::partition_range& range,
                      const query::partition_slice& slice,
                      const io_priority_class& pc,
                      mutation_reader::forwarding fwd_mr)
-         : impl(s)
+         : impl(s, std::move(permit))
          , iterator_reader(s, std::move(m), range)
-         , _permit(std::move(permit))
          , _pc(pc)
          , _slice(slice)
          , _fwd_mr(fwd_mr)
@@ -424,8 +428,7 @@ public:
             if (!_delegate) {
                 _delegate_range = get_delegate_range();
                 if (_delegate_range) {
-                    assert(_permit);
-                    _delegate = delegate_reader(*_permit, *_delegate_range, _slice, _pc, streamed_mutation::forwarding::no, _fwd_mr);
+                    _delegate = delegate_reader(_permit, *_delegate_range, _slice, _pc, streamed_mutation::forwarding::no, _fwd_mr);
                 } else {
                     auto key_and_snp = read_section()(region(), [&] {
                         return with_linearized_managed_bytes([&] () -> std::optional<std::pair<dht::decorated_key, partition_snapshot_ptr>> {
@@ -448,7 +451,7 @@ public:
                         auto cr = query::clustering_key_filter_ranges::get_ranges(*schema(), _slice, key_and_snp->first.key());
                         auto snp_schema = key_and_snp->second->schema();
                         bool digest_requested = _slice.options.contains<query::partition_slice::option::with_digest>();
-                        auto mpsr = make_partition_snapshot_flat_reader(snp_schema, std::move(key_and_snp->first), std::move(cr),
+                        auto mpsr = make_partition_snapshot_flat_reader(snp_schema, _permit, std::move(key_and_snp->first), std::move(cr),
                                         std::move(key_and_snp->second), digest_requested, region(), read_section(), mtbl(), streamed_mutation::forwarding::no);
                         mpsr.upgrade_schema(schema());
                         _delegate = std::move(mpsr);
@@ -574,8 +577,8 @@ class flush_reader final : public flat_mutation_reader::impl, private iterator_r
     flat_mutation_reader_opt _partition_reader;
     flush_memory_accounter _flushed_memory;
 public:
-    flush_reader(schema_ptr s, lw_shared_ptr<memtable> m)
-        : impl(s)
+    flush_reader(schema_ptr s, reader_permit permit, lw_shared_ptr<memtable> m)
+        : impl(s, std::move(permit))
         , iterator_reader(std::move(s), m, query::full_partition_range)
         , _flushed_memory(*m)
     {}
@@ -604,7 +607,7 @@ private:
             update_last(key_and_snp->first);
             auto cr = query::clustering_key_filter_ranges::get_ranges(*schema(), schema()->full_slice(), key_and_snp->first.key());
             auto snp_schema = key_and_snp->second->schema();
-            auto mpsr = make_partition_snapshot_flat_reader<partition_snapshot_accounter>(snp_schema, std::move(key_and_snp->first), std::move(cr),
+            auto mpsr = make_partition_snapshot_flat_reader<partition_snapshot_accounter>(snp_schema, _permit, std::move(key_and_snp->first), std::move(cr),
                             std::move(key_and_snp->second), false, region(), read_section(), mtbl(), streamed_mutation::forwarding::no, *snp_schema, _flushed_memory);
             mpsr.upgrade_schema(schema());
             _partition_reader = std::move(mpsr);
@@ -676,13 +679,13 @@ memtable::make_flat_reader(schema_ptr s,
             }
         });
         if (!snp) {
-            return make_empty_flat_reader(std::move(s));
+            return make_empty_flat_reader(std::move(s), std::move(permit));
         }
         auto dk = pos.as_decorated_key();
         auto cr = query::clustering_key_filter_ranges::get_ranges(*s, slice, dk.key());
         auto snp_schema = snp->schema();
         bool digest_requested = slice.options.contains<query::partition_slice::option::with_digest>();
-        auto rd = make_partition_snapshot_flat_reader(snp_schema, std::move(dk), std::move(cr), std::move(snp), digest_requested,
+        auto rd = make_partition_snapshot_flat_reader(snp_schema, std::move(permit), std::move(dk), std::move(cr), std::move(snp), digest_requested,
                                                       *this, _read_section, shared_from_this(), fwd);
         rd.upgrade_schema(s);
         return rd;
@@ -699,10 +702,10 @@ memtable::make_flat_reader(schema_ptr s,
 flat_mutation_reader
 memtable::make_flush_reader(schema_ptr s, const io_priority_class& pc) {
     if (group()) {
-        return make_flat_mutation_reader<flush_reader>(s, shared_from_this());
+        return make_flat_mutation_reader<flush_reader>(s, _flush_semaphore.make_permit(), shared_from_this());
     } else {
         auto& full_slice = s->full_slice();
-        return make_flat_mutation_reader<scanning_reader>(std::move(s), shared_from_this(), std::nullopt,
+        return make_flat_mutation_reader<scanning_reader>(std::move(s), shared_from_this(), _flush_semaphore.make_permit(),
             query::full_partition_range, full_slice, pc, mutation_reader::forwarding::no);
     }
 }

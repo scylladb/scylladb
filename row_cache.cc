@@ -390,7 +390,7 @@ private:
 public:
     single_partition_populating_reader(row_cache& cache,
             lw_shared_ptr<read_context> context)
-        : impl(context->schema())
+        : impl(context->schema(), context->permit())
         , _cache(cache)
         , _read_context(std::move(context))
     { }
@@ -666,7 +666,7 @@ public:
     scanning_and_populating_reader(row_cache& cache,
                                    const dht::partition_range& range,
                                    lw_shared_ptr<read_context> context)
-        : impl(context->schema())
+        : impl(context->schema(), context->permit())
         , _pr(&range)
         , _cache(cache)
         , _read_context(std::move(context))
@@ -747,7 +747,7 @@ row_cache::make_reader(schema_ptr s,
                     on_partition_hit();
                     return e.read(*this, *ctx);
                 } else if (i->continuous()) {
-                    return make_empty_flat_reader(std::move(s));
+                    return make_empty_flat_reader(std::move(s), ctx->permit());
                 } else {
                     tracing::trace(trace_state, "Range {} not found in cache", range);
                     on_partition_miss();

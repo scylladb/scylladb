@@ -145,7 +145,7 @@ public:
                                lw_shared_ptr<read_context> ctx,
                                partition_snapshot_ptr snp,
                                row_cache& cache)
-        : flat_mutation_reader::impl(std::move(s))
+        : flat_mutation_reader::impl(std::move(s), ctx->permit())
         , _snp(std::move(snp))
         , _position_cmp(*_schema)
         , _ck_ranges(std::move(crr))

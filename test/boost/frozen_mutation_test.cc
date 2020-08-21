@@ -107,7 +107,7 @@ SEASTAR_THREAD_TEST_CASE(test_frozen_mutation_fragment) {
     for_each_mutation([] (const mutation& m) {
         auto& s = *m.schema();
         std::vector<mutation_fragment> mfs;
-        auto rd = flat_mutation_reader_from_mutations({ m });
+        auto rd = flat_mutation_reader_from_mutations(tests::make_permit(), { m });
         rd.consume_pausable([&] (mutation_fragment mf) {
             mfs.emplace_back(std::move(mf));
             return stop_iteration::no;

@@ -72,7 +72,7 @@ class build_progress_virtual_reader {
                 tracing::trace_state_ptr trace_state,
                 streamed_mutation::forwarding fwd,
                 mutation_reader::forwarding fwd_mr)
-                : flat_mutation_reader::impl(std::move(legacy_schema))
+                : flat_mutation_reader::impl(std::move(legacy_schema), permit)
                 , _scylla_next_token_col(scylla_views_build_progress.schema()->get_column_definition("next_token")->id)
                 , _scylla_generation_number_col(scylla_views_build_progress.schema()->get_column_definition("generation_number")->id)
                 , _legacy_last_token_col(_schema->get_column_definition("last_token")->id)

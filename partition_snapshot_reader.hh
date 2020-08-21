@@ -267,11 +267,11 @@ private:
     }
 public:
     template <typename... Args>
-    partition_snapshot_flat_reader(schema_ptr s, dht::decorated_key dk, partition_snapshot_ptr snp,
+    partition_snapshot_flat_reader(schema_ptr s, reader_permit permit, dht::decorated_key dk, partition_snapshot_ptr snp,
                               query::clustering_key_filter_ranges crr, bool digest_requested,
                               logalloc::region& region, logalloc::allocating_section& read_section,
                               boost::any pointer_to_container, Args&&... args)
-        : impl(std::move(s))
+        : impl(std::move(s), std::move(permit))
         , MemoryAccounter(std::forward<Args>(args)...)
         , _container_guard(std::move(pointer_to_container))
         , _ck_ranges(std::move(crr))
@@ -313,6 +313,7 @@ public:
 template <typename MemoryAccounter, typename... Args>
 inline flat_mutation_reader
 make_partition_snapshot_flat_reader(schema_ptr s,
+                                    reader_permit permit,
                                     dht::decorated_key dk,
                                     query::clustering_key_filter_ranges crr,
                                     partition_snapshot_ptr snp,
@@ -323,7 +324,7 @@ make_partition_snapshot_flat_reader(schema_ptr s,
                                     streamed_mutation::forwarding fwd,
                                     Args&&... args)
 {
-    auto res = make_flat_mutation_reader<partition_snapshot_flat_reader<MemoryAccounter>>(std::move(s), std::move(dk),
+    auto res = make_flat_mutation_reader<partition_snapshot_flat_reader<MemoryAccounter>>(std::move(s), std::move(permit), std::move(dk),
             snp, std::move(crr), digest_requested, region, read_section, std::move(pointer_to_container), std::forward<Args>(args)...);
     if (fwd) {
         return make_forwardable(std::move(res)); // FIXME: optimize
@@ -334,6 +335,7 @@ make_partition_snapshot_flat_reader(schema_ptr s,
 
 inline flat_mutation_reader
 make_partition_snapshot_flat_reader(schema_ptr s,
+                                    reader_permit permit,
                                     dht::decorated_key dk,
                                     query::clustering_key_filter_ranges crr,
                                     partition_snapshot_ptr snp,
@@ -343,6 +345,6 @@ make_partition_snapshot_flat_reader(schema_ptr s,
                                     boost::any pointer_to_container,
                                     streamed_mutation::forwarding fwd)
 {
-    return make_partition_snapshot_flat_reader<partition_snapshot_reader_dummy_accounter>(std::move(s),
+    return make_partition_snapshot_flat_reader<partition_snapshot_reader_dummy_accounter>(std::move(s), std::move(permit),
             std::move(dk), std::move(crr), std::move(snp), digest_requested, region, read_section, std::move(pointer_to_container), fwd);
 }

@@ -248,6 +248,7 @@ public:
     // mutation_reader::forwarding tag must be the same for all included
     // readers.
     combined_mutation_reader(schema_ptr schema,
+            reader_permit permit,
             std::unique_ptr<reader_selector> selector,
             streamed_mutation::forwarding fwd_sm,
             mutation_reader::forwarding fwd_mr);
@@ -566,10 +567,11 @@ size_t mutation_reader_merger::buffer_size() const {
 }
 
 combined_mutation_reader::combined_mutation_reader(schema_ptr schema,
+        reader_permit permit,
         std::unique_ptr<reader_selector> selector,
         streamed_mutation::forwarding fwd_sm,
         mutation_reader::forwarding fwd_mr)
-    : impl(std::move(schema))
+    : impl(std::move(schema), std::move(permit))
     , _producer(_schema, mutation_reader_merger(_schema, std::move(selector), fwd_sm, fwd_mr))
     , _fwd_sm(fwd_sm) {
 }
@@ -626,32 +628,37 @@ size_t combined_mutation_reader::buffer_size() const {
 }
 
 flat_mutation_reader make_combined_reader(schema_ptr schema,
+        reader_permit permit,
         std::unique_ptr<reader_selector> selectors,
         streamed_mutation::forwarding fwd_sm,
         mutation_reader::forwarding fwd_mr) {
     return make_flat_mutation_reader<combined_mutation_reader>(schema,
+            std::move(permit),
             std::move(selectors),
             fwd_sm,
             fwd_mr);
 }
 
 flat_mutation_reader make_combined_reader(schema_ptr schema,
+        reader_permit permit,
         std::vector<flat_mutation_reader> readers,
         streamed_mutation::forwarding fwd_sm,
         mutation_reader::forwarding fwd_mr) {
     if (readers.empty()) {
-        return make_empty_flat_reader(std::move(schema));
+        return make_empty_flat_reader(std::move(schema), std::move(permit));
     }
     if (readers.size() == 1) {
         return std::move(readers.front());
     }
     return make_flat_mutation_reader<combined_mutation_reader>(schema,
+            std::move(permit),
             std::make_unique<list_reader_selector>(schema, std::move(readers)),
             fwd_sm,
             fwd_mr);
 }
 
 flat_mutation_reader make_combined_reader(schema_ptr schema,
+        reader_permit permit,
         flat_mutation_reader&& a,
         flat_mutation_reader&& b,
         streamed_mutation::forwarding fwd_sm,
@@ -660,7 +667,7 @@ flat_mutation_reader make_combined_reader(schema_ptr schema,
     v.reserve(2);
     v.push_back(std::move(a));
     v.push_back(std::move(b));
-    return make_combined_reader(std::move(schema), std::move(v), fwd_sm, fwd_mr);
+    return make_combined_reader(std::move(schema), std::move(permit), std::move(v), fwd_sm, fwd_mr);
 }
 
 const ssize_t new_reader_base_cost{16 * 1024};
@@ -719,7 +726,7 @@ public:
             tracing::trace_state_ptr trace_state,
             streamed_mutation::forwarding fwd,
             mutation_reader::forwarding fwd_mr)
-        : impl(s)
+        : impl(s, permit)
         , _state(pending_state{
                 mutation_source_and_params{std::move(ms), std::move(s), std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr}}) {
     }
@@ -795,7 +802,7 @@ mutation_source make_empty_mutation_source() {
             tracing::trace_state_ptr tr,
             streamed_mutation::forwarding fwd,
             mutation_reader::forwarding) {
-        return make_empty_flat_reader(s);
+        return make_empty_flat_reader(s, std::move(permit));
     }, [] {
         return [] (const dht::decorated_key& key) {
             return partition_presence_checker_result::definitely_doesnt_exist;
@@ -816,7 +823,7 @@ mutation_source make_combined_mutation_source(std::vector<mutation_source> adden
         for (auto&& ms : addends) {
             rd.emplace_back(ms.make_reader(s, permit, pr, slice, pc, tr, fwd));
         }
-        return make_combined_reader(s, std::move(rd), fwd);
+        return make_combined_reader(s, std::move(permit), std::move(rd), fwd);
     });
 }
 
@@ -878,6 +885,7 @@ class foreign_reader : public flat_mutation_reader::impl {
     }
 public:
     foreign_reader(schema_ptr schema,
+            reader_permit permit,
             foreign_unique_ptr<flat_mutation_reader> reader,
             streamed_mutation::forwarding fwd_sm = streamed_mutation::forwarding::no);
 
@@ -896,9 +904,10 @@ public:
 };
 
 foreign_reader::foreign_reader(schema_ptr schema,
+        reader_permit permit,
         foreign_unique_ptr<flat_mutation_reader> reader,
         streamed_mutation::forwarding fwd_sm)
-    : impl(std::move(schema))
+    : impl(std::move(schema), std::move(permit))
     , _reader(std::move(reader))
     , _fwd_sm(fwd_sm) {
 }
@@ -974,12 +983,13 @@ future<> foreign_reader::fast_forward_to(position_range pr, db::timeout_clock::t
 }
 
 flat_mutation_reader make_foreign_reader(schema_ptr schema,
+            reader_permit permit,
             foreign_ptr<std::unique_ptr<flat_mutation_reader>> reader,
             streamed_mutation::forwarding fwd_sm) {
     if (reader.get_owner_shard() == this_shard_id()) {
         return std::move(*reader);
     }
-    return make_flat_mutation_reader<foreign_reader>(std::move(schema), std::move(reader), fwd_sm);
+    return make_flat_mutation_reader<foreign_reader>(std::move(schema), std::move(permit), std::move(reader), fwd_sm);
 }
 
 namespace {
@@ -1020,7 +1030,6 @@ public:
 private:
     auto_pause _auto_pause;
     mutation_source _ms;
-    reader_permit _permit;
     const dht::partition_range* _pr;
     const query::partition_slice& _ps;
     const io_priority_class& _pc;
@@ -1196,7 +1205,7 @@ flat_mutation_reader evictable_reader::recreate_reader() {
         // read a single partition) but still, let's make sure we handle it
         // correctly.
         if (_pr->is_singular() && !partition_range_is_inclusive) {
-            return make_empty_flat_reader(_schema);
+            return make_empty_flat_reader(_schema, _permit);
         }
 
         _range_override = dht::partition_range({dht::partition_range::bound(*_last_pkey, partition_range_is_inclusive)}, _pr->end());
@@ -1442,10 +1451,9 @@ evictable_reader::evictable_reader(
         const io_priority_class& pc,
         tracing::trace_state_ptr trace_state,
         mutation_reader::forwarding fwd_mr)
-    : impl(std::move(schema))
+    : impl(std::move(schema), std::move(permit))
     , _auto_pause(ap)
     , _ms(std::move(ms))
-    , _permit(std::move(permit))
     , _pr(&pr)
     , _ps(ps)
     , _pc(pc)
@@ -1582,7 +1590,7 @@ public:
             const io_priority_class& pc,
             tracing::trace_state_ptr trace_state,
             mutation_reader::forwarding fwd_mr)
-        : impl(std::move(schema))
+        : impl(std::move(schema), lifecycle_policy->semaphore().make_permit())
         , _lifecycle_policy(std::move(lifecycle_policy))
         , _shard(shard)
         , _pr(&pr)
@@ -1881,7 +1889,7 @@ multishard_combining_reader::multishard_combining_reader(
         const io_priority_class& pc,
         tracing::trace_state_ptr trace_state,
         mutation_reader::forwarding fwd_mr)
-    : impl(std::move(s)), _sharder(sharder) {
+    : impl(std::move(s), lifecycle_policy->semaphore().make_permit()), _sharder(sharder) {
 
     on_partition_range_change(pr);
 
@@ -2006,8 +2014,8 @@ private:
     }
 
 public:
-    explicit queue_reader(schema_ptr s)
-        : impl(std::move(s)) {
+    explicit queue_reader(schema_ptr s, reader_permit permit)
+        : impl(std::move(s), std::move(permit)) {
     }
     ~queue_reader() {
         if (_handle) {
@@ -2122,8 +2130,8 @@ void queue_reader_handle::abort(std::exception_ptr ep) {
     }
 }
 
-std::pair<flat_mutation_reader, queue_reader_handle> make_queue_reader(schema_ptr s) {
-    auto impl = std::make_unique<queue_reader>(std::move(s));
+std::pair<flat_mutation_reader, queue_reader_handle> make_queue_reader(schema_ptr s, reader_permit permit) {
+    auto impl = std::make_unique<queue_reader>(std::move(s), std::move(permit));
     auto handle = queue_reader_handle(*impl);
     return {flat_mutation_reader(std::move(impl)), std::move(handle)};
 }
@@ -2201,7 +2209,7 @@ private:
 public:
     compacting_reader(flat_mutation_reader source, gc_clock::time_point compaction_time,
             std::function<api::timestamp_type(const dht::decorated_key&)> get_max_purgeable)
-        : impl(source.schema())
+        : impl(source.schema(), source.permit())
         , _reader(std::move(source))
         , _compactor(*_schema, compaction_time, get_max_purgeable)
         , _last_uncompacted_partition_start(dht::decorated_key(dht::minimum_token(), partition_key::make_empty()), tombstone{}) {

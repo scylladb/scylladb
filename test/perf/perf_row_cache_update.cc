@@ -82,7 +82,7 @@ void run_test(const sstring& name, schema_ptr s, MutationGenerator&& gen) {
         // Create a reader which tests the case of memtable snapshots
         // going away after memtable was merged to cache.
         auto rd = std::make_unique<flat_mutation_reader>(
-            make_combined_reader(s, cache.make_reader(s, tests::make_permit()), mt->make_flat_reader(s, tests::make_permit())));
+            make_combined_reader(s, tests::make_permit(), cache.make_reader(s, tests::make_permit()), mt->make_flat_reader(s, tests::make_permit())));
         rd->set_max_buffer_size(1);
         rd->fill_buffer(db::no_timeout).get();
 

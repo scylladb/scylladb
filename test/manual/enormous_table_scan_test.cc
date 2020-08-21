@@ -26,6 +26,7 @@
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/log.hh"
 #include "test/lib/cql_assertions.hh"
+#include "test/lib/reader_permit.hh"
 #include "transport/messages/result_message.hh"
 
 #include <boost/range/adaptor/indirected.hpp>
@@ -48,7 +49,7 @@ public:
     static constexpr uint64_t CLUSTERING_ROW_COUNT = 4500ULL * 1000ULL * 1000ULL;
 
     enormous_table_reader(schema_ptr schema, const dht::partition_range& prange, const query::partition_slice& slice)
-        : impl(schema)
+        : impl(schema, tests::make_permit())
         , _schema(std::move(schema))
         , _slice(slice)
     {

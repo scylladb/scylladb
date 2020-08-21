@@ -402,6 +402,7 @@ using is_local_reader = bool_class<class is_local_reader_tag>;
 
 private:
     schema_ptr _schema;
+    reader_permit _permit;
     dht::partition_range _range;
     // Used to find the range that repair master will work on
     dht::selective_token_range_sharder _sharder;
@@ -430,6 +431,7 @@ public:
             uint64_t seed,
             is_local_reader local_reader)
             : _schema(s)
+            , _permit(cf.streaming_read_concurrency_semaphore().make_permit())
             , _range(dht::to_partition_range(range))
             , _sharder(remote_sharder, range, remote_shard)
             , _seed(seed)
@@ -450,7 +452,7 @@ public:
             std::tie(_reader, _reader_handle) = make_manually_paused_evictable_reader(
                     std::move(ms),
                     _schema,
-                    cf.streaming_read_concurrency_semaphore().make_permit(),
+                    _permit,
                     _range,
                     _schema->full_slice(),
                     service::get_local_streaming_priority(),
@@ -477,7 +479,7 @@ public:
     }
 
     void on_end_of_stream() {
-        _reader = make_empty_flat_reader(_schema);
+        _reader = make_empty_flat_reader(_schema, _permit);
         _reader_handle.reset();
     }
 
@@ -560,9 +562,9 @@ public:
         if (_writer_done[node_idx]) {
             return;
         }
-        auto [queue_reader, queue_handle] = make_queue_reader(_schema);
-        _mq[node_idx] = std::move(queue_handle);
         table& t = db.local().find_column_family(_schema->id());
+        auto [queue_reader, queue_handle] = make_queue_reader(_schema, t.streaming_read_concurrency_semaphore().make_permit());
+        _mq[node_idx] = std::move(queue_handle);
         _writer_done[node_idx] = mutation_writer::distribute_reader_and_consume_on_shards(_schema, std::move(queue_reader),
                 [&db, reason = this->_reason, estimated_partitions = this->_estimated_partitions] (flat_mutation_reader reader) {
             auto& t = db.local().find_column_family(reader.schema());

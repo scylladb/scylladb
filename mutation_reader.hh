@@ -69,14 +69,17 @@ public:
 // Returns mutation of the same schema only when all readers return mutations
 // of the same schema.
 flat_mutation_reader make_combined_reader(schema_ptr schema,
+        reader_permit permit,
         std::vector<flat_mutation_reader>,
         streamed_mutation::forwarding fwd_sm = streamed_mutation::forwarding::no,
         mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes);
 flat_mutation_reader make_combined_reader(schema_ptr schema,
+        reader_permit permit,
         std::unique_ptr<reader_selector>,
         streamed_mutation::forwarding,
         mutation_reader::forwarding);
 flat_mutation_reader make_combined_reader(schema_ptr schema,
+        reader_permit permit,
         flat_mutation_reader&& a,
         flat_mutation_reader&& b,
         streamed_mutation::forwarding fwd_sm = streamed_mutation::forwarding::no,
@@ -92,7 +95,7 @@ class filtering_reader : public flat_mutation_reader::impl {
     static_assert(std::is_same<bool, std::result_of_t<MutationFilter(const dht::decorated_key&)>>::value, "bad MutationFilter signature");
 public:
     filtering_reader(flat_mutation_reader rd, MutationFilter&& filter)
-        : impl(rd.schema())
+        : impl(rd.schema(), rd.permit())
         , _rd(std::move(rd))
         , _filter(std::forward<MutationFilter>(filter)) {
     }
@@ -371,6 +374,7 @@ stable_flattened_mutations_consumer<FlattenedConsumer> make_stable_flattened_mut
 /// is called) there is no need to wrap it in foreign_reader, just return it as
 /// is.
 flat_mutation_reader make_foreign_reader(schema_ptr schema,
+        reader_permit permit,
         foreign_ptr<std::unique_ptr<flat_mutation_reader>> reader,
         streamed_mutation::forwarding fwd_sm = streamed_mutation::forwarding::no);
 
@@ -568,7 +572,7 @@ class queue_reader;
 /// `push_end_of_stream()` is called, the reader and the handle can be destroyed
 /// in any order. The reader can be destroyed at any time.
 class queue_reader_handle {
-    friend std::pair<flat_mutation_reader, queue_reader_handle> make_queue_reader(schema_ptr s);
+    friend std::pair<flat_mutation_reader, queue_reader_handle> make_queue_reader(schema_ptr, reader_permit);
     friend class queue_reader;
 
 private:
@@ -601,7 +605,7 @@ public:
     bool is_terminated() const;
 };
 
-std::pair<flat_mutation_reader, queue_reader_handle> make_queue_reader(schema_ptr s);
+std::pair<flat_mutation_reader, queue_reader_handle> make_queue_reader(schema_ptr s, reader_permit permit);
 
 /// Creates a compacting reader.
 ///

@@ -123,8 +123,8 @@ class timestamp_based_splitting_mutation_writer {
         }
 
     public:
-        bucket_writer(schema_ptr schema, reader_consumer& consumer)
-            : bucket_writer(schema, make_queue_reader(schema), consumer) {
+        bucket_writer(schema_ptr schema, reader_permit permit, reader_consumer& consumer)
+            : bucket_writer(schema, make_queue_reader(schema, std::move(permit)), consumer) {
         }
         void set_has_current_partition() {
             _has_current_partition = true;
@@ -148,6 +148,7 @@ class timestamp_based_splitting_mutation_writer {
 
 private:
     schema_ptr _schema;
+    reader_permit _permit;
     classify_by_timestamp _classifier;
     reader_consumer _consumer;
     partition_start _current_partition_start;
@@ -168,8 +169,9 @@ private:
     future<> write_marker_and_tombstone(const clustering_row& cr);
 
 public:
-    timestamp_based_splitting_mutation_writer(schema_ptr schema, classify_by_timestamp classifier, reader_consumer consumer)
+    timestamp_based_splitting_mutation_writer(schema_ptr schema, reader_permit permit, classify_by_timestamp classifier, reader_consumer consumer)
         : _schema(std::move(schema))
+        , _permit(std::move(permit))
         , _classifier(std::move(classifier))
         , _consumer(std::move(consumer))
         , _current_partition_start(dht::decorated_key(dht::token{}, partition_key::make_empty()), tombstone{}) {
@@ -189,7 +191,7 @@ public:
 };
 
 future<> timestamp_based_splitting_mutation_writer::write_to_bucket(bucket_id bucket, mutation_fragment&& mf) {
-    auto it = _buckets.try_emplace(bucket, _schema, _consumer).first;
+    auto it = _buckets.try_emplace(bucket, _schema, _permit, _consumer).first;
 
     auto& writer = it->second;
 
@@ -464,9 +466,10 @@ future<> timestamp_based_splitting_mutation_writer::consume(partition_end&& pe) 
 future<> segregate_by_timestamp(flat_mutation_reader producer, classify_by_timestamp classifier, reader_consumer consumer) {
     //FIXME: make this into a consume() variant?
     auto schema = producer.schema();
+    auto permit = producer.permit();
     return feed_writer(
             std::move(producer),
-            timestamp_based_splitting_mutation_writer(std::move(schema), std::move(classifier), std::move(consumer)));
+            timestamp_based_splitting_mutation_writer(std::move(schema), std::move(permit), std::move(classifier), std::move(consumer)));
 }
 
 } // namespace mutation_writer

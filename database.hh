@@ -976,6 +976,7 @@ private:
             tracing::trace_state_ptr tr_state, reader_concurrency_semaphore& sem, const io_priority_class& io_priority, query::partition_slice::option_set custom_opts) const;
     std::vector<view_ptr> affected_views(const schema_ptr& base, const mutation& update, gc_clock::time_point now) const;
     future<> generate_and_propagate_view_updates(const schema_ptr& base,
+            reader_permit permit,
             std::vector<db::view::view_and_base>&& views,
             mutation&& m,
             flat_mutation_reader_opt existings,

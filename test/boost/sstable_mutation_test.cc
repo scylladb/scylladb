@@ -1318,7 +1318,7 @@ SEASTAR_TEST_CASE(test_writing_combined_stream_with_tombstones_at_the_same_posit
                                           1 /* generation */,
                                           version,
                                           sstables::sstable::format_types::big);
-        sst->write_components(make_combined_reader(s,
+        sst->write_components(make_combined_reader(s, tests::make_permit(),
             mt1->make_flat_reader(s, tests::make_permit()),
             mt2->make_flat_reader(s, tests::make_permit())), 1, s, env.manager().configure_writer(), encoding_stats{}).get();
         sst->load().get();
