@@ -638,6 +638,9 @@ flat_mutation_reader make_combined_reader(schema_ptr schema,
         std::vector<flat_mutation_reader> readers,
         streamed_mutation::forwarding fwd_sm,
         mutation_reader::forwarding fwd_mr) {
+    if (readers.empty()) {
+        return make_empty_flat_reader(std::move(schema));
+    }
     if (readers.size() == 1) {
         return std::move(readers.front());
     }
