@@ -62,7 +62,7 @@ shared_ptr<abstract_command> exists::prepare(service::storage_proxy& proxy, requ
 }
 
 future<redis_message> exists::execute(service::storage_proxy& proxy, redis::redis_options& options, service_permit permit) {
-    return seastar::do_for_each(_keys, [&proxy, &options, &permit, this] (bytes key) {
+    return seastar::do_for_each(_keys, [&proxy, &options, &permit, this] (bytes& key) {
         return redis::read_strings(proxy, options, key, permit).then([this] (lw_shared_ptr<strings_result> result) {
             if (result->has_result()) {
                 _count++;
