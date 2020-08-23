@@ -372,6 +372,64 @@ flat_mutation_reader make_foreign_reader(schema_ptr schema,
         foreign_ptr<std::unique_ptr<flat_mutation_reader>> reader,
         streamed_mutation::forwarding fwd_sm = streamed_mutation::forwarding::no);
 
+/// Make an auto-paused evictable reader.
+///
+/// The reader is paused after each use, that is after each call to any of its
+/// members that cause actual reading to be done (`fill_buffer()` and
+/// `fast_forward_to()`). When paused, the reader is made evictable, that it is
+/// it is registered with reader concurrency semaphore as an inactive read.
+/// The reader is resumed automatically on the next use. If it was evicted, it
+/// will be recreated at the position it left off reading. This is all
+/// transparent to its user.
+/// Parameters passed by reference have to be kept alive while the reader is
+/// alive.
+flat_mutation_reader make_auto_paused_evictable_reader(
+        mutation_source ms,
+        schema_ptr schema,
+        reader_concurrency_semaphore& semaphore,
+        const dht::partition_range& pr,
+        const query::partition_slice& ps,
+        const io_priority_class& pc,
+        tracing::trace_state_ptr trace_state,
+        mutation_reader::forwarding fwd_mr);
+
+class evictable_reader;
+
+class evictable_reader_handle {
+    friend std::pair<flat_mutation_reader, evictable_reader_handle> make_manually_paused_evictable_reader(mutation_source, schema_ptr, reader_concurrency_semaphore&,
+            const dht::partition_range&, const query::partition_slice&, const io_priority_class&, tracing::trace_state_ptr, mutation_reader::forwarding);
+
+private:
+    evictable_reader* _r;
+
+private:
+    explicit evictable_reader_handle(evictable_reader& r);
+
+public:
+    void pause();
+};
+
+/// Make a manually-paused evictable reader.
+///
+/// The reader can be paused via the evictable reader handle when desired. The
+/// intended usage is subsequent reads done in bursts, after which the reader is
+/// not used for some time. When paused, the reader is made evictable, that is,
+/// it is registered with reader concurrency semaphore as an inactive read.
+/// The reader is resumed automatically on the next use. If it was evicted, it
+/// will be recreated at the position it left off reading. This is all
+/// transparent to its user.
+/// Parameters passed by reference have to be kept alive while the reader is
+/// alive.
+std::pair<flat_mutation_reader, evictable_reader_handle> make_manually_paused_evictable_reader(
+        mutation_source ms,
+        schema_ptr schema,
+        reader_concurrency_semaphore& semaphore,
+        const dht::partition_range& pr,
+        const query::partition_slice& ps,
+        const io_priority_class& pc,
+        tracing::trace_state_ptr trace_state,
+        mutation_reader::forwarding fwd_mr);
+
 /// Reader lifecycle policy for the mulitshard combining reader.
 ///
 /// This policy is expected to make sure any additional resource the readers
