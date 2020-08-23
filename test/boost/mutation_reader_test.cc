@@ -43,6 +43,7 @@
 #include "test/lib/make_random_string.hh"
 #include "test/lib/dummy_partitioner.hh"
 #include "test/lib/reader_lifecycle_policy.hh"
+#include "test/lib/random_utils.hh"
 
 #include "dht/sharder.hh"
 #include "mutation_reader.hh"
@@ -2736,4 +2737,113 @@ SEASTAR_THREAD_TEST_CASE(test_compacting_reader_next_partition) {
         reader_assertions.produces(schema, *it++);
     }
     reader_assertions.produces_end_of_stream();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_auto_paused_evictable_reader_is_mutation_source) {
+    auto make_populate = [] (schema_ptr s, const std::vector<mutation>& mutations, gc_clock::time_point query_time) {
+        auto mt = make_lw_shared<memtable>(s);
+        for (auto& mut : mutations) {
+            mt->apply(mut);
+        }
+        auto sem = make_lw_shared<reader_concurrency_semaphore>(reader_concurrency_semaphore::no_limits());
+        return mutation_source([=] (
+                schema_ptr s,
+                reader_permit permit,
+                const dht::partition_range& range,
+                const query::partition_slice& slice,
+                const io_priority_class& pc,
+                tracing::trace_state_ptr trace_state,
+                streamed_mutation::forwarding fwd_sm,
+                mutation_reader::forwarding fwd_mr) mutable {
+            auto mr = make_auto_paused_evictable_reader(mt->as_data_source(), std::move(s), *sem, range, slice, pc, std::move(trace_state), fwd_mr);
+            if (fwd_sm == streamed_mutation::forwarding::yes) {
+                return make_forwardable(std::move(mr));
+            }
+            return mr;
+        });
+    };
+
+    run_mutation_source_tests(make_populate);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_manual_paused_evictable_reader_is_mutation_source) {
+    class maybe_pausing_reader : public flat_mutation_reader::impl {
+        flat_mutation_reader _reader;
+        std::optional<evictable_reader_handle> _handle;
+
+    private:
+        void maybe_pause() {
+            if (!tests::random::get_int(0, 4)) {
+                _handle->pause();
+            }
+        }
+
+    public:
+        maybe_pausing_reader(
+                memtable& mt,
+                reader_concurrency_semaphore& semaphore,
+                const dht::partition_range& pr,
+                const query::partition_slice& ps,
+                const io_priority_class& pc,
+                tracing::trace_state_ptr trace_state,
+                mutation_reader::forwarding fwd_mr)
+            : impl(mt.schema()), _reader(nullptr) {
+            std::tie(_reader, _handle) = make_manually_paused_evictable_reader(mt.as_data_source(), mt.schema(), semaphore, pr, ps, pc,
+                    std::move(trace_state), fwd_mr);
+        }
+        virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override {
+            return _reader.fill_buffer(timeout).then([this] {
+                _end_of_stream = _reader.is_end_of_stream();
+                _reader.move_buffer_content_to(*this);
+            }).then([this] {
+                maybe_pause();
+            });
+        }
+        virtual void next_partition() override {
+            clear_buffer_to_next_partition();
+            if (!is_buffer_empty()) {
+                return;
+            }
+            _end_of_stream = false;
+            _reader.next_partition();
+        }
+        virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {
+            clear_buffer();
+            _end_of_stream = false;
+            return _reader.fast_forward_to(pr, timeout).then([this] {
+                maybe_pause();
+            });
+        }
+        virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) override {
+            throw_with_backtrace<std::bad_function_call>();
+        }
+        virtual size_t buffer_size() const override {
+            return flat_mutation_reader::impl::buffer_size() + _reader.buffer_size();
+        }
+    };
+
+    auto make_populate = [this] (schema_ptr s, const std::vector<mutation>& mutations, gc_clock::time_point query_time) {
+        auto mt = make_lw_shared<memtable>(s);
+        for (auto& mut : mutations) {
+            mt->apply(mut);
+        }
+        auto sem = make_lw_shared<reader_concurrency_semaphore>(reader_concurrency_semaphore::no_limits());
+        return mutation_source([=] (
+                schema_ptr s,
+                reader_permit permit,
+                const dht::partition_range& range,
+                const query::partition_slice& slice,
+                const io_priority_class& pc,
+                tracing::trace_state_ptr trace_state,
+                streamed_mutation::forwarding fwd_sm,
+                mutation_reader::forwarding fwd_mr) mutable {
+            auto mr = make_flat_mutation_reader<maybe_pausing_reader>(*mt, *sem, range, slice, pc, std::move(trace_state), fwd_mr);
+            if (fwd_sm == streamed_mutation::forwarding::yes) {
+                return make_forwardable(std::move(mr));
+            }
+            return mr;
+        });
+    };
+
+    run_mutation_source_tests(make_populate);
 }

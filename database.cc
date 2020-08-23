@@ -2009,9 +2009,10 @@ flat_mutation_reader make_multishard_streaming_reader(distributed<database>& db,
             reader_concurrency_semaphore* semaphore;
         };
         distributed<database>& _db;
+        utils::UUID _table_id;
         std::vector<reader_context> _contexts;
     public:
-        explicit streaming_reader_lifecycle_policy(distributed<database>& db) : _db(db), _contexts(smp::count) {
+        streaming_reader_lifecycle_policy(distributed<database>& db, utils::UUID table_id) : _db(db), _table_id(table_id), _contexts(smp::count) {
         }
         virtual flat_mutation_reader create_reader(
                 schema_ptr schema,
@@ -2040,7 +2041,12 @@ flat_mutation_reader make_multishard_streaming_reader(distributed<database>& db,
             });
         }
         virtual reader_concurrency_semaphore& semaphore() override {
-            return *_contexts[engine().cpu_id()].semaphore;
+            const auto shard = engine().cpu_id();
+            if (!_contexts[shard].semaphore) {
+                auto& cf = _db.local().find_column_family(_table_id);
+                _contexts[shard].semaphore = &cf.streaming_read_concurrency_semaphore();
+            }
+            return *_contexts[shard].semaphore;
         }
     };
     auto ms = mutation_source([&db] (schema_ptr s,
@@ -2051,7 +2057,8 @@ flat_mutation_reader make_multishard_streaming_reader(distributed<database>& db,
             tracing::trace_state_ptr trace_state,
             streamed_mutation::forwarding,
             mutation_reader::forwarding fwd_mr) {
-        return make_multishard_combining_reader(make_shared<streaming_reader_lifecycle_policy>(db), std::move(s), pr, ps, pc,
+        auto table_id = s->id();
+        return make_multishard_combining_reader(make_shared<streaming_reader_lifecycle_policy>(db, table_id), std::move(s), pr, ps, pc,
                 std::move(trace_state), fwd_mr);
     });
     auto&& full_slice = schema->full_slice();
