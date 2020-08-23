@@ -49,6 +49,7 @@
 #include <boost/range/iterator_range.hpp>
 #include <boost/icl/interval.hpp>
 #include "range.hh"
+#include <seastar/core/shared_ptr.hh>
 
 // forward declaration since database.hh includes this file
 class keyspace;
@@ -313,6 +314,35 @@ public:
     void invalidate_cached_rings();
 
     friend class token_metadata_impl;
+};
+
+using token_metadata_ptr = lw_shared_ptr<const token_metadata>;
+using mutable_token_metadata_ptr = lw_shared_ptr<token_metadata>;
+
+template <typename... Args>
+mutable_token_metadata_ptr make_token_metadata_ptr(Args... args) {
+    return make_lw_shared<token_metadata>(std::forward<Args>(args)...);
+}
+
+class shared_token_metadata {
+    mutable_token_metadata_ptr _shared;
+public:
+    // used to construct the shared object as a sharded<> instance
+    shared_token_metadata()
+        : _shared(make_token_metadata_ptr())
+    { }
+
+    shared_token_metadata(const shared_token_metadata& x) = default;
+    shared_token_metadata(shared_token_metadata&& x) = default;
+
+    token_metadata_ptr get() const noexcept {
+        return _shared;
+    }
+
+    // FIXME: temporary, to be replaced by clone/set.
+    mutable_token_metadata_ptr get_mutable() const noexcept {
+        return _shared;
+    }
 };
 
 }

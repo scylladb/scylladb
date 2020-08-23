@@ -97,7 +97,7 @@ distributed<storage_service> _the_storage_service;
 
 storage_service::storage_service(abort_source& abort_source, distributed<database>& db, gms::gossiper& gossiper, sharded<db::system_distributed_keyspace>& sys_dist_ks,
         sharded<db::view::view_update_generator>& view_update_generator, gms::feature_service& feature_service, storage_service_config config, sharded<service::migration_notifier>& mn,
-        locator::token_metadata& tm, sharded<netw::messaging_service>& ms, bool for_testing)
+        locator::shared_token_metadata& stm, sharded<netw::messaging_service>& ms, bool for_testing)
         : _abort_source(abort_source)
         , _feature_service(feature_service)
         , _db(db)
@@ -107,7 +107,7 @@ storage_service::storage_service(abort_source& abort_source, distributed<databas
         , _service_memory_total(config.available_memory / 10)
         , _service_memory_limiter(_service_memory_total)
         , _for_testing(for_testing)
-        , _token_metadata(tm)
+        , _token_metadata(*stm.get_mutable())
         , _replicate_action([this] { return do_replicate_to_all_cores(); })
         , _update_pending_ranges_action([this] { return do_update_pending_ranges(); })
         , _sys_dist_ks(sys_dist_ks)
@@ -3057,9 +3057,9 @@ storage_service::view_build_statuses(sstring keyspace, sstring view_name) const 
 future<> init_storage_service(sharded<abort_source>& abort_source, distributed<database>& db, sharded<gms::gossiper>& gossiper,
         sharded<db::system_distributed_keyspace>& sys_dist_ks,
         sharded<db::view::view_update_generator>& view_update_generator, sharded<gms::feature_service>& feature_service,
-        storage_service_config config, sharded<service::migration_notifier>& mn, sharded<locator::token_metadata>& tm,
+        storage_service_config config, sharded<service::migration_notifier>& mn, sharded<locator::shared_token_metadata>& stm,
         sharded<netw::messaging_service>& ms) {
-    return service::get_storage_service().start(std::ref(abort_source), std::ref(db), std::ref(gossiper), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(feature_service), config, std::ref(mn), std::ref(tm), std::ref(ms));
+    return service::get_storage_service().start(std::ref(abort_source), std::ref(db), std::ref(gossiper), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(feature_service), config, std::ref(mn), std::ref(stm), std::ref(ms));
 }
 
 future<> deinit_storage_service() {

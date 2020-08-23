@@ -37,7 +37,7 @@ class storage_service_for_tests::impl {
     sharded<gms::gossiper> _gossiper;
     distributed<database> _db;
     db::config _cfg;
-    sharded<locator::token_metadata> _token_metadata;
+    sharded<locator::shared_token_metadata> _token_metadata;
     sharded<service::migration_notifier> _mnotif;
     sharded<db::system_distributed_keyspace> _sys_dist_ks;
     sharded<db::view::view_update_generator> _view_update_generator;

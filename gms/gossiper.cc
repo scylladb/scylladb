@@ -123,10 +123,10 @@ public:
     void on_restart(inet_address, endpoint_state) override {}
 };
 
-gossiper::gossiper(abort_source& as, feature_service& features, const locator::token_metadata& tokens, netw::messaging_service& ms, db::config& cfg, gossip_config gcfg)
+gossiper::gossiper(abort_source& as, feature_service& features, const locator::shared_token_metadata& stm, netw::messaging_service& ms, db::config& cfg, gossip_config gcfg)
         : _abort_source(as)
         , _feature_service(features)
-        , _token_metadata(tokens)
+        , _token_metadata(*stm.get())
         , _messaging(ms)
         , _cfg(cfg)
         , _gcfg(gcfg)

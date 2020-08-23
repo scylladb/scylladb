@@ -63,6 +63,7 @@
 #include "service_permit.hh"
 #include "service/client_state.hh"
 #include "cdc/stats.hh"
+#include "locator/token_metadata.hh"
 
 class reconcilable_result;
 class frozen_mutation_and_schema;
@@ -72,12 +73,6 @@ namespace seastar::rpc {
 
 template <typename... T>
 class tuple;
-
-}
-
-namespace locator {
-
-class token_metadata;
 
 }
 
@@ -438,7 +433,7 @@ private:
     future<> mutate_counters(Range&& mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state, service_permit permit, clock_type::time_point timeout);
 public:
     storage_proxy(distributed<database>& db, config cfg, db::view::node_update_backlog& max_view_update_backlog,
-            scheduling_group_key stats_key, gms::feature_service& feat, const locator::token_metadata& tokens, netw::messaging_service& ms);
+            scheduling_group_key stats_key, gms::feature_service& feat, const locator::shared_token_metadata& stm, netw::messaging_service& ms);
     ~storage_proxy();
     const distributed<database>& get_db() const {
         return _db;
