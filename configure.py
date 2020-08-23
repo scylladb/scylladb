@@ -498,6 +498,9 @@ arg_parser.add_argument('--with-ragel', dest='ragel_exec', action='store', defau
 add_tristate(arg_parser, name='stack-guards', dest='stack_guards', help='Use stack guards')
 arg_parser.add_argument('--verbose', dest='verbose', action='store_true',
                         help='Make configure.py output more verbose (useful for debugging the build process itself)')
+arg_parser.add_argument('--repeat', dest='test_repeat', action='store', type=str, default='3',
+                         help='Set number of times to repeat each unittest.')
+arg_parser.add_argument('--timeout', dest='test_timeout', action='store', type=str, default='7200')
 args = arg_parser.parse_args()
 
 defines = ['XXH_PRIVATE_API',
@@ -1396,6 +1399,12 @@ if args.ragel_exec:
 else:
     ragel_exec = "ragel"
 
+if args.test_repeat:
+    test_repeat = args.test_repeat
+
+if args.test_timeout:
+    test_timeout = args.test_timeout
+
 for mode in build_modes:
     configure_abseil(outdir, mode)
 
@@ -1505,10 +1514,10 @@ with open(buildfile_tmp, 'w') as f:
               description = CHECKHH $in
               depfile = $out.d
             rule test.{mode}
-              command = ./test.py --mode={mode}
+              command = ./test.py --mode={mode} --repeat={test_repeat} --timeout={test_timeout}
               pool = console
               description = TEST {mode}
-            ''').format(mode=mode, antlr3_exec=antlr3_exec, fmt_lib=fmt_lib, **modeval))
+            ''').format(mode=mode, antlr3_exec=antlr3_exec, fmt_lib=fmt_lib, test_repeat=test_repeat, test_timeout=test_timeout, **modeval))
         f.write(
             'build {mode}-build: phony {artifacts}\n'.format(
                 mode=mode,
