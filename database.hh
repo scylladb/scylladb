@@ -1529,6 +1529,8 @@ public:
         return *_system_sstables_manager;
     }
 
+    dht::token_range_vector get_keyspace_local_ranges(sstring ks);
+
     void set_format(sstables::sstable_version_types format);
     void set_format_by_config();
 

@@ -204,7 +204,7 @@ public:
     future<> perform_cleanup(database& db, column_family* cf);
 
     // Submit a column family to be upgraded and wait for its termination.
-    future<> perform_sstable_upgrade(column_family* cf, bool exclude_current_version);
+    future<> perform_sstable_upgrade(database& db, column_family* cf, bool exclude_current_version);
 
     // Submit a column family to be scrubbed and wait for its termination.
     future<> perform_sstable_scrub(column_family* cf, bool skip_corrupted);

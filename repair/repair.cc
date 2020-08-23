@@ -1161,17 +1161,6 @@ static future<> repair_range(repair_info& ri, const dht::token_range& range) {
     });
 }
 
-static dht::token_range_vector get_ranges_for_endpoint(
-        database& db, sstring keyspace, gms::inet_address ep) {
-    auto& rs = db.find_keyspace(keyspace).get_replication_strategy();
-    return rs.get_ranges(ep);
-}
-
-static dht::token_range_vector get_local_ranges(
-        database& db, sstring keyspace) {
-    return get_ranges_for_endpoint(db, keyspace, utils::fb_utilities::get_broadcast_address());
-}
-
 static dht::token_range_vector get_primary_ranges_for_endpoint(
         database& db, sstring keyspace, gms::inet_address ep) {
     auto& rs = db.find_keyspace(keyspace).get_replication_strategy();
@@ -1556,7 +1545,7 @@ static int do_repair_start(seastar::sharded<database>& db, seastar::sharded<netw
             ranges = get_primary_ranges(db.local(), keyspace);
         }
     } else {
-        ranges = get_local_ranges(db.local(), keyspace);
+        ranges = db.local().get_keyspace_local_ranges(keyspace);
     }
 
     if (!options.data_centers.empty() && !options.hosts.empty()) {
