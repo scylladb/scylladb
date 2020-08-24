@@ -1278,6 +1278,9 @@ future<> view_builder::start(service::migration_manager& mm) {
             (void)_build_step.trigger();
             return make_ready_future<>();
         });
+    }).handle_exception([] (std::exception_ptr eptr) {
+        vlogger.error("start failed: {}", eptr);
+        return make_ready_future<>();
     });
     return make_ready_future<>();
 }
@@ -1285,7 +1288,7 @@ future<> view_builder::start(service::migration_manager& mm) {
 future<> view_builder::stop() {
     vlogger.info("Stopping view builder");
     _as.request_abort();
-    return _started.finally([this] {
+    return _started.then([this] {
         return _mnotifier.unregister_listener(this).then([this] {
             return _sem.wait();
         }).then([this] {
