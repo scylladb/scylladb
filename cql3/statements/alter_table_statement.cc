@@ -207,6 +207,9 @@ void alter_table_statement::add_column(const schema& schema, const table& cf, sc
                 "because a collection with the same name and a different type has already been used in the past", column_name));
         }
     }
+    if (type->is_counter() && !schema.is_counter()) {
+        throw exceptions::configuration_exception(format("Cannot add a counter column ({}) in a non counter column family", column_name));
+    }
 
     cfm.with_column(column_name.name(), type, is_static ? column_kind::static_column : column_kind::regular_column);
 

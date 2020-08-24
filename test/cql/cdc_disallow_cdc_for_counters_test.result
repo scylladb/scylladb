@@ -20,6 +20,6 @@ create table tb3 (pk int primary key) with cdc = {'enabled': true};
 }
 alter table tb3 add (c1 counter);
 {
-	"message" : "exceptions::invalid_request_exception (Cannot create CDC log for table ks.tb3. Counter support not implemented)",
+	"message" : "exceptions::configuration_exception (Cannot add a counter column (c1) in a non counter column family)",
 	"status" : "error"
 }
