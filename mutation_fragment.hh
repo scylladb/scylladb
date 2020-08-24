@@ -397,10 +397,6 @@ public:
         _data->_size_in_bytes = std::nullopt;
         fn(_data->_partition_start);
     }
-    partition_end& as_mutable_end_of_partition() {
-        _data->_size_in_bytes = std::nullopt;
-        return _data->_partition_end;
-    }
 
     static_row&& as_static_row() && { return std::move(_data->_static_row); }
     clustering_row&& as_clustering_row() && { return std::move(_data->_clustering_row); }
