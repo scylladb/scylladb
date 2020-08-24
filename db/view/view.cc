@@ -1247,10 +1247,7 @@ future<> view_builder::start(service::migration_manager& mm) {
             auto units = get_units(_sem, 1).get0();
             // Wait for schema agreement even if we're a seed node.
             while (!mm.have_schema_agreement()) {
-                if (_as.abort_requested()) {
-                    return;
-                }
-                seastar::sleep(500ms).get();
+                seastar::sleep_abortable(500ms, _as).get();
             }
             auto built = system_keyspace::load_built_views().get0();
             auto in_progress = system_keyspace::load_view_build_progress().get0();
