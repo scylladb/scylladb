@@ -2100,14 +2100,14 @@ stop_iteration components_writer::consume(clustering_row&& cr) {
 void components_writer::drain_tombstones(position_in_partition_view pos) {
     ensure_tombstone_is_written();
     while (auto mfo = _range_tombstones.get_next(pos)) {
-        write_tombstone(std::move(mfo->as_mutable_range_tombstone()));
+        write_tombstone(std::move(*mfo).as_range_tombstone());
     }
 }
 
 void components_writer::drain_tombstones() {
     ensure_tombstone_is_written();
     while (auto mfo = _range_tombstones.get_next()) {
-        write_tombstone(std::move(mfo->as_mutable_range_tombstone()));
+        write_tombstone(std::move(*mfo).as_range_tombstone());
     }
 }
 

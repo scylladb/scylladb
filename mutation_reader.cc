@@ -1339,7 +1339,7 @@ bool evictable_reader::maybe_trim_range_tombstone(mutation_fragment& mf) const {
         return false; // rt in range, no need to trim
     }
 
-    auto& rt = mf.as_mutable_range_tombstone();
+    const auto& rt = mf.as_range_tombstone();
 
     require(
             _tri_cmp(_next_position_in_partition, rt.end_position()) <= 0,
@@ -1348,7 +1348,9 @@ bool evictable_reader::maybe_trim_range_tombstone(mutation_fragment& mf) const {
             _next_position_in_partition,
             rt.end_position());
 
-    rt.set_start(*_schema, position_in_partition_view::before_key(_next_position_in_partition));
+    mf.mutate_as_range_tombstone(*_schema, [this] (range_tombstone& rt) {
+        rt.set_start(*_schema, position_in_partition_view::before_key(_next_position_in_partition));
+    });
 
     return true;
 }

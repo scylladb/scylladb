@@ -389,9 +389,9 @@ public:
         _data->_size_in_bytes = std::nullopt;
         fn(_data->_clustering_row);
     }
-    range_tombstone& as_mutable_range_tombstone() {
+    void mutate_as_range_tombstone(const schema& s, std::invocable<range_tombstone&> auto&& fn) {
         _data->_size_in_bytes = std::nullopt;
-        return _data->_range_tombstone;
+        fn(_data->_range_tombstone);
     }
     partition_start& as_mutable_partition_start() {
         _data->_size_in_bytes = std::nullopt;
