@@ -69,15 +69,6 @@ selector_factories::selector_factories(std::vector<::shared_ptr<selectable>> sel
     }
 }
 
-bool selector_factories::uses_function(const sstring& ks_name, const sstring& function_name) const {
-    for (auto&& f : _factories) {
-        if (f && f->uses_function(ks_name, function_name)) {
-            return true;
-        }
-    }
-    return false;
-}
-
 void selector_factories::add_selector_for_post_processing(const column_definition& def, uint32_t index) {
     _factories.emplace_back(simple_selector::new_factory(def.name_as_text(), index, def.type));
     ++_number_of_factories_for_post_processing;

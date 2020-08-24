@@ -424,11 +424,6 @@ functions::type_equals(const std::vector<data_type>& t1, const std::vector<data_
     return t1 == t2;
 }
 
-bool
-function_call::uses_function(const sstring& ks_name, const sstring& function_name) const {
-    return _fun->uses_function(ks_name, function_name);
-}
-
 void
 function_call::collect_marker_specification(variable_specifications& bound_names) const {
     for (auto&& t : _terms) {

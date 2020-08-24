@@ -186,10 +186,6 @@ public:
 
     virtual uint32_t add_column_for_post_processing(const column_definition& c);
 
-    virtual bool uses_function(const sstring &ks_name, const sstring& function_name) const {
-        return false;
-    }
-
     query::partition_slice::option_set get_query_options();
 private:
     static bool processes_selection(const std::vector<::shared_ptr<raw_selector>>& raw_selectors) {

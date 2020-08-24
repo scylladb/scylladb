@@ -59,8 +59,6 @@ public:
 private:
     attributes(::shared_ptr<term>&& timestamp, ::shared_ptr<term>&& time_to_live);
 public:
-    bool uses_function(const sstring& ks_name, const sstring& function_name) const;
-
     bool is_timestamp_set() const;
 
     bool is_time_to_live_set() const;

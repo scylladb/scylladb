@@ -91,10 +91,6 @@ public:
             && _return_type == x._return_type;
     }
 
-    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override {
-        return _name.keyspace == ks_name && _name.name == function_name;
-    }
-
     virtual sstring column_name(const std::vector<sstring>& column_names) const override {
         return format("{}({})", _name, join(", ", column_names));
     }

@@ -67,11 +67,6 @@ future<> schema_altering_statement::grant_permissions_to_creator(const service::
     return make_ready_future<>();
 }
 
-bool schema_altering_statement::uses_function(const sstring& ks_name, const sstring& function_name) const
-{
-    return cf_statement::uses_function(ks_name, function_name);
-}
-
 bool schema_altering_statement::depends_on_keyspace(const sstring& ks_name) const
 {
     return false;

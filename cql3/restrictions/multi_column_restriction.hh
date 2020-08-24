@@ -83,10 +83,6 @@ public:
         expression = make_conjunction(std::move(expression), other->expression);
     }
 
-    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override {
-        return expr::uses_function(expression, ks_name, function_name);
-    }
-
 protected:
     virtual void do_merge_with(::shared_ptr<clustering_key_restrictions> other) = 0;
 

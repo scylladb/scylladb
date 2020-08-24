@@ -181,10 +181,6 @@ sstring user_types::value::to_string() const {
 user_types::delayed_value::delayed_value(user_type type, std::vector<shared_ptr<term>> values)
         : _type(std::move(type)), _values(std::move(values)) {
 }
-bool user_types::delayed_value::uses_function(const sstring& ks_name, const sstring& function_name) const {
-    return boost::algorithm::any_of(_values,
-                std::bind(&term::uses_function, std::placeholders::_1, std::cref(ks_name), std::cref(function_name)));
-}
 bool user_types::delayed_value::contains_bind_marker() const {
     return boost::algorithm::any_of(_values, std::mem_fn(&term::contains_bind_marker));
 }

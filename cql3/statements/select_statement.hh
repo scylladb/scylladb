@@ -113,8 +113,6 @@ public:
             ::shared_ptr<term> per_partition_limit,
             cql_stats& stats);
 
-    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override;
-
     virtual ::shared_ptr<const cql3::metadata> get_result_metadata() const override;
     virtual uint32_t get_bound_terms() const override;
     virtual future<> check_access(service::storage_proxy& proxy, const service::client_state& state) const override;

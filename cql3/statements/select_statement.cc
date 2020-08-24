@@ -156,12 +156,6 @@ select_statement::select_statement(schema_ptr schema,
     _opts.set_if<query::partition_slice::option::reversed>(_is_reversed);
 }
 
-bool select_statement::uses_function(const sstring& ks_name, const sstring& function_name) const {
-    return _selection->uses_function(ks_name, function_name)
-        || _restrictions->uses_function(ks_name, function_name)
-        || (_limit && _limit->uses_function(ks_name, function_name));
-}
-
 ::shared_ptr<const cql3::metadata> select_statement::get_result_metadata() const {
     // FIXME: COUNT needs special result metadata handling.
     return _selection->get_result_metadata();

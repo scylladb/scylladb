@@ -85,9 +85,6 @@ public:
         // throw? should not reach?
         return {};
     }
-    bool uses_function(const sstring&, const sstring&) const override {
-        return false;
-    }
     bool empty() const override {
         return true;
     }
@@ -328,12 +325,6 @@ void statement_restrictions::add_single_column_restriction(::shared_ptr<single_c
     } else {
         _nonprimary_key_restrictions->add_restriction(restriction);
     }
-}
-
-bool statement_restrictions::uses_function(const sstring& ks_name, const sstring& function_name) const {
-    return  _partition_key_restrictions->uses_function(ks_name, function_name)
-            || _clustering_columns_restrictions->uses_function(ks_name, function_name)
-            || _nonprimary_key_restrictions->uses_function(ks_name, function_name);
 }
 
 const std::vector<::shared_ptr<restrictions>>& statement_restrictions::index_restrictions() const {

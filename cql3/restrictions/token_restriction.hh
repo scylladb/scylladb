@@ -74,10 +74,6 @@ public:
         expression = make_conjunction(std::move(expression), restriction->expression);
     }
 
-    bool uses_function(const sstring& ks_name, const sstring& function_name) const override {
-        return expr::uses_function(expression, ks_name, function_name);
-    }
-
     virtual bool has_supporting_index(const secondary_index::secondary_index_manager& index_manager,
                                       expr::allow_local_index allow_local) const override {
         return false;

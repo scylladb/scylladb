@@ -162,10 +162,6 @@ public:
         , _factories(std::move(factories))
     { }
 
-    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override {
-        return _factories->uses_function(ks_name, function_name);
-    }
-
     virtual uint32_t add_column_for_post_processing(const column_definition& c) override {
         uint32_t index = selection::add_column_for_post_processing(c);
         _factories->add_selector_for_post_processing(c, index);

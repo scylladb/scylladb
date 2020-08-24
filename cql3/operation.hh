@@ -103,10 +103,6 @@ public:
         return params.make_counter_update_cell(delta);
     }
 
-    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const {
-        return _t && _t->uses_function(ks_name, function_name);
-    }
-
     virtual bool is_raw_counter_shard_write() const {
         return false;
     }

@@ -118,24 +118,6 @@ uint32_t read_and_check_list_index(const cql3::raw_value_view& key) {
 
 namespace cql3 {
 
-bool
-column_condition::uses_function(const sstring& ks_name, const sstring& function_name) const {
-    if (bool(_collection_element) && _collection_element->uses_function(ks_name, function_name)) {
-        return true;
-    }
-    if (bool(_value) && _value->uses_function(ks_name, function_name)) {
-        return true;
-    }
-    if (!_in_values.empty()) {
-        for (auto&& value : _in_values) {
-            if (bool(value) && value->uses_function(ks_name, function_name)) {
-                return true;
-            }
-        }
-    }
-    return false;
-}
-
 void column_condition::collect_marker_specificaton(variable_specifications& bound_names) const {
     if (_collection_element) {
         _collection_element->collect_marker_specification(bound_names);

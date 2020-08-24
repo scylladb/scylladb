@@ -59,8 +59,6 @@ public:
 
     virtual uint32_t get_bound_terms() const override;
 
-    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override;
-
     virtual bool depends_on_keyspace(const sstring& ks_name) const override;
 
     virtual bool depends_on_column_family(const sstring& cf_name) const override;

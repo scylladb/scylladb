@@ -129,10 +129,6 @@ public:
         return _restrictions->is_all_eq();
     }
 
-    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override {
-        return _restrictions->uses_function(ks_name, function_name);
-    }
-
     void do_merge_with(::shared_ptr<single_column_restriction> restriction) {
         if (!_restrictions->empty() && !_allow_filtering) {
             auto last_column = *_restrictions->last_column();
