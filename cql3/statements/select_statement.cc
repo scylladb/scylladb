@@ -1085,9 +1085,9 @@ query::partition_slice indexed_table_select_statement::get_partition_slice_for_g
             auto base_pk = partition_key::from_optional_exploded(*_schema, single_pk_restrictions->values(options));
             bytes token_value = dht::get_token(*_schema, base_pk).data();
             auto token_restriction = ::make_shared<restrictions::single_column_restriction>(token_cdef);
-            token_restriction->expression = expr::make_column_op(
+            token_restriction->expression = expr::binary_operator{
                     &token_cdef, expr::oper_t::EQ,
-                    ::make_shared<cql3::constants::value>(cql3::raw_value::make_value(token_value)));
+                    ::make_shared<cql3::constants::value>(cql3::raw_value::make_value(token_value))};
             clustering_restrictions->merge_with(token_restriction);
 
             if (_restrictions->get_clustering_columns_restrictions()->prefix_size() > 0) {
@@ -1120,8 +1120,8 @@ query::partition_slice indexed_table_select_statement::get_partition_slice_for_l
     if (value) {
         const column_definition* view_cdef = _view_schema->get_column_definition(to_bytes(_index.target_column()));
         auto index_eq_restriction = ::make_shared<restrictions::single_column_restriction>(*view_cdef);
-        index_eq_restriction->expression = expr::make_column_op(
-                view_cdef, expr::oper_t::EQ, ::make_shared<cql3::constants::value>(cql3::raw_value::make_value(*value)));
+        index_eq_restriction->expression = expr::binary_operator{
+                view_cdef, expr::oper_t::EQ, ::make_shared<cql3::constants::value>(cql3::raw_value::make_value(*value))};
         clustering_restrictions->merge_with(index_eq_restriction);
     }
 

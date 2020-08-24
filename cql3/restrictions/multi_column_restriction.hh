@@ -565,7 +565,7 @@ private:
         using namespace expr;
         if (!bound){
             auto r = ::make_shared<cql3::restrictions::single_column_restriction>(*_column_defs[column_pos]);
-            r->expression = make_column_op(_column_defs[column_pos], expr::oper_t::EQ, std::move(term));
+            r->expression = binary_operator{_column_defs[column_pos], expr::oper_t::EQ, std::move(term)};
             return r;
         } else {
             auto r = ::make_shared<cql3::restrictions::single_column_restriction>(*_column_defs[column_pos]);
