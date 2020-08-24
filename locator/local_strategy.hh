@@ -46,7 +46,7 @@ public:
      * because the default implementation depends on token calculations but
      * LocalStrategy may be used before tokens are set up.
      */
-    std::vector<inet_address> get_natural_endpoints(const token& search_token) override;
+    std::vector<inet_address> do_get_natural_endpoints(const token& search_token, const token_metadata& tm) override;
 
     virtual void validate_options() const override;
 

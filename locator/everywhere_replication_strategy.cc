@@ -51,11 +51,11 @@ std::vector<inet_address> everywhere_replication_strategy::calculate_natural_end
     return tm.get_all_endpoints();
 }
 
-std::vector<inet_address> everywhere_replication_strategy::get_natural_endpoints(const token& search_token) {
-    if (_token_metadata.sorted_tokens().empty()) {
+std::vector<inet_address> everywhere_replication_strategy::do_get_natural_endpoints(const token& search_token, const token_metadata& tm) {
+    if (tm.sorted_tokens().empty()) {
         return std::vector<inet_address>({utils::fb_utilities::get_broadcast_address()});
     }
-    return calculate_natural_endpoints(search_token, _token_metadata);
+    return calculate_natural_endpoints(search_token, tm);
 }
 
 size_t everywhere_replication_strategy::get_replication_factor() const {

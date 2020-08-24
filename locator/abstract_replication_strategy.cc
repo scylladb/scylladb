@@ -74,12 +74,16 @@ void abstract_replication_strategy::validate_replication_strategy(const sstring&
 }
 
 std::vector<inet_address> abstract_replication_strategy::get_natural_endpoints(const token& search_token) {
-    const token& key_token = _token_metadata.first_token(search_token);
+    return do_get_natural_endpoints(search_token, _token_metadata);
+}
+
+std::vector<inet_address> abstract_replication_strategy::do_get_natural_endpoints(const token& search_token, const token_metadata& tm) {
+    const token& key_token = tm.first_token(search_token);
     auto& cached_endpoints = get_cached_endpoints();
     auto res = cached_endpoints.find(key_token);
 
     if (res == cached_endpoints.end()) {
-        auto endpoints = calculate_natural_endpoints(search_token, _token_metadata);
+        auto endpoints = calculate_natural_endpoints(search_token, tm);
         cached_endpoints.emplace(key_token, endpoints);
 
         return endpoints;
@@ -90,8 +94,9 @@ std::vector<inet_address> abstract_replication_strategy::get_natural_endpoints(c
 }
 
 std::vector<inet_address> abstract_replication_strategy::get_natural_endpoints_without_node_being_replaced(const token& search_token) {
-    std::vector<gms::inet_address> natural_endpoints = get_natural_endpoints(search_token);
-    if (_token_metadata.is_any_node_being_replaced() &&
+    const token_metadata& tm = _token_metadata;
+    std::vector<gms::inet_address> natural_endpoints = do_get_natural_endpoints(search_token, tm);
+    if (tm.is_any_node_being_replaced() &&
         allow_remove_node_being_replaced_from_natural_endpoints()) {
         // When a new node is started to replace an existing dead node, we want
         // to make the replacing node take writes but do not count it for
@@ -104,8 +109,8 @@ std::vector<inet_address> abstract_replication_strategy::get_natural_endpoints_w
         // LocalStrategy because LocalStrategy always returns the node itself
         // as the natural_endpoints and the node will not appear in the
         // pending_endpoints.
-        auto it = boost::range::remove_if(natural_endpoints, [this] (gms::inet_address& p) {
-            return _token_metadata.is_being_replaced(p);
+        auto it = boost::range::remove_if(natural_endpoints, [&tm] (gms::inet_address& p) {
+            return tm.is_being_replaced(p);
         });
         natural_endpoints.erase(it, natural_endpoints.end());
     }

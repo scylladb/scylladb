@@ -94,8 +94,8 @@ public:
                                               const sstring& strategy_name,
                                               const token_metadata& token_metadata,
                                               const std::map<sstring, sstring>& config_options);
-    virtual std::vector<inet_address> get_natural_endpoints(const token& search_token);
-    virtual std::vector<inet_address> get_natural_endpoints_without_node_being_replaced(const token& search_token);
+    std::vector<inet_address> get_natural_endpoints(const token& search_token);
+    std::vector<inet_address> get_natural_endpoints_without_node_being_replaced(const token& search_token);
     virtual void validate_options() const = 0;
     virtual std::optional<std::set<sstring>> recognized_options() const = 0;
     virtual size_t get_replication_factor() const = 0;
@@ -122,6 +122,7 @@ public:
 private:
     // Caller must ensure that token_metadata will not change throughout the call if can_yield==true.
     dht::token_range_vector do_get_ranges(inet_address ep, const token_metadata& tm, bool can_yield) const;
+    virtual std::vector<inet_address> do_get_natural_endpoints(const token& search_token, const token_metadata& tm);
 
 public:
     // get_primary_ranges() returns the list of "primary ranges" for the given
