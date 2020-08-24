@@ -1,7 +1,7 @@
 create table tb1 (pk int, ck int, i1 int, PRIMARY KEY (pk, ck)) with cdc = {'enabled': true, 'preimage': false, 'postimage': false, 'delta': 'off'};
 
 create table tb2 (pk int, ck int, i1 int, PRIMARY KEY (pk, ck)) with cdc = {'enabled': true, 'preimage': true, 'postimage': true, 'delta': 'off'};
--- Should add 2 rows (preimage + postimage)
+-- Should add 1 row (postimage)
 insert into tb2 (pk, ck, i1) VALUES (1, 11, 111) USING TTL 1111;
 select "cdc$batch_seq_no", "cdc$operation", pk, ck, i1 from tb2_scylla_cdc_log where pk = 1 and ck = 11 allow filtering;
 

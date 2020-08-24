@@ -1504,11 +1504,6 @@ public:
 
         assert(_builder);
 
-        auto image_ck = _builder->allocate_new_log_row(op);
-        if (ck) {
-            _builder->set_clustering_columns(image_ck, *ck);
-        }
-
         const auto kind = ck ? column_kind::regular_column : column_kind::static_column;
 
         cell_map* row_state;
@@ -1516,10 +1511,25 @@ public:
             row_state = get_row_state(_clustering_row_states, *ck);
             if (!row_state) {
                 // We have no data for this row, we can stop here
+                // Empty row here means we had data, but column deletes
+                // removed it. This we should report as pk/ck only
                 return;
             }
         } else {
             row_state = &_static_row_state;
+            // if the static row state is empty and we did not touch 
+            // during processing, it either did not exist, or we did pk delete. 
+            // In those cases, no postimage for you.
+            // If we touched it, we should indicate it with an empty 
+            // postimage. 
+            if (row_state->empty() && !_touched_parts.contains(stats::part_type::STATIC_ROW)) {
+                return;
+            }
+        }
+
+        auto image_ck = _builder->allocate_new_log_row(op);
+        if (ck) {
+            _builder->set_clustering_columns(image_ck, *ck);
         }
 
         auto process_cell = [&, this] (const column_definition& cdef) {
