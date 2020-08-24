@@ -1254,7 +1254,7 @@ future<> view_builder::start(service::migration_manager& mm) {
             }
             auto built = system_keyspace::load_built_views().get0();
             auto in_progress = system_keyspace::load_view_build_progress().get0();
-            calculate_shard_build_step(std::move(built), std::move(in_progress)).get();
+            calculate_shard_build_step(vbi, std::move(built), std::move(in_progress)).get();
             _mnotifier.register_listener(this);
             _current_step = _base_to_build_step.begin();
             // Waited on indirectly in stop().
@@ -1402,11 +1402,11 @@ void view_builder::reshard(
 }
 
 future<> view_builder::calculate_shard_build_step(
+        view_builder_init_state& vbi,
         std::vector<system_keyspace::view_name> built,
         std::vector<system_keyspace::view_build_progress> in_progress) {
     // Shard 0 makes cleanup changes to the system tables, but none that could conflict
     // with the other shards; everyone is thus able to proceed independently.
-    auto bookkeeping_ops = std::make_unique<std::vector<future<>>>();
     auto base_table_exists = [this] (const view_ptr& view) {
         // This is a safety check in case this node missed a create MV statement
         // but got a drop table for the base, and another node didn't get the
@@ -1433,9 +1433,9 @@ future<> view_builder::calculate_shard_build_step(
             // Fall-through
         }
         if (this_shard_id() == 0) {
-            bookkeeping_ops->push_back(_sys_dist_ks.remove_view(name.first, name.second));
-            bookkeeping_ops->push_back(system_keyspace::remove_built_view(name.first, name.second));
-            bookkeeping_ops->push_back(
+            vbi.bookkeeping_ops.push_back(_sys_dist_ks.remove_view(name.first, name.second));
+            vbi.bookkeeping_ops.push_back(system_keyspace::remove_built_view(name.first, name.second));
+            vbi.bookkeeping_ops.push_back(
                     system_keyspace::remove_view_build_progress_across_all_shards(
                             std::move(name.first),
                             std::move(name.second)));
@@ -1443,25 +1443,24 @@ future<> view_builder::calculate_shard_build_step(
         return view_ptr(nullptr);
     };
 
-    auto built_views = boost::copy_range<std::unordered_set<utils::UUID>>(built
+    vbi.built_views = boost::copy_range<std::unordered_set<utils::UUID>>(built
             | boost::adaptors::transformed(maybe_fetch_view)
             | boost::adaptors::filtered([] (const view_ptr& v) { return bool(v); })
             | boost::adaptors::transformed([] (const view_ptr& v) { return v->id(); }));
 
-    std::vector<std::vector<view_build_status>> view_build_status_per_shard;
     for (auto& [view_name, first_token, next_token_opt, cpu_id] : in_progress) {
         if (auto view = maybe_fetch_view(view_name)) {
-            if (built_views.contains(view->id())) {
+            if (vbi.built_views.contains(view->id())) {
                 if (this_shard_id() == 0) {
                     auto f = _sys_dist_ks.finish_view_build(std::move(view_name.first), std::move(view_name.second)).then([view = std::move(view)] {
                         return system_keyspace::remove_view_build_progress_across_all_shards(view->cf_name(), view->ks_name());
                     });
-                    bookkeeping_ops->push_back(std::move(f));
+                    vbi.bookkeeping_ops.push_back(std::move(f));
                 }
                 continue;
             }
-            view_build_status_per_shard.resize(std::max(view_build_status_per_shard.size(), size_t(cpu_id + 1)));
-            view_build_status_per_shard[cpu_id].emplace_back(view_build_status{
+            vbi.status_per_shard.resize(std::max(vbi.status_per_shard.size(), size_t(cpu_id + 1)));
+            vbi.status_per_shard[cpu_id].emplace_back(view_build_status{
                     std::move(view),
                     std::move(first_token),
                     std::move(next_token_opt)});
@@ -1483,10 +1482,10 @@ future<> view_builder::calculate_shard_build_step(
     }).get();
 
     std::unordered_set<utils::UUID> loaded_views;
-    if (view_build_status_per_shard.size() != smp::count) {
-        reshard(std::move(view_build_status_per_shard), loaded_views);
-    } else if (!view_build_status_per_shard.empty()) {
-        for (auto& status : view_build_status_per_shard[this_shard_id()]) {
+    if (vbi.status_per_shard.size() != smp::count) {
+        reshard(std::move(vbi.status_per_shard), loaded_views);
+    } else if (!vbi.status_per_shard.empty()) {
+        for (auto& status : vbi.status_per_shard[this_shard_id()]) {
             load_view_status(std::move(status), loaded_views);
         }
     }
@@ -1503,18 +1502,18 @@ future<> view_builder::calculate_shard_build_step(
     auto all_views = _db.get_views();
     auto is_new = [&] (const view_ptr& v) {
         return base_table_exists(v) && !loaded_views.contains(v->id())
-                && !built_views.contains(v->id());
+                && !vbi.built_views.contains(v->id());
     };
     for (auto&& view : all_views | boost::adaptors::filtered(is_new)) {
-        bookkeeping_ops->push_back(add_new_view(view, get_or_create_build_step(view->view_info()->base_id())));
+        vbi.bookkeeping_ops.push_back(add_new_view(view, get_or_create_build_step(view->view_info()->base_id())));
     }
 
     for (auto& [_, build_step] : _base_to_build_step) {
         initialize_reader_at_current_token(build_step);
     }
 
-    auto f = seastar::when_all_succeed(bookkeeping_ops->begin(), bookkeeping_ops->end());
-    return f.handle_exception([this, bookkeeping_ops = std::move(bookkeeping_ops)] (std::exception_ptr ep) {
+    auto f = seastar::when_all_succeed(vbi.bookkeeping_ops.begin(), vbi.bookkeeping_ops.end());
+    return f.handle_exception([this] (std::exception_ptr ep) {
         vlogger.warn("Failed to update materialized view bookkeeping while synchronizing view builds on all shards ({}), continuing anyway.", ep);
     });
 }

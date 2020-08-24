@@ -173,6 +173,9 @@ class view_builder final : public service::migration_listener::only_view_notific
     metrics::metric_groups _metrics;
 
     struct view_builder_init_state {
+        std::vector<future<>> bookkeeping_ops;
+        std::vector<std::vector<view_build_status>> status_per_shard;
+        std::unordered_set<utils::UUID> built_views;
     };
 
 public:
@@ -211,7 +214,7 @@ private:
     void initialize_reader_at_current_token(build_step&);
     void load_view_status(view_build_status, std::unordered_set<utils::UUID>&);
     void reshard(std::vector<std::vector<view_build_status>>, std::unordered_set<utils::UUID>&);
-    future<> calculate_shard_build_step(std::vector<system_keyspace::view_name>, std::vector<system_keyspace::view_build_progress>);
+    future<> calculate_shard_build_step(view_builder_init_state& vbi, std::vector<system_keyspace::view_name>, std::vector<system_keyspace::view_build_progress>);
     future<> add_new_view(view_ptr, build_step&);
     future<> do_build_step();
     void execute(build_step&, exponential_backoff_retry);
