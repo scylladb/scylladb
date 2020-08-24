@@ -361,10 +361,14 @@ if $nonroot; then
     sed -i -e "s#/var/lib/scylla#$rprefix#g" $rsysconfdir/scylla-server
     sed -i -e "s#/etc/scylla#$retc/scylla#g" $rsysconfdir/scylla-server
     sed -i -e "s#^SCYLLA_ARGS=\"#SCYLLA_ARGS=\"--workdir $rprefix #g" $rsysconfdir/scylla-server
+    # nonroot install is also 'offline install'
+    touch $rprefix/SCYLLA-OFFLINE-FILE
     touch $rprefix/SCYLLA-NONROOT-FILE
     systemctl --user daemon-reload
     echo "Scylla non-root install completed."
 elif ! $packaging; then
+    # run install.sh without --packaging is 'offline install'
+    touch $rprefix/SCYLLA-OFFLINE-FILE
     nousr=
     nogrp=
     getent passwd scylla || nousr=1
@@ -382,4 +386,5 @@ elif ! $packaging; then
     chown -R scylla:scylla $rhkdata
 
     $rprefix/scripts/scylla_post_install.sh
+    echo "Scylla offline install completed."
 fi
