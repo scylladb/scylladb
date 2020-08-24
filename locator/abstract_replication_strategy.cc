@@ -79,7 +79,7 @@ std::vector<inet_address> abstract_replication_strategy::get_natural_endpoints(c
 
 std::vector<inet_address> abstract_replication_strategy::do_get_natural_endpoints(const token& search_token, const token_metadata& tm) {
     const token& key_token = tm.first_token(search_token);
-    auto& cached_endpoints = get_cached_endpoints();
+    auto& cached_endpoints = get_cached_endpoints(tm);
     auto res = cached_endpoints.find(key_token);
 
     if (res == cached_endpoints.end()) {
@@ -132,10 +132,11 @@ void abstract_replication_strategy::validate_replication_factor(sstring rf) cons
 }
 
 inline std::unordered_map<token, std::vector<inet_address>>&
-abstract_replication_strategy::get_cached_endpoints() {
-    if (_last_invalidated_ring_version != _token_metadata.get_ring_version()) {
+abstract_replication_strategy::get_cached_endpoints(const token_metadata& tm) {
+    auto ring_version = tm.get_ring_version();
+    if (_last_invalidated_ring_version != ring_version) {
         _cached_endpoints.clear();
-        _last_invalidated_ring_version = _token_metadata.get_ring_version();
+        _last_invalidated_ring_version = ring_version;
     }
 
     return _cached_endpoints;

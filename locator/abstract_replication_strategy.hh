@@ -53,7 +53,7 @@ private:
     static logging::logger logger;
 
     std::unordered_map<token, std::vector<inet_address>>&
-    get_cached_endpoints();
+    get_cached_endpoints(const token_metadata& tm);
 protected:
     sstring _ks_name;
     // TODO: Do we need this member at all?
