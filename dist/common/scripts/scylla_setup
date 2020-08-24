@@ -107,8 +107,14 @@ def interactive_choose_swap_size():
         except Exception as e:
             print(f'"{s}" is not valid number, input again')
 
+pkg_files = {
+        'scylla-jmx': scylladir_p() / 'jmx/scylla-jmx',
+        'scylla-tools': scylladir_p() / 'share/cassandra/bin/cqlsh'
+        }
 def do_verify_package(pkg):
-    if is_debian_variant():
+    if is_offline():
+        res = 0 if pkg_files[pkg].exists() else 1
+    elif is_debian_variant():
         res = run('dpkg -s {}'.format(pkg), silent=True, exception=False)
     elif is_redhat_variant():
         res = run('rpm -q {}'.format(pkg), silent=True, exception=False)
