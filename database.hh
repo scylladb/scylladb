@@ -1078,7 +1078,7 @@ public:
                  std::map<sstring, sstring> options,
                  bool durables_writes,
                  std::vector<schema_ptr> cf_defs = std::vector<schema_ptr>{});
-    void validate(const locator::token_metadata& tm) const;
+    void validate(const locator::shared_token_metadata& stm) const;
     const sstring& name() const {
         return _name;
     }
@@ -1148,14 +1148,14 @@ private:
 public:
     explicit keyspace(lw_shared_ptr<keyspace_metadata> metadata, config cfg);
 
-    void update_from(const locator::token_metadata& tm, lw_shared_ptr<keyspace_metadata>);
+    void update_from(const locator::shared_token_metadata& stm, lw_shared_ptr<keyspace_metadata>);
 
     /** Note: return by shared pointer value, since the meta data is
      * semi-volatile. I.e. we could do alter keyspace at any time, and
      * boom, it is replaced.
      */
     lw_shared_ptr<keyspace_metadata> metadata() const;
-    void create_replication_strategy(const locator::token_metadata& tm, const std::map<sstring, sstring>& options);
+    void create_replication_strategy(const locator::shared_token_metadata& stm, const std::map<sstring, sstring>& options);
     /**
      * This should not really be return by reference, since replication
      * strategy is also volatile in that it could be replaced at "any" time.
@@ -1336,7 +1336,7 @@ private:
 
     service::migration_notifier& _mnotifier;
     gms::feature_service& _feat;
-    const locator::token_metadata& _token_metadata;
+    const locator::shared_token_metadata& _shared_token_metadata;
 
     sharded<semaphore>& _sst_dir_semaphore;
 
@@ -1404,7 +1404,8 @@ public:
         return *_compaction_manager;
     }
 
-    const locator::token_metadata& get_token_metadata() const { return _token_metadata; }
+    const locator::shared_token_metadata& get_shared_token_metadata() const { return _shared_token_metadata; }
+    const locator::token_metadata& get_token_metadata() const { return *_shared_token_metadata.get(); }
 
     service::migration_notifier& get_notifier() { return _mnotifier; }
     const service::migration_notifier& get_notifier() const { return _mnotifier; }

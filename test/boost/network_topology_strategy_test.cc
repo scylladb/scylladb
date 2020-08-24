@@ -185,10 +185,9 @@ future<> simple_test() {
     utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address("localhost"));
 
     // Create the RackInferringSnitch
-    return i_endpoint_snitch::create_snitch("RackInferringSnitch").then(
-        [] {
-
-        lw_shared_ptr<token_metadata> tm = make_lw_shared<token_metadata>();
+    return i_endpoint_snitch::create_snitch("RackInferringSnitch").then([] {
+      return do_with(locator::shared_token_metadata(), [] (locator::shared_token_metadata& stm) {
+        auto tmptr = stm.clone();
         std::vector<ring_point> ring_points = {
             { 1.0,  inet_address("192.100.10.1") },
             { 2.0,  inet_address("192.101.10.1") },
@@ -204,10 +203,11 @@ future<> simple_test() {
         };
         // Initialize the token_metadata
         for (unsigned i = 0; i < ring_points.size(); i++) {
-            tm->update_normal_token(
+            tmptr->update_normal_token(
                 {dht::token::kind::key, d2t(ring_points[i].point / ring_points.size())},
                 ring_points[i].host);
         }
+        stm.set(tmptr);
 
         /////////////////////////////////////
         // Create the replication strategy
@@ -218,7 +218,7 @@ future<> simple_test() {
         };
 
         auto ars_uptr = abstract_replication_strategy::create_replication_strategy(
-            "test keyspace", "NetworkTopologyStrategy", *tm, options323);
+            "test keyspace", "NetworkTopologyStrategy", stm, options323);
 
         auto ars_ptr = ars_uptr.get();
 
@@ -233,7 +233,7 @@ future<> simple_test() {
         };
 
         ars_uptr = abstract_replication_strategy::create_replication_strategy(
-            "test keyspace", "NetworkTopologyStrategy", *tm, options320);
+            "test keyspace", "NetworkTopologyStrategy", stm, options320);
 
         ars_ptr = ars_uptr.get();
 
@@ -245,10 +245,13 @@ future<> simple_test() {
         // points will be taken from the cache when it shouldn't and the
         // corresponding check will fail.
         //
-        tm->invalidate_cached_rings();
+        tmptr = stm.clone();
+        tmptr->invalidate_cached_rings();
+        stm.set(std::move(tmptr));
         full_ring_check(ring_points, options320, ars_ptr);
 
         return i_endpoint_snitch::stop_snitch();
+      });
     });
 }
 
@@ -257,13 +260,13 @@ future<> heavy_origin_test() {
     utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address("localhost"));
 
     // Create the RackInferringSnitch
-    return i_endpoint_snitch::create_snitch("RackInferringSnitch").then(
-        [] {
+    return i_endpoint_snitch::create_snitch("RackInferringSnitch").then([] {
+      return do_with(locator::shared_token_metadata(), [] (locator::shared_token_metadata& stm) {
         std::vector<int> dc_racks = {2, 4, 8};
         std::vector<int> dc_endpoints = {128, 256, 512};
         std::vector<int> dc_replication = {2, 6, 6};
 
-        lw_shared_ptr<token_metadata> tm = make_lw_shared<token_metadata>();
+        auto tmptr = stm.clone();
         std::map<sstring, sstring> config_options;
         std::unordered_map<inet_address, std::unordered_set<token>> tokens;
         std::vector<ring_point> ring_points;
@@ -304,16 +307,18 @@ future<> heavy_origin_test() {
             }
         }
 
-        tm->update_normal_tokens(tokens);
+        tmptr->update_normal_tokens(tokens);
+        stm.set(std::move(tmptr));
 
         auto ars_uptr = abstract_replication_strategy::create_replication_strategy(
-            "test keyspace", "NetworkTopologyStrategy", *tm, config_options);
+            "test keyspace", "NetworkTopologyStrategy", stm, config_options);
 
         auto ars_ptr = ars_uptr.get();
 
         full_ring_check(ring_points, config_options, ars_ptr);
 
         return i_endpoint_snitch::stop_snitch();
+      });
     });
 }
 
@@ -471,14 +476,14 @@ static std::vector<inet_address> calculate_natural_endpoints(
     return std::move(replicas.get_vector());
 }
 
-static void test_equivalence(const token_metadata& tm, snitch_ptr& snitch, const std::unordered_map<sstring, size_t>& datacenters) {
+static void test_equivalence(const shared_token_metadata& stm, snitch_ptr& snitch, const std::unordered_map<sstring, size_t>& datacenters) {
     class my_network_topology_strategy : public network_topology_strategy {
     public:
         using network_topology_strategy::network_topology_strategy;
         using network_topology_strategy::calculate_natural_endpoints;
     };
 
-    my_network_topology_strategy nts("ks", tm, snitch,
+    my_network_topology_strategy nts("ks", stm, snitch,
                     boost::copy_range<std::map<sstring, sstring>>(
                                     datacenters
                                                     | boost::adaptors::transformed(
@@ -486,6 +491,7 @@ static void test_equivalence(const token_metadata& tm, snitch_ptr& snitch, const
                                                                         return std::make_pair(p.first, to_sstring(p.second));
                                                                     })));
 
+    const token_metadata& tm = *stm.get();
     for (size_t i = 0; i < 1000; ++i) {
         auto token = dht::token::get_random_token();
         auto expected = calculate_natural_endpoints(token, tm, snitch, datacenters);
@@ -583,17 +589,19 @@ SEASTAR_TEST_CASE(testCalculateEndpoints) {
         auto& snitch = i_endpoint_snitch::get_local_snitch_ptr();
 
         for (size_t run = 0; run < RUNS; ++run) {
-            token_metadata tm;
+            shared_token_metadata stm;
+            auto tmptr = stm.clone();
             // not doing anything sharded. We can just play fast and loose with the snitch.
             (void)snitch.stop();
             snitch = generate_snitch(datacenters, nodes);
 
             for (auto& node : nodes) {
                 for (size_t i = 0; i < VNODES; ++i) {
-                    tm.update_normal_token(dht::token::get_random_token(), node);
+                    tmptr->update_normal_token(dht::token::get_random_token(), node);
                 }
             }
-            test_equivalence(tm, snitch, datacenters);
+            stm.set(std::move(tmptr));
+            test_equivalence(stm, snitch, datacenters);
         }
 
         return i_endpoint_snitch::stop_snitch();

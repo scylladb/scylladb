@@ -1764,7 +1764,7 @@ void make(database& db, bool durable, bool volatile_testing_only) {
             // don't make system keyspace writes wait for user writes (if under pressure)
             kscfg.dirty_memory_manager = &db._system_dirty_memory_manager;
             keyspace _ks{ksm, std::move(kscfg)};
-            auto rs(locator::abstract_replication_strategy::create_replication_strategy(NAME, "LocalStrategy", db.get_token_metadata(), ksm->strategy_options()));
+            auto rs(locator::abstract_replication_strategy::create_replication_strategy(NAME, "LocalStrategy", db.get_shared_token_metadata(), ksm->strategy_options()));
             _ks.set_replication_strategy(std::move(rs));
             db.add_keyspace(ks_name, std::move(_ks));
         }

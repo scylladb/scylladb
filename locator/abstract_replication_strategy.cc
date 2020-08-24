@@ -30,25 +30,25 @@ logging::logger abstract_replication_strategy::logger("replication_strategy");
 
 abstract_replication_strategy::abstract_replication_strategy(
     const sstring& ks_name,
-    const token_metadata& token_metadata,
+    const shared_token_metadata& stm,
     snitch_ptr& snitch,
     const std::map<sstring, sstring>& config_options,
     replication_strategy_type my_type)
         : _ks_name(ks_name)
         , _config_options(config_options)
-        , _token_metadata(token_metadata)
+        , _shared_token_metadata(stm)
         , _snitch(snitch)
         , _my_type(my_type) {}
 
-std::unique_ptr<abstract_replication_strategy> abstract_replication_strategy::create_replication_strategy(const sstring& ks_name, const sstring& strategy_name, const token_metadata& tk_metadata, const std::map<sstring, sstring>& config_options) {
+std::unique_ptr<abstract_replication_strategy> abstract_replication_strategy::create_replication_strategy(const sstring& ks_name, const sstring& strategy_name, const shared_token_metadata& stm, const std::map<sstring, sstring>& config_options) {
     assert(locator::i_endpoint_snitch::get_local_snitch_ptr());
     try {
         return create_object<abstract_replication_strategy,
                              const sstring&,
-                             const token_metadata&,
+                             const shared_token_metadata&,
                              snitch_ptr&,
                              const std::map<sstring, sstring>&>
-            (strategy_name, ks_name, tk_metadata,
+            (strategy_name, ks_name, stm,
              locator::i_endpoint_snitch::get_local_snitch_ptr(), config_options);
     } catch (const no_such_class& e) {
         throw exceptions::configuration_exception(e.what());
@@ -57,10 +57,10 @@ std::unique_ptr<abstract_replication_strategy> abstract_replication_strategy::cr
 
 void abstract_replication_strategy::validate_replication_strategy(const sstring& ks_name,
                                                                   const sstring& strategy_name,
-                                                                  const token_metadata& token_metadata,
+                                                                  const shared_token_metadata& stm,
                                                                   const std::map<sstring, sstring>& config_options)
 {
-    auto strategy = create_replication_strategy(ks_name, strategy_name, token_metadata, config_options);
+    auto strategy = create_replication_strategy(ks_name, strategy_name, stm, config_options);
     strategy->validate_options();
     auto expected = strategy->recognized_options();
     if (expected) {
@@ -74,7 +74,7 @@ void abstract_replication_strategy::validate_replication_strategy(const sstring&
 }
 
 std::vector<inet_address> abstract_replication_strategy::get_natural_endpoints(const token& search_token) {
-    return do_get_natural_endpoints(search_token, _token_metadata);
+    return do_get_natural_endpoints(search_token, *_shared_token_metadata.get());
 }
 
 std::vector<inet_address> abstract_replication_strategy::do_get_natural_endpoints(const token& search_token, const token_metadata& tm) {
@@ -94,9 +94,9 @@ std::vector<inet_address> abstract_replication_strategy::do_get_natural_endpoint
 }
 
 std::vector<inet_address> abstract_replication_strategy::get_natural_endpoints_without_node_being_replaced(const token& search_token) {
-    const token_metadata& tm = _token_metadata;
-    std::vector<gms::inet_address> natural_endpoints = do_get_natural_endpoints(search_token, tm);
-    if (tm.is_any_node_being_replaced() &&
+    token_metadata_ptr tmptr = _shared_token_metadata.get();
+    std::vector<gms::inet_address> natural_endpoints = do_get_natural_endpoints(search_token, *tmptr);
+    if (tmptr->is_any_node_being_replaced() &&
         allow_remove_node_being_replaced_from_natural_endpoints()) {
         // When a new node is started to replace an existing dead node, we want
         // to make the replacing node take writes but do not count it for
@@ -109,8 +109,8 @@ std::vector<inet_address> abstract_replication_strategy::get_natural_endpoints_w
         // LocalStrategy because LocalStrategy always returns the node itself
         // as the natural_endpoints and the node will not appear in the
         // pending_endpoints.
-        auto it = boost::range::remove_if(natural_endpoints, [&tm] (gms::inet_address& p) {
-            return tm.is_being_replaced(p);
+        auto it = boost::range::remove_if(natural_endpoints, [tmptr = std::move(tmptr)] (gms::inet_address& p) {
+            return tmptr->is_being_replaced(p);
         });
         natural_endpoints.erase(it, natural_endpoints.end());
     }
@@ -174,15 +174,13 @@ insert_token_range_to_sorted_container_while_unwrapping(
 
 dht::token_range_vector
 abstract_replication_strategy::get_ranges(inet_address ep) const {
-    return do_get_ranges(ep, _token_metadata, false);
+    return do_get_ranges(ep, *_shared_token_metadata.get(), false);
 }
 
 dht::token_range_vector
 abstract_replication_strategy::get_ranges_in_thread(inet_address ep) const {
-    // copy token_metadata so we can safely yield if needed
-    // FIXME: this may temporarily add a stall that should be replaced by an asynchronous interface
-    token_metadata tm = _token_metadata;
-    return do_get_ranges(ep, tm, true);
+    token_metadata_ptr tmptr = _shared_token_metadata.get();
+    return do_get_ranges(ep, *tmptr, true);
 }
 
 dht::token_range_vector
@@ -219,9 +217,10 @@ abstract_replication_strategy::do_get_ranges(inet_address ep, const token_metada
 dht::token_range_vector
 abstract_replication_strategy::get_primary_ranges(inet_address ep) {
     dht::token_range_vector ret;
-    auto prev_tok = _token_metadata.sorted_tokens().back();
-    for (auto tok : _token_metadata.sorted_tokens()) {
-        auto&& eps = calculate_natural_endpoints(tok, _token_metadata);
+    token_metadata_ptr tmptr = _shared_token_metadata.get();
+    auto prev_tok = tmptr->sorted_tokens().back();
+    for (auto tok : tmptr->sorted_tokens()) {
+        auto&& eps = calculate_natural_endpoints(tok, *tmptr);
         if (eps.size() > 0 && eps[0] == ep) {
             insert_token_range_to_sorted_container_while_unwrapping(prev_tok, tok, ret);
         }
@@ -234,10 +233,11 @@ dht::token_range_vector
 abstract_replication_strategy::get_primary_ranges_within_dc(inet_address ep) {
     dht::token_range_vector ret;
     sstring local_dc = _snitch->get_datacenter(ep);
-    std::unordered_set<inet_address> local_dc_nodes = _token_metadata.get_topology().get_datacenter_endpoints().at(local_dc);
-    auto prev_tok = _token_metadata.sorted_tokens().back();
-    for (auto tok : _token_metadata.sorted_tokens()) {
-        auto&& eps = calculate_natural_endpoints(tok, _token_metadata);
+    token_metadata_ptr tmptr = _shared_token_metadata.get();
+    std::unordered_set<inet_address> local_dc_nodes = tmptr->get_topology().get_datacenter_endpoints().at(local_dc);
+    auto prev_tok = tmptr->sorted_tokens().back();
+    for (auto tok : tmptr->sorted_tokens()) {
+        auto&& eps = calculate_natural_endpoints(tok, *tmptr);
         // Unlike get_primary_ranges() which checks if ep is the first
         // owner of this range, here we check if ep is the first just
         // among nodes which belong to the local dc of ep.

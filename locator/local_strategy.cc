@@ -27,7 +27,7 @@
 
 namespace locator {
 
-local_strategy::local_strategy(const sstring& keyspace_name, const token_metadata& token_metadata, snitch_ptr& snitch, const std::map<sstring, sstring>& config_options) :
+local_strategy::local_strategy(const sstring& keyspace_name, const shared_token_metadata& token_metadata, snitch_ptr& snitch, const std::map<sstring, sstring>& config_options) :
         abstract_replication_strategy(keyspace_name, token_metadata, snitch, config_options, replication_strategy_type::local) {}
 
 std::vector<inet_address> local_strategy::do_get_natural_endpoints(const token& t, const token_metadata& tm) {
@@ -50,7 +50,7 @@ size_t local_strategy::get_replication_factor() const {
     return 1;
 }
 
-using registry = class_registrator<abstract_replication_strategy, local_strategy, const sstring&, const token_metadata&, snitch_ptr&, const std::map<sstring, sstring>&>;
+using registry = class_registrator<abstract_replication_strategy, local_strategy, const sstring&, const shared_token_metadata&, snitch_ptr&, const std::map<sstring, sstring>&>;
 static registry registrator("org.apache.cassandra.locator.LocalStrategy");
 static registry registrator_short_name("LocalStrategy");
 

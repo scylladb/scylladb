@@ -59,7 +59,7 @@ protected:
     // TODO: Do we need this member at all?
     //keyspace* _keyspace = nullptr;
     std::map<sstring, sstring> _config_options;
-    const token_metadata& _token_metadata;
+    const shared_token_metadata& _shared_token_metadata;
     snitch_ptr& _snitch;
     replication_strategy_type _my_type;
 
@@ -83,16 +83,16 @@ protected:
 public:
     abstract_replication_strategy(
         const sstring& keyspace_name,
-        const token_metadata& token_metadata,
+        const shared_token_metadata& stm,
         snitch_ptr& snitch,
         const std::map<sstring, sstring>& config_options,
         replication_strategy_type my_type);
     virtual std::vector<inet_address> calculate_natural_endpoints(const token& search_token, const token_metadata& tm) const = 0;
     virtual ~abstract_replication_strategy() {}
-    static std::unique_ptr<abstract_replication_strategy> create_replication_strategy(const sstring& ks_name, const sstring& strategy_name, const token_metadata& token_metadata, const std::map<sstring, sstring>& config_options);
+    static std::unique_ptr<abstract_replication_strategy> create_replication_strategy(const sstring& ks_name, const sstring& strategy_name, const shared_token_metadata& stm, const std::map<sstring, sstring>& config_options);
     static void validate_replication_strategy(const sstring& ks_name,
                                               const sstring& strategy_name,
-                                              const token_metadata& token_metadata,
+                                              const shared_token_metadata& stm,
                                               const std::map<sstring, sstring>& config_options);
     std::vector<inet_address> get_natural_endpoints(const token& search_token);
     std::vector<inet_address> get_natural_endpoints_without_node_being_replaced(const token& search_token);

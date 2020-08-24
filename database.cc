@@ -219,7 +219,7 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
     , _data_listeners(std::make_unique<db::data_listeners>(*this))
     , _mnotifier(mn)
     , _feat(feat)
-    , _token_metadata(*stm.get())
+    , _shared_token_metadata(stm)
     , _sst_dir_semaphore(sst_dir_sem)
 {
     local_schema_registry().init(*this); // TODO: we're never unbound.
@@ -727,7 +727,7 @@ future<> database::update_keyspace(const sstring& name) {
             }
         }
 
-        ks.update_from(get_token_metadata(), std::move(new_ksm));
+        ks.update_from(get_shared_token_metadata(), std::move(new_ksm));
         return get_notifier().update_keyspace(ks.metadata());
     });
 }
@@ -907,12 +907,12 @@ bool database::column_family_exists(const utils::UUID& uuid) const {
 }
 
 void
-keyspace::create_replication_strategy(const locator::token_metadata& tm, const std::map<sstring, sstring>& options) {
+keyspace::create_replication_strategy(const locator::shared_token_metadata& stm, const std::map<sstring, sstring>& options) {
     using namespace locator;
 
     _replication_strategy =
             abstract_replication_strategy::create_replication_strategy(
-                _metadata->name(), _metadata->strategy_name(), tm, options);
+                _metadata->name(), _metadata->strategy_name(), stm, options);
 }
 
 locator::abstract_replication_strategy&
@@ -931,9 +931,9 @@ keyspace::set_replication_strategy(std::unique_ptr<locator::abstract_replication
     _replication_strategy = std::move(replication_strategy);
 }
 
-void keyspace::update_from(const locator::token_metadata& tm, ::lw_shared_ptr<keyspace_metadata> ksm) {
+void keyspace::update_from(const locator::shared_token_metadata& stm, ::lw_shared_ptr<keyspace_metadata> ksm) {
     _metadata = std::move(ksm);
-   create_replication_strategy(tm, _metadata->strategy_options());
+   create_replication_strategy(stm, _metadata->strategy_options());
 }
 
 future<> keyspace::ensure_populated() const {
@@ -1047,7 +1047,7 @@ const column_family& database::find_column_family(const schema_ptr& schema) cons
 using strategy_class_registry = class_registry<
     locator::abstract_replication_strategy,
     const sstring&,
-    const locator::token_metadata&,
+    const locator::shared_token_metadata&,
     locator::snitch_ptr&,
     const std::map<sstring, sstring>&>;
 
@@ -1080,20 +1080,20 @@ keyspace_metadata::keyspace_metadata(std::string_view name,
     }
 }
 
-void keyspace_metadata::validate(const locator::token_metadata& tm) const {
+void keyspace_metadata::validate(const locator::shared_token_metadata& stm) const {
     using namespace locator;
-    abstract_replication_strategy::validate_replication_strategy(name(), strategy_name(), tm, strategy_options());
+    abstract_replication_strategy::validate_replication_strategy(name(), strategy_name(), stm, strategy_options());
 }
 
 void database::validate_keyspace_update(keyspace_metadata& ksm) {
-    ksm.validate(get_token_metadata());
+    ksm.validate(get_shared_token_metadata());
     if (!has_keyspace(ksm.name())) {
         throw exceptions::configuration_exception(format("Cannot update non existing keyspace '{}'.", ksm.name()));
     }
 }
 
 void database::validate_new_keyspace(keyspace_metadata& ksm) {
-    ksm.validate(get_token_metadata());
+    ksm.validate(get_shared_token_metadata());
     if (has_keyspace(ksm.name())) {
         throw exceptions::already_exists_exception{ksm.name()};
     }
@@ -1136,7 +1136,7 @@ std::vector<view_ptr> database::get_views() const {
 
 void database::create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm) {
     keyspace ks(ksm, std::move(make_keyspace_config(*ksm)));
-    ks.create_replication_strategy(get_token_metadata(), ksm->strategy_options());
+    ks.create_replication_strategy(get_shared_token_metadata(), ksm->strategy_options());
     _keyspaces.emplace(ksm->name(), std::move(ks));
 }
 
