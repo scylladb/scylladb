@@ -172,6 +172,9 @@ class view_builder final : public service::migration_listener::only_view_notific
     stats _stats;
     metrics::metric_groups _metrics;
 
+    struct view_builder_init_state {
+    };
+
 public:
     // The view builder processes the base table in steps of batch_size rows.
     // However, if the individual rows are large, there is no real need to

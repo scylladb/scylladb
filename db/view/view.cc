@@ -1239,7 +1239,8 @@ void view_builder::setup_metrics() {
 }
 
 future<> view_builder::start(service::migration_manager& mm) {
-    _started = seastar::async([this, &mm] {
+    _started = do_with(view_builder_init_state{}, [this, &mm] (view_builder_init_state& vbi) {
+      return seastar::async([this, &mm, &vbi] {
         // Guard the whole startup routine with a semaphore,
         // so that it's not intercepted by `on_drop_view`, `on_create_view`
         // or `on_update_view` events.
@@ -1258,6 +1259,7 @@ future<> view_builder::start(service::migration_manager& mm) {
         _current_step = _base_to_build_step.begin();
         // Waited on indirectly in stop().
         (void)_build_step.trigger();
+      });
     });
     return make_ready_future<>();
 }
