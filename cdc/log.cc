@@ -1424,9 +1424,8 @@ private:
                     // The case of `get_delta_mode() == delta_mode::keys`:
                     it->row().cells().remove_if([this, log_s = m.schema()] (column_id id, atomic_cell_or_collection& acoc) {
                         const auto& log_cdef = log_s->column_at(column_kind::regular_column, id);
-                        // We can surely remove "cdc$*" columns.
                         if (is_cdc_metacolumn_name(log_cdef.name_as_text())) {
-                            return true;
+                            return false;
                         }
                         const auto* base_cdef = _schema->get_column_definition(log_cdef.name());
                         // Remove columns from delta that correspond to non-PK/CK columns in the base table.
