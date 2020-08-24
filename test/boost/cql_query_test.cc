@@ -4737,3 +4737,12 @@ SEASTAR_TEST_CASE(test_clustering_filtering_3) {
     return do_for_each(test_compaction_strategies,
             test_clustering_filtering_3_with_compaction_strategy);
 }
+
+SEASTAR_TEST_CASE(test_counter_column_added_into_non_counter_table) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        cquery_nofail(e, "CREATE TABLE t (pk int, ck int, PRIMARY KEY(pk, ck))");
+
+        BOOST_REQUIRE_THROW(e.execute_cql("ALTER TABLE t ADD \"c\" counter;").get(),
+                exceptions::configuration_exception);
+    });
+}
