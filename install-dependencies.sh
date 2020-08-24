@@ -82,6 +82,7 @@ fedora_packages=(
     python3-pytest
     python3-distro
     python3-psutil
+    python3-redis
     dnf-utils
     pigz
     net-tools
