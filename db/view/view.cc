@@ -885,7 +885,7 @@ future<stop_iteration> view_update_builder::on_results() {
             if (_update->is_range_tombstone()) {
                 _update_tombstone_tracker.apply(std::move(_update->as_range_tombstone()));
             } else if (_update->is_clustering_row()) {
-                auto& update = _update->as_mutable_clustering_row();
+                auto update = std::move(*_update).as_clustering_row();
                 apply_tracked_tombstones(_update_tombstone_tracker, update);
                 auto tombstone = _existing_tombstone_tracker.current_tombstone();
                 auto existing = tombstone
@@ -901,7 +901,7 @@ future<stop_iteration> view_update_builder::on_results() {
             if (_existing->is_range_tombstone()) {
                 _existing_tombstone_tracker.apply(std::move(_existing->as_range_tombstone()));
             } else if (_existing->is_clustering_row()) {
-                auto& existing = _existing->as_mutable_clustering_row();
+                auto existing = std::move(*_existing).as_clustering_row();
                 apply_tracked_tombstones(_existing_tombstone_tracker, existing);
                 auto tombstone = _update_tombstone_tracker.current_tombstone();
                 // The way we build the read command used for existing rows, we should always have a non-empty
@@ -921,8 +921,12 @@ future<stop_iteration> view_update_builder::on_results() {
             _update_tombstone_tracker.apply(std::move(*_update).as_range_tombstone());
         } else if (_update->is_clustering_row()) {
             assert(_existing->is_clustering_row());
-            apply_tracked_tombstones(_update_tombstone_tracker, _update->as_mutable_clustering_row());
-            apply_tracked_tombstones(_existing_tombstone_tracker, _existing->as_mutable_clustering_row());
+            _update->mutate_as_clustering_row(*_schema, [&] (clustering_row& cr) mutable {
+                apply_tracked_tombstones(_update_tombstone_tracker, cr);
+            });
+            _existing->mutate_as_clustering_row(*_schema, [&] (clustering_row& cr) mutable {
+                apply_tracked_tombstones(_existing_tombstone_tracker, cr);
+            });
             generate_update(std::move(*_update).as_clustering_row(), { std::move(*_existing).as_clustering_row() });
         }
         return advance_all();
@@ -942,7 +946,9 @@ future<stop_iteration> view_update_builder::on_results() {
     // If we have updates and it's a range tombstone, it removes nothing pre-exisiting, so we can ignore it
     if (_update && !_update->is_end_of_partition()) {
         if (_update->is_clustering_row()) {
-            apply_tracked_tombstones(_update_tombstone_tracker, _update->as_mutable_clustering_row());
+            _update->mutate_as_clustering_row(*_schema, [&] (clustering_row& cr) mutable {
+                apply_tracked_tombstones(_update_tombstone_tracker, cr);
+            });
             auto existing_tombstone = _existing_tombstone_tracker.current_tombstone();
             auto existing = existing_tombstone
                           ? std::optional<clustering_row>(std::in_place, _update->as_clustering_row().key(), row_tombstone(std::move(existing_tombstone)), row_marker(), ::row())

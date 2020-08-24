@@ -264,7 +264,9 @@ private:
                     sr.set_cell(*_cdef, std::move(ac));
                 });
             } else {
-                mf.as_mutable_clustering_row().set_cell(*_cdef, std::move(ac));
+                mf.mutate_as_clustering_row(s, [&] (clustering_row& cr) {
+                    cr.set_cell(*_cdef, std::move(ac));
+                });
             }
         }
     };
@@ -522,7 +524,9 @@ public:
 
         if (col.cell.size() == 0) {
             row_marker rm(timestamp, gc_clock::duration(ttl), gc_clock::time_point(gc_clock::duration(expiration)));
-            _in_progress->as_mutable_clustering_row().apply(std::move(rm));
+            _in_progress->mutate_as_clustering_row(*_schema, [&] (clustering_row& cr) {
+                cr.apply(std::move(rm));
+            });
             return ret;
         }
 
@@ -543,7 +547,9 @@ public:
                     sr.set_cell(*(col.cdef), std::move(ac));
                 });
             } else {
-                _in_progress->as_mutable_clustering_row().set_cell(*(col.cdef), atomic_cell_or_collection(std::move(ac)));
+                _in_progress->mutate_as_clustering_row(*_schema, [&] (clustering_row& cr) mutable {
+                    cr.set_cell(*(col.cdef), atomic_cell_or_collection(std::move(ac)));
+                });
             }
         });
     }
@@ -597,7 +603,9 @@ public:
                 });
                 return;
             }
-            _in_progress->as_mutable_clustering_row().set_cell(*(col.cdef), atomic_cell_or_collection(std::move(ac)));
+            _in_progress->mutate_as_clustering_row(*_schema, [&] (clustering_row& cr) mutable {
+                cr.set_cell(*(col.cdef), atomic_cell_or_collection(std::move(ac)));
+            });
         });
     }
 
@@ -617,7 +625,9 @@ public:
 
         if (col.cell.size() == 0) {
             row_marker rm(tombstone(timestamp, local_deletion_time));
-            _in_progress->as_mutable_clustering_row().apply(rm);
+            _in_progress->mutate_as_clustering_row(*_schema, [&] (clustering_row& cr) mutable {
+                cr.apply(rm);
+            });
             return ret;
         }
         if (!col.is_present) {
@@ -638,7 +648,9 @@ public:
                 sr.set_cell(*col.cdef, atomic_cell_or_collection(std::move(ac)));
             });
         } else {
-            _in_progress->as_mutable_clustering_row().set_cell(*col.cdef, atomic_cell_or_collection(std::move(ac)));
+            _in_progress->mutate_as_clustering_row(*_schema, [&] (clustering_row& cr) mutable {
+                cr.set_cell(*col.cdef, atomic_cell_or_collection(std::move(ac)));
+            });
         }
         return ret;
     }
@@ -656,7 +668,9 @@ public:
         auto ck = clustering_key_prefix::from_exploded_view(key);
         auto ret = flush_if_needed(std::move(ck));
         if (!_skip_in_progress) {
-            _in_progress->as_mutable_clustering_row().apply(shadowable_tombstone(tombstone(deltime)));
+            _in_progress->mutate_as_clustering_row(*_schema, [&] (clustering_row& cr) mutable {
+                cr.apply(shadowable_tombstone(tombstone(deltime)));
+            });
         }
         return ret;
     }
@@ -710,7 +724,9 @@ public:
             if (range_tombstone::is_single_clustering_row_tombstone(*_schema, start_ck, start_kind, end, end_kind)) {
                 auto ret = flush_if_needed(std::move(start_ck));
                 if (!_skip_in_progress) {
-                    _in_progress->as_mutable_clustering_row().apply(tombstone(deltime));
+                    _in_progress->mutate_as_clustering_row(*_schema, [&] (clustering_row& cr) mutable {
+                        cr.apply(tombstone(deltime));
+                    });
                 }
                 return ret;
             } else {

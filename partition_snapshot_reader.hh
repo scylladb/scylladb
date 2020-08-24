@@ -186,7 +186,9 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
                         if (_digest_requested) {
                             e.row().cells().prepare_hash(_schema, column_kind::regular_column);
                         }
-                        result.as_mutable_clustering_row().apply(_schema, e);
+                        result.mutate_as_clustering_row(_schema, [&] (clustering_row& cr) mutable {
+                            cr.apply(_schema, e);
+                        });
                     }
                     return result;
                 }

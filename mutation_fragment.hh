@@ -385,9 +385,9 @@ public:
         _data->_size_in_bytes = std::nullopt;
         fn(_data->_static_row);
     }
-    clustering_row& as_mutable_clustering_row() {
+    void mutate_as_clustering_row(const schema& s, std::invocable<clustering_row&> auto&& fn) {
         _data->_size_in_bytes = std::nullopt;
-        return _data->_clustering_row;
+        fn(_data->_clustering_row);
     }
     range_tombstone& as_mutable_range_tombstone() {
         _data->_size_in_bytes = std::nullopt;

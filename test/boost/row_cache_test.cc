@@ -3326,7 +3326,7 @@ SEASTAR_TEST_CASE(test_hash_is_cached) {
         {
             auto rd = cache.make_reader(s, tests::make_permit());
             rd(db::no_timeout).get0()->as_partition_start();
-            clustering_row row = std::move(rd(db::no_timeout).get0()->as_mutable_clustering_row());
+            clustering_row row = std::move(*rd(db::no_timeout).get0()).as_clustering_row();
             BOOST_REQUIRE(!row.cells().cell_hash_for(0));
         }
 
@@ -3335,14 +3335,14 @@ SEASTAR_TEST_CASE(test_hash_is_cached) {
             slice.options.set<query::partition_slice::option::with_digest>();
             auto rd = cache.make_reader(s, tests::make_permit(), query::full_partition_range, slice);
             rd(db::no_timeout).get0()->as_partition_start();
-            clustering_row row = std::move(rd(db::no_timeout).get0()->as_mutable_clustering_row());
+            clustering_row row = std::move(*rd(db::no_timeout).get0()).as_clustering_row();
             BOOST_REQUIRE(row.cells().cell_hash_for(0));
         }
 
         {
             auto rd = cache.make_reader(s, tests::make_permit());
             rd(db::no_timeout).get0()->as_partition_start();
-            clustering_row row = std::move(rd(db::no_timeout).get0()->as_mutable_clustering_row());
+            clustering_row row = std::move(*rd(db::no_timeout).get0()).as_clustering_row();
             BOOST_REQUIRE(row.cells().cell_hash_for(0));
         }
 
@@ -3353,7 +3353,7 @@ SEASTAR_TEST_CASE(test_hash_is_cached) {
         {
             auto rd = cache.make_reader(s, tests::make_permit());
             rd(db::no_timeout).get0()->as_partition_start();
-            clustering_row row = std::move(rd(db::no_timeout).get0()->as_mutable_clustering_row());
+            clustering_row row = std::move(*rd(db::no_timeout).get0()).as_clustering_row();
             BOOST_REQUIRE(!row.cells().cell_hash_for(0));
         }
 
@@ -3362,14 +3362,14 @@ SEASTAR_TEST_CASE(test_hash_is_cached) {
             slice.options.set<query::partition_slice::option::with_digest>();
             auto rd = cache.make_reader(s, tests::make_permit(), query::full_partition_range, slice);
             rd(db::no_timeout).get0()->as_partition_start();
-            clustering_row row = std::move(rd(db::no_timeout).get0()->as_mutable_clustering_row());
+            clustering_row row = std::move(*rd(db::no_timeout).get0()).as_clustering_row();
             BOOST_REQUIRE(row.cells().cell_hash_for(0));
         }
 
         {
             auto rd = cache.make_reader(s, tests::make_permit());
             rd(db::no_timeout).get0()->as_partition_start();
-            clustering_row row = std::move(rd(db::no_timeout).get0()->as_mutable_clustering_row());
+            clustering_row row = std::move(*rd(db::no_timeout).get0()).as_clustering_row();
             BOOST_REQUIRE(row.cells().cell_hash_for(0));
         }
     });

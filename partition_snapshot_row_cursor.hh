@@ -361,12 +361,11 @@ public:
         if (digest_requested) {
             row->row().cells().prepare_hash(_schema, column_kind::regular_column);
         }
-        auto mf = mutation_fragment(clustering_row(_schema, *row));
-        auto& cr = mf.as_mutable_clustering_row();
+        auto cr = clustering_row(_schema, *row);
         for (++it; it != _current_row.end(); ++it) {
             cr.apply(_schema, *it->it);
         }
-        return mf;
+        return mutation_fragment(std::move(cr));
     }
 
     // Can be called only when cursor is valid and pointing at a row.
