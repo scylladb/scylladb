@@ -324,10 +324,14 @@ mutation_fragment frozen_mutation_fragment::unfreeze(const schema& s)
             public:
                 explicit static_row_builder(const schema& s) : _s(s), _mf(static_row()) { }
                 void accept_atomic_cell(column_id id, atomic_cell ac) {
-                    _mf.as_mutable_static_row().cells().append_cell(id, std::move(ac));
+                    _mf.mutate_as_static_row(_s, [&] (static_row& sr) mutable {
+                        sr.cells().append_cell(id, std::move(ac));
+                    });
                 }
                 void accept_collection(column_id id, const collection_mutation& cm) {
-                    _mf.as_mutable_static_row().cells().append_cell(id, collection_mutation(*_s.static_column_at(id).type, cm));
+                    _mf.mutate_as_static_row(_s, [&] (static_row& sr) mutable {
+                        sr.cells().append_cell(id, collection_mutation(*_s.static_column_at(id).type, cm));
+                    });
                 }
                 mutation_fragment get_mutation_fragment() && { return std::move(_mf); }
             };

@@ -260,7 +260,9 @@ private:
             }
             auto ac = atomic_cell_or_collection::from_collection_mutation(cm.serialize(*_cdef->type));
             if (_cdef->is_static()) {
-                mf.as_mutable_static_row().set_cell(*_cdef, std::move(ac));
+                mf.mutate_as_static_row(s, [&] (static_row& sr) mutable {
+                    sr.set_cell(*_cdef, std::move(ac));
+                });
             } else {
                 mf.as_mutable_clustering_row().set_cell(*_cdef, std::move(ac));
             }
@@ -537,7 +539,9 @@ public:
             auto ac = make_counter_cell(timestamp, value);
 
             if (col.is_static) {
-                _in_progress->as_mutable_static_row().set_cell(*(col.cdef), std::move(ac));
+                _in_progress->mutate_as_static_row(*_schema, [&] (static_row& sr) mutable {
+                    sr.set_cell(*(col.cdef), std::move(ac));
+                });
             } else {
                 _in_progress->as_mutable_clustering_row().set_cell(*(col.cdef), atomic_cell_or_collection(std::move(ac)));
             }
@@ -588,7 +592,9 @@ public:
                                        gc_clock::time_point(gc_clock::duration(expiration)),
                                        atomic_cell::collection_member::no);
             if (col.is_static) {
-                _in_progress->as_mutable_static_row().set_cell(*(col.cdef), std::move(ac));
+                _in_progress->mutate_as_static_row(*_schema, [&] (static_row& sr) mutable {
+                    sr.set_cell(*(col.cdef), std::move(ac));
+                });
                 return;
             }
             _in_progress->as_mutable_clustering_row().set_cell(*(col.cdef), atomic_cell_or_collection(std::move(ac)));
@@ -628,7 +634,9 @@ public:
         if (is_multi_cell) {
             update_pending_collection(col.cdef, to_bytes(col.collection_extra_data), std::move(ac));
         } else if (col.is_static) {
-            _in_progress->as_mutable_static_row().set_cell(*col.cdef, atomic_cell_or_collection(std::move(ac)));
+            _in_progress->mutate_as_static_row(*_schema, [&] (static_row& sr) {
+                sr.set_cell(*col.cdef, atomic_cell_or_collection(std::move(ac)));
+            });
         } else {
             _in_progress->as_mutable_clustering_row().set_cell(*col.cdef, atomic_cell_or_collection(std::move(ac)));
         }

@@ -381,9 +381,9 @@ public:
     bool is_partition_start() const { return _kind == kind::partition_start; }
     bool is_end_of_partition() const { return _kind == kind::partition_end; }
 
-    static_row& as_mutable_static_row() {
+    void mutate_as_static_row(const schema& s, std::invocable<static_row&> auto&& fn) {
         _data->_size_in_bytes = std::nullopt;
-        return _data->_static_row;
+        fn(_data->_static_row);
     }
     clustering_row& as_mutable_clustering_row() {
         _data->_size_in_bytes = std::nullopt;
