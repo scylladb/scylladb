@@ -104,10 +104,10 @@ def curl(url, headers=None, byte=False):
                 else:
                     return res.read().decode('utf-8')
         except urllib.error.HTTPError:
-            logging.warn("Failed to grab %s..." % url)
+            logging.warning("Failed to grab %s..." % url)
             time.sleep(5)
             retries += 1
-            if (retries >= max_retries):
+            if retries >= max_retries:
                 raise
 
 class gcp_instance:
