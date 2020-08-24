@@ -393,9 +393,9 @@ public:
         _data->_size_in_bytes = std::nullopt;
         fn(_data->_range_tombstone);
     }
-    partition_start& as_mutable_partition_start() {
+    void mutate_as_partition_start(const schema& s, std::invocable<partition_start&> auto&& fn) {
         _data->_size_in_bytes = std::nullopt;
-        return _data->_partition_start;
+        fn(_data->_partition_start);
     }
     partition_end& as_mutable_end_of_partition() {
         _data->_size_in_bytes = std::nullopt;
