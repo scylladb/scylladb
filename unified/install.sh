@@ -38,6 +38,11 @@ EOF
     exit 1
 }
 
+check_usermode_support() {
+    user=$(systemctl --help|grep -e '--user')
+    [ -n "$user" ]
+}
+
 root=/
 housekeeping=false
 python3=/opt/scylladb/python3/bin/python3
@@ -79,6 +84,12 @@ while [ $# -gt 0 ]; do
             ;;
     esac
 done
+
+if $nonroot && ! check_usermode_support; then
+    echo "WARNING: This distribution does not support systemd user mode, please configure and launch Scylla manually."
+    echo "Press any key to continue..."
+    read
+fi
 
 if [ -z "$prefix" ]; then
     if $nonroot; then
