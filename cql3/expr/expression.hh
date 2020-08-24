@@ -229,11 +229,6 @@ extern bool is_on_collection(const binary_operator&);
 /// column_value.
 extern expression replace_column_def(const expression&, const column_definition*);
 
-/// Makes a binary_operator on a column_definition.
-inline expression make_column_op(const column_definition* cdef, oper_t op, ::shared_ptr<term> value) {
-    return binary_operator{column_value(cdef), op, std::move(value)};
-}
-
 inline oper_t pick_operator(statements::bound b, bool inclusive) {
     return is_start(b) ?
             (inclusive ? oper_t::GTE : oper_t::GT) :

@@ -171,7 +171,7 @@ protected:
 
         auto term = to_term(to_receivers(*schema, column_def), *_value, db, schema->ks_name(), bound_names);
         auto r = ::make_shared<restrictions::single_column_restriction>(column_def);
-        r->expression = expr::make_column_op(&column_def, _relation_type, std::move(term));
+        r->expression = expr::binary_operator{&column_def, _relation_type, std::move(term)};
         return r;
     }
 
@@ -181,8 +181,8 @@ protected:
         auto&& column_def = to_column_definition(*schema, *_entity);
         auto term = to_term(to_receivers(*schema, column_def), *_value, db, schema->ks_name(), bound_names);
         auto r = ::make_shared<restrictions::single_column_restriction>(column_def);
-        r->expression = expr::make_column_op(
-                &column_def, is_key ? expr::oper_t::CONTAINS_KEY : expr::oper_t::CONTAINS, std::move(term));
+        r->expression = expr::binary_operator{
+                &column_def, is_key ? expr::oper_t::CONTAINS_KEY : expr::oper_t::CONTAINS, std::move(term)};
         return r;
     }
 
