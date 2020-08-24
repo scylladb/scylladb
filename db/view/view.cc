@@ -1254,7 +1254,21 @@ future<> view_builder::start(service::migration_manager& mm) {
             }
             auto built = system_keyspace::load_built_views().get0();
             auto in_progress = system_keyspace::load_view_build_progress().get0();
-            calculate_shard_build_step(vbi, std::move(built), std::move(in_progress)).get();
+            setup_shard_build_step(vbi, std::move(built), std::move(in_progress));
+            // All shards need to arrive at the same decisions on whether or not to
+            // restart a view build at some common token (reshard), and which token
+            // to restart at. So we need to wait until all shards have read the view
+            // build statuses before they can all proceed to make the (same) decision.
+            // If we don't synchronize here, a fast shard may make a decision, start
+            // building and finish a build step - before the slowest shard even read
+            // the view build information.
+            container().invoke_on(0, [] (view_builder& builder) {
+                if (++builder._shards_finished_read == smp::count) {
+                    builder._shards_finished_read_promise.set_value();
+                }
+                return builder._shards_finished_read_promise.get_shared_future();
+            }).get();
+            calculate_shard_build_step(vbi).get();
             _mnotifier.register_listener(this);
             _current_step = _base_to_build_step.begin();
             // Waited on indirectly in stop().
@@ -1401,7 +1415,7 @@ void view_builder::reshard(
     }
 }
 
-future<> view_builder::calculate_shard_build_step(
+void view_builder::setup_shard_build_step(
         view_builder_init_state& vbi,
         std::vector<system_keyspace::view_name> built,
         std::vector<system_keyspace::view_build_progress> in_progress) {
@@ -1466,21 +1480,20 @@ future<> view_builder::calculate_shard_build_step(
                     std::move(next_token_opt)});
         }
     }
+}
 
-    // All shards need to arrive at the same decisions on whether or not to
-    // restart a view build at some common token (reshard), and which token
-    // to restart at. So we need to wait until all shards have read the view
-    // build statuses before they can all proceed to make the (same) decision.
-    // If we don't synchronize here, a fast shard may make a decision, start
-    // building and finish a build step - before the slowest shard even read
-    // the view build information.
-    container().invoke_on(0, [] (view_builder& builder) {
-        if (++builder._shards_finished_read == smp::count) {
-            builder._shards_finished_read_promise.set_value();
+future<> view_builder::calculate_shard_build_step(view_builder_init_state& vbi) {
+    auto base_table_exists = [this] (const view_ptr& view) {
+        // This is a safety check in case this node missed a create MV statement
+        // but got a drop table for the base, and another node didn't get the
+        // drop notification and sent us the view schema.
+        try {
+            _db.find_schema(view->view_info()->base_id());
+            return true;
+        } catch (const no_such_column_family&) {
+            return false;
         }
-        return builder._shards_finished_read_promise.get_shared_future();
-    }).get();
-
+    };
     std::unordered_set<utils::UUID> loaded_views;
     if (vbi.status_per_shard.size() != smp::count) {
         reshard(std::move(vbi.status_per_shard), loaded_views);
