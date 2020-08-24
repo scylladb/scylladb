@@ -80,10 +80,6 @@ abstract_function_selector::new_factory(shared_ptr<functions::function> fun, sha
             return _fun->return_type();
         }
 
-        virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override {
-            return _fun->uses_function(ks_name, function_name);
-        }
-
         virtual shared_ptr<selector> new_instance() const override {
             using ret_type = shared_ptr<selector>;
             return _fun->is_aggregate() ? ret_type(::make_shared<aggregate_function_selector>(_fun, _factories->new_instances()))

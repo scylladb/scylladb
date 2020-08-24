@@ -131,10 +131,6 @@ class selector::factory {
 public:
     virtual ~factory() {}
 
-    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const {
-        return false;
-    }
-
     /**
      * Returns the column specification corresponding to the output value of the selector instances created by
      * this factory.

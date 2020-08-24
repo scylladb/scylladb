@@ -46,11 +46,6 @@ uint32_t cql3::statements::authorization_statement::get_bound_terms() const {
     return 0;
 }
 
-bool cql3::statements::authorization_statement::uses_function(
-                const sstring& ks_name, const sstring& function_name) const {
-    return parsed_statement::uses_function(ks_name, function_name);
-}
-
 bool cql3::statements::authorization_statement::depends_on_keyspace(
                 const sstring& ks_name) const {
     return false;

@@ -140,10 +140,6 @@ public:
         os << ") -> " << utf8_type->as_cql3_type().to_string();
     }
 
-    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override {
-        return false;
-    }
-
     virtual sstring column_name(const std::vector<sstring>& column_names) const override {
         return "[json]";
     }

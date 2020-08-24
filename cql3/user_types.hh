@@ -91,7 +91,6 @@ public:
         std::vector<shared_ptr<term>> _values;
     public:
         delayed_value(user_type type, std::vector<shared_ptr<term>> values);
-        virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override;
         virtual bool contains_bind_marker() const override;
         virtual void collect_marker_specification(variable_specifications& bound_names) const;
     private:

@@ -86,31 +86,6 @@ modification_statement::modification_statement(statement_type type_, uint32_t bo
     , _ks_sel(::is_system_keyspace(schema_->ks_name()) ? ks_selector::SYSTEM : ks_selector::NONSYSTEM)
 { }
 
-bool modification_statement::uses_function(const sstring& ks_name, const sstring& function_name) const {
-    if (attrs->uses_function(ks_name, function_name)) {
-        return true;
-    }
-    if (_restrictions->uses_function(ks_name, function_name)) {
-        return true;
-    }
-    for (auto&& operation : _column_operations) {
-        if (operation && operation->uses_function(ks_name, function_name)) {
-            return true;
-        }
-    }
-    for (auto&& condition : _regular_conditions) {
-        if (condition && condition->uses_function(ks_name, function_name)) {
-            return true;
-        }
-    }
-    for (auto&& condition : _static_conditions) {
-        if (condition && condition->uses_function(ks_name, function_name)) {
-            return true;
-        }
-    }
-    return false;
-}
-
 uint32_t modification_statement::get_bound_terms() const {
     return _bound_terms;
 }

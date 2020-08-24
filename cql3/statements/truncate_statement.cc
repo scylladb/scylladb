@@ -66,11 +66,6 @@ std::unique_ptr<prepared_statement> truncate_statement::prepare(database& db,cql
     return std::make_unique<prepared_statement>(::make_shared<truncate_statement>(*this));
 }
 
-bool truncate_statement::uses_function(const sstring& ks_name, const sstring& function_name) const
-{
-    return parsed_statement::uses_function(ks_name, function_name);
-}
-
 bool truncate_statement::depends_on_keyspace(const sstring& ks_name) const
 {
     return false;

@@ -144,8 +144,6 @@ public:
             std::unique_ptr<attributes> attrs_,
             cql_stats& stats_);
 
-    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override;
-
     virtual bool require_full_clustering_key() const = 0;
 
     virtual bool allow_clustering_key_slices() const = 0;

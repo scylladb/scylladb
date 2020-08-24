@@ -99,8 +99,6 @@ public:
     selector_factories(std::vector<::shared_ptr<selectable>> selectables,
             database& db, schema_ptr schema, std::vector<const column_definition*>& defs);
 public:
-    bool uses_function(const sstring& ks_name, const sstring& function_name) const;
-
     /**
      * Adds a new <code>Selector.Factory</code> for a column that is needed only for ORDER BY or post
      * processing purposes.

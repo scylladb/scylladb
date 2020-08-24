@@ -73,11 +73,6 @@ std::unique_ptr<prepared_statement> use_statement::prepare(database& db, cql_sta
 
 }
 
-bool use_statement::uses_function(const sstring& ks_name, const sstring& function_name) const
-{
-    return false;
-}
-
 bool use_statement::depends_on_keyspace(const sstring& ks_name) const
 {
     return false;

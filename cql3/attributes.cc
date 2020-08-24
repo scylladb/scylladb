@@ -52,11 +52,6 @@ attributes::attributes(::shared_ptr<term>&& timestamp, ::shared_ptr<term>&& time
     , _time_to_live{std::move(time_to_live)}
 { }
 
-bool attributes::uses_function(const sstring& ks_name, const sstring& function_name) const {
-    return (_timestamp && _timestamp->uses_function(ks_name, function_name))
-        || (_time_to_live && _time_to_live->uses_function(ks_name, function_name));
-}
-
 bool attributes::is_timestamp_set() const {
     return bool(_timestamp);
 }

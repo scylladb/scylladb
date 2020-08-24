@@ -71,8 +71,6 @@ public:
     void set_bound_variables(const std::vector<::shared_ptr<column_identifier>>& bound_names);
 
     virtual std::unique_ptr<prepared_statement> prepare(database& db, cql_stats& stats) = 0;
-
-    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const;
 };
 
 }

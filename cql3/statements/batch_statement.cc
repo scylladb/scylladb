@@ -87,12 +87,6 @@ batch_statement::batch_statement(type type_,
 {
 }
 
-bool batch_statement::uses_function(const sstring& ks_name, const sstring& function_name) const
-{
-    return _attrs->uses_function(ks_name, function_name)
-            || boost::algorithm::any_of(_statements, [&] (auto&& s) { return s.statement->uses_function(ks_name, function_name); });
-}
-
 bool batch_statement::depends_on_keyspace(const sstring& ks_name) const
 {
     return false;

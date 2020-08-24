@@ -91,8 +91,6 @@ public:
      */
     void collect_marker_specificaton(variable_specifications& bound_names) const;
 
-    bool uses_function(const sstring& ks_name, const sstring& function_name) const;
-
     // Retrieve parameter marker values, if any, find the appropriate collection
     // element if the cell is a collection and an element access is used in the expression,
     // and evaluate the condition.

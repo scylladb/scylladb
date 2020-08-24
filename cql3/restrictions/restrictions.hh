@@ -72,15 +72,6 @@ public:
     }
 
     /**
-     * Returns <code>true</code> if one of the restrictions use the specified function.
-     *
-     * @param ks_name the keyspace name
-     * @param function_name the function name
-     * @return <code>true</code> if one of the restrictions use the specified function, <code>false</code> otherwise.
-     */
-    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const = 0;
-
-    /**
      * Check if the restriction is on indexed columns.
      *
      * @param index_manager the index manager

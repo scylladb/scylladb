@@ -127,15 +127,6 @@ public:
         return i->second;
     }
 
-    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override {
-        for (auto&& e : _restrictions) {
-            if (expr::uses_function(e.second->expression, ks_name, function_name)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
     virtual bool empty() const override {
         return _restrictions.empty();
     }
