@@ -24,6 +24,7 @@ import os
 import sys
 import glob
 import platform
+import distro
 
 from scylla_util import *
 
@@ -132,7 +133,7 @@ if __name__ == '__main__':
         for n in glob.glob('/sys/devices/system/node/node?'):
             with open('{n}/hugepages/hugepages-2048kB/nr_hugepages'.format(n=n), 'w') as f:
                 f.write(nr_hugepages)
-        if dist_name() == 'Ubuntu':
+        if distro.name() == 'Ubuntu':
             run('hugeadm --create-mounts')
     else:
         try:

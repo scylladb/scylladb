@@ -26,6 +26,7 @@ import pwd
 import grp
 import sys
 import stat
+import distro
 from scylla_util import *
 
 if __name__ == '__main__':
@@ -101,7 +102,7 @@ if __name__ == '__main__':
         fsdev = args.raiddev
 
     print('Creating {type} for scylla using {nr_disk} disk(s): {disks}'.format(type='RAID0' if raid else 'XFS volume', nr_disk=len(disks), disks=args.disks))
-    if dist_name() == 'Ubuntu' and dist_ver() == '14.04':
+    if distro.name() == 'Ubuntu' and distro.version() == '14.04':
         if raid:
             run('udevadm settle')
             run('mdadm --create --verbose --force --run {raid} --level=0 -c1024 --raid-devices={nr_disk} {disks}'.format(raid=fsdev, nr_disk=len(disks), disks=args.disks.replace(',', ' ')))
