@@ -15,6 +15,7 @@ import bisect
 import os
 import subprocess
 import time
+import socket
 
 
 def template_arguments(gdb_type):
@@ -502,6 +503,26 @@ def uint64_t(val):
         val += 1 << 64
     return val
 
+class inet_address_printer(gdb.printing.PrettyPrinter):
+    'print a gms::inet_address'
+
+    def __init__(self, val):
+        self.val = val
+
+    def to_string(self):
+        family = str(self.val['_addr']['_in_family'])
+        if family == "seastar::net::inet_address::family::INET":
+            raw = self.val['_addr']['_in']['s_addr']
+            ipv4 = socket.inet_ntop(socket.AF_INET, struct.pack('=L', raw))
+            return str(ipv4)
+        else:
+            raw = self.val['_addr']['_in6']['__in6_u']['__u6_addr32']
+            ipv6 = socket.inet_ntop(socket.AF_INET6, struct.pack('=LLLL', raw[0], raw[1], raw[2], raw[3]))
+            return str(ipv6)
+
+    def display_hint(self):
+        return 'string'
+
 
 class sstring_printer(gdb.printing.PrettyPrinter):
     'print an sstring'
@@ -648,6 +669,7 @@ def build_pretty_printer():
     pp.add_printer('managed_vector', r'^managed_vector<.*>$', managed_vector_printer)
     pp.add_printer('uuid', r'^utils::UUID$', uuid_printer)
     pp.add_printer('boost_intrusive_list', r'^boost::intrusive::list<.*>$', boost_intrusive_list_printer)
+    pp.add_printer('inet_address_printer', r'^gms::inet_address$', inet_address_printer)
     return pp
 
 
