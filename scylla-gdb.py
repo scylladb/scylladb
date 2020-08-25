@@ -656,8 +656,9 @@ class boost_intrusive_list_printer(gdb.printing.PrettyPrinter):
     def __init__(self, val):
         self.val = intrusive_list(val)
     def to_string(self):
-        items = [str(v) for v in self.val]
-        return 'boost::intrusive::list of size {} = [{}]'.format(len(items), ', '.join(items))
+        items = ['@' + str(v.address) + '=' + str(v) for v in self.val]
+        ptrs = [str(v.address) for v in self.val]
+        return 'boost::intrusive::list of size {} = [{}] = [{}]'.format(len(items), ', '.join(ptrs), ', '.join(items))
 
 def build_pretty_printer():
     pp = gdb.printing.RegexpCollectionPrettyPrinter('scylla')
