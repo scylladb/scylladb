@@ -647,7 +647,7 @@ def build_pretty_printer():
     pp.add_printer('row', r'^row$', row_printer)
     pp.add_printer('managed_vector', r'^managed_vector<.*>$', managed_vector_printer)
     pp.add_printer('uuid', r'^utils::UUID$', uuid_printer)
-    pp.add_printer('b0ost_intrusive_list', r'^boost::intrusive::list<.*>$', boost_intrusive_list_printer)
+    pp.add_printer('boost_intrusive_list', r'^boost::intrusive::list<.*>$', boost_intrusive_list_printer)
     return pp
 
 
