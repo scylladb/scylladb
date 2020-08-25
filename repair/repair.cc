@@ -840,8 +840,8 @@ future<> repair_info::do_streaming() {
 }
 
 void repair_info::check_failed_ranges() {
-    rlogger.info("repair id {} on shard {} stats: ranges_nr={}, sub_ranges_nr={}, {}",
-        id, shard, ranges.size(), _sub_ranges_nr, _stats.get_stats());
+    rlogger.info("repair id {} on shard {} stats: repair_reason={}, keyspace={}, tables={}, ranges_nr={}, sub_ranges_nr={}, {}",
+        id, shard, reason, keyspace, table_names(), ranges.size(), _sub_ranges_nr, _stats.get_stats());
     if (nr_failed_ranges) {
         rlogger.warn("repair id {} on shard {} failed - {} ranges failed", id, shard, nr_failed_ranges);
         throw std::runtime_error(format("repair id {} on shard {} failed to repair {} sub ranges", id, shard, nr_failed_ranges));
