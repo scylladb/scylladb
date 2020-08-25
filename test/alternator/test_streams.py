@@ -769,11 +769,74 @@ def test_streams_updateitem_old_image_lsi(test_table_ss_old_image_and_lsi, dynam
         return events
     do_test(test_table_ss_old_image_and_lsi, dynamodbstreams, do_updates, 'OLD_IMAGE')
 
-# TODO: test NEW_IMAGE and NEW_AND_OLD_IMAGES, similar to OLD_IMAGE above.
-# In fact, it can be exactly the same code, sharing one do_update() function.
-# Just make sure to keep three separate tests on the three separate tables -
-# testing NEW_AND_OLD_IMAGES is not enough - OLD_IMAGE might have a bug,
-# e.g., a missing column, that isn't missing in NEW_AND_OLD_IMAGES.
+# Tests similar to the above tests for OLD_IMAGE, just for NEW_IMAGE mode.
+# Verify that the NEW_IMAGE includes the entire old item (including the key),
+# that deleting the item results in a missing NEW_IMAGE, and that setting the
+# item to be empty has a different result - a NEW_IMAGE with just a key.
+# Reproduces issue #7107.
+@pytest.mark.xfail(reason="issue #7107")
+def test_streams_new_image(test_table_ss_new_image, dynamodbstreams):
+    def do_updates(table, p, c):
+        events = []
+        table.update_item(Key={'p': p, 'c': c},
+            UpdateExpression='SET x = :val1', ExpressionAttributeValues={':val1': 2})
+        # Confirm that when adding one attribute "x", the NewImage contains both
+        # the new x, and the key columns (p and c).
+        # We use here '*' instead of 'INSERT' to avoid testing issue #6918 here.
+        events.append(['*', {'p': p, 'c': c}, None, {'p': p, 'c': c, 'x': 2}])
+        # Confirm that when adding just attribute "y", the NewImage will contain
+        # all the attributes, including the old "x":
+        table.update_item(Key={'p': p, 'c': c},
+            UpdateExpression='SET y = :val1', ExpressionAttributeValues={':val1': 3})
+        events.append(['MODIFY', {'p': p, 'c': c}, {'p': p, 'c': c, 'x': 2}, {'p': p, 'c': c, 'x': 2, 'y': 3}])
+        # Confirm that when deleting the columns x and y, the NewImage becomes
+        # empty - but still exists and contains the key columns,
+        table.update_item(Key={'p': p, 'c': c},
+            UpdateExpression='REMOVE x, y')
+        events.append(['MODIFY', {'p': p, 'c': c}, {'p': p, 'c': c, 'x': 2, 'y': 3}, {'p': p, 'c': c}])
+        # Confirm that deleting the item results in a missing NewImage:
+        table.delete_item(Key={'p': p, 'c': c})
+        events.append(['REMOVE', {'p': p, 'c': c}, {'p': p, 'c': c}, None])
+        return events
+    do_test(test_table_ss_new_image, dynamodbstreams, do_updates, 'NEW_IMAGE')
+
+# Test similar to the above test for NEW_IMAGE corner cases, but here for
+# NEW_AND_OLD_IMAGES mode.
+# Although it is likely that if both OLD_IMAGE and NEW_IMAGE work correctly then
+# so will the combined NEW_AND_OLD_IMAGES mode, it is still possible that the
+# implementation of the combined mode has unique bugs, so it is worth testing
+# it separately.
+# Reproduces issue #7107.
+@pytest.mark.xfail(reason="issue #7107")
+def test_streams_new_and_old_images(test_table_ss_new_and_old_images, dynamodbstreams):
+    def do_updates(table, p, c):
+        events = []
+        table.update_item(Key={'p': p, 'c': c},
+            UpdateExpression='SET x = :val1', ExpressionAttributeValues={':val1': 2})
+        # The item doesn't yet exist, so OldImage is missing.
+        # We use here '*' instead of 'INSERT' to avoid testing issue #6918 here.
+        events.append(['*', {'p': p, 'c': c}, None, {'p': p, 'c': c, 'x': 2}])
+        # Confirm that when adding just attribute "y", the NewImage will contain
+        # all the attributes, including the old "x". Also, OldImage contains the
+        # key attributes, not just "x":
+        table.update_item(Key={'p': p, 'c': c},
+            UpdateExpression='SET y = :val1', ExpressionAttributeValues={':val1': 3})
+        events.append(['MODIFY', {'p': p, 'c': c}, {'p': p, 'c': c, 'x': 2}, {'p': p, 'c': c, 'x': 2, 'y': 3}])
+        # Confirm that when deleting the attributes x and y, the NewImage becomes
+        # empty - but still exists and contains the key attributes:
+        table.update_item(Key={'p': p, 'c': c},
+            UpdateExpression='REMOVE x, y')
+        events.append(['MODIFY', {'p': p, 'c': c}, {'p': p, 'c': c, 'x': 2, 'y': 3}, {'p': p, 'c': c}])
+        # Confirm that when adding an attribute z to the empty item, OldItem is
+        # not missing - it just contains only the key attributes:
+        table.update_item(Key={'p': p, 'c': c},
+            UpdateExpression='SET z = :val1', ExpressionAttributeValues={':val1': 4})
+        events.append(['MODIFY', {'p': p, 'c': c}, {'p': p, 'c': c}, {'p': p, 'c': c, 'z': 4}])
+        # Confirm that deleting the item results in a missing NewImage:
+        table.delete_item(Key={'p': p, 'c': c})
+        events.append(['REMOVE', {'p': p, 'c': c}, {'p': p, 'c': c, 'z': 4}, None])
+        return events
+    do_test(test_table_ss_new_and_old_images, dynamodbstreams, do_updates, 'NEW_AND_OLD_IMAGES')
 
 # Test that when a stream shard has no data to read, GetRecords returns an
 # empty Records array - not a missing one. Reproduces issue #6926.
