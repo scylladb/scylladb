@@ -25,9 +25,9 @@
 import pytest
 
 def pytest_addoption(parser):
-    parser.addoption("--redis-host", action="store",
+    parser.addoption("--redis-host", action="store", default="localhost",
         help="ip address")
-    parser.addoption("--redis-port", action="store", type=int,
+    parser.addoption("--redis-port", action="store", type=int, default=6379,
         help="port number")
 
 
