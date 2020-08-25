@@ -299,6 +299,9 @@ class std_array:
     def __bool__(self):
         return self.__nonzero__()
 
+    def __getitem__(self, i):
+        return self.ref['_M_elems'][int(i)]
+
 
 class std_vector:
     def __init__(self, ref):
@@ -1342,8 +1345,13 @@ class scylla_memory(gdb.Command):
         stats_ptr_type = gdb.lookup_type('service::storage_proxy::stats').pointer()
         key_id = int(sp['_stats_key']['_id'])
         per_sg_stats = {}
+        reactor = gdb.parse_and_eval('seastar::local_engine')
         for tq in get_local_task_queues():
-            stats = std_vector(tq['_scheduling_group_specific_vals'])[key_id].reinterpret_cast(stats_ptr_type).dereference()
+            try:
+                sched_group_specific = std_array(reactor['_scheduling_group_specific_data']['per_scheduling_group_data'])[int(tq['_id'])]['specific_vals']
+            except gdb.error: # 4.0 backwards compatibility
+                sched_group_specific = tq['_scheduling_group_specific_vals']
+            stats = std_vector(sched_group_specific)[key_id].reinterpret_cast(stats_ptr_type).dereference()
             if int(stats['writes']) == 0 and int(stats['background_writes']) == 0 and int(stats['foreground_reads']) == 0 and int(stats['reads']) == 0:
                 continue
             per_sg_stats[tq] = stats
