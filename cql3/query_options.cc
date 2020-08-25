@@ -161,23 +161,6 @@ query_options::query_options(std::vector<cql3::raw_value> values)
           db::consistency_level::ONE, infinite_timeout_config, std::move(values))
 {}
 
-bytes_view query_options::linearize(fragmented_temporary_buffer::view view) const
-{
-    if (view.empty()) {
-        return { };
-    } else if (std::next(view.begin()) == view.end()) {
-        return *view.begin();
-    } else {
-        auto ptr = _temporaries.write_place_holder(view.size_bytes());
-        auto dst = ptr;
-        using boost::range::for_each;
-        for_each(view, [&] (bytes_view bv) {
-            dst = std::copy(bv.begin(), bv.end(), dst);
-        });
-        return bytes_view(ptr, view.size_bytes());
-    }
-}
-
 void query_options::prepare(const std::vector<lw_shared_ptr<column_specification>>& specs)
 {
     if (!_names) {

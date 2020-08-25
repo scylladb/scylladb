@@ -79,7 +79,6 @@ private:
     const std::optional<std::vector<sstring_view>> _names;
     std::vector<cql3::raw_value> _values;
     std::vector<cql3::raw_value_view> _value_views;
-    mutable bytes_ostream _temporaries;
     const bool _skip_metadata;
     const specific_options _options;
     cql_serialization_format _cql_serialization_format;
@@ -177,8 +176,6 @@ public:
     size_t get_values_count() const {
         return _value_views.size();
     }
-
-    bytes_view linearize(fragmented_temporary_buffer::view) const;
 
     bool skip_metadata() const {
         return _skip_metadata;
