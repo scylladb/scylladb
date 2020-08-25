@@ -102,19 +102,7 @@ public:
         return !(*this == other);
     }
 
-    friend std::ostream& operator<<(std::ostream& os, const raw_value_view& value) {
-        seastar::visit(value._data, [&] (fragmented_temporary_buffer::view v) {
-            os << "{ value: ";
-            using boost::range::for_each;
-            for_each(v, [&os] (bytes_view bv) { os << bv; });
-            os << " }";
-        }, [&] (null_value) {
-            os << "{ null }";
-        }, [&] (unset_value) {
-            os << "{ unset }";
-        });
-        return os;
-    }
+    friend std::ostream& operator<<(std::ostream& os, const raw_value_view& value);
 };
 
 /// \brief Raw CQL protocol value.
@@ -144,15 +132,7 @@ public:
     static raw_value make_unset_value() {
         return raw_value{std::move(unset_value{})};
     }
-    static raw_value make_value(const raw_value_view& view) {
-        if (view.is_null()) {
-            return make_null();
-        }
-        if (view.is_unset_value()) {
-            return make_unset_value();
-        }
-        return make_value(linearized(*view));
-    }
+    static raw_value make_value(const raw_value_view& view);
     static raw_value make_value(bytes&& bytes) {
         return raw_value{std::move(bytes)};
     }
@@ -189,13 +169,7 @@ public:
     const bytes& operator*() const {
         return std::get<bytes>(_data);
     }
-    raw_value_view to_view() const {
-        switch (_data.index()) {
-        case 0:  return raw_value_view::make_value(fragmented_temporary_buffer::view(bytes_view{std::get<bytes>(_data)}));
-        case 1:  return raw_value_view::make_null();
-        default: return raw_value_view::make_unset_value();
-        }
-    }
+    raw_value_view to_view() const;
 };
 
 }
