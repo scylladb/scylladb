@@ -498,9 +498,9 @@ arg_parser.add_argument('--with-ragel', dest='ragel_exec', action='store', defau
 add_tristate(arg_parser, name='stack-guards', dest='stack_guards', help='Use stack guards')
 arg_parser.add_argument('--verbose', dest='verbose', action='store_true',
                         help='Make configure.py output more verbose (useful for debugging the build process itself)')
-arg_parser.add_argument('--repeat', dest='test_repeat', action='store', type=str, default='3',
+arg_parser.add_argument('--test-repeat', dest='test_repeat', action='store', type=str, default='1',
                          help='Set number of times to repeat each unittest.')
-arg_parser.add_argument('--timeout', dest='test_timeout', action='store', type=str, default='7200')
+arg_parser.add_argument('--test-timeout', dest='test_timeout', action='store', type=str, default='7200')
 args = arg_parser.parse_args()
 
 defines = ['XXH_PRIVATE_API',
@@ -1399,12 +1399,6 @@ if args.ragel_exec:
     ragel_exec = args.ragel_exec
 else:
     ragel_exec = "ragel"
-
-if args.test_repeat:
-    test_repeat = args.test_repeat
-
-if args.test_timeout:
-    test_timeout = args.test_timeout
 
 for mode in build_modes:
     configure_abseil(outdir, mode)
