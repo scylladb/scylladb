@@ -635,19 +635,7 @@ def get_scylla_dirs():
     Returns a list of scylla directories configured in /etc/scylla/scylla.yaml.
     Verifies that mandatory parameters are set.
     """
-    scylla_yaml_name = '/etc/scylla/scylla.yaml'
-    y = yaml.safe_load(open(scylla_yaml_name))
-
-    # Check that mandatory fields are set
-    if 'workdir' not in y or not y['workdir']:
-        y['workdir'] = datadir()
-    if 'data_file_directories' not in y or \
-            not y['data_file_directories'] or \
-            not len(y['data_file_directories']) or \
-            not " ".join(y['data_file_directories']).strip():
-        y['data_file_directories'] = [os.path.join(y['workdir'], 'data')]
-    if 'commitlog_directory' not in y or not y['commitlog_directory']:
-        y['commitlog_directory'] = os.path.join(y['workdir'], 'commitlog')
+    y = parse_scylla_dirs_with_default()
 
     dirs = []
     dirs.extend(y['data_file_directories'])
