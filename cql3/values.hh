@@ -39,11 +39,22 @@ struct null_value {
 struct unset_value {
 };
 
+class raw_value;
 /// \brief View to a raw CQL protocol value.
 ///
 /// \see raw_value
 struct raw_value_view {
     std::variant<fragmented_temporary_buffer::view, null_value, unset_value> _data;
+    // Temporary storage is only useful if a raw_value_view needs to be instantiated
+    // with a value which lifetime is bounded only to the view itself.
+    // This hack is introduced in order to avoid storing temporary storage
+    // in an external container, which may cause memory leaking problems.
+    // This pointer is disengaged for regular raw_value_view instances.
+    // Data is stored in a shared pointer for two reasons:
+    // - pointers are cheap to copy
+    // - it makes the view keep its semantics - it's safe to copy a view multiple times
+    //   and all copies still refer to the same underlying data.
+    lw_shared_ptr<bytes> _temporary_storage = nullptr;
 
     raw_value_view(null_value&& data)
         : _data{std::move(data)}
@@ -54,6 +65,9 @@ struct raw_value_view {
     raw_value_view(fragmented_temporary_buffer::view data)
         : _data{data}
     {}
+    // This constructor is only used by make_temporary() and it acquires ownership
+    // of the given buffer. The view created that way refers to its own temporary storage.
+    explicit raw_value_view(bytes&& temporary_storage);
 public:
     static raw_value_view make_null() {
         return raw_value_view{std::move(null_value{})};
@@ -64,6 +78,7 @@ public:
     static raw_value_view make_value(fragmented_temporary_buffer::view view) {
         return raw_value_view{view};
     }
+    static raw_value_view make_temporary(raw_value&& value);
     bool is_null() const {
         return std::holds_alternative<null_value>(_data);
     }

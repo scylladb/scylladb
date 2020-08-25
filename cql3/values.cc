@@ -55,4 +55,16 @@ raw_value raw_value::make_value(const raw_value_view& view) {
     return make_value(linearized(*view));
 }
 
+raw_value_view raw_value_view::make_temporary(raw_value&& value) {
+    if (!value) {
+        return raw_value_view::make_null();
+    }
+    return raw_value_view(std::move(value).extract_value());
+}
+
+raw_value_view::raw_value_view(bytes&& tmp) {
+    _temporary_storage = make_lw_shared<bytes>(std::move(tmp));
+    _data = fragmented_temporary_buffer::view(bytes_view(*_temporary_storage));
+}
+
 }
