@@ -1983,6 +1983,11 @@ void table::set_schema(schema_ptr s) {
     }
     _schema = std::move(s);
 
+    for (auto&& v : _views) {
+        v->view_info()->set_base_info(
+            v->view_info()->make_base_dependent_view_info(*_schema));
+    }
+
     set_compaction_strategy(_schema->compaction_strategy());
     trigger_compaction();
 }
@@ -1994,7 +1999,8 @@ static std::vector<view_ptr>::iterator find_view(std::vector<view_ptr>& views, c
 }
 
 void table::add_or_update_view(view_ptr v) {
-    v->view_info()->initialize_base_dependent_fields(*schema());
+    v->view_info()->set_base_info(
+        v->view_info()->make_base_dependent_view_info(*_schema));
     auto existing = find_view(_views, v);
     if (existing != _views.end()) {
         *existing = std::move(v);
@@ -2047,7 +2053,7 @@ static size_t memory_usage_of(const std::vector<frozen_mutation_and_schema>& ms)
  * @return a future resolving to the mutations to apply to the views, which can be empty.
  */
 future<> table::generate_and_propagate_view_updates(const schema_ptr& base,
-        std::vector<view_ptr>&& views,
+        std::vector<db::view::view_and_base>&& views,
         mutation&& m,
         flat_mutation_reader_opt existings,
         tracing::trace_state_ptr tr_state,
@@ -2159,7 +2165,7 @@ table::local_base_lock(
  * @return a future that resolves when the updates have been acknowledged by the view replicas
  */
 future<> table::populate_views(
-        std::vector<view_ptr> views,
+        std::vector<db::view::view_and_base> views,
         dht::token base_token,
         flat_mutation_reader&& reader,
         gc_clock::time_point now) {
@@ -2530,7 +2536,7 @@ future<row_locker::lock_holder> table::do_push_view_replica_updates(const schema
     utils::get_local_injector().inject("table_push_view_replica_updates_stale_time_point", [&now] {
         now -= 10s;
     });
-    auto views = affected_views(base, m, now);
+    auto views = db::view::with_base_info_snapshot(affected_views(base, m, now));
     if (views.empty()) {
         return make_ready_future<row_locker::lock_holder>();
     }

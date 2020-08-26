@@ -55,6 +55,7 @@
 #include <limits>
 #include <cstddef>
 #include "schema_fwd.hh"
+#include "db/view/view.hh"
 #include "db/schema_features.hh"
 #include "gms/feature.hh"
 #include "timestamp.hh"
@@ -1008,8 +1009,9 @@ public:
         return *_config.sstables_manager;
     }
 
+    // Reader's schema must be the same as the base schema of each of the views.
     future<> populate_views(
-            std::vector<view_ptr>,
+            std::vector<db::view::view_and_base>,
             dht::token base_token,
             flat_mutation_reader&&,
             gc_clock::time_point);
@@ -1027,7 +1029,7 @@ private:
             tracing::trace_state_ptr tr_state, reader_concurrency_semaphore& sem, const io_priority_class& io_priority, query::partition_slice::option_set custom_opts) const;
     std::vector<view_ptr> affected_views(const schema_ptr& base, const mutation& update, gc_clock::time_point now) const;
     future<> generate_and_propagate_view_updates(const schema_ptr& base,
-            std::vector<view_ptr>&& views,
+            std::vector<db::view::view_and_base>&& views,
             mutation&& m,
             flat_mutation_reader_opt existings,
             tracing::trace_state_ptr tr_state,

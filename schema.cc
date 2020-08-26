@@ -19,6 +19,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <seastar/core/on_internal_error.hh>
 #include <map>
 #include "utils/UUID_gen.hh"
 #include "cql3/column_identifier.hh"
@@ -42,6 +43,8 @@
 #include "cdc/cdc_extension.hh"
 
 constexpr int32_t schema::NAME_LENGTH;
+
+extern logging::logger dblog;
 
 sstring to_sstring(column_kind k) {
     switch (k) {
@@ -592,11 +595,15 @@ schema::get_column_definition(const bytes& name) const {
 
 const column_definition&
 schema::column_at(column_kind kind, column_id id) const {
-    return _raw._columns.at(column_offset(kind) + id);
+    return column_at(static_cast<ordinal_column_id>(column_offset(kind) + id));
 }
 
 const column_definition&
 schema::column_at(ordinal_column_id ordinal_id) const {
+    if (size_t(ordinal_id) >= _raw._columns.size()) [[unlikely]] {
+        on_internal_error(dblog, format("{}.{}@{}: column id {:d} >= {:d}",
+            ks_name(), cf_name(), version(), size_t(ordinal_id), _raw._columns.size()));
+    }
     return _raw._columns.at(static_cast<column_count_type>(ordinal_id));
 }
 
