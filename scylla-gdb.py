@@ -15,6 +15,7 @@ import bisect
 import os
 import subprocess
 import time
+import socket
 
 
 def template_arguments(gdb_type):
@@ -505,6 +506,26 @@ def uint64_t(val):
         val += 1 << 64
     return val
 
+class inet_address_printer(gdb.printing.PrettyPrinter):
+    'print a gms::inet_address'
+
+    def __init__(self, val):
+        self.val = val
+
+    def to_string(self):
+        family = str(self.val['_addr']['_in_family'])
+        if family == "seastar::net::inet_address::family::INET":
+            raw = self.val['_addr']['_in']['s_addr']
+            ipv4 = socket.inet_ntop(socket.AF_INET, struct.pack('=L', raw))
+            return str(ipv4)
+        else:
+            raw = self.val['_addr']['_in6']['__in6_u']['__u6_addr32']
+            ipv6 = socket.inet_ntop(socket.AF_INET6, struct.pack('=LLLL', raw[0], raw[1], raw[2], raw[3]))
+            return str(ipv6)
+
+    def display_hint(self):
+        return 'string'
+
 
 class sstring_printer(gdb.printing.PrettyPrinter):
     'print an sstring'
@@ -638,8 +659,9 @@ class boost_intrusive_list_printer(gdb.printing.PrettyPrinter):
     def __init__(self, val):
         self.val = intrusive_list(val)
     def to_string(self):
-        items = [str(v) for v in self.val]
-        return 'boost::intrusive::list of size {} = [{}]'.format(len(items), ', '.join(items))
+        items = ['@' + str(v.address) + '=' + str(v) for v in self.val]
+        ptrs = [str(v.address) for v in self.val]
+        return 'boost::intrusive::list of size {} = [{}] = [{}]'.format(len(items), ', '.join(ptrs), ', '.join(items))
 
 def build_pretty_printer():
     pp = gdb.printing.RegexpCollectionPrettyPrinter('scylla')
@@ -650,7 +672,8 @@ def build_pretty_printer():
     pp.add_printer('row', r'^row$', row_printer)
     pp.add_printer('managed_vector', r'^managed_vector<.*>$', managed_vector_printer)
     pp.add_printer('uuid', r'^utils::UUID$', uuid_printer)
-    pp.add_printer('b0ost_intrusive_list', r'^boost::intrusive::list<.*>$', boost_intrusive_list_printer)
+    pp.add_printer('boost_intrusive_list', r'^boost::intrusive::list<.*>$', boost_intrusive_list_printer)
+    pp.add_printer('inet_address_printer', r'^gms::inet_address$', inet_address_printer)
     return pp
 
 
@@ -3774,6 +3797,49 @@ class scylla_features(gdb.Command):
             f = reference_wrapper(f).get()
             gdb.write('%s: %s\n' % (f['_name'], f['_enabled']))
 
+class scylla_repairs(gdb.Command):
+    """ List all active repair instances for both repair masters and followers.
+
+    Example:
+
+       (repair_meta*) for masters: addr = 0x600005abf830, table = myks2.standard1, ip = 127.0.0.1, states = ['127.0.0.1->repair_state::get_sync_boundary_started', '127.0.0.3->repair_state::get_sync_boundary_finished'], repair_meta = {
+         db = @0x7fffe538c9f0,
+         _messaging = @0x7fffe538ca90,
+         _cf = @0x6000066f0000,
+
+       ....
+
+       (repair_meta*) for masters: addr = 0x60000521f830, table = myks2.standard1, ip = 127.0.0.1, states = ['127.0.0.1->repair_state::get_sync_boundary_started', '127.0.0.2->repair_state::get_sync_boundary_started'], repair_meta = {
+         _db = @0x7fffe538c9f0,
+         _messaging = @0x7fffe538ca90,
+        _cf = @0x6000066f0000,
+
+       ....
+
+      (repair_meta*) for follower: addr = 0x60000432a808, table = myks2.standard1, ip = 127.0.0.1, states = ['127.0.0.1->repair_state::get_sync_boundary_started', '127.0.0.2->repair_state::unknown'], repair_meta = {
+        db = @0x7fffe538c9f0,
+        messaging = @0x7fffe538ca90,
+        _cf = @0x6000066f0000,
+
+    """
+
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla repairs', gdb.COMMAND_USER, gdb.COMPLETE_NONE, True)
+
+    def process(self, master, rm):
+        schema = rm['_schema']
+        table = schema_ptr(schema).table_name().replace('"', '')
+        all_nodes_state = []
+        ip = str(rm['_myip']).replace('"', '')
+        for n in std_vector(rm['_all_node_states']):
+            all_nodes_state.append(str(n['node']).replace('"', '') + "->" + str(n['state']))
+        gdb.write('(%s*) for %s: addr = %s, table = %s, ip = %s, states = %s, repair_meta = %s\n' % (rm.type, master, str(rm.address), table, ip, all_nodes_state, rm))
+
+    def invoke(self, arg, for_tty):
+        for rm in intrusive_list(gdb.parse_and_eval('debug::repair_meta_for_masters._repair_metas')):
+            self.process("masters", rm)
+        for rm in intrusive_list(gdb.parse_and_eval('debug::repair_meta_for_followers._repair_metas')):
+            self.process("follower", rm)
 
 class scylla_gdb_func_collection_element(gdb.Function):
     """Return the element at the specified index/key from the container.
@@ -3866,6 +3932,7 @@ scylla_memtables()
 scylla_generate_object_graph()
 scylla_smp_queues()
 scylla_features()
+scylla_repairs()
 scylla_small_objects()
 
 
