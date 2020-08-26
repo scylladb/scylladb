@@ -42,8 +42,6 @@ EOF
 
 root=/
 housekeeping=false
-python3=/opt/scylladb/python3/bin/python3
-sysconfdir=/etc/sysconfig
 nonroot=false
 packaging=false
 upgrade=false
@@ -179,6 +177,20 @@ if [ -z "$prefix" ]; then
 fi
 
 rprefix=$(realpath -m "$root/$prefix")
+
+if [ -f "/etc/os-release" ]; then
+    . /etc/os-release
+fi
+
+if [ -z "$sysconfdir" ]; then
+    sysconfdir=/etc/sysconfig
+    if ! $nonroot; then
+        if [ "$ID" = "ubuntu" ] || [ "$ID" = "debian" ]; then
+            sysconfdir=/etc/default
+        fi
+    fi
+fi
+
 if [ -z "$python3" ]; then
     python3=$prefix/python3/bin/python3
 fi
