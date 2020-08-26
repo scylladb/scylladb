@@ -957,8 +957,8 @@ file_writer::~file_writer() {
 void file_writer::close() {
     assert(!_closed && "file_writer already closed");
     try {
-        _out.close().get();
         _closed = true;
+        _out.close().get();
     } catch (...) {
         auto e = std::current_exception();
         sstlog.error("Error while closing {}: {}", get_filename(), e);
