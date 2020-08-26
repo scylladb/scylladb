@@ -21,6 +21,7 @@
 #include <vector>
 #include <list>
 #include <random>
+#include <fmt/ranges.h>
 #include "heat_load_balance.hh"
 
 logging::logger hr_logger("heat_load_balance");
