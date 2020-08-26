@@ -227,7 +227,7 @@ shared_ptr<terminal> user_types::delayed_value::bind(const query_options& option
 }
 
 cql3::raw_value_view user_types::delayed_value::bind_and_get(const query_options& options) {
-    return options.make_temporary(cql3::raw_value::make_value(user_type_impl::build_value(bind_internal(options))));
+    return cql3::raw_value_view::make_temporary(cql3::raw_value::make_value(user_type_impl::build_value(bind_internal(options))));
 }
 
 shared_ptr<terminal> user_types::marker::bind(const query_options& options) {

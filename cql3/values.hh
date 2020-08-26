@@ -39,11 +39,22 @@ struct null_value {
 struct unset_value {
 };
 
+class raw_value;
 /// \brief View to a raw CQL protocol value.
 ///
 /// \see raw_value
 struct raw_value_view {
     std::variant<fragmented_temporary_buffer::view, null_value, unset_value> _data;
+    // Temporary storage is only useful if a raw_value_view needs to be instantiated
+    // with a value which lifetime is bounded only to the view itself.
+    // This hack is introduced in order to avoid storing temporary storage
+    // in an external container, which may cause memory leaking problems.
+    // This pointer is disengaged for regular raw_value_view instances.
+    // Data is stored in a shared pointer for two reasons:
+    // - pointers are cheap to copy
+    // - it makes the view keep its semantics - it's safe to copy a view multiple times
+    //   and all copies still refer to the same underlying data.
+    lw_shared_ptr<bytes> _temporary_storage = nullptr;
 
     raw_value_view(null_value&& data)
         : _data{std::move(data)}
@@ -54,6 +65,9 @@ struct raw_value_view {
     raw_value_view(fragmented_temporary_buffer::view data)
         : _data{data}
     {}
+    // This constructor is only used by make_temporary() and it acquires ownership
+    // of the given buffer. The view created that way refers to its own temporary storage.
+    explicit raw_value_view(bytes&& temporary_storage);
 public:
     static raw_value_view make_null() {
         return raw_value_view{std::move(null_value{})};
@@ -64,6 +78,7 @@ public:
     static raw_value_view make_value(fragmented_temporary_buffer::view view) {
         return raw_value_view{view};
     }
+    static raw_value_view make_temporary(raw_value&& value);
     bool is_null() const {
         return std::holds_alternative<null_value>(_data);
     }
@@ -102,19 +117,7 @@ public:
         return !(*this == other);
     }
 
-    friend std::ostream& operator<<(std::ostream& os, const raw_value_view& value) {
-        seastar::visit(value._data, [&] (fragmented_temporary_buffer::view v) {
-            os << "{ value: ";
-            using boost::range::for_each;
-            for_each(v, [&os] (bytes_view bv) { os << bv; });
-            os << " }";
-        }, [&] (null_value) {
-            os << "{ null }";
-        }, [&] (unset_value) {
-            os << "{ unset }";
-        });
-        return os;
-    }
+    friend std::ostream& operator<<(std::ostream& os, const raw_value_view& value);
 };
 
 /// \brief Raw CQL protocol value.
@@ -144,15 +147,7 @@ public:
     static raw_value make_unset_value() {
         return raw_value{std::move(unset_value{})};
     }
-    static raw_value make_value(const raw_value_view& view) {
-        if (view.is_null()) {
-            return make_null();
-        }
-        if (view.is_unset_value()) {
-            return make_unset_value();
-        }
-        return make_value(linearized(*view));
-    }
+    static raw_value make_value(const raw_value_view& view);
     static raw_value make_value(bytes&& bytes) {
         return raw_value{std::move(bytes)};
     }
@@ -189,13 +184,12 @@ public:
     const bytes& operator*() const {
         return std::get<bytes>(_data);
     }
-    raw_value_view to_view() const {
-        switch (_data.index()) {
-        case 0:  return raw_value_view::make_value(fragmented_temporary_buffer::view(bytes_view{std::get<bytes>(_data)}));
-        case 1:  return raw_value_view::make_null();
-        default: return raw_value_view::make_unset_value();
-        }
+    bytes&& extract_value() && {
+        auto b = std::get_if<bytes>(&_data);
+        assert(b);
+        return std::move(*b);
     }
+    raw_value_view to_view() const;
 };
 
 }

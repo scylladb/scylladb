@@ -445,7 +445,7 @@ function_call::bind_and_get(const query_options& options) {
         buffers.push_back(std::move(to_bytes_opt(val)));
     }
     auto result = execute_internal(options.get_cql_serialization_format(), *_fun, std::move(buffers));
-    return options.make_temporary(cql3::raw_value::make_value(result));
+    return cql3::raw_value_view::make_temporary(cql3::raw_value::make_value(result));
 }
 
 bytes_opt
