@@ -1278,7 +1278,7 @@ private:
         if (rows.empty()) {
             return make_ready_future<>();
         }
-        return to_repair_rows_list(rows).then([this] (std::list<repair_row> row_diff) {
+        return to_repair_rows_list(std::move(rows)).then([this] (std::list<repair_row> row_diff) {
             return do_with(std::move(row_diff), [this] (std::list<repair_row>& row_diff) {
                 unsigned node_idx = 0;
                 return do_apply_rows(row_diff, node_idx, update_working_row_buf::no);
