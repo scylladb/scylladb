@@ -243,11 +243,11 @@ private:
         return *_index_reader;
     }
     future<> advance_to_next_partition() {
-        sstlog.trace("reader {}: advance_to_next_partition()", this);
+        sstlog.trace("reader {}: advance_to_next_partition()", fmt::ptr(this));
         _before_partition = true;
         auto& consumer = _consumer;
         if (consumer.is_mutation_end()) {
-            sstlog.trace("reader {}: already at partition boundary", this);
+            sstlog.trace("reader {}: already at partition boundary", fmt::ptr(this));
             _index_in_current_partition = false;
             return make_ready_future<>();
         }
@@ -267,10 +267,10 @@ private:
         });
     }
     future<> read_from_index() {
-        sstlog.trace("reader {}: read from index", this);
+        sstlog.trace("reader {}: read from index", fmt::ptr(this));
         auto tomb = _index_reader->partition_tombstone();
         if (!tomb) {
-            sstlog.trace("reader {}: no tombstone", this);
+            sstlog.trace("reader {}: no tombstone", fmt::ptr(this));
             return read_from_datafile();
         }
         auto pk = _index_reader->partition_key().to_partition_key(*_schema);
@@ -280,16 +280,16 @@ private:
         return make_ready_future<>();
     }
     future<> read_from_datafile() {
-        sstlog.trace("reader {}: read from data file", this);
+        sstlog.trace("reader {}: read from data file", fmt::ptr(this));
         return _context->read();
     }
     // Assumes that we're currently positioned at partition boundary.
     future<> read_partition() {
-        sstlog.trace("reader {}: reading partition", this);
+        sstlog.trace("reader {}: reading partition", fmt::ptr(this));
 
         _end_of_stream = true; // on_next_partition() will set it to true
         if (!_read_enabled) {
-            sstlog.trace("reader {}: eof", this);
+            sstlog.trace("reader {}: eof", fmt::ptr(this));
             return make_ready_future<>();
         }
 
@@ -306,7 +306,7 @@ private:
         //
         if (_index_in_current_partition) {
             if (_context->eof()) {
-                sstlog.trace("reader {}: eof", this);
+                sstlog.trace("reader {}: eof", fmt::ptr(this));
                 return make_ready_future<>();
             }
             if (_index_reader->partition_data_ready()) {
@@ -324,12 +324,12 @@ private:
     }
     // Can be called from any position.
     future<> read_next_partition() {
-        sstlog.trace("reader {}: read next partition", this);
+        sstlog.trace("reader {}: read next partition", fmt::ptr(this));
         // If next partition exists then on_next_partition will be called
         // and _end_of_stream will be set to false again.
         _end_of_stream = true;
         if (!_read_enabled || _single_partition_read) {
-            sstlog.trace("reader {}: eof", this);
+            sstlog.trace("reader {}: eof", fmt::ptr(this));
             return make_ready_future<>();
         }
         return advance_to_next_partition().then([this] {

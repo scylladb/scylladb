@@ -130,7 +130,7 @@ public:
         , _fn(std::move(fn)) {
 
         tlogger.trace("incremental_reader_selector {}: created for range: {} with {} sstables",
-                this,
+                fmt::ptr(this),
                 *_pr,
                 _sstables->all()->size());
     }
@@ -142,7 +142,7 @@ public:
     incremental_reader_selector& operator=(incremental_reader_selector&&) = delete;
 
     virtual std::vector<flat_mutation_reader> create_new_readers(const std::optional<dht::ring_position_view>& pos) override {
-        tlogger.trace("incremental_reader_selector {}: {}({})", this, __FUNCTION__, seastar::lazy_deref(pos));
+        tlogger.trace("incremental_reader_selector {}: {}({})", fmt::ptr(this), __FUNCTION__, seastar::lazy_deref(pos));
 
         auto readers = std::vector<flat_mutation_reader>();
 
@@ -150,7 +150,7 @@ public:
             auto selection = _selector->select(_selector_position);
             _selector_position = selection.next_position;
 
-            tlogger.trace("incremental_reader_selector {}: {} sstables to consider, advancing selector to {}", this, selection.sstables.size(),
+            tlogger.trace("incremental_reader_selector {}: {} sstables to consider, advancing selector to {}", fmt::ptr(this), selection.sstables.size(),
                     _selector_position);
 
             readers = boost::copy_range<std::vector<flat_mutation_reader>>(selection.sstables
@@ -158,7 +158,7 @@ public:
                     | boost::adaptors::transformed([this] (auto& sst) { return this->create_reader(sst); }));
         } while (!_selector_position.is_max() && readers.empty() && (!pos || dht::ring_position_tri_compare(*_s, *pos, _selector_position) >= 0));
 
-        tlogger.trace("incremental_reader_selector {}: created {} new readers", this, readers.size());
+        tlogger.trace("incremental_reader_selector {}: created {} new readers", fmt::ptr(this), readers.size());
 
         // prevents sstable_set::incremental_selector::_current_sstables from holding reference to
         // sstables when done selecting.

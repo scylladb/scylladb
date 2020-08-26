@@ -174,7 +174,7 @@ void compression::segmented_offsets::init(uint32_t chunk_size) {
 
     sstlog.trace(
             "{} {}(): chunk size {} (log2)",
-            this,
+            fmt::ptr(this),
             __FUNCTION__,
             static_cast<int>(params.first.chunk_size_log2));
 

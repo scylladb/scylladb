@@ -890,7 +890,7 @@ void segment_pool::free_segment(segment* seg) noexcept {
 }
 
 void segment_pool::free_segment(segment* seg, segment_descriptor& desc) noexcept {
-    llogger.trace("Releasing segment {}", seg);
+    llogger.trace("Releasing segment {}", fmt::ptr(seg));
     desc._region = nullptr;
     deallocate_segment(seg);
     --_segments_in_use;
@@ -1230,7 +1230,7 @@ private:
             auto pos =_active->at<char>(_active_offset);
             desc.encode(pos);
         }
-        llogger.trace("Closing segment {}, used={}, waste={} [B]", _active, _active->occupancy(), segment::size - _active_offset);
+        llogger.trace("Closing segment {}, used={}, waste={} [B]", fmt::ptr(_active), _active->occupancy(), segment::size - _active_offset);
         _closed_occupancy += _active->occupancy();
 
         _segment_descs.push(shard_segment_pool.descriptor(_active));
@@ -1264,7 +1264,7 @@ private:
 
     void compact_segment_locked(segment* seg, segment_descriptor& desc) {
         auto seg_occupancy = desc.occupancy();
-        llogger.debug("Compacting segment {} from region {}, {}", seg, id(), seg_occupancy);
+        llogger.debug("Compacting segment {} from region {}, {}", fmt::ptr(seg), id(), seg_occupancy);
 
         ++_invalidate_counter;
 
@@ -2052,7 +2052,7 @@ void tracker::impl::register_region(region::impl* r) {
     }
     reclaiming_lock _(*this);
     _regions.push_back(r);
-    llogger.debug("Registered region @{} with id={}", r, r->id());
+    llogger.debug("Registered region @{} with id={}", fmt::ptr(r), r->id());
 }
 
 void tracker::impl::unregister_region(region::impl* r) noexcept {
@@ -2288,10 +2288,10 @@ void allocating_section::on_alloc_failure(logalloc::region& r) {
     r.allocator().invalidate_references();
     if (shard_segment_pool.allocation_failure_flag()) {
         _lsa_reserve *= 2; // FIXME: decay?
-        llogger.debug("LSA allocation failure, increasing reserve in section {} to {} segments", this, _lsa_reserve);
+        llogger.debug("LSA allocation failure, increasing reserve in section {} to {} segments", fmt::ptr(this), _lsa_reserve);
     } else {
         _std_reserve *= 2; // FIXME: decay?
-        llogger.debug("Standard allocator failure, increasing head-room in section {} to {} [B]", this, _std_reserve);
+        llogger.debug("Standard allocator failure, increasing head-room in section {} to {} [B]", fmt::ptr(this), _std_reserve);
     }
     reserve();
 }

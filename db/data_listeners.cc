@@ -31,11 +31,11 @@ namespace db {
 
 void data_listeners::install(data_listener* listener) {
     _listeners.emplace(listener);
-    dblog.debug("data_listeners: install listener {}", listener);
+    dblog.debug("data_listeners: install listener {}", fmt::ptr(listener));
 }
 
 void data_listeners::uninstall(data_listener* listener) {
-    dblog.debug("data_listeners: uninstall listener {}", listener);
+    dblog.debug("data_listeners: uninstall listener {}", fmt::ptr(listener));
     _listeners.erase(listener);
 }
 
@@ -64,17 +64,17 @@ toppartitions_item_key::operator sstring() const {
 }
 
 toppartitions_data_listener::toppartitions_data_listener(database& db, sstring ks, sstring cf) : _db(db), _ks(ks), _cf(cf) {
-    dblog.debug("toppartitions_data_listener: installing {}", this);
+    dblog.debug("toppartitions_data_listener: installing {}", fmt::ptr(this));
     _db.data_listeners().install(this);
 }
 
 toppartitions_data_listener::~toppartitions_data_listener() {
-    dblog.debug("toppartitions_data_listener: uninstalling {}", this);
+    dblog.debug("toppartitions_data_listener: uninstalling {}", fmt::ptr(this));
     _db.data_listeners().uninstall(this);
 }
 
 future<> toppartitions_data_listener::stop() {
-    dblog.debug("toppartitions_data_listener: stopping {}", this);
+    dblog.debug("toppartitions_data_listener: stopping {}", fmt::ptr(this));
     return make_ready_future<>();
 }
 
@@ -138,7 +138,7 @@ future<toppartitions_query::results> toppartitions_query::gather(unsigned res_si
     dblog.debug("toppartitions_query::gather");
 
     auto map = [res_size, this] (toppartitions_data_listener& listener) {
-        dblog.trace("toppartitions_query::map_reduce with listener {}", &listener);
+        dblog.trace("toppartitions_query::map_reduce with listener {}", fmt::ptr(&listener));
         top_t rd = toppartitions_data_listener::globalize(listener._top_k_read.top(res_size));
         top_t wr = toppartitions_data_listener::globalize(listener._top_k_write.top(res_size));
         return make_foreign(std::make_unique<std::tuple<top_t, top_t>>(std::move(rd), std::move(wr)));

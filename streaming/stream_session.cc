@@ -374,7 +374,7 @@ void stream_session::received_failed_complete_message() {
 
 void stream_session::abort() {
     if (sslog.is_enabled(logging::log_level::debug)) {
-        sslog.debug("[Stream #{}] Aborted stream session={}, peer={}, is_initialized={}", plan_id(), this, peer, is_initialized());
+        sslog.debug("[Stream #{}] Aborted stream session={}, peer={}, is_initialized={}", plan_id(), fmt::ptr(this), peer, is_initialized());
     } else {
         sslog.info("[Stream #{}] Aborted stream session, peer={}, is_initialized={}", plan_id(), peer, is_initialized());
     }
@@ -505,7 +505,7 @@ void stream_session::send_failed_complete_message() {
 bool stream_session::maybe_completed() {
     bool completed = _receivers.empty() && _transfers.empty();
     if (completed) {
-        sslog.debug("[Stream #{}] maybe_completed: {} -> COMPLETE: session={}, peer={}", plan_id(), _state, this, peer);
+        sslog.debug("[Stream #{}] maybe_completed: {} -> COMPLETE: session={}, peer={}", plan_id(), _state, fmt::ptr(this), peer);
         close_session(stream_session_state::COMPLETE);
     }
     return completed;
@@ -585,7 +585,7 @@ future<> stream_session::receiving_failed(UUID cf_id)
 }
 
 void stream_session::close_session(stream_session_state final_state) {
-    sslog.debug("[Stream #{}] close_session session={}, state={}, is_aborted={}", plan_id(), this, final_state, _is_aborted);
+    sslog.debug("[Stream #{}] close_session session={}, state={}, is_aborted={}", plan_id(), fmt::ptr(this), final_state, _is_aborted);
     if (!_is_aborted) {
         _is_aborted = true;
         set_state(final_state);
@@ -593,12 +593,12 @@ void stream_session::close_session(stream_session_state final_state) {
         if (final_state == stream_session_state::FAILED) {
             for (auto& x : _transfers) {
                 stream_transfer_task& task = x.second;
-                sslog.debug("[Stream #{}] close_session session={}, state={}, abort stream_transfer_task cf_id={}", plan_id(), this, final_state, task.cf_id);
+                sslog.debug("[Stream #{}] close_session session={}, state={}, abort stream_transfer_task cf_id={}", plan_id(), fmt::ptr(this), final_state, task.cf_id);
                 task.abort();
             }
             for (auto& x : _receivers) {
                 stream_receive_task& task = x.second;
-                sslog.debug("[Stream #{}] close_session session={}, state={}, abort stream_receive_task cf_id={}", plan_id(), this, final_state, task.cf_id);
+                sslog.debug("[Stream #{}] close_session session={}, state={}, abort stream_receive_task cf_id={}", plan_id(), fmt::ptr(this), final_state, task.cf_id);
                 //FIXME: discarded future.
                 (void)receiving_failed(x.first);
                 task.abort();
@@ -613,7 +613,7 @@ void stream_session::close_session(stream_session_state final_state) {
             _stream_result->handle_session_complete(shared_from_this());
         }
 
-        sslog.debug("[Stream #{}] close_session session={}, state={}", plan_id(), this, final_state);
+        sslog.debug("[Stream #{}] close_session session={}, state={}", plan_id(), fmt::ptr(this), final_state);
     }
 }
 
