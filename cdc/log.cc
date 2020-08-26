@@ -295,17 +295,15 @@ future<> cdc::cdc_service::stop() {
 cdc::cdc_service::~cdc_service() = default;
 
 namespace {
-static const sstring delta_mode_string_off  = "off";
 static const sstring delta_mode_string_keys = "keys";
 static const sstring delta_mode_string_full = "full";
 
 static const std::string_view image_mode_string_on  = "on";
-static const std::string_view image_mode_string_off  = delta_mode_string_off;
+static const std::string_view image_mode_string_off = "off";
 static const std::string_view image_mode_string_full = delta_mode_string_full;
 
 sstring to_string(cdc::delta_mode dm) {
     switch (dm) {
-        case cdc::delta_mode::off  : return delta_mode_string_off;
         case cdc::delta_mode::keys : return delta_mode_string_keys;
         case cdc::delta_mode::full : return delta_mode_string_full;
     }
@@ -363,8 +361,6 @@ cdc::options::options(const std::map<sstring, sstring>& map) {
         } else if (key == "delta") {
             if (val == delta_mode_string_keys) {
                 _delta_mode = delta_mode::keys;
-            } else if (val == delta_mode_string_off) {
-                _delta_mode = delta_mode::off;
             } else if (val != delta_mode_string_full) {
                 throw exceptions::configuration_exception("Invalid value for CDC option \"delta\": " + p.second);
             }
@@ -376,11 +372,6 @@ cdc::options::options(const std::map<sstring, sstring>& map) {
         } else {
             throw exceptions::configuration_exception("Invalid CDC option: " + p.first);
         }
-    }
-
-    if (_enabled && !preimage() && !postimage() && get_delta_mode() == delta_mode::off) {
-        throw exceptions::configuration_exception("Invalid combination of CDC options: neither of"
-                " {preimage, postimage, delta} is enabled");
     }
 }
 
@@ -1438,12 +1429,6 @@ private:
                 const auto& op_cell = it->row().cells().cell_at(op_col.id).as_atomic_cell(op_col);
                 const auto op_val = op_cell.value().linearize();
                 if (op_val != preimg_op_bytes && op_val != postimg_op_bytes) {
-                    if (_schema->cdc_options().get_delta_mode() == cdc::delta_mode::off) {
-                        it = m.partition().clustered_rows().erase_and_dispose(it, current_deleter<rows_entry>());
-                        ++deleted_rows_cnt;
-                        continue;
-                    }
-
                     // The case of `get_delta_mode() == delta_mode::keys`:
                     it->row().cells().remove_if([this, log_s = m.schema()] (column_id id, atomic_cell_or_collection& acoc) {
                         const auto& log_cdef = log_s->column_at(column_kind::regular_column, id);
