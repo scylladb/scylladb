@@ -856,12 +856,14 @@ future<> storage_service::check_and_repair_cdc_streams() {
             cdc_log.error("Aborting CDC generation repair due to missing STATUS");
             return;
         }
+        // Update _cdc_streams_ts first, so that do_handle_cdc_generation (which will get called due to the status update)
+        // won't try to update the gossiper, which would result in a deadlock inside add_local_application_state
+        _cdc_streams_ts = new_streams_ts;
         _gossiper.add_local_application_state({
                 { gms::application_state::CDC_STREAMS_TIMESTAMP, versioned_value::cdc_streams_timestamp(new_streams_ts) },
                 { gms::application_state::STATUS, *status }
         }).get();
         db::system_keyspace::update_cdc_streams_timestamp(new_streams_ts).get();
-        _cdc_streams_ts = new_streams_ts;
     });
 }
 
