@@ -283,8 +283,8 @@ SEASTAR_THREAD_TEST_CASE(test_permissions_of_cdc_description) {
             assert_unauthorized(format("DROP TABLE {}", full_name));
         };
 
-        test_table("cdc_streams");
-        test_table("cdc_generations");
+        test_table("cdc_streams_2");
+        test_table("cdc_generations_2");
     }, mk_cdc_test_config()).get();
 }
 

@@ -107,7 +107,7 @@ Shard-colocation is an optimization.
 
 Having different generations operating at different points in time is necessary to maintain colocation in presence of topology changes. When a new node joins the cluster it modifies the token ring by refining existing vnodes into smaller vnodes. But before it does it, it will introduce a new CDC generation whose token ranges refine those new (smaller) vnodes (which means they also refine the old vnodes; that way writes will be colocated on both old and new replicas).
 
-The joining node learns about the current vnodes, chooses tokens which will split them into smaller vnodes and creates a new `cdc::topology_description` which refines those smaller vnodes. This is done in the `cdc::generate_topology_description` function. It then inserts the generation description into an internal distributed table `cdc_generations` in the `system_distributed` keyspace. The table is defined as follows (from db/system_distributed_keyspace.cc):
+The joining node learns about the current vnodes, chooses tokens which will split them into smaller vnodes and creates a new `cdc::topology_description` which refines those smaller vnodes. This is done in the `cdc::generate_topology_description` function. It then inserts the generation description into an internal distributed table `cdc_generations_2` in the `system_distributed` keyspace. The table is defined as follows (from db/system_distributed_keyspace.cc):
 ```
         return schema_builder(system_distributed_keyspace::NAME, system_distributed_keyspace::CDC_TOPOLOGY_DESCRIPTION, {id})
                 /* The timestamp of this CDC generation. */
@@ -146,11 +146,11 @@ Next, the node starts gossiping the timestamp of the new generation together wit
         }).get();
 ```
 
-When other nodes learn about the generation, they'll extract it from the `cdc_generations` table and save it using `cdc::metadata::insert(db_clock::time_point, topology_description&&)`.
+When other nodes learn about the generation, they'll extract it from the `cdc_generations_2` table and save it using `cdc::metadata::insert(db_clock::time_point, topology_description&&)`.
 Notice that nodes learn about the generation together with the new node's tokens. When they learn about its tokens they'll immediately start sending writes to the new node (in the case of bootstrapping, it will become a pending replica). But the old generation will still be operating for a minute or two. Thus colocation will be lost for a while. This problem will be fixed when the two-phase-commit approach is implemented.
 
 We're not able to prevent a node learning about a new generation too late due to a network partition: if gossip doesn't reach the node in time, some writes might be sent to the wrong (old) generation.
-However, it could happen that a node learns about the generation from gossip in time, but then won't be able to extract it from `cdc_generations`. In that case we can still maintain consistency: the node will remember that there is a new generation even though it doesn't yet know what it is (just the timestamp) using the `cdc::metadata::prepare(db_clock::time_point)` method, and then _reject_ writes for CDC-enabled tables that are supposed to use this new generation. The node will keep trying to read the generation's data in background until it succeeds or sees that it's not necessary anymore (e.g. because the generation was already superseded by a new generation).
+However, it could happen that a node learns about the generation from gossip in time, but then won't be able to extract it from `cdc_generations_2`. In that case we can still maintain consistency: the node will remember that there is a new generation even though it doesn't yet know what it is (just the timestamp) using the `cdc::metadata::prepare(db_clock::time_point)` method, and then _reject_ writes for CDC-enabled tables that are supposed to use this new generation. The node will keep trying to read the generation's data in background until it succeeds or sees that it's not necessary anymore (e.g. because the generation was already superseded by a new generation).
 Thus we give up availability for safety. This likely won't happen if the administrator ensures that the cluster is not partitioned before bootstrapping a new node. This problem will also be mitigated with a future patch.
 
 Due to the need of maintaining colocation we don't allow the client to send writes with arbitrary timestamps.
@@ -159,7 +159,7 @@ Reason: we cannot allow writes before `T`, because they belong to the old genera
 
 ### Streams description table
 
-The `cdc_streams` table in the `system_distributed` keyspace allows CDC clients to learn about available sets of streams and the time intervals they are operating at. It's definition is as follows (db/system_distributed_keyspace.cc):
+The `cdc_streams_2` table in the `system_distributed` keyspace allows CDC clients to learn about available sets of streams and the time intervals they are operating at. It's definition is as follows (db/system_distributed_keyspace.cc):
 ```
         return schema_builder(system_distributed_keyspace::NAME, system_distributed_keyspace::CDC_DESC, {id})
                 /* The timestamp of this CDC generation. */
@@ -176,9 +176,9 @@ where
 thread_local data_type cdc_stream_tuple_type = tuple_type_impl::get_instance({long_type, long_type});
 thread_local data_type cdc_streams_set_type = set_type_impl::get_instance(cdc_stream_tuple_type, false);
 ```
-This table simply contains each generation's timestamp (as partition key) and the set of stream IDs used by this generation. It is meant to be user-facing, in contrast to `cdc_generations` which is used internally.
+This table simply contains each generation's timestamp (as partition key) and the set of stream IDs used by this generation. It is meant to be user-facing, in contrast to `cdc_generations_2` which is used internally.
 
 When nodes learn about a CDC generation through gossip, they race to update the description table by inserting a proper row (see `cdc::update_streams_description`). This operation is idempotent so it doesn't matter if multiple nodes do it at the same time.
 
 #### TODO: expired generations
-The `expired` column in `cdc_streams` and `cdc_generations` means that this generation was superseded by some new generation and will soon be removed (its table entry will be gone). This functionality is yet to be implemented.
+The `expired` column in `cdc_streams_2` and `cdc_generations_2` means that this generation was superseded by some new generation and will soon be removed (its table entry will be gone). This functionality is yet to be implemented.
