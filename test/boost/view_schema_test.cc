@@ -119,6 +119,25 @@ SEASTAR_TEST_CASE(test_access_and_schema) {
     });
 }
 
+SEASTAR_TEST_CASE(test_column_dropped_from_base) {
+    return do_with_cql_env_thread([] (auto& e) {
+        e.execute_cql("create table cf (p int, c ascii, a int, v int, primary key (p, c));").get();
+        e.execute_cql("create materialized view vcf as select p, c, v from cf "
+                      "where v is not null and p is not null and c is not null "
+                      "primary key (v, p, c)").get();
+        e.execute_cql("alter table cf drop a;").get();
+        e.execute_cql("insert into cf (p, c, v) values (0, 'foo', 1);").get();
+        eventually([&] {
+        auto msg = e.execute_cql("select v from vcf").get0();
+        assert_that(msg).is_rows()
+            .with_size(1)
+            .with_row({
+                {int32_type->decompose(1)}
+            });
+        });
+    });
+}
+
 SEASTAR_TEST_CASE(test_updates) {
     return do_with_cql_env_thread([] (auto& e) {
         e.execute_cql("create table base (k int, v int, primary key (k));").get();
