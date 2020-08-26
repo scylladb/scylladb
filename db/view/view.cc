@@ -799,8 +799,8 @@ private:
     future<stop_iteration> advance_all() {
         auto existings_f = _existings ? (*_existings)(db::no_timeout) : make_ready_future<optimized_optional<mutation_fragment>>();
         return when_all(_updates(db::no_timeout), std::move(existings_f)).then([this] (auto&& fragments) mutable {
-            _update = std::move(std::get<mutation_fragment_opt>(std::get<0>(fragments).get()));
-            _existing = std::move(std::get<mutation_fragment_opt>(std::get<1>(fragments).get()));
+            _update = std::move(std::get<0>(fragments).get0());
+            _existing = std::move(std::get<1>(fragments).get0());
             return stop_iteration::no;
         });
     }

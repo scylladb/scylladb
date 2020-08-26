@@ -42,7 +42,7 @@ static void broken_sst(sstring dir, unsigned long generation, schema_ptr s, sstr
     sstable_version_types version = la) {
     try {
         sstables::test_env env;
-        sstable_ptr sstp = std::get<0>(env.reusable_sst(s, dir, generation, version).get());
+        sstable_ptr sstp = env.reusable_sst(s, dir, generation, version).get0();
         auto r = sstp->read_rows_flat(s, tests::make_permit());
         r.consume(my_consumer{}, db::no_timeout).get();
         BOOST_FAIL("expecting exception");
@@ -66,7 +66,7 @@ SEASTAR_THREAD_TEST_CASE(test_empty_index) {
                  .set_compressor_params(compression_parameters::no_compression())
                  .build();
     sstables::test_env env;
-    sstable_ptr sstp = std::get<0>(env.reusable_sst(s, "test/resource/sstables/empty_index", 36, sstable_version_types::mc).get());
+    sstable_ptr sstp = env.reusable_sst(s, "test/resource/sstables/empty_index", 36, sstable_version_types::mc).get0();
     sstp->load().get();
     auto fut = sstables::test(sstp).read_indexes();
     BOOST_REQUIRE_EXCEPTION(fut.get(), malformed_sstable_exception, exception_predicate::message_equals(

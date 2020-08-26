@@ -769,7 +769,7 @@ public:
                     auto current = *view.begin();
                     return _file.dma_write(off, current.data(), current.size(), priority_class).then_wrapped([this, size, &off, &view](future<size_t>&& f) {
                         try {
-                            auto bytes = std::get<0>(f.get());
+                            auto bytes = f.get0();
                             _segment_manager->totals.bytes_written += bytes;
                             _segment_manager->totals.active_size_on_disk += bytes;
                             ++_segment_manager->totals.cycle_count;

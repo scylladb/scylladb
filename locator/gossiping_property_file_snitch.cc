@@ -50,7 +50,7 @@ future<bool> gossiping_property_file_snitch::property_file_was_modified() {
         });
     }).then_wrapped([this] (auto&& f) {
         try {
-            auto st = std::get<0>(f.get());
+            auto st = f.get0();
 
             if (!_last_file_mod ||
                 _last_file_mod->tv_sec != st.st_mtim.tv_sec) {

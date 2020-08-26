@@ -593,7 +593,7 @@ thread_local cql_server::connection::execution_stage_type
 
 future<> cql_server::connection::process_request() {
     return read_frame().then_wrapped([this] (future<std::optional<cql_binary_frame_v3>>&& v) {
-        auto maybe_frame = std::get<0>(v.get());
+        auto maybe_frame = v.get0();
         if (!maybe_frame) {
             // eof
             return make_ready_future<>();
