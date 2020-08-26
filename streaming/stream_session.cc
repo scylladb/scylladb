@@ -373,7 +373,11 @@ void stream_session::received_failed_complete_message() {
 }
 
 void stream_session::abort() {
-    sslog.info("[Stream #{}] Aborted stream session={}, peer={}, is_initialized={}", plan_id(), this, peer, is_initialized());
+    if (sslog.is_enabled(logging::log_level::debug)) {
+        sslog.debug("[Stream #{}] Aborted stream session={}, peer={}, is_initialized={}", plan_id(), this, peer, is_initialized());
+    } else {
+        sslog.info("[Stream #{}] Aborted stream session, peer={}, is_initialized={}", plan_id(), peer, is_initialized());
+    }
     close_session(stream_session_state::FAILED);
 }
 
