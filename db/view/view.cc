@@ -1240,26 +1240,26 @@ void view_builder::setup_metrics() {
 
 future<> view_builder::start(service::migration_manager& mm) {
     _started = do_with(view_builder_init_state{}, [this, &mm] (view_builder_init_state& vbi) {
-      return seastar::async([this, &mm, &vbi] {
-        // Guard the whole startup routine with a semaphore,
-        // so that it's not intercepted by `on_drop_view`, `on_create_view`
-        // or `on_update_view` events.
-        auto units = get_units(_sem, 1).get0();
-        // Wait for schema agreement even if we're a seed node.
-        while (!mm.have_schema_agreement()) {
-            if (_as.abort_requested()) {
-                return;
+        return seastar::async([this, &mm, &vbi] {
+            // Guard the whole startup routine with a semaphore,
+            // so that it's not intercepted by `on_drop_view`, `on_create_view`
+            // or `on_update_view` events.
+            auto units = get_units(_sem, 1).get0();
+            // Wait for schema agreement even if we're a seed node.
+            while (!mm.have_schema_agreement()) {
+                if (_as.abort_requested()) {
+                    return;
+                }
+                seastar::sleep(500ms).get();
             }
-            seastar::sleep(500ms).get();
-        }
-        auto built = system_keyspace::load_built_views().get0();
-        auto in_progress = system_keyspace::load_view_build_progress().get0();
-        calculate_shard_build_step(std::move(built), std::move(in_progress)).get();
-        _mnotifier.register_listener(this);
-        _current_step = _base_to_build_step.begin();
-        // Waited on indirectly in stop().
-        (void)_build_step.trigger();
-      });
+            auto built = system_keyspace::load_built_views().get0();
+            auto in_progress = system_keyspace::load_view_build_progress().get0();
+            calculate_shard_build_step(std::move(built), std::move(in_progress)).get();
+            _mnotifier.register_listener(this);
+            _current_step = _base_to_build_step.begin();
+            // Waited on indirectly in stop().
+            (void)_build_step.trigger();
+        });
     });
     return make_ready_future<>();
 }
