@@ -317,7 +317,7 @@ redistribute(const std::vector<float>& p, unsigned me, unsigned k) {
         float s = 0;
         int count = mixed_count;
         for (auto& d : sorted_deficits) {
-            hr_logger.trace("next sorted deficit={{}, {}}", d.first, d.second);
+            hr_logger.trace("next sorted deficit={{{}, {}}}", d.first, d.second);
             // What "diff" to distribute
             auto diff = d.second - s;
             s = d.second;
