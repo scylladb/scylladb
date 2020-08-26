@@ -190,7 +190,7 @@ public:
     virtual cql3::raw_value get(const query_options& options) = 0;
 
     virtual cql3::raw_value_view bind_and_get(const query_options& options) override {
-        return options.make_temporary(get(options));
+        return raw_value_view::make_temporary(get(options));
     }
 
     virtual sstring to_string() const = 0;
@@ -227,7 +227,7 @@ public:
     virtual cql3::raw_value_view bind_and_get(const query_options& options) override {
         auto t = bind(options);
         if (t) {
-            return options.make_temporary(t->get(options));
+            return cql3::raw_value_view::make_temporary(t->get(options));
         }
         return cql3::raw_value_view::make_null();
     };
