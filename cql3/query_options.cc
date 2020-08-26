@@ -161,17 +161,6 @@ query_options::query_options(std::vector<cql3::raw_value> values)
           db::consistency_level::ONE, infinite_timeout_config, std::move(values))
 {}
 
-cql3::raw_value_view query_options::make_temporary(cql3::raw_value value) const
-{
-    if (value) {
-        auto value_view = *value;
-        auto ptr = _temporaries.write_place_holder(value_view.size());
-        std::copy_n(value_view.data(), value_view.size(), ptr);
-        return cql3::raw_value_view::make_value(fragmented_temporary_buffer::view(bytes_view{ptr, value_view.size()}));
-    }
-    return cql3::raw_value_view::make_null();
-}
-
 bytes_view query_options::linearize(fragmented_temporary_buffer::view view) const
 {
     if (view.empty()) {

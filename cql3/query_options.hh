@@ -178,7 +178,6 @@ public:
         return _value_views.size();
     }
 
-    cql3::raw_value_view make_temporary(cql3::raw_value value) const;
     bytes_view linearize(fragmented_temporary_buffer::view) const;
 
     bool skip_metadata() const {
