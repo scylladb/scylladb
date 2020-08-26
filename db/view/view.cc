@@ -1266,6 +1266,10 @@ future<> view_builder::start(service::migration_manager& mm) {
             }
 
             return container().invoke_on(0, [eptr = std::move(eptr)] (view_builder& builder) {
+                // The &builder is alive, because it can only be destroyed in
+                // sharded<view_builder>::stop(), which, in turn, waits for all
+                // view_builder::stop()-s to finish, and each stop() waits for
+                // the shard's current future (called _started) to resolve.
                 if (!eptr) {
                     if (++builder._shards_finished_read == smp::count) {
                         builder._shards_finished_read_promise.set_value();
