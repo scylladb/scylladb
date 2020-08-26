@@ -1392,7 +1392,7 @@ void writer::consume_end_of_stream() {
 
     _cfg.monitor->on_data_write_completed();
 
-    seal_summary(_sst._components->summary, std::move(_first_key), std::move(_last_key), _index_sampling_state);
+    seal_summary(_sst._components->summary, std::move(_first_key), std::move(_last_key), _index_sampling_state).get();
 
     if (_sst.has_component(component_type::CompressionInfo)) {
         _sst.get_metadata_collector().add_compression_ratio(_sst._components->compression.compressed_file_length(), _sst._components->compression.uncompressed_file_length());

@@ -606,7 +606,7 @@ const db::config& get_config();
 
 void prepare_summary(summary& s, uint64_t expected_partition_count, uint32_t min_index_interval);
 
-void seal_summary(summary& s,
+future<> seal_summary(summary& s,
     std::optional<key>&& first_key,
     std::optional<key>&& last_key,
     const index_sampling_state& state);

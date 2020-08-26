@@ -1843,18 +1843,13 @@ void prepare_summary(summary& s, uint64_t expected_partition_count, uint32_t min
     s.header.memory_size = 0;
 }
 
-void seal_summary(summary& s,
+future<> seal_summary(summary& s,
         std::optional<key>&& first_key,
         std::optional<key>&& last_key,
         const index_sampling_state& state) {
     s.header.size = s.entries.size();
     s.header.size_at_full_sampling = sstable::get_size_at_full_sampling(state.partition_count, s.header.min_index_interval);
 
-    s.header.memory_size = s.header.size * sizeof(uint32_t);
-    for (auto& e: s.entries) {
-        s.positions.push_back(s.header.memory_size);
-        s.header.memory_size += e.key.size() + sizeof(e.position);
-    }
     assert(first_key); // assume non-empty sstable
     s.first_key.value = first_key->get_bytes();
 
@@ -1864,6 +1859,13 @@ void seal_summary(summary& s,
         // An empty last_mutation indicates we had just one partition
         s.last_key.value = s.first_key.value;
     }
+
+    s.header.memory_size = s.header.size * sizeof(uint32_t);
+    s.positions.reserve(s.entries.size());
+    return do_for_each(s.entries, [&s] (summary_entry& e) {
+        s.positions.push_back(s.header.memory_size);
+        s.header.memory_size += e.key.size() + sizeof(e.position);
+    });
 }
 
 static
@@ -2188,7 +2190,7 @@ void components_writer::consume_end_of_stream() {
         on_internal_error(sstlog, "Mutation stream ends with unclosed partition during write");
     }
     // what if there is only one partition? what if it is empty?
-    seal_summary(_sst._components->summary, std::move(_first_key), std::move(_last_key), _index_sampling_state);
+    seal_summary(_sst._components->summary, std::move(_first_key), std::move(_last_key), _index_sampling_state).get();
 
     _index_needs_close = false;
     _index.close();
@@ -2575,7 +2577,7 @@ future<> sstable::generate_summary(const io_priority_class& pc) {
                     return ctx->consume_input().finally([ctx] {
                         return ctx->close();
                     }).then([this, ctx, &s, sem = std::move(sem)] {
-                        seal_summary(_components->summary, std::move(s.first_key), std::move(s.last_key), s.state());
+                        return seal_summary(_components->summary, std::move(s.first_key), std::move(s.last_key), s.state());
                     });
                 });
             }).then([index_file] () mutable {
