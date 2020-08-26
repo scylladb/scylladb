@@ -50,6 +50,12 @@ struct hash<bytes_view> {
 
 }
 
+struct fmt_hex {
+    bytes_view& v;
+};
+
+std::ostream& operator<<(std::ostream& os, const fmt_hex& hex);
+
 bytes from_hex(sstring_view s);
 sstring to_hex(bytes_view b);
 sstring to_hex(const bytes& b);

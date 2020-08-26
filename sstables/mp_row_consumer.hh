@@ -1212,7 +1212,7 @@ public:
                                    bool is_deleted) override {
         const std::optional<column_id>& column_id = column_info.id;
         sstlog.trace("mp_row_consumer_m {}: consume_column(id={}, path={}, value={}, ts={}, ttl={}, del_time={}, deleted={})", this,
-            column_id, cell_path, value, timestamp, ttl.count(), local_deletion_time.time_since_epoch().count(), is_deleted);
+            column_id, fmt_hex(cell_path), fmt_hex(value), timestamp, ttl.count(), local_deletion_time.time_since_epoch().count(), is_deleted);
         check_column_missing_in_current_schema(column_info, timestamp);
         if (!column_id) {
             return proceed::yes;
@@ -1290,7 +1290,7 @@ public:
                                            bytes_view value,
                                            api::timestamp_type timestamp) override {
         const std::optional<column_id>& column_id = column_info.id;
-        sstlog.trace("mp_row_consumer_m {}: consume_counter_column({}, {}, {})", this, column_id, value, timestamp);
+        sstlog.trace("mp_row_consumer_m {}: consume_counter_column({}, {}, {})", this, column_id, fmt_hex(value), timestamp);
         check_column_missing_in_current_schema(column_info, timestamp);
         if (!column_id) {
             return proceed::yes;
