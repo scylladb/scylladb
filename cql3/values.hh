@@ -169,6 +169,11 @@ public:
     const bytes& operator*() const {
         return std::get<bytes>(_data);
     }
+    bytes&& extract_value() && {
+        auto b = std::get_if<bytes>(&_data);
+        assert(b);
+        return std::move(*b);
+    }
     raw_value_view to_view() const;
 };
 
