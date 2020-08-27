@@ -2985,8 +2985,9 @@ storage_service::get_all_ranges(const std::vector<token>& sorted_tokens) const {
 std::vector<gms::inet_address>
 storage_service::get_natural_endpoints(const sstring& keyspace,
         const sstring& cf, const sstring& key) const {
-    sstables::key_view key_view = sstables::key_view(bytes_view(reinterpret_cast<const signed char*>(key.c_str()), key.size()));
-    dht::token token = _db.local().find_schema(keyspace, cf)->get_partitioner().get_token(key_view);
+    auto schema = _db.local().find_schema(keyspace, cf);
+    partition_key pk = partition_key::from_nodetool_style_string(schema, key);
+    dht::token token = schema->get_partitioner().get_token(*schema, pk.view());
     return get_natural_endpoints(keyspace, token);
 }
 
