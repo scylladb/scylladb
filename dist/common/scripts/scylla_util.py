@@ -92,8 +92,7 @@ def scyllabindir():
 
 
 # @param headers dict of k:v
-def curl(url, headers=None, byte=False, timeout=3):
-    max_retries = 5
+def curl(url, headers=None, byte=False, timeout=3, max_retries=5):
     retries = 0
     while True:
         try:
