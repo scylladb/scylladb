@@ -194,7 +194,21 @@ future<> paxos_state::learn(schema_ptr schema, proposal decision, clock_type::ti
             f = f.then([schema, &decision, timeout, tr_state] {
                 logger.debug("Committing decision {}", decision);
                 tracing::trace(tr_state, "Committing decision {}", decision);
-                return get_local_storage_proxy().mutate_locally(schema, decision.update, tr_state, db::commitlog::force_sync::yes, timeout);
+
+                schema_ptr s = schema;
+                // In case current schema is not the same as the schema in the decision
+                // try to look it up in the local schema_registry cache and upgrade
+                // the mutation using schema from the cache.
+                if (decision.update.schema_version() != schema->version()) {
+                    logger.debug("Stored mutation references outdated schema version. "
+                        "Trying to upgrade the accepted proposal mutation to the most recent schema version.");
+                    schema_ptr cached_schema = local_schema_registry().get_or_null(decision.update.schema_version());
+                    if (cached_schema) {
+                        logger.debug("Found the desired schema version in the local schema_registry.");
+                        s = cached_schema;
+                    }
+                }
+                return get_local_storage_proxy().mutate_locally(s, decision.update, tr_state, db::commitlog::force_sync::yes, timeout);
             });
         } else {
             logger.debug("Not committing decision {} as ballot timestamp predates last truncation time", decision);
