@@ -92,13 +92,13 @@ def scyllabindir():
 
 
 # @param headers dict of k:v
-def curl(url, headers=None, byte=False):
+def curl(url, headers=None, byte=False, timeout=3):
     max_retries = 5
     retries = 0
     while True:
         try:
             req = urllib.request.Request(url, headers=headers or {})
-            with urllib.request.urlopen(req) as res:
+            with urllib.request.urlopen(req, timeout=timeout) as res:
                 if byte:
                     return res.read()
                 else:
