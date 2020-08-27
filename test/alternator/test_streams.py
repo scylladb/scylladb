@@ -803,7 +803,6 @@ def test_streams_new_image(test_table_ss_new_image, dynamodbstreams):
 # implementation of the combined mode has unique bugs, so it is worth testing
 # it separately.
 # Reproduces issue #7107.
-@pytest.mark.xfail(reason="issue #7107")
 def test_streams_new_and_old_images(test_table_ss_new_and_old_images, dynamodbstreams):
     def do_updates(table, p, c):
         events = []
