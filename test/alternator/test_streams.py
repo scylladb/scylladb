@@ -677,8 +677,7 @@ def test_streams_updateitem_keys_only_2(test_table_ss_keys_only, dynamodbstreams
 
 # Test OLD_IMAGE using UpdateItem. Verify that the OLD_IMAGE indeed includes,
 # as needed, the entire old item and not just the modified columns.
-# Currently fails in Alternator because the item's key is missing in OldImage (#6935).
-@pytest.mark.xfail(reason="Currently fails - see issue #6935")
+# Reproduces issue #6935
 def test_streams_updateitem_old_image(test_table_ss_old_image, dynamodbstreams):
     def do_updates(table, p, c):
         events = []
@@ -703,7 +702,6 @@ def test_streams_updateitem_old_image(test_table_ss_old_image, dynamodbstreams):
 # key - in this case since the item did exist, OLD_IMAGE should be returned -
 # and include just the key. This is a special case of reproducing #6935 -
 # the first patch for this issue failed in this special case.
-@pytest.mark.xfail(reason="Currently fails - see issue #6935")
 def test_streams_updateitem_old_image_empty_item(test_table_ss_old_image, dynamodbstreams):
     def do_updates(table, p, c):
         events = []
@@ -751,7 +749,6 @@ def test_table_ss_old_image_and_lsi(dynamodb, dynamodbstreams):
     yield table, arn
     table.delete()
 
-@pytest.mark.xfail(reason="Currently fails - see issue #6935, #7030")
 def test_streams_updateitem_old_image_lsi(test_table_ss_old_image_and_lsi, dynamodbstreams):
     def do_updates(table, p, c):
         events = []
@@ -774,7 +771,6 @@ def test_streams_updateitem_old_image_lsi(test_table_ss_old_image_and_lsi, dynam
 # that deleting the item results in a missing NEW_IMAGE, and that setting the
 # item to be empty has a different result - a NEW_IMAGE with just a key.
 # Reproduces issue #7107.
-@pytest.mark.xfail(reason="issue #7107")
 def test_streams_new_image(test_table_ss_new_image, dynamodbstreams):
     def do_updates(table, p, c):
         events = []

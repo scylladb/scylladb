@@ -840,9 +840,8 @@ future<executor::request_return_type> executor::get_records(client_state& client
             {
                 auto item = rjson::empty_object();
                 describe_single_item(*selection, row, attr_names, item, true);
-                if (!item.ObjectEmpty()) {
-                    rjson::set(dynamodb, op == cdc::operation::pre_image ? "OldImage" : "NewImage", std::move(item));
-                }
+                describe_single_item(*selection, row, key_names, item);
+                rjson::set(dynamodb, op == cdc::operation::pre_image ? "OldImage" : "NewImage", std::move(item));
                 break;
             }
             case cdc::operation::update:
