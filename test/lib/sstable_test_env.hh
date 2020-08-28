@@ -82,7 +82,6 @@ public:
 
     static inline future<> do_with_async(noncopyable_function<void (test_env&)> func) {
         return seastar::async([func = std::move(func)] {
-            auto wait_for_background_jobs = defer([] { sstables::await_background_jobs_on_all_shards().get(); });
             test_env env;
             auto close_env = defer([&] { env.stop().get(); });
             func(env);
@@ -91,7 +90,6 @@ public:
 
     static inline future<> do_with_sharded_async(noncopyable_function<void (sharded<test_env>&)> func) {
         return seastar::async([func = std::move(func)] {
-            auto wait_for_background_jobs = defer([] { sstables::await_background_jobs_on_all_shards().get(); });
             sharded<test_env> env;
             env.start().get();
             auto stop = defer([&] { env.stop().get(); });
@@ -102,7 +100,6 @@ public:
     template <typename T>
     static future<T> do_with_async_returning(noncopyable_function<T (test_env&)> func) {
         return seastar::async([func = std::move(func)] {
-            auto wait_for_background_jobs = defer([] { sstables::await_background_jobs_on_all_shards().get(); });
             test_env env;
             auto stop = defer([&] { env.stop().get(); });
             return func(env);

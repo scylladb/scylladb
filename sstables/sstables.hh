@@ -52,7 +52,6 @@
 #include "utils/disk-error-handler.hh"
 #include "sstables/progress_monitor.hh"
 #include "db/commitlog/replay_position.hh"
-#include "utils/phased_barrier.hh"
 #include "component_type.hh"
 #include "sstable_version.hh"
 #include "db/large_data_handler.hh"
@@ -877,16 +876,6 @@ public:
     friend void lw_shared_ptr_deleter<sstables::sstable>::dispose(sstable* s);
 };
 
-// Waits for all prior tasks started on current shard related to sstable management to finish.
-//
-// There may be asynchronous cleanup started from sstable destructor. Since we can't have blocking
-// destructors in seastar, that cleanup is not waited for. It can be waited for using this function.
-// It is also waited for when seastar exits.
-future<> await_background_jobs();
-
-// Invokes await_background_jobs() on all shards
-future<> await_background_jobs_on_all_shards();
-
 // When we compact sstables, we have to atomically instantiate the new
 // sstable and delete the old ones.  Otherwise, if we compact A+B into C,
 // and if A contained some data that was tombstoned by B, and if B was
@@ -936,8 +925,6 @@ public:
 };
 
 future<> init_metrics();
-
-utils::phased_barrier& background_jobs();
 
 class file_io_extension {
 public:
