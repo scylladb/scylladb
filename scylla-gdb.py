@@ -3660,6 +3660,51 @@ class scylla_small_objects(gdb.Command):
             gdb.write("[{}] 0x{:x} {}\n".format(offset + i, obj, sym_text))
 
 
+class scylla_compaction_tasks(gdb.Command):
+    """Summarize the compaction_manager::task instances.
+
+    The summary is created based on compaction_manager::_tasks and it takes the
+    form of a histogram with the compaction type and compaction running and
+    table name as keys. Example:
+
+	(gdb) scylla compaction-task
+	     2116 type=sstables::compaction_type::Compaction, running=false, "cdc_test"."test_table_postimage_scylla_cdc_log"
+	      769 type=sstables::compaction_type::Compaction, running=false, "cdc_test"."test_table_scylla_cdc_log"
+	      750 type=sstables::compaction_type::Compaction, running=false, "cdc_test"."test_table_preimage_postimage_scylla_cdc_log"
+	      731 type=sstables::compaction_type::Compaction, running=false, "cdc_test"."test_table_preimage_scylla_cdc_log"
+	      293 type=sstables::compaction_type::Compaction, running=false, "cdc_test"."test_table"
+	      286 type=sstables::compaction_type::Compaction, running=false, "cdc_test"."test_table_preimage"
+	      230 type=sstables::compaction_type::Compaction, running=false, "cdc_test"."test_table_postimage"
+	       58 type=sstables::compaction_type::Compaction, running=false, "cdc_test"."test_table_preimage_postimage"
+		4 type=sstables::compaction_type::Compaction, running=true , "cdc_test"."test_table_postimage_scylla_cdc_log"
+		2 type=sstables::compaction_type::Compaction, running=true , "cdc_test"."test_table"
+		2 type=sstables::compaction_type::Compaction, running=true , "cdc_test"."test_table_preimage_postimage_scylla_cdc_log"
+		2 type=sstables::compaction_type::Compaction, running=true , "cdc_test"."test_table_preimage"
+		1 type=sstables::compaction_type::Compaction, running=true , "cdc_test"."test_table_preimage_postimage"
+		1 type=sstables::compaction_type::Compaction, running=true , "cdc_test"."test_table_scylla_cdc_log"
+		1 type=sstables::compaction_type::Compaction, running=true , "cdc_test"."test_table_preimage_scylla_cdc_log"
+	Total: 5246 instances of compaction_manager::task
+    """
+
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla compaction-tasks', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
+
+    def invoke(self, arg, from_tty):
+        db = find_db()
+        cm = std_unique_ptr(db['_compaction_manager']).get().dereference()
+        task_hist = histogram(print_indicators=False)
+
+        task_list = list(std_list(cm['_tasks']))
+        for task in task_list:
+            task = seastar_lw_shared_ptr(task).get().dereference()
+            schema = schema_ptr(task['compacting_cf'].dereference()['_schema'])
+            key = 'type={}, running={:5}, {}'.format(task['type'], str(task['compaction_running']), schema.table_name())
+            task_hist.add(key)
+
+        task_hist.print_to_console()
+        gdb.write('Total: {} instances of compaction_manager::task\n'.format(len(task_list)))
+
+
 class scylla_gdb_func_dereference_smart_ptr(gdb.Function):
     """Dereference the pointer guarded by the smart pointer instance.
 
@@ -3942,6 +3987,7 @@ scylla_smp_queues()
 scylla_features()
 scylla_repairs()
 scylla_small_objects()
+scylla_compaction_tasks()
 
 
 # Convenience functions
