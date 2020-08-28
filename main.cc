@@ -818,9 +818,6 @@ int main(int ac, char** av) {
                     return db.invoke_on_all([](auto& db) {
                         return db.stop();
                     });
-                }).then([] {
-                    startlog.info("Shutting down database: waiting for background jobs...");
-                    return sstables::await_background_jobs_on_all_shards();
                 }).get();
             });
             api::set_server_config(ctx).get();

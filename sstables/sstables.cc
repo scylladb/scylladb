@@ -178,24 +178,6 @@ future<file> sstable::new_sstable_component_file(const io_error_handler& error_h
   }
 }
 
-utils::phased_barrier& background_jobs() {
-    static thread_local utils::phased_barrier gate;
-    return gate;
-}
-
-future<> await_background_jobs() {
-    sstlog.debug("Waiting for background jobs");
-    return background_jobs().advance_and_await().finally([] {
-        sstlog.debug("Waiting done");
-    });
-}
-
-future<> await_background_jobs_on_all_shards() {
-    return smp::invoke_on_all([] {
-        return await_background_jobs();
-    });
-}
-
 std::unordered_map<sstable::version_types, sstring, enum_hash<sstable::version_types>> sstable::_version_string = {
     { sstable::version_types::ka , "ka" },
     { sstable::version_types::la , "la" },
