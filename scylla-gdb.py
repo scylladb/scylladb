@@ -3079,6 +3079,7 @@ class scylla_sstables(gdb.Command):
     def invoke(self, arg, from_tty):
         parser = argparse.ArgumentParser(description="scylla sstables")
         parser.add_argument("-t", "--tables", action="store_true", help="Only consider sstables attached to tables")
+        parser.add_argument("--histogram", action="store_true", help="Instead of printing all sstables, print a histogram of the number of sstables per table")
         try:
             args = parser.parse_args(arg.split())
         except SystemExit:
@@ -3091,6 +3092,7 @@ class scylla_sstables(gdb.Command):
         count = 0
 
         sstable_generator = find_sstables_attached_to_tables if args.tables else find_sstables
+        sstable_histogram = histogram(print_indicators=False)
 
         for sst in sstable_generator():
             if not sst['_open']:
@@ -3131,12 +3133,18 @@ class scylla_sstables(gdb.Command):
 
             data_file_size = sst['_data_file_size']
             schema = schema_ptr(sst['_schema'])
-            gdb.write('(sstables::sstable*) 0x%x: local=%d data_file=%d, in_memory=%d (bf=%d, summary=%d, sm=%d) %s filename=%s\n'
-                      % (int(sst), local, data_file_size, size, bf_size, summary_size, sm_size, schema.table_name(), scylla_sstables.filename(sst)))
+            if args.histogram:
+                sstable_histogram.add(schema.table_name())
+            else:
+                gdb.write('(sstables::sstable*) 0x%x: local=%d data_file=%d, in_memory=%d (bf=%d, summary=%d, sm=%d) %s filename=%s\n'
+                          % (int(sst), local, data_file_size, size, bf_size, summary_size, sm_size, schema.table_name(), scylla_sstables.filename(sst)))
 
             if local:
                 total_size += size
                 total_on_disk_size += data_file_size
+
+        if args.histogram:
+           sstable_histogram.print_to_console()
 
         gdb.write('total (shard-local): count=%d, data_file=%d, in_memory=%d\n' % (count, total_on_disk_size, total_size))
 
