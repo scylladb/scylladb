@@ -28,6 +28,7 @@
 #include <unordered_map>
 
 #include "cql3/lists.hh"
+#include "cql3/selection/selection.hh"
 #include "cql3/tuples.hh"
 #include "index/secondary_index_manager.hh"
 #include "types/list.hh"

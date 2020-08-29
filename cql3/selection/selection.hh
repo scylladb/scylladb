@@ -49,6 +49,7 @@
 #include "cql3/selection/raw_selector.hh"
 #include "unimplemented.hh"
 #include <seastar/core/thread.hh>
+#include "cql3/expr/expression.hh"
 
 namespace cql3 {
 
@@ -284,10 +285,8 @@ public:
         }
     };
     class restrictions_filter {
-        ::shared_ptr<restrictions::statement_restrictions> _restrictions;
+        const expr::expression _expression;
         const query_options& _options;
-        const bool _skip_pk_restrictions;
-        const bool _skip_ck_restrictions;
         mutable bool _current_partition_key_does_not_match = false;
         mutable bool _current_static_row_does_not_match = false;
         mutable uint64_t _rows_dropped = 0;
@@ -299,11 +298,12 @@ public:
         mutable std::optional<partition_key> _last_pkey;
         mutable bool _is_first_partition_on_page = true;
     public:
-        explicit restrictions_filter(::shared_ptr<restrictions::statement_restrictions> restrictions,
+        explicit restrictions_filter(const restrictions::statement_restrictions& restrictions,
                 const query_options& options,
                 uint64_t remaining,
                 schema_ptr schema,
                 uint64_t per_partition_limit,
+                const selection& sel,
                 std::optional<partition_key> last_pkey = {},
                 uint64_t rows_fetched_for_last_partition = 0);
         bool operator()(const selection& selection, const std::vector<bytes>& pk, const std::vector<bytes>& ck, const query::result_row_view& static_row, const query::result_row_view* row) const;

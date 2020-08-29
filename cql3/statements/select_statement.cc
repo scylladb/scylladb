@@ -740,7 +740,9 @@ select_statement::process_results(foreign_ptr<lw_shared_ptr<query::result>> resu
                 _stats.filtered_rows_read_total += *results->row_count();
                 query::result_view::consume(*results, cmd->slice,
                         cql3::selection::result_set_builder::visitor(builder, *_schema,
-                                *_selection, cql3::selection::result_set_builder::restrictions_filter(_restrictions, options, cmd->get_row_limit(), _schema, cmd->slice.partition_row_limit())));
+                                *_selection, cql3::selection::result_set_builder::restrictions_filter(
+                                        *_restrictions, options, cmd->get_row_limit(), _schema,
+                                        cmd->slice.partition_row_limit(), *_selection)));
             } else {
                 query::result_view::consume(*results, cmd->slice,
                         cql3::selection::result_set_builder::visitor(builder, *_schema,
@@ -999,7 +1001,9 @@ indexed_table_select_statement::do_execute(service::storage_proxy& proxy,
                     if (restrictions_need_filtering) {
                         _stats.filtered_rows_read_total += *results->row_count();
                         query::result_view::consume(*results, cmd->slice, cql3::selection::result_set_builder::visitor(builder, *_schema, *_selection,
-                                cql3::selection::result_set_builder::restrictions_filter(_restrictions, options, cmd->get_row_limit(), _schema, cmd->slice.partition_row_limit())));
+                                cql3::selection::result_set_builder::restrictions_filter(
+                                        *_restrictions, options, cmd->get_row_limit(), _schema,
+                                        cmd->slice.partition_row_limit(), *_selection)));
                     } else {
                         query::result_view::consume(*results, cmd->slice, cql3::selection::result_set_builder::visitor(builder, *_schema, *_selection));
                     }

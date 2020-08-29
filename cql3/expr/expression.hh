@@ -28,7 +28,6 @@
 
 #include "bytes.hh"
 #include "cql3/query_options.hh"
-#include "cql3/selection/selection.hh"
 #include "cql3/statements/bound.hh"
 #include "cql3/term.hh"
 #include "database_fwd.hh"
@@ -45,6 +44,10 @@ class secondary_index_manager;
 } // namespace secondary_index
 
 namespace cql3 {
+
+namespace selection {
+class selection;
+} // namespace selection
 
 namespace expr {
 

@@ -42,6 +42,8 @@
 #include <boost/range/adaptors.hpp>
 #include <boost/range/algorithm/equal.hpp>
 #include <boost/range/algorithm/transform.hpp>
+#include <ranges>
+#include <seastar/util/variant_utils.hh>
 
 #include "cql3/selection/selection.hh"
 #include "cql3/selection/selector_factories.hh"
@@ -386,17 +388,61 @@ std::unique_ptr<result_set> result_set_builder::build() {
     return std::move(_result_set);
 }
 
-result_set_builder::restrictions_filter::restrictions_filter(::shared_ptr<restrictions::statement_restrictions> restrictions,
+namespace {
+
+using namespace expr;
+
+/// A visitor that copies an expression, but replaces token operator and unselected-column operators with the
+/// TRUE literal.
+struct drop_token_and_unselected_columns {
+    const selection& sel;
+
+    expression operator()(const conjunction& c) const {
+        auto r = c.children | std::views::transform([this] (const expression& e) { return std::visit(*this, e); });
+        return conjunction{std::vector<expression>(r.begin(), r.end())};
+    }
+
+    expression operator()(const binary_operator& binop) const {
+        return seastar::visit(binop.lhs,
+                [] (const token&) { return expression(true); },
+                [&] (const column_value& cv) {
+                    return sel.has_column(*cv.col) ? expression(binop) : expression(true);
+                },
+                [&] (auto&& default_case) { return expression(binop); });
+    }
+
+    expression operator()(bool b) const { return b; }
+};
+
+/// Compiles an expression equivalent to the given restrictions.  A filter can evaluate this expression on each
+/// row to satisfy the restrictions.
+expression compile(
+        const restrictions::statement_restrictions& restrictions,
+        const query_options& options,
+        const selection& sel) {
+    auto ex = restrictions.get_partition_key_restrictions()->expression;
+    if (restrictions.ck_restrictions_need_filtering()) {
+        ex = make_conjunction(std::move(ex), restrictions.get_clustering_columns_restrictions()->expression);
+    }
+    for (auto r : restrictions.get_non_pk_restriction()) {
+        ex = make_conjunction(std::move(ex), r.second->expression);
+    }
+    // TODO: Bind markers here instead of in do_filter, which redoes it for each row.
+    return std::visit(drop_token_and_unselected_columns{sel}, ex);
+}
+
+} // anonymous namespace
+
+result_set_builder::restrictions_filter::restrictions_filter(const restrictions::statement_restrictions& restrictions,
         const query_options& options,
         uint64_t remaining,
         schema_ptr schema,
         uint64_t per_partition_limit,
+        const selection& sel,
         std::optional<partition_key> last_pkey,
         uint64_t rows_fetched_for_last_partition)
-    : _restrictions(restrictions)
+    : _expression(compile(restrictions, options, sel))
     , _options(options)
-    , _skip_pk_restrictions(!_restrictions->pk_restrictions_need_filtering())
-    , _skip_ck_restrictions(!_restrictions->ck_restrictions_need_filtering())
     , _remaining(remaining)
     , _schema(schema)
     , _per_partition_limit(per_partition_limit)
@@ -410,85 +456,10 @@ bool result_set_builder::restrictions_filter::do_filter(const selection& selecti
                                                          const std::vector<bytes>& clustering_key,
                                                          const query::result_row_view& static_row,
                                                          const query::result_row_view* row) const {
-    static logging::logger rlogger("restrictions_filter");
-
     if (_current_partition_key_does_not_match || _current_static_row_does_not_match || _remaining == 0 || _per_partition_remaining == 0) {
         return false;
     }
-
-    auto clustering_columns_restrictions = _restrictions->get_clustering_columns_restrictions();
-    if (dynamic_pointer_cast<cql3::restrictions::multi_column_restriction>(clustering_columns_restrictions)) {
-        clustering_key_prefix ckey = clustering_key_prefix::from_exploded(clustering_key);
-        return expr::is_satisfied_by(
-                clustering_columns_restrictions->expression,
-                partition_key, clustering_key, static_row, row, selection, _options);
-    }
-
-    auto static_row_iterator = static_row.iterator();
-    auto row_iterator = row ? std::optional<query::result_row_view::iterator_type>(row->iterator()) : std::nullopt;
-    auto non_pk_restrictions_map = _restrictions->get_non_pk_restriction();
-    for (auto&& cdef : selection.get_columns()) {
-        switch (cdef->kind) {
-        case column_kind::static_column:
-            // fallthrough
-        case column_kind::regular_column: {
-            if (cdef->kind == column_kind::regular_column && !row_iterator) {
-                continue;
-            }
-            auto restr_it = non_pk_restrictions_map.find(cdef);
-            if (restr_it == non_pk_restrictions_map.end()) {
-                continue;
-            }
-            restrictions::single_column_restriction& restriction = *restr_it->second;
-            bool regular_restriction_matches = expr::is_satisfied_by(
-                    restriction.expression, partition_key, clustering_key, static_row, row, selection, _options);
-            if (!regular_restriction_matches) {
-                _current_static_row_does_not_match = (cdef->kind == column_kind::static_column);
-                return false;
-            }
-            }
-            break;
-        case column_kind::partition_key: {
-            if (_skip_pk_restrictions) {
-                continue;
-            }
-            auto partition_key_restrictions_map = _restrictions->get_single_column_partition_key_restrictions();
-            auto restr_it = partition_key_restrictions_map.find(cdef);
-            if (restr_it == partition_key_restrictions_map.end()) {
-                continue;
-            }
-            restrictions::single_column_restriction& restriction = *restr_it->second;
-            if (!expr::is_satisfied_by(
-                        restriction.expression, partition_key, clustering_key, static_row, row, selection, _options)) {
-                _current_partition_key_does_not_match = true;
-                return false;
-            }
-            }
-            break;
-        case column_kind::clustering_key: {
-            if (_skip_ck_restrictions) {
-                continue;
-            }
-            auto clustering_key_restrictions_map = _restrictions->get_single_column_clustering_key_restrictions();
-            auto restr_it = clustering_key_restrictions_map.find(cdef);
-            if (restr_it == clustering_key_restrictions_map.end()) {
-                continue;
-            }
-            if (clustering_key.empty()) {
-                return false;
-            }
-            restrictions::single_column_restriction& restriction = *restr_it->second;
-            if (!expr::is_satisfied_by(
-                        restriction.expression, partition_key, clustering_key, static_row, row, selection, _options)) {
-                return false;
-            }
-            }
-            break;
-        default:
-            break;
-        }
-    }
-    return true;
+    return is_satisfied_by(_expression, partition_key, clustering_key, static_row, row, selection, _options);
 }
 
 bool result_set_builder::restrictions_filter::operator()(const selection& selection,
