@@ -87,6 +87,7 @@ if [ -z "$prefix" ]; then
         prefix=/opt/scylladb
     fi
 fi
+rprefix=$(realpath -m "$root/$prefix")
 
 scylla_args=()
 args=()
@@ -106,3 +107,5 @@ fi
 (cd $(readlink -f scylla-jmx); ./install.sh --root "$root" --prefix "$prefix"  --sysconfdir "$sysconfdir" ${args[@]})
 
 (cd $(readlink -f scylla-tools); ./install.sh --root "$root" --prefix "$prefix" ${args[@]})
+
+install -m755 uninstall.sh -Dt "$rprefix"
