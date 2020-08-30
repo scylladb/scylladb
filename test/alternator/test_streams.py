@@ -874,6 +874,56 @@ def test_streams_last_result(test_table_ss_keys_only, dynamodbstreams):
         time.sleep(0.5)
     pytest.fail("timed out")
 
+# In test_streams_last_result above we tested that there is no further events
+# after reading the only one. In this test we verify that if we *do* perform
+# another change on the same key, we do get another event and it happens on the
+# *same* shard.
+def test_streams_another_result(test_table_ss_keys_only, dynamodbstreams):
+    table, arn = test_table_ss_keys_only
+    iterators = latest_iterators(dynamodbstreams, arn)
+    # Do an UpdateItem operation that is expected to leave one event in the
+    # stream.
+    p = random_string()
+    c = random_string()
+    table.update_item(Key={'p': p, 'c': c},
+        UpdateExpression='SET x = :val1', ExpressionAttributeValues={':val1': 5})
+    # Eventually, *one* of the stream shards will return one event:
+    timeout = time.time() + 15
+    while time.time() < timeout:
+        for iter in iterators:
+            response = dynamodbstreams.get_records(ShardIterator=iter)
+            if 'Records' in response and response['Records'] != []:
+                # Finally found the shard reporting the changes to this key
+                assert len(response['Records']) == 1
+                assert response['Records'][0]['dynamodb']['Keys']== {'p': {'S': p}, 'c': {'S': c}}
+                assert 'NextShardIterator' in response
+                iter = response['NextShardIterator']
+                # Found the shard with the data. It only has one event so if
+                # we try to read again, we find nothing (this is the same as
+                # what test_streams_last_result tests).
+                response = dynamodbstreams.get_records(ShardIterator=iter)
+                assert response['Records'] == []
+                assert 'NextShardIterator' in response
+                iter = response['NextShardIterator']
+                # Do another UpdateItem operation to the same key, so it is
+                # expected to write to the *same* shard:
+                table.update_item(Key={'p': p, 'c': c},
+                    UpdateExpression='SET x = :val2', ExpressionAttributeValues={':val2': 7})
+                # Again we may need to wait for the event to appear on the stream:
+                timeout = time.time() + 15
+                while time.time() < timeout:
+                    response = dynamodbstreams.get_records(ShardIterator=iter)
+                    if 'Records' in response and response['Records'] != []:
+                        assert len(response['Records']) == 1
+                        assert response['Records'][0]['dynamodb']['Keys']== {'p': {'S': p}, 'c': {'S': c}}
+                        assert 'NextShardIterator' in response
+                        # The test is done, successfully.
+                        return
+                    time.sleep(0.5)
+                pytest.fail("timed out")
+        time.sleep(0.5)
+    pytest.fail("timed out")
+
 # Above we tested some specific operations in small tests aimed to reproduce
 # a specific bug, in the following tests we do a all the different operations,
 # PutItem, DeleteItem, BatchWriteItem and UpdateItem, and check the resulting
