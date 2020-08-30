@@ -1018,6 +1018,56 @@ def test_streams_after_sequence_number(test_table_ss_keys_only, dynamodbstreams)
         time.sleep(0.5)
     pytest.fail("timed out")
 
+# Test the "TRIM_HORIZON" iterator, which can be used to re-read *all* the
+# previously-read events of the stream shard again.
+# NOTE: This test relies on the test_table_ss_keys_only fixture giving us a
+# brand new stream, with no old events saved from other tests. If we ever
+# change this, we should change this test to use a different fixture.
+def test_streams_trim_horizon(test_table_ss_keys_only, dynamodbstreams):
+    table, arn = test_table_ss_keys_only
+    # List all the shards and their LATEST iterators:
+    shards_and_iterators = []
+    for shard_id in list_shards(dynamodbstreams, arn):
+        shards_and_iterators.append((shard_id, dynamodbstreams.get_shard_iterator(StreamArn=arn,
+            ShardId=shard_id, ShardIteratorType='LATEST')['ShardIterator']))
+    # Do two UpdateItem operations to the same key, that are expected to leave
+    # two events in the stream.
+    p = random_string()
+    c = random_string()
+    table.update_item(Key={'p': p, 'c': c},
+        UpdateExpression='SET x = :val1', ExpressionAttributeValues={':val1': 3})
+    table.update_item(Key={'p': p, 'c': c},
+        UpdateExpression='SET x = :val1', ExpressionAttributeValues={':val1': 5})
+    # Eventually, *one* of the stream shards will return the two events:
+    timeout = time.time() + 15
+    while time.time() < timeout:
+        for (shard_id, iter) in shards_and_iterators:
+            response = dynamodbstreams.get_records(ShardIterator=iter)
+            if 'Records' in response and len(response['Records']) == 2:
+                assert response['Records'][0]['dynamodb']['Keys'] == {'p': {'S': p}, 'c': {'S': c}}
+                assert response['Records'][1]['dynamodb']['Keys'] == {'p': {'S': p}, 'c': {'S': c}}
+                sequence_number_1 = response['Records'][0]['dynamodb']['SequenceNumber']
+                sequence_number_2 = response['Records'][1]['dynamodb']['SequenceNumber']
+                # If we use the TRIM_HORIZON iterator, we should receive the
+                # same two events again, in the same order.
+                # Note that we assume that the fixture gave us a brand new
+                # stream, with no old events saved from other tests. If we
+                # couldn't assume this, this test would need to become much
+                # more complex, and would need to read from this shard until
+                # we find the two events we are looking for.
+                iter = dynamodbstreams.get_shard_iterator(StreamArn=arn,
+                    ShardId=shard_id, ShardIteratorType='TRIM_HORIZON')['ShardIterator']
+                response = dynamodbstreams.get_records(ShardIterator=iter)
+                assert 'Records' in response
+                assert len(response['Records']) == 2
+                assert response['Records'][0]['dynamodb']['Keys'] == {'p': {'S': p}, 'c': {'S': c}}
+                assert response['Records'][1]['dynamodb']['Keys'] == {'p': {'S': p}, 'c': {'S': c}}
+                assert response['Records'][0]['dynamodb']['SequenceNumber'] == sequence_number_1
+                assert response['Records'][1]['dynamodb']['SequenceNumber'] == sequence_number_2
+                return
+        time.sleep(0.5)
+    pytest.fail("timed out")
+
 # Above we tested some specific operations in small tests aimed to reproduce
 # a specific bug, in the following tests we do a all the different operations,
 # PutItem, DeleteItem, BatchWriteItem and UpdateItem, and check the resulting
