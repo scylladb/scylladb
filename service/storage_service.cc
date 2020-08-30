@@ -1090,11 +1090,10 @@ void storage_service::handle_state_bootstrap(inet_address endpoint) {
     handle_cdc_generation(cdc_streams_ts);
 
     _token_metadata.add_bootstrap_tokens(tokens, endpoint);
-    update_pending_ranges().get();
-
     if (_gossiper.uses_host_id(endpoint)) {
         _token_metadata.update_host_id(_gossiper.get_host_id(endpoint), endpoint);
     }
+    update_pending_ranges().get();
 }
 
 void storage_service::handle_state_normal(inet_address endpoint) {
