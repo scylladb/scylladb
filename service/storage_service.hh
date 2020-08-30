@@ -119,6 +119,8 @@ private:
     using boot_strapper = dht::boot_strapper;
     using token_metadata = locator::token_metadata;
     using shared_token_metadata = locator::shared_token_metadata;
+    using token_metadata_ptr = locator::token_metadata_ptr;
+    using mutable_token_metadata_ptr = locator::mutable_token_metadata_ptr;
     using token_metadata_lock = locator::token_metadata_lock;
     using application_state = gms::application_state;
     using inet_address = gms::inet_address;
@@ -172,20 +174,24 @@ private:
     // Update pending ranges locally and then replicate to all cores.
     // Should be serialized under token_metadata_lock.
     // Must be called on shard 0.
-    future<> update_pending_ranges_locked(sstring reason);
+    future<> update_pending_ranges(mutable_token_metadata_ptr tmptr, sstring reason);
     future<> update_pending_ranges(sstring reason);
     future<> keyspace_changed(const sstring& ks_name);
     void register_metrics();
     future<> publish_schema_version();
     void install_schema_version_change_listener();
 
-    locator::token_metadata& get_mutable_token_metadata() {
-        return *_shared_token_metadata.get_mutable();
+    mutable_token_metadata_ptr get_mutable_token_metadata_ptr() {
+        return _shared_token_metadata.clone();
     }
 public:
     static future<> update_topology(inet_address endpoint);
 
-    const locator::token_metadata& get_token_metadata() const {
+    token_metadata_ptr get_token_metadata_ptr() const noexcept {
+        return _shared_token_metadata.get();
+    }
+
+    const locator::token_metadata& get_token_metadata() const noexcept {
         return *_shared_token_metadata.get();
     }
 
@@ -543,7 +549,7 @@ public:
     future<> check_and_repair_cdc_streams();
 private:
     // Should be serialized under token_metadata_lock.
-    future<> replicate_to_all_cores();
+    future<> replicate_to_all_cores(mutable_token_metadata_ptr tmptr) noexcept;
     sharded<db::system_distributed_keyspace>& _sys_dist_ks;
     sharded<db::view::view_update_generator>& _view_update_generator;
     serialized_action _schema_version_publisher;
