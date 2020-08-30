@@ -62,6 +62,7 @@
 #include <boost/range/algorithm/set_algorithm.hpp>
 #include <boost/range/adaptors.hpp>
 #include "utils/generation-number.hh"
+#include "locator/token_metadata.hh"
 
 namespace gms {
 
@@ -126,7 +127,7 @@ public:
 gossiper::gossiper(abort_source& as, feature_service& features, const locator::shared_token_metadata& stm, netw::messaging_service& ms, db::config& cfg, gossip_config gcfg)
         : _abort_source(as)
         , _feature_service(features)
-        , _token_metadata(*stm.get())
+        , _shared_token_metadata(stm)
         , _messaging(ms)
         , _cfg(cfg)
         , _gcfg(gcfg)
@@ -734,7 +735,7 @@ void gossiper::do_status_check() {
         // check for dead state removal
         auto expire_time = get_expire_time_for_endpoint(endpoint);
         if (!is_alive && (now > expire_time)
-             && (!_token_metadata.is_member(endpoint))) {
+             && (!get_token_metadata_ptr()->is_member(endpoint))) {
             logger.debug("time is expiring for endpoint : {} ({})", endpoint, expire_time.time_since_epoch().count());
             evict_from_membership(endpoint);
         }
@@ -940,7 +941,7 @@ std::set<inet_address> gossiper::get_live_token_owners() {
     std::set<inet_address> token_owners;
     for (auto& member : get_live_members()) {
         auto es = get_endpoint_state_for_endpoint_ptr(member);
-        if (es && !is_dead_state(*es) && _token_metadata.is_member(member)) {
+        if (es && !is_dead_state(*es) && get_token_metadata_ptr()->is_member(member)) {
             token_owners.insert(member);
         }
     }
@@ -951,7 +952,7 @@ std::set<inet_address> gossiper::get_unreachable_token_owners() {
     std::set<inet_address> token_owners;
     for (auto&& x : _unreachable_endpoints) {
         auto& endpoint = x.first;
-        if (_token_metadata.is_member(endpoint)) {
+        if (get_token_metadata_ptr()->is_member(endpoint)) {
             token_owners.insert(endpoint);
         }
     }
@@ -1147,7 +1148,7 @@ future<> gossiper::assassinate_endpoint(sstring address) {
             std::vector<dht::token> tokens;
             logger.warn("Assassinating {} via gossip", endpoint);
             if (es) {
-                tokens = gossiper._token_metadata.get_tokens(endpoint);
+                tokens = gossiper.get_token_metadata_ptr()->get_tokens(endpoint);
                 if (tokens.empty()) {
                     logger.warn("Unable to calculate tokens for {}.  Will use a random one", address);
                     throw std::runtime_error(format("Unable to calculate tokens for {}", endpoint));
@@ -1235,7 +1236,7 @@ bool gossiper::is_gossip_only_member(inet_address endpoint) {
     if (!es) {
         return false;
     }
-    return !is_dead_state(*es) && !_token_metadata.is_member(endpoint);
+    return !is_dead_state(*es) && !get_token_metadata_ptr()->is_member(endpoint);
 }
 
 clk::time_point gossiper::get_expire_time_for_endpoint(inet_address endpoint) const noexcept {
@@ -1864,12 +1865,13 @@ void gossiper::add_saved_endpoint(inet_address ep) {
         logger.debug("not replacing a previous ep_state for {}, but reusing it: {}", ep, ep_state);
         ep_state.set_heart_beat_state_and_update_timestamp(heart_beat_state(0));
     }
-    auto tokens = _token_metadata.get_tokens(ep);
+    const auto tmptr = get_token_metadata_ptr();
+    auto tokens = tmptr->get_tokens(ep);
     if (!tokens.empty()) {
         std::unordered_set<dht::token> tokens_set(tokens.begin(), tokens.end());
         ep_state.add_application_state(gms::application_state::TOKENS, versioned_value::tokens(tokens_set));
     }
-    auto host_id = _token_metadata.get_host_id_if_known(ep);
+    auto host_id = tmptr->get_host_id_if_known(ep);
     if (host_id) {
         ep_state.add_application_state(gms::application_state::HOST_ID, versioned_value::host_id(host_id.value()));
     }
@@ -2405,6 +2407,10 @@ void gossiper::maybe_enable_features() {
         }
         g._features_condvar.broadcast();
     }).get();
+}
+
+locator::token_metadata_ptr gossiper::get_token_metadata_ptr() const noexcept {
+    return _shared_token_metadata.get();
 }
 
 } // namespace gms
