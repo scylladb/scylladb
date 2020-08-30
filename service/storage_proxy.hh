@@ -240,13 +240,13 @@ public:
 
     const gms::feature_service& features() const { return _features; }
 
-    const locator::token_metadata& get_token_metadata() const { return _token_metadata; }
+    locator::token_metadata_ptr get_token_metadata_ptr() const noexcept;
 
     query::max_result_size get_max_result_size(const query::partition_slice& slice) const;
 
 private:
     distributed<database>& _db;
-    const locator::token_metadata& _token_metadata;
+    const locator::shared_token_metadata& _shared_token_metadata;
     smp_service_group _read_smp_service_group;
     smp_service_group _write_smp_service_group;
     smp_service_group _hints_write_smp_service_group;
