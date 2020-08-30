@@ -924,6 +924,100 @@ def test_streams_another_result(test_table_ss_keys_only, dynamodbstreams):
         time.sleep(0.5)
     pytest.fail("timed out")
 
+# Test the SequenceNumber attribute returned for stream events, and the
+# "AT_SEQUENCE_NUMBER" iterator that can be used to re-read from the same
+# event again given its saved "sequence number".
+def test_streams_at_sequence_number(test_table_ss_keys_only, dynamodbstreams):
+    table, arn = test_table_ss_keys_only
+    # List all the shards and their LATEST iterators:
+    shards_and_iterators = []
+    for shard_id in list_shards(dynamodbstreams, arn):
+        shards_and_iterators.append((shard_id, dynamodbstreams.get_shard_iterator(StreamArn=arn,
+            ShardId=shard_id, ShardIteratorType='LATEST')['ShardIterator']))
+    # Do an UpdateItem operation that is expected to leave one event in the
+    # stream.
+    p = random_string()
+    c = random_string()
+    table.update_item(Key={'p': p, 'c': c},
+        UpdateExpression='SET x = :val1', ExpressionAttributeValues={':val1': 5})
+    # Eventually, *one* of the stream shards will return the one event:
+    timeout = time.time() + 15
+    while time.time() < timeout:
+        for (shard_id, iter) in shards_and_iterators:
+            response = dynamodbstreams.get_records(ShardIterator=iter)
+            if 'Records' in response and response['Records'] != []:
+                # Finally found the shard reporting the changes to this key:
+                assert len(response['Records']) == 1
+                assert response['Records'][0]['dynamodb']['Keys'] == {'p': {'S': p}, 'c': {'S': c}}
+                assert 'NextShardIterator' in response
+                sequence_number = response['Records'][0]['dynamodb']['SequenceNumber']
+                # Found the shard with the data. It only has one event so if
+                # we try to read again, we find nothing (this is the same as
+                # what test_streams_last_result tests).
+                iter = response['NextShardIterator']
+                response = dynamodbstreams.get_records(ShardIterator=iter)
+                assert response['Records'] == []
+                assert 'NextShardIterator' in response
+                # If we use the SequenceNumber of the first event to create an
+                # AT_SEQUENCE_NUMBER iterator, we can read the same event again.
+                # We don't need a loop and a timeout, because this event is already
+                # available.
+                iter = dynamodbstreams.get_shard_iterator(StreamArn=arn,
+                    ShardId=shard_id, ShardIteratorType='AT_SEQUENCE_NUMBER',
+                    SequenceNumber=sequence_number)['ShardIterator']
+                response = dynamodbstreams.get_records(ShardIterator=iter)
+                assert 'Records' in response
+                assert len(response['Records']) == 1
+                assert response['Records'][0]['dynamodb']['Keys'] == {'p': {'S': p}, 'c': {'S': c}}
+                assert response['Records'][0]['dynamodb']['SequenceNumber'] == sequence_number
+                return
+        time.sleep(0.5)
+    pytest.fail("timed out")
+
+# Test the SequenceNumber attribute returned for stream events, and the
+# "AFTER_SEQUENCE_NUMBER" iterator that can be used to re-read *after* the same
+# event again given its saved "sequence number".
+def test_streams_after_sequence_number(test_table_ss_keys_only, dynamodbstreams):
+    table, arn = test_table_ss_keys_only
+    # List all the shards and their LATEST iterators:
+    shards_and_iterators = []
+    for shard_id in list_shards(dynamodbstreams, arn):
+        shards_and_iterators.append((shard_id, dynamodbstreams.get_shard_iterator(StreamArn=arn,
+            ShardId=shard_id, ShardIteratorType='LATEST')['ShardIterator']))
+    # Do two UpdateItem operations to the same key, that are expected to leave
+    # two events in the stream.
+    p = random_string()
+    c = random_string()
+    table.update_item(Key={'p': p, 'c': c},
+        UpdateExpression='SET x = :val1', ExpressionAttributeValues={':val1': 3})
+    table.update_item(Key={'p': p, 'c': c},
+        UpdateExpression='SET x = :val1', ExpressionAttributeValues={':val1': 5})
+    # Eventually, *one* of the stream shards will return the two events:
+    timeout = time.time() + 15
+    while time.time() < timeout:
+        for (shard_id, iter) in shards_and_iterators:
+            response = dynamodbstreams.get_records(ShardIterator=iter)
+            if 'Records' in response and len(response['Records']) == 2:
+                assert response['Records'][0]['dynamodb']['Keys'] == {'p': {'S': p}, 'c': {'S': c}}
+                assert response['Records'][1]['dynamodb']['Keys'] == {'p': {'S': p}, 'c': {'S': c}}
+                sequence_number_1 = response['Records'][0]['dynamodb']['SequenceNumber']
+                sequence_number_2 = response['Records'][1]['dynamodb']['SequenceNumber']
+                # If we use the SequenceNumber of the first event to create an
+                # AFTER_SEQUENCE_NUMBER iterator, we can read the second event
+                # (only) again. We don't need a loop and a timeout, because this
+                # event is already available.
+                iter = dynamodbstreams.get_shard_iterator(StreamArn=arn,
+                    ShardId=shard_id, ShardIteratorType='AFTER_SEQUENCE_NUMBER',
+                    SequenceNumber=sequence_number_1)['ShardIterator']
+                response = dynamodbstreams.get_records(ShardIterator=iter)
+                assert 'Records' in response
+                assert len(response['Records']) == 1
+                assert response['Records'][0]['dynamodb']['Keys'] == {'p': {'S': p}, 'c': {'S': c}}
+                assert response['Records'][0]['dynamodb']['SequenceNumber'] == sequence_number_2
+                return
+        time.sleep(0.5)
+    pytest.fail("timed out")
+
 # Above we tested some specific operations in small tests aimed to reproduce
 # a specific bug, in the following tests we do a all the different operations,
 # PutItem, DeleteItem, BatchWriteItem and UpdateItem, and check the resulting
