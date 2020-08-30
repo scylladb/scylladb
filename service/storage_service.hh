@@ -173,13 +173,13 @@ private:
     void install_schema_version_change_listener();
 
     locator::token_metadata& get_mutable_token_metadata() {
-        return _token_metadata;
+        return *_shared_token_metadata.get_mutable();
     }
 public:
     static future<> update_topology(inet_address endpoint);
 
     const locator::token_metadata& get_token_metadata() const {
-        return _token_metadata;
+        return *_shared_token_metadata.get();
     }
 
     cdc::metadata& get_cdc_metadata() {
@@ -214,7 +214,7 @@ private:
         return utils::fb_utilities::get_broadcast_address();
     }
     /* This abstraction maintains the token/endpoint metadata information */
-    token_metadata& _token_metadata;
+    shared_token_metadata& _shared_token_metadata;
 
     // Maintains the set of known CDC generations used to pick streams for log writes (i.e., the partition keys of these log writes).
     // Updated in response to certain gossip events (see the handle_cdc_generation function).

@@ -107,7 +107,7 @@ storage_service::storage_service(abort_source& abort_source, distributed<databas
         , _service_memory_total(config.available_memory / 10)
         , _service_memory_limiter(_service_memory_total)
         , _for_testing(for_testing)
-        , _token_metadata(*stm.get_mutable())
+        , _shared_token_metadata(stm)
         , _replicate_action([this] { return do_replicate_to_all_cores(); })
         , _update_pending_ranges_action([this] { return do_update_pending_ranges(); })
         , _sys_dist_ks(sys_dist_ks)
@@ -1692,12 +1692,12 @@ future<> storage_service::replicate_tm_only() noexcept {
     assert(this_shard_id() == 0);
 
   try {
-    auto tm = _token_metadata;
+    auto tm = *_shared_token_metadata.get();
 
     return do_with(std::move(tm), [this] (token_metadata& tm) {
         return container().invoke_on_all([&tm] (storage_service& local_ss){
             if (this_shard_id() != 0) {
-                local_ss._token_metadata = tm;
+                *local_ss._shared_token_metadata.get_mutable() = tm;
             }
         });
     });
