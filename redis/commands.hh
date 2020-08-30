@@ -70,6 +70,34 @@ public:
     virtual future<redis_message> execute(service::storage_proxy&, redis_options&, service_permit) override;
 };
 
+class hget : public abstract_command {
+    bytes _key;
+    bytes _field;
+public:
+    static shared_ptr<abstract_command> prepare(service::storage_proxy& proxy, request&& req);
+    hget(bytes&& name, bytes&& key, bytes&& field)
+        : abstract_command(std::move(name))
+        , _key(std::move(key))
+        , _field(std::move(field)) {
+    }
+    virtual future<redis_message> execute(service::storage_proxy&, redis_options&, service_permit) override;
+};
+
+class hset : public abstract_command {
+    bytes _key;
+    bytes _field;
+    bytes _data;
+public:
+    static shared_ptr<abstract_command> prepare(service::storage_proxy& proxy, request&& req);
+    hset(bytes&& name, bytes&& key, bytes&& field, bytes&& data)
+        : abstract_command(std::move(name))
+        , _key(std::move(key))
+        , _field(std::move(field))
+        , _data(std::move(data)) {
+    }
+    virtual future<redis_message> execute(service::storage_proxy&, redis_options&, service_permit) override;
+};
+
 class set : public abstract_command {
     bytes _key;
     bytes _data;

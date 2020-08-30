@@ -51,6 +51,23 @@ atomic_cell make_cell(const schema_ptr schema,
     return atomic_cell::make_live(type, api::new_timestamp(), value, atomic_cell::collection_member::no);
 }  
 
+
+future<> write_hashes(service::storage_proxy& proxy, redis::redis_options& options, bytes&& key, bytes&& field, bytes&& data, long ttl, service_permit permit) {
+    db::timeout_clock::time_point timeout = db::timeout_clock::now() + options.get_write_timeout();
+
+    auto schema = get_schema(proxy, options.get_keyspace_name(), redis::HASHes);
+    const column_definition& column = *schema->get_column_definition(redis::DATA_COLUMN_NAME);
+    auto pkey = partition_key::from_single_value(*schema, key);
+    auto ckey = clustering_key::from_single_value(*schema, field);
+    auto m = mutation(schema, std::move(pkey));
+    auto cell = make_cell(schema, *(column.type.get()), data, ttl);
+    m.set_clustered_cell(ckey, column, std::move(cell));
+
+    auto write_consistency_level = options.get_write_consistency_level();
+    return proxy.mutate(std::vector<mutation> {std::move(m)}, write_consistency_level, timeout, nullptr, permit);
+}
+
+
 mutation make_mutation(service::storage_proxy& proxy, const redis_options& options, bytes&& key, bytes&& data, long ttl) {
     auto schema = get_schema(proxy, options.get_keyspace_name(), redis::STRINGs);
     const column_definition& column = *schema->get_column_definition(redis::DATA_COLUMN_NAME);

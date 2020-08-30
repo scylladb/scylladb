@@ -286,7 +286,7 @@ transaction is supported (e.g. CAS).  In this proposal, the commands, which
 require a read before the write (a.k.a read-modify-write), are implemented
 in an unsafe way, that simply performs a read before the write.
 
-Fortunately, the LWT is soon comming to Scylla.  By then the
+Fortunately, the LWT is soon coming to Scylla.  By then the
 read-modify-write commands will be implemented based on LWT.
 
 **IMPORTANT NOTE**:
@@ -308,14 +308,14 @@ As mentioned above, Scylla currently does not support LWT. The RMW commands
 are implemented in an unsafe way in this proposal. It simply performs a
 read before the write.
 
-Asumming Scylla has supported the LWT, there is no difference with the
+Assuming Scylla has supported the LWT, there is no difference with the
 original Reids about the RMW commands.
 
 ### 5.2 Non-RMW Command
 
 The Non-RMW command only performs a single read or write operation. For
 instance, The SET, GET, EXISTS of STRINGs strucutures. The behaviour of
-these commands are not difference with the original Redis.
+these commands are not different with the original Redis.
 
 ### 5.3 Transaction
 
@@ -355,7 +355,7 @@ consistency of Redis operations configurable.
 
 ### 5.6 Implementation of Shared Commands
 
-In Redis, data strucutures have the shared commands (e.g. DEL, EXISTS).
+In Redis, data structures have the shared commands (e.g. DEL, EXISTS).
 And other commands usually operate on special one data structure of Redis.
 As mentioned above,
 we split the key set into 5 different Scylla table. The shared commands
@@ -383,5 +383,8 @@ The Redis API in Scylla supports the following subset of the Redis commands.
 | `GET key` | Get the value for a `key`. |
 | `SET key value [EX seconds\|PX milliseconds] [NX\|XX] [KEEPTTL]` | Set the value of `key`. |
 | `SETEX key seconds value` | Set the value and the expiration of `key`. |
+| **Hash data type** | |
+| `HGET key field` | Get the value for a `key` and `field`. |
+| `HSET key field value` | Set the value of `key` and `field`. Multiple field/value is not yet supported. Return value is always 1 whether the key exists or not. |
 | **Server** | |
 | `LOLWUT [VERSION version]` | Return Redis version. |

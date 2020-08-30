@@ -33,6 +33,7 @@
 #include "redis/keyspace_utils.hh"
 
 namespace redis {
+
 class strings_result_builder {
     lw_shared_ptr<strings_result> _data;
     const query::partition_slice& _partition_slice;
@@ -75,6 +76,21 @@ public:
 future<lw_shared_ptr<strings_result>> read_strings(service::storage_proxy& proxy, const redis_options& options, const bytes& key, service_permit permit) {
     auto schema = get_schema(proxy, options.get_keyspace_name(), redis::STRINGs);
     auto ps = partition_slice_builder(*schema).build();
+    return query_strings(proxy, options, key, permit, schema, ps);
+}
+
+future<lw_shared_ptr<strings_result>> read_strings_from_hash(service::storage_proxy& proxy, const redis_options& options, const bytes& key, const bytes& field, service_permit permit) {
+    auto schema = get_schema(proxy, options.get_keyspace_name(), redis::HASHes);
+    auto ckey = clustering_key::from_single_value(*schema, field);
+    auto clustering_range = query::clustering_range::make_singular(ckey);
+
+    auto ps = partition_slice_builder(*schema)
+        .with_range(std::move(clustering_range))
+        .build();
+    return query_strings(proxy, options, key, permit, schema, ps);
+}
+
+future<lw_shared_ptr<strings_result>> query_strings(service::storage_proxy& proxy, const redis_options& options, const bytes& key, service_permit permit, schema_ptr schema, query::partition_slice ps) {
     const auto max_result_size = proxy.get_max_result_size(ps);
     query::read_command cmd(schema->id(), schema->version(), ps, 1, gc_clock::now(), std::nullopt, 1, utils::UUID(), query::is_first_page::no, max_result_size, 0);
     auto pkey = partition_key::from_single_value(*schema, key);
@@ -88,8 +104,8 @@ future<lw_shared_ptr<strings_result>> read_strings(service::storage_proxy& proxy
             auto pd = make_lw_shared<strings_result>();
             v.consume(ps, strings_result_builder(pd, schema, ps));
             return pd;
-        }); 
-    }); 
+        });
+    });
 }
 
 }

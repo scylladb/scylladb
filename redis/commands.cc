@@ -110,6 +110,36 @@ future<redis_message> strlen::execute(service::storage_proxy& proxy, redis::redi
     });
 }
 
+shared_ptr<abstract_command> hget::prepare(service::storage_proxy& proxy, request&& req) {
+    if (req.arguments_size() != 2) {
+        throw wrong_arguments_exception(2, req.arguments_size(), req._command);
+    }
+    return seastar::make_shared<hget> (std::move(req._command), std::move(req._args[0]), std::move(req._args[1]));
+}
+
+future<redis_message> hget::execute(service::storage_proxy& proxy, redis::redis_options& options, service_permit permit) {
+    return redis::read_strings_from_hash(proxy, options, _key, _field, permit).then([] (auto result) {
+        if (result->has_result()) {
+            return redis_message::make_strings_result(std::move(result->result()));
+        }
+        // return nil string if key does not exist
+        return redis_message::nil();
+    });
+}
+
+shared_ptr<abstract_command> hset::prepare(service::storage_proxy& proxy, request&& req) {
+    if (req.arguments_size() == 3) {
+        return seastar::make_shared<hset> (std::move(req._command), std::move(req._args[0]), std::move(req._args[1]), std::move(req._args[2]));
+    }
+    throw wrong_number_of_arguments_exception(req._command);
+}
+
+future<redis_message> hset::execute(service::storage_proxy& proxy, redis::redis_options& options, service_permit permit) {
+    return redis::write_hashes(proxy, options, std::move(_key), std::move(_field), std::move(_data), 0, permit).then([] {
+        return redis_message::one();
+    });
+}
+
 shared_ptr<abstract_command> set::prepare(service::storage_proxy& proxy, request&& req) {
     if (req.arguments_size() == 2) {
         return seastar::make_shared<set> (std::move(req._command), std::move(req._args[0]), std::move(req._args[1]));

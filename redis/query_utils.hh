@@ -25,6 +25,7 @@
 #include "seastar/core/future.hh"
 #include "bytes.hh"
 #include "gc_clock.hh"
+#include "query-request.hh"
 
 using namespace seastar;
 
@@ -50,5 +51,7 @@ struct strings_result {
 };
 
 future<lw_shared_ptr<strings_result>> read_strings(service::storage_proxy&, const redis_options&, const bytes&, service_permit);
+future<lw_shared_ptr<strings_result>> read_strings_from_hash(service::storage_proxy&, const redis_options&, const bytes&, const bytes&, service_permit);
+future<lw_shared_ptr<strings_result>> query_strings(service::storage_proxy&, const redis_options&, const bytes&, service_permit, schema_ptr, query::partition_slice);
 
 }
