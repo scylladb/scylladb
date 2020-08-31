@@ -141,9 +141,9 @@ public:
 
     std::unordered_map<dht::token_range, std::vector<inet_address>> get_range_addresses(const token_metadata& tm) const;
 
-    dht::token_range_vector get_pending_address_ranges(const token_metadata& tm, token pending_token, inet_address pending_address) const;
+    dht::token_range_vector get_pending_address_ranges(const token_metadata_ptr tmptr, token pending_token, inet_address pending_address) const;
 
-    dht::token_range_vector get_pending_address_ranges(const token_metadata& tm, std::unordered_set<token> pending_tokens, inet_address pending_address) const;
+    dht::token_range_vector get_pending_address_ranges(const token_metadata_ptr tmptr, std::unordered_set<token> pending_tokens, inet_address pending_address) const;
 };
 
 }
