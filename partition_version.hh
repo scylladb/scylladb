@@ -469,7 +469,6 @@ private:
     void set_version(partition_version*);
 public:
     struct evictable_tag {};
-    class rows_iterator;
     // Constructs a non-evictable entry holding empty partition
     partition_entry() = default;
     // Constructs a non-evictable entry
