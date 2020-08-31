@@ -2827,6 +2827,20 @@ future<> storage_service::keyspace_changed(const sstring& ks_name) {
     });
 }
 
+future<> storage_service::update_topology(inet_address endpoint) {
+    // FIXME: update token_metadata on shard 0 and then
+    // replicate_to_all_cores rather than updating on all shards
+    // in parallel.
+    return service::get_storage_service().invoke_on_all([endpoint] (auto& ss) {
+        auto& tmd = ss.get_mutable_token_metadata();
+
+        // initiate the token metadata endpoints cache reset
+        tmd.invalidate_cached_rings();
+        // re-read local rack and DC info
+        tmd.update_topology(endpoint);
+    });
+}
+
 void storage_service::init_messaging_service() {
     _messaging.local().register_replication_finished([] (gms::inet_address from) {
         return get_local_storage_service().confirm_replication(from);

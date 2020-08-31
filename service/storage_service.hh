@@ -170,6 +170,7 @@ private:
     future<> publish_schema_version();
     void install_schema_version_change_listener();
 public:
+    static future<> update_topology(inet_address endpoint);
 
     const locator::token_metadata& get_token_metadata() const {
         return _token_metadata;
