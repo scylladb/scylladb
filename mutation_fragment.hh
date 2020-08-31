@@ -284,11 +284,10 @@ public:
     };
 private:
     struct data {
-        data(reader_permit permit) : _permit(std::move(permit)) { }
+        data(reader_permit permit) :  _memory(permit.consume_memory()) { }
         ~data() { }
 
-        reader_permit _permit;
-        std::optional<size_t> _size_in_bytes;
+        reader_permit::resource_units _memory;
         union {
             static_row _static_row;
             clustering_row _clustering_row;
@@ -316,6 +315,7 @@ public:
         , _data(std::make_unique<data>(std::move(permit)))
     {
         new (&_data->_clustering_row) clustering_row(std::forward<Args>(args)...);
+        _data->_memory.reset(reader_resources::with_memory(calculate_memory_usage(s)));
     }
 
     mutation_fragment(const schema& s, reader_permit permit, static_row&& r);
@@ -343,6 +343,7 @@ public:
                 new (&_data->_partition_end) partition_end(o._data->_partition_end);
                 break;
         }
+        _data->_memory.reset(o._data->_memory.resources());
     }
     mutation_fragment(mutation_fragment&& other) = default;
     mutation_fragment& operator=(mutation_fragment&& other) noexcept {
@@ -384,20 +385,20 @@ public:
     bool is_end_of_partition() const { return _kind == kind::partition_end; }
 
     void mutate_as_static_row(const schema& s, std::invocable<static_row&> auto&& fn) {
-        _data->_size_in_bytes = std::nullopt;
         fn(_data->_static_row);
+        _data->_memory.reset(reader_resources::with_memory(calculate_memory_usage(s)));
     }
     void mutate_as_clustering_row(const schema& s, std::invocable<clustering_row&> auto&& fn) {
-        _data->_size_in_bytes = std::nullopt;
         fn(_data->_clustering_row);
+        _data->_memory.reset(reader_resources::with_memory(calculate_memory_usage(s)));
     }
     void mutate_as_range_tombstone(const schema& s, std::invocable<range_tombstone&> auto&& fn) {
-        _data->_size_in_bytes = std::nullopt;
         fn(_data->_range_tombstone);
+        _data->_memory.reset(reader_resources::with_memory(calculate_memory_usage(s)));
     }
     void mutate_as_partition_start(const schema& s, std::invocable<partition_start&> auto&& fn) {
-        _data->_size_in_bytes = std::nullopt;
         fn(_data->_partition_start);
+        _data->_memory.reset(reader_resources::with_memory(calculate_memory_usage(s)));
     }
 
     static_row&& as_static_row() && { return std::move(_data->_static_row); }
@@ -418,6 +419,7 @@ public:
     template<typename Consumer>
     requires MutationFragmentConsumer<Consumer, decltype(std::declval<Consumer>().consume(std::declval<range_tombstone>()))>
     decltype(auto) consume(Consumer& consumer) && {
+        _data->_memory.reset();
         switch (_kind) {
         case kind::static_row:
             return consumer.consume(std::move(_data->_static_row));
@@ -452,14 +454,11 @@ public:
     }
 
     size_t memory_usage(const schema& s) const {
-        if (!_data->_size_in_bytes) {
-            _data->_size_in_bytes = sizeof(data) + visit([&s] (auto& mf) -> size_t { return mf.external_memory_usage(s); });
-        }
-        return *_data->_size_in_bytes;
+        return _data->_memory.resources().memory;
     }
 
     reader_permit permit() const {
-        return _data->_permit;
+        return _data->_memory.permit();
     }
 
     bool equal(const schema& s, const mutation_fragment& other) const {
@@ -501,6 +500,11 @@ public:
         friend std::ostream& operator<<(std::ostream& os, const printer& p);
     };
     friend std::ostream& operator<<(std::ostream& os, const printer& p);
+
+private:
+    size_t calculate_memory_usage(const schema& s) const {
+        return sizeof(data) + visit([&s] (auto& mf) -> size_t { return mf.external_memory_usage(s); });
+    }
 };
 
 inline position_in_partition_view static_row::position() const
