@@ -317,7 +317,13 @@ int main(int argc, char** argv) {
     testing::local_random_engine.seed(std::random_device()());
 
     return app.run(argc, argv, [] {
+      return async([] {
         cql_test_config test_cfg;
+
+        test_cfg.dbcfg.emplace();
+        test_cfg.dbcfg->available_memory = memory::stats().total_memory();
+        test_cfg.dbcfg->statement_scheduling_group = seastar::create_scheduling_group("statement", 1000).get0();
+        test_cfg.dbcfg->streaming_scheduling_group = seastar::create_scheduling_group("streaming", 200).get0();
 
         auto& db_cfg = *test_cfg.db_config;
 
@@ -339,8 +345,13 @@ int main(int argc, char** argv) {
             throw std::runtime_error(format("Unsupported sstable format: {}", sstable_format_name));
         }
 
-        return do_with_cql_env_thread([] (cql_test_env& env) {
-            test_main_thread(env);
-        }, test_cfg);
+        do_with_cql_env([] (cql_test_env& env) {
+            return with_scheduling_group(env.local_db().get_statement_scheduling_group(), [&] {
+                return seastar::async([&] {
+                    test_main_thread(env);
+                });
+            });
+        }, test_cfg).get();
+      });
     });
 }
