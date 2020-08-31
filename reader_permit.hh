@@ -31,6 +31,8 @@ struct reader_resources {
     int count = 0;
     ssize_t memory = 0;
 
+    static reader_resources with_memory(ssize_t memory) { return reader_resources(0, memory); }
+
     reader_resources() = default;
 
     reader_resources(int count, ssize_t memory)
