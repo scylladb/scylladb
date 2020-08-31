@@ -2259,6 +2259,34 @@ allocating_section::guard::~guard() {
     shard_segment_pool.set_emergency_reserve_max(_prev);
 }
 
+void allocating_section::maybe_decay_reserve() {
+    // The decay rate is inversely proportional to the reserve
+    // (every (s_segments_per_decay/_lsa_reserve) allocations).
+    //
+    // If the reserve is high, it is expensive since we may need to
+    // evict a lot of memory to satisfy the reserve. Hence, we are
+    // willing to risk a more frequent bad_alloc in order to decay it.
+    // The cost of a bad_alloc is also lower compared to maintaining
+    // the reserve.
+    //
+    // If the reserve is low, it is not expensive to maintain, so we
+    // decay it at a lower rate.
+
+    _remaining_lsa_segments_until_decay -= _lsa_reserve;
+    if (_remaining_lsa_segments_until_decay < 0) {
+        _remaining_lsa_segments_until_decay = s_segments_per_decay;
+        _lsa_reserve = std::max(s_min_lsa_reserve, _lsa_reserve / 2);
+        llogger.debug("Decaying LSA reserve in section {} to {} segments", static_cast<void*>(this), _lsa_reserve);
+    }
+
+    _remaining_std_bytes_until_decay -= _std_reserve;
+    if (_remaining_std_bytes_until_decay < 0) {
+        _remaining_std_bytes_until_decay = s_bytes_per_decay;
+        _std_reserve = std::max(s_min_std_reserve, _std_reserve / 2);
+        llogger.debug("Decaying standard allocator head-room in section {} to {} [B]", static_cast<void*>(this), _std_reserve);
+    }
+}
+
 void allocating_section::reserve() {
   try {
     shard_segment_pool.set_emergency_reserve_max(std::max(_lsa_reserve, _minimum_lsa_emergency_reserve));
@@ -2287,10 +2315,10 @@ void allocating_section::reserve() {
 void allocating_section::on_alloc_failure(logalloc::region& r) {
     r.allocator().invalidate_references();
     if (shard_segment_pool.allocation_failure_flag()) {
-        _lsa_reserve *= 2; // FIXME: decay?
+        _lsa_reserve *= 2;
         llogger.debug("LSA allocation failure, increasing reserve in section {} to {} segments", fmt::ptr(this), _lsa_reserve);
     } else {
-        _std_reserve *= 2; // FIXME: decay?
+        _std_reserve *= 2;
         llogger.debug("Standard allocator failure, increasing head-room in section {} to {} [B]", fmt::ptr(this), _std_reserve);
     }
     reserve();

@@ -685,9 +685,16 @@ struct reclaim_lock {
 // also allocate LSA memory. The object learns from failures how much it
 // should reserve up front in order to not cause allocation failures.
 class allocating_section {
-    size_t _lsa_reserve = 10; // in segments
-    size_t _std_reserve = 1024; // in bytes
+    // Do not decay below these minimal values
+    static constexpr size_t s_min_lsa_reserve = 10;
+    static constexpr size_t s_min_std_reserve = 1024;
+    static constexpr uint64_t s_bytes_per_decay = 10'000'000'000;
+    static constexpr unsigned s_segments_per_decay = 100'000;
+    size_t _lsa_reserve = s_min_lsa_reserve; // in segments
+    size_t _std_reserve = s_min_std_reserve; // in bytes
     size_t _minimum_lsa_emergency_reserve = 0;
+    int64_t _remaining_std_bytes_until_decay = s_bytes_per_decay;
+    int _remaining_lsa_segments_until_decay = s_segments_per_decay;
 private:
     struct guard {
         size_t _prev;
@@ -695,6 +702,7 @@ private:
         ~guard();
     };
     void reserve();
+    void maybe_decay_reserve();
     void on_alloc_failure(logalloc::region&);
 public:
 
@@ -739,6 +747,7 @@ public:
     template<typename Func>
     decltype(auto) with_reclaiming_disabled(logalloc::region& r, Func&& fn) {
         assert(r.reclaiming_enabled());
+        maybe_decay_reserve();
         while (true) {
             try {
                 logalloc::reclaim_lock _(r);

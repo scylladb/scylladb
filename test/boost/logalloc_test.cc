@@ -1365,4 +1365,100 @@ SEASTAR_THREAD_TEST_CASE(test_can_reclaim_contiguous_memory_with_mixed_allocatio
         large_allocs.push_back(std::move(up));
     }
 }
+
+SEASTAR_THREAD_TEST_CASE(test_decay_reserves) {
+    logalloc::region region;
+    std::list<managed_bytes> lru;
+    unsigned reclaims = 0;
+    logalloc::allocating_section alloc_section;
+    auto small_thing = bytes(10'000, int8_t(0));
+    auto large_thing = bytes(100'000'000, int8_t(0));
+
+    auto cleanup = defer([&] {
+        with_allocator(region.allocator(), [&] {
+            lru.clear();
+        });
+    });
+
+    region.make_evictable([&] () -> memory::reclaiming_result {
+       if (lru.empty()) {
+           return memory::reclaiming_result::reclaimed_nothing;
+       }
+       with_allocator(region.allocator(), [&] {
+           lru.pop_back();
+           ++reclaims;
+       });
+       return memory::reclaiming_result::reclaimed_something;
+    });
+
+    // Fill up region with stuff so that allocations fail and the
+    // reserve is forced to increase
+    while (reclaims == 0) {
+        alloc_section(region, [&] {
+            with_allocator(region.allocator(), [&] {
+                lru.push_front(managed_bytes(small_thing));
+            });
+        });
+    }
+
+    reclaims = 0;
+
+    // Allocate a big chunk to force the reserve to increase,
+    // and immediately deallocate it (to keep the lru homogenous
+    // and the test simple)
+    alloc_section(region, [&] {
+        with_allocator(region.allocator(), [&] {
+            auto large_chunk = managed_bytes(large_thing);
+            (void)large_chunk; // keep compiler quiet
+        });
+    });
+
+    // sanity check, we must have reclaimed at least that much
+    BOOST_REQUIRE(reclaims >= large_thing.size() / small_thing.size());
+
+    // Run a fake workload, not actually allocating anything,
+    // to let the large reserve decay
+    for (int i = 0; i < 1'000'000; ++i) {
+        alloc_section(region, [&] {
+            // nothing
+        });
+    }
+
+    reclaims = 0;
+
+    // Fill up the reserve behind allocating_section's back,
+    // so when we invoke it again we see exactly how much it
+    // thinks it needs to reserve.
+    with_allocator(region.allocator(), [&] {
+        reclaim_lock lock(region);
+        while (true) {
+            try {
+                lru.push_front(managed_bytes(small_thing));
+            } catch (std::bad_alloc&) {
+                break;
+            }
+        }
+    });
+
+    // Sanity check, everything was under reclaim_lock:
+    BOOST_REQUIRE_EQUAL(reclaims, 0);
+
+    // Now run a real workload, and observe how many reclaims are
+    // needed. The first few allocations will not need to reclaim
+    // anything since the previously large reserves made room for
+    // them.
+    while (reclaims == 0) {
+        alloc_section(region, [&] {
+            with_allocator(region.allocator(), [&] {
+                lru.push_front(managed_bytes(small_thing));
+            });
+        });
+    }
+
+    auto expected_reserve_size = 128 * 1024 * 10;
+    auto slop = 5;
+    auto expected_reclaims = expected_reserve_size * slop / small_thing.size();
+    BOOST_REQUIRE_LE(reclaims, expected_reclaims);
+}
+
 #endif
