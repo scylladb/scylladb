@@ -116,12 +116,12 @@ public:
     dht::token_range_vector get_ranges_in_thread(inet_address ep) const;
 
     // Use the token_metadata provided by the caller instead of _token_metadata
-    dht::token_range_vector get_ranges(inet_address ep, const token_metadata& tm) const;
+    dht::token_range_vector get_ranges(inet_address ep, const token_metadata_ptr tmptr) const;
     // Caller must ensure that token_metadata will not change throughout the call
-    dht::token_range_vector get_ranges_in_thread(inet_address ep, const token_metadata& tm) const;
+    dht::token_range_vector get_ranges_in_thread(inet_address ep, const token_metadata_ptr tmptr) const;
 private:
     // Caller must ensure that token_metadata will not change throughout the call if can_yield==true.
-    dht::token_range_vector do_get_ranges(inet_address ep, const token_metadata& tm, bool can_yield) const;
+    dht::token_range_vector do_get_ranges(inet_address ep, const token_metadata_ptr tmptr, bool can_yield) const;
     virtual std::vector<inet_address> do_get_natural_endpoints(const token& search_token, const token_metadata& tm);
 
 public:

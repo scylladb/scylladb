@@ -174,30 +174,30 @@ insert_token_range_to_sorted_container_while_unwrapping(
 
 dht::token_range_vector
 abstract_replication_strategy::get_ranges(inet_address ep) const {
-    return do_get_ranges(ep, *_shared_token_metadata.get(), false);
+    return do_get_ranges(ep, _shared_token_metadata.get(), false);
 }
 
 dht::token_range_vector
 abstract_replication_strategy::get_ranges_in_thread(inet_address ep) const {
-    token_metadata_ptr tmptr = _shared_token_metadata.get();
-    return do_get_ranges(ep, *tmptr, true);
+    return do_get_ranges(ep, _shared_token_metadata.get(), true);
 }
 
 dht::token_range_vector
-abstract_replication_strategy::get_ranges(inet_address ep, const token_metadata& tm) const {
-    return do_get_ranges(ep, tm, false);
+abstract_replication_strategy::get_ranges(inet_address ep, const token_metadata_ptr tmptr) const {
+    return do_get_ranges(ep, std::move(tmptr), false);
 }
 
 // Caller must ensure that token_metadata will not change throughout the call
 dht::token_range_vector
-abstract_replication_strategy::get_ranges_in_thread(inet_address ep, const token_metadata& tm) const {
-    return do_get_ranges(ep, tm, true);
+abstract_replication_strategy::get_ranges_in_thread(inet_address ep, const token_metadata_ptr tmptr) const {
+    return do_get_ranges(ep, std::move(tmptr), true);
 }
 
 // Caller must ensure that token_metadata will not change throughout the call if can_yield==true.
 dht::token_range_vector
-abstract_replication_strategy::do_get_ranges(inet_address ep, const token_metadata& tm, bool can_yield) const {
+abstract_replication_strategy::do_get_ranges(inet_address ep, const token_metadata_ptr tmptr, bool can_yield) const {
     dht::token_range_vector ret;
+    const auto& tm = *tmptr;
     auto prev_tok = tm.sorted_tokens().back();
     for (auto tok : tm.sorted_tokens()) {
         for (inet_address a : calculate_natural_endpoints(tok, tm)) {
