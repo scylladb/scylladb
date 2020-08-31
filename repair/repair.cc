@@ -64,6 +64,8 @@ public:
                 [this] { return rebuild_finished_percentage(); }),
             sm::make_gauge("decommission_finished_percentage", sm::description("Number of finished percentage for decommission operation on this shard."),
                 [this] { return decommission_finished_percentage(); }),
+            sm::make_gauge("removenode_finished_percentage", sm::description("Number of finished percentage for removenode operation on this shard."),
+                [this] { return removenode_finished_percentage(); }),
             sm::make_gauge("repair_finished_percentage", sm::description("Number of finished percentage for repair operation on this shard."),
                 [this] { return repair_finished_percentage(); }),
         });
@@ -76,6 +78,8 @@ public:
     uint64_t rebuild_finished_ranges{0};
     uint64_t decommission_total_ranges{0};
     uint64_t decommission_finished_ranges{0};
+    uint64_t removenode_total_ranges{0};
+    uint64_t removenode_finished_ranges{0};
     uint64_t repair_total_ranges_sum{0};
     uint64_t repair_finished_ranges_sum{0};
 private:
@@ -91,6 +95,9 @@ private:
     }
     float decommission_finished_percentage() {
         return decommission_total_ranges == 0 ? 1 : float(decommission_finished_ranges) / float(decommission_total_ranges);
+    }
+    float removenode_finished_percentage() {
+        return removenode_total_ranges == 0 ? 1 : float(removenode_finished_ranges) / float(removenode_total_ranges);
     }
     float repair_finished_percentage();
 };
@@ -1458,6 +1465,8 @@ static future<> do_repair_ranges(lw_shared_ptr<repair_info> ri) {
                         _node_ops_metrics.rebuild_finished_ranges++;
                     } else if (ri->reason == streaming::stream_reason::decommission) {
                         _node_ops_metrics.decommission_finished_ranges++;
+                    } else if (ri->reason == streaming::stream_reason::removenode) {
+                        _node_ops_metrics.removenode_finished_ranges++;
                     } else if (ri->reason == streaming::stream_reason::repair) {
                         _node_ops_metrics.repair_finished_ranges_sum++;
                         ri->nr_ranges_finished++;
@@ -1494,6 +1503,8 @@ static future<> do_repair_ranges(lw_shared_ptr<repair_info> ri) {
                     _node_ops_metrics.rebuild_finished_ranges++;
                 } else if (ri->reason == streaming::stream_reason::decommission) {
                      _node_ops_metrics.decommission_finished_ranges++;
+                } else if (ri->reason == streaming::stream_reason::removenode) {
+                    _node_ops_metrics.removenode_finished_ranges++;
                 } else if (ri->reason == streaming::stream_reason::repair) {
                     _node_ops_metrics.repair_finished_ranges_sum++;
                     ri->nr_ranges_finished++;
@@ -1935,6 +1946,11 @@ static future<> do_decommission_removenode_with_repair(seastar::sharded<database
                 _node_ops_metrics.decommission_finished_ranges = 0;
                 _node_ops_metrics.decommission_total_ranges = nr_ranges_total;
             }).get();
+        } else if (reason == streaming::stream_reason::removenode) {
+            db.invoke_on_all([nr_ranges_total] (database&) {
+                _node_ops_metrics.removenode_finished_ranges = 0;
+                _node_ops_metrics.removenode_total_ranges = nr_ranges_total;
+            }).get();
         }
         rlogger.info("{}: started with keyspaces={}, leaving_node={}", op, keyspaces, leaving_node);
         for (auto& keyspace_name : keyspaces) {
@@ -2072,6 +2088,10 @@ static future<> do_decommission_removenode_with_repair(seastar::sharded<database
             if (reason == streaming::stream_reason::decommission) {
                 db.invoke_on_all([nr_ranges_skipped] (database&) {
                     _node_ops_metrics.decommission_finished_ranges += nr_ranges_skipped;
+                }).get();
+            } else if (reason == streaming::stream_reason::removenode) {
+                db.invoke_on_all([nr_ranges_skipped] (database&) {
+                    _node_ops_metrics.removenode_finished_ranges += nr_ranges_skipped;
                 }).get();
             }
             if (is_removenode) {
