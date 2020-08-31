@@ -964,12 +964,12 @@ void storage_service::bootstrap() {
     set_mode(mode::JOINING, "Starting to bootstrap...", true);
     if (is_repair_based_node_ops_enabled()) {
         if (db().local().is_replacing()) {
-            replace_with_repair(_db, _messaging, get_token_metadata(), _bootstrap_tokens).get();
+            replace_with_repair(_db, _messaging, get_token_metadata_ptr(), _bootstrap_tokens).get();
         } else {
-            bootstrap_with_repair(_db, _messaging, get_token_metadata(), _bootstrap_tokens).get();
+            bootstrap_with_repair(_db, _messaging, get_token_metadata_ptr(), _bootstrap_tokens).get();
         }
     } else {
-        dht::boot_strapper bs(_db, _abort_source, get_broadcast_address(), _bootstrap_tokens, get_token_metadata());
+        dht::boot_strapper bs(_db, _abort_source, get_broadcast_address(), _bootstrap_tokens, get_token_metadata_ptr());
         // Does the actual streaming of newly replicated token ranges.
         if (db().local().is_replacing()) {
             bs.bootstrap(streaming::stream_reason::replace).get();
@@ -2350,11 +2350,11 @@ future<> storage_service::drain() {
 future<> storage_service::rebuild(sstring source_dc) {
     return run_with_api_lock(sstring("rebuild"), [source_dc] (storage_service& ss) {
         slogger.info("rebuild from dc: {}", source_dc == "" ? "(any dc)" : source_dc);
-        const auto& tm = ss.get_token_metadata();
+        auto tmptr = ss.get_token_metadata_ptr();
         if (ss.is_repair_based_node_ops_enabled()) {
-            return rebuild_with_repair(ss._db, ss._messaging, tm, std::move(source_dc));
+            return rebuild_with_repair(ss._db, ss._messaging, tmptr, std::move(source_dc));
         } else {
-            auto streamer = make_lw_shared<dht::range_streamer>(ss._db, tm, ss._abort_source,
+            auto streamer = make_lw_shared<dht::range_streamer>(ss._db, *tmptr, ss._abort_source,
                     ss.get_broadcast_address(), "Rebuild", streaming::stream_reason::rebuild);
             streamer->add_source_filter(std::make_unique<dht::range_streamer::failure_detector_source_filter>(ss._gossiper.get_unreachable_members()));
             if (source_dc != "") {
@@ -2463,7 +2463,7 @@ std::unordered_multimap<dht::token_range, inet_address> storage_service::get_cha
 void storage_service::unbootstrap() {
     db::get_local_batchlog_manager().do_batch_log_replay().get();
     if (is_repair_based_node_ops_enabled()) {
-        decommission_with_repair(_db, _messaging, get_token_metadata()).get();
+        decommission_with_repair(_db, _messaging, get_token_metadata_ptr()).get();
     } else {
         std::unordered_map<sstring, std::unordered_multimap<dht::token_range, inet_address>> ranges_to_stream;
 
@@ -2505,7 +2505,7 @@ void storage_service::unbootstrap() {
 
 future<> storage_service::restore_replica_count(inet_address endpoint, inet_address notify_endpoint) {
     if (is_repair_based_node_ops_enabled()) {
-        return removenode_with_repair(_db, _messaging, get_token_metadata(), endpoint).finally([this, notify_endpoint] () {
+        return removenode_with_repair(_db, _messaging, get_token_metadata_ptr(), endpoint).finally([this, notify_endpoint] () {
             return send_replication_notification(notify_endpoint);
         });
     }
