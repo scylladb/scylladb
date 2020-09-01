@@ -35,6 +35,7 @@
 #include <vector>
 #include <list>
 #include <functional>
+#include <algorithm>
 #include "sstables/compaction.hh"
 #include "compaction_weight_registration.hh"
 #include "compaction_backlog_manager.hh"
@@ -243,6 +244,13 @@ public:
     const std::list<lw_shared_ptr<sstables::compaction_info>>& get_compactions() const {
         return _compactions;
     }
+
+    // Returns true if table has an ongoing compaction, running on its behalf
+    bool has_table_ongoing_compaction(column_family* cf) const {
+        return std::any_of(_tasks.begin(), _tasks.end(), [cf] (const lw_shared_ptr<task>& task) {
+            return task->compacting_cf == cf && task->compaction_running;
+        });
+    };
 
     // Stops ongoing compaction of a given type.
     void stop_compaction(sstring type);
