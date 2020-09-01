@@ -199,6 +199,102 @@ void execute_reads(reader_concurrency_semaphore& sem, unsigned reads, unsigned c
     }
 }
 
+void test_main_thread(cql_test_env& env) {
+    bool with_compression = app.configuration().contains("with-compression");
+    auto compressor = with_compression ? "LZ4Compressor" : "";
+    uint64_t sstable_size = app.configuration()["sstable-size"].as<uint64_t>();
+    uint64_t sstables = app.configuration()["sstables"].as<uint64_t>();
+    const auto clustering_row_size = app.configuration()["clustering-row-size"].as<uint64_t>();
+    auto reads = app.configuration()["reads"].as<unsigned>();
+    auto read_concurrency = app.configuration()["read-concurrency"].as<unsigned>();
+
+    std::optional<stats_collector::params> stats_collector_params;
+    try {
+        stats_collector_params = stats_collector::parse_params(app.configuration());
+    } catch (...) {
+        testlog.error("Error parsing stats collection parameters: {}", std::current_exception());
+        return;
+    }
+
+    env.execute_cql(format("{} WITH compression = {{ 'sstable_compression': '{}' }} "
+                           "AND compaction = {{'class' : 'NullCompactionStrategy'}};",
+        "create table test (pk int, ck int, value blob, primary key (pk,ck))", compressor)).get();
+
+    table& tab = env.local_db().find_column_family("ks", "test");
+    auto s = tab.schema();
+
+    auto value = serialized(tests::random::get_bytes(clustering_row_size));
+    auto& value_cdef = *s->get_column_definition("value");
+    auto pk = partition_key::from_single_value(*s, serialized(0));
+    uint64_t rows = 0;
+    auto gen = [s, &rows, ck = 0, pk, &value_cdef, value] (uint64_t sstable_size) mutable -> mutation {
+        auto ts = api::new_timestamp();
+        mutation m(s, pk);
+        uint64_t size = m.partition().external_memory_usage(*s);
+        while (size < sstable_size) {
+            auto ckey = clustering_key::from_single_value(*s, serialized(ck));
+            auto& row = m.partition().clustered_row(*s, ckey);
+            row.cells().apply(value_cdef, atomic_cell::make_live(*value_cdef.type, ts, value));
+            size += row.cells().external_memory_usage(*s, column_kind::regular_column);
+            ++rows;
+            ++ck;
+            thread::maybe_yield();
+        }
+        return m;
+    };
+
+    testlog.info("Populating");
+
+    for (uint64_t i = 0; i < sstables; ++i) {
+        auto m = gen(sstable_size);
+        env.local_db().apply(s, freeze(m), tracing::trace_state_ptr(), db::commitlog::force_sync::no, db::no_timeout).get();
+        tab.flush().get();
+        thread::maybe_yield();
+    }
+
+    env.local_db().flush_all_memtables().get();
+
+    testlog.info("Live disk space used: {}", tab.get_stats().live_disk_space_used);
+    testlog.info("Live sstables: {}", tab.get_stats().live_sstable_count);
+
+    testlog.info("Preparing dummy cache");
+    memtable_snapshot_source underlying(s);
+    cache_tracker& tr = env.local_db().row_cache_tracker();
+    row_cache c(s, snapshot_source([&] { return underlying(); }), tr, is_continuous::yes);
+    auto prev_evictions = tr.get_stats().row_evictions;
+    while (tr.get_stats().row_evictions == prev_evictions) {
+        auto mt = make_lw_shared<memtable>(s);
+        mt->apply(gen(sstable_size));
+        c.update([] {}, *mt).get();
+        thread::maybe_yield();
+    }
+
+    auto prev_occupancy = logalloc::shard_tracker().occupancy();
+    testlog.info("Occupancy before: {}", prev_occupancy);
+
+    auto& sem = env.local_db().get_reader_concurrency_semaphore();
+
+    testlog.info("Reading");
+    stats_collector sc(sem, stats_collector_params);
+    try {
+        auto _ = sc.collect();
+        memory::set_heap_profiling_enabled(true);
+        execute_reads(sem, reads, read_concurrency, [&] (unsigned i) {
+            return env.execute_cql(format("select * from ks.test where pk = 0 and ck > {} limit 100;",
+                    tests::random::get_int(rows / 2))).discard_result();
+        });
+    } catch (...) {
+        testlog.error("Reads aborted due to exception: {}", std::current_exception());
+    }
+    memory::set_heap_profiling_enabled(false);
+    sc.write_stats().get();
+
+    auto occupancy = logalloc::shard_tracker().occupancy();
+    testlog.info("Occupancy after: {}", occupancy);
+    testlog.info("Max demand: {}", prev_occupancy.total_space() - occupancy.total_space());
+    testlog.info("Max sstables per read: {}", tab.get_stats().estimated_sstable_per_read.max());
+}
+
 } // anonymous namespace
 
 int main(int argc, char** argv) {
@@ -244,99 +340,7 @@ int main(int argc, char** argv) {
         }
 
         return do_with_cql_env_thread([] (cql_test_env& env) {
-            bool with_compression = app.configuration().contains("with-compression");
-            auto compressor = with_compression ? "LZ4Compressor" : "";
-            uint64_t sstable_size = app.configuration()["sstable-size"].as<uint64_t>();
-            uint64_t sstables = app.configuration()["sstables"].as<uint64_t>();
-            const auto clustering_row_size = app.configuration()["clustering-row-size"].as<uint64_t>();
-            auto reads = app.configuration()["reads"].as<unsigned>();
-            auto read_concurrency = app.configuration()["read-concurrency"].as<unsigned>();
-
-            std::optional<stats_collector::params> stats_collector_params;
-            try {
-                stats_collector_params = stats_collector::parse_params(app.configuration());
-            } catch (...) {
-                testlog.error("Error parsing stats collection parameters: {}", std::current_exception());
-                return;
-            }
-
-            env.execute_cql(format("{} WITH compression = {{ 'sstable_compression': '{}' }} "
-                                   "AND compaction = {{'class' : 'NullCompactionStrategy'}};",
-                "create table test (pk int, ck int, value blob, primary key (pk,ck))", compressor)).get();
-
-            table& tab = env.local_db().find_column_family("ks", "test");
-            auto s = tab.schema();
-
-            auto value = serialized(tests::random::get_bytes(clustering_row_size));
-            auto& value_cdef = *s->get_column_definition("value");
-            auto pk = partition_key::from_single_value(*s, serialized(0));
-            uint64_t rows = 0;
-            auto gen = [s, &rows, ck = 0, pk, &value_cdef, value] (uint64_t sstable_size) mutable -> mutation {
-                auto ts = api::new_timestamp();
-                mutation m(s, pk);
-                uint64_t size = m.partition().external_memory_usage(*s);
-                while (size < sstable_size) {
-                    auto ckey = clustering_key::from_single_value(*s, serialized(ck));
-                    auto& row = m.partition().clustered_row(*s, ckey);
-                    row.cells().apply(value_cdef, atomic_cell::make_live(*value_cdef.type, ts, value));
-                    size += row.cells().external_memory_usage(*s, column_kind::regular_column);
-                    ++rows;
-                    ++ck;
-                    thread::maybe_yield();
-                }
-                return m;
-            };
-
-            testlog.info("Populating");
-
-            for (uint64_t i = 0; i < sstables; ++i) {
-                auto m = gen(sstable_size);
-                env.local_db().apply(s, freeze(m), tracing::trace_state_ptr(), db::commitlog::force_sync::no, db::no_timeout).get();
-                tab.flush().get();
-                thread::maybe_yield();
-            }
-
-            env.local_db().flush_all_memtables().get();
-
-            testlog.info("Live disk space used: {}", tab.get_stats().live_disk_space_used);
-            testlog.info("Live sstables: {}", tab.get_stats().live_sstable_count);
-
-            testlog.info("Preparing dummy cache");
-            memtable_snapshot_source underlying(s);
-            cache_tracker& tr = env.local_db().row_cache_tracker();
-            row_cache c(s, snapshot_source([&] { return underlying(); }), tr, is_continuous::yes);
-            auto prev_evictions = tr.get_stats().row_evictions;
-            while (tr.get_stats().row_evictions == prev_evictions) {
-                auto mt = make_lw_shared<memtable>(s);
-                mt->apply(gen(sstable_size));
-                c.update([] {}, *mt).get();
-                thread::maybe_yield();
-            }
-
-            auto prev_occupancy = logalloc::shard_tracker().occupancy();
-            testlog.info("Occupancy before: {}", prev_occupancy);
-
-            auto& sem = env.local_db().get_reader_concurrency_semaphore();
-
-            testlog.info("Reading");
-            stats_collector sc(sem, stats_collector_params);
-            try {
-                auto _ = sc.collect();
-                memory::set_heap_profiling_enabled(true);
-                execute_reads(sem, reads, read_concurrency, [&] (unsigned i) {
-                    return env.execute_cql(format("select * from ks.test where pk = 0 and ck > {} limit 100;",
-                            tests::random::get_int(rows / 2))).discard_result();
-                });
-            } catch (...) {
-                testlog.error("Reads aborted due to exception: {}", std::current_exception());
-            }
-            memory::set_heap_profiling_enabled(false);
-            sc.write_stats().get();
-
-            auto occupancy = logalloc::shard_tracker().occupancy();
-            testlog.info("Occupancy after: {}", occupancy);
-            testlog.info("Max demand: {}", prev_occupancy.total_space() - occupancy.total_space());
-            testlog.info("Max sstables per read: {}", tab.get_stats().estimated_sstable_per_read.max());
+            test_main_thread(env);
         }, test_cfg);
     });
 }
