@@ -130,20 +130,6 @@ statement_restrictions::initial_key_restrictions<clustering_key_prefix>::merge_t
     return allow_filtering ? initial_kr_true : initial_kr_false;
 }
 
-std::vector<::shared_ptr<column_identifier>>
-statement_restrictions::get_partition_key_unrestricted_components() const {
-    std::vector<::shared_ptr<column_identifier>> r;
-
-    auto restricted = _partition_key_restrictions->get_column_defs();
-    auto is_not_restricted = [&restricted] (const column_definition& def) {
-        return !boost::count(restricted, &def);
-    };
-
-    boost::copy(_schema->partition_key_columns() | filtered(is_not_restricted) | transformed(to_identifier),
-        std::back_inserter(r));
-    return r;
-}
-
 statement_restrictions::statement_restrictions(schema_ptr schema, bool allow_filtering)
     : _schema(schema)
     , _partition_key_restrictions(get_initial_partition_key_restrictions(allow_filtering))

@@ -214,12 +214,6 @@ private:
     void process_partition_key_restrictions(bool has_queriable_index, bool for_view, bool allow_filtering);
 
     /**
-     * Returns the partition key components that are not restricted.
-     * @return the partition key components that are not restricted.
-     */
-    std::vector<::shared_ptr<column_identifier>> get_partition_key_unrestricted_components() const;
-
-    /**
      * Processes the clustering column restrictions.
      *
      * @param has_queriable_index <code>true</code> if some of the queried data are indexed, <code>false</code> otherwise
