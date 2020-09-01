@@ -1423,24 +1423,30 @@ class scylla_memory(gdb.Command):
     def print_replica_stats():
         db = sharded(gdb.parse_and_eval('::debug::db')).local()
 
+        try:
+            mem_stats = dict()
+            for key, sem in [('user_mem_str', db['_read_concurrency_sem']), ('streaming_mem_str', db['_streaming_concurrency_sem']), ('system_mem_str', db['_system_read_concurrency_sem'])]:
+                mem_stats[key] = '{:>13}/{:>13} B'.format(int(sem['_initial_resources']['memory'] - sem['_resources']['memory']), int(sem['_initial_resources']['memory']))
+        except gdb.error: # <= 4.2 compatibility
+            for key, sem in [('user_mem_str', db['_read_concurrency_sem']), ('streaming_mem_str', db['_streaming_concurrency_sem']), ('system_mem_str', db['_system_read_concurrency_sem'])]:
+                mem_stats[key] = 'remaining mem: {:>13} B'.format(int(sem['_resources']['memory']))
+
         gdb.write('Replica:\n')
         gdb.write('  Read Concurrency Semaphores:\n'
-                '    user sstable reads:      {user_sst_rd_count:>3}/{user_sst_rd_max_count:>3}, remaining mem: {user_sst_rd_mem:>13} B, queued: {user_sst_rd_queued}\n'
-                '    streaming sstable reads: {streaming_sst_rd_count:>3}/{streaming_sst_rd_max_count:>3}, remaining mem: {system_sst_rd_mem:>13} B, queued: {streaming_sst_rd_queued}\n'
-                '    system sstable reads:    {system_sst_rd_count:>3}/{system_sst_rd_max_count:>3}, remaining mem: {system_sst_rd_mem:>13} B, queued: {system_sst_rd_queued}\n'
+                '    user sstable reads:      {user_sst_rd_count:>3}/{user_sst_rd_max_count:>3}, {user_mem_str}, queued: {user_sst_rd_queued}\n'
+                '    streaming sstable reads: {streaming_sst_rd_count:>3}/{streaming_sst_rd_max_count:>3}, {streaming_mem_str}, queued: {streaming_sst_rd_queued}\n'
+                '    system sstable reads:    {system_sst_rd_count:>3}/{system_sst_rd_max_count:>3}, {system_mem_str}, queued: {system_sst_rd_queued}\n'
                 .format(
                         user_sst_rd_count=int(gdb.parse_and_eval('database::max_count_concurrent_reads')) - int(db['_read_concurrency_sem']['_resources']['count']),
                         user_sst_rd_max_count=int(gdb.parse_and_eval('database::max_count_concurrent_reads')),
-                        user_sst_rd_mem=int(db['_read_concurrency_sem']['_resources']['memory']),
                         user_sst_rd_queued=int(db['_read_concurrency_sem']['_wait_list']['_size']),
                         streaming_sst_rd_count=int(gdb.parse_and_eval('database::max_count_streaming_concurrent_reads')) - int(db['_streaming_concurrency_sem']['_resources']['count']),
                         streaming_sst_rd_max_count=int(gdb.parse_and_eval('database::max_count_streaming_concurrent_reads')),
-                        streaming_sst_rd_mem=int(db['_streaming_concurrency_sem']['_resources']['memory']),
                         streaming_sst_rd_queued=int(db['_streaming_concurrency_sem']['_wait_list']['_size']),
                         system_sst_rd_count=int(gdb.parse_and_eval('database::max_count_system_concurrent_reads')) - int(db['_system_read_concurrency_sem']['_resources']['count']),
                         system_sst_rd_max_count=int(gdb.parse_and_eval('database::max_count_system_concurrent_reads')),
-                        system_sst_rd_mem=int(db['_system_read_concurrency_sem']['_resources']['memory']),
-                        system_sst_rd_queued=int(db['_system_read_concurrency_sem']['_wait_list']['_size'])))
+                        system_sst_rd_queued=int(db['_system_read_concurrency_sem']['_wait_list']['_size']),
+                        **mem_stats))
 
         gdb.write('  Execution Stages:\n')
         for es_path in [('_data_query_stage',), ('_mutation_query_stage', '_execution_stage'), ('_apply_stage',)]:
