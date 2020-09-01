@@ -525,24 +525,30 @@ std::istream& operator>>(std::istream& is, shard_iterator_type& type) {
 }
 
 struct shard_iterator {    
-    static auto constexpr marker = 'I';
+    // A stream shard iterator can request either >=threshold
+    // (inclusive of threshold) or >threshold (exclusive).
+    static auto constexpr inclusive_marker = 'I';
+    static auto constexpr exclusive_marker = 'i';
 
     shard_id shard;
     utils::UUID threshold;
+    bool inclusive;
 
-    shard_iterator(shard_id i, utils::UUID th)
+    shard_iterator(shard_id i, utils::UUID th, bool inclusive)
         : shard(i)
         , threshold(th)
+        , inclusive(inclusive)
     {}
-    shard_iterator(utils::UUID arn, db_clock::time_point ts, cdc::stream_id i, utils::UUID th)
+    shard_iterator(utils::UUID arn, db_clock::time_point ts, cdc::stream_id i, utils::UUID th, bool inclusive)
         : shard(arn, ts, i)
         , threshold(th)
+        , inclusive(inclusive)
     {}
     shard_iterator(const sstring&);
 
     friend std::ostream& operator<<(std::ostream& os, const shard_iterator& id) {
         boost::io::ios_flags_saver fs(os);
-        return os << marker << std::hex << id.threshold
+        return os << (id.inclusive ? inclusive_marker : exclusive_marker) << std::hex << id.threshold
             << ':' << id.shard
             ;
     }
@@ -558,23 +564,11 @@ shard_iterator::shard_iterator(const sstring& s, size_t i)
     : shard(s.substr(i + 1))
     , threshold(s.substr(1, i))
 {
-    if (s.at(0) != marker || i == sstring::npos) {
+    if ((s.at(0) != inclusive_marker && s.at(0) != exclusive_marker) || i == sstring::npos) {
         throw std::invalid_argument(s);
     }
+    inclusive = (s[0] == inclusive_marker);
 }
-}
-
-/**
- * Increment a timeuuid. The lowest larger timeuud we 
- * can get (tm)
- */
-static utils::UUID increment(const utils::UUID& uuid) {
-    auto msb = uuid.get_most_significant_bits();
-    auto lsb = uuid.get_least_significant_bits() + 1;
-    if (lsb == 0) {
-        ++msb;
-    }
-    return utils::UUID(msb, lsb);
 }
 
 template<typename ValueType>
@@ -619,23 +613,28 @@ future<executor::request_return_type> executor::get_shard_iterator(client_state&
     }
 
     utils::UUID threshold;
+    bool inclusive_of_threshold;
 
     switch (type) {
         case shard_iterator_type::AT_SEQUENCE_NUMBER:
             threshold = *seq_num;
+            inclusive_of_threshold = true;
             break;
         case shard_iterator_type::AFTER_SEQUENCE_NUMBER:
-            threshold = increment(*seq_num);
+            threshold = *seq_num;
+            inclusive_of_threshold = false;
             break;
         case shard_iterator_type::TRIM_HORIZON:
             threshold = utils::UUID{};
+            inclusive_of_threshold = true;
             break;
         case shard_iterator_type::LATEST:
             threshold = utils::UUID_gen::min_time_UUID((db_clock::now() - confidence_interval(db)).time_since_epoch().count());
+            inclusive_of_threshold = true;
             break;
     }
 
-    shard_iterator iter(*sid, threshold);
+    shard_iterator iter(*sid, threshold, inclusive_of_threshold);
 
     auto ret = rjson::empty_object();
     rjson::set(ret, "ShardIterator", iter);
@@ -702,13 +701,13 @@ future<executor::request_return_type> executor::get_records(client_state& client
     dht::partition_range_vector partition_ranges{ dht::partition_range::make_singular(dht::decorate_key(*schema, pk)) };
 
     auto high_ts = db_clock::now() - confidence_interval(db);
-    auto high_uuid = utils::UUID_gen::min_time_UUID(high_ts.time_since_epoch().count());    
+    auto high_uuid = utils::UUID_gen::min_time_UUID(high_ts.time_since_epoch().count());
     auto lo = clustering_key_prefix::from_exploded(*schema, { iter.threshold.serialize() });
     auto hi = clustering_key_prefix::from_exploded(*schema, { high_uuid.serialize() });
 
     std::vector<query::clustering_range> bounds;
     using bound = typename query::clustering_range::bound;
-    bounds.push_back(query::clustering_range::make(bound(lo), bound(hi, false)));
+    bounds.push_back(query::clustering_range::make(bound(lo, iter.inclusive), bound(hi, false)));
 
     static const bytes timestamp_column_name = cdc::log_meta_column_name_bytes("time");
     static const bytes op_column_name = cdc::log_meta_column_name_bytes("operation");
@@ -865,10 +864,10 @@ future<executor::request_return_type> executor::get_records(client_state& client
 
         if (nrecords != 0) {
             // #9642. Set next iterators threshold to > last
-            shard_iterator next_iter(iter.shard, increment(*timestamp));
+            shard_iterator next_iter(iter.shard, *timestamp, false);
             rjson::set(ret, "NextShardIterator", next_iter);
             _stats.api_operations.get_records_latency.add(std::chrono::steady_clock::now() - start_time);
-             return make_ready_future<executor::request_return_type>(make_jsonable(std::move(ret)));
+            return make_ready_future<executor::request_return_type>(make_jsonable(std::move(ret)));
         }
 
         // ugh. figure out if we are and end-of-shard
@@ -878,7 +877,11 @@ future<executor::request_return_type> executor::get_records(client_state& client
             if (shard.time < ts && ts < high_ts) {
                 rjson::set(ret, "NextShardIterator", "");
             } else {
-                shard_iterator next_iter(iter.shard, utils::UUID_gen::min_time_UUID(high_ts.time_since_epoch().count()));
+                // We could have return the same iterator again, but we did
+                // a search from it until high_ts and found nothing, so we
+                // can also start the next search from high_ts.
+                // TODO: but why? It's simpler just to leave the iterator be.
+                shard_iterator next_iter(iter.shard, utils::UUID_gen::min_time_UUID(high_ts.time_since_epoch().count()), true);
                 rjson::set(ret, "NextShardIterator", iter);
             }
             _stats.api_operations.get_records_latency.add(std::chrono::steady_clock::now() - start_time);
