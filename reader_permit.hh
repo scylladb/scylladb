@@ -145,3 +145,38 @@ temporary_buffer<Char> make_tracked_temporary_buffer(temporary_buffer<Char> buf,
 }
 
 file make_tracked_file(file f, reader_permit p);
+
+template <typename T>
+class tracking_allocator {
+public:
+    using value_type = T;
+    using propagate_on_container_move_assignment = std::true_type;
+    using is_always_equal = std::false_type;
+
+private:
+    reader_permit _permit;
+    std::allocator<T> _alloc;
+
+public:
+    tracking_allocator(reader_permit permit) noexcept : _permit(std::move(permit)) { }
+
+    T* allocate(size_t n) {
+        auto p = _alloc.allocate(n);
+        _permit.consume(reader_resources::with_memory(n * sizeof(T)));
+        return p;
+    }
+    void deallocate(T* p, size_t n) {
+        _alloc.deallocate(p, n);
+        if (n) {
+            _permit.signal(reader_resources::with_memory(n * sizeof(T)));
+        }
+    }
+
+    template <typename U>
+    friend bool operator==(const tracking_allocator<U>& a, const tracking_allocator<U>& b);
+};
+
+template <typename T>
+bool operator==(const tracking_allocator<T>& a, const tracking_allocator<T>& b) {
+    return a._semaphore == b._semaphore;
+}
