@@ -33,7 +33,7 @@
 
 logging::logger fmr_logger("flat_mutation_reader");
 
-static size_t compute_buffer_size(const schema& s, circular_buffer<mutation_fragment>& buffer)
+static size_t compute_buffer_size(const schema& s, const flat_mutation_reader::tracked_buffer& buffer)
 {
     return boost::accumulate(
         buffer

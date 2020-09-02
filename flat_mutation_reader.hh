@@ -78,9 +78,11 @@ concept FlattenedConsumerFilter =
  */
 class flat_mutation_reader final {
 public:
+    using tracked_buffer = circular_buffer<mutation_fragment, tracking_allocator<mutation_fragment>>;
+
     class impl {
     private:
-        circular_buffer<mutation_fragment> _buffer;
+        tracked_buffer _buffer;
         size_t _buffer_size = 0;
         bool _consume_done = false;
     protected:
@@ -110,11 +112,11 @@ public:
                 _buffer.reserve(_buffer.size() * 2 + 1);
             }
         }
-        const circular_buffer<mutation_fragment>& buffer() const {
+        const tracked_buffer& buffer() const {
             return _buffer;
         }
     public:
-        impl(schema_ptr s, reader_permit permit) : _schema(std::move(s)), _permit(std::move(permit)) { }
+        impl(schema_ptr s, reader_permit permit) : _buffer(permit), _schema(std::move(s)), _permit(std::move(permit)) { }
         virtual ~impl() {}
         virtual future<> fill_buffer(db::timeout_clock::time_point) = 0;
         virtual void next_partition() = 0;
@@ -286,9 +288,9 @@ public:
             return _buffer_size;
         }
 
-        circular_buffer<mutation_fragment> detach_buffer() {
+        tracked_buffer detach_buffer() {
             _buffer_size = 0;
-            return std::exchange(_buffer, {});
+            return std::exchange(_buffer, tracked_buffer(_permit));
         }
 
         void move_buffer_content_to(impl& other) {
@@ -472,7 +474,7 @@ public:
     size_t buffer_size() const {
         return _impl->buffer_size();
     }
-    const circular_buffer<mutation_fragment>& buffer() const {
+    const tracked_buffer& buffer() const {
         return _impl->buffer();
     }
     // Detach the internal buffer of the reader.
@@ -480,7 +482,7 @@ public:
     // until is_buffer_empty() returns true.
     // The reader will need to allocate a new buffer on the next fill_buffer()
     // call.
-    circular_buffer<mutation_fragment> detach_buffer() {
+    tracked_buffer detach_buffer() {
         return _impl->detach_buffer();
     }
     // Moves the buffer content to `other`.

@@ -830,12 +830,12 @@ mutation_source make_combined_mutation_source(std::vector<mutation_source> adden
 namespace {
 
 struct remote_fill_buffer_result {
-    foreign_ptr<std::unique_ptr<const circular_buffer<mutation_fragment>>> buffer;
+    foreign_ptr<std::unique_ptr<const flat_mutation_reader::tracked_buffer>> buffer;
     bool end_of_stream = false;
 
     remote_fill_buffer_result() = default;
-    remote_fill_buffer_result(circular_buffer<mutation_fragment>&& buffer, bool end_of_stream)
-        : buffer(make_foreign(std::make_unique<const circular_buffer<mutation_fragment>>(std::move(buffer))))
+    remote_fill_buffer_result(flat_mutation_reader::tracked_buffer&& buffer, bool end_of_stream)
+        : buffer(make_foreign(std::make_unique<const flat_mutation_reader::tracked_buffer>(std::move(buffer))))
         , end_of_stream(end_of_stream) {
     }
 };
@@ -847,7 +847,7 @@ class foreign_reader : public flat_mutation_reader::impl {
     template <typename T>
     using foreign_unique_ptr = foreign_ptr<std::unique_ptr<T>>;
 
-    using fragment_buffer = circular_buffer<mutation_fragment>;
+    using fragment_buffer = flat_mutation_reader::tracked_buffer;
 
     foreign_unique_ptr<flat_mutation_reader> _reader;
     foreign_unique_ptr<future<>> _read_ahead_future;
@@ -1064,7 +1064,7 @@ private:
     void adjust_partition_slice();
     flat_mutation_reader recreate_reader();
     flat_mutation_reader resume_or_create_reader();
-    void maybe_validate_partition_start(const circular_buffer<mutation_fragment>& buffer);
+    void maybe_validate_partition_start(const flat_mutation_reader::tracked_buffer& buffer);
     void validate_position_in_partition(position_in_partition_view pos) const;
     bool should_drop_fragment(const mutation_fragment& mf);
     bool maybe_trim_range_tombstone(mutation_fragment& mf) const;
@@ -1245,7 +1245,7 @@ static void require(bool condition, const char* msg, const Arg&... arg) {
     }
 }
 
-void evictable_reader::maybe_validate_partition_start(const circular_buffer<mutation_fragment>& buffer) {
+void evictable_reader::maybe_validate_partition_start(const flat_mutation_reader::tracked_buffer& buffer) {
     if (!_validate_partition_key || buffer.empty()) {
         return;
     }
@@ -1636,11 +1636,11 @@ void shard_reader::stop() noexcept {
         return smp::submit_to(_shard, [this] {
             auto ret = std::tuple(
                     make_foreign(std::make_unique<reader_concurrency_semaphore::inactive_read_handle>(std::move(*_reader).inactive_read_handle())),
-                    make_foreign(std::make_unique<circular_buffer<mutation_fragment>>(_reader->detach_buffer())));
+                    make_foreign(std::make_unique<const flat_mutation_reader::tracked_buffer>(_reader->detach_buffer())));
             _reader.reset();
             return ret;
         }).then([this] (std::tuple<foreign_ptr<std::unique_ptr<reader_concurrency_semaphore::inactive_read_handle>>,
-                foreign_ptr<std::unique_ptr<circular_buffer<mutation_fragment>>>> remains) {
+                foreign_ptr<std::unique_ptr<const flat_mutation_reader::tracked_buffer>>> remains) {
             auto&& [irh, remote_buffer] = remains;
             auto buffer = detach_buffer();
             for (const auto& mf : *remote_buffer) {

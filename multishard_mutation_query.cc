@@ -123,9 +123,10 @@ class read_context : public reader_lifecycle_policy {
         foreign_unique_ptr<remote_parts> rparts;
         foreign_unique_ptr<reader_concurrency_semaphore::inactive_read_handle> handle;
         bool has_pending_next_partition = false;
-        circular_buffer<mutation_fragment> buffer;
+        std::optional<flat_mutation_reader::tracked_buffer> buffer;
 
         reader_meta() = default;
+
         // Remote constructor.
         reader_meta(reader_state s, remote_parts rp, reader_concurrency_semaphore::inactive_read_handle h = {})
             : state(s)
@@ -193,6 +194,7 @@ class read_context : public reader_lifecycle_policy {
 
     distributed<database>& _db;
     schema_ptr _schema;
+    reader_permit _permit;
     const query::read_command& _cmd;
     const dht::partition_range_vector& _ranges;
     tracing::trace_state_ptr _trace_state;
@@ -205,7 +207,7 @@ class read_context : public reader_lifecycle_policy {
 
     static std::string_view reader_state_to_string(reader_state rs);
 
-    dismantle_buffer_stats dismantle_combined_buffer(circular_buffer<mutation_fragment> combined_buffer, const dht::decorated_key& pkey);
+    dismantle_buffer_stats dismantle_combined_buffer(flat_mutation_reader::tracked_buffer combined_buffer, const dht::decorated_key& pkey);
     dismantle_buffer_stats dismantle_compaction_state(detached_compaction_state compaction_state);
     future<> save_reader(shard_id shard, const dht::decorated_key& last_pkey, const std::optional<clustering_key_prefix>& last_ckey);
 
@@ -214,6 +216,7 @@ public:
             tracing::trace_state_ptr trace_state)
             : _db(db)
             , _schema(std::move(s))
+            , _permit(_db.local().get_reader_concurrency_semaphore().make_permit())
             , _cmd(cmd)
             , _ranges(ranges)
             , _trace_state(std::move(trace_state))
@@ -229,6 +232,10 @@ public:
 
     distributed<database>& db() {
         return _db;
+    }
+
+    reader_permit permit() const {
+        return _permit;
     }
 
     virtual flat_mutation_reader create_reader(
@@ -251,7 +258,7 @@ public:
 
     future<> lookup_readers();
 
-    future<> save_readers(circular_buffer<mutation_fragment> unconsumed_buffer, detached_compaction_state compaction_state,
+    future<> save_readers(flat_mutation_reader::tracked_buffer unconsumed_buffer, detached_compaction_state compaction_state,
             std::optional<clustering_key_prefix> last_ckey);
 
     future<> stop();
@@ -364,7 +371,7 @@ future<> read_context::stop() {
     return fut;
 }
 
-read_context::dismantle_buffer_stats read_context::dismantle_combined_buffer(circular_buffer<mutation_fragment> combined_buffer,
+read_context::dismantle_buffer_stats read_context::dismantle_combined_buffer(flat_mutation_reader::tracked_buffer combined_buffer,
         const dht::decorated_key& pkey) {
     auto& sharder = _schema->get_sharder();
 
@@ -389,7 +396,7 @@ read_context::dismantle_buffer_stats read_context::dismantle_combined_buffer(cir
                 continue;
             }
 
-            auto& shard_buffer = _readers[shard].buffer;
+            auto& shard_buffer = *_readers[shard].buffer;
             for (auto& smf : tmp_buffer) {
                 stats.add(*_schema, smf);
                 shard_buffer.emplace_front(std::move(smf));
@@ -403,7 +410,7 @@ read_context::dismantle_buffer_stats read_context::dismantle_combined_buffer(cir
     }
 
     const auto shard = sharder.shard_of(pkey.token());
-    auto& shard_buffer = _readers[shard].buffer;
+    auto& shard_buffer = *_readers[shard].buffer;
     for (auto& smf : tmp_buffer) {
         stats.add(*_schema, smf);
         shard_buffer.emplace_front(std::move(smf));
@@ -431,7 +438,7 @@ read_context::dismantle_buffer_stats read_context::dismantle_compaction_state(de
         return stats;
     }
 
-    auto& shard_buffer = _readers[shard].buffer;
+    auto& shard_buffer = *_readers[shard].buffer;
 
     for (auto& rt : compaction_state.range_tombstones | boost::adaptors::reversed) {
         stats.add(*_schema, rt);
@@ -463,7 +470,7 @@ future<> read_context::save_reader(shard_id shard, const dht::decorated_key& las
                 reader->next_partition();
             }
 
-            auto& buffer = rm.buffer;
+            auto& buffer = *rm.buffer;
             const auto fragments = buffer.size();
             const auto size_before = reader->buffer_size();
 
@@ -545,7 +552,7 @@ future<> read_context::lookup_readers() {
     });
 }
 
-future<> read_context::save_readers(circular_buffer<mutation_fragment> unconsumed_buffer, detached_compaction_state compaction_state,
+future<> read_context::save_readers(flat_mutation_reader::tracked_buffer unconsumed_buffer, detached_compaction_state compaction_state,
             std::optional<clustering_key_prefix> last_ckey) {
     if (_cmd.query_uuid == utils::UUID{}) {
         return make_ready_future<>();
@@ -554,6 +561,13 @@ future<> read_context::save_readers(circular_buffer<mutation_fragment> unconsume
     return _dismantling_gate.close().then([this, unconsumed_buffer = std::move(unconsumed_buffer), compaction_state = std::move(compaction_state),
           last_ckey = std::move(last_ckey)] () mutable {
         auto last_pkey = compaction_state.partition_start.key();
+
+        // Ensure all readers have engaged reader_meta::buffer member.
+        for (auto& rm : _readers) {
+            if (!rm.buffer) {
+                rm.buffer.emplace(_permit);
+            }
+        }
 
         const auto cb_stats = dismantle_combined_buffer(std::move(unconsumed_buffer), last_pkey);
         tracing::trace(_trace_state, "Dismantled combined buffer: {}", cb_stats);
@@ -582,10 +596,10 @@ using consume_result = std::tuple<std::optional<clustering_key_prefix>, reconcil
 struct page_consume_result {
     std::optional<clustering_key_prefix> last_ckey;
     reconcilable_result result;
-    circular_buffer<mutation_fragment> unconsumed_fragments;
+    flat_mutation_reader::tracked_buffer unconsumed_fragments;
     lw_shared_ptr<compact_for_mutation_query_state> compaction_state;
 
-    page_consume_result(consume_result&& result, circular_buffer<mutation_fragment>&& unconsumed_fragments,
+    page_consume_result(consume_result&& result, flat_mutation_reader::tracked_buffer&& unconsumed_fragments,
             lw_shared_ptr<compact_for_mutation_query_state>&& compaction_state)
         : last_ckey(std::get<std::optional<clustering_key_prefix>>(std::move(result)))
         , result(std::get<reconcilable_result>(std::move(result)))
@@ -618,7 +632,7 @@ static future<reconcilable_result> do_query_mutations(
                     mutation_reader::forwarding fwd_mr) {
                 return make_multishard_combining_reader(ctx, std::move(s), pr, ps, pc, std::move(trace_state), fwd_mr);
             });
-            auto reader = make_flat_multi_range_reader(s, ctx->db().local().get_reader_concurrency_semaphore().make_permit(), std::move(ms), ranges,
+            auto reader = make_flat_multi_range_reader(s, ctx->permit(), std::move(ms), ranges,
                     cmd.slice, service::get_local_sstable_query_read_priority(), trace_state, mutation_reader::forwarding::no);
 
             auto compaction_state = make_lw_shared<compact_for_mutation_query_state>(*s, cmd.timestamp, cmd.slice, cmd.get_row_limit(),

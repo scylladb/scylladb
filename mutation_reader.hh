@@ -453,7 +453,7 @@ class reader_lifecycle_policy {
 public:
     struct stopped_reader {
         foreign_ptr<std::unique_ptr<reader_concurrency_semaphore::inactive_read_handle>> handle;
-        circular_buffer<mutation_fragment> unconsumed_fragments;
+        flat_mutation_reader::tracked_buffer unconsumed_fragments;
         bool has_pending_next_partition;
     };
 
