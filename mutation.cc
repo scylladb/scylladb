@@ -278,7 +278,20 @@ future<mutation_opt> read_mutation_from_flat_mutation_reader(flat_mutation_reade
 
 std::ostream& operator<<(std::ostream& os, const mutation& m) {
     const ::schema& s = *m.schema();
-    fmt_print(os, "{{{}.{} {} ", s.ks_name(), s.cf_name(), m.decorated_key());
-    os << mutation_partition::printer(s, m.partition()) << "}";
+    const auto& dk = m.decorated_key();
+
+    fmt_print(os, "{{table: '{}.{}', key: {{", s.ks_name(), s.cf_name());
+
+    auto type_iterator = dk._key.get_compound_type(s)->types().begin();
+    auto column_iterator = s.partition_key_columns().begin();
+
+    for (auto&& e : dk._key.components(s)) {
+        os << "'" << column_iterator->name_as_text() << "': " << (*type_iterator)->to_string(to_bytes(e)) << ", ";
+        ++type_iterator;
+        ++column_iterator;
+    }
+
+    fmt_print(os, "token: {}}}, ", dk._token);
+    os << mutation_partition::printer(s, m.partition()) << "\n}";
     return os;
 }

@@ -1028,19 +1028,71 @@ operator<<(std::ostream& os, const rows_entry::printer& p) {
 
 std::ostream&
 operator<<(std::ostream& os, const mutation_partition::printer& p) {
+    const auto indent = "  ";
+
     auto& mp = p._mutation_partition;
-    os << "{mutation_partition: ";
+    os << "mutation_partition: {\n";
     if (mp._tombstone) {
-        os << mp._tombstone << ",";
+        os << indent << "tombstone: " << mp._tombstone << ",\n";
     }
     if (!mp._row_tombstones.empty()) {
-        os << "\n range_tombstones: {" << ::join(",", prefixed("\n    ", mp._row_tombstones)) << "},";
+        os << indent << "range_tombstones: {" << ::join(",", prefixed("\n    ", mp._row_tombstones)) << "},\n";
     }
-    os << "\n static: cont=" << int(mp._static_row_continuous) << " " << lazy_row::printer(p._schema, column_kind::static_column, mp._static_row) << ",";
-    auto add_printer = [&] (const auto& re) {
-        return rows_entry::printer(p._schema, re);
-    };
-    os << "\n clustered: {" << ::join(",", prefixed("\n    ", mp._rows | boost::adaptors::transformed(add_printer))) << "}}";
+
+    if (!mp.static_row().empty()) {
+        os << indent << "static_row: {\n";
+        const auto& srow = mp.static_row().get();
+        srow.for_each_cell([&] (column_id& c_id, const atomic_cell_or_collection& cell) {
+            auto& column_def = p._schema.column_at(column_kind::static_column, c_id);
+            os << indent << indent <<  "'" << column_def.name_as_text() 
+               << "': " << atomic_cell_or_collection::printer(column_def, cell) << ",\n";
+        }); 
+        os << indent << "},\n";
+    }
+
+    os << indent << "rows: [\n";
+
+    for (const auto& re : mp.clustered_rows()) {
+        os << indent << indent << "{\n";
+
+        const auto& row = re.row();
+        os << indent << indent << indent << "cont: " << re.continuous() << ",\n";
+        os << indent << indent << indent << "dummy: " << re.dummy() << ",\n";
+        if (!row.marker().is_missing()) {
+            os << indent << indent << indent << "marker: " << row.marker() << ",\n";
+        }
+
+        position_in_partition pip(re.position());
+        if (pip.get_clustering_key_prefix()) {
+            os << indent << indent << indent << "position: {\n";
+
+            auto ck = *pip.get_clustering_key_prefix();
+            auto type_iterator = ck.get_compound_type(p._schema)->types().begin();
+            auto column_iterator = p._schema.clustering_key_columns().begin();
+
+            os << indent << indent << indent << indent << "bound_weight: " << int32_t(pip.get_bound_weight()) << ",\n";
+
+            for (auto&& e : ck.components(p._schema)) {
+                os << indent << indent << indent << indent << "'" << column_iterator->name_as_text() 
+                   << "': " << (*type_iterator)->to_string(to_bytes(e)) << ",\n";
+                ++type_iterator;
+                ++column_iterator;
+            }
+
+            os << indent << indent << indent << "},\n";
+        }
+
+        row.cells().for_each_cell([&] (column_id& c_id, const atomic_cell_or_collection& cell) {
+            auto& column_def = p._schema.column_at(column_kind::regular_column, c_id);
+            os << indent << indent << indent <<  "'" << column_def.name_as_text() 
+               << "': " << atomic_cell_or_collection::printer(column_def, cell) << ",\n";
+        });
+
+        os << indent << indent << "},\n";
+    }
+
+    os << indent << "]\n}";
+
     return os;
 }
 
