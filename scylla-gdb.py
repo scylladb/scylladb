@@ -3065,10 +3065,11 @@ class scylla_sstables(gdb.Command):
 
         Should mirror `sstables::sstable::component_basename()`.
         """
-        version_to_str = ['ka', 'la', 'mc']
+        version_to_str = ['ka', 'la', 'mc', 'md']
         format_to_str = ['big']
         formats = [
                 '{keyspace}-{table}-{version}-{generation}-Data.db',
+                '{version}-{generation}-{format}-Data.db',
                 '{version}-{generation}-{format}-Data.db',
                 '{version}-{generation}-{format}-Data.db',
             ]
