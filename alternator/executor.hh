@@ -146,7 +146,9 @@ public:
 
 
 
-    void add_stream_options(const rjson::value& stream_spec, schema_builder&);
+    void add_stream_options(const rjson::value& stream_spec, schema_builder&) const;
+    void supplement_table_info(rjson::value& descr, const schema& schema) const;
+    void supplement_table_stream_info(rjson::value& descr, const schema& schema) const;
 };
 
 }

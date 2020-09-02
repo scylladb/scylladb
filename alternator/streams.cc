@@ -890,7 +890,7 @@ future<executor::request_return_type> executor::get_records(client_state& client
     });
 }
 
-void executor::add_stream_options(const rjson::value& stream_specification, schema_builder& builder) {
+void executor::add_stream_options(const rjson::value& stream_specification, schema_builder& builder) const {
     auto stream_enabled = rjson::find(stream_specification, "StreamEnabled");
     if (!stream_enabled || !stream_enabled->IsBool()) {
         throw api_error::validation("StreamSpecification needs boolean StreamEnabled");
@@ -925,6 +925,15 @@ void executor::add_stream_options(const rjson::value& stream_specification, sche
         cdc::options opts;
         opts.enabled(false);
         builder.with_cdc_options(opts);
+    }
+}
+
+void executor::supplement_table_stream_info(rjson::value& descr, const schema& schema) const {
+    if (schema.cdc_options().enabled()) {
+        auto& db = _proxy.get_db().local();
+        auto& cf = db.find_column_family(schema.ks_name(), cdc::log_name(schema.cf_name()));
+        stream_arn arn(cf.schema()->id());
+        rjson::set(descr, "LatestStreamArn", arn);
     }
 }
 

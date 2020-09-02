@@ -87,11 +87,13 @@ std::string json_string::to_json() const {
     return _value;
 }
 
-static void supplement_table_info(rjson::value& descr, const schema& schema) {
+void executor::supplement_table_info(rjson::value& descr, const schema& schema) const {
     rjson::set(descr, "CreationDateTime", rjson::value(std::chrono::duration_cast<std::chrono::seconds>(gc_clock::now().time_since_epoch()).count()));
     rjson::set(descr, "TableStatus", "ACTIVE");
     auto schema_id_str = schema.id().to_sstring();
     rjson::set(descr, "TableId", rjson::from_string(schema_id_str));
+
+    executor::supplement_table_stream_info(descr, schema);
 }
 
 // We would have liked to support table names up to 255 bytes, like DynamoDB.
@@ -451,6 +453,8 @@ future<executor::request_return_type> executor::describe_table(client_state& cli
     }
     rjson::set(table_description, "AttributeDefinitions", std::move(attribute_definitions));
 
+    supplement_table_stream_info(table_description, *schema);
+    
     // FIXME: still missing some response fields (issue #5026)
 
     rjson::value response = rjson::empty_object();
@@ -989,7 +993,7 @@ future<executor::request_return_type> executor::create_table(client_state& clien
                 }
                 return f.then([this] {
                     return wait_for_schema_agreement(_mm, db::timeout_clock::now() + 10s);
-                }).then([table_info = std::move(table_info), schema] () mutable {
+                }).then([this, table_info = std::move(table_info), schema] () mutable {
                     rjson::value status = rjson::empty_object();
                     supplement_table_info(table_info, *schema);
                     rjson::set(status, "TableDescription", std::move(table_info));
@@ -1043,7 +1047,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
 
     return _mm.announce_column_family_update(schema, false, {}).then([this] {
         return wait_for_schema_agreement(_mm, db::timeout_clock::now() + 10s);
-    }).then([table_info = std::move(request), schema] () mutable {
+    }).then([this, table_info = std::move(request), schema] () mutable {
         rjson::value status = rjson::empty_object();
         supplement_table_info(table_info, *schema);
         rjson::set(status, "TableDescription", std::move(table_info));
