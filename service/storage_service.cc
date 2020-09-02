@@ -1185,7 +1185,7 @@ void storage_service::handle_state_normal(inet_address endpoint) {
     // a race where natural endpoint was updated to contain node A, but A was
     // not yet removed from pending endpoints
     _token_metadata.update_normal_tokens(owned_tokens, endpoint);
-    _update_pending_ranges_action.trigger_later().get();
+    update_pending_ranges().get();
 
     for (auto ep : endpoints_to_remove) {
         remove_endpoint(ep);
@@ -1207,7 +1207,6 @@ void storage_service::handle_state_normal(inet_address endpoint) {
         notify_joined(endpoint);
     }
 
-    update_pending_ranges().get();
     if (slogger.is_enabled(logging::log_level::debug)) {
         auto ver = _token_metadata.get_ring_version();
         for (auto& x : _token_metadata.get_token_to_endpoint()) {
