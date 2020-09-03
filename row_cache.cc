@@ -380,7 +380,7 @@ private:
                 _end_of_stream = true;
             } else if (phase == _cache.phase_of(_read_context->range().start()->value())) {
                 _reader = _cache._read_section(_cache._tracker.region(), [&] {
-                    cache_entry& e = _cache.find_or_create(mfopt->as_partition_start().key(), mfopt->as_partition_start().partition_tombstone(), phase);
+                    cache_entry& e = _cache.find_or_create_incomplete(mfopt->as_partition_start(), phase);
                     return e.read(_cache, *_read_context, phase);
                 });
             } else {
@@ -529,9 +529,7 @@ public:
                 const dht::decorated_key& key = ps.key();
                 if (_reader.creation_phase() == _cache.phase_of(key)) {
                     return _cache._read_section(_cache._tracker.region(), [&] {
-                        cache_entry& e = _cache.find_or_create(key,
-                                                               ps.partition_tombstone(),
-                                                               _reader.creation_phase(),
+                        cache_entry& e = _cache.find_or_create_incomplete(ps, _reader.creation_phase(),
                                                                this->can_set_continuity() ? &*_last_key : nullptr);
                         _last_key = row_cache::previous_entry_pointer(key);
                         return make_ready_future<read_result>(
@@ -836,16 +834,16 @@ cache_entry& row_cache::do_find_or_create_entry(const dht::decorated_key& key,
     });
 }
 
-cache_entry& row_cache::find_or_create(const dht::decorated_key& key, tombstone t, row_cache::phase_type phase, const previous_entry_pointer* previous) {
-    return do_find_or_create_entry(key, previous, [&] (auto i, const partitions_type::bound_hint& hint) { // create
-        partitions_type::iterator entry = _partitions.emplace_before(i, key.token().raw(), hint,
-                cache_entry::incomplete_tag{}, _schema, key, t);
+cache_entry& row_cache::find_or_create_incomplete(const partition_start& ps, row_cache::phase_type phase, const previous_entry_pointer* previous) {
+    return do_find_or_create_entry(ps.key(), previous, [&] (auto i, const partitions_type::bound_hint& hint) { // create
+        partitions_type::iterator entry = _partitions.emplace_before(i, ps.key().token().raw(), hint,
+                cache_entry::incomplete_tag{}, _schema, ps.key(), ps.partition_tombstone());
         _tracker.insert(*entry);
         return entry;
     }, [&] (auto i) { // visit
         _tracker.on_miss_already_populated();
         cache_entry& e = *i;
-        e.partition().open_version(*e.schema(), &_tracker, phase).partition().apply(t);
+        e.partition().open_version(*e.schema(), &_tracker, phase).partition().apply(ps.partition_tombstone());
         upgrade_entry(e);
     });
 }

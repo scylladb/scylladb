@@ -400,7 +400,7 @@ private:
     // The entry which is returned will have the tombstone applied to it.
     //
     // Must be run under reclaim lock
-    cache_entry& find_or_create(const dht::decorated_key& key, tombstone t, row_cache::phase_type phase, const previous_entry_pointer* previous = nullptr);
+    cache_entry& find_or_create_incomplete(const partition_start& ps, row_cache::phase_type phase, const previous_entry_pointer* previous = nullptr);
 
     // Creates (or touches) a cache entry for missing partition so that sstables are not
     // poked again for it.
