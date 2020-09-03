@@ -372,7 +372,6 @@ private:
             if (!mfopt) {
                 if (phase == _cache.phase_of(_read_context->range().start()->value())) {
                     _cache._read_section(_cache._tracker.region(), [this] {
-                        with_allocator(_cache._tracker.allocator(), [this] {
                             const dht::decorated_key& dk = _read_context->key();
                             _cache.do_find_or_create_entry(dk, nullptr, [&] (auto i, const row_cache::partitions_type::bound_hint& hint) {
                                 mutation_partition mp(_cache._schema);
@@ -385,7 +384,6 @@ private:
                             }, [&] (auto i) {
                                 _cache._tracker.on_miss_already_populated();
                             });
-                        });
                     });
                 } else {
                     _cache._tracker.on_mispopulate();
