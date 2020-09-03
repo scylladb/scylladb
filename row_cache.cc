@@ -814,10 +814,10 @@ void row_cache::clear_now() noexcept {
 }
 
 template<typename CreateEntry, typename VisitEntry>
-//requires requires(CreateEntry create, VisitEntry visit, row_cache::partitions_type::iterator it) {
-//        { create(it) } -> row_cache::partitions_type::iterator;
-//        { visit(it) } -> void;
-//    }
+requires requires(CreateEntry create, VisitEntry visit, row_cache::partitions_type::iterator it, row_cache::partitions_type::bound_hint hint) {
+    { create(it, hint) } -> std::same_as<row_cache::partitions_type::iterator>;
+    { visit(it) } -> std::same_as<void>;
+}
 cache_entry& row_cache::do_find_or_create_entry(const dht::decorated_key& key,
     const previous_entry_pointer* previous, CreateEntry&& create_entry, VisitEntry&& visit_entry)
 {

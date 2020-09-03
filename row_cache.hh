@@ -385,11 +385,10 @@ private:
     };
 
     template<typename CreateEntry, typename VisitEntry>
-    //requires requires(CreateEntry create, VisitEntry visit, partitions_type::iterator it) {
-    //        { create(it) } -> partitions_type::iterator;
-    //        { visit(it) } -> void;
-    //    }
-    //
+    requires requires(CreateEntry create, VisitEntry visit, partitions_type::iterator it, partitions_type::bound_hint hint) {
+        { create(it, hint) } -> std::same_as<partitions_type::iterator>;
+        { visit(it) } -> std::same_as<void>;
+    }
     // Must be run under reclaim lock
     cache_entry& do_find_or_create_entry(const dht::decorated_key& key, const previous_entry_pointer* previous,
                                  CreateEntry&& create_entry, VisitEntry&& visit_entry);
