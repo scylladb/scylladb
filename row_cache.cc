@@ -743,8 +743,9 @@ row_cache::make_reader(schema_ptr s,
             return with_linearized_managed_bytes([&] {
                 dht::ring_position_comparator cmp(*_schema);
                 auto&& pos = ctx->range().start()->value();
-                auto i = _partitions.lower_bound(pos, cmp);
-                if (i != _partitions.end() && cmp(pos, i->position()) >= 0) {
+                partitions_type::bound_hint hint;
+                auto i = _partitions.lower_bound(pos, cmp, hint);
+                if (i != _partitions.end() && hint.match) {
                     cache_entry& e = *i;
                     upgrade_entry(e);
                     on_partition_hit();
