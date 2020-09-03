@@ -158,6 +158,92 @@ are debugging. The `TUI` mode can be activated by passing `-tui` to GDB
 on the command line, or any time by executing the `tui enable` to
 activate it and `tui disable` to deactivate it respectively.
 
+#### Thread Local Storage (TLS) variables
+
+Thread local variables are saved in a special area of memory, at a negative
+offset from `$fs_base`. Let's look at an example TLS variable, given the
+following C++ code from seastar:
+
+    namespace seastar::internal {
+
+    inline
+    scheduling_group*
+    current_scheduling_group_ptr() noexcept {
+        // Slow unless constructor is constexpr
+        static thread_local scheduling_group sg;
+        return &sg;
+    }
+
+    }
+
+Let's have a look in GDB:
+
+    (gdb) p &'seastar::internal::current_scheduling_group_ptr()::sg'
+    $1 = (<thread local variable, no debug info> *) 0x7fc1f11e7c0c
+    (gdb) p/x $fs_base
+    $2 = 0x7fc1f11ff700
+    (gdb) p/x 0x7fc1f11e7c0c - $fs_base
+    $3 = 0xfffffffffffe850c
+    (gdb) p/x -0xfffffffffffe850c
+    $4 = 0x17af4
+
+The variable `sg` is located at offset `0x17af4` beneath `$fs_base`. We
+can also calculate the offset (and hence address) of a known TLS
+variable in memory as follows:
+
+    $fs_offset = $tls_entry - $sizeof_TLS_header
+
+`$sizeof_TLS_header` can be obtained by listing the program headers of the binary:
+
+    $ eu-readelf -l ./a.out
+      Type           Offset    VirtAddr           PhysAddr           FileSiz  MemSiz   Flg Align
+      [...]
+      TLS            0x31ead40 0x00000000033ecd40 0x00000000033ecd40 0x000058 0x017bf0 R   0x40
+      [...]
+
+We are interested in the size of the TLS header, which is in the
+`MemSiz` column and is `0x017bf0` in this example. The value of the
+`$tls_entry` can be found in the process' symbol table:
+
+    eu-readelf -s ./a.out
+
+	Symbol table [ 5] '.dynsym' contains 1288 entries:
+	 1 local symbol  String table: [ 9] '.dynstr'
+	  Num:            Value   Size Type    Bind   Vis          Ndx Name
+		[...]
+	 1282: 000000000000010c      4 TLS     LOCAL  HIDDEN        23 _ZZN7seastar8internal28current_scheduling_group_ptrEvE2sg
+		[...]
+
+If we substitute these values in we can verify our theory:
+
+    (gdb) set $tls_entry = 0x000000000000010c
+    (gdb) set $sizeof_TLS_header = 0x017bf0
+    (gdb) p/x $tls_entry - $sizeof_TLS_header
+    $5 = 0xfffe851c
+    (gdb) p/x -($tls_entry - $sizeof_TLS_header)
+    $6 = 0x17ae4
+
+We can also identify a TLS variable based on its address. We know the
+value of `$sizeof_TLS_header` and we can easily calculate `$fs_offset`.
+To identify the variable we need to calculate its `$tls_entry` based on
+which we can find the matching entry in the symbol table. Remaining with
+the above example of the address being `0x7fc1f11e7c0c`, we can
+calculate this as:
+
+    $tls_entry = $sizeof_TLS_header + $fs_offset
+
+Do note however that `$fs_offset` is negative so this is in effect a
+substituation:
+
+    $tls_entry = 0x017bf0 - 0x17ae4
+
+This yields `0x10c` which is exactly the value of the `Value` column in
+the matching symbol table entry. This should work also if you don't have
+the address to the start of the object. In this case you have to locate
+the entry in the symbol table, whose value range includes the
+calculated value. This can be made easier by sorting the symbol table by
+the `Value` column.
+
 ### Debugging coredumps
 
 Up until release 3.0 we used to build and package Scylla separately for each
