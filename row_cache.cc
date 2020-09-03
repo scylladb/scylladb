@@ -879,6 +879,16 @@ void row_cache::populate(const mutation& m, const previous_entry_pointer* previo
   });
 }
 
+cache_entry& row_cache::lookup(const dht::decorated_key& key) {
+    return do_find_or_create_entry(key, nullptr, [&] (auto i, const partitions_type::bound_hint& hint) {
+        throw std::runtime_error(format("cache doesn't contain entry for {}", key));
+        return i;
+    }, [&] (auto i) {
+        _tracker.on_miss_already_populated();
+        upgrade_entry(*i);
+    });
+}
+
 mutation_source& row_cache::snapshot_for_phase(phase_type phase) {
     if (phase == _underlying_phase) {
         return _underlying;

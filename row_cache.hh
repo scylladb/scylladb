@@ -488,6 +488,10 @@ public:
     // Can only be called prior to any reads.
     void populate(const mutation& m, const previous_entry_pointer* previous = nullptr);
 
+    // Finds the entry in cache for a given key.
+    // Intended to be used only in tests.
+    cache_entry& lookup(const dht::decorated_key& key);
+
     // Synchronizes cache with the underlying data source from a memtable which
     // has just been flushed to the underlying data source.
     // The memtable can be queried during the process, but must not be written.
