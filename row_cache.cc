@@ -836,8 +836,10 @@ cache_entry& row_cache::do_find_or_create_entry(const dht::decorated_key& key,
 
 cache_entry& row_cache::find_or_create_incomplete(const partition_start& ps, row_cache::phase_type phase, const previous_entry_pointer* previous) {
     return do_find_or_create_entry(ps.key(), previous, [&] (auto i, const partitions_type::bound_hint& hint) { // create
+        // Create an fully discontinuous, except for the partition tombstone, entry
+        mutation_partition mp = mutation_partition::make_incomplete(*_schema, ps.partition_tombstone());
         partitions_type::iterator entry = _partitions.emplace_before(i, ps.key().token().raw(), hint,
-                cache_entry::incomplete_tag{}, _schema, ps.key(), ps.partition_tombstone());
+                _schema, ps.key(), std::move(mp));
         _tracker.insert(*entry);
         return entry;
     }, [&] (auto i) { // visit

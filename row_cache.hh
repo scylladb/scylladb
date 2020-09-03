@@ -87,7 +87,6 @@ public:
     void set_train(bool v) noexcept { _flags._train = v; }
 
     struct dummy_entry_tag{};
-    struct incomplete_tag{};
     struct evictable_tag{};
 
     cache_entry(dummy_entry_tag)
@@ -95,11 +94,6 @@ public:
     {
         _flags._dummy_entry = true;
     }
-
-    // Creates an entry which is fully discontinuous, except for the partition tombstone.
-    cache_entry(incomplete_tag, schema_ptr s, const dht::decorated_key& key, tombstone t)
-        : cache_entry(s, key, mutation_partition::make_incomplete(*s, t))
-    { }
 
     cache_entry(schema_ptr s, const dht::decorated_key& key, const mutation_partition& p)
         : _schema(std::move(s))
