@@ -373,12 +373,12 @@ private:
                 if (phase == _cache.phase_of(_read_context->range().start()->value())) {
                     _cache._read_section(_cache._tracker.region(), [this] {
                         with_allocator(_cache._tracker.allocator(), [this] {
-                            dht::decorated_key dk = _read_context->range().start()->value().as_decorated_key();
+                            const dht::decorated_key& dk = _read_context->key();
                             _cache.do_find_or_create_entry(dk, nullptr, [&] (auto i, const row_cache::partitions_type::bound_hint& hint) {
                                 mutation_partition mp(_cache._schema);
                                 bool cont = i->continuous();
                                 row_cache::partitions_type::iterator entry = _cache._partitions.emplace_before(i, dk.token().raw(), hint,
-                                    _cache._schema, std::move(dk), std::move(mp));
+                                    _cache._schema, dk, std::move(mp));
                                 _cache._tracker.insert(*entry);
                                 entry->set_continuous(cont);
                                 return entry;
