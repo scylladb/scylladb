@@ -328,7 +328,7 @@ private:
             return row_consumer::proceed::yes;
         }
 #endif
-        sstlog.trace("data_consume_row_context {}: state={}, size={}", this, static_cast<int>(_state), data.size());
+        sstlog.trace("data_consume_row_context {}: state={}, size={}", fmt::ptr(this), static_cast<int>(_state), data.size());
         switch (_state) {
         case state::ROW_START:
             if (read_short_length_bytes(data, _key) != read_status::ready) {

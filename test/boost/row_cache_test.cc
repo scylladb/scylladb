@@ -2723,7 +2723,7 @@ SEASTAR_TEST_CASE(test_no_misses_when_read_is_repeated) {
 
         for (auto n_ranges : {1, 2, 4}) {
             auto ranges = gen.make_random_ranges(n_ranges);
-            testlog.info("Reading {{}}", ranges);
+            testlog.info("Reading {{{}}}", ranges);
 
             populate_range(cache, pr, ranges);
             check_continuous(cache, pr, ranges);

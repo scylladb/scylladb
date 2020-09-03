@@ -105,7 +105,7 @@ public:
     }
 
     future<> skip_to(indexable_element el, uint64_t begin) {
-        sstlog.trace("data_consume_rows_context {}: skip_to({} -> {}, el={})", _ctx.get(), _ctx->position(), begin, static_cast<int>(el));
+        sstlog.trace("data_consume_rows_context {}: skip_to({} -> {}, el={})", fmt::ptr(_ctx.get()), _ctx->position(), begin, static_cast<int>(el));
         if (begin <= _ctx->position()) {
             return make_ready_future<>();
         }

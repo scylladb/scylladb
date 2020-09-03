@@ -42,7 +42,7 @@ public:
             const query::partition_slice& slice, flat_mutation_reader&& rd) {
         if (s->cf_name() == _cf_name) {
             return make_filtering_reader(std::move(rd), [this, &range, &slice, s = std::move(s)] (const dht::decorated_key& dk) {
-                testlog.info("listener {}: read {}", this, dk);
+                testlog.info("listener {}: read {}", fmt::ptr(this), dk);
                 ++read;
                 return true;
             });
@@ -75,7 +75,7 @@ results test_data_listeners(cql_test_env& e, sstring cf_name) {
     e.db().invoke_on_all([&listeners, &cf_name] (database& db) {
         auto listener = std::make_unique<table_listener>(cf_name);
         db.data_listeners().install(&*listener);
-        testlog.info("installed listener {}", &*listener);
+        testlog.info("installed listener {}", fmt::ptr(&*listener));
         listeners.push_back(std::move(listener));
     }).get();
 
@@ -93,7 +93,7 @@ results test_data_listeners(cql_test_env& e, sstring cf_name) {
                     continue;
                 }
                 results res{li->read, li->write};
-                testlog.info("uninstalled listener {}: rd={} wr={}", li, li->read, li->write);
+                testlog.info("uninstalled listener {}: rd={} wr={}", fmt::ptr(li), li->read, li->write);
                 db.data_listeners().uninstall(li);
                 return res;
             }

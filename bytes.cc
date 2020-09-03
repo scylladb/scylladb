@@ -100,3 +100,7 @@ std::ostream& operator<<(std::ostream& os, const bytes_view& b) {
 }
 
 }
+
+std::ostream& operator<<(std::ostream& os, const fmt_hex& b) {
+    return os << to_hex(b.v);
+}

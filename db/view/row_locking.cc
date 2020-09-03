@@ -34,7 +34,7 @@ void row_locker::upgrade(schema_ptr new_schema) {
     if (new_schema == _schema) {
         return;
     }
-    mylog.debug("row_locker::upgrade from {} to {}", _schema.get(), new_schema.get());
+    mylog.debug("row_locker::upgrade from {} to {}", fmt::ptr(_schema.get()), fmt::ptr(new_schema.get()));
     _schema = new_schema;
 }
 
