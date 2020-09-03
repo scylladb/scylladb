@@ -372,18 +372,7 @@ private:
             if (!mfopt) {
                 if (phase == _cache.phase_of(_read_context->range().start()->value())) {
                     _cache._read_section(_cache._tracker.region(), [this] {
-                        const dht::decorated_key& dk = _read_context->key();
-                        _cache.do_find_or_create_entry(dk, nullptr, [&] (auto i, const row_cache::partitions_type::bound_hint& hint) {
-                            mutation_partition mp(_cache._schema);
-                            bool cont = i->continuous();
-                            row_cache::partitions_type::iterator entry = _cache._partitions.emplace_before(i, dk.token().raw(), hint,
-                                _cache._schema, dk, std::move(mp));
-                            _cache._tracker.insert(*entry);
-                            entry->set_continuous(cont);
-                            return entry;
-                        }, [&] (auto i) {
-                            _cache._tracker.on_miss_already_populated();
-                        });
+                        _cache.find_or_create_missing(_read_context->key());
                     });
                 } else {
                     _cache._tracker.on_mispopulate();
@@ -858,6 +847,20 @@ cache_entry& row_cache::find_or_create(const dht::decorated_key& key, tombstone 
         cache_entry& e = *i;
         e.partition().open_version(*e.schema(), &_tracker, phase).partition().apply(t);
         upgrade_entry(e);
+    });
+}
+
+cache_entry& row_cache::find_or_create_missing(const dht::decorated_key& key) {
+    return do_find_or_create_entry(key, nullptr, [&] (auto i, const partitions_type::bound_hint& hint) {
+        mutation_partition mp(_schema);
+        bool cont = i->continuous();
+        partitions_type::iterator entry = _partitions.emplace_before(i, key.token().raw(), hint,
+                _schema, key, std::move(mp));
+        _tracker.insert(*entry);
+        entry->set_continuous(cont);
+        return entry;
+    }, [&] (auto i) {
+        _tracker.on_miss_already_populated();
     });
 }
 

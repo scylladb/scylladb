@@ -402,6 +402,10 @@ private:
     // Must be run under reclaim lock
     cache_entry& find_or_create(const dht::decorated_key& key, tombstone t, row_cache::phase_type phase, const previous_entry_pointer* previous = nullptr);
 
+    // Creates (or touches) a cache entry for missing partition so that sstables are not
+    // poked again for it.
+    cache_entry& find_or_create_missing(const dht::decorated_key& key);
+
     partitions_type::iterator partitions_end() {
         return std::prev(_partitions.end());
     }
