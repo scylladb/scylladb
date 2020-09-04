@@ -225,7 +225,7 @@ scylla-jmx (https://github.com/scylladb/scylla-jmx). It can be build
 with
 
 ```bash
-$ mvn package
+$ mvn --file scylla-jmx-parent/pom.xml package
 ```
 
 and must be started with
