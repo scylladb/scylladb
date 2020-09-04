@@ -207,13 +207,7 @@ public:
     // CAS statement returns a result set. Prepare result set metadata
     // so that get_result_metadata() returns a meaningful value.
     void build_cas_result_set_metadata();
-    // Build a result set with prefetched rows, but return only
-    // the columns required by CAS. Static since reused by BATCH
-    // CAS.
-    static seastar::shared_ptr<cql_transport::messages::result_message>
-    build_cas_result_set(seastar::shared_ptr<cql3::metadata> metadata,
-            const column_set& mask, bool is_applied,
-            const update_parameters::prefetch_data& rows);
+
 public:
     virtual dht::partition_range_vector build_partition_keys(const query_options& options, const json_cache_opt& json_cache) const;
     virtual query::clustering_row_ranges create_clustering_ranges(const query_options& options, const json_cache_opt& json_cache) const;
