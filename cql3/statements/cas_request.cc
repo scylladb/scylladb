@@ -42,6 +42,9 @@
 #include "modification_statement.hh"
 #include "cas_request.hh"
 #include <seastar/core/sleep.hh>
+#include "cql3/result_set.hh"
+#include "transport/messages/result_message.hh"
+#include "types/map.hh"
 
 namespace cql3::statements {
 
@@ -120,60 +123,16 @@ lw_shared_ptr<query::read_command> cas_request::read_command(service::storage_pr
 }
 
 bool cas_request::applies_to() const {
-
-    const partition_key& pkey = _key.front().start()->value().key().value();
-    const clustering_key empty_ckey = clustering_key::make_empty();
-    bool applies = true;
-    bool is_cas_result_set_empty = true;
-    bool has_static_column_conditions = false;
     for (const cas_row_update& op: _updates) {
-        if (op.statement.has_conditions() == false) {
+        if (!op.statement.has_conditions()) {
             continue;
         }
-        if (op.statement.has_static_column_conditions()) {
-            has_static_column_conditions = true;
-        }
-        // If a statement has only static columns conditions, we must ignore its clustering columns
-        // restriction when choosing a row to check the conditions, i.e. choose any partition row,
-        // because any of them must have static columns and that's all we need to know if the
-        // statement applies. For example, the following update must successfully apply (effectively
-        // turn into INSERT), because, although the table doesn't have any regular rows matching the
-        // statement clustering column restriction, the static row matches the statement condition:
-        //   CREATE TABLE t(p int, c int, s int static, v int, PRIMARY KEY(p, c));
-        //   INSERT INTO t(p, s) VALUES(1, 1);
-        //   UPDATE t SET v=1 WHERE p=1 AND c=1 IF s=1;
-        // Another case when we pass an empty clustering key prefix is apparently when the table
-        // doesn't have any clustering key columns and the clustering key range is empty (open
-        // ended on both sides).
-        const auto& ckey = !op.statement.has_only_static_column_conditions() && op.ranges.front().start() ?
-            op.ranges.front().start()->value() : empty_ckey;
-        const auto* row = _rows.find_row(pkey, ckey);
-        if (row) {
-            row->is_in_cas_result_set = true;
-            is_cas_result_set_empty = false;
-        }
-        if (!applies) {
-            // No need to check this condition as we have already failed a previous one.
-            // Continuing the loop just to set is_in_cas_result_set flag for all involved
-            // statements, which is necessary to build the CAS result set.
-            continue;
-        }
-        applies = op.statement.applies_to(row, op.options);
-    }
-    if (has_static_column_conditions && is_cas_result_set_empty) {
-        // If none of the fetched rows matches clustering key restrictions and hence none of them is
-        // included into the CAS result set, but there is a static column condition in the CAS batch,
-        // we must still include the static row into the result set. Consider the following example:
-        //   CREATE TABLE t(p int, c int, s int static, v int, PRIMARY KEY(p, c));
-        //   INSERT INTO t(p, s) VALUES(1, 1);
-        //   DELETE v FROM t WHERE p=1 AND c=1 IF v=1 AND s=1;
-        // In this case the conditional DELETE must return [applied=False, v=null, s=1].
-        const auto* row = _rows.find_row(pkey, empty_ckey);
-        if (row) {
-            row->is_in_cas_result_set = true;
+        // No need to check subsequent conditions as we have already failed the current one.
+        if (!op.statement.applies_to(find_old_row(op), op.options)) {
+            return false;
         }
     }
-    return applies;
+    return true;
 }
 
 std::optional<mutation> cas_request::apply(foreign_ptr<lw_shared_ptr<query::result>> qr,
@@ -184,6 +143,93 @@ std::optional<mutation> cas_request::apply(foreign_ptr<lw_shared_ptr<query::resu
     } else {
         return {};
     }
+}
+
+const update_parameters::prefetch_data::row* cas_request::find_old_row(const cas_row_update& op) const {
+    static const clustering_key empty_ckey = clustering_key::make_empty();
+    const partition_key& pkey = _key.front().start()->value().key().value();
+    // If a statement has only static columns conditions, we must ignore its clustering columns
+    // restriction when choosing a row to check the conditions, i.e. choose any partition row,
+    // because any of them must have static columns and that's all we need to know if the
+    // statement applies. For example, the following update must successfully apply (effectively
+    // turn into INSERT), because, although the table doesn't have any regular rows matching the
+    // statement clustering column restriction, the static row matches the statement condition:
+    //   CREATE TABLE t(p int, c int, s int static, v int, PRIMARY KEY(p, c));
+    //   INSERT INTO t(p, s) VALUES(1, 1);
+    //   UPDATE t SET v=1 WHERE p=1 AND c=1 IF s=1;
+    // Another case when we pass an empty clustering key prefix is apparently when the table
+    // doesn't have any clustering key columns and the clustering key range is empty (open
+    // ended on both sides).
+    const clustering_key& ckey = !op.statement.has_only_static_column_conditions() && op.ranges.front().start() ?
+        op.ranges.front().start()->value() : empty_ckey;
+    return _rows.find_row(pkey, ckey);
+}
+
+seastar::shared_ptr<cql_transport::messages::result_message>
+cas_request::build_cas_result_set(seastar::shared_ptr<cql3::metadata> metadata,
+                                  const column_set& columns,
+                                  bool is_applied) const {
+    const partition_key& pkey = _key.front().start()->value().key().value();
+    const clustering_key empty_ckey = clustering_key::make_empty();
+    auto result_set = std::make_unique<cql3::result_set>(metadata);
+
+    for (const cas_row_update& op: _updates) {
+        // Construct the result set row
+        std::vector<bytes_opt> rs_row;
+        rs_row.reserve(metadata->value_count());
+        rs_row.emplace_back(boolean_type->decompose(is_applied));
+        // Get old row from prefetched data for the row update
+        const auto* old_row = find_old_row(op);
+        if (!old_row) {
+            if (!op.statement.has_static_column_conditions()) {
+                // In case there is no old row, leave all other columns null
+                // so that we can infer whether the update attempts to insert a
+                // non-existing row.
+                rs_row.resize(metadata->value_count());
+                result_set->add_row(std::move(rs_row));
+                continue;
+            }
+            // If none of the fetched rows matches clustering key restrictions,
+            // but there is a static column condition in the CAS batch,
+            // we must still include the static row into the result set. Consider the following example:
+            //   CREATE TABLE t(p int, c int, s int static, v int, PRIMARY KEY(p, c));
+            //   INSERT INTO t(p, s) VALUES(1, 1);
+            //   DELETE v FROM t WHERE p=1 AND c=1 IF v=1 AND s=1;
+            // In this case the conditional DELETE must return [applied=False, v=null, s=1].
+            old_row = _rows.find_row(pkey, empty_ckey);
+            if (!old_row) {
+                // In case there is no old row, leave all other columns null
+                // so that we can infer whether the update attempts to insert a
+                // non-existing row.
+                rs_row.resize(metadata->value_count());
+                result_set->add_row(std::move(rs_row));
+                continue;
+            }
+        }
+        // Fill in the cells from prefetch data (old row) into the result set row
+        for (ordinal_column_id id = columns.find_first(); id != column_set::npos; id = columns.find_next(id)) {
+            const auto it = old_row->cells.find(id);
+            if (it == old_row->cells.end()) {
+                rs_row.emplace_back(bytes_opt{});
+                continue;
+            }
+            const data_value& cell = it->second;
+            const abstract_type& cell_type = *cell.type();
+            const abstract_type& column_type = *_rows.schema->column_at(id).type;
+
+            if (column_type.is_listlike() && cell_type.is_map()) {
+                // List/sets are fetched as maps, but need to be stored as sets.
+                const listlike_collection_type_impl& list_type = static_cast<const listlike_collection_type_impl&>(column_type);
+                const map_type_impl& map_type = static_cast<const map_type_impl&>(cell_type);
+                rs_row.emplace_back(list_type.serialize_map(map_type, cell));
+            } else {
+                rs_row.emplace_back(cell_type.decompose(cell));
+            }
+        }
+        result_set->add_row(std::move(rs_row));
+    }
+    cql3::result result(std::move(result_set));
+    return seastar::make_shared<cql_transport::messages::result_message::rows>(std::move(result));
 }
 
 } // end of namespace "cql3::statements"

@@ -355,55 +355,8 @@ modification_statement::execute_with_condition(service::storage_proxy& proxy, se
     return proxy.cas(s, request, request->read_command(proxy), request->key(),
             {read_timeout, qs.get_permit(), qs.get_client_state(), qs.get_trace_state()},
             cl_for_paxos, cl_for_learn, statement_timeout, cas_timeout).then([this, request] (bool is_applied) {
-        return build_cas_result_set(_metadata, _columns_of_cas_result_set, is_applied, request->rows());
+        return request->build_cas_result_set(_metadata, _columns_of_cas_result_set, is_applied);
     });
-}
-
-seastar::shared_ptr<cql_transport::messages::result_message>
-modification_statement::build_cas_result_set(seastar::shared_ptr<cql3::metadata> metadata,
-        const column_set& columns,
-        bool is_applied,
-        const update_parameters::prefetch_data& rows) {
-
-    auto result_set = std::make_unique<cql3::result_set>(metadata);
-    for (const auto& it : rows.rows) {
-        const update_parameters::prefetch_data::row& cell_map = it.second;
-        if (!cell_map.is_in_cas_result_set) {
-            continue;
-        }
-        std::vector<bytes_opt> row;
-        row.reserve(metadata->value_count());
-        row.emplace_back(boolean_type->decompose(is_applied));
-        for (ordinal_column_id id = columns.find_first(); id != column_set::npos; id = columns.find_next(id)) {
-            const auto it = cell_map.cells.find(id);
-            if (it == cell_map.cells.end()) {
-                row.emplace_back(bytes_opt{});
-            } else {
-                const data_value& cell = it->second;
-                const abstract_type& cell_type = *cell.type();
-                const abstract_type& column_type = *rows.schema->column_at(id).type;
-
-                if (column_type.is_listlike() && cell_type.is_map()) {
-                    // List/sets are fetched as maps, but need to be stored as sets.
-                    const listlike_collection_type_impl& list_type = static_cast<const listlike_collection_type_impl&>(column_type);
-                    const map_type_impl& map_type = static_cast<const map_type_impl&>(cell_type);
-                    row.emplace_back(list_type.serialize_map(map_type, cell));
-                } else {
-                    row.emplace_back(cell_type.decompose(cell));
-                }
-            }
-        }
-        result_set->add_row(std::move(row));
-    }
-    if (result_set->empty()) {
-        // Is the case when, e.g., IF EXISTS or IF NOT EXISTS finds no row.
-        std::vector<bytes_opt> row;
-        row.emplace_back(boolean_type->decompose(is_applied));
-        row.resize(metadata->value_count());
-        result_set->add_row(std::move(row));
-    }
-    cql3::result result(std::move(result_set));
-    return seastar::make_shared<cql_transport::messages::result_message::rows>(std::move(result));
 }
 
 void modification_statement::build_cas_result_set_metadata() {

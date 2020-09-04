@@ -98,9 +98,21 @@ public:
     virtual std::optional<mutation> apply(foreign_ptr<lw_shared_ptr<query::result>> qr,
             const query::partition_slice& slice, api::timestamp_type ts) override;
 
+    /// Build a result set with prefetched rows, but return only
+    /// the columns required by CAS.
+    ///
+    /// Each cas_row_update provides a row in the result set.
+    /// Rows are ordered the same way as the individual statements appear
+    /// in case of batch statement.
+    seastar::shared_ptr<cql_transport::messages::result_message>
+    build_cas_result_set(seastar::shared_ptr<cql3::metadata> metadata,
+            const column_set& mask, bool is_applied) const;
+
 private:
     bool applies_to() const;
     std::optional<mutation> apply_updates(api::timestamp_type t) const;
+    /// Find a row in prefetch_data which matches primary key identifying a given `cas_row_update`
+    const update_parameters::prefetch_data::row* find_old_row(const cas_row_update& op) const;
 };
 
 } // end of namespace "cql3::statements"
