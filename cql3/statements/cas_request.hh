@@ -101,6 +101,8 @@ public:
 private:
     bool applies_to() const;
     std::optional<mutation> apply_updates(api::timestamp_type t) const;
+    /// Find a row in prefetch_data which matches primary key identifying a given `cas_row_update`
+    const update_parameters::prefetch_data::row* find_old_row(const cas_row_update& op) const;
 };
 
 } // end of namespace "cql3::statements"

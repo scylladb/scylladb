@@ -133,21 +133,7 @@ bool cas_request::applies_to() const {
         if (op.statement.has_static_column_conditions()) {
             has_static_column_conditions = true;
         }
-        // If a statement has only static columns conditions, we must ignore its clustering columns
-        // restriction when choosing a row to check the conditions, i.e. choose any partition row,
-        // because any of them must have static columns and that's all we need to know if the
-        // statement applies. For example, the following update must successfully apply (effectively
-        // turn into INSERT), because, although the table doesn't have any regular rows matching the
-        // statement clustering column restriction, the static row matches the statement condition:
-        //   CREATE TABLE t(p int, c int, s int static, v int, PRIMARY KEY(p, c));
-        //   INSERT INTO t(p, s) VALUES(1, 1);
-        //   UPDATE t SET v=1 WHERE p=1 AND c=1 IF s=1;
-        // Another case when we pass an empty clustering key prefix is apparently when the table
-        // doesn't have any clustering key columns and the clustering key range is empty (open
-        // ended on both sides).
-        const auto& ckey = !op.statement.has_only_static_column_conditions() && op.ranges.front().start() ?
-            op.ranges.front().start()->value() : empty_ckey;
-        const auto* row = _rows.find_row(pkey, ckey);
+        const auto* row = find_old_row(op);
         if (row) {
             row->is_in_cas_result_set = true;
             is_cas_result_set_empty = false;
@@ -184,6 +170,26 @@ std::optional<mutation> cas_request::apply(foreign_ptr<lw_shared_ptr<query::resu
     } else {
         return {};
     }
+}
+
+const update_parameters::prefetch_data::row* cas_request::find_old_row(const cas_row_update& op) const {
+    static const clustering_key empty_ckey = clustering_key::make_empty();
+    const partition_key& pkey = _key.front().start()->value().key().value();
+    // If a statement has only static columns conditions, we must ignore its clustering columns
+    // restriction when choosing a row to check the conditions, i.e. choose any partition row,
+    // because any of them must have static columns and that's all we need to know if the
+    // statement applies. For example, the following update must successfully apply (effectively
+    // turn into INSERT), because, although the table doesn't have any regular rows matching the
+    // statement clustering column restriction, the static row matches the statement condition:
+    //   CREATE TABLE t(p int, c int, s int static, v int, PRIMARY KEY(p, c));
+    //   INSERT INTO t(p, s) VALUES(1, 1);
+    //   UPDATE t SET v=1 WHERE p=1 AND c=1 IF s=1;
+    // Another case when we pass an empty clustering key prefix is apparently when the table
+    // doesn't have any clustering key columns and the clustering key range is empty (open
+    // ended on both sides).
+    const clustering_key& ckey = !op.statement.has_only_static_column_conditions() && op.ranges.front().start() ?
+        op.ranges.front().start()->value() : empty_ckey;
+    return _rows.find_row(pkey, ckey);
 }
 
 } // end of namespace "cql3::statements"
