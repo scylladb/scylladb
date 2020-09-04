@@ -1327,7 +1327,7 @@ bool evictable_reader::maybe_trim_range_tombstone(mutation_fragment& mf) const {
             rt.end_position());
 
     mf.mutate_as_range_tombstone(*_schema, [this] (range_tombstone& rt) {
-        rt.set_start(*_schema, position_in_partition_view::before_key(_next_position_in_partition));
+        rt.set_start(position_in_partition_view::before_key(_next_position_in_partition));
     });
 
     return true;
