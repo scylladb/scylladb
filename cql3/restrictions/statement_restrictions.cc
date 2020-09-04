@@ -410,7 +410,7 @@ void statement_restrictions::process_partition_key_restrictions(bool has_queriab
     // components must have a EQ. Only the last partition key component can be in IN relation.
     if (has_token(_partition_key_restrictions->expression)) {
         _is_key_range = true;
-    } else if (_partition_key_restrictions->has_unrestricted_components(*_schema)) {
+    } else if (_partition_key_restrictions->empty()) {
         _is_key_range = true;
         _uses_secondary_indexing = has_queriable_index;
     }
