@@ -24,6 +24,7 @@
 #include <boost/locale/encoding_utf.hpp>
 
 #include "server.hh"
+#include "utils/utf8.hh"
 #include "utils/reusable_buffer.hh"
 #include "utils/fragmented_temporary_buffer.hh"
 
@@ -40,10 +41,9 @@ private:
         };
     };
     static void validate_utf8(sstring_view s) {
-        try {
-            boost::locale::conv::utf_to_utf<char>(s.begin(), s.end(), boost::locale::conv::stop);
-        } catch (const boost::locale::conv::conversion_error& ex) {
-            throw exceptions::protocol_exception("Cannot decode string as UTF8");
+        auto error_pos = utils::utf8::validate_with_error_position(to_bytes_view(s));
+        if (error_pos) {
+            throw exceptions::protocol_exception(format("Cannot decode string as UTF8, invalid character at byte offset {}", *error_pos));
         }
     }
 

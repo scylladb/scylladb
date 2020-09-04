@@ -793,10 +793,11 @@ struct from_lua_visitor {
 
     data_value operator()(const utf8_type_impl& t) {
         sstring s = get_string(l, -1);
-        if (utils::utf8::validate(reinterpret_cast<uint8_t*>(s.data()), s.size())) {
-            return std::move(s);
+        auto error_pos = utils::utf8::validate_with_error_position(reinterpret_cast<uint8_t*>(s.data()), s.size());
+        if (error_pos) {
+            throw exceptions::invalid_request_exception(format("value is not valid utf8, invalid character at byte offset {}", *error_pos));
         }
-        throw exceptions::invalid_request_exception("value is not valid utf8");
+        return std::move(s);
     }
 
     data_value operator()(const ascii_type_impl& t) {

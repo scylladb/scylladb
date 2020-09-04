@@ -39,6 +39,10 @@ inline sstring_view to_sstring_view(bytes_view view) {
     return {reinterpret_cast<const char*>(view.data()), view.size()};
 }
 
+inline bytes_view to_bytes_view(sstring_view view) {
+    return {reinterpret_cast<const int8_t*>(view.data()), view.size()};
+}
+
 namespace std {
 
 template <>
