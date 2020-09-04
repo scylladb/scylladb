@@ -222,3 +222,45 @@ begin batch
 apply batch;
 select * from lwt;
 drop table lwt;
+
+--
+-- A test case for Issue #7113
+-- Return one row per each LWT statement
+-- in a batch, in statement order.
+--
+CREATE TABLE IF NOT EXISTS gh7113 (
+    part int,
+    key int,
+    lwt_trivial int,
+    int1 int,
+    int2 int,
+    PRIMARY KEY (part, key)
+);
+
+BEGIN BATCH
+    UPDATE gh7113 SET int1 = 6 WHERE part = 0 AND key = 4 IF lwt_trivial = null
+APPLY BATCH;
+
+BEGIN BATCH
+    UPDATE gh7113 SET int2 = 0, int1 = 0 WHERE part = 0 AND key = 0 IF lwt_trivial = null
+    UPDATE gh7113 SET int2 = 1, int1 = 6 WHERE part = 0 AND key = 7 IF lwt_trivial = null
+APPLY BATCH;
+
+BEGIN BATCH
+    UPDATE gh7113 SET int2 = 0, int1 = 2 WHERE part = 0 AND key = 9 IF lwt_trivial = null
+    UPDATE gh7113 SET int1 = 7 WHERE part = 0 AND key = 0 IF lwt_trivial = null
+APPLY BATCH;
+
+
+BEGIN BATCH
+UPDATE gh7113 SET int1 = 6, int2 = 7 WHERE part = 0 AND key = 1 IF lwt_trivial = null
+UPDATE gh7113 SET int2 = 4 WHERE part = 0 AND key = 0 IF lwt_trivial = null
+UPDATE gh7113 SET int2 = 2 WHERE part = 0 AND key = 3 IF lwt_trivial = null
+APPLY BATCH;
+
+BEGIN BATCH
+    UPDATE gh7113 SET int2 = 1 WHERE part = 0 AND key = 4 IF lwt_trivial = null
+    UPDATE gh7113 SET int2 = 1 WHERE part = 0 AND key = 0 IF lwt_trivial = null
+    UPDATE gh7113 SET int1 = 4, int2 = 8 WHERE part = 0 AND key = 9 IF lwt_trivial = null
+    UPDATE gh7113 SET int1 = 0, int2 = 9 WHERE part = 0 AND key = 0 IF lwt_trivial = null
+APPLY BATCH;

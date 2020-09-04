@@ -68,6 +68,9 @@ apply batch;
 			"[applied]" : "false",
 			"a" : "1",
 			"b" : "1"
+		},
+		{
+			"[applied]" : "false"
 		}
 	]
 }
@@ -83,6 +86,9 @@ apply batch;
 			"[applied]" : "false",
 			"a" : "1",
 			"b" : "1"
+		},
+		{
+			"[applied]" : "false"
 		}
 	]
 }
@@ -127,6 +133,11 @@ apply batch;
 {
 	"rows" : 
 	[
+		{
+			"[applied]" : "false",
+			"a" : "1",
+			"b" : "1"
+		},
 		{
 			"[applied]" : "false",
 			"a" : "1",
@@ -206,6 +217,9 @@ apply batch;
 	[
 		{
 			"[applied]" : "true"
+		},
+		{
+			"[applied]" : "true"
 		}
 	]
 }
@@ -247,6 +261,9 @@ apply batch;
 	[
 		{
 			"[applied]" : "true"
+		},
+		{
+			"[applied]" : "true"
 		}
 	]
 }
@@ -279,6 +296,9 @@ apply batch;
 			"b" : "1",
 			"c" : "[\"1\"]",
 			"d" : "[\"1\", \"2\"]"
+		},
+		{
+			"[applied]" : "true"
 		}
 	]
 }
@@ -310,6 +330,9 @@ apply batch;
 			"a" : "1",
 			"b" : "1",
 			"c" : "[\"1\", \"3\"]"
+		},
+		{
+			"[applied]" : "true"
 		}
 	]
 }
@@ -456,6 +479,13 @@ apply batch;
 			"b" : "1",
 			"c" : "1",
 			"d" : "1"
+		},
+		{
+			"[applied]" : "true",
+			"a" : "1",
+			"b" : "1",
+			"c" : "1",
+			"d" : "1"
 		}
 	]
 }
@@ -543,6 +573,12 @@ apply batch;
 			"c" : "1",
 			"i" : "1",
 			"p" : "1"
+		},
+		{
+			"[applied]" : "false",
+			"c" : "2",
+			"i" : "2",
+			"p" : "1"
 		}
 	]
 }
@@ -559,6 +595,12 @@ apply batch;
 			"c" : "1",
 			"i" : "1",
 			"p" : "1"
+		},
+		{
+			"[applied]" : "true",
+			"c" : "2",
+			"i" : "2",
+			"p" : "1"
 		}
 	]
 }
@@ -572,6 +614,13 @@ apply batch;
 	[
 		{
 			"[applied]" : "false"
+		},
+		{
+			"[applied]" : "false",
+			"c" : "2",
+			"i" : "2",
+			"l" : "[1, 3, 4]",
+			"p" : "1"
 		}
 	]
 }
@@ -588,6 +637,13 @@ apply batch;
 			"c" : "1",
 			"i" : "2",
 			"l" : "[1, 2]",
+			"p" : "1"
+		},
+		{
+			"[applied]" : "true",
+			"c" : "2",
+			"i" : "2",
+			"l" : "[1, 3, 4]",
 			"p" : "1"
 		}
 	]
@@ -633,6 +689,9 @@ apply batch;
 {
 	"rows" : 
 	[
+		{
+			"[applied]" : "true"
+		},
 		{
 			"[applied]" : "true",
 			"p" : "1",
@@ -695,6 +754,12 @@ apply batch;
 			"ck" : "0",
 			"cv" : "[\"a\", \"b\"]",
 			"key" : "1"
+		},
+		{
+			"[applied]" : "true",
+			"ck" : "0",
+			"cv" : "[\"a\", \"b\"]",
+			"key" : "1"
 		}
 	]
 }
@@ -735,6 +800,12 @@ apply batch;
 			"ck" : "0",
 			"cv" : "[\"a\", \"b\"]",
 			"key" : "1"
+		},
+		{
+			"[applied]" : "true",
+			"ck" : "0",
+			"cv" : "[\"a\", \"b\"]",
+			"key" : "1"
 		}
 	]
 }
@@ -752,4 +823,122 @@ select * from lwt;
 drop table lwt;
 {
 	"status" : "ok"
+}
+
+--
+-- A test case for Issue #7113
+-- Return one row per each LWT statement
+-- in a batch, in statement order.
+--
+CREATE TABLE IF NOT EXISTS gh7113 (
+    part int,
+    key int,
+    lwt_trivial int,
+    int1 int,
+    int2 int,
+    PRIMARY KEY (part, key)
+);
+{
+	"status" : "ok"
+}
+
+BEGIN BATCH
+    UPDATE gh7113 SET int1 = 6 WHERE part = 0 AND key = 4 IF lwt_trivial = null
+APPLY BATCH;
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "true"
+		}
+	]
+}
+
+BEGIN BATCH
+    UPDATE gh7113 SET int2 = 0, int1 = 0 WHERE part = 0 AND key = 0 IF lwt_trivial = null
+    UPDATE gh7113 SET int2 = 1, int1 = 6 WHERE part = 0 AND key = 7 IF lwt_trivial = null
+APPLY BATCH;
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "true"
+		},
+		{
+			"[applied]" : "true"
+		}
+	]
+}
+
+BEGIN BATCH
+    UPDATE gh7113 SET int2 = 0, int1 = 2 WHERE part = 0 AND key = 9 IF lwt_trivial = null
+    UPDATE gh7113 SET int1 = 7 WHERE part = 0 AND key = 0 IF lwt_trivial = null
+APPLY BATCH;
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "true"
+		},
+		{
+			"[applied]" : "true",
+			"key" : "0",
+			"part" : "0"
+		}
+	]
+}
+
+
+BEGIN BATCH
+UPDATE gh7113 SET int1 = 6, int2 = 7 WHERE part = 0 AND key = 1 IF lwt_trivial = null
+UPDATE gh7113 SET int2 = 4 WHERE part = 0 AND key = 0 IF lwt_trivial = null
+UPDATE gh7113 SET int2 = 2 WHERE part = 0 AND key = 3 IF lwt_trivial = null
+APPLY BATCH;
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "true"
+		},
+		{
+			"[applied]" : "true",
+			"key" : "0",
+			"part" : "0"
+		},
+		{
+			"[applied]" : "true"
+		}
+	]
+}
+
+BEGIN BATCH
+    UPDATE gh7113 SET int2 = 1 WHERE part = 0 AND key = 4 IF lwt_trivial = null
+    UPDATE gh7113 SET int2 = 1 WHERE part = 0 AND key = 0 IF lwt_trivial = null
+    UPDATE gh7113 SET int1 = 4, int2 = 8 WHERE part = 0 AND key = 9 IF lwt_trivial = null
+    UPDATE gh7113 SET int1 = 0, int2 = 9 WHERE part = 0 AND key = 0 IF lwt_trivial = null
+APPLY BATCH;
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "true",
+			"key" : "4",
+			"part" : "0"
+		},
+		{
+			"[applied]" : "true",
+			"key" : "0",
+			"part" : "0"
+		},
+		{
+			"[applied]" : "true",
+			"key" : "9",
+			"part" : "0"
+		},
+		{
+			"[applied]" : "true",
+			"key" : "0",
+			"part" : "0"
+		}
+	]
 }
