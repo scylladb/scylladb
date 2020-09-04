@@ -40,6 +40,17 @@ inline bool validate(bytes_view string) {
     return validate(data, len);
 }
 
+// If data represents a correct UTF-8 string, return std::nullopt,
+// otherwise return a position of first error byte.
+std::optional<size_t> validate_with_error_position(const uint8_t *data, size_t len);
+
+inline std::optional<size_t> validate_with_error_position(bytes_view string) {
+    const uint8_t *data = reinterpret_cast<const uint8_t*>(string.data());
+    size_t len = string.size();
+
+    return validate_with_error_position(data, len);	
+}
+
 } // namespace utf8
 
 } // namespace utils

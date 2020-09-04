@@ -163,3 +163,15 @@ BOOST_AUTO_TEST_CASE(test_utf8_negative) {
         }
     }
 }
+
+BOOST_AUTO_TEST_CASE(test_utf8_position) {
+    auto test_string = [](const char* str, std::optional<size_t> expected) {
+        BOOST_CHECK(utils::utf8::validate_with_error_position(reinterpret_cast<const uint8_t*>(str), strlen(str)) == expected);
+    };
+
+    test_string("valid string", std::nullopt);
+    test_string("ab\xc3\x28 xx", 2);
+    test_string("abc\xe2\x82\x28", 3);
+    test_string("abcd\xf0\x28\x8c\x28", 4);
+    test_string("abcd\xc3\x28", 4);
+}

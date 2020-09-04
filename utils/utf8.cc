@@ -57,7 +57,9 @@ namespace utils {
 namespace utf8 {
 
 // 3x faster than boost utf_to_utf
-static inline bool validate_naive(const uint8_t *data, size_t len) {
+static inline std::optional<size_t> validate_naive(const uint8_t *data, size_t len) {
+    size_t pos = 0;
+
     while (len) {
         size_t bytes;
         const uint8_t byte1 = data[0];
@@ -99,20 +101,21 @@ static inline bool validate_naive(const uint8_t *data, size_t len) {
                          (byte1 == 0xF4 && byte2 <= 0x8F))) {
                     bytes = 4;
                 } else {
-                    return false;
+                    return pos;
                 }
             } else {
-                return false;
+                return pos;
             }
         } else {
-            return false;
+            return pos;
         }
 
         len -= bytes;
+        pos += bytes;
         data += bytes;
     }
 
-    return true;
+    return std::nullopt;
 }
 
 #if defined(__aarch64__)
@@ -306,8 +309,8 @@ bool validate(const uint8_t *data, size_t len) {
         len += lookahead;
     }
 
-    // Check remaining bytes with naive method
-    return validate_naive(data, len);
+    // Check for no error position in remaining bytes with naive method
+    return !validate_naive(data, len);
 }
 
 #elif defined(__x86_64__)
@@ -490,16 +493,26 @@ bool validate(const uint8_t *data, size_t len) {
         len += lookahead;
     }
 
-    // Check remaining bytes with naive method
-    return validate_naive(data, len);
+    // Check for no error position in remaining bytes with naive method
+    return !validate_naive(data, len);
 }
 
 #else
 // No SIMD implementation for this arch, fallback to naive method
 bool validate(const uint8_t *data, size_t len) {
-    return validate_naive(data, len);
+    // Check for no error position
+    return !validate_naive(data, len);
 }
 #endif
+
+std::optional<size_t> validate_with_error_position(const uint8_t *data, size_t len) {
+    // First pass - validate data (using optimized code)
+    if (validate(data, len)) {
+        return std::nullopt;
+    }
+    // Second pass - data is invalid. Find the error position using naive method
+    return validate_naive(data, len);
+}
 
 } // namespace utf8
 
