@@ -58,6 +58,7 @@ i18n_xlat = {
     },
 }
 
+python3_dependencies = subprocess.run('./install-dependencies.sh --print-python3-runtime-packages', shell=True, capture_output=True, encoding='utf-8').stdout.strip()
 
 def pkgname(name):
     if name in i18n_xlat:
@@ -1749,7 +1750,7 @@ with open(buildfile_tmp, 'w') as f:
         build dist-server: phony dist-server-tar dist-server-rpm dist-server-deb
 
         rule build-submodule-reloc
-          command = cd $reloc_dir && ./reloc/build_reloc.sh --nodeps
+          command = cd $reloc_dir && ./reloc/build_reloc.sh --nodeps $args
         rule build-submodule-rpm
           command = cd $dir && ./reloc/build_rpm.sh --reloc-pkg $artifact
         rule build-submodule-deb
@@ -1796,6 +1797,7 @@ with open(buildfile_tmp, 'w') as f:
 
         build tools/python3/build/scylla-python3-package.tar.gz: build-submodule-reloc
           reloc_dir = tools/python3
+          args = --packages "{python3_dependencies}"
         build dist-python3-rpm: build-submodule-rpm tools/python3/build/scylla-python3-package.tar.gz
           dir = tools/python3
           artifact = $builddir/scylla-python3-package.tar.gz
