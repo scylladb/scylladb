@@ -27,10 +27,6 @@ else
     exit 1
 fi
 
-bash seastar/install-dependencies.sh
-bash tools/jmx/install-dependencies.sh
-bash tools/java/install-dependencies.sh
-
 debian_base_packages=(
     liblua5.3-dev
     python3-pyparsing
@@ -67,21 +63,10 @@ fedora_packages=(
     patchelf
     python3
     python3-pip
-    python3-PyYAML
-    python3-pyudev
-    python3-setuptools
-    python3-urwid
-    python3-pyparsing
-    python3-requests
-    python3-pyudev
-    python3-setuptools
     python3-magic
-    python3-psutil
     python3-colorama
     python3-boto3
     python3-pytest
-    python3-distro
-    python3-psutil
     python3-redis
     dnf-utils
     pigz
@@ -103,6 +88,17 @@ fedora_packages=(
     fakeroot
     file
     dpkg-dev
+)
+
+fedora_python3_packages=(
+    python3-pyyaml
+    python3-urwid
+    python3-pyparsing
+    python3-requests
+    python3-pyudev
+    python3-setuptools
+    python3-psutil
+    python3-distro
 )
 
 centos_packages=(
@@ -141,6 +137,39 @@ arch_packages=(
     thrift
 )
 
+print_usage() {
+    echo "Usage: install-dependencies.sh [OPTION]..."
+    echo ""
+    echo "  --print-python3-runtime-packages Print required python3 packages for Scylla"
+    exit 1
+}
+
+PRINT_PYTHON3=false
+while [ $# -gt 0 ]; do
+    case "$1" in
+        "--print-python3-runtime-packages")
+            PRINT_PYTHON3=true
+            shift 1
+            ;;
+         *)
+            print_usage
+            ;;
+    esac
+done
+
+if $PRINT_PYTHON3; then
+    if [ "$ID" != "fedora" ]; then
+        echo "Unsupported Distribution: $ID"
+        exit 1
+    fi
+    echo "${fedora_python3_packages[@]}"
+    exit 0
+fi
+
+bash seastar/install-dependencies.sh
+bash tools/jmx/install-dependencies.sh
+bash tools/java/install-dependencies.sh
+
 if [ "$ID" = "ubuntu" ] || [ "$ID" = "debian" ]; then
     apt-get -y install "${debian_base_packages[@]}"
     if [ "$VERSION_ID" = "8" ]; then
@@ -160,7 +189,7 @@ elif [ "$ID" = "fedora" ]; then
         echo "Please remove the package and try to run this script again."
         exit 1
     fi
-    yum install -y "${fedora_packages[@]}"
+    yum install -y "${fedora_packages[@]}" "${fedora_python3_packages[@]}"
     pip3 install cassandra-driver
 elif [ "$ID" = "centos" ]; then
     yum install -y "${centos_packages[@]}"
