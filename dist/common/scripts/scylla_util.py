@@ -679,11 +679,8 @@ def colorprint(msg, **kwargs):
 
 
 def get_mode_cpuset(nic, mode):
-    try:
-        mode_cpu_mask = out('/opt/scylladb/scripts/perftune.py --tune net --nic {} --mode {} --get-cpu-mask-quiet'.format(nic, mode))
-        return hex2list(mode_cpu_mask)
-    except subprocess.CalledProcessError:
-        return '-1'
+    mode_cpu_mask = out('/opt/scylladb/scripts/perftune.py --tune net --nic {} --mode {} --get-cpu-mask-quiet'.format(nic, mode))
+    return hex2list(mode_cpu_mask)
 
 
 def parse_scylla_dirs_with_default(conf='/etc/scylla/scylla.yaml'):
@@ -746,7 +743,7 @@ def get_cur_cpuset():
 
 def get_tune_mode(nic):
     if not os.path.exists('/etc/scylla.d/cpuset.conf'):
-        return
+        raise Exception('/etc/scylla.d/cpuset.conf not found')
     cur_cpuset = get_cur_cpuset()
     mq_cpuset = get_mode_cpuset(nic, 'mq')
     sq_cpuset = get_mode_cpuset(nic, 'sq')
@@ -758,6 +755,8 @@ def get_tune_mode(nic):
         return 'sq'
     elif cur_cpuset == sq_split_cpuset:
         return 'sq_split'
+    else:
+        raise Exception('tune mode not found')
 
 
 def create_perftune_conf(cfg):

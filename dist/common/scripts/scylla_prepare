@@ -78,5 +78,11 @@ if __name__ == '__main__':
         if dist_name() == 'Ubuntu':
             run('hugeadm --create-mounts')
     else:
-        if create_perftune_conf(cfg):
-            run("{} --options-file /etc/scylla.d/perftune.yaml".format(perftune_base_command()))
+        try:
+            if create_perftune_conf(cfg):
+                run("{} --options-file /etc/scylla.d/perftune.yaml".format(perftune_base_command()))
+        except Exception as e:
+            print(f'Exception occurred while creating perftune.yaml: {e}')
+            print('To fix the error, please re-run scylla_setup.')
+            sys.exit(1)
+
