@@ -143,7 +143,7 @@ This will reduce contention over hot keys and thus increase LWT performance.
 The feature is identified by the `SCYLLA_LWT_ADD_METADATA_MARK` key that is
 meant to be sent in the SUPPORTED message along with the following additional
 parameters:
-  - `SCYLLA_LWT_OPTIMIZATION_META_BIT_MASK` is a 32-bit integer that represents
+  - `SCYLLA_LWT_OPTIMIZATION_META_BIT_MASK` is a 32-bit unsigned integer that represents
     the bit mask that should be used by the client to test against when checking
     prepared statement metadata flags to see if the current query is conditional
     or not.
