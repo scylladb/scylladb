@@ -72,8 +72,13 @@ void on_types_internal_error(std::exception_ptr ex) {
 template<typename T>
 sstring time_point_to_string(const T& tp)
 {
-    auto timestamp = tp.time_since_epoch().count();
-    auto time = boost::posix_time::from_time_t(0) + boost::posix_time::milliseconds(timestamp);
+    auto nanos = std::chrono::duration_cast<std::chrono::nanoseconds>(tp.time_since_epoch()).count();
+    auto time = boost::posix_time::from_time_t(0);
+#ifdef BOOST_DATE_TIME_HAS_NANOSECONDS
+    time += boost::posix_time::nanoseconds(nanos);
+#else
+    time += boost::posix_time::microseconds(nanos / 1000);
+#endif
     return boost::posix_time::to_iso_extended_string(time);
 }
 
