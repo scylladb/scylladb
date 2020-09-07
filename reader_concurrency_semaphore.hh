@@ -202,6 +202,10 @@ public:
         return _stats;
     }
 
+    stats& get_stats() {
+        return _stats;
+    }
+
     reader_permit make_permit();
 
     const resources initial_resources() const {
