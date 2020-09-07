@@ -1779,6 +1779,7 @@ storage_proxy::storage_proxy(distributed<database>& db, storage_proxy::config cf
     , _token_metadata(tm)
     , _read_smp_service_group(cfg.read_smp_service_group)
     , _write_smp_service_group(cfg.write_smp_service_group)
+    , _hints_write_smp_service_group(cfg.hints_write_smp_service_group)
     , _write_ack_smp_service_group(cfg.write_ack_smp_service_group)
     , _next_response_id(std::chrono::system_clock::now().time_since_epoch()/1ms)
     , _hints_resource_manager(cfg.available_memory / 10)
@@ -1859,7 +1860,7 @@ future<>
 storage_proxy::mutate_hint(const schema_ptr& s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, clock_type::time_point timeout) {
     auto shard = _db.local().shard_of(m);
     get_stats().replica_cross_shard_ops += shard != this_shard_id();
-    return _db.invoke_on(shard, {_write_smp_service_group, timeout}, [&m, gs = global_schema_ptr(s), tr_state = std::move(tr_state), timeout] (database& db) mutable -> future<> {
+    return _db.invoke_on(shard, {_hints_write_smp_service_group, timeout}, [&m, gs = global_schema_ptr(s), tr_state = std::move(tr_state), timeout] (database& db) mutable -> future<> {
         return db.apply_hint(gs, m, std::move(tr_state), timeout);
     });
 }

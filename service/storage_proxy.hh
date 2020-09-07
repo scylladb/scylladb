@@ -162,6 +162,7 @@ public:
         size_t available_memory;
         smp_service_group read_smp_service_group = default_smp_service_group();
         smp_service_group write_smp_service_group = default_smp_service_group();
+        smp_service_group hints_write_smp_service_group = default_smp_service_group();
         // Write acknowledgments might not be received on the correct shard, and
         // they need a separate smp_service_group to prevent an ABBA deadlock
         // with writes.
@@ -253,6 +254,7 @@ private:
     const locator::token_metadata& _token_metadata;
     smp_service_group _read_smp_service_group;
     smp_service_group _write_smp_service_group;
+    smp_service_group _hints_write_smp_service_group;
     smp_service_group _write_ack_smp_service_group;
     response_id_type _next_response_id;
     response_handlers_map _response_handlers;
