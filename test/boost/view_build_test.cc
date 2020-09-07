@@ -563,12 +563,12 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_deadlock) {
 
         testlog.info("res = [.count={}, .memory={}]", sem.available_resources().count, sem.available_resources().memory);
 
-        BOOST_REQUIRE_EQUAL(sem.get_inactive_read_stats().permit_based_evictions, 0);
+        BOOST_REQUIRE_EQUAL(sem.get_stats().permit_based_evictions, 0);
 
         view_update_generator.register_staging_sstable(sst, t).get();
 
         eventually_true([&] {
-            return sem.get_inactive_read_stats().permit_based_evictions > 0;
+            return sem.get_stats().permit_based_evictions > 0;
         });
 
         return make_ready_future<>();
