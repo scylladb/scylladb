@@ -79,7 +79,11 @@ sstring time_point_to_string(const T& tp)
 #else
     time += boost::posix_time::microseconds(nanos / 1000);
 #endif
+  try {
     return boost::posix_time::to_iso_extended_string(time);
+  } catch (const std::exception& e) {
+    return format("{} nanoseconds ({})", nanos, e.what());
+  }
 }
 
 sstring simple_date_to_string(const uint32_t days_count) {
