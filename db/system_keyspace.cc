@@ -1745,6 +1745,7 @@ static bool maybe_write_in_user_memory(schema_ptr s, database& db) {
 }
 
 void make(database& db, bool durable, bool volatile_testing_only) {
+    auto enable_cache = db.get_config().enable_cache();
     for (auto&& table : all_tables()) {
         auto ks_name = table->ks_name();
         if (!db.has_keyspace(ks_name)) {
@@ -1757,7 +1758,7 @@ void make(database& db, bool durable, bool volatile_testing_only) {
             kscfg.enable_disk_reads = !volatile_testing_only;
             kscfg.enable_disk_writes = !volatile_testing_only;
             kscfg.enable_commitlog = !volatile_testing_only;
-            kscfg.enable_cache = true;
+            kscfg.enable_cache = enable_cache;
             kscfg.compaction_concurrency_semaphore = &db._compaction_concurrency_sem;
             // don't make system keyspace writes wait for user writes (if under pressure)
             kscfg.dirty_memory_manager = &db._system_dirty_memory_manager;
