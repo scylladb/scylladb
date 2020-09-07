@@ -1824,10 +1824,10 @@ storage_proxy::response_id_type storage_proxy::unique_response_handler::release(
 }
 
 future<>
-storage_proxy::mutate_locally(const mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout) {
+storage_proxy::mutate_locally(const mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout, smp_service_group smp_grp) {
     auto shard = _db.local().shard_of(m);
     get_stats().replica_cross_shard_ops += shard != this_shard_id();
-    return _db.invoke_on(shard, {_write_smp_service_group, timeout},
+    return _db.invoke_on(shard, {smp_grp, timeout},
             [s = global_schema_ptr(m.schema()),
              m = freeze(m),
              gtr = tracing::global_trace_state_ptr(std::move(tr_state)),
@@ -1838,24 +1838,29 @@ storage_proxy::mutate_locally(const mutation& m, tracing::trace_state_ptr tr_sta
 }
 
 future<>
-storage_proxy::mutate_locally(const schema_ptr& s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout) {
+storage_proxy::mutate_locally(const schema_ptr& s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout,
+        smp_service_group smp_grp) {
     auto shard = _db.local().shard_of(m);
     get_stats().replica_cross_shard_ops += shard != this_shard_id();
-    return _db.invoke_on(shard, {_write_smp_service_group, timeout},
+    return _db.invoke_on(shard, {smp_grp, timeout},
             [&m, gs = global_schema_ptr(s), gtr = tracing::global_trace_state_ptr(std::move(tr_state)), timeout, sync] (database& db) mutable -> future<> {
         return db.apply(gs, m, gtr.get(), sync, timeout);
     });
 }
 
 future<>
-storage_proxy::mutate_locally(std::vector<mutation> mutations, tracing::trace_state_ptr tr_state, clock_type::time_point timeout) {
-    return do_with(std::move(mutations), [this, timeout, tr_state = std::move(tr_state)] (std::vector<mutation>& pmut) mutable {
-        return parallel_for_each(pmut.begin(), pmut.end(), [this, tr_state = std::move(tr_state), timeout] (const mutation& m) mutable {
-            return mutate_locally(m, tr_state, db::commitlog::force_sync::no, timeout);
+storage_proxy::mutate_locally(std::vector<mutation> mutations, tracing::trace_state_ptr tr_state, clock_type::time_point timeout, smp_service_group smp_grp) {
+    return do_with(std::move(mutations), [this, timeout, tr_state = std::move(tr_state), smp_grp] (std::vector<mutation>& pmut) mutable {
+        return parallel_for_each(pmut.begin(), pmut.end(), [this, tr_state = std::move(tr_state), timeout, smp_grp] (const mutation& m) mutable {
+            return mutate_locally(m, tr_state, db::commitlog::force_sync::no, timeout, smp_grp);
         });
     });
 }
 
+future<> 
+storage_proxy::mutate_locally(std::vector<mutation> mutation, tracing::trace_state_ptr tr_state, clock_type::time_point timeout) {
+        return mutate_locally(std::move(mutation), tr_state, timeout, _write_smp_service_group);
+}
 future<>
 storage_proxy::mutate_hint(const schema_ptr& s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, clock_type::time_point timeout) {
     auto shard = _db.local().shard_of(m);
@@ -4862,7 +4867,7 @@ void storage_proxy::init_messaging_service() {
         });
     };
 
-    auto receive_mutation_handler = [] (const rpc::client_info& cinfo, rpc::opt_time_point t, frozen_mutation in, std::vector<gms::inet_address> forward,
+    auto receive_mutation_handler = [] (smp_service_group smp_grp, const rpc::client_info& cinfo, rpc::opt_time_point t, frozen_mutation in, std::vector<gms::inet_address> forward,
             gms::inet_address reply_to, unsigned shard, storage_proxy::response_id_type response_id, rpc::optional<std::optional<tracing::trace_info>> trace_info) {
         tracing::trace_state_ptr trace_state_ptr;
         auto src_addr = netw::messaging_service::get_source(cinfo);
@@ -4870,9 +4875,9 @@ void storage_proxy::init_messaging_service() {
         utils::UUID schema_version = in.schema_version();
         return handle_write(src_addr, t, schema_version, std::move(in), std::move(forward), reply_to, shard, response_id,
                 trace_info ? *trace_info : std::nullopt,
-                /* apply_fn */ [] (shared_ptr<storage_proxy>& p, tracing::trace_state_ptr tr_state, schema_ptr s, const frozen_mutation& m,
+                /* apply_fn */ [smp_grp] (shared_ptr<storage_proxy>& p, tracing::trace_state_ptr tr_state, schema_ptr s, const frozen_mutation& m,
                         clock_type::time_point timeout) {
-                    return p->mutate_locally(std::move(s), m, std::move(tr_state), db::commitlog::force_sync::no, timeout);
+                    return p->mutate_locally(std::move(s), m, std::move(tr_state), db::commitlog::force_sync::no, timeout, smp_grp);
                 },
                 /* forward_fn */ [] (shared_ptr<storage_proxy>& p, netw::messaging_service::msg_addr addr, clock_type::time_point timeout, const frozen_mutation& m,
                         gms::inet_address reply_to, unsigned shard, response_id_type response_id,
@@ -4880,8 +4885,8 @@ void storage_proxy::init_messaging_service() {
                     return p->_messaging.send_mutation(addr, timeout, m, {}, reply_to, shard, response_id, std::move(trace_info));
                 });
     };
-    ms.register_mutation(receive_mutation_handler);
-    ms.register_hint_mutation(receive_mutation_handler);
+    ms.register_mutation(std::bind_front<>(receive_mutation_handler, _write_smp_service_group));
+    ms.register_hint_mutation(std::bind_front<>(receive_mutation_handler, _hints_write_smp_service_group));
 
     ms.register_paxos_learn([] (const rpc::client_info& cinfo, rpc::opt_time_point t, paxos::proposal decision,
             std::vector<gms::inet_address> forward, gms::inet_address reply_to, unsigned shard,
