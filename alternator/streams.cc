@@ -24,6 +24,8 @@
 #include <boost/io/ios_state.hpp>
 #include <boost/multiprecision/cpp_int.hpp>
 
+#include <seastar/json/formatter.hh>
+
 #include "base64.hh"
 #include "log.hh"
 #include "database.hh"
@@ -88,6 +90,21 @@ template<typename ValueType>
 struct rapidjson::internal::TypeHelper<ValueType, utils::UUID>
     : public from_string_helper<ValueType, utils::UUID>
 {};
+
+/**
+ * Note: scylla tables do not have a timestamp as such, 
+ * but the UUID (for newly created tables at least) is 
+ * a timeuuid, so we can use this to fake creation timestamp
+ */
+static sstring stream_label(const schema& log_schema) {
+    auto& uuid = log_schema.id();
+    auto ms = utils::UUID_gen::get_adjusted_timestamp(uuid);
+    std::chrono::system_clock::time_point ts{std::chrono::milliseconds(ms)};
+    auto tt = std::chrono::system_clock::to_time_t(ts);
+    struct tm tm;
+    ::localtime_r(&tt, &tm);
+    return seastar::json::formatter::to_json(tm);
+}
 
 namespace alternator {
 
@@ -188,7 +205,7 @@ future<alternator::executor::request_return_type> alternator::executor::list_str
 
             last = i->first;
             rjson::set(new_entry, "StreamArn", *last);
-            rjson::set(new_entry, "StreamLabel", rjson::from_string(ks_name + "." + cf_name));
+            rjson::set(new_entry, "StreamLabel", rjson::from_string(stream_label(*s)));
             rjson::set(new_entry, "TableName", rjson::from_string(cdc::base_name(table_name(*s))));
             rjson::push_back(streams, std::move(new_entry));
 
