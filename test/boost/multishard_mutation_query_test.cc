@@ -66,7 +66,7 @@ static void require_eventually_empty_caches(distributed<database>& db,
     auto aggregated_population_is_zero = [&] () mutable {
         return aggregate_querier_cache_stat(db, &query::querier_cache::stats::population) == 0;
     };
-    BOOST_REQUIRE(eventually_true(aggregated_population_is_zero));
+    tests::require(eventually_true(aggregated_population_is_zero));
 }
 
 // Best run with SMP>=2
@@ -112,7 +112,7 @@ static std::vector<mutation> read_all_partitions_one_by_one(distributed<database
             });
         }).get0();
 
-        BOOST_REQUIRE_EQUAL(res->partitions().size(), 1);
+        tests::require_equal(res->partitions().size(), 1u);
         results.emplace_back(res->partitions().front().mut().unfreeze(s));
     }
 
@@ -180,7 +180,7 @@ read_partitions_with_paged_scan(distributed<database>& db, schema_ptr s, uint32_
         auto res = std::get<0>(query_mutations_on_all_shards(db, s, cmd, {pkrange}, nullptr, db::no_timeout).get0());
 
         if (is_stateful) {
-            BOOST_REQUIRE(aggregate_querier_cache_stat(db, &query::querier_cache::stats::lookups) >= npages);
+            tests::require(aggregate_querier_cache_stat(db, &query::querier_cache::stats::lookups) >= npages);
         }
 
         if (!res->partitions().empty()) {
@@ -221,7 +221,7 @@ read_all_partitions_with_paged_scan(distributed<database>& db, schema_ptr s, uin
 }
 
 void check_results_are_equal(std::vector<mutation>& results1, std::vector<mutation>& results2) {
-    BOOST_REQUIRE_EQUAL(results1.size(), results2.size());
+    tests::require_equal(results1.size(), results2.size());
 
     auto mut_less = [] (const mutation& a, const mutation& b) {
         return a.decorated_key().less_compare(*a.schema(), b.decorated_key());
@@ -251,17 +251,17 @@ SEASTAR_THREAD_TEST_CASE(test_read_all) {
         // Then do a paged range-query, with reader caching
         auto results2 = read_all_partitions_with_paged_scan(env.db(), s, 4, stateful_query::yes, [&] (size_t) {
             check_cache_population(env.db(), 1);
-            BOOST_REQUIRE_EQUAL(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::drops), 0);
-            BOOST_REQUIRE_EQUAL(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::misses), 0);
+            tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::drops), 0u);
+            tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::misses), 0u);
         }).first;
 
         check_results_are_equal(results1, results2);
 
-        BOOST_REQUIRE_EQUAL(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::drops), 0);
-        BOOST_REQUIRE_EQUAL(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::misses), 0);
-        BOOST_REQUIRE_EQUAL(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::time_based_evictions), 0);
-        BOOST_REQUIRE_EQUAL(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::resource_based_evictions), 0);
-        BOOST_REQUIRE_EQUAL(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::memory_based_evictions), 0);
+        tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::drops), 0u);
+        tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::misses), 0u);
+        tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::time_based_evictions), 0u);
+        tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::resource_based_evictions), 0u);
+        tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::memory_based_evictions), 0u);
 
         require_eventually_empty_caches(env.db());
 
@@ -298,16 +298,16 @@ SEASTAR_THREAD_TEST_CASE(test_evict_a_shard_reader_on_each_page) {
                 db.get_querier_cache().evict_one();
             }).get();
 
-            BOOST_REQUIRE_EQUAL(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::drops), 0);
-            BOOST_REQUIRE_EQUAL(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::misses), page);
+            tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::drops), 0u);
+            tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::misses), page);
         });
 
         check_results_are_equal(results1, results2);
 
-        BOOST_REQUIRE_EQUAL(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::drops), 0);
-        BOOST_REQUIRE_EQUAL(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::time_based_evictions), 0);
-        BOOST_REQUIRE_EQUAL(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::resource_based_evictions), npages);
-        BOOST_REQUIRE_EQUAL(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::memory_based_evictions), 0);
+        tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::drops), 0u);
+        tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::time_based_evictions), 0u);
+        tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::resource_based_evictions), npages);
+        tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::memory_based_evictions), 0u);
 
         require_eventually_empty_caches(env.db());
 
