@@ -92,11 +92,12 @@ def wait_for_active_stream(dynamodbstreams, table, timeout=60):
     while time.process_time() < exp:
         streams = dynamodbstreams.list_streams(TableName=table.name)
         for stream in streams['Streams']:
-            desc = dynamodbstreams.describe_stream(StreamArn=stream['StreamArn'])['StreamDescription']
+            arn = stream['StreamArn']
+            if arn == None:
+                continue
+            desc = dynamodbstreams.describe_stream(StreamArn=arn)['StreamDescription']
             if not 'StreamStatus' in desc or desc.get('StreamStatus') == 'ENABLED':
-                arn = stream['StreamArn']
-                if arn != None:
-                    return arn;
+                return (arn, stream['StreamLabel']);
         # real dynamo takes some time until a stream is usable
         print("Stream not available. Sleep 5s...")
         time.sleep(5)
@@ -203,9 +204,13 @@ def test_describe_stream(dynamodb, dynamodbstreams):
         assert desc['StreamDescription']['Shards'][0].get('ShardId')
         assert desc['StreamDescription']['Shards'][0].get('SequenceNumberRange')
         assert desc['StreamDescription']['Shards'][0]['SequenceNumberRange'].get('StartingSequenceNumber')
+        # We don't know what the sequence number is supposed to be, but the
+        # DynamoDB documentation requires that it contains only numeric
+        # characters and some libraries rely on this. Reproduces issue #7158:
+        assert desc['StreamDescription']['Shards'][0]['SequenceNumberRange']['StartingSequenceNumber'].isdecimal()
 
-@pytest.mark.xfail(reason="alternator does not have creation time or label for streams")
-def test_describe_stream(dynamodb, dynamodbstreams):
+@pytest.mark.xfail(reason="alternator does not have creation time on streams")
+def test_describe_stream_create_time(dynamodb, dynamodbstreams):
     with create_stream_test_table(dynamodb, StreamViewType='KEYS_ONLY') as table:
         streams = dynamodbstreams.list_streams(TableName=table.name)
         arn = streams['Streams'][0]['StreamArn'];
@@ -213,7 +218,6 @@ def test_describe_stream(dynamodb, dynamodbstreams):
         assert desc;
         assert desc.get('StreamDescription')
         # note these are non-required attributes
-        assert 'StreamLabel' in desc['StreamDescription']
         assert 'CreationRequestDateTime' in desc['StreamDescription']
 
 def test_describe_nonexistent_stream(dynamodb, dynamodbstreams):
@@ -289,7 +293,7 @@ def test_get_shard_iterator(dynamodb, dynamodbstreams):
 
 def test_get_shard_iterator_for_nonexistent_stream(dynamodb, dynamodbstreams):
     with create_stream_test_table(dynamodb, StreamViewType='KEYS_ONLY') as table:
-        arn = wait_for_active_stream(dynamodbstreams, table)
+        (arn, label) = wait_for_active_stream(dynamodbstreams, table)
         desc = dynamodbstreams.describe_stream(StreamArn=arn)
         shards = desc['StreamDescription']['Shards']
         with pytest.raises(ClientError, match='ResourceNotFoundException' if is_local_java(dynamodbstreams) else 'ValidationException'):
@@ -309,7 +313,7 @@ def test_get_shard_iterator_for_nonexistent_shard(dynamodb, dynamodbstreams):
 def test_get_records(dynamodb, dynamodbstreams):
     # TODO: add tests for storage/transactionable variations and global/local index
     with create_stream_test_table(dynamodb, StreamViewType='NEW_AND_OLD_IMAGES') as table:
-        arn = wait_for_active_stream(dynamodbstreams, table)
+        (arn, label) = wait_for_active_stream(dynamodbstreams, table)
 
         p = 'piglet'
         c = 'ninja'
@@ -431,7 +435,7 @@ def create_table_ss(dynamodb, dynamodbstreams, type):
         KeySchema=[{ 'AttributeName': 'p', 'KeyType': 'HASH' }, { 'AttributeName': 'c', 'KeyType': 'RANGE' }],
         AttributeDefinitions=[{ 'AttributeName': 'p', 'AttributeType': 'S' }, { 'AttributeName': 'c', 'AttributeType': 'S' }],
         StreamSpecification={ 'StreamEnabled': True, 'StreamViewType': type })
-    arn = wait_for_active_stream(dynamodbstreams, table, timeout=60)
+    (arn, label) = wait_for_active_stream(dynamodbstreams, table, timeout=60)
     yield table, arn
     table.delete()
 
@@ -563,11 +567,16 @@ def compare_events(expected_events, output, mode):
         if expected_type != '*': # hack to allow a caller to not test op, to bypass issue #6918.
             assert op == expected_type
         assert record['StreamViewType'] == mode
-        # Check that all the expected members appear in the record, even if
-        # we don't have anything to compare them to (TODO: we should probably
-        # at least check they have proper format).
+        # We don't know what ApproximateCreationDateTime should be, but we do
+        # know it needs to be a timestamp - there is conflicting documentation
+        # in what format (ISO 8601?). In any case, boto3 parses this timestamp
+        # for us, so we can't check it here, beyond checking it exists.
         assert 'ApproximateCreationDateTime' in record
+        # We don't know what SequenceNumber is supposed to be, but the DynamoDB
+        # documentation requires that it contains only numeric characters and
+        # some libraries rely on this. This reproduces issue #7158:
         assert 'SequenceNumber' in record
+        assert record['SequenceNumber'].isdecimal()
         # Alternator doesn't set the SizeBytes member. Issue #6931.
         #assert 'SizeBytes' in record
         if mode == 'KEYS_ONLY':
@@ -745,7 +754,7 @@ def test_table_ss_old_image_and_lsi(dynamodb, dynamodbstreams):
             'Projection': { 'ProjectionType': 'ALL' }
         }],
         StreamSpecification={ 'StreamEnabled': True, 'StreamViewType': 'OLD_IMAGE' })
-    arn = wait_for_active_stream(dynamodbstreams, table, timeout=60)
+    (arn, label) = wait_for_active_stream(dynamodbstreams, table, timeout=60)
     yield table, arn
     table.delete()
 
@@ -1125,6 +1134,103 @@ def test_streams_1_old_image(test_table_ss_old_image, dynamodbstreams):
 @pytest.mark.xfail(reason="Currently fails - because of multiple issues listed above")
 def test_streams_1_new_and_old_images(test_table_ss_new_and_old_images, dynamodbstreams):
     do_test(test_table_ss_new_and_old_images, dynamodbstreams, do_updates_1, 'NEW_AND_OLD_IMAGES')
+
+# A fixture which creates a test table with a stream enabled, and returns a
+# bunch of interesting information collected from the CreateTable response.
+# This fixture is session-scoped - it can be shared by multiple tests below,
+# because we are not going to actually use or change this stream, we will
+# just do multiple tests on its setup.
+@pytest.fixture(scope="session")
+def test_table_stream_with_result(dynamodb, dynamodbstreams):
+    tablename = test_table_name()
+    result = dynamodb.meta.client.create_table(TableName=tablename,
+        BillingMode='PAY_PER_REQUEST',
+        StreamSpecification={'StreamEnabled': True, 'StreamViewType': 'KEYS_ONLY'},
+        KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                    { 'AttributeName': 'c', 'KeyType': 'RANGE' }
+        ],
+        AttributeDefinitions=[
+                    { 'AttributeName': 'p', 'AttributeType': 'S' },
+                    { 'AttributeName': 'c', 'AttributeType': 'S' },
+        ])
+    waiter = dynamodb.meta.client.get_waiter('table_exists')
+    waiter.config.delay = 1
+    waiter.config.max_attempts = 200
+    waiter.wait(TableName=tablename)
+    table = dynamodb.Table(tablename)
+    yield result, table
+    while True:
+        try:
+            table.delete()
+            return
+        except ClientError as ce:
+            # if the table has a stream currently being created we cannot
+            # delete the table immediately. Again, only with real dynamo
+            if ce.response['Error']['Code'] == 'ResourceInUseException':
+                print('Could not delete table yet. Sleeping 5s.')
+                time.sleep(5)
+                continue;
+            raise
+
+# Test that in a table with Streams enabled, LatestStreamArn is returned
+# by CreateTable, DescribeTable and UpdateTable, and is the same ARN as
+# returned by ListStreams. Reproduces issue #7157.
+def test_latest_stream_arn(test_table_stream_with_result, dynamodbstreams):
+    (result, table) = test_table_stream_with_result
+    assert 'LatestStreamArn' in result['TableDescription']
+    arn_in_create_table = result['TableDescription']['LatestStreamArn']
+    # Check that ListStreams returns the same stream ARN as returned
+    # by the original CreateTable
+    (arn_in_list_streams, label) = wait_for_active_stream(dynamodbstreams, table)
+    assert arn_in_create_table == arn_in_list_streams
+    # Check that DescribeTable also includes the same LatestStreamArn:
+    desc = table.meta.client.describe_table(TableName=table.name)['Table']
+    assert 'LatestStreamArn' in desc
+    assert desc['LatestStreamArn'] == arn_in_create_table
+    # Check that UpdateTable also includes the same LatestStreamArn.
+    # The "update" changes nothing (it just sets BillingMode to what it was).
+    desc = table.meta.client.update_table(TableName=table.name,
+            BillingMode='PAY_PER_REQUEST')['TableDescription']
+    assert desc['LatestStreamArn'] == arn_in_create_table
+
+# Test that in a table with Streams enabled, LatestStreamLabel is returned
+# by CreateTable, DescribeTable and UpdateTable, and is the same "label" as
+# returned by ListStreams. Reproduces issue #7162.
+def test_latest_stream_label(test_table_stream_with_result, dynamodbstreams):
+    (result, table) = test_table_stream_with_result
+    assert 'LatestStreamLabel' in result['TableDescription']
+    label_in_create_table = result['TableDescription']['LatestStreamLabel']
+    # Check that ListStreams returns the same stream label as returned
+    # by the original CreateTable
+    (arn, label) = wait_for_active_stream(dynamodbstreams, table)
+    assert label_in_create_table == label
+    # Check that DescribeTable also includes the same LatestStreamLabel:
+    desc = table.meta.client.describe_table(TableName=table.name)['Table']
+    assert 'LatestStreamLabel' in desc
+    assert desc['LatestStreamLabel'] == label_in_create_table
+    # Check that UpdateTable also includes the same LatestStreamLabel.
+    # The "update" changes nothing (it just sets BillingMode to what it was).
+    desc = table.meta.client.update_table(TableName=table.name,
+            BillingMode='PAY_PER_REQUEST')['TableDescription']
+    assert desc['LatestStreamLabel'] == label_in_create_table
+
+# Test that in a table with Streams enabled, StreamSpecification is returned
+# by CreateTable, DescribeTable and UpdateTable. Reproduces issue #7163.
+def test_stream_specification(test_table_stream_with_result, dynamodbstreams):
+    # StreamSpecification as set in test_table_stream_with_result:
+    stream_specification = {'StreamEnabled': True, 'StreamViewType': 'KEYS_ONLY'}
+    (result, table) = test_table_stream_with_result
+    assert 'StreamSpecification' in result['TableDescription']
+    assert stream_specification == result['TableDescription']['StreamSpecification']
+    # Check that DescribeTable also includes the same StreamSpecification:
+    desc = table.meta.client.describe_table(TableName=table.name)['Table']
+    assert 'StreamSpecification' in desc
+    assert stream_specification == desc['StreamSpecification']
+    # Check that UpdateTable also includes the same StreamSpecification.
+    # The "update" changes nothing (it just sets BillingMode to what it was).
+    desc = table.meta.client.update_table(TableName=table.name,
+            BillingMode='PAY_PER_REQUEST')['TableDescription']
+    assert stream_specification == desc['StreamSpecification']
 
 # TODO: tests on multiple partitions
 # TODO: write a test that disabling the stream and re-enabling it works, but
