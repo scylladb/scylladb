@@ -422,8 +422,8 @@ flat_mutation_reader_from_mutations(std::vector<mutation> mutations, const dht::
             }
         }
         void prepare_next_range_tombstone() {
-            auto& rts = _cur->partition().row_tombstones().tombstones();
-            auto rt = rts.unlink_leftmost_without_rebalance();
+            auto& rts = _cur->partition().row_tombstones();
+            auto rt = rts.pop_front_and_lock();
             if (rt) {
                 auto rt_deleter = defer([rt] { current_deleter<range_tombstone>()(rt); });
                 _rt = mutation_fragment(std::move(*rt));
@@ -480,11 +480,11 @@ flat_mutation_reader_from_mutations(std::vector<mutation> mutations, const dht::
                 re = crs.unlink_leftmost_without_rebalance();
             }
 
-            auto &rts = _cur->partition().row_tombstones().tombstones();
-            auto rt = rts.unlink_leftmost_without_rebalance();
+            auto &rts = _cur->partition().row_tombstones();
+            auto rt = rts.pop_front_and_lock();
             while (rt) {
                 current_deleter<range_tombstone>()(rt);
-                rt = rts.unlink_leftmost_without_rebalance();
+                rt = rts.pop_front_and_lock();
             }
         }
         struct cmp {

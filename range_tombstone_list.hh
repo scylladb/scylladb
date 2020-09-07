@@ -166,6 +166,12 @@ public:
     // Returns range tombstones which overlap with [start, end)
     boost::iterator_range<const_iterator> slice(const schema& s, position_in_partition_view start, position_in_partition_view end) const;
     iterator erase(const_iterator, const_iterator);
+
+    // Pops the first element and bans (in theory) further additions
+    range_tombstone* pop_front_and_lock() {
+        return _tombstones.unlink_leftmost_without_rebalance();
+    }
+
     // Ensures that every range tombstone is strictly contained within given clustering ranges.
     // Preserves all information which may be relevant for rows from that ranges.
     void trim(const schema& s, const query::clustering_row_ranges&);
