@@ -45,6 +45,8 @@ shared_ptr<abstract_command> command_factory::create(service::storage_proxy& pro
         { "lolwut", [] (service::storage_proxy& proxy, request&& req) { return commands::lolwut::prepare(proxy, std::move(req)); } },
         { "hget", [] (service::storage_proxy& proxy, request&& req) { return commands::hget::prepare(proxy, std::move(req)); } },
         { "hset", [] (service::storage_proxy& proxy, request&& req) { return commands::hset::prepare(proxy, std::move(req)); } },
+        { "hgetall", [] (service::storage_proxy& proxy, request&& req) { return commands::hgetall::prepare(proxy, std::move(req)); } },
+        { "hdel", [] (service::storage_proxy& proxy, request&& req) { return commands::hdel::prepare(proxy, std::move(req)); } },
     };
     auto&& command = _commands.find(req._command);
     if (command != _commands.end()) {

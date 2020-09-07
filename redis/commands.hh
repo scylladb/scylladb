@@ -70,6 +70,17 @@ public:
     virtual future<redis_message> execute(service::storage_proxy&, redis_options&, service_permit) override;
 };
 
+class hgetall : public abstract_command {
+    bytes _key;
+public:
+    static shared_ptr<abstract_command> prepare(service::storage_proxy& proxy, request&& req);
+    hgetall(bytes&& name, bytes&& key)
+        : abstract_command(std::move(name))
+        , _key(std::move(key)) {
+    }
+    virtual future<redis_message> execute(service::storage_proxy&, redis_options&, service_permit) override;
+};
+
 class hget : public abstract_command {
     bytes _key;
     bytes _field;
@@ -94,6 +105,19 @@ public:
         , _key(std::move(key))
         , _field(std::move(field))
         , _data(std::move(data)) {
+    }
+    virtual future<redis_message> execute(service::storage_proxy&, redis_options&, service_permit) override;
+};
+
+class hdel : public abstract_command {
+    bytes _key;
+    std::vector<bytes> _fields;
+public:
+    static shared_ptr<abstract_command> prepare(service::storage_proxy& proxy, request&& req);
+    hdel(bytes&& name, bytes&& key, std::vector<bytes>&& fields)
+        : abstract_command(std::move(name))
+        , _key(std::move(key))
+        , _fields(std::move(fields)) {
     }
     virtual future<redis_message> execute(service::storage_proxy&, redis_options&, service_permit) override;
 };

@@ -73,6 +73,15 @@ public:
         m->append(sprint(":%zu\r\n", n));
         return make_ready_future<redis_message>(m);
     }
+    static future<redis_message> make_list_result(std::map<bytes, bytes>& list_result) {
+        auto m = make_lw_shared<scattered_message<char>> ();
+        m->append(sprint("*%u\r\n", list_result.size() * 2));
+        for (auto r : list_result) {
+            write_bytes(m, (bytes&)r.first);
+            write_bytes(m, r.second);
+        }
+        return make_ready_future<redis_message>(m);
+    }
     static future<redis_message> make_strings_result(bytes result) {
         auto m = make_lw_shared<scattered_message<char>> ();
         write_bytes(m, result);

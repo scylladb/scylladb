@@ -107,4 +107,21 @@ future<> delete_objects(service::storage_proxy& proxy, redis::redis_options& opt
     return parallel_for_each(tables.begin(), tables.end(), remove);
 }
 
+future<> delete_fields(service::storage_proxy& proxy, redis::redis_options& options, bytes&& key, std::vector<bytes>&& fields, service_permit permit) {
+    db::timeout_clock::time_point timeout = db::timeout_clock::now() + options.get_write_timeout();
+    auto write_consistency_level = options.get_write_consistency_level();
+    auto schema = get_schema(proxy, options.get_keyspace_name(), redis::HASHes);
+    auto pkey = partition_key::from_single_value(*schema, key);
+    auto ts = api::new_timestamp();
+    auto clk = gc_clock::now();
+    std::vector<mutation> mutations;
+    for (auto& field : fields) {
+        auto ckey = clustering_key::from_single_value(*schema, field);
+        auto m = mutation(schema, pkey);
+        m.partition().apply_delete(*schema, ckey, tombstone { ts, clk });
+        mutations.push_back(m);
+    }
+    return proxy.mutate(mutations, write_consistency_level, timeout, nullptr, permit);
+}
+
 }

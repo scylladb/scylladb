@@ -30,6 +30,7 @@
 #include "redis/query_utils.hh"
 #include "redis/mutation_utils.hh"
 #include "redis/lolwut.hh"
+#include "redis/keyspace_utils.hh"
 
 namespace redis {
 
@@ -110,6 +111,23 @@ future<redis_message> strlen::execute(service::storage_proxy& proxy, redis::redi
     });
 }
 
+shared_ptr<abstract_command> hgetall::prepare(service::storage_proxy& proxy, request&& req) {
+    if (req.arguments_size() != 1) {
+        throw wrong_number_of_arguments_exception(req._command);
+    }
+    return seastar::make_shared<hgetall> (std::move(req._command), std::move(req._args[0]));
+}
+
+future<redis_message> hgetall::execute(service::storage_proxy& proxy, redis::redis_options& options, service_permit permit) {
+    return redis::read_hashes(proxy, options, _key, permit).then([] (auto result) {
+        if (!result->empty()) {
+            return redis_message::make_list_result(*result);
+        }
+        // return nil string if key does not exist
+        return redis_message::nil();
+    });
+}
+
 shared_ptr<abstract_command> hget::prepare(service::storage_proxy& proxy, request&& req) {
     if (req.arguments_size() != 2) {
         throw wrong_arguments_exception(2, req.arguments_size(), req._command);
@@ -118,9 +136,9 @@ shared_ptr<abstract_command> hget::prepare(service::storage_proxy& proxy, reques
 }
 
 future<redis_message> hget::execute(service::storage_proxy& proxy, redis::redis_options& options, service_permit permit) {
-    return redis::read_strings_from_hash(proxy, options, _key, _field, permit).then([] (auto result) {
-        if (result->has_result()) {
-            return redis_message::make_strings_result(std::move(result->result()));
+    return redis::read_hashes(proxy, options, _key, _field, permit).then([this] (auto result) {
+        if (!result->empty()) {
+            return redis_message::make_strings_result(std::move(result->at(_field)));
         }
         // return nil string if key does not exist
         return redis_message::nil();
@@ -137,6 +155,21 @@ shared_ptr<abstract_command> hset::prepare(service::storage_proxy& proxy, reques
 future<redis_message> hset::execute(service::storage_proxy& proxy, redis::redis_options& options, service_permit permit) {
     return redis::write_hashes(proxy, options, std::move(_key), std::move(_field), std::move(_data), 0, permit).then([] {
         return redis_message::one();
+    });
+}
+
+shared_ptr<abstract_command> hdel::prepare(service::storage_proxy& proxy, request&& req) {
+    if (req.arguments_size() < 2) {
+        throw wrong_number_of_arguments_exception(req._command);
+    }
+    return seastar::make_shared<hdel> (std::move(req._command), std::move(req._args[0]), std::vector<bytes>(req._args.begin() + 1, req._args.end()));
+}
+
+future<redis_message> hdel::execute(service::storage_proxy& proxy, redis::redis_options& options, service_permit permit) {
+    //FIXME: We should return the count of the actually deleted fields.
+    auto size = _fields.size();
+    return redis::delete_fields(proxy, options, std::move(_key), std::move(_fields), permit).then([size] {
+        return redis_message::number(size);
     });
 }
 

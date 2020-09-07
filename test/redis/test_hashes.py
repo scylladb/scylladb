@@ -29,17 +29,13 @@ def test_hset_hget_delete(redis_host, redis_port):
     val = random_string(10)
     other_val = random_string(10)
 
-    try:
+    with pytest.raises(redis.exceptions.ResponseError) as excinfo:
         r.execute_command("HSET testkey")
-        raise Exception('Expect that `HSET testkey` does not work')
-    except redis.exceptions.ResponseError as ex:
-        assert str(ex) == "wrong number of arguments for 'hset' command"
+    assert "wrong number of arguments for 'hset' command" in str(excinfo.value)
 
-    try:
+    with pytest.raises(redis.exceptions.ResponseError) as excinfo:
         r.execute_command("HSET testkey testfield")
-        raise Exception('Expect that `HSET testkey testfield` does not work')
-    except redis.exceptions.ResponseError as ex:
-        assert str(ex) == "wrong number of arguments for 'hset' command"
+    assert "wrong number of arguments for 'hset' command" in str(excinfo.value)
 
     assert r.hset(key, field, val) == 1
     assert r.hget(key, field) == val
@@ -85,3 +81,77 @@ def test_hget_nonexistent_key(redis_host, redis_port):
     field = random_string(10)
 
     assert r.hget(key, field) == None
+
+def test_hset_hdel_hgetall(redis_host, redis_port):
+    r = connect(redis_host, redis_port)
+    key = random_string(10)
+    field = random_string(10)
+    val = random_string(10)
+    other_field = random_string(10)
+    other_val = random_string(10)
+
+    # Check result is empty
+    assert r.hgetall(key) == {}
+
+    # Set 2 key/field and test hgetall
+    assert r.hset(key, field, val) == 1
+    assert r.hset(key, other_field, other_val) == 1
+    assert r.hgetall(key) == {field: val, other_field: other_val}
+
+    # Delete 1 key/field and check removal with hgetall
+    assert r.hdel(key, field) == 1
+    assert r.hgetall(key) == {other_field: other_val}
+
+    # Delete another key/field and check removal with hgetall
+    assert r.hdel(key, other_field) == 1
+    assert r.hgetall(key) == {}
+
+    with pytest.raises(redis.exceptions.ResponseError) as excinfo:
+        r.execute_command("HGETALL testkey testfield")
+    assert "wrong number of arguments for 'hgetall' command" in str(excinfo.value)
+
+@pytest.mark.xfail(reason="HDEL command does not support return of changes, it always return 1")
+def test_hdel_return_changes(redis_host, redis_port):
+    r = connect(redis_host, redis_port)
+    key = random_string(10)
+    field = random_string(10)
+    val = random_string(10)
+
+    assert r.hset(key, field, val) == 1
+    assert r.hdel(key, field) == 1
+    assert r.hdel(key, field) == 0
+
+def test_hdel_several_keys(redis_host, redis_port):
+    r = connect(redis_host, redis_port)
+    key = random_string(10)
+    field1 = random_string(10)
+    val1 = random_string(10)
+    field2 = random_string(10)
+    val2 = random_string(10)
+    field3 = random_string(10)
+    val3 = random_string(10)
+
+    # Set 2 key/field
+    assert r.hset(key, field1, val1) == 1
+    assert r.hset(key, field2, val2) == 1
+    assert r.hset(key, field3, val3) == 1
+
+    # Delete 2 of them
+    assert r.hdel(key, field1, field3) == 2
+
+    # Check the remaining item
+    assert r.hgetall(key) == {field2: val2}
+
+def test_delete_hash(redis_host, redis_port):
+    r = connect(redis_host, redis_port)
+    key = random_string(10)
+    field = random_string(10)
+    val = random_string(10)
+    field2 = random_string(10)
+    val2 = random_string(10)
+
+    assert r.hset(key, field, val) == 1
+    assert r.hset(key, field2, val2) == 1
+    assert r.hgetall(key) == {field: val, field2: val2}
+    assert r.delete(key) == 1
+    assert r.hgetall(key) == {}

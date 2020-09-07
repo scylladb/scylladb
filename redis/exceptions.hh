@@ -54,7 +54,7 @@ public:
 
 class invalid_arguments_exception : public redis_exception {
 public:
-    invalid_arguments_exception(const bytes& command) : redis_exception(sprint("invalid argument for '%s' command", command)) {}
+    invalid_arguments_exception(const bytes& command) : redis_exception(sprint("invalid argument for '%s' command", sstring(reinterpret_cast<const char*>(command.data()), command.size()))) {}
 };
 
 class invalid_db_index_exception : public redis_exception {
