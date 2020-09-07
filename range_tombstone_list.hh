@@ -112,9 +112,6 @@ public:
     bool empty() const {
         return _tombstones.empty();
     }
-    range_tombstones_type& tombstones() {
-        return _tombstones;
-    }
     auto begin() {
         return _tombstones.begin();
     }
