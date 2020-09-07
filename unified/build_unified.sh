@@ -67,4 +67,4 @@ done
 ln -f unified/install.sh build/"$MODE"/unified/
 ln -f unified/uninstall.sh build/"$MODE"/unified/
 cd build/"$MODE"/unified
-tar czvpf "$UNIFIED_PKG" * .relocatable_package_version
+tar czpf "$UNIFIED_PKG" * .relocatable_package_version
