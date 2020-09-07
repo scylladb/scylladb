@@ -785,6 +785,23 @@ static future<> wait_for_schema_agreement(service::migration_manager& mm, db::ti
     });
 }
 
+static void verify_billing_mode(const rjson::value& request) {
+        // Alternator does not yet support billing or throughput limitations, but
+    // let's verify that BillingMode is at least legal.
+    std::string billing_mode = get_string_attribute(request, "BillingMode", "PROVISIONED");
+    if (billing_mode == "PAY_PER_REQUEST") {
+        if (rjson::find(request, "ProvisionedThroughput")) {
+            throw api_error::validation("When BillingMode=PAY_PER_REQUEST, ProvisionedThroughput cannot be specified.");
+        }
+    } else if (billing_mode == "PROVISIONED") {
+        if (!rjson::find(request, "ProvisionedThroughput")) {
+            throw api_error::validation("When BillingMode=PROVISIONED, ProvisionedThroughput must be specified.");
+        }
+    } else {
+        throw api_error::validation("Unknown BillingMode={}. Must be PAY_PER_REQUEST or PROVISIONED.");
+    }
+}
+
 future<executor::request_return_type> executor::create_table(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request) {
     _stats.api_operations.create_table++;
     elogger.trace("Creating table {}", request);
@@ -806,23 +823,7 @@ future<executor::request_return_type> executor::create_table(client_state& clien
     }
     builder.with_column(bytes(ATTRS_COLUMN_NAME), attrs_type(), column_kind::regular_column);
 
-    // Alternator does not yet support billing or throughput limitations, but
-    // let's verify that BillingMode is at least legal.
-    std::string billing_mode = get_string_attribute(request, "BillingMode", "PROVISIONED");
-    if (billing_mode == "PAY_PER_REQUEST") {
-        if (rjson::find(request, "ProvisionedThroughput")) {
-            return make_ready_future<request_return_type>(api_error::validation(
-                    "When BillingMode=PAY_PER_REQUEST, ProvisionedThroughput cannot be specified."));
-        }
-    } else if (billing_mode == "PROVISIONED") {
-        if (!rjson::find(request, "ProvisionedThroughput")) {
-            return make_ready_future<request_return_type>(api_error::validation(
-                    "When BillingMode=PROVISIONED, ProvisionedThroughput must be specified."));
-        }
-    } else {
-        return make_ready_future<request_return_type>(api_error::validation(
-                "Unknown BillingMode={}. Must be PAY_PER_REQUEST or PROVISIONED."));
-    }
+    verify_billing_mode(request);
 
     schema_ptr partial_schema = builder.build();
 
@@ -1030,7 +1031,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
     }
 
     static const std::vector<sstring> unsupported = {
-        "AttributeDefinitions", "BillingMode",
+        "AttributeDefinitions", 
         "GlobalSecondaryIndexUpdates", 
         "ProvisionedThroughput",
         "ReplicaUpdates",
@@ -1041,6 +1042,10 @@ future<executor::request_return_type> executor::update_table(client_state& clien
         if (rjson::find(request, s)) {
             throw api_error::validation(s + " not supported");
         }
+    }
+
+    if (rjson::find(request, "BillingMode")) {
+        verify_billing_mode(request);
     }
 
     auto schema = builder.build();
