@@ -993,6 +993,8 @@ void executor::supplement_table_stream_info(rjson::value& descr, const schema& s
         auto& cf = db.find_column_family(schema.ks_name(), cdc::log_name(schema.cf_name()));
         stream_arn arn(cf.schema()->id());
         rjson::set(descr, "LatestStreamArn", arn);
+        rjson::set(descr, "LatestStreamLabel", rjson::from_string(stream_label(*cf.schema())));
+
     }
 }
 
