@@ -21,6 +21,7 @@
 
 #pragma once
 
+#include <seastar/util/defer.hh>
 #include "range_tombstone.hh"
 #include "query-request.hh"
 #include "position_in_partition.hh"
@@ -186,6 +187,16 @@ public:
     void clear() {
         _tombstones.clear_and_dispose(current_deleter<range_tombstone>());
     }
+
+    template <typename T>
+    requires std::constructible_from<T, range_tombstone>
+    auto pop_as(iterator it) {
+        range_tombstone& rt = *it;
+        _tombstones.erase(it);
+        auto rt_deleter = seastar::defer([&rt] { current_deleter<range_tombstone>()(&rt); });
+        return T(std::move(rt));
+    }
+
     // Removes elements of this list in batches.
     // Returns stop_iteration::yes iff there is no more elements to remove.
     stop_iteration clear_gently() noexcept;

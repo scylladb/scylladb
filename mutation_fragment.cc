@@ -231,11 +231,7 @@ std::ostream& operator<<(std::ostream& os, const mutation_fragment::printer& p) 
 
 mutation_fragment_opt range_tombstone_stream::do_get_next()
 {
-    auto& rt = *_list.tombstones().begin();
-    auto mf = mutation_fragment(std::move(rt));
-    _list.tombstones().erase(_list.begin());
-    current_deleter<range_tombstone>()(&rt);
-    return mf;
+    return _list.pop_as<mutation_fragment>(_list.begin());
 }
 
 mutation_fragment_opt range_tombstone_stream::get_next(const rows_entry& re)

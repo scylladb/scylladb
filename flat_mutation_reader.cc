@@ -73,10 +73,7 @@ flat_mutation_reader make_reversing_reader(flat_mutation_reader& original, query
         stop_iteration emit_partition() {
             auto emit_range_tombstone = [&] {
                 auto it = std::prev(_range_tombstones.end());
-                auto& rt = *it;
-                _range_tombstones.tombstones().erase(it);
-                auto rt_owner = alloc_strategy_unique_ptr<range_tombstone>(&rt);
-                push_mutation_fragment(mutation_fragment(std::move(rt)));
+                push_mutation_fragment(_range_tombstones.pop_as<mutation_fragment>(it));
             };
             position_in_partition::less_compare cmp(*_schema);
             while (!_mutation_fragments.empty() && !is_buffer_full()) {
