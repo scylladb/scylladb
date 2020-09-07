@@ -31,7 +31,7 @@
 namespace query {
 
 struct noop_hasher {
-    void update(const char* ptr, size_t length) { }
+    void update(const char* ptr, size_t length) noexcept { }
     std::array<uint8_t, 16> finalize_array() { return std::array<uint8_t, 16>(); };
 };
 
@@ -55,7 +55,7 @@ public:
 
     template<typename T, typename... Args>
     void feed_hash(const T& value, Args&&... args) {
-        std::visit([&] (auto& hasher) {
+        std::visit([&] (auto& hasher) noexcept -> void {
             ::feed_hash(hasher, value, std::forward<Args>(args)...);
         }, _impl);
     };

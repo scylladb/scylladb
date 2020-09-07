@@ -40,7 +40,7 @@ public:
         XXH64_reset(&_state, seed);
     }
 
-    void update(const char* ptr, size_t length) {
+    void update(const char* ptr, size_t length) noexcept {
         XXH64_update(&_state, ptr, length);
     }
 

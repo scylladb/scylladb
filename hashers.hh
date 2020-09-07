@@ -40,7 +40,7 @@ public:
 
     bytes finalize();
     std::array<uint8_t, size> finalize_array();
-    void update(const char* ptr, size_t length) override;
+    void update(const char* ptr, size_t length) noexcept override;
 
     // Use update and finalize to compute the hash over the full view.
     static bytes calculate(const std::string_view& s);
