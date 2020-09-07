@@ -988,13 +988,27 @@ void executor::add_stream_options(const rjson::value& stream_specification, sche
 }
 
 void executor::supplement_table_stream_info(rjson::value& descr, const schema& schema) const {
-    if (schema.cdc_options().enabled()) {
+    auto& opts = schema.cdc_options();
+    if (opts.enabled()) {
         auto& db = _proxy.get_db().local();
         auto& cf = db.find_column_family(schema.ks_name(), cdc::log_name(schema.cf_name()));
         stream_arn arn(cf.schema()->id());
         rjson::set(descr, "LatestStreamArn", arn);
         rjson::set(descr, "LatestStreamLabel", rjson::from_string(stream_label(*cf.schema())));
 
+        auto stream_desc = rjson::empty_object();
+        rjson::set(stream_desc, "StreamEnabled", true);
+
+        auto mode = stream_view_type::KEYS_ONLY;
+        if (opts.preimage() && opts.postimage()) {
+            mode = stream_view_type::NEW_AND_OLD_IMAGES;
+        } else if (opts.preimage()) {
+            mode = stream_view_type::OLD_IMAGE;
+        } else if (opts.postimage()) {
+            mode = stream_view_type::NEW_IMAGE;
+        }
+        rjson::set(stream_desc, "StreamViewType", mode);
+        rjson::set(descr, "StreamSpecification", std::move(stream_desc));
     }
 }
 
