@@ -460,13 +460,13 @@ private:
         feed_hash(_hasher, cell, col);
     }
 
-    void consume_range_tombstone_start(const range_tombstone& rt) {
+    void consume_range_tombstone_start(const range_tombstone& rt) noexcept {
         feed_hash(_hasher, rt.start, _schema);
         feed_hash(_hasher, rt.start_kind);
         feed_hash(_hasher, rt.tomb);
     }
 
-    void consume_range_tombstone_end(const range_tombstone& rt) {
+    void consume_range_tombstone_end(const range_tombstone& rt) noexcept {
         feed_hash(_hasher, rt.end, _schema);
         feed_hash(_hasher, rt.end_kind);
     }
