@@ -24,7 +24,10 @@
 
 #include "reader_concurrency_semaphore.hh"
 #include "utils/exceptions.hh"
+#include <random>
 
+#include <seastar/core/sleep.hh>
+#include "exceptions/exceptions.hh"
 
 reader_permit::resource_units::resource_units(reader_concurrency_semaphore& semaphore, reader_resources res) noexcept
         : _semaphore(&semaphore), _resources(res) {
@@ -149,14 +152,33 @@ bool reader_concurrency_semaphore::try_evict_one_inactive_read() {
     return true;
 }
 
+class queue_throttler {
+    static constexpr size_t max_error_response_delay_ms = 1000;
+    size_t _severity;
+public:
+    queue_throttler(size_t current, size_t max)
+            : _severity(current > max ? current - max : 0) {}
+    bool should_throttle() {
+        static thread_local std::default_random_engine random_engine{std::random_device{}()};
+        static thread_local std::uniform_int_distribution<size_t> random_dist{0, 99};
+        return _severity > 0 && (_severity >= 100 || random_dist(random_engine) < _severity);
+    }
+    future<reader_permit::resource_units> throttle(sstring queue_name) {
+        return seastar::sleep(std::chrono::milliseconds(std::min(10 * _severity, max_error_response_delay_ms))).then([queue_name = std::move(queue_name)] {
+            return make_exception_future<reader_permit::resource_units>(
+                    std::make_exception_ptr(std::runtime_error(
+                            format("{}: restricted mutation reader queue overload", queue_name))));
+        });
+    }
+};
+
 future<reader_permit::resource_units> reader_concurrency_semaphore::do_wait_admission(size_t memory, db::timeout_clock::time_point timeout) {
-    if (_wait_list.size() >= _max_queue_length) {
+    queue_throttler throttler(_wait_list.size(), _max_queue_length);
+    if (throttler.should_throttle()) {
         if (_prethrow_action) {
             _prethrow_action();
         }
-        return make_exception_future<reader_permit::resource_units>(
-                std::make_exception_ptr(std::runtime_error(
-                        format("{}: restricted mutation reader queue overload", _name))));
+        return throttler.throttle(_name);
     }
     auto r = resources(1, static_cast<ssize_t>(memory));
     auto it = _inactive_reads.begin();
