@@ -66,6 +66,7 @@ public:
     bool full_preimage() const { return _preimage == image_mode::full; }
     bool postimage() const { return _postimage; }
     delta_mode get_delta_mode() const { return _delta_mode; }
+    void set_delta_mode(delta_mode m) { _delta_mode = m; }
     int ttl() const { return _ttl; }
 
     void enabled(bool b) { _enabled = b; }

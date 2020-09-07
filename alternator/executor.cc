@@ -87,11 +87,13 @@ std::string json_string::to_json() const {
     return _value;
 }
 
-static void supplement_table_info(rjson::value& descr, const schema& schema) {
+void executor::supplement_table_info(rjson::value& descr, const schema& schema) const {
     rjson::set(descr, "CreationDateTime", rjson::value(std::chrono::duration_cast<std::chrono::seconds>(gc_clock::now().time_since_epoch()).count()));
     rjson::set(descr, "TableStatus", "ACTIVE");
     auto schema_id_str = schema.id().to_sstring();
     rjson::set(descr, "TableId", rjson::from_string(schema_id_str));
+
+    executor::supplement_table_stream_info(descr, schema);
 }
 
 // We would have liked to support table names up to 255 bytes, like DynamoDB.
@@ -451,6 +453,8 @@ future<executor::request_return_type> executor::describe_table(client_state& cli
     }
     rjson::set(table_description, "AttributeDefinitions", std::move(attribute_definitions));
 
+    supplement_table_stream_info(table_description, *schema);
+    
     // FIXME: still missing some response fields (issue #5026)
 
     rjson::value response = rjson::empty_object();
@@ -781,6 +785,23 @@ static future<> wait_for_schema_agreement(service::migration_manager& mm, db::ti
     });
 }
 
+static void verify_billing_mode(const rjson::value& request) {
+        // Alternator does not yet support billing or throughput limitations, but
+    // let's verify that BillingMode is at least legal.
+    std::string billing_mode = get_string_attribute(request, "BillingMode", "PROVISIONED");
+    if (billing_mode == "PAY_PER_REQUEST") {
+        if (rjson::find(request, "ProvisionedThroughput")) {
+            throw api_error::validation("When BillingMode=PAY_PER_REQUEST, ProvisionedThroughput cannot be specified.");
+        }
+    } else if (billing_mode == "PROVISIONED") {
+        if (!rjson::find(request, "ProvisionedThroughput")) {
+            throw api_error::validation("When BillingMode=PROVISIONED, ProvisionedThroughput must be specified.");
+        }
+    } else {
+        throw api_error::validation("Unknown BillingMode={}. Must be PAY_PER_REQUEST or PROVISIONED.");
+    }
+}
+
 future<executor::request_return_type> executor::create_table(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request) {
     _stats.api_operations.create_table++;
     elogger.trace("Creating table {}", request);
@@ -802,23 +823,7 @@ future<executor::request_return_type> executor::create_table(client_state& clien
     }
     builder.with_column(bytes(ATTRS_COLUMN_NAME), attrs_type(), column_kind::regular_column);
 
-    // Alternator does not yet support billing or throughput limitations, but
-    // let's verify that BillingMode is at least legal.
-    std::string billing_mode = get_string_attribute(request, "BillingMode", "PROVISIONED");
-    if (billing_mode == "PAY_PER_REQUEST") {
-        if (rjson::find(request, "ProvisionedThroughput")) {
-            return make_ready_future<request_return_type>(api_error::validation(
-                    "When BillingMode=PAY_PER_REQUEST, ProvisionedThroughput cannot be specified."));
-        }
-    } else if (billing_mode == "PROVISIONED") {
-        if (!rjson::find(request, "ProvisionedThroughput")) {
-            return make_ready_future<request_return_type>(api_error::validation(
-                    "When BillingMode=PROVISIONED, ProvisionedThroughput must be specified."));
-        }
-    } else {
-        return make_ready_future<request_return_type>(api_error::validation(
-                "Unknown BillingMode={}. Must be PAY_PER_REQUEST or PROVISIONED."));
-    }
+    verify_billing_mode(request);
 
     schema_ptr partial_schema = builder.build();
 
@@ -989,7 +994,7 @@ future<executor::request_return_type> executor::create_table(client_state& clien
                 }
                 return f.then([this] {
                     return wait_for_schema_agreement(_mm, db::timeout_clock::now() + 10s);
-                }).then([table_info = std::move(table_info), schema] () mutable {
+                }).then([this, table_info = std::move(table_info), schema] () mutable {
                     rjson::value status = rjson::empty_object();
                     supplement_table_info(table_info, *schema);
                     rjson::set(status, "TableDescription", std::move(table_info));
@@ -1026,7 +1031,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
     }
 
     static const std::vector<sstring> unsupported = {
-        "AttributeDefinitions", "BillingMode",
+        "AttributeDefinitions", 
         "GlobalSecondaryIndexUpdates", 
         "ProvisionedThroughput",
         "ReplicaUpdates",
@@ -1039,11 +1044,15 @@ future<executor::request_return_type> executor::update_table(client_state& clien
         }
     }
 
+    if (rjson::find(request, "BillingMode")) {
+        verify_billing_mode(request);
+    }
+
     auto schema = builder.build();
 
     return _mm.announce_column_family_update(schema, false, {}).then([this] {
         return wait_for_schema_agreement(_mm, db::timeout_clock::now() + 10s);
-    }).then([table_info = std::move(request), schema] () mutable {
+    }).then([this, table_info = std::move(request), schema] () mutable {
         rjson::value status = rjson::empty_object();
         supplement_table_info(table_info, *schema);
         rjson::set(status, "TableDescription", std::move(table_info));

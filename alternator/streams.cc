@@ -22,6 +22,9 @@
 #include <type_traits>
 #include <boost/lexical_cast.hpp>
 #include <boost/io/ios_state.hpp>
+#include <boost/multiprecision/cpp_int.hpp>
+
+#include <seastar/json/formatter.hh>
 
 #include "base64.hh"
 #include "log.hh"
@@ -87,6 +90,21 @@ template<typename ValueType>
 struct rapidjson::internal::TypeHelper<ValueType, utils::UUID>
     : public from_string_helper<ValueType, utils::UUID>
 {};
+
+/**
+ * Note: scylla tables do not have a timestamp as such, 
+ * but the UUID (for newly created tables at least) is 
+ * a timeuuid, so we can use this to fake creation timestamp
+ */
+static sstring stream_label(const schema& log_schema) {
+    auto& uuid = log_schema.id();
+    auto ms = utils::UUID_gen::get_adjusted_timestamp(uuid);
+    std::chrono::system_clock::time_point ts{std::chrono::milliseconds(ms)};
+    auto tt = std::chrono::system_clock::to_time_t(ts);
+    struct tm tm;
+    ::localtime_r(&tt, &tm);
+    return seastar::json::formatter::to_json(tm);
+}
 
 namespace alternator {
 
@@ -187,7 +205,7 @@ future<alternator::executor::request_return_type> alternator::executor::list_str
 
             last = i->first;
             rjson::set(new_entry, "StreamArn", *last);
-            rjson::set(new_entry, "StreamLabel", rjson::from_string(ks_name + "." + cf_name));
+            rjson::set(new_entry, "StreamLabel", rjson::from_string(stream_label(*s)));
             rjson::set(new_entry, "TableName", rjson::from_string(cdc::base_name(table_name(*s))));
             rjson::push_back(streams, std::move(new_entry));
 
@@ -240,11 +258,48 @@ shard_id::shard_id(const sstring& s) {
     id = cdc::stream_id(from_hex(s.substr(j + 1)));
 }
 
+struct sequence_number {
+    utils::UUID uuid;
+
+    sequence_number(utils::UUID uuid)
+        : uuid(uuid)
+    {}
+    sequence_number(std::string_view);
+
+    operator const utils::UUID&() const {
+        return uuid;
+    }
+
+    friend std::ostream& operator<<(std::ostream& os, const sequence_number& num) {
+        boost::io::ios_flags_saver fs(os);
+
+        using namespace boost::multiprecision;
+
+        uint128_t hi = uint64_t(num.uuid.get_most_significant_bits());
+        uint128_t lo = uint64_t(num.uuid.get_least_significant_bits());
+
+        return os << std::dec << ((hi << 64) | lo);
+    }
+};
+
+sequence_number::sequence_number(std::string_view v) 
+    : uuid([&] {
+        using namespace boost::multiprecision;
+        uint128_t tmp{v};
+        return utils::UUID(uint64_t(tmp >> 64), uint64_t(tmp & std::numeric_limits<uint64_t>::max()));
+    }())
+{}
+
 }
 
 template<typename ValueType>
 struct rapidjson::internal::TypeHelper<ValueType, alternator::shard_id>
     : public from_string_helper<ValueType, alternator::shard_id>
+{};
+
+template<typename ValueType>
+struct rapidjson::internal::TypeHelper<ValueType, alternator::sequence_number>
+    : public from_string_helper<ValueType, alternator::sequence_number>
 {};
 
 namespace alternator {
@@ -438,6 +493,9 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
 
         for (; limit > 0 && i != e; prev = i, ++i) {
             auto& [ts, sv] = *i;
+
+            last = std::nullopt;
+
             for (auto& id : sv.streams()) {
                 if (shard_start && shard_start->id != id) {
                     continue;
@@ -464,9 +522,9 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
                 rjson::set(shard, "ShardId", *last);
 
                 auto range = rjson::empty_object();
-                rjson::set(range, "StartingSequenceNumber", utils::UUID_gen::min_time_UUID(ts.time_since_epoch().count()));
+                rjson::set(range, "StartingSequenceNumber", sequence_number(utils::UUID_gen::min_time_UUID(ts.time_since_epoch().count())));
                 if (sv.expired() && *sv.expired() < threshold) {
-                    rjson::set(range, "EndingSequenceNumber", utils::UUID_gen::max_time_UUID((*sv.expired() + confidence_interval(db)).time_since_epoch().count()));
+                    rjson::set(range, "EndingSequenceNumber", sequence_number(utils::UUID_gen::max_time_UUID((*sv.expired() + confidence_interval(db)).time_since_epoch().count())));
                 }
 
                 rjson::set(shard, "SequenceNumberRange", std::move(range));
@@ -476,6 +534,7 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
                     break;
                 }
 
+                last = std::nullopt;
             }
         }
 
@@ -587,7 +646,7 @@ future<executor::request_return_type> executor::get_shard_iterator(client_state&
     _stats.api_operations.get_shard_iterator++;
 
     auto type = rjson::get<shard_iterator_type>(request, "ShardIteratorType");
-    auto seq_num = rjson::get_opt<utils::UUID>(request, "SequenceNumber");
+    auto seq_num = rjson::get_opt<sequence_number>(request, "SequenceNumber");
     
     if (type < shard_iterator_type::TRIM_HORIZON && !seq_num) {
         throw api_error::validation("Missing required parameter \"SequenceNumber\"");
@@ -807,7 +866,7 @@ future<executor::request_return_type> executor::get_records(client_state& client
                 describe_single_item(*selection, row, key_names, keys);
                 rjson::set(dynamodb, "Keys", std::move(keys));
                 rjson::set(dynamodb, "ApproximateCreationDateTime", utils::UUID_gen::unix_timestamp_in_sec(ts).count());
-                rjson::set(dynamodb, "SequenceNumber", ts);
+                rjson::set(dynamodb, "SequenceNumber", sequence_number(ts));
                 rjson::set(dynamodb, "StreamViewType", type);
                 //TODO: SizeInBytes
             }
@@ -890,7 +949,7 @@ future<executor::request_return_type> executor::get_records(client_state& client
     });
 }
 
-void executor::add_stream_options(const rjson::value& stream_specification, schema_builder& builder) {
+void executor::add_stream_options(const rjson::value& stream_specification, schema_builder& builder) const {
     auto stream_enabled = rjson::find(stream_specification, "StreamEnabled");
     if (!stream_enabled || !stream_enabled->IsBool()) {
         throw api_error::validation("StreamSpecification needs boolean StreamEnabled");
@@ -905,6 +964,8 @@ void executor::add_stream_options(const rjson::value& stream_specification, sche
 
         cdc::options opts;
         opts.enabled(true);
+        opts.set_delta_mode(cdc::delta_mode::keys);
+
         auto type = rjson::get_opt<stream_view_type>(stream_specification, "StreamViewType").value_or(stream_view_type::KEYS_ONLY);
         switch (type) {
             default: 
@@ -925,6 +986,31 @@ void executor::add_stream_options(const rjson::value& stream_specification, sche
         cdc::options opts;
         opts.enabled(false);
         builder.with_cdc_options(opts);
+    }
+}
+
+void executor::supplement_table_stream_info(rjson::value& descr, const schema& schema) const {
+    auto& opts = schema.cdc_options();
+    if (opts.enabled()) {
+        auto& db = _proxy.get_db().local();
+        auto& cf = db.find_column_family(schema.ks_name(), cdc::log_name(schema.cf_name()));
+        stream_arn arn(cf.schema()->id());
+        rjson::set(descr, "LatestStreamArn", arn);
+        rjson::set(descr, "LatestStreamLabel", rjson::from_string(stream_label(*cf.schema())));
+
+        auto stream_desc = rjson::empty_object();
+        rjson::set(stream_desc, "StreamEnabled", true);
+
+        auto mode = stream_view_type::KEYS_ONLY;
+        if (opts.preimage() && opts.postimage()) {
+            mode = stream_view_type::NEW_AND_OLD_IMAGES;
+        } else if (opts.preimage()) {
+            mode = stream_view_type::OLD_IMAGE;
+        } else if (opts.postimage()) {
+            mode = stream_view_type::NEW_IMAGE;
+        }
+        rjson::set(stream_desc, "StreamViewType", mode);
+        rjson::set(descr, "StreamSpecification", std::move(stream_desc));
     }
 }
 
