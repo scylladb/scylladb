@@ -87,6 +87,10 @@ public:
         uint64_t permit_based_evictions = 0;
         // The number of inactive reads currently registered.
         uint64_t inactive_reads = 0;
+        // Total number of successful reads executed through this semaphore.
+        uint64_t total_successful_reads = 0;
+        // Total number of failed reads executed through this semaphore.
+        uint64_t total_failed_reads = 0;
     };
 
 private:
