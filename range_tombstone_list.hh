@@ -120,6 +120,12 @@ public:
     auto begin() const {
         return _tombstones.begin();
     }
+    auto rbegin() {
+        return _tombstones.rbegin();
+    }
+    auto rbegin() const {
+        return _tombstones.rbegin();
+    }
     auto end() {
         return _tombstones.end();
     }
