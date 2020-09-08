@@ -1134,6 +1134,9 @@ SEASTAR_TEST_CASE(test_filtering) {
                 { int32_type->decompose(8), int32_type->decompose(3) },
                 { int32_type->decompose(9), int32_type->decompose(3) },
             });
+            require_rows(e, "SELECT k FROM cf WHERE k=12 AND (m,n)>=(4,0) ALLOW FILTERING;", {
+                    { int32_type->decompose(12), int32_type->decompose(4), int32_type->decompose(5)},
+                });
         }
 
         // test filtering on clustering keys
