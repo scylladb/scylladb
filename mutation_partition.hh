@@ -1103,6 +1103,8 @@ public:
     bool is_last_dummy() const { return _flags._last_dummy; }
     void set_dummy(bool value) { _flags._dummy = value; }
     void set_dummy(is_dummy value) { _flags._dummy = bool(value); }
+    void replace_with(rows_entry&& other) noexcept;
+
     void apply(row_tombstone t) {
         _row.apply(t);
     }
