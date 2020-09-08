@@ -1025,7 +1025,6 @@ class cache_tracker;
 
 class rows_entry {
     using lru_link_type = bi::list_member_hook<bi::link_mode<bi::auto_unlink>>;
-    friend class cache_tracker;
     friend class size_calculator;
     intrusive_set_external_comparator_member_hook _link;
     clustering_key _key;
@@ -1042,7 +1041,6 @@ class rows_entry {
         bool _last_dummy : 1;
         flags() : _before_ck(0), _after_ck(0), _continuous(true), _dummy(false), _last_dummy(false) { }
     } _flags{};
-    friend class mutation_partition;
 public:
     using container_type = intrusive_set_external_comparator<rows_entry, &rows_entry::_link>;
     using lru_type = bi::list<rows_entry,
@@ -1240,7 +1238,6 @@ struct mutation_application_stats {
 class mutation_partition final {
 public:
     using rows_type = rows_entry::container_type;
-    friend class rows_entry;
     friend class size_calculator;
 private:
     tombstone _tombstone;
