@@ -2437,7 +2437,7 @@ class circular_buffer(object):
         self.ref = ref
 
     def _mask(self, i):
-        return i & (int(self['_impl']['capacity']) - 1)
+        return i & (int(self.ref['_impl']['capacity']) - 1)
 
     def __iter__(self):
         impl = self.ref['_impl']
