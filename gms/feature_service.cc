@@ -57,6 +57,7 @@ constexpr std::string_view features::HINTED_HANDOFF_SEPARATE_CONNECTION = "HINTE
 constexpr std::string_view features::LWT = "LWT";
 constexpr std::string_view features::PER_TABLE_PARTITIONERS = "PER_TABLE_PARTITIONERS";
 constexpr std::string_view features::PER_TABLE_CACHING = "PER_TABLE_CACHING";
+constexpr std::string_view features::DIGEST_FOR_NULL_VALUES = "DIGEST_FOR_NULL_VALUES";
 
 static logging::logger logger("features");
 
@@ -92,8 +93,9 @@ feature_service::feature_service(feature_config cfg) : _config(cfg)
         , _hinted_handoff_separate_connection(*this, features::HINTED_HANDOFF_SEPARATE_CONNECTION)
         , _lwt_feature(*this, features::LWT)
         , _per_table_partitioners_feature(*this, features::PER_TABLE_PARTITIONERS)
-        , _per_table_caching_feature(*this, features::PER_TABLE_CACHING) {
-}
+        , _per_table_caching_feature(*this, features::PER_TABLE_CACHING)
+        , _digest_for_null_values_feature(*this, features::DIGEST_FOR_NULL_VALUES)
+{}
 
 feature_config feature_config_from_db_config(db::config& cfg, std::set<sstring> disabled) {
     feature_config fcfg;
@@ -190,6 +192,7 @@ std::set<std::string_view> feature_service::known_feature_set() {
         gms::features::MD_SSTABLE,
         gms::features::UDF,
         gms::features::CDC,
+        gms::features::DIGEST_FOR_NULL_VALUES,
     };
 
     for (const sstring& s : _config._disabled_features) {
@@ -281,6 +284,7 @@ void feature_service::enable(const std::set<std::string_view>& list) {
         std::ref(_lwt_feature),
         std::ref(_per_table_partitioners_feature),
         std::ref(_per_table_caching_feature),
+        std::ref(_digest_for_null_values_feature),
     })
     {
         if (list.contains(f.name())) {
