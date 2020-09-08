@@ -785,7 +785,7 @@ class histogram:
     """
     _column_count = 40
 
-    def __init__(self, counts = defaultdict(int), print_indicators = True, formatter=None):
+    def __init__(self, counts = None, print_indicators = True, formatter=None):
         """Constructor.
 
         Params:
@@ -797,7 +797,10 @@ class histogram:
             expected to return the string to be printed in the second column.
             By default, items are printed verbatim.
         """
-        self._counts = counts
+        if counts is None:
+            self._counts = defaultdict(int)
+        else:
+            self._counts = counts
         self._print_indicators = print_indicators
 
         def default_formatter(value):
