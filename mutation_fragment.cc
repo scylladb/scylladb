@@ -30,8 +30,8 @@
 std::ostream&
 operator<<(std::ostream& os, const clustering_row::printer& p) {
     auto& row = p._clustering_row;
-    return os << "{clustering_row: ck " << row._ck << " t " << row._t << " row_marker " << row._marker << " cells "
-              << row::printer(p._schema, column_kind::regular_column, row._cells) << "}";
+    return os << "{clustering_row: ck " << row._ck << " dr "
+              << deletable_row::printer(p._schema, row._row) << "}";
 }
 
 std::ostream&

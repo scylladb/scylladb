@@ -965,11 +965,15 @@ public:
 
     void apply(const row_marker& rm) {
         _marker.apply(rm);
-        _deleted_at.maybe_shadow(_marker);
+        maybe_shadow();
     }
 
     void remove_tombstone() {
         _deleted_at = {};
+    }
+
+    void maybe_shadow() {
+        _deleted_at.maybe_shadow(_marker);
     }
 
     // Weak exception guarantees. After exception, both src and this will commute to the same value as
