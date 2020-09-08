@@ -357,7 +357,7 @@ stop_iteration mutation_partition::apply_monotonically(const schema& s, mutation
                 i->_row = std::move(src_e._row);
             } else {
                 memory::on_alloc_point();
-                i->_row.apply_monotonically(s, std::move(src_e._row));
+                i->apply_monotonically(s, std::move(src_e));
             }
             ++app_stats.row_hits;
             p_i = p._rows.erase_and_dispose(p_i, del);
