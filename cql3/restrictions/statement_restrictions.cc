@@ -417,7 +417,7 @@ std::vector<const column_definition*> statement_restrictions::get_column_defs_fo
                     _clustering_columns_restrictions->num_prefix_columns_that_need_not_be_filtered();
             for (auto&& cdef : _clustering_columns_restrictions->get_column_defs()) {
                 ::shared_ptr<single_column_restriction> restr;
-                if (single_pk_restrs) {
+                if (single_ck_restrs) {
                     auto it = single_ck_restrs->restrictions().find(cdef);
                     if (it != single_ck_restrs->restrictions().end()) {
                         restr = dynamic_pointer_cast<single_column_restriction>(it->second);
