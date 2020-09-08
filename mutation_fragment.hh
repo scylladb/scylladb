@@ -137,6 +137,10 @@ public:
         friend std::ostream& operator<<(std::ostream& os, const printer& p);
     };
     friend std::ostream& operator<<(std::ostream& os, const printer& p);
+
+    deletable_row as_deletable_row() && {
+        return deletable_row(std::move(_t), std::move(_marker), std::move(_cells));
+    }
 };
 
 class static_row {

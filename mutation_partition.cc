@@ -293,15 +293,9 @@ struct mutation_fragment_applier {
     void operator()(const clustering_row& cr) {
         auto temp = clustering_row(_s, cr);
         auto& dr = _mp.clustered_row(_s, std::move(temp.key()));
-        dr.apply(_s, std::move(temp));
+        dr.apply(_s, std::move(temp).as_deletable_row());
     }
 };
-
-void deletable_row::apply(const schema& s, clustering_row cr) {
-    apply(cr.tomb());
-    apply(cr.marker());
-    cells().apply(s, column_kind::regular_column, std::move(cr.cells()));
-}
 
 void
 mutation_partition::apply(const schema& s, const mutation_fragment& mf) {
@@ -2376,12 +2370,6 @@ mutation_query(schema_ptr s,
             row_limit, partition_limit, query_time, timeout, class_config, std::move(accounter), std::move(trace_ptr), std::move(cache_ctx));
 }
 
-deletable_row::deletable_row(clustering_row&& cr)
-    : _deleted_at(cr.tomb())
-    , _marker(std::move(cr.marker()))
-    , _cells(std::move(cr.cells()))
-{ }
-
 class counter_write_query_result_builder {
     const schema& _schema;
     mutation_opt _mutation;
@@ -2396,7 +2384,7 @@ public:
         return stop_iteration::no;
     }
     stop_iteration consume(clustering_row&& cr, row_tombstone,  bool) {
-        _mutation->partition().insert_row(_schema, cr.key(), deletable_row(std::move(cr)));
+        _mutation->partition().insert_row(_schema, cr.key(), std::move(cr).as_deletable_row());
         return stop_iteration::no;
     }
     stop_iteration consume(range_tombstone&& rt) {

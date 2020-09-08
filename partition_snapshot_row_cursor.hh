@@ -482,7 +482,7 @@ public:
         mutation_partition p(_schema.shared_from_this());
         do {
             p.clustered_row(_schema, position(), is_dummy(dummy()), is_continuous(continuous()))
-                .apply(_schema, row(false).as_clustering_row());
+                .apply(_schema, row(false).as_clustering_row().as_deletable_row());
         } while (next());
         return p;
     }
