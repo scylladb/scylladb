@@ -161,10 +161,7 @@ public:
 // Tracks accesses and performs eviction of cache entries.
 class cache_tracker final {
 public:
-    using lru_type = bi::list<rows_entry,
-        bi::member_hook<rows_entry, rows_entry::lru_link_type, &rows_entry::_lru_link>,
-        bi::constant_time_size<false>>; // we need this to have bi::auto_unlink on hooks.
-public:
+    using lru_type = rows_entry::lru_type;
     friend class row_cache;
     friend class cache::read_context;
     friend class cache::autoupdating_underlying_reader;

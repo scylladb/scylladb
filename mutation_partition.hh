@@ -1044,6 +1044,11 @@ class rows_entry {
     } _flags{};
     friend class mutation_partition;
 public:
+    using container_type = intrusive_set_external_comparator<rows_entry, &rows_entry::_link>;
+    using lru_type = bi::list<rows_entry,
+        bi::member_hook<rows_entry, rows_entry::lru_link_type, &rows_entry::_lru_link>,
+        bi::constant_time_size<false>>; // we need this to have bi::auto_unlink on hooks.
+
     void unlink_from_lru() noexcept { _lru_link.unlink(); }
     struct last_dummy_tag {};
     explicit rows_entry(clustering_key&& key)
@@ -1234,7 +1239,7 @@ struct mutation_application_stats {
 // in the doc in partition_version.hh.
 class mutation_partition final {
 public:
-    using rows_type = intrusive_set_external_comparator<rows_entry, &rows_entry::_link>;
+    using rows_type = rows_entry::container_type;
     friend class rows_entry;
     friend class size_calculator;
 private:
