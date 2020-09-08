@@ -166,6 +166,7 @@ public:
         size_t available_memory;
         smp_service_group read_smp_service_group = default_smp_service_group();
         smp_service_group write_smp_service_group = default_smp_service_group();
+        smp_service_group hints_write_smp_service_group = default_smp_service_group();
         // Write acknowledgments might not be received on the correct shard, and
         // they need a separate smp_service_group to prevent an ABBA deadlock
         // with writes.
@@ -256,6 +257,7 @@ private:
     locator::token_metadata& _token_metadata;
     smp_service_group _read_smp_service_group;
     smp_service_group _write_smp_service_group;
+    smp_service_group _hints_write_smp_service_group;
     smp_service_group _write_ack_smp_service_group;
     response_id_type _next_response_id;
     response_handlers_map _response_handlers;
@@ -454,12 +456,29 @@ public:
     void init_messaging_service();
     future<> uninit_messaging_service();
 
+private:
     // Applies mutation on this node.
     // Resolves with timed_out_error when timeout is reached.
-    future<> mutate_locally(const mutation& m, db::commitlog::force_sync sync, clock_type::time_point timeout = clock_type::time_point::max());
+    future<> mutate_locally(const mutation& m, db::commitlog::force_sync sync, clock_type::time_point timeout, smp_service_group smp_grp);
     // Applies mutation on this node.
     // Resolves with timed_out_error when timeout is reached.
-    future<> mutate_locally(const schema_ptr&, const frozen_mutation& m, db::commitlog::force_sync sync, clock_type::time_point timeout = clock_type::time_point::max());
+    future<> mutate_locally(const schema_ptr&, const frozen_mutation& m, db::commitlog::force_sync sync, clock_type::time_point timeout,
+            smp_service_group smp_grp);
+    // Applies mutations on this node.
+    // Resolves with timed_out_error when timeout is reached.
+    future<> mutate_locally(std::vector<mutation> mutation, clock_type::time_point timeout, smp_service_group smp_grp);
+
+public:
+    // Applies mutation on this node.
+    // Resolves with timed_out_error when timeout is reached.
+    future<> mutate_locally(const mutation& m, db::commitlog::force_sync sync, clock_type::time_point timeout = clock_type::time_point::max()) {
+        return mutate_locally(m, sync, timeout, _write_smp_service_group);
+    }
+    // Applies mutation on this node.
+    // Resolves with timed_out_error when timeout is reached.
+    future<> mutate_locally(const schema_ptr& s, const frozen_mutation& m, db::commitlog::force_sync sync, clock_type::time_point timeout = clock_type::time_point::max()) {
+        return mutate_locally(s, m, sync, timeout, _write_smp_service_group);
+    }
     // Applies mutations on this node.
     // Resolves with timed_out_error when timeout is reached.
     future<> mutate_locally(std::vector<mutation> mutation, clock_type::time_point timeout = clock_type::time_point::max());
