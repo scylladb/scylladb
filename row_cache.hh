@@ -222,7 +222,6 @@ public:
     void insert(partition_version&) noexcept;
     void insert(rows_entry&) noexcept;
     void on_remove(rows_entry&) noexcept;
-    void unlink(rows_entry&) noexcept;
     void clear_continuity(cache_entry& ce) noexcept;
     void on_partition_erase() noexcept;
     void on_partition_merge() noexcept;

@@ -1044,6 +1044,7 @@ class rows_entry {
     } _flags{};
     friend class mutation_partition;
 public:
+    void unlink_from_lru() noexcept { _lru_link.unlink(); }
     struct last_dummy_tag {};
     explicit rows_entry(clustering_key&& key)
         : _key(std::move(key))
