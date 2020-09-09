@@ -369,6 +369,9 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
         app_states.emplace(gms::application_state::CDC_STREAMS_TIMESTAMP, versioned_value::cdc_streams_timestamp(_cdc_streams_ts));
         app_states.emplace(gms::application_state::STATUS, versioned_value::normal(my_tokens));
     }
+    if (replacing_a_node_with_same_ip || replacing_a_node_with_diff_ip) {
+        app_states.emplace(gms::application_state::TOKENS, versioned_value::tokens(_bootstrap_tokens));
+    }
     slogger.info("Starting up server gossip");
 
     auto generation_number = db::system_keyspace::increment_and_get_generation().get0();
