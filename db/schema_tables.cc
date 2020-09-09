@@ -822,6 +822,14 @@ future<> merge_schema(distributed<service::storage_proxy>& proxy, gms::feature_s
     });
 }
 
+future<> recalculate_schema_version(distributed<service::storage_proxy>& proxy, gms::feature_service& feat) {
+    return merge_lock().then([&proxy, &feat] {
+        return update_schema_version_and_announce(proxy, feat.cluster_schema_features());
+    }).finally([] {
+        return merge_unlock();
+    });
+}
+
 future<> merge_schema(distributed<service::storage_proxy>& proxy, std::vector<mutation> mutations, bool do_flush)
 {
     return merge_lock().then([&proxy, mutations = std::move(mutations), do_flush] () mutable {
