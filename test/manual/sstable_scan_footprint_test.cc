@@ -282,6 +282,7 @@ int main(int argc, char** argv) {
                     size += row.cells().external_memory_usage(*s, column_kind::regular_column);
                     ++rows;
                     ++ck;
+                    thread::maybe_yield();
                 }
                 return m;
             };
@@ -292,6 +293,7 @@ int main(int argc, char** argv) {
                 auto m = gen(sstable_size);
                 env.local_db().apply(s, freeze(m), tracing::trace_state_ptr(), db::commitlog::force_sync::no, db::no_timeout).get();
                 tab.flush().get();
+                thread::maybe_yield();
             }
 
             env.local_db().flush_all_memtables().get();
@@ -308,6 +310,7 @@ int main(int argc, char** argv) {
                 auto mt = make_lw_shared<memtable>(s);
                 mt->apply(gen(sstable_size));
                 c.update([] {}, *mt).get();
+                thread::maybe_yield();
             }
 
             auto prev_occupancy = logalloc::shard_tracker().occupancy();
