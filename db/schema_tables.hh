@@ -170,6 +170,13 @@ future<> merge_schema(distributed<service::storage_proxy>& proxy, gms::feature_s
 
 future<> merge_schema(distributed<service::storage_proxy>& proxy, std::vector<mutation> mutations, bool do_flush);
 
+// Recalculates the local schema version and publishes it in gossip.
+//
+// It is safe to call concurrently with recalculate_schema_version() and merge_schema() in which case it
+// is guaranteed that the schema version we end up with after all calls will reflect the most recent state
+// of feature_service and schema tables.
+future<> recalculate_schema_version(distributed<service::storage_proxy>& proxy, gms::feature_service& feat);
+
 future<std::set<sstring>> merge_keyspaces(distributed<service::storage_proxy>& proxy, schema_result&& before, schema_result&& after);
 
 std::vector<mutation> make_create_keyspace_mutations(lw_shared_ptr<keyspace_metadata> keyspace, api::timestamp_type timestamp, bool with_tables_and_types_and_functions = true);
