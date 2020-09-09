@@ -49,7 +49,6 @@
 #include "utils/managed_ref.hh"
 
 class mutation_fragment;
-class clustering_row;
 
 struct cell_hash {
     using size_type = uint64_t;
@@ -759,8 +758,6 @@ struct appending_hash<row_marker> {
     }
 };
 
-class clustering_row;
-
 class shadowable_tombstone {
     tombstone _tomb;
 public:
@@ -942,7 +939,6 @@ class deletable_row final {
     row _cells;
 public:
     deletable_row() {}
-    explicit deletable_row(clustering_row&&);
     deletable_row(const schema& s, const deletable_row& other)
         : _deleted_at(other._deleted_at)
         , _marker(other._marker)
@@ -951,8 +947,9 @@ public:
     deletable_row(const schema& s, row_tombstone tomb, const row_marker& marker, const row& cells)
         : _deleted_at(tomb), _marker(marker), _cells(s, column_kind::regular_column, cells)
     {}
-
-    void apply(const schema&, clustering_row);
+    deletable_row(row_tombstone&& tomb, row_marker&& marker, row&& cells)
+        : _deleted_at(std::move(tomb)), _marker(std::move(marker)), _cells(std::move(cells))
+    {}
 
     void apply(tombstone deleted_at) {
         _deleted_at.apply(deleted_at);
@@ -968,11 +965,15 @@ public:
 
     void apply(const row_marker& rm) {
         _marker.apply(rm);
-        _deleted_at.maybe_shadow(_marker);
+        maybe_shadow();
     }
 
     void remove_tombstone() {
         _deleted_at = {};
+    }
+
+    void maybe_shadow() {
+        _deleted_at.maybe_shadow(_marker);
     }
 
     // Weak exception guarantees. After exception, both src and this will commute to the same value as

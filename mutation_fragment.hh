@@ -43,76 +43,64 @@
 
 class clustering_row {
     clustering_key_prefix _ck;
-    row_tombstone _t;
-    row_marker _marker;
-    row _cells;
+    deletable_row _row;
 public:
     explicit clustering_row(clustering_key_prefix ck) : _ck(std::move(ck)) { }
     clustering_row(clustering_key_prefix ck, row_tombstone t, row_marker marker, row cells)
-            : _ck(std::move(ck)), _t(t), _marker(std::move(marker)), _cells(std::move(cells)) {
-        _t.maybe_shadow(marker);
+            : _ck(std::move(ck)), _row(std::move(t), std::move(marker), std::move(cells)) {
+        _row.maybe_shadow();
     }
     clustering_row(const schema& s, const clustering_row& other)
-        : clustering_row(other._ck, other._t, other._marker, row(s, column_kind::regular_column, other._cells)) { }
+        : _ck(other._ck), _row(s, other._row) { }
     clustering_row(const schema& s, const rows_entry& re)
-            : clustering_row(re.key(), re.row().deleted_at(), re.row().marker(), row(s, column_kind::regular_column, re.row().cells())) { }
+        : _ck(re.key()), _row(s, re.row()) { }
     clustering_row(rows_entry&& re)
-            : clustering_row(std::move(re.key()), re.row().deleted_at(), re.row().marker(), std::move(re.row().cells())) { }
+        : _ck(std::move(re.key())), _row(std::move(re.row())) {}
 
     clustering_key_prefix& key() { return _ck; }
     const clustering_key_prefix& key() const { return _ck; }
 
-    void remove_tombstone() { _t = {}; }
-    row_tombstone tomb() const { return _t; }
+    void remove_tombstone() { _row.remove_tombstone(); }
+    row_tombstone tomb() const { return _row.deleted_at(); }
 
-    const row_marker& marker() const { return _marker; }
-    row_marker& marker() { return _marker; }
+    const row_marker& marker() const { return _row.marker(); }
+    row_marker& marker() { return _row.marker(); }
 
-    const row& cells() const { return _cells; }
-    row& cells() { return _cells; }
+    const row& cells() const { return _row.cells(); }
+    row& cells() { return _row.cells(); }
 
-    bool empty() const {
-        return !_t && _marker.is_missing() && _cells.empty();
-    }
+    bool empty() const { return _row.empty(); }
 
     bool is_live(const schema& s, tombstone base_tombstone = tombstone(), gc_clock::time_point now = gc_clock::time_point::min()) const {
-        base_tombstone.apply(_t.tomb());
-        return _marker.is_live(base_tombstone, now) || _cells.is_live(s, column_kind::regular_column, base_tombstone, now);
+        return _row.is_live(s, std::move(base_tombstone), std::move(now));
     }
 
     void apply(const schema& s, clustering_row&& cr) {
-        _marker.apply(std::move(cr._marker));
-        _t.apply(cr._t, _marker);
-        _cells.apply(s, column_kind::regular_column, std::move(cr._cells));
+        _row.apply(s, std::move(cr._row));
     }
     void apply(const schema& s, const clustering_row& cr) {
-        _marker.apply(cr._marker);
-        _t.apply(cr._t, _marker);
-        _cells.apply(s, column_kind::regular_column, cr._cells);
+        _row.apply(s, deletable_row(s, cr._row));
     }
     void set_cell(const column_definition& def, atomic_cell_or_collection&& value) {
-        _cells.apply(def, std::move(value));
+        _row.cells().apply(def, std::move(value));
     }
     void apply(row_marker rm) {
-        _marker.apply(std::move(rm));
-        _t.maybe_shadow(_marker);
+        _row.apply(std::move(rm));
     }
     void apply(tombstone t) {
-        _t.apply(t);
+        _row.apply(std::move(t));
     }
     void apply(shadowable_tombstone t) {
-        _t.apply(t, _marker);
+        _row.apply(std::move(t));
     }
     void apply(const schema& s, const rows_entry& r) {
-        _marker.apply(r.row().marker());
-        _t.apply(r.row().deleted_at(), _marker);
-        _cells.apply(s, column_kind::regular_column, r.row().cells());
+        _row.apply(s, deletable_row(s, r.row()));
     }
 
     position_in_partition_view position() const;
 
     size_t external_memory_usage(const schema& s) const {
-        return _ck.external_memory_usage() + _cells.external_memory_usage(s, column_kind::regular_column);
+        return _ck.external_memory_usage() + _row.cells().external_memory_usage(s, column_kind::regular_column);
     }
 
     size_t memory_usage(const schema& s) const {
@@ -121,9 +109,7 @@ public:
 
     bool equal(const schema& s, const clustering_row& other) const {
         return _ck.equal(s, other._ck)
-               && _t == other._t
-               && _marker == other._marker
-               && _cells.equal(column_kind::regular_column, s, other._cells, s);
+                && _row.equal(column_kind::regular_column, s, other._row, s);
     }
 
     class printer {
@@ -137,6 +123,8 @@ public:
         friend std::ostream& operator<<(std::ostream& os, const printer& p);
     };
     friend std::ostream& operator<<(std::ostream& os, const printer& p);
+
+    deletable_row as_deletable_row() && { return std::move(_row); }
 };
 
 class static_row {
