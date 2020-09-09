@@ -659,6 +659,7 @@ struct max_timestamp {
 
 template<>
 struct appending_hash<row> {
+    static constexpr int null_hash_value = 0xbeefcafe;
     template<typename Hasher>
     void operator()(Hasher& h, const row& cells, const schema& s, column_kind kind, const query::column_id_vector& columns, max_timestamp& max_ts) const;
 };

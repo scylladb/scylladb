@@ -125,7 +125,7 @@ using fbu = utils::fb_utilities;
 static inline
 query::digest_algorithm digest_algorithm(service::storage_proxy& proxy) {
     return proxy.features().cluster_supports_xxhash_digest_algorithm()
-         ? query::digest_algorithm::xxHash
+         ? query::digest_algorithm::legacy_xxHash_without_null_digest
          : query::digest_algorithm::MD5;
 }
 
