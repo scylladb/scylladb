@@ -1869,9 +1869,11 @@ future<std::map<gms::inet_address, float>> storage_service::effective_ownership(
         return do_with(dht::token::describe_ownership(ss._token_metadata.sorted_tokens()),
                 ss._token_metadata.get_topology().get_datacenter_endpoints(),
                 std::map<gms::inet_address, float>(),
-                [&ss, keyspace_name](const std::map<token, float>& token_ownership, std::unordered_map<sstring,
+                std::move(keyspace_name),
+                [&ss](const std::map<token, float>& token_ownership, std::unordered_map<sstring,
                         std::unordered_set<gms::inet_address>>& datacenter_endpoints,
-                        std::map<gms::inet_address, float>& final_ownership) {
+                        std::map<gms::inet_address, float>& final_ownership,
+                        sstring& keyspace_name) {
             return do_for_each(datacenter_endpoints, [&ss, &keyspace_name, &final_ownership, &token_ownership](std::pair<sstring,std::unordered_set<inet_address>>&& endpoints) mutable {
                 return do_with(std::unordered_set<inet_address>(endpoints.second), [&ss, &keyspace_name, &final_ownership, &token_ownership](const std::unordered_set<inet_address>& endpoints_map) mutable {
                     return do_for_each(endpoints_map, [&ss, &keyspace_name, &final_ownership, &token_ownership](const gms::inet_address& endpoint) mutable {
