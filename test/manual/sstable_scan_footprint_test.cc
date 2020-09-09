@@ -212,6 +212,7 @@ int main(int argc, char** argv) {
         ("sstables", bpo::value<uint64_t>()->default_value(100), "Number of sstables to generate")
         ("sstable-size", bpo::value<uint64_t>()->default_value(10000000), "Size of generated sstables")
         ("sstable-format", bpo::value<std::string>()->default_value("md"), "Sstable format version to use during population")
+        ("clustering-row-size", bpo::value<uint64_t>()->default_value(100), "Size of a clustering row")
         ("collect-stats", "Enable collecting statistics.")
         ("stats-file", bpo::value<sstring>()->default_value("stats.csv"), "Store statistics in the specified file.")
         ("stats-period-ms", bpo::value<unsigned>()->default_value(100), "Tick period of the stats collection.")
@@ -247,6 +248,7 @@ int main(int argc, char** argv) {
             auto compressor = with_compression ? "LZ4Compressor" : "";
             uint64_t sstable_size = app.configuration()["sstable-size"].as<uint64_t>();
             uint64_t sstables = app.configuration()["sstables"].as<uint64_t>();
+            const auto clustering_row_size = app.configuration()["clustering-row-size"].as<uint64_t>();
             auto reads = app.configuration()["reads"].as<unsigned>();
             auto read_concurrency = app.configuration()["read-concurrency"].as<unsigned>();
 
@@ -260,22 +262,24 @@ int main(int argc, char** argv) {
 
             env.execute_cql(format("{} WITH compression = {{ 'sstable_compression': '{}' }} "
                                    "AND compaction = {{'class' : 'NullCompactionStrategy'}};",
-                "create table test (pk int, ck int, value int, primary key (pk,ck))", compressor)).get();
+                "create table test (pk int, ck int, value blob, primary key (pk,ck))", compressor)).get();
 
             table& tab = env.local_db().find_column_family("ks", "test");
             auto s = tab.schema();
 
-            auto value = serialized(tests::random::get_bytes(100));
+            auto value = serialized(tests::random::get_bytes(clustering_row_size));
             auto& value_cdef = *s->get_column_definition("value");
             auto pk = partition_key::from_single_value(*s, serialized(0));
             uint64_t rows = 0;
-            auto gen = [s, &rows, ck = 0, pk, &value_cdef, value] () mutable -> mutation {
+            auto gen = [s, &rows, ck = 0, pk, &value_cdef, value] (uint64_t sstable_size) mutable -> mutation {
                 auto ts = api::new_timestamp();
                 mutation m(s, pk);
-                for (int i = 0; i < 1000; ++i) {
+                uint64_t size = m.partition().external_memory_usage(*s);
+                while (size < sstable_size) {
                     auto ckey = clustering_key::from_single_value(*s, serialized(ck));
                     auto& row = m.partition().clustered_row(*s, ckey);
                     row.cells().apply(value_cdef, atomic_cell::make_live(*value_cdef.type, ts, value));
+                    size += row.cells().external_memory_usage(*s, column_kind::regular_column);
                     ++rows;
                     ++ck;
                 }
@@ -284,14 +288,10 @@ int main(int argc, char** argv) {
 
             testlog.info("Populating");
 
-            uint64_t i = 0;
-            while (i < sstables) {
-                auto m = gen();
+            for (uint64_t i = 0; i < sstables; ++i) {
+                auto m = gen(sstable_size);
                 env.local_db().apply(s, freeze(m), tracing::trace_state_ptr(), db::commitlog::force_sync::no, db::no_timeout).get();
-                if (tab.active_memtable().occupancy().used_space() > sstable_size) {
-                    tab.flush().get();
-                    ++i;
-                }
+                tab.flush().get();
             }
 
             env.local_db().flush_all_memtables().get();
@@ -306,7 +306,7 @@ int main(int argc, char** argv) {
             auto prev_evictions = tr.get_stats().row_evictions;
             while (tr.get_stats().row_evictions == prev_evictions) {
                 auto mt = make_lw_shared<memtable>(s);
-                mt->apply(gen());
+                mt->apply(gen(sstable_size));
                 c.update([] {}, *mt).get();
             }
 
