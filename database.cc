@@ -562,14 +562,14 @@ database::~database() {
 }
 
 void database::update_version(const utils::UUID& version) {
-    if (_version != version) {
+    if (_version.get() != version) {
         _schema_change_count++;
     }
-    _version = version;
+    _version.set(version);
 }
 
 const utils::UUID& database::get_version() const {
-    return _version;
+    return _version.get();
 }
 
 static future<>

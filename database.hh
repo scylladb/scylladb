@@ -96,6 +96,7 @@
 #include "user_types_metadata.hh"
 #include "query_class_config.hh"
 #include "absl-flat_hash_map.hh"
+#include "utils/updateable_value.hh"
 
 class cell_locker;
 class cell_locker_stats;
@@ -1317,7 +1318,7 @@ private:
         flat_hash_map<std::pair<sstring, sstring>, utils::UUID, utils::tuple_hash, string_pair_eq>;
     ks_cf_to_uuid_t _ks_cf_to_uuid;
     std::unique_ptr<db::commitlog> _commitlog;
-    utils::UUID _version;
+    utils::updateable_value_source<utils::UUID> _version;
     uint32_t _schema_change_count = 0;
     // compaction_manager object is referenced by all column families of a database.
     std::unique_ptr<compaction_manager> _compaction_manager;
@@ -1388,6 +1389,7 @@ public:
     void update_version(const utils::UUID& version);
 
     const utils::UUID& get_version() const;
+    utils::observable<utils::UUID>& observable_schema_version() const { return _version.as_observable(); }
 
     db::commitlog* commitlog() const {
         return _commitlog.get();
