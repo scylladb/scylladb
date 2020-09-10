@@ -28,7 +28,8 @@ namespace query {
 enum class digest_algorithm : uint8_t {
     none = 0,  // digest not required
     MD5 = 1,
-    xxHash = 2,// default algorithm
+    legacy_xxHash_without_null_digest = 2,
+    xxHash = 3, // default algorithm
 };
 
 }

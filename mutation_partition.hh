@@ -649,6 +649,22 @@ public:
     };
 };
 
+// Used to return the timestamp of the latest update to the row
+struct max_timestamp {
+    api::timestamp_type max = api::missing_timestamp;
+
+    void update(api::timestamp_type ts) {
+        max = std::max(max, ts);
+    }
+};
+
+template<>
+struct appending_hash<row> {
+    static constexpr int null_hash_value = 0xbeefcafe;
+    template<typename Hasher>
+    void operator()(Hasher& h, const row& cells, const schema& s, column_kind kind, const query::column_id_vector& columns, max_timestamp& max_ts) const;
+};
+
 class row_marker;
 int compare_row_marker_for_merge(const row_marker& left, const row_marker& right) noexcept;
 
