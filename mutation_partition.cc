@@ -734,56 +734,78 @@ void write_counter_cell(RowWriter& w, const query::partition_slice& slice, ::ato
   });
 }
 
-// Used to return the timestamp of the latest update to the row
-struct max_timestamp {
-    api::timestamp_type max = api::missing_timestamp;
-
-    void update(api::timestamp_type ts) {
-        max = std::max(max, ts);
-    }
-};
-
-template<>
-struct appending_hash<row> {
-    template<typename Hasher>
-    void operator()(Hasher& h, const row& cells, const schema& s, column_kind kind, const query::column_id_vector& columns, max_timestamp& max_ts) const {
-        for (auto id : columns) {
-            const cell_and_hash* cell_and_hash = cells.find_cell_and_hash(id);
-            if (!cell_and_hash) {
-                return;
-            }
-            auto&& def = s.column_at(kind, id);
-            if (def.is_atomic()) {
-                max_ts.update(cell_and_hash->cell.as_atomic_cell(def).timestamp());
-                if constexpr (query::using_hash_of_hash_v<Hasher>) {
-                    if (cell_and_hash->hash) {
-                        feed_hash(h, *cell_and_hash->hash);
-                    } else {
-                        query::default_hasher cellh;
-                        feed_hash(cellh, cell_and_hash->cell.as_atomic_cell(def), def);
-                        feed_hash(h, cellh.finalize_uint64());
-                    }
+template<typename Hasher>
+void appending_hash<row>::operator()(Hasher& h, const row& cells, const schema& s, column_kind kind, const query::column_id_vector& columns, max_timestamp& max_ts) const {
+    for (auto id : columns) {
+        const cell_and_hash* cell_and_hash = cells.find_cell_and_hash(id);
+        if (!cell_and_hash) {
+            feed_hash(h, appending_hash<row>::null_hash_value);
+            continue;
+        }
+        auto&& def = s.column_at(kind, id);
+        if (def.is_atomic()) {
+            max_ts.update(cell_and_hash->cell.as_atomic_cell(def).timestamp());
+            if constexpr (query::using_hash_of_hash_v<Hasher>) {
+                if (cell_and_hash->hash) {
+                    feed_hash(h, *cell_and_hash->hash);
                 } else {
-                    feed_hash(h, cell_and_hash->cell.as_atomic_cell(def), def);
+                    query::default_hasher cellh;
+                    feed_hash(cellh, cell_and_hash->cell.as_atomic_cell(def), def);
+                    feed_hash(h, cellh.finalize_uint64());
                 }
             } else {
-                auto cm = cell_and_hash->cell.as_collection_mutation();
-                max_ts.update(cm.last_update(*def.type));
-                if constexpr (query::using_hash_of_hash_v<Hasher>) {
-                    if (cell_and_hash->hash) {
-                        feed_hash(h, *cell_and_hash->hash);
-                    } else {
-                        query::default_hasher cellh;
-                        feed_hash(cellh, cm, def);
-                        feed_hash(h, cellh.finalize_uint64());
-                    }
+                feed_hash(h, cell_and_hash->cell.as_atomic_cell(def), def);
+            }
+        } else {
+            auto cm = cell_and_hash->cell.as_collection_mutation();
+            max_ts.update(cm.last_update(*def.type));
+            if constexpr (query::using_hash_of_hash_v<Hasher>) {
+                if (cell_and_hash->hash) {
+                    feed_hash(h, *cell_and_hash->hash);
                 } else {
-                    feed_hash(h, cm, def);
+                    query::default_hasher cellh;
+                    feed_hash(cellh, cm, def);
+                    feed_hash(h, cellh.finalize_uint64());
                 }
+            } else {
+                feed_hash(h, cm, def);
             }
         }
     }
-};
+}
+// Instantiation for mutation_test.cc
+template void appending_hash<row>::operator()<xx_hasher>(xx_hasher& h, const row& cells, const schema& s, column_kind kind, const query::column_id_vector& columns, max_timestamp& max_ts) const;
+
+template<>
+void appending_hash<row>::operator()<legacy_xx_hasher_without_null_digest>(legacy_xx_hasher_without_null_digest& h, const row& cells, const schema& s, column_kind kind, const query::column_id_vector& columns, max_timestamp& max_ts) const {
+    for (auto id : columns) {
+        const cell_and_hash* cell_and_hash = cells.find_cell_and_hash(id);
+        if (!cell_and_hash) {
+            return;
+        }
+        auto&& def = s.column_at(kind, id);
+        if (def.is_atomic()) {
+            max_ts.update(cell_and_hash->cell.as_atomic_cell(def).timestamp());
+            if (cell_and_hash->hash) {
+                feed_hash(h, *cell_and_hash->hash);
+            } else {
+                query::default_hasher cellh;
+                feed_hash(cellh, cell_and_hash->cell.as_atomic_cell(def), def);
+                feed_hash(h, cellh.finalize_uint64());
+            }
+        } else {
+            auto cm = cell_and_hash->cell.as_collection_mutation();
+            max_ts.update(cm.last_update(*def.type));
+            if (cell_and_hash->hash) {
+                feed_hash(h, *cell_and_hash->hash);
+            } else {
+                query::default_hasher cellh;
+                feed_hash(cellh, cm, def);
+                feed_hash(h, cellh.finalize_uint64());
+            }
+        }
+    }
+}
 
 cell_hash_opt row::cell_hash_for(column_id id) const {
     if (_type == storage_type::vector) {
