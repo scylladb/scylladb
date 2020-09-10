@@ -170,7 +170,7 @@ future<> merge_schema(distributed<service::storage_proxy>& proxy, gms::feature_s
 
 future<> merge_schema(distributed<service::storage_proxy>& proxy, std::vector<mutation> mutations, bool do_flush);
 
-// Recalculates the local schema version and publishes it in gossip.
+// Recalculates the local schema version.
 //
 // It is safe to call concurrently with recalculate_schema_version() and merge_schema() in which case it
 // is guaranteed that the schema version we end up with after all calls will reflect the most recent state
