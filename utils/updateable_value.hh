@@ -155,6 +155,9 @@ public:
     const T& operator()() const {
         return _value;
     }
+    observable<T>& as_observable() const {
+        return _updater;
+    }
     observer<T> observe(std::function<void (const T&)> callback) const {
         return _updater.observe(std::move(callback));
     }
