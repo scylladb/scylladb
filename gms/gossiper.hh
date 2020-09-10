@@ -222,8 +222,6 @@ private:
 
     bool _in_shadow_round = false;
 
-    clk::time_point _last_processed_message_at = now();
-
     std::unordered_map<inet_address, clk::time_point> _shadow_unreachable_endpoints;
     utils::chunked_vector<inet_address> _shadow_live_endpoints;
 
@@ -239,9 +237,6 @@ private:
     future<> replicate(inet_address, application_state key, const versioned_value& value);
 public:
     explicit gossiper(abort_source& as, feature_service& features, const locator::token_metadata& tokens, netw::messaging_service& ms, db::config& cfg);
-
-    void set_last_processed_message_at();
-    void set_last_processed_message_at(clk::time_point tp);
 
     void check_seen_seeds();
 
