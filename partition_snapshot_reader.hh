@@ -208,6 +208,7 @@ private:
     range_tombstone_stream _range_tombstones;
 
     lsa_partition_reader _reader;
+    bool _static_row_done = false;
     bool _no_more_rows_in_current_range = false;
 
     MemoryAccounter& mem_accounter() {
@@ -281,14 +282,16 @@ public:
     {
         _reader.with_reserve([&] {
             push_mutation_fragment(partition_start(std::move(dk), _reader.partition_tombstone()));
-            push_static_row();
-            on_new_range();
-            do_fill_buffer(db::no_timeout);
         });
     }
 
     virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override {
         _reader.with_reserve([&] {
+            if (!_static_row_done) {
+                push_static_row();
+                on_new_range();
+                _static_row_done = true;
+            }
             do_fill_buffer(timeout);
         });
         return make_ready_future<>();
