@@ -159,14 +159,6 @@ gossiper::gossiper(abort_source& as, feature_service& features, const locator::t
     });
 }
 
-void gossiper::set_last_processed_message_at() {
-    set_last_processed_message_at(now());
-}
-
-void gossiper::set_last_processed_message_at(clk::time_point tp) {
-    _last_processed_message_at = tp;
-}
-
 /*
  * First construct a map whose key is the endpoint in the GossipDigest and the value is the
  * GossipDigest itself. Then build a list of version differences i.e difference between the
@@ -211,7 +203,6 @@ void gossiper::do_sort(utils::chunked_vector<gossip_digest>& g_digest_list) {
 future<> gossiper::handle_syn_msg(msg_addr from, gossip_digest_syn syn_msg) {
     logger.trace("handle_syn_msg():from={},cluster_name:peer={},local={},partitioner_name:peer={},local={}",
         from, syn_msg.cluster_id(), get_cluster_name(), syn_msg.partioner(), get_partitioner_name());
-    this->set_last_processed_message_at();
     if (!this->is_enabled()) {
         return make_ready_future<>();
     }
@@ -306,7 +297,6 @@ private:
 future<> gossiper::handle_ack_msg(msg_addr id, gossip_digest_ack ack_msg) {
     logger.trace("handle_ack_msg():from={},msg={}", id, ack_msg);
 
-    this->set_last_processed_message_at();
     if (!this->is_enabled() && !this->is_in_shadow_round()) {
         return make_ready_future<>();
     }
@@ -404,7 +394,6 @@ future<> gossiper::do_send_ack2_msg(msg_addr from, utils::chunked_vector<gossip_
 // - on_alive callbacks
 future<> gossiper::handle_ack2_msg(gossip_digest_ack2 msg) {
     logger.trace("handle_ack2_msg():msg={}", msg);
-    set_last_processed_message_at();
     if (!is_enabled()) {
         return make_ready_future<>();
     }
@@ -418,12 +407,10 @@ future<> gossiper::handle_ack2_msg(gossip_digest_ack2 msg) {
 }
 
 future<> gossiper::handle_echo_msg() {
-    set_last_processed_message_at();
     return make_ready_future<>();
 }
 
 future<> gossiper::handle_shutdown_msg(inet_address from) {
-    set_last_processed_message_at();
     if (!is_enabled()) {
         logger.debug("Ignoring shutdown message from {} because gossip is disabled", from);
         return make_ready_future<>();
@@ -1418,7 +1405,6 @@ void gossiper::mark_alive(inet_address addr, endpoint_state& local_state) {
     // Do it in the background.
     (void)_messaging.send_gossip_echo(id).then([this, addr] {
         logger.trace("Got EchoMessage Reply");
-        set_last_processed_message_at();
         return seastar::async([this, addr] {
             // After sending echo message, the Node might not be in the
             // endpoint_state_map anymore, use the reference of local_state
