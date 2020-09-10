@@ -117,7 +117,8 @@ def is_local_java(dynamodbstreams):
     try: 
         urllib.request.urlopen(url)
     except URLError as e:
-        return e.info()['Server'].startswith('Jetty')
+        if hasattr(e, 'info'):
+            return e.info()['Server'].startswith('Jetty')
     return False
 
 def ensure_java_server(dynamodbstreams, error='ValidationException'):
