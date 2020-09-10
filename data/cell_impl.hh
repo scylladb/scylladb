@@ -104,19 +104,18 @@ public:
 
         auto offset = 0;
         auto migrate_fn_ptr = &cell::lsa_chunk_migrate_fn;
-        while (_value_size - offset > cell::maximum_external_chunk_length) {
+        while (_value_size - offset > cell::effective_external_chunk_length) {
             imr::placeholder<imr::pod<uint8_t*>> phldr;
             auto chunk_ser = allocations.template allocate_nested<cell::external_chunk>(migrate_fn_ptr)
                     .serialize(next_pointer_position);
             next_pointer_position = chunk_ser.position();
             next_pointer_phldr.serialize(
                 chunk_ser.serialize(phldr)
-                        .serialize(cell::maximum_external_chunk_length,
-                                   write_to_destination(cell::maximum_external_chunk_length))
+                        .serialize(cell::effective_external_chunk_length, write_to_destination(cell::effective_external_chunk_length))
                         .done()
             );
             next_pointer_phldr = phldr;
-            offset += cell::maximum_external_chunk_length;
+            offset += cell::effective_external_chunk_length;
         }
 
         size_t left = _value_size - offset;
@@ -156,11 +155,11 @@ inline basic_value_view<is_mutable> cell::variable_value::do_make_view(structure
     return view.template get<tags::value_data>().visit(make_visitor(
             [&] (imr::pod<uint8_t*>::view ptr) {
                 auto ex_ptr = static_cast<uint8_t*>(ptr.load());
-                if (size > maximum_external_chunk_length) {
+                if (size > cell::effective_external_chunk_length) {
                     auto ex_ctx = chunk_context(ex_ptr);
                     auto ex_view = external_chunk::make_view(ex_ptr, ex_ctx);
                     auto next = static_cast<uint8_t*>(ex_view.get<tags::chunk_next>().load());
-                    return basic_value_view<is_mutable>(ex_view.get<tags::chunk_data>(ex_ctx), size - maximum_external_chunk_length, next);
+                    return basic_value_view<is_mutable>(ex_view.get<tags::chunk_data>(ex_ctx), size - cell::effective_external_chunk_length, next);
                 } else {
                     auto ex_ctx = last_chunk_context(ex_ptr);
                     auto ex_view = external_last_chunk::make_view(ex_ptr, ex_ctx);

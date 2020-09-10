@@ -208,7 +208,7 @@ size_t atomic_cell_or_collection::external_memory_usage(const abstract_type& t) 
             external_value_size = cell_view.value_size();
         }
         // Add overhead of chunk headers. The last one is a special case.
-        external_value_size += (external_value_size - 1) / data::cell::maximum_external_chunk_length * data::cell::external_chunk_overhead;
+        external_value_size += (external_value_size - 1) / data::cell::effective_external_chunk_length * data::cell::external_chunk_overhead;
         external_value_size += data::cell::external_last_chunk_overhead;
     }
     return data::cell::structure::serialized_object_size(_data.get(), ctx)

@@ -42,9 +42,6 @@ namespace data {
 template<mutable_view is_mutable>
 class basic_value_view {
 public:
-    static constexpr size_t maximum_internal_storage_length = 8 * 1024;
-    static constexpr size_t maximum_external_chunk_length = 8 * 1024;
-
     using fragment_type = std::conditional_t<is_mutable == mutable_view::no,
                                              bytes_view, bytes_mutable_view>;
     using raw_pointer_type = std::conditional_t<is_mutable == mutable_view::no,

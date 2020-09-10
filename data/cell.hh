@@ -44,8 +44,16 @@ template<typename T>
 class value_writer;
 
 struct cell {
-    static constexpr size_t maximum_internal_storage_length = value_view::maximum_internal_storage_length;
-    static constexpr size_t maximum_external_chunk_length = value_view::maximum_external_chunk_length;
+    // We make the internal storage 1KB smaller for 2 reasons:
+    // * To ensure the cell storage doesn't exceed 8KB in total (and hence
+    //   reverts to a 16KB allocation, wasting a lot of space).
+    // * To make sure we can distinguish between external and internal storage
+    //   values based on size. External storage will practically store less than
+    //   8KB in chunks due to chunk header overhead. So in order to be able to
+    //   decide on size alone we need to leave sufficient room between the two.
+    static constexpr size_t maximum_internal_storage_length = 7 * 1024;
+    static constexpr size_t maximum_external_chunk_length = 8 * 1024;
+
 
     struct tags {
         class cell;
@@ -204,14 +212,16 @@ struct cell {
     /// If a cell value size is above maximum_internal_storage_length it is
     /// stored externally. Moreover, in order to avoid stressing the memory
     /// allocators with large allocations values are fragmented in chunks
-    /// no larger than maximum_external_chunk_length. The size of all chunks,
-    /// but the last one is always maximum_external_chunk_length.
+    /// no larger than maximum_external_chunk_length. The gross size (including
+    /// the chunk header) of all chunks, but the last one is always
+    /// maximum_external_chunk_length.
     using external_chunk = imr::structure<
         imr::member<tags::chunk_back_pointer, imr::tagged_type<tags::chunk_back_pointer, imr::pod<uint8_t*>>>,
         imr::member<tags::chunk_next, imr::pod<uint8_t*>>,
         imr::member<tags::chunk_data, imr::buffer<tags::chunk_data>>
     >;
     static constexpr size_t external_chunk_overhead = sizeof(uint8_t*) * 2;
+    static constexpr size_t effective_external_chunk_length = maximum_external_chunk_length - external_chunk_overhead;
 
     using external_last_chunk_size = imr::pod<uint16_t>;
     /// The last fragment of an externally stored value
@@ -239,7 +249,7 @@ struct cell {
 
         template<typename Tag>
         static constexpr size_t size_of() noexcept {
-            return cell::maximum_external_chunk_length;
+            return cell::effective_external_chunk_length;
         }
         template<typename Tag, typename... Args>
         auto context_for(Args&&...) const noexcept {
@@ -662,7 +672,7 @@ public:
     }
 
     bool is_value_fragmented() const noexcept {
-        return flags_view().template get<tags::external_data>() && value_size() > maximum_external_chunk_length;
+        return flags_view().template get<tags::external_data>() && value_size() > cell::effective_external_chunk_length;
     }
 };
 
@@ -705,15 +715,15 @@ inline cell::mutable_atomic_cell_view cell::make_atomic_cell_view(const type_inf
 /// When a cell value is stored externally as a list of fragments we need to
 /// know when we reach the last fragment. The way to do that is to read the
 /// total value size from the parent cell object and use the fact that the size
-/// of all fragments except the last one is cell::maximum_external_chunk_length.
+/// of all fragments except the last one is cell::effective_external_chunk_length.
 class fragment_chain_destructor_context : public imr::no_context_t {
     size_t _total_length;
 public:
     explicit fragment_chain_destructor_context(size_t total_length) noexcept
             : _total_length(total_length) { }
 
-    void next_chunk() noexcept { _total_length -= data::cell::maximum_external_chunk_length; }
-    bool is_last_chunk() const noexcept { return _total_length <= data::cell::maximum_external_chunk_length; }
+    void next_chunk() noexcept { _total_length -= data::cell::effective_external_chunk_length; }
+    bool is_last_chunk() const noexcept { return _total_length <= data::cell::effective_external_chunk_length; }
 };
 
 }
