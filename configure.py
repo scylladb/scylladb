@@ -1744,6 +1744,9 @@ with open(buildfile_tmp, 'w') as f:
     )
 
     f.write(textwrap.dedent(f'''\
+        build dist-unified-tar: phony {' '.join(['$builddir/{mode}/scylla-unified-package.tar.gz'.format(mode=mode) for mode in build_modes])}
+        build dist-unified: phony dist-unified-tar
+
         build dist-server-deb: phony {' '.join(['$builddir/dist/{mode}/debian'.format(mode=mode) for mode in build_modes])}
         build dist-server-rpm: phony {' '.join(['$builddir/dist/{mode}/redhat'.format(mode=mode) for mode in build_modes])}
         build dist-server-tar: phony {' '.join(['$builddir/{mode}/scylla-package.tar.gz'.format(mode=mode) for mode in build_modes])}
@@ -1794,7 +1797,6 @@ with open(buildfile_tmp, 'w') as f:
           dir = tools/python3
           artifact = $builddir/scylla-python3-package.tar.gz
 
-
         build tools/python3/build/scylla-python3-package.tar.gz: build-submodule-reloc
           reloc_dir = tools/python3
           args = --packages "{python3_dependencies}"
@@ -1808,9 +1810,9 @@ with open(buildfile_tmp, 'w') as f:
         build dist-python3: phony dist-python3-tar dist-python3-rpm dist-python3-deb $builddir/release/scylla-python3-package.tar.gz compat-python3-rpm compat-python3-deb
         build dist-deb: phony dist-server-deb dist-python3-deb dist-jmx-deb dist-tools-deb
         build dist-rpm: phony dist-server-rpm dist-python3-rpm dist-jmx-rpm dist-tools-rpm
-        build dist-tar: phony dist-server-tar dist-python3-tar dist-jmx-tar dist-tools-tar
+        build dist-tar: phony dist-unified-tar dist-server-tar dist-python3-tar dist-jmx-tar dist-tools-tar
 
-        build dist: phony dist-server dist-python3 dist-jmx dist-tools
+        build dist: phony dist-unified dist-server dist-python3 dist-jmx dist-tools
         '''))
 
     f.write(textwrap.dedent(f'''\
