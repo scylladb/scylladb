@@ -111,7 +111,6 @@ class partition_snapshot_row_cursor final {
     struct position_in_version {
         mutation_partition::rows_type::iterator it;
         mutation_partition::rows_type::iterator end;
-        mutation_partition::rows_type* rows;
         int version_no;
         bool unique_owner;
 
@@ -178,7 +177,7 @@ class partition_snapshot_row_cursor final {
             auto end = rows.end();
             _iterators.push_back(pos);
             if (pos != end) {
-                _heap.push_back({pos, end, &rows, version_no, unique_owner});
+                _heap.push_back({pos, end, version_no, unique_owner});
             }
             ++version_no;
             first = false;
@@ -327,7 +326,7 @@ public:
         position_in_version::less_compare heap_less(_schema);
         for (auto&& curr : _current_row) {
             if (curr.unique_owner) {
-                curr.it = curr.rows->erase_and_dispose(curr.it, current_deleter<rows_entry>());
+                curr.it = curr.it.erase_and_dispose(current_deleter<rows_entry>());
             } else {
                 ++curr.it;
             }
