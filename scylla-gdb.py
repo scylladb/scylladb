@@ -3711,6 +3711,72 @@ class scylla_compaction_tasks(gdb.Command):
         gdb.write('Total: {} instances of compaction_manager::task\n'.format(len(task_list)))
 
 
+class scylla_schema(gdb.Command):
+    """Pretty print a schema
+
+    Example:
+	(gdb) scylla schema $s
+	(schema*) 0x604009352380 ks="scylla_bench" cf="test" id=a3eadd80-f2a7-11ea-853c-000000000004 version=47e0bf13-6cc8-3421-93c6-a9fe169b1689
+
+	partition key: byte_order_equal=true byte_order_comparable=false is_reversed=false
+	    "org.apache.cassandra.db.marshal.LongType"
+
+	clustering key: byte_order_equal=true byte_order_comparable=false is_reversed=true
+	    "org.apache.cassandra.db.marshal.ReversedType(org.apache.cassandra.db.marshal.LongType)"
+
+	columns:
+	    column_kind::partition_key  id=0 ordinal_id=0 "pk" "org.apache.cassandra.db.marshal.LongType" is_atomic=true is_counter=false
+	    column_kind::clustering_key id=0 ordinal_id=1 "ck" "org.apache.cassandra.db.marshal.ReversedType(org.apache.cassandra.db.marshal.LongType)" is_atomic=true is_counter=false
+	    column_kind::regular_column id=0 ordinal_id=2 "v" "org.apache.cassandra.db.marshal.BytesType" is_atomic=true is_counter=false
+
+    Argument is an expression that evaluates to a schema value, reference,
+    pointer or shared pointer.
+    """
+
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla schema', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
+
+    def print_key_type(self, key_type, key_name):
+        gdb.write('{} key: byte_order_equal={} byte_order_comparable={} is_reversed={}\n'.format(
+                key_name, key_type['_byte_order_equal'], key_type['_byte_order_comparable'], key_type['_is_reversed']))
+
+        for key_type in std_vector(key_type['_types']):
+            key_type = seastar_shared_ptr(key_type).get().dereference()
+            gdb.write('    {}\n'.format(key_type['_name']))
+
+    def invoke(self, schema, from_tty):
+        schema = gdb.parse_and_eval(schema)
+        typ = schema.type.strip_typedefs()
+        if typ.code == gdb.TYPE_CODE_PTR or typ.code == gdb.TYPE_CODE_REF or typ.code == gdb.TYPE_CODE_RVALUE_REF:
+            schema = schema.referenced_value()
+            typ = schema.type
+        if typ.name.startswith('seastar::lw_shared_ptr<'):
+            schema = seastar_lw_shared_ptr(schema).get().dereference()
+            typ = schema.type
+
+        raw_schema = schema['_raw']
+
+        gdb.write('(schema*) 0x{:x} ks={} cf={} id={} version={}\n'.format(int(schema.address), raw_schema['_ks_name'], raw_schema['_cf_name'], raw_schema['_id'], raw_schema['_version']))
+
+        gdb.write('\n')
+        self.print_key_type(seastar_lw_shared_ptr(schema['_partition_key_type']).get().dereference(), 'partition')
+
+        gdb.write('\n')
+        self.print_key_type(seastar_lw_shared_ptr(schema['_clustering_key_type']).get().dereference(), 'clustering')
+
+        gdb.write('\n')
+        gdb.write("columns:\n")
+        for cdef in std_vector(raw_schema['_columns']):
+            gdb.write("    {:27} id={} ordinal_id={} {} {} is_atomic={} is_counter={}\n".format(
+                    str(cdef['kind']),
+                    cdef['id'],
+                    int(cdef['ordinal_id']),
+                    cdef['_name'],
+                    seastar_shared_ptr(cdef['type']).get().dereference()['_name'],
+                    cdef['_is_atomic'],
+                    cdef['_is_counter']))
+
+
 class scylla_gdb_func_dereference_smart_ptr(gdb.Function):
     """Dereference the pointer guarded by the smart pointer instance.
 
@@ -3994,6 +4060,7 @@ scylla_features()
 scylla_repairs()
 scylla_small_objects()
 scylla_compaction_tasks()
+scylla_schema()
 
 
 # Convenience functions
