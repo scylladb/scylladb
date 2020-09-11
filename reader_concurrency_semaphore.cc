@@ -21,10 +21,12 @@
 
 #include <seastar/core/seastar.hh>
 #include <seastar/core/print.hh>
+#include <seastar/util/log.hh>
 
 #include "reader_concurrency_semaphore.hh"
 #include "utils/exceptions.hh"
 
+logger rcslog("reader_concurrency_semaphore");
 
 reader_permit::resource_units::resource_units(reader_permit permit, reader_resources res) noexcept
     : _permit(std::move(permit)), _resources(res) {
@@ -67,19 +69,28 @@ void reader_permit::resource_units::reset(reader_resources res) {
 
 class reader_permit::impl {
     reader_concurrency_semaphore& _semaphore;
+    reader_resources _resources;
 
 public:
     impl(reader_concurrency_semaphore& semaphore) : _semaphore(semaphore) { }
+    ~impl() {
+        if (_resources) {
+            on_internal_error_noexcept(rcslog, format("reader_permit::impl::~impl(): detected a leak of {{count={}, memory={}}} resources",
+                        _resources.count, _resources.memory));
+        }
+    }
 
     reader_concurrency_semaphore& semaphore() {
         return _semaphore;
     }
 
     void consume(reader_resources res) {
+        _resources += res;
         _semaphore.consume(res);
     }
 
     void signal(reader_resources res) {
+        _resources -= res;
         _semaphore.signal(res);
     }
 };
