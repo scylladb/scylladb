@@ -1047,6 +1047,9 @@ int main(int ac, char** av) {
             supervisor::notify("starting storage service", true);
             auto& ss = service::get_local_storage_service();
             ss.init_messaging_service_part().get();
+            auto stop_ss_msg = defer_verbose_shutdown("storage service messaging", [&ss] {
+                ss.uninit_messaging_service_part().get();
+            });
             api::set_server_messaging_service(ctx, messaging).get();
             auto stop_messaging_api = defer_verbose_shutdown("messaging service API", [&ctx] {
                 api::unset_server_messaging_service(ctx).get();
