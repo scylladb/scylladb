@@ -1716,7 +1716,7 @@ with open(buildfile_tmp, 'w') as f:
         f.write(f'  pool = submodule_pool\n')
         f.write(f'  mode = {mode}\n')
         f.write(f'build dist-server-{mode}: phony $builddir/dist/{mode}/redhat $builddir/dist/{mode}/debian\n')
-        f.write(f'build $builddir/{mode}/scylla-unified-package.tar.gz: unified $builddir/{mode}/scylla-package.tar.gz $builddir/{mode}/scylla-python3-package.tar.gz tools/jmx/build/scylla-jmx-package.tar.gz tools/java/build/scylla-tools-package.tar.gz | always\n')
+        f.write(f'build $builddir/{mode}/scylla-unified-package.tar.gz: unified $builddir/{mode}/dist/tar/scylla-package.tar.gz $builddir/{mode}/dist/tar/scylla-python3-package.tar.gz $builddir/{mode}/dist/tar/scylla-jmx-package.tar.gz $builddir/{mode}/dist/tar/scylla-tools-package.tar.gz | always\n')
         f.write(f'  pool = submodule_pool\n')
         f.write(f'  mode = {mode}\n')
         f.write('rule libdeflate.{mode}\n'.format(**locals()))
