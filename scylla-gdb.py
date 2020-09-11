@@ -652,8 +652,6 @@ class uuid_printer(gdb.printing.PrettyPrinter):
         lsb = uint64_t(self.val['least_sig_bits'])
         return str(uuid.UUID(int=(msb << 64) | lsb))
 
-    def display_hint(self):
-        return 'string'
 
 class boost_intrusive_list_printer(gdb.printing.PrettyPrinter):
     def __init__(self, val):
