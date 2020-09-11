@@ -2200,3 +2200,18 @@ future<> replace_with_repair(seastar::sharded<database>& db, seastar::sharded<ne
     tm.update_normal_tokens(replacing_tokens, utils::fb_utilities::get_broadcast_address());
     return do_rebuild_replace_with_repair(db, ms, std::move(tm), std::move(op), std::move(source_dc), reason);
 }
+
+future<> repair_init_messaging_service_handler(repair_service& rs,
+        distributed<db::system_distributed_keyspace>& sys_dist_ks,
+        distributed<db::view::view_update_generator>& view_update_generator,
+        sharded<database>& db, sharded<netw::messaging_service>& ms) {
+    return when_all_succeed(
+            row_level_repair_init_messaging_service_handler(rs, sys_dist_ks, view_update_generator, ms)
+    ).discard_result();
+}
+
+future<> repair_uninit_messaging_service_handler() {
+    return when_all_succeed(
+            row_level_repair_uninit_messaging_service_handler()
+    ).discard_result();
+}

@@ -1040,7 +1040,7 @@ int main(int ac, char** av) {
             auto stop_repair_service = defer_verbose_shutdown("repair service", [&rs] {
                 rs.stop().get();
             });
-            repair_init_messaging_service_handler(rs, sys_dist_ks, view_update_generator, messaging).get();
+            repair_init_messaging_service_handler(rs, sys_dist_ks, view_update_generator, db, messaging).get();
             auto stop_repair_messages = defer_verbose_shutdown("repair message handlers", [] {
                 repair_uninit_messaging_service_handler().get();
             });
