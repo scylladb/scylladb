@@ -552,21 +552,19 @@ class managed_bytes_printer(gdb.printing.PrettyPrinter):
         self.val = val
 
     def bytes(self):
-        def signed_chr(c):
-            return int(c).to_bytes(1, byteorder='little', signed=True)
+        inf = gdb.selected_inferior()
+        def to_hex(data, size):
+            return bytes(inf.read_memory(data, size)).hex()
+
         if self.val['_u']['small']['size'] >= 0:
-            array = self.val['_u']['small']['data']
-            len = int(self.val['_u']['small']['size'])
-            return b''.join([signed_chr(array[x]) for x in range(len)])
+            return to_hex(self.val['_u']['small']['data'], int(self.val['_u']['small']['size']))
         else:
             ref = self.val['_u']['ptr']
             chunks = list()
             while ref['ptr']:
-                array = ref['ptr']['data']
-                len = int(ref['ptr']['frag_size'])
+                chunks.append(to_hex(ref['ptr']['data'], int(ref['ptr']['frag_size'])))
                 ref = ref['ptr']['next']
-                chunks.append(b''.join([signed_chr(array[x]) for x in range(len)]))
-            return b''.join(chunks)
+            return ''.join(chunks)
 
     def to_string(self):
         return str(self.bytes())
