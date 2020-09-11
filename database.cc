@@ -1965,18 +1965,6 @@ future<> database::clear_snapshot(sstring tag, std::vector<sstring> keyspace_nam
     });
 }
 
-future<> update_schema_version_and_announce(distributed<service::storage_proxy>& proxy, schema_features features) {
-    return db::schema_tables::calculate_schema_digest(proxy, features).then([&proxy] (utils::UUID uuid) {
-        return db::system_keyspace::update_schema_version(uuid).then([&proxy, uuid] {
-            return proxy.local().get_db().invoke_on_all([uuid] (database& db) {
-                db.update_version(uuid);
-            });
-        }).then([uuid] {
-            dblog.info("Schema version changed to {}", uuid);
-        });
-    });
-}
-
 std::ostream& operator<<(std::ostream& os, const user_types_metadata& m) {
     os << "org.apache.cassandra.config.UTMetaData@" << &m;
     return os;
