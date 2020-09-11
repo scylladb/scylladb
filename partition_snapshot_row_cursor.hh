@@ -355,7 +355,7 @@ public:
     const clustering_key& key() const { return _current_row[0].it->key(); }
 
     // Can be called only when cursor is valid and pointing at a row.
-    mutation_fragment row(bool digest_requested) const {
+    clustering_row row(bool digest_requested) const {
         auto it = _current_row.begin();
         auto row = it->it;
         if (digest_requested) {
@@ -365,7 +365,7 @@ public:
         for (++it; it != _current_row.end(); ++it) {
             cr.apply(_schema, *it->it);
         }
-        return mutation_fragment(std::move(cr));
+        return cr;
     }
 
     // Can be called only when cursor is valid and pointing at a row.
@@ -481,7 +481,7 @@ public:
         mutation_partition p(_schema.shared_from_this());
         do {
             p.clustered_row(_schema, position(), is_dummy(dummy()), is_continuous(continuous()))
-                .apply(_schema, row(false).as_clustering_row().as_deletable_row());
+                .apply(_schema, row(false).as_deletable_row());
         } while (next());
         return p;
     }
