@@ -73,7 +73,7 @@ flat_mutation_reader make_reversing_reader(flat_mutation_reader& original, query
         stop_iteration emit_partition() {
             auto emit_range_tombstone = [&] {
                 auto it = std::prev(_range_tombstones.end());
-                push_mutation_fragment(_range_tombstones.pop_as<mutation_fragment>(it));
+                push_mutation_fragment(*_schema, _permit, _range_tombstones.pop_as<range_tombstone>(it));
             };
             position_in_partition::less_compare cmp(*_schema);
             while (!_mutation_fragments.empty() && !is_buffer_full()) {
@@ -315,7 +315,7 @@ flat_mutation_reader make_nonforwardable(flat_mutation_reader r, bool single_par
                 _static_row_done = true;
                 return _underlying.fast_forward_to(position_range::all_clustered_rows(), timeout);
             }
-            push_mutation_fragment(partition_end());
+            push_mutation_fragment(*_schema, _permit, partition_end());
             if (_single_partition) {
                 _end_of_stream = true;
                 return make_ready_future<>();
@@ -417,7 +417,7 @@ flat_mutation_reader_from_mutations(reader_permit permit, std::vector<mutation> 
                 }
                 auto re_deleter = defer([re] { current_deleter<rows_entry>()(re); });
                 if (!re->dummy()) {
-                    _cr = mutation_fragment(std::move(*re));
+                    _cr = mutation_fragment(*_schema, _permit, std::move(*re));
                     break;
                 }
             }
@@ -427,7 +427,7 @@ flat_mutation_reader_from_mutations(reader_permit permit, std::vector<mutation> 
             auto rt = rts.pop_front_and_lock();
             if (rt) {
                 auto rt_deleter = defer([rt] { current_deleter<range_tombstone>()(rt); });
-                _rt = mutation_fragment(std::move(*rt));
+                _rt = mutation_fragment(*_schema, _permit, std::move(*rt));
             }
         }
         mutation_fragment_opt read_next() {
@@ -448,14 +448,14 @@ flat_mutation_reader_from_mutations(reader_permit permit, std::vector<mutation> 
                 if (!_static_row_done) {
                     _static_row_done = true;
                     if (!_cur->partition().static_row().empty()) {
-                        push_mutation_fragment(static_row(std::move(_cur->partition().static_row().get_existing())));
+                        push_mutation_fragment(*_schema, _permit, static_row(std::move(_cur->partition().static_row().get_existing())));
                     }
                 }
                 auto mfopt = read_next();
                 if (mfopt) {
                     push_mutation_fragment(std::move(*mfopt));
                 } else {
-                    push_mutation_fragment(partition_end());
+                    push_mutation_fragment(*_schema, _permit, partition_end());
                     ++_cur;
                     if (_cur == _end) {
                         _end_of_stream = true;
@@ -467,7 +467,7 @@ flat_mutation_reader_from_mutations(reader_permit permit, std::vector<mutation> 
         }
         void start_new_partition() {
             _static_row_done = false;
-            push_mutation_fragment(partition_start(_cur->decorated_key(),
+            push_mutation_fragment(*_schema, _permit, partition_start(_cur->decorated_key(),
                                                    _cur->partition().partition_tombstone()));
 
             prepare_next_clustering_row();

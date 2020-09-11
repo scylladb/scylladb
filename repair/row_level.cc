@@ -425,13 +425,14 @@ public:
             seastar::sharded<database>& db,
             column_family& cf,
             schema_ptr s,
+            reader_permit permit,
             dht::token_range range,
             const dht::sharder& remote_sharder,
             unsigned remote_shard,
             uint64_t seed,
             is_local_reader local_reader)
             : _schema(s)
-            , _permit(cf.streaming_read_concurrency_semaphore().make_permit())
+            , _permit(std::move(permit))
             , _range(dht::to_partition_range(range))
             , _sharder(remote_sharder, range, remote_shard)
             , _seed(seed)
@@ -510,6 +511,7 @@ public:
 
 class repair_writer {
     schema_ptr _schema;
+    reader_permit _permit;
     uint64_t _estimated_partitions;
     size_t _nr_peer_nodes;
     // Needs more than one for repair master
@@ -526,10 +528,12 @@ class repair_writer {
 public:
     repair_writer(
             schema_ptr schema,
+            reader_permit permit,
             uint64_t estimated_partitions,
             size_t nr_peer_nodes,
             streaming::stream_reason reason)
             : _schema(std::move(schema))
+            , _permit(std::move(permit))
             , _estimated_partitions(estimated_partitions)
             , _nr_peer_nodes(nr_peer_nodes)
             , _reason(reason) {
@@ -543,7 +547,7 @@ public:
                 _partition_opened[node_idx] = true;
             });
         } else {
-            auto start = mutation_fragment(partition_start(dk->dk, tombstone()));
+            auto start = mutation_fragment(*_schema, _permit, partition_start(dk->dk, tombstone()));
             return _mq[node_idx]->push(std::move(start)).then([this, node_idx, mf = std::move(mf)] () mutable {
                 _partition_opened[node_idx] = true;
                 return _mq[node_idx]->push(std::move(mf));
@@ -563,7 +567,7 @@ public:
             return;
         }
         table& t = db.local().find_column_family(_schema->id());
-        auto [queue_reader, queue_handle] = make_queue_reader(_schema, t.streaming_read_concurrency_semaphore().make_permit());
+        auto [queue_reader, queue_handle] = make_queue_reader(_schema, _permit);
         _mq[node_idx] = std::move(queue_handle);
         _writer_done[node_idx] = mutation_writer::distribute_reader_and_consume_on_shards(_schema, std::move(queue_reader),
                 [&db, reason = this->_reason, estimated_partitions = this->_estimated_partitions] (flat_mutation_reader reader) {
@@ -607,7 +611,7 @@ public:
 
     future<> write_partition_end(unsigned node_idx) {
         if (_partition_opened[node_idx]) {
-            return _mq[node_idx]->push(partition_end()).then([this, node_idx] {
+            return _mq[node_idx]->push(mutation_fragment(*_schema, _permit, partition_end())).then([this, node_idx] {
                 _partition_opened[node_idx] = false;
             });
         }
@@ -691,6 +695,7 @@ private:
     seastar::sharded<netw::messaging_service>& _messaging;
     column_family& _cf;
     schema_ptr _schema;
+    reader_permit _permit;
     dht::token_range _range;
     repair_sync_boundary::tri_compare _cmp;
     // The algorithm used to find the row difference
@@ -792,6 +797,7 @@ public:
             , _messaging(ms)
             , _cf(cf)
             , _schema(s)
+            , _permit(_cf.streaming_read_concurrency_semaphore().make_permit())
             , _range(range)
             , _cmp(repair_sync_boundary::tri_compare(*_schema))
             , _algo(algo)
@@ -809,13 +815,14 @@ public:
                     _db,
                     _cf,
                     _schema,
+                    _permit,
                     _range,
                     _remote_sharder,
                     _master_node_shard_config.shard,
                     _seed,
                     repair_reader::is_local_reader(_repair_master || _same_sharding_config)
               )
-            , _repair_writer(_schema, _estimated_partitions, _nr_peer_nodes, _reason)
+            , _repair_writer(_schema, _permit, _estimated_partitions, _nr_peer_nodes, _reason)
             , _sink_source_for_get_full_row_hashes(_repair_meta_id, _nr_peer_nodes,
                     [&ms] (uint32_t repair_meta_id, netw::messaging_service::msg_addr addr) {
                         return ms.local().make_sink_and_source_for_repair_get_full_row_hashes_with_rpc_stream(repair_meta_id, addr);
@@ -1435,7 +1442,7 @@ private:
                         // optimization to avoid unfreeze again when
                         // mutation_fragment is needed by _repair_writer.do_write()
                         // to apply the repair_row to disk
-                        auto mf = make_lw_shared<mutation_fragment>(fmf.unfreeze(*_schema));
+                        auto mf = make_lw_shared<mutation_fragment>(fmf.unfreeze(*_schema, _permit));
                         auto hash = do_hash_for_mf(*dk_ptr, *mf);
                         position_in_partition pos(mf->position());
                         row_list.push_back(repair_row(std::move(fmf), std::move(pos), dk_ptr, std::move(hash), std::move(mf)));
@@ -1445,7 +1452,7 @@ private:
                     return do_for_each(x.get_mutation_fragments(), [this, &dk_ptr, &row_list, &last_mf, &cmp] (frozen_mutation_fragment& fmf) mutable {
                         _metrics.rx_row_nr += 1;
                         _metrics.rx_row_bytes += fmf.representation().size();
-                        auto mf = make_lw_shared<mutation_fragment>(fmf.unfreeze(*_schema));
+                        auto mf = make_lw_shared<mutation_fragment>(fmf.unfreeze(*_schema, _permit));
                         // If the mutation_fragment has the same position as
                         // the last mutation_fragment, it means they are the
                         // same row with different contents. We can not feed

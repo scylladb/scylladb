@@ -20,12 +20,13 @@
  */
 
 #include "test/lib/normalizing_reader.hh"
+#include "test/lib/reader_permit.hh"
 #include <seastar/core/future-util.hh>
 
 normalizing_reader::normalizing_reader(flat_mutation_reader rd)
     : impl(rd.schema(), rd.permit())
     , _rd(std::move(rd))
-    , _range_tombstones(*_rd.schema())
+    , _range_tombstones(*_rd.schema(), tests::make_permit())
 {}
 
 future<> normalizing_reader::fill_buffer(db::timeout_clock::time_point timeout) {
@@ -48,9 +49,9 @@ future<> normalizing_reader::fill_buffer(db::timeout_clock::time_point timeout) 
                     while (auto mfo = _range_tombstones.get_next(mf)) {
                         range_tombstone&& rt = std::move(*mfo).as_range_tombstone();
                         if (!less(after_pos, rt.end_position())) {
-                            push_mutation_fragment(std::move(rt));
+                            push_mutation_fragment(*_schema, _permit, std::move(rt));
                         } else {
-                            push_mutation_fragment(range_tombstone{rt.position(), after_pos, rt.tomb});
+                            push_mutation_fragment(*_schema, _permit, range_tombstone{rt.position(), after_pos, rt.tomb});
                             _range_tombstones.apply(range_tombstone{after_pos, rt.end_position(), rt.tomb});
                         }
                     }

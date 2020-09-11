@@ -40,6 +40,12 @@ logging::logger slogger("mc_writer");
 namespace sstables {
 namespace mc {
 
+namespace {
+
+thread_local reader_concurrency_semaphore reader_semaphore(reader_concurrency_semaphore::no_limits{}, "kx/lx writer");
+
+}
+
 using indexed_columns = std::vector<std::reference_wrapper<const column_definition>>;
 
 // There is a special case when we need to treat a non-full clustering key prefix as a full one
@@ -735,7 +741,7 @@ public:
         : sstable_writer::writer_impl(sst, s, pc, cfg)
         , _enc_stats(enc_stats)
         , _shard(shard)
-        , _range_tombstones(_schema)
+        , _range_tombstones(_schema, reader_semaphore.make_permit())
         , _tmp_bufs(_sst.sstable_buffer_size)
         , _sst_schema(make_sstable_schema(s, _enc_stats, _cfg))
         , _run_identifier(cfg.run_identifier)

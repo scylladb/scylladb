@@ -50,8 +50,9 @@ struct mock_consumer {
         bool _consume_end_of_stream_called = false;
         std::vector<mutation_fragment> _fragments;
     };
+    const schema& _schema;
     result _result;
-    mock_consumer(size_t depth) {
+    mock_consumer(const schema& s, size_t depth) : _schema(s) {
         _result._depth = depth;
     }
     stop_iteration update_depth() {
@@ -66,15 +67,15 @@ struct mock_consumer {
         return stop_iteration::no;
     }
     stop_iteration consume(static_row&& sr) {
-        _result._fragments.push_back(mutation_fragment(std::move(sr)));
+        _result._fragments.push_back(mutation_fragment(_schema, tests::make_permit(), std::move(sr)));
         return update_depth();
     }
     stop_iteration consume(clustering_row&& cr) {
-        _result._fragments.push_back(mutation_fragment(std::move(cr)));
+        _result._fragments.push_back(mutation_fragment(_schema, tests::make_permit(), std::move(cr)));
         return update_depth();
     }
     stop_iteration consume(range_tombstone&& rt) {
-        _result._fragments.push_back(mutation_fragment(std::move(rt)));
+        _result._fragments.push_back(mutation_fragment(_schema, tests::make_permit(), std::move(rt)));
         return update_depth();
     }
     stop_iteration consume_end_of_partition() {
@@ -104,7 +105,7 @@ SEASTAR_TEST_CASE(test_flat_mutation_reader_consume_single_partition) {
             size_t fragments_in_m = count_fragments(m);
             for (size_t depth = 1; depth <= fragments_in_m + 1; ++depth) {
                 auto r = flat_mutation_reader_from_mutations(tests::make_permit(), {m});
-                auto result = r.consume(mock_consumer(depth), db::no_timeout).get0();
+                auto result = r.consume(mock_consumer(*m.schema(), depth), db::no_timeout).get0();
                 BOOST_REQUIRE(result._consume_end_of_stream_called);
                 BOOST_REQUIRE_EQUAL(1, result._consume_new_partition_call_count);
                 BOOST_REQUIRE_EQUAL(1, result._consume_end_of_partition_call_count);
@@ -126,7 +127,7 @@ SEASTAR_TEST_CASE(test_flat_mutation_reader_consume_two_partitions) {
             size_t fragments_in_m2 = count_fragments(m2);
             for (size_t depth = 1; depth < fragments_in_m1; ++depth) {
                 auto r = flat_mutation_reader_from_mutations(tests::make_permit(), {m1, m2});
-                auto result = r.consume(mock_consumer(depth), db::no_timeout).get0();
+                auto result = r.consume(mock_consumer(*m1.schema(), depth), db::no_timeout).get0();
                 BOOST_REQUIRE(result._consume_end_of_stream_called);
                 BOOST_REQUIRE_EQUAL(1, result._consume_new_partition_call_count);
                 BOOST_REQUIRE_EQUAL(1, result._consume_end_of_partition_call_count);
@@ -143,7 +144,7 @@ SEASTAR_TEST_CASE(test_flat_mutation_reader_consume_two_partitions) {
             }
             for (size_t depth = fragments_in_m1; depth < fragments_in_m1 + fragments_in_m2 + 1; ++depth) {
                 auto r = flat_mutation_reader_from_mutations(tests::make_permit(), {m1, m2});
-                auto result = r.consume(mock_consumer(depth), db::no_timeout).get0();
+                auto result = r.consume(mock_consumer(*m1.schema(), depth), db::no_timeout).get0();
                 BOOST_REQUIRE(result._consume_end_of_stream_called);
                 BOOST_REQUIRE_EQUAL(2, result._consume_new_partition_call_count);
                 BOOST_REQUIRE_EQUAL(2, result._consume_end_of_partition_call_count);
@@ -550,7 +551,7 @@ public:
         BOOST_REQUIRE(!_previous_position);
         BOOST_REQUIRE_GE(_mutations.size(), 1);
         _previous_position.emplace(sr.position());
-        _mutations.back().partition().apply(*_schema, mutation_fragment(std::move(sr)));
+        _mutations.back().partition().apply(*_schema, mutation_fragment(*_schema, tests::make_permit(), std::move(sr)));
         return stop_iteration(bool(_skip_partition));
     }
     stop_iteration consume(clustering_row&& cr) {
@@ -558,7 +559,7 @@ public:
         verify_order(cr.position());
         BOOST_REQUIRE_GE(_mutations.size(), 1);
         _previous_position.emplace(cr.position());
-        _mutations.back().partition().apply(*_schema, mutation_fragment(std::move(cr)));
+        _mutations.back().partition().apply(*_schema, mutation_fragment(*_schema, tests::make_permit(), std::move(cr)));
         return stop_iteration(bool(_skip_partition));
     }
     stop_iteration consume(range_tombstone&& rt) {
@@ -567,7 +568,7 @@ public:
         verify_order(pos);
         BOOST_REQUIRE_GE(_mutations.size(), 1);
         _previous_position.emplace(pos);
-        _mutations.back().partition().apply(*_schema, mutation_fragment(std::move(rt)));
+        _mutations.back().partition().apply(*_schema, mutation_fragment(*_schema, tests::make_permit(), std::move(rt)));
         return stop_iteration(bool(_skip_partition));
     }
     stop_iteration consume_end_of_partition() {

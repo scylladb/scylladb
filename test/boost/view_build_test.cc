@@ -858,7 +858,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering) {
 
         std::vector<mutation> collected_muts;
 
-        staging_reader.consume_in_thread(db::view::view_updating_consumer(schema, as, staging_reader_handle,
+        staging_reader.consume_in_thread(db::view::view_updating_consumer(schema, permit, as, staging_reader_handle,
                     consumer_verifier(schema, permit, partition_rows, collected_muts)), db::no_timeout);
 
         BOOST_REQUIRE_EQUAL(muts.size(), collected_muts.size());

@@ -241,19 +241,19 @@ public:
     stop_iteration consume(static_row&& sr) {
         BOOST_REQUIRE(_current_mutation);
         verify_static_row(sr);
-        _current_mutation->apply(std::move(sr));
+        _current_mutation->apply(mutation_fragment(*_schema, tests::make_permit(), std::move(sr)));
         return stop_iteration::no;
     }
     stop_iteration consume(clustering_row&& cr) {
         BOOST_REQUIRE(_current_mutation);
         verify_clustering_row(cr);
-        _current_mutation->apply(std::move(cr));
+        _current_mutation->apply(mutation_fragment(*_schema, tests::make_permit(), std::move(cr)));
         return stop_iteration::no;
     }
     stop_iteration consume(range_tombstone&& rt) {
         BOOST_REQUIRE(_current_mutation);
         verify_range_tombstone(rt);
-        _current_mutation->apply(std::move(rt));
+        _current_mutation->apply(mutation_fragment(*_schema, tests::make_permit(), std::move(rt)));
         return stop_iteration::no;
     }
     stop_iteration consume_end_of_partition() {

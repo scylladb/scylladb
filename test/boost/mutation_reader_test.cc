@@ -926,7 +926,7 @@ public:
         return _reader.fill_buffer(timeout).then([this] {
             _end_of_stream = _reader.is_end_of_stream();
             while (!_reader.is_buffer_empty()) {
-                push_mutation_fragment(_reader.pop_mutation_fragment());
+                push_mutation_fragment(*_schema, _permit, _reader.pop_mutation_fragment());
             }
         });
     }
@@ -2023,7 +2023,7 @@ private:
             _end_of_stream = true;
             return false;
         }
-        push_mutation_fragment(partition_start(_s.make_pkey(_pkeys.at(_partition_index++)), {}));
+        push_mutation_fragment(*_s.schema(), tests::make_permit(), partition_start(_s.make_pkey(_pkeys.at(_partition_index++)), {}));
         return true;
     }
 
@@ -2033,10 +2033,10 @@ private:
         }
         auto ck = uint32_t(0);
         while (!is_buffer_full()) {
-            push_mutation_fragment(_s.make_row(_s.make_ckey(ck++), make_random_string(2 << 5)));
+            push_mutation_fragment(*_s.schema(), tests::make_permit(), _s.make_row(_s.make_ckey(ck++), make_random_string(2 << 5)));
         }
 
-        push_mutation_fragment(partition_end());
+        push_mutation_fragment(*_s.schema(), tests::make_permit(), partition_end());
     }
 
 public:
@@ -2468,21 +2468,22 @@ std::deque<mutation_fragment> make_fragments_with_non_monotonic_positions(simple
         gc_clock::time_point tombstone_deletion_time) {
     std::deque<mutation_fragment> fragments;
 
-    fragments.emplace_back(partition_start{std::move(pkey), {}});
+    fragments.emplace_back(*s.schema(), tests::make_permit(), partition_start{std::move(pkey), {}});
 
     int i = 0;
     size_t mem_usage = fragments.back().memory_usage(*s.schema());
 
     for (int buffers = 0; buffers < 2; ++buffers) {
         while (mem_usage <= max_buffer_size) {
-            fragments.emplace_back(s.make_range_tombstone(query::clustering_range::make(s.make_ckey(0), s.make_ckey(i + 1)), tombstone_deletion_time));
+            fragments.emplace_back(*s.schema(), tests::make_permit(),
+                    s.make_range_tombstone(query::clustering_range::make(s.make_ckey(0), s.make_ckey(i + 1)), tombstone_deletion_time));
             mem_usage += fragments.back().memory_usage(*s.schema());
             ++i;
         }
         mem_usage = 0;
     }
 
-    fragments.emplace_back(s.make_row(s.make_ckey(0), "v"));
+    fragments.emplace_back(*s.schema(), tests::make_permit(), s.make_row(s.make_ckey(0), "v"));
 
     return fragments;
 }
@@ -2715,7 +2716,7 @@ SEASTAR_THREAD_TEST_CASE(test_queue_reader) {
         handle.abort(std::make_exception_ptr<std::runtime_error>(std::runtime_error("error")));
 
         BOOST_REQUIRE_THROW(fill_buffer_fut.get(), std::runtime_error);
-        BOOST_REQUIRE_THROW(handle.push(partition_end{}).get(), std::runtime_error);
+        BOOST_REQUIRE_THROW(handle.push(mutation_fragment(*gen.schema(), tests::make_permit(), partition_end{})).get(), std::runtime_error);
     }
 
     // Detached handle
@@ -2727,7 +2728,7 @@ SEASTAR_THREAD_TEST_CASE(test_queue_reader) {
             auto throwaway_reader = std::move(reader);
         }
 
-        BOOST_REQUIRE_THROW(handle.push(partition_end{}).get(), std::runtime_error);
+        BOOST_REQUIRE_THROW(handle.push(mutation_fragment(*gen.schema(), tests::make_permit(), partition_end{})).get(), std::runtime_error);
         BOOST_REQUIRE_THROW(handle.push_end_of_stream(), std::runtime_error);
         BOOST_REQUIRE_THROW(fill_buffer_fut.get(), broken_promise);
     }
@@ -2750,7 +2751,7 @@ SEASTAR_THREAD_TEST_CASE(test_queue_reader) {
         }
 
         BOOST_REQUIRE_THROW(fill_buffer_fut.get(), std::runtime_error);
-        BOOST_REQUIRE_THROW(handle.push(partition_end{}).get(), std::runtime_error);
+        BOOST_REQUIRE_THROW(handle.push(mutation_fragment(*gen.schema(), tests::make_permit(), partition_end{})).get(), std::runtime_error);
     }
 
     // Abandoned handle aborts, destructor
@@ -2770,7 +2771,7 @@ SEASTAR_THREAD_TEST_CASE(test_queue_reader) {
         }
 
         BOOST_REQUIRE_THROW(fill_buffer_fut.get(), std::runtime_error);
-        BOOST_REQUIRE_THROW(handle.push(partition_end{}).get(), std::runtime_error);
+        BOOST_REQUIRE_THROW(handle.push(mutation_fragment(*gen.schema(), tests::make_permit(), partition_end{})).get(), std::runtime_error);
     }
 
     // Life-cycle, relies on ASAN for error reporting
@@ -2847,22 +2848,22 @@ SEASTAR_THREAD_TEST_CASE(test_compacting_reader_next_partition) {
         auto dk0 = ss.make_pkey(0);
         auto dk1 = ss.make_pkey(1);
 
-        mfs.emplace_back(partition_start(dk0, tombstone{}));
+        mfs.emplace_back(*ss.schema(), tests::make_permit(), partition_start(dk0, tombstone{}));
 
         auto i = 0;
         size_t mfs_size = 0;
         while (mfs_size <= buffer_size) {
-            mfs.emplace_back(ss.make_row(ss.make_ckey(i++), "v"));
+            mfs.emplace_back(*ss.schema(), tests::make_permit(), ss.make_row(ss.make_ckey(i++), "v"));
             mfs_size += mfs.back().memory_usage(schema);
         }
-        mfs.emplace_back(partition_end{});
+        mfs.emplace_back(*ss.schema(), tests::make_permit(), partition_end{});
 
-        mfs.emplace_back(partition_start(dk1, tombstone{}));
-        mfs.emplace_back(ss.make_row(ss.make_ckey(0), "v"));
-        mfs.emplace_back(partition_end{});
+        mfs.emplace_back(*ss.schema(), tests::make_permit(), partition_start(dk1, tombstone{}));
+        mfs.emplace_back(*ss.schema(), tests::make_permit(), ss.make_row(ss.make_ckey(0), "v"));
+        mfs.emplace_back(*ss.schema(), tests::make_permit(), partition_end{});
 
         for (const auto& mf : mfs) {
-            expected.emplace_back(*ss.schema(), mf);
+            expected.emplace_back(*ss.schema(), tests::make_permit(), mf);
         }
 
         auto mr = make_compacting_reader(make_flat_mutation_reader_from_fragments(ss.schema(), tests::make_permit(), std::move(mfs)),
@@ -2995,10 +2996,10 @@ SEASTAR_THREAD_TEST_CASE(test_manual_paused_evictable_reader_is_mutation_source)
 
 namespace {
 
-std::deque<mutation_fragment> copy_fragments(const schema& s, const std::deque<mutation_fragment>& o) {
+std::deque<mutation_fragment> copy_fragments(const schema& s, reader_permit permit, const std::deque<mutation_fragment>& o) {
     std::deque<mutation_fragment> buf;
     for (const auto& mf : o) {
-        buf.emplace_back(s, mf);
+        buf.emplace_back(s, permit, mf);
     }
     return buf;
 }
@@ -3024,7 +3025,7 @@ flat_mutation_reader create_evictable_reader_and_evict_after_first_buffer(
             if (!o) {
                 return {};
             }
-            return copy_fragments(*_schema, *o);
+            return copy_fragments(*_schema, _permit, *o);
         }
 
     public:
@@ -3114,26 +3115,26 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_trim_range_tombstones) {
     size_t mem_usage = 0;
 
     std::deque<mutation_fragment> first_buffer;
-    first_buffer.emplace_back(partition_start{pkey, {}});
+    first_buffer.emplace_back(*s.schema(), permit, partition_start{pkey, {}});
     mem_usage = first_buffer.back().memory_usage(*s.schema());
     for (int i = 0; i < second_buffer_ck; ++i) {
-        first_buffer.emplace_back(s.make_row(s.make_ckey(i++), "v"));
+        first_buffer.emplace_back(*s.schema(), permit, s.make_row(s.make_ckey(i++), "v"));
         mem_usage += first_buffer.back().memory_usage(*s.schema());
     }
     const auto last_fragment_position = position_in_partition(first_buffer.back().position());
     max_buffer_size = mem_usage;
-    first_buffer.emplace_back(s.make_row(s.make_ckey(second_buffer_ck), "v"));
+    first_buffer.emplace_back(*s.schema(), permit, s.make_row(s.make_ckey(second_buffer_ck), "v"));
 
     std::deque<mutation_fragment> second_buffer;
-    second_buffer.emplace_back(partition_start{pkey, {}});
+    second_buffer.emplace_back(*s.schema(), permit, partition_start{pkey, {}});
     mem_usage = second_buffer.back().memory_usage(*s.schema());
-    second_buffer.emplace_back(s.make_range_tombstone(query::clustering_range::make_ending_with(s.make_ckey(second_buffer_ck + 10))));
+    second_buffer.emplace_back(*s.schema(), permit, s.make_range_tombstone(query::clustering_range::make_ending_with(s.make_ckey(second_buffer_ck + 10))));
     int ckey = second_buffer_ck;
     while (mem_usage <= max_buffer_size) {
-        second_buffer.emplace_back(s.make_row(s.make_ckey(ckey++), "v"));
+        second_buffer.emplace_back(*s.schema(), permit, s.make_row(s.make_ckey(ckey++), "v"));
         mem_usage += second_buffer.back().memory_usage(*s.schema());
     }
-    second_buffer.emplace_back(partition_end{});
+    second_buffer.emplace_back(*s.schema(), permit, partition_end{});
 
     auto rd = create_evictable_reader_and_evict_after_first_buffer(s.schema(), permit, query::full_partition_range,
             s.schema()->full_slice(), std::move(first_buffer), last_fragment_position, std::move(second_buffer), max_buffer_size);
@@ -3220,30 +3221,30 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_self_validation) {
     const auto slice = partition_slice_builder(*s.schema()).with_range(ckrange).build();
 
     std::deque<mutation_fragment> first_buffer;
-    first_buffer.emplace_back(partition_start{pkeys[1], {}});
+    first_buffer.emplace_back(*s.schema(), permit, partition_start{pkeys[1], {}});
     size_t mem_usage = first_buffer.back().memory_usage(*s.schema());
     for (int i = 0; i < second_buffer_ck; ++i) {
-        first_buffer.emplace_back(s.make_row(s.make_ckey(i++), "v"));
+        first_buffer.emplace_back(*s.schema(), permit, s.make_row(s.make_ckey(i++), "v"));
         mem_usage += first_buffer.back().memory_usage(*s.schema());
     }
     max_buffer_size = mem_usage;
     auto last_fragment_position = position_in_partition(first_buffer.back().position());
-    first_buffer.emplace_back(s.make_row(s.make_ckey(second_buffer_ck), "v"));
+    first_buffer.emplace_back(*s.schema(), permit, s.make_row(s.make_ckey(second_buffer_ck), "v"));
 
-    auto make_second_buffer = [&s, &max_buffer_size, second_buffer_ck] (dht::decorated_key pkey, std::optional<int> first_ckey = {},
+    auto make_second_buffer = [&s, permit, &max_buffer_size, second_buffer_ck] (dht::decorated_key pkey, std::optional<int> first_ckey = {},
             bool inject_range_tombstone = false) mutable {
         auto ckey = first_ckey ? *first_ckey : second_buffer_ck;
         std::deque<mutation_fragment> second_buffer;
-        second_buffer.emplace_back(partition_start{std::move(pkey), {}});
+        second_buffer.emplace_back(*s.schema(), permit, partition_start{std::move(pkey), {}});
         size_t mem_usage = second_buffer.back().memory_usage(*s.schema());
         if (inject_range_tombstone) {
-            second_buffer.emplace_back(s.make_range_tombstone(query::clustering_range::make_ending_with(s.make_ckey(last_ck))));
+            second_buffer.emplace_back(*s.schema(), permit, s.make_range_tombstone(query::clustering_range::make_ending_with(s.make_ckey(last_ck))));
         }
         while (mem_usage <= max_buffer_size) {
-            second_buffer.emplace_back(s.make_row(s.make_ckey(ckey++), "v"));
+            second_buffer.emplace_back(*s.schema(), permit, s.make_row(s.make_ckey(ckey++), "v"));
             mem_usage += second_buffer.back().memory_usage(*s.schema());
         }
-        second_buffer.emplace_back(partition_end{});
+        second_buffer.emplace_back(*s.schema(), permit, partition_end{});
         return second_buffer;
     };
 
@@ -3258,7 +3259,7 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_self_validation) {
             permit,
             prange,
             slice,
-            copy_fragments(*s.schema(), first_buffer),
+            copy_fragments(*s.schema(), permit, first_buffer),
             last_fragment_position,
             make_second_buffer(pkeys[0]),
             max_buffer_size);
@@ -3270,7 +3271,7 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_self_validation) {
             permit,
             prange,
             slice,
-            copy_fragments(*s.schema(), first_buffer),
+            copy_fragments(*s.schema(), permit, first_buffer),
             last_fragment_position,
             make_second_buffer(pkeys[1]),
             max_buffer_size);
@@ -3282,7 +3283,7 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_self_validation) {
             permit,
             prange,
             slice,
-            copy_fragments(*s.schema(), first_buffer),
+            copy_fragments(*s.schema(), permit, first_buffer),
             last_fragment_position,
             make_second_buffer(pkeys[1], first_ck - 10),
             max_buffer_size);
@@ -3294,7 +3295,7 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_self_validation) {
             permit,
             prange,
             slice,
-            copy_fragments(*s.schema(), first_buffer),
+            copy_fragments(*s.schema(), permit, first_buffer),
             last_fragment_position,
             make_second_buffer(pkeys[1], first_ck - 10, true),
             max_buffer_size);
@@ -3306,7 +3307,7 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_self_validation) {
             permit,
             prange,
             slice,
-            copy_fragments(*s.schema(), first_buffer),
+            copy_fragments(*s.schema(), permit, first_buffer),
             last_fragment_position,
             make_second_buffer(pkeys[1], second_buffer_ck - 2),
             max_buffer_size);
@@ -3318,14 +3319,15 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_self_validation) {
             permit,
             prange,
             slice,
-            copy_fragments(*s.schema(), first_buffer),
+            copy_fragments(*s.schema(), permit, first_buffer),
             last_fragment_position,
             make_second_buffer(pkeys[1], second_buffer_ck - 2, true),
             max_buffer_size);
 
     {
         auto second_buffer = make_second_buffer(pkeys[1], second_buffer_ck);
-        second_buffer[1] = s.make_range_tombstone(query::clustering_range::make_ending_with(s.make_ckey(second_buffer_ck - 10)));
+        second_buffer[1] = mutation_fragment(*s.schema(), permit,
+                s.make_range_tombstone(query::clustering_range::make_ending_with(s.make_ckey(second_buffer_ck - 10))));
         check_evictable_reader_validation_is_triggered(
                 "pkey == _last_pkey; end(range_tombstone) < _next_position_in_partition",
                 trim_range_tombstones_error_prefix,
@@ -3333,7 +3335,7 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_self_validation) {
                 permit,
                 prange,
                 slice,
-                copy_fragments(*s.schema(), first_buffer),
+                copy_fragments(*s.schema(), permit, first_buffer),
                 last_fragment_position,
                 std::move(second_buffer),
                 max_buffer_size);
@@ -3341,7 +3343,8 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_self_validation) {
 
     {
         auto second_buffer = make_second_buffer(pkeys[1], second_buffer_ck);
-        second_buffer[1] = s.make_range_tombstone(query::clustering_range::make_ending_with(s.make_ckey(second_buffer_ck + 10)));
+        second_buffer[1] = mutation_fragment(*s.schema(), permit,
+                s.make_range_tombstone(query::clustering_range::make_ending_with(s.make_ckey(second_buffer_ck + 10))));
         check_evictable_reader_validation_is_triggered(
                 "pkey == _last_pkey; end(range_tombstone) > _next_position_in_partition",
                 "",
@@ -3349,7 +3352,7 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_self_validation) {
                 permit,
                 prange,
                 slice,
-                copy_fragments(*s.schema(), first_buffer),
+                copy_fragments(*s.schema(), permit, first_buffer),
                 last_fragment_position,
                 std::move(second_buffer),
                 max_buffer_size);
@@ -3357,7 +3360,8 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_self_validation) {
 
     {
         auto second_buffer = make_second_buffer(pkeys[1], second_buffer_ck);
-        second_buffer[1] = s.make_range_tombstone(query::clustering_range::make_starting_with(s.make_ckey(last_ck + 10)));
+        second_buffer[1] = mutation_fragment(*s.schema(), permit,
+                s.make_range_tombstone(query::clustering_range::make_starting_with(s.make_ckey(last_ck + 10))));
         check_evictable_reader_validation_is_triggered(
                 "pkey == _last_pkey; start(range_tombstone) ∉ ckrange (>)",
                 position_in_partition_error_prefix,
@@ -3365,7 +3369,7 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_self_validation) {
                 permit,
                 prange,
                 slice,
-                copy_fragments(*s.schema(), first_buffer),
+                copy_fragments(*s.schema(), permit, first_buffer),
                 last_fragment_position,
                 std::move(second_buffer),
                 max_buffer_size);
@@ -3378,7 +3382,7 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_self_validation) {
             permit,
             prange,
             slice,
-            copy_fragments(*s.schema(), first_buffer),
+            copy_fragments(*s.schema(), permit, first_buffer),
             last_fragment_position,
             make_second_buffer(pkeys[1], second_buffer_ck),
             max_buffer_size);
@@ -3390,7 +3394,7 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_self_validation) {
             permit,
             prange,
             slice,
-            copy_fragments(*s.schema(), first_buffer),
+            copy_fragments(*s.schema(), permit, first_buffer),
             last_fragment_position,
             make_second_buffer(pkeys[1], last_ck + 10),
             max_buffer_size);
@@ -3402,7 +3406,7 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_self_validation) {
             permit,
             prange,
             slice,
-            copy_fragments(*s.schema(), first_buffer),
+            copy_fragments(*s.schema(), permit, first_buffer),
             last_fragment_position,
             make_second_buffer(pkeys[2]),
             max_buffer_size);
@@ -3414,7 +3418,7 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_self_validation) {
             permit,
             prange,
             slice,
-            copy_fragments(*s.schema(), first_buffer),
+            copy_fragments(*s.schema(), permit, first_buffer),
             last_fragment_position,
             make_second_buffer(pkeys[3]),
             max_buffer_size);
@@ -3425,17 +3429,17 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_self_validation) {
 
     first_buffer.clear();
 
-    first_buffer.emplace_back(partition_start{pkeys[1], {}});
+    first_buffer.emplace_back(*s.schema(), permit, partition_start{pkeys[1], {}});
     mem_usage = first_buffer.back().memory_usage(*s.schema());
     for (int i = 0; i < second_buffer_ck; ++i) {
-        first_buffer.emplace_back(s.make_row(s.make_ckey(i++), "v"));
+        first_buffer.emplace_back(*s.schema(), permit, s.make_row(s.make_ckey(i++), "v"));
         mem_usage += first_buffer.back().memory_usage(*s.schema());
     }
-    first_buffer.emplace_back(partition_end{});
+    first_buffer.emplace_back(*s.schema(), permit, partition_end{});
     mem_usage += first_buffer.back().memory_usage(*s.schema());
     last_fragment_position = position_in_partition(first_buffer.back().position());
     max_buffer_size = mem_usage;
-    first_buffer.emplace_back(partition_start{pkeys[2], {}});
+    first_buffer.emplace_back(*s.schema(), permit, partition_start{pkeys[2], {}});
 
     check_evictable_reader_validation_is_triggered(
             "pkey < _last_pkey; pkey ∉ pkrange",
@@ -3444,7 +3448,7 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_self_validation) {
             permit,
             prange,
             slice,
-            copy_fragments(*s.schema(), first_buffer),
+            copy_fragments(*s.schema(), permit, first_buffer),
             last_fragment_position,
             make_second_buffer(pkeys[0]),
             max_buffer_size);
@@ -3456,7 +3460,7 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_self_validation) {
             permit,
             prange,
             slice,
-            copy_fragments(*s.schema(), first_buffer),
+            copy_fragments(*s.schema(), permit, first_buffer),
             last_fragment_position,
             make_second_buffer(pkeys[1]),
             max_buffer_size);
@@ -3468,7 +3472,7 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_self_validation) {
             permit,
             prange,
             slice,
-            copy_fragments(*s.schema(), first_buffer),
+            copy_fragments(*s.schema(), permit, first_buffer),
             last_fragment_position,
             make_second_buffer(pkeys[2]),
             max_buffer_size);
@@ -3480,7 +3484,7 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_self_validation) {
             permit,
             prange,
             slice,
-            copy_fragments(*s.schema(), first_buffer),
+            copy_fragments(*s.schema(), permit, first_buffer),
             last_fragment_position,
             make_second_buffer(pkeys[3]),
             max_buffer_size);

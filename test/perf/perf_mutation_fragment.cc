@@ -97,19 +97,19 @@ PERF_TEST_F(clustering_row, make_1M)
 
 PERF_TEST_F(clustering_row, copy_4)
 {
-    auto mf = mutation_fragment(*schema(), clustering_row_4());
+    auto mf = mutation_fragment(*schema(), tests::make_permit(), clustering_row_4());
     perf_tests::do_not_optimize(mf);
 }
 
 PERF_TEST_F(clustering_row, copy_4k)
 {
-    auto mf = mutation_fragment(*schema(), clustering_row_4k());
+    auto mf = mutation_fragment(*schema(), tests::make_permit(), clustering_row_4k());
     perf_tests::do_not_optimize(mf);
 }
 
 PERF_TEST_F(clustering_row, copy_1M)
 {
-    auto mf = mutation_fragment(*schema(), clustering_row_1M());
+    auto mf = mutation_fragment(*schema(), tests::make_permit(), clustering_row_1M());
     perf_tests::do_not_optimize(mf);
 }
 

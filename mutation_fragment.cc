@@ -89,32 +89,32 @@ std::ostream& operator<<(std::ostream& out, const position_range& range) {
     return out << "{" << range.start() << ", " << range.end() << "}";
 }
 
-mutation_fragment::mutation_fragment(static_row&& r)
-    : _kind(kind::static_row), _data(std::make_unique<data>())
+mutation_fragment::mutation_fragment(const schema& s, reader_permit permit, static_row&& r)
+    : _kind(kind::static_row), _data(std::make_unique<data>(std::move(permit)))
 {
     new (&_data->_static_row) static_row(std::move(r));
 }
 
-mutation_fragment::mutation_fragment(clustering_row&& r)
-    : _kind(kind::clustering_row), _data(std::make_unique<data>())
+mutation_fragment::mutation_fragment(const schema& s, reader_permit permit, clustering_row&& r)
+    : _kind(kind::clustering_row), _data(std::make_unique<data>(std::move(permit)))
 {
     new (&_data->_clustering_row) clustering_row(std::move(r));
 }
 
-mutation_fragment::mutation_fragment(range_tombstone&& r)
-    : _kind(kind::range_tombstone), _data(std::make_unique<data>())
+mutation_fragment::mutation_fragment(const schema& s, reader_permit permit, range_tombstone&& r)
+    : _kind(kind::range_tombstone), _data(std::make_unique<data>(std::move(permit)))
 {
     new (&_data->_range_tombstone) range_tombstone(std::move(r));
 }
 
-mutation_fragment::mutation_fragment(partition_start&& r)
-        : _kind(kind::partition_start), _data(std::make_unique<data>())
+mutation_fragment::mutation_fragment(const schema& s, reader_permit permit, partition_start&& r)
+        : _kind(kind::partition_start), _data(std::make_unique<data>(std::move(permit)))
 {
     new (&_data->_partition_start) partition_start(std::move(r));
 }
 
-mutation_fragment::mutation_fragment(partition_end&& r)
-        : _kind(kind::partition_end), _data(std::make_unique<data>())
+mutation_fragment::mutation_fragment(const schema& s, reader_permit permit, partition_end&& r)
+        : _kind(kind::partition_end), _data(std::make_unique<data>(std::move(permit)))
 {
     new (&_data->_partition_end) partition_end(std::move(r));
 }
@@ -231,7 +231,7 @@ std::ostream& operator<<(std::ostream& os, const mutation_fragment::printer& p) 
 
 mutation_fragment_opt range_tombstone_stream::do_get_next()
 {
-    return _list.pop_as<mutation_fragment>(_list.begin());
+    return mutation_fragment(_schema, _permit, _list.pop_as<range_tombstone>(_list.begin()));
 }
 
 mutation_fragment_opt range_tombstone_stream::get_next(const rows_entry& re)

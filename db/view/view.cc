@@ -1819,7 +1819,7 @@ public:
         }
 
         _fragments_memory_usage += cr.memory_usage(*_step.reader.schema());
-        _fragments.push_back(std::move(cr));
+        _fragments.emplace_back(*_step.reader.schema(), _builder._permit, std::move(cr));
         if (_fragments_memory_usage > batch_memory_max) {
             // Although we have not yet completed the batch of base rows that
             // compact_for_query<> planned for us (view_builder::batchsize),
@@ -1839,7 +1839,7 @@ public:
         inject_failure("view_builder_flush_fragments");
         _builder._as.check();
         if (!_fragments.empty()) {
-            _fragments.push_front(partition_start(_step.current_key, tombstone()));
+            _fragments.emplace_front(*_step.reader.schema(), _builder._permit, partition_start(_step.current_key, tombstone()));
             auto base_schema = _step.base->schema();
             auto views = with_base_info_snapshot(_views_to_build);
             auto reader = make_flat_mutation_reader_from_fragments(_step.reader.schema(), _builder._permit, std::move(_fragments));
@@ -2032,9 +2032,9 @@ void view_updating_consumer::maybe_flush_buffer_mid_partition() {
     }
 }
 
-view_updating_consumer::view_updating_consumer(schema_ptr schema, table& table, std::vector<sstables::shared_sstable> excluded_sstables, const seastar::abort_source& as,
+view_updating_consumer::view_updating_consumer(schema_ptr schema, reader_permit permit, table& table, std::vector<sstables::shared_sstable> excluded_sstables, const seastar::abort_source& as,
         evictable_reader_handle& staging_reader_handle)
-    : view_updating_consumer(std::move(schema), as, staging_reader_handle,
+    : view_updating_consumer(std::move(schema), std::move(permit), as, staging_reader_handle,
             [table = table.shared_from_this(), excluded_sstables = std::move(excluded_sstables)] (mutation m) mutable {
         auto s = m.schema();
         return table->stream_view_replica_updates(std::move(s), std::move(m), db::no_timeout, excluded_sstables);

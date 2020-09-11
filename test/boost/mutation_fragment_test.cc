@@ -160,13 +160,13 @@ SEASTAR_TEST_CASE(test_range_tombstones_stream) {
         auto rt3 = range_tombstone(create_ck({ 1, 1 }), t0,  bound_kind::incl_start, create_ck({ 2 }), bound_kind::incl_end);
         auto rt4 = range_tombstone(create_ck({ 2 }), t0, bound_kind::incl_start, create_ck({ 2, 2 }), bound_kind::incl_end);
 
-        mutation_fragment cr1 = clustering_row(create_ck({ 0, 0 }));
-        mutation_fragment cr2 = clustering_row(create_ck({ 1, 0 }));
-        mutation_fragment cr3 = clustering_row(create_ck({ 1, 1 }));
+        mutation_fragment cr1(*s, tests::make_permit(), clustering_row(create_ck({ 0, 0 })));
+        mutation_fragment cr2(*s, tests::make_permit(), clustering_row(create_ck({ 1, 0 })));
+        mutation_fragment cr3(*s, tests::make_permit(), clustering_row(create_ck({ 1, 1 })));
         auto cr4 = rows_entry(create_ck({ 1, 2 }));
         auto cr5 = rows_entry(create_ck({ 1, 3 }));
 
-        range_tombstone_stream rts(*s);
+        range_tombstone_stream rts(*s, tests::make_permit());
         rts.apply(range_tombstone(rt1));
         rts.apply(range_tombstone(rt2));
         rts.apply(range_tombstone(rt4));
@@ -182,7 +182,7 @@ SEASTAR_TEST_CASE(test_range_tombstones_stream) {
         mf = rts.get_next(cr2);
         BOOST_REQUIRE(!mf);
 
-        mf = rts.get_next(mutation_fragment(range_tombstone(rt3)));
+        mf = rts.get_next(mutation_fragment(*s, tests::make_permit(), range_tombstone(rt3)));
         BOOST_REQUIRE(mf && mf->is_range_tombstone());
         BOOST_REQUIRE(mf->as_range_tombstone().equal(*s, rt2));
 

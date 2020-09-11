@@ -30,6 +30,7 @@
 #include "mutation.hh"
 #include "schema_builder.hh"
 #include "sstable_utils.hh"
+#include "reader_permit.hh"
 
 // Helper for working with the following table:
 //
@@ -131,14 +132,14 @@ public:
         auto row = clustering_row(key);
         const column_definition& v_def = get_v_def(*_s);
         row.cells().apply(v_def, atomic_cell::make_live(*v_def.type, new_timestamp(), serialized(v)));
-        return mutation_fragment(std::move(row));
+        return mutation_fragment(*_s, tests::make_permit(), std::move(row));
     }
 
     mutation_fragment make_row_from_serialized_value(const clustering_key& key, bytes_view v) {
         auto row = clustering_row(key);
         const column_definition& v_def = get_v_def(*_s);
         row.cells().apply(v_def, atomic_cell::make_live(*v_def.type, new_timestamp(), v));
-        return mutation_fragment(std::move(row));
+        return mutation_fragment(*_s, tests::make_permit(), std::move(row));
     }
 
     void set_schema(schema_ptr s) {

@@ -442,16 +442,16 @@ read_context::dismantle_buffer_stats read_context::dismantle_compaction_state(de
 
     for (auto& rt : compaction_state.range_tombstones | boost::adaptors::reversed) {
         stats.add(*_schema, rt);
-        shard_buffer.emplace_front(std::move(rt));
+        shard_buffer.emplace_front(*_schema, _permit, std::move(rt));
     }
 
     if (compaction_state.static_row) {
         stats.add(*_schema, *compaction_state.static_row);
-        shard_buffer.emplace_front(std::move(*compaction_state.static_row));
+        shard_buffer.emplace_front(*_schema, _permit, std::move(*compaction_state.static_row));
     }
 
     stats.add(*_schema, compaction_state.partition_start);
-    shard_buffer.emplace_front(std::move(compaction_state.partition_start));
+    shard_buffer.emplace_front(*_schema, _permit, std::move(compaction_state.partition_start));
 
     return stats;
 }
@@ -479,7 +479,7 @@ future<> read_context::save_reader(shard_id shard, const dht::decorated_key& las
             auto& schema = *reader->schema();
             for (;rit != rend; ++rit) {
                 // Copy the fragment, the buffer is on another shard.
-                reader->unpop_mutation_fragment(mutation_fragment(schema, *rit));
+                reader->unpop_mutation_fragment(mutation_fragment(schema, rm.rparts->permit, *rit));
             }
 
             const auto size_after = reader->buffer_size();

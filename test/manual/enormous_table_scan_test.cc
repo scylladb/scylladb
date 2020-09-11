@@ -77,7 +77,7 @@ public:
 
             auto dk = get_dk();
             if (_pps == partition_production_state::before_partition_start) {
-                push_mutation_fragment(partition_start(std::move(dk), tombstone()));
+                push_mutation_fragment(*_schema, _permit, partition_start(std::move(dk), tombstone()));
                 _pps = partition_production_state::after_partition_start;
 
             } else if (_pps == partition_production_state::after_partition_start) {
@@ -107,10 +107,10 @@ public:
                 auto crow = clustering_row(std::move(ck));
                 // crow.set_cell(_cdef, atomic_cell::make_live(*_cdef.type, ));
                 crow.marker() = row_marker(api::new_timestamp());
-                push_mutation_fragment(std::move(crow));
+                push_mutation_fragment(*_schema, _permit, std::move(crow));
 
             } else if (_pps == partition_production_state::before_partition_end) {
-                push_mutation_fragment(partition_end());
+                push_mutation_fragment(*_schema, _permit, partition_end());
                 _pps = partition_production_state::after_partition_end;
                 _end_of_stream = true;
             }

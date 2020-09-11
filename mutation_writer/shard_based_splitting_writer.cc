@@ -83,23 +83,23 @@ public:
         if (!_shards[_current_shard]) {
             _shards[_current_shard] = shard_writer(_schema, _permit, _consumer);
         }
-        return write_to_shard(std::move(ps));
+        return write_to_shard(mutation_fragment(*_schema, _permit, std::move(ps)));
     }
 
     future<> consume(static_row&& sr) {
-        return write_to_shard(std::move(sr));
+        return write_to_shard(mutation_fragment(*_schema, _permit, std::move(sr)));
     }
 
     future<> consume(clustering_row&& cr) {
-        return write_to_shard(std::move(cr));
+        return write_to_shard(mutation_fragment(*_schema, _permit, std::move(cr)));
     }
 
     future<> consume(range_tombstone&& rt) {
-        return write_to_shard(std::move(rt));
+        return write_to_shard(mutation_fragment(*_schema, _permit, std::move(rt)));
     }
 
     future<> consume(partition_end&& pe) {
-        return write_to_shard(std::move(pe));
+        return write_to_shard(mutation_fragment(*_schema, _permit, std::move(pe)));
     }
 
     future<> consume_end_of_stream() {

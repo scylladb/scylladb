@@ -375,7 +375,7 @@ public:
         if (_fwd == streamed_mutation::forwarding::yes) {
             _end_of_stream = true;
         } else {
-            this->push_mutation_fragment(mutation_fragment(partition_end()));
+            this->push_mutation_fragment(mutation_fragment(*_schema, _permit, partition_end()));
             _partition_finished = true;
         }
     }
@@ -473,7 +473,7 @@ void mp_row_consumer_reader::on_next_partition(dht::decorated_key key, tombstone
     _end_of_stream = false;
     _current_partition_key = std::move(key);
     push_mutation_fragment(
-        mutation_fragment(partition_start(*_current_partition_key, tomb)));
+        mutation_fragment(*_schema, _permit, partition_start(*_current_partition_key, tomb)));
     _sst->get_stats().on_partition_read();
 }
 

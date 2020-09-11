@@ -142,8 +142,9 @@ void stream_session::init_messaging_service_handler(netw::messaging_service& ms)
                 bool got_end_of_stream = false;
             };
             auto cmd_status = make_lw_shared<stream_mutation_fragments_cmd_status>();
-            auto get_next_mutation_fragment = [source, plan_id, from, s, cmd_status] () mutable {
-                return source().then([plan_id, from, s, cmd_status] (std::optional<std::tuple<frozen_mutation_fragment, rpc::optional<stream_mutation_fragments_cmd>>> opt) mutable {
+            auto permit = cf.streaming_read_concurrency_semaphore().make_permit();
+            auto get_next_mutation_fragment = [source, plan_id, from, s, cmd_status, permit] () mutable {
+                return source().then([plan_id, from, s, cmd_status, permit] (std::optional<std::tuple<frozen_mutation_fragment, rpc::optional<stream_mutation_fragments_cmd>>> opt) mutable {
                     if (opt) {
                         auto cmd = std::get<1>(*opt);
                         if (cmd) {
@@ -162,7 +163,7 @@ void stream_session::init_messaging_service_handler(netw::messaging_service& ms)
                         }
                         frozen_mutation_fragment& fmf = std::get<0>(*opt);
                         auto sz = fmf.representation().size();
-                        auto mf = fmf.unfreeze(*s);
+                        auto mf = fmf.unfreeze(*s, permit);
                         streaming::get_local_stream_manager().update_progress(plan_id, from.addr, progress_info::direction::IN, sz);
                         return make_ready_future<mutation_fragment_opt>(std::move(mf));
                     } else {
@@ -178,7 +179,7 @@ void stream_session::init_messaging_service_handler(netw::messaging_service& ms)
             };
             //FIXME: discarded future.
             (void)mutation_writer::distribute_reader_and_consume_on_shards(s,
-                make_generating_reader(s, cf.streaming_read_concurrency_semaphore().make_permit(), std::move(get_next_mutation_fragment)),
+                make_generating_reader(s, permit, std::move(get_next_mutation_fragment)),
                 [plan_id, estimated_partitions, reason] (flat_mutation_reader reader) {
                     auto& cf = get_local_db().find_column_family(reader.schema());
                     return db::view::check_needs_view_update_path(_sys_dist_ks->local(), cf, reason).then([cf = cf.shared_from_this(), estimated_partitions, reader = std::move(reader)] (bool use_view_update_path) mutable {

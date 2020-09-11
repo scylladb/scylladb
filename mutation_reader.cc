@@ -955,7 +955,7 @@ future<> foreign_reader::fill_buffer(db::timeout_clock::time_point timeout) {
         _end_of_stream = res.end_of_stream;
         for (const auto& mf : *res.buffer) {
             // Need a copy since the mf is on the remote shard.
-            push_mutation_fragment(mutation_fragment(*_schema, mf));
+            push_mutation_fragment(mutation_fragment(*_schema, _permit, mf));
         }
     });
 }
@@ -1646,7 +1646,7 @@ void shard_reader::stop() noexcept {
             auto&& [irh, remote_buffer] = remains;
             auto buffer = detach_buffer();
             for (const auto& mf : *remote_buffer) {
-                buffer.emplace_back(*_schema, mf); // we are copying from the remote shard.
+                buffer.emplace_back(*_schema, _permit, mf); // we are copying from the remote shard.
             }
             return reader_lifecycle_policy::stopped_reader{std::move(irh), std::move(buffer), _pending_next_partition};
         });
@@ -1701,7 +1701,7 @@ future<> shard_reader::do_fill_buffer(db::timeout_clock::time_point timeout) {
     return fill_buf_fut.then([this, zis = shared_from_this()] (remote_fill_buffer_result res) mutable {
         _end_of_stream = res.end_of_stream;
         for (const auto& mf : *res.buffer) {
-            push_mutation_fragment(mutation_fragment(*_schema, mf));
+            push_mutation_fragment(mutation_fragment(*_schema, _permit, mf));
         }
     });
 }
@@ -2156,7 +2156,7 @@ private:
 private:
     void maybe_push_partition_start() {
         if (_has_compacted_partition_start) {
-            push_mutation_fragment(std::move(_last_uncompacted_partition_start));
+            push_mutation_fragment(mutation_fragment(*_schema, _permit, std::move(_last_uncompacted_partition_start)));
             _has_compacted_partition_start = false;
         }
     }
@@ -2182,23 +2182,23 @@ private:
     }
     stop_iteration consume(static_row&& sr, tombstone, bool) {
         maybe_push_partition_start();
-        push_mutation_fragment(std::move(sr));
+        push_mutation_fragment(mutation_fragment(*_schema, _permit, std::move(sr)));
         return stop_iteration::no;
     }
     stop_iteration consume(clustering_row&& cr, row_tombstone, bool) {
         maybe_push_partition_start();
-        push_mutation_fragment(std::move(cr));
+        push_mutation_fragment(mutation_fragment(*_schema, _permit, std::move(cr)));
         return stop_iteration::no;
     }
     stop_iteration consume(range_tombstone&& rt) {
         maybe_push_partition_start();
-        push_mutation_fragment(std::move(rt));
+        push_mutation_fragment(mutation_fragment(*_schema, _permit, std::move(rt)));
         return stop_iteration::no;
     }
     stop_iteration consume_end_of_partition() {
         maybe_push_partition_start();
         if (!_ignore_partition_end) {
-            push_mutation_fragment(partition_end{});
+            push_mutation_fragment(mutation_fragment(*_schema, _permit, partition_end{}));
         }
         return stop_iteration::no;
     }

@@ -396,7 +396,7 @@ public:
         , _schema(schema)
         , _slice(slice)
         , _fwd(fwd)
-        , _range_tombstones(*_schema)
+        , _range_tombstones(*_schema, this->permit())
         , _treat_non_compound_rt_as_compound(!sst->has_correct_non_compound_range_tombstones())
     { }
 
@@ -456,7 +456,7 @@ public:
             ret = flush();
         }
         advance_to(rt);
-        _in_progress = mutation_fragment(std::move(rt));
+        _in_progress = mutation_fragment(*_schema, permit(), std::move(rt));
         if (_out_of_range) {
             ret = push_ready_fragments_out_of_range();
         }
@@ -480,9 +480,9 @@ public:
         if (!_in_progress) {
             advance_to(pos);
             if (is_static) {
-                _in_progress = mutation_fragment(static_row());
+                _in_progress = mutation_fragment(*_schema, permit(), static_row());
             } else {
-                _in_progress = mutation_fragment(clustering_row(std::move(pos.key())));
+                _in_progress = mutation_fragment(*_schema, permit(), clustering_row(std::move(pos.key())));
             }
             if (_out_of_range) {
                 ret = push_ready_fragments_out_of_range();
@@ -965,7 +965,7 @@ class mp_row_consumer_m : public consumer_m {
         const auto action = _mf_filter->apply(rt);
         switch (action) {
         case mutation_fragment_filter::result::emit:
-            _reader->push_mutation_fragment(std::move(rt));
+            _reader->push_mutation_fragment(mutation_fragment(*_schema, permit(), std::move(rt)));
             break;
         case mutation_fragment_filter::result::ignore:
             if (_mf_filter->out_of_range()) {
@@ -1064,7 +1064,7 @@ public:
                 assert(_mf_filter);
                 switch (_mf_filter->apply(*mfopt)) {
                 case mutation_fragment_filter::result::emit:
-                    _reader->push_mutation_fragment(*std::exchange(mfopt, {}));
+                    _reader->push_mutation_fragment(mutation_fragment(*_schema, permit(), *std::exchange(mfopt, {})));
                     break;
                 case mutation_fragment_filter::result::ignore:
                     mfopt.reset();
@@ -1385,7 +1385,7 @@ public:
                 auto action = _mf_filter->apply(_in_progress_static_row);
                 switch (action) {
                 case mutation_fragment_filter::result::emit:
-                    _reader->push_mutation_fragment(std::move(_in_progress_static_row));
+                    _reader->push_mutation_fragment(mutation_fragment(*_schema, permit(), std::move(_in_progress_static_row)));
                     break;
                 case mutation_fragment_filter::result::ignore:
                     break;
@@ -1398,7 +1398,7 @@ public:
             if (!_cells.empty()) {
                 fill_cells(column_kind::regular_column, _in_progress_row->cells());
             }
-            _reader->push_mutation_fragment(*std::exchange(_in_progress_row, {}));
+            _reader->push_mutation_fragment(mutation_fragment(*_schema, permit(), *std::exchange(_in_progress_row, {})));
         }
 
         return proceed(!_reader->is_buffer_full());
@@ -1425,7 +1425,7 @@ public:
                                            _opened_range_tombstone->tomb};
                 sstlog.trace("mp_row_consumer_m {}: on_end_of_stream(), emitting last tombstone: {}", fmt::ptr(this), rt);
                 _opened_range_tombstone.reset();
-                _reader->push_mutation_fragment(std::move(rt));
+                _reader->push_mutation_fragment(mutation_fragment(*_schema, permit(), std::move(rt)));
             }
         }
         if (!_reader->_partition_finished) {
@@ -1446,7 +1446,7 @@ public:
         _reader->_index_in_current_partition = false;
         _reader->_partition_finished = true;
         _reader->_before_partition = true;
-        _reader->push_mutation_fragment(mutation_fragment(partition_end()));
+        _reader->push_mutation_fragment(mutation_fragment(*_schema, permit(), partition_end()));
         return proceed::yes;
     }
 

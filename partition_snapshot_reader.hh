@@ -55,6 +55,7 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
     // allocation section retry (_clustering_rows).
     class lsa_partition_reader {
         const schema& _schema;
+        reader_permit _permit;
         rows_entry::compare _cmp;
         position_in_partition::equal_compare _eq;
         heap_compare _heap_cmp;
@@ -127,10 +128,11 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
             return !_clustering_rows.empty();
         }
     public:
-        explicit lsa_partition_reader(const schema& s, partition_snapshot_ptr snp,
+        explicit lsa_partition_reader(const schema& s, reader_permit permit, partition_snapshot_ptr snp,
                                       logalloc::region& region, logalloc::allocating_section& read_section,
                                       bool digest_requested)
             : _schema(s)
+            , _permit(std::move(permit))
             , _cmp(s)
             , _eq(s)
             , _heap_cmp(s)
@@ -180,7 +182,7 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
                     if (_digest_requested) {
                         e.row().cells().prepare_hash(_schema, column_kind::regular_column);
                     }
-                    auto result = mutation_fragment(mutation_fragment::clustering_row_tag_t(), _schema, e);
+                    auto result = mutation_fragment(mutation_fragment::clustering_row_tag_t(), _schema, _permit, _schema, e);
                     while (has_more_rows() && _eq(peek_row().position(), result.as_clustering_row().position())) {
                         const rows_entry& e = pop_clustering_row();
                         if (_digest_requested) {
@@ -220,7 +222,7 @@ private:
     void push_static_row() {
         auto sr = _reader.get_static_row();
         if (!sr.empty()) {
-            emplace_mutation_fragment(mutation_fragment(std::move(sr)));
+            emplace_mutation_fragment(mutation_fragment(*_schema, _permit, std::move(sr)));
         }
     }
 
@@ -250,7 +252,7 @@ private:
     void on_new_range() {
         if (_current_ck_range == _ck_range_end) {
             _end_of_stream = true;
-            push_mutation_fragment(partition_end());
+            push_mutation_fragment(mutation_fragment(*_schema, _permit, partition_end()));
         }
         _no_more_rows_in_current_range = false;
     }
@@ -279,11 +281,11 @@ public:
         , _ck_ranges(std::move(crr))
         , _current_ck_range(_ck_ranges.begin())
         , _ck_range_end(_ck_ranges.end())
-        , _range_tombstones(*_schema)
-        , _reader(*_schema, std::move(snp), region, read_section, digest_requested)
+        , _range_tombstones(*_schema, _permit)
+        , _reader(*_schema, _permit, std::move(snp), region, read_section, digest_requested)
     {
         _reader.with_reserve([&] {
-            push_mutation_fragment(partition_start(std::move(dk), _reader.partition_tombstone()));
+            push_mutation_fragment(*_schema, _permit, partition_start(std::move(dk), _reader.partition_tombstone()));
         });
     }
 

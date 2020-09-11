@@ -72,6 +72,7 @@ future<> view_update_generator::start() {
                         ssts->insert(sst);
                     }
 
+                    auto permit = _db.get_reader_concurrency_semaphore().make_permit();
                     auto ms = mutation_source([this, ssts] (
                                 schema_ptr s,
                                 reader_permit permit,
@@ -86,7 +87,7 @@ future<> view_update_generator::start() {
                     auto [staging_sstable_reader, staging_sstable_reader_handle] = make_manually_paused_evictable_reader(
                             std::move(ms),
                             s,
-                            _db.get_reader_concurrency_semaphore().make_permit(),
+                            permit,
                             query::full_partition_range,
                             s->full_slice(),
                             service::get_local_streaming_priority(),
@@ -94,7 +95,7 @@ future<> view_update_generator::start() {
                             ::mutation_reader::forwarding::no);
 
                     inject_failure("view_update_generator_consume_staging_sstable");
-                    auto result = staging_sstable_reader.consume_in_thread(view_updating_consumer(s, *t, sstables, _as, staging_sstable_reader_handle), db::no_timeout);
+                    auto result = staging_sstable_reader.consume_in_thread(view_updating_consumer(s, std::move(permit), *t, sstables, _as, staging_sstable_reader_handle), db::no_timeout);
                     if (result == stop_iteration::yes) {
                         break;
                     }

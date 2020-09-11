@@ -133,7 +133,7 @@ class cache_flat_mutation_reader final : public flat_mutation_reader::impl {
     void maybe_add_to_cache(const static_row& sr);
     void maybe_set_static_row_continuous();
     void finish_reader() {
-        push_mutation_fragment(partition_end());
+        push_mutation_fragment(*_schema, _permit, partition_end());
         _end_of_stream = true;
         _state = state::end_of_stream;
     }
@@ -158,7 +158,7 @@ public:
         , _next_row(*_schema, *_snp)
     {
         clogger.trace("csm {}: table={}.{}", fmt::ptr(this), _schema->ks_name(), _schema->cf_name());
-        push_mutation_fragment(partition_start(std::move(dk), _snp->partition_tombstone()));
+        push_mutation_fragment(*_schema, _permit, partition_start(std::move(dk), _snp->partition_tombstone()));
     }
     cache_flat_mutation_reader(const cache_flat_mutation_reader&) = delete;
     cache_flat_mutation_reader(cache_flat_mutation_reader&&) = delete;
@@ -187,7 +187,7 @@ future<> cache_flat_mutation_reader::process_static_row(db::timeout_clock::time_
             return _snp->static_row(_read_context->digest_requested());
         });
         if (!sr.empty()) {
-            push_mutation_fragment(mutation_fragment(std::move(sr)));
+            push_mutation_fragment(mutation_fragment(*_schema, _permit, std::move(sr)));
         }
         return make_ready_future<>();
     } else {
@@ -516,7 +516,7 @@ void cache_flat_mutation_reader::copy_from_cache_to_buffer() {
                 return;
             }
         }
-        push_mutation_fragment(std::move(rts));
+        push_mutation_fragment(*_schema, _permit, std::move(rts));
     }
     // We add the row to the buffer even when it's full.
     // This simplifies the code. For more info see #3139.
@@ -617,7 +617,7 @@ inline
 void cache_flat_mutation_reader::add_to_buffer(const partition_snapshot_row_cursor& row) {
     if (!row.dummy()) {
         _read_context->cache().on_row_hit();
-        add_clustering_row_to_buffer(row.row(_read_context->digest_requested()));
+        add_clustering_row_to_buffer(mutation_fragment(*_schema, _permit, row.row(_read_context->digest_requested())));
     }
 }
 
@@ -649,7 +649,7 @@ void cache_flat_mutation_reader::add_to_buffer(range_tombstone&& rt) {
         _lower_bound = position_in_partition(rt.position());
         _lower_bound_changed = true;
     }
-    push_mutation_fragment(std::move(rt));
+    push_mutation_fragment(*_schema, _permit, std::move(rt));
 }
 
 inline

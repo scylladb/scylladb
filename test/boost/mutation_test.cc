@@ -412,7 +412,7 @@ SEASTAR_THREAD_TEST_CASE(test_large_collection_allocation) {
 
         row r;
         r.apply(cdef, atomic_cell_or_collection(cmd.serialize(*collection_type)));
-        mut.apply(clustering_row(clustering_key_prefix::make_empty(), {}, {}, std::move(r)));
+        mut.apply(mutation_fragment(*schema, tests::make_permit(), clustering_row(clustering_key_prefix::make_empty(), {}, {}, std::move(r))));
 
         return mut;
     };

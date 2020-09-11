@@ -4303,7 +4303,7 @@ SEASTAR_TEST_CASE(test_repeated_tombstone_skipping) {
             query::clustering_range::bound(table.make_ckey(count - 1), true)
         ));
 
-        fragments.push_back(mutation_fragment(range_tombstone(rt)));
+        fragments.push_back(mutation_fragment(*table.schema(), tests::make_permit(), range_tombstone(rt)));
 
         std::vector<range_tombstone> rts;
 
@@ -4313,10 +4313,10 @@ SEASTAR_TEST_CASE(test_repeated_tombstone_skipping) {
                 query::clustering_range::bound(table.make_ckey(seq), true),
                 query::clustering_range::bound(table.make_ckey(seq + 1), false)
             )));
-            fragments.push_back(range_tombstone(rts.back()));
+            fragments.emplace_back(*table.schema(), tests::make_permit(), range_tombstone(rts.back()));
             ++seq;
 
-            fragments.push_back(table.make_row(table.make_ckey(seq), make_random_string(1)));
+            fragments.emplace_back(*table.schema(), tests::make_permit(), table.make_row(table.make_ckey(seq), make_random_string(1)));
             ++seq;
         }
 
@@ -5333,9 +5333,9 @@ SEASTAR_TEST_CASE(sstable_scrub_test) {
                     testlog.trace("Writing partition {}", pkey.with_schema(*schema));
 
                     if (write_to_scrubbed) {
-                        scrubbed_fragments.emplace_back(partition_start(dkey, {}));
+                        scrubbed_fragments.emplace_back(*schema, tests::make_permit(), partition_start(dkey, {}));
                     }
-                    corrupt_fragments.emplace_back(partition_start(dkey, {}));
+                    corrupt_fragments.emplace_back(*schema, tests::make_permit(), partition_start(dkey, {}));
                     writer.consume_new_partition(dkey);
 
                     {
@@ -5344,9 +5344,9 @@ SEASTAR_TEST_CASE(sstable_scrub_test) {
                         testlog.trace("Writing row {}", sr.position());
 
                         if (write_to_scrubbed) {
-                            scrubbed_fragments.emplace_back(static_row(*schema, sr));
+                            scrubbed_fragments.emplace_back(*schema, tests::make_permit(), static_row(*schema, sr));
                         }
-                        corrupt_fragments.emplace_back(static_row(*schema, sr));
+                        corrupt_fragments.emplace_back(*schema, tests::make_permit(), static_row(*schema, sr));
                         writer.consume(std::move(sr));
                     }
 
@@ -5357,16 +5357,16 @@ SEASTAR_TEST_CASE(sstable_scrub_test) {
                         testlog.trace("Writing row {}", cr.position());
 
                         if (write_to_scrubbed) {
-                            scrubbed_fragments.emplace_back(clustering_row(*schema, cr));
+                            scrubbed_fragments.emplace_back(*schema, tests::make_permit(), clustering_row(*schema, cr));
                         }
-                        corrupt_fragments.emplace_back(clustering_row(*schema, cr));
+                        corrupt_fragments.emplace_back(*schema, tests::make_permit(), clustering_row(*schema, cr));
                         writer.consume(clustering_row(*schema, cr));
 
                         // write row twice
                         if (i == (rows_count / 2)) {
                             auto bad_cr = make_clustering_row(i - 2);
                             testlog.trace("Writing out-of-order row {}", bad_cr.position());
-                            corrupt_fragments.emplace_back(clustering_row(*schema, bad_cr));
+                            corrupt_fragments.emplace_back(*schema, tests::make_permit(), clustering_row(*schema, bad_cr));
                             writer.consume(std::move(bad_cr));
                         }
                     }
@@ -5374,9 +5374,9 @@ SEASTAR_TEST_CASE(sstable_scrub_test) {
                     testlog.trace("Writing partition_end");
 
                     if (write_to_scrubbed) {
-                        scrubbed_fragments.emplace_back(partition_end{});
+                        scrubbed_fragments.emplace_back(*schema, tests::make_permit(), partition_end{});
                     }
-                    corrupt_fragments.emplace_back(partition_end{});
+                    corrupt_fragments.emplace_back(*schema, tests::make_permit(), partition_end{});
                     writer.consume_end_of_partition();
                 };
 
@@ -5456,7 +5456,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_reader_test) {
     auto make_partition_start = [&, schema] (unsigned pk) {
         auto pkey = partition_key::from_deeply_exploded(*schema, { local_keys.at(pk) });
         auto dkey = dht::decorate_key(*schema, pkey);
-        return partition_start(std::move(dkey), {});
+        return mutation_fragment(*schema, tests::make_permit(), partition_start(std::move(dkey), {}));
     };
 
     auto make_static_row = [&, schema, ts] {
@@ -5464,7 +5464,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_reader_test) {
         auto cdef = schema->static_column_at(0);
         auto ac = atomic_cell::make_live(*cdef.type, ts, cdef.type->decompose(data_value(1)));
         r.apply(cdef, atomic_cell_or_collection{std::move(ac)});
-        return static_row(*schema, std::move(r));
+        return mutation_fragment(*schema, tests::make_permit(), static_row(*schema, std::move(r)));
     };
 
     auto make_clustering_row = [&, schema, ts] (unsigned i) {
@@ -5472,11 +5472,12 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_reader_test) {
         auto cdef = schema->regular_column_at(0);
         auto ac = atomic_cell::make_live(*cdef.type, ts, cdef.type->decompose(data_value(1)));
         r.apply(cdef, atomic_cell_or_collection{std::move(ac)});
-        return clustering_row(clustering_key::from_single_value(*schema, int32_type->decompose(data_value(int(i)))), {}, {}, std::move(r));
+        return mutation_fragment(*schema, tests::make_permit(),
+                clustering_row(clustering_key::from_single_value(*schema, int32_type->decompose(data_value(int(i)))), {}, {}, std::move(r)));
     };
 
     auto add_fragment = [&, schema] (mutation_fragment mf, bool add_to_scrubbed = true) {
-        corrupt_fragments.emplace_back(mutation_fragment(*schema, mf));
+        corrupt_fragments.emplace_back(mutation_fragment(*schema, tests::make_permit(), mf));
         if (add_to_scrubbed) {
             scrubbed_fragments.emplace_back(std::move(mf));
         }
@@ -5488,7 +5489,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_reader_test) {
     add_fragment(make_clustering_row(0));
     add_fragment(make_clustering_row(2));
     add_fragment(make_clustering_row(1), false); // out-of-order clustering key
-    scrubbed_fragments.emplace_back(partition_end{}); // missing partition-end
+    scrubbed_fragments.emplace_back(*schema, tests::make_permit(), partition_end{}); // missing partition-end
 
     // Partition 2
     add_fragment(make_partition_start(2));
@@ -5496,7 +5497,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_reader_test) {
     add_fragment(make_clustering_row(0));
     add_fragment(make_clustering_row(1));
     add_fragment(make_static_row(), false); // out-of-order static row
-    add_fragment(partition_end{});
+    add_fragment(mutation_fragment(*schema, tests::make_permit(), partition_end{}));
 
     // Partition 1 - out-of-order
     add_fragment(make_partition_start(1), false);
@@ -5505,7 +5506,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_reader_test) {
     add_fragment(make_clustering_row(1), false);
     add_fragment(make_clustering_row(2), false);
     add_fragment(make_clustering_row(3), false);
-    add_fragment(partition_end{}, false);
+    add_fragment(mutation_fragment(*schema, tests::make_permit(), partition_end{}), false);
 
     // Partition 3
     add_fragment(make_partition_start(3));
@@ -5514,7 +5515,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_reader_test) {
     add_fragment(make_clustering_row(1));
     add_fragment(make_clustering_row(2));
     add_fragment(make_clustering_row(3));
-    scrubbed_fragments.emplace_back(partition_end{}); // missing partition-end - at EOS
+    scrubbed_fragments.emplace_back(*schema, tests::make_permit(), partition_end{}); // missing partition-end - at EOS
 
     auto r = assert_that(make_scrubbing_reader(make_flat_mutation_reader_from_fragments(schema, tests::make_permit(), std::move(corrupt_fragments)), true));
     for (const auto& mf : scrubbed_fragments) {
