@@ -664,6 +664,7 @@ class boost_intrusive_list_printer(gdb.printing.PrettyPrinter):
 def build_pretty_printer():
     pp = gdb.printing.RegexpCollectionPrettyPrinter('scylla')
     pp.add_printer('sstring', r'^seastar::basic_sstring<char,.*>$', sstring_printer)
+    pp.add_printer('bytes', r'^seastar::basic_sstring<signed char, unsigned int, 31, false>$', sstring_printer)
     pp.add_printer('managed_bytes', r'^managed_bytes$', managed_bytes_printer)
     pp.add_printer('partition_entry', r'^partition_entry$', partition_entry_printer)
     pp.add_printer('mutation_partition', r'^mutation_partition$', mutation_partition_printer)
