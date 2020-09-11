@@ -26,6 +26,7 @@ import argparse
 import subprocess
 import re
 import distro
+import shutil
 
 from scylla_util import *
 
@@ -41,7 +42,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     if is_debian_variant():
-        if not os.path.exists('/usr/sbin/ntpd') or not os.path.exists('/usr/sbin/ntpdate'):
+        if not shutil.which('ntpd') or not shutil.which('ntpdate'):
             run('apt-get install -y ntp ntpdate')
         with open('/etc/ntp.conf') as f:
             conf = f.read()
@@ -57,7 +58,7 @@ if __name__ == '__main__':
         ntp.start()
 
     if is_gentoo_variant():
-        if not os.path.exists('/usr/sbin/ntpd'):
+        if not shutil.which('ntpd'):
             run('emerge -uq net-misc/ntp')
         with open('/etc/ntp.conf') as f:
             conf = f.read()
@@ -78,7 +79,7 @@ if __name__ == '__main__':
 
     if is_redhat_variant():
         if int(distro.major_version()) >= 8:
-            if not os.path.exists('/usr/sbin/chronyd'):
+            if not shutil.which('chronyd'):
                 run('dnf install -y chrony')
             with open('/etc/chrony.conf') as f:
                 conf = f.read()
@@ -92,7 +93,7 @@ if __name__ == '__main__':
             chronyd.restart()
             run('chronyc makestep')
         else:
-            if not os.path.exists('/usr/sbin/ntpd') or not os.path.exists('/usr/sbin/ntpdate'):
+            if not shutil.which('ntpd') or not shutil.which('ntpdate'):
                 run('yum install -y ntp ntpdate')
             with open('/etc/ntp.conf') as f:
                 conf = f.read()
