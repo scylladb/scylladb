@@ -1025,16 +1025,6 @@ int main(int ac, char** av) {
             }).get();
 
             supervisor::notify("starting messaging service");
-            // Start handling REPAIR_CHECKSUM_RANGE messages
-            messaging.invoke_on_all([&db] (auto& ms) {
-                ms.register_repair_checksum_range([&db] (sstring keyspace, sstring cf, dht::token_range range, rpc::optional<repair_checksum> hash_version) {
-                    auto hv = hash_version ? *hash_version : repair_checksum::legacy;
-                    return do_with(std::move(keyspace), std::move(cf), std::move(range),
-                            [&db, hv] (auto& keyspace, auto& cf, auto& range) {
-                        return checksum_range(db, keyspace, cf, range, hv);
-                    });
-                });
-            }).get();
             auto max_memory_repair = db.local().get_available_memory() * 0.1;
             repair_service rs(gossiper, max_memory_repair);
             auto stop_repair_service = defer_verbose_shutdown("repair service", [&rs] {

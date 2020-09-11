@@ -51,6 +51,8 @@
 
 logging::logger rlogger("repair");
 
+static sharded<netw::messaging_service>* _messaging;
+
 class node_ops_metrics {
 public:
     node_ops_metrics() {
@@ -2201,17 +2203,38 @@ future<> replace_with_repair(seastar::sharded<database>& db, seastar::sharded<ne
     return do_rebuild_replace_with_repair(db, ms, std::move(tm), std::move(op), std::move(source_dc), reason);
 }
 
+static future<> init_messaging_service_handler(sharded<database>& db, sharded<netw::messaging_service>& messaging) {
+    _messaging = &messaging;
+    return messaging.invoke_on_all([&db] (auto& ms) {
+        ms.register_repair_checksum_range([&db] (sstring keyspace, sstring cf, dht::token_range range, rpc::optional<repair_checksum> hash_version) {
+            auto hv = hash_version ? *hash_version : repair_checksum::legacy;
+            return do_with(std::move(keyspace), std::move(cf), std::move(range),
+                    [&db, hv] (auto& keyspace, auto& cf, auto& range) {
+                return checksum_range(db, keyspace, cf, range, hv);
+            });
+        });
+    });
+}
+
+static future<> uninit_messaging_service_handler() {
+    return _messaging->invoke_on_all([] (auto& ms) {
+        return ms.unregister_repair_checksum_range();
+    });
+}
+
 future<> repair_init_messaging_service_handler(repair_service& rs,
         distributed<db::system_distributed_keyspace>& sys_dist_ks,
         distributed<db::view::view_update_generator>& view_update_generator,
         sharded<database>& db, sharded<netw::messaging_service>& ms) {
     return when_all_succeed(
+            init_messaging_service_handler(db, ms),
             row_level_repair_init_messaging_service_handler(rs, sys_dist_ks, view_update_generator, ms)
     ).discard_result();
 }
 
 future<> repair_uninit_messaging_service_handler() {
     return when_all_succeed(
+            uninit_messaging_service_handler(),
             row_level_repair_uninit_messaging_service_handler()
     ).discard_result();
 }
