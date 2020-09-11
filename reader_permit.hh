@@ -106,13 +106,13 @@ public:
 };
 
 class reader_permit::resource_units {
-    reader_concurrency_semaphore* _semaphore;
+    reader_permit _permit;
     reader_resources _resources;
 
     friend class reader_permit;
     friend class reader_concurrency_semaphore;
 private:
-    resource_units(reader_concurrency_semaphore& semaphore, reader_resources res) noexcept;
+    resource_units(reader_permit permit, reader_resources res) noexcept;
 public:
     resource_units(const resource_units&) = delete;
     resource_units(resource_units&&) noexcept;

@@ -96,8 +96,10 @@ public:
 private:
     struct entry {
         promise<reader_permit::resource_units> pr;
+        reader_permit permit;
         resources res;
-        entry(promise<reader_permit::resource_units>&& pr, resources r) : pr(std::move(pr)), res(r) {}
+        entry(promise<reader_permit::resource_units>&& pr, reader_permit permit, resources r)
+            : pr(std::move(pr)), permit(std::move(permit)), res(r) {}
     };
 
     class expiry_handler {
@@ -128,7 +130,7 @@ private:
 
     bool may_proceed(const resources& r) const;
 
-    future<reader_permit::resource_units> do_wait_admission(size_t memory, db::timeout_clock::time_point timeout);
+    future<reader_permit::resource_units> do_wait_admission(reader_permit permit, size_t memory, db::timeout_clock::time_point timeout);
 
 public:
     struct no_limits { };

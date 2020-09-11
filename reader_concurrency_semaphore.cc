@@ -26,18 +26,20 @@
 #include "utils/exceptions.hh"
 
 
-reader_permit::resource_units::resource_units(reader_concurrency_semaphore& semaphore, reader_resources res) noexcept
-        : _semaphore(&semaphore), _resources(res) {
-    _semaphore->consume(res);
+reader_permit::resource_units::resource_units(reader_permit permit, reader_resources res) noexcept
+    : _permit(std::move(permit)), _resources(res) {
+    _permit._semaphore->consume(res);
 }
 
 reader_permit::resource_units::resource_units(resource_units&& o) noexcept
-    : _semaphore(o._semaphore)
+    : _permit(std::move(o._permit))
     , _resources(std::exchange(o._resources, {})) {
 }
 
 reader_permit::resource_units::~resource_units() {
-    reset();
+    if (_resources) {
+        reset();
+    }
 }
 
 reader_permit::resource_units& reader_permit::resource_units::operator=(resource_units&& o) noexcept {
@@ -45,20 +47,20 @@ reader_permit::resource_units& reader_permit::resource_units::operator=(resource
         return *this;
     }
     reset();
-    _semaphore = o._semaphore;
+    _permit = std::move(o._permit);
     _resources = std::exchange(o._resources, {});
     return *this;
 }
 
 void reader_permit::resource_units::add(resource_units&& o) {
-    assert(_semaphore == o._semaphore);
+    assert(_permit == o._permit);
     _resources += std::exchange(o._resources, {});
 }
 
 void reader_permit::resource_units::reset(reader_resources res) {
-    _semaphore->consume(res);
+    _permit._semaphore->consume(res);
     if (_resources) {
-        _semaphore->signal(_resources);
+        _permit._semaphore->signal(_resources);
     }
     _resources = res;
 }
@@ -68,7 +70,7 @@ reader_permit::reader_permit(reader_concurrency_semaphore& semaphore)
 }
 
 future<reader_permit::resource_units> reader_permit::wait_admission(size_t memory, db::timeout_clock::time_point timeout) {
-    return _semaphore->do_wait_admission(memory, timeout);
+    return _semaphore->do_wait_admission(*this, memory, timeout);
 }
 
 reader_permit::resource_units reader_permit::consume_memory(size_t memory) {
@@ -76,7 +78,7 @@ reader_permit::resource_units reader_permit::consume_memory(size_t memory) {
 }
 
 reader_permit::resource_units reader_permit::consume_resources(reader_resources res) {
-    return resource_units(*_semaphore, res);
+    return resource_units(*this, res);
 }
 
 void reader_concurrency_semaphore::signal(const resources& r) noexcept {
@@ -84,7 +86,7 @@ void reader_concurrency_semaphore::signal(const resources& r) noexcept {
     while (!_wait_list.empty() && has_available_units(_wait_list.front().res)) {
         auto& x = _wait_list.front();
         try {
-            x.pr.set_value(reader_permit::resource_units(*this, x.res));
+            x.pr.set_value(reader_permit::resource_units(std::move(x.permit), x.res));
         } catch (...) {
             x.pr.set_exception(std::current_exception());
         }
@@ -158,7 +160,7 @@ bool reader_concurrency_semaphore::may_proceed(const resources& r) const {
     return _wait_list.empty() && (has_available_units(r) || _resources.count == _initial_resources.count);
 }
 
-future<reader_permit::resource_units> reader_concurrency_semaphore::do_wait_admission(size_t memory, db::timeout_clock::time_point timeout) {
+future<reader_permit::resource_units> reader_concurrency_semaphore::do_wait_admission(reader_permit permit, size_t memory, db::timeout_clock::time_point timeout) {
     if (_wait_list.size() >= _max_queue_length) {
         if (_prethrow_action) {
             _prethrow_action();
@@ -178,11 +180,11 @@ future<reader_permit::resource_units> reader_concurrency_semaphore::do_wait_admi
         --_stats.inactive_reads;
     }
     if (may_proceed(r)) {
-        return make_ready_future<reader_permit::resource_units>(reader_permit::resource_units(*this, r));
+        return make_ready_future<reader_permit::resource_units>(reader_permit::resource_units(std::move(permit), r));
     }
     promise<reader_permit::resource_units> pr;
     auto fut = pr.get_future();
-    _wait_list.push_back(entry(std::move(pr), r), timeout);
+    _wait_list.push_back(entry(std::move(pr), std::move(permit), r), timeout);
     return fut;
 }
 
