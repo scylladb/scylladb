@@ -78,6 +78,18 @@ while [ $# -gt 0 ]; do
     esac
 done
 
+has_java=false
+if [ -x /usr/bin/java ]; then
+    javaver=$(/usr/bin/java -version 2>&1|head -n1|cut -f 3 -d " ")
+    if [[ "$javaver" =~ ^\"1.8.0 || "$javaver" =~ ^\"11.0. ]]; then
+        has_java=true
+    fi
+fi
+if ! $has_java; then
+    echo "Please install openjdk-8 or openjdk-11 before running install.sh."
+    exit 1
+fi
+
 if [ -z "$prefix" ]; then
     if $nonroot; then
         prefix=~/scylladb
