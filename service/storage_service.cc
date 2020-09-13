@@ -1411,8 +1411,6 @@ void storage_service::on_change(inet_address endpoint, application_state state, 
         } else {
             return; // did nothing.
         }
-        // we have (most likely) modified token metadata
-        replicate_to_all_cores().get();
     } else {
         auto* ep_state = _gossiper.get_endpoint_state_for_endpoint_ptr(endpoint);
         if (!ep_state || _gossiper.is_dead_state(*ep_state)) {
