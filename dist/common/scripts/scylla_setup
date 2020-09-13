@@ -165,15 +165,58 @@ def run_setup_script(name, script):
             sys.exit(1)
     return res
 
+def warn_offline(setup):
+    colorprint('{red}{setup} is disabled by default, since the installation is offline mode.{nocolor}', setup=setup)
+
+def warn_offline_missing_pkg(setup, pkg):
+    colorprint('{red}{setup} disabled by default, since {pkg} not available.{nocolor}', setup=setup, pkg=pkg)
+
 if __name__ == '__main__':
     if not is_nonroot() and os.getuid() > 0:
         print('Requires root permission.')
         sys.exit(1)
+
+    default_no_ntp_setup = False
+    default_no_node_exporter = False
+    default_no_kernel_check = False
+    default_no_raid_setup = False
+    default_no_coredump_setup = False
+    default_no_cpuscaling_setup = False
+
+    if is_offline():
+        default_no_ntp_setup = True
+        default_no_node_exporter = True
+        warn_offline('ntp setup')
+        warn_offline('node exporter setup')
+
+        if not shutil.which('mkfs.xfs'):
+            default_no_kernel_check = True
+            default_no_raid_setup = True
+            warn_offline_missing_pkg('kernel version check', 'xfsprogs')
+            warn_offline_missing_pkg('RAID setup', 'xfsprogs')
+
+        if not default_no_raid_setup and not shutil.which('mdadm'):
+            default_no_raid_setup = True
+            warn_offline_missing_pkg('RAID setup', 'mdadm')
+
+        if not shutil.which('coredumpctl'):
+            default_no_coredump_setup = True
+            warn_offline_missing_pkg('coredump setup', 'systemd-coredump')
+
+        if is_debian_variant() and not shutil.which('cpufreq-set'):
+            default_no_cpuscaling_setup = True
+            warn_offline_missing_pkg('cpuscaling setup', 'cpufrequtils')
+        elif not shutil.which('cpupower'):
+            default_no_cpuscaling_setup = True
+            warn_offline_missing_pkg('cpuscaling setup', 'cpupower')
+        print()
+
     parser = argparse.ArgumentParser(description='Configure environment for Scylla.')
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument('--disks',
                         help='specify disks for RAID')
-    group.add_argument('--no-raid-setup', action='store_true', default=False,
+    group.add_argument('--no-raid-setup', action='store_true',
+                        default=default_no_raid_setup,
                         help='skip raid setup')
     parser.add_argument('--nic',
                         help='specify NIC')
@@ -191,7 +234,8 @@ if __name__ == '__main__':
                         help='enable developer mode')
     parser.add_argument('--no-ec2-check', action='store_true', default=False,
                         help='skip EC2 configuration check')
-    parser.add_argument('--no-kernel-check', action='store_true', default=False,
+    parser.add_argument('--no-kernel-check', action='store_true',
+                        default=default_no_kernel_check,
                         help='skip kernel version check')
     parser.add_argument('--no-verify-package', action='store_true', default=False,
                         help='skip verifying packages')
@@ -202,9 +246,11 @@ if __name__ == '__main__':
                             help='skip selinux setup')
     parser.add_argument('--no-bootparam-setup', action='store_true', default=False,
                         help='skip bootparam setup')
-    parser.add_argument('--no-ntp-setup', action='store_true', default=False,
+    parser.add_argument('--no-ntp-setup', action='store_true',
+                        default=default_no_ntp_setup,
                         help='skip ntp setup')
-    parser.add_argument('--no-coredump-setup', action='store_true', default=False,
+    parser.add_argument('--no-coredump-setup', action='store_true',
+                        default=default_no_coredump_setup,
                         help='skip coredump setup')
     parser.add_argument('--no-sysconfig-setup', action='store_true', default=False,
                         help='skip sysconfig setup')
@@ -214,9 +260,11 @@ if __name__ == '__main__':
                         help='skip IO configuration setup')
     parser.add_argument('--no-version-check', action='store_true', default=False,
                         help='skip daily version check')
-    parser.add_argument('--no-node-exporter', action='store_true', default=False,
+    parser.add_argument('--no-node-exporter', action='store_true',
+                        default=default_no_node_exporter,
                         help='do not install the node exporter')
-    parser.add_argument('--no-cpuscaling-setup', action='store_true', default=False,
+    parser.add_argument('--no-cpuscaling-setup', action='store_true',
+                        default=default_no_cpuscaling_setup,
                         help='skip cpu scaling setup')
     parser.add_argument('--no-fstrim-setup', action='store_true', default=False,
                         help='skip fstrim setup')

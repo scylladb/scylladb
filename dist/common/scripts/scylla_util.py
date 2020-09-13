@@ -539,6 +539,7 @@ class scylla_cpuinfo:
 # When a CLI tool is not installed, use relocatable CLI tool provided by Scylla
 scylla_env = os.environ.copy()
 scylla_env['PATH'] =  '{}:{}'.format(scyllabindir(), scylla_env['PATH'])
+scylla_env['DEBIAN_FRONTEND'] = 'noninteractive'
 
 def run(cmd, shell=False, silent=False, exception=True):
     stdout = subprocess.DEVNULL if silent else None
@@ -820,6 +821,54 @@ def get_set_nic_and_disks_config_value(cfg):
 def swap_exists():
     swaps = out('swapon --noheadings --raw')
     return True if swaps != '' else False
+
+def pkg_error_exit(pkg):
+    print(f'Package "{pkg}" required.')
+    sys.exit(1)
+
+def yum_install(pkg):
+    if is_offline():
+        pkg_error_exit(pkg)
+    return run(f'yum install -y {pkg}')
+
+def apt_install(pkg):
+    if is_offline():
+        pkg_error_exit(pkg)
+    return run(f'apt-get install -y {pkg}')
+
+def emerge_install(pkg):
+    if is_offline():
+        pkg_error_exit(pkg)
+    return run(f'emerge -uq {pkg}')
+
+def pkg_install(pkg):
+    if is_redhat_variant():
+        return yum_install(pkg)
+    elif is_debian_variant():
+        return apt_install(pkg)
+    elif is_gentoo_variant():
+        return emerge_install(pkg)
+    else:
+        pkg_error_exit(pkg)
+
+def yum_uninstall(pkg):
+    return run(f'yum remove -y {pkg}')
+
+def apt_uninstall(pkg):
+    return run(f'apt-get remove -y {pkg}')
+
+def emerge_uninstall(pkg):
+    return run(f'emerge --deselect {pkg}')
+
+def pkg_uninstall(pkg):
+    if is_redhat_variant():
+        return yum_uninstall(pkg)
+    elif is_debian_variant():
+        return apt_uninstall(pkg)
+    elif is_gentoo_variant():
+        return emerge_uninstall(pkg)
+    else:
+        print(f'WARNING: Package "{pkg}" should be removed.')
 
 class SystemdException(Exception):
     pass
