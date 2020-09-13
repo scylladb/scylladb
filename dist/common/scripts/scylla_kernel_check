@@ -31,12 +31,7 @@ if __name__ == '__main__':
         sys.exit(1)
 
     if not shutil.which('mkfs.xfs'):
-        if is_debian_variant():
-            run('apt-get install -y xfsprogs')
-        elif is_gentoo_variant():
-            run('emerge -uq sys-fs/xfsprogs')
-        elif is_redhat_variant():
-            run('yum install -y xfsprogs')
+        pkg_install('xfsprogs')
 
     makedirs('/var/tmp/mnt')
     run('dd if=/dev/zero of=/var/tmp/kernel-check.img bs=1M count=128', silent=True)

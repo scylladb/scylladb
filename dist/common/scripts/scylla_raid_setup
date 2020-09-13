@@ -86,18 +86,12 @@ if __name__ == '__main__':
         print('mount unit {} already exists'.format(mntunit))
         sys.exit(1)
 
-    if is_debian_variant():
-        run('env DEBIAN_FRONTEND=noninteractive apt-get -y install mdadm xfsprogs')
-        try:
-            md_service = systemd_unit('mdmonitor.service')
-        except SystemdException:
-            md_service = systemd_unit('mdadm.service')
-    elif is_redhat_variant():
-        run('yum install -y mdadm xfsprogs')
+    if not shutil.which('mkfs.xfs') or not shutil.which('mdadm'):
+        pkg_install('xfsprogs mdadm')
+    try:
         md_service = systemd_unit('mdmonitor.service')
-    elif is_gentoo_variant():
-        run('emerge -uq sys-fs/mdadm sys-fs/xfsprogs')
-        md_service = systemd_unit('mdmonitor.service')
+    except SystemdException:
+        md_service = systemd_unit('mdadm.service')
 
     if len(disks) == 1 and not args.force_raid:
         raid = False

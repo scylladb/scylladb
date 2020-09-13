@@ -169,11 +169,36 @@ if __name__ == '__main__':
     if not is_nonroot() and os.getuid() > 0:
         print('Requires root permission.')
         sys.exit(1)
+
+    if is_offline():
+        default_no_ntp_setup = True
+        default_no_node_exporter = True
+        default_no_kernel_check = False
+        default_no_raid_setup = False
+        default_no_coredump_setup = False
+        default_no_cpuscaling_setup = False
+
+        if not shutil.which('mkfs.xfs'):
+            default_no_kernel_check = True
+            default_no_raid_setup = True
+
+        if not shutil.which('mdadm'):
+            default_no_raid_setup = True
+
+        if not shutil.which('coredumpctl'):
+            default_no_coredump_setup = True
+
+        if is_debian_variant() and not shutil.which('cpufreq-set'):
+            default_no_cpuscaling_setup = True
+        elif not shutil.which('cpupower'):
+            default_no_cpuscaling_setup = True
+
     parser = argparse.ArgumentParser(description='Configure environment for Scylla.')
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument('--disks',
                         help='specify disks for RAID')
-    group.add_argument('--no-raid-setup', action='store_true', default=False,
+    group.add_argument('--no-raid-setup', action='store_true',
+                        default=default_no_raid_setup,
                         help='skip raid setup')
     parser.add_argument('--nic',
                         help='specify NIC')
@@ -191,7 +216,8 @@ if __name__ == '__main__':
                         help='enable developer mode')
     parser.add_argument('--no-ec2-check', action='store_true', default=False,
                         help='skip EC2 configuration check')
-    parser.add_argument('--no-kernel-check', action='store_true', default=False,
+    parser.add_argument('--no-kernel-check', action='store_true',
+                        default=default_no_kernel_check,
                         help='skip kernel version check')
     parser.add_argument('--no-verify-package', action='store_true', default=False,
                         help='skip verifying packages')
@@ -202,9 +228,11 @@ if __name__ == '__main__':
                             help='skip selinux setup')
     parser.add_argument('--no-bootparam-setup', action='store_true', default=False,
                         help='skip bootparam setup')
-    parser.add_argument('--no-ntp-setup', action='store_true', default=False,
+    parser.add_argument('--no-ntp-setup', action='store_true',
+                        default=default_no_ntp_setup,
                         help='skip ntp setup')
-    parser.add_argument('--no-coredump-setup', action='store_true', default=False,
+    parser.add_argument('--no-coredump-setup', action='store_true',
+                        default=default_no_coredump_setup,
                         help='skip coredump setup')
     parser.add_argument('--no-sysconfig-setup', action='store_true', default=False,
                         help='skip sysconfig setup')
@@ -214,9 +242,11 @@ if __name__ == '__main__':
                         help='skip IO configuration setup')
     parser.add_argument('--no-version-check', action='store_true', default=False,
                         help='skip daily version check')
-    parser.add_argument('--no-node-exporter', action='store_true', default=False,
+    parser.add_argument('--no-node-exporter', action='store_true',
+                        default=default_no_node_exporter,
                         help='do not install the node exporter')
-    parser.add_argument('--no-cpuscaling-setup', action='store_true', default=False,
+    parser.add_argument('--no-cpuscaling-setup', action='store_true',
+                        default=default_no_cpuscaling_setup,
                         help='skip cpu scaling setup')
     parser.add_argument('--no-fstrim-setup', action='store_true', default=False,
                         help='skip fstrim setup')
@@ -503,10 +533,10 @@ if __name__ == '__main__':
             print('Please restart your machine before using ScyllaDB, as you have disabled')
             print(' SELinux.')
 
-        if distro.id() == 'ubuntu':
+        if distro.id() == 'ubuntu' and not is_offline():
             # Ubuntu version is 20.04 or later
             if int(distro.major_version()) >= 20:
                 hugepkg = 'libhugetlbfs-bin'
             else:
                 hugepkg = 'hugepages'
-            run(f'apt-get install -y {hugepkg}')
+            apt_install(hugepkg)
