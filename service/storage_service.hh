@@ -170,7 +170,6 @@ private:
 public:
     future<> keyspace_changed(const sstring& ks_name);
     future<> update_pending_ranges();
-    void update_pending_ranges_nowait(inet_address endpoint);
 
     const locator::token_metadata& get_token_metadata() const {
         return _token_metadata;

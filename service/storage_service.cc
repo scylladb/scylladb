@@ -1248,14 +1248,10 @@ void storage_service::handle_state_leaving(inet_address endpoint) {
     // at this point the endpoint is certainly a member with this token, so let's proceed
     // normally
     _token_metadata.add_leaving_endpoint(endpoint);
-    update_pending_ranges_nowait(endpoint);
-}
 
-void storage_service::update_pending_ranges_nowait(inet_address endpoint) {
-    //FIXME: discarded future.
-    (void)update_pending_ranges().handle_exception([endpoint] (std::exception_ptr ep) {
+    update_pending_ranges().handle_exception([endpoint] (std::exception_ptr ep) {
         slogger.info("Failed to update_pending_ranges for node {}: {}", endpoint, ep);
-    });
+    }).get();
 }
 
 void storage_service::handle_state_left(inet_address endpoint, std::vector<sstring> pieces) {
