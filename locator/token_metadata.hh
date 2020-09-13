@@ -50,6 +50,7 @@
 #include <boost/icl/interval.hpp>
 #include "range.hh"
 #include <seastar/core/shared_ptr.hh>
+#include <seastar/core/semaphore.hh>
 
 // forward declaration since database.hh includes this file
 class keyspace;
@@ -318,6 +319,7 @@ public:
 
 using token_metadata_ptr = lw_shared_ptr<const token_metadata>;
 using mutable_token_metadata_ptr = lw_shared_ptr<token_metadata>;
+using token_metadata_lock = semaphore_units<semaphore_default_exception_factory>;
 
 template <typename... Args>
 mutable_token_metadata_ptr make_token_metadata_ptr(Args... args) {
@@ -326,6 +328,7 @@ mutable_token_metadata_ptr make_token_metadata_ptr(Args... args) {
 
 class shared_token_metadata {
     mutable_token_metadata_ptr _shared;
+    semaphore _sem = { 1 };
 public:
     // used to construct the shared object as a sharded<> instance
     shared_token_metadata()
@@ -351,6 +354,8 @@ public:
     mutable_token_metadata_ptr get_mutable() const noexcept {
         return _shared;
     }
+
+    future<token_metadata_lock> get_lock() noexcept;
 };
 
 }

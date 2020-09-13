@@ -119,6 +119,7 @@ private:
     using boot_strapper = dht::boot_strapper;
     using token_metadata = locator::token_metadata;
     using shared_token_metadata = locator::shared_token_metadata;
+    using token_metadata_lock = locator::token_metadata_lock;
     using application_state = gms::application_state;
     using inet_address = gms::inet_address;
     using versioned_value = gms::versioned_value;
@@ -165,7 +166,13 @@ public:
     future<> uninit_messaging_service();
 
 private:
-    future<> do_update_pending_ranges();
+    future<token_metadata_lock> get_token_metadata_lock() noexcept;
+    future<> with_token_metadata_lock(std::function<future<> ()>) noexcept;
+
+    // Update pending ranges locally and then replicate to all cores.
+    // Should be serialized under token_metadata_lock.
+    // Must be called on shard 0.
+    future<> update_pending_ranges_locked(sstring reason);
     future<> update_pending_ranges(sstring reason);
     future<> keyspace_changed(const sstring& ks_name);
     void register_metrics();
@@ -535,24 +542,12 @@ private:
 public:
     future<> check_and_repair_cdc_streams();
 private:
+    // Should be serialized under token_metadata_lock.
     future<> replicate_to_all_cores();
-    future<> do_replicate_to_all_cores() noexcept;
-    serialized_action _replicate_action;
-    serialized_action _update_pending_ranges_action;
     sharded<db::system_distributed_keyspace>& _sys_dist_ks;
     sharded<db::view::view_update_generator>& _view_update_generator;
     serialized_action _schema_version_publisher;
 private:
-    /**
-     * Replicates token_metadata contents on shard0 instance to other shards.
-     *
-     * Should be serialized.
-     * Should run on shard 0 only.
-     *
-     * @return a ready future when replication is complete.
-     */
-    future<> replicate_tm_only() noexcept;
-
     /**
      * Handle node bootstrap
      *

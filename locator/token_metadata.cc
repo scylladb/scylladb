@@ -1933,4 +1933,9 @@ const endpoint_dc_rack& topology::get_location(const inet_address& ep) const {
 }
 
 /////////////////// class topology end /////////////////////////////////////////
+
+future<token_metadata_lock> shared_token_metadata::get_lock() noexcept {
+    return get_units(_sem, 1);
+}
+
 } // namespace locator
