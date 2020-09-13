@@ -37,6 +37,6 @@ class command_factory {
 public:
     command_factory() {}
     ~command_factory() {}
-    static shared_ptr<abstract_command> create(service::storage_proxy&, request&&);
+    static future<redis_message> create_execute(service::storage_proxy&, request&&, redis::redis_options&, service_permit);
 };
 }

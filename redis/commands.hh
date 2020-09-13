@@ -28,169 +28,22 @@ namespace redis {
 
 namespace commands {
 
-class get : public abstract_command {
-    bytes _key;
-public:
-    static shared_ptr<abstract_command> prepare(service::storage_proxy& proxy, request&& req);
-    get(bytes&& name, bytes&& key) 
-        : abstract_command(std::move(name)) 
-        , _key(std::move(key)) {
-    }
-    virtual future<redis_message> execute(service::storage_proxy&, redis_options&, service_permit) override;
-};
-
-class exists : public abstract_command {
-    std::vector<bytes> _keys;
-    size_t _count = 0;
-public:
-    static shared_ptr<abstract_command> prepare(service::storage_proxy& proxy, request&& req);
-    exists(bytes&& name, std::vector<bytes>&& keys);
-    virtual future<redis_message> execute(service::storage_proxy&, redis_options&, service_permit) override;
-};
-
-class ttl : public abstract_command {
-    bytes _key;
-public:
-    static shared_ptr<abstract_command> prepare(service::storage_proxy& proxy, request&& req);
-    ttl(bytes&& name, bytes&& key)
-        : abstract_command(std::move(name))
-        , _key(std::move(key)) {
-    }
-    virtual future<redis_message> execute(service::storage_proxy&, redis_options&, service_permit) override;
-};
-
-class strlen : public abstract_command {
-    bytes _key;
-public:
-    static shared_ptr<abstract_command> prepare(service::storage_proxy& proxy, request&& req);
-    strlen(bytes&& name, bytes&& key)
-        : abstract_command(std::move(name))
-        , _key(std::move(key)) {
-    }
-    virtual future<redis_message> execute(service::storage_proxy&, redis_options&, service_permit) override;
-};
-
-class hgetall : public abstract_command {
-    bytes _key;
-public:
-    static shared_ptr<abstract_command> prepare(service::storage_proxy& proxy, request&& req);
-    hgetall(bytes&& name, bytes&& key)
-        : abstract_command(std::move(name))
-        , _key(std::move(key)) {
-    }
-    virtual future<redis_message> execute(service::storage_proxy&, redis_options&, service_permit) override;
-};
-
-class hget : public abstract_command {
-    bytes _key;
-    bytes _field;
-public:
-    static shared_ptr<abstract_command> prepare(service::storage_proxy& proxy, request&& req);
-    hget(bytes&& name, bytes&& key, bytes&& field)
-        : abstract_command(std::move(name))
-        , _key(std::move(key))
-        , _field(std::move(field)) {
-    }
-    virtual future<redis_message> execute(service::storage_proxy&, redis_options&, service_permit) override;
-};
-
-class hset : public abstract_command {
-    bytes _key;
-    bytes _field;
-    bytes _data;
-public:
-    static shared_ptr<abstract_command> prepare(service::storage_proxy& proxy, request&& req);
-    hset(bytes&& name, bytes&& key, bytes&& field, bytes&& data)
-        : abstract_command(std::move(name))
-        , _key(std::move(key))
-        , _field(std::move(field))
-        , _data(std::move(data)) {
-    }
-    virtual future<redis_message> execute(service::storage_proxy&, redis_options&, service_permit) override;
-};
-
-class hdel : public abstract_command {
-    bytes _key;
-    std::vector<bytes> _fields;
-public:
-    static shared_ptr<abstract_command> prepare(service::storage_proxy& proxy, request&& req);
-    hdel(bytes&& name, bytes&& key, std::vector<bytes>&& fields)
-        : abstract_command(std::move(name))
-        , _key(std::move(key))
-        , _fields(std::move(fields)) {
-    }
-    virtual future<redis_message> execute(service::storage_proxy&, redis_options&, service_permit) override;
-};
-
-class set : public abstract_command {
-    bytes _key;
-    bytes _data;
-    long _ttl = 0;
-public:
-    static shared_ptr<abstract_command> prepare(service::storage_proxy& proxy, request&& req);
-    set(bytes&& name, bytes&& key, bytes&& data, long ttl) 
-        : abstract_command(std::move(name)) 
-        , _key(std::move(key))
-        , _data(std::move(data))
-        , _ttl(ttl) {
-    }
-    set(bytes&& name, bytes&& key, bytes&& data) : set(std::move(name), std::move(key), std::move(data), 0) {}
-    virtual future<redis_message> execute(service::storage_proxy&, redis_options&, service_permit) override;
-};
-
-class setex : public set {
-public:
-    static shared_ptr<abstract_command> prepare(service::storage_proxy& proxy, request&& req);
-    setex(bytes&& name, bytes&& key, bytes&& data, long ttl)
-        : set(std::move(name), std::move(key), std::move(data), ttl) {
-    }
-};
-
-class del : public abstract_command {
-    std::vector<bytes> _keys;
-public:
-    static shared_ptr<abstract_command> prepare(service::storage_proxy& proxy, request&& req);
-    del(bytes&& name, std::vector<bytes>&& keys) : abstract_command(std::move(name)), _keys(std::move(keys)) {} 
-    virtual future<redis_message> execute(service::storage_proxy&, redis_options&, service_permit) override;
-};
-
-class unknown : public abstract_command {
-public:
-    static shared_ptr<abstract_command> prepare(service::storage_proxy& proxy, request&& req);
-    unknown(bytes&& name) : abstract_command(std::move(name)) {}
-    virtual future<redis_message> execute(service::storage_proxy&, redis_options&, service_permit permit) override;
-};
-
-class echo : public abstract_command {
-    bytes _str;
-public:
-    static shared_ptr<abstract_command> prepare(service::storage_proxy& proxy, request&& req);
-    echo(bytes&& name, bytes&& str) : abstract_command(std::move(name)) , _str(std::move(str)) {}
-    virtual future<redis_message> execute(service::storage_proxy&, redis_options&, service_permit) override;
-};
-
-class ping : public abstract_command {
-public:
-    static shared_ptr<abstract_command> prepare(service::storage_proxy& proxy, request&& req);
-    ping(bytes&& name) : abstract_command(std::move(name)) {}
-    virtual future<redis_message> execute(service::storage_proxy&, redis_options&, service_permit) override;
-};
-
-class select : public abstract_command {
-    long _index;
-public:
-    static shared_ptr<abstract_command> prepare(service::storage_proxy& proxy, request&& req);
-    select(bytes&& name, long index) : abstract_command(std::move(name)), _index(index) {}
-    virtual future<redis_message> execute(service::storage_proxy&, redis_options&, service_permit) override;
-};
-
-class lolwut : public abstract_command {
-    const int _cols, _squares_per_row, _squares_per_col;
-public:
-    static shared_ptr<abstract_command> prepare(service::storage_proxy& proxy, request&& req);
-    lolwut(bytes&& name, const int cols, const int squares_per_row, const int squares_per_col) : abstract_command(std::move(name)), _cols(cols), _squares_per_row(squares_per_row), _squares_per_col(squares_per_col) {}
-    virtual future<redis_message> execute(service::storage_proxy&, redis_options&, service_permit) override;
-};
+future<redis_message> get(service::storage_proxy&, request&&, redis_options&, service_permit);
+future<redis_message> exists(service::storage_proxy& proxy, request&& req, redis::redis_options& options, service_permit permit);
+future<redis_message> ttl(service::storage_proxy& proxy, request&& req, redis::redis_options& options, service_permit permit);
+future<redis_message> strlen(service::storage_proxy& proxy, request&& req, redis::redis_options& options, service_permit permit);
+future<redis_message> hgetall(service::storage_proxy& proxy, request&& req, redis::redis_options& options, service_permit permit);
+future<redis_message> hget(service::storage_proxy& proxy, request&& req, redis::redis_options& options, service_permit permit);
+future<redis_message> hset(service::storage_proxy& proxy, request&& req, redis::redis_options& options, service_permit permit);
+future<redis_message> hdel(service::storage_proxy& proxy, request&& req, redis::redis_options& options, service_permit permit);
+future<redis_message> set(service::storage_proxy& proxy, request&& req, redis::redis_options& options, service_permit permit);
+future<redis_message> setex(service::storage_proxy& proxy, request&& req, redis::redis_options& options, service_permit permit);
+future<redis_message> del(service::storage_proxy& proxy, request&& req, redis::redis_options& options, service_permit permit);
+future<redis_message> unknown(service::storage_proxy&, request&&, redis_options&, service_permit);
+future<redis_message> select(service::storage_proxy&, request&& req, redis::redis_options& options, service_permit);
+future<redis_message> ping(service::storage_proxy&, request&& req, redis::redis_options&, service_permit);
+future<redis_message> echo(service::storage_proxy&, request&& req, redis::redis_options&, service_permit);
+future<redis_message> lolwut(service::storage_proxy&, request&& req, redis::redis_options& options, service_permit);
 
 }
 

@@ -28,33 +28,33 @@ namespace redis {
 
 static logging::logger logging("command_factory");
 
-shared_ptr<abstract_command> command_factory::create(service::storage_proxy& proxy, request&& req)
+future<redis_message> command_factory::create_execute(service::storage_proxy& proxy, request&& req, redis::redis_options& options, service_permit permit)
 {
-    static thread_local std::unordered_map<bytes, std::function<shared_ptr<abstract_command> (service::storage_proxy& proxy, request&& req)>> _commands =
+    static thread_local std::unordered_map<bytes, std::function<future<redis_message> (service::storage_proxy& proxy, request&& req, redis::redis_options& options, service_permit permit)>> _commands =
     { 
-        { "ping",  [] (service::storage_proxy& proxy, request&& req) { return commands::ping::prepare(proxy, std::move(req)); } }, 
-        { "select",  [] (service::storage_proxy& proxy, request&& req) { return commands::select::prepare(proxy, std::move(req)); } }, 
-        { "get",  [] (service::storage_proxy& proxy, request&& req) { return commands::get::prepare(proxy, std::move(req)); } }, 
-        { "exists", [] (service::storage_proxy& proxy, request&& req) { return commands::exists::prepare(proxy, std::move(req)); } },
-        { "ttl", [] (service::storage_proxy& proxy, request&& req) { return commands::ttl::prepare(proxy, std::move(req)); } },
-        { "strlen", [] (service::storage_proxy& proxy, request&& req) { return commands::strlen::prepare(proxy, std::move(req)); } },
-        { "set",  [] (service::storage_proxy& proxy, request&& req) { return commands::set::prepare(proxy, std::move(req)); } }, 
-        { "setex",  [] (service::storage_proxy& proxy, request&& req) { return commands::setex::prepare(proxy, std::move(req)); } },
-        { "del",  [] (service::storage_proxy& proxy, request&& req) { return commands::del::prepare(proxy, std::move(req)); } }, 
-        { "echo",  [] (service::storage_proxy& proxy, request&& req) { return commands::echo::prepare(proxy, std::move(req)); } },
-        { "lolwut", [] (service::storage_proxy& proxy, request&& req) { return commands::lolwut::prepare(proxy, std::move(req)); } },
-        { "hget", [] (service::storage_proxy& proxy, request&& req) { return commands::hget::prepare(proxy, std::move(req)); } },
-        { "hset", [] (service::storage_proxy& proxy, request&& req) { return commands::hset::prepare(proxy, std::move(req)); } },
-        { "hgetall", [] (service::storage_proxy& proxy, request&& req) { return commands::hgetall::prepare(proxy, std::move(req)); } },
-        { "hdel", [] (service::storage_proxy& proxy, request&& req) { return commands::hdel::prepare(proxy, std::move(req)); } },
+        { "ping",  [] (service::storage_proxy& proxy, request&& req, redis::redis_options& options, service_permit permit) { return commands::ping(proxy, std::move(req), options, permit); } },
+        { "select",  [] (service::storage_proxy& proxy, request&& req, redis::redis_options& options, service_permit permit) { return commands::select(proxy, std::move(req), options, permit); } },
+        { "get",  [] (service::storage_proxy& proxy, request&& req, redis::redis_options& options, service_permit permit) { return commands::get(proxy, std::move(req), options, permit); } },
+        { "exists", [] (service::storage_proxy& proxy, request&& req, redis::redis_options& options, service_permit permit) { return commands::exists(proxy, std::move(req), options, permit); } },
+        { "ttl", [] (service::storage_proxy& proxy, request&& req, redis::redis_options& options, service_permit permit) { return commands::ttl(proxy, std::move(req), options, permit); } },
+        { "strlen", [] (service::storage_proxy& proxy, request&& req, redis::redis_options& options, service_permit permit) { return commands::strlen(proxy, std::move(req), options, permit); } },
+        { "set",  [] (service::storage_proxy& proxy, request&& req, redis::redis_options& options, service_permit permit) { return commands::set(proxy, std::move(req), options, permit); } },
+        { "setex",  [] (service::storage_proxy& proxy, request&& req, redis::redis_options& options, service_permit permit) { return commands::setex(proxy, std::move(req), options, permit); } },
+        { "del",  [] (service::storage_proxy& proxy, request&& req, redis::redis_options& options, service_permit permit) { return commands::del(proxy, std::move(req), options, permit); } },
+        { "echo",  [] (service::storage_proxy& proxy, request&& req, redis::redis_options& options, service_permit permit) { return commands::echo(proxy, std::move(req), options, permit); } },
+        { "lolwut", [] (service::storage_proxy& proxy, request&& req, redis::redis_options& options, service_permit permit) { return commands::lolwut(proxy, std::move(req), options, permit); } },
+        { "hget", [] (service::storage_proxy& proxy, request&& req, redis::redis_options& options, service_permit permit) { return commands::hget(proxy, std::move(req), options, permit); } },
+        { "hset", [] (service::storage_proxy& proxy, request&& req, redis::redis_options& options, service_permit permit) { return commands::hset(proxy, std::move(req), options, permit); } },
+        { "hgetall", [] (service::storage_proxy& proxy, request&& req, redis::redis_options& options, service_permit permit) { return commands::hgetall(proxy, std::move(req), options, permit); } },
+        { "hdel", [] (service::storage_proxy& proxy, request&& req, redis::redis_options& options, service_permit permit) { return commands::hdel(proxy, std::move(req), options, permit); } },
     };
     auto&& command = _commands.find(req._command);
     if (command != _commands.end()) {
-        return (command->second)(proxy, std::move(req));
+        return (command->second)(proxy, std::move(req), options, permit);
     }
     auto& b = req._command;
     logging.error("receive unknown command = {}", sstring(reinterpret_cast<const char*>(b.data()), b.size()));
-    return commands::unknown::prepare(proxy, std::move(req));
+    return commands::unknown(proxy, std::move(req), options, permit);
 }
 
 }
