@@ -164,12 +164,12 @@ public:
 
 private:
     future<> do_update_pending_ranges();
+    future<> update_pending_ranges();
+    future<> keyspace_changed(const sstring& ks_name);
     void register_metrics();
     future<> publish_schema_version();
     void install_schema_version_change_listener();
 public:
-    future<> keyspace_changed(const sstring& ks_name);
-    future<> update_pending_ranges();
 
     const locator::token_metadata& get_token_metadata() const {
         return _token_metadata;
