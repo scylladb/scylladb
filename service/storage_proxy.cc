@@ -3775,10 +3775,6 @@ class range_slice_read_executor : public never_speculating_read_executor {
 public:
     using never_speculating_read_executor::never_speculating_read_executor;
     virtual future<foreign_ptr<lw_shared_ptr<query::result>>> execute(storage_proxy::clock_type::time_point timeout) override {
-        if (!_proxy->features().cluster_supports_digest_multipartition_reads()) {
-            reconcile(_cl, timeout);
-            return _result_promise.get_future();
-        }
         return never_speculating_read_executor::execute(timeout);
     }
 };
