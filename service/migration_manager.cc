@@ -93,7 +93,7 @@ void migration_manager::init_messaging_service()
         //FIXME: future discarded.
         (void)with_gate(_background_tasks, [this] {
             mlogger.debug("features changed, recalculating schema version");
-            return update_schema_version_and_announce(get_storage_proxy(), _feat.cluster_schema_features());
+            return db::schema_tables::recalculate_schema_version(get_storage_proxy(), _feat);
         });
     };
 

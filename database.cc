@@ -562,14 +562,14 @@ database::~database() {
 }
 
 void database::update_version(const utils::UUID& version) {
-    if (_version != version) {
+    if (_version.get() != version) {
         _schema_change_count++;
     }
-    _version = version;
+    _version.set(version);
 }
 
 const utils::UUID& database::get_version() const {
-    return _version;
+    return _version.get();
 }
 
 static future<>
@@ -1962,31 +1962,6 @@ future<> database::clear_snapshot(sstring tag, std::vector<sstring> keyspace_nam
                  }, [] (const fs::path& parent_dir, const directory_entry& dir_entry) { return dir_entry.name == "snapshots"; });
             }, table_filter);
         }, *filter);
-    });
-}
-
-future<utils::UUID> update_schema_version(distributed<service::storage_proxy>& proxy, schema_features features)
-{
-    return db::schema_tables::calculate_schema_digest(proxy, features).then([&proxy] (utils::UUID uuid) {
-        return proxy.local().get_db().invoke_on_all([uuid] (database& db) {
-            db.update_version(uuid);
-        }).then([uuid] {
-            return db::system_keyspace::update_schema_version(uuid);
-        }).then([uuid] {
-            dblog.info("Schema version changed to {}", uuid);
-            return uuid;
-        });
-    });
-}
-
-future<> announce_schema_version(utils::UUID schema_version) {
-    return service::migration_manager::passive_announce(schema_version);
-}
-
-future<> update_schema_version_and_announce(distributed<service::storage_proxy>& proxy, schema_features features)
-{
-    return update_schema_version(proxy, features).then([] (utils::UUID uuid) {
-        return announce_schema_version(uuid);
     });
 }
 

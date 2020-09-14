@@ -802,6 +802,19 @@ future<> merge_unlock() {
     return smp::submit_to(0, [] { the_merge_lock.signal(); });
 }
 
+static
+future<> update_schema_version_and_announce(distributed<service::storage_proxy>& proxy, schema_features features) {
+    return calculate_schema_digest(proxy, features).then([&proxy] (utils::UUID uuid) {
+        return db::system_keyspace::update_schema_version(uuid).then([&proxy, uuid] {
+            return proxy.local().get_db().invoke_on_all([uuid] (database& db) {
+                db.update_version(uuid);
+            });
+        }).then([uuid] {
+            slogger.info("Schema version changed to {}", uuid);
+        });
+    });
+}
+
 /**
  * Merge remote schema in form of mutations with local and mutate ks/cf metadata objects
  * (which also involves fs operations on add/drop ks/cf)
@@ -817,6 +830,14 @@ future<> merge_schema(distributed<service::storage_proxy>& proxy, gms::feature_s
         return do_merge_schema(proxy, std::move(mutations), true).then([&proxy, &feat] {
             return update_schema_version_and_announce(proxy, feat.cluster_schema_features());
         });
+    }).finally([] {
+        return merge_unlock();
+    });
+}
+
+future<> recalculate_schema_version(distributed<service::storage_proxy>& proxy, gms::feature_service& feat) {
+    return merge_lock().then([&proxy, &feat] {
+        return update_schema_version_and_announce(proxy, feat.cluster_schema_features());
     }).finally([] {
         return merge_unlock();
     });
