@@ -27,6 +27,8 @@
 #include "gms/feature_service.hh"
 
 namespace gms {
+
+// Deprecated features - sent to other nodes via gossip, but assumed true in the code
 constexpr std::string_view features::RANGE_TOMBSTONES = "RANGE_TOMBSTONES";
 constexpr std::string_view features::LARGE_PARTITIONS = "LARGE_PARTITIONS";
 constexpr std::string_view features::MATERIALIZED_VIEWS = "MATERIALIZED_VIEWS";
@@ -38,10 +40,12 @@ constexpr std::string_view features::SCHEMA_TABLES_V3 = "SCHEMA_TABLES_V3";
 constexpr std::string_view features::CORRECT_NON_COMPOUND_RANGE_TOMBSTONES = "CORRECT_NON_COMPOUND_RANGE_TOMBSTONES";
 constexpr std::string_view features::WRITE_FAILURE_REPLY = "WRITE_FAILURE_REPLY";
 constexpr std::string_view features::XXHASH = "XXHASH";
-constexpr std::string_view features::UDF = "UDF";
 constexpr std::string_view features::ROLES = "ROLES";
 constexpr std::string_view features::LA_SSTABLE = "LA_SSTABLE_FORMAT";
 constexpr std::string_view features::STREAM_WITH_RPC_STREAM = "STREAM_WITH_RPC_STREAM";
+
+// Up-to-date features
+constexpr std::string_view features::UDF = "UDF";
 constexpr std::string_view features::MC_SSTABLE = "MC_SSTABLE_FORMAT";
 constexpr std::string_view features::MD_SSTABLE = "MD_SSTABLE_FORMAT";
 constexpr std::string_view features::ROW_LEVEL_REPAIR = "ROW_LEVEL_REPAIR";
@@ -149,6 +153,7 @@ std::set<std::string_view> feature_service::known_feature_set() {
     // introduced in scylla, update it here, e.g.,
     // return sstring("FEATURE1,FEATURE2")
     std::set<std::string_view> features = {
+        // Deprecated features - sent to other nodes via gossip, but assumed true in the code
         gms::features::RANGE_TOMBSTONES,
         gms::features::LARGE_PARTITIONS,
         gms::features::COUNTERS,
@@ -163,6 +168,8 @@ std::set<std::string_view> feature_service::known_feature_set() {
         gms::features::STREAM_WITH_RPC_STREAM,
         gms::features::MATERIALIZED_VIEWS,
         gms::features::INDEXES,
+
+        // Up-to-date features
         gms::features::ROW_LEVEL_REPAIR,
         gms::features::TRUNCATION_TABLE,
         gms::features::CORRECT_STATIC_COMPACT_IN_MC,
