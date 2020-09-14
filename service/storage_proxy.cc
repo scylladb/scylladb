@@ -4845,18 +4845,16 @@ void storage_proxy::init_messaging_service() {
                 // ignore results, since we'll be returning them via MUTATION_DONE/MUTATION_FAILURE verbs
                 auto fut = make_ready_future<seastar::rpc::no_wait_type>(netw::messaging_service::no_wait());
                 if (errors) {
-                    if (p->features().cluster_supports_write_failure_reply()) {
-                        tracing::trace(trace_state_ptr, "Sending mutation_failure with {} failures to /{}", errors, reply_to);
-                        fut = p->_messaging.send_mutation_failed(
-                                netw::messaging_service::msg_addr{reply_to, shard},
-                                shard,
-                                response_id,
-                                errors,
-                                p->get_view_update_backlog()).then_wrapped([] (future<> f) {
-                            f.ignore_ready_future();
-                            return netw::messaging_service::no_wait();
-                        });
-                    }
+                    tracing::trace(trace_state_ptr, "Sending mutation_failure with {} failures to /{}", errors, reply_to);
+                    fut = p->_messaging.send_mutation_failed(
+                            netw::messaging_service::msg_addr{reply_to, shard},
+                            shard,
+                            response_id,
+                            errors,
+                            p->get_view_update_backlog()).then_wrapped([] (future<> f) {
+                        f.ignore_ready_future();
+                        return netw::messaging_service::no_wait();
+                    });
                 }
                 return fut.finally([trace_state_ptr] {
                     tracing::trace(trace_state_ptr, "Mutation handling is done");
