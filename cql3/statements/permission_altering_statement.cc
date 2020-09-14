@@ -68,11 +68,7 @@ cql3::statements::permission_altering_statement::permission_altering_statement(
                 , _role_name(rn.to_string()) {
 }
 
-void cql3::statements::permission_altering_statement::validate(service::storage_proxy& proxy, const service::client_state& state) const {
-    if (!proxy.features().cluster_supports_roles()) {
-        throw exceptions::invalid_request_exception(
-                "You cannot modify access-control information until the cluster has fully upgraded.");
-    }
+void cql3::statements::permission_altering_statement::validate(service::storage_proxy&, const service::client_state&) const {
 }
 
 future<> cql3::statements::permission_altering_statement::check_access(service::storage_proxy& proxy, const service::client_state& state) const {
