@@ -918,8 +918,7 @@ static future<> repair_cf_range(repair_info& ri,
             check_in_shutdown();
             ri.check_in_abort();
             return seastar::get_units(parallelism_semaphore, 1).then([&ri, &completion, &success, &neighbors, &cf, range] (auto signal_sem) {
-                auto checksum_type = ri.db.local().features().cluster_supports_large_partitions()
-                                     ? repair_checksum::streamed : repair_checksum::legacy;
+                auto checksum_type = repair_checksum::streamed;
 
                 // Ask this node, and all neighbors, to calculate checksums in
                 // this range. When all are done, compare the results, and if
