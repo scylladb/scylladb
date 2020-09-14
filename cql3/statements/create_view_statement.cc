@@ -93,9 +93,6 @@ future<> create_view_statement::check_access(service::storage_proxy& proxy, cons
 }
 
 void create_view_statement::validate(service::storage_proxy& proxy, const service::client_state& state) const {
-    if (!proxy.features().cluster_supports_materialized_views()) {
-        throw exceptions::invalid_request_exception("Can't create materialized views until the whole cluster has been upgraded");
-    }
 }
 
 static const column_definition* get_column_definition(const schema& schema, column_identifier::raw& identifier) {
