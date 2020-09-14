@@ -76,8 +76,6 @@ private:
     gms::feature_service& _feat;
     netw::messaging_service& _messaging;
     seastar::abort_source _as;
-    bool _cluster_upgraded = false;
-    seastar::condition_variable _wait_cluster_upgraded;
 public:
     migration_manager(migration_notifier&, gms::feature_service&, netw::messaging_service& ms);
 
