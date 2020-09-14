@@ -108,7 +108,8 @@ storage_service::storage_service(abort_source& abort_source, distributed<databas
         , _replicate_action([this] { return do_replicate_to_all_cores(); })
         , _update_pending_ranges_action([this] { return do_update_pending_ranges(); })
         , _sys_dist_ks(sys_dist_ks)
-        , _view_update_generator(view_update_generator) {
+        , _view_update_generator(view_update_generator)
+        , _schema_version_publisher([this] { return publish_schema_version(); }) {
     register_metrics();
     sstable_read_error.connect([this] { do_isolate_on_error(disk_error::regular); });
     sstable_write_error.connect([this] { do_isolate_on_error(disk_error::regular); });
@@ -207,6 +208,16 @@ bool get_property_load_ring_state() {
 
 bool storage_service::should_bootstrap() const {
     return is_auto_bootstrap() && !db::system_keyspace::bootstrap_complete() && !_gossiper.get_seeds().count(get_broadcast_address());
+}
+
+void storage_service::install_schema_version_change_listener() {
+    _listeners.emplace_back(make_lw_shared(_db.local().observable_schema_version().observe([this] (utils::UUID schema_version) {
+        (void)_schema_version_publisher.trigger();
+    })));
+}
+
+future<> storage_service::publish_schema_version() {
+    return get_local_migration_manager().passive_announce(_db.local().get_version());
 }
 
 // Runs inside seastar::async context
@@ -351,7 +362,7 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
     auto broadcast_rpc_address = utils::fb_utilities::get_broadcast_rpc_address();
     auto& proxy = service::get_storage_proxy();
     // Ensure we know our own actual Schema UUID in preparation for updates
-    auto schema_version = update_schema_version(proxy, _feature_service.cluster_schema_features()).get0();
+    db::schema_tables::recalculate_schema_version(proxy, _feature_service).get0();
     app_states.emplace(gms::application_state::NET_VERSION, versioned_value::network_version());
     app_states.emplace(gms::application_state::HOST_ID, versioned_value::host_id(local_host_id));
     app_states.emplace(gms::application_state::RPC_ADDRESS, versioned_value::rpcaddress(broadcast_rpc_address));
@@ -361,7 +372,7 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
     app_states.emplace(gms::application_state::SCHEMA_TABLES_VERSION, versioned_value(db::schema_tables::version));
     app_states.emplace(gms::application_state::RPC_READY, versioned_value::cql_ready(false));
     app_states.emplace(gms::application_state::VIEW_BACKLOG, versioned_value(""));
-    app_states.emplace(gms::application_state::SCHEMA, versioned_value::schema(schema_version));
+    app_states.emplace(gms::application_state::SCHEMA, versioned_value::schema(_db.local().get_version()));
     if (restarting_normal_node) {
         // Order is important: both the CDC streams timestamp and tokens must be known when a node handles our status.
         // Exception: there might be no CDC streams timestamp proposed by us if we're upgrading from a non-CDC version.
@@ -376,6 +387,8 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
 
     auto generation_number = db::system_keyspace::increment_and_get_generation().get0();
     _gossiper.start_gossiping(generation_number, app_states, gms::bind_messaging_port(bool(do_bind))).get();
+
+    install_schema_version_change_listener();
 
     // gossip snitch infos (local DC and rack)
     gossip_snitch_info().get();
@@ -1735,6 +1748,9 @@ future<> storage_service::gossip_sharder() {
 future<> storage_service::stop() {
     return uninit_messaging_service().then([this] {
         return _service_memory_limiter.wait(_service_memory_total); // make sure nobody uses the semaphore
+    }).finally([this] {
+        _listeners.clear();
+        return _schema_version_publisher.join();
     });
 }
 
