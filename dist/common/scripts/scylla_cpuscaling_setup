@@ -58,6 +58,9 @@ RemainAfterExit=yes
 EnvironmentFile=/etc/sysconfig/scylla-cpupower
 ExecStart=/usr/bin/cpupower $CPUPOWER_START_OPTS
 ExecStop=/usr/bin/cpupower $CPUPOWER_STOP_OPTS
+
+[Install]
+WantedBy=multi-user.target
 '''[1:-1]
     with open('/etc/systemd/system/scylla-cpupower.service', 'w') as f:
         f.write(unit_data)
