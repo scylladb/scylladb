@@ -502,11 +502,3 @@ if __name__ == '__main__':
         if selinux_reboot_required:
             print('Please restart your machine before using ScyllaDB, as you have disabled')
             print(' SELinux.')
-
-        if distro.id() == 'ubuntu':
-            # Ubuntu version is 20.04 or later
-            if int(distro.major_version()) >= 20:
-                hugepkg = 'libhugetlbfs-bin'
-            else:
-                hugepkg = 'hugepages'
-            run(f'apt-get install -y {hugepkg}')
