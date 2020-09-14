@@ -88,9 +88,6 @@ void drop_index_statement::validate(service::storage_proxy& proxy, const service
 
 future<shared_ptr<cql_transport::event::schema_change>> drop_index_statement::announce_migration(service::storage_proxy& proxy, bool is_local_only) const
 {
-    if (!proxy.features().cluster_supports_indexes()) {
-        throw exceptions::invalid_request_exception("Index support is not enabled");
-    }
     auto cfm = lookup_indexed_table(proxy);
     if (!cfm) {
         return make_ready_future<::shared_ptr<cql_transport::event::schema_change>>(nullptr);
