@@ -87,7 +87,6 @@ public:
     void set_train(bool v) noexcept { _flags._train = v; }
 
     struct dummy_entry_tag{};
-    struct incomplete_tag{};
     struct evictable_tag{};
 
     cache_entry(dummy_entry_tag)
@@ -95,11 +94,6 @@ public:
     {
         _flags._dummy_entry = true;
     }
-
-    // Creates an entry which is fully discontinuous, except for the partition tombstone.
-    cache_entry(incomplete_tag, schema_ptr s, const dht::decorated_key& key, tombstone t)
-        : cache_entry(s, key, mutation_partition::make_incomplete(*s, t))
-    { }
 
     cache_entry(schema_ptr s, const dht::decorated_key& key, const mutation_partition& p)
         : _schema(std::move(s))
@@ -385,11 +379,10 @@ private:
     };
 
     template<typename CreateEntry, typename VisitEntry>
-    //requires requires(CreateEntry create, VisitEntry visit, partitions_type::iterator it) {
-    //        { create(it) } -> partitions_type::iterator;
-    //        { visit(it) } -> void;
-    //    }
-    //
+    requires requires(CreateEntry create, VisitEntry visit, partitions_type::iterator it, partitions_type::bound_hint hint) {
+        { create(it, hint) } -> std::same_as<partitions_type::iterator>;
+        { visit(it) } -> std::same_as<void>;
+    }
     // Must be run under reclaim lock
     cache_entry& do_find_or_create_entry(const dht::decorated_key& key, const previous_entry_pointer* previous,
                                  CreateEntry&& create_entry, VisitEntry&& visit_entry);
@@ -401,7 +394,11 @@ private:
     // The entry which is returned will have the tombstone applied to it.
     //
     // Must be run under reclaim lock
-    cache_entry& find_or_create(const dht::decorated_key& key, tombstone t, row_cache::phase_type phase, const previous_entry_pointer* previous = nullptr);
+    cache_entry& find_or_create_incomplete(const partition_start& ps, row_cache::phase_type phase, const previous_entry_pointer* previous = nullptr);
+
+    // Creates (or touches) a cache entry for missing partition so that sstables are not
+    // poked again for it.
+    cache_entry& find_or_create_missing(const dht::decorated_key& key);
 
     partitions_type::iterator partitions_end() {
         return std::prev(_partitions.end());
@@ -484,6 +481,10 @@ public:
     // Intended to be used only in tests.
     // Can only be called prior to any reads.
     void populate(const mutation& m, const previous_entry_pointer* previous = nullptr);
+
+    // Finds the entry in cache for a given key.
+    // Intended to be used only in tests.
+    cache_entry& lookup(const dht::decorated_key& key);
 
     // Synchronizes cache with the underlying data source from a memtable which
     // has just been flushed to the underlying data source.

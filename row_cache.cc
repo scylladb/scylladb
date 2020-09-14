@@ -372,20 +372,7 @@ private:
             if (!mfopt) {
                 if (phase == _cache.phase_of(_read_context->range().start()->value())) {
                     _cache._read_section(_cache._tracker.region(), [this] {
-                        with_allocator(_cache._tracker.allocator(), [this] {
-                            dht::decorated_key dk = _read_context->range().start()->value().as_decorated_key();
-                            _cache.do_find_or_create_entry(dk, nullptr, [&] (auto i, const row_cache::partitions_type::bound_hint& hint) {
-                                mutation_partition mp(_cache._schema);
-                                bool cont = i->continuous();
-                                row_cache::partitions_type::iterator entry = _cache._partitions.emplace_before(i, dk.token().raw(), hint,
-                                    _cache._schema, std::move(dk), std::move(mp));
-                                _cache._tracker.insert(*entry);
-                                entry->set_continuous(cont);
-                                return entry;
-                            }, [&] (auto i) {
-                                _cache._tracker.on_miss_already_populated();
-                            });
-                        });
+                        _cache.find_or_create_missing(_read_context->key());
                     });
                 } else {
                     _cache._tracker.on_mispopulate();
@@ -393,7 +380,7 @@ private:
                 _end_of_stream = true;
             } else if (phase == _cache.phase_of(_read_context->range().start()->value())) {
                 _reader = _cache._read_section(_cache._tracker.region(), [&] {
-                    cache_entry& e = _cache.find_or_create(mfopt->as_partition_start().key(), mfopt->as_partition_start().partition_tombstone(), phase);
+                    cache_entry& e = _cache.find_or_create_incomplete(mfopt->as_partition_start(), phase);
                     return e.read(_cache, *_read_context, phase);
                 });
             } else {
@@ -542,9 +529,7 @@ public:
                 const dht::decorated_key& key = ps.key();
                 if (_reader.creation_phase() == _cache.phase_of(key)) {
                     return _cache._read_section(_cache._tracker.region(), [&] {
-                        cache_entry& e = _cache.find_or_create(key,
-                                                               ps.partition_tombstone(),
-                                                               _reader.creation_phase(),
+                        cache_entry& e = _cache.find_or_create_incomplete(ps, _reader.creation_phase(),
                                                                this->can_set_continuity() ? &*_last_key : nullptr);
                         _last_key = row_cache::previous_entry_pointer(key);
                         return make_ready_future<read_result>(
@@ -758,8 +743,9 @@ row_cache::make_reader(schema_ptr s,
             return with_linearized_managed_bytes([&] {
                 dht::ring_position_comparator cmp(*_schema);
                 auto&& pos = ctx->range().start()->value();
-                auto i = _partitions.lower_bound(pos, cmp);
-                if (i != _partitions.end() && cmp(pos, i->position()) >= 0) {
+                partitions_type::bound_hint hint;
+                auto i = _partitions.lower_bound(pos, cmp, hint);
+                if (i != _partitions.end() && hint.match) {
                     cache_entry& e = *i;
                     upgrade_entry(e);
                     on_partition_hit();
@@ -814,10 +800,10 @@ void row_cache::clear_now() noexcept {
 }
 
 template<typename CreateEntry, typename VisitEntry>
-//requires requires(CreateEntry create, VisitEntry visit, row_cache::partitions_type::iterator it) {
-//        { create(it) } -> row_cache::partitions_type::iterator;
-//        { visit(it) } -> void;
-//    }
+requires requires(CreateEntry create, VisitEntry visit, row_cache::partitions_type::iterator it, row_cache::partitions_type::bound_hint hint) {
+    { create(it, hint) } -> std::same_as<row_cache::partitions_type::iterator>;
+    { visit(it) } -> std::same_as<void>;
+}
 cache_entry& row_cache::do_find_or_create_entry(const dht::decorated_key& key,
     const previous_entry_pointer* previous, CreateEntry&& create_entry, VisitEntry&& visit_entry)
 {
@@ -849,17 +835,33 @@ cache_entry& row_cache::do_find_or_create_entry(const dht::decorated_key& key,
     });
 }
 
-cache_entry& row_cache::find_or_create(const dht::decorated_key& key, tombstone t, row_cache::phase_type phase, const previous_entry_pointer* previous) {
-    return do_find_or_create_entry(key, previous, [&] (auto i, const partitions_type::bound_hint& hint) { // create
-        partitions_type::iterator entry = _partitions.emplace_before(i, key.token().raw(), hint,
-                cache_entry::incomplete_tag{}, _schema, key, t);
+cache_entry& row_cache::find_or_create_incomplete(const partition_start& ps, row_cache::phase_type phase, const previous_entry_pointer* previous) {
+    return do_find_or_create_entry(ps.key(), previous, [&] (auto i, const partitions_type::bound_hint& hint) { // create
+        // Create an fully discontinuous, except for the partition tombstone, entry
+        mutation_partition mp = mutation_partition::make_incomplete(*_schema, ps.partition_tombstone());
+        partitions_type::iterator entry = _partitions.emplace_before(i, ps.key().token().raw(), hint,
+                _schema, ps.key(), std::move(mp));
         _tracker.insert(*entry);
         return entry;
     }, [&] (auto i) { // visit
         _tracker.on_miss_already_populated();
         cache_entry& e = *i;
-        e.partition().open_version(*e.schema(), &_tracker, phase).partition().apply(t);
+        e.partition().open_version(*e.schema(), &_tracker, phase).partition().apply(ps.partition_tombstone());
         upgrade_entry(e);
+    });
+}
+
+cache_entry& row_cache::find_or_create_missing(const dht::decorated_key& key) {
+    return do_find_or_create_entry(key, nullptr, [&] (auto i, const partitions_type::bound_hint& hint) {
+        mutation_partition mp(_schema);
+        bool cont = i->continuous();
+        partitions_type::iterator entry = _partitions.emplace_before(i, key.token().raw(), hint,
+                _schema, key, std::move(mp));
+        _tracker.insert(*entry);
+        entry->set_continuous(cont);
+        return entry;
+    }, [&] (auto i) {
+        _tracker.on_miss_already_populated();
     });
 }
 
@@ -876,6 +878,16 @@ void row_cache::populate(const mutation& m, const previous_entry_pointer* previo
         throw std::runtime_error(format("cache already contains entry for {}", m.key()));
     });
   });
+}
+
+cache_entry& row_cache::lookup(const dht::decorated_key& key) {
+    return do_find_or_create_entry(key, nullptr, [&] (auto i, const partitions_type::bound_hint& hint) {
+        throw std::runtime_error(format("cache doesn't contain entry for {}", key));
+        return i;
+    }, [&] (auto i) {
+        _tracker.on_miss_already_populated();
+        upgrade_entry(*i);
+    });
 }
 
 mutation_source& row_cache::snapshot_for_phase(phase_type phase) {
