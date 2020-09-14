@@ -453,7 +453,7 @@ public:
         abort();
     }
 
-    size_t memory_usage(const schema& s) const {
+    size_t memory_usage() const {
         return _data->_memory.resources().memory;
     }
 

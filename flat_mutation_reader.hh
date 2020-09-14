@@ -96,7 +96,7 @@ public:
         void push_mutation_fragment(Args&&... args) {
             seastar::memory::on_alloc_point(); // for exception safety tests
             _buffer.emplace_back(std::forward<Args>(args)...);
-            _buffer_size += _buffer.back().memory_usage(*_schema);
+            _buffer_size += _buffer.back().memory_usage();
         }
         void clear_buffer() {
             _buffer.erase(_buffer.begin(), _buffer.end());
@@ -128,12 +128,12 @@ public:
         mutation_fragment pop_mutation_fragment() {
             auto mf = std::move(_buffer.front());
             _buffer.pop_front();
-            _buffer_size -= mf.memory_usage(*_schema);
+            _buffer_size -= mf.memory_usage();
             return mf;
         }
 
         void unpop_mutation_fragment(mutation_fragment mf) {
-            const auto memory_usage = mf.memory_usage(*_schema);
+            const auto memory_usage = mf.memory_usage();
             _buffer.emplace_front(std::move(mf));
             _buffer_size += memory_usage;
         }

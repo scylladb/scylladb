@@ -38,7 +38,7 @@ static size_t compute_buffer_size(const schema& s, const flat_mutation_reader::t
     return boost::accumulate(
         buffer
         | boost::adaptors::transformed([&s] (const mutation_fragment& mf) {
-            return mf.memory_usage(s);
+            return mf.memory_usage();
         }), size_t(0)
     );
 }
@@ -81,7 +81,7 @@ flat_mutation_reader make_reversing_reader(flat_mutation_reader& original, query
                 if (!_range_tombstones.empty() && !cmp(_range_tombstones.rbegin()->end_position(), mf.position())) {
                     emit_range_tombstone();
                 } else {
-                    _stack_size -= mf.memory_usage(*_schema);
+                    _stack_size -= mf.memory_usage();
                     push_mutation_fragment(std::move(mf));
                     _mutation_fragments.pop();
                 }
@@ -116,7 +116,7 @@ flat_mutation_reader make_reversing_reader(flat_mutation_reader& original, query
                     _range_tombstones.apply(*_schema, std::move(mf.as_range_tombstone()));
                 } else {
                     _mutation_fragments.emplace(std::move(mf));
-                    _stack_size += _mutation_fragments.top().memory_usage(*_schema);
+                    _stack_size += _mutation_fragments.top().memory_usage();
                     if (_stack_size > _max_size.hard_limit || (_stack_size > _max_size.soft_limit && _below_soft_limit)) {
                         const partition_key* key = nullptr;
                         auto it = buffer().end();
@@ -171,7 +171,7 @@ flat_mutation_reader make_reversing_reader(flat_mutation_reader& original, query
             clear_buffer_to_next_partition();
             if (is_buffer_empty() && !is_end_of_stream()) {
                 while (!_mutation_fragments.empty()) {
-                    _stack_size -= _mutation_fragments.top().memory_usage(*_schema);
+                    _stack_size -= _mutation_fragments.top().memory_usage();
                     _mutation_fragments.pop();
                 }
                 _range_tombstones.clear();

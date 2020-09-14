@@ -143,10 +143,10 @@ class read_context : public reader_lifecycle_policy {
         size_t discarded_fragments = 0;
         size_t discarded_bytes = 0;
 
-        void add(const schema& s, const mutation_fragment& mf) {
+        void add(const mutation_fragment& mf) {
             partitions += unsigned(mf.is_partition_start());
             ++fragments;
-            bytes += mf.memory_usage(s);
+            bytes += mf.memory_usage();
         }
         void add(const schema& s, const range_tombstone& rt) {
             ++fragments;
@@ -161,10 +161,10 @@ class read_context : public reader_lifecycle_policy {
             ++fragments;
             bytes += ps.memory_usage(s);
         }
-        void add_discarded(const schema& s, const mutation_fragment& mf) {
+        void add_discarded(const mutation_fragment& mf) {
             discarded_partitions += unsigned(mf.is_partition_start());
             ++discarded_fragments;
-            discarded_bytes += mf.memory_usage(s);
+            discarded_bytes += mf.memory_usage();
         }
         void add_discarded(const schema& s, const range_tombstone& rt) {
             ++discarded_fragments;
@@ -389,19 +389,19 @@ read_context::dismantle_buffer_stats read_context::dismantle_combined_buffer(fla
             // because it was evicted.
             if (_readers[shard].state != reader_state::saving) {
                 for (auto& smf : tmp_buffer) {
-                    stats.add_discarded(*_schema, smf);
+                    stats.add_discarded(smf);
                 }
-                stats.add_discarded(*_schema, *rit);
+                stats.add_discarded(*rit);
                 tmp_buffer.clear();
                 continue;
             }
 
             auto& shard_buffer = *_readers[shard].buffer;
             for (auto& smf : tmp_buffer) {
-                stats.add(*_schema, smf);
+                stats.add(smf);
                 shard_buffer.emplace_front(std::move(smf));
             }
-            stats.add(*_schema, *rit);
+            stats.add(*rit);
             shard_buffer.emplace_front(std::move(*rit));
             tmp_buffer.clear();
         } else {
@@ -412,7 +412,7 @@ read_context::dismantle_buffer_stats read_context::dismantle_combined_buffer(fla
     const auto shard = sharder.shard_of(pkey.token());
     auto& shard_buffer = *_readers[shard].buffer;
     for (auto& smf : tmp_buffer) {
-        stats.add(*_schema, smf);
+        stats.add(smf);
         shard_buffer.emplace_front(std::move(smf));
     }
 
