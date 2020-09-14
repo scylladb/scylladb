@@ -32,21 +32,21 @@ future<redis_message> command_factory::create_execute(service::storage_proxy& pr
 {
     static thread_local std::unordered_map<bytes, std::function<future<redis_message> (service::storage_proxy& proxy, request&& req, redis::redis_options& options, service_permit permit)>> _commands =
     { 
-        { "ping",  [] (service::storage_proxy& proxy, request&& req, redis::redis_options& options, service_permit permit) { return commands::ping(proxy, std::move(req), options, permit); } },
-        { "select",  [] (service::storage_proxy& proxy, request&& req, redis::redis_options& options, service_permit permit) { return commands::select(proxy, std::move(req), options, permit); } },
-        { "get",  [] (service::storage_proxy& proxy, request&& req, redis::redis_options& options, service_permit permit) { return commands::get(proxy, std::move(req), options, permit); } },
-        { "exists", [] (service::storage_proxy& proxy, request&& req, redis::redis_options& options, service_permit permit) { return commands::exists(proxy, std::move(req), options, permit); } },
-        { "ttl", [] (service::storage_proxy& proxy, request&& req, redis::redis_options& options, service_permit permit) { return commands::ttl(proxy, std::move(req), options, permit); } },
-        { "strlen", [] (service::storage_proxy& proxy, request&& req, redis::redis_options& options, service_permit permit) { return commands::strlen(proxy, std::move(req), options, permit); } },
-        { "set",  [] (service::storage_proxy& proxy, request&& req, redis::redis_options& options, service_permit permit) { return commands::set(proxy, std::move(req), options, permit); } },
-        { "setex",  [] (service::storage_proxy& proxy, request&& req, redis::redis_options& options, service_permit permit) { return commands::setex(proxy, std::move(req), options, permit); } },
-        { "del",  [] (service::storage_proxy& proxy, request&& req, redis::redis_options& options, service_permit permit) { return commands::del(proxy, std::move(req), options, permit); } },
-        { "echo",  [] (service::storage_proxy& proxy, request&& req, redis::redis_options& options, service_permit permit) { return commands::echo(proxy, std::move(req), options, permit); } },
-        { "lolwut", [] (service::storage_proxy& proxy, request&& req, redis::redis_options& options, service_permit permit) { return commands::lolwut(proxy, std::move(req), options, permit); } },
-        { "hget", [] (service::storage_proxy& proxy, request&& req, redis::redis_options& options, service_permit permit) { return commands::hget(proxy, std::move(req), options, permit); } },
-        { "hset", [] (service::storage_proxy& proxy, request&& req, redis::redis_options& options, service_permit permit) { return commands::hset(proxy, std::move(req), options, permit); } },
-        { "hgetall", [] (service::storage_proxy& proxy, request&& req, redis::redis_options& options, service_permit permit) { return commands::hgetall(proxy, std::move(req), options, permit); } },
-        { "hdel", [] (service::storage_proxy& proxy, request&& req, redis::redis_options& options, service_permit permit) { return commands::hdel(proxy, std::move(req), options, permit); } },
+        { "ping", commands::ping },
+        { "select", commands::select },
+        { "get", commands::get },
+        { "exists", commands::exists },
+        { "ttl", commands::ttl },
+        { "strlen", commands::strlen },
+        { "set", commands::set },
+        { "setex", commands::setex },
+        { "del", commands::del },
+        { "echo", commands::echo },
+        { "lolwut", commands::lolwut },
+        { "hget", commands::hget },
+        { "hset", commands::hset },
+        { "hgetall", commands::hgetall },
+        { "hdel", commands::hdel },
     };
     auto&& command = _commands.find(req._command);
     if (command != _commands.end()) {
