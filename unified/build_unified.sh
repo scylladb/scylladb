@@ -46,7 +46,7 @@ while [ $# -gt 0 ]; do
 done
 
 UNIFIED_PKG="$(realpath -s $UNIFIED_PKG)"
-PKGS="build/$MODE/scylla-package.tar.gz build/$MODE/scylla-python3-package.tar.gz tools/jmx/build/scylla-jmx-package.tar.gz tools/java/build/scylla-tools-package.tar.gz"
+PKGS="build/$MODE/dist/tar/scylla-package.tar.gz build/$MODE/dist/tar/scylla-python3-package.tar.gz build/$MODE/dist/tar/scylla-jmx-package.tar.gz build/$MODE/dist/tar/scylla-tools-package.tar.gz"
 
 rm -rf build/"$MODE"/unified/
 mkdir -p build/"$MODE"/unified/
