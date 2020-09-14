@@ -72,16 +72,13 @@ flat_mutation_reader make_reversing_reader(flat_mutation_reader& original, query
     private:
         stop_iteration emit_partition() {
             auto emit_range_tombstone = [&] {
-                auto it = std::prev(_range_tombstones.tombstones().end());
-                auto& rt = *it;
-                _range_tombstones.tombstones().erase(it);
-                auto rt_owner = alloc_strategy_unique_ptr<range_tombstone>(&rt);
-                push_mutation_fragment(mutation_fragment(std::move(rt)));
+                auto it = std::prev(_range_tombstones.end());
+                push_mutation_fragment(_range_tombstones.pop_as<mutation_fragment>(it));
             };
             position_in_partition::less_compare cmp(*_schema);
             while (!_mutation_fragments.empty() && !is_buffer_full()) {
                 auto& mf = _mutation_fragments.top();
-                if (!_range_tombstones.empty() && !cmp(_range_tombstones.tombstones().rbegin()->end_position(), mf.position())) {
+                if (!_range_tombstones.empty() && !cmp(_range_tombstones.rbegin()->end_position(), mf.position())) {
                     emit_range_tombstone();
                 } else {
                     _stack_size -= mf.memory_usage(*_schema);
@@ -425,8 +422,8 @@ flat_mutation_reader_from_mutations(std::vector<mutation> mutations, const dht::
             }
         }
         void prepare_next_range_tombstone() {
-            auto& rts = _cur->partition().row_tombstones().tombstones();
-            auto rt = rts.unlink_leftmost_without_rebalance();
+            auto& rts = _cur->partition().row_tombstones();
+            auto rt = rts.pop_front_and_lock();
             if (rt) {
                 auto rt_deleter = defer([rt] { current_deleter<range_tombstone>()(rt); });
                 _rt = mutation_fragment(std::move(*rt));
@@ -483,11 +480,11 @@ flat_mutation_reader_from_mutations(std::vector<mutation> mutations, const dht::
                 re = crs.unlink_leftmost_without_rebalance();
             }
 
-            auto &rts = _cur->partition().row_tombstones().tombstones();
-            auto rt = rts.unlink_leftmost_without_rebalance();
+            auto &rts = _cur->partition().row_tombstones();
+            auto rt = rts.pop_front_and_lock();
             while (rt) {
                 current_deleter<range_tombstone>()(rt);
-                rt = rts.unlink_leftmost_without_rebalance();
+                rt = rts.pop_front_and_lock();
             }
         }
         struct cmp {

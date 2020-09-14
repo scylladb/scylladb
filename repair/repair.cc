@@ -460,21 +460,15 @@ private:
         feed_hash(_hasher, cell, col);
     }
 
-    void consume_range_tombstone_start(const range_tombstone& rt) {
+    void consume_range_tombstone_start(const range_tombstone& rt) noexcept {
         feed_hash(_hasher, rt.start, _schema);
         feed_hash(_hasher, rt.start_kind);
         feed_hash(_hasher, rt.tomb);
     }
 
-    void consume_range_tombstone_end(const range_tombstone& rt) {
+    void consume_range_tombstone_end(const range_tombstone& rt) noexcept {
         feed_hash(_hasher, rt.end, _schema);
         feed_hash(_hasher, rt.end_kind);
-    }
-
-    void pop_rt_front() {
-        auto& rt = *_rt_list.tombstones().begin();
-        _rt_list.tombstones().erase(_rt_list.begin());
-        current_deleter<range_tombstone>()(&rt);
     }
 
     void consume_range_tombstones_until(const clustering_row& cr) {
@@ -482,9 +476,8 @@ private:
             auto it = _rt_list.begin();
             if (_inside_range_tombstone) {
                 if (_cmp(it->end_bound(), cr.key())) {
-                    consume_range_tombstone_end(*it);
+                    consume_range_tombstone_end(_rt_list.pop_as<range_tombstone>(it));
                     _inside_range_tombstone = false;
-                    pop_rt_front();
                 } else {
                     break;
                 }
@@ -501,8 +494,7 @@ private:
 
     void consume_range_tombstones_until_end() {
         if (_inside_range_tombstone) {
-            consume_range_tombstone_end(*_rt_list.begin());
-            pop_rt_front();
+            consume_range_tombstone_end(_rt_list.pop_as<range_tombstone>(_rt_list.begin()));
         }
         for (auto&& rt : _rt_list) {
             consume_range_tombstone_start(rt);

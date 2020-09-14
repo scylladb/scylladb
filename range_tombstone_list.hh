@@ -21,6 +21,7 @@
 
 #pragma once
 
+#include <seastar/util/defer.hh>
 #include "range_tombstone.hh"
 #include "query-request.hh"
 #include "position_in_partition.hh"
@@ -111,14 +112,17 @@ public:
     bool empty() const {
         return _tombstones.empty();
     }
-    range_tombstones_type& tombstones() {
-        return _tombstones;
-    }
     auto begin() {
         return _tombstones.begin();
     }
     auto begin() const {
         return _tombstones.begin();
+    }
+    auto rbegin() {
+        return _tombstones.rbegin();
+    }
+    auto rbegin() const {
+        return _tombstones.rbegin();
     }
     auto end() {
         return _tombstones.end();
@@ -159,6 +163,12 @@ public:
     // Returns range tombstones which overlap with [start, end)
     boost::iterator_range<const_iterator> slice(const schema& s, position_in_partition_view start, position_in_partition_view end) const;
     iterator erase(const_iterator, const_iterator);
+
+    // Pops the first element and bans (in theory) further additions
+    range_tombstone* pop_front_and_lock() {
+        return _tombstones.unlink_leftmost_without_rebalance();
+    }
+
     // Ensures that every range tombstone is strictly contained within given clustering ranges.
     // Preserves all information which may be relevant for rows from that ranges.
     void trim(const schema& s, const query::clustering_row_ranges&);
@@ -180,6 +190,16 @@ public:
     void clear() {
         _tombstones.clear_and_dispose(current_deleter<range_tombstone>());
     }
+
+    template <typename T>
+    requires std::constructible_from<T, range_tombstone>
+    auto pop_as(iterator it) {
+        range_tombstone& rt = *it;
+        _tombstones.erase(it);
+        auto rt_deleter = seastar::defer([&rt] { current_deleter<range_tombstone>()(&rt); });
+        return T(std::move(rt));
+    }
+
     // Removes elements of this list in batches.
     // Returns stop_iteration::yes iff there is no more elements to remove.
     stop_iteration clear_gently() noexcept;

@@ -29,12 +29,20 @@ template <typename T> struct hasher_traits;
 template <> struct hasher_traits<md5_hasher> { using impl_type = CryptoPP::Weak::MD5; };
 template <> struct hasher_traits<sha256_hasher> { using impl_type = CryptoPP::SHA256; };
 
-template <typename T, size_t size> struct cryptopp_hasher<T, size>::impl {
+template<typename H>
+concept HashUpdater =
+    requires(hasher_traits<H>::impl_type& h, const CryptoPP::byte* ptr, size_t size) {
+        { h.Update(ptr, size) } noexcept -> std::same_as<void>;
+    };
+
+template <typename T, size_t size>
+requires HashUpdater<T>
+struct cryptopp_hasher<T, size>::impl {
     using impl_type = typename hasher_traits<T>::impl_type;
 
     impl_type hash{};
 
-    void update(const char* ptr, size_t length) {
+    void update(const char* ptr, size_t length) noexcept {
         using namespace CryptoPP;
         static_assert(sizeof(char) == sizeof(byte), "Assuming lengths will be the same");
         hash.Update(reinterpret_cast<const byte*>(ptr), length * sizeof(byte));
@@ -74,7 +82,7 @@ template <typename T, size_t size> std::array<uint8_t, size> cryptopp_hasher<T, 
     return _impl->finalize_array();
 }
 
-template <typename T, size_t size> void cryptopp_hasher<T, size>::update(const char* ptr, size_t length) { _impl->update(ptr, length); }
+template <typename T, size_t size> void cryptopp_hasher<T, size>::update(const char* ptr, size_t length) noexcept { _impl->update(ptr, length); }
 
 template <typename T, size_t size> bytes cryptopp_hasher<T, size>::calculate(const std::string_view& s) {
     typename cryptopp_hasher<T, size>::impl::impl_type hash;
