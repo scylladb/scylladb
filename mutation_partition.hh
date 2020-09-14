@@ -1362,7 +1362,7 @@ public:
     // object contains at least all the writes it contained before the call (monotonicity). It may contain partial writes.
     // Also, some progress is always guaranteed (liveness).
     //
-    // The operation can be drien to completion like this:
+    // The operation can be driven to completion like this:
     //
     //   while (apply_monotonically(..., is_preemtable::yes) == stop_iteration::no) { }
     //
