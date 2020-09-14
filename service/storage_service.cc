@@ -2647,7 +2647,7 @@ void storage_service::shutdown_client_servers() {
 
 future<>
 storage_service::set_tables_autocompaction(const sstring &keyspace, std::vector<sstring> tables, bool enabled) {
-    slogger.debug("set_tables_autocompaction: enabled={} keyspace={} tables={}", enabled, keyspace, tables);
+    slogger.info("set_tables_autocompaction: enabled={} keyspace={} tables={}", enabled, keyspace, tables);
     if (!_initialized) {
         return make_exception_future<>(std::runtime_error("Too early: storage service not initialized yet"));
     }
