@@ -586,14 +586,8 @@ void write_counter_value(counter_cell_view ccv, W& out, sstable_version_types v,
             int64_t(uuid.get_least_significant_bits()),
             int64_t(s.logical_clock()), int64_t(s.value()));
     };
-    if (service::get_local_storage_service().features().cluster_supports_correct_counter_order()) {
-        for (auto&& s : ccv.shards()) {
-            write_shard(s);
-        }
-    } else {
-        for (auto&& s : ccv.shards_compatible_with_1_7_4()) {
-            write_shard(s);
-        }
+    for (auto&& s : ccv.shards()) {
+        write_shard(s);
     }
 }
 
