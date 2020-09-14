@@ -743,7 +743,7 @@ void appending_hash<row>::operator()(Hasher& h, const row& cells, const schema& 
                 if (cell_and_hash->hash) {
                     feed_hash(h, *cell_and_hash->hash);
                 } else {
-                    query::default_hasher cellh;
+                    Hasher cellh;
                     feed_hash(cellh, cell_and_hash->cell.as_atomic_cell(def), def);
                     feed_hash(h, cellh.finalize_uint64());
                 }
@@ -757,7 +757,7 @@ void appending_hash<row>::operator()(Hasher& h, const row& cells, const schema& 
                 if (cell_and_hash->hash) {
                     feed_hash(h, *cell_and_hash->hash);
                 } else {
-                    query::default_hasher cellh;
+                    Hasher cellh;
                     feed_hash(cellh, cm, def);
                     feed_hash(h, cellh.finalize_uint64());
                 }
@@ -783,7 +783,7 @@ void appending_hash<row>::operator()<legacy_xx_hasher_without_null_digest>(legac
             if (cell_and_hash->hash) {
                 feed_hash(h, *cell_and_hash->hash);
             } else {
-                query::default_hasher cellh;
+                legacy_xx_hasher_without_null_digest cellh;
                 feed_hash(cellh, cell_and_hash->cell.as_atomic_cell(def), def);
                 feed_hash(h, cellh.finalize_uint64());
             }
@@ -793,7 +793,7 @@ void appending_hash<row>::operator()<legacy_xx_hasher_without_null_digest>(legac
             if (cell_and_hash->hash) {
                 feed_hash(h, *cell_and_hash->hash);
             } else {
-                query::default_hasher cellh;
+                legacy_xx_hasher_without_null_digest cellh;
                 feed_hash(cellh, cm, def);
                 feed_hash(h, cellh.finalize_uint64());
             }
