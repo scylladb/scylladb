@@ -188,9 +188,7 @@ if __name__ == '__main__':
         if not shutil.which('coredumpctl'):
             default_no_coredump_setup = True
 
-        if is_debian_variant() and not shutil.which('cpufreq-set'):
-            default_no_cpuscaling_setup = True
-        elif not shutil.which('cpupower'):
+        if not shutil.which('cpupower'):
             default_no_cpuscaling_setup = True
 
     parser = argparse.ArgumentParser(description='Configure environment for Scylla.')

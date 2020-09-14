@@ -23,6 +23,7 @@
 import os
 import sys
 import shlex
+import shutil
 from scylla_util import *
 
 if __name__ == '__main__':
@@ -33,37 +34,20 @@ if __name__ == '__main__':
         print('This computer doesn\'t supported CPU scaling configuration.')
         sys.exit(0)
     if is_debian_variant():
-        if not shutil.which('cpufreq-set'):
-            apt_install('cpufrequtils')
-        cfg = sysconfig_parser('/etc/default/cpufrequtils')
-        cfg.set('GOVERNOR', 'performance')
-        cfg.commit()
-        cpufreq = systemd_unit('cpufrequtils.service')
-        cpufreq.enable()
-        cpufreq.restart()
-    if is_gentoo_variant():
+        if not shutil.which('cpupower'):
+            apt_install('linux-cpupower')
+    elif is_gentoo_variant():
         if not shutil.which('cpupower'):
             emerge_install('sys-power/cpupower')
-        with open('/etc/conf.d/cpupower') as f:
-            cur = f.read()
-        new = re.sub(r'--governor ondemand', '--governor performance', cur, flags=re.MULTILINE)
-        with open('/etc/conf.d/cpupower', 'w') as f:
-            f.write(new)
-        if is_systemd():
-            cpufreq = systemd_unit('cpupower-frequency-set.service')
-            cpufreq.enable()
-            cpufreq.restart()
-        else:
-            run('rc-update add cpupower default')
-            run('rc-service cpupower start')
-    if is_amzn2():
+    elif is_redhat_variant():
         if not shutil.which('cpupower'):
             yum_install('cpupowerutils')
-        cfg = sysconfig_parser('/etc/sysconfig/scylla-cpupower')
-        cfg.set('CPUPOWER_START_OPTS', 'frequency-set -g performance')
-        cfg.set('CPUPOWER_STOP_OPTS', 'frequency-set -g ondemand')
-        cfg.commit()
-        unit_data = '''
+
+    cfg = sysconfig_parser('/etc/sysconfig/scylla-cpupower')
+    cfg.set('CPUPOWER_START_OPTS', 'frequency-set -g performance')
+    cfg.set('CPUPOWER_STOP_OPTS', 'frequency-set -g ondemand')
+    cfg.commit()
+    unit_data = '''
 [Unit]
 Description=Scylla cpupower service
 After=syslog.target
@@ -75,19 +59,15 @@ EnvironmentFile=/etc/sysconfig/scylla-cpupower
 ExecStart=/usr/bin/cpupower $CPUPOWER_START_OPTS
 ExecStop=/usr/bin/cpupower $CPUPOWER_STOP_OPTS
 '''[1:-1]
-        with open('/etc/systemd/system/scylla-cpupower.service', 'w') as f:
-            f.write(unit_data)
-        systemd_unit.reload()
-        cpupwr = systemd_unit('scylla-cpupower.service')
-        cpupwr.enable()
-        cpupwr.restart()
-    elif is_redhat_variant():
-        if not shutil.which('cpupower'):
-            yum_install('cpupowerutils')
-        cfg = sysconfig_parser('/etc/sysconfig/cpupower')
-        cfg.set('CPUPOWER_START_OPTS', 'frequency-set -g performance')
-        cfg.set('CPUPOWER_STOP_OPTS', 'frequency-set -g ondemand')
-        cfg.commit()
+    with open('/etc/systemd/system/scylla-cpupower.service', 'w') as f:
+        f.write(unit_data)
+    systemd_unit.reload()
+    # disable distro default service if it exists
+    try:
         cpupwr = systemd_unit('cpupower.service')
-        cpupwr.enable()
-        cpupwr.restart()
+        cpupwr.disable()
+    except:
+        pass
+    cpupwr = systemd_unit('scylla-cpupower.service')
+    cpupwr.enable()
+    cpupwr.restart()
