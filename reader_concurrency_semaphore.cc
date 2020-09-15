@@ -65,20 +65,46 @@ void reader_permit::resource_units::reset(reader_resources res) {
     _resources = res;
 }
 
+class reader_permit::impl {
+    reader_concurrency_semaphore& _semaphore;
+
+public:
+    impl(reader_concurrency_semaphore& semaphore) : _semaphore(semaphore) { }
+
+    reader_concurrency_semaphore& semaphore() {
+        return _semaphore;
+    }
+
+    void consume(reader_resources res) {
+        _semaphore.consume(res);
+    }
+
+    void signal(reader_resources res) {
+        _semaphore.signal(res);
+    }
+};
+
 reader_permit::reader_permit(reader_concurrency_semaphore& semaphore)
-    : _semaphore(&semaphore) {
+    : _impl(make_shared<impl>(semaphore)) {
+}
+
+reader_permit::~reader_permit() {
+}
+
+reader_concurrency_semaphore& reader_permit::semaphore() {
+    return _impl->semaphore();
 }
 
 future<reader_permit::resource_units> reader_permit::wait_admission(size_t memory, db::timeout_clock::time_point timeout) {
-    return _semaphore->do_wait_admission(*this, memory, timeout);
+    return _impl->semaphore().do_wait_admission(*this, memory, timeout);
 }
 
 void reader_permit::consume(reader_resources res) {
-    _semaphore->consume(res);
+    _impl->consume(res);
 }
 
 void reader_permit::signal(reader_resources res) {
-    _semaphore->signal(res);
+    _impl->signal(res);
 }
 
 reader_permit::resource_units reader_permit::consume_memory(size_t memory) {

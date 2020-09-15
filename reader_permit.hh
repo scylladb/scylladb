@@ -84,19 +84,26 @@ public:
     class resource_units;
 
 private:
-    reader_concurrency_semaphore* _semaphore;
+    class impl;
+    shared_ptr<impl> _impl;
 
 private:
     explicit reader_permit(reader_concurrency_semaphore& semaphore);
 
 public:
+    ~reader_permit();
+
+    reader_permit(const reader_permit&) = default;
+    reader_permit(reader_permit&&) = default;
+
+    reader_permit& operator=(const reader_permit&) = default;
+    reader_permit& operator=(reader_permit&&) = default;
+
     bool operator==(const reader_permit& o) const {
-        return _semaphore == o._semaphore;
+        return _impl == o._impl;
     }
 
-    reader_concurrency_semaphore& semaphore() {
-        return *_semaphore;
-    }
+    reader_concurrency_semaphore& semaphore();
 
     future<resource_units> wait_admission(size_t memory, db::timeout_clock::time_point timeout);
 
