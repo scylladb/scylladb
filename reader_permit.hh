@@ -90,6 +90,8 @@ private:
 private:
     explicit reader_permit(reader_concurrency_semaphore& semaphore);
 
+    void on_admission();
+
 public:
     ~reader_permit();
 

@@ -70,6 +70,7 @@ void reader_permit::resource_units::reset(reader_resources res) {
 class reader_permit::impl {
     reader_concurrency_semaphore& _semaphore;
     reader_resources _resources;
+    bool _admitted = false;
 
 public:
     impl(reader_concurrency_semaphore& semaphore) : _semaphore(semaphore) { }
@@ -84,19 +85,32 @@ public:
         return _semaphore;
     }
 
+    void on_admission() {
+        _admitted = true;
+        _semaphore.consume(_resources);
+    }
+
     void consume(reader_resources res) {
         _resources += res;
-        _semaphore.consume(res);
+        if (_admitted) {
+            _semaphore.consume(res);
+        }
     }
 
     void signal(reader_resources res) {
         _resources -= res;
-        _semaphore.signal(res);
+        if (_admitted) {
+            _semaphore.signal(res);
+        }
     }
 };
 
 reader_permit::reader_permit(reader_concurrency_semaphore& semaphore)
     : _impl(make_shared<impl>(semaphore)) {
+}
+
+void reader_permit::on_admission() {
+    _impl->on_admission();
 }
 
 reader_permit::~reader_permit() {
@@ -131,6 +145,7 @@ void reader_concurrency_semaphore::signal(const resources& r) noexcept {
     while (!_wait_list.empty() && has_available_units(_wait_list.front().res)) {
         auto& x = _wait_list.front();
         try {
+            x.permit.on_admission();
             x.pr.set_value(reader_permit::resource_units(std::move(x.permit), x.res));
         } catch (...) {
             x.pr.set_exception(std::current_exception());
@@ -225,6 +240,7 @@ future<reader_permit::resource_units> reader_concurrency_semaphore::do_wait_admi
         --_stats.inactive_reads;
     }
     if (may_proceed(r)) {
+        permit.on_admission();
         return make_ready_future<reader_permit::resource_units>(reader_permit::resource_units(std::move(permit), r));
     }
     promise<reader_permit::resource_units> pr;
