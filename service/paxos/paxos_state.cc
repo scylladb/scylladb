@@ -32,6 +32,9 @@
 
 #include "utils/error_injection.hh"
 
+#include "db/schema_tables.hh"
+#include "service/migration_manager.hh"
+
 namespace service::paxos {
 
 logging::logger paxos_state::logger("paxos");
@@ -195,20 +198,23 @@ future<> paxos_state::learn(schema_ptr schema, proposal decision, clock_type::ti
                 logger.debug("Committing decision {}", decision);
                 tracing::trace(tr_state, "Committing decision {}", decision);
 
-                schema_ptr s = schema;
                 // In case current schema is not the same as the schema in the decision
-                // try to look it up in the local schema_registry cache and upgrade
+                // try to look it up first in the local schema_registry cache and upgrade
                 // the mutation using schema from the cache.
+                //
+                // If there's no schema in the cache, then retrieve persisted column mapping
+                // for that version and upgrade the mutation with it.
                 if (decision.update.schema_version() != schema->version()) {
                     logger.debug("Stored mutation references outdated schema version. "
                         "Trying to upgrade the accepted proposal mutation to the most recent schema version.");
-                    schema_ptr cached_schema = local_schema_registry().get_or_null(decision.update.schema_version());
-                    if (cached_schema) {
-                        logger.debug("Found the desired schema version in the local schema_registry.");
-                        s = cached_schema;
-                    }
+                    return service::get_column_mapping(decision.update.column_family_id(), decision.update.schema_version())
+                        .then([schema, tr_state, timeout, &decision] (const column_mapping& cm) {
+                            return do_with(decision.update.unfreeze_upgrading(schema, cm), [tr_state, timeout] (const mutation& upgraded) {
+                                return get_local_storage_proxy().mutate_locally(upgraded, tr_state, db::commitlog::force_sync::yes, timeout);
+                            });
+                        });
                 }
-                return get_local_storage_proxy().mutate_locally(s, decision.update, tr_state, db::commitlog::force_sync::yes, timeout);
+                return get_local_storage_proxy().mutate_locally(schema, decision.update, tr_state, db::commitlog::force_sync::yes, timeout);
             });
         } else {
             logger.debug("Not committing decision {} as ballot timestamp predates last truncation time", decision);

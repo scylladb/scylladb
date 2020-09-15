@@ -1110,7 +1110,17 @@ static future<> maybe_sync(const schema_ptr& s, netw::messaging_service::msg_add
 future<schema_ptr> get_schema_definition(table_schema_version v, netw::messaging_service::msg_addr dst, netw::messaging_service& ms) {
     return local_schema_registry().get_or_load(v, [&ms, dst] (table_schema_version v) {
         mlogger.debug("Requesting schema {} from {}", v, dst);
-        return ms.send_get_schema_version(dst, v);
+        return ms.send_get_schema_version(dst, v).then([] (frozen_schema s) {
+            auto& proxy = get_storage_proxy();
+            // Since the latest schema version is always present in the schema registry
+            // we only happen to query already outdated schema version, which is
+            // referenced by the incoming request.
+            // That means the column mapping for the schema should always be inserted
+            // with TTL (refresh TTL in case column mapping already existed prior to that).
+            return db::schema_tables::store_column_mapping(proxy, s.unfreeze(db::schema_ctxt(proxy)), true).then([s] {
+                return s;
+            });
+        });
     });
 }
 
@@ -1143,6 +1153,14 @@ future<> migration_manager::sync_schema(const database& db, const std::vector<gm
             });
         });
     });
+}
+
+future<column_mapping> get_column_mapping(utils::UUID table_id, table_schema_version v) {
+    schema_ptr s = local_schema_registry().get_or_null(v);
+    if (s) {
+        return make_ready_future<column_mapping>(s->get_column_mapping());
+    }
+    return db::schema_tables::get_column_mapping(table_id, v);
 }
 
 }

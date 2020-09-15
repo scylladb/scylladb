@@ -109,6 +109,7 @@ static constexpr auto AGGREGATES = "aggregates";
 static constexpr auto INDEXES = "indexes";
 static constexpr auto VIEW_VIRTUAL_COLUMNS = "view_virtual_columns"; // Scylla specific
 static constexpr auto COMPUTED_COLUMNS = "computed_columns"; // Scylla specific
+static constexpr auto SCYLLA_TABLE_SCHEMA_HISTORY = "scylla_table_schema_history"; // Scylla specific;
 
 schema_ptr columns();
 schema_ptr view_virtual_columns();
@@ -118,6 +119,8 @@ schema_ptr tables();
 schema_ptr scylla_tables(schema_features features = schema_features::full());
 schema_ptr views();
 schema_ptr computed_columns();
+// Belongs to the "system" keyspace
+schema_ptr scylla_table_schema_history();
 
 }
 
@@ -246,6 +249,18 @@ std::optional<std::map<K, V>> get_map(const query::result_set_row& row, const ss
     }
     return std::nullopt;
 }
+
+/// Stores the column mapping for the table being created or altered in the system table
+/// which holds a history of schema versions alongside with their column mappings.
+/// Can be used to insert entries with TTL (equal to DEFAULT_GC_GRACE_SECONDS) in case we are
+/// overwriting an existing column mapping to garbage collect obsolete entries.
+future<> store_column_mapping(distributed<service::storage_proxy>& proxy, schema_ptr s, bool with_ttl);
+/// Query column mapping for a given version of the table locally.
+future<column_mapping> get_column_mapping(utils::UUID table_id, table_schema_version version);
+/// Check that column mapping exists for a given version of the table
+future<bool> column_mapping_exists(utils::UUID table_id, table_schema_version version);
+/// Delete matching column mapping entries from the `system.scylla_table_schema_history` table
+future<> drop_column_mapping(utils::UUID table_id, table_schema_version version);
 
 } // namespace schema_tables
 } // namespace db

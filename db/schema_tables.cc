@@ -90,6 +90,14 @@
 #include "index/target_parser.hh"
 #include "lua.hh"
 
+#include "db/query_context.hh"
+#include "serializer.hh"
+#include "idl/mutation.dist.hh"
+#include "serializer_impl.hh"
+#include "idl/mutation.dist.impl.hh"
+#include "db/system_keyspace.hh"
+#include "cql3/untyped_result_set.hh"
+
 using namespace db::system_keyspace;
 using namespace std::chrono_literals;
 
@@ -614,6 +622,38 @@ schema_ptr aggregates() {
     return schema;
 }
 
+schema_ptr scylla_table_schema_history() {
+    static thread_local auto s = [] {
+        schema_builder builder(make_lw_shared(schema(
+            generate_legacy_id(db::system_keyspace::NAME, SCYLLA_TABLE_SCHEMA_HISTORY), db::system_keyspace::NAME, SCYLLA_TABLE_SCHEMA_HISTORY,
+            // partition key
+            {{"cf_id", uuid_type}},
+            // clustering key
+            {{"schema_version", uuid_type}, {"column_name", utf8_type}},
+            // regular columns
+            // mirrors the structure of the "columns" table which is essentially
+            // needed to represent a column mapping in serialized form
+            {
+                {"clustering_order", utf8_type},
+                {"column_name_bytes", bytes_type},
+                {"kind", utf8_type},
+                {"position", int32_type},
+                {"type", utf8_type},
+            },
+            // static columns
+            {},
+            // regular column name type
+            utf8_type,
+            // comment
+            "Scylla specific table to store a history of column mappings "
+            "for each table schema version upon an CREATE TABLE/ALTER TABLE operations"
+        )));
+        builder.with_version(generate_schema_version(builder.uuid()));
+        return builder.build(schema_builder::compact_storage::no);
+    }();
+    return s;
+}
+
 }
 
 #if 0
@@ -906,6 +946,7 @@ static void fill_column_info(const schema& table,
                              const clustering_key& ckey,
                              const column_definition& column,
                              api::timestamp_type timestamp,
+                             ttl_opt ttl,
                              mutation& m) {
     auto order = "NONE";
     if (column.is_clustering_key()) {
@@ -923,11 +964,38 @@ static void fill_column_info(const schema& table,
         pos = table.position(column);
     }
 
-    m.set_clustered_cell(ckey, "column_name_bytes", data_value(column.name()), timestamp);
-    m.set_clustered_cell(ckey, "kind", serialize_kind(column.kind), timestamp);
-    m.set_clustered_cell(ckey, "position", pos, timestamp);
-    m.set_clustered_cell(ckey, "clustering_order", sstring(order), timestamp);
-    m.set_clustered_cell(ckey, "type", type->as_cql3_type().to_string(), timestamp);
+    m.set_clustered_cell(ckey, "column_name_bytes", data_value(column.name()), timestamp, ttl);
+    m.set_clustered_cell(ckey, "kind", serialize_kind(column.kind), timestamp, ttl);
+    m.set_clustered_cell(ckey, "position", pos, timestamp, ttl);
+    m.set_clustered_cell(ckey, "clustering_order", sstring(order), timestamp, ttl);
+    m.set_clustered_cell(ckey, "type", type->as_cql3_type().to_string(), timestamp, ttl);
+}
+
+future<> store_column_mapping(distributed<service::storage_proxy>& proxy, schema_ptr s, bool with_ttl) {
+    // Skip "system*" tables -- only user-related tables are relevant
+    if (static_cast<std::string_view>(s->ks_name()).starts_with(db::system_keyspace::NAME)) {
+        return make_ready_future<>();
+    }
+    schema_ptr history_tbl = scylla_table_schema_history();
+
+    // Insert the new column mapping for a given schema version (without TTL)
+    std::vector<mutation> muts;
+    partition_key pk = partition_key::from_exploded(*history_tbl, {uuid_type->decompose(s->id())});
+
+    ttl_opt ttl;
+    if (with_ttl) {
+        ttl = gc_clock::duration(DEFAULT_GC_GRACE_SECONDS);
+    }
+    // Use one timestamp for all mutations for the ease of debugging
+    const auto ts = api::new_timestamp();
+    for (const auto& cdef : boost::range::join(s->static_columns(), s->regular_columns())) {
+        mutation m(history_tbl, pk);
+        auto ckey = clustering_key::from_exploded(*history_tbl, {uuid_type->decompose(s->version()),
+                                                                 utf8_type->decompose(cdef.name_as_text())});
+        fill_column_info(*s, ckey, cdef, ts, ttl, m);
+        muts.emplace_back(std::move(m));
+    }
+    return proxy.local().mutate_locally(std::move(muts), tracing::trace_state_ptr());
 }
 
 static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std::vector<mutation> mutations, bool do_flush)
@@ -1057,8 +1125,13 @@ struct schema_diff {
         }};
     };
 
+    struct altered_schema {
+        global_schema_ptr old_schema;
+        global_schema_ptr new_schema;
+    };
+
     std::vector<global_schema_ptr> created;
-    std::vector<global_schema_ptr> altered;
+    std::vector<altered_schema> altered;
     std::vector<dropped_schema> dropped;
 
     size_t size() const {
@@ -1084,9 +1157,10 @@ static schema_diff diff_table_or_view(distributed<service::storage_proxy>& proxy
         d.created.emplace_back(s);
     }
     for (auto&& key : diff.entries_differing) {
+        auto s_before = create_schema(std::move(before.at(key)));
         auto s = create_schema(std::move(after.at(key)));
         slogger.info("Altering {}.{} id={} version={}", s->ks_name(), s->cf_name(), s->id(), s->version());
-        d.altered.emplace_back(s);
+        d.altered.emplace_back(s_before, s);
     }
     return d;
 }
@@ -1136,8 +1210,8 @@ static void merge_tables_and_views(distributed<service::storage_proxy>& proxy,
             }
             std::vector<bool> columns_changed;
             columns_changed.reserve(tables_diff.altered.size() + views_diff.altered.size());
-            for (auto&& gs : boost::range::join(tables_diff.altered, views_diff.altered)) {
-                columns_changed.push_back(db.update_column_family(gs));
+            for (auto&& altered : boost::range::join(tables_diff.altered, views_diff.altered)) {
+                columns_changed.push_back(db.update_column_family(altered.new_schema));
             }
 
             auto it = columns_changed.begin();
@@ -1152,10 +1226,35 @@ static void merge_tables_and_views(distributed<service::storage_proxy>& proxy,
             notify(tables_diff.created, [&] (auto&& gs) { return db.get_notifier().create_column_family(gs); });
             notify(views_diff.created, [&] (auto&& gs) { return db.get_notifier().create_view(view_ptr(gs)); });
             // Table altering is notified first, in case new base columns appear
-            notify(tables_diff.altered, [&] (auto&& gs) { return db.get_notifier().update_column_family(gs, *it++); });
-            notify(views_diff.altered, [&] (auto&& gs) { return db.get_notifier().update_view(view_ptr(gs), *it++); });
+            notify(tables_diff.altered, [&] (auto&& altered) { return db.get_notifier().update_column_family(altered.new_schema, *it++); });
+            notify(views_diff.altered, [&] (auto&& altered) { return db.get_notifier().update_view(view_ptr(altered.new_schema), *it++); });
         });
     }).get();
+
+    // Insert column_mapping into history table for altered and created tables.
+    //
+    // Entries for new tables are inserted without TTL, which means that the most
+    // recent schema version should always be available.
+    //
+    // For altered tables we both insert a new column mapping without TTL and
+    // overwrite the previous version entries with TTL to expire them eventually.
+    //
+    // Drop column mapping entries for dropped tables since these will not be TTLed automatically
+    // and will stay there forever if we don't clean them up manually
+    when_all_succeed(
+        parallel_for_each(tables_diff.created, [&proxy] (global_schema_ptr& gs) {
+            return store_column_mapping(proxy, gs.get(), false);
+        }),
+        parallel_for_each(tables_diff.altered, [&proxy] (schema_diff::altered_schema& altered) {
+            return when_all_succeed(
+                store_column_mapping(proxy, altered.old_schema.get(), true),
+                store_column_mapping(proxy, altered.new_schema.get(), false)).discard_result();
+        }),
+        parallel_for_each(tables_diff.dropped, [&proxy] (schema_diff::dropped_schema& dropped) {
+            schema_ptr s = dropped.schema.get();
+            return drop_column_mapping(s->id(), s->version());
+        })
+    ).get();
 }
 
 static std::vector<const query::result_set_row*> collect_rows(const std::set<sstring>& keys, const schema_result& result) {
@@ -2396,7 +2495,7 @@ static void add_column_to_schema_mutation(schema_ptr table,
 {
     auto ckey = clustering_key::from_exploded(*m.schema(), {utf8_type->decompose(table->cf_name()),
                                                             utf8_type->decompose(column.name_as_text())});
-    fill_column_info(*table, ckey, column, timestamp, m);
+    fill_column_info(*table, ckey, column, timestamp, std::nullopt, m);
 }
 
 static void add_computed_column_to_schema_mutation(schema_ptr table,
@@ -2962,6 +3061,74 @@ future<schema_mutations> read_table_mutations(distributed<service::storage_proxy
 }
 
 } // namespace legacy
+
+static auto GET_COLUMN_MAPPING_QUERY = format("SELECT column_name, clustering_order, column_name_bytes, kind, position, type FROM system.{} WHERE cf_id = ? AND schema_version = ?",
+    db::schema_tables::SCYLLA_TABLE_SCHEMA_HISTORY);
+
+future<column_mapping> get_column_mapping(utils::UUID table_id, table_schema_version version) {
+    auto cm_fut = cql3::get_local_query_processor().execute_internal(
+        GET_COLUMN_MAPPING_QUERY,
+        db::consistency_level::LOCAL_ONE,
+        infinite_timeout_config,
+        {table_id, version}
+    );
+    return cm_fut.then([version] (shared_ptr<cql3::untyped_result_set> results) {
+        if (results->empty()) {
+            // If we don't have a stored column_mapping for an obsolete schema version
+            // then it means it's way too old and been cleaned up already.
+            // Fail the whole learn stage in this case.
+            return make_exception_future<column_mapping>(std::runtime_error(
+                format("Failed to look up column mapping for schema version {}",
+                    version)));
+        }
+        std::vector<column_definition>  static_columns, regular_columns;
+        for (const auto& row : *results) {
+            auto kind = deserialize_kind(row.get_as<sstring>("kind"));
+            auto type = cql_type_parser::parse("" /*unused*/, row.get_as<sstring>("type"));
+            auto name_bytes = row.get_blob("column_name_bytes");
+            column_id position = row.get_as<int32_t>("position");
+
+            auto order = row.get_as<sstring>("clustering_order");
+            std::transform(order.begin(), order.end(), order.begin(), ::toupper);
+            if (order == "DESC") {
+                type = reversed_type_impl::get_instance(type);
+            }
+            if (kind == column_kind::static_column) {
+                static_columns.emplace_back(name_bytes, type, kind, position);
+            } else if (kind == column_kind::regular_column) {
+                regular_columns.emplace_back(name_bytes, type, kind, position);
+            }
+        }
+        std::vector<column_mapping_entry> cm_columns;
+        for (const column_definition& def : boost::range::join(static_columns, regular_columns)) {
+            cm_columns.emplace_back(column_mapping_entry{def.name(), def.type});
+        }
+        column_mapping cm(std::move(cm_columns), static_columns.size());
+        return make_ready_future<column_mapping>(std::move(cm));
+    });
+}
+
+future<bool> column_mapping_exists(utils::UUID table_id, table_schema_version version) {
+    return cql3::get_local_query_processor().execute_internal(
+        GET_COLUMN_MAPPING_QUERY,
+        db::consistency_level::LOCAL_ONE,
+        infinite_timeout_config,
+        {table_id, version}
+    ).then([] (shared_ptr<cql3::untyped_result_set> results) {
+        return !results->empty();
+    });
+}
+
+future<> drop_column_mapping(utils::UUID table_id, table_schema_version version) {
+    const static sstring DEL_COLUMN_MAPPING_QUERY =
+        format("DELETE FROM system.{} WHERE cf_id = ? and schema_version = ?",
+            db::schema_tables::SCYLLA_TABLE_SCHEMA_HISTORY);
+    return cql3::get_local_query_processor().execute_internal(
+        DEL_COLUMN_MAPPING_QUERY,
+        db::consistency_level::LOCAL_ONE,
+        infinite_timeout_config,
+        {table_id, version}).discard_result();
+}
 
 } // namespace schema_tables
 } // namespace schema
