@@ -68,7 +68,6 @@ private:
     std::unordered_map<inet_address, inet_address> _replacing_endpoints;
 
     std::unordered_map<sstring, std::unordered_multimap<range<token>, inet_address>> _pending_ranges;
-    std::unordered_map<sstring, std::unordered_map<range<token>, std::unordered_set<inet_address>>> _pending_ranges_map;
     std::unordered_map<sstring, boost::icl::interval_map<token, std::unordered_set<inet_address>>> _pending_ranges_interval_map;
 
     std::vector<token> _sorted_tokens;
@@ -1340,7 +1339,6 @@ void token_metadata_impl::set_pending_ranges(const sstring& keyspace_name,
         std::unordered_multimap<range<token>, inet_address> new_pending_ranges) {
     if (new_pending_ranges.empty()) {
         _pending_ranges.erase(keyspace_name);
-        _pending_ranges_map.erase(keyspace_name);
         _pending_ranges_interval_map.erase(keyspace_name);
         return;
     }
@@ -1356,7 +1354,6 @@ void token_metadata_impl::set_pending_ranges(const sstring& keyspace_name,
                 std::make_pair(range_to_interval(m.first), m.second);
     }
     _pending_ranges[keyspace_name] = std::move(new_pending_ranges);
-    _pending_ranges_map[keyspace_name] = std::move(map);
 }
 
 std::vector<range<token>>
