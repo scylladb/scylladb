@@ -31,27 +31,25 @@ from boto3.dynamodb.types import TypeDeserializer
 stream_types = [ 'OLD_IMAGE', 'NEW_IMAGE', 'KEYS_ONLY', 'NEW_AND_OLD_IMAGES']
 
 def disable_stream(dynamodbstreams, table):
-    while True:
-        try:
-            table.update(StreamSpecification={'StreamEnabled': False});
-            while True:
-                streams = dynamodbstreams.list_streams(TableName=table.name)
-                if not streams.get('Streams'):
-                    return
-                # when running against real dynamodb, modifying stream 
-                # state has a delay. need to wait for propagation. 
-                print("Stream(s) lingering. Sleep 10s...")
-                time.sleep(10)
-        except ClientError as ce:
-            # again, real dynamo has periods when state cannot yet
-            # be modified. 
-            if ce.response['Error']['Code'] == 'ResourceInUseException':
-                print("Stream(s) in use. Sleep 10s...")
-                time.sleep(10)
-                continue
-            raise
+    table.update(StreamSpecification={'StreamEnabled': False});
+    # Wait for the stream to really be disabled. A table may have multiple
+    # historic streams - we need all of them to become DISABLED. One of
+    # them (the current one) may remain DISABLING for some time.
+    exp = time.process_time() + 60
+    while time.process_time() < exp:
+        streams = dynamodbstreams.list_streams(TableName=table.name)
+        disabled = True
+        for stream in streams['Streams']:
+            desc = dynamodbstreams.describe_stream(StreamArn=stream['StreamArn'])['StreamDescription']
+            if desc['StreamStatus'] != 'DISABLED':
+                disabled = False
+                break
+        if disabled:
+            print('disabled stream on {}'.format(table.name))
+            return
+        time.sleep(0.5)
+    pytest.fail("timed out")
             
-#
 # Cannot use fixtures. Because real dynamodb cannot _remove_ a stream
 # once created. It can only expire 24h later. So reusing test_table for 
 # example works great for scylla/local testing, but once we run against
@@ -1233,12 +1231,57 @@ def test_stream_specification(test_table_stream_with_result, dynamodbstreams):
             BillingMode='PAY_PER_REQUEST')['TableDescription']
     assert stream_specification == desc['StreamSpecification']
 
+# The following test checks the behavior of *closed* shards.
+# We achieve a closed shard by disabling the stream - the DynamoDB
+# documentation states that "If you disable a stream, any shards that are
+# still open will be closed. The data in the stream will continue to be
+# readable for 24 hours". In the test we verify that indeed, after a shard
+# is closed, it is still readable with GetRecords (reproduces issue #7239).
+# Moreover, upon reaching the end of data in the shard, the NextShardIterator
+# attribute should say that the end was reached. The DynamoDB documentation
+# says that NextShardIterator should be "set to null" in this case - but it
+# is not clear what "null" means in this context: Should NextShardIterator
+# be missing? Or a "null" JSON type? Or an empty string? This test verifies
+# that the right answer is that NextShardIterator should be *missing*
+# (reproduces issue #7237).
+@pytest.mark.xfail(reason="disabled stream is deleted - issue #7239")
+def test_streams_closed_read(test_table_ss_keys_only, dynamodbstreams):
+    table, arn = test_table_ss_keys_only
+    iterators = latest_iterators(dynamodbstreams, arn)
+    # Do an UpdateItem operation that is expected to leave one event in the
+    # stream.
+    table.update_item(Key={'p': random_string(), 'c': random_string()},
+        UpdateExpression='SET x = :val1', ExpressionAttributeValues={':val1': 5})
+    # Disable streaming for this table. Note that the test_table_ss_keys_only
+    # fixture has "function" scope so it is fine to ruin table, it will not
+    # be used in other tests.
+    disable_stream(dynamodbstreams, table)
+
+    # Even after streaming is disabled for the table, we can still read
+    # from the earlier stream (it is guaranteed to work for 24 hours).
+    # The iterators we got earlier should still be fully usable, and
+    # eventually *one* of the stream shards will return one event:
+    timeout = time.time() + 15
+    while time.time() < timeout:
+        for iter in iterators:
+            response = dynamodbstreams.get_records(ShardIterator=iter)
+            if 'Records' in response and response['Records'] != []:
+                # Found the shard with the data! Test that it only has
+                # one event, and NextShardIterator is missing - indicating
+                # that it is a closed shard.
+                assert len(response['Records']) == 1
+                assert not 'NextShardIterator' in response
+                return
+        time.sleep(0.5)
+    pytest.fail("timed out")
+
+
 # TODO: tests on multiple partitions
 # TODO: write a test that disabling the stream and re-enabling it works, but
 #   requires the user to wait for the first stream to become DISABLED before
 #   creating the new one. Then ListStreams should return the two streams,
 #   one DISABLED and one ENABLED? I'm not sure we want or can do this in
 #   Alternator.
-# TODO: Can we test shard ending, or shard splitting? (shard splitting
+# TODO: Can we test shard splitting? (shard splitting
 #   requires the user to - periodically or following shards ending - to call
 #   DescribeStream again. We don't do this in any of our tests.
