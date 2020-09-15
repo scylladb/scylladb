@@ -113,9 +113,6 @@ class reconcilable_result_builder {
     const schema& _schema;
     const query::partition_slice& _slice;
 
-    utils::chunked_vector<partition> _result;
-    uint32_t _live_rows{};
-
     bool _return_static_content_on_partition_with_no_rows{};
     bool _static_row_is_alive{};
     uint32_t _total_live_rows = 0;
@@ -123,6 +120,10 @@ class reconcilable_result_builder {
     stop_iteration _stop;
     bool _short_read_allowed;
     std::optional<streamed_mutation_freezer> _mutation_consumer;
+
+    uint32_t _live_rows{};
+    // make this the last member so it is destroyed first. #7240
+    utils::chunked_vector<partition> _result;
 public:
     reconcilable_result_builder(const schema& s, const query::partition_slice& slice,
                                 query::result_memory_accounter&& accounter)
