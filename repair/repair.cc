@@ -58,16 +58,28 @@ public:
         _metrics.add_group("node_maintenance_operations", {
             sm::make_gauge("bootstrap_finished_percentage", sm::description("Number of finished percentage for bootstrap operation on this shard."),
                 [this] { return bootstrap_finished_percentage(); }),
+            sm::make_gauge("replace_finished_percentage", sm::description("Number of finished percentage for replace operation on this shard."),
+                [this] { return replace_finished_percentage(); }),
             sm::make_gauge("rebuild_finished_percentage", sm::description("Number of finished percentage for rebuild operation on this shard."),
                 [this] { return rebuild_finished_percentage(); }),
+            sm::make_gauge("decommission_finished_percentage", sm::description("Number of finished percentage for decommission operation on this shard."),
+                [this] { return decommission_finished_percentage(); }),
+            sm::make_gauge("removenode_finished_percentage", sm::description("Number of finished percentage for removenode operation on this shard."),
+                [this] { return removenode_finished_percentage(); }),
             sm::make_gauge("repair_finished_percentage", sm::description("Number of finished percentage for repair operation on this shard."),
                 [this] { return repair_finished_percentage(); }),
         });
     }
     uint64_t bootstrap_total_ranges{0};
     uint64_t bootstrap_finished_ranges{0};
+    uint64_t replace_total_ranges{0};
+    uint64_t replace_finished_ranges{0};
     uint64_t rebuild_total_ranges{0};
     uint64_t rebuild_finished_ranges{0};
+    uint64_t decommission_total_ranges{0};
+    uint64_t decommission_finished_ranges{0};
+    uint64_t removenode_total_ranges{0};
+    uint64_t removenode_finished_ranges{0};
     uint64_t repair_total_ranges_sum{0};
     uint64_t repair_finished_ranges_sum{0};
 private:
@@ -75,8 +87,17 @@ private:
     float bootstrap_finished_percentage() {
         return bootstrap_total_ranges == 0 ? 1 : float(bootstrap_finished_ranges) / float(bootstrap_total_ranges);
     }
+    float replace_finished_percentage() {
+        return replace_total_ranges == 0 ? 1 : float(replace_finished_ranges) / float(replace_total_ranges);
+    }
     float rebuild_finished_percentage() {
         return rebuild_total_ranges == 0 ? 1 : float(rebuild_finished_ranges) / float(rebuild_total_ranges);
+    }
+    float decommission_finished_percentage() {
+        return decommission_total_ranges == 0 ? 1 : float(decommission_finished_ranges) / float(decommission_total_ranges);
+    }
+    float removenode_finished_percentage() {
+        return removenode_total_ranges == 0 ? 1 : float(removenode_finished_ranges) / float(removenode_total_ranges);
     }
     float repair_finished_percentage();
 };
@@ -1430,8 +1451,14 @@ static future<> do_repair_ranges(lw_shared_ptr<repair_info> ri) {
                 return repair_range(*ri, range).then([ri] {
                     if (ri->reason == streaming::stream_reason::bootstrap) {
                         _node_ops_metrics.bootstrap_finished_ranges++;
+                    } else if (ri->reason == streaming::stream_reason::replace) {
+                        _node_ops_metrics.replace_finished_ranges++;
                     } else if (ri->reason == streaming::stream_reason::rebuild) {
                         _node_ops_metrics.rebuild_finished_ranges++;
+                    } else if (ri->reason == streaming::stream_reason::decommission) {
+                        _node_ops_metrics.decommission_finished_ranges++;
+                    } else if (ri->reason == streaming::stream_reason::removenode) {
+                        _node_ops_metrics.removenode_finished_ranges++;
                     } else if (ri->reason == streaming::stream_reason::repair) {
                         _node_ops_metrics.repair_finished_ranges_sum++;
                         ri->nr_ranges_finished++;
@@ -1462,8 +1489,14 @@ static future<> do_repair_ranges(lw_shared_ptr<repair_info> ri) {
             }).then([ri] {
                 if (ri->reason == streaming::stream_reason::bootstrap) {
                     _node_ops_metrics.bootstrap_finished_ranges++;
+                } else if (ri->reason == streaming::stream_reason::replace) {
+                    _node_ops_metrics.replace_finished_ranges++;
                 } else if (ri->reason == streaming::stream_reason::rebuild) {
                     _node_ops_metrics.rebuild_finished_ranges++;
+                } else if (ri->reason == streaming::stream_reason::decommission) {
+                     _node_ops_metrics.decommission_finished_ranges++;
+                } else if (ri->reason == streaming::stream_reason::removenode) {
+                    _node_ops_metrics.removenode_finished_ranges++;
                 } else if (ri->reason == streaming::stream_reason::repair) {
                     _node_ops_metrics.repair_finished_ranges_sum++;
                     ri->nr_ranges_finished++;
@@ -1890,6 +1923,27 @@ static future<> do_decommission_removenode_with_repair(seastar::sharded<database
         bool is_removenode = myip != leaving_node;
         auto op = is_removenode ? "removenode_with_repair" : "decommission_with_repair";
         streaming::stream_reason reason = is_removenode ? streaming::stream_reason::removenode : streaming::stream_reason::decommission;
+        size_t nr_ranges_total = 0;
+        for (auto& keyspace_name : keyspaces) {
+            if (!db.local().has_keyspace(keyspace_name)) {
+                continue;
+            }
+            auto& ks = db.local().find_keyspace(keyspace_name);
+            auto& strat = ks.get_replication_strategy();
+            dht::token_range_vector ranges = strat.get_ranges_in_thread(leaving_node);
+            nr_ranges_total += ranges.size();
+        }
+        if (reason == streaming::stream_reason::decommission) {
+            db.invoke_on_all([nr_ranges_total] (database&) {
+                _node_ops_metrics.decommission_finished_ranges = 0;
+                _node_ops_metrics.decommission_total_ranges = nr_ranges_total;
+            }).get();
+        } else if (reason == streaming::stream_reason::removenode) {
+            db.invoke_on_all([nr_ranges_total] (database&) {
+                _node_ops_metrics.removenode_finished_ranges = 0;
+                _node_ops_metrics.removenode_total_ranges = nr_ranges_total;
+            }).get();
+        }
         rlogger.info("{}: started with keyspaces={}, leaving_node={}", op, keyspaces, leaving_node);
         for (auto& keyspace_name : keyspaces) {
             if (!db.local().has_keyspace(keyspace_name)) {
@@ -2023,6 +2077,15 @@ static future<> do_decommission_removenode_with_repair(seastar::sharded<database
                     }
                 }
             }
+            if (reason == streaming::stream_reason::decommission) {
+                db.invoke_on_all([nr_ranges_skipped] (database&) {
+                    _node_ops_metrics.decommission_finished_ranges += nr_ranges_skipped;
+                }).get();
+            } else if (reason == streaming::stream_reason::removenode) {
+                db.invoke_on_all([nr_ranges_skipped] (database&) {
+                    _node_ops_metrics.removenode_finished_ranges += nr_ranges_skipped;
+                }).get();
+            }
             if (is_removenode) {
                 ranges.swap(ranges_for_removenode);
             }
@@ -2064,6 +2127,11 @@ static future<> do_rebuild_replace_with_repair(seastar::sharded<database>& db, s
                 _node_ops_metrics.rebuild_finished_ranges = 0;
                 _node_ops_metrics.rebuild_total_ranges = nr_ranges_total;
             }).get();
+        } else if (reason == streaming::stream_reason::replace) {
+            db.invoke_on_all([nr_ranges_total] (database&) {
+                _node_ops_metrics.replace_finished_ranges = 0;
+                _node_ops_metrics.replace_total_ranges = nr_ranges_total;
+            }).get();
         }
         rlogger.info("{}: started with keyspaces={}, source_dc={}, nr_ranges_total={}", op, keyspaces, source_dc, nr_ranges_total);
         for (auto& keyspace_name : keyspaces) {
@@ -2103,6 +2171,10 @@ static future<> do_rebuild_replace_with_repair(seastar::sharded<database>& db, s
             if (reason == streaming::stream_reason::rebuild) {
                 db.invoke_on_all([nr_ranges_skipped] (database&) {
                     _node_ops_metrics.rebuild_finished_ranges += nr_ranges_skipped;
+                }).get();
+            } else if (reason == streaming::stream_reason::replace) {
+                db.invoke_on_all([nr_ranges_skipped] (database&) {
+                    _node_ops_metrics.replace_finished_ranges += nr_ranges_skipped;
                 }).get();
             }
             auto nr_ranges = ranges.size();
