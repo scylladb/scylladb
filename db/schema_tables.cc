@@ -900,6 +900,36 @@ static void delete_schema_version(mutation& m) {
     }
 }
 
+/// Helper function which fills a given mutation with column information
+/// provided the corresponding column_definition object.
+static void fill_column_info(const schema& table,
+                             const clustering_key& ckey,
+                             const column_definition& column,
+                             api::timestamp_type timestamp,
+                             mutation& m) {
+    auto order = "NONE";
+    if (column.is_clustering_key()) {
+        order = "ASC";
+    }
+    auto type = column.type;
+    if (type->is_reversed()) {
+        type = type->underlying_type();
+        if (column.is_clustering_key()) {
+            order = "DESC";
+        }
+    }
+    int32_t pos = -1;
+    if (column.is_primary_key()) {
+        pos = table.position(column);
+    }
+
+    m.set_clustered_cell(ckey, "column_name_bytes", data_value(column.name()), timestamp);
+    m.set_clustered_cell(ckey, "kind", serialize_kind(column.kind), timestamp);
+    m.set_clustered_cell(ckey, "position", pos, timestamp);
+    m.set_clustered_cell(ckey, "clustering_order", sstring(order), timestamp);
+    m.set_clustered_cell(ckey, "type", type->as_cql3_type().to_string(), timestamp);
+}
+
 static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std::vector<mutation> mutations, bool do_flush)
 {
    return seastar::async([&proxy, mutations = std::move(mutations), do_flush] () mutable {
@@ -2366,28 +2396,7 @@ static void add_column_to_schema_mutation(schema_ptr table,
 {
     auto ckey = clustering_key::from_exploded(*m.schema(), {utf8_type->decompose(table->cf_name()),
                                                             utf8_type->decompose(column.name_as_text())});
-
-    auto order = "NONE";
-    if (column.is_clustering_key()) {
-        order = "ASC";
-    }
-    auto type = column.type;
-    if (type->is_reversed()) {
-        type = type->underlying_type();
-        if (column.is_clustering_key()) {
-            order = "DESC";
-        }
-    }
-    auto pos = -1;
-    if (column.is_primary_key()) {
-        pos = int32_t(table->position(column));
-    }
-
-    m.set_clustered_cell(ckey, "column_name_bytes", data_value(column.name()), timestamp);
-    m.set_clustered_cell(ckey, "kind", serialize_kind(column.kind), timestamp);
-    m.set_clustered_cell(ckey, "position", pos, timestamp);
-    m.set_clustered_cell(ckey, "clustering_order", sstring(order), timestamp);
-    m.set_clustered_cell(ckey, "type", type->as_cql3_type().to_string(), timestamp);
+    fill_column_info(*table, ckey, column, timestamp, m);
 }
 
 static void add_computed_column_to_schema_mutation(schema_ptr table,
