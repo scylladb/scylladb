@@ -100,6 +100,10 @@ public:
 
     future<resource_units> wait_admission(size_t memory, db::timeout_clock::time_point timeout);
 
+    void consume(reader_resources res);
+
+    void signal(reader_resources res);
+
     resource_units consume_memory(size_t memory = 0);
 
     resource_units consume_resources(reader_resources res);
