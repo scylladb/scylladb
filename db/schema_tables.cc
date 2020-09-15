@@ -103,6 +103,7 @@ namespace db {
 schema_ctxt::schema_ctxt(const db::config& cfg)
     : _extensions(cfg.extensions())
     , _murmur3_partitioner_ignore_msb_bits(cfg.murmur3_partitioner_ignore_msb_bits())
+    , _schema_registry_grace_period(cfg.schema_registry_grace_period())
 {}
 
 schema_ctxt::schema_ctxt(const database& db)

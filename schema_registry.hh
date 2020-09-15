@@ -120,10 +120,9 @@ class schema_registry {
     friend class schema_registry_entry;
     schema_registry_entry& get_entry(table_schema_version) const;
     // Duration for which unused entries are kept alive to avoid
-    // too frequent re-requests and syncs.
-    schema_registry_entry::erase_clock::duration grace_period() const {
-        return std::chrono::seconds(1);
-    }
+    // too frequent re-requests and syncs. Default is 1 second.
+    schema_registry_entry::erase_clock::duration grace_period() const;
+
 public:
     ~schema_registry();
     // workaround to this object being magically appearing from nowhere.

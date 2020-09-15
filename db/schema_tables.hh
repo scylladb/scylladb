@@ -83,9 +83,15 @@ public:
     const unsigned murmur3_partitioner_ignore_msb_bits() const {
         return _murmur3_partitioner_ignore_msb_bits;
     }
+
+    uint32_t schema_registry_grace_period() const {
+        return _schema_registry_grace_period;
+    }
+
 private:
     const db::extensions& _extensions;
     const unsigned _murmur3_partitioner_ignore_msb_bits;
+    const uint32_t _schema_registry_grace_period;
 };
 
 namespace schema_tables {

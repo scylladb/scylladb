@@ -93,6 +93,10 @@ schema_registry_entry& schema_registry::get_entry(table_schema_version v) const 
     return e;
 }
 
+schema_registry_entry::erase_clock::duration schema_registry::grace_period() const {
+    return std::chrono::seconds(_ctxt->schema_registry_grace_period());
+}
+
 schema_ptr schema_registry::get(table_schema_version v) const {
     return get_entry(v).get_schema();
 }
