@@ -2054,6 +2054,7 @@ static future<> do_rebuild_replace_with_repair(seastar::sharded<database>& db, s
             }
             auto& ks = db.local().find_keyspace(keyspace_name);
             auto& strat = ks.get_replication_strategy();
+            // Okay to yield since tm is immutable
             dht::token_range_vector ranges = strat.get_ranges_in_thread(myip, tm);
             nr_ranges_total += ranges.size();
 

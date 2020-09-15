@@ -173,7 +173,10 @@ abstract_replication_strategy::get_ranges(inet_address ep) const {
 
 dht::token_range_vector
 abstract_replication_strategy::get_ranges_in_thread(inet_address ep) const {
-    return do_get_ranges(ep, _token_metadata, true);
+    // copy token_metadata so we can safely yield if needed
+    // FIXME: this may temporarily add a stall that should be replaced by an asynchronous interface
+    token_metadata tm = _token_metadata;
+    return do_get_ranges(ep, tm, true);
 }
 
 dht::token_range_vector
@@ -181,11 +184,13 @@ abstract_replication_strategy::get_ranges(inet_address ep, const token_metadata&
     return do_get_ranges(ep, tm, false);
 }
 
+// Caller must ensure that token_metadata will not change throughout the call
 dht::token_range_vector
 abstract_replication_strategy::get_ranges_in_thread(inet_address ep, const token_metadata& tm) const {
     return do_get_ranges(ep, tm, true);
 }
 
+// Caller must ensure that token_metadata will not change throughout the call if can_yield==true.
 dht::token_range_vector
 abstract_replication_strategy::do_get_ranges(inet_address ep, const token_metadata& tm, bool can_yield) const {
     dht::token_range_vector ret;
