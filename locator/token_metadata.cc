@@ -67,8 +67,6 @@ private:
     // The map between the existing node to be replaced and the replacing node
     std::unordered_map<inet_address, inet_address> _replacing_endpoints;
 
-    std::unordered_map<sstring, std::unordered_multimap<range<token>, inet_address>> _pending_ranges;
-    std::unordered_map<sstring, std::unordered_map<range<token>, std::unordered_set<inet_address>>> _pending_ranges_map;
     std::unordered_map<sstring, boost::icl::interval_map<token, std::unordered_set<inet_address>>> _pending_ranges_interval_map;
 
     std::vector<token> _sorted_tokens;
@@ -458,8 +456,8 @@ private:
     void set_pending_ranges(const sstring& keyspace_name, std::unordered_multimap<range<token>, inet_address> new_pending_ranges);
 
 public:
-    // returns an empty vector if keyspace_name not found
-    std::vector<range<token>> get_pending_ranges(sstring keyspace_name, inet_address endpoint) const;
+    bool has_pending_ranges(sstring keyspace_name, inet_address endpoint) const;
+
      /**
      * Calculate pending ranges according to bootsrapping and leaving nodes. Reasoning is:
      *
@@ -658,7 +656,6 @@ public:
             _endpoint_to_host_id_map.clear();
             _bootstrap_tokens.clear();
             _leaving_endpoints.clear();
-            _pending_ranges.clear();
             sortedTokens.clear();
             topology.clear();
             invalidateCachedRings();
@@ -727,7 +724,6 @@ public:
         return sb.toString();
     }
 #endif
-    sstring print_pending_ranges() const;
 public:
     // returns empty vector if keyspace_name not found.
     std::vector<gms::inet_address> pending_endpoints_for(const token& token, const sstring& keyspace_name) const;
@@ -1339,8 +1335,6 @@ token_metadata_impl::interval_to_range(boost::icl::interval<token>::interval_typ
 void token_metadata_impl::set_pending_ranges(const sstring& keyspace_name,
         std::unordered_multimap<range<token>, inet_address> new_pending_ranges) {
     if (new_pending_ranges.empty()) {
-        _pending_ranges.erase(keyspace_name);
-        _pending_ranges_map.erase(keyspace_name);
         _pending_ranges_interval_map.erase(keyspace_name);
         return;
     }
@@ -1355,24 +1349,22 @@ void token_metadata_impl::set_pending_ranges(const sstring& keyspace_name,
         _pending_ranges_interval_map[keyspace_name] +=
                 std::make_pair(range_to_interval(m.first), m.second);
     }
-    _pending_ranges[keyspace_name] = std::move(new_pending_ranges);
-    _pending_ranges_map[keyspace_name] = std::move(map);
 }
 
-std::vector<range<token>>
-token_metadata_impl::get_pending_ranges(sstring keyspace_name, inet_address endpoint) const {
-    std::vector<range<token>> ret;
-    const auto it = _pending_ranges.find(keyspace_name);
-    if (it != _pending_ranges.end()) {
-      for (auto x : it->second) {
-        auto& range_token = x.first;
-        auto& ep = x.second;
-        if (ep == endpoint) {
-            ret.push_back(range_token);
-        }
-      }
+
+bool
+token_metadata_impl::has_pending_ranges(sstring keyspace_name, inet_address endpoint) const {
+    const auto it = _pending_ranges_interval_map.find(keyspace_name);
+    if (it == _pending_ranges_interval_map.end()) {
+        return false;
     }
-    return ret;
+    for (const auto& item : it->second) {
+        const auto& nodes = item.second;
+        if (nodes.contains(endpoint)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 future<> token_metadata_impl::calculate_pending_ranges_for_leaving(
@@ -1494,9 +1486,6 @@ future<> token_metadata_impl::update_pending_ranges(
         // At this stage newPendingRanges has been updated according to leaving and bootstrapping nodes.
         set_pending_ranges(keyspace_name, std::move(*new_pending_ranges));
 
-        if (tlogger.is_enabled(logging::log_level::debug)) {
-            tlogger.debug("Pending ranges: {}", (_pending_ranges.empty() ? "<empty>" : print_pending_ranges()));
-        }
         return make_ready_future<>();
     });
   });
@@ -1509,21 +1498,6 @@ size_t token_metadata_impl::count_normal_token_owners() const {
         eps.insert(ep);
     }
     return eps.size();
-}
-
-sstring token_metadata_impl::print_pending_ranges() const {
-    std::stringstream ss;
-
-    for (auto& x : _pending_ranges) {
-        auto& keyspace_name = x.first;
-        ss << "\nkeyspace_name = " << keyspace_name << " {\n";
-        for (auto& m : x.second) {
-            ss << m.second << " : " << m.first << "\n";
-        }
-        ss << "}\n";
-    }
-
-    return sstring(ss.str());
 }
 
 void token_metadata_impl::add_leaving_endpoint(inet_address endpoint) {
@@ -1868,9 +1842,9 @@ token_metadata::interval_to_range(boost::icl::interval<token>::interval_type i) 
     return token_metadata_impl::interval_to_range(std::move(i));
 }
 
-std::vector<range<token>>
-token_metadata::get_pending_ranges(sstring keyspace_name, inet_address endpoint) const {
-    return _impl->get_pending_ranges(std::move(keyspace_name), endpoint);
+bool
+token_metadata::has_pending_ranges(sstring keyspace_name, inet_address endpoint) const {
+    return _impl->has_pending_ranges(std::move(keyspace_name), endpoint);
 }
 
 future<>
@@ -1912,11 +1886,6 @@ token_metadata::get_all_endpoints_count() const {
 size_t
 token_metadata::count_normal_token_owners() const {
     return _impl->count_normal_token_owners();
-}
-
-sstring
-token_metadata::print_pending_ranges() const {
-    return _impl->print_pending_ranges();
 }
 
 std::vector<gms::inet_address>
