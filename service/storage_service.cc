@@ -2105,7 +2105,7 @@ future<> storage_service::decommission() {
 
             auto non_system_keyspaces = db.get_non_system_keyspaces();
             for (const auto& keyspace_name : non_system_keyspaces) {
-                if (tm.get_pending_ranges(keyspace_name, ss.get_broadcast_address()).size() > 0) {
+                if (tm.has_pending_ranges(keyspace_name, ss.get_broadcast_address())) {
                     throw std::runtime_error("data is currently moving to this node; unable to leave the ring");
                 }
             }
@@ -3126,11 +3126,11 @@ void storage_service::notify_cql_change(inet_address endpoint, bool ready)
 future<bool> storage_service::is_cleanup_allowed(sstring keyspace) {
     return get_storage_service().invoke_on(0, [keyspace = std::move(keyspace)] (storage_service& ss) {
         auto my_address = ss.get_broadcast_address();
-        auto pending_ranges = ss.get_token_metadata().get_pending_ranges(keyspace, my_address).size();
+        auto pending_ranges = ss.get_token_metadata().has_pending_ranges(keyspace, my_address);
         bool is_bootstrap_mode = ss._is_bootstrap_mode;
         slogger.debug("is_cleanup_allowed: keyspace={}, is_bootstrap_mode={}, pending_ranges={}",
                 keyspace, is_bootstrap_mode, pending_ranges);
-        return !is_bootstrap_mode && pending_ranges == 0;
+        return !is_bootstrap_mode && !pending_ranges;
     });
 }
 

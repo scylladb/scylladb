@@ -269,8 +269,7 @@ public:
     static boost::icl::interval<token>::interval_type range_to_interval(range<dht::token> r);
     static range<dht::token> interval_to_range(boost::icl::interval<token>::interval_type i);
 
-    // returns an empty vector if keyspace_name not found
-    std::vector<range<token>> get_pending_ranges(sstring keyspace_name, inet_address endpoint) const;
+    bool has_pending_ranges(sstring keyspace_name, inet_address endpoint) const;
      /**
      * Calculate pending ranges according to bootsrapping and leaving nodes. Reasoning is:
      *
@@ -316,8 +315,6 @@ public:
      * Bootstrapping tokens are not taken into account. */
     size_t count_normal_token_owners() const;
 
-
-    sstring print_pending_ranges() const;
     // returns empty vector if keyspace_name not found.
     std::vector<gms::inet_address> pending_endpoints_for(const token& token, const sstring& keyspace_name) const;
 
