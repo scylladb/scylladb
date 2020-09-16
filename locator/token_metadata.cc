@@ -1344,11 +1344,12 @@ void token_metadata_impl::set_pending_ranges(const sstring& keyspace_name,
     }
 
     // construct a interval map to speed up the search
-    _pending_ranges_interval_map[keyspace_name] = {};
+    boost::icl::interval_map<token, std::unordered_set<inet_address>> interval_map;
     for (const auto& m : map) {
-        _pending_ranges_interval_map[keyspace_name] +=
+        interval_map +=
                 std::make_pair(range_to_interval(m.first), m.second);
     }
+    _pending_ranges_interval_map[keyspace_name] = std::move(interval_map);
 }
 
 
