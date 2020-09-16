@@ -164,7 +164,7 @@ public:
 
 private:
     future<> do_update_pending_ranges();
-    future<> update_pending_ranges();
+    future<> update_pending_ranges(sstring reason);
     future<> keyspace_changed(const sstring& ks_name);
     void register_metrics();
     future<> publish_schema_version();
