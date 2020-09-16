@@ -148,6 +148,14 @@ bool reader_concurrency_semaphore::try_evict_one_inactive_read() {
     return true;
 }
 
+bool reader_concurrency_semaphore::has_available_units(const resources& r) const {
+    return bool(_resources) && _resources >= r;
+}
+
+bool reader_concurrency_semaphore::may_proceed(const resources& r) const {
+    return has_available_units(r) && _wait_list.empty();
+}
+
 future<reader_permit::resource_units> reader_concurrency_semaphore::do_wait_admission(size_t memory, db::timeout_clock::time_point timeout) {
     if (_wait_list.size() >= _max_queue_length) {
         if (_prethrow_action) {

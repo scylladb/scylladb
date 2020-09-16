@@ -124,13 +124,9 @@ private:
     stats _stats;
 
 private:
-    bool has_available_units(const resources& r) const {
-        return bool(_resources) && _resources >= r;
-    }
+    bool has_available_units(const resources& r) const;
 
-    bool may_proceed(const resources& r) const {
-        return has_available_units(r) && _wait_list.empty();
-    }
+    bool may_proceed(const resources& r) const;
 
     future<reader_permit::resource_units> do_wait_admission(size_t memory, db::timeout_clock::time_point timeout);
 
