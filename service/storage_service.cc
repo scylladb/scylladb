@@ -1672,6 +1672,8 @@ future<> storage_service::join_cluster() {
 
 // Serialized
 future<> storage_service::replicate_tm_only() {
+    assert(this_shard_id() == 0);
+
     auto tm = _token_metadata;
 
     return do_with(std::move(tm), [] (token_metadata& tm) {
@@ -1684,14 +1686,6 @@ future<> storage_service::replicate_tm_only() {
 }
 
 future<> storage_service::replicate_to_all_cores() {
-    // sanity checks: this function is supposed to be run on shard 0 only and
-    // when gossiper has already been initialized.
-    if (this_shard_id() != 0) {
-        auto err = format("replicate_to_all_cores is not ran on cpu zero");
-        slogger.warn("{}", err);
-        throw std::runtime_error(err);
-    }
-
     return _replicate_action.trigger_later().then([self = shared_from_this()] {});
 }
 
@@ -2797,9 +2791,8 @@ std::chrono::milliseconds storage_service::get_ring_delay() {
 }
 
 future<> storage_service::do_update_pending_ranges() {
-    if (this_shard_id() != 0) {
-        return make_exception_future<>(std::runtime_error("do_update_pending_ranges should be called on cpu zero"));
-    }
+    assert(this_shard_id() == 0);
+
     // long start = System.currentTimeMillis();
     return do_with(_db.local().get_non_system_keyspaces(), [this] (auto& keyspaces){
         return do_for_each(keyspaces, [this] (auto& keyspace_name) {
