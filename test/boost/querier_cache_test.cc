@@ -757,6 +757,8 @@ SEASTAR_THREAD_TEST_CASE(test_immediate_evict_on_insert) {
     auto& sem = t.get_semaphore();
     auto permit = sem.make_permit();
 
+    permit.wait_admission(0, db::no_timeout).get();
+
     auto resources = permit.consume_resources(reader_resources(sem.available_resources().count, 0));
 
     BOOST_CHECK_EQUAL(sem.available_resources().count, 0);
