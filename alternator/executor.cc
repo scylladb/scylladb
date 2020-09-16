@@ -1069,14 +1069,23 @@ class attribute_collector {
     void add(bytes&& name, atomic_cell&& cell) {
         collected.emplace(std::move(name), std::move(cell));
     }
+    void add(const bytes& name, atomic_cell&& cell) {
+        collected.emplace(name, std::move(cell));
+    }
 public:
     attribute_collector() : collected(attrs_type()->get_keys_type()->as_less_comparator()) { }
-    void put(bytes&& name, bytes&& val, api::timestamp_type ts) {
-        add(std::move(name), atomic_cell::make_live(*bytes_type, ts, std::move(val), atomic_cell::collection_member::yes));
+    void put(bytes&& name, const bytes& val, api::timestamp_type ts) {
+        add(std::move(name), atomic_cell::make_live(*bytes_type, ts, val, atomic_cell::collection_member::yes));
 
+    }
+    void put(const bytes& name, const bytes& val, api::timestamp_type ts) {
+        add(name, atomic_cell::make_live(*bytes_type, ts, val, atomic_cell::collection_member::yes));
     }
     void del(bytes&& name, api::timestamp_type ts) {
         add(std::move(name), atomic_cell::make_dead(ts, gc_clock::now()));
+    }
+    void del(const bytes& name, api::timestamp_type ts) {
+        add(name, atomic_cell::make_dead(ts, gc_clock::now()));
     }
     collection_mutation_description to_mut() {
         collection_mutation_description ret;
@@ -1154,7 +1163,7 @@ public:
     put_or_delete_item(const rjson::value& item, schema_ptr schema, put_item);
     // put_or_delete_item doesn't keep a reference to schema (so it can be
     // moved between shards for LWT) so it needs to be given again to build():
-    mutation build(schema_ptr schema, api::timestamp_type ts);
+    mutation build(schema_ptr schema, api::timestamp_type ts) const;
     const partition_key& pk() const { return _pk; }
     const clustering_key& ck() const { return _ck; }
 };
@@ -1183,7 +1192,7 @@ put_or_delete_item::put_or_delete_item(const rjson::value& item, schema_ptr sche
     }
 }
 
-mutation put_or_delete_item::build(schema_ptr schema, api::timestamp_type ts) {
+mutation put_or_delete_item::build(schema_ptr schema, api::timestamp_type ts) const {
     mutation m(schema, _pk);
     // If there's no clustering key, a tombstone should be created directly
     // on a partition, not on a clustering row - otherwise it will look like
@@ -1205,7 +1214,7 @@ mutation put_or_delete_item::build(schema_ptr schema, api::timestamp_type ts) {
     for (auto& c : *_cells) {
         const column_definition* cdef = schema->get_column_definition(c.column_name);
         if (!cdef) {
-            attrs_collector.put(std::move(c.column_name), std::move(c.value), ts);
+            attrs_collector.put(c.column_name, c.value, ts);
         } else {
             row.cells().apply(*cdef, atomic_cell::make_live(*cdef->type, ts, std::move(c.value)));
         }
@@ -1520,7 +1529,7 @@ public:
                check_needs_read_before_write(_condition_expression) ||
                _returnvalues == returnvalues::ALL_OLD;
     }
-    virtual std::optional<mutation> apply(std::unique_ptr<rjson::value> previous_item, api::timestamp_type ts) override {
+    virtual std::optional<mutation> apply(std::unique_ptr<rjson::value> previous_item, api::timestamp_type ts) const override {
         if (!verify_expected(_request, previous_item.get()) ||
             !verify_condition_expression(_condition_expression, previous_item.get())) {
             // If the update is to be cancelled because of an unfulfilled Expected
@@ -1530,6 +1539,8 @@ public:
         }
         if (_returnvalues == returnvalues::ALL_OLD && previous_item) {
             _return_attributes = std::move(*previous_item);
+        } else {
+            _return_attributes = {};
         }
         return _mutation_builder.build(_schema, ts);
     }
@@ -1603,7 +1614,7 @@ public:
                 check_needs_read_before_write(_condition_expression) ||
                 _returnvalues == returnvalues::ALL_OLD;
     }
-    virtual std::optional<mutation> apply(std::unique_ptr<rjson::value> previous_item, api::timestamp_type ts) override {
+    virtual std::optional<mutation> apply(std::unique_ptr<rjson::value> previous_item, api::timestamp_type ts) const override {
         if (!verify_expected(_request, previous_item.get()) ||
             !verify_condition_expression(_condition_expression, previous_item.get())) {
             // If the update is to be cancelled because of an unfulfilled Expected
@@ -1613,6 +1624,8 @@ public:
         }
         if (_returnvalues == returnvalues::ALL_OLD && previous_item) {
             _return_attributes = std::move(*previous_item);
+        } else {
+            _return_attributes = {};
         }
         return _mutation_builder.build(_schema, ts);
     }
@@ -1687,7 +1700,7 @@ public:
     virtual ~put_or_delete_item_cas_request() = default;
     virtual std::optional<mutation> apply(foreign_ptr<lw_shared_ptr<query::result>> qr, const query::partition_slice& slice, api::timestamp_type ts) override {
         std::optional<mutation> ret;
-        for (put_or_delete_item& mutation_builder : _mutation_builders) {
+        for (const put_or_delete_item& mutation_builder : _mutation_builders) {
             // We assume all these builders have the same partition.
             if (ret) {
                 ret->apply(mutation_builder.build(schema, ts));
@@ -2036,7 +2049,7 @@ public:
 
     update_item_operation(service::storage_proxy& proxy, rjson::value&& request);
     virtual ~update_item_operation() = default;
-    virtual std::optional<mutation> apply(std::unique_ptr<rjson::value> previous_item, api::timestamp_type ts) override;
+    virtual std::optional<mutation> apply(std::unique_ptr<rjson::value> previous_item, api::timestamp_type ts) const override;
     bool needs_read_before_write() const;
 };
 
@@ -2114,7 +2127,7 @@ update_item_operation::needs_read_before_write() const {
 }
 
 std::optional<mutation>
-update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::timestamp_type ts) {
+update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::timestamp_type ts) const {
     if (!verify_expected(_request, previous_item.get()) ||
         !verify_condition_expression(_condition_expression, previous_item.get())) {
         // If the update is to be cancelled because of an unfulfilled
