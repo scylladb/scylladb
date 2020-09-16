@@ -21,6 +21,8 @@ for required in jq curl; do
 	fi
 done
 
+NL=$'\n'
+
 PR_NUM=$1
 PR_PREFIX=https://api.github.com/repos/scylladb/scylla/pulls
 
@@ -36,10 +38,14 @@ git fetch origin pull/$PR_NUM/head:$PR_LOCAL_BRANCH
 
 nr_commits=$(git log --pretty=oneline HEAD..$PR_LOCAL_BRANCH | wc -l)
 
+closes="${NL}${NL}Closes #${PR_NUM}${NL}"
+
 if [[ $nr_commits == 1 ]]; then
 	commit=$(git log --pretty=oneline HEAD..$PR_LOCAL_BRANCH | awk '{print $1}')
+	message="$(git log -1 "$commit" --format="format:%s%n%n%b")"
 	git cherry-pick $commit
+	git commit --amend -m "${message}${closes}"
 else
-	git merge --no-ff --log $PR_LOCAL_BRANCH -m "Merge '$PR_TITLE' from $PR_LOGIN" -m "$PR_DESCR"
+	git merge --no-ff --log $PR_LOCAL_BRANCH -m "Merge '$PR_TITLE' from $PR_LOGIN" -m "${PR_DESCR}${closes}"
 fi
 git commit --amend # for a manual double-check
