@@ -34,6 +34,8 @@ PR_LOGIN=$(jq -r .head.user.login <<< $PR_DATA)
 PR_REPO=$(jq -r .head.repo.html_url <<< $PR_DATA)
 PR_LOCAL_BRANCH=$PR_LOGIN-$PR_REF
 
+USER_NAME=$(curl -s "https://api.github.com/users/$PR_LOGIN" | jq -r .name)
+
 git fetch origin pull/$PR_NUM/head:$PR_LOCAL_BRANCH
 
 nr_commits=$(git log --pretty=oneline HEAD..$PR_LOCAL_BRANCH | wc -l)
@@ -46,6 +48,6 @@ if [[ $nr_commits == 1 ]]; then
 	git cherry-pick $commit
 	git commit --amend -m "${message}${closes}"
 else
-	git merge --no-ff --log $PR_LOCAL_BRANCH -m "Merge '$PR_TITLE' from $PR_LOGIN" -m "${PR_DESCR}${closes}"
+	git merge --no-ff --log $PR_LOCAL_BRANCH -m "Merge '$PR_TITLE' from $USER_NAME" -m "${PR_DESCR}${closes}"
 fi
 git commit --amend # for a manual double-check
