@@ -545,6 +545,8 @@ def parse_cmd_line():
     parser.add_argument('--save-log-on-success', "-s", default=False,
                         dest="save_log_on_success", action="store_true",
                         help="Save test log output on success.")
+    parser.add_argument('--list', dest="list_tests", action="store_true", default=False,
+                        help="Print list of tests instead of executing them")
     parser.add_argument('--skip', default="",
                         dest="skip_pattern", action="store",
                         help="Skip tests which match the provided pattern")
@@ -728,6 +730,10 @@ async def main():
     open_log(options.tmpdir)
 
     find_tests(options)
+    if options.list_tests:
+        print('\n'.join([t.name for t in TestSuite.tests()]))
+        return 0
+
     signaled = asyncio.Event()
 
     setup_signal_handlers(asyncio.get_event_loop(), signaled)
