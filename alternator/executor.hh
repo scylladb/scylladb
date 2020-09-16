@@ -56,6 +56,7 @@ namespace service {
 namespace alternator {
 
 class rmw_operation;
+class shard_iterator;
 
 struct make_jsonable : public json::jsonable {
     rjson::value _value;
@@ -131,6 +132,8 @@ private:
     static void describe_key_schema(rjson::value& parent, const schema&, std::unordered_map<std::string,std::string> * = nullptr);
     static void describe_key_schema(rjson::value& parent, const schema& schema, std::unordered_map<std::string,std::string>&);
     
+    future<request_return_type> do_get_records(client_state&, service_permit permit, schema_ptr, schema_ptr, size_t, shard_iterator);
+
 public:    
     static std::optional<rjson::value> describe_single_item(schema_ptr,
         const query::partition_slice&,

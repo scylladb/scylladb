@@ -87,16 +87,18 @@ struct rapidjson::internal::TypeHelper<ValueType, utils::UUID>
     : public from_string_helper<ValueType, utils::UUID>
 {};
 
+static db_clock::time_point as_timepoint(const utils::UUID& uuid) {
+    return db_clock::time_point{std::chrono::milliseconds(utils::UUID_gen::get_adjusted_timestamp(uuid))};
+}
+
 /**
  * Note: scylla tables do not have a timestamp as such, 
  * but the UUID (for newly created tables at least) is 
  * a timeuuid, so we can use this to fake creation timestamp
  */
 static sstring stream_label(const schema& log_schema) {
-    auto& uuid = log_schema.id();
-    auto ms = utils::UUID_gen::get_adjusted_timestamp(uuid);
-    std::chrono::system_clock::time_point ts{std::chrono::milliseconds(ms)};
-    auto tt = std::chrono::system_clock::to_time_t(ts);
+    auto ts = as_timepoint(log_schema.id());
+    auto tt = db_clock::to_time_t(ts);
     struct tm tm;
     ::localtime_r(&tt, &tm);
     return seastar::json::formatter::to_json(tm);
@@ -218,40 +220,79 @@ future<alternator::executor::request_return_type> alternator::executor::list_str
     return make_ready_future<executor::request_return_type>(make_jsonable(std::move(ret)));
 }
 
+/**
+ * Note: because "end_time" will be zero for non-closed generation
+ * shards, but non-zero once said generation expires, we will in 
+ * fact give "multiple versions" of the same shard, i.e. a shard
+ * will change ID (as presented to the user).
+ * 
+ * The dynamo specs do not forbid this, but we are (probably)
+ * expected to allow a shard that is still valid (not 24h+ old)
+ * to still be queried, hence we "repair" info in iterator 
+ * query later on.
+ * 
+ * The alternative would be to either be stateful, or query
+ * end timestamp on get_shard_iterator. But we cannot currently 
+ * do this in any really efficient way for a single shard, so
+ * let's be mutable instead.
+ * 
+ */
 struct shard_id {
     static constexpr auto marker = 'H';
+    static constexpr auto hex_width = sizeof(uint64_t)*8/4;
 
-    utils::UUID table;
-    db_clock::time_point time;
-    cdc::stream_id id;
+    db_clock::time_point start_time;
+    db_clock::time_point end_time; // zero if open
+    dht::token lo_token; // range start, inclusive (first id of vnode)
+    dht::token hi_token; // range end, inclusive (last id of vnode)
 
-    shard_id(utils::UUID tab, db_clock::time_point t, cdc::stream_id i)
-        : table(tab)
-        , time(t)
-        , id(i)
-    {}
+    shard_id(db_clock::time_point start,  db_clock::time_point end, dht::token lo, dht::token hi)
+        : start_time(start)
+        , end_time(end)
+        , lo_token(lo)
+        , hi_token(hi)
+    {
+        // cdc generations cannot really have start==end, but for our purposes
+        // it is still passable/valid, so allow it.
+        assert(end_time == db_clock::time_point{} || start_time < end_time);
+    }
     shard_id(const sstring&);
 
+    bool has_expired() const {
+        return end_time != db_clock::time_point{};
+    }
+    bool is_wraparound() const {
+        return lo_token > hi_token;
+    }
+
+    // dynamo specifies shardid as max 65 chars. Thus we cannot use separators, 
+    // instead we have to rely on 16 width hex
     friend std::ostream& operator<<(std::ostream& os, const shard_id& id) {
         boost::io::ios_flags_saver fs(os);
-        return os << marker << id.table << std::hex
-            << ':' << id.time.time_since_epoch().count()
-            << ':' << id.id.to_bytes()
+        return os << marker << std::hex << std::setfill('0') 
+            << std::setw(hex_width) << id.start_time.time_since_epoch().count()
+            << std::setw(hex_width) << id.end_time.time_since_epoch().count()
+            << std::setw(hex_width) << (id.lo_token.is_minimum() ? 0ull : dht::token::to_int64(id.lo_token))
+            << std::setw(hex_width) << (id.hi_token.is_maximum() ? 0ull : dht::token::to_int64(id.hi_token))
             ;
     }
 };
 
 shard_id::shard_id(const sstring& s) {
-    auto i = s.find(':');
-    auto j = s.find(':', i + 1);
-
-    if (s.at(0) != marker || i == sstring::npos || j == sstring::npos) {
+    if (s.at(0) != marker || s.size() != (1 + hex_width * 4)) {
         throw std::invalid_argument(s);
     }
 
-    table = utils::UUID(s.substr(1, i));
-    time = db_clock::time_point(db_clock::duration(std::stoull(s.substr(i + 1, j), nullptr, 16)));
-    id = cdc::stream_id(from_hex(s.substr(j + 1)));
+    start_time = db_clock::time_point(db_clock::duration(std::stoull(s.substr(1, hex_width), nullptr, 16)));
+    end_time = db_clock::time_point(db_clock::duration(std::stoull(s.substr(1 + hex_width, hex_width), nullptr, 16)));
+    auto lo = std::stoull(s.substr(1 + 2*hex_width, hex_width), nullptr, 16);
+    auto hi = std::stoull(s.substr(1 + 3*hex_width), nullptr, 16);
+    lo_token = lo == 0 ? dht::minimum_token() : dht::token::from_int64(lo);
+    hi_token = hi == 0 ? dht::maximum_token() : dht::token::from_int64(hi);
+
+    if (end_time != db_clock::time_point{} && end_time < start_time) {
+        throw std::invalid_argument(format("Invalid ShardID {}. Start={}, End={}", s, start_time, end_time));
+    }
 }
 
 struct sequence_number {
@@ -359,52 +400,26 @@ using namespace std::string_literals;
 
 /**
  * This implementation of CDC stream to dynamo shard mapping
- * is simply a 1:1 mapping, id=shard. Simple, and fairly easy
- * to do ranged queries later.
+ * is making a shard equal to a vnode token range, by using the 
+ * cdc stream id "index" grouping. 
  * 
- * Downside is that we get a _lot_ of shards. And with actual
- * generations, we'll get hubba-hubba loads of them. 
+ * We stil get a lot of shards, but fewer than with 1:1 mapping
+ * cdc stream -> shard. This means our queries will cross actual
+ * scylla shards, but that is not neccessarily a bad thing.
  * 
- * Improvement ideas: 
- * 1.) Prune expired streams that cannot have records (check ttls)
- * 2.) Group cdc streams into N per shards (by token range)
- * 
- * The latter however makes it impossible to do a simple 
- * range query with limit (we need to do staggered querying, because
- * of how GetRecords work).
- * The results of a select from cdc log on more than one cdc stream,
- * where timestamp < T will typically look like: 
- * 
- * <shard 0> <ts0> ...
- * ....
- * <shard 0> <tsN> ...
- * <shard 1> <ts0p> ...
- * ...
- * <shard 1> <tsNp> ...
- *
- * Where tsN < timestamp and tsNp < timestamp, but range [ts0-tsN] and [ts0p-tsNp]
- * overlap. 
- * 
- * Now, if we have limit=X, we might end on a row inside shard 0.
- * For our next query, we would in the simple case just say "timestamp > ts3 and timestamp < T",
- * but of course this would then miss rows in shard 1 and above. 
- * 
- * However if we instead set the conditions to 
- * 
- *   "(token(stream_id) = token(shard 0) and timestamp > ts3 and timestamp < T)
- *      or (token(stream_id) > token(shard 0) and timestamp < T)"
- * 
- * we can get the correct data. Question is however how well this will perform, if at 
- * all.
- * 
- * For now, go simple, but maybe consider if this latter approach would work
- * and perform. 
- * 
+ * Note we could possibly reduce the number of shards by simply 
+ * splitting the id/token range into N (chosen by some critera, 
+ * probably ring size) and hope the range queries crossing vnode
+ * bounds are not that bad. To do so, it is a fairly easy change
+ * in the code below.
  */
 
 static std::chrono::seconds confidence_interval(const database& db) {
     return std::chrono::seconds(db.get_config().alternator_streams_time_window_s());
 }
+
+// Dynamo docs says no data shall live longer than 24h.
+static constexpr auto dynamo_streams_max_window = 24h;
 
 future<executor::request_return_type> executor::describe_stream(client_state& client_state, service_permit permit, rjson::value request) {
     _stats.api_operations.describe_stream++;
@@ -479,50 +494,125 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
     // or on expired...
     // TODO: maybe add secondary index to topology table to enable this?
     return _sdks.cdc_get_versioned_streams({ tm.count_normal_token_owners() }).then([this, &db, schema, shard_start, limit, ret = std::move(ret), stream_desc = std::move(stream_desc)](std::map<db_clock::time_point, cdc::streams_version> topologies) mutable {
-        auto i = topologies.begin();
+
+        // filter out cdc generations older than the table or now() - dynamo_streams_max_window (24h)
+        auto low_ts = std::max(as_timepoint(schema->id()), db_clock::now() - dynamo_streams_max_window);
+
+        auto i = topologies.lower_bound(low_ts);
+        // need first gen _intersecting_ the timestamp.
+        if (i != topologies.begin()) {
+            i = std::prev(i);
+        }
+
         auto e = topologies.end();
         auto prev = e;
-        auto threshold = db_clock::now() - confidence_interval(db);
         auto shards = rjson::empty_array();
 
         std::optional<shard_id> last;
+
+        // i is now at the youngest generation we include. make a mark of it.
+        auto first = i;
+
+        // if we're a paged query, skip to the generation where we left of.
+        if (shard_start) {
+            i = topologies.find(shard_start->start_time);
+        }
+
+        // need a prev even if we are skipping stuff
+        if (i != first) {
+            prev = std::prev(i);
+            std::stable_sort(prev->second.streams.begin(), prev->second.streams.end(), [](auto& id1, auto& id2) { 
+                return id1.token() < id2.token(); 
+            });
+        }
 
         for (; limit > 0 && i != e; prev = i, ++i) {
             auto& [ts, sv] = *i;
 
             last = std::nullopt;
 
-            for (auto& id : sv.streams()) {
-                if (shard_start && shard_start->id != id) {
-                    continue;
+            auto get_expiration = [&](auto iter) {
+                if (++iter != e) {
+                    return iter->first;
                 }
-                if (shard_start && shard_start->id == id) {
-                    shard_start = std::nullopt;
-                    continue;
-                }
+                return db_clock::time_point{};
+            };
+
+            auto lo = sv.streams.begin();
+            auto end = sv.streams.end();
+
+            // first sort by index.
+            std::stable_sort(lo, end, [](auto& id1, auto& id2) {
+                return id1.index() < id2.index();
+            });
+
+            if (shard_start) {
+                // find next shard position
+                // first id set is the wraparound range. skip it here.
+                lo = std::find_if(lo, end, [](const cdc::stream_id& id) { return id.index() != 0; });
+                lo = std::upper_bound(lo, end, shard_start->hi_token, [](const dht::token& t, const cdc::stream_id& id) {
+                    return t < id.token();
+                });
+                shard_start = std::nullopt;
+            }
+
+            for (auto hi = lo; lo != end; lo = hi) {
+                auto& id = *lo++;
+
+                hi = std::find_if(lo, end, [i = id.index()](const cdc::stream_id& id) {
+                    return id.index() != i;
+                });
+                auto t = id.token();
+                auto et = std::prev(hi)->token();
+
+                last.emplace(ts, get_expiration(i), t, et);
 
                 auto shard = rjson::empty_object();
 
                 if (prev != e) {
-                    auto token = id.token();
-                    auto& pids = prev->second.streams();
-                    auto pid = std::upper_bound(pids.begin(), pids.end(), token, [](const dht::token& t, const cdc::stream_id& id) {
+                    auto& pids = prev->second.streams;
+                    // maybe re-sort by token, so we can find the previous shard bounds
+                    // if prev is sorted by index, we can just rotate it slightly to make it sorted by
+                    // token.
+                    if (pids.front().token() > pids.back().token()) {
+                        auto nf = std::find_if(pids.begin(), pids.end(), [t = pids.back().token()](const cdc::stream_id& id) {
+                            return id.token() < t;
+                        });
+                        std::rotate(pids.begin(), nf, pids.end());
+                    }
+                    auto pid = std::upper_bound(pids.begin(), pids.end(), t, [](const dht::token& t, const cdc::stream_id& id) {
                         return t < id.token();
                     });
+                    if (pid != pids.begin()) {
+                        pid = std::prev(pid);
+                    }
                     if (pid != pids.end()) {
-                        rjson::set(shard, "ParentShardId", shard_id(schema->id(), prev->first, *pid));
+                        auto index = pid->index();
+                        auto cmp = [index](const cdc::stream_id& id) {
+                            return id.index() != index;
+                        };
+                        // reverse iteration: base will point to elem matching index
+                        auto plo = index == 0
+                            ? std::find_if(pids.rbegin(), pids.rend(), cmp).base()
+                            : std::find_if(std::make_reverse_iterator(pid), pids.rend(), cmp).base()
+                            ;
+                        auto phi = index == 0
+                            ? std::find_if(pids.begin(), pids.end(), cmp)
+                            : std::find_if(pid, pids.end(), cmp)
+                            ;
+                        auto lt = plo->token();
+                        auto et = std::prev(phi)->token();
+                        rjson::set(shard, "ParentShardId", shard_id(prev->first, get_expiration(prev), lt, et));
                     }
                 }
 
-                last = shard_id(schema->id(), ts, id);
-                rjson::set(shard, "ShardId", *last);
-
                 auto range = rjson::empty_object();
                 rjson::set(range, "StartingSequenceNumber", sequence_number(utils::UUID_gen::min_time_UUID(ts.time_since_epoch().count())));
-                if (sv.expired() && *sv.expired() < threshold) {
-                    rjson::set(range, "EndingSequenceNumber", sequence_number(utils::UUID_gen::max_time_UUID((*sv.expired() + confidence_interval(db)).time_since_epoch().count())));
+                if (last->has_expired()) {
+                    rjson::set(range, "EndingSequenceNumber", sequence_number(utils::UUID_gen::min_time_UUID(last->end_time.time_since_epoch().count())));
                 }
 
+                rjson::set(shard, "ShardId", *last);
                 rjson::set(shard, "SequenceNumberRange", std::move(range));
                 rjson::push_back(shards, std::move(shard));
                 
@@ -585,44 +675,39 @@ struct shard_iterator {
     static auto constexpr inclusive_marker = 'I';
     static auto constexpr exclusive_marker = 'i';
 
-    shard_id shard;
+    static auto constexpr uuid_str_length = 36;
+
+    utils::UUID table;
     utils::UUID threshold;
+    shard_id shard;
     bool inclusive;
 
-    shard_iterator(shard_id i, utils::UUID th, bool inclusive)
-        : shard(i)
-        , threshold(th)
-        , inclusive(inclusive)
-    {}
-    shard_iterator(utils::UUID arn, db_clock::time_point ts, cdc::stream_id i, utils::UUID th, bool inclusive)
-        : shard(arn, ts, i)
-        , threshold(th)
-        , inclusive(inclusive)
-    {}
     shard_iterator(const sstring&);
 
+    shard_iterator(utils::UUID t, shard_id i, utils::UUID th, bool inclusive)
+        : table(t)
+        , threshold(th)
+        , shard(i)
+        , inclusive(inclusive)
+    {}
     friend std::ostream& operator<<(std::ostream& os, const shard_iterator& id) {
-        boost::io::ios_flags_saver fs(os);
-        return os << (id.inclusive ? inclusive_marker : exclusive_marker) << std::hex << id.threshold
+        return os << (id.inclusive ? inclusive_marker : exclusive_marker) << std::hex
+            << id.table
+            << ':' << id.threshold
             << ':' << id.shard
             ;
     }
-private:
-    shard_iterator(const sstring&, size_t);
 };
 
-shard_iterator::shard_iterator(const sstring& s) 
-    : shard_iterator(s, s.find(':'))
-{}
-
-shard_iterator::shard_iterator(const sstring& s, size_t i)
-    : shard(s.substr(i + 1))
-    , threshold(s.substr(1, i))
+shard_iterator::shard_iterator(const sstring& s)
+    : table(s.substr(1, uuid_str_length))
+    , threshold(s.substr(2 + uuid_str_length, uuid_str_length))
+    , shard(s.substr(3 + 2 * uuid_str_length))
+    , inclusive(s.at(0) == inclusive_marker)
 {
-    if ((s.at(0) != inclusive_marker && s.at(0) != exclusive_marker) || i == sstring::npos) {
+    if (s.at(0) != inclusive_marker && s.at(0) != exclusive_marker) {
         throw std::invalid_argument(s);
     }
-    inclusive = (s[0] == inclusive_marker);
 }
 }
 
@@ -663,56 +748,87 @@ future<executor::request_return_type> executor::get_shard_iterator(client_state&
         sid = rjson::get<shard_id>(request, "ShardId");
     } catch (...) {
     }
-    if (!schema || !cdc::get_base_table(db, *schema) || !is_alternator_keyspace(schema->ks_name()) || sid->table != schema->id()) {
+    if (!schema || !cdc::get_base_table(db, *schema) || !is_alternator_keyspace(schema->ks_name())) {
         throw api_error::resource_not_found("Invalid StreamArn");
     }
-
-    utils::UUID threshold;
-    bool inclusive_of_threshold;
-
-    switch (type) {
-        case shard_iterator_type::AT_SEQUENCE_NUMBER:
-            threshold = *seq_num;
-            inclusive_of_threshold = true;
-            break;
-        case shard_iterator_type::AFTER_SEQUENCE_NUMBER:
-            threshold = *seq_num;
-            inclusive_of_threshold = false;
-            break;
-        case shard_iterator_type::TRIM_HORIZON:
-            threshold = utils::UUID{};
-            inclusive_of_threshold = true;
-            break;
-        case shard_iterator_type::LATEST:
-            threshold = utils::UUID_gen::min_time_UUID((db_clock::now() - confidence_interval(db)).time_since_epoch().count());
-            inclusive_of_threshold = true;
-            break;
+    if (!sid) {
+        throw api_error::resource_not_found("Invalid ShardId");
     }
 
-    shard_iterator iter(*sid, threshold, inclusive_of_threshold);
+    auto f = make_ready_future<shard_id>(*sid);
 
-    auto ret = rjson::empty_object();
-    rjson::set(ret, "ShardIterator", iter);
+    if (!sid->has_expired()) {
+        // see comment in get_records. Need to check if this (open)
+        // shard is in fact still valid.
+        auto& ep = utils::fb_utilities::get_broadcast_address();
+        auto ts = cdc::get_streams_timestamp_for(ep, _ss.gossiper());
+        if (ts != db_clock::time_point{} &&  ts != sid->start_time) {
+            // The shard expired between user queried it and 
+            // this call. Client probably does not expect a shard ID to 
+            // "change"/disappear like this sort of does (replaced with
+            // one with an end time in it), so we'll simply repair it
+            // in place and give an iterator that knows its end time.
+            // Hopefully the client will then read until end-of-shard
+            // data using this iterator, and can move on to next
+            // describe_stream result set next.
+            const auto& tm = _proxy.get_token_metadata();
+            f = _sdks.get_next_stream_timestamp({ tm.count_normal_token_owners() }, sid->start_time).then([sid = *sid](db_clock::time_point ts) mutable {
+                sid.end_time = ts;
+                return sid;
+            });
+        }
+    }
 
-    return make_ready_future<executor::request_return_type>(make_jsonable(std::move(ret)));
+    return f.then([&db, stream_arn, schema, type, seq_num = std::move(seq_num)](shard_id sid) {
+        if (sid.has_expired() && (db_clock::now() - dynamo_streams_max_window) <= sid.end_time) {
+            throw api_error::trimmed_data_access_exception("Expired shard");
+        }
+
+        utils::UUID threshold;
+        bool inclusive_of_threshold;
+
+        switch (type) {
+            case shard_iterator_type::AT_SEQUENCE_NUMBER:
+                threshold = *seq_num;
+                inclusive_of_threshold = true;
+                break;
+            case shard_iterator_type::AFTER_SEQUENCE_NUMBER:
+                threshold = *seq_num;
+                inclusive_of_threshold = false;
+                break;
+            case shard_iterator_type::TRIM_HORIZON:
+                threshold = utils::UUID_gen::min_time_UUID(sid.start_time.time_since_epoch().count());
+                inclusive_of_threshold = true;
+                break;
+            case shard_iterator_type::LATEST:
+                threshold = utils::UUID_gen::min_time_UUID((db_clock::now() - confidence_interval(db)).time_since_epoch().count());
+                inclusive_of_threshold = true;
+                break;
+        }
+
+        shard_iterator iter(stream_arn, sid, threshold, inclusive_of_threshold);
+
+        auto ret = rjson::empty_object();
+        rjson::set(ret, "ShardIterator", iter);
+
+        return make_ready_future<executor::request_return_type>(make_jsonable(std::move(ret)));
+    });
 }
 
 struct event_id {
-    cdc::stream_id stream;
+    utils::UUID stream;
     utils::UUID timestamp;
 
     static const auto marker = 'E';
 
-    event_id(cdc::stream_id s, utils::UUID ts)
+    event_id(utils::UUID s, utils::UUID ts)
         : stream(s)
         , timestamp(ts)
     {}
     
     friend std::ostream& operator<<(std::ostream& os, const event_id& id) {
         boost::io::ios_flags_saver fs(os);
-        return os << marker << std::hex << id.stream.to_bytes()
-            << ':' << id.timestamp
-            ;
+        return os << marker << id.stream << ':' << id.timestamp;
     }
 };
 }
@@ -738,24 +854,70 @@ future<executor::request_return_type> executor::get_records(client_state& client
     auto& db = _proxy.get_db().local();
     schema_ptr schema, base;
     try {
-        auto& log_table = db.find_column_family(iter.shard.table);
+        auto& log_table = db.find_column_family(iter.table);
         schema = log_table.schema();
         base = cdc::get_base_table(db, *schema);
     } catch (...) {        
     }
 
     if (!schema || !base || !is_alternator_keyspace(schema->ks_name())) {
-        throw api_error::resource_not_found(boost::lexical_cast<std::string>(iter.shard.table));
+        throw api_error::resource_not_found(boost::lexical_cast<std::string>(iter.table));
     }
 
     tracing::add_table_name(trace_state, schema->ks_name(), schema->cf_name());
 
+    auto f = make_ready_future<shard_iterator>(iter);
+
+    if (!iter.shard.has_expired()) {
+        // ugh. figure out if we have end-of-shard
+        // We try to avoid the extra query by using the
+        // gossip state as a cache check - i.e. know if
+        // topology has changed and invalidated the current
+        // iterator. This is far from exact, so we could still
+        // generate duplicate records at generation changes
+        // unless our confidence window is large enough.
+        auto& ep = utils::fb_utilities::get_broadcast_address();
+        auto ts = cdc::get_streams_timestamp_for(ep, _ss.gossiper());
+        if (ts != db_clock::time_point{} &&  ts != iter.shard.start_time) {
+            // Sigh. there seem to be at least one new generation after this.
+            // Do a query for our actual end timestamp (i.e. start of generation
+            // after use), and update the iterator.
+            // We could just say "expired iterator". This would cause kinesis et all 
+            // to get a new iterator with the same shard ID though, which is why
+            // we replace end time in get_shard_iterator if needed. But we can just as
+            // well save the round trip and update the iterator ourselves.
+            const auto& tm = _proxy.get_token_metadata();
+            f = _sdks.get_next_stream_timestamp({ tm.count_normal_token_owners() }, iter.shard.start_time).then([iter](db_clock::time_point ts) mutable {
+                iter.shard.end_time = ts;
+                return iter;
+            });
+        }
+    }
+
+    return f.then([this, schema, base, limit, &client_state, permit = std::move(permit)](shard_iterator iter) mutable {
+        return do_get_records(client_state, std::move(permit), schema, base, limit, iter);
+    }).finally([this, start_time] {
+        _stats.api_operations.get_records_latency.add(std::chrono::steady_clock::now() - start_time);
+    });
+}
+
+future<executor::request_return_type> executor::do_get_records(client_state& client_state, service_permit permit, schema_ptr schema, schema_ptr base, size_t limit, shard_iterator iter) {
     db::consistency_level cl = db::consistency_level::LOCAL_QUORUM;
-    partition_key pk = iter.shard.id.to_partition_key(*schema);
 
-    dht::partition_range_vector partition_ranges{ dht::partition_range::make_singular(dht::decorate_key(*schema, pk)) };
+    auto lo_pk_bound = dht::partition_range::bound(dht::ring_position::starting_at(iter.shard.lo_token));
+    auto hi_pk_bound = dht::partition_range::bound(dht::ring_position::ending_at(iter.shard.hi_token));
 
+    auto partition_ranges = iter.shard.is_wraparound()
+        ? dht::partition_range_vector{ dht::partition_range::make_starting_with(std::move(lo_pk_bound)), dht::partition_range::make_ending_with(std::move(hi_pk_bound))}
+        : dht::partition_range_vector{ dht::partition_range::make(std::move(lo_pk_bound), std::move(hi_pk_bound)) }
+        ;
+
+    auto& db = _proxy.get_db().local();
     auto high_ts = db_clock::now() - confidence_interval(db);
+    if (iter.shard.has_expired() && high_ts > iter.shard.end_time) {
+        high_ts = iter.shard.end_time;
+    }
+
     auto high_uuid = utils::UUID_gen::min_time_UUID(high_ts.time_since_epoch().count());
     auto lo = clustering_key_prefix::from_exploded(*schema, { iter.threshold.serialize() });
     auto hi = clustering_key_prefix::from_exploded(*schema, { high_uuid.serialize() });
@@ -803,7 +965,7 @@ future<executor::request_return_type> executor::get_records(client_state& client
             query::row_limit(limit * 4));
 
     return _proxy.query(schema, std::move(command), std::move(partition_ranges), cl, service::storage_proxy::coordinator_query_options(default_timeout(), std::move(permit), client_state)).then(
-            [this, schema, partition_slice = std::move(partition_slice), selection = std::move(selection), start_time = std::move(start_time), limit, key_names = std::move(key_names), attr_names = std::move(attr_names), type, iter, high_ts] (service::storage_proxy::coordinator_query_result qr) mutable {       
+            [this, schema, partition_slice = std::move(partition_slice), selection = std::move(selection), limit, key_names = std::move(key_names), attr_names = std::move(attr_names), type, iter, high_ts] (service::storage_proxy::coordinator_query_result qr) mutable {
         cql3::selection::result_set_builder builder(*selection, gc_clock::now(), cql_serialization_format::latest());
         query::result_view::consume(*qr.query_result, partition_slice, cql3::selection::result_set_builder::visitor(builder, *schema, *selection));
 
@@ -836,7 +998,7 @@ future<executor::request_return_type> executor::get_records(client_state& client
             }
             if (!record.ObjectEmpty()) {
                 // TODO: awsRegion?
-                rjson::set(record, "eventID", event_id(iter.shard.id, *timestamp));
+                rjson::set(record, "eventID", event_id(iter.table, *timestamp));
                 rjson::set(record, "eventSource", "scylladb:alternator");
                 rjson::push_back(records, std::move(record));
                 record = rjson::empty_object();
@@ -914,41 +1076,13 @@ future<executor::request_return_type> executor::get_records(client_state& client
         }
 
         auto ret = rjson::empty_object();
-        auto nrecords = records.Size();
         rjson::set(ret, "Records", std::move(records));
 
-        if (nrecords != 0) {
-            // #9642. Set next iterators threshold to > last
-            shard_iterator next_iter(iter.shard, *timestamp, false);
-            // Note that here we unconditionally return NextShardIterator,
-            // without checking if maybe we reached the end-of-shard. If the
-            // shard did end, then the next read will have nrecords == 0 and
-            // will notice end end of shard and not return NextShardIterator.
-            rjson::set(ret, "NextShardIterator", next_iter);
-            _stats.api_operations.get_records_latency.add(std::chrono::steady_clock::now() - start_time);
-            return make_ready_future<executor::request_return_type>(make_jsonable(std::move(ret)));
+        auto high = timestamp ? *timestamp : utils::UUID_gen::min_time_UUID(high_ts.time_since_epoch().count());
+        if (!iter.shard.has_expired() || as_timepoint(high) < iter.shard.end_time) {
+            rjson::set(ret, "NextShardIterator", shard_iterator(iter.table, iter.shard, high, false));
         }
-
-        // ugh. figure out if we are and end-of-shard
-        return cdc::get_local_streams_timestamp().then([this, iter, high_ts, start_time, ret = std::move(ret)](db_clock::time_point ts) mutable {
-            auto& shard = iter.shard;            
-
-            if (shard.time < ts && ts < high_ts) {
-                // The DynamoDB documentation states that when a shard is
-                // closed, reading it until the end has NextShardIterator
-                // "set to null". Our test test_streams_closed_read
-                // confirms that by "null" they meant not set at all.
-            } else {
-                // We could have return the same iterator again, but we did
-                // a search from it until high_ts and found nothing, so we
-                // can also start the next search from high_ts.
-                // TODO: but why? It's simpler just to leave the iterator be.
-                shard_iterator next_iter(iter.shard, utils::UUID_gen::min_time_UUID(high_ts.time_since_epoch().count()), true);
-                rjson::set(ret, "NextShardIterator", iter);
-            }
-            _stats.api_operations.get_records_latency.add(std::chrono::steady_clock::now() - start_time);
-            return make_ready_future<executor::request_return_type>(make_jsonable(std::move(ret)));
-        });
+        return make_ready_future<executor::request_return_type>(make_jsonable(std::move(ret)));
     });
 }
 

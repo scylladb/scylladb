@@ -198,6 +198,12 @@ public:
     distributed<database>& db() {
         return _db;
     }
+    gms::gossiper& gossiper() {
+        return _gossiper;
+    }
+    const gms::gossiper& gossiper() const {
+        return _gossiper;
+    }
 
     gms::feature_service& features() { return _feature_service; }
     const gms::feature_service& features() const { return _feature_service; }

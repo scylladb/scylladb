@@ -486,6 +486,7 @@ def list_shards(dynamodbstreams, arn):
         assert len(response['Shards']) <= limit
         shards.extend([x['ShardId'] for x in response['Shards']])
     print('Number of shards in stream: {}'.format(len(shards)))
+    assert len(set(shards)) == len(shards)
     return shards
 
 # Utility function for getting shard iterators starting at "LATEST" for
@@ -495,6 +496,7 @@ def latest_iterators(dynamodbstreams, arn):
     for shard_id in list_shards(dynamodbstreams, arn):
         iterators.append(dynamodbstreams.get_shard_iterator(StreamArn=arn,
             ShardId=shard_id, ShardIteratorType='LATEST')['ShardIterator'])
+    assert len(set(iterators)) == len(iterators)
     return iterators
 
 # Utility function for fetching more content from the stream (given its
@@ -510,6 +512,7 @@ def fetch_more(dynamodbstreams, iterators, output):
         if 'NextShardIterator' in response:
             new_iterators.append(response['NextShardIterator'])
         output.extend(response['Records'])
+    assert len(set(new_iterators)) == len(new_iterators)
     return new_iterators
 
 # Utility function for comparing "output" as fetched by fetch_more(), to a list
@@ -845,9 +848,11 @@ def test_streams_no_records(test_table_ss_keys_only, dynamodbstreams):
     table, arn = test_table_ss_keys_only
     # Get just one shard - any shard - and its LATEST iterator. Because it's
     # LATEST, there will be no data to read from this iterator.
-    shard_id = dynamodbstreams.describe_stream(StreamArn=arn, Limit=1)['StreamDescription']['Shards'][0]['ShardId']
+    shard = dynamodbstreams.describe_stream(StreamArn=arn, Limit=1)['StreamDescription']['Shards'][0]
+    shard_id = shard['ShardId']
     iter = dynamodbstreams.get_shard_iterator(StreamArn=arn, ShardId=shard_id, ShardIteratorType='LATEST')['ShardIterator']
     response = dynamodbstreams.get_records(ShardIterator=iter)
+    assert 'NextShardIterator' in response or 'EndingSequenceNumber' in shard['SequenceNumberRange']
     assert 'Records' in response
     # We expect Records to be empty - there is no data at the LATEST iterator.
     assert response['Records'] == []

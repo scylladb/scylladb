@@ -71,6 +71,12 @@ public:
     static api_error conditional_check_failed(std::string msg) {
         return api_error("ConditionalCheckFailedException", std::move(msg));
     }
+    static api_error expired_iterator(std::string msg) {
+        return api_error("ExpiredIteratorException", std::move(msg));
+    }
+    static api_error trimmed_data_access_exception(std::string msg) {
+        return api_error("TrimmedDataAccessException", std::move(msg));
+    }
     static api_error internal(std::string msg) {
         return api_error("InternalServerError", std::move(msg), reply::status_type::internal_server_error);
     }
