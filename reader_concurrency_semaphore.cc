@@ -153,7 +153,9 @@ bool reader_concurrency_semaphore::has_available_units(const resources& r) const
 }
 
 bool reader_concurrency_semaphore::may_proceed(const resources& r) const {
-    return has_available_units(r) && _wait_list.empty();
+    // Special case: when there is no active reader (based on count) admit one
+    // regardless of availability of memory.
+    return _wait_list.empty() && (has_available_units(r) || _resources.count == _initial_resources.count);
 }
 
 future<reader_permit::resource_units> reader_concurrency_semaphore::do_wait_admission(size_t memory, db::timeout_clock::time_point timeout) {
