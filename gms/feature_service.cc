@@ -27,6 +27,8 @@
 #include "gms/feature_service.hh"
 
 namespace gms {
+
+// Deprecated features - sent to other nodes via gossip, but assumed true in the code
 constexpr std::string_view features::RANGE_TOMBSTONES = "RANGE_TOMBSTONES";
 constexpr std::string_view features::LARGE_PARTITIONS = "LARGE_PARTITIONS";
 constexpr std::string_view features::MATERIALIZED_VIEWS = "MATERIALIZED_VIEWS";
@@ -38,10 +40,12 @@ constexpr std::string_view features::SCHEMA_TABLES_V3 = "SCHEMA_TABLES_V3";
 constexpr std::string_view features::CORRECT_NON_COMPOUND_RANGE_TOMBSTONES = "CORRECT_NON_COMPOUND_RANGE_TOMBSTONES";
 constexpr std::string_view features::WRITE_FAILURE_REPLY = "WRITE_FAILURE_REPLY";
 constexpr std::string_view features::XXHASH = "XXHASH";
-constexpr std::string_view features::UDF = "UDF";
 constexpr std::string_view features::ROLES = "ROLES";
 constexpr std::string_view features::LA_SSTABLE = "LA_SSTABLE_FORMAT";
 constexpr std::string_view features::STREAM_WITH_RPC_STREAM = "STREAM_WITH_RPC_STREAM";
+
+// Up-to-date features
+constexpr std::string_view features::UDF = "UDF";
 constexpr std::string_view features::MC_SSTABLE = "MC_SSTABLE_FORMAT";
 constexpr std::string_view features::MD_SSTABLE = "MD_SSTABLE_FORMAT";
 constexpr std::string_view features::ROW_LEVEL_REPAIR = "ROW_LEVEL_REPAIR";
@@ -65,20 +69,7 @@ feature_config::feature_config() {
 }
 
 feature_service::feature_service(feature_config cfg) : _config(cfg)
-        , _range_tombstones_feature(*this, features::RANGE_TOMBSTONES)
-        , _large_partitions_feature(*this, features::LARGE_PARTITIONS)
-        , _materialized_views_feature(*this, features::MATERIALIZED_VIEWS)
-        , _counters_feature(*this, features::COUNTERS)
-        , _indexes_feature(*this, features::INDEXES)
-        , _digest_multipartition_read_feature(*this, features::DIGEST_MULTIPARTITION_READ)
-        , _correct_counter_order_feature(*this, features::CORRECT_COUNTER_ORDER)
-        , _schema_tables_v3(*this, features::SCHEMA_TABLES_V3)
-        , _correct_non_compound_range_tombstones(*this, features::CORRECT_NON_COMPOUND_RANGE_TOMBSTONES)
-        , _write_failure_reply_feature(*this, features::WRITE_FAILURE_REPLY)
-        , _xxhash_feature(*this, features::XXHASH)
         , _udf_feature(*this, features::UDF)
-        , _roles_feature(*this, features::ROLES)
-        , _stream_with_rpc_stream_feature(*this, features::STREAM_WITH_RPC_STREAM)
         , _mc_sstable_feature(*this, features::MC_SSTABLE)
         , _md_sstable_feature(*this, features::MD_SSTABLE)
         , _row_level_repair_feature(*this, features::ROW_LEVEL_REPAIR)
@@ -162,6 +153,7 @@ std::set<std::string_view> feature_service::known_feature_set() {
     // introduced in scylla, update it here, e.g.,
     // return sstring("FEATURE1,FEATURE2")
     std::set<std::string_view> features = {
+        // Deprecated features - sent to other nodes via gossip, but assumed true in the code
         gms::features::RANGE_TOMBSTONES,
         gms::features::LARGE_PARTITIONS,
         gms::features::COUNTERS,
@@ -176,6 +168,8 @@ std::set<std::string_view> feature_service::known_feature_set() {
         gms::features::STREAM_WITH_RPC_STREAM,
         gms::features::MATERIALIZED_VIEWS,
         gms::features::INDEXES,
+
+        // Up-to-date features
         gms::features::ROW_LEVEL_REPAIR,
         gms::features::TRUNCATION_TABLE,
         gms::features::CORRECT_STATIC_COMPACT_IN_MC,
@@ -255,20 +249,7 @@ db::schema_features feature_service::cluster_schema_features() const {
 
 void feature_service::enable(const std::set<std::string_view>& list) {
     for (gms::feature& f : {
-        std::ref(_range_tombstones_feature),
-        std::ref(_large_partitions_feature),
-        std::ref(_materialized_views_feature),
-        std::ref(_counters_feature),
-        std::ref(_indexes_feature),
-        std::ref(_digest_multipartition_read_feature),
-        std::ref(_correct_counter_order_feature),
-        std::ref(_schema_tables_v3),
-        std::ref(_correct_non_compound_range_tombstones),
-        std::ref(_write_failure_reply_feature),
-        std::ref(_xxhash_feature),
         std::ref(_udf_feature),
-        std::ref(_roles_feature),
-        std::ref(_stream_with_rpc_stream_feature),
         std::ref(_mc_sstable_feature),
         std::ref(_md_sstable_feature),
         std::ref(_row_level_repair_feature),

@@ -75,20 +75,7 @@ public:
     std::set<std::string_view> supported_feature_set();
 
 private:
-    gms::feature _range_tombstones_feature;
-    gms::feature _large_partitions_feature;
-    gms::feature _materialized_views_feature;
-    gms::feature _counters_feature;
-    gms::feature _indexes_feature;
-    gms::feature _digest_multipartition_read_feature;
-    gms::feature _correct_counter_order_feature;
-    gms::feature _schema_tables_v3;
-    gms::feature _correct_non_compound_range_tombstones;
-    gms::feature _write_failure_reply_feature;
-    gms::feature _xxhash_feature;
     gms::feature _udf_feature;
-    gms::feature _roles_feature;
-    gms::feature _stream_with_rpc_stream_feature;
     gms::feature _mc_sstable_feature;
     gms::feature _md_sstable_feature;
     gms::feature _row_level_repair_feature;
@@ -107,60 +94,8 @@ private:
     gms::feature _digest_for_null_values_feature;
 
 public:
-    bool cluster_supports_range_tombstones() const {
-        return bool(_range_tombstones_feature);
-    }
-
-    bool cluster_supports_large_partitions() const {
-        return bool(_large_partitions_feature);
-    }
-
-    bool cluster_supports_materialized_views() const {
-        return bool(_materialized_views_feature);
-    }
-
-    bool cluster_supports_counters() const {
-        return bool(_counters_feature);
-    }
-
-    bool cluster_supports_indexes() const {
-        return bool(_indexes_feature);
-    }
-
-    bool cluster_supports_digest_multipartition_reads() const {
-        return bool(_digest_multipartition_read_feature);
-    }
-
-    bool cluster_supports_correct_counter_order() const {
-        return bool(_correct_counter_order_feature);
-    }
-
-    const gms::feature& cluster_supports_schema_tables_v3() const {
-        return _schema_tables_v3;
-    }
-
-    bool cluster_supports_reading_correctly_serialized_range_tombstones() const {
-        return bool(_correct_non_compound_range_tombstones);
-    }
-
-    bool cluster_supports_write_failure_reply() const {
-        return bool(_write_failure_reply_feature);
-    }
-
-    bool cluster_supports_xxhash_digest_algorithm() const {
-        return bool(_xxhash_feature);
-    }
-
     bool cluster_supports_user_defined_functions() const {
         return bool(_udf_feature);
-    }
-
-    bool cluster_supports_roles() const {
-        return bool(_roles_feature);
-    }
-
-    bool cluster_supports_stream_with_rpc_stream() const {
-        return bool(_stream_with_rpc_stream_feature);
     }
 
     const feature& cluster_supports_mc_sstable() const {

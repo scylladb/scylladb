@@ -82,11 +82,7 @@ static future<result_message_ptr> void_result_message() {
     return make_ready_future<result_message_ptr>(nullptr);
 }
 
-void validate_cluster_support(service::storage_proxy& proxy) {
-    if (!proxy.features().cluster_supports_roles()) {
-        throw exceptions::invalid_request_exception(
-                "You cannot modify access-control information until the cluster has fully upgraded.");
-    }
+void validate_cluster_support(service::storage_proxy&) {
 }
 
 //

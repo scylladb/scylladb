@@ -126,9 +126,7 @@ static inline
 query::digest_algorithm digest_algorithm(service::storage_proxy& proxy) {
     return proxy.features().cluster_supports_digest_for_null_values()
             ? query::digest_algorithm::xxHash
-            : proxy.features().cluster_supports_xxhash_digest_algorithm()
-                    ? query::digest_algorithm::legacy_xxHash_without_null_digest
-                    : query::digest_algorithm::MD5;
+            : query::digest_algorithm::legacy_xxHash_without_null_digest;
 }
 
 static inline
@@ -3775,10 +3773,6 @@ class range_slice_read_executor : public never_speculating_read_executor {
 public:
     using never_speculating_read_executor::never_speculating_read_executor;
     virtual future<foreign_ptr<lw_shared_ptr<query::result>>> execute(storage_proxy::clock_type::time_point timeout) override {
-        if (!_proxy->features().cluster_supports_digest_multipartition_reads()) {
-            reconcile(_cl, timeout);
-            return _result_promise.get_future();
-        }
         return never_speculating_read_executor::execute(timeout);
     }
 };
@@ -4849,18 +4843,16 @@ void storage_proxy::init_messaging_service() {
                 // ignore results, since we'll be returning them via MUTATION_DONE/MUTATION_FAILURE verbs
                 auto fut = make_ready_future<seastar::rpc::no_wait_type>(netw::messaging_service::no_wait());
                 if (errors) {
-                    if (p->features().cluster_supports_write_failure_reply()) {
-                        tracing::trace(trace_state_ptr, "Sending mutation_failure with {} failures to /{}", errors, reply_to);
-                        fut = p->_messaging.send_mutation_failed(
-                                netw::messaging_service::msg_addr{reply_to, shard},
-                                shard,
-                                response_id,
-                                errors,
-                                p->get_view_update_backlog()).then_wrapped([] (future<> f) {
-                            f.ignore_ready_future();
-                            return netw::messaging_service::no_wait();
-                        });
-                    }
+                    tracing::trace(trace_state_ptr, "Sending mutation_failure with {} failures to /{}", errors, reply_to);
+                    fut = p->_messaging.send_mutation_failed(
+                            netw::messaging_service::msg_addr{reply_to, shard},
+                            shard,
+                            response_id,
+                            errors,
+                            p->get_view_update_backlog()).then_wrapped([] (future<> f) {
+                        f.ignore_ready_future();
+                        return netw::messaging_service::no_wait();
+                    });
                 }
                 return fut.finally([trace_state_ptr] {
                     tracing::trace(trace_state_ptr, "Mutation handling is done");

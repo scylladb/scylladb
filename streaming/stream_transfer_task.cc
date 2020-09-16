@@ -228,11 +228,7 @@ future<> stream_transfer_task::execute() {
                         plan_id, cf_id, this_shard_id());
                 return make_ready_future<>();
             }
-            if (si->db.features().cluster_supports_stream_with_rpc_stream()) {
-                return send_mutation_fragments(std::move(si));
-            } else {
-                throw std::runtime_error("cluster does not support STREAM_WITH_RPC_STREAM feature");
-            }
+            return send_mutation_fragments(std::move(si));
         });
     }).then([this, plan_id, cf_id, id] {
         sslog.debug("[Stream #{}] SEND STREAM_MUTATION_DONE to {}, cf_id={}", plan_id, id, cf_id);

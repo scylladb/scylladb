@@ -211,9 +211,6 @@ std::unique_ptr<prepared_statement> create_table_statement::raw_statement::prepa
     for (auto&& entry : _definitions) {
         ::shared_ptr<column_identifier> id = entry.first;
         cql3_type pt = entry.second->prepare(db, keyspace());
-        if (pt.is_counter() && !db.features().cluster_supports_counters()) {
-            throw exceptions::invalid_request_exception("Counter support is not enabled");
-        }
         if (pt.get_type()->is_multi_cell()) {
             if (pt.get_type()->is_user_type()) {
                 // check for multi-cell types (non-frozen UDTs or collections) inside a non-frozen UDT
