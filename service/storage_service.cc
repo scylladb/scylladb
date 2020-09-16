@@ -1697,7 +1697,7 @@ future<> storage_service::replicate_to_all_cores() {
 
 future<> storage_service::do_replicate_to_all_cores() noexcept {
     return replicate_tm_only().handle_exception([] (auto e) {
-        slogger.error("Fail to replicate _token_metadata: {}", e);
+        on_internal_error(slogger, format("Failed to replicate _token_metadata: {}", e));
     });
 }
 
