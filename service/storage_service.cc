@@ -2810,16 +2810,16 @@ future<> storage_service::do_update_pending_ranges() {
                 slogger.debug("Updating pending ranges for keyspace={} ends", keyspace_name);
             });
         });
+    }).then([this] {
+        // update_pending_ranges will modify token_metadata, we need to replicate to other cores
+        return do_replicate_to_all_cores();
     });
     // slogger.debug("finished calculation for {} keyspaces in {}ms", keyspaces.size(), System.currentTimeMillis() - start);
 }
 
 future<> storage_service::update_pending_ranges() {
     return get_storage_service().invoke_on(0, [] (auto& ss){
-        return ss._update_pending_ranges_action.trigger_later().then([&ss] {
-            // update_pending_ranges will modify token_metadata, we need to replicate to other cores
-            return ss.replicate_to_all_cores().then([s = ss.shared_from_this()] { });
-        });
+        return ss._update_pending_ranges_action.trigger_later().then([s = ss.shared_from_this()] { });
     });
 }
 
