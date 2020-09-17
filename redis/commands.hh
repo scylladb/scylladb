@@ -36,6 +36,7 @@ future<redis_message> hgetall(service::storage_proxy& proxy, request&& req, redi
 future<redis_message> hget(service::storage_proxy& proxy, request&& req, redis::redis_options& options, service_permit permit);
 future<redis_message> hset(service::storage_proxy& proxy, request&& req, redis::redis_options& options, service_permit permit);
 future<redis_message> hdel(service::storage_proxy& proxy, request&& req, redis::redis_options& options, service_permit permit);
+future<redis_message> hexists(service::storage_proxy& proxy, request&& req, redis::redis_options& options, service_permit permit);
 future<redis_message> set(service::storage_proxy& proxy, request&& req, redis::redis_options& options, service_permit permit);
 future<redis_message> setex(service::storage_proxy& proxy, request&& req, redis::redis_options& options, service_permit permit);
 future<redis_message> del(service::storage_proxy& proxy, request&& req, redis::redis_options& options, service_permit permit);

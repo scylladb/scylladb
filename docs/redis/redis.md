@@ -388,5 +388,6 @@ The Redis API in Scylla supports the following subset of the Redis commands.
 | `HSET key field value` | Set the value of `key` and `field`. Multiple field/value is not yet supported. Return value is always 1 whether the key exists or not. |
 | `HGETALL key` | Get all values for a `key`. |
 | `HDEL key field` | Delete a value for a `key` and `field`. Return value is always the number of fields whether the fields existed or not. |
+| `HEXISTS key field` | Returns 1 if a value exists for a `key` and `field` or 0 if it doesn't. |
 | **Server** | |
 | `LOLWUT [VERSION version]` | Return Redis version. |

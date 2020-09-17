@@ -155,3 +155,12 @@ def test_delete_hash(redis_host, redis_port):
     assert r.hgetall(key) == {field: val, field2: val2}
     assert r.delete(key) == 1
     assert r.hgetall(key) == {}
+
+def test_hexists(redis_host, redis_port):
+    r = connect(redis_host, redis_port)
+    key = random_string(10)
+    field = random_string(10)
+
+    assert r.hexists(key, field) == 0
+    assert r.hset(key, field, random_string(10)) == 1
+    assert r.hexists(key, field) == 1
