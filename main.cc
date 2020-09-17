@@ -1025,28 +1025,21 @@ int main(int ac, char** av) {
             }).get();
 
             supervisor::notify("starting messaging service");
-            // Start handling REPAIR_CHECKSUM_RANGE messages
-            messaging.invoke_on_all([&db] (auto& ms) {
-                ms.register_repair_checksum_range([&db] (sstring keyspace, sstring cf, dht::token_range range, rpc::optional<repair_checksum> hash_version) {
-                    auto hv = hash_version ? *hash_version : repair_checksum::legacy;
-                    return do_with(std::move(keyspace), std::move(cf), std::move(range),
-                            [&db, hv] (auto& keyspace, auto& cf, auto& range) {
-                        return checksum_range(db, keyspace, cf, range, hv);
-                    });
-                });
-            }).get();
             auto max_memory_repair = db.local().get_available_memory() * 0.1;
             repair_service rs(gossiper, max_memory_repair);
             auto stop_repair_service = defer_verbose_shutdown("repair service", [&rs] {
                 rs.stop().get();
             });
-            repair_init_messaging_service_handler(rs, sys_dist_ks, view_update_generator, messaging).get();
+            repair_init_messaging_service_handler(rs, sys_dist_ks, view_update_generator, db, messaging).get();
             auto stop_repair_messages = defer_verbose_shutdown("repair message handlers", [] {
                 repair_uninit_messaging_service_handler().get();
             });
             supervisor::notify("starting storage service", true);
             auto& ss = service::get_local_storage_service();
             ss.init_messaging_service_part().get();
+            auto stop_ss_msg = defer_verbose_shutdown("storage service messaging", [&ss] {
+                ss.uninit_messaging_service_part().get();
+            });
             api::set_server_messaging_service(ctx, messaging).get();
             auto stop_messaging_api = defer_verbose_shutdown("messaging service API", [&ctx] {
                 api::unset_server_messaging_service(ctx).get();

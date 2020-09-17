@@ -1611,6 +1611,10 @@ future<> storage_service::init_messaging_service_part() {
     return get_storage_service().invoke_on_all(&service::storage_service::init_messaging_service);
 }
 
+future<> storage_service::uninit_messaging_service_part() {
+    return get_storage_service().invoke_on_all(&service::storage_service::uninit_messaging_service);
+}
+
 future<> storage_service::init_server(bind_messaging_port do_bind) {
     return seastar::async([this, do_bind] {
         _initialized = true;
@@ -1724,9 +1728,8 @@ future<> storage_service::gossip_sharder() {
 }
 
 future<> storage_service::stop() {
-    return uninit_messaging_service().then([this] {
-        return _service_memory_limiter.wait(_service_memory_total); // make sure nobody uses the semaphore
-    }).finally([this] {
+    // make sure nobody uses the semaphore
+    return _service_memory_limiter.wait(_service_memory_total).finally([this] {
         _listeners.clear();
         return _schema_version_publisher.join();
     });

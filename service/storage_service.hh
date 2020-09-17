@@ -323,6 +323,10 @@ public:
      * \see init_server_without_the_messaging_service_part
      */
     future<> init_messaging_service_part();
+    /*!
+     * \brief Uninit the messaging service part of the service.
+     */
+    future<> uninit_messaging_service_part();
 
     /*!
      * \brief complete the server initialization

@@ -39,6 +39,23 @@ class flat_mutation_reader;
 
 namespace locator { class token_metadata; }
 
+class database;
+class repair_service;
+namespace db {
+    namespace view {
+        class view_update_generator;
+    }
+    class system_distributed_keyspace;
+}
+namespace netw { class messaging_service; }
+
+future<> repair_init_messaging_service_handler(repair_service& rs,
+        distributed<db::system_distributed_keyspace>& sys_dist_ks,
+        distributed<db::view::view_update_generator>& view_update_generator,
+        sharded<database>& db,
+        sharded<netw::messaging_service>& ms);
+future<> repair_uninit_messaging_service_handler();
+
 class repair_exception : public std::exception {
 private:
     sstring _what;

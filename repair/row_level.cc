@@ -2204,7 +2204,7 @@ static future<> repair_get_full_row_hashes_with_rpc_stream_handler(
     });
 }
 
-future<> repair_init_messaging_service_handler(repair_service& rs, distributed<db::system_distributed_keyspace>& sys_dist_ks,
+future<> row_level_repair_init_messaging_service_handler(repair_service& rs, distributed<db::system_distributed_keyspace>& sys_dist_ks,
         distributed<db::view::view_update_generator>& view_update_generator, sharded<netw::messaging_service>& ms) {
     _sys_dist_ks = &sys_dist_ks;
     _view_update_generator = &view_update_generator;
@@ -2370,7 +2370,7 @@ future<> repair_init_messaging_service_handler(repair_service& rs, distributed<d
     });
 }
 
-future<> repair_uninit_messaging_service_handler() {
+future<> row_level_repair_uninit_messaging_service_handler() {
     return _messaging->invoke_on_all([] (auto& ms) {
         return when_all_succeed(
             ms.unregister_repair_get_row_diff_with_rpc_stream(),
