@@ -390,7 +390,7 @@ distributed_loader::process_upload_dir(distributed<database>& db, distributed<db
 
         sharded<sstables::sstable_directory> directory;
         auto upload = fs::path(global_table->dir()) / "upload";
-        directory.start(upload, db.local().get_config().initial_sstable_loading_concurrency(),
+        directory.start(upload, db.local().get_config().initial_sstable_loading_concurrency(), std::ref(db.local().get_sharded_sst_dir_semaphore()),
             sstables::sstable_directory::need_mutate_level::yes,
             sstables::sstable_directory::lack_of_toc_fatal::no,
             sstables::sstable_directory::enable_dangerous_direct_import_of_cassandra_counters(db.local().get_config().enable_dangerous_direct_import_of_cassandra_counters()),
@@ -532,7 +532,7 @@ future<> distributed_loader::populate_column_family(distributed<database>& db, s
         global_column_family_ptr global_table(db, ks, cf);
 
         sharded<sstables::sstable_directory> directory;
-        directory.start(fs::path(sstdir), db.local().get_config().initial_sstable_loading_concurrency(),
+        directory.start(fs::path(sstdir), db.local().get_config().initial_sstable_loading_concurrency(), std::ref(db.local().get_sharded_sst_dir_semaphore()),
             sstables::sstable_directory::need_mutate_level::no,
             sstables::sstable_directory::lack_of_toc_fatal::yes,
             sstables::sstable_directory::enable_dangerous_direct_import_of_cassandra_counters(db.local().get_config().enable_dangerous_direct_import_of_cassandra_counters()),

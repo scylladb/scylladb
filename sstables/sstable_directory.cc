@@ -43,6 +43,7 @@ bool manifest_json_filter(const fs::path&, const directory_entry& entry) {
 
 sstable_directory::sstable_directory(fs::path sstable_dir,
         unsigned load_parallelism,
+        semaphore& load_semaphore,
         need_mutate_level need_mutate_level,
         lack_of_toc_fatal throw_on_missing_toc,
         enable_dangerous_direct_import_of_cassandra_counters eddiocc,
@@ -50,7 +51,7 @@ sstable_directory::sstable_directory(fs::path sstable_dir,
         sstable_object_from_existing_fn sstable_from_existing)
     : _sstable_dir(std::move(sstable_dir))
     , _load_parallelism(load_parallelism)
-    , _load_semaphore(load_parallelism)
+    , _load_semaphore(load_semaphore)
     , _need_mutate_level(need_mutate_level)
     , _throw_on_missing_toc(throw_on_missing_toc)
     , _enable_dangerous_direct_import_of_cassandra_counters(eddiocc)

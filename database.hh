@@ -1343,6 +1343,8 @@ private:
     gms::feature_service& _feat;
     const locator::token_metadata& _token_metadata;
 
+    sharded<semaphore>& _sst_dir_semaphore;
+
     bool _supports_infinite_bound_range_deletions = false;
     gms::feature::listener_registration _infinite_bound_range_deletions_reg;
 
@@ -1381,7 +1383,7 @@ public:
     void set_enable_incremental_backups(bool val) { _enable_incremental_backups = val; }
 
     future<> parse_system_tables(distributed<service::storage_proxy>&, distributed<service::migration_manager>&);
-    database(const db::config&, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat, const locator::token_metadata& tm, abort_source& as);
+    database(const db::config&, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat, const locator::token_metadata& tm, abort_source& as, sharded<semaphore>& sst_dir_sem);
     database(database&&) = delete;
     ~database();
 
@@ -1596,6 +1598,10 @@ public:
     // Get the reader concurrency semaphore, appropriate for the query class,
     // which is deduced from the current scheduling group.
     reader_concurrency_semaphore& get_reader_concurrency_semaphore();
+
+    sharded<semaphore>& get_sharded_sst_dir_semaphore() {
+        return _sst_dir_semaphore;
+    }
 };
 
 future<> start_large_data_handler(sharded<database>& db);

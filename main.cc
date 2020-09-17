@@ -500,6 +500,7 @@ int main(int ac, char** av) {
     sharded<gms::feature_service> feature_service;
     sharded<db::snapshot_ctl> snapshot_ctl;
     sharded<netw::messaging_service> messaging;
+    sharded<semaphore> sst_dir_semaphore;
 
     return app.run(ac, av, [&] () -> future<int> {
 
@@ -528,7 +529,7 @@ int main(int ac, char** av) {
 
         return seastar::async([cfg, ext, &db, &qp, &proxy, &mm, &mm_notifier, &ctx, &opts, &dirs,
                 &prometheus_server, &cf_cache_hitrate_calculator, &load_meter, &feature_service,
-                &token_metadata, &snapshot_ctl, &messaging] {
+                &token_metadata, &snapshot_ctl, &messaging, &sst_dir_semaphore] {
           try {
             ::stop_signal stop_signal; // we can move this earlier to support SIGINT during initialization
             read_config(opts, *cfg).get();
@@ -808,7 +809,12 @@ int main(int ac, char** av) {
             service::init_storage_service(stop_signal.as_sharded_abort_source(), db, gossiper, sys_dist_ks, view_update_generator, feature_service, sscfg, mm_notifier, token_metadata, messaging).get();
             supervisor::notify("starting per-shard database core");
 
-            db.start(std::ref(*cfg), dbcfg, std::ref(mm_notifier), std::ref(feature_service), std::ref(token_metadata), std::ref(stop_signal.as_sharded_abort_source())).get();
+            sst_dir_semaphore.start(cfg->initial_sstable_loading_concurrency()).get();
+            auto stop_sst_dir_sem = defer_verbose_shutdown("sst_dir_semaphore", [&sst_dir_semaphore] {
+                sst_dir_semaphore.stop().get();
+            });
+
+            db.start(std::ref(*cfg), dbcfg, std::ref(mm_notifier), std::ref(feature_service), std::ref(token_metadata), std::ref(stop_signal.as_sharded_abort_source()), std::ref(sst_dir_semaphore)).get();
             start_large_data_handler(db).get();
             auto stop_database_and_sstables = defer_verbose_shutdown("database", [&db] {
                 // #293 - do not stop anything - not even db (for real)

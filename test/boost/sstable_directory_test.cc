@@ -134,6 +134,12 @@ static void with_sstable_directory(
     sstable_directory::sstable_object_from_existing_fn sstable_from_existing,
     noncopyable_function<void (sharded<sstable_directory>&)> func) {
 
+    sharded<semaphore> sstdir_sem;
+    sstdir_sem.start(load_parallelism).get();
+    auto stop_sstdir_sem = defer([&sstdir_sem] {
+        sstdir_sem.stop().get();
+    });
+
     sharded<sstable_directory> sstdir;
     auto stop_sstdir = defer([&sstdir] {
         sstdir.stop().get();
@@ -143,7 +149,7 @@ static void with_sstable_directory(
         return sstable_from_existing(std::move(dir), gen, v, f);
     };
 
-    sstdir.start(std::move(path), load_parallelism, need_mutate, fatal_nontoc, eddiocc, almv, std::move(wrapped_sfe)).get();
+    sstdir.start(std::move(path), load_parallelism, std::ref(sstdir_sem), need_mutate, fatal_nontoc, eddiocc, almv, std::move(wrapped_sfe)).get();
 
     func(sstdir);
 }
@@ -394,8 +400,14 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_lock_works) {
         auto& cf = e.local_db().find_column_family(ks_name, cf_name);
         auto path = fs::path(cf.dir());
 
+        sharded<semaphore> sstdir_sem;
+        sstdir_sem.start(1).get();
+        auto stop_sstdir_sem = defer([&sstdir_sem] {
+            sstdir_sem.stop().get();
+        });
+
         sharded<sstable_directory> sstdir;
-        sstdir.start(path, 1,
+        sstdir.start(path, 1, std::ref(sstdir_sem),
                 sstable_directory::need_mutate_level::no,
                 sstable_directory::lack_of_toc_fatal::no,
                 sstable_directory::enable_dangerous_direct_import_of_cassandra_counters::no,
