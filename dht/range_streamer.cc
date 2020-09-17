@@ -114,7 +114,7 @@ range_streamer::get_all_ranges_with_sources_for(const sstring& keyspace_name, dh
     auto& ks = _db.local().find_keyspace(keyspace_name);
     auto& strat = ks.get_replication_strategy();
 
-    auto tm = _metadata.clone_only_token_map();
+    auto tm = get_token_metadata().clone_only_token_map();
     auto range_addresses = strat.get_range_addresses(tm);
 
     logger.debug("keyspace={}, desired_ranges.size={}, range_addresses.size={}", keyspace_name, desired_ranges.size(), range_addresses.size());
@@ -155,7 +155,7 @@ range_streamer::get_all_ranges_with_strict_sources_for(const sstring& keyspace_n
     auto& strat = ks.get_replication_strategy();
 
     //Active ranges
-    auto metadata_clone = _metadata.clone_only_token_map();
+    auto metadata_clone = get_token_metadata().clone_only_token_map();
     auto range_addresses = strat.get_range_addresses(metadata_clone);
 
     //Pending ranges
@@ -221,7 +221,7 @@ bool range_streamer::use_strict_sources_for_ranges(const sstring& keyspace_name)
     return !_db.local().is_replacing()
            && use_strict_consistency()
            && !_tokens.empty()
-           && _metadata.get_all_endpoints().size() != strat.get_replication_factor();
+           && get_token_metadata().get_all_endpoints().size() != strat.get_replication_factor();
 }
 
 void range_streamer::add_tx_ranges(const sstring& keyspace_name, std::unordered_map<inet_address, dht::token_range_vector> ranges_per_endpoint) {

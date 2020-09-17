@@ -50,7 +50,7 @@ static logging::logger blogger("boot_strapper");
 namespace dht {
 
 future<> boot_strapper::bootstrap(streaming::stream_reason reason) {
-    blogger.debug("Beginning bootstrap process: sorted_tokens={}", _token_metadata.sorted_tokens());
+    blogger.debug("Beginning bootstrap process: sorted_tokens={}", get_token_metadata().sorted_tokens());
     sstring description;
     if (reason == streaming::stream_reason::bootstrap) {
         description = "Bootstrap";
@@ -59,7 +59,7 @@ future<> boot_strapper::bootstrap(streaming::stream_reason reason) {
     } else {
         return make_exception_future<>(std::runtime_error("Wrong stream_reason provided: it can only be replace or bootstrap"));
     }
-    auto streamer = make_lw_shared<range_streamer>(_db, _token_metadata, _abort_source, _tokens, _address, description, reason);
+    auto streamer = make_lw_shared<range_streamer>(_db, _token_metadata_ptr, _abort_source, _tokens, _address, description, reason);
     auto nodes_to_filter = gms::get_local_gossiper().get_unreachable_members();
     if (reason == streaming::stream_reason::replace && _db.local().get_replace_address()) {
         nodes_to_filter.insert(_db.local().get_replace_address().value());
@@ -70,7 +70,7 @@ future<> boot_strapper::bootstrap(streaming::stream_reason reason) {
     return do_for_each(*keyspaces, [this, keyspaces, streamer] (sstring& keyspace_name) {
         auto& ks = _db.local().find_keyspace(keyspace_name);
         auto& strategy = ks.get_replication_strategy();
-        dht::token_range_vector ranges = strategy.get_pending_address_ranges(_token_metadata, _tokens, _address);
+        dht::token_range_vector ranges = strategy.get_pending_address_ranges(get_token_metadata(), _tokens, _address);
         blogger.debug("Will stream keyspace={}, ranges={}", keyspace_name, ranges);
         return streamer->add_ranges(keyspace_name, ranges);
     }).then([this, streamer] {

@@ -2354,7 +2354,7 @@ future<> storage_service::rebuild(sstring source_dc) {
         if (ss.is_repair_based_node_ops_enabled()) {
             return rebuild_with_repair(ss._db, ss._messaging, tmptr, std::move(source_dc));
         } else {
-            auto streamer = make_lw_shared<dht::range_streamer>(ss._db, *tmptr, ss._abort_source,
+            auto streamer = make_lw_shared<dht::range_streamer>(ss._db, tmptr, ss._abort_source,
                     ss.get_broadcast_address(), "Rebuild", streaming::stream_reason::rebuild);
             streamer->add_source_filter(std::make_unique<dht::range_streamer::failure_detector_source_filter>(ss._gossiper.get_unreachable_members()));
             if (source_dc != "") {
@@ -2510,7 +2510,7 @@ future<> storage_service::restore_replica_count(inet_address endpoint, inet_addr
         });
     }
   return seastar::async([this, endpoint, notify_endpoint] {
-    auto streamer = make_lw_shared<dht::range_streamer>(_db, get_token_metadata(), _abort_source, get_broadcast_address(), "Restore_replica_count", streaming::stream_reason::removenode);
+    auto streamer = make_lw_shared<dht::range_streamer>(_db, get_token_metadata_ptr(), _abort_source, get_broadcast_address(), "Restore_replica_count", streaming::stream_reason::removenode);
     auto my_address = get_broadcast_address();
     auto non_system_keyspaces = _db.local().get_non_system_keyspaces();
     for (const auto& keyspace_name : non_system_keyspaces) {
@@ -2626,7 +2626,7 @@ void storage_service::leave_ring() {
 
 future<>
 storage_service::stream_ranges(std::unordered_map<sstring, std::unordered_multimap<dht::token_range, inet_address>> ranges_to_stream_by_keyspace) {
-    auto streamer = make_lw_shared<dht::range_streamer>(_db, get_token_metadata(), _abort_source, get_broadcast_address(), "Unbootstrap", streaming::stream_reason::decommission);
+    auto streamer = make_lw_shared<dht::range_streamer>(_db, get_token_metadata_ptr(), _abort_source, get_broadcast_address(), "Unbootstrap", streaming::stream_reason::decommission);
     for (auto& entry : ranges_to_stream_by_keyspace) {
         const auto& keyspace = entry.first;
         auto& ranges_with_endpoints = entry.second;
