@@ -669,10 +669,16 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_register_semaphore_unit_leak
 
         auto fut_res = when_all_succeed(futures.begin(), futures.end());
 
+        auto watchdog_timer_done = make_ready_future<>();
+
         // Watchdog timer which will break out of the deadlock and fail the test.
-        timer watchdog_timer([&view_update_generator] {
+        timer watchdog_timer([&view_update_generator, &watchdog_timer_done] {
             // Re-start it so stop() on shutdown doesn't crash.
-            (void)view_update_generator.stop().then([&] { return view_update_generator.start(); });
+            watchdog_timer_done = watchdog_timer_done.then([&] {
+                return view_update_generator.stop().then([&] {
+                    return view_update_generator.start();
+                });
+            });
         });
 
         watchdog_timer.arm(std::chrono::seconds(60));
@@ -682,7 +688,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_register_semaphore_unit_leak
 
         watchdog_timer.cancel();
 
-
+        watchdog_timer_done.get();
     }, std::move(test_cfg)).get();
 }
 
