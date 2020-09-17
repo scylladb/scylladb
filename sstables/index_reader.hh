@@ -397,7 +397,7 @@ class index_reader {
     reader_permit _permit;
     const io_priority_class& _pc;
     tracing::trace_state_ptr _trace_state;
-    shared_index_lists _index_lists;
+    shared_index_lists& _index_lists;
 
     struct reader {
         index_consumer _consumer;
@@ -709,6 +709,7 @@ public:
         , _permit(std::move(permit))
         , _pc(pc)
         , _trace_state(std::move(trace_state))
+        , _index_lists(_sstable->_index_lists)
     {
         sstlog.trace("index {}: index_reader for {}", fmt::ptr(this), _sstable->get_filename());
     }
