@@ -33,11 +33,13 @@ option to choose one. There is currently no default for this option: Trying
 to run Scylla with Alternator enabled without passing this option will
 result in an error asking you to set it.
 
-DynamoDB clients usually specify a single "endpoint" address, e.g.,
-`dynamodb.us-east-1.amazonaws.com`, and a DNS server and/or load balancers
-distribute the connections to many different backend nodes. Alternator
-does not provide such a load-balancing setup, so you set one up - having
-it forward each request to one of the live Scylla nodes at random.
+DynamoDB applications specify a single "endpoint" address, e.g.,
+`dynamodb.us-east-1.amazonaws.com`. Behind the scenes, a DNS server and/or
+load balancers distribute the connections to many different backend nodes.
+Alternator does not provide such a load-balancing setup, so you should
+either set one up, or set up the client library to do the load balancing
+itself. Instructions, code and examples for doing this can be found in:
+https://github.com/scylladb/alternator-load-balancing/
 
 Alternator tables are stored as Scylla tables, each in a separate keyspace.
 Each keyspace is initialized when the corresponding Alternator table is
@@ -68,7 +70,8 @@ progresses and compatibility continues to improve.
     alternator\_enforce\_authorization: true
 * Load balancing: Not a part of Alternator. One should use an external load
   balancer or DNS server to balance the requests between the live Scylla
-  nodes. We plan to publish a reference example soon.
+  nodes, or a modification to the client library. For more information, see
+  https://github.com/scylladb/alternator-load-balancing/.
 ### Table Operations
 * CreateTable and DeleteTable: Supported. Note our implementation is synchronous.
 * DescribeTable: Partial implementation. Missing creation date and size estimate.
