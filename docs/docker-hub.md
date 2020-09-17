@@ -312,6 +312,88 @@ The `--authorizer` command lines option allows to provide the authorizer class S
 
 **Since: 2.3**
 
+## JMX parameters
+
+JMX Scylla service is initialized from the `/scylla-jmx-service.sh` on
+container startup. By default the script uses `/etc/sysconfig/scylla-jmx`
+to read default configuration. It then can be overridden by setting
+an environmental parameters.
+
+An example:
+
+    docker run -d -e "SCYLLA_JMX_ADDR=-ja 0.0.0.0" -e SCYLLA_JMX_REMOTE=-r --publish 7199:7199 scylladb/scylla
+
+### SCYLLA_JMX_PORT
+
+Scylla JMX listening port.
+
+Default value:
+
+    SCYLLA_JMX_PORT="-jp 7199"
+
+### SCYLLA_API_PORT
+
+Scylla API port for JMX to connect to.
+
+Default value:
+
+    SCYLLA_API_PORT="-p 10000"
+
+### SCYLLA_API_ADDR
+
+Scylla API address for JMX to connect to.
+
+Default value:
+
+    SCYLLA_API_ADDR="-a localhost"
+
+### SCYLLA_JMX_ADDR
+
+JMX address to bind on.
+
+Default value:
+
+    SCYLLA_JMX_ADDR="-ja localhost"
+
+For example, it is possible to make JMX available to the outer world
+by changing its bind address to `0.0.0.0`:
+
+    docker run -d -e "SCYLLA_JMX_ADDR=-ja 0.0.0.0" -e SCYLLA_JMX_REMOTE=-r --publish 7199:7199 scylladb/scylla
+
+`cassandra-stress` requires direct access to the JMX.
+
+### SCYLLA_JMX_FILE
+
+A JMX service configuration file path.
+
+Example value:
+
+    SCYLLA_JMX_FILE="-cf /etc/scylla.d/scylla-user.cfg"
+
+### SCYLLA_JMX_LOCAL
+
+The location of the JMX executable.
+
+Example value:
+
+    SCYLLA_JMX_LOCAL="-l /opt/scylladb/jmx
+
+### SCYLLA_JMX_REMOTE
+
+Allow JMX to run remotely.
+
+Example value:
+
+    SCYLLA_JMX_REMOTE="-r"
+
+### SCYLLA_JMX_DEBUG
+
+Enable debugger.
+
+Example value:
+
+    SCYLLA_JMX_DEBUG="-d"
+
 ## Related Links
 
 * [Best practices for running Scylla on docker](http://docs.scylladb.com/procedures/best_practices_scylla_on_docker/)
