@@ -2813,15 +2813,17 @@ future<> storage_service::do_update_pending_ranges() {
 }
 
 future<> storage_service::update_pending_ranges() {
-    return get_storage_service().invoke_on(0, [] (auto& ss){
-        return ss._update_pending_ranges_action.trigger_later().then([s = ss.shared_from_this()] { });
-    });
+    assert(this_shard_id() == 0);
+    return _update_pending_ranges_action.trigger_later().then([self = shared_from_this()] { });
 }
 
 future<> storage_service::keyspace_changed(const sstring& ks_name) {
     // Update pending ranges since keyspace can be changed after we calculate pending ranges.
-    return update_pending_ranges().handle_exception([ks_name] (auto ep) {
+    return get_storage_service().invoke_on(0, [ks_name] (auto& ss) mutable {
+    // FIXME: reindent in a following patch
+    return ss.update_pending_ranges().handle_exception([ks_name] (auto ep) {
         slogger.warn("Failed to update pending ranges for ks = {}: {}", ks_name, ep);
+    });
     });
 }
 
