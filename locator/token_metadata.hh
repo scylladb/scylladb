@@ -247,6 +247,13 @@ public:
     void del_replacing_endpoint(inet_address existing_node);
 
     /**
+     * Create a full copy of token_metadata using asynchronous continuations.
+     * The caller must ensure that the cloned object will not change if
+     * the function yields.
+     */
+    future<token_metadata> clone_async() const noexcept;
+
+    /**
      * Create a copy of TokenMetadata with only tokenToEndpointMap. That is, pending ranges,
      * bootstrap tokens and leaving endpoints are not included in the copy.
      */

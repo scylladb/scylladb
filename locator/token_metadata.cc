@@ -75,13 +75,18 @@ private:
 
     long _ring_version = 0;
 
+    // Note: if any member is added to this class
+    // clone_async() must be updated to copy that member.
+
     void sort_tokens();
 
     using tokens_iterator = tokens_iterator_impl;
 
 public:
     token_metadata_impl(std::unordered_map<token, inet_address> token_to_endpoint_map, std::unordered_map<inet_address, utils::UUID> endpoints_map, topology topology);
-    token_metadata_impl() {};
+    token_metadata_impl() noexcept {};
+    token_metadata_impl(const token_metadata_impl&) = default;
+    token_metadata_impl(token_metadata_impl&&) noexcept = default;
     const std::vector<token>& sorted_tokens() const;
     void update_normal_token(token token, inet_address endpoint);
     void update_normal_tokens(std::unordered_set<token> tokens, inet_address endpoint);
@@ -372,6 +377,13 @@ public:
     private final AtomicReference<TokenMetadata> cachedTokenMap = new AtomicReference<TokenMetadata>();
 #endif
 public:
+
+    /**
+     * Create a full copy of token_metadata_impl using asynchronous continuations.
+     * The caller must ensure that the cloned object will not change if
+     * the function yields.
+     */
+    future<token_metadata_impl> clone_async() const noexcept;
 
     /**
      * Create a copy of TokenMetadata with only tokenToEndpointMap. That is, pending ranges,
@@ -938,6 +950,36 @@ token_metadata_impl::ring_range(const token& start, bool include_min) const {
 token_metadata_impl::token_metadata_impl(std::unordered_map<token, inet_address> token_to_endpoint_map, std::unordered_map<inet_address, utils::UUID> endpoints_map, topology topology) :
     _token_to_endpoint_map(token_to_endpoint_map), _endpoint_to_host_id_map(endpoints_map), _topology(topology) {
     sort_tokens();
+}
+
+future<token_metadata_impl> token_metadata_impl::clone_async() const noexcept {
+    return do_with(token_metadata_impl(), [this] (token_metadata_impl& ret) {
+        ret._token_to_endpoint_map.reserve(_token_to_endpoint_map.size());
+        return do_for_each(_token_to_endpoint_map, [&ret] (const auto& p) {
+            ret._token_to_endpoint_map.emplace(p);
+        }).then([this, &ret] {
+            ret._endpoint_to_host_id_map = _endpoint_to_host_id_map;
+        }).then([this, &ret] {
+            ret._topology = _topology;
+        }).then([this, &ret] {
+            ret._bootstrap_tokens.reserve(_bootstrap_tokens.size());
+            return do_for_each(_bootstrap_tokens, [&ret] (const auto& p) {
+                ret._bootstrap_tokens.emplace(p);
+            });
+        }).then([this, &ret] {
+            ret._leaving_endpoints = _leaving_endpoints;
+            ret._replacing_endpoints = _replacing_endpoints;
+        }).then([this, &ret] {
+            return do_for_each(_pending_ranges_interval_map,
+                    [this, &ret] (const auto& p) {
+                ret._pending_ranges_interval_map.emplace(p);
+            });
+        }).then([this, &ret] {
+            ret._ring_version = _ring_version;
+            ret._sorted_tokens = _sorted_tokens;
+            return make_ready_future<token_metadata_impl>(std::move(ret));
+        });
+    });
 }
 
 void token_metadata_impl::sort_tokens() {
@@ -1776,6 +1818,12 @@ void token_metadata::add_replacing_endpoint(inet_address existing_node, inet_add
 
 void token_metadata::del_replacing_endpoint(inet_address existing_node) {
     _impl->del_replacing_endpoint(existing_node);
+}
+
+future<token_metadata> token_metadata::clone_async() const noexcept {
+    return _impl->clone_async().then([] (token_metadata_impl impl) {
+        return make_ready_future<token_metadata>(std::make_unique<token_metadata_impl>(std::move(impl)));
+    });
 }
 
 token_metadata
