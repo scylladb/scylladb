@@ -46,7 +46,7 @@ if __name__ == '__main__':
 # Other distributions can use systemd-coredump, so setup it
     else:
         if is_debian_variant():
-            run('apt-get install -y systemd-coredump')
+            apt_install('systemd-coredump')
         conf_data = '''
 [Coredump]
 Storage=external
