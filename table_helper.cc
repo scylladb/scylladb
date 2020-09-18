@@ -57,7 +57,7 @@ future<> table_helper::setup_table(cql3::query_processor& qp) const {
     return service::get_local_migration_manager().announce_new_column_family(b.build(), false).discard_result().handle_exception([this] (auto ep) {});;
 }
 
-future<> table_helper::cache_table_info(service::query_state& qs) {
+future<> table_helper::cache_table_info(cql3::query_processor& qp, service::query_state& qs) {
     if (!_prepared_stmt) {
         // if prepared statement has been invalidated - drop cached pointers
         _insert_stmt = nullptr;
@@ -66,7 +66,6 @@ future<> table_helper::cache_table_info(service::query_state& qs) {
         return now();
     }
 
-    cql3::query_processor& qp = cql3::get_local_query_processor();
     return qp.prepare(_insert_cql, qs.get_client_state(), false)
             .then([this] (shared_ptr<cql_transport::messages::result_message::prepared> msg_ptr) noexcept {
         _prepared_stmt = std::move(msg_ptr->get_prepared());
@@ -106,8 +105,8 @@ future<> table_helper::cache_table_info(service::query_state& qs) {
     });
 }
 
-future<> table_helper::insert(service::query_state& qs, noncopyable_function<cql3::query_options ()> opt_maker) {
-    return cache_table_info(qs).then([this, &qs, opt_maker = std::move(opt_maker)] () mutable {
+future<> table_helper::insert(cql3::query_processor& qp, service::query_state& qs, noncopyable_function<cql3::query_options ()> opt_maker) {
+    return cache_table_info(qp, qs).then([this, &qs, opt_maker = std::move(opt_maker)] () mutable {
         return do_with(opt_maker(), [this, &qs] (auto& opts) {
             opts.prepare(_prepared_stmt->bound_names);
             return _insert_stmt->execute(service::get_storage_proxy().local(), qs, opts);
@@ -115,7 +114,7 @@ future<> table_helper::insert(service::query_state& qs, noncopyable_function<cql
     }).discard_result();
 }
 
-future<> table_helper::setup_keyspace(const sstring& keyspace_name, sstring replication_factor, service::query_state& qs, std::vector<table_helper*> tables) {
+future<> table_helper::setup_keyspace(cql3::query_processor& qp, const sstring& keyspace_name, sstring replication_factor, service::query_state& qs, std::vector<table_helper*> tables) {
     if (this_shard_id() == 0) {
         size_t n = tables.size();
         for (size_t i = 0; i < n; ++i) {
@@ -123,8 +122,7 @@ future<> table_helper::setup_keyspace(const sstring& keyspace_name, sstring repl
                 throw std::invalid_argument("setup_keyspace called with table_helper for different keyspace");
             }
         }
-        return seastar::async([&keyspace_name, replication_factor, &qs, tables] {
-            cql3::query_processor& qp = cql3::get_local_query_processor();
+        return seastar::async([&qp, &keyspace_name, replication_factor, &qs, tables] {
             database& db = qp.db();
 
             // Create a keyspace

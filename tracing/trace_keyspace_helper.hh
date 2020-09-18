@@ -131,7 +131,7 @@ private:
      * @note A caller must ensure that @param events_records is alive till the
      * returned future resolves.
      */
-    future<> apply_events_mutation(lw_shared_ptr<one_session_records> records, std::deque<event_record>& events_records);
+    future<> apply_events_mutation(cql3::query_processor& qp, lw_shared_ptr<one_session_records> records, std::deque<event_record>& events_records);
 
     /**
      * Create a mutation data for a new session record
