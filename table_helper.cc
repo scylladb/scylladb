@@ -26,8 +26,7 @@
 #include "cql3/statements/modification_statement.hh"
 #include "database.hh"
 
-future<> table_helper::setup_table() const {
-    auto& qp = cql3::get_local_query_processor();
+future<> table_helper::setup_table(cql3::query_processor& qp) const {
     auto& db = qp.db();
 
     if (db.has_schema(_keyspace, _name)) {
@@ -67,13 +66,14 @@ future<> table_helper::cache_table_info(service::query_state& qs) {
         return now();
     }
 
-    return cql3::get_local_query_processor().prepare(_insert_cql, qs.get_client_state(), false)
+    cql3::query_processor& qp = cql3::get_local_query_processor();
+    return qp.prepare(_insert_cql, qs.get_client_state(), false)
             .then([this] (shared_ptr<cql_transport::messages::result_message::prepared> msg_ptr) noexcept {
         _prepared_stmt = std::move(msg_ptr->get_prepared());
         shared_ptr<cql3::cql_statement> cql_stmt = _prepared_stmt->statement;
         _insert_stmt = dynamic_pointer_cast<cql3::statements::modification_statement>(cql_stmt);
         _is_fallback_stmt = false;
-    }).handle_exception_type([this, &qs] (exceptions::invalid_request_exception& eptr) {
+    }).handle_exception_type([this, &qs, &qp] (exceptions::invalid_request_exception& eptr) {
         // the non-fallback statement can't be prepared
         if (!_insert_cql_fallback) {
             return make_exception_future(eptr);
@@ -82,17 +82,17 @@ future<> table_helper::cache_table_info(service::query_state& qs) {
             // we have already prepared the fallback statement
             return now();
         }
-        return cql3::get_local_query_processor().prepare(_insert_cql_fallback.value(), qs.get_client_state(), false)
+        return qp.prepare(_insert_cql_fallback.value(), qs.get_client_state(), false)
                 .then([this] (shared_ptr<cql_transport::messages::result_message::prepared> msg_ptr) noexcept {
             _prepared_stmt = std::move(msg_ptr->get_prepared());
             shared_ptr<cql3::cql_statement> cql_stmt = _prepared_stmt->statement;
             _insert_stmt = dynamic_pointer_cast<cql3::statements::modification_statement>(cql_stmt);
             _is_fallback_stmt = true;
         });
-    }).handle_exception([this] (auto eptr) {
+    }).handle_exception([this, &qp] (auto eptr) {
         // One of the possible causes for an error here could be the table that doesn't exist.
         //FIXME: discarded future.
-        (void)this->setup_table().discard_result();
+        (void)this->setup_table(qp).discard_result();
 
         // We throw the bad_column_family exception because the caller
         // expects and accounts this type of errors.
@@ -124,7 +124,8 @@ future<> table_helper::setup_keyspace(const sstring& keyspace_name, sstring repl
             }
         }
         return seastar::async([&keyspace_name, replication_factor, &qs, tables] {
-            auto& db = cql3::get_local_query_processor().db();
+            cql3::query_processor& qp = cql3::get_local_query_processor();
+            database& db = qp.db();
 
             // Create a keyspace
             if (!db.has_keyspace(keyspace_name)) {
@@ -141,7 +142,7 @@ future<> table_helper::setup_keyspace(const sstring& keyspace_name, sstring repl
             // Create tables
             size_t n = tables.size();
             for (size_t i = 0; i < n; ++i) {
-                tables[i]->setup_table().get();
+                tables[i]->setup_table(qp).get();
             }
         });
     } else {

@@ -26,9 +26,11 @@
 #include "service/migration_manager.hh"
 
 
-namespace cql3::statements {
+namespace cql3 {
+class query_processor;
+namespace statements {
 class modification_statement;
-}
+}}
 
 /**
  * \class table_helper
@@ -64,7 +66,7 @@ public:
      * @return A future that resolves when the operation is complete. Any
      *         possible errors are ignored.
      */
-    future<> setup_table() const;
+    future<> setup_table(cql3::query_processor& qp) const;
 
     /**
      * @return a future that resolves when the given t_helper is ready to be used for
