@@ -582,11 +582,6 @@ def hex2list(hex_str):
     return ",".join(cpu_list)
 
 
-def makedirs(name):
-    if not os.path.isdir(name):
-        os.makedirs(name)
-
-
 def rmtree(path):
     if not os.path.islink(path):
         shutil.rmtree(path)

@@ -138,7 +138,7 @@ if __name__ == '__main__':
             f.write(res)
             f.write('\nMAILADDR root')
 
-    makedirs(mount_at)
+    os.makedirs(mount_at, exist_ok=True)
 
     uuid = out(f'blkid -s UUID -o value {fsdev}')
     after = 'local-fs.target'
@@ -163,7 +163,7 @@ WantedBy=multi-user.target
         f.write(unit_data)
     mounts_conf = '/etc/systemd/system/scylla-server.service.d/mounts.conf'
     if not os.path.exists(mounts_conf):
-        makedirs('/etc/systemd/system/scylla-server.service.d/')
+        os.makedirs('/etc/systemd/system/scylla-server.service.d/', exist_ok=True)
         with open(mounts_conf, 'w') as f:
             f.write(f'[Unit]\nRequiresMountsFor={mount_at}\n')
     else:
@@ -183,7 +183,7 @@ WantedBy=multi-user.target
 
     for d in ['coredump', 'data', 'commitlog', 'hints', 'view_hints', 'saved_caches']:
         dpath = '{}/{}'.format(root, d)
-        makedirs(dpath)
+        os.makedirs(dpath, exist_ok=True)
         os.chown(dpath, uid, gid)
 
     if is_debian_variant():

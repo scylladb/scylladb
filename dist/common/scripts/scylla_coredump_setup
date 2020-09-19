@@ -75,7 +75,7 @@ WantedBy=multi-user.target
 '''[1:-1]
             with open('/etc/systemd/system/var-lib-systemd-coredump.mount', 'w') as f:
                 f.write(dot_mount)
-            makedirs('/var/lib/scylla/coredump')
+            os.makedirs('/var/lib/scylla/coredump', exist_ok=True)
             systemd_unit.reload()
             systemd_unit('var-lib-systemd-coredump.mount').enable()
             systemd_unit('var-lib-systemd-coredump.mount').start()
