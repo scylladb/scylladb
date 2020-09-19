@@ -32,7 +32,9 @@ template <> struct hasher_traits<sha256_hasher> { using impl_type = CryptoPP::SH
 template<typename H>
 concept HashUpdater =
     requires(typename hasher_traits<H>::impl_type& h, const CryptoPP::byte* ptr, size_t size) {
-        { h.Update(ptr, size) } noexcept -> std::same_as<void>;
+        // We need Update() not to throw, but it isn't marked noexcept
+        // in CryptoPP source. We'll just hope it doesn't throw.
+        { h.Update(ptr, size) } -> std::same_as<void>;
     };
 
 template <typename T, size_t size>
