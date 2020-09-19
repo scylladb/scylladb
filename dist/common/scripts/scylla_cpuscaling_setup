@@ -53,13 +53,9 @@ if __name__ == '__main__':
         new = re.sub(r'--governor ondemand', '--governor performance', cur, flags=re.MULTILINE)
         with open('/etc/conf.d/cpupower', 'w') as f:
             f.write(new)
-        if is_systemd():
-            cpufreq = systemd_unit('cpupower-frequency-set.service')
-            cpufreq.enable()
-            cpufreq.restart()
-        else:
-            run('rc-update add cpupower default')
-            run('rc-service cpupower start')
+        cpufreq = systemd_unit('cpupower-frequency-set.service')
+        cpufreq.enable()
+        cpufreq.restart()
     if is_amzn2():
         if not shutil.which('cpupower'):
             yum_install('cpupowerutils')

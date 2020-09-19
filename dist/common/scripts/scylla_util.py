@@ -561,15 +561,6 @@ def get_cloud_instance():
         raise Exception("Unknown cloud provider! Only AWS/GCP supported.")
 
 
-def is_systemd():
-    try:
-        with open('/proc/1/comm') as f:
-            s = f.read()
-        return True if re.match(r'^systemd$', s, flags=re.MULTILINE) else False
-    except Exception:
-        return False
-
-
 def hex2list(hex_str):
     hex_str2 = hex_str.replace("0x", "").replace(",", "")
     hex_int = int(hex_str2, 16)

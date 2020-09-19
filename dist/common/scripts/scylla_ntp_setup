@@ -64,18 +64,11 @@ if __name__ == '__main__':
             conf = f.read()
         match = re.search(r'^server\s+(\S*)(\s+\S+)?', conf, flags=re.MULTILINE)
         server = match.group(1)
-        if is_systemd():
-            ntpd = systemd_unit('ntpd.service')
-            ntpd.stop()
-            run('ntpdate {}'.format(server))
-            ntpd.enable()
-            ntpd.start()
-        else:
-            run('rc-service ntpd stop', exception=False)
-            # ignore error, ntpd may able to adjust clock later
-            run('ntpdate {}'.format(server), exception=False)
-            run('rc-update add ntpd default')
-            run('rc-service ntpd start')
+        ntpd = systemd_unit('ntpd.service')
+        ntpd.stop()
+        run('ntpdate {}'.format(server))
+        ntpd.enable()
+        ntpd.start()
 
     if is_redhat_variant():
         if int(distro.major_version()) >= 8:

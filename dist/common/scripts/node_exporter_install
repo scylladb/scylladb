@@ -53,12 +53,8 @@ if __name__ == '__main__':
 
     if is_gentoo_variant():
         run('emerge -uq app-metrics/node_exporter')
-        if is_systemd():
-            print('app-metrics/node_exporter does not install systemd service files, please fill a bug if you need them.')
-            sys.exit(1)
-        else:
-            run('rc-update add node_exporter default')
-            run('rc-service node_exporter start')
+        print('app-metrics/node_exporter does not install systemd service files, please fill a bug if you need them.')
+        sys.exit(1)
     else:
         data = curl('https://github.com/prometheus/node_exporter/releases/download/v{version}/node_exporter-{version}.linux-amd64.tar.gz'.format(version=VERSION), byte=True)
         with open('/var/tmp/node_exporter-{version}.linux-amd64.tar.gz'.format(version=VERSION), 'wb') as f:
@@ -69,11 +65,8 @@ if __name__ == '__main__':
         if node_exporter_p.exists():
             node_exporter_p.unlink()
         os.symlink('{install_dir}/node_exporter-{version}.linux-amd64/node_exporter'.format(install_dir=INSTALL_DIR, version=VERSION), str(node_exporter_p))
-        if is_systemd():
-            node_exporter = systemd_unit('node-exporter.service')
-            node_exporter.enable()
-            node_exporter.start()
-        else:
-            run('service node-exporter start')
+        node_exporter = systemd_unit('node-exporter.service')
+        node_exporter.enable()
+        node_exporter.start()
 
     print('node_exporter successfully installed')
