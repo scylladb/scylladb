@@ -38,7 +38,7 @@ public:
     base64_chars() {
         static_assert(sizeof(to) == 64 + 1);
         for (int i = 0; i < 255; i++) {
-            from[i] = 255; // signal invalid character
+            from[i] = -1; // signal invalid character
         }
         for (int i = 0; i < 64; i++) {
             from[(unsigned) to[i]] = i;
