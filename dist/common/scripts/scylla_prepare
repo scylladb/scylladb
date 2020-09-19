@@ -24,8 +24,66 @@ import os
 import sys
 import glob
 import platform
+import distro
 
 from scylla_util import *
+
+def get_mode_cpuset(nic, mode):
+    mode_cpu_mask = out('/opt/scylladb/scripts/perftune.py --tune net --nic {} --mode {} --get-cpu-mask-quiet'.format(nic, mode))
+    return hex2list(mode_cpu_mask)
+
+def get_cur_cpuset():
+    cfg = sysconfig_parser('/etc/scylla.d/cpuset.conf')
+    cpuset = cfg.get('CPUSET')
+    return re.sub(r'^--cpuset (.+)$', r'\1', cpuset).strip()
+
+def get_tune_mode(nic):
+    if not os.path.exists('/etc/scylla.d/cpuset.conf'):
+        raise Exception('/etc/scylla.d/cpuset.conf not found')
+    cur_cpuset = get_cur_cpuset()
+    mq_cpuset = get_mode_cpuset(nic, 'mq')
+    sq_cpuset = get_mode_cpuset(nic, 'sq')
+    sq_split_cpuset = get_mode_cpuset(nic, 'sq_split')
+
+    if cur_cpuset == mq_cpuset:
+        return 'mq'
+    elif cur_cpuset == sq_cpuset:
+        return 'sq'
+    elif cur_cpuset == sq_split_cpuset:
+        return 'sq_split'
+    else:
+        raise Exception('tune mode not found')
+
+def create_perftune_conf(cfg):
+    """
+    This function checks if a perftune configuration file should be created and
+    creates it if so is the case, returning a boolean accordingly. It returns False
+    if none of the perftune options are enabled in scylla_server file. If the perftune
+    configuration file already exists, none is created.
+    :return boolean indicating if perftune.py should be executed
+    """
+    params = ''
+    if get_set_nic_and_disks_config_value(cfg) == 'yes':
+        nic = cfg.get('IFNAME')
+        if not nic:
+            nic = 'eth0'
+        params += '--tune net --nic "{nic}"'.format(nic=nic)
+
+    if cfg.has_option('SET_CLOCKSOURCE') and cfg.get('SET_CLOCKSOURCE') == 'yes':
+        params += ' --tune-clock'
+
+    if len(params) > 0:
+        if os.path.exists('/etc/scylla.d/perftune.yaml'):
+            return True
+
+        mode = get_tune_mode(nic)
+        params += ' --mode {mode} --dump-options-file'.format(mode=mode)
+        yaml = out('/opt/scylladb/scripts/perftune.py ' + params)
+        with open('/etc/scylla.d/perftune.yaml', 'w') as f:
+            f.write(yaml)
+        return True
+    else:
+        return False
 
 def verify_cpu():
     if platform.machine() == 'x86_64':
@@ -75,7 +133,7 @@ if __name__ == '__main__':
         for n in glob.glob('/sys/devices/system/node/node?'):
             with open('{n}/hugepages/hugepages-2048kB/nr_hugepages'.format(n=n), 'w') as f:
                 f.write(nr_hugepages)
-        if dist_name() == 'Ubuntu':
+        if distro.name() == 'Ubuntu':
             run('hugeadm --create-mounts')
     else:
         try:

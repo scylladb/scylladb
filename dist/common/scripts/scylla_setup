@@ -171,6 +171,11 @@ def warn_offline(setup):
 def warn_offline_missing_pkg(setup, pkg):
     colorprint('{red}{setup} disabled by default, since {pkg} not available.{nocolor}', setup=setup, pkg=pkg)
 
+def current_umask():
+    current = os.umask(0)
+    os.umask(current)
+    return current
+
 if __name__ == '__main__':
     if not is_nonroot() and os.getuid() > 0:
         print('Requires root permission.')
@@ -352,10 +357,7 @@ if __name__ == '__main__':
     enable_service = interactive_ask_service('Do you want the Scylla server service to automatically start when the Scylla node boots?', 'Yes - Scylla server service automatically starts on Scylla node boot. No - skips this step. Note you will have to start the Scylla Server service manually.', enable_service)
     args.no_enable_service = not enable_service
     if enable_service:
-        if is_systemd():
-            systemd_unit('scylla-server.service').enable()
-        elif is_gentoo_variant():
-            run('rc-update add scylla-server default')
+        systemd_unit('scylla-server.service').enable()
 
     if not is_nonroot():
         if not os.path.exists('/etc/scylla.d/housekeeping.cfg'):
@@ -364,19 +366,17 @@ if __name__ == '__main__':
             if version_check:
                 with open('/etc/scylla.d/housekeeping.cfg', 'w') as f:
                     f.write('[housekeeping]\ncheck-version: True\n')
-                if is_systemd():
-                    systemd_unit('scylla-housekeeping-daily.timer').unmask()
-                    systemd_unit('scylla-housekeeping-restart.timer').unmask()
+                systemd_unit('scylla-housekeeping-daily.timer').unmask()
+                systemd_unit('scylla-housekeeping-restart.timer').unmask()
             else:
                 with open('/etc/scylla.d/housekeeping.cfg', 'w') as f:
                     f.write('[housekeeping]\ncheck-version: False\n')
-                if is_systemd():
-                    hk_daily = systemd_unit('scylla-housekeeping-daily.timer')
-                    hk_daily.mask()
-                    hk_daily.stop()
-                    hk_restart = systemd_unit('scylla-housekeeping-restart.timer')
-                    hk_restart.mask()
-                    hk_restart.stop()
+                hk_daily = systemd_unit('scylla-housekeeping-daily.timer')
+                hk_daily.mask()
+                hk_daily.stop()
+                hk_restart = systemd_unit('scylla-housekeeping-restart.timer')
+                hk_restart.mask()
+                hk_restart.stop()
 
         cur_version=out('scylla --version', exception=False)
         if len(cur_version) > 0:

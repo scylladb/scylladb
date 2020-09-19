@@ -491,98 +491,6 @@ class aws_instance:
 
 
 
-# Regular expression helpers
-# non-advancing comment matcher
-_nocomment = r"^\s*(?!#)"
-# non-capturing grouping
-_scyllaeq = r"(?:\s*|=)"
-_cpuset = r"(?:\s*--cpuset" + _scyllaeq + r"(?P<cpuset>\d+(?:[-,]\d+)*))"
-_smp = r"(?:\s*--smp" + _scyllaeq + r"(?P<smp>\d+))"
-
-
-def _reopt(s):
-    return s + r"?"
-
-
-def is_developer_mode():
-    f = open(etcdir() + "/scylla.d/dev-mode.conf", "r")
-    pattern = re.compile(_nocomment + r".*developer-mode" + _scyllaeq + "(1|true)")
-    return len([x for x in f if pattern.match(x)]) >= 1
-
-
-class scylla_cpuinfo:
-    """Class containing information about how Scylla sees CPUs in this machine.
-    Information that can be probed include in which hyperthreads Scylla is configured
-    to run, how many total threads exist in the system, etc"""
-
-    def __parse_cpuset(self):
-        f = open(etcdir() + "/scylla.d/cpuset.conf", "r")
-        pattern = re.compile(_nocomment + r"CPUSET=\s*\"" + _reopt(_cpuset) + _reopt(_smp) + "\s*\"")
-        grp = [pattern.match(x) for x in f.readlines() if pattern.match(x)]
-        if not grp:
-            d = {"cpuset": None, "smp": None}
-        else:
-            # if more than one, use last
-            d = grp[-1].groupdict()
-        actual_set = set()
-        if d["cpuset"]:
-            groups = d["cpuset"].split(",")
-            for g in groups:
-                ends = [int(x) for x in g.split("-")]
-                actual_set = actual_set.union(set(range(ends[0], ends[-1] + 1)))
-            d["cpuset"] = actual_set
-        if d["smp"]:
-            d["smp"] = int(d["smp"])
-        self._cpu_data = d
-
-    def __system_cpus(self):
-        cur_proc = -1
-        f = open("/proc/cpuinfo", "r")
-        results = {}
-        for line in f:
-            if line == '\n':
-                continue
-            key, value = [x.strip() for x in line.split(":")]
-            if key == "processor":
-                cur_proc = int(value)
-                results[cur_proc] = {}
-            results[cur_proc][key] = value
-        return results
-
-    def __init__(self):
-        self.__parse_cpuset()
-        self._cpu_data["system"] = self.__system_cpus()
-
-    def system_cpuinfo(self):
-        """Returns parsed information about CPUs in the system"""
-        return self._cpu_data["system"]
-
-    def system_nr_threads(self):
-        """Returns the number of threads available in the system"""
-        return len(self._cpu_data["system"])
-
-    def system_nr_cores(self):
-        """Returns the number of cores available in the system"""
-        return len(set([x['core id'] for x in list(self._cpu_data["system"].values())]))
-
-    def cpuset(self):
-        """Returns the current cpuset Scylla is configured to use. Returns None if no constraints exist"""
-        return self._cpu_data["cpuset"]
-
-    def smp(self):
-        """Returns the explicit smp configuration for Scylla, returns None if no constraints exist"""
-        return self._cpu_data["smp"]
-
-    def nr_shards(self):
-        """How many shards will Scylla use in this machine"""
-        if self._cpu_data["smp"]:
-            return self._cpu_data["smp"]
-        elif self._cpu_data["cpuset"]:
-            return len(self._cpu_data["cpuset"])
-        else:
-            return len(self._cpu_data["system"])
-
-
 # When a CLI tool is not installed, use relocatable CLI tool provided by Scylla
 scylla_env = os.environ.copy()
 scylla_env['PATH'] =  '{}:{}'.format(scyllabindir(), scylla_env['PATH'])
@@ -616,14 +524,8 @@ def is_redhat_variant():
     d = get_id_like() if get_id_like() else distro.id()
     return ('rhel' in d) or ('fedora' in d) or ('oracle') in d
 
-def is_amzn2():
-    return ('amzn' in distro.id()) and ('2' in distro.version())
-
 def is_gentoo_variant():
     return ('gentoo' in distro.id())
-
-def redhat_version():
-    return distro.version()
 
 
 def get_text_from_path(fpath):
@@ -656,15 +558,6 @@ def get_cloud_instance():
         raise Exception("Unknown cloud provider! Only AWS/GCP supported.")
 
 
-def is_systemd():
-    try:
-        with open('/proc/1/comm') as f:
-            s = f.read()
-        return True if re.match(r'^systemd$', s, flags=re.MULTILINE) else False
-    except Exception:
-        return False
-
-
 def hex2list(hex_str):
     hex_str2 = hex_str.replace("0x", "").replace(",", "")
     hex_int = int(hex_str2, 16)
@@ -684,30 +577,6 @@ def hex2list(hex_str):
                 i = j
         i += 1
     return ",".join(cpu_list)
-
-
-def makedirs(name):
-    if not os.path.isdir(name):
-        os.makedirs(name)
-
-
-def rmtree(path):
-    if not os.path.islink(path):
-        shutil.rmtree(path)
-    else:
-        os.remove(path)
-
-def current_umask():
-    current = os.umask(0)
-    os.umask(current)
-    return current
-
-def dist_name():
-    return distro.name()
-
-
-def dist_ver():
-    return distro.version()
 
 
 SYSTEM_PARTITION_UUIDS = [
@@ -745,11 +614,6 @@ def colorprint(msg, **kwargs):
     print(msg.format(**fmt))
 
 
-def get_mode_cpuset(nic, mode):
-    mode_cpu_mask = out('/opt/scylladb/scripts/perftune.py --tune net --nic {} --mode {} --get-cpu-mask-quiet'.format(nic, mode))
-    return hex2list(mode_cpu_mask)
-
-
 def parse_scylla_dirs_with_default(conf='/etc/scylla/scylla.yaml'):
     y = yaml.safe_load(open(conf))
     if 'workdir' not in y or not y['workdir']:
@@ -771,19 +635,7 @@ def get_scylla_dirs():
     Returns a list of scylla directories configured in /etc/scylla/scylla.yaml.
     Verifies that mandatory parameters are set.
     """
-    scylla_yaml_name = '/etc/scylla/scylla.yaml'
-    y = yaml.safe_load(open(scylla_yaml_name))
-
-    # Check that mandatory fields are set
-    if 'workdir' not in y or not y['workdir']:
-        y['workdir'] = datadir()
-    if 'data_file_directories' not in y or \
-            not y['data_file_directories'] or \
-            not len(y['data_file_directories']) or \
-            not " ".join(y['data_file_directories']).strip():
-        y['data_file_directories'] = [os.path.join(y['workdir'], 'data')]
-    if 'commitlog_directory' not in y or not y['commitlog_directory']:
-        y['commitlog_directory'] = os.path.join(y['workdir'], 'commitlog')
+    y = parse_scylla_dirs_with_default()
 
     dirs = []
     dirs.extend(y['data_file_directories'])
@@ -802,87 +654,11 @@ def perftune_base_command():
     return '/opt/scylladb/scripts/perftune.py {}'.format(disk_tune_param)
 
 
-def get_cur_cpuset():
-    cfg = sysconfig_parser('/etc/scylla.d/cpuset.conf')
-    cpuset = cfg.get('CPUSET')
-    return re.sub(r'^--cpuset (.+)$', r'\1', cpuset).strip()
-
-
-def get_tune_mode(nic):
-    if not os.path.exists('/etc/scylla.d/cpuset.conf'):
-        raise Exception('/etc/scylla.d/cpuset.conf not found')
-    cur_cpuset = get_cur_cpuset()
-    mq_cpuset = get_mode_cpuset(nic, 'mq')
-    sq_cpuset = get_mode_cpuset(nic, 'sq')
-    sq_split_cpuset = get_mode_cpuset(nic, 'sq_split')
-
-    if cur_cpuset == mq_cpuset:
-        return 'mq'
-    elif cur_cpuset == sq_cpuset:
-        return 'sq'
-    elif cur_cpuset == sq_split_cpuset:
-        return 'sq_split'
-    else:
-        raise Exception('tune mode not found')
-
-
-def create_perftune_conf(cfg):
-    """
-    This function checks if a perftune configuration file should be created and
-    creates it if so is the case, returning a boolean accordingly. It returns False
-    if none of the perftune options are enabled in scylla_server file. If the perftune
-    configuration file already exists, none is created.
-    :return boolean indicating if perftune.py should be executed
-    """
-    params = ''
-    if get_set_nic_and_disks_config_value(cfg) == 'yes':
-        nic = cfg.get('IFNAME')
-        if not nic:
-            nic = 'eth0'
-        params += '--tune net --nic "{nic}"'.format(nic=nic)
-
-    if cfg.has_option('SET_CLOCKSOURCE') and cfg.get('SET_CLOCKSOURCE') == 'yes':
-        params += ' --tune-clock'
-
-    if len(params) > 0:
-        if os.path.exists('/etc/scylla.d/perftune.yaml'):
-            return True
-
-        mode = get_tune_mode(nic)
-        params += ' --mode {mode} --dump-options-file'.format(mode=mode)
-        yaml = out('/opt/scylladb/scripts/perftune.py ' + params)
-        with open('/etc/scylla.d/perftune.yaml', 'w') as f:
-            f.write(yaml)
-        return True
-    else:
-        return False
-
 def is_valid_nic(nic):
     if len(nic) == 0:
         return False
     return os.path.exists('/sys/class/net/{}'.format(nic))
 
-# Remove this when we do not support SET_NIC configuration value anymore
-
-
-def get_set_nic_and_disks_config_value(cfg):
-    """
-    Get the SET_NIC_AND_DISKS configuration value.
-    Return the SET_NIC configuration value if SET_NIC_AND_DISKS is not found (old releases case).
-    :param cfg: sysconfig_parser object
-    :return configuration value
-    :except If the configuration value is not found
-    """
-
-    # Sanity check
-    if cfg.has_option('SET_NIC_AND_DISKS') and cfg.has_option('SET_NIC'):
-        raise Exception("Only one of 'SET_NIC_AND_DISKS' and 'SET_NIC' is allowed to be present")
-
-    try:
-        return cfg.get('SET_NIC_AND_DISKS')
-    except Exception:
-        # For backwards compatibility
-        return cfg.get('SET_NIC')
 
 def swap_exists():
     swaps = out('swapon --noheadings --raw')

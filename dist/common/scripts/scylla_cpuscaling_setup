@@ -23,7 +23,11 @@
 import os
 import sys
 import shlex
+import distro
 from scylla_util import *
+
+def is_amzn2():
+    return ('amzn' in distro.id()) and ('2' in distro.version())
 
 if __name__ == '__main__':
     if os.getuid() > 0:
@@ -49,13 +53,9 @@ if __name__ == '__main__':
         new = re.sub(r'--governor ondemand', '--governor performance', cur, flags=re.MULTILINE)
         with open('/etc/conf.d/cpupower', 'w') as f:
             f.write(new)
-        if is_systemd():
-            cpufreq = systemd_unit('cpupower-frequency-set.service')
-            cpufreq.enable()
-            cpufreq.restart()
-        else:
-            run('rc-update add cpupower default')
-            run('rc-service cpupower start')
+        cpufreq = systemd_unit('cpupower-frequency-set.service')
+        cpufreq.enable()
+        cpufreq.restart()
     if is_amzn2():
         if not shutil.which('cpupower'):
             yum_install('cpupowerutils')

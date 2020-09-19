@@ -30,6 +30,97 @@ import logging
 import sys
 import scylla_blocktune as blocktune
 
+
+# Regular expression helpers
+# non-advancing comment matcher
+_nocomment = r"^\s*(?!#)"
+# non-capturing grouping
+_scyllaeq = r"(?:\s*|=)"
+_cpuset = r"(?:\s*--cpuset" + _scyllaeq + r"(?P<cpuset>\d+(?:[-,]\d+)*))"
+_smp = r"(?:\s*--smp" + _scyllaeq + r"(?P<smp>\d+))"
+
+
+def _reopt(s):
+    return s + r"?"
+
+
+def is_developer_mode():
+    f = open(etcdir() + "/scylla.d/dev-mode.conf", "r")
+    pattern = re.compile(_nocomment + r".*developer-mode" + _scyllaeq + "(1|true)")
+    return len([x for x in f if pattern.match(x)]) >= 1
+
+class scylla_cpuinfo:
+    """Class containing information about how Scylla sees CPUs in this machine.
+    Information that can be probed include in which hyperthreads Scylla is configured
+    to run, how many total threads exist in the system, etc"""
+
+    def __parse_cpuset(self):
+        f = open(etcdir() + "/scylla.d/cpuset.conf", "r")
+        pattern = re.compile(_nocomment + r"CPUSET=\s*\"" + _reopt(_cpuset) + _reopt(_smp) + "\s*\"")
+        grp = [pattern.match(x) for x in f.readlines() if pattern.match(x)]
+        if not grp:
+            d = {"cpuset": None, "smp": None}
+        else:
+            # if more than one, use last
+            d = grp[-1].groupdict()
+        actual_set = set()
+        if d["cpuset"]:
+            groups = d["cpuset"].split(",")
+            for g in groups:
+                ends = [int(x) for x in g.split("-")]
+                actual_set = actual_set.union(set(range(ends[0], ends[-1] + 1)))
+            d["cpuset"] = actual_set
+        if d["smp"]:
+            d["smp"] = int(d["smp"])
+        self._cpu_data = d
+
+    def __system_cpus(self):
+        cur_proc = -1
+        f = open("/proc/cpuinfo", "r")
+        results = {}
+        for line in f:
+            if line == '\n':
+                continue
+            key, value = [x.strip() for x in line.split(":")]
+            if key == "processor":
+                cur_proc = int(value)
+                results[cur_proc] = {}
+            results[cur_proc][key] = value
+        return results
+
+    def __init__(self):
+        self.__parse_cpuset()
+        self._cpu_data["system"] = self.__system_cpus()
+
+    def system_cpuinfo(self):
+        """Returns parsed information about CPUs in the system"""
+        return self._cpu_data["system"]
+
+    def system_nr_threads(self):
+        """Returns the number of threads available in the system"""
+        return len(self._cpu_data["system"])
+
+    def system_nr_cores(self):
+        """Returns the number of cores available in the system"""
+        return len(set([x['core id'] for x in list(self._cpu_data["system"].values())]))
+
+    def cpuset(self):
+        """Returns the current cpuset Scylla is configured to use. Returns None if no constraints exist"""
+        return self._cpu_data["cpuset"]
+
+    def smp(self):
+        """Returns the explicit smp configuration for Scylla, returns None if no constraints exist"""
+        return self._cpu_data["smp"]
+
+    def nr_shards(self):
+        """How many shards will Scylla use in this machine"""
+        if self._cpu_data["smp"]:
+            return self._cpu_data["smp"]
+        elif self._cpu_data["cpuset"]:
+            return len(self._cpu_data["cpuset"])
+        else:
+            return len(self._cpu_data["system"])
+
 def run_iotune():
             if "SCYLLA_CONF" in os.environ:
                 conf_dir = os.environ["SCYLLA_CONF"]
