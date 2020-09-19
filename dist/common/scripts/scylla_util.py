@@ -527,9 +527,6 @@ def is_redhat_variant():
 def is_gentoo_variant():
     return ('gentoo' in distro.id())
 
-def redhat_version():
-    return distro.version()
-
 
 def get_text_from_path(fpath):
     board_vendor_path = Path(fpath)
@@ -580,13 +577,6 @@ def hex2list(hex_str):
                 i = j
         i += 1
     return ",".join(cpu_list)
-
-
-def rmtree(path):
-    if not os.path.islink(path):
-        shutil.rmtree(path)
-    else:
-        os.remove(path)
 
 
 SYSTEM_PARTITION_UUIDS = [
