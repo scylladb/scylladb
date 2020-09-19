@@ -171,6 +171,11 @@ def warn_offline(setup):
 def warn_offline_missing_pkg(setup, pkg):
     colorprint('{red}{setup} disabled by default, since {pkg} not available.{nocolor}', setup=setup, pkg=pkg)
 
+def current_umask():
+    current = os.umask(0)
+    os.umask(current)
+    return current
+
 if __name__ == '__main__':
     if not is_nonroot() and os.getuid() > 0:
         print('Requires root permission.')

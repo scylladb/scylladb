@@ -23,7 +23,11 @@
 import os
 import sys
 import shlex
+import distro
 from scylla_util import *
+
+def is_amzn2():
+    return ('amzn' in distro.id()) and ('2' in distro.version())
 
 if __name__ == '__main__':
     if os.getuid() > 0:
