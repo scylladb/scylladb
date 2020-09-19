@@ -38,8 +38,8 @@ concept HashUpdater =
     };
 
 template <typename T, size_t size>
-requires HashUpdater<T>
 struct cryptopp_hasher<T, size>::impl {
+    static_assert(HashUpdater<T>);
     using impl_type = typename hasher_traits<T>::impl_type;
 
     impl_type hash{};
