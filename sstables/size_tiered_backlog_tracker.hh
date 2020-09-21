@@ -89,7 +89,7 @@ class size_tiered_backlog_tracker final : public compaction_backlog_tracker::imp
     inflight_component compacted_backlog(const compaction_backlog_tracker::ongoing_compactions& ongoing_compactions) const;
 
     double log4(double x) const {
-        static constexpr double inv_log_4 = 1.0f / std::log(4);
+        double inv_log_4 = 1.0f / std::log(4);
         return log(x) * inv_log_4;
     }
 public:
