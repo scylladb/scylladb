@@ -551,7 +551,7 @@ indexed_table_select_statement::do_execute_base_query(
             concurrency *= 2;
             return proxy.query(_schema, command, std::move(prange), options.get_consistency(), {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state()})
             .then([&ranges_to_vnodes, &merger] (service::storage_proxy::coordinator_query_result qr) {
-                bool is_short_read = qr.query_result->is_short_read();
+                auto is_short_read = qr.query_result->is_short_read();
                 merger(std::move(qr.query_result));
                 return stop_iteration(is_short_read || ranges_to_vnodes.empty());
             });
@@ -627,7 +627,7 @@ indexed_table_select_statement::do_execute_base_query(
                     return std::move(qr.query_result);
                 });
             }, std::move(oneshot_merger)).then([&key_it, key_it_end = std::move(key_it_end), &keys, &merger] (foreign_ptr<lw_shared_ptr<query::result>> result) {
-                bool is_short_read = result->is_short_read();
+                auto is_short_read = result->is_short_read();
                 merger(std::move(result));
                 key_it = key_it_end;
                 return stop_iteration(is_short_read || key_it == keys.end());
