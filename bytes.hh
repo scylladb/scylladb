@@ -56,6 +56,7 @@ struct hash<bytes_view> {
 
 struct fmt_hex {
     bytes_view& v;
+    fmt_hex(bytes_view& v) noexcept : v(v) {}
 };
 
 std::ostream& operator<<(std::ostream& os, const fmt_hex& hex);
