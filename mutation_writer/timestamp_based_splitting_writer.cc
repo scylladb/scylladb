@@ -69,7 +69,7 @@ small_flat_map<Key, Value, Size>::at(const key_type& k) {
     if (auto it = find(k); it != end()) {
         return it->second;
     }
-    throw std::out_of_range();
+    throw std::out_of_range("small_flat_map: did not find key");
 }
 
 template <typename Key, typename Value, size_t Size>
