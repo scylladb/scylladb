@@ -183,7 +183,7 @@ private:
         uint64_t offset = 0;
         uint64_t width = 0;
 
-        enum class state {
+        enum class state_type {
             START_NAME_LENGTH,
             START_NAME_BYTES,
             END_NAME_LENGTH,
@@ -191,7 +191,7 @@ private:
             OFFSET,
             WIDTH,
             ADD_BLOCK,
-        } state = state::START_NAME_LENGTH;
+        } state = state_type::START_NAME_LENGTH;
     };
 
     struct m_parser_context {
@@ -205,7 +205,7 @@ private:
     std::variant<k_l_parser_context, m_parser_context> _ctx;
 
     void process_state(temporary_buffer<char>& data, k_l_parser_context& ctx) {
-        using state_k_l = typename k_l_parser_context::state;
+        using state_k_l = typename k_l_parser_context::state_type;
         // keep running in the loop until we either are out of data or have consumed all the blocks
         while (true) {
             switch (ctx.state) {
@@ -276,7 +276,7 @@ public:
     }
 
     bool non_consuming(const k_l_parser_context& ctx) const {
-        return ctx.state == k_l_parser_context::state::ADD_BLOCK;
+        return ctx.state == k_l_parser_context::state_type::ADD_BLOCK;
     }
 
     bool non_consuming(const m_parser_context& ctx) const {
