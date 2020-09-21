@@ -151,7 +151,7 @@ public:
             return 4L * max_sstable_size_in_bytes;
         }
         double bytes = pow(leveled_fan_out, level) * max_sstable_size_in_bytes;
-        if (bytes > std::numeric_limits<int64_t>::max()) {
+        if (bytes > double(std::numeric_limits<int64_t>::max())) {
             throw std::runtime_error(format("At most {:d} bytes may be in a compaction level; your maxSSTableSize must be absurdly high to compute {:f}", 
                 std::numeric_limits<int64_t>::max(), bytes));
         }
