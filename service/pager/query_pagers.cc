@@ -356,7 +356,7 @@ public:
             _max = _max - row_count;
             _exhausted = (row_count < page_size && !results->is_short_read()) || _max == 0;
 
-            if (!_exhausted || row_count > 0) {
+            if (!_exhausted && row_count > 0) {
                 if (_last_pkey) {
                     update_slice(*_last_pkey);
                 }
