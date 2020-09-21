@@ -206,6 +206,7 @@ public:
     std::tuple<partition_key, std::optional<clustering_key>>
     get_last_partition_and_clustering_key() const {
         auto ps = _v.partitions();
+        assert(!ps.empty());
         auto& p = ps.back();
         auto rs = p.rows();
         return { p.key().value(), !rs.empty() ? rs.back().key() : std::optional<clustering_key>() };
