@@ -3196,6 +3196,14 @@ SEASTAR_TEST_CASE(test_static_multi_cell_static_lists_with_ckey) {
     });
 }
 
+// std::pow() is not constexpr
+static constexpr int constexpr_int_pow(int x, unsigned y) {
+    int ret = 1;
+    for (unsigned i = 0; i < y; ++i) {
+        ret *= x;
+    }
+    return ret;
+}
 
 /**
  * A class to represent a single multy-column slice expression.
@@ -3234,7 +3242,7 @@ public:
     /**
      *  The mapping of tuples is to integers between 0 and this value.
      */
-    static const int total_num_of_values = std::pow(Base,Digits);
+    static const int total_num_of_values = constexpr_int_pow(Base, Digits);
 
     /**
      * Consructor for the testcase
