@@ -510,7 +510,7 @@ public:
     trace_state_ptr(lw_shared_ptr<trace_state> state_ptr)
         : _state_ptr(std::move(state_ptr))
     {}
-    trace_state_ptr(nullptr_t)
+    trace_state_ptr(std::nullptr_t)
         : _state_ptr(nullptr)
     {}
 
