@@ -980,8 +980,6 @@ class node final {
 
     using node_or_data = node_or_data_or_tree;
 
-    friend data::data(data&&);
-
     [[no_unique_address]] utils::neat_id<Debug == with_debug::yes> id;
 
     unsigned short _num_keys;
