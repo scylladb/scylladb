@@ -1429,13 +1429,13 @@ void view_builder::reshard(
                 // multiple non-contiguous ranges. To avoid the complexity of dealing with more
                 // than one range, we'll just take one of the intersections.
                 auto [bottom_range, top_range] = other_range.unwrap();
-                if (auto bottom_int = my_range->intersection(nonwrapping_range(std::move(bottom_range)), dht::token_comparator())) {
+                if (auto bottom_int = my_range->intersection(nonwrapping_interval(std::move(bottom_range)), dht::token_comparator())) {
                     my_range = std::move(bottom_int);
                 } else {
-                    my_range = my_range->intersection(nonwrapping_range(std::move(top_range)), dht::token_comparator());
+                    my_range = my_range->intersection(nonwrapping_interval(std::move(top_range)), dht::token_comparator());
                 }
             } else {
-                my_range = my_range->intersection(nonwrapping_range(std::move(other_range)), dht::token_comparator());
+                my_range = my_range->intersection(nonwrapping_interval(std::move(other_range)), dht::token_comparator());
             }
         }
     }
