@@ -234,7 +234,7 @@ public:
 
     using node = class node<Key, T, Less, NodeSize, Search, Debug>;
     using data = class data<Key, T, Less, NodeSize, Search, Debug>;
-    using kid_index = node::kid_index;
+    using kid_index = typename node::kid_index;
 
 private:
 
