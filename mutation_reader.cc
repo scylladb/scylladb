@@ -1029,6 +1029,9 @@ private:
     bool _reader_created = false;
     bool _drop_partition_start = false;
     bool _drop_static_row = false;
+    // Trim range tombstones on the start of the buffer to the start of the read
+    // range (_next_position_in_partition). Set after reader recreation.
+    bool _trim_range_tombstones = false;
     position_in_partition::tri_compare _tri_cmp;
 
     std::optional<dht::decorated_key> _last_pkey;
@@ -1051,6 +1054,7 @@ private:
     flat_mutation_reader recreate_reader();
     flat_mutation_reader resume_or_create_reader();
     bool should_drop_fragment(const mutation_fragment& mf);
+    bool maybe_trim_range_tombstone(mutation_fragment& mf) const;
     future<> do_fill_buffer(flat_mutation_reader& reader, db::timeout_clock::time_point timeout);
     future<> fill_buffer(flat_mutation_reader& reader, db::timeout_clock::time_point timeout);
 
@@ -1194,6 +1198,8 @@ flat_mutation_reader evictable_reader::recreate_reader() {
         range = &*_range_override;
     }
 
+    _trim_range_tombstones = true;
+
     return _ms.make_reader(
             _schema,
             _permit,
@@ -1232,6 +1238,28 @@ bool evictable_reader::should_drop_fragment(const mutation_fragment& mf) {
     return false;
 }
 
+bool evictable_reader::maybe_trim_range_tombstone(mutation_fragment& mf) const {
+    // We either didn't read a partition yet (evicted after fast-forwarding) or
+    // didn't stop in a clustering region. We don't need to trim range
+    // tombstones in either case.
+    if (!_last_pkey || _next_position_in_partition.region() != partition_region::clustered) {
+        return false;
+    }
+    if (!mf.is_range_tombstone()) {
+        return false;
+    }
+
+    if (_tri_cmp(mf.position(), _next_position_in_partition) >= 0) {
+        return false; // rt in range, no need to trim
+    }
+
+    auto& rt = mf.as_mutable_range_tombstone();
+
+    rt.set_start(*_schema, position_in_partition_view::before_key(_next_position_in_partition));
+
+    return true;
+}
+
 future<> evictable_reader::do_fill_buffer(flat_mutation_reader& reader, db::timeout_clock::time_point timeout) {
     if (!_drop_partition_start && !_drop_static_row) {
         return reader.fill_buffer(timeout);
@@ -1250,6 +1278,11 @@ future<> evictable_reader::fill_buffer(flat_mutation_reader& reader, db::timeout
     return do_fill_buffer(reader, timeout).then([this, &reader, timeout] {
         if (reader.is_buffer_empty()) {
             return make_ready_future<>();
+        }
+        while (_trim_range_tombstones && !reader.is_buffer_empty()) {
+            auto mf = reader.pop_mutation_fragment();
+            _trim_range_tombstones = maybe_trim_range_tombstone(mf);
+            push_mutation_fragment(std::move(mf));
         }
         reader.move_buffer_content_to(*this);
         auto stop = [this, &reader] {
@@ -1291,7 +1324,13 @@ future<> evictable_reader::fill_buffer(flat_mutation_reader& reader, db::timeout
             if (reader.is_buffer_empty()) {
                 return do_fill_buffer(reader, timeout);
             }
-            push_mutation_fragment(reader.pop_mutation_fragment());
+            if (_trim_range_tombstones) {
+                auto mf = reader.pop_mutation_fragment();
+                _trim_range_tombstones = maybe_trim_range_tombstone(mf);
+                push_mutation_fragment(std::move(mf));
+            } else {
+                push_mutation_fragment(reader.pop_mutation_fragment());
+            }
             return make_ready_future<>();
         });
     }).then([this, &reader] {
