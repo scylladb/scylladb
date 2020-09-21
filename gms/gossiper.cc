@@ -1984,6 +1984,11 @@ future<> gossiper::add_local_application_state(std::list<std::pair<application_s
 future<> gossiper::do_stop_gossiping() {
     if (!is_enabled()) {
         logger.info("gossip is already stopped");
+        // Verbs might have been registered by do_shadow_round(), but
+        // gossiper itself was not enabled after it...
+        if (_ms_registered) {
+            return get_gossiper().invoke_on_all(&gossiper::uninit_messaging_service_handler);
+        }
         return make_ready_future<>();
     }
     return seastar::async([this, g = this->shared_from_this()] {
