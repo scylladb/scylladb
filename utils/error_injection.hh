@@ -46,8 +46,6 @@ public:
     : runtime_error{err_name} { }
 };
 
-inline auto& get_local_injector();
-
 extern logging::logger errinj_logger;
 
 /**
@@ -111,6 +109,7 @@ extern logging::logger errinj_logger;
 
 template <bool injection_enabled>
 class error_injection {
+    inline static thread_local error_injection _local;
     using handler_fun = std::function<void()>;
 
     // String cross-type comparator
@@ -265,21 +264,21 @@ public:
 
     future<> enable_on_all(const std::string_view& injection_name, bool one_shot = false) {
         return smp::invoke_on_all([injection_name = sstring(injection_name), one_shot] {
-            auto& errinj = utils::get_local_injector();
+            auto& errinj = _local;
             errinj.enable(injection_name, one_shot);
         });
     }
 
     static future<> disable_on_all(const std::string_view& injection_name) {
         return smp::invoke_on_all([injection_name = sstring(injection_name)] {
-            auto& errinj = utils::get_local_injector();
+            auto& errinj = _local;
             errinj.disable(injection_name);
         });
     }
 
     static future<> disable_on_all() {
         return smp::invoke_on_all([] {
-            auto& errinj = utils::get_local_injector();
+            auto& errinj = _local;
             errinj.disable_all();
         });
     }
@@ -289,16 +288,20 @@ public:
         // so returning the list from the current shard will do.
         // In future different shards may have different enabled sets,
         // in which case we may want to extend the API.
-        auto& errinj = utils::get_local_injector();
+        auto& errinj = _local;
         return errinj.enabled_injections();
     }
 
+    static error_injection& get_local() {
+        return _local;
+    }
 };
 
 
 // no-op, should be optimized away
 template <>
 class error_injection<false> {
+    static thread_local error_injection _local;
     using handler_fun = std::function<void()>;
 public:
     bool enter(const std::string_view& name) const {
@@ -372,15 +375,20 @@ public:
 
     [[gnu::always_inline]]
     static std::vector<sstring> enabled_injections_on_all() { return {}; }
+
+    static error_injection& get_local() {
+        return _local;
+    }
 };
 
-inline auto& get_local_injector() {
 #ifdef SCYLLA_ENABLE_ERROR_INJECTION
-    thread_local error_injection<true> local_injector;        // debug, dev
+using error_injection_type = error_injection<true>;        // debug, dev
 #else
-    thread_local error_injection<false> local_injector;       // release
+using error_injection_type = error_injection<false>;       // release
 #endif
-    return local_injector;
+
+inline error_injection_type& get_local_injector() {
+    return error_injection_type::get_local();
 }
 
 } // namespace utils

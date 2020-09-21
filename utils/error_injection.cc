@@ -25,4 +25,6 @@ namespace utils {
 
 logging::logger errinj_logger("debug_error_injection");
 
+thread_local error_injection<false> error_injection<false>::_local;
+
 } // namespace utils
