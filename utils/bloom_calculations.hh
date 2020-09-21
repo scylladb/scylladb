@@ -145,10 +145,10 @@ namespace bloom_calculations {
     inline int max_buckets_per_element(long num_elements) {
         num_elements = std::max(1l, num_elements);
 
-        double v = std::numeric_limits<long>::max() - EXCESS;
+        auto v = std::numeric_limits<long>::max() - EXCESS;
         v = v / num_elements;
 
-        if (v < 1.0) {
+        if (v < 1) {
             throw exceptions::unsupported_operation_exception(format("Cannot compute probabilities for {:d} elements.", num_elements));
         }
         return std::min(probs.size() - 1, size_t(v));
