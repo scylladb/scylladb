@@ -1800,7 +1800,7 @@ with open(buildfile_tmp, 'w') as f:
         build dist-server: phony dist-server-tar dist-server-rpm dist-server-deb
 
         rule build-submodule-reloc
-          command = cd $reloc_dir && ./reloc/build_reloc.sh --nodeps $args
+          command = cd $reloc_dir && ./reloc/build_reloc.sh --version $$(<../../build/SCYLLA-PRODUCT-FILE)-$$(<../../build/SCYLLA-VERSION-FILE)-$$(<../../build/SCYLLA-RELEASE-FILE) --nodeps $args
         rule build-submodule-rpm
           command = cd $dir && ./reloc/build_rpm.sh --reloc-pkg $artifact
         rule build-submodule-deb
