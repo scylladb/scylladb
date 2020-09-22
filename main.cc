@@ -1066,7 +1066,7 @@ int main(int ac, char** av) {
             ss.join_cluster().get();
 
             supervisor::notify("starting tracing");
-            tracing::tracing::start_tracing().get();
+            tracing::tracing::start_tracing(qp).get();
 
             startlog.info("SSTable data integrity checker is {}.",
                     cfg->enable_sstable_data_integrity_check() ? "enabled" : "disabled");
