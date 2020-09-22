@@ -357,10 +357,8 @@ def test_get_records(dynamodb, dynamodbstreams):
             while iterators:
                 iter = iterators.pop(0)
                 response = dynamodbstreams.get_records(ShardIterator=iter, Limit=1000)
-                next = response['NextShardIterator']
-
-                if next != '':
-                    next_iterators.append(next)
+                if 'NextShardIterator' in response:
+                    next_iterators.append(response['NextShardIterator'])
 
                 records = response.get('Records')
                 # print("Query {} -> {}".format(iter, records))
@@ -850,7 +848,6 @@ def test_streams_no_records(test_table_ss_keys_only, dynamodbstreams):
     shard_id = dynamodbstreams.describe_stream(StreamArn=arn, Limit=1)['StreamDescription']['Shards'][0]['ShardId']
     iter = dynamodbstreams.get_shard_iterator(StreamArn=arn, ShardId=shard_id, ShardIteratorType='LATEST')['ShardIterator']
     response = dynamodbstreams.get_records(ShardIterator=iter)
-    assert 'NextShardIterator' in response
     assert 'Records' in response
     # We expect Records to be empty - there is no data at the LATEST iterator.
     assert response['Records'] == []
@@ -1267,10 +1264,17 @@ def test_streams_closed_read(test_table_ss_keys_only, dynamodbstreams):
             response = dynamodbstreams.get_records(ShardIterator=iter)
             if 'Records' in response and response['Records'] != []:
                 # Found the shard with the data! Test that it only has
-                # one event, and NextShardIterator is missing - indicating
-                # that it is a closed shard.
+                # one event. NextShardIterator should either be missing now,
+                # indicating that it is a closed shard (DynamoDB does this),
+                # or, it may (and currently does in Alternator) return another
+                # and reading from *that* iterator should then tell us that
+                # we reached the end of the shard (i.e., zero results and
+                # missing NextShardIterator).
                 assert len(response['Records']) == 1
-                assert not 'NextShardIterator' in response
+                if 'NextShardIterator' in response:
+                    response = dynamodbstreams.get_records(ShardIterator=response['NextShardIterator'])
+                    assert len(response['Records']) == 0
+                    assert not 'NextShardIterator' in response
                 return
         time.sleep(0.5)
     pytest.fail("timed out")

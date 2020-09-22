@@ -920,6 +920,10 @@ future<executor::request_return_type> executor::get_records(client_state& client
         if (nrecords != 0) {
             // #9642. Set next iterators threshold to > last
             shard_iterator next_iter(iter.shard, *timestamp, false);
+            // Note that here we unconditionally return NextShardIterator,
+            // without checking if maybe we reached the end-of-shard. If the
+            // shard did end, then the next read will have nrecords == 0 and
+            // will notice end end of shard and not return NextShardIterator.
             rjson::set(ret, "NextShardIterator", next_iter);
             _stats.api_operations.get_records_latency.add(std::chrono::steady_clock::now() - start_time);
             return make_ready_future<executor::request_return_type>(make_jsonable(std::move(ret)));
@@ -930,7 +934,10 @@ future<executor::request_return_type> executor::get_records(client_state& client
             auto& shard = iter.shard;            
 
             if (shard.time < ts && ts < high_ts) {
-                rjson::set(ret, "NextShardIterator", "");
+                // The DynamoDB documentation states that when a shard is
+                // closed, reading it until the end has NextShardIterator
+                // "set to null". Our test test_streams_closed_read
+                // confirms that by "null" they meant not set at all.
             } else {
                 // We could have return the same iterator again, but we did
                 // a search from it until high_ts and found nothing, so we
