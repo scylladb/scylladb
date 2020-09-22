@@ -369,6 +369,7 @@ void server_impl::make_me_leader() {
 std::unique_ptr<server> create_server(server_id uuid, std::unique_ptr<rpc> rpc,
     std::unique_ptr<state_machine> state_machine, std::unique_ptr<storage> storage,
     seastar::shared_ptr<failure_detector> failure_detector) {
+    assert(uuid != raft::server_id{utils::UUID(0, 0)});
     return std::make_unique<raft::server_impl>(uuid, std::move(rpc), std::move(state_machine),
         std::move(storage), failure_detector);
 }
