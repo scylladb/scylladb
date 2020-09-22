@@ -234,7 +234,7 @@ public:
 
     using node = class node<Key, T, Less, NodeSize, Search, Debug>;
     using data = class data<Key, T, Less, NodeSize, Search, Debug>;
-    using kid_index = node::kid_index;
+    using kid_index = typename node::kid_index;
 
 private:
 
@@ -979,8 +979,6 @@ class node final {
     };
 
     using node_or_data = node_or_data_or_tree;
-
-    friend data::data(data&&);
 
     [[no_unique_address]] utils::neat_id<Debug == with_debug::yes> id;
 

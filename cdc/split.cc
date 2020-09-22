@@ -80,8 +80,9 @@ using clustered_column_set = std::map<clustering_key, cdc::one_kind_column_set, 
 
 template<typename Container>
 concept EntryContainer = requires(Container& container) {
-    { container.atomic_entries } -> std::same_as<std::vector<atomic_column_update>&>;
-    { container.nonatomic_entries } -> std::same_as<std::vector<nonatomic_column_update>&>;
+    // Parenthesized due to https://bugs.llvm.org/show_bug.cgi?id=45088
+    { (container.atomic_entries) } -> std::same_as<std::vector<atomic_column_update>&>;
+    { (container.nonatomic_entries) } -> std::same_as<std::vector<nonatomic_column_update>&>;
 };
 
 template<EntryContainer Container>

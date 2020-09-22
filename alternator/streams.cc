@@ -77,11 +77,7 @@ struct from_string_helper {
     static ValueType& Set(ValueType& v, T data, typename ValueType::AllocatorType& a) {
         std::ostringstream ss;
         ss << data;
-#if __cplusplus >= 202002L
-        auto s = ss.view();
-#else
         auto s = ss.str();
-#endif
         return v.SetString(s.data(), s.size(), a);
     }
 };

@@ -61,7 +61,7 @@ public:
     updateable_value_base& operator=(const updateable_value_base&);
     updateable_value_base(updateable_value_base&&) noexcept;
     updateable_value_base& operator=(updateable_value_base&&) noexcept;
-    updateable_value_base& operator=(nullptr_t);
+    updateable_value_base& operator=(std::nullptr_t);
 
     friend class updateable_value_source_base;
 };

@@ -354,14 +354,14 @@ SEASTAR_TEST_CASE(test_numeric_casts_in_selection_clause) {
                 auto row = dynamic_cast<cql_transport::messages::result_message::rows&>(*msg).rs().result_set().rows().front();
                 BOOST_CHECK(!row[index]);
             };
-            cmp(0, 1.d);
-            cmp(1, 2.d);
-            cmp(2, 3.d);
-            cmp(3, 4.d);
-            cmp(4, 5.2d);
-            cmp(5, 6.3d);
-            cmp(6, 7.3d);
-            cmp(7, 8.d);
+            cmp(0, 1.);
+            cmp(1, 2.);
+            cmp(2, 3.);
+            cmp(3, 4.);
+            cmp(4, 5.2);
+            cmp(5, 6.3);
+            cmp(6, 7.3);
+            cmp(7, 8.);
             cmp_null(8);
         }
         {
@@ -385,14 +385,14 @@ SEASTAR_TEST_CASE(test_numeric_casts_in_selection_clause) {
                 auto row = dynamic_cast<cql_transport::messages::result_message::rows&>(*msg).rs().result_set().rows().front();
                 BOOST_CHECK(!row[index]);
             };
-            cmp(0, 1.d);
-            cmp(1, 2.d);
-            cmp(2, 3.d);
-            cmp(3, 4.d);
-            cmp(4, 5.2d);
-            cmp(5, 6.3d);
-            cmp(6, 7.3d);
-            cmp(7, 8.d);
+            cmp(0, 1.);
+            cmp(1, 2.);
+            cmp(2, 3.);
+            cmp(3, 4.);
+            cmp(4, 5.2);
+            cmp(5, 6.3);
+            cmp(6, 7.3);
+            cmp(7, 8.);
             cmp_null(8);
         }
         {

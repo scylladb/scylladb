@@ -143,6 +143,9 @@ public:
     multiprecision_int operator-() const {
         return cpp_int(-_v);
     }
+    multiprecision_int operator+(const multiprecision_int& x) const {
+        return cpp_int(_v + x._v);
+    }
     template <typename T>
     multiprecision_int operator+(const T& x) const {
         return cpp_int(_v + maybe_unwrap(x));
@@ -170,6 +173,24 @@ public:
     template <typename T>
     multiprecision_int operator>>(const T& x) const {
         return cpp_int(_v >> maybe_unwrap(x));
+    }
+    bool operator==(const multiprecision_int& x) const {
+        return _v == x._v;
+    }
+    bool operator!=(const multiprecision_int& x) const {
+        return _v != x._v;
+    }
+    bool operator>(const multiprecision_int& x) const {
+        return _v > x._v;
+    }
+    bool operator>=(const multiprecision_int& x) const {
+        return _v >= x._v;
+    }
+    bool operator<(const multiprecision_int& x) const {
+        return _v < x._v;
+    }
+    bool operator<=(const multiprecision_int& x) const {
+        return _v <= x._v;
     }
     template <typename T>
     bool operator==(const T& x) const {

@@ -3189,13 +3189,21 @@ SEASTAR_TEST_CASE(test_static_multi_cell_static_lists_with_ckey) {
             auto msg = e.execute_cql("SELECT slist, v FROM t WHERE p = 1 AND c = 1;").get0();
             auto slist_type = list_type_impl::get_instance(int32_type, true);
             assert_that(msg).is_rows().with_row({
-                { slist_type->decompose(make_list_value(slist_type, list_type_impl::native_type({3}))) },
+                { slist_type->decompose(make_list_value(slist_type, list_type_impl::native_type({data_value(3)}))) },
                 { int32_type->decompose(7) }
             });
         }
     });
 }
 
+// std::pow() is not constexpr
+static constexpr int constexpr_int_pow(int x, unsigned y) {
+    int ret = 1;
+    for (unsigned i = 0; i < y; ++i) {
+        ret *= x;
+    }
+    return ret;
+}
 
 /**
  * A class to represent a single multy-column slice expression.
@@ -3234,7 +3242,7 @@ public:
     /**
      *  The mapping of tuples is to integers between 0 and this value.
      */
-    static const int total_num_of_values = std::pow(Base,Digits);
+    static const int total_num_of_values = constexpr_int_pow(Base, Digits);
 
     /**
      * Consructor for the testcase

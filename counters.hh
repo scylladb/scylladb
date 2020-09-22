@@ -291,7 +291,7 @@ public:
             return *this;
         }
         inserter_iterator& operator=(const counter_shard_view& csv) {
-            return operator=(counter_shard(csv));
+            return this->operator=(counter_shard(csv));
         }
         inserter_iterator& operator++() { return *this; }
         inserter_iterator& operator++(int) { return *this; }

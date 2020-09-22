@@ -390,6 +390,10 @@ class index_reader {
         tombstone tomb;
     };
 
+public: // Otherwise std::optional<index_bound>::emplace() fails, since
+        // it has a constraint std::is_constructible_v<T>, which fails with
+        // private types
+
     // Contains information about index_reader position in the index file
     struct index_bound {
         shared_index_lists::list_ptr current_list;
@@ -402,6 +406,7 @@ class index_reader {
         std::optional<open_rt_marker> end_open_marker;
     };
 
+private:
     index_bound _lower_bound;
     // Upper bound may remain uninitialized
     std::optional<index_bound> _upper_bound;

@@ -83,7 +83,7 @@ updateable_value_base::operator=(updateable_value_base&& v) noexcept {
 }
 
 updateable_value_base&
-updateable_value_base::updateable_value_base::operator=(nullptr_t) {
+updateable_value_base::updateable_value_base::operator=(std::nullptr_t) {
     if (_source) {
         _source->del_ref(this);
         _source = nullptr;

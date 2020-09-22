@@ -32,13 +32,13 @@
 // and the character used in base64 encoding to represent it.
 static class base64_chars {
 public:
-    static constexpr const char* to =
+    static constexpr const char to[] =
             "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     int8_t from[255];
     base64_chars() {
-        static_assert(strlen(to) == 64);
+        static_assert(sizeof(to) == 64 + 1);
         for (int i = 0; i < 255; i++) {
-            from[i] = 255; // signal invalid character
+            from[i] = -1; // signal invalid character
         }
         for (int i = 0; i < 64; i++) {
             from[(unsigned) to[i]] = i;
