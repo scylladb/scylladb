@@ -336,18 +336,18 @@ static size_t get_replication_factor(const sstring& dc,
 }
 
 static bool has_sufficient_replicas(const sstring& dc,
-                std::unordered_map<sstring, std::unordered_set<inet_address>>& dc_replicas,
-                std::unordered_map<sstring, std::unordered_set<inet_address>>& all_endpoints,
+                const std::unordered_map<sstring, std::unordered_set<inet_address>>& dc_replicas,
+                const std::unordered_map<sstring, std::unordered_set<inet_address>>& all_endpoints,
                 const std::unordered_map<sstring, size_t>& datacenters) {
 
-    return dc_replicas[dc].size()
-                    >= std::min(all_endpoints[dc].size(),
+    return dc_replicas.at(dc).size()
+                    >= std::min(all_endpoints.at(dc).size(),
                                     get_replication_factor(dc, datacenters));
 }
 
 static bool has_sufficient_replicas(
-                std::unordered_map<sstring, std::unordered_set<inet_address>>& dc_replicas,
-                std::unordered_map<sstring, std::unordered_set<inet_address>>& all_endpoints,
+                const std::unordered_map<sstring, std::unordered_set<inet_address>>& dc_replicas,
+                const std::unordered_map<sstring, std::unordered_set<inet_address>>& all_endpoints,
                 const std::unordered_map<sstring, size_t>& datacenters) {
 
     for (auto& dc : datacenters | boost::adaptors::map_keys) {
@@ -361,7 +361,7 @@ static bool has_sufficient_replicas(
 }
 
 static std::vector<inet_address> calculate_natural_endpoints(
-                const token& search_token, token_metadata& tm,
+                const token& search_token, const token_metadata& tm,
                 snitch_ptr& snitch,
                 const std::unordered_map<sstring, size_t>& datacenters) {
     //
@@ -393,20 +393,20 @@ static std::vector<inet_address> calculate_natural_endpoints(
         skipped_dc_endpoints[dc_name] = {};
     }
 
-    topology& tp = tm.get_topology();
+    const topology& tp = tm.get_topology();
 
     //
     // all endpoints in each DC, so we can check when we have exhausted all
     // the members of a DC
     //
-    std::unordered_map<sstring,
+    const std::unordered_map<sstring,
                        std::unordered_set<inet_address>>&
         all_endpoints = tp.get_datacenter_endpoints();
     //
     // all racks in a DC so we can check when we have exhausted all racks in a
     // DC
     //
-    std::unordered_map<sstring,
+    const std::unordered_map<sstring,
                        std::unordered_map<sstring,
                                           std::unordered_set<inet_address>>>&
         racks = tp.get_datacenter_racks();
@@ -424,7 +424,7 @@ static std::vector<inet_address> calculate_natural_endpoints(
         sstring dc = snitch->get_datacenter(ep);
 
         auto& seen_racks_dc_set = seen_racks[dc];
-        auto& racks_dc_map = racks[dc];
+        auto& racks_dc_map = racks.at(dc);
         auto& skipped_dc_endpoints_set = skipped_dc_endpoints[dc];
         auto& dc_replicas_dc_set = dc_replicas[dc];
 
@@ -471,7 +471,7 @@ static std::vector<inet_address> calculate_natural_endpoints(
     return std::move(replicas.get_vector());
 }
 
-static void test_equivalence(token_metadata& tm, snitch_ptr& snitch, const std::unordered_map<sstring, size_t>& datacenters) {
+static void test_equivalence(const token_metadata& tm, snitch_ptr& snitch, const std::unordered_map<sstring, size_t>& datacenters) {
     class my_network_topology_strategy : public network_topology_strategy {
     public:
         using network_topology_strategy::network_topology_strategy;
