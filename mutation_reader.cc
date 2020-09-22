@@ -1126,16 +1126,11 @@ void evictable_reader::update_next_position(flat_mutation_reader& reader) {
             _next_position_in_partition = position_in_partition::before_all_clustered_rows();
             break;
         case partition_region::clustered:
-            if (reader.is_buffer_empty()) {
-                _next_position_in_partition = position_in_partition::after_key(last_pos);
-            } else {
-               const auto& next_frag = reader.peek_buffer();
-               if (next_frag.is_end_of_partition()) {
+            if (!reader.is_buffer_empty() && reader.peek_buffer().is_end_of_partition()) {
                    push_mutation_fragment(reader.pop_mutation_fragment());
                    _next_position_in_partition = position_in_partition::for_partition_start();
-               } else {
-                   _next_position_in_partition = position_in_partition(next_frag.position());
-               }
+            } else {
+                _next_position_in_partition = position_in_partition::after_key(last_pos);
             }
             break;
         case partition_region::partition_end:
