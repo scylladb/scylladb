@@ -253,19 +253,23 @@ def find_headers(repodir, excluded_dirs):
 modes = {
     'debug': {
         'cxxflags': '-DDEBUG -DDEBUG_LSA_SANITIZER -DSCYLLA_ENABLE_ERROR_INJECTION',
-        'cxx_ld_flags': '-Wstack-usage=%s' % (1024*40),
+        'cxx_ld_flags': '',
+        'stack-usage-threshold': 1024*40,
     },
     'release': {
         'cxxflags': '',
-        'cxx_ld_flags': '-O3 -ffunction-sections -fdata-sections -Wl,--gc-sections -Wstack-usage=%s' % (1024*13),
+        'cxx_ld_flags': '-O3 -ffunction-sections -fdata-sections -Wl,--gc-sections',
+        'stack-usage-threshold': 1024*13,
     },
     'dev': {
         'cxxflags': '-DSEASTAR_ENABLE_ALLOC_FAILURE_INJECTION -DSCYLLA_ENABLE_ERROR_INJECTION',
-        'cxx_ld_flags': '-O1 -Wstack-usage=%s' % (1024*21),
+        'cxx_ld_flags': '-O1',
+        'stack-usage-threshold': 1024*21,
     },
     'sanitize': {
         'cxxflags': '-DDEBUG -DDEBUG_LSA_SANITIZER -DSCYLLA_ENABLE_ERROR_INJECTION',
-        'cxx_ld_flags': '-Os -Wstack-usage=%s' % (1024*50),
+        'cxx_ld_flags': '-Os',
+        'stack-usage-threshold': 1024*50,
     }
 }
 
@@ -1123,6 +1127,10 @@ optimization_flags = [o
                       if flag_supported(flag=o, compiler=args.cxx)]
 modes['release']['cxx_ld_flags'] += ' ' + ' '.join(optimization_flags)
 
+if flag_supported(flag='-Wstack-usage=4096', compiler=args.cxx):
+    for mode in modes:
+        modes[mode]['cxx_ld_flags'] += f' -Wstack-usage={modes[mode]["stack-usage-threshold"]} -Wno-error=stack-usage='
+
 linker_flags = linker_flags(compiler=args.cxx)
 
 dbgflag = '-g -gz' if args.debuginfo else ''
@@ -1255,8 +1263,6 @@ forced_ldflags += '--build-id=sha1,'
 forced_ldflags += f'--dynamic-linker={dynamic_linker}'
 
 args.user_ldflags = forced_ldflags + ' ' + args.user_ldflags
-
-args.user_cflags += ' -Wno-error=stack-usage='
 
 args.user_cflags += f"-ffile-prefix-map={curdir}=."
 
