@@ -1025,7 +1025,6 @@ class cache_tracker;
 
 class rows_entry {
     using lru_link_type = bi::list_member_hook<bi::link_mode<bi::auto_unlink>>;
-    friend class cache_tracker;
     friend class size_calculator;
     intrusive_set_external_comparator_member_hook _link;
     clustering_key _key;
@@ -1042,8 +1041,13 @@ class rows_entry {
         bool _last_dummy : 1;
         flags() : _before_ck(0), _after_ck(0), _continuous(true), _dummy(false), _last_dummy(false) { }
     } _flags{};
-    friend class mutation_partition;
 public:
+    using container_type = intrusive_set_external_comparator<rows_entry, &rows_entry::_link>;
+    using lru_type = bi::list<rows_entry,
+        bi::member_hook<rows_entry, rows_entry::lru_link_type, &rows_entry::_lru_link>,
+        bi::constant_time_size<false>>; // we need this to have bi::auto_unlink on hooks.
+
+    void unlink_from_lru() noexcept { _lru_link.unlink(); }
     struct last_dummy_tag {};
     explicit rows_entry(clustering_key&& key)
         : _key(std::move(key))
@@ -1103,6 +1107,8 @@ public:
     bool is_last_dummy() const { return _flags._last_dummy; }
     void set_dummy(bool value) { _flags._dummy = value; }
     void set_dummy(is_dummy value) { _flags._dummy = bool(value); }
+    void replace_with(rows_entry&& other) noexcept;
+
     void apply(row_tombstone t) {
         _row.apply(t);
     }
@@ -1231,8 +1237,7 @@ struct mutation_application_stats {
 // in the doc in partition_version.hh.
 class mutation_partition final {
 public:
-    using rows_type = intrusive_set_external_comparator<rows_entry, &rows_entry::_link>;
-    friend class rows_entry;
+    using rows_type = rows_entry::container_type;
     friend class size_calculator;
 private:
     tombstone _tombstone;

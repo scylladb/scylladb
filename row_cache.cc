@@ -156,9 +156,9 @@ void cache_tracker::clear() {
 }
 
 void cache_tracker::touch(rows_entry& e) {
-    if (e._lru_link.is_linked()) { // last dummy may not be linked if evicted.
-        _lru.erase(_lru.iterator_to(e));
-    }
+    // last dummy may not be linked if evicted, but
+    // the unlink_from_lru() handles it
+    e.unlink_from_lru();
     _lru.push_front(e);
 }
 
@@ -174,10 +174,6 @@ void cache_tracker::on_partition_erase() noexcept {
     --_stats.partitions;
     ++_stats.partition_removals;
     allocator().invalidate_references();
-}
-
-void cache_tracker::unlink(rows_entry& row) noexcept {
-    row._lru_link.unlink();
 }
 
 void cache_tracker::on_partition_merge() noexcept {
@@ -1106,7 +1102,7 @@ void row_cache::unlink_from_lru(const dht::decorated_key& dk) {
             if (i != _partitions.end()) {
                 for (partition_version& pv : i->partition().versions_from_oldest()) {
                     for (rows_entry& row : pv.partition().clustered_rows()) {
-                        _tracker.unlink(row);
+                        row.unlink_from_lru();
                     }
                 }
             }
@@ -1243,7 +1239,7 @@ void rows_entry::on_evicted(cache_tracker& tracker) noexcept {
         // so don't remove it, just unlink from the LRU.
         // That dummy is linked in the LRU, because there may be partitions
         // with no regular rows, and we need to track them.
-        _lru_link.unlink();
+        unlink_from_lru();
     } else {
         ++it;
         it->set_continuous(false);
