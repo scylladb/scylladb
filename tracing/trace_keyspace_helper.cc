@@ -241,8 +241,8 @@ trace_keyspace_helper::trace_keyspace_helper(tracing& tr)
     });
 }
 
-future<> trace_keyspace_helper::start(cql3::query_processor& _qp) {
-    cql3::query_processor& qp = cql3::get_local_query_processor();
+future<> trace_keyspace_helper::start(cql3::query_processor& qp) {
+    _qp_anchor = &qp;
     return table_helper::setup_keyspace(qp, KEYSPACE_NAME, "2", _dummy_query_state, { &_sessions, &_sessions_time_idx, &_events, &_slow_query_log, &_slow_query_log_time_idx });
 }
 
@@ -462,7 +462,10 @@ future<> trace_keyspace_helper::flush_one_session_mutations(lw_shared_ptr<one_se
         auto backend_state_ptr = static_cast<trace_keyspace_backend_sesssion_state*>(records->backend_state_ptr.get());
         semaphore& write_sem = backend_state_ptr->write_sem;
         return with_semaphore(write_sem, 1, [this, records, session_record_is_ready, &events_records] {
-            cql3::query_processor& qp = cql3::get_local_query_processor();
+            // This code is inside the _pending_writes gate and the qp pointer
+            // is cleared on ::stop() after the gate is closed.
+            assert(_qp_anchor != nullptr);
+            cql3::query_processor& qp = *_qp_anchor;
             return apply_events_mutation(qp, records, events_records).then([this, &qp, session_record_is_ready, records] {
                 if (session_record_is_ready) {
 

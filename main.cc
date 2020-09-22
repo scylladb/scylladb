@@ -1067,6 +1067,13 @@ int main(int ac, char** av) {
 
             supervisor::notify("starting tracing");
             tracing::tracing::start_tracing(qp).get();
+            /*
+             * FIXME -- tracing is stopped inside drain_on_shutdown, which
+             * is deferred later on. If the start aborts before it, the
+             * tracing will remain started and will continue referencing
+             * the query processor. Nowadays the latter is not stopped
+             * either, but when it will, this place shold be fixed too.
+             */
 
             startlog.info("SSTable data integrity checker is {}.",
                     cfg->enable_sstable_data_integrity_check() ? "enabled" : "disabled");

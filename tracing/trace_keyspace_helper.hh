@@ -66,6 +66,7 @@ private:
     int64_t _slow_query_last_nanos = 0;
     service::query_state _dummy_query_state;
 
+    cql3::query_processor* _qp_anchor;
     table_helper _sessions;
     table_helper _sessions_time_idx;
     table_helper _events;
@@ -91,7 +92,7 @@ public:
     virtual future<> start(cql3::query_processor& qp) override;
 
     virtual future<> stop() override {
-        return _pending_writes.close();
+        return _pending_writes.close().then([this] { _qp_anchor = nullptr; });
     };
 
     virtual void write_records_bulk(records_bulk& bulk) override;
