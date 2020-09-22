@@ -1164,6 +1164,17 @@ pkgs.append('libsystemd')
 
 
 compiler_test_src = '''
+
+// clang pretends to be gcc (defined __GNUC__), so we
+// must check it first
+#ifdef __clang__
+
+#if __clang_major__ < 10
+    #error "MAJOR"
+#endif
+
+#elif defined(__GNUC__)
+
 #if __GNUC__ < 10
     #error "MAJOR"
 #elif __GNUC__ == 10
@@ -1174,6 +1185,12 @@ compiler_test_src = '''
             #error "PATCHLEVEL"
         #endif
     #endif
+#endif
+
+#else
+
+#error "Unrecognized compiler"
+
 #endif
 
 int main() { return 0; }
