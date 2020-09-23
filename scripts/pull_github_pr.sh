@@ -26,13 +26,22 @@ NL=$'\n'
 PR_NUM=$1
 PR_PREFIX=https://api.github.com/repos/scylladb/scylla/pulls
 
+echo "Fetching info on PR #$PR_NUM... "
 PR_DATA=$(curl -s $PR_PREFIX/$PR_NUM)
+MESSAGE=$(jq -r .message <<< $PR_DATA)
+if [ "$MESSAGE" != null ]
+then
+    # Error message, probably "Not Found".
+    echo "$MESSAGE"
+    exit 1
+fi
 PR_TITLE=$(jq -r .title <<< $PR_DATA)
+echo "    $PR_TITLE"
 PR_DESCR=$(jq -r .body <<< $PR_DATA)
 PR_LOGIN=$(jq -r .head.user.login <<< $PR_DATA)
-PR_REPO=$(jq -r .head.repo.html_url <<< $PR_DATA)
-
+echo -n "Fetching full name of author $PR_LOGIN... "
 USER_NAME=$(curl -s "https://api.github.com/users/$PR_LOGIN" | jq -r .name)
+echo "$USER_NAME"
 
 git fetch origin pull/$PR_NUM/head
 
