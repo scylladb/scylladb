@@ -33,7 +33,7 @@ if __name__ == '__main__':
     if not shutil.which('mkfs.xfs'):
         pkg_install('xfsprogs')
 
-    makedirs('/var/tmp/mnt')
+    os.makedirs('/var/tmp/mnt', exist_ok=True)
     run('dd if=/dev/zero of=/var/tmp/kernel-check.img bs=1M count=128', silent=True)
     run('mkfs.xfs /var/tmp/kernel-check.img', silent=True)
     run('mount /var/tmp/kernel-check.img /var/tmp/mnt -o loop', silent=True)
