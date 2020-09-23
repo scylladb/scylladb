@@ -102,14 +102,14 @@ reader_concurrency_semaphore::inactive_read_handle reader_concurrency_semaphore:
     if (_wait_list.empty()) {
         const auto [it, _] = _inactive_reads.emplace(_next_id++, std::move(ir));
         (void)_;
-        ++_inactive_read_stats.population;
+        ++_stats.inactive_reads;
         return inactive_read_handle(*this, it->first);
     }
 
     // The evicted reader will release its permit, hopefully allowing us to
     // admit some readers from the _wait_list.
     ir->evict();
-    ++_inactive_read_stats.permit_based_evictions;
+    ++_stats.permit_based_evictions;
     return inactive_read_handle();
 }
 
@@ -128,7 +128,7 @@ std::unique_ptr<reader_concurrency_semaphore::inactive_read> reader_concurrency_
     if (auto it = _inactive_reads.find(irh._id); it != _inactive_reads.end()) {
         auto ir = std::move(it->second);
         _inactive_reads.erase(it);
-        --_inactive_read_stats.population;
+        --_stats.inactive_reads;
         return ir;
     }
     return {};
@@ -142,8 +142,8 @@ bool reader_concurrency_semaphore::try_evict_one_inactive_read() {
     it->second->evict();
     _inactive_reads.erase(it);
 
-    ++_inactive_read_stats.permit_based_evictions;
-    --_inactive_read_stats.population;
+    ++_stats.permit_based_evictions;
+    --_stats.inactive_reads;
 
     return true;
 }
@@ -164,8 +164,8 @@ future<reader_permit::resource_units> reader_concurrency_semaphore::do_wait_admi
         it = _inactive_reads.erase(it);
         ir->evict();
 
-        ++_inactive_read_stats.permit_based_evictions;
-        --_inactive_read_stats.population;
+        ++_stats.permit_based_evictions;
+        --_stats.inactive_reads;
     }
     if (may_proceed(r)) {
         return make_ready_future<reader_permit::resource_units>(reader_permit::resource_units(*this, r));

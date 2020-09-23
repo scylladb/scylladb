@@ -82,11 +82,15 @@ public:
         }
     };
 
-    struct inactive_read_stats {
+    struct stats {
         // The number of inactive reads evicted to free up permits.
         uint64_t permit_based_evictions = 0;
         // The number of inactive reads currently registered.
-        uint64_t population = 0;
+        uint64_t inactive_reads = 0;
+        // Total number of successful reads executed through this semaphore.
+        uint64_t total_successful_reads = 0;
+        // Total number of failed reads executed through this semaphore.
+        uint64_t total_failed_reads = 0;
     };
 
 private:
@@ -117,7 +121,7 @@ private:
     std::function<void()> _prethrow_action;
     uint64_t _next_id = 1;
     std::map<uint64_t, std::unique_ptr<inactive_read>> _inactive_reads;
-    inactive_read_stats _inactive_read_stats;
+    stats _stats;
 
 private:
     bool has_available_units(const resources& r) const {
@@ -198,8 +202,12 @@ public:
         _inactive_reads.clear();
     }
 
-    const inactive_read_stats& get_inactive_read_stats() const {
-        return _inactive_read_stats;
+    const stats& get_stats() const {
+        return _stats;
+    }
+
+    stats& get_stats() {
+        return _stats;
     }
 
     reader_permit make_permit();
