@@ -292,7 +292,7 @@ inline bool manager::have_ep_manager(ep_key_type ep) const noexcept {
 }
 
 bool manager::store_hint(ep_key_type ep, schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state) noexcept {
-    if (stopping() || !started() || !can_hint_for(ep)) {
+    if (stopping() || draining_all() || !started() || !can_hint_for(ep)) {
         manager_logger.trace("Can't store a hint to {}", ep);
         ++_stats.dropped;
         return false;
@@ -537,7 +537,7 @@ bool manager::check_dc_for(ep_key_type ep) const noexcept {
 }
 
 void manager::drain_for(gms::inet_address endpoint) {
-    if (stopping()) {
+    if (stopping() || draining_all()) {
         return;
     }
 
@@ -548,6 +548,7 @@ void manager::drain_for(gms::inet_address endpoint) {
         return with_semaphore(drain_lock(), 1, [this, endpoint] {
             return futurize_invoke([this, endpoint] () {
                 if (utils::fb_utilities::is_me(endpoint)) {
+                    set_draining_all();
                     return parallel_for_each(_ep_managers, [] (auto& pair) {
                         return pair.second.stop(drain::yes).finally([&pair] {
                             return with_file_update_mutex(pair.second, [&pair] {

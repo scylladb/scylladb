@@ -424,12 +424,14 @@ public:
     enum class state {
         started,                // hinting is currently allowed (start() call is complete)
         replay_allowed,         // replaying (hints sending) is allowed
+        draining_all,           // hinting is not allowed - all ep managers are being stopped because this node is leaving the cluster
         stopping                // hinting is not allowed - stopping is in progress (stop() method has been called)
     };
 
     using state_set = enum_set<super_enum<state,
         state::started,
         state::replay_allowed,
+        state::draining_all,
         state::stopping>>;
 
 private:
@@ -688,6 +690,14 @@ private:
 
     bool replay_allowed() const noexcept {
         return _state.contains(state::replay_allowed);
+    }
+
+    void set_draining_all() noexcept {
+        _state.set(state::draining_all);
+    }
+
+    bool draining_all() noexcept {
+        return _state.contains(state::draining_all);
     }
 
 public:
