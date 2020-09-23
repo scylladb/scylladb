@@ -371,7 +371,7 @@ system_distributed_keyspace::cdc_desc_exists(
     });
 }
 
-future<std::map<db_clock::time_point, cdc::streams_version>> 
+future<std::map<db_clock::time_point, cdc::streams_version>>
 system_distributed_keyspace::cdc_get_versioned_streams(context ctx) {
     return _qp.execute_internal(
             format("SELECT * FROM {}.{}", NAME, CDC_DESC),
@@ -394,5 +394,27 @@ system_distributed_keyspace::cdc_get_versioned_streams(context ctx) {
     });
 }
 
+future<db_clock::time_point>
+system_distributed_keyspace::get_next_stream_timestamp(context ctx, db_clock::time_point low) {
+    // I love that you cannot order by pk.
+    return _qp.execute_internal(
+            format("SELECT time FROM {}.{}", NAME, CDC_DESC),
+            quorum_if_many(ctx.num_token_owners),
+            internal_distributed_timeout_config,
+            {},
+            false
+    ).then([low] (::shared_ptr<cql3::untyped_result_set> cql_result) {
+        std::optional<db_clock::time_point> high;
+        db_clock::time_point res = low;
+        for (auto& row : *cql_result) {
+            auto ts = row.get_as<db_clock::time_point>("time");
+            if (ts > low && (!high || ts < *high)) {
+                high = ts;
+                res = ts;
+            }
+        }
+        return res;
+    });
+}
 
 }

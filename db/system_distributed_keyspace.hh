@@ -83,6 +83,12 @@ public:
     future<bool> cdc_desc_exists(db_clock::time_point streams_ts, context);
 
     future<std::map<db_clock::time_point, cdc::streams_version>> cdc_get_versioned_streams(context);
+
+    /**
+     * Gets the next higher generation timestamp from descriptions table, or 
+     * the input if none exists
+     */
+    future<db_clock::time_point> get_next_stream_timestamp(context, db_clock::time_point);
 };
 
 }
