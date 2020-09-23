@@ -390,7 +390,7 @@ distributed_loader::process_upload_dir(distributed<database>& db, distributed<db
 
         sharded<sstables::sstable_directory> directory;
         auto upload = fs::path(global_table->dir()) / "upload";
-        directory.start(upload, 4,
+        directory.start(upload, db.local().get_config().initial_sstable_loading_concurrency(),
             sstables::sstable_directory::need_mutate_level::yes,
             sstables::sstable_directory::lack_of_toc_fatal::no,
             sstables::sstable_directory::enable_dangerous_direct_import_of_cassandra_counters(db.local().get_config().enable_dangerous_direct_import_of_cassandra_counters()),
