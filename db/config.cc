@@ -745,6 +745,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , user_defined_function_contiguous_allocation_limit_bytes(this, "user_defined_function_contiguous_allocation_limit_bytes", value_status::Used, 1024*1024, "How much memory each UDF invocation can allocate in one chunk")
     , schema_registry_grace_period(this, "schema_registry_grace_period", value_status::Used, 1,
         "Time period in seconds after which unused schema versions will be evicted from the local schema registry cache. Default is 1 second.")
+    , max_concurrent_requests_per_shard(this, "max_concurrent_requests_per_shard", value_status::Used, std::numeric_limits<uint32_t>::max(),
+        "Maximum number of concurrent requests a single shard can handle before it starts shedding extra load. By default, no requests will be shed.")
     , alternator_port(this, "alternator_port", value_status::Used, 0, "Alternator API port")
     , alternator_https_port(this, "alternator_https_port", value_status::Used, 0, "Alternator API HTTPS port")
     , alternator_address(this, "alternator_address", value_status::Used, "0.0.0.0", "Alternator API listening address")

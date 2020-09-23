@@ -618,6 +618,11 @@ future<> cql_server::connection::process_request() {
                     f.length, mem_estimate, _server._max_request_size));
         }
 
+        if (_server._requests_serving > _server._config.max_concurrent_requests) {
+            return make_exception_future<>(
+                    exceptions::overloaded_exception(format("too many in-flight requests: {}", _server._requests_serving)));
+        }
+
         auto fut = get_units(_server._memory_available, mem_estimate);
         if (_server._memory_available.waiters()) {
             ++_server._requests_blocked_memory;

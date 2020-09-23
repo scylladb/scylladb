@@ -69,6 +69,7 @@ future<> controller::do_start_server() {
         cql_transport::cql_server_config cql_server_config;
         cql_server_config.timeout_config = make_timeout_config(cfg);
         cql_server_config.max_request_size = service::get_local_storage_service()._service_memory_total;
+        cql_server_config.max_concurrent_requests = cfg.max_concurrent_requests_per_shard();
         cql_server_config.get_service_memory_limiter_semaphore = [ss = std::ref(service::get_storage_service())] () -> semaphore& { return ss.get().local()._service_memory_limiter; };
         cql_server_config.allow_shard_aware_drivers = cfg.enable_shard_aware_drivers();
         cql_server_config.sharding_ignore_msb = cfg.murmur3_partitioner_ignore_msb_bits();
