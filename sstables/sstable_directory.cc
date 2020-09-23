@@ -49,6 +49,7 @@ sstable_directory::sstable_directory(fs::path sstable_dir,
         allow_loading_materialized_view allow_mv,
         sstable_object_from_existing_fn sstable_from_existing)
     : _sstable_dir(std::move(sstable_dir))
+    , _load_parallelism(load_parallelism)
     , _load_semaphore(load_parallelism)
     , _need_mutate_level(need_mutate_level)
     , _throw_on_missing_toc(throw_on_missing_toc)
@@ -409,10 +410,12 @@ sstable_directory::do_for_each_sstable(std::function<future<>(sstables::shared_s
 template <typename Container, typename Func>
 future<>
 sstable_directory::parallel_for_each_restricted(Container&& C, Func&& func) {
-    return parallel_for_each(C, [this, func = std::move(func)] (auto& el) mutable {
+    return do_with(std::move(C), [this, func = std::move(func)] (Container& c) mutable {
+      return max_concurrent_for_each(c, _load_parallelism, [this, func = std::move(func)] (auto& el) mutable {
         return with_semaphore(_load_semaphore, 1, [this, func,  el = std::move(el)] () mutable {
             return func(el);
         });
+      });
     });
 }
 

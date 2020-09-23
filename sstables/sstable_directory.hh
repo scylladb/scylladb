@@ -85,6 +85,7 @@ private:
 
     // We may have hundreds of thousands of files to load. To protect against OOMs we will limit
     // how many of them we process at the same time.
+    const size_t _load_parallelism;
     semaphore _load_semaphore;
 
     // Flags below control how to behave when scanning new SSTables.
