@@ -420,6 +420,10 @@ database::setup_metrics() {
                        sm::description("Holds the number of currently active read operations. "),
                        {user_label_instance}),
 
+    });
+
+    // Registering all the metrics with a single call causes the stack size to blow up.
+    _metrics.add_group("database", {
         sm::make_gauge("active_reads_memory_consumption", [this] { return max_memory_concurrent_reads() - _read_concurrency_sem.available_resources().memory; },
                        sm::description(seastar::format("Holds the amount of memory consumed by currently active read operations. "
                                                        "If this value gets close to {} we are likely to start dropping new read requests. "
