@@ -2993,3 +2993,343 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_trim_range_tombstones) {
 
     BOOST_REQUIRE(tri_cmp(last_fragment_position, rd.peek_buffer().position()) < 0);
 }
+
+namespace {
+
+void check_evictable_reader_validation_is_triggered(
+        std::string_view test_name,
+        std::string_view error_prefix, // empty str if no exception is expected
+        schema_ptr schema,
+        reader_concurrency_semaphore& semaphore,
+        const dht::partition_range& prange,
+        const query::partition_slice& slice,
+        std::deque<mutation_fragment> first_buffer,
+        position_in_partition_view last_fragment_position,
+        std::deque<mutation_fragment> second_buffer,
+        size_t max_buffer_size) {
+
+    testlog.info("check_evictable_reader_validation_is_triggered(): checking {} test case: {}", error_prefix.empty() ? "positive" : "negative", test_name);
+
+    auto rd = create_evictable_reader_and_evict_after_first_buffer(std::move(schema), semaphore, prange, slice, std::move(first_buffer),
+            last_fragment_position, std::move(second_buffer), max_buffer_size);
+
+    const bool fail = !error_prefix.empty();
+
+    try {
+        rd.fill_buffer(db::no_timeout).get0();
+    } catch (std::runtime_error& e) {
+        if (fail) {
+            if (error_prefix == std::string_view(e.what(), error_prefix.size())) {
+                testlog.trace("Expected exception caught: {}", std::current_exception());
+                return;
+            } else {
+                BOOST_FAIL(fmt::format("Exception with unexpected message caught: {}", std::current_exception()));
+            }
+        } else {
+            BOOST_FAIL(fmt::format("Unexpected exception caught: {}", std::current_exception()));
+        }
+    }
+    if (fail) {
+        BOOST_FAIL(fmt::format("Expected exception not thrown"));
+    }
+}
+
+}
+
+SEASTAR_THREAD_TEST_CASE(test_evictable_reader_self_validation) {
+    set_abort_on_internal_error(false);
+    auto reset_on_internal_abort = defer([] {
+        set_abort_on_internal_error(true);
+    });
+
+    reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::no_limits{});
+    simple_schema s;
+
+    auto pkeys = s.make_pkeys(4);
+    boost::sort(pkeys, dht::decorated_key::less_comparator(s.schema()));
+
+    size_t max_buffer_size = 512;
+    const int first_ck = 100;
+    const int second_buffer_ck = first_ck + 100;
+    const int last_ck = second_buffer_ck + 100;
+
+    static const char partition_error_prefix[] = "maybe_validate_partition_start(): validation failed";
+    static const char position_in_partition_error_prefix[] = "validate_position_in_partition(): validation failed";
+    static const char trim_range_tombstones_error_prefix[] = "maybe_trim_range_tombstone(): validation failed";
+
+    const auto prange = dht::partition_range::make(
+            dht::partition_range::bound(pkeys[1], true),
+            dht::partition_range::bound(pkeys[2], true));
+
+    const auto ckrange = query::clustering_range::make(
+            query::clustering_range::bound(s.make_ckey(first_ck), true),
+            query::clustering_range::bound(s.make_ckey(last_ck), true));
+
+    const auto slice = partition_slice_builder(*s.schema()).with_range(ckrange).build();
+
+    std::deque<mutation_fragment> first_buffer;
+    first_buffer.emplace_back(partition_start{pkeys[1], {}});
+    size_t mem_usage = first_buffer.back().memory_usage(*s.schema());
+    for (int i = 0; i < second_buffer_ck; ++i) {
+        first_buffer.emplace_back(s.make_row(s.make_ckey(i++), "v"));
+        mem_usage += first_buffer.back().memory_usage(*s.schema());
+    }
+    max_buffer_size = mem_usage;
+    auto last_fragment_position = position_in_partition(first_buffer.back().position());
+    first_buffer.emplace_back(s.make_row(s.make_ckey(second_buffer_ck), "v"));
+
+    auto make_second_buffer = [&s, &max_buffer_size, second_buffer_ck] (dht::decorated_key pkey, std::optional<int> first_ckey = {},
+            bool inject_range_tombstone = false) mutable {
+        auto ckey = first_ckey ? *first_ckey : second_buffer_ck;
+        std::deque<mutation_fragment> second_buffer;
+        second_buffer.emplace_back(partition_start{std::move(pkey), {}});
+        size_t mem_usage = second_buffer.back().memory_usage(*s.schema());
+        if (inject_range_tombstone) {
+            second_buffer.emplace_back(s.make_range_tombstone(query::clustering_range::make_ending_with(s.make_ckey(last_ck))));
+        }
+        while (mem_usage <= max_buffer_size) {
+            second_buffer.emplace_back(s.make_row(s.make_ckey(ckey++), "v"));
+            mem_usage += second_buffer.back().memory_usage(*s.schema());
+        }
+        second_buffer.emplace_back(partition_end{});
+        return second_buffer;
+    };
+
+    //
+    // Continuing the same partition
+    //
+
+    check_evictable_reader_validation_is_triggered(
+            "pkey < _last_pkey; pkey ∉ prange",
+            partition_error_prefix,
+            s.schema(),
+            semaphore,
+            prange,
+            slice,
+            copy_fragments(*s.schema(), first_buffer),
+            last_fragment_position,
+            make_second_buffer(pkeys[0]),
+            max_buffer_size);
+
+    check_evictable_reader_validation_is_triggered(
+            "pkey == _last_pkey",
+            "",
+            s.schema(),
+            semaphore,
+            prange,
+            slice,
+            copy_fragments(*s.schema(), first_buffer),
+            last_fragment_position,
+            make_second_buffer(pkeys[1]),
+            max_buffer_size);
+
+    check_evictable_reader_validation_is_triggered(
+            "pkey == _last_pkey; position_in_partition ∉ ckrange (<)",
+            position_in_partition_error_prefix,
+            s.schema(),
+            semaphore,
+            prange,
+            slice,
+            copy_fragments(*s.schema(), first_buffer),
+            last_fragment_position,
+            make_second_buffer(pkeys[1], first_ck - 10),
+            max_buffer_size);
+
+    check_evictable_reader_validation_is_triggered(
+            "pkey == _last_pkey; position_in_partition ∉ ckrange (<); start with trimmable range-tombstone",
+            position_in_partition_error_prefix,
+            s.schema(),
+            semaphore,
+            prange,
+            slice,
+            copy_fragments(*s.schema(), first_buffer),
+            last_fragment_position,
+            make_second_buffer(pkeys[1], first_ck - 10, true),
+            max_buffer_size);
+
+    check_evictable_reader_validation_is_triggered(
+            "pkey == _last_pkey; position_in_partition ∉ ckrange; position_in_partition < _next_position_in_partition",
+            position_in_partition_error_prefix,
+            s.schema(),
+            semaphore,
+            prange,
+            slice,
+            copy_fragments(*s.schema(), first_buffer),
+            last_fragment_position,
+            make_second_buffer(pkeys[1], second_buffer_ck - 2),
+            max_buffer_size);
+
+    check_evictable_reader_validation_is_triggered(
+            "pkey == _last_pkey; position_in_partition ∉ ckrange; position_in_partition < _next_position_in_partition; start with trimmable range-tombstone",
+            position_in_partition_error_prefix,
+            s.schema(),
+            semaphore,
+            prange,
+            slice,
+            copy_fragments(*s.schema(), first_buffer),
+            last_fragment_position,
+            make_second_buffer(pkeys[1], second_buffer_ck - 2, true),
+            max_buffer_size);
+
+    {
+        auto second_buffer = make_second_buffer(pkeys[1], second_buffer_ck);
+        second_buffer[1] = s.make_range_tombstone(query::clustering_range::make_ending_with(s.make_ckey(second_buffer_ck - 10)));
+        check_evictable_reader_validation_is_triggered(
+                "pkey == _last_pkey; end(range_tombstone) < _next_position_in_partition",
+                trim_range_tombstones_error_prefix,
+                s.schema(),
+                semaphore,
+                prange,
+                slice,
+                copy_fragments(*s.schema(), first_buffer),
+                last_fragment_position,
+                std::move(second_buffer),
+                max_buffer_size);
+    }
+
+    {
+        auto second_buffer = make_second_buffer(pkeys[1], second_buffer_ck);
+        second_buffer[1] = s.make_range_tombstone(query::clustering_range::make_ending_with(s.make_ckey(second_buffer_ck + 10)));
+        check_evictable_reader_validation_is_triggered(
+                "pkey == _last_pkey; end(range_tombstone) > _next_position_in_partition",
+                "",
+                s.schema(),
+                semaphore,
+                prange,
+                slice,
+                copy_fragments(*s.schema(), first_buffer),
+                last_fragment_position,
+                std::move(second_buffer),
+                max_buffer_size);
+    }
+
+    {
+        auto second_buffer = make_second_buffer(pkeys[1], second_buffer_ck);
+        second_buffer[1] = s.make_range_tombstone(query::clustering_range::make_starting_with(s.make_ckey(last_ck + 10)));
+        check_evictable_reader_validation_is_triggered(
+                "pkey == _last_pkey; start(range_tombstone) ∉ ckrange (>)",
+                position_in_partition_error_prefix,
+                s.schema(),
+                semaphore,
+                prange,
+                slice,
+                copy_fragments(*s.schema(), first_buffer),
+                last_fragment_position,
+                std::move(second_buffer),
+                max_buffer_size);
+    }
+
+    check_evictable_reader_validation_is_triggered(
+            "pkey == _last_pkey; position_in_partition ∈ ckrange",
+            "",
+            s.schema(),
+            semaphore,
+            prange,
+            slice,
+            copy_fragments(*s.schema(), first_buffer),
+            last_fragment_position,
+            make_second_buffer(pkeys[1], second_buffer_ck),
+            max_buffer_size);
+
+    check_evictable_reader_validation_is_triggered(
+            "pkey == _last_pkey; position_in_partition ∉ ckrange (>)",
+            position_in_partition_error_prefix,
+            s.schema(),
+            semaphore,
+            prange,
+            slice,
+            copy_fragments(*s.schema(), first_buffer),
+            last_fragment_position,
+            make_second_buffer(pkeys[1], last_ck + 10),
+            max_buffer_size);
+
+    check_evictable_reader_validation_is_triggered(
+            "pkey > _last_pkey; pkey ∈ pkrange",
+            partition_error_prefix,
+            s.schema(),
+            semaphore,
+            prange,
+            slice,
+            copy_fragments(*s.schema(), first_buffer),
+            last_fragment_position,
+            make_second_buffer(pkeys[2]),
+            max_buffer_size);
+
+    check_evictable_reader_validation_is_triggered(
+            "pkey > _last_pkey; pkey ∉ pkrange",
+            partition_error_prefix,
+            s.schema(),
+            semaphore,
+            prange,
+            slice,
+            copy_fragments(*s.schema(), first_buffer),
+            last_fragment_position,
+            make_second_buffer(pkeys[3]),
+            max_buffer_size);
+
+    //
+    // Continuing from next partition
+    //
+
+    first_buffer.clear();
+
+    first_buffer.emplace_back(partition_start{pkeys[1], {}});
+    mem_usage = first_buffer.back().memory_usage(*s.schema());
+    for (int i = 0; i < second_buffer_ck; ++i) {
+        first_buffer.emplace_back(s.make_row(s.make_ckey(i++), "v"));
+        mem_usage += first_buffer.back().memory_usage(*s.schema());
+    }
+    first_buffer.emplace_back(partition_end{});
+    mem_usage += first_buffer.back().memory_usage(*s.schema());
+    last_fragment_position = position_in_partition(first_buffer.back().position());
+    max_buffer_size = mem_usage;
+    first_buffer.emplace_back(partition_start{pkeys[2], {}});
+
+    check_evictable_reader_validation_is_triggered(
+            "pkey < _last_pkey; pkey ∉ pkrange",
+            partition_error_prefix,
+            s.schema(),
+            semaphore,
+            prange,
+            slice,
+            copy_fragments(*s.schema(), first_buffer),
+            last_fragment_position,
+            make_second_buffer(pkeys[0]),
+            max_buffer_size);
+
+    check_evictable_reader_validation_is_triggered(
+            "pkey == _last_pkey",
+            partition_error_prefix,
+            s.schema(),
+            semaphore,
+            prange,
+            slice,
+            copy_fragments(*s.schema(), first_buffer),
+            last_fragment_position,
+            make_second_buffer(pkeys[1]),
+            max_buffer_size);
+
+    check_evictable_reader_validation_is_triggered(
+            "pkey > _last_pkey; pkey ∈ pkrange",
+            "",
+            s.schema(),
+            semaphore,
+            prange,
+            slice,
+            copy_fragments(*s.schema(), first_buffer),
+            last_fragment_position,
+            make_second_buffer(pkeys[2]),
+            max_buffer_size);
+
+    check_evictable_reader_validation_is_triggered(
+            "pkey > _last_pkey; pkey ∉ pkrange",
+            partition_error_prefix,
+            s.schema(),
+            semaphore,
+            prange,
+            slice,
+            copy_fragments(*s.schema(), first_buffer),
+            last_fragment_position,
+            make_second_buffer(pkeys[3]),
+            max_buffer_size);
+}
