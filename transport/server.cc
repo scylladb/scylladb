@@ -614,8 +614,8 @@ future<> cql_server::connection::process_request() {
         auto mem_estimate = f.length * 2 + 8000; // Allow for extra copies and bookkeeping
 
         if (mem_estimate > _server._max_request_size) {
-            throw exceptions::invalid_request_exception(format("request size too large (frame size {:d}; estimate {:d}; allowed {:d}",
-                    f.length, mem_estimate, _server._max_request_size));
+            return make_exception_future<>(exceptions::invalid_request_exception(format("request size too large (frame size {:d}; estimate {:d}; allowed {:d}",
+                    f.length, mem_estimate, _server._max_request_size)));
         }
 
         if (_server._requests_serving > _server._config.max_concurrent_requests) {
