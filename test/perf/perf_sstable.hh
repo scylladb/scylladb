@@ -153,7 +153,7 @@ public:
 
     future<double> compaction(int idx) {
         return test_setup::create_empty_test_dir(dir()).then([this, idx] {
-            return seastar::async([this, idx] {
+            return sstables::test_env::do_with_async_returning<double>([this, idx] (sstables::test_env& env) {
                 auto sst_gen = [this, gen = make_lw_shared<unsigned>(idx)] () mutable {
                     return _env.make_sstable(s, dir(), (*gen)++, sstable::version_types::ka, sstable::format_types::big, _cfg.buffer_size);
                 };
@@ -170,7 +170,7 @@ public:
                 cache_tracker tracker;
                 cell_locker_stats cl_stats;
                 auto cm = make_lw_shared<compaction_manager>();
-                auto cf = make_lw_shared<column_family>(s, column_family_test_config(), column_family::no_commitlog(), *cm, cl_stats, tracker);
+                auto cf = make_lw_shared<column_family>(s, column_family_test_config(env.manager()), column_family::no_commitlog(), *cm, cl_stats, tracker);
 
                 auto start = perf_sstable_test_env::now();
 

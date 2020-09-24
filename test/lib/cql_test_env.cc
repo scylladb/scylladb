@@ -80,12 +80,6 @@ cql_test_config::cql_test_config(shared_ptr<db::config> cfg)
 cql_test_config::cql_test_config(const cql_test_config&) = default;
 cql_test_config::~cql_test_config() = default;
 
-namespace sstables {
-
-future<> await_background_jobs_on_all_shards();
-
-}
-
 static const sstring testing_superuser = "tester";
 
 static future<> tst_init_ms_fd_gossiper(sharded<gms::feature_service>& features, sharded<locator::token_metadata>& tm, sharded<netw::messaging_service>& ms, db::config& cfg, db::seed_provider_type seed_provider,
@@ -380,8 +374,6 @@ public:
             utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address("localhost"));
             locator::i_endpoint_snitch::create_snitch("SimpleSnitch").get();
             auto stop_snitch = defer([] { locator::i_endpoint_snitch::stop_snitch().get(); });
-
-            auto wait_for_background_jobs = defer([] { sstables::await_background_jobs_on_all_shards().get(); });
 
             sharded<abort_source> abort_sources;
             abort_sources.start().get();

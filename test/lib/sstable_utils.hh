@@ -44,7 +44,7 @@ using local_shard_only = bool_class<local_shard_only_tag>;
 sstables::shared_sstable make_sstable_containing(std::function<sstables::shared_sstable()> sst_factory, std::vector<mutation> muts);
 
 inline future<> write_memtable_to_sstable_for_test(memtable& mt, sstables::shared_sstable sst) {
-    return write_memtable_to_sstable(mt, sst, test_sstables_manager.configure_writer());
+    return write_memtable_to_sstable(mt, sst, sst->manager().configure_writer());
 }
 
 //
@@ -316,6 +316,7 @@ public:
             storage_service_for_tests ssft;
             auto tmp = tmpdir();
             test_env env;
+            auto close_env = defer([&] { env.stop().get(); });
             fut(env, tmp.path().string()).get();
         });
     }
@@ -331,6 +332,7 @@ public:
             auto dest_path = dest_dir.path() / src.c_str();
             std::filesystem::create_directories(dest_path);
             test_env env;
+            auto close_env = defer([&] { env.stop().get(); });
             fut(env, src_dir.path().string(), dest_path.string()).get();
         });
     }

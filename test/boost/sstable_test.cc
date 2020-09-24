@@ -183,14 +183,10 @@ static future<sstable_ptr> do_write_sst(test_env& env, schema_ptr schema, sstrin
     });
 }
 
-static future<sstable_ptr> do_write_sst(schema_ptr schema, sstring load_dir, sstring write_dir, unsigned long generation) {
-  return test_env::do_with([schema = std::move(schema), load_dir = std::move(load_dir), write_dir = std::move(write_dir), generation] (test_env& env) {
-      return do_write_sst(env, std::move(schema), std::move(load_dir), std::move(write_dir), generation);
-  });
-}
-
 static future<> write_sst_info(schema_ptr schema, sstring load_dir, sstring write_dir, unsigned long generation) {
-    return do_write_sst(std::move(schema), load_dir, write_dir, generation).then([] (auto ptr) { return make_ready_future<>(); });
+    return test_env::do_with([schema = std::move(schema), load_dir = std::move(load_dir), write_dir = std::move(write_dir), generation] (test_env& env) {
+        return do_write_sst(env, std::move(schema), load_dir, write_dir, generation).then([] (auto ptr) { return make_ready_future<>(); });
+    });
 }
 
 using bufptr_t = std::unique_ptr<char [], free_deleter>;
@@ -245,10 +241,9 @@ SEASTAR_TEST_CASE(check_compressed_info_func) {
     return check_component_integrity(component_type::CompressionInfo);
 }
 
-template <typename Func>
-inline auto
-write_and_validate_sst(schema_ptr s, sstring dir, Func&& func) {
-    return test_env::do_with(tmpdir(), [s = std::move(s), dir = std::move(dir), func = std::move(func)] (test_env& env, tmpdir& tmp) {
+future<>
+write_and_validate_sst(schema_ptr s, sstring dir, noncopyable_function<future<> (shared_sstable sst1, shared_sstable sst2)> func) {
+    return test_env::do_with(tmpdir(), [s = std::move(s), dir = std::move(dir), func = std::move(func)] (test_env& env, tmpdir& tmp) mutable {
         return do_write_sst(env, s, dir, tmp.path().string(), 1).then([&env, &tmp, s = std::move(s), func = std::move(func)] (auto sst1) {
             auto sst2 = env.make_sstable(s, tmp.path().string(), 2, la, big);
             return func(std::move(sst1), std::move(sst2));

@@ -56,21 +56,21 @@ schema_ptr test_table_schema() {
 
 using namespace sstables;
 
-future<sstables::shared_sstable>
+sstables::shared_sstable
 make_sstable_for_this_shard(std::function<sstables::shared_sstable()> sst_factory) {
     auto s = test_table_schema();
     auto key_token_pair = token_generation_for_shard(1, this_shard_id(), 12);
     auto key = partition_key::from_exploded(*s, {to_bytes(key_token_pair[0].first)});
     mutation m(s, key);
     m.set_clustered_cell(clustering_key::make_empty(), bytes("c"), data_value(int32_t(0)), api::timestamp_type(0));
-    return make_ready_future<sstables::shared_sstable>(make_sstable_containing(sst_factory, {m}));
+    return make_sstable_containing(sst_factory, {m});
 }
 
 /// Create a shared SSTable belonging to all shards for the following schema: "create table cf (p text PRIMARY KEY, c int)"
 ///
 /// Arguments passed to the function are passed to table::make_sstable
 template <typename... Args>
-future<sstables::shared_sstable>
+sstables::shared_sstable
 make_sstable_for_all_shards(database& db, table& table, fs::path sstdir, int64_t generation, Args&&... args) {
     // Unlike the previous helper, we'll assume we're in a thread here. It's less flexible
     // but the users are usually in a thread, and rewrite_toc_without_scylla_component requires
@@ -92,15 +92,24 @@ make_sstable_for_all_shards(database& db, table& table, fs::path sstdir, int64_t
     // it came from Cassandra
     sstables::test(sst).remove_component(sstables::component_type::Scylla).get();
     sstables::test(sst).rewrite_toc_without_scylla_component();
-    return make_ready_future<sstables::shared_sstable>(sst);
+    return sst;
 }
 
-sstables::shared_sstable sstable_from_existing_file(fs::path dir, int64_t gen, sstables::sstable_version_types v, sstables::sstable_format_types f) {
-    return test_sstables_manager.make_sstable(test_table_schema(), dir.native(), gen, v, f, gc_clock::now(), default_io_error_handler_gen(), default_sstable_buffer_size);
-}
+class sstable_from_existing_file {
+    std::function<sstables::sstables_manager* ()> _get_mgr;
+public:
+    explicit sstable_from_existing_file(sstables::test_env& env) : _get_mgr([m = &env.manager()] { return m; }) {}
+    // This variant this transportable across shards
+    explicit sstable_from_existing_file(sharded<sstables::test_env>& env) : _get_mgr([s = &env] { return &s->local().manager(); }) {}
+    // This variant this transportable across shards
+    explicit sstable_from_existing_file(cql_test_env& env) : _get_mgr([&env] { return &env.db().local().get_user_sstables_manager(); }) {}
+    sstables::shared_sstable operator()(fs::path dir, int64_t gen, sstables::sstable_version_types v, sstables::sstable_format_types f) const {
+        return _get_mgr()->make_sstable(test_table_schema(), dir.native(), gen, v, f, gc_clock::now(), default_io_error_handler_gen(), default_sstable_buffer_size);
+    }
+};
 
-sstables::shared_sstable new_sstable(fs::path dir, int64_t gen) {
-    return test_sstables_manager.make_sstable(test_table_schema(), dir.native(), gen,
+sstables::shared_sstable new_sstable(sstables::test_env& env, fs::path dir, int64_t gen) {
+    return env.manager().make_sstable(test_table_schema(), dir.native(), gen,
                 sstables::sstable_version_types::mc, sstables::sstable_format_types::big,
                 gc_clock::now(), default_io_error_handler_gen(), default_sstable_buffer_size);
 }
@@ -115,6 +124,7 @@ highest_generation_seen(sharded<sstables::sstable_directory>& dir) {
 }
 
 SEASTAR_THREAD_TEST_CASE(sstable_directory_test_table_simple_empty_directory_scan) {
+  sstables::test_env::do_with_async([] (test_env& env) {
     auto dir = tmpdir();
 
     // Write a manifest file to make sure it's ignored
@@ -128,7 +138,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_test_table_simple_empty_directory_sca
             sstable_directory::lack_of_toc_fatal::no,
             sstable_directory::enable_dangerous_direct_import_of_cassandra_counters::no,
             sstable_directory::allow_loading_materialized_view::no,
-            &sstable_from_existing_file).get();
+            sstable_from_existing_file(env)).get();
 
     auto stop = defer([&sstdir] {
         sstdir.stop().get();
@@ -138,12 +148,14 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_test_table_simple_empty_directory_sca
     int64_t max_generation_seen = highest_generation_seen(sstdir).get0();
     // No generation found on empty directory.
     BOOST_REQUIRE_EQUAL(max_generation_seen, 0);
+  }).get();
 }
 
 // Test unrecoverable SSTable: missing a file that is expected in the TOC.
 SEASTAR_THREAD_TEST_CASE(sstable_directory_test_table_scan_incomplete_sstables) {
+  sstables::test_env::do_with_async([] (test_env& env) {
     auto dir = tmpdir();
-    auto sst = make_sstable_for_this_shard(std::bind(new_sstable, dir.path(), 1)).get0();
+    auto sst = make_sstable_for_this_shard(std::bind(new_sstable, std::ref(env), dir.path(), 1));
 
     // Now there is one sstable to the upload directory, but it is incomplete and one component is missing.
     // We should fail validation and leave the directory untouched
@@ -155,7 +167,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_test_table_scan_incomplete_sstables) 
             sstable_directory::lack_of_toc_fatal::no,
             sstable_directory::enable_dangerous_direct_import_of_cassandra_counters::no,
             sstable_directory::allow_loading_materialized_view::no,
-            &sstable_from_existing_file).get();
+            sstable_from_existing_file(env)).get();
 
     auto stop = defer([&sstdir] {
         sstdir.stop().get();
@@ -163,12 +175,14 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_test_table_scan_incomplete_sstables) 
 
     auto expect_malformed_sstable = distributed_loader::process_sstable_dir(sstdir);
     BOOST_REQUIRE_THROW(expect_malformed_sstable.get(), sstables::malformed_sstable_exception);
+  }).get();
 }
 
 // Test always-benign incomplete SSTable: temporaryTOC found
 SEASTAR_THREAD_TEST_CASE(sstable_directory_test_table_temporary_toc) {
+  sstables::test_env::do_with_async([] (test_env& env) {
     auto dir = tmpdir();
-    auto sst = make_sstable_for_this_shard(std::bind(new_sstable, dir.path(), 1)).get0();
+    auto sst = make_sstable_for_this_shard(std::bind(new_sstable, std::ref(env), dir.path(), 1));
     rename_file(sst->filename(sstables::component_type::TOC), sst->filename(sstables::component_type::TemporaryTOC)).get();
 
     sharded<sstable_directory> sstdir;
@@ -177,7 +191,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_test_table_temporary_toc) {
             sstable_directory::lack_of_toc_fatal::yes,
             sstable_directory::enable_dangerous_direct_import_of_cassandra_counters::no,
             sstable_directory::allow_loading_materialized_view::no,
-            &sstable_from_existing_file).get();
+            sstable_from_existing_file(env)).get();
 
     auto stop = defer([&sstdir] {
         sstdir.stop().get();
@@ -185,13 +199,15 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_test_table_temporary_toc) {
 
     auto expect_ok = distributed_loader::process_sstable_dir(sstdir);
     BOOST_REQUIRE_NO_THROW(expect_ok.get());
+  }).get();
 }
 
 // Test the absence of TOC. Behavior is controllable by a flag
 SEASTAR_THREAD_TEST_CASE(sstable_directory_test_table_missing_toc) {
+  sstables::test_env::do_with_async([] (test_env& env) {
     auto dir = tmpdir();
 
-    auto sst = make_sstable_for_this_shard(std::bind(new_sstable, dir.path(), 1)).get0();
+    auto sst = make_sstable_for_this_shard(std::bind(new_sstable, std::ref(env), dir.path(), 1));
     remove_file(sst->filename(sstables::component_type::TOC)).get();
 
     sharded<sstable_directory> sstdir_fatal;
@@ -200,7 +216,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_test_table_missing_toc) {
             sstable_directory::lack_of_toc_fatal::yes,
             sstable_directory::enable_dangerous_direct_import_of_cassandra_counters::no,
             sstable_directory::allow_loading_materialized_view::no,
-            &sstable_from_existing_file).get();
+            sstable_from_existing_file(env)).get();
 
     auto stop_fatal = defer([&sstdir_fatal] {
         sstdir_fatal.stop().get();
@@ -215,7 +231,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_test_table_missing_toc) {
             sstable_directory::lack_of_toc_fatal::no,
             sstable_directory::enable_dangerous_direct_import_of_cassandra_counters::no,
             sstable_directory::allow_loading_materialized_view::no,
-            &sstable_from_existing_file).get();
+            sstable_from_existing_file(env)).get();
 
     auto stop_ok = defer([&sstdir_ok] {
         sstdir_ok.stop().get();
@@ -223,15 +239,17 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_test_table_missing_toc) {
 
     auto expect_ok = distributed_loader::process_sstable_dir(sstdir_ok);
     BOOST_REQUIRE_NO_THROW(expect_ok.get());
+  }).get();
 }
 
 // Test the presence of TemporaryStatistics. If the old Statistics file is around
 // this is benign and we'll just delete it and move on. If the old Statistics file
 // is not around (but mentioned in the TOC), then this is an error.
 SEASTAR_THREAD_TEST_CASE(sstable_directory_test_temporary_statistics) {
+  sstables::test_env::do_with_sharded_async([] (sharded<test_env>& env) {
     auto dir = tmpdir();
 
-    auto sst = make_sstable_for_this_shard(std::bind(new_sstable, dir.path(), 1)).get0();
+    auto sst = make_sstable_for_this_shard(std::bind(new_sstable, std::ref(env.local()), dir.path(), 1));
     auto tempstr = sst->filename(dir.path().native(), component_type::TemporaryStatistics);
     auto f = open_file_dma(tempstr, open_flags::rw | open_flags::create | open_flags::truncate).get0();
     f.close().get();
@@ -243,7 +261,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_test_temporary_statistics) {
             sstable_directory::lack_of_toc_fatal::no,
             sstable_directory::enable_dangerous_direct_import_of_cassandra_counters::no,
             sstable_directory::allow_loading_materialized_view::no,
-            &sstable_from_existing_file).get();
+            sstable_from_existing_file(env)).get();
 
     auto stop_ok= defer([&sstdir_ok] {
         sstdir_ok.stop().get();
@@ -264,7 +282,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_test_temporary_statistics) {
             sstable_directory::lack_of_toc_fatal::no,
             sstable_directory::enable_dangerous_direct_import_of_cassandra_counters::no,
             sstable_directory::allow_loading_materialized_view::no,
-            &sstable_from_existing_file).get();
+            sstable_from_existing_file(env)).get();
 
     auto stop_fatal = defer([&sstdir_fatal] {
         sstdir_fatal.stop().get();
@@ -272,13 +290,15 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_test_temporary_statistics) {
 
     auto expect_malformed_sstable  = distributed_loader::process_sstable_dir(sstdir_fatal);
     BOOST_REQUIRE_THROW(expect_malformed_sstable.get(), sstables::malformed_sstable_exception);
+  }).get();
 }
 
 // Test that we see the right generation during the scan. Temporary files are skipped
 SEASTAR_THREAD_TEST_CASE(sstable_directory_test_generation_sanity) {
+  sstables::test_env::do_with_sharded_async([] (sharded<test_env>& env) {
     auto dir = tmpdir();
-    make_sstable_for_this_shard(std::bind(new_sstable, dir.path(), 3333)).get0();
-    auto sst = make_sstable_for_this_shard(std::bind(new_sstable, dir.path(), 6666)).get0();
+    make_sstable_for_this_shard(std::bind(new_sstable, std::ref(env.local()), dir.path(), 3333));
+    auto sst = make_sstable_for_this_shard(std::bind(new_sstable, std::ref(env.local()), dir.path(), 6666));
     rename_file(sst->filename(sstables::component_type::TOC), sst->filename(sstables::component_type::TemporaryTOC)).get();
 
     sharded<sstable_directory> sstdir;
@@ -287,7 +307,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_test_generation_sanity) {
             sstable_directory::lack_of_toc_fatal::yes,
             sstable_directory::enable_dangerous_direct_import_of_cassandra_counters::no,
             sstable_directory::allow_loading_materialized_view::no,
-            &sstable_from_existing_file).get();
+            sstable_from_existing_file(env)).get();
 
     auto stop = defer([&sstdir] {
         sstdir.stop().get();
@@ -296,6 +316,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_test_generation_sanity) {
     distributed_loader::process_sstable_dir(sstdir).get();
     int64_t max_generation_seen = highest_generation_seen(sstdir).get0();
     BOOST_REQUIRE_EQUAL(max_generation_seen, 3333);
+  }).get();
 }
 
 future<> verify_that_all_sstables_are_local(sharded<sstable_directory>& sstdir, unsigned expected_sstables) {
@@ -318,13 +339,14 @@ future<> verify_that_all_sstables_are_local(sharded<sstable_directory>& sstdir, 
 // Test that all SSTables are seen as unshared, if the generation numbers match what their
 // shard-assignments expect
 SEASTAR_THREAD_TEST_CASE(sstable_directory_unshared_sstables_sanity_matched_generations) {
+  sstables::test_env::do_with_sharded_async([] (sharded<test_env>& env) {
     auto dir = tmpdir();
     for (shard_id i = 0; i < smp::count; ++i) {
-        smp::submit_to(i, [dir = dir.path(), i] {
+        env.invoke_on(i, [dir = dir.path(), i] (sstables::test_env& env) {
             // this is why it is annoying for the internal functions in the test infrastructure to
             // assume threaded execution
-            return seastar::async([dir, i] {
-                make_sstable_for_this_shard(std::bind(new_sstable, dir, i)).get0();
+            return seastar::async([dir, i, &env] {
+                make_sstable_for_this_shard(std::bind(new_sstable, std::ref(env), dir, i));
             });
         }).get();
     }
@@ -335,7 +357,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_unshared_sstables_sanity_matched_gene
             sstable_directory::lack_of_toc_fatal::yes,
             sstable_directory::enable_dangerous_direct_import_of_cassandra_counters::no,
             sstable_directory::allow_loading_materialized_view::no,
-            &sstable_from_existing_file).get();
+            sstable_from_existing_file(env)).get();
 
     auto stop = defer([&sstdir] {
         sstdir.stop().get();
@@ -343,18 +365,20 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_unshared_sstables_sanity_matched_gene
 
     distributed_loader::process_sstable_dir(sstdir).get();
     verify_that_all_sstables_are_local(sstdir, smp::count).get();
+  }).get();
 }
 
 // Test that all SSTables are seen as unshared, even if the generation numbers do not match what their
 // shard-assignments expect
 SEASTAR_THREAD_TEST_CASE(sstable_directory_unshared_sstables_sanity_unmatched_generations) {
+  sstables::test_env::do_with_sharded_async([] (sharded<test_env>& env) {
     auto dir = tmpdir();
     for (shard_id i = 0; i < smp::count; ++i) {
-        smp::submit_to(i, [dir = dir.path(), i] {
+        env.invoke_on(i, [dir = dir.path(), i] (sstables::test_env& env) {
             // this is why it is annoying for the internal functions in the test infrastructure to
             // assume threaded execution
-            return seastar::async([dir, i] {
-                make_sstable_for_this_shard(std::bind(new_sstable, dir, i + 1)).get0();
+            return seastar::async([dir, i, &env] {
+                make_sstable_for_this_shard(std::bind(new_sstable, std::ref(env), dir, i + 1));
             });
         }).get();
     }
@@ -365,7 +389,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_unshared_sstables_sanity_unmatched_ge
             sstable_directory::lack_of_toc_fatal::yes,
             sstable_directory::enable_dangerous_direct_import_of_cassandra_counters::no,
             sstable_directory::allow_loading_materialized_view::no,
-            &sstable_from_existing_file).get();
+            sstable_from_existing_file(env)).get();
 
     auto stop = defer([&sstdir] {
         sstdir.stop().get();
@@ -373,6 +397,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_unshared_sstables_sanity_unmatched_ge
 
     distributed_loader::process_sstable_dir(sstdir).get();
     verify_that_all_sstables_are_local(sstdir, smp::count).get();
+  }).get();
 }
 
 // Test that the sstable_dir object can keep the table alive against a drop
@@ -390,7 +415,7 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_lock_works) {
                 sstable_directory::lack_of_toc_fatal::no,
                 sstable_directory::enable_dangerous_direct_import_of_cassandra_counters::no,
                 sstable_directory::allow_loading_materialized_view::no,
-                &sstable_from_existing_file).get();
+                sstable_from_existing_file(e)).get();
 
         // stop cleanly in case we fail early for unexpected reasons
         auto stop = defer([&sstdir] {
@@ -440,7 +465,7 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_correctly) {
         unsigned num_sstables = 10 * smp::count;
         auto generation = 0;
         for (unsigned nr = 0; nr < num_sstables; ++nr) {
-            make_sstable_for_all_shards(e.db().local(), cf, upload_path.native(), generation++, sstables::sstable_version_types::mc, sstables::sstable::format_types::big).get();
+            make_sstable_for_all_shards(e.db().local(), cf, upload_path.native(), generation++, sstables::sstable_version_types::mc, sstables::sstable::format_types::big);
         }
 
         sharded<sstable_directory> sstdir;
@@ -493,7 +518,7 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_distributes_well_eve
         unsigned num_sstables = 10 * smp::count;
         auto generation = 0;
         for (unsigned nr = 0; nr < num_sstables; ++nr) {
-            make_sstable_for_all_shards(e.db().local(), cf, upload_path.native(), generation++ * smp::count, sstables::sstable_version_types::mc, sstables::sstable::format_types::big).get();
+            make_sstable_for_all_shards(e.db().local(), cf, upload_path.native(), generation++ * smp::count, sstables::sstable_version_types::mc, sstables::sstable::format_types::big);
         }
 
         sharded<sstable_directory> sstdir;
@@ -546,7 +571,7 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_respect_max_threshol
         unsigned num_sstables = (cf.schema()->max_compaction_threshold() + 1) * smp::count;
         auto generation = 0;
         for (unsigned nr = 0; nr < num_sstables; ++nr) {
-            make_sstable_for_all_shards(e.db().local(), cf, upload_path.native(), generation++, sstables::sstable_version_types::mc, sstables::sstable::format_types::big).get();
+            make_sstable_for_all_shards(e.db().local(), cf, upload_path.native(), generation++, sstables::sstable_version_types::mc, sstables::sstable::format_types::big);
         }
 
         sharded<sstable_directory> sstdir;

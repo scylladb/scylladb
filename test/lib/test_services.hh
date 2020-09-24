@@ -46,9 +46,8 @@ public:
 extern db::nop_large_data_handler nop_lp_handler;
 extern db::config test_db_config;
 extern gms::feature_service test_feature_service;
-extern thread_local sstables::sstables_manager test_sstables_manager;
 
-column_family::config column_family_test_config();
+column_family::config column_family_test_config(sstables::sstables_manager& sstables_manager);
 
 struct column_family_for_tests {
     struct data {
@@ -61,9 +60,9 @@ struct column_family_for_tests {
     };
     lw_shared_ptr<data> _data;
 
-    column_family_for_tests();
+    explicit column_family_for_tests(sstables::sstables_manager& sstables_manager);
 
-    explicit column_family_for_tests(schema_ptr s);
+    explicit column_family_for_tests(sstables::sstables_manager& sstables_manager, schema_ptr s);
 
     schema_ptr schema() { return _data->s; }
 

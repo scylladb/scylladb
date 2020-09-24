@@ -37,9 +37,9 @@ using namespace sstables;
 using namespace std::chrono_literals;
 
 SEASTAR_THREAD_TEST_CASE(test_schema_changes) {
+  sstables::test_env::do_with_async([] (sstables::test_env& env) {
     auto dir = tmpdir();
     storage_service_for_tests ssft;
-    auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
     int gen = 1;
 
     std::map<std::tuple<sstables::sstable::version_types, schema_ptr>, std::tuple<shared_sstable, int>> cache;
@@ -50,7 +50,6 @@ SEASTAR_THREAD_TEST_CASE(test_schema_changes) {
 
             shared_sstable created_with_base_schema;
             shared_sstable created_with_changed_schema;
-            sstables::test_env env;
             if (it == cache.end()) {
                 auto mt = make_lw_shared<memtable>(base);
                 for (auto& m : base_mutations) {
@@ -58,7 +57,7 @@ SEASTAR_THREAD_TEST_CASE(test_schema_changes) {
                 }
                 created_with_base_schema = env.make_sstable(base, dir.path().string(), gen, version, sstables::sstable::format_types::big);
                 created_with_base_schema->write_components(mt->make_flat_reader(base, tests::make_permit()), base_mutations.size(), base,
-                        test_sstables_manager.configure_writer(), mt->get_encoding_stats()).get();
+                        env.manager().configure_writer(), mt->get_encoding_stats()).get();
                 created_with_base_schema->load().get();
 
                 created_with_changed_schema = env.make_sstable(changed, dir.path().string(), gen, version, sstables::sstable::format_types::big);
@@ -88,4 +87,5 @@ SEASTAR_THREAD_TEST_CASE(test_schema_changes) {
             mr.produces_end_of_stream();
         }
     });
+  }).get();
 }

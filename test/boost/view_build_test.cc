@@ -433,7 +433,7 @@ SEASTAR_TEST_CASE(test_view_update_generator) {
 
         auto write_to_sstable = [&] (mutation m) {
             auto sst = t->make_streaming_staging_sstable();
-            sstables::sstable_writer_config sst_cfg = test_sstables_manager.configure_writer();
+            sstables::sstable_writer_config sst_cfg = e.db().local().get_user_sstables_manager().configure_writer();
             auto& pc = service::get_local_streaming_priority();
 
             sst->write_components(flat_mutation_reader_from_mutations({m}), 1ul, s, sst_cfg, {}, pc).get();
@@ -547,7 +547,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_deadlock) {
         }
 
         auto sst = t->make_streaming_staging_sstable();
-        sstables::sstable_writer_config sst_cfg = test_sstables_manager.configure_writer();
+        sstables::sstable_writer_config sst_cfg = e.local_db().get_user_sstables_manager().configure_writer();
         auto& pc = service::get_local_streaming_priority();
 
         sst->write_components(flat_mutation_reader_from_mutations({m}), 1ul, s, sst_cfg, {}, pc).get();
@@ -584,7 +584,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_register_semaphore_unit_leak
     db_cfg.enable_cache(false);
     db_cfg.enable_commitlog(false);
 
-    do_with_cql_env([] (cql_test_env& e) -> future<> {
+    do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("create table t (p text, c text, v text, primary key (p, c))").get();
         e.execute_cql("create materialized view tv as select * from t "
                       "where p is not null and c is not null and v is not null "
@@ -619,7 +619,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_register_semaphore_unit_leak
             }
 
             auto sst = t->make_streaming_staging_sstable();
-            sstables::sstable_writer_config sst_cfg = test_sstables_manager.configure_writer();
+            sstables::sstable_writer_config sst_cfg = e.local_db().get_user_sstables_manager().configure_writer();
             auto& pc = service::get_local_streaming_priority();
 
             sst->write_components(flat_mutation_reader_from_mutations({m}), 1ul, s, sst_cfg, {}, pc).get();
@@ -669,10 +669,16 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_register_semaphore_unit_leak
 
         auto fut_res = when_all_succeed(futures.begin(), futures.end());
 
+        auto watchdog_timer_done = make_ready_future<>();
+
         // Watchdog timer which will break out of the deadlock and fail the test.
-        timer watchdog_timer([&view_update_generator] {
+        timer watchdog_timer([&view_update_generator, &watchdog_timer_done] {
             // Re-start it so stop() on shutdown doesn't crash.
-            (void)view_update_generator.stop().then([&] { return view_update_generator.start(); });
+            watchdog_timer_done = watchdog_timer_done.then([&] {
+                return view_update_generator.stop().then([&] {
+                    return view_update_generator.start();
+                });
+            });
         });
 
         watchdog_timer.arm(std::chrono::seconds(60));
@@ -682,8 +688,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_register_semaphore_unit_leak
 
         watchdog_timer.cancel();
 
-        return make_ready_future<>();
-
+        watchdog_timer_done.get();
     }, std::move(test_cfg)).get();
 }
 
