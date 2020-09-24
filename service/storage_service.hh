@@ -169,14 +169,14 @@ private:
     void register_metrics();
     future<> publish_schema_version();
     void install_schema_version_change_listener();
+
+    locator::token_metadata& get_mutable_token_metadata() {
+        return _token_metadata;
+    }
 public:
     static future<> update_topology(inet_address endpoint);
 
     const locator::token_metadata& get_token_metadata() const {
-        return _token_metadata;
-    }
-
-    locator::token_metadata& get_mutable_token_metadata() {
         return _token_metadata;
     }
 
