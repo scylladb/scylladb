@@ -1673,9 +1673,10 @@ future<> storage_service::join_cluster() {
 }
 
 // Serialized
-future<> storage_service::replicate_tm_only() {
+future<> storage_service::replicate_tm_only() noexcept {
     assert(this_shard_id() == 0);
 
+  try {
     auto tm = _token_metadata;
 
     return do_with(std::move(tm), [] (token_metadata& tm) {
@@ -1685,13 +1686,16 @@ future<> storage_service::replicate_tm_only() {
             }
         });
     });
+  } catch (...) {
+      return current_exception_as_future();
+  }
 }
 
 future<> storage_service::replicate_to_all_cores() {
     return _replicate_action.trigger_later().then([self = shared_from_this()] {});
 }
 
-future<> storage_service::do_replicate_to_all_cores() {
+future<> storage_service::do_replicate_to_all_cores() noexcept {
     return replicate_tm_only().handle_exception([] (auto e) {
         slogger.error("Fail to replicate _token_metadata: {}", e);
     });

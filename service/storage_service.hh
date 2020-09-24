@@ -534,7 +534,7 @@ public:
     future<> check_and_repair_cdc_streams();
 private:
     future<> replicate_to_all_cores();
-    future<> do_replicate_to_all_cores();
+    future<> do_replicate_to_all_cores() noexcept;
     serialized_action _replicate_action;
     serialized_action _update_pending_ranges_action;
     sharded<db::system_distributed_keyspace>& _sys_dist_ks;
@@ -549,7 +549,7 @@ private:
      *
      * @return a ready future when replication is complete.
      */
-    future<> replicate_tm_only();
+    future<> replicate_tm_only() noexcept;
 
     /**
      * Handle node bootstrap
