@@ -55,6 +55,6 @@ if [[ $nr_commits == 1 ]]; then
 	git cherry-pick $commit
 	git commit --amend -m "${message}${closes}"
 else
-	git merge --no-ff --log FETCH_HEAD -m "Merge '$PR_TITLE' from $USER_NAME" -m "${PR_DESCR}${closes}"
+	git merge --no-ff --log=1000 FETCH_HEAD -m "Merge '$PR_TITLE' from $USER_NAME" -m "${PR_DESCR}${closes}"
 fi
 git commit --amend # for a manual double-check
