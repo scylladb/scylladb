@@ -40,6 +40,7 @@ public:
     virtual void erase(per_key_t k) = 0;
     virtual void drain(int batch) = 0;
     virtual void show_stats() = 0;
+    virtual void insert_and_erase(per_key_t k) = 0;
     virtual ~collection_tester() {};
 };
 
@@ -67,6 +68,11 @@ public:
                 seastar::thread::yield();
             }
         }
+    }
+    virtual void insert_and_erase(per_key_t k) override {
+        auto i = _t.emplace(k, 0);
+        assert(i.second);
+        i.first.erase(key_compare{});
     }
     virtual void show_stats() {
         struct bplus::stats st = _t.get_stats();
@@ -139,6 +145,11 @@ public:
             }
         }
     }
+    virtual void insert_and_erase(per_key_t k) override {
+        isec_node n(k);
+        auto i = _t.insert_before(_t.end(), n);
+        _t.erase(i);
+    }
     virtual void show_stats() { }
     virtual ~isec_tester() {
         _t.clear_and_dispose([] (isec_node* n) { delete n; });
@@ -164,6 +175,11 @@ public:
             }
         }
     }
+    virtual void insert_and_erase(per_key_t k) override {
+        auto i = _s.insert(k);
+        assert(i.second);
+        _s.erase(i.first);
+    }
     virtual void show_stats() { }
     virtual ~set_tester() = default;
 };
@@ -187,6 +203,11 @@ public:
             }
         }
     }
+    virtual void insert_and_erase(per_key_t k) override {
+        auto i = _m.insert({k, 0});
+        assert(i.second);
+        _m.erase(i.first);
+    }
     virtual void show_stats() { }
     virtual ~map_tester() = default;
 };
@@ -199,7 +220,7 @@ int main(int argc, char **argv) {
         ("batch", bpo::value<int>()->default_value(50), "number of operations between deferring points")
         ("iters", bpo::value<int>()->default_value(1), "number of iterations")
         ("col", bpo::value<std::string>()->default_value("bptree"), "collection to test")
-        ("test", bpo::value<std::string>()->default_value("erase"), "what to test (erase, drain, find)")
+        ("test", bpo::value<std::string>()->default_value("erase"), "what to test (erase, drain, find, oneshot)")
         ("stats", bpo::value<bool>()->default_value(false), "show stats");
 
     return app.run(argc, argv, [&app] {
@@ -240,6 +261,20 @@ int main(int argc, char **argv) {
             for (auto rep = 0; rep < iters; rep++) {
                 std::shuffle(keys.begin(), keys.end(), g);
                 seastar::thread::yield();
+
+                if (tst == "oneshot") {
+                    auto d = duration_in_seconds([&] {
+                        for (int i = 0; i < count; i++) {
+                            c->insert_and_erase(keys[i]);
+                            if ((i + 1) % batch == 0) {
+                                seastar::thread::yield();
+                            }
+                        }
+                    });
+
+                    fmt::print("one-shot: {:.6f} ms\n", d.count() * 1000);
+                    continue;
+                }
 
                 auto d = duration_in_seconds([&] {
                     for (int i = 0; i < count; i++) {
