@@ -33,16 +33,6 @@ struct key_compare {
     bool operator()(const per_key_t& a, const per_key_t& b) const noexcept { return a < b; }
 };
 
-#include "utils/bptree.hh"
-
-using namespace bplus;
-using namespace seastar;
-
-constexpr int TEST_NODE_SIZE = 4;
-
-/* On node size 32 (this test) linear search works better */
-using test_tree = tree<per_key_t, unsigned long, key_compare, TEST_NODE_SIZE, key_search::linear>;
-
 class collection_tester {
 public:
     virtual void insert(per_key_t k) = 0;
@@ -53,7 +43,12 @@ public:
     virtual ~collection_tester() {};
 };
 
+#include "utils/bptree.hh"
+
 class bptree_tester : public collection_tester {
+    /* On node size 32 (this test) linear search works better */
+    using test_tree = bplus::tree<per_key_t, unsigned long, key_compare, 4, bplus::key_search::linear>;
+
     test_tree _t;
 public:
     bptree_tester() : _t(key_compare{}) {}
