@@ -478,9 +478,7 @@ future<> gossiper::init_messaging_service_handler(bind_messaging_port do_bind) {
         return messaging_service::no_wait();
     });
     _messaging.register_gossip_echo([] {
-        return smp::submit_to(0, [] {
-            return gms::get_local_gossiper().handle_echo_msg();
-        });
+        return gms::get_local_gossiper().handle_echo_msg();
     });
     _messaging.register_gossip_shutdown([] (inet_address from) {
         // In a new fiber.
