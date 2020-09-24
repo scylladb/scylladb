@@ -37,6 +37,7 @@ class collection_tester {
 public:
     virtual void insert(per_key_t k) = 0;
     virtual void lower_bound(per_key_t k) = 0;
+    virtual void scan(int batch) = 0;
     virtual void erase(per_key_t k) = 0;
     virtual void drain(int batch) = 0;
     virtual void clear() = 0;
@@ -44,6 +45,18 @@ public:
     virtual void insert_and_erase(per_key_t k) = 0;
     virtual ~collection_tester() {};
 };
+
+template <typename Col>
+void scan_collection(Col& c, int batch) {
+    int x = 0;
+    auto i = c.begin();
+    while (i != c.end()) {
+        i++;
+        if (++x % batch == 0) {
+            seastar::thread::yield();
+        }
+    }
+}
 
 #include "utils/bptree.hh"
 
@@ -58,6 +71,9 @@ public:
     virtual void lower_bound(per_key_t k) override {
         auto i = _t.lower_bound(k);
         assert(i != _t.end());
+    }
+    virtual void scan(int batch) override {
+        scan_collection(_t, batch);
     }
     virtual void erase(per_key_t k) override { _t.erase(k); }
     virtual void drain(int batch) override {
@@ -128,6 +144,9 @@ public:
         auto i = _t.lower_bound(k, compare{});
         assert(i != _t.end());
     }
+    virtual void scan(int batch) override {
+        scan_collection(_t, batch);
+    }
     virtual void erase(per_key_t k) override {
         auto i = _t.find(k, compare{});
         _t.erase_and_dispose(i, [] (isec_node* n) { delete n; });
@@ -165,6 +184,9 @@ public:
         auto i = _s.lower_bound(k);
         assert(i != _s.end());
     }
+    virtual void scan(int batch) override {
+        scan_collection(_s, batch);
+    }
     virtual void erase(per_key_t k) override { _s.erase(k); }
     virtual void drain(int batch) override {
         int x = 0;
@@ -193,6 +215,9 @@ public:
     virtual void lower_bound(per_key_t k) override {
         auto i = _m.lower_bound(k);
         assert(i != _m.end());
+    }
+    virtual void scan(int batch) override {
+        scan_collection(_m, batch);
     }
     virtual void erase(per_key_t k) override { _m.erase(k); }
     virtual void drain(int batch) override {
@@ -334,6 +359,12 @@ int main(int argc, char **argv) {
                     });
 
                     fmt::print("find: {:.6f} ms\n", d.count() * 1000);
+                } else if (tst == "scan") {
+                    d = duration_in_seconds([&] {
+                        c->scan(batch);
+                    });
+
+                    fmt::print("scan: {:.6f} ms\n", d.count() * 1000);
                 }
 
                 c->clear();
