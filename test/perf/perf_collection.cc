@@ -229,6 +229,8 @@ int main(int argc, char **argv) {
 
                     fmt::print("find: {:.6f} ms\n", d.count() * 1000);
                 }
+
+                c->clear();
             }
         });
     });
