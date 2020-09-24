@@ -39,6 +39,7 @@ public:
     virtual void lower_bound(per_key_t k) = 0;
     virtual void erase(per_key_t k) = 0;
     virtual void drain(int batch) = 0;
+    virtual void clear() = 0;
     virtual void show_stats() = 0;
     virtual void insert_and_erase(per_key_t k) = 0;
     virtual ~collection_tester() {};
@@ -69,6 +70,7 @@ public:
             }
         }
     }
+    virtual void clear() override { _t.clear(); }
     virtual void insert_and_erase(per_key_t k) override {
         auto i = _t.emplace(k, 0);
         assert(i.second);
@@ -86,9 +88,7 @@ public:
         }
         fmt::print("datas:     {}\n", st.datas);
     }
-    virtual ~bptree_tester() {
-        _t.clear();
-    }
+    virtual ~bptree_tester() { clear(); }
 };
 
 #include "intrusive_set_external_comparator.hh"
@@ -145,15 +145,16 @@ public:
             }
         }
     }
+    virtual void clear() override {
+        _t.clear_and_dispose([] (isec_node* n) { delete n; });
+    }
     virtual void insert_and_erase(per_key_t k) override {
         isec_node n(k);
         auto i = _t.insert_before(_t.end(), n);
         _t.erase(i);
     }
     virtual void show_stats() { }
-    virtual ~isec_tester() {
-        _t.clear_and_dispose([] (isec_node* n) { delete n; });
-    }
+    virtual ~isec_tester() { clear(); }
 };
 
 class set_tester : public collection_tester {
@@ -175,6 +176,7 @@ public:
             }
         }
     }
+    virtual void clear() override { _s.clear(); }
     virtual void insert_and_erase(per_key_t k) override {
         auto i = _s.insert(k);
         assert(i.second);
@@ -203,6 +205,7 @@ public:
             }
         }
     }
+    virtual void clear() override { _m.clear(); }
     virtual void insert_and_erase(per_key_t k) override {
         auto i = _m.insert({k, 0});
         assert(i.second);
@@ -220,7 +223,7 @@ int main(int argc, char **argv) {
         ("batch", bpo::value<int>()->default_value(50), "number of operations between deferring points")
         ("iters", bpo::value<int>()->default_value(1), "number of iterations")
         ("col", bpo::value<std::string>()->default_value("bptree"), "collection to test")
-        ("test", bpo::value<std::string>()->default_value("erase"), "what to test (erase, drain, find, oneshot)")
+        ("test", bpo::value<std::string>()->default_value("erase"), "what to test (erase, drain, clear, find, oneshot)")
         ("stats", bpo::value<bool>()->default_value(false), "show stats");
 
     return app.run(argc, argv, [&app] {
@@ -311,6 +314,12 @@ int main(int argc, char **argv) {
                     });
 
                     fmt::print("drain: {:.6f} ms\n", d.count() * 1000);
+                } else if (tst == "clear") {
+                    d = duration_in_seconds([&] {
+                        c->clear();
+                    });
+
+                    fmt::print("clear: {:.6f} ms\n", d.count() * 1000);
                 } else if (tst == "find") {
                     std::shuffle(keys.begin(), keys.end(), g);
                     seastar::thread::yield();
