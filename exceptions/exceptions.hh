@@ -228,6 +228,8 @@ struct read_failure_exception : public request_failure_exception {
 struct overloaded_exception : public cassandra_exception {
     overloaded_exception(size_t c) noexcept :
         cassandra_exception(exception_code::OVERLOADED, prepare_message("Too many in flight hints: %lu", c)) {}
+    explicit overloaded_exception(sstring msg) noexcept :
+        cassandra_exception(exception_code::OVERLOADED, std::move(msg)) {}
 };
 
 class request_validation_exception : public cassandra_exception {
