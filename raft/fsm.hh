@@ -343,6 +343,28 @@ void fsm::step(server_id from, Message&& msg) {
                 _my_id, _current_term, from, msg.current_term);
         }
         return;
+
+    } else /* _current_term == msg.current_term */ {
+        if constexpr (std::is_same_v<Message, append_request_recv> ||
+                      std::is_same_v<Message, install_snapshot>) {
+            if (is_candidate()) {
+                // 3.4 Leader Election
+                // While waiting for votes, a candidate may receive an AppendEntries
+                // RPC from another server claiming to be leader. If the
+                // leader’s term (included in its RPC) is at least as large as the
+                // candidate’s current term, then the candidate recognizes the
+                // leader as legitimate and returns to follower state.
+                become_follower(from);
+            } else if (_current_leader == server_id{}) {
+                // Earlier we changed our term to match a candidate's
+                // term. Now we get the first message from the
+                // newly elected leader. Keep track of the current
+                // leader to avoid starting an election if the
+                // leader becomes idle.
+                _current_leader = from;
+            }
+            assert(_current_leader == from);
+        }
     }
 
     auto visitor = [this, from, msg = std::move(msg)](auto state) mutable {
@@ -350,16 +372,6 @@ void fsm::step(server_id from, Message&& msg) {
 
         if constexpr (std::is_same_v<Message, append_request_recv>) {
             // Got AppendEntries RPC from self
-            assert((!std::is_same_v<State, leader>));
-            // 3.4 Leader Election
-            // While waiting for votes, a candidate may receive an AppendEntries
-            // RPC from another server claiming to be leader. If the
-            // leader’s term (included in its RPC) is at least as large as the
-            // candidate’s current term, then the candidate recognizes the
-            // leader as legitimate and returns to follower state.
-            if constexpr (std::is_same_v<State, candidate>) {
-                become_follower(from);
-            }
             append_entries(from, std::move(msg));
         } else if constexpr (std::is_same_v<Message, append_reply>) {
             if constexpr (!std::is_same_v<State, leader>) {
