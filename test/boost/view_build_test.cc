@@ -559,7 +559,11 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_deadlock) {
         }).get0();
 
         // consume all units except what is needed to admit a single reader.
-        sem.consume(sem.initial_resources() - reader_resources{1, new_reader_base_cost});
+        const auto consumed_resources = sem.initial_resources() - reader_resources{1, new_reader_base_cost};
+        sem.consume(consumed_resources);
+        auto release_resources = defer([&sem, consumed_resources] {
+            sem.signal(consumed_resources);
+        });
 
         testlog.info("res = [.count={}, .memory={}]", sem.available_resources().count, sem.available_resources().memory);
 
