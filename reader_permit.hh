@@ -119,8 +119,6 @@ public:
     resource_units consume_memory(size_t memory = 0);
 
     resource_units consume_resources(reader_resources res);
-
-    void release();
 };
 
 template <typename Char>
