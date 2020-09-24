@@ -85,6 +85,66 @@ public:
     }
 };
 
+#include "intrusive_set_external_comparator.hh"
+
+class isec_tester : public collection_tester {
+    class isec_node {
+        friend class isec_tester;
+        intrusive_set_external_comparator_member_hook link;
+        per_key_t key;
+    public:
+        explicit isec_node(per_key_t k) : key(k) {}
+    };
+    class compare {
+        key_compare cmp;
+    public:
+        bool operator()(const isec_node& a, const isec_node& b) const {
+            return cmp(a.key, b.key);
+        }
+        bool operator()(per_key_t a, const isec_node& b) const {
+            return cmp(a, b.key);
+        }
+        bool operator()(const isec_node& a, per_key_t b) const {
+            return cmp(a.key, b);
+        }
+    };
+
+    using test_tree = intrusive_set_external_comparator<isec_node, &isec_node::link>;
+    test_tree _t;
+public:
+    virtual void insert(per_key_t k) override {
+        auto i = _t.lower_bound(k, compare{});
+        auto n = std::make_unique<isec_node>(k);
+        _t.insert_before(i, *n);
+        n.release();
+    }
+    virtual void lower_bound(per_key_t k) override {
+        auto i = _t.lower_bound(k, compare{});
+        assert(i != _t.end());
+    }
+    virtual void erase(per_key_t k) override {
+        auto i = _t.find(k, compare{});
+        _t.erase_and_dispose(i, [] (isec_node* n) { delete n; });
+    }
+    virtual void drain(int batch) override {
+        int x = 0;
+        while (true) {
+            isec_node* n = _t.unlink_leftmost_without_rebalance();
+            if (n == nullptr) {
+                break;
+            }
+            delete n;
+            if (++x % batch == 0) {
+                seastar::thread::yield();
+            }
+        }
+    }
+    virtual void show_stats() { }
+    virtual ~isec_tester() {
+        _t.clear_and_dispose([] (isec_node* n) { delete n; });
+    }
+};
+
 class set_tester : public collection_tester {
     std::set<per_key_t> _s;
 public:
@@ -159,6 +219,8 @@ int main(int argc, char **argv) {
                 c = std::make_unique<set_tester>();
             } else if (col == "map") {
                 c = std::make_unique<map_tester>();
+            } else if (col == "isec") {
+                c = std::make_unique<isec_tester>();
             } else {
                 fmt::print("Unknown collection\n");
                 return;
