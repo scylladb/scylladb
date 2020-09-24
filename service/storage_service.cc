@@ -1608,6 +1608,8 @@ future<> storage_service::uninit_messaging_service_part() {
 }
 
 future<> storage_service::init_server(bind_messaging_port do_bind) {
+    assert(this_shard_id() == 0);
+
     return seastar::async([this, do_bind] {
         _initialized = true;
 

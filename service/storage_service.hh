@@ -337,6 +337,9 @@ public:
      *
      * It is safe to start the API after init_messaging_service_part
      * completed
+     *
+     * Must be called on shard 0.
+     *
      * \see init_messaging_service_part
      */
     future<> init_server(bind_messaging_port do_bind = bind_messaging_port::yes);
