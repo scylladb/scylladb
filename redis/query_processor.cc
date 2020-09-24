@@ -52,8 +52,10 @@ future<> query_processor::stop() {
 }
 
 future<redis_message> query_processor::process(request&& req, redis::redis_options& opts, service_permit permit) {
-    return with_gate(_pending_command_gate, [this, req = std::move(req), &opts, permit] () mutable {
-        return command_factory::create_execute(_proxy, std::move(req), opts, permit);
+    return do_with(std::move(req), [this, &opts, permit] (auto& req) {
+        return with_gate(_pending_command_gate, [this, &req, &opts, permit] () mutable {
+            return command_factory::create_execute(_proxy, req, opts, permit);
+        });
     });
 }
 

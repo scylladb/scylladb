@@ -28,9 +28,9 @@ namespace redis {
 
 static logging::logger logging("command_factory");
 
-future<redis_message> command_factory::create_execute(service::storage_proxy& proxy, request&& req, redis::redis_options& options, service_permit permit)
+future<redis_message> command_factory::create_execute(service::storage_proxy& proxy, request& req, redis::redis_options& options, service_permit permit)
 {
-    static thread_local std::unordered_map<bytes, std::function<future<redis_message> (service::storage_proxy& proxy, request&& req, redis::redis_options& options, service_permit permit)>> _commands =
+    static thread_local std::unordered_map<bytes, std::function<future<redis_message> (service::storage_proxy& proxy, request& req, redis::redis_options& options, service_permit permit)>> _commands =
     { 
         { "ping", commands::ping },
         { "select", commands::select },
@@ -51,11 +51,11 @@ future<redis_message> command_factory::create_execute(service::storage_proxy& pr
     };
     auto&& command = _commands.find(req._command);
     if (command != _commands.end()) {
-        return (command->second)(proxy, std::move(req), options, permit);
+        return (command->second)(proxy, req, options, permit);
     }
     auto& b = req._command;
     logging.error("receive unknown command = {}", sstring(reinterpret_cast<const char*>(b.data()), b.size()));
-    return commands::unknown(proxy, std::move(req), options, permit);
+    return commands::unknown(proxy, req, options, permit);
 }
 
 }
