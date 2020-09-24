@@ -27,6 +27,7 @@
 
 
 reader_permit::impl::impl(reader_concurrency_semaphore& semaphore, reader_resources base_cost) : semaphore(semaphore), base_cost(base_cost) {
+    semaphore.consume(base_cost);
 }
 
 reader_permit::impl::~impl() {
@@ -88,7 +89,6 @@ void reader_concurrency_semaphore::signal(const resources& r) noexcept {
     _resources += r;
     while (!_wait_list.empty() && has_available_units(_wait_list.front().res)) {
         auto& x = _wait_list.front();
-        _resources -= x.res;
         try {
             x.pr.set_value(reader_permit(*this, x.res));
         } catch (...) {
@@ -160,7 +160,6 @@ future<reader_permit> reader_concurrency_semaphore::wait_admission(size_t memory
         --_inactive_read_stats.population;
     }
     if (may_proceed(r)) {
-        _resources -= r;
         return make_ready_future<reader_permit>(reader_permit(*this, r));
     }
     promise<reader_permit> pr;
@@ -170,7 +169,6 @@ future<reader_permit> reader_concurrency_semaphore::wait_admission(size_t memory
 }
 
 reader_permit reader_concurrency_semaphore::consume_resources(resources r) {
-    _resources -= r;
     return reader_permit(*this, r);
 }
 

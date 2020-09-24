@@ -128,6 +128,10 @@ private:
         return has_available_units(r) && _wait_list.empty();
     }
 
+    void consume(resources r) {
+        _resources -= r;
+    }
+
     void consume_memory(size_t memory) {
         _resources.memory -= memory;
     }
