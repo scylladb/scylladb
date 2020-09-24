@@ -827,6 +827,21 @@ mutation_source make_combined_mutation_source(std::vector<mutation_source> adden
     });
 }
 
+namespace {
+
+struct remote_fill_buffer_result {
+    foreign_ptr<std::unique_ptr<const circular_buffer<mutation_fragment>>> buffer;
+    bool end_of_stream = false;
+
+    remote_fill_buffer_result() = default;
+    remote_fill_buffer_result(circular_buffer<mutation_fragment>&& buffer, bool end_of_stream)
+        : buffer(make_foreign(std::make_unique<const circular_buffer<mutation_fragment>>(std::move(buffer))))
+        , end_of_stream(end_of_stream) {
+    }
+};
+
+}
+
 /// See make_foreign_reader() for description.
 class foreign_reader : public flat_mutation_reader::impl {
     template <typename T>
@@ -931,19 +946,12 @@ future<> foreign_reader::fill_buffer(db::timeout_clock::time_point timeout) {
         return make_ready_future();
     }
 
-    struct fill_buffer_result {
-        foreign_unique_ptr<fragment_buffer> buffer;
-        bool end_of_stream;
-    };
-
     return forward_operation(timeout, [reader = _reader.get(), timeout] () {
         auto f = reader->is_buffer_empty() ? reader->fill_buffer(timeout) : make_ready_future<>();
         return f.then([=] {
-            return make_ready_future<fill_buffer_result>(fill_buffer_result{
-                    std::make_unique<fragment_buffer>(reader->detach_buffer()),
-                    reader->is_end_of_stream()});
+            return make_ready_future<remote_fill_buffer_result>(remote_fill_buffer_result(reader->detach_buffer(), reader->is_end_of_stream()));
         });
-    }).then([this] (fill_buffer_result res) mutable {
+    }).then([this] (remote_fill_buffer_result res) mutable {
         _end_of_stream = res.end_of_stream;
         for (const auto& mf : *res.buffer) {
             // Need a copy since the mf is on the remote shard.
@@ -993,17 +1001,6 @@ flat_mutation_reader make_foreign_reader(schema_ptr schema,
 }
 
 namespace {
-
-struct fill_buffer_result {
-    foreign_ptr<std::unique_ptr<const circular_buffer<mutation_fragment>>> buffer;
-    bool end_of_stream = false;
-
-    fill_buffer_result() = default;
-    fill_buffer_result(circular_buffer<mutation_fragment> buffer, bool end_of_stream)
-        : buffer(make_foreign(std::make_unique<const circular_buffer<mutation_fragment>>(std::move(buffer))))
-        , end_of_stream(end_of_stream) {
-    }
-};
 
 class inactive_evictable_reader : public reader_concurrency_semaphore::inactive_read {
     flat_mutation_reader_opt _reader;
@@ -1655,12 +1652,12 @@ void shard_reader::stop() noexcept {
 }
 
 future<> shard_reader::do_fill_buffer(db::timeout_clock::time_point timeout) {
-    auto fill_buf_fut = make_ready_future<fill_buffer_result>();
+    auto fill_buf_fut = make_ready_future<remote_fill_buffer_result>();
     const auto pending_next_partition = std::exchange(_pending_next_partition, false);
 
     struct reader_and_buffer_fill_result {
         foreign_ptr<std::unique_ptr<evictable_reader>> reader;
-        fill_buffer_result result;
+        remote_fill_buffer_result result;
     };
 
     if (!_reader) {
@@ -1681,7 +1678,7 @@ future<> shard_reader::do_fill_buffer(db::timeout_clock::time_point timeout) {
             tracing::trace(_trace_state, "Creating shard reader on shard: {}", this_shard_id());
             auto f = rreader->fill_buffer(timeout);
             return f.then([rreader = std::move(rreader)] () mutable {
-                auto res = fill_buffer_result(rreader->detach_buffer(), rreader->is_end_of_stream());
+                auto res = remote_fill_buffer_result(rreader->detach_buffer(), rreader->is_end_of_stream());
                 return make_ready_future<reader_and_buffer_fill_result>(reader_and_buffer_fill_result{std::move(rreader), std::move(res)});
             });
         }).then([this, timeout] (reader_and_buffer_fill_result res) {
@@ -1694,12 +1691,12 @@ future<> shard_reader::do_fill_buffer(db::timeout_clock::time_point timeout) {
                 _reader->next_partition();
             }
             return _reader->fill_buffer(timeout).then([this] {
-                return fill_buffer_result(_reader->detach_buffer(), _reader->is_end_of_stream());
+                return remote_fill_buffer_result(_reader->detach_buffer(), _reader->is_end_of_stream());
             });
         });
     }
 
-    return fill_buf_fut.then([this, zis = shared_from_this()] (fill_buffer_result res) mutable {
+    return fill_buf_fut.then([this, zis = shared_from_this()] (remote_fill_buffer_result res) mutable {
         _end_of_stream = res.end_of_stream;
         for (const auto& mf : *res.buffer) {
             push_mutation_fragment(mutation_fragment(*_schema, mf));
