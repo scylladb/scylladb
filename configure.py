@@ -1731,8 +1731,8 @@ with open(buildfile_tmp, 'w') as f:
             f.write('  subdir = $builddir/{mode}/abseil\n'.format(**locals()))
             f.write('  target = {lib}\n'.format(**locals()))
 
-    mode = 'dev' if 'dev' in modes else modes[0]
-    f.write('build checkheaders: phony || {}\n'.format(' '.join(['$builddir/{}/{}.o'.format(mode, hh) for hh in headers])))
+    checkheaders_mode = 'dev' if 'dev' in modes else modes[0]
+    f.write('build checkheaders: phony || {}\n'.format(' '.join(['$builddir/{}/{}.o'.format(checkheaders_mode, hh) for hh in headers])))
 
     f.write(
             'build build: phony {}\n'.format(' '.join([f'{mode}-build' for mode in build_modes]))
