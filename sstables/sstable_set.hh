@@ -58,7 +58,7 @@ class sstable_set : public enable_lw_shared_from_this<sstable_set> {
     std::unordered_map<utils::UUID, sstable_run> _all_runs;
 public:
     ~sstable_set();
-    sstable_set(std::unique_ptr<sstable_set_impl> impl, schema_ptr s, lw_shared_ptr<sstable_list> all);
+    sstable_set(std::unique_ptr<sstable_set_impl> impl, schema_ptr s);
     sstable_set(const sstable_set&);
     sstable_set(sstable_set&&) noexcept;
     sstable_set& operator=(const sstable_set&);
@@ -162,7 +162,7 @@ flat_mutation_reader make_restricted_range_sstable_reader(
     mutation_reader::forwarding,
     read_monitor_generator& rmg = default_read_monitor_generator());
 
-sstable_set make_partitioned_sstable_set(schema_ptr schema, lw_shared_ptr<sstable_list> all, bool use_level_metadata = true);
+sstable_set make_partitioned_sstable_set(schema_ptr schema, bool use_level_metadata = true);
 
 std::ostream& operator<<(std::ostream& os, const sstables::sstable_run& run);
 

@@ -63,10 +63,13 @@ std::ostream& operator<<(std::ostream& os, const sstables::sstable_run& run) {
     return os;
 }
 
-sstable_set::sstable_set(std::unique_ptr<sstable_set_impl> impl, schema_ptr s, lw_shared_ptr<sstable_list> all)
+sstable_set::sstable_set(std::unique_ptr<sstable_set_impl> impl, schema_ptr s)
         : _impl(std::move(impl))
         , _schema(std::move(s))
-        , _all(std::move(all)) {
+        , _all(make_lw_shared<sstable_list>(sstable_list())) {
+    if (!_impl->empty()) {
+        throw std::logic_error("Can't create an sstable_set using a non-empty sstable_set_impl");
+    }
 }
 
 sstable_set::sstable_set(const sstable_set& x)
@@ -169,6 +172,10 @@ void bag_sstable_set::erase(shared_sstable sst) {
     if (it != _sstables.end()){
         _sstables.erase(it);
     }
+}
+
+bool bag_sstable_set::empty() const {
+    return _sstables.empty();
 }
 
 class bag_sstable_set::incremental_selector : public incremental_selector_impl {
@@ -299,6 +306,10 @@ void partitioned_sstable_set::erase(shared_sstable sst) {
     }
 }
 
+bool partitioned_sstable_set::empty() const {
+    return _unleveled_sstables.empty() && _leveled_sstables.empty();
+}
+
 class partitioned_sstable_set::incremental_selector : public incremental_selector_impl {
     schema_ptr _schema;
     const std::vector<shared_sstable>& _unleveled_sstables;
@@ -394,6 +405,10 @@ void time_series_sstable_set::erase(shared_sstable sst) {
     if (it != last) {
         _sstables->erase(it);
     }
+}
+
+bool time_series_sstable_set::empty() const {
+    return _sstables->empty();
 }
 
 std::unique_ptr<incremental_selector_impl> time_series_sstable_set::make_incremental_selector() const {
@@ -535,16 +550,15 @@ std::unique_ptr<sstable_set_impl> time_window_compaction_strategy::make_sstable_
     return std::make_unique<time_series_sstable_set>(std::move(schema));
 }
 
-sstable_set make_partitioned_sstable_set(schema_ptr schema, lw_shared_ptr<sstable_list> all, bool use_level_metadata) {
-    return sstable_set(std::make_unique<partitioned_sstable_set>(schema, use_level_metadata), schema, std::move(all));
+sstable_set make_partitioned_sstable_set(schema_ptr schema, bool use_level_metadata) {
+    return sstable_set(std::make_unique<partitioned_sstable_set>(schema, use_level_metadata), schema);
 }
 
 sstable_set
 compaction_strategy::make_sstable_set(schema_ptr schema) const {
     return sstable_set(
             _compaction_strategy_impl->make_sstable_set(schema),
-            schema,
-            make_lw_shared<sstable_list>());
+            schema);
 }
 
 using sstable_reader_factory_type = std::function<flat_mutation_reader(shared_sstable&, const dht::partition_range& pr)>;

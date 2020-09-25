@@ -41,6 +41,7 @@ public:
     virtual std::vector<shared_sstable> select(const dht::partition_range& range) const = 0;
     virtual void insert(shared_sstable sst) = 0;
     virtual void erase(shared_sstable sst) = 0;
+    virtual bool empty() const = 0;
     virtual std::unique_ptr<incremental_selector_impl> make_incremental_selector() const = 0;
 
     virtual flat_mutation_reader create_single_key_sstable_reader(
@@ -65,6 +66,7 @@ public:
     virtual std::vector<shared_sstable> select(const dht::partition_range& range = query::full_partition_range) const override;
     virtual void insert(shared_sstable sst) override;
     virtual void erase(shared_sstable sst) override;
+    virtual bool empty() const override;
     virtual std::unique_ptr<incremental_selector_impl> make_incremental_selector() const override;
     class incremental_selector;
 };
@@ -103,6 +105,7 @@ public:
     virtual std::vector<shared_sstable> select(const dht::partition_range& range) const override;
     virtual void insert(shared_sstable sst) override;
     virtual void erase(shared_sstable sst) override;
+    virtual bool empty() const override;
     virtual std::unique_ptr<incremental_selector_impl> make_incremental_selector() const override;
     class incremental_selector;
 };
@@ -124,6 +127,7 @@ public:
     virtual std::vector<shared_sstable> select(const dht::partition_range& range = query::full_partition_range) const override;
     virtual void insert(shared_sstable sst) override;
     virtual void erase(shared_sstable sst) override;
+    virtual bool empty() const override;
     virtual std::unique_ptr<incremental_selector_impl> make_incremental_selector() const override;
 
     std::unique_ptr<position_reader_queue> make_min_position_reader_queue(
