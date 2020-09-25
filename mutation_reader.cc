@@ -30,6 +30,7 @@
 #include "schema_registry.hh"
 #include "mutation_compactor.hh"
 
+logging::logger mrlog("mutation_reader");
 
 static constexpr size_t merger_small_vector_size = 4;
 
@@ -1029,6 +1030,13 @@ private:
     bool _reader_created = false;
     bool _drop_partition_start = false;
     bool _drop_static_row = false;
+    // Trim range tombstones on the start of the buffer to the start of the read
+    // range (_next_position_in_partition). Set after reader recreation.
+    // Also validate the first not-trimmed mutation fragment's position.
+    bool _trim_range_tombstones = false;
+    // Validate the partition key of the first emitted partition, set after the
+    // reader was recreated.
+    bool _validate_partition_key = false;
     position_in_partition::tri_compare _tri_cmp;
 
     std::optional<dht::decorated_key> _last_pkey;
@@ -1050,7 +1058,10 @@ private:
     void adjust_partition_slice();
     flat_mutation_reader recreate_reader();
     flat_mutation_reader resume_or_create_reader();
+    void maybe_validate_partition_start(const circular_buffer<mutation_fragment>& buffer);
+    void validate_position_in_partition(position_in_partition_view pos) const;
     bool should_drop_fragment(const mutation_fragment& mf);
+    bool maybe_trim_range_tombstone(mutation_fragment& mf) const;
     future<> do_fill_buffer(flat_mutation_reader& reader, db::timeout_clock::time_point timeout);
     future<> fill_buffer(flat_mutation_reader& reader, db::timeout_clock::time_point timeout);
 
@@ -1124,16 +1135,11 @@ void evictable_reader::update_next_position(flat_mutation_reader& reader) {
             _next_position_in_partition = position_in_partition::before_all_clustered_rows();
             break;
         case partition_region::clustered:
-            if (reader.is_buffer_empty()) {
-                _next_position_in_partition = position_in_partition::after_key(last_pos);
-            } else {
-               const auto& next_frag = reader.peek_buffer();
-               if (next_frag.is_end_of_partition()) {
+            if (!reader.is_buffer_empty() && reader.peek_buffer().is_end_of_partition()) {
                    push_mutation_fragment(reader.pop_mutation_fragment());
                    _next_position_in_partition = position_in_partition::for_partition_start();
-               } else {
-                   _next_position_in_partition = position_in_partition(next_frag.position());
-               }
+            } else {
+                _next_position_in_partition = position_in_partition::after_key(last_pos);
             }
             break;
         case partition_region::partition_end:
@@ -1157,6 +1163,9 @@ void evictable_reader::adjust_partition_slice() {
 flat_mutation_reader evictable_reader::recreate_reader() {
     const dht::partition_range* range = _pr;
     const query::partition_slice* slice = &_ps;
+
+    _range_override.reset();
+    _slice_override.reset();
 
     if (_last_pkey) {
         bool partition_range_is_inclusive = true;
@@ -1194,6 +1203,9 @@ flat_mutation_reader evictable_reader::recreate_reader() {
         range = &*_range_override;
     }
 
+    _trim_range_tombstones = true;
+    _validate_partition_key = true;
+
     return _ms.make_reader(
             _schema,
             _permit,
@@ -1220,6 +1232,78 @@ flat_mutation_reader evictable_reader::resume_or_create_reader() {
     return recreate_reader();
 }
 
+template <typename... Arg>
+static void require(bool condition, const char* msg, const Arg&... arg) {
+    if (!condition) {
+        on_internal_error(mrlog, format(msg, arg...));
+    }
+}
+
+void evictable_reader::maybe_validate_partition_start(const circular_buffer<mutation_fragment>& buffer) {
+    if (!_validate_partition_key || buffer.empty()) {
+        return;
+    }
+
+    // If this is set we can assume the first fragment is a partition-start.
+    const auto& ps = buffer.front().as_partition_start();
+    const auto tri_cmp = dht::ring_position_comparator(*_schema);
+    // If we recreated the reader after fast-forwarding it we won't have
+    // _last_pkey set. In this case it is enough to check if the partition
+    // is in range.
+    if (_last_pkey) {
+        const auto cmp_res = tri_cmp(*_last_pkey, ps.key());
+        if (_drop_partition_start) { // should be the same partition
+            require(
+                    cmp_res == 0,
+                    "{}(): validation failed, expected partition with key equal to _last_pkey {} due to _drop_partition_start being set, but got {}",
+                    __FUNCTION__,
+                    *_last_pkey,
+                    ps.key());
+        } else { // should be a larger partition
+            require(
+                    cmp_res < 0,
+                    "{}(): validation failed, expected partition with key larger than _last_pkey {} due to _drop_partition_start being unset, but got {}",
+                    __FUNCTION__,
+                    *_last_pkey,
+                    ps.key());
+        }
+    }
+    const auto& prange = _range_override ? *_range_override : *_pr;
+    require(
+            // TODO: somehow avoid this copy
+            prange.contains(ps.key(), tri_cmp),
+            "{}(): validation failed, expected partition with key that falls into current range {}, but got {}",
+            __FUNCTION__,
+            prange,
+            ps.key());
+
+    _validate_partition_key = false;
+}
+
+void evictable_reader::validate_position_in_partition(position_in_partition_view pos) const {
+    require(
+            _tri_cmp(_next_position_in_partition, pos) <= 0,
+            "{}(): validation failed, expected position in partition that is larger-than-equal than _next_position_in_partition {}, but got {}",
+            __FUNCTION__,
+            _next_position_in_partition,
+            pos);
+
+    if (_slice_override && pos.region() == partition_region::clustered) {
+        const auto ranges = _slice_override->row_ranges(*_schema, _last_pkey->key());
+        const bool any_contains = std::any_of(ranges.begin(), ranges.end(), [this, &pos] (const query::clustering_range& cr) {
+            // TODO: somehow avoid this copy
+            auto range = position_range(cr);
+            return range.contains(*_schema, pos);
+        });
+        require(
+                any_contains,
+                "{}(): validation failed, expected clustering fragment that is included in the slice {}, but got {}",
+                __FUNCTION__,
+                *_slice_override,
+                pos);
+    }
+}
+
 bool evictable_reader::should_drop_fragment(const mutation_fragment& mf) {
     if (_drop_partition_start && mf.is_partition_start()) {
         _drop_partition_start = false;
@@ -1232,12 +1316,50 @@ bool evictable_reader::should_drop_fragment(const mutation_fragment& mf) {
     return false;
 }
 
+bool evictable_reader::maybe_trim_range_tombstone(mutation_fragment& mf) const {
+    // We either didn't read a partition yet (evicted after fast-forwarding) or
+    // didn't stop in a clustering region. We don't need to trim range
+    // tombstones in either case.
+    if (!_last_pkey || _next_position_in_partition.region() != partition_region::clustered) {
+        return false;
+    }
+    if (!mf.is_range_tombstone()) {
+        validate_position_in_partition(mf.position());
+        return false;
+    }
+
+    if (_tri_cmp(mf.position(), _next_position_in_partition) >= 0) {
+        validate_position_in_partition(mf.position());
+        return false; // rt in range, no need to trim
+    }
+
+    auto& rt = mf.as_mutable_range_tombstone();
+
+    require(
+            _tri_cmp(_next_position_in_partition, rt.end_position()) <= 0,
+            "{}(): validation failed, expected range tombstone with end pos larger than _next_position_in_partition {}, but got {}",
+            __FUNCTION__,
+            _next_position_in_partition,
+            rt.end_position());
+
+    rt.set_start(*_schema, position_in_partition_view::before_key(_next_position_in_partition));
+
+    return true;
+}
+
 future<> evictable_reader::do_fill_buffer(flat_mutation_reader& reader, db::timeout_clock::time_point timeout) {
     if (!_drop_partition_start && !_drop_static_row) {
-        return reader.fill_buffer(timeout);
+        auto fill_buf_fut = reader.fill_buffer(timeout);
+        if (_validate_partition_key) {
+            fill_buf_fut = fill_buf_fut.then([this, &reader] {
+                maybe_validate_partition_start(reader.buffer());
+            });
+        }
+        return fill_buf_fut;
     }
     return repeat([this, &reader, timeout] {
         return reader.fill_buffer(timeout).then([this, &reader] {
+            maybe_validate_partition_start(reader.buffer());
             while (!reader.is_buffer_empty() && should_drop_fragment(reader.peek_buffer())) {
                 reader.pop_mutation_fragment();
             }
@@ -1250,6 +1372,11 @@ future<> evictable_reader::fill_buffer(flat_mutation_reader& reader, db::timeout
     return do_fill_buffer(reader, timeout).then([this, &reader, timeout] {
         if (reader.is_buffer_empty()) {
             return make_ready_future<>();
+        }
+        while (_trim_range_tombstones && !reader.is_buffer_empty()) {
+            auto mf = reader.pop_mutation_fragment();
+            _trim_range_tombstones = maybe_trim_range_tombstone(mf);
+            push_mutation_fragment(std::move(mf));
         }
         reader.move_buffer_content_to(*this);
         auto stop = [this, &reader] {
@@ -1291,7 +1418,13 @@ future<> evictable_reader::fill_buffer(flat_mutation_reader& reader, db::timeout
             if (reader.is_buffer_empty()) {
                 return do_fill_buffer(reader, timeout);
             }
-            push_mutation_fragment(reader.pop_mutation_fragment());
+            if (_trim_range_tombstones) {
+                auto mf = reader.pop_mutation_fragment();
+                _trim_range_tombstones = maybe_trim_range_tombstone(mf);
+                push_mutation_fragment(std::move(mf));
+            } else {
+                push_mutation_fragment(reader.pop_mutation_fragment());
+            }
             return make_ready_future<>();
         });
     }).then([this, &reader] {
