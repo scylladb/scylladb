@@ -34,6 +34,7 @@
 
 #include "test/lib/mutation_assertions.hh"
 #include "test/lib/reader_permit.hh"
+#include "test/lib/simple_schema.hh"
 
 // A StreamedMutationConsumer which distributes fragments randomly into several mutations.
 class fragment_scatterer {
@@ -406,4 +407,66 @@ SEASTAR_TEST_CASE(test_schema_upgrader_is_equivalent_with_mutation_upgrade) {
             }
         });
     });
+}
+
+SEASTAR_TEST_CASE(test_mutation_fragment_mutate_exception_safety) {
+    struct dummy_exception { };
+
+    reader_concurrency_semaphore sem(1, 100, get_name());
+    auto permit = sem.make_permit();
+
+    simple_schema s;
+
+    const auto available_res = sem.available_resources();
+    const sstring val(1024, 'a');
+
+    // partition start
+    {
+        try {
+            auto ps = mutation_fragment(*s.schema(), permit, partition_start(s.make_pkey(0), {}));
+            ps.mutate_as_partition_start(*s.schema(), [&] (partition_start&) {
+                throw dummy_exception{};
+            });
+        } catch (dummy_exception&) { }
+        BOOST_REQUIRE(available_res == sem.available_resources());
+    }
+
+    // static row
+    {
+        try {
+            auto sr = s.make_static_row(val);
+            // Copy to move to our permit.
+            sr = mutation_fragment(*s.schema(), permit, sr);
+            sr.mutate_as_clustering_row(*s.schema(), [&] (clustering_row&) {
+                throw dummy_exception{};
+            });
+        } catch (dummy_exception&) { }
+        BOOST_REQUIRE(available_res == sem.available_resources());
+    }
+
+    // clustering row
+    {
+        try {
+            auto cr = s.make_row(s.make_ckey(0), val);
+            // Copy to move to our permit.
+            cr = mutation_fragment(*s.schema(), permit, cr);
+            cr.mutate_as_clustering_row(*s.schema(), [&] (clustering_row&) {
+                throw dummy_exception{};
+            });
+        } catch (dummy_exception&) { }
+        BOOST_REQUIRE(available_res == sem.available_resources());
+    }
+
+    // range tombstone
+    {
+        try {
+            auto rt = mutation_fragment(*s.schema(), permit, s.make_range_tombstone(query::clustering_range::make_ending_with(s.make_ckey(0))));
+            rt.mutate_as_range_tombstone(*s.schema(), [&] (range_tombstone&) {
+                throw dummy_exception{};
+            });
+        } catch (dummy_exception&) { }
+        BOOST_REQUIRE(available_res == sem.available_resources());
+    }
+
+    return make_ready_future<>();
 }
