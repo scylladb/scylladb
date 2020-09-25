@@ -741,6 +741,7 @@ int main(int ac, char** av) {
             dbcfg.statement_scheduling_group = make_sched_group("statement", 1000);
             dbcfg.memtable_scheduling_group = make_sched_group("memtable", 1000);
             dbcfg.memtable_to_cache_scheduling_group = make_sched_group("memtable_to_cache", 200);
+            dbcfg.gossip_scheduling_group = make_sched_group("gossip", 1000);
             dbcfg.available_memory = memory::stats().total_memory();
 
             const auto& ssl_opts = cfg->server_encryption_options();
@@ -781,7 +782,7 @@ int main(int ac, char** av) {
             netw::messaging_service::scheduling_config scfg;
             scfg.statement_tenants = { {dbcfg.statement_scheduling_group, "$user"}, {default_scheduling_group(), "$system"} };
             scfg.streaming = dbcfg.streaming_scheduling_group;
-            scfg.gossip = scheduling_group();
+            scfg.gossip = dbcfg.gossip_scheduling_group;
 
             debug::the_messaging_service = &messaging;
             netw::init_messaging_service(messaging, std::move(mscfg), std::move(scfg), trust_store, cert, key, prio, clauth);
