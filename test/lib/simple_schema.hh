@@ -142,6 +142,13 @@ public:
         return mutation_fragment(*_s, tests::make_permit(), std::move(row));
     }
 
+    mutation_fragment make_static_row(sstring v) {
+        static_row row;
+        const column_definition& s_def = *_s->get_column_definition(to_bytes("s1"));
+        row.cells().apply(s_def, atomic_cell::make_live(*s_def.type, new_timestamp(), serialized(v)));
+        return mutation_fragment(*_s, tests::make_permit(), std::move(row));
+    }
+
     void set_schema(schema_ptr s) {
         _s = s;
     }
