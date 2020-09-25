@@ -69,6 +69,10 @@ struct reader_resources {
     }
 };
 
+inline bool operator==(const reader_resources& a, const reader_resources& b) {
+    return a.count == b.count && a.memory == b.memory;
+}
+
 class reader_concurrency_semaphore;
 
 /// A permit for a specific read.
