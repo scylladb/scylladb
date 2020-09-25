@@ -2872,8 +2872,7 @@ future<> storage_service::load_and_stream(sstring ks_name, sstring cf_name,
     size_t nr_sst_current = 0;
     while (!sstables.empty()) {
         auto ops_uuid = utils::make_random_uuid();
-        auto sst_set = make_lw_shared<sstables::sstable_set>(sstables::make_partitioned_sstable_set(s,
-                make_lw_shared<sstable_list>(sstable_list{}), false));
+        auto sst_set = make_lw_shared<sstables::sstable_set>(sstables::make_partitioned_sstable_set(s, false));
         size_t batch_sst_nr = 16;
         std::vector<sstring> sst_names;
         std::vector<sstables::shared_sstable> sst_processed;
