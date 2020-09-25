@@ -246,14 +246,20 @@ future<> view_update_backlog_broker::start() {
         // Gossiper runs only on shard 0, and there's no API to add multiple, per-shard application states.
         // Also, right now we aggregate all backlogs, since the coordinator doesn't keep per-replica shard backlogs.
         _started = seastar::async([this] {
+            std::optional<db::view::update_backlog> backlog_published;
             while (!_as.abort_requested()) {
                 auto backlog = _sp.local().get_view_update_backlog();
+                if (backlog_published && *backlog_published == backlog) {
+                    sleep_abortable(gms::gossiper::INTERVAL, _as).get();
+                    continue;
+                }
                 auto now = api::timestamp_type(std::chrono::duration_cast<std::chrono::milliseconds>(
                         std::chrono::system_clock::now().time_since_epoch()).count());
                 //FIXME: discarded future.
                 (void)_gossiper.add_local_application_state(
                         gms::application_state::VIEW_BACKLOG,
                         gms::versioned_value(seastar::format("{}:{}:{}", backlog.current, backlog.max, now)));
+                backlog_published = backlog;
                 sleep_abortable(gms::gossiper::INTERVAL, _as).get();
             }
         }).handle_exception_type([] (const seastar::sleep_aborted& ignored) { });
