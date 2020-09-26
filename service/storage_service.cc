@@ -1644,6 +1644,7 @@ future<> storage_service::init_server(bind_messaging_port do_bind) {
                 slogger.debug("Loaded host_id: endpoint={}, uuid={}", x.first, x.second);
             }
 
+            auto& tm = get_mutable_token_metadata();
             for (auto x : loaded_tokens) {
                 auto ep = x.first;
                 auto tokens = x.second;
@@ -1651,7 +1652,6 @@ future<> storage_service::init_server(bind_messaging_port do_bind) {
                     // entry has been mistakenly added, delete it
                     db::system_keyspace::remove_endpoint(ep).get();
                 } else {
-                    auto& tm = get_mutable_token_metadata();
                     tm.update_normal_tokens(tokens, ep);
                     if (loaded_host_ids.contains(ep)) {
                         tm.update_host_id(loaded_host_ids.at(ep), ep);
@@ -1660,6 +1660,7 @@ future<> storage_service::init_server(bind_messaging_port do_bind) {
                     _gossiper.add_saved_endpoint(ep);
                 }
             }
+            replicate_to_all_cores().get();
         }
 
         // Seeds are now only used as the initial contact point nodes. If the
