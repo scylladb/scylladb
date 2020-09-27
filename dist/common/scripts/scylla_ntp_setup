@@ -36,70 +36,28 @@ if __name__ == '__main__':
         sys.exit(1)
 
     parser = argparse.ArgumentParser(description='Optimize NTP client setting for Scylla.')
-    if is_redhat_variant():
-        parser.add_argument('--subdomain',
-                            help='specify subdomain of pool.ntp.org (ex: centos, fedora or amazon)')
+    parser.add_argument('--subdomain',
+                        help='specify subdomain of pool.ntp.org (ex: centos, fedora or amazon)')
     args = parser.parse_args()
 
+    if shutil.which('ntpd'):
+        pkg_uninstall('ntp')
+    if not shutil.which('chronyd'):
+        pkg_install('chrony')
     if is_debian_variant():
-        if not shutil.which('ntpd') or not shutil.which('ntpdate'):
-            apt_install('ntp ntpdate')
-        with open('/etc/ntp.conf') as f:
-            conf = f.read()
-        if not re.match(r'^server ', conf, flags=re.MULTILINE):
-            conf2 = re.findall(r'^(?!pool).*\n', conf, flags=re.MULTILINE)
-            with open('/etc/ntp.conf', 'w') as f:
-                f.writelines(conf2)
-                f.write('server ntp.ubuntu.com iburst')
-        ntp = systemd_unit('ntp.service')
-        ntp.stop()
-        # ignore error, ntpd may able to adjust clock later
-        run('ntpdate ntp.ubuntu.com', exception=False)
-        ntp.start()
-
-    if is_gentoo_variant():
-        if not shutil.which('ntpd'):
-            emerge_install('net-misc/ntp')
-        with open('/etc/ntp.conf') as f:
-            conf = f.read()
-        match = re.search(r'^server\s+(\S*)(\s+\S+)?', conf, flags=re.MULTILINE)
-        server = match.group(1)
-        ntpd = systemd_unit('ntpd.service')
-        ntpd.stop()
-        run('ntpdate {}'.format(server))
-        ntpd.enable()
-        ntpd.start()
-
-    if is_redhat_variant():
-        if int(distro.major_version()) >= 8:
-            if not shutil.which('chronyd'):
-                yum_install('chrony')
-            with open('/etc/chrony.conf') as f:
-                conf = f.read()
-            if args.subdomain:
-                conf2 = re.sub(r'pool\s+([0-9]+)\.(\S+)\.pool\.ntp\.org', 'pool \\1.{}.pool.ntp.org'.format(args.subdomain), conf, flags=re.MULTILINE)
-                with open('/etc/chrony.conf', 'w') as f:
-                    f.write(conf2)
-                conf = conf2
-            chronyd = systemd_unit('chronyd.service')
-            chronyd.enable()
-            chronyd.restart()
-            run('chronyc makestep')
-        else:
-            if not shutil.which('ntpd') or not shutil.which('ntpdate'):
-                yum_install('ntp ntpdate')
-            with open('/etc/ntp.conf') as f:
-                conf = f.read()
-            if args.subdomain:
-                conf2 = re.sub(r'server\s+([0-9]+)\.(\S+)\.pool\.ntp\.org', 'server \\1.{}.pool.ntp.org'.format(args.subdomain), conf, flags=re.MULTILINE)
-                with open('/etc/ntp.conf', 'w') as f:
-                    f.write(conf2)
-                conf = conf2
-            match = re.search(r'^server\s+(\S*)(\s+\S+)?', conf, flags=re.MULTILINE)
-            server = match.group(1)
-            ntpd = systemd_unit('ntpd.service')
-            ntpd.stop()
-            # ignore error, ntpd may able to adjust clock later
-            run('ntpdate {}'.format(server), exception=False)
-            ntpd.enable()
-            ntpd.start()
+        confpath = '/etc/chrony/chrony.conf'
+        chronyd = 'chrony.service'
+    else:
+        confpath = '/etc/chrony.conf'
+        chronyd = 'chronyd.service'
+    with open(confpath) as f:
+        conf = f.read()
+    if args.subdomain:
+        conf2 = re.sub(r'pool\s+([0-9]+)\.(\S+)\.pool\.ntp\.org', 'pool \\1.{}.pool.ntp.org'.format(args.subdomain), conf, flags=re.MULTILINE)
+        with open(confpath, 'w') as f:
+            f.write(conf2)
+        conf = conf2
+    chronyd = systemd_unit(chronyd)
+    chronyd.enable()
+    chronyd.restart()
+    run('chronyc makestep')
