@@ -206,7 +206,7 @@ if ! $nonroot; then
 else
     retc="$rprefix/etc"
     rsysconfdir="$rprefix/$sysconfdir"
-    rsystemd="$retc/systemd"
+    rsystemd="$HOME/.config/systemd/user"
     rdoc="$rprefix/share/doc"
     rdata="$rprefix"
 fi
@@ -323,8 +323,8 @@ EOS
     done
 else
     install -m755 -d "$rdata"/saved_caches
-    install -d -m755 "$retc"/systemd/system/scylla-server.service.d
-    cat << EOS > "$retc"/systemd/system/scylla-server.service.d/nonroot.conf
+    install -d -m755 "$rsystemd"/scylla-server.service.d
+    cat << EOS > "$rsystemd"/scylla-server.service.d/nonroot.conf
 [Service]
 EnvironmentFile=
 EnvironmentFile=$rsysconfdir/scylla-server
@@ -335,8 +335,8 @@ ExecStart=$rprefix/bin/scylla \$SCYLLA_ARGS \$SEASTAR_IO \$DEV_MODE \$CPUSET
 ExecStopPost=
 User=
 EOS
-     install -d -m755 "$retc"/systemd/system/node-exporter.service.d
-     cat << EOS > "$retc"/systemd/system/node-exporter.service.d/nonroot.conf
+     install -d -m755 "$rsystemd"/node-exporter.service.d
+     cat << EOS > "$rsystemd"/node-exporter.service.d/nonroot.conf
 [Service]
 ExecStart=
 ExecStart=$rprefix/bin/node_exporter  --collector.interrupts
@@ -347,16 +347,6 @@ EOS
     for i in $SBINFILES; do
         ln -srf "$rprefix/scripts/$i" "$rprefix/sbin/$i"
     done
-    if [ ! -d ~/.config/systemd/user/scylla-server.service.d ]; then
-        mkdir -p ~/.config/systemd/user/scylla-server.service.d
-    fi
-    ln -srf $rsystemd/scylla-server.service ~/.config/systemd/user/
-    ln -srf "$retc"/systemd/system/scylla-server.service.d/nonroot.conf ~/.config/systemd/user/scylla-server.service.d
-    if [ ! -d ~/.config/systemd/user/node-exporter.service.d ]; then
-        mkdir -p ~/.config/systemd/user/node-exporter.service.d
-    fi
-    ln -srf $rsystemd/node-exporter.service ~/.config/systemd/user/
-    ln -srf "$retc"/systemd/system/node-exporter.service.d/nonroot.conf ~/.config/systemd/user/node-exporter.service.d
 fi
 
 install -m755 scylla-gdb.py -Dt "$rprefix"/scripts/
