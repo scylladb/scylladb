@@ -189,31 +189,32 @@ if __name__ == '__main__':
     default_no_cpuscaling_setup = False
 
     if is_offline():
-        default_no_ntp_setup = True
         default_no_node_exporter = True
-        warn_offline('ntp setup')
         warn_offline('node exporter setup')
 
-        if not shutil.which('mkfs.xfs'):
-            default_no_kernel_check = True
-            default_no_raid_setup = True
-            warn_offline_missing_pkg('kernel version check', 'xfsprogs')
-            warn_offline_missing_pkg('RAID setup', 'xfsprogs')
+        if not is_nonroot():
+            default_no_ntp_setup = True
+            warn_offline('ntp setup')
+            if not shutil.which('mkfs.xfs'):
+                default_no_kernel_check = True
+                default_no_raid_setup = True
+                warn_offline_missing_pkg('kernel version check', 'xfsprogs')
+                warn_offline_missing_pkg('RAID setup', 'xfsprogs')
 
-        if not default_no_raid_setup and not shutil.which('mdadm'):
-            default_no_raid_setup = True
-            warn_offline_missing_pkg('RAID setup', 'mdadm')
+            if not default_no_raid_setup and not shutil.which('mdadm'):
+                default_no_raid_setup = True
+                warn_offline_missing_pkg('RAID setup', 'mdadm')
 
-        if not shutil.which('coredumpctl'):
-            default_no_coredump_setup = True
-            warn_offline_missing_pkg('coredump setup', 'systemd-coredump')
+            if not shutil.which('coredumpctl'):
+                default_no_coredump_setup = True
+                warn_offline_missing_pkg('coredump setup', 'systemd-coredump')
 
-        if is_debian_variant() and not shutil.which('cpufreq-set'):
-            default_no_cpuscaling_setup = True
-            warn_offline_missing_pkg('cpuscaling setup', 'cpufrequtils')
-        elif not shutil.which('cpupower'):
-            default_no_cpuscaling_setup = True
-            warn_offline_missing_pkg('cpuscaling setup', 'cpupower')
+            if is_debian_variant() and not shutil.which('cpufreq-set'):
+                default_no_cpuscaling_setup = True
+                warn_offline_missing_pkg('cpuscaling setup', 'cpufrequtils')
+            elif not shutil.which('cpupower'):
+                default_no_cpuscaling_setup = True
+                warn_offline_missing_pkg('cpuscaling setup', 'cpupower')
         print()
 
     parser = argparse.ArgumentParser(description='Configure environment for Scylla.')
