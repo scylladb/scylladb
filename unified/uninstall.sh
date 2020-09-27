@@ -59,7 +59,7 @@ else
     sysconfdir=/etc/sysconfig
     retc="$rprefix/etc"
     rsysconfdir="$rprefix/$sysconfdir"
-    rsystemd="$retc/systemd"
+    rsystemd="$HOME/.config/systemd/user"
     rdoc="$rprefix/share/doc"
     rdata="$rprefix"
 fi
@@ -77,8 +77,8 @@ rm -rfv "$rprefix"/api
 rm -rfv "$rprefix"/scyllatop
 rm -rfv "$rprefix"/scripts
 rm -rfv "$rprefix"/bin
-rm -rfv "$retc"/systemd/system/scylla-server.service.d
 if ! $nonroot; then
+    rm -rfv "$retc"/systemd/system/scylla-server.service.d
     rm -rfv "$retc"/systemd/system/scylla-housekeeping-*.service.d
     rm -fv "$retc"/security/limits.d/scylla.conf
     rm -fv "$rusr"/bin/scylla
@@ -88,10 +88,9 @@ if ! $nonroot; then
     find "$rusr"/lib/scylla -type l -exec rm -fv {} \;
     rm -rfv "$rusr"/lib/scylla/scyllatop
 else
-    rm -rfv "$retc"/systemd/system/node-exporter.service.d
     rm -rfv "$rprefix"/sbin
-    rm -rfv ~/.config/systemd/user/scylla-server.service.d
-    rm -fv ~/.config/systemd/user/{scylla-server.service,node-exporter.service}
+    rm -rfv "$rsystemd"/scylla-server.service.d
+    rm -rfv "$rsystemd"/node-exporter.service.d
 fi
 
 # scylla-python3
@@ -99,10 +98,10 @@ rm -rfv "$rprefix"/python3
 
 # scylla-jmx
 rm -fv "$rsystemd"/scylla-jmx.service
-rm -rfv "$retc"/systemd/system/scylla-jmx.service.d
-if $nonroot; then
-    rm -fv ~/.config/systemd/user/scylla-jmx.service
-    rm -rfv ~/.config/systemd/user/scylla-jmx.service.d
+if ! $nonroot; then
+    rm -rfv "$retc"/systemd/system/scylla-jmx.service.d
+else
+    rm -rfv "$rsystemd"/scylla-jmx.service.d
 fi
 rm -rfv "$rprefix"/jmx
 if ! $nonroot; then
