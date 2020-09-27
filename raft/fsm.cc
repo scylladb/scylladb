@@ -266,9 +266,11 @@ void fsm::tick_leader() {
             if (_failure_detector.is_alive(progress.id)) {
                 active++;
             }
-            if (progress.state == follower_progress::state::PIPELINE &&
+            if (progress.state == follower_progress::state::PROBE) {
+                // allow one probe to be resent per follower per time tick
+                progress.probe_sent = false;
+            } else if (progress.state == follower_progress::state::PIPELINE &&
                 progress.in_flight == follower_progress::max_in_flight) {
-
                 progress.in_flight--; // allow one more packet to be sent
             }
             if (progress.match_idx < _log.stable_idx() || progress.commit_idx < _commit_idx) {
@@ -462,7 +464,7 @@ void fsm::replicate_to(follower_progress& progress, bool allow_empty) {
     logger.trace("replicate_to[{}->{}]: called next={} match={}",
         _my_id, progress.id, progress.next_idx, progress.match_idx);
 
-    while (progress.can_send_to(_clock.now())) {
+    while (progress.can_send_to()) {
         index_t next_idx = progress.next_idx;
         if (progress.next_idx > _log.stable_idx()) {
             next_idx = index_t(0);
@@ -515,7 +517,9 @@ void fsm::replicate_to(follower_progress& progress, bool allow_empty) {
 
         send_to(progress.id, std::move(req));
 
-        progress.last_append_time = _clock.now();
+        if (progress.state == follower_progress::state::PROBE) {
+             progress.probe_sent = true;
+        }
     }
 }
 

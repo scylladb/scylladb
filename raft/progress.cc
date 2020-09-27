@@ -49,6 +49,7 @@ bool follower_progress::is_stray_reject(const append_reply::rejected& rejected) 
 
 void follower_progress::become_probe() {
     state = state::PROBE;
+    probe_sent = false;
 }
 
 void follower_progress::become_pipeline() {
@@ -64,10 +65,10 @@ void follower_progress::become_snapshot() {
     state = state::SNAPSHOT;
 }
 
-bool follower_progress::can_send_to(logical_clock::time_point now) {
+bool follower_progress::can_send_to() {
     switch (state) {
     case state::PROBE:
-        return now - last_append_time >= logical_clock::duration{1};
+        return !probe_sent;
     case state::PIPELINE:
         // allow `max_in_flight` outstanding indexes
         // FIXME: make it smarter

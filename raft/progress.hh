@@ -48,16 +48,11 @@ public:
         SNAPSHOT
     };
     state state = state::PROBE;
+    // true if a packet was sent already in a probe mode
+    bool probe_sent = false;
     // number of in flight still un-acked append entries requests
     size_t in_flight = 0;
     static constexpr size_t max_in_flight = 10;
-
-    // Set when a message is sent to the follower.
-    // Used to decide if a separate keep alive message is needed
-    // within this tick.
-    // In probe mode, used to limit the amount of entries sent to
-    // the follower.
-    logical_clock::time_point last_append_time = logical_clock::min();
 
     // check if a reject packet should be ignored because it was delayed
     // or reordered
@@ -68,7 +63,7 @@ public:
     void become_snapshot();
 
     // Return true if a new replication record can be sent to the follower.
-    bool can_send_to(logical_clock::time_point now);
+    bool can_send_to();
 
     follower_progress(server_id id_arg, index_t next_idx_arg)
         : id(id_arg), next_idx(next_idx_arg)
