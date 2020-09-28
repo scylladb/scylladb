@@ -332,6 +332,26 @@ future<> close_index_list(shared_index_lists::list_ptr& list) {
     return make_ready_future<>();
 }
 
+// Stores information about open end RT marker
+// of the lower index bound
+struct open_rt_marker {
+    position_in_partition pos;
+    tombstone tomb;
+};
+
+// Contains information about index_reader position in the index file
+struct index_bound {
+    index_bound() = default;
+    shared_index_lists::list_ptr current_list;
+    uint64_t previous_summary_idx = 0;
+    uint64_t current_summary_idx = 0;
+    uint64_t current_index_idx = 0;
+    uint64_t current_pi_idx = 0; // Points to upper bound of the cursor.
+    uint64_t data_file_position = 0;
+    indexable_element element = indexable_element::partition;
+    std::optional<open_rt_marker> end_open_marker;
+};
+
 // Provides access to sstable indexes.
 //
 // Maintains logical cursors to sstable elements (partitions, cells).
@@ -381,29 +401,6 @@ class index_reader {
                            : std::optional<column_values_fixed_lengths>{}),
                        trace_state)
         { }
-    };
-
-    // Stores information about open end RT marker
-    // of the lower index bound
-    struct open_rt_marker {
-        position_in_partition pos;
-        tombstone tomb;
-    };
-
-public: // Otherwise std::optional<index_bound>::emplace() fails, since
-        // it has a constraint std::is_constructible_v<T>, which fails with
-        // private types
-
-    // Contains information about index_reader position in the index file
-    struct index_bound {
-        shared_index_lists::list_ptr current_list;
-        uint64_t previous_summary_idx = 0;
-        uint64_t current_summary_idx = 0;
-        uint64_t current_index_idx = 0;
-        uint64_t current_pi_idx = 0; // Points to upper bound of the cursor.
-        uint64_t data_file_position = 0;
-        indexable_element element = indexable_element::partition;
-        std::optional<open_rt_marker> end_open_marker;
     };
 
 private:
