@@ -289,9 +289,9 @@ cql3::query_options trace_keyspace_helper::make_slow_query_mutation_data(const o
     auto millis_since_epoch = std::chrono::duration_cast<std::chrono::milliseconds>(record.started_at.time_since_epoch()).count();
 
     // query command is stored on a parameters map with a 'query' key
-    auto query_str_it = record.parameters.find("query");
+    const auto query_str_it = record.parameters.find("query");
     if (query_str_it == record.parameters.end()) {
-        throw std::logic_error("No \"query\" parameter set for a session requesting a slow_query_log record");
+        tlogger.trace("No \"query\" parameter set for a session requesting a slow_query_log record");
     }
 
     // parameters map
@@ -312,7 +312,9 @@ cql3::query_options trace_keyspace_helper::make_slow_query_mutation_data(const o
         cql3::raw_value::make_value(uuid_type->decompose(session_records.session_id)),
         cql3::raw_value::make_value(timestamp_type->decompose(millis_since_epoch)),
         cql3::raw_value::make_value(timeuuid_type->decompose(start_time_id)),
-        cql3::raw_value::make_value(utf8_type->decompose(query_str_it->second)),
+        query_str_it != record.parameters.end()
+                ? cql3::raw_value::make_value(utf8_type->decompose(query_str_it->second))
+                : cql3::raw_value::make_null(),
         cql3::raw_value::make_value(int32_type->decompose(elapsed_to_micros(record.elapsed))),
         cql3::raw_value::make_value(make_map_value(my_map_type, map_type_impl::native_type(std::move(parameters_values_vector))).serialize()),
         cql3::raw_value::make_value(inet_addr_type->decompose(record.client.addr())),
