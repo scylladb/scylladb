@@ -610,13 +610,13 @@ static constexpr bool inclusive = true, exclusive = false;
 nonwrapping_range<bytes> to_range(oper_t op, const bytes& val) {
     switch (op) {
     case oper_t::GT:
-        return nonwrapping_range<bytes>::make_starting_with(range_bound(val, exclusive));
+        return nonwrapping_range<bytes>::make_starting_with(interval_bound(val, exclusive));
     case oper_t::GTE:
-        return nonwrapping_range<bytes>::make_starting_with(range_bound(val, inclusive));
+        return nonwrapping_range<bytes>::make_starting_with(interval_bound(val, inclusive));
     case oper_t::LT:
-        return nonwrapping_range<bytes>::make_ending_with(range_bound(val, exclusive));
+        return nonwrapping_range<bytes>::make_ending_with(interval_bound(val, exclusive));
     case oper_t::LTE:
-        return nonwrapping_range<bytes>::make_ending_with(range_bound(val, inclusive));
+        return nonwrapping_range<bytes>::make_ending_with(interval_bound(val, inclusive));
     default:
         throw std::logic_error(format("to_range: unknown comparison operator {}", op));
     }
@@ -731,9 +731,9 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
                             if (oper.op == oper_t::EQ) {
                                 return value_list{*val};
                             } else if (oper.op == oper_t::GT) {
-                                return nonwrapping_range<bytes>::make_starting_with(range_bound(*val, exclusive));
+                                return nonwrapping_range<bytes>::make_starting_with(interval_bound(*val, exclusive));
                             } else if (oper.op == oper_t::GTE) {
-                                return nonwrapping_range<bytes>::make_starting_with(range_bound(*val, inclusive));
+                                return nonwrapping_range<bytes>::make_starting_with(interval_bound(*val, inclusive));
                             }
                             static const bytes MININT = serialized(std::numeric_limits<int64_t>::min()),
                                     MAXINT = serialized(std::numeric_limits<int64_t>::max());
@@ -741,9 +741,9 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
                             // that as MAXINT for some reason.
                             const auto adjusted_val = (*val == MININT) ? serialized(MAXINT) : *val;
                             if (oper.op == oper_t::LT) {
-                                return nonwrapping_range<bytes>::make_ending_with(range_bound(adjusted_val, exclusive));
+                                return nonwrapping_range<bytes>::make_ending_with(interval_bound(adjusted_val, exclusive));
                             } else if (oper.op == oper_t::LTE) {
-                                return nonwrapping_range<bytes>::make_ending_with(range_bound(adjusted_val, inclusive));
+                                return nonwrapping_range<bytes>::make_ending_with(interval_bound(adjusted_val, inclusive));
                             }
                             throw std::logic_error(format("get_token_interval invalid operator {}", oper.op));
                         },
