@@ -29,15 +29,6 @@ counter_id counter_id::local()
     return counter_id(service::get_local_storage_service().get_local_id());
 }
 
-bool counter_id::less_compare_1_7_4::operator()(const counter_id& a, const counter_id& b) const
-{
-    if (a._most_significant != b._most_significant) {
-        return a._most_significant < b._most_significant;
-    } else {
-        return a._least_significant < b._least_significant;
-    }
-}
-
 std::ostream& operator<<(std::ostream& os, const counter_id& id) {
     return os << id.to_uuid();
 }
@@ -66,16 +57,6 @@ void counter_cell_builder::do_sort_and_remove_duplicates()
     }
     _shards = std::move(new_shards);
     _sorted = true;
-}
-
-std::vector<counter_shard> counter_cell_view::shards_compatible_with_1_7_4() const
-{
-    auto sorted_shards = boost::copy_range<std::vector<counter_shard>>(shards());
-    counter_id::less_compare_1_7_4 cmp;
-    boost::range::sort(sorted_shards, [&] (auto& a, auto& b) {
-        return cmp(a.id(), b.id());
-    });
-    return sorted_shards;
 }
 
 static bool apply_in_place(const column_definition& cdef, atomic_cell_mutable_view dst, atomic_cell_mutable_view src)

@@ -61,11 +61,6 @@ public:
         return !(*this == other);
     }
 public:
-    // (Wrong) Counter ID ordering used by Scylla 1.7.4 and earlier.
-    struct less_compare_1_7_4 {
-        bool operator()(const counter_id& a, const counter_id& b) const;
-    };
-public:
     static counter_id local();
 
     // For tests.
@@ -416,9 +411,6 @@ struct counter_cell_view : basic_counter_cell_view<mutable_view::no> {
             return fn(ccv);
         });
     }
-
-    // Returns counter shards in an order that is compatible with Scylla 1.7.4.
-    std::vector<counter_shard> shards_compatible_with_1_7_4() const;
 
     // Reversibly applies two counter cells, at least one of them must be live.
     static void apply(const column_definition& cdef, atomic_cell_or_collection& dst, atomic_cell_or_collection& src);
