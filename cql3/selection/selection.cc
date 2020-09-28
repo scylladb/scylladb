@@ -511,7 +511,7 @@ void result_set_builder::restrictions_filter::reset(const partition_key* key) {
     _current_static_row_does_not_match = false;
     _rows_dropped = 0;
     _per_partition_remaining = _per_partition_limit;
-    if (_is_first_partition_on_page && _per_partition_limit < std::numeric_limits<typeof(_per_partition_limit)>::max()) {
+    if (_is_first_partition_on_page && _per_partition_limit < std::numeric_limits<decltype(_per_partition_limit)>::max()) {
         // If any rows related to this key were also present in the previous query,
         // we need to take it into account as well.
         if (key && _last_pkey && _last_pkey->equal(*_schema, *key)) {
