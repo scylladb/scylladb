@@ -28,6 +28,7 @@ submodules=(
     seastar
     tools/jmx
     tools/java
+    tools/python3
 )
 
 for submodule in "${submodules[@]}"; do
