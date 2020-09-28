@@ -865,7 +865,9 @@ void set_column_family(http_context& ctx, routes& r) {
     });
 
     cf::get_built_indexes.set(r, [&ctx](std::unique_ptr<request> req) {
-        auto [ks, cf_name] = parse_fully_qualified_cf_name(req->param["name"]);
+        auto ks_cf = parse_fully_qualified_cf_name(req->param["name"]);
+        auto&& ks = std::get<0>(ks_cf);
+        auto&& cf_name = std::get<1>(ks_cf);
         return db::system_keyspace::load_view_build_progress().then([ks, cf_name, &ctx](const std::vector<db::system_keyspace::view_build_progress>& vb) mutable {
             std::set<sstring> vp;
             for (auto b : vb) {
