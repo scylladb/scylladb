@@ -289,10 +289,22 @@ cql3::query_options trace_keyspace_helper::make_slow_query_mutation_data(const o
     const session_record& record = session_records.session_rec;
     auto millis_since_epoch = std::chrono::duration_cast<std::chrono::milliseconds>(record.started_at.time_since_epoch()).count();
 
-    // query command is stored on a parameters map with a 'query' key
-    auto query_str_it = record.parameters.find("query");
-    if (query_str_it == record.parameters.end()) {
-        throw std::logic_error("No \"query\" parameter set for a session requesting a slow_query_log record");
+    sstring query_str;
+    // query command is stored on a parameters map with a 'query' key or 'query[N]' keys
+    if (auto query_str_it = record.parameters.find("query"); query_str_it == record.parameters.end()) {
+        for (int i = 0; /* nothing */; ++i) {
+            // Extract the values under "query[0]", "query[1]", etc. in case of batched prepared statements
+            auto ith_query_iter = record.parameters.find(format("query[{}]", i));
+            if (ith_query_iter == record.parameters.end()) {
+                break;
+            }
+            query_str += ith_query_iter->second + " ";
+        }
+        if (query_str.empty()) {
+            throw std::logic_error("No \"query\" nor \"query[0]\" parameter set for a session requesting a slow_query_log record");
+        }
+    } else {
+        query_str = query_str_it->second;
     }
 
     // parameters map
@@ -313,7 +325,7 @@ cql3::query_options trace_keyspace_helper::make_slow_query_mutation_data(const o
         cql3::raw_value::make_value(uuid_type->decompose(session_records.session_id)),
         cql3::raw_value::make_value(timestamp_type->decompose(millis_since_epoch)),
         cql3::raw_value::make_value(timeuuid_type->decompose(start_time_id)),
-        cql3::raw_value::make_value(utf8_type->decompose(query_str_it->second)),
+        cql3::raw_value::make_value(utf8_type->decompose(query_str)),
         cql3::raw_value::make_value(int32_type->decompose(elapsed_to_micros(record.elapsed))),
         cql3::raw_value::make_value(make_map_value(my_map_type, map_type_impl::native_type(std::move(parameters_values_vector))).serialize()),
         cql3::raw_value::make_value(inet_addr_type->decompose(record.client.addr())),
