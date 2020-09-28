@@ -555,28 +555,28 @@ bytes_opt get_kth(size_t k, const query_options& options, const ::shared_ptr<ter
 }
 
 template<typename Range>
-requires std::ranges::forward_range<Range>
+// Clang doesn't compile this, and boost ranges aren't std::ranges
+// requires std::ranges::forward_range<Range>
 value_list to_sorted_vector(Range r, const serialized_compare& comparator) {
     value_list tmp(r.begin(), r.end()); // Need random-access range to sort (r is not necessarily random-access).
     const auto unique = boost::unique(boost::sort(tmp, comparator));
     return value_list(unique.begin(), unique.end());
 }
 
-const auto non_null = std::views::filter([] (const bytes_opt& b) { return b.has_value(); });
+const auto non_null = boost::adaptors::filtered([] (const bytes_opt& b) { return b.has_value(); });
 
-const auto deref = std::views::transform([] (const bytes_opt& b) { return b.value(); });
+const auto deref = boost::adaptors::transformed([] (const bytes_opt& b) { return b.value(); });
 
 /// Returns possible values from t, which must be RHS of IN.
 value_list get_IN_values(
         const ::shared_ptr<term>& t, const query_options& options, const serialized_compare& comparator) {
-    using std::views::transform;
     // RHS is prepared differently for different CQL cases.  Cast it dynamically to discern which case this is.
     if (auto dv = dynamic_pointer_cast<lists::delayed_value>(t)) {
         // Case `a IN (1,2,3)`.
         const auto result_range = dv->get_elements()
-                | transform([&] (const ::shared_ptr<term>& t) { return to_bytes_opt(t->bind_and_get(options)); })
+                | boost::adaptors::transformed([&] (const ::shared_ptr<term>& t) { return to_bytes_opt(t->bind_and_get(options)); })
                 | non_null | deref;
-        return to_sorted_vector(move(result_range), comparator);
+        return to_sorted_vector(std::move(result_range), comparator);
     } else if (auto mkr = dynamic_pointer_cast<lists::marker>(t)) {
         // Case `a IN ?`.  Collect all list-element values.
         const auto val = static_pointer_cast<lists::value>(mkr->bind(options));
@@ -588,20 +588,19 @@ value_list get_IN_values(
 /// Returns possible values for k-th column from t, which must be RHS of IN.
 value_list get_IN_values(const ::shared_ptr<term>& t, size_t k, const query_options& options,
                          const serialized_compare& comparator) {
-    using std::views::transform;
     // RHS is prepared differently for different CQL cases.  Cast it dynamically to discern which case this is.
     if (auto dv = dynamic_pointer_cast<lists::delayed_value>(t)) {
         // Case `(a,b) in ((1,1),(2,2),(3,3))`.  Get kth value from each term element.
         const auto result_range = dv->get_elements()
-                | transform(std::bind_front(get_kth, k, options)) | non_null | deref;
-        return to_sorted_vector(move(result_range), comparator);
+                | boost::adaptors::transformed(std::bind_front(get_kth, k, options)) | non_null | deref;
+        return to_sorted_vector(std::move(result_range), comparator);
     } else if (auto mkr = dynamic_pointer_cast<tuples::in_marker>(t)) {
         // Case `(a,b) IN ?`.  Get kth value from each vector<bytes> element.
         const auto val = static_pointer_cast<tuples::in_value>(mkr->bind(options));
         const auto split_values = val->get_split_values(); // Need lvalue from which to make std::view.
         const auto result_range = split_values
-                | transform([k] (const std::vector<bytes_opt>& v) { return v[k]; }) | non_null | deref;
-        return to_sorted_vector(move(result_range), comparator);
+                | boost::adaptors::transformed([k] (const std::vector<bytes_opt>& v) { return v[k]; }) | non_null | deref;
+        return to_sorted_vector(std::move(result_range), comparator);
     }
     throw std::logic_error(format("get_IN_values(multi-column) on invalid term {}", *t));
 }
