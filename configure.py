@@ -1507,7 +1507,7 @@ with open(buildfile_tmp, 'w') as f:
         configure_args = {configure_args}
         builddir = {outdir}
         cxx = {cxx}
-        cxxflags = {user_cflags} {warnings} {defines}
+        cxxflags = --std=gnu++20 {user_cflags} {warnings} {defines}
         ldflags = {linker_flags} {user_ldflags}
         ldflags_build = {linker_flags}
         libs = {libs}
