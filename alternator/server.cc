@@ -276,7 +276,7 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
         auto callback_it = _callbacks.find(op);
         if (callback_it == _callbacks.end()) {
             _executor._stats.unsupported_operations++;
-            throw api_error::unknown_operation(format("Unsupported operation {}", op));
+            return make_ready_future<executor::request_return_type>(api_error::unknown_operation(format("Unsupported operation {}", op)));
         }
         if (_pending_requests.get_count() >= _max_concurrent_requests) {
             _executor._stats.requests_shed++;
