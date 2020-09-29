@@ -71,6 +71,9 @@ public:
     static api_error conditional_check_failed(std::string msg) {
         return api_error("ConditionalCheckFailedException", std::move(msg));
     }
+    static api_error request_limit_exceeded(std::string msg) {
+        return api_error("RequestLimitExceeded", std::move(msg));
+    }
     static api_error internal(std::string msg) {
         return api_error("InternalServerError", std::move(msg), reply::status_type::internal_server_error);
     }
