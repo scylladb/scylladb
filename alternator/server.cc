@@ -279,6 +279,7 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
             throw api_error::unknown_operation(format("Unsupported operation {}", op));
         }
         if (_pending_requests.get_count() >= _max_concurrent_requests) {
+            _executor._stats.requests_shed++;
             return make_ready_future<executor::request_return_type>(
                     api_error::request_limit_exceeded(format("too many in-flight requests (configured via max_concurrent_requests_per_shard): {}", _pending_requests.get_count())));
         }
