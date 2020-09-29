@@ -54,7 +54,7 @@ class built_indexes_virtual_reader {
                 tracing::trace_state_ptr trace_state,
                 streamed_mutation::forwarding fwd,
                 mutation_reader::forwarding fwd_mr)
-                : flat_mutation_reader::impl(std::move(schema))
+                : flat_mutation_reader::impl(std::move(schema), permit)
                 , _db(db)
                 , _underlying(built_views.make_reader(
                         built_views.schema(),

@@ -34,6 +34,7 @@
 
 #include "test/lib/mutation_assertions.hh"
 #include "test/lib/reader_permit.hh"
+#include "test/lib/simple_schema.hh"
 
 // A StreamedMutationConsumer which distributes fragments randomly into several mutations.
 class fragment_scatterer {
@@ -110,7 +111,7 @@ SEASTAR_TEST_CASE(test_mutation_merger_conforms_to_mutation_source) {
                 for (int i = 0; i < n; ++i) {
                     muts.push_back(mutation(m.schema(), m.decorated_key()));
                 }
-                auto rd = flat_mutation_reader_from_mutations({m});
+                auto rd = flat_mutation_reader_from_mutations(tests::make_permit(), {m});
                 rd.consume(fragment_scatterer{muts}, db::no_timeout).get();
                 for (int i = 0; i < n; ++i) {
                     memtables[i]->apply(std::move(muts[i]));
@@ -130,7 +131,7 @@ SEASTAR_TEST_CASE(test_mutation_merger_conforms_to_mutation_source) {
                 for (int i = 0; i < n; ++i) {
                     readers.push_back(memtables[i]->make_flat_reader(s, tests::make_permit(), range, slice, pc, trace_state, fwd, fwd_mr));
                 }
-                return make_combined_reader(s, std::move(readers), fwd, fwd_mr);
+                return make_combined_reader(s, tests::make_permit(), std::move(readers), fwd, fwd_mr);
             });
         });
     });
@@ -160,13 +161,13 @@ SEASTAR_TEST_CASE(test_range_tombstones_stream) {
         auto rt3 = range_tombstone(create_ck({ 1, 1 }), t0,  bound_kind::incl_start, create_ck({ 2 }), bound_kind::incl_end);
         auto rt4 = range_tombstone(create_ck({ 2 }), t0, bound_kind::incl_start, create_ck({ 2, 2 }), bound_kind::incl_end);
 
-        mutation_fragment cr1 = clustering_row(create_ck({ 0, 0 }));
-        mutation_fragment cr2 = clustering_row(create_ck({ 1, 0 }));
-        mutation_fragment cr3 = clustering_row(create_ck({ 1, 1 }));
+        mutation_fragment cr1(*s, tests::make_permit(), clustering_row(create_ck({ 0, 0 })));
+        mutation_fragment cr2(*s, tests::make_permit(), clustering_row(create_ck({ 1, 0 })));
+        mutation_fragment cr3(*s, tests::make_permit(), clustering_row(create_ck({ 1, 1 })));
         auto cr4 = rows_entry(create_ck({ 1, 2 }));
         auto cr5 = rows_entry(create_ck({ 1, 3 }));
 
-        range_tombstone_stream rts(*s);
+        range_tombstone_stream rts(*s, tests::make_permit());
         rts.apply(range_tombstone(rt1));
         rts.apply(range_tombstone(rt2));
         rts.apply(range_tombstone(rt4));
@@ -182,7 +183,7 @@ SEASTAR_TEST_CASE(test_range_tombstones_stream) {
         mf = rts.get_next(cr2);
         BOOST_REQUIRE(!mf);
 
-        mf = rts.get_next(mutation_fragment(range_tombstone(rt3)));
+        mf = rts.get_next(mutation_fragment(*s, tests::make_permit(), range_tombstone(rt3)));
         BOOST_REQUIRE(mf && mf->is_range_tombstone());
         BOOST_REQUIRE(mf->as_range_tombstone().equal(*s, rt2));
 
@@ -396,7 +397,7 @@ SEASTAR_TEST_CASE(test_schema_upgrader_is_equivalent_with_mutation_upgrade) {
             if (m1.schema()->version() != m2.schema()->version()) {
                 // upgrade m1 to m2's schema
 
-                auto reader = transform(flat_mutation_reader_from_mutations({m1}), schema_upgrader(m2.schema()));
+                auto reader = transform(flat_mutation_reader_from_mutations(tests::make_permit(), {m1}), schema_upgrader(m2.schema()));
                 auto from_upgrader = read_mutation_from_flat_mutation_reader(reader, db::no_timeout).get0();
 
                 auto regular = m1;
@@ -406,4 +407,66 @@ SEASTAR_TEST_CASE(test_schema_upgrader_is_equivalent_with_mutation_upgrade) {
             }
         });
     });
+}
+
+SEASTAR_TEST_CASE(test_mutation_fragment_mutate_exception_safety) {
+    struct dummy_exception { };
+
+    reader_concurrency_semaphore sem(1, 100, get_name());
+    auto permit = sem.make_permit();
+
+    simple_schema s;
+
+    const auto available_res = sem.available_resources();
+    const sstring val(1024, 'a');
+
+    // partition start
+    {
+        try {
+            auto ps = mutation_fragment(*s.schema(), permit, partition_start(s.make_pkey(0), {}));
+            ps.mutate_as_partition_start(*s.schema(), [&] (partition_start&) {
+                throw dummy_exception{};
+            });
+        } catch (dummy_exception&) { }
+        BOOST_REQUIRE(available_res == sem.available_resources());
+    }
+
+    // static row
+    {
+        try {
+            auto sr = s.make_static_row(val);
+            // Copy to move to our permit.
+            sr = mutation_fragment(*s.schema(), permit, sr);
+            sr.mutate_as_clustering_row(*s.schema(), [&] (clustering_row&) {
+                throw dummy_exception{};
+            });
+        } catch (dummy_exception&) { }
+        BOOST_REQUIRE(available_res == sem.available_resources());
+    }
+
+    // clustering row
+    {
+        try {
+            auto cr = s.make_row(s.make_ckey(0), val);
+            // Copy to move to our permit.
+            cr = mutation_fragment(*s.schema(), permit, cr);
+            cr.mutate_as_clustering_row(*s.schema(), [&] (clustering_row&) {
+                throw dummy_exception{};
+            });
+        } catch (dummy_exception&) { }
+        BOOST_REQUIRE(available_res == sem.available_resources());
+    }
+
+    // range tombstone
+    {
+        try {
+            auto rt = mutation_fragment(*s.schema(), permit, s.make_range_tombstone(query::clustering_range::make_ending_with(s.make_ckey(0))));
+            rt.mutate_as_range_tombstone(*s.schema(), [&] (range_tombstone&) {
+                throw dummy_exception{};
+            });
+        } catch (dummy_exception&) { }
+        BOOST_REQUIRE(available_res == sem.available_resources());
+    }
+
+    return make_ready_future<>();
 }

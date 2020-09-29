@@ -885,7 +885,7 @@ future<stop_iteration> view_update_builder::on_results() {
             if (_update->is_range_tombstone()) {
                 _update_tombstone_tracker.apply(std::move(_update->as_range_tombstone()));
             } else if (_update->is_clustering_row()) {
-                auto& update = _update->as_mutable_clustering_row();
+                auto update = std::move(*_update).as_clustering_row();
                 apply_tracked_tombstones(_update_tombstone_tracker, update);
                 auto tombstone = _existing_tombstone_tracker.current_tombstone();
                 auto existing = tombstone
@@ -901,7 +901,7 @@ future<stop_iteration> view_update_builder::on_results() {
             if (_existing->is_range_tombstone()) {
                 _existing_tombstone_tracker.apply(std::move(_existing->as_range_tombstone()));
             } else if (_existing->is_clustering_row()) {
-                auto& existing = _existing->as_mutable_clustering_row();
+                auto existing = std::move(*_existing).as_clustering_row();
                 apply_tracked_tombstones(_existing_tombstone_tracker, existing);
                 auto tombstone = _update_tombstone_tracker.current_tombstone();
                 // The way we build the read command used for existing rows, we should always have a non-empty
@@ -921,8 +921,12 @@ future<stop_iteration> view_update_builder::on_results() {
             _update_tombstone_tracker.apply(std::move(*_update).as_range_tombstone());
         } else if (_update->is_clustering_row()) {
             assert(_existing->is_clustering_row());
-            apply_tracked_tombstones(_update_tombstone_tracker, _update->as_mutable_clustering_row());
-            apply_tracked_tombstones(_existing_tombstone_tracker, _existing->as_mutable_clustering_row());
+            _update->mutate_as_clustering_row(*_schema, [&] (clustering_row& cr) mutable {
+                apply_tracked_tombstones(_update_tombstone_tracker, cr);
+            });
+            _existing->mutate_as_clustering_row(*_schema, [&] (clustering_row& cr) mutable {
+                apply_tracked_tombstones(_existing_tombstone_tracker, cr);
+            });
             generate_update(std::move(*_update).as_clustering_row(), { std::move(*_existing).as_clustering_row() });
         }
         return advance_all();
@@ -942,7 +946,9 @@ future<stop_iteration> view_update_builder::on_results() {
     // If we have updates and it's a range tombstone, it removes nothing pre-exisiting, so we can ignore it
     if (_update && !_update->is_end_of_partition()) {
         if (_update->is_clustering_row()) {
-            apply_tracked_tombstones(_update_tombstone_tracker, _update->as_mutable_clustering_row());
+            _update->mutate_as_clustering_row(*_schema, [&] (clustering_row& cr) mutable {
+                apply_tracked_tombstones(_update_tombstone_tracker, cr);
+            });
             auto existing_tombstone = _existing_tombstone_tracker.current_tombstone();
             auto existing = existing_tombstone
                           ? std::optional<clustering_row>(std::in_place, _update->as_clustering_row().key(), row_tombstone(std::move(existing_tombstone)), row_marker(), ::row())
@@ -1228,7 +1234,8 @@ future<> mutate_MV(
 view_builder::view_builder(database& db, db::system_distributed_keyspace& sys_dist_ks, service::migration_notifier& mn)
         : _db(db)
         , _sys_dist_ks(sys_dist_ks)
-        , _mnotifier(mn) {
+        , _mnotifier(mn)
+        , _permit(_db.get_reader_concurrency_semaphore().make_permit()) {
     setup_metrics();
 }
 
@@ -1360,10 +1367,9 @@ view_builder::build_step& view_builder::get_or_create_build_step(utils::UUID bas
 void view_builder::initialize_reader_at_current_token(build_step& step) {
     step.pslice = make_partition_slice(*step.base->schema());
     step.prange = dht::partition_range(dht::ring_position::starting_at(step.current_token()), dht::ring_position::max());
-    auto permit = _db.get_reader_concurrency_semaphore().make_permit();
     step.reader = make_local_shard_sstable_reader(
             step.base->schema(),
-            std::move(permit),
+            _permit,
             make_lw_shared<sstables::sstable_set>(step.base->get_sstable_set()),
             step.prange,
             step.pslice,
@@ -1813,7 +1819,7 @@ public:
         }
 
         _fragments_memory_usage += cr.memory_usage(*_step.reader.schema());
-        _fragments.push_back(std::move(cr));
+        _fragments.emplace_back(*_step.reader.schema(), _builder._permit, std::move(cr));
         if (_fragments_memory_usage > batch_memory_max) {
             // Although we have not yet completed the batch of base rows that
             // compact_for_query<> planned for us (view_builder::batchsize),
@@ -1833,10 +1839,10 @@ public:
         inject_failure("view_builder_flush_fragments");
         _builder._as.check();
         if (!_fragments.empty()) {
-            _fragments.push_front(partition_start(_step.current_key, tombstone()));
+            _fragments.emplace_front(*_step.reader.schema(), _builder._permit, partition_start(_step.current_key, tombstone()));
             auto base_schema = _step.base->schema();
             auto views = with_base_info_snapshot(_views_to_build);
-            auto reader = make_flat_mutation_reader_from_fragments(_step.reader.schema(), std::move(_fragments));
+            auto reader = make_flat_mutation_reader_from_fragments(_step.reader.schema(), _builder._permit, std::move(_fragments));
             reader.upgrade_schema(base_schema);
             _step.base->populate_views(
                     std::move(views),
@@ -2026,9 +2032,9 @@ void view_updating_consumer::maybe_flush_buffer_mid_partition() {
     }
 }
 
-view_updating_consumer::view_updating_consumer(schema_ptr schema, table& table, std::vector<sstables::shared_sstable> excluded_sstables, const seastar::abort_source& as,
+view_updating_consumer::view_updating_consumer(schema_ptr schema, reader_permit permit, table& table, std::vector<sstables::shared_sstable> excluded_sstables, const seastar::abort_source& as,
         evictable_reader_handle& staging_reader_handle)
-    : view_updating_consumer(std::move(schema), as, staging_reader_handle,
+    : view_updating_consumer(std::move(schema), std::move(permit), as, staging_reader_handle,
             [table = table.shared_from_this(), excluded_sstables = std::move(excluded_sstables)] (mutation m) mutable {
         auto s = m.schema();
         return table->stream_view_replica_updates(std::move(s), std::move(m), db::no_timeout, excluded_sstables);

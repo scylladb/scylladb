@@ -28,6 +28,7 @@
 class schema_upgrader {
     schema_ptr _prev;
     schema_ptr _new;
+    std::optional<reader_permit> _permit;
 private:
     row transform(row&& r, column_kind kind) {
         row new_row;
@@ -49,22 +50,23 @@ public:
         return _new;
     }
     mutation_fragment consume(static_row&& row) {
-        return mutation_fragment(static_row(transform(std::move(row.cells()), column_kind::static_column)));
+        return mutation_fragment(*_new, std::move(*_permit), static_row(transform(std::move(row.cells()), column_kind::static_column)));
     }
     mutation_fragment consume(clustering_row&& row) {
-        return mutation_fragment(clustering_row(row.key(), row.tomb(), row.marker(),
+        return mutation_fragment(*_new, std::move(*_permit), clustering_row(row.key(), row.tomb(), row.marker(),
             transform(std::move(row.cells()), column_kind::regular_column)));
     }
     mutation_fragment consume(range_tombstone&& rt) {
-        return std::move(rt);
+        return mutation_fragment(*_new, std::move(*_permit), std::move(rt));
     }
     mutation_fragment consume(partition_start&& ph) {
-        return std::move(ph);
+        return mutation_fragment(*_new, std::move(*_permit), std::move(ph));
     }
     mutation_fragment consume(partition_end&& eop) {
-        return std::move(eop);
+        return mutation_fragment(*_new, std::move(*_permit), std::move(eop));
     }
     mutation_fragment operator()(mutation_fragment&& mf) {
+        _permit = mf.permit();
         return std::move(mf).consume(*this);
     }
 };

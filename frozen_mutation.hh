@@ -117,13 +117,15 @@ using frozen_mutation_consumer_fn = std::function<future<stop_iteration>(frozen_
 future<> fragment_and_freeze(flat_mutation_reader mr, frozen_mutation_consumer_fn c,
                              size_t fragment_size = default_frozen_fragment_size);
 
+class reader_permit;
+
 class frozen_mutation_fragment {
     bytes_ostream _bytes;
 public:
     explicit frozen_mutation_fragment(bytes_ostream bytes) : _bytes(std::move(bytes)) { }
     const bytes_ostream& representation() const { return _bytes; }
 
-    mutation_fragment unfreeze(const schema& s);
+    mutation_fragment unfreeze(const schema& s, reader_permit permit);
 };
 
 frozen_mutation_fragment freeze(const schema& s, const mutation_fragment& mf);

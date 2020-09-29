@@ -225,8 +225,9 @@ future<std::vector<token_range>> test_get_local_ranges(database& db) {
     return get_local_ranges(db);
 }
 
-size_estimates_mutation_reader::size_estimates_mutation_reader(schema_ptr schema, const dht::partition_range& prange, const query::partition_slice& slice, streamed_mutation::forwarding fwd)
-            : impl(std::move(schema))
+size_estimates_mutation_reader::size_estimates_mutation_reader(schema_ptr schema, reader_permit permit, const dht::partition_range& prange,
+        const query::partition_slice& slice, streamed_mutation::forwarding fwd)
+            : impl(std::move(schema), std::move(permit))
             , _prange(&prange)
             , _slice(slice)
             , _fwd(fwd)
@@ -248,7 +249,7 @@ future<> size_estimates_mutation_reader::get_next_partition() {
         ++_current_partition;
         std::vector<mutation> ms;
         ms.emplace_back(std::move(mutations));
-        _partition_reader = flat_mutation_reader_from_mutations(std::move(ms), _fwd);
+        _partition_reader = flat_mutation_reader_from_mutations(_permit, std::move(ms), _fwd);
     });
 }
 

@@ -85,6 +85,12 @@ thread_local disk_error_signal_type sstable_write_error;
 
 namespace sstables {
 
+namespace {
+
+thread_local reader_concurrency_semaphore reader_semaphore(reader_concurrency_semaphore::no_limits{}, "kx/lx writer");
+
+}
+
 logging::logger sstlog("sstable");
 
 bool use_binary_search_in_promoted_index = true;
@@ -2017,7 +2023,7 @@ components_writer::components_writer(sstable& sst, const schema& s, file_writer&
     , _index_needs_close(true)
     , _max_sstable_size(cfg.max_sstable_size)
     , _tombstone_written(false)
-    , _range_tombstones(s)
+    , _range_tombstones(s, reader_semaphore.make_permit())
 {
     // This can be 0 in some cases, which is albeit benign, can wreak havoc
     // in lower-level writer code, so clamp it to [1, +inf) here, which is
@@ -2100,14 +2106,14 @@ stop_iteration components_writer::consume(clustering_row&& cr) {
 void components_writer::drain_tombstones(position_in_partition_view pos) {
     ensure_tombstone_is_written();
     while (auto mfo = _range_tombstones.get_next(pos)) {
-        write_tombstone(std::move(mfo->as_mutable_range_tombstone()));
+        write_tombstone(std::move(*mfo).as_range_tombstone());
     }
 }
 
 void components_writer::drain_tombstones() {
     ensure_tombstone_is_written();
     while (auto mfo = _range_tombstones.get_next()) {
-        write_tombstone(std::move(mfo->as_mutable_range_tombstone()));
+        write_tombstone(std::move(*mfo).as_range_tombstone());
     }
 }
 

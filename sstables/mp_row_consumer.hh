@@ -71,8 +71,8 @@ protected:
 
     std::optional<dht::decorated_key> _current_partition_key;
 public:
-    mp_row_consumer_reader(schema_ptr s, shared_sstable sst)
-        : impl(std::move(s))
+    mp_row_consumer_reader(schema_ptr s, reader_permit permit, shared_sstable sst)
+        : impl(std::move(s), std::move(permit))
         , _sst(std::move(sst))
     { }
 
@@ -260,9 +260,13 @@ private:
             }
             auto ac = atomic_cell_or_collection::from_collection_mutation(cm.serialize(*_cdef->type));
             if (_cdef->is_static()) {
-                mf.as_mutable_static_row().set_cell(*_cdef, std::move(ac));
+                mf.mutate_as_static_row(s, [&] (static_row& sr) mutable {
+                    sr.set_cell(*_cdef, std::move(ac));
+                });
             } else {
-                mf.as_mutable_clustering_row().set_cell(*_cdef, std::move(ac));
+                mf.mutate_as_clustering_row(s, [&] (clustering_row& cr) {
+                    cr.set_cell(*_cdef, std::move(ac));
+                });
             }
         }
     };
@@ -392,7 +396,7 @@ public:
         , _schema(schema)
         , _slice(slice)
         , _fwd(fwd)
-        , _range_tombstones(*_schema)
+        , _range_tombstones(*_schema, this->permit())
         , _treat_non_compound_rt_as_compound(!sst->has_correct_non_compound_range_tombstones())
     { }
 
@@ -452,7 +456,7 @@ public:
             ret = flush();
         }
         advance_to(rt);
-        _in_progress = mutation_fragment(std::move(rt));
+        _in_progress = mutation_fragment(*_schema, permit(), std::move(rt));
         if (_out_of_range) {
             ret = push_ready_fragments_out_of_range();
         }
@@ -476,9 +480,9 @@ public:
         if (!_in_progress) {
             advance_to(pos);
             if (is_static) {
-                _in_progress = mutation_fragment(static_row());
+                _in_progress = mutation_fragment(*_schema, permit(), static_row());
             } else {
-                _in_progress = mutation_fragment(clustering_row(std::move(pos.key())));
+                _in_progress = mutation_fragment(*_schema, permit(), clustering_row(std::move(pos.key())));
             }
             if (_out_of_range) {
                 ret = push_ready_fragments_out_of_range();
@@ -520,7 +524,9 @@ public:
 
         if (col.cell.size() == 0) {
             row_marker rm(timestamp, gc_clock::duration(ttl), gc_clock::time_point(gc_clock::duration(expiration)));
-            _in_progress->as_mutable_clustering_row().apply(std::move(rm));
+            _in_progress->mutate_as_clustering_row(*_schema, [&] (clustering_row& cr) {
+                cr.apply(std::move(rm));
+            });
             return ret;
         }
 
@@ -537,9 +543,13 @@ public:
             auto ac = make_counter_cell(timestamp, value);
 
             if (col.is_static) {
-                _in_progress->as_mutable_static_row().set_cell(*(col.cdef), std::move(ac));
+                _in_progress->mutate_as_static_row(*_schema, [&] (static_row& sr) mutable {
+                    sr.set_cell(*(col.cdef), std::move(ac));
+                });
             } else {
-                _in_progress->as_mutable_clustering_row().set_cell(*(col.cdef), atomic_cell_or_collection(std::move(ac)));
+                _in_progress->mutate_as_clustering_row(*_schema, [&] (clustering_row& cr) mutable {
+                    cr.set_cell(*(col.cdef), atomic_cell_or_collection(std::move(ac)));
+                });
             }
         });
     }
@@ -588,10 +598,14 @@ public:
                                        gc_clock::time_point(gc_clock::duration(expiration)),
                                        atomic_cell::collection_member::no);
             if (col.is_static) {
-                _in_progress->as_mutable_static_row().set_cell(*(col.cdef), std::move(ac));
+                _in_progress->mutate_as_static_row(*_schema, [&] (static_row& sr) mutable {
+                    sr.set_cell(*(col.cdef), std::move(ac));
+                });
                 return;
             }
-            _in_progress->as_mutable_clustering_row().set_cell(*(col.cdef), atomic_cell_or_collection(std::move(ac)));
+            _in_progress->mutate_as_clustering_row(*_schema, [&] (clustering_row& cr) mutable {
+                cr.set_cell(*(col.cdef), atomic_cell_or_collection(std::move(ac)));
+            });
         });
     }
 
@@ -611,7 +625,9 @@ public:
 
         if (col.cell.size() == 0) {
             row_marker rm(tombstone(timestamp, local_deletion_time));
-            _in_progress->as_mutable_clustering_row().apply(rm);
+            _in_progress->mutate_as_clustering_row(*_schema, [&] (clustering_row& cr) mutable {
+                cr.apply(rm);
+            });
             return ret;
         }
         if (!col.is_present) {
@@ -628,9 +644,13 @@ public:
         if (is_multi_cell) {
             update_pending_collection(col.cdef, to_bytes(col.collection_extra_data), std::move(ac));
         } else if (col.is_static) {
-            _in_progress->as_mutable_static_row().set_cell(*col.cdef, atomic_cell_or_collection(std::move(ac)));
+            _in_progress->mutate_as_static_row(*_schema, [&] (static_row& sr) {
+                sr.set_cell(*col.cdef, atomic_cell_or_collection(std::move(ac)));
+            });
         } else {
-            _in_progress->as_mutable_clustering_row().set_cell(*col.cdef, atomic_cell_or_collection(std::move(ac)));
+            _in_progress->mutate_as_clustering_row(*_schema, [&] (clustering_row& cr) mutable {
+                cr.set_cell(*col.cdef, atomic_cell_or_collection(std::move(ac)));
+            });
         }
         return ret;
     }
@@ -648,7 +668,9 @@ public:
         auto ck = clustering_key_prefix::from_exploded_view(key);
         auto ret = flush_if_needed(std::move(ck));
         if (!_skip_in_progress) {
-            _in_progress->as_mutable_clustering_row().apply(shadowable_tombstone(tombstone(deltime)));
+            _in_progress->mutate_as_clustering_row(*_schema, [&] (clustering_row& cr) mutable {
+                cr.apply(shadowable_tombstone(tombstone(deltime)));
+            });
         }
         return ret;
     }
@@ -702,7 +724,9 @@ public:
             if (range_tombstone::is_single_clustering_row_tombstone(*_schema, start_ck, start_kind, end, end_kind)) {
                 auto ret = flush_if_needed(std::move(start_ck));
                 if (!_skip_in_progress) {
-                    _in_progress->as_mutable_clustering_row().apply(tombstone(deltime));
+                    _in_progress->mutate_as_clustering_row(*_schema, [&] (clustering_row& cr) mutable {
+                        cr.apply(tombstone(deltime));
+                    });
                 }
                 return ret;
             } else {
@@ -941,7 +965,7 @@ class mp_row_consumer_m : public consumer_m {
         const auto action = _mf_filter->apply(rt);
         switch (action) {
         case mutation_fragment_filter::result::emit:
-            _reader->push_mutation_fragment(std::move(rt));
+            _reader->push_mutation_fragment(mutation_fragment(*_schema, permit(), std::move(rt)));
             break;
         case mutation_fragment_filter::result::ignore:
             if (_mf_filter->out_of_range()) {
@@ -1040,7 +1064,7 @@ public:
                 assert(_mf_filter);
                 switch (_mf_filter->apply(*mfopt)) {
                 case mutation_fragment_filter::result::emit:
-                    _reader->push_mutation_fragment(*std::exchange(mfopt, {}));
+                    _reader->push_mutation_fragment(mutation_fragment(*_schema, permit(), *std::exchange(mfopt, {})));
                     break;
                 case mutation_fragment_filter::result::ignore:
                     mfopt.reset();
@@ -1361,7 +1385,7 @@ public:
                 auto action = _mf_filter->apply(_in_progress_static_row);
                 switch (action) {
                 case mutation_fragment_filter::result::emit:
-                    _reader->push_mutation_fragment(std::move(_in_progress_static_row));
+                    _reader->push_mutation_fragment(mutation_fragment(*_schema, permit(), std::move(_in_progress_static_row)));
                     break;
                 case mutation_fragment_filter::result::ignore:
                     break;
@@ -1374,7 +1398,7 @@ public:
             if (!_cells.empty()) {
                 fill_cells(column_kind::regular_column, _in_progress_row->cells());
             }
-            _reader->push_mutation_fragment(*std::exchange(_in_progress_row, {}));
+            _reader->push_mutation_fragment(mutation_fragment(*_schema, permit(), *std::exchange(_in_progress_row, {})));
         }
 
         return proceed(!_reader->is_buffer_full());
@@ -1401,7 +1425,7 @@ public:
                                            _opened_range_tombstone->tomb};
                 sstlog.trace("mp_row_consumer_m {}: on_end_of_stream(), emitting last tombstone: {}", fmt::ptr(this), rt);
                 _opened_range_tombstone.reset();
-                _reader->push_mutation_fragment(std::move(rt));
+                _reader->push_mutation_fragment(mutation_fragment(*_schema, permit(), std::move(rt)));
             }
         }
         if (!_reader->_partition_finished) {
@@ -1422,7 +1446,7 @@ public:
         _reader->_index_in_current_partition = false;
         _reader->_partition_finished = true;
         _reader->_before_partition = true;
-        _reader->push_mutation_fragment(mutation_fragment(partition_end()));
+        _reader->push_mutation_fragment(mutation_fragment(*_schema, permit(), partition_end()));
         return proceed::yes;
     }
 

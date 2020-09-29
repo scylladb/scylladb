@@ -29,6 +29,8 @@
 
 namespace mutation_writer {
 
+thread_local reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::no_limits{}, "multishard_writer");
+
 class shard_writer {
 private:
     schema_ptr _s;
@@ -104,12 +106,12 @@ multishard_writer::multishard_writer(
 }
 
 future<> multishard_writer::make_shard_writer(unsigned shard) {
-    auto [reader, handle] = make_queue_reader(_s);
+    auto [reader, handle] = make_queue_reader(_s, _producer.permit());
     _queue_reader_handles[shard] = std::move(handle);
     return smp::submit_to(shard, [gs = global_schema_ptr(_s),
             consumer = _consumer,
             reader = make_foreign(std::make_unique<flat_mutation_reader>(std::move(reader)))] () mutable {
-        auto this_shard_reader = make_foreign_reader(gs.get(), std::move(reader));
+        auto this_shard_reader = make_foreign_reader(gs.get(), semaphore.make_permit(), std::move(reader));
         return make_foreign(std::make_unique<shard_writer>(gs.get(), std::move(this_shard_reader), consumer));
     }).then([this, shard] (foreign_ptr<std::unique_ptr<shard_writer>> writer) {
         _shard_writers[shard] = std::move(writer);

@@ -1118,7 +1118,7 @@ class scrub_compaction final : public regular_compaction {
                     current_key.key().with_schema(*_schema),
                     current_key);
 
-            auto pe = mutation_fragment(partition_end{});
+            auto pe = mutation_fragment(*_schema, _permit, partition_end{});
             if (!_validator(pe)) {
                 throw compaction_stop_exception(
                         _schema->ks_name(),
@@ -1169,7 +1169,7 @@ class scrub_compaction final : public regular_compaction {
         void on_invalid_end_of_stream() {
             maybe_abort_scrub();
             // Handle missing partition_end
-            push_mutation_fragment(partition_end{});
+            push_mutation_fragment(mutation_fragment(*_schema, _permit, partition_end{}));
             clogger.error("[scrub compaction {}.{}] Adding missing partition-end to the end of the stream.",
                     _schema->ks_name(), _schema->cf_name());
         }
@@ -1217,7 +1217,7 @@ class scrub_compaction final : public regular_compaction {
 
     public:
         reader(flat_mutation_reader underlying, bool skip_corrupted)
-            : impl(underlying.schema())
+            : impl(underlying.schema(), underlying.permit())
             , _skip_corrupted(skip_corrupted)
             , _reader(std::move(underlying))
             , _validator(*_schema)

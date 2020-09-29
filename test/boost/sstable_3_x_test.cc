@@ -3219,6 +3219,7 @@ static tmpdir write_sstables(test_env& env, schema_ptr s, lw_shared_ptr<memtable
     auto sst = env.make_sstable(s, tmp.path().string(), 1, version, sstable::format_types::big, 4096);
 
     sst->write_components(make_combined_reader(s,
+        tests::make_permit(),
         mt1->make_flat_reader(s, tests::make_permit()),
         mt2->make_flat_reader(s, tests::make_permit())), 1, s, env.manager().configure_writer(), mt1->get_encoding_stats()).get();
     return tmp;

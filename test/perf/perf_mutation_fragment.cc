@@ -97,44 +97,47 @@ PERF_TEST_F(clustering_row, make_1M)
 
 PERF_TEST_F(clustering_row, copy_4)
 {
-    auto mf = mutation_fragment(*schema(), clustering_row_4());
+    auto mf = mutation_fragment(*schema(), tests::make_permit(), clustering_row_4());
     perf_tests::do_not_optimize(mf);
 }
 
 PERF_TEST_F(clustering_row, copy_4k)
 {
-    auto mf = mutation_fragment(*schema(), clustering_row_4k());
+    auto mf = mutation_fragment(*schema(), tests::make_permit(), clustering_row_4k());
     perf_tests::do_not_optimize(mf);
 }
 
 PERF_TEST_F(clustering_row, copy_1M)
 {
-    auto mf = mutation_fragment(*schema(), clustering_row_1M());
+    auto mf = mutation_fragment(*schema(), tests::make_permit(), clustering_row_1M());
     perf_tests::do_not_optimize(mf);
 }
 
 PERF_TEST_F(clustering_row, hash_4)
 {
-    auto& cr = clustering_row_4().as_mutable_clustering_row();
-    cr.cells().prepare_hash(*schema(), column_kind::regular_column);
-    perf_tests::do_not_optimize(cr);
-    cr.cells().clear_hash();
+    clustering_row_4().mutate_as_clustering_row(*schema(), [&] (::clustering_row& cr) mutable {
+        cr.cells().prepare_hash(*schema(), column_kind::regular_column);
+        perf_tests::do_not_optimize(cr);
+        cr.cells().clear_hash();
+    });
 }
 
 PERF_TEST_F(clustering_row, hash_4k)
 {
-    auto& cr = clustering_row_4k().as_mutable_clustering_row();
-    cr.cells().prepare_hash(*schema(), column_kind::regular_column);
-    perf_tests::do_not_optimize(cr);
-    cr.cells().clear_hash();
+    clustering_row_4k().mutate_as_clustering_row(*schema(), [&] (::clustering_row& cr) mutable {
+        cr.cells().prepare_hash(*schema(), column_kind::regular_column);
+        perf_tests::do_not_optimize(cr);
+        cr.cells().clear_hash();
+    });
 }
 
 PERF_TEST_F(clustering_row, hash_1M)
 {
-    auto& cr = clustering_row_1M().as_mutable_clustering_row();
-    cr.cells().prepare_hash(*schema(), column_kind::regular_column);
-    perf_tests::do_not_optimize(cr);
-    cr.cells().clear_hash();
+    clustering_row_1M().mutate_as_clustering_row(*schema(), [&] (::clustering_row& cr) mutable {
+        cr.cells().prepare_hash(*schema(), column_kind::regular_column);
+        perf_tests::do_not_optimize(cr);
+        cr.cells().clear_hash();
+    });
 }
 
 }

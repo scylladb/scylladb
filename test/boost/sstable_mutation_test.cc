@@ -823,9 +823,9 @@ SEASTAR_THREAD_TEST_CASE(buffer_overflow) {
                         clustering_key::from_exploded(*s, {int32_type->decompose(1)}),
                         tomb);
     r.set_max_buffer_size(std::max(
-                mutation_fragment(partition_start(dk1, tomb)).memory_usage(*s)
-                    + mutation_fragment(range_tombstone(rt1)).memory_usage(*s),
-                mutation_fragment(clustering_row(ck1)).memory_usage(*s)));
+                mutation_fragment(*s, tests::make_permit(), partition_start(dk1, tomb)).memory_usage()
+                    + mutation_fragment(*s, tests::make_permit(), range_tombstone(rt1)).memory_usage(),
+                mutation_fragment(*s, tests::make_permit(), clustering_row(ck1)).memory_usage()));
     flat_reader_assertions rd(std::move(r));
     rd.produces_partition_start(dk1)
         .produces_range_tombstone(rt1)
@@ -1318,7 +1318,7 @@ SEASTAR_TEST_CASE(test_writing_combined_stream_with_tombstones_at_the_same_posit
                                           1 /* generation */,
                                           version,
                                           sstables::sstable::format_types::big);
-        sst->write_components(make_combined_reader(s,
+        sst->write_components(make_combined_reader(s, tests::make_permit(),
             mt1->make_flat_reader(s, tests::make_permit()),
             mt2->make_flat_reader(s, tests::make_permit())), 1, s, env.manager().configure_writer(), encoding_stats{}).get();
         sst->load().get();

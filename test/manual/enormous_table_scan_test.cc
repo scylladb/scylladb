@@ -26,6 +26,7 @@
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/log.hh"
 #include "test/lib/cql_assertions.hh"
+#include "test/lib/reader_permit.hh"
 #include "transport/messages/result_message.hh"
 
 #include <boost/range/adaptor/indirected.hpp>
@@ -48,7 +49,7 @@ public:
     static constexpr uint64_t CLUSTERING_ROW_COUNT = 4500ULL * 1000ULL * 1000ULL;
 
     enormous_table_reader(schema_ptr schema, const dht::partition_range& prange, const query::partition_slice& slice)
-        : impl(schema)
+        : impl(schema, tests::make_permit())
         , _schema(std::move(schema))
         , _slice(slice)
     {
@@ -76,7 +77,7 @@ public:
 
             auto dk = get_dk();
             if (_pps == partition_production_state::before_partition_start) {
-                push_mutation_fragment(partition_start(std::move(dk), tombstone()));
+                push_mutation_fragment(*_schema, _permit, partition_start(std::move(dk), tombstone()));
                 _pps = partition_production_state::after_partition_start;
 
             } else if (_pps == partition_production_state::after_partition_start) {
@@ -106,10 +107,10 @@ public:
                 auto crow = clustering_row(std::move(ck));
                 // crow.set_cell(_cdef, atomic_cell::make_live(*_cdef.type, ));
                 crow.marker() = row_marker(api::new_timestamp());
-                push_mutation_fragment(std::move(crow));
+                push_mutation_fragment(*_schema, _permit, std::move(crow));
 
             } else if (_pps == partition_production_state::before_partition_end) {
-                push_mutation_fragment(partition_end());
+                push_mutation_fragment(*_schema, _permit, partition_end());
                 _pps = partition_production_state::after_partition_end;
                 _end_of_stream = true;
             }

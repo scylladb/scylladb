@@ -436,7 +436,7 @@ SEASTAR_TEST_CASE(test_view_update_generator) {
             sstables::sstable_writer_config sst_cfg = e.db().local().get_user_sstables_manager().configure_writer();
             auto& pc = service::get_local_streaming_priority();
 
-            sst->write_components(flat_mutation_reader_from_mutations({m}), 1ul, s, sst_cfg, {}, pc).get();
+            sst->write_components(flat_mutation_reader_from_mutations(tests::make_permit(), {m}), 1ul, s, sst_cfg, {}, pc).get();
             sst->open_data().get();
             t->add_sstable_and_update_cache(sst).get();
             return sst;
@@ -550,7 +550,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_deadlock) {
         sstables::sstable_writer_config sst_cfg = e.local_db().get_user_sstables_manager().configure_writer();
         auto& pc = service::get_local_streaming_priority();
 
-        sst->write_components(flat_mutation_reader_from_mutations({m}), 1ul, s, sst_cfg, {}, pc).get();
+        sst->write_components(flat_mutation_reader_from_mutations(tests::make_permit(), {m}), 1ul, s, sst_cfg, {}, pc).get();
         sst->open_data().get();
         t->add_sstable_and_update_cache(sst).get();
 
@@ -559,7 +559,11 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_deadlock) {
         }).get0();
 
         // consume all units except what is needed to admit a single reader.
-        sem.consume(sem.initial_resources() - reader_resources{1, new_reader_base_cost});
+        const auto consumed_resources = sem.initial_resources() - reader_resources{1, new_reader_base_cost};
+        sem.consume(consumed_resources);
+        auto release_resources = defer([&sem, consumed_resources] {
+            sem.signal(consumed_resources);
+        });
 
         testlog.info("res = [.count={}, .memory={}]", sem.available_resources().count, sem.available_resources().memory);
 
@@ -622,7 +626,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_register_semaphore_unit_leak
             sstables::sstable_writer_config sst_cfg = e.local_db().get_user_sstables_manager().configure_writer();
             auto& pc = service::get_local_streaming_priority();
 
-            sst->write_components(flat_mutation_reader_from_mutations({m}), 1ul, s, sst_cfg, {}, pc).get();
+            sst->write_components(flat_mutation_reader_from_mutations(tests::make_permit(), {m}), 1ul, s, sst_cfg, {}, pc).get();
             sst->open_data().get();
             t->add_sstable_and_update_cache(sst).get();
             return sst;
@@ -700,7 +704,6 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering) {
         reader_permit _permit;
         const partition_size_map& _partition_rows;
         std::vector<mutation>& _collected_muts;
-        bool& _failed;
         std::unique_ptr<row_locker> _rl;
         std::unique_ptr<row_locker::stats> _rl_stats;
         clustering_key::less_compare _less_cmp;
@@ -722,9 +725,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering) {
         void check(mutation mut) {
             // First we check that we would be able to create a reader, even
             // though the staging reader consumed all resources.
-            auto fut = _permit.wait_admission(new_reader_base_cost, db::timeout_clock::now());
-            BOOST_REQUIRE(!fut.failed());
-            auto res_units = fut.get0();
+            auto res_units = _permit.wait_admission(new_reader_base_cost, db::timeout_clock::now()).get0();
 
             const size_t current_rows = rows_in_mut(mut);
             const auto total_rows = _partition_rows.at(mut.decorated_key());
@@ -768,12 +769,11 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering) {
         }
 
     public:
-        consumer_verifier(schema_ptr schema, reader_permit permit, const partition_size_map& partition_rows, std::vector<mutation>& collected_muts, bool& failed)
+        consumer_verifier(schema_ptr schema, reader_permit permit, const partition_size_map& partition_rows, std::vector<mutation>& collected_muts)
             : _schema(std::move(schema))
             , _permit(std::move(permit))
             , _partition_rows(partition_rows)
             , _collected_muts(collected_muts)
-            , _failed(failed)
             , _rl(std::make_unique<row_locker>(_schema))
             , _rl_stats(std::make_unique<row_locker::stats>())
             , _less_cmp(*_schema)
@@ -785,8 +785,8 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering) {
             try {
                 check(std::move(mut));
             } catch (...) {
-                testlog.error("consumer_verifier::operator(): caught unexpected exception {}", std::current_exception());
-                _failed |= true;
+                //testlog.error("consumer_verifier::operator(): caught unexpected exception {}", std::current_exception());
+                BOOST_FAIL(fmt::format("consumer_verifier::operator(): caught unexpected exception {}", std::current_exception()));
             }
             return _rl->lock_pk(_collected_muts.back().decorated_key(), true, db::no_timeout, *_rl_stats);
         }
@@ -857,12 +857,9 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering) {
                 ::mutation_reader::forwarding::no);
 
         std::vector<mutation> collected_muts;
-        bool failed = false;
 
-        staging_reader.consume_in_thread(db::view::view_updating_consumer(schema, as, staging_reader_handle,
-                    consumer_verifier(schema, permit, partition_rows, collected_muts, failed)), db::no_timeout);
-
-        BOOST_REQUIRE(!failed);
+        staging_reader.consume_in_thread(db::view::view_updating_consumer(schema, permit, as, staging_reader_handle,
+                    consumer_verifier(schema, permit, partition_rows, collected_muts)), db::no_timeout);
 
         BOOST_REQUIRE_EQUAL(muts.size(), collected_muts.size());
         for (size_t i = 0; i < muts.size(); ++i) {

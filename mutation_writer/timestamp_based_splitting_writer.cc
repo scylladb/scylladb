@@ -123,8 +123,8 @@ class timestamp_based_splitting_mutation_writer {
         }
 
     public:
-        bucket_writer(schema_ptr schema, reader_consumer& consumer)
-            : bucket_writer(schema, make_queue_reader(schema), consumer) {
+        bucket_writer(schema_ptr schema, reader_permit permit, reader_consumer& consumer)
+            : bucket_writer(schema, make_queue_reader(schema, std::move(permit)), consumer) {
         }
         void set_has_current_partition() {
             _has_current_partition = true;
@@ -148,6 +148,7 @@ class timestamp_based_splitting_mutation_writer {
 
 private:
     schema_ptr _schema;
+    reader_permit _permit;
     classify_by_timestamp _classifier;
     reader_consumer _consumer;
     partition_start _current_partition_start;
@@ -168,8 +169,9 @@ private:
     future<> write_marker_and_tombstone(const clustering_row& cr);
 
 public:
-    timestamp_based_splitting_mutation_writer(schema_ptr schema, classify_by_timestamp classifier, reader_consumer consumer)
+    timestamp_based_splitting_mutation_writer(schema_ptr schema, reader_permit permit, classify_by_timestamp classifier, reader_consumer consumer)
         : _schema(std::move(schema))
+        , _permit(std::move(permit))
         , _classifier(std::move(classifier))
         , _consumer(std::move(consumer))
         , _current_partition_start(dht::decorated_key(dht::token{}, partition_key::make_empty()), tombstone{}) {
@@ -189,7 +191,7 @@ public:
 };
 
 future<> timestamp_based_splitting_mutation_writer::write_to_bucket(bucket_id bucket, mutation_fragment&& mf) {
-    auto it = _buckets.try_emplace(bucket, _schema, _consumer).first;
+    auto it = _buckets.try_emplace(bucket, _schema, _permit, _consumer).first;
 
     auto& writer = it->second;
 
@@ -206,7 +208,7 @@ future<> timestamp_based_splitting_mutation_writer::write_to_bucket(bucket_id bu
         });
     }
 
-    return writer.consume(partition_start(_current_partition_start)).then([this, bucket = it->first, &writer, mf = std::move(mf)] () mutable {
+    return writer.consume(mutation_fragment(*_schema, _permit, partition_start(_current_partition_start))).then([this, bucket = it->first, &writer, mf = std::move(mf)] () mutable {
         writer.set_has_current_partition();
         _buckets_used_for_current_partition.push_back(bucket);
         return writer.consume(std::move(mf));
@@ -391,17 +393,17 @@ future<> timestamp_based_splitting_mutation_writer::write_marker_and_tombstone(c
     }
 
     if (marker_bucket_id == tomb_bucket_id) {
-        return write_to_bucket(*marker_bucket_id, clustering_row(cr.key(), cr.tomb(), cr.marker(), {}));
+        return write_to_bucket(*marker_bucket_id, mutation_fragment(*_schema, _permit, clustering_row(cr.key(), cr.tomb(), cr.marker(), {})));
     }
 
     auto write_marker_fut = make_ready_future<>();
     if (marker_bucket_id) {
-        write_marker_fut = write_to_bucket(*marker_bucket_id, clustering_row(cr.key(), {}, cr.marker(), {}));
+        write_marker_fut = write_to_bucket(*marker_bucket_id, mutation_fragment(*_schema, _permit, clustering_row(cr.key(), {}, cr.marker(), {})));
     }
 
     auto write_tomb_fut = make_ready_future<>();
     if (tomb_bucket_id) {
-        write_tomb_fut = write_to_bucket(*tomb_bucket_id, clustering_row(cr.key(), cr.tomb(), {}, {}));
+        write_tomb_fut = write_to_bucket(*tomb_bucket_id, mutation_fragment(*_schema, _permit, clustering_row(cr.key(), cr.tomb(), {}, {})));
     }
     return when_all_succeed(std::move(write_marker_fut), std::move(write_tomb_fut)).discard_result();
 }
@@ -412,7 +414,7 @@ future<> timestamp_based_splitting_mutation_writer::consume(partition_start&& ps
         auto bucket = _classifier(tomb.timestamp);
         auto ps = partition_start(_current_partition_start);
         tomb = {};
-        return write_to_bucket(bucket, std::move(ps));
+        return write_to_bucket(bucket, mutation_fragment(mutation_fragment(*_schema, _permit, std::move(ps))));
     }
     return make_ready_future<>();
 }
@@ -423,11 +425,11 @@ future<> timestamp_based_splitting_mutation_writer::consume(static_row&& sr) {
     }
 
     if (const auto bucket = examine_static_row(sr)) {
-        return write_to_bucket(*bucket, std::move(sr));
+        return write_to_bucket(*bucket, mutation_fragment(*_schema, _permit, std::move(sr)));
     }
 
     return parallel_for_each(split_static_row(std::move(sr)), [this] (std::pair<bucket_id, static_row>& sr_piece) {
-        return write_to_bucket(sr_piece.first, static_row(std::move(sr_piece.second)));
+        return write_to_bucket(sr_piece.first, mutation_fragment(*_schema, _permit, static_row(std::move(sr_piece.second))));
     });
 }
 
@@ -437,23 +439,23 @@ future<> timestamp_based_splitting_mutation_writer::consume(clustering_row&& cr)
     }
 
     if (const auto bucket = examine_clustering_row(cr)) {
-        return write_to_bucket(*bucket, std::move(cr));
+        return write_to_bucket(*bucket, mutation_fragment(*_schema, _permit, std::move(cr)));
     }
 
     return parallel_for_each(split_clustering_row(std::move(cr)), [this] (std::pair<bucket_id, clustering_row>& cr_piece) {
-        return write_to_bucket(cr_piece.first, std::move(cr_piece.second));
+        return write_to_bucket(cr_piece.first, mutation_fragment(*_schema, _permit, std::move(cr_piece.second)));
     });
 }
 
 future<> timestamp_based_splitting_mutation_writer::consume(range_tombstone&& rt) {
     auto timestamp = _classifier(rt.tomb.timestamp);
-    return write_to_bucket(timestamp, std::move(rt));
+    return write_to_bucket(timestamp, mutation_fragment(*_schema, _permit, std::move(rt)));
 }
 
 future<> timestamp_based_splitting_mutation_writer::consume(partition_end&& pe) {
     return parallel_for_each(_buckets_used_for_current_partition, [this, pe = std::move(pe)] (bucket_id bucket) {
         auto& writer = _buckets.at(bucket);
-        return writer.consume(mutation_fragment(partition_end(pe))).then([&writer] {
+        return writer.consume(mutation_fragment(*_schema, _permit, partition_end(pe))).then([&writer] {
             writer.clear_has_current_partition();
         });
     }).then([this] {
@@ -464,9 +466,10 @@ future<> timestamp_based_splitting_mutation_writer::consume(partition_end&& pe) 
 future<> segregate_by_timestamp(flat_mutation_reader producer, classify_by_timestamp classifier, reader_consumer consumer) {
     //FIXME: make this into a consume() variant?
     auto schema = producer.schema();
+    auto permit = producer.permit();
     return feed_writer(
             std::move(producer),
-            timestamp_based_splitting_mutation_writer(std::move(schema), std::move(classifier), std::move(consumer)));
+            timestamp_based_splitting_mutation_writer(std::move(schema), std::move(permit), std::move(classifier), std::move(consumer)));
 }
 
 } // namespace mutation_writer

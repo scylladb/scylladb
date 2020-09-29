@@ -152,6 +152,7 @@ class view_builder final : public service::migration_listener::only_view_notific
     database& _db;
     db::system_distributed_keyspace& _sys_dist_ks;
     service::migration_notifier& _mnotifier;
+    reader_permit _permit;
     base_to_build_step_type _base_to_build_step;
     base_to_build_step_type::iterator _current_step = _base_to_build_step.end();
     serialized_action _build_step{std::bind(&view_builder::do_build_step, this)};

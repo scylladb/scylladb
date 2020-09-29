@@ -30,6 +30,7 @@
 #include "seastar/core/future-util.hh"
 
 #include "db/timeout_clock.hh"
+#include "reader_permit.hh"
 
 // mutation_fragments are the objects that streamed_mutation are going to
 // stream. They can represent:
@@ -283,10 +284,10 @@ public:
     };
 private:
     struct data {
-        data() { }
+        data(reader_permit permit) :  _memory(permit.consume_memory()) { }
         ~data() { }
 
-        std::optional<size_t> _size_in_bytes;
+        reader_permit::resource_units _memory;
         union {
             static_row _static_row;
             clustering_row _clustering_row;
@@ -309,21 +310,22 @@ public:
     struct clustering_row_tag_t { };
 
     template<typename... Args>
-    mutation_fragment(clustering_row_tag_t, Args&&... args)
+    mutation_fragment(clustering_row_tag_t, const schema& s, reader_permit permit, Args&&... args)
         : _kind(kind::clustering_row)
-        , _data(std::make_unique<data>())
+        , _data(std::make_unique<data>(std::move(permit)))
     {
         new (&_data->_clustering_row) clustering_row(std::forward<Args>(args)...);
+        _data->_memory.reset(reader_resources::with_memory(calculate_memory_usage(s)));
     }
 
-    mutation_fragment(static_row&& r);
-    mutation_fragment(clustering_row&& r);
-    mutation_fragment(range_tombstone&& r);
-    mutation_fragment(partition_start&& r);
-    mutation_fragment(partition_end&& r);
+    mutation_fragment(const schema& s, reader_permit permit, static_row&& r);
+    mutation_fragment(const schema& s, reader_permit permit, clustering_row&& r);
+    mutation_fragment(const schema& s, reader_permit permit, range_tombstone&& r);
+    mutation_fragment(const schema& s, reader_permit permit, partition_start&& r);
+    mutation_fragment(const schema& s, reader_permit permit, partition_end&& r);
 
-    mutation_fragment(const schema& s, const mutation_fragment& o)
-        : _kind(o._kind), _data(std::make_unique<data>()) {
+    mutation_fragment(const schema& s, reader_permit permit, const mutation_fragment& o)
+        : _kind(o._kind), _data(std::make_unique<data>(std::move(permit))) {
         switch (_kind) {
             case kind::static_row:
                 new (&_data->_static_row) static_row(s, o._data->_static_row);
@@ -341,6 +343,7 @@ public:
                 new (&_data->_partition_end) partition_end(o._data->_partition_end);
                 break;
         }
+        _data->_memory.reset(o._data->_memory.resources());
     }
     mutation_fragment(mutation_fragment&& other) = default;
     mutation_fragment& operator=(mutation_fragment&& other) noexcept {
@@ -381,25 +384,21 @@ public:
     bool is_partition_start() const { return _kind == kind::partition_start; }
     bool is_end_of_partition() const { return _kind == kind::partition_end; }
 
-    static_row& as_mutable_static_row() {
-        _data->_size_in_bytes = std::nullopt;
-        return _data->_static_row;
+    void mutate_as_static_row(const schema& s, std::invocable<static_row&> auto&& fn) {
+        fn(_data->_static_row);
+        _data->_memory.reset(reader_resources::with_memory(calculate_memory_usage(s)));
     }
-    clustering_row& as_mutable_clustering_row() {
-        _data->_size_in_bytes = std::nullopt;
-        return _data->_clustering_row;
+    void mutate_as_clustering_row(const schema& s, std::invocable<clustering_row&> auto&& fn) {
+        fn(_data->_clustering_row);
+        _data->_memory.reset(reader_resources::with_memory(calculate_memory_usage(s)));
     }
-    range_tombstone& as_mutable_range_tombstone() {
-        _data->_size_in_bytes = std::nullopt;
-        return _data->_range_tombstone;
+    void mutate_as_range_tombstone(const schema& s, std::invocable<range_tombstone&> auto&& fn) {
+        fn(_data->_range_tombstone);
+        _data->_memory.reset(reader_resources::with_memory(calculate_memory_usage(s)));
     }
-    partition_start& as_mutable_partition_start() {
-        _data->_size_in_bytes = std::nullopt;
-        return _data->_partition_start;
-    }
-    partition_end& as_mutable_end_of_partition() {
-        _data->_size_in_bytes = std::nullopt;
-        return _data->_partition_end;
+    void mutate_as_partition_start(const schema& s, std::invocable<partition_start&> auto&& fn) {
+        fn(_data->_partition_start);
+        _data->_memory.reset(reader_resources::with_memory(calculate_memory_usage(s)));
     }
 
     static_row&& as_static_row() && { return std::move(_data->_static_row); }
@@ -420,6 +419,7 @@ public:
     template<typename Consumer>
     requires MutationFragmentConsumer<Consumer, decltype(std::declval<Consumer>().consume(std::declval<range_tombstone>()))>
     decltype(auto) consume(Consumer& consumer) && {
+        _data->_memory.reset();
         switch (_kind) {
         case kind::static_row:
             return consumer.consume(std::move(_data->_static_row));
@@ -453,11 +453,12 @@ public:
         abort();
     }
 
-    size_t memory_usage(const schema& s) const {
-        if (!_data->_size_in_bytes) {
-            _data->_size_in_bytes = sizeof(data) + visit([&s] (auto& mf) -> size_t { return mf.external_memory_usage(s); });
-        }
-        return *_data->_size_in_bytes;
+    size_t memory_usage() const {
+        return _data->_memory.resources().memory;
+    }
+
+    reader_permit permit() const {
+        return _data->_memory.permit();
     }
 
     bool equal(const schema& s, const mutation_fragment& other) const {
@@ -499,6 +500,11 @@ public:
         friend std::ostream& operator<<(std::ostream& os, const printer& p);
     };
     friend std::ostream& operator<<(std::ostream& os, const printer& p);
+
+private:
+    size_t calculate_memory_usage(const schema& s) const {
+        return sizeof(data) + visit([&s] (auto& mf) -> size_t { return mf.external_memory_usage(s); });
+    }
 };
 
 inline position_in_partition_view static_row::position() const
@@ -569,12 +575,13 @@ namespace streamed_mutation {
 // to the stream.
 class range_tombstone_stream {
     const schema& _schema;
+    reader_permit _permit;
     position_in_partition::less_compare _cmp;
     range_tombstone_list _list;
 private:
     mutation_fragment_opt do_get_next();
 public:
-    range_tombstone_stream(const schema& s) : _schema(s), _cmp(s), _list(s) { }
+    range_tombstone_stream(const schema& s, reader_permit permit) : _schema(s), _permit(std::move(permit)), _cmp(s), _list(s) { }
     mutation_fragment_opt get_next(const rows_entry&);
     mutation_fragment_opt get_next(const mutation_fragment&);
     // Returns next fragment with position before upper_bound or disengaged optional if no such fragments are left.

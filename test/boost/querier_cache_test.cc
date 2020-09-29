@@ -164,7 +164,7 @@ public:
         , _cache(cache_size, entry_ttl)
         , _mutations(make_mutations(_s, external_make_value))
         , _mutation_source([this] (schema_ptr, reader_permit, const dht::partition_range& range) {
-            auto rd = flat_mutation_reader_from_mutations(_mutations, range);
+            auto rd = flat_mutation_reader_from_mutations(tests::make_permit(), _mutations, range);
             rd.set_max_buffer_size(max_reader_buffer_size);
             return rd;
         }) {
@@ -681,21 +681,15 @@ SEASTAR_THREAD_TEST_CASE(test_resources_based_cache_eviction) {
                 db::no_timeout).get();
 
         auto& semaphore = db.get_reader_concurrency_semaphore();
-        auto permit = semaphore.make_permit();
 
         BOOST_CHECK_EQUAL(db.get_querier_cache_stats().resource_based_evictions, 0);
 
         // Drain all resources of the semaphore
-        const auto resources = semaphore.available_resources();
-        const auto per_count_memory  = resources.memory / resources.count;
-
-        auto units = permit.wait_admission(per_count_memory, db::no_timeout).get0();
-        for (int i = 0; i < resources.count - 1; ++i) {
-            units.add(permit.wait_admission(per_count_memory, db::no_timeout).get0());
-        }
-
-        BOOST_CHECK_EQUAL(semaphore.available_resources().count, 0);
-        BOOST_CHECK(semaphore.available_resources().memory < per_count_memory);
+        const auto available_resources = semaphore.available_resources();
+        semaphore.consume(available_resources);
+        auto release_resources = defer([&semaphore, available_resources] {
+            semaphore.signal(available_resources);
+        });
 
         auto cmd2 = query::read_command(s->id(),
                 s->version(),
@@ -756,6 +750,8 @@ SEASTAR_THREAD_TEST_CASE(test_immediate_evict_on_insert) {
 
     auto& sem = t.get_semaphore();
     auto permit = sem.make_permit();
+
+    permit.wait_admission(0, db::no_timeout).get();
 
     auto resources = permit.consume_resources(reader_resources(sem.available_resources().count, 0));
 

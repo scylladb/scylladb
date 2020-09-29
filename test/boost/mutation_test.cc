@@ -412,7 +412,7 @@ SEASTAR_THREAD_TEST_CASE(test_large_collection_allocation) {
 
         row r;
         r.apply(cdef, atomic_cell_or_collection(cmd.serialize(*collection_type)));
-        mut.apply(clustering_row(clustering_key_prefix::make_empty(), {}, {}, std::move(r)));
+        mut.apply(mutation_fragment(*schema, tests::make_permit(), clustering_row(clustering_key_prefix::make_empty(), {}, {}, std::move(r))));
 
         return mut;
     };
@@ -2914,7 +2914,7 @@ void run_compaction_data_stream_split_test(const schema& schema, gc_clock::time_
 
     testlog.info("Original data: {}", create_stats(expected_mutations_summary));
 
-    auto reader = flat_mutation_reader_from_mutations(std::move(mutations));
+    auto reader = flat_mutation_reader_from_mutations(tests::make_permit(), std::move(mutations));
     auto get_max_purgeable = [] (const dht::decorated_key&) {
         return api::max_timestamp;
     };

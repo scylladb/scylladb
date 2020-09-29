@@ -142,7 +142,7 @@ public:
          tracing::trace_state_ptr trace_state,
          streamed_mutation::forwarding fwd,
          read_monitor& mon)
-        : mp_row_consumer_reader(std::move(schema), std::move(sst))
+        : mp_row_consumer_reader(std::move(schema), permit, std::move(sst))
         , _consumer(this, _schema, std::move(permit), _schema->full_slice(), pc, std::move(trace_state), fwd, _sst)
         , _initialize([this] {
             _context = data_consume_rows<DataConsumeRowsContext>(*_schema, _sst, _consumer);
@@ -161,7 +161,7 @@ public:
          streamed_mutation::forwarding fwd,
          mutation_reader::forwarding fwd_mr,
          read_monitor& mon)
-        : mp_row_consumer_reader(std::move(schema), std::move(sst))
+        : mp_row_consumer_reader(std::move(schema), permit, std::move(sst))
         , _consumer(this, _schema, std::move(permit), slice, pc, std::move(trace_state), fwd, _sst)
         , _initialize([this, pr, &pc, &slice, fwd_mr] () mutable {
             auto f = get_index_reader().advance_to(pr);
@@ -189,7 +189,7 @@ public:
                             streamed_mutation::forwarding fwd,
                             mutation_reader::forwarding fwd_mr,
                             read_monitor& mon)
-        : mp_row_consumer_reader(std::move(schema), std::move(sst))
+        : mp_row_consumer_reader(std::move(schema), permit, std::move(sst))
         , _consumer(this, _schema, std::move(permit), slice, pc, std::move(trace_state), fwd, _sst)
         , _single_partition_read(true)
         , _initialize([this, key = std::move(key), &pc, &slice, fwd_mr] () mutable {
@@ -375,7 +375,7 @@ public:
         if (_fwd == streamed_mutation::forwarding::yes) {
             _end_of_stream = true;
         } else {
-            this->push_mutation_fragment(mutation_fragment(partition_end()));
+            this->push_mutation_fragment(mutation_fragment(*_schema, _permit, partition_end()));
             _partition_finished = true;
         }
     }
@@ -473,7 +473,7 @@ void mp_row_consumer_reader::on_next_partition(dht::decorated_key key, tombstone
     _end_of_stream = false;
     _current_partition_key = std::move(key);
     push_mutation_fragment(
-        mutation_fragment(partition_start(*_current_partition_key, tomb)));
+        mutation_fragment(*_schema, _permit, partition_start(*_current_partition_key, tomb)));
     _sst->get_stats().on_partition_read();
 }
 

@@ -26,6 +26,7 @@
 #include "mutation_fragment.hh"
 #include "sstables/shared_sstable.hh"
 #include "database.hh"
+#include "reader_permit.hh"
 
 class evictable_reader_handle;
 
@@ -45,6 +46,7 @@ public:
 
 private:
     schema_ptr _schema;
+    reader_permit _permit;
     const seastar::abort_source* _as;
     evictable_reader_handle& _staging_reader_handle;
     circular_buffer<mutation> _buffer;
@@ -58,15 +60,16 @@ private:
 
 public:
     // Push updates with a custom pusher. Mainly for tests.
-    view_updating_consumer(schema_ptr schema, const seastar::abort_source& as, evictable_reader_handle& staging_reader_handle,
+    view_updating_consumer(schema_ptr schema, reader_permit permit, const seastar::abort_source& as, evictable_reader_handle& staging_reader_handle,
             noncopyable_function<future<row_locker::lock_holder>(mutation)> view_update_pusher)
             : _schema(std::move(schema))
+            , _permit(std::move(permit))
             , _as(&as)
             , _staging_reader_handle(staging_reader_handle)
             , _view_update_pusher(std::move(view_update_pusher))
     { }
 
-    view_updating_consumer(schema_ptr schema, table& table, std::vector<sstables::shared_sstable> excluded_sstables, const seastar::abort_source& as,
+    view_updating_consumer(schema_ptr schema, reader_permit permit, table& table, std::vector<sstables::shared_sstable> excluded_sstables, const seastar::abort_source& as,
             evictable_reader_handle& staging_reader_handle);
 
     view_updating_consumer(view_updating_consumer&&) = default;
@@ -87,7 +90,7 @@ public:
             return stop_iteration::yes;
         }
         _buffer_size += sr.memory_usage(*_schema);
-        _m->partition().apply(*_schema, std::move(sr));
+        _m->partition().apply(*_schema, mutation_fragment(*_schema, _permit, std::move(sr)));
         maybe_flush_buffer_mid_partition();
         return stop_iteration::no;
     }
@@ -97,7 +100,7 @@ public:
             return stop_iteration::yes;
         }
         _buffer_size += cr.memory_usage(*_schema);
-        _m->partition().apply(*_schema, std::move(cr));
+        _m->partition().apply(*_schema, mutation_fragment(*_schema, _permit, std::move(cr)));
         maybe_flush_buffer_mid_partition();
         return stop_iteration::no;
     }
@@ -107,7 +110,7 @@ public:
             return stop_iteration::yes;
         }
         _buffer_size += rt.memory_usage(*_schema);
-        _m->partition().apply(*_schema, std::move(rt));
+        _m->partition().apply(*_schema, mutation_fragment(*_schema, _permit, std::move(rt)));
         maybe_flush_buffer_mid_partition();
         return stop_iteration::no;
     }

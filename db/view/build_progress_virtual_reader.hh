@@ -72,7 +72,7 @@ class build_progress_virtual_reader {
                 tracing::trace_state_ptr trace_state,
                 streamed_mutation::forwarding fwd,
                 mutation_reader::forwarding fwd_mr)
-                : flat_mutation_reader::impl(std::move(legacy_schema))
+                : flat_mutation_reader::impl(std::move(legacy_schema), permit)
                 , _scylla_next_token_col(scylla_views_build_progress.schema()->get_column_definition("next_token")->id)
                 , _scylla_generation_number_col(scylla_views_build_progress.schema()->get_column_definition("generation_number")->id)
                 , _legacy_last_token_col(_schema->get_column_definition("last_token")->id)
@@ -141,19 +141,19 @@ class build_progress_virtual_reader {
                             continue;
                         }
                         _previous_clustering_key = ck;
-                        mf = clustering_row(
+                        mf = mutation_fragment(*_schema, _permit, clustering_row(
                                 std::move(ck),
                                 std::move(scylla_in_progress_row.tomb()),
                                 std::move(scylla_in_progress_row.marker()),
-                                std::move(legacy_in_progress_row));
+                                std::move(legacy_in_progress_row)));
                     } else if (mf.is_range_tombstone()) {
                         auto scylla_in_progress_rt = std::move(mf).as_range_tombstone();
-                        mf = range_tombstone(
+                        mf = mutation_fragment(*_schema, _permit, range_tombstone(
                                 adjust_ckey(scylla_in_progress_rt.start),
                                 scylla_in_progress_rt.start_kind,
                                 adjust_ckey(scylla_in_progress_rt.end),
                                 scylla_in_progress_rt.end_kind,
-                                scylla_in_progress_rt.tomb);
+                                scylla_in_progress_rt.tomb));
                     } else if (mf.is_end_of_partition()) {
                         _previous_clustering_key.reset();
                     }
