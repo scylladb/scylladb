@@ -257,18 +257,18 @@ modes = {
         'stack-usage-threshold': 1024*40,
     },
     'release': {
-        'cxxflags': '',
-        'cxx_ld_flags': '-O3 -ffunction-sections -fdata-sections -Wl,--gc-sections',
+        'cxxflags': '-O3 -ffunction-sections -fdata-sections ',
+        'cxx_ld_flags': '-Wl,--gc-sections',
         'stack-usage-threshold': 1024*13,
     },
     'dev': {
-        'cxxflags': '-DSEASTAR_ENABLE_ALLOC_FAILURE_INJECTION -DSCYLLA_ENABLE_ERROR_INJECTION',
-        'cxx_ld_flags': '-O1',
+        'cxxflags': '-O1 -DSEASTAR_ENABLE_ALLOC_FAILURE_INJECTION -DSCYLLA_ENABLE_ERROR_INJECTION',
+        'cxx_ld_flags': '',
         'stack-usage-threshold': 1024*21,
     },
     'sanitize': {
-        'cxxflags': '-DDEBUG -DSANITIZE -DDEBUG_LSA_SANITIZER -DSCYLLA_ENABLE_ERROR_INJECTION',
-        'cxx_ld_flags': '-Os',
+        'cxxflags': '-Os -DDEBUG -DSANITIZE -DDEBUG_LSA_SANITIZER -DSCYLLA_ENABLE_ERROR_INJECTION',
+        'cxx_ld_flags': '',
         'stack-usage-threshold': 1024*50,
     }
 }
@@ -1167,11 +1167,11 @@ optimization_flags = [
 optimization_flags = [o
                       for o in optimization_flags
                       if flag_supported(flag=o, compiler=args.cxx)]
-modes['release']['cxx_ld_flags'] += ' ' + ' '.join(optimization_flags)
+modes['release']['cxxflags'] += ' ' + ' '.join(optimization_flags)
 
 if flag_supported(flag='-Wstack-usage=4096', compiler=args.cxx):
     for mode in modes:
-        modes[mode]['cxx_ld_flags'] += f' -Wstack-usage={modes[mode]["stack-usage-threshold"]} -Wno-error=stack-usage='
+        modes[mode]['cxxflags'] += f' -Wstack-usage={modes[mode]["stack-usage-threshold"]} -Wno-error=stack-usage='
 
 linker_flags = linker_flags(compiler=args.cxx)
 
@@ -1338,6 +1338,13 @@ libdeflate_cflags = seastar_cflags
 
 MODE_TO_CMAKE_BUILD_TYPE = {'release' : 'RelWithDebInfo', 'debug' : 'Debug', 'dev' : 'Dev', 'sanitize' : 'Sanitize' }
 
+# cmake likes to separate things with semicolons
+def semicolon_separated(*flags):
+    # original flags may be space separated, so convert to string still
+    # using spaces
+    f = ' '.join(flags)
+    return re.sub(' +', ';', f)
+
 def configure_seastar(build_dir, mode):
     seastar_build_dir = os.path.join(build_dir, mode, 'seastar')
 
@@ -1346,8 +1353,8 @@ def configure_seastar(build_dir, mode):
         '-DCMAKE_C_COMPILER={}'.format(args.cc),
         '-DCMAKE_CXX_COMPILER={}'.format(args.cxx),
         '-DCMAKE_EXPORT_NO_PACKAGE_REGISTRY=ON',
-        '-DSeastar_CXX_FLAGS={}'.format((seastar_cflags + ' ' + modes[mode]['cxx_ld_flags']).replace(' ', ';')),
-        '-DSeastar_LD_FLAGS={}'.format(seastar_ldflags),
+        '-DSeastar_CXX_FLAGS={}'.format((seastar_cflags).replace(' ', ';')),
+        '-DSeastar_LD_FLAGS={}'.format(semicolon_separated(seastar_ldflags, modes[mode]['cxx_ld_flags'])),
         '-DSeastar_CXX_DIALECT=gnu++20',
         '-DSeastar_API_LEVEL=6',
         '-DSeastar_UNUSED_RESULT_ERROR=ON',
