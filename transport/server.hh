@@ -132,7 +132,7 @@ private:
     uint64_t _connects = 0;
     uint64_t _connections = 0;
     uint64_t _requests_served = 0;
-    uint64_t _requests_serving = 0;
+    uint32_t _requests_serving = 0;
     uint64_t _requests_blocked_memory = 0;
     uint64_t _requests_shed = 0;
     auth::service& _auth_service;
