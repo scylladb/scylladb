@@ -624,7 +624,7 @@ future<> cql_server::connection::process_request() {
         if (_server._requests_serving > _server._config.max_concurrent_requests) {
             ++_server._requests_shed;
             return make_exception_future<>(
-                    exceptions::overloaded_exception(format("too many in-flight requests: {}", _server._requests_serving)));
+                    exceptions::overloaded_exception(format("too many in-flight requests (configured via max_concurrent_requests_per_shard): {}", _server._requests_serving)));
         }
 
         auto fut = get_units(_server._memory_available, mem_estimate);
