@@ -315,6 +315,7 @@ public:
     named_value<unsigned> user_defined_function_allocation_limit_bytes;
     named_value<unsigned> user_defined_function_contiguous_allocation_limit_bytes;
     named_value<uint32_t> schema_registry_grace_period;
+    named_value<uint32_t> max_concurrent_requests_per_shard;
 
     named_value<uint16_t> alternator_port;
     named_value<uint16_t> alternator_https_port;
