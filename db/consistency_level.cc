@@ -61,7 +61,8 @@ namespace db {
 logging::logger cl_logger("consistency");
 
 size_t quorum_for(const keyspace& ks) {
-    return (ks.get_replication_strategy().get_replication_factor() / 2) + 1;
+    size_t replication_factor = ks.get_replication_strategy().get_replication_factor();
+    return replication_factor ? (replication_factor / 2) + 1 : 0;
 }
 
 size_t local_quorum_for(const keyspace& ks, const sstring& dc) {
@@ -72,8 +73,8 @@ size_t local_quorum_for(const keyspace& ks, const sstring& dc) {
     if (rs.get_type() == replication_strategy_type::network_topology) {
         const network_topology_strategy* nrs =
             static_cast<const network_topology_strategy*>(&rs);
-
-        return (nrs->get_replication_factor(dc) / 2) + 1;
+        size_t replication_factor = nrs->get_replication_factor(dc);
+        return replication_factor ? (replication_factor / 2) + 1 : 0;
     }
 
     return quorum_for(ks);
