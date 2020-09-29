@@ -278,6 +278,10 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
             _executor._stats.unsupported_operations++;
             throw api_error::unknown_operation(format("Unsupported operation {}", op));
         }
+        if (_pending_requests.get_count() >= _max_concurrent_requests) {
+            return make_ready_future<executor::request_return_type>(
+                    api_error::request_limit_exceeded(format("too many in-flight requests (configured via max_concurrent_requests_per_shard): {}", _pending_requests.get_count())));
+        }
         return with_gate(_pending_requests, [this, callback_it = std::move(callback_it), op = std::move(op), req = std::move(req)] () mutable {
             //FIXME: Client state can provide more context, e.g. client's endpoint address
             // We use unique_ptr because client_state cannot be moved or copied
@@ -404,9 +408,10 @@ server::server(executor& exec)
 }
 
 future<> server::init(net::inet_address addr, std::optional<uint16_t> port, std::optional<uint16_t> https_port, std::optional<tls::credentials_builder> creds,
-        bool enforce_authorization, semaphore* memory_limiter) {
+        bool enforce_authorization, semaphore* memory_limiter, utils::updateable_value<uint32_t> max_concurrent_requests) {
     _memory_limiter = memory_limiter;
     _enforce_authorization = enforce_authorization;
+    _max_concurrent_requests = std::move(max_concurrent_requests);
     if (!port && !https_port) {
         return make_exception_future<>(std::runtime_error("Either regular port or TLS port"
                 " must be specified in order to init an alternator HTTP server instance"));
