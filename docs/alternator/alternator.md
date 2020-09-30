@@ -113,7 +113,7 @@ implemented, with the following limitations:
   feature with the same name.
 ### Replication
 * Supported, with RF=3 (unless running on a cluster of less than 3 nodes).
-  Writes are done in LOCAL_QURUM and reads in LOCAL_ONE (eventual consistency)
+  Writes are done in LOCAL_QUORUM and reads in LOCAL_ONE (eventual consistency)
   or LOCAL_QUORUM (strong consistency).
 ### Global Tables
 * Currently, *all* Alternator tables are created as "global" tables and can
@@ -138,7 +138,7 @@ implemented, with the following limitations:
   the old conditional updates which were "lightweight transactions".
 ### Streams
 * Implemented via [CDC](https://docs.scylladb.com/using-scylla/cdc/)
-  (change data capture). The Alternator server responed to all DynamoDB 
+  (change data capture). The Alternator server responds to all DynamoDB
   Streams API calls.
   Note that because of how Scylla CDC operates, there is a time window
   between data being written to a table and it being visible via
@@ -184,7 +184,7 @@ below.
 
 A default write isolation policy **must** be chosen using the
 `--alternator-write-isolation` configuration option. Additionally, the write
-isolation policy for a specific table can be overriden by tagging the table
+isolation policy for a specific table can be overridden by tagging the table
 (at CreateTable time, or any time later with TagResource) with the key
 `system:write_isolation`, and one of the following values:
 
