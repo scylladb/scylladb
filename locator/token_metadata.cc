@@ -75,7 +75,7 @@ private:
 
     long _ring_version = 0;
 
-    std::vector<token> sort_tokens();
+    void sort_tokens();
 
     using tokens_iterator = tokens_iterator_impl;
 
@@ -958,10 +958,10 @@ token_metadata_impl::ring_range(const token& start, bool include_min) const {
 
 token_metadata_impl::token_metadata_impl(std::unordered_map<token, inet_address> token_to_endpoint_map, std::unordered_map<inet_address, utils::UUID> endpoints_map, topology topology) :
     _token_to_endpoint_map(token_to_endpoint_map), _endpoint_to_host_id_map(endpoints_map), _topology(topology) {
-    _sorted_tokens = sort_tokens();
+    sort_tokens();
 }
 
-std::vector<token> token_metadata_impl::sort_tokens() {
+void token_metadata_impl::sort_tokens() {
     std::vector<token> sorted;
     sorted.reserve(_token_to_endpoint_map.size());
 
@@ -971,7 +971,7 @@ std::vector<token> token_metadata_impl::sort_tokens() {
 
     std::sort(sorted.begin(), sorted.end());
 
-    return sorted;
+    _sorted_tokens = std::move(sorted);
 }
 
 const std::vector<token>& token_metadata_impl::sorted_tokens() const {
@@ -1052,7 +1052,7 @@ void token_metadata_impl::update_normal_tokens(const std::unordered_map<inet_add
     }
 
     if (should_sort_tokens) {
-        _sorted_tokens = sort_tokens();
+        sort_tokens();
     }
 }
 
@@ -1244,7 +1244,7 @@ void token_metadata_impl::remove_endpoint(inet_address endpoint) {
     _leaving_endpoints.erase(endpoint);
     del_replacing_endpoint(endpoint);
     _endpoint_to_host_id_map.erase(endpoint);
-    _sorted_tokens = sort_tokens();
+    sort_tokens();
     invalidate_cached_rings();
 }
 
