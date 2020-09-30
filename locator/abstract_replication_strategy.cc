@@ -270,6 +270,31 @@ abstract_replication_strategy::get_address_ranges(const token_metadata& tm) cons
     return ret;
 }
 
+std::unordered_multimap<inet_address, dht::token_range>
+abstract_replication_strategy::get_address_ranges(const token_metadata& tm, inet_address endpoint) const {
+    std::unordered_multimap<inet_address, dht::token_range> ret;
+    for (auto& t : tm.sorted_tokens()) {
+        auto eps = calculate_natural_endpoints(t, tm);
+        bool found = false;
+        for (auto ep : eps) {
+            if (ep != endpoint) {
+                continue;
+            }
+            dht::token_range_vector r = tm.get_primary_ranges_for(t);
+            logger.debug("token={} primary_range={} endpoint={}", t, r, endpoint);
+            for (auto&& rng : r) {
+                ret.emplace(ep, rng);
+            }
+            found = true;
+            break;
+        }
+        if (!found) {
+            logger.debug("token={} natural_endpoints={}: endpoint={} not found", t, eps, endpoint);
+        }
+    }
+    return ret;
+}
+
 std::unordered_map<dht::token_range, std::vector<inet_address>>
 abstract_replication_strategy::get_range_addresses(const token_metadata& tm) const {
     std::unordered_map<dht::token_range, std::vector<inet_address>> ret;
@@ -293,10 +318,8 @@ abstract_replication_strategy::get_pending_address_ranges(const token_metadata_p
     dht::token_range_vector ret;
     auto temp = tmptr->clone_only_token_map_sync();
     temp.update_normal_tokens(pending_tokens, pending_address);
-    for (auto& x : get_address_ranges(temp)) {
-        if (x.first == pending_address) {
+    for (auto& x : get_address_ranges(temp, pending_address)) {
             ret.push_back(x.second);
-        }
     }
     return ret;
 }

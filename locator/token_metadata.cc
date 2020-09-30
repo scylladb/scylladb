@@ -1493,10 +1493,8 @@ void token_metadata_impl::calculate_pending_ranges_for_bootstrap(
         auto& endpoint = x.first;
         auto& tokens = x.second;
         all_left_metadata->update_normal_tokens(tokens, endpoint);
-        for (auto& x : strategy.get_address_ranges(*all_left_metadata)) {
-            if (x.first == endpoint) {
+        for (auto& x : strategy.get_address_ranges(*all_left_metadata, endpoint)) {
                 new_pending_ranges->emplace(x.second, endpoint);
-            }
         }
         all_left_metadata->_impl->remove_endpoint(endpoint);
     }

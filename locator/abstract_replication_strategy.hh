@@ -138,6 +138,7 @@ public:
     dht::token_range_vector get_primary_ranges_within_dc(inet_address ep);
 
     std::unordered_multimap<inet_address, dht::token_range> get_address_ranges(const token_metadata& tm) const;
+    std::unordered_multimap<inet_address, dht::token_range> get_address_ranges(const token_metadata& tm, inet_address endpoint) const;
 
     std::unordered_map<dht::token_range, std::vector<inet_address>> get_range_addresses(const token_metadata& tm) const;
 
