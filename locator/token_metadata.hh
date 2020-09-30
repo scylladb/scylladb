@@ -269,10 +269,12 @@ public:
     /**
      * Create a copy of TokenMetadata with tokenToEndpointMap reflecting situation after all
      * current leave operations have finished.
+     * The caller must ensure that the cloned object will not change if
+     * the function yields.
      *
-     * @return new token metadata
+     * @return a future holding a new token metadata
      */
-    token_metadata clone_after_all_left() const;
+    future<token_metadata> clone_after_all_left() const noexcept;
 
     dht::token_range_vector get_primary_ranges_for(std::unordered_set<token> tokens) const;
 

@@ -2124,7 +2124,7 @@ future<> storage_service::decommission() {
                 throw std::runtime_error("local node is not a member of the token ring yet");
             }
 
-            if (tmptr->clone_after_all_left().sorted_tokens().size() < 2) {
+            if (tmptr->clone_after_all_left().get0().sorted_tokens().size() < 2) {
                 throw std::runtime_error("no other normal nodes in the ring; decommission would be pointless");
             }
 
@@ -2415,7 +2415,7 @@ std::unordered_multimap<dht::token_range, inet_address> storage_service::get_cha
         current_replica_endpoints.emplace(r, std::move(eps));
     }
 
-    auto temp = tm.clone_after_all_left();
+    auto temp = tm.clone_after_all_left().get0();
 
     // endpoint might or might not be 'leaving'. If it was not leaving (that is, removenode
     // command was used), it is still present in temp and must be removed.

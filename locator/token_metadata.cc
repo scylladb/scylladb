@@ -433,15 +433,15 @@ public:
      *
      * @return new token metadata
      */
-    token_metadata_impl clone_after_all_left() const {
-        auto all_left_metadata = clone_only_token_map_sync();
-
+    future<token_metadata_impl> clone_after_all_left() const noexcept {
+      return clone_only_token_map().then([this] (token_metadata_impl all_left_metadata) {
         for (auto endpoint : _leaving_endpoints) {
             all_left_metadata.remove_endpoint(endpoint);
         }
         all_left_metadata.sort_tokens();
 
-        return all_left_metadata;
+        return std::move(all_left_metadata);
+      });
     }
 
 public:
@@ -1516,8 +1516,8 @@ future<> token_metadata_impl::update_pending_ranges(
 
   return calculate_pending_ranges_for_replacing(unpimplified_this, strategy, new_pending_ranges).then([&unpimplified_this, this, keyspace_name, &strategy, new_pending_ranges] {
     // Copy of metadata reflecting the situation after all leave operations are finished.
-    auto all_left_metadata = make_token_metadata_ptr(std::make_unique<token_metadata_impl>(clone_after_all_left()));
-
+   return clone_after_all_left().then([&unpimplified_this, this, keyspace_name, &strategy, new_pending_ranges] (token_metadata_impl impl) {
+    auto all_left_metadata = make_token_metadata_ptr(std::make_unique<token_metadata_impl>(std::move(impl)));
     return calculate_pending_ranges_for_leaving(unpimplified_this, strategy, new_pending_ranges, all_left_metadata).then([this, keyspace_name, &strategy, new_pending_ranges, all_left_metadata] {
         // At this stage newPendingRanges has been updated according to leave operations. We can
         // now continue the calculation by checking bootstrapping nodes.
@@ -1528,6 +1528,7 @@ future<> token_metadata_impl::update_pending_ranges(
 
         return make_ready_future<>();
     });
+   });
   });
 
 }
@@ -1856,9 +1857,11 @@ token_metadata::clone_only_token_map() const noexcept {
     });
 }
 
-token_metadata
-token_metadata::clone_after_all_left() const {
-    return token_metadata(std::make_unique<token_metadata_impl>(_impl->clone_after_all_left()));
+future<token_metadata>
+token_metadata::clone_after_all_left() const noexcept {
+    return _impl->clone_after_all_left().then([] (token_metadata_impl impl) {
+        return token_metadata(std::make_unique<token_metadata_impl>(std::move(impl)));
+    });
 }
 
 dht::token_range_vector

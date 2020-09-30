@@ -1965,7 +1965,7 @@ static future<> do_decommission_removenode_with_repair(seastar::sharded<database
                 auto eps = strat.calculate_natural_endpoints(end_token, *tmptr);
                 current_replica_endpoints.emplace(r, std::move(eps));
             }
-            auto temp = tmptr->clone_after_all_left();
+            auto temp = tmptr->clone_after_all_left().get0();
             // leaving_node might or might not be 'leaving'. If it was not leaving (that is, removenode
             // command was used), it is still present in temp and must be removed.
             if (temp.is_member(leaving_node)) {
