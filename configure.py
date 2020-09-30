@@ -1447,7 +1447,7 @@ libs = ' '.join([maybe_static(args.staticyamlcpp, '-lyaml-cpp'), '-latomic', '-l
                  # Must link with static version of libzstd, since
                  # experimental APIs that we use are only present there.
                  maybe_static(True, '-lzstd'),
-                 maybe_static(args.staticboost, '-lboost_date_time -lboost_regex -licuuc'),
+                 maybe_static(args.staticboost, '-lboost_date_time -lboost_regex -licuuc -licui18n'),
                  '-lxxhash'])
 
 if not args.staticboost:
