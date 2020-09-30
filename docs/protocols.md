@@ -137,10 +137,9 @@ TODO: is there an SSL version of Thrift?
 
 # DynamoDB client protocol
 
-Scylla also supports, as an experimental feature, Amazon's DynamoDB API.
-The DynamoDB API is a JSON over HTTP (unencrypted) or HTTPS (encrypted)
-protocol. Because Scylla's support for this protocol is experimental,
-it is not turned on by default, and must be turned on manually by setting
+Scylla also supports Amazon's DynamoDB API. The DynamoDB API is a JSON over
+HTTP (unencrypted) or HTTPS (encrypted) protocol. Support for this protocol
+is not turned on by default, and must be turned on manually by setting
 the `alternator_port` and/or `alternator_https_port` configuration option.
 "Alternator" is the codename of Scylla's DynamoDB API support, and is
 documented in more detail in [alternator.md](alternator/alternator.md).
@@ -152,6 +151,13 @@ unprivileged port numbers 8000 and 8043 instead.
 There is also an `alternator_address` configuration option to set the IP
 address (and therefore network interface) on which Scylla should listen
 for the DynamoDB protocol. This address defaults to 0.0.0.0.
+
+When the HTTPS-based protocol is enabled, the server also needs to know
+the certificate and key files to use. The default locations of these files
+are `/etc/scylla/scylla.crt` and `/etc/scylla/scylla.key` respectively, but
+can be overridden by specifying in `alternator_encryption_options` the
+`keyfile` and `certificate` options. For example,
+`--alternator-encryption-options keyfile="..."`.
 
 # Redis client protocol
 

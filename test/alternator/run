@@ -94,8 +94,8 @@ ln -s "$SCYLLA" "$SCYLLA_LINK"
         --prometheus-address $SCYLLA_IP \
         --seed-provider-parameters seeds=$SCYLLA_IP \
         --workdir "$tmp_dir" \
-        --server-encryption-options keyfile="$tmp_dir/scylla.key" \
-        --server-encryption-options certificate="$tmp_dir/scylla.crt" \
+        --alternator-encryption-options keyfile="$tmp_dir/scylla.key" \
+        --alternator-encryption-options certificate="$tmp_dir/scylla.crt" \
         --auto-snapshot 0 \
         --skip-wait-for-gossip-to-settle 0 \
         >"$tmp_dir/log" 2>&1 &

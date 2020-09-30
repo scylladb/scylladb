@@ -252,6 +252,7 @@ public:
     named_value<uint32_t> permissions_cache_max_entries;
     named_value<string_map> server_encryption_options;
     named_value<string_map> client_encryption_options;
+    named_value<string_map> alternator_encryption_options;
     named_value<uint32_t> ssl_storage_port;
     named_value<bool> enable_in_memory_data_store;
     named_value<bool> enable_cache;

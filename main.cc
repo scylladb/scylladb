@@ -1204,21 +1204,29 @@ int main(int ac, char** av) {
                 std::optional<uint16_t> alternator_https_port;
                 std::optional<tls::credentials_builder> creds;
                 if (cfg->alternator_https_port()) {
-                    creds.emplace();
                     alternator_https_port = cfg->alternator_https_port();
-                    creds->set_dh_level(tls::dh_params::level::MEDIUM);
-                    creds->set_x509_key_file(cert, key, tls::x509_crt_format::PEM).get();
-                    if (trust_store.empty()) {
-                        creds->set_system_trust().get();
-                    } else {
-                        creds->set_x509_trust_file(trust_store, tls::x509_crt_format::PEM).get();
+                    creds.emplace();
+                    auto opts = cfg->alternator_encryption_options();
+                    if (opts.empty()) {
+                        // Earlier versions mistakenly configured Alternator's
+                        // HTTPS parameters via the "server_encryption_option"
+                        // configuration parameter. We *temporarily* continue
+                        // to allow this, for backward compatibility.
+                        opts = cfg->server_encryption_options();
+                        if (!opts.empty()) {
+                            startlog.warn("Setting server_encryption_options to configure "
+                                    "Alternator's HTTPS encryption is deprecated. Please "
+                                    "switch to setting alternator_encryption_options instead.");
+                        }
                     }
+                    creds->set_dh_level(tls::dh_params::level::MEDIUM);
+                    auto cert = get_or_default(opts, "certificate", db::config::get_conf_sub("scylla.crt").string());
+                    auto key = get_or_default(opts, "keyfile", db::config::get_conf_sub("scylla.key").string());
+                    creds->set_x509_key_file(cert, key, tls::x509_crt_format::PEM).get();
+                    auto prio = get_or_default(opts, "priority_string", sstring());
                     creds->set_priority_string(db::config::default_tls_priority);
                     if (!prio.empty()) {
                         creds->set_priority_string(prio);
-                    }
-                    if (clauth) {
-                        creds->set_client_auth(seastar::tls::client_auth::REQUIRE);
                     }
                 }
                 bool alternator_enforce_authorization = cfg->alternator_enforce_authorization();

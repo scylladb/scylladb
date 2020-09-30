@@ -25,6 +25,15 @@ By default, Scylla listens on this port on all network interfaces.
 To listen only on a specific interface, pass also an "`alternator-address`"
 option.
 
+In addition to (or instead of) serving HTTP requests on `alternator-port`,
+Scylla can accept DynamoDB API requests over HTTPS (encrypted), on the port
+specified by `alternator-https-port`. As usual for HTTPS servers, the
+operator must specify certificate and key files. By default these should
+be placed in `/etc/scylla/scylla.crt` and `/etc/scylla/scylla.key`, but
+these default locations can overridden by specifying
+`--alternator-encryption-options keyfile="..."` and
+`--alternator-encryption-options certificate="..."`.
+
 As we explain below in the "Write isolation policies", Alternator has
 four different choices for the implementation of writes, each with
 different advantages. You should consider which of the options makes

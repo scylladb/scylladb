@@ -662,6 +662,15 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "\tpriority_string : GnuTLS priority string controlling TLS algorithms used/allowed.\n"
         "\trequire_client_auth : (Default: false ) Enables or disables certificate authentication.\n"
         "Related information: Client-to-node encryption")
+    , alternator_encryption_options(this, "alternator_encryption_options", value_status::Used, {/*none*/},
+        "When Alternator via HTTPS is enabled with alternator_https_port, where to take the key and certificate. The available options are:\n"
+        "\n"
+        "\tcertificate: (Default: conf/scylla.crt) The location of a PEM-encoded x509 certificate used to identify and encrypt the client/server communication.\n"
+        "\tkeyfile: (Default: conf/scylla.key) PEM Key file associated with certificate.\n"
+        "\n"
+        "The advanced settings are:\n"
+        "\n"
+        "\tpriority_string : GnuTLS priority string controlling TLS algorithms used/allowed.")
     , ssl_storage_port(this, "ssl_storage_port", value_status::Used, 7001,
         "The SSL port for encrypted communication. Unused unless enabled in encryption_options.")
     , enable_in_memory_data_store(this, "enable_in_memory_data_store", value_status::Used, false, "Enable in memory mode (system tables are always persisted)")
