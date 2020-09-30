@@ -425,28 +425,6 @@ public:
     }
 
 public:
-    /**
-     * Create a copy of TokenMetadata with tokenToEndpointMap reflecting situation after all
-     * current leave, and move operations have finished.
-     *
-     * @return new token metadata
-     */
-    token_metadata_impl clone_after_all_settled() const;
-#if 0
-    public InetAddress getEndpoint(Token token)
-    {
-        lock.readLock().lock();
-        try
-        {
-            return tokenToEndpointMap.get(token);
-        }
-        finally
-        {
-            lock.readLock().unlock();
-        }
-    }
-#endif
-public:
     dht::token_range_vector get_primary_ranges_for(std::unordered_set<token> tokens) const;
 
     dht::token_range_vector get_primary_ranges_for(token right) const;
@@ -1520,17 +1498,6 @@ void token_metadata_impl::del_replacing_endpoint(inet_address existing_node) {
     _replacing_endpoints.erase(existing_node);
 }
 
-token_metadata_impl token_metadata_impl::clone_after_all_settled() const {
-    token_metadata_impl metadata = clone_only_token_map();
-
-    for (auto endpoint : _leaving_endpoints) {
-        metadata.remove_endpoint(endpoint);
-    }
-    metadata.sort_tokens();
-
-    return metadata;
-}
-
 std::vector<gms::inet_address> token_metadata_impl::pending_endpoints_for(const token& token, const sstring& keyspace_name) const {
     // Fast path 0: pending ranges not found for this keyspace_name
     const auto pr_it = _pending_ranges_interval_map.find(keyspace_name);
@@ -1819,11 +1786,6 @@ token_metadata::clone_only_token_map() const {
 token_metadata
 token_metadata::clone_after_all_left() const {
     return token_metadata(std::make_unique<token_metadata_impl>(_impl->clone_after_all_left()));
-}
-
-token_metadata
-token_metadata::clone_after_all_settled() const {
-    return token_metadata(std::make_unique<token_metadata_impl>(_impl->clone_after_all_settled()));
 }
 
 dht::token_range_vector

@@ -256,13 +256,7 @@ public:
      * @return new token metadata
      */
     token_metadata clone_after_all_left() const;
-    /**
-     * Create a copy of TokenMetadata with tokenToEndpointMap reflecting situation after all
-     * current leave, and move operations have finished.
-     *
-     * @return new token metadata
-     */
-    token_metadata clone_after_all_settled() const;
+
     dht::token_range_vector get_primary_ranges_for(std::unordered_set<token> tokens) const;
 
     dht::token_range_vector get_primary_ranges_for(token right) const;
