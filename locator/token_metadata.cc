@@ -425,7 +425,7 @@ public:
      * The caller must ensure that the cloned object will not change if
      * the function yields.
      */
-    future<token_metadata_impl> clone_only_token_map() const noexcept;
+    future<token_metadata_impl> clone_only_token_map(bool clone_sorted_tokens = true) const noexcept;
 
     /**
      * Create a copy of TokenMetadata with tokenToEndpointMap reflecting situation after all
@@ -434,7 +434,7 @@ public:
      * @return new token metadata
      */
     future<token_metadata_impl> clone_after_all_left() const noexcept {
-      return clone_only_token_map().then([this] (token_metadata_impl all_left_metadata) {
+      return clone_only_token_map(false).then([this] (token_metadata_impl all_left_metadata) {
         for (auto endpoint : _leaving_endpoints) {
             all_left_metadata.remove_endpoint(endpoint);
         }
@@ -982,8 +982,8 @@ future<token_metadata_impl> token_metadata_impl::clone_async() const noexcept {
     });
 }
 
-future<token_metadata_impl> token_metadata_impl::clone_only_token_map() const noexcept {
-    return do_with(token_metadata_impl(), [this] (token_metadata_impl& ret) {
+future<token_metadata_impl> token_metadata_impl::clone_only_token_map(bool clone_sorted_tokens) const noexcept {
+    return do_with(token_metadata_impl(), [this, clone_sorted_tokens] (token_metadata_impl& ret) {
         ret._token_to_endpoint_map.reserve(_token_to_endpoint_map.size());
         return do_for_each(_token_to_endpoint_map, [&ret] (const auto& p) {
             ret._token_to_endpoint_map.emplace(p);
@@ -991,8 +991,10 @@ future<token_metadata_impl> token_metadata_impl::clone_only_token_map() const no
             ret._endpoint_to_host_id_map = _endpoint_to_host_id_map;
         }).then([this, &ret] {
             ret._topology = _topology;
-        }).then([this, &ret] {
-            ret._sorted_tokens = _sorted_tokens;
+        }).then([this, &ret, clone_sorted_tokens] {
+            if (clone_sorted_tokens) {
+                ret._sorted_tokens = _sorted_tokens;
+            }
             return make_ready_future<token_metadata_impl>(std::move(ret));
         });
     });
