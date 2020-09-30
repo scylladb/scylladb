@@ -419,6 +419,7 @@ public:
         for (auto endpoint : _leaving_endpoints) {
             all_left_metadata.remove_endpoint(endpoint);
         }
+        all_left_metadata.sort_tokens();
 
         return all_left_metadata;
     }
@@ -1244,7 +1245,6 @@ void token_metadata_impl::remove_endpoint(inet_address endpoint) {
     _leaving_endpoints.erase(endpoint);
     del_replacing_endpoint(endpoint);
     _endpoint_to_host_id_map.erase(endpoint);
-    sort_tokens();
     invalidate_cached_rings();
 }
 
@@ -1458,8 +1458,9 @@ void token_metadata_impl::calculate_pending_ranges_for_bootstrap(
                 new_pending_ranges->emplace(x.second, endpoint);
             }
         }
-        all_left_metadata->remove_endpoint(endpoint);
+        all_left_metadata->_impl->remove_endpoint(endpoint);
     }
+    all_left_metadata->_impl->sort_tokens();
 }
 
 future<> token_metadata_impl::update_pending_ranges(
@@ -1525,6 +1526,7 @@ token_metadata_impl token_metadata_impl::clone_after_all_settled() const {
     for (auto endpoint : _leaving_endpoints) {
         metadata.remove_endpoint(endpoint);
     }
+    metadata.sort_tokens();
 
     return metadata;
 }
@@ -1778,6 +1780,7 @@ token_metadata::add_leaving_endpoint(inet_address endpoint) {
 void
 token_metadata::remove_endpoint(inet_address endpoint) {
     _impl->remove_endpoint(endpoint);
+    _impl->sort_tokens();
 }
 
 bool
