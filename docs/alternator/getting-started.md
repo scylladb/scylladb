@@ -33,7 +33,7 @@ which also contains drivers for DynamoDB:
 ```
 sudo pip install --upgrade boto3
 ```
-### Runnning some simple scripts:
+### Running some simple scripts:
 The following is a 3 scripts test that creates a table named _usertable_ writes the
 famous hello world record to it, and then, reads it back.
 
