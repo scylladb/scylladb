@@ -152,6 +152,7 @@ cql_server::cql_server(distributed<cql3::query_processor>& qp, auth::service& au
     : _query_processor(qp)
     , _config(config)
     , _max_request_size(config.max_request_size)
+    , _max_concurrent_requests(config.get_max_concurrent_requests_updateable_value())
     , _memory_available(config.get_service_memory_limiter_semaphore())
     , _notifier(std::make_unique<event_notifier>(mn))
     , _auth_service(auth_service)
@@ -621,7 +622,7 @@ future<> cql_server::connection::process_request() {
                     f.length, mem_estimate, _server._max_request_size)));
         }
 
-        if (_server._requests_serving > _server._config.max_concurrent_requests) {
+        if (_server._requests_serving > _server._max_concurrent_requests) {
             ++_server._requests_shed;
             return make_exception_future<>(
                     exceptions::overloaded_exception(format("too many in-flight requests (configured via max_concurrent_requests_per_shard): {}", _server._requests_serving)));
