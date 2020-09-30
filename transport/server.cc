@@ -179,6 +179,9 @@ cql_server::cql_server(distributed<cql3::query_processor>& qp, auth::service& au
                         sm::description(
                             seastar::format("Holds an incrementing counter with the requests that ever blocked due to reaching the memory quota limit ({}B). "
                                             "The first derivative of this value shows how often we block due to memory exhaustion in the \"CQL transport\" component.", _max_request_size))),
+        sm::make_derive("requests_shed", _requests_shed,
+                        sm::description("Holds an incrementing counter with the requests that were shed due to overload (threshold configured via max_concurrent_requests_per_shard). "
+                                            "The first derivative of this value shows how often we shed requests due to overload in the \"CQL transport\" component.")),
        sm::make_gauge("requests_memory_available", [this] { return _memory_available.current(); },
                         sm::description(
                             seastar::format("Holds the amount of available memory for admitting new requests (max is {}B)."
@@ -619,8 +622,9 @@ future<> cql_server::connection::process_request() {
         }
 
         if (_server._requests_serving > _server._config.max_concurrent_requests) {
+            ++_server._requests_shed;
             return make_exception_future<>(
-                    exceptions::overloaded_exception(format("too many in-flight requests: {}", _server._requests_serving)));
+                    exceptions::overloaded_exception(format("too many in-flight requests (configured via max_concurrent_requests_per_shard): {}", _server._requests_serving)));
         }
 
         auto fut = get_units(_server._memory_available, mem_estimate);
