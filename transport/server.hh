@@ -273,6 +273,12 @@ class cql_server::event_notifier : public service::migration_listener,
     std::unordered_map<gms::inet_address, event::status_change::status_type> _last_status_change;
     service::migration_notifier& _mnotifier;
     bool _stopped = false;
+
+    // We want to delay sending NEW_NODE CQL event to clients until the new node
+    // has started listening for CQL requests.
+    std::unordered_set<gms::inet_address> _endpoints_pending_joined_notification;
+
+    void send_join_cluster(const gms::inet_address& endpoint);
 public:
     future<> stop();
     event_notifier(service::migration_notifier& mn);
