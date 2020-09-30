@@ -102,10 +102,16 @@ def test_select(redis_host, redis_port):
     r.delete(key)
     assert r.get(key) == None
 
-    logger.debug('Try to switch to invalid database 16')
+def test_select_invalid_db(redis_host, redis_port):
+    r = connect(redis_host, redis_port)
+    logger.debug('Assume that user will not set redis_database_count to be bigger as 100')
+    invalid_db_idx = 100
+
+    logger.debug('Try to switch to invalid database {}'.format(invalid_db_idx))
     try:
-        r.execute_command('SELECT 16')
-        raise Exception('Expect that `SELECT 16` does not work')
+        query = 'SELECT {}'.format(invalid_db_idx)
+        r.execute_command(query)
+        raise Exception('Expect that `{}` does not work'.format(query))
     except redis.exceptions.ResponseError as ex:
         assert str(ex) == 'DB index is out of range'
 

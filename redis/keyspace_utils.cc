@@ -178,8 +178,8 @@ future<> create_keyspace_if_not_exists_impl(db::config& config, int default_repl
         logger.info("Create keyspace: {}, table: {} for redis.", ks_name, cf_name);
         return service::get_local_migration_manager().announce_new_column_family(schema, false);
     };
-    // create 16 default database for redis.
-    return parallel_for_each(boost::irange<unsigned>(0, 16), [keyspace_gen = std::move(keyspace_gen), table_gen = std::move(table_gen)] (auto c) {
+    // create default databases for redis.
+    return parallel_for_each(boost::irange<unsigned>(0, config.redis_database_count()), [keyspace_gen = std::move(keyspace_gen), table_gen = std::move(table_gen)] (auto c) {
         auto ks_name = sprint("REDIS_%d", c);
         return keyspace_gen(ks_name).then([ks_name, table_gen] {
             return when_all_succeed(
