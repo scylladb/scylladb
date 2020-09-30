@@ -1818,22 +1818,6 @@ token_metadata::update_pending_ranges(const abstract_replication_strategy& strat
     return _impl->update_pending_ranges(*this, strategy, keyspace_name);
 }
 
-future<>
-token_metadata::calculate_pending_ranges_for_leaving(
-        const abstract_replication_strategy& strategy,
-        lw_shared_ptr<std::unordered_multimap<range<token>, inet_address>> new_pending_ranges,
-        lw_shared_ptr<token_metadata> all_left_metadata) const {
-    return _impl->calculate_pending_ranges_for_leaving(*this, strategy, std::move(new_pending_ranges), std::move(all_left_metadata));
-}
-
-void
-token_metadata::calculate_pending_ranges_for_bootstrap(
-        const abstract_replication_strategy& strategy,
-        lw_shared_ptr<std::unordered_multimap<range<token>, inet_address>> new_pending_ranges,
-        lw_shared_ptr<token_metadata> all_left_metadata) const {
-    _impl->calculate_pending_ranges_for_bootstrap(strategy, std::move(new_pending_ranges), std::move(all_left_metadata));
-}
-
 token
 token_metadata::get_predecessor(token t) const {
     return _impl->get_predecessor(t);

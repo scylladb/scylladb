@@ -288,17 +288,6 @@ public:
      * changes state in the cluster, so it should be manageable.
      */
     future<> update_pending_ranges(const abstract_replication_strategy& strategy, const sstring& keyspace_name);
-    future<> calculate_pending_ranges_for_leaving(
-        const abstract_replication_strategy& strategy,
-        lw_shared_ptr<std::unordered_multimap<range<token>, inet_address>> new_pending_ranges,
-        lw_shared_ptr<token_metadata> all_left_metadata) const;
-    void calculate_pending_ranges_for_bootstrap(
-        const abstract_replication_strategy& strategy,
-        lw_shared_ptr<std::unordered_multimap<range<token>, inet_address>> new_pending_ranges,
-        lw_shared_ptr<token_metadata> all_left_metadata) const;
-    future<> calculate_pending_ranges_for_replacing(
-            abstract_replication_strategy& strategy,
-            lw_shared_ptr<std::unordered_multimap<range<token>, inet_address>> new_pending_ranges) const;
 
     token get_predecessor(token t) const;
 
