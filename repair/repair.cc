@@ -1783,7 +1783,7 @@ future<> bootstrap_with_repair(seastar::sharded<database>& db, seastar::sharded<
             bool find_node_in_local_dc_only = strat.get_type() == locator::replication_strategy_type::network_topology;
 
             //Active ranges
-            auto metadata_clone = tmptr->clone_only_token_map();
+            auto metadata_clone = tmptr->clone_only_token_map().get0();
             auto range_addresses = strat.get_range_addresses(metadata_clone);
 
             //Pending ranges

@@ -389,7 +389,7 @@ public:
      * Create a copy of TokenMetadata with only tokenToEndpointMap. That is, pending ranges,
      * bootstrap tokens and leaving endpoints are not included in the copy.
      */
-    token_metadata_impl clone_only_token_map() const {
+    token_metadata_impl clone_only_token_map_sync() const {
         return token_metadata_impl(this->_token_to_endpoint_map, this->_endpoint_to_host_id_map, this->_topology);
     }
 #if 0
@@ -420,13 +420,21 @@ public:
     }
 #endif
     /**
+     * Create a copy of TokenMetadata with only tokenToEndpointMap. That is, pending ranges,
+     * bootstrap tokens and leaving endpoints are not included in the copy.
+     * The caller must ensure that the cloned object will not change if
+     * the function yields.
+     */
+    future<token_metadata_impl> clone_only_token_map() const noexcept;
+
+    /**
      * Create a copy of TokenMetadata with tokenToEndpointMap reflecting situation after all
      * current leave operations have finished.
      *
      * @return new token metadata
      */
     token_metadata_impl clone_after_all_left() const {
-        auto all_left_metadata = clone_only_token_map();
+        auto all_left_metadata = clone_only_token_map_sync();
 
         for (auto endpoint : _leaving_endpoints) {
             all_left_metadata.remove_endpoint(endpoint);
@@ -953,19 +961,11 @@ token_metadata_impl::token_metadata_impl(std::unordered_map<token, inet_address>
 }
 
 future<token_metadata_impl> token_metadata_impl::clone_async() const noexcept {
-    return do_with(token_metadata_impl(), [this] (token_metadata_impl& ret) {
-        ret._token_to_endpoint_map.reserve(_token_to_endpoint_map.size());
-        return do_for_each(_token_to_endpoint_map, [&ret] (const auto& p) {
-            ret._token_to_endpoint_map.emplace(p);
-        }).then([this, &ret] {
-            ret._endpoint_to_host_id_map = _endpoint_to_host_id_map;
-        }).then([this, &ret] {
-            ret._topology = _topology;
-        }).then([this, &ret] {
-            ret._bootstrap_tokens.reserve(_bootstrap_tokens.size());
-            return do_for_each(_bootstrap_tokens, [&ret] (const auto& p) {
-                ret._bootstrap_tokens.emplace(p);
-            });
+    return clone_only_token_map().then([this] (token_metadata_impl ret) {
+      return do_with(std::move(ret), [this] (token_metadata_impl& ret) {
+        ret._bootstrap_tokens.reserve(_bootstrap_tokens.size());
+        return do_for_each(_bootstrap_tokens, [&ret] (const auto& p) {
+            ret._bootstrap_tokens.emplace(p);
         }).then([this, &ret] {
             ret._leaving_endpoints = _leaving_endpoints;
             ret._replacing_endpoints = _replacing_endpoints;
@@ -976,6 +976,22 @@ future<token_metadata_impl> token_metadata_impl::clone_async() const noexcept {
             });
         }).then([this, &ret] {
             ret._ring_version = _ring_version;
+            return make_ready_future<token_metadata_impl>(std::move(ret));
+        });
+      });
+    });
+}
+
+future<token_metadata_impl> token_metadata_impl::clone_only_token_map() const noexcept {
+    return do_with(token_metadata_impl(), [this] (token_metadata_impl& ret) {
+        ret._token_to_endpoint_map.reserve(_token_to_endpoint_map.size());
+        return do_for_each(_token_to_endpoint_map, [&ret] (const auto& p) {
+            ret._token_to_endpoint_map.emplace(p);
+        }).then([this, &ret] {
+            ret._endpoint_to_host_id_map = _endpoint_to_host_id_map;
+        }).then([this, &ret] {
+            ret._topology = _topology;
+        }).then([this, &ret] {
             ret._sorted_tokens = _sorted_tokens;
             return make_ready_future<token_metadata_impl>(std::move(ret));
         });
@@ -1404,7 +1420,8 @@ future<> token_metadata_impl::calculate_pending_ranges_for_leaving(
     }
     // for each of those ranges, find what new nodes will be responsible for the range when
     // all leaving nodes are gone.
-    auto metadata = token_metadata(std::make_unique<token_metadata_impl>(clone_only_token_map())); // don't do this in the loop! #7758
+  return clone_only_token_map().then([&strategy, new_pending_ranges, all_left_metadata, affected_ranges = std::move(affected_ranges)] (token_metadata_impl impl) {
+    auto metadata = token_metadata(std::make_unique<token_metadata_impl>(std::move(impl)));
     auto affected_ranges_size = affected_ranges.size();
     tlogger.debug("In calculate_pending_ranges: affected_ranges.size={} stars", affected_ranges_size);
     return do_with(std::move(metadata), std::move(affected_ranges), [&strategy, new_pending_ranges, all_left_metadata, affected_ranges_size] (auto& metadata, auto& affected_ranges) {
@@ -1424,6 +1441,7 @@ future<> token_metadata_impl::calculate_pending_ranges_for_leaving(
             tlogger.debug("In calculate_pending_ranges: affected_ranges.size={} ends", affected_ranges_size);
         });
     });
+  });
 }
 
 future<> token_metadata_impl::calculate_pending_ranges_for_replacing(
@@ -1827,8 +1845,15 @@ future<token_metadata> token_metadata::clone_async() const noexcept {
 }
 
 token_metadata
-token_metadata::clone_only_token_map() const {
-    return token_metadata(std::make_unique<token_metadata_impl>(_impl->clone_only_token_map()));
+token_metadata::clone_only_token_map_sync() const {
+    return token_metadata(std::make_unique<token_metadata_impl>(_impl->clone_only_token_map_sync()));
+}
+
+future<token_metadata>
+token_metadata::clone_only_token_map() const noexcept {
+    return _impl->clone_only_token_map().then([] (token_metadata_impl impl) {
+        return token_metadata(std::make_unique<token_metadata_impl>(std::move(impl)));
+    });
 }
 
 token_metadata

@@ -2406,7 +2406,7 @@ std::unordered_multimap<dht::token_range, inet_address> storage_service::get_cha
 
     // Find (for each range) all nodes that store replicas for these ranges as well
     const auto& tm = get_token_metadata();
-    auto metadata = tm.clone_only_token_map(); // don't do this in the loop! #7758
+    auto metadata = tm.clone_only_token_map().get0();
     for (auto& r : ranges) {
         seastar::thread::maybe_yield();
         auto& ks = _db.local().find_keyspace(keyspace_name);
@@ -2732,12 +2732,13 @@ storage_service::set_tables_autocompaction(const sstring &keyspace, std::vector<
     });
 }
 
+// Must be called from a seastar thread
 std::unordered_multimap<inet_address, dht::token_range>
 storage_service::get_new_source_ranges(const sstring& keyspace_name, const dht::token_range_vector& ranges) {
     auto my_address = get_broadcast_address();
     auto& ks = _db.local().find_keyspace(keyspace_name);
     auto& strat = ks.get_replication_strategy();
-    auto tm = get_token_metadata().clone_only_token_map();
+    auto tm = get_token_metadata().clone_only_token_map().get0();
     std::unordered_map<dht::token_range, std::vector<inet_address>> range_addresses = strat.get_range_addresses(tm);
     std::unordered_multimap<inet_address, dht::token_range> source_ranges;
 

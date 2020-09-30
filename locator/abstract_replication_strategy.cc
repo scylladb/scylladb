@@ -291,7 +291,7 @@ abstract_replication_strategy::get_pending_address_ranges(const token_metadata_p
 dht::token_range_vector
 abstract_replication_strategy::get_pending_address_ranges(const token_metadata_ptr tmptr, std::unordered_set<token> pending_tokens, inet_address pending_address) const {
     dht::token_range_vector ret;
-    auto temp = tmptr->clone_only_token_map();
+    auto temp = tmptr->clone_only_token_map_sync();
     temp.update_normal_tokens(pending_tokens, pending_address);
     for (auto& x : get_address_ranges(temp)) {
         if (x.first == pending_address) {
