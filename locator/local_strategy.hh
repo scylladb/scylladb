@@ -36,7 +36,7 @@ using token = dht::token;
 
 class local_strategy : public abstract_replication_strategy {
 protected:
-    virtual std::vector<inet_address> calculate_natural_endpoints(const token& search_token, const token_metadata& tm) const override;
+    virtual std::vector<inet_address> calculate_natural_endpoints(const token& search_token, const token_metadata& tm, can_yield) const override;
 public:
     local_strategy(const sstring& keyspace_name, const shared_token_metadata& token_metadata, snitch_ptr& snitch, const std::map<sstring, sstring>& config_options);
     virtual ~local_strategy() {};
@@ -46,7 +46,7 @@ public:
      * because the default implementation depends on token calculations but
      * LocalStrategy may be used before tokens are set up.
      */
-    std::vector<inet_address> do_get_natural_endpoints(const token& search_token, const token_metadata& tm) override;
+    std::vector<inet_address> do_get_natural_endpoints(const token& search_token, const token_metadata& tm, can_yield) override;
 
     virtual void validate_options() const override;
 

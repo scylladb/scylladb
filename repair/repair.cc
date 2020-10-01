@@ -1176,15 +1176,15 @@ static future<> repair_range(repair_info& ri, const dht::token_range& range) {
 }
 
 static dht::token_range_vector get_primary_ranges_for_endpoint(
-        database& db, sstring keyspace, gms::inet_address ep) {
+        database& db, sstring keyspace, gms::inet_address ep, locator::can_yield can_yield = locator::can_yield::no) {
     auto& rs = db.find_keyspace(keyspace).get_replication_strategy();
-    return rs.get_primary_ranges(ep);
+    return rs.get_primary_ranges(ep, can_yield);
 }
 
 static dht::token_range_vector get_primary_ranges(
-        database& db, sstring keyspace) {
+        database& db, sstring keyspace, locator::can_yield can_yield = locator::can_yield::no) {
     return get_primary_ranges_for_endpoint(db, keyspace,
-            utils::fb_utilities::get_broadcast_address());
+            utils::fb_utilities::get_broadcast_address(), can_yield);
 }
 
 // get_primary_ranges_within_dc() is similar to get_primary_ranges(),
@@ -1192,10 +1192,10 @@ static dht::token_range_vector get_primary_ranges(
 // across the entire cluster, here each range is assigned a primary
 // owner in each of the clusters.
 static dht::token_range_vector get_primary_ranges_within_dc(
-        database& db, sstring keyspace) {
+        database& db, sstring keyspace, locator::can_yield can_yield = locator::can_yield::no) {
     auto& rs = db.find_keyspace(keyspace).get_replication_strategy();
     return rs.get_primary_ranges_within_dc(
-            utils::fb_utilities::get_broadcast_address());
+            utils::fb_utilities::get_broadcast_address(), can_yield);
 }
 
 static sstring get_local_dc() {
@@ -1763,7 +1763,7 @@ future<> bootstrap_with_repair(seastar::sharded<database>& db, seastar::sharded<
             }
             auto& ks = db.local().find_keyspace(keyspace_name);
             auto& strat = ks.get_replication_strategy();
-            dht::token_range_vector desired_ranges = strat.get_pending_address_ranges(tmptr, tokens, myip);
+            dht::token_range_vector desired_ranges = strat.get_pending_address_ranges(tmptr, tokens, myip, locator::can_yield::yes);
             seastar::thread::maybe_yield();
             nr_ranges_total += desired_ranges.size();
         }
@@ -1779,16 +1779,16 @@ future<> bootstrap_with_repair(seastar::sharded<database>& db, seastar::sharded<
             }
             auto& ks = db.local().find_keyspace(keyspace_name);
             auto& strat = ks.get_replication_strategy();
-            dht::token_range_vector desired_ranges = strat.get_pending_address_ranges(tmptr, tokens, myip);
+            dht::token_range_vector desired_ranges = strat.get_pending_address_ranges(tmptr, tokens, myip, locator::can_yield::yes);
             bool find_node_in_local_dc_only = strat.get_type() == locator::replication_strategy_type::network_topology;
 
             //Active ranges
             auto metadata_clone = tmptr->clone_only_token_map().get0();
-            auto range_addresses = strat.get_range_addresses(metadata_clone);
+            auto range_addresses = strat.get_range_addresses(metadata_clone, locator::can_yield::yes);
 
             //Pending ranges
             metadata_clone.update_normal_tokens(tokens, myip);
-            auto pending_range_addresses = strat.get_range_addresses(metadata_clone);
+            auto pending_range_addresses = strat.get_range_addresses(metadata_clone, locator::can_yield::yes);
 
             //Collects the source that will have its range moved to the new node
             std::unordered_map<dht::token_range, repair_neighbors> range_sources;
@@ -1962,7 +1962,7 @@ static future<> do_decommission_removenode_with_repair(seastar::sharded<database
             // Find (for each range) all nodes that store replicas for these ranges as well
             for (auto& r : ranges) {
                 auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
-                auto eps = strat.calculate_natural_endpoints(end_token, *tmptr);
+                auto eps = strat.calculate_natural_endpoints(end_token, *tmptr, locator::can_yield::yes);
                 current_replica_endpoints.emplace(r, std::move(eps));
             }
             auto temp = tmptr->clone_after_all_left().get0();
@@ -1977,9 +1977,8 @@ static future<> do_decommission_removenode_with_repair(seastar::sharded<database
             auto local_dc = get_local_dc();
             bool find_node_in_local_dc_only = strat.get_type() == locator::replication_strategy_type::network_topology;
             for (auto&r : ranges) {
-                seastar::thread::maybe_yield();
                 auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
-                const std::vector<inet_address> new_eps = ks.get_replication_strategy().calculate_natural_endpoints(end_token, temp);
+                const std::vector<inet_address> new_eps = ks.get_replication_strategy().calculate_natural_endpoints(end_token, temp, locator::can_yield::yes);
                 const std::vector<inet_address>& current_eps = current_replica_endpoints[r];
                 std::unordered_set<inet_address> neighbors_set(new_eps.begin(), new_eps.end());
                 bool skip_this_range = false;
@@ -2151,7 +2150,7 @@ static future<> do_rebuild_replace_with_repair(seastar::sharded<database>& db, s
                 seastar::thread::maybe_yield();
                 auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
                 auto& snitch_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
-                auto neighbors = boost::copy_range<std::vector<gms::inet_address>>(strat.calculate_natural_endpoints(end_token, *tmptr) |
+                auto neighbors = boost::copy_range<std::vector<gms::inet_address>>(strat.calculate_natural_endpoints(end_token, *tmptr, locator::can_yield::yes) |
                     boost::adaptors::filtered([myip, &source_dc, &snitch_ptr] (const gms::inet_address& node) {
                         if (node == myip) {
                             return false;

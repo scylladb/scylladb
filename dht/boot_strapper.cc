@@ -70,7 +70,7 @@ future<> boot_strapper::bootstrap(streaming::stream_reason reason) {
     return do_for_each(*keyspaces, [this, keyspaces, streamer] (sstring& keyspace_name) {
         auto& ks = _db.local().find_keyspace(keyspace_name);
         auto& strategy = ks.get_replication_strategy();
-        dht::token_range_vector ranges = strategy.get_pending_address_ranges(_token_metadata_ptr, _tokens, _address);
+        dht::token_range_vector ranges = strategy.get_pending_address_ranges(_token_metadata_ptr, _tokens, _address, locator::can_yield::no);
         blogger.debug("Will stream keyspace={}, ranges={}", keyspace_name, ranges);
         return streamer->add_ranges(keyspace_name, ranges);
     }).then([this, streamer] {

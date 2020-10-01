@@ -1412,7 +1412,7 @@ void token_metadata_impl::calculate_pending_ranges_for_leaving(
         const abstract_replication_strategy& strategy,
         std::unordered_multimap<range<token>, inet_address>& new_pending_ranges,
         mutable_token_metadata_ptr all_left_metadata) const {
-    std::unordered_multimap<inet_address, dht::token_range> address_ranges = strategy.get_address_ranges(unpimplified_this);
+    std::unordered_multimap<inet_address, dht::token_range> address_ranges = strategy.get_address_ranges(unpimplified_this, can_yield::yes);
     // get all ranges that will be affected by leaving nodes
     std::unordered_set<range<token>> affected_ranges;
     for (auto endpoint : _leaving_endpoints) {
@@ -1428,8 +1428,8 @@ void token_metadata_impl::calculate_pending_ranges_for_leaving(
     tlogger.debug("In calculate_pending_ranges: affected_ranges.size={} stars", affected_ranges_size);
     for (const auto& r : affected_ranges) {
         auto t = r.end() ? r.end()->value() : dht::maximum_token();
-        auto current_endpoints = strategy.calculate_natural_endpoints(t, metadata);
-        auto new_endpoints = strategy.calculate_natural_endpoints(t, *all_left_metadata);
+        auto current_endpoints = strategy.calculate_natural_endpoints(t, metadata, can_yield::yes);
+        auto new_endpoints = strategy.calculate_natural_endpoints(t, *all_left_metadata, can_yield::yes);
         std::vector<inet_address> diff;
         std::sort(current_endpoints.begin(), current_endpoints.end());
         std::sort(new_endpoints.begin(), new_endpoints.end());
@@ -1450,7 +1450,7 @@ void token_metadata_impl::calculate_pending_ranges_for_replacing(
     if (_replacing_endpoints.empty()) {
         return;
     }
-    auto address_ranges = strategy.get_address_ranges(unpimplified_this);
+    auto address_ranges = strategy.get_address_ranges(unpimplified_this, can_yield::yes);
     for (const auto& node : _replacing_endpoints) {
         auto existing_node = node.first;
         auto replacing_node = node.second;
@@ -1464,6 +1464,7 @@ void token_metadata_impl::calculate_pending_ranges_for_replacing(
     }
 }
 
+// Called from a seastar thread
 void token_metadata_impl::calculate_pending_ranges_for_bootstrap(
         const abstract_replication_strategy& strategy,
         std::unordered_multimap<range<token>, inet_address>& new_pending_ranges,
@@ -1486,7 +1487,7 @@ void token_metadata_impl::calculate_pending_ranges_for_bootstrap(
         auto& endpoint = x.first;
         auto& tokens = x.second;
         all_left_metadata->update_normal_tokens(tokens, endpoint);
-        for (auto& x : strategy.get_address_ranges(*all_left_metadata, endpoint)) {
+        for (auto& x : strategy.get_address_ranges(*all_left_metadata, endpoint, can_yield::yes)) {
             new_pending_ranges.emplace(x.second, endpoint);
         }
         all_left_metadata->_impl->remove_endpoint(endpoint);

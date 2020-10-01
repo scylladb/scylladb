@@ -73,8 +73,8 @@ static void check_ranges_are_sorted(abstract_replication_strategy* ars, gms::ine
     // Too slow in debug mode
 #ifndef SEASTAR_DEBUG
     verify_sorted(ars->get_ranges(ep));
-    verify_sorted(ars->get_primary_ranges(ep));
-    verify_sorted(ars->get_primary_ranges_within_dc(ep));
+    verify_sorted(ars->get_primary_ranges(ep, locator::can_yield::no));
+    verify_sorted(ars->get_primary_ranges_within_dc(ep, locator::can_yield::no));
 #endif
 }
 
@@ -495,7 +495,7 @@ static void test_equivalence(const shared_token_metadata& stm, snitch_ptr& snitc
     for (size_t i = 0; i < 1000; ++i) {
         auto token = dht::token::get_random_token();
         auto expected = calculate_natural_endpoints(token, tm, snitch, datacenters);
-        auto actual = nts.calculate_natural_endpoints(token, tm);
+        auto actual = nts.calculate_natural_endpoints(token, tm, locator::can_yield::no);
 
         // Because the old algorithm does not put the nodes in the correct order in the case where more replicas
         // are required than there are racks in a dc, we accept different order as long as the primary
