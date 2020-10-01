@@ -452,7 +452,7 @@ public:
     static range<dht::token> interval_to_range(boost::icl::interval<token>::interval_type i);
 
 private:
-    void set_pending_ranges(const sstring& keyspace_name, std::unordered_multimap<range<token>, inet_address> new_pending_ranges);
+    void set_pending_ranges(const sstring& keyspace_name, std::unordered_multimap<range<token>, inet_address> new_pending_ranges, can_yield);
 
 public:
     bool has_pending_ranges(sstring keyspace_name, inet_address endpoint) const;
@@ -1371,21 +1371,28 @@ token_metadata_impl::interval_to_range(boost::icl::interval<token>::interval_typ
 }
 
 void token_metadata_impl::set_pending_ranges(const sstring& keyspace_name,
-        std::unordered_multimap<range<token>, inet_address> new_pending_ranges) {
+        std::unordered_multimap<range<token>, inet_address> new_pending_ranges,
+        can_yield can_yield) {
     if (new_pending_ranges.empty()) {
         _pending_ranges_interval_map.erase(keyspace_name);
         return;
     }
     std::unordered_map<range<token>, std::unordered_set<inet_address>> map;
     for (const auto& x : new_pending_ranges) {
+        if (can_yield) {
+            seastar::thread::maybe_yield();
+        }
         map[x.first].emplace(x.second);
     }
 
     // construct a interval map to speed up the search
     boost::icl::interval_map<token, std::unordered_set<inet_address>> interval_map;
-    for (const auto& m : map) {
+    for (auto& m : map) {
+        if (can_yield) {
+            seastar::thread::maybe_yield();
+        }
         interval_map +=
-                std::make_pair(range_to_interval(m.first), m.second);
+                std::make_pair(range_to_interval(m.first), std::move(m.second));
     }
     _pending_ranges_interval_map[keyspace_name] = std::move(interval_map);
 }
@@ -1502,7 +1509,7 @@ future<> token_metadata_impl::update_pending_ranges(
         keyspace_name, _bootstrap_tokens, _leaving_endpoints, _replacing_endpoints);
     if (_bootstrap_tokens.empty() && _leaving_endpoints.empty() && _replacing_endpoints.empty()) {
         tlogger.debug("No bootstrapping, leaving nodes, replacing nodes -> empty pending ranges for {}", keyspace_name);
-        set_pending_ranges(keyspace_name, std::unordered_multimap<range<token>, inet_address>());
+        set_pending_ranges(keyspace_name, std::unordered_multimap<range<token>, inet_address>(), can_yield::no);
         return make_ready_future<>();
     }
 
@@ -1517,7 +1524,7 @@ future<> token_metadata_impl::update_pending_ranges(
         calculate_pending_ranges_for_bootstrap(strategy, new_pending_ranges, all_left_metadata);
 
         // At this stage newPendingRanges has been updated according to leaving and bootstrapping nodes.
-        set_pending_ranges(keyspace_name, std::move(new_pending_ranges));
+        set_pending_ranges(keyspace_name, std::move(new_pending_ranges), can_yield::yes);
     });
 
 }
