@@ -1,5 +1,5 @@
 # Getting Started With ScyllaDB Alternator
----
+
 ## Installing Scylla
 Before you can start using ScyllaDB Alternator, you will have to have an up
 and running scylla cluster configured to expose the alternator port.
