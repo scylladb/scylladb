@@ -1761,9 +1761,9 @@ with open(buildfile_tmp, 'w') as f:
         f.write(f'build dist-jmx-{mode}: phony $builddir/{mode}/dist/tar/scylla-jmx-package.tar.gz dist-jmx-rpm dist-jmx-deb\n')
         f.write(f'build dist-tools-{mode}: phony $builddir/{mode}/dist/tar/scylla-tools-package.tar.gz dist-tools-rpm dist-tools-deb\n')
         f.write(f'build dist-python3-{mode}: phony dist-python3-tar dist-python3-rpm dist-python3-deb compat-python3-rpm compat-python3-deb\n')
-        f.write(f'build dist-unified-{mode}: phony $builddir/{mode}/dist/tar/scylla-unified-package.tar.gz\n')
-        f.write(f'build $builddir/{mode}/scylla-unified-package.tar.gz: copy $builddir/{mode}/dist/tar/scylla-unified-package.tar.gz\n')
-        f.write(f'build $builddir/{mode}/dist/tar/scylla-unified-package.tar.gz: unified $builddir/{mode}/dist/tar/scylla-package.tar.gz $builddir/{mode}/dist/tar/scylla-python3-package.tar.gz $builddir/{mode}/dist/tar/scylla-jmx-package.tar.gz $builddir/{mode}/dist/tar/scylla-tools-package.tar.gz | always\n')
+        f.write(f'build dist-unified-{mode}: phony $builddir/{mode}/dist/tar/scylla-unified-package-{scylla_version}.{scylla_release}.tar.gz\n')
+        f.write(f'build $builddir/{mode}/scylla-unified-package-{scylla_version}.{scylla_release}.tar.gz: copy $builddir/{mode}/dist/tar/scylla-unified-package.tar.gz\n')
+        f.write(f'build $builddir/{mode}/dist/tar/scylla-unified-package-{scylla_version}.{scylla_release}.tar.gz: unified $builddir/{mode}/dist/tar/scylla-package.tar.gz $builddir/{mode}/dist/tar/scylla-python3-package.tar.gz $builddir/{mode}/dist/tar/scylla-jmx-package.tar.gz $builddir/{mode}/dist/tar/scylla-tools-package.tar.gz | always\n')
         f.write(f'  pool = submodule_pool\n')
         f.write(f'  mode = {mode}\n')
         f.write('rule libdeflate.{mode}\n'.format(**locals()))
@@ -1791,7 +1791,7 @@ with open(buildfile_tmp, 'w') as f:
     )
 
     f.write(textwrap.dedent(f'''\
-        build dist-unified-tar: phony {' '.join(['$builddir/{mode}/scylla-unified-package.tar.gz'.format(mode=mode) for mode in build_modes])}
+        build dist-unified-tar: phony {' '.join(['$builddir/{mode}/scylla-unified-package-$scylla_version.$scylla_release.tar.gz'.format(mode=mode) for mode in build_modes])}
         build dist-unified: phony dist-unified-tar
 
         build dist-server-deb: phony {' '.join(['$builddir/dist/{mode}/debian'.format(mode=mode) for mode in build_modes])}
