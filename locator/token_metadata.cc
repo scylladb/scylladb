@@ -1504,31 +1504,26 @@ void token_metadata_impl::calculate_pending_ranges_for_bootstrap(
 future<> token_metadata_impl::update_pending_ranges(
         const token_metadata& unpimplified_this,
         const abstract_replication_strategy& strategy, const sstring& keyspace_name) {
-    auto new_pending_ranges = make_lw_shared<std::unordered_multimap<range<token>, inet_address>>();
-
     tlogger.debug("calculate_pending_ranges: keyspace_name={}, bootstrap_tokens={}, leaving nodes={}, replacing_endpoints={}",
         keyspace_name, _bootstrap_tokens, _leaving_endpoints, _replacing_endpoints);
     if (_bootstrap_tokens.empty() && _leaving_endpoints.empty() && _replacing_endpoints.empty()) {
         tlogger.debug("No bootstrapping, leaving nodes, replacing nodes -> empty pending ranges for {}", keyspace_name);
-        set_pending_ranges(keyspace_name, std::move(*new_pending_ranges));
+        set_pending_ranges(keyspace_name, std::unordered_multimap<range<token>, inet_address>());
         return make_ready_future<>();
     }
 
-  return calculate_pending_ranges_for_replacing(unpimplified_this, strategy, new_pending_ranges).then([&unpimplified_this, this, keyspace_name, &strategy, new_pending_ranges] {
+  return async([this, &unpimplified_this, &strategy, keyspace_name] () mutable {
+    auto new_pending_ranges = make_lw_shared<std::unordered_multimap<range<token>, inet_address>>();
+    calculate_pending_ranges_for_replacing(unpimplified_this, strategy, new_pending_ranges).get();
     // Copy of metadata reflecting the situation after all leave operations are finished.
-   return clone_after_all_left().then([&unpimplified_this, this, keyspace_name, &strategy, new_pending_ranges] (token_metadata_impl impl) {
-    auto all_left_metadata = make_token_metadata_ptr(std::make_unique<token_metadata_impl>(std::move(impl)));
-    return calculate_pending_ranges_for_leaving(unpimplified_this, strategy, new_pending_ranges, all_left_metadata).then([this, keyspace_name, &strategy, new_pending_ranges, all_left_metadata] {
+    auto all_left_metadata = make_token_metadata_ptr(std::make_unique<token_metadata_impl>(clone_after_all_left().get0()));
+    calculate_pending_ranges_for_leaving(unpimplified_this, strategy, new_pending_ranges, all_left_metadata).get();
         // At this stage newPendingRanges has been updated according to leave operations. We can
         // now continue the calculation by checking bootstrapping nodes.
         calculate_pending_ranges_for_bootstrap(strategy, new_pending_ranges, all_left_metadata);
 
         // At this stage newPendingRanges has been updated according to leaving and bootstrapping nodes.
         set_pending_ranges(keyspace_name, std::move(*new_pending_ranges));
-
-        return make_ready_future<>();
-    });
-   });
   });
 
 }
