@@ -116,13 +116,16 @@ public:
     // The list is sorted, and its elements are non overlapping and non wrap-around.
     // It the analogue of Origin's getAddressRanges().get(endpoint).
     // This function is not efficient, and not meant for the fast path.
-    dht::token_range_vector get_ranges(inet_address ep) const;
-    dht::token_range_vector get_ranges_in_thread(inet_address ep) const;
+    dht::token_range_vector get_ranges(inet_address ep, can_yield can_yield = can_yield::no) const {
+        return do_get_ranges(ep, _shared_token_metadata.get(), can_yield);
+    }
 
     // Use the token_metadata provided by the caller instead of _token_metadata
-    dht::token_range_vector get_ranges(inet_address ep, const token_metadata_ptr tmptr) const;
-    // Caller must ensure that token_metadata will not change throughout the call
-    dht::token_range_vector get_ranges_in_thread(inet_address ep, const token_metadata_ptr tmptr) const;
+    // Caller must ensure that token_metadata will not change throughout the call if can_yield::yes
+    dht::token_range_vector get_ranges(inet_address ep, const token_metadata_ptr tmptr, can_yield can_yield = can_yield::no) const {
+        return do_get_ranges(ep, std::move(tmptr), can_yield);
+    }
+private:
     // Caller must ensure that token_metadata will not change throughout the call if can_yield::yes.
     dht::token_range_vector do_get_ranges(inet_address ep, const token_metadata_ptr tmptr, can_yield) const;
     virtual std::vector<inet_address> do_get_natural_endpoints(const token& search_token, const token_metadata& tm, can_yield);

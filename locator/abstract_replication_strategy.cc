@@ -172,27 +172,6 @@ insert_token_range_to_sorted_container_while_unwrapping(
     }
 }
 
-dht::token_range_vector
-abstract_replication_strategy::get_ranges(inet_address ep) const {
-    return do_get_ranges(ep, _shared_token_metadata.get(), can_yield::no);
-}
-
-dht::token_range_vector
-abstract_replication_strategy::get_ranges_in_thread(inet_address ep) const {
-    return do_get_ranges(ep, _shared_token_metadata.get(), can_yield::yes);
-}
-
-dht::token_range_vector
-abstract_replication_strategy::get_ranges(inet_address ep, const token_metadata_ptr tmptr) const {
-    return do_get_ranges(ep, std::move(tmptr), can_yield::no);
-}
-
-// Caller must ensure that token_metadata will not change throughout the call
-dht::token_range_vector
-abstract_replication_strategy::get_ranges_in_thread(inet_address ep, const token_metadata_ptr tmptr) const {
-    return do_get_ranges(ep, std::move(tmptr), can_yield::yes);
-}
-
 // Caller must ensure that token_metadata will not change throughout the call if can_yield::yes.
 dht::token_range_vector
 abstract_replication_strategy::do_get_ranges(inet_address ep, const token_metadata_ptr tmptr, can_yield can_yield) const {

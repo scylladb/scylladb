@@ -1931,7 +1931,7 @@ static future<> do_decommission_removenode_with_repair(seastar::sharded<database
             }
             auto& ks = db.local().find_keyspace(keyspace_name);
             auto& strat = ks.get_replication_strategy();
-            dht::token_range_vector ranges = strat.get_ranges_in_thread(leaving_node);
+            dht::token_range_vector ranges = strat.get_ranges(leaving_node, locator::can_yield::yes);
             nr_ranges_total += ranges.size();
         }
         if (reason == streaming::stream_reason::decommission) {
@@ -1954,7 +1954,7 @@ static future<> do_decommission_removenode_with_repair(seastar::sharded<database
             auto& ks = db.local().find_keyspace(keyspace_name);
             auto& strat = ks.get_replication_strategy();
             // First get all ranges the leaving node is responsible for
-            dht::token_range_vector ranges = strat.get_ranges_in_thread(leaving_node);
+            dht::token_range_vector ranges = strat.get_ranges(leaving_node, locator::can_yield::yes);
             rlogger.info("{}: started with keyspace={}, leaving_node={}, nr_ranges={}", op, keyspace_name, leaving_node, ranges.size());
             size_t nr_ranges_total = ranges.size();
             size_t nr_ranges_skipped = 0;
@@ -2118,7 +2118,7 @@ static future<> do_rebuild_replace_with_repair(seastar::sharded<database>& db, s
             auto& ks = db.local().find_keyspace(keyspace_name);
             auto& strat = ks.get_replication_strategy();
             // Okay to yield since tm is immutable
-            dht::token_range_vector ranges = strat.get_ranges_in_thread(myip, tmptr);
+            dht::token_range_vector ranges = strat.get_ranges(myip, tmptr, locator::can_yield::yes);
             nr_ranges_total += ranges.size();
 
         }
@@ -2142,7 +2142,7 @@ static future<> do_rebuild_replace_with_repair(seastar::sharded<database>& db, s
             }
             auto& ks = db.local().find_keyspace(keyspace_name);
             auto& strat = ks.get_replication_strategy();
-            dht::token_range_vector ranges = strat.get_ranges_in_thread(myip, tmptr);
+            dht::token_range_vector ranges = strat.get_ranges(myip, tmptr, locator::can_yield::yes);
             std::unordered_map<dht::token_range, repair_neighbors> range_sources;
             rlogger.info("{}: started with keyspace={}, source_dc={}, nr_ranges={}", op, keyspace_name, source_dc, ranges.size());
             for (auto it = ranges.begin(); it != ranges.end();) {
