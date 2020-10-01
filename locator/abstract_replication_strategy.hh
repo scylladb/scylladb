@@ -28,6 +28,7 @@
 #include "dht/i_partitioner.hh"
 #include "token_metadata.hh"
 #include "snitch_base.hh"
+#include <seastar/util/bool_class.hh>
 
 // forward declaration since database.hh includes this file
 class keyspace;
@@ -43,6 +44,9 @@ enum class replication_strategy_type {
     network_topology,
     everywhere_topology,
 };
+
+class can_yield_tag;
+using can_yield = bool_class<can_yield_tag>;
 
 class abstract_replication_strategy {
 private:
@@ -119,9 +123,8 @@ public:
     dht::token_range_vector get_ranges(inet_address ep, const token_metadata_ptr tmptr) const;
     // Caller must ensure that token_metadata will not change throughout the call
     dht::token_range_vector get_ranges_in_thread(inet_address ep, const token_metadata_ptr tmptr) const;
-private:
-    // Caller must ensure that token_metadata will not change throughout the call if can_yield==true.
-    dht::token_range_vector do_get_ranges(inet_address ep, const token_metadata_ptr tmptr, bool can_yield) const;
+    // Caller must ensure that token_metadata will not change throughout the call if can_yield::yes.
+    dht::token_range_vector do_get_ranges(inet_address ep, const token_metadata_ptr tmptr, can_yield) const;
     virtual std::vector<inet_address> do_get_natural_endpoints(const token& search_token, const token_metadata& tm);
 
 public:
