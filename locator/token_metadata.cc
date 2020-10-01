@@ -1427,19 +1427,19 @@ void token_metadata_impl::calculate_pending_ranges_for_leaving(
     auto affected_ranges_size = affected_ranges.size();
     tlogger.debug("In calculate_pending_ranges: affected_ranges.size={} stars", affected_ranges_size);
     for (const auto& r : affected_ranges) {
-            auto t = r.end() ? r.end()->value() : dht::maximum_token();
-            auto current_endpoints = strategy.calculate_natural_endpoints(t, metadata);
-            auto new_endpoints = strategy.calculate_natural_endpoints(t, *all_left_metadata);
-            std::vector<inet_address> diff;
-            std::sort(current_endpoints.begin(), current_endpoints.end());
-            std::sort(new_endpoints.begin(), new_endpoints.end());
-            std::set_difference(new_endpoints.begin(), new_endpoints.end(),
-                current_endpoints.begin(), current_endpoints.end(), std::back_inserter(diff));
-            for (auto& ep : diff) {
-                new_pending_ranges.emplace(r, ep);
-            }
+        auto t = r.end() ? r.end()->value() : dht::maximum_token();
+        auto current_endpoints = strategy.calculate_natural_endpoints(t, metadata);
+        auto new_endpoints = strategy.calculate_natural_endpoints(t, *all_left_metadata);
+        std::vector<inet_address> diff;
+        std::sort(current_endpoints.begin(), current_endpoints.end());
+        std::sort(new_endpoints.begin(), new_endpoints.end());
+        std::set_difference(new_endpoints.begin(), new_endpoints.end(),
+            current_endpoints.begin(), current_endpoints.end(), std::back_inserter(diff));
+        for (auto& ep : diff) {
+            new_pending_ranges.emplace(r, ep);
+        }
     }
-            tlogger.debug("In calculate_pending_ranges: affected_ranges.size={} ends", affected_ranges_size);
+    tlogger.debug("In calculate_pending_ranges: affected_ranges.size={} ends", affected_ranges_size);
 }
 
 // Called from a seastar thread
@@ -1451,17 +1451,17 @@ void token_metadata_impl::calculate_pending_ranges_for_replacing(
         return;
     }
     auto address_ranges = strategy.get_address_ranges(unpimplified_this);
-        for (const auto& node : _replacing_endpoints) {
-            auto existing_node = node.first;
-            auto replacing_node = node.second;
-            for (const auto& x : address_ranges) {
-                seastar::thread::maybe_yield();
-                if (x.first == existing_node) {
-                    tlogger.debug("Node {} replaces {} for range {}", replacing_node, existing_node, x.second);
-                    new_pending_ranges.emplace(x.second, replacing_node);
-                }
+    for (const auto& node : _replacing_endpoints) {
+        auto existing_node = node.first;
+        auto replacing_node = node.second;
+        for (const auto& x : address_ranges) {
+            seastar::thread::maybe_yield();
+            if (x.first == existing_node) {
+                tlogger.debug("Node {} replaces {} for range {}", replacing_node, existing_node, x.second);
+                new_pending_ranges.emplace(x.second, replacing_node);
             }
         }
+    }
 }
 
 void token_metadata_impl::calculate_pending_ranges_for_bootstrap(
@@ -1487,7 +1487,7 @@ void token_metadata_impl::calculate_pending_ranges_for_bootstrap(
         auto& tokens = x.second;
         all_left_metadata->update_normal_tokens(tokens, endpoint);
         for (auto& x : strategy.get_address_ranges(*all_left_metadata, endpoint)) {
-                new_pending_ranges.emplace(x.second, endpoint);
+            new_pending_ranges.emplace(x.second, endpoint);
         }
         all_left_metadata->_impl->remove_endpoint(endpoint);
     }
@@ -1505,19 +1505,19 @@ future<> token_metadata_impl::update_pending_ranges(
         return make_ready_future<>();
     }
 
-  return async([this, &unpimplified_this, &strategy, keyspace_name] () mutable {
-    std::unordered_multimap<range<token>, inet_address> new_pending_ranges;
-    calculate_pending_ranges_for_replacing(unpimplified_this, strategy, new_pending_ranges);
-    // Copy of metadata reflecting the situation after all leave operations are finished.
-    auto all_left_metadata = make_token_metadata_ptr(std::make_unique<token_metadata_impl>(clone_after_all_left().get0()));
-    calculate_pending_ranges_for_leaving(unpimplified_this, strategy, new_pending_ranges, all_left_metadata);
+    return async([this, &unpimplified_this, &strategy, keyspace_name] () mutable {
+        std::unordered_multimap<range<token>, inet_address> new_pending_ranges;
+        calculate_pending_ranges_for_replacing(unpimplified_this, strategy, new_pending_ranges);
+        // Copy of metadata reflecting the situation after all leave operations are finished.
+        auto all_left_metadata = make_token_metadata_ptr(std::make_unique<token_metadata_impl>(clone_after_all_left().get0()));
+        calculate_pending_ranges_for_leaving(unpimplified_this, strategy, new_pending_ranges, all_left_metadata);
         // At this stage newPendingRanges has been updated according to leave operations. We can
         // now continue the calculation by checking bootstrapping nodes.
         calculate_pending_ranges_for_bootstrap(strategy, new_pending_ranges, all_left_metadata);
 
         // At this stage newPendingRanges has been updated according to leaving and bootstrapping nodes.
         set_pending_ranges(keyspace_name, std::move(new_pending_ranges));
-  });
+    });
 
 }
 
