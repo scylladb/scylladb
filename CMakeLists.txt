@@ -110,6 +110,7 @@ scan_scylla_source_directories(
           io
           locator
           message
+          raft
           repair
           service
           sstables
