@@ -4440,6 +4440,12 @@ future<bool> storage_proxy::cas(schema_ptr schema, shared_ptr<cas_request> reque
                                     paxos::paxos_state::logger.debug("CAS[{}] successful", handler->id());
                                     tracing::trace(handler->tr_state, "CAS successful");
                                     return std::optional<bool>(condition_met);
+                                }).handle_exception_type([handler] (unavailable_exception& e) {
+                                    // if learning stage encountered unavailablity error lets re-map it to a write error
+                                    // since unavailable error means that operation has never ever started which is not the case here
+                                    schema_ptr schema = handler->schema();
+                                    return make_exception_future<std::optional<bool>>(mutation_write_timeout_exception(schema->ks_name(), schema->cf_name(),
+                                                               e.consistency, e.alive, e.required, db::write_type::CAS));
                                 });
                             }
                             paxos::paxos_state::logger.debug("CAS[{}] PAXOS proposal not accepted (pre-empted by a higher ballot)",
