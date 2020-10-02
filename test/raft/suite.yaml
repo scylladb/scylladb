@@ -1,5 +1,0 @@
-# Suite test type. Supported types: unit, boost, cql
-type: unit
-custom_args:
-    replication_test:
-        - '-c1 -m200M' 
