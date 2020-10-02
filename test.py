@@ -142,9 +142,10 @@ class TestSuite(ABC):
             # Some tests are long and are better to be started earlier,
             # so pop them up while sorting the list
             lst.sort(key=lambda x: (x not in run_first_tests, x))
+        disable_tests = set(self.cfg.get("disable", []))
         skip_tests = set(self.cfg.get("skip_in_debug_mode", []))
         for shortname in lst:
-            if mode not in ["release", "dev"] and shortname in skip_tests:
+            if shortname in disable_tests or (mode not in ["release", "dev"] and shortname in skip_tests):
                 continue
             t = os.path.join(self.name, shortname)
             patterns = options.name if options.name else [t]
