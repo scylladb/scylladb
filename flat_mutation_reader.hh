@@ -487,6 +487,9 @@ public:
     size_t buffer_size() const {
         return _impl->buffer_size();
     }
+    const circular_buffer<mutation_fragment>& buffer() const {
+        return _impl->buffer();
+    }
     // Detach the internal buffer of the reader.
     // Roughly equivalent to depleting it by calling pop_mutation_fragment()
     // until is_buffer_empty() returns true.
