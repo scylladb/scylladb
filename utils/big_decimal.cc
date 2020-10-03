@@ -26,6 +26,21 @@
 
 #include <regex>
 
+#ifdef __clang__
+
+// Clang or boost have a problem navigating the enable_if maze
+// that is cpp_int's constructor. It ends up treating the
+// string_view as binary and "0" ends up 48.
+
+// Work around by casting to string.
+using string_view_workaround = std::string;
+
+#else
+
+using string_view_workaround = std::string_view;
+
+#endif
+
 uint64_t from_varint_to_integer(const utils::multiprecision_int& varint) {
     // The behavior CQL expects on overflow is for values to wrap
     // around. For cpp_int conversion functions, the behavior is to
@@ -70,7 +85,7 @@ big_decimal::big_decimal(sstring_view text)
 
     integer.remove_prefix(std::min(integer.find_first_not_of("0"), integer.size() - 1));
     try {
-        _unscaled_value = boost::multiprecision::cpp_int(integer);
+        _unscaled_value = boost::multiprecision::cpp_int(string_view_workaround(integer));
     } catch (...) {
         throw marshal_exception(format("big_decimal - failed to parse integer value: {}", integer));
     }
