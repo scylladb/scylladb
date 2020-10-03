@@ -241,7 +241,7 @@ inline void serialize(Output& out, const std::reference_wrapper<T> v) {
 template<typename T, typename Input>
 inline auto deserialize(Input& in, boost::type<T> t) {
     return serializer<T>::read(in);
-};
+}
 
 template<typename T, typename Input>
 inline void skip(Input& v, boost::type<T>) {
