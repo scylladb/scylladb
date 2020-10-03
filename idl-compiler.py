@@ -1037,9 +1037,9 @@ def load_file(name):
     data = parse_file(name)
     if data:
         handle_types(data)
-    add_visitors(cout)
     if data:
         handle_objects(data, hout, cout)
+    add_visitors(cout)
     if config.ns != '':
         fprintln(cout, "}")
     cout.close()
