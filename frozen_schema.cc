@@ -24,10 +24,14 @@
 #include "canonical_mutation.hh"
 #include "schema_mutations.hh"
 #include "idl/uuid.dist.hh"
+#include "idl/keys.dist.hh"
+#include "idl/mutation.dist.hh"
 #include "idl/frozen_schema.dist.hh"
 #include "serializer_impl.hh"
 #include "serialization_visitors.hh"
 #include "idl/uuid.dist.impl.hh"
+#include "idl/keys.dist.impl.hh"
+#include "idl/mutation.dist.impl.hh"
 #include "idl/frozen_schema.dist.impl.hh"
 
 frozen_schema::frozen_schema(const schema_ptr& s)
