@@ -501,6 +501,12 @@ if __name__ == '__main__':
     if node_exporter:
         run_setup_script('node exporter', 'node_exporter_install')
 
+    if is_nonroot():
+        params = out('systemctl --no-pager show user@1000.service')
+        res = re.findall(r'^LimitNOFILE=(.*)$', params, flags=re.MULTILINE)
+        if res and int(res[0]) < 10000:
+            colorprint('{red}NOFILE hard limit is too low, enabling developer mode{nocolor}')
+            args.developer_mode = True
     if args.developer_mode:
         run_setup_script('developer mode', 'scylla_dev_mode_setup --developer-mode 1')
 
