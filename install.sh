@@ -324,7 +324,8 @@ EOS
 else
     install -m755 -d "$rdata"/saved_caches
     install -d -m755 "$rsystemd"/scylla-server.service.d
-    cat << EOS > "$rsystemd"/scylla-server.service.d/nonroot.conf
+    if [ -d /var/log/journal ]; then
+        cat << EOS > "$rsystemd"/scylla-server.service.d/nonroot.conf
 [Service]
 EnvironmentFile=
 EnvironmentFile=$rsysconfdir/scylla-server
@@ -335,8 +336,27 @@ ExecStart=$rprefix/bin/scylla \$SCYLLA_ARGS \$SEASTAR_IO \$DEV_MODE \$CPUSET
 ExecStopPost=
 User=
 EOS
-     install -d -m755 "$rsystemd"/node-exporter.service.d
-     cat << EOS > "$rsystemd"/node-exporter.service.d/nonroot.conf
+    else
+        cat << EOS > "$rsystemd"/scylla-server.service.d/nonroot.conf
+[Service]
+EnvironmentFile=
+EnvironmentFile=$rsysconfdir/scylla-server
+EnvironmentFile=$retc/scylla.d/*.conf
+ExecStartPre=
+ExecStartPre=$rprefix/scripts/scylla_logrotate
+ExecStart=
+ExecStart=$rprefix/bin/scylla \$SCYLLA_ARGS \$SEASTAR_IO \$DEV_MODE \$CPUSET
+ExecStopPost=
+User=
+StandardOutput=
+StandardOutput=file:$rprefix/scylla-server.log
+StandardError=
+StandardError=inherit
+EOS
+    fi
+
+    install -d -m755 "$rsystemd"/node-exporter.service.d
+    cat << EOS > "$rsystemd"/node-exporter.service.d/nonroot.conf
 [Service]
 ExecStart=
 ExecStart=$rprefix/bin/node_exporter  --collector.interrupts
@@ -364,6 +384,9 @@ if $nonroot; then
     sed -i -e "s#/var/lib/scylla#$rprefix#g" $rsysconfdir/scylla-server
     sed -i -e "s#/etc/scylla#$retc/scylla#g" $rsysconfdir/scylla-server
     sed -i -e "s#^SCYLLA_ARGS=\"#SCYLLA_ARGS=\"--workdir $rprefix #g" $rsysconfdir/scylla-server
+    if [ ! -d /var/log/journal ]; then
+        sed -i -e "s#--log-to-stdout 0#--log-to-stdout 1#g" $rsysconfdir/scylla-server
+    fi
     # nonroot install is also 'offline install'
     touch $rprefix/SCYLLA-OFFLINE-FILE
     touch $rprefix/SCYLLA-NONROOT-FILE
