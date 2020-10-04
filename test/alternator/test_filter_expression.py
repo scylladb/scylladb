@@ -714,6 +714,56 @@ def test_filter_expression_and_attributes_to_get(test_table):
             AttributesToGet=['y'],
             ExpressionAttributeValues={':p': p, ':x': 'mouse'})
 
+# All the previous tests involved top-level attributes to be filtered.
+# But FilterExpression also allows reading nested attributes, and we should
+# support that too. This test just checks one operators - we don't
+# test all the different operators again here, we will assume the same
+# code is used internally so if one operator worked, all will work.
+@pytest.mark.xfail(reason="nested attributes not yet implemented in FilterExpression")
+def test_filter_expression_nested_attribute(test_table):
+    p = random_string()
+    test_table.put_item(Item={'p': p, 'c': 'hi', 'x': {'a': 'dog', 'b': 3}})
+    test_table.put_item(Item={'p': p, 'c': 'yo', 'x': {'a': 'mouse', 'b': 4}})
+    got_items = full_query(test_table,
+        KeyConditionExpression='p=:p',
+        FilterExpression='x.a=:a',
+        ExpressionAttributeValues={':p': p, ':a': 'mouse'})
+    assert(got_items == [{'p': p, 'c': 'yo', 'x': {'a': 'mouse', 'b': 4}}])
+
+@pytest.mark.xfail(reason="nested attributes not yet implemented in FilterExpression")
+# This test is a version of test_filter_expression_and_projection_expression
+# involving nested attributes. In that test, we had a filter and projection
+# involving different attributes. Nested attributes open new corner cases:
+# The different filter and projection attributes may now be two different
+# sub-attributes of the same top-level attribute, or one be a sub-attribute
+# of the other. We need to verify that these corner cases work correctly.
+# This test reproduces issue #6951 (for the nested attribute case).
+def test_filter_expression_and_projection_expression_nested(test_table):
+    p = random_string()
+    test_table.put_item(Item={'p': p, 'c': 'hi', 'x': {'a': 'dog', 'b': 3}, 'y': 'cat'})
+    test_table.put_item(Item={'p': p, 'c': 'yo', 'x': {'a': 'mouse', 'b': 4}, 'y': 'horse'})
+    # Case 1: filter on x.a, but project only x.b:
+    got_items = full_query(test_table,
+        KeyConditionExpression='p=:p',
+        FilterExpression='x.a=:a',
+        ProjectionExpression='x.b',
+        ExpressionAttributeValues={':p': p, ':a': 'mouse'})
+    assert(got_items == [{'x': {'b': 4}}])
+    # Case 2: filter on x.a, project entire x:
+    got_items = full_query(test_table,
+        KeyConditionExpression='p=:p',
+        FilterExpression='x.a=:a',
+        ProjectionExpression='x',
+        ExpressionAttributeValues={':p': p, ':a': 'mouse'})
+    assert(got_items == [{'x': {'a': 'mouse', 'b': 4}}])
+    # Case 3: filter on entire x, project only x.a:
+    got_items = full_query(test_table,
+        KeyConditionExpression='p=:p',
+        FilterExpression='x=:x',
+        ProjectionExpression='x.a',
+        ExpressionAttributeValues={':p': p, ':x': {'a': 'mouse', 'b': 4}})
+    assert(got_items == [{'x': {'a': 'mouse'}}])
+
 # All the tests above were for the Query operation. Let's verify that
 # FilterExpression also works for Scan. We will assume the same code is
 # used internally, so don't need to check all the details of the
