@@ -491,22 +491,24 @@ if __name__ == '__main__':
 
             run_setup_script('Performance Tuning', 'scylla_sysconfig_setup --nic {nic} {setup_args}'.format(nic=nic, setup_args=setup_args))
 
-    io_setup = interactive_ask_service('Do you want IOTune to study your disks IO profile and adapt Scylla to it? (*WARNING* Saying NO here means the node will not boot in production mode unless you configure the I/O Subsystem manually!)', 'Yes - let iotune study my disk(s). Note that this action will take a few minutes. No - skip this step.', io_setup)
-    args.io_setup = io_setup
-    if io_setup:
-        run_setup_script('IO configuration', 'scylla_io_setup')
-
-    node_exporter = interactive_ask_service('Do you want to install node exporter to export Prometheus data from the node? Note that the Scylla monitoring stack uses this data', 'Yes - install node exporter. No - skip this  step.', node_exporter)
-    args.no_node_exporter = not node_exporter
-    if node_exporter:
-        run_setup_script('node exporter', 'node_exporter_install')
-
     if is_nonroot():
         params = out('systemctl --no-pager show user@1000.service')
         res = re.findall(r'^LimitNOFILE=(.*)$', params, flags=re.MULTILINE)
         if res and int(res[0]) < 10000:
             colorprint('{red}NOFILE hard limit is too low, enabling developer mode{nocolor}')
             args.developer_mode = True
+
+    if not args.developer_mode:
+        io_setup = interactive_ask_service('Do you want IOTune to study your disks IO profile and adapt Scylla to it? (*WARNING* Saying NO here means the node will not boot in production mode unless you configure the I/O Subsystem manually!)', 'Yes - let iotune study my disk(s). Note that this action will take a few minutes. No - skip this step.', io_setup)
+        args.io_setup = io_setup
+        if io_setup:
+            run_setup_script('IO configuration', 'scylla_io_setup')
+
+    node_exporter = interactive_ask_service('Do you want to install node exporter to export Prometheus data from the node? Note that the Scylla monitoring stack uses this data', 'Yes - install node exporter. No - skip this  step.', node_exporter)
+    args.no_node_exporter = not node_exporter
+    if node_exporter:
+        run_setup_script('node exporter', 'node_exporter_install')
+
     if args.developer_mode:
         run_setup_script('developer mode', 'scylla_dev_mode_setup --developer-mode 1')
 
