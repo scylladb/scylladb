@@ -348,6 +348,39 @@ bool condition_expression_on(const parsed::condition_expression& ce, std::string
     }, ce._expression);
 }
 
+// for_condition_expression_on() runs a given function over all the attributes
+// mentioned in the expression. If the same attribute is mentioned more than
+// once, the function will be called more than once for the same attribute.
+
+static void for_value_on(const parsed::value& v, const noncopyable_function<void(std::string_view)>& func) {
+    std::visit(overloaded_functor {
+        [&] (const parsed::constant& c) { },
+        [&] (const parsed::value::function_call& f) {
+            for (const parsed::value& value : f._parameters) {
+                for_value_on(value, func);
+            }
+        },
+        [&] (const parsed::path& p) {
+            func(p.root());
+        }
+    }, v._value);
+}
+
+void for_condition_expression_on(const parsed::condition_expression& ce, const noncopyable_function<void(std::string_view)>& func) {
+    std::visit(overloaded_functor {
+        [&] (const parsed::primitive_condition& cond) {
+            for (const parsed::value& value : cond._values) {
+                for_value_on(value, func);
+            }
+        },
+        [&] (const parsed::condition_expression::condition_list& list) {
+            for (const parsed::condition_expression& cond : list.conditions) {
+                for_condition_expression_on(cond, func);
+            }
+        }
+    }, ce._expression);
+}
+
 // The following calculate_value() functions calculate, or evaluate, a parsed
 // expression. The parsed expression is assumed to have been "resolved", with
 // the matching resolve_* function.
