@@ -658,7 +658,6 @@ def test_filter_expression_and_sort_key_condition(test_table_sn_with_data):
 # In particular, test that FilterExpression may inspect attributes which will
 # not be returned by the query, because of the ProjectionExpression.
 # This test reproduces issue #6951.
-@pytest.mark.xfail(reason="issue #6951: cannot filter on non-returned attributes")
 def test_filter_expression_and_projection_expression(test_table):
     p = random_string()
     test_table.put_item(Item={'p': p, 'c': 'hi', 'x': 'dog', 'y': 'cat'})

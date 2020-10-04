@@ -1881,7 +1881,8 @@ static std::string get_item_type_string(const rjson::value& v) {
 
 // calculate_attrs_to_get() takes either AttributesToGet or
 // ProjectionExpression parameters (having both is *not* allowed),
-// and returns the list of cells we need to read.
+// and returns the list of cells we need to read, or an empty set when
+// *all* attributes are to be returned.
 // In our current implementation, only top-level attributes are stored
 // as cells, and nested documents are stored serialized as JSON.
 // So this function currently returns only the the top-level attributes
@@ -2571,6 +2572,10 @@ public:
             std::unordered_set<std::string>& used_attribute_values);
     bool check(const rjson::value& item) const;
     bool filters_on(std::string_view attribute) const;
+    // for_filters_on() runs the given function on the attributes that the
+    // filter works on. It may run for the same attribute more than once if
+    // used more than once in the filter.
+    void for_filters_on(const noncopyable_function<void(std::string_view)>& func) const;
     operator bool() const { return bool(_imp); }
 };
 
@@ -2651,10 +2656,26 @@ bool filter::filters_on(std::string_view attribute) const {
     }, *_imp);
 }
 
+void filter::for_filters_on(const noncopyable_function<void(std::string_view)>& func) const {
+    if (_imp) {
+        std::visit(overloaded_functor {
+            [&] (const conditions_filter& f) -> void {
+                for (auto it = f.conditions.MemberBegin(); it != f.conditions.MemberEnd(); ++it) {
+                    func(rjson::to_string_view(it->name));
+                }
+            },
+            [&] (const expression_filter& f) -> void {
+                return for_condition_expression_on(f.expression, func);
+            }
+        }, *_imp);
+    }
+}
+
 class describe_items_visitor {
     typedef std::vector<const column_definition*> columns_t;
     const columns_t& _columns;
     const std::unordered_set<std::string>& _attrs_to_get;
+    std::unordered_set<std::string> _extra_filter_attrs;
     const filter& _filter;
     typename columns_t::const_iterator _column_it;
     rjson::value _item;
@@ -2670,7 +2691,20 @@ public:
             , _item(rjson::empty_object())
             , _items(rjson::empty_array())
             , _scanned_count(0)
-    { }
+    {
+        // _filter.check() may need additional attributes not listed in
+        // _attrs_to_get (i.e., not requested as part of the output).
+        // We list those in _extra_filter_attrs. We will include them in
+        // the JSON but take them out before finally returning the JSON.
+        if (!_attrs_to_get.empty()) {
+            _filter.for_filters_on([&] (std::string_view attr) {
+                std::string a(attr); // no heterogenous maps searches :-(
+                if (!_attrs_to_get.contains(a)) {
+                    _extra_filter_attrs.emplace(std::move(a));
+                }
+            });
+        }
+    }
 
     void start_row() {
         _column_it = _columns.begin();
@@ -2684,7 +2718,7 @@ public:
         result_bytes_view->with_linearized([this] (bytes_view bv) {
             std::string column_name = (*_column_it)->name_as_text();
             if (column_name != executor::ATTRS_COLUMN_NAME) {
-                if (_attrs_to_get.empty() || _attrs_to_get.contains(column_name)) {
+                if (_attrs_to_get.empty() || _attrs_to_get.contains(column_name) || _extra_filter_attrs.contains(column_name)) {
                     if (!_item.HasMember(column_name.c_str())) {
                         rjson::set_with_string_name(_item, column_name, rjson::empty_object());
                     }
@@ -2696,7 +2730,7 @@ public:
                 auto keys_and_values = value_cast<map_type_impl::native_type>(deserialized);
                 for (auto entry : keys_and_values) {
                     std::string attr_name = value_cast<sstring>(entry.first);
-                    if (_attrs_to_get.empty() || _attrs_to_get.contains(attr_name)) {
+                    if (_attrs_to_get.empty() || _attrs_to_get.contains(attr_name) || _extra_filter_attrs.contains(attr_name)) {
                         bytes value = value_cast<bytes>(entry.second);
                         rjson::set_with_string_name(_item, attr_name, deserialize_item(value));
                     }
@@ -2708,6 +2742,11 @@ public:
 
     void end_row() {
         if (_filter.check(_item)) {
+            // Remove the extra attributes _extra_filter_attrs which we had
+            // to add just for the filter, and not requested to be returned:
+            for (const auto& attr : _extra_filter_attrs) {
+                rjson::remove_member(_item, attr);
+            }
             rjson::push_back(_items, std::move(_item));
         }
         _item = rjson::empty_object();
