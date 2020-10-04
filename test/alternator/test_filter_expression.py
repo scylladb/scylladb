@@ -680,7 +680,6 @@ def test_filter_expression_and_projection_expression(test_table):
 # It is not allowed to combine the new-style FilterExpression with the
 # old-style AttributesToGet. You must use ProjectionExpression instead
 # (tested in test_filter_expression_and_projection_expression() above).
-@pytest.mark.xfail(reason="missing check for expression and non-expression query parameters")
 def test_filter_expression_and_attributes_to_get(test_table):
     p = random_string()
     # DynamoDB complains: "Can not use both expression and non-expression

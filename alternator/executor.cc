@@ -2603,6 +2603,9 @@ filter::filter(const rjson::value& request, request_type rt,
         if (expression->GetStringLength() == 0) {
             throw api_error::validation("FilterExpression must not be empty");
         }
+        if (rjson::find(request, "AttributesToGet")) {
+            throw api_error::validation("Cannot use both old-style and new-style parameters in same request: FilterExpression and AttributesToGet");
+        }
         try {
             // FIXME: make parse_condition_expression take string_view, get
             // rid of the silly conversion to std::string.
@@ -2618,6 +2621,9 @@ filter::filter(const rjson::value& request, request_type rt,
         }
     }
     if (conditions) {
+        if (rjson::find(request, "ProjectionExpression")) {
+            throw api_error::validation(format("Cannot use both old-style and new-style parameters in same request: {} and ProjectionExpression", conditions_attribute));
+        }
         bool require_all = conditional_operator != conditional_operator_type::OR;
         _imp = conditions_filter { require_all, rjson::copy(*conditions) };
     }
