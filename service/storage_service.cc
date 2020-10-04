@@ -474,11 +474,11 @@ void storage_service::join_token_ring(int delay) {
                 if (!_bootstrap_tokens.empty()) {
                     slogger.info("Using previously saved tokens = {}", _bootstrap_tokens);
                 } else {
-                    _bootstrap_tokens = boot_strapper::get_bootstrap_tokens(*tmptr, _db.local());
+                    _bootstrap_tokens = boot_strapper::get_bootstrap_tokens(tmptr, _db.local());
                     slogger.info("Using newly generated tokens = {}", _bootstrap_tokens);
                 }
             } else {
-                _bootstrap_tokens = boot_strapper::get_bootstrap_tokens(*tmptr, _db.local());
+                _bootstrap_tokens = boot_strapper::get_bootstrap_tokens(tmptr, _db.local());
                 slogger.info("Using newly generated tokens = {}", _bootstrap_tokens);
             }
         } else {
@@ -519,7 +519,7 @@ void storage_service::join_token_ring(int delay) {
         if (_bootstrap_tokens.empty()) {
             auto initial_tokens = _db.local().get_initial_tokens();
             if (initial_tokens.size() < 1) {
-                _bootstrap_tokens = boot_strapper::get_random_tokens(get_token_metadata(), num_tokens);
+                _bootstrap_tokens = boot_strapper::get_random_tokens(get_token_metadata_ptr(), num_tokens);
                 if (num_tokens == 1) {
                     slogger.warn("Generated random token {}. Random tokens will result in an unbalanced ring; see http://wiki.apache.org/cassandra/Operations", _bootstrap_tokens);
                 } else {

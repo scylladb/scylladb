@@ -83,7 +83,7 @@ future<> boot_strapper::bootstrap(streaming::stream_reason reason) {
 
 }
 
-std::unordered_set<token> boot_strapper::get_bootstrap_tokens(const token_metadata& metadata, database& db) {
+std::unordered_set<token> boot_strapper::get_bootstrap_tokens(const token_metadata_ptr tmptr, database& db) {
     auto initial_tokens = db.get_initial_tokens();
     // if user specified tokens, use those
     if (initial_tokens.size() > 0) {
@@ -91,7 +91,7 @@ std::unordered_set<token> boot_strapper::get_bootstrap_tokens(const token_metada
         std::unordered_set<token> tokens;
         for (auto& token_string : initial_tokens) {
             auto token = dht::token::from_sstring(token_string);
-            if (metadata.get_endpoint(token)) {
+            if (tmptr->get_endpoint(token)) {
                 throw std::runtime_error(format("Bootstrapping to existing token {} is not allowed (decommission/removenode the old node first).", token_string));
             }
             tokens.insert(token);
@@ -109,16 +109,16 @@ std::unordered_set<token> boot_strapper::get_bootstrap_tokens(const token_metada
         blogger.warn("Picking random token for a single vnode.  You should probably add more vnodes; failing that, you should probably specify the token manually");
     }
 
-    auto tokens = get_random_tokens(metadata, num_tokens);
+    auto tokens = get_random_tokens(std::move(tmptr), num_tokens);
     blogger.debug("Get random bootstrap_tokens={}", tokens);
     return tokens;
 }
 
-std::unordered_set<token> boot_strapper::get_random_tokens(const token_metadata& metadata, size_t num_tokens) {
+std::unordered_set<token> boot_strapper::get_random_tokens(const token_metadata_ptr tmptr, size_t num_tokens) {
     std::unordered_set<token> tokens;
     while (tokens.size() < num_tokens) {
         auto token = dht::token::get_random_token();
-        auto ep = metadata.get_endpoint(token);
+        auto ep = tmptr->get_endpoint(token);
         if (!ep) {
             tokens.emplace(token);
         }
