@@ -4176,7 +4176,7 @@ storage_proxy::query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
 
     // when dealing with LocalStrategy keyspaces, we can skip the range splitting and merging (which can be
     // expensive in clusters with vnodes)
-    query_ranges_to_vnodes_generator ranges_to_vnodes(*get_token_metadata_ptr(), schema, std::move(partition_ranges), ks.get_replication_strategy().get_type() == locator::replication_strategy_type::local);
+    query_ranges_to_vnodes_generator ranges_to_vnodes(get_token_metadata_ptr(), schema, std::move(partition_ranges), ks.get_replication_strategy().get_type() == locator::replication_strategy_type::local);
 
     int result_rows_per_range = 0;
     int concurrency_factor = 1;
@@ -4611,8 +4611,8 @@ std::vector<gms::inet_address> storage_proxy::intersection(const std::vector<gms
     return inter;
 }
 
-query_ranges_to_vnodes_generator::query_ranges_to_vnodes_generator(const locator::token_metadata& tm, schema_ptr s, dht::partition_range_vector ranges, bool local) :
-        _s(s), _ranges(std::move(ranges)), _i(_ranges.begin()), _local(local), _tm(tm) {}
+query_ranges_to_vnodes_generator::query_ranges_to_vnodes_generator(const locator::token_metadata_ptr tmptr, schema_ptr s, dht::partition_range_vector ranges, bool local) :
+        _s(s), _ranges(std::move(ranges)), _i(_ranges.begin()), _local(local), _tmptr(std::move(tmptr)) {}
 
 dht::partition_range_vector query_ranges_to_vnodes_generator::operator()(size_t n) {
     n = std::min(n, size_t(1024));
@@ -4662,7 +4662,7 @@ void query_ranges_to_vnodes_generator::process_one_range(size_t n, dht::partitio
     }
 
     // divide the queryRange into pieces delimited by the ring
-    auto ring_iter = _tm.ring_range(cr.start(), false);
+    auto ring_iter = _tmptr->ring_range(cr.start(), false);
     for (const dht::token& upper_bound_token : ring_iter) {
         /*
          * remainder can be a range/bounds of token _or_ keys and we want to split it with a token:

@@ -53,9 +53,9 @@ SEASTAR_TEST_CASE(test_get_restricted_ranges) {
 
             std::vector<dht::ring_position> ring = make_ring(s, 10);
 
-            auto check = [&s](locator::token_metadata& tm, dht::partition_range input,
+            auto check = [&s](locator::token_metadata_ptr tmptr, dht::partition_range input,
                               dht::partition_range_vector expected) {
-                service::query_ranges_to_vnodes_generator ranges_to_vnodes(tm, s, {input});
+                service::query_ranges_to_vnodes_generator ranges_to_vnodes(tmptr, s, {input});
                 auto actual = ranges_to_vnodes(expected.size());
                 if (!std::equal(actual.begin(), actual.end(), expected.begin(), [&s](auto&& r1, auto&& r2) {
                     return r1.equal(r2, dht::ring_position_comparator(*s));
@@ -66,45 +66,45 @@ SEASTAR_TEST_CASE(test_get_restricted_ranges) {
 
             {
                 // Ring with minimum token
-                locator::token_metadata tm;
-                tm.update_normal_token(dht::minimum_token(), {"10.0.0.1"});
+                auto tmptr = locator::make_token_metadata_ptr();
+                tmptr->update_normal_token(dht::minimum_token(), {"10.0.0.1"});
 
-                check(tm, dht::partition_range::make_singular(ring[0]), {
+                check(tmptr, dht::partition_range::make_singular(ring[0]), {
                         dht::partition_range::make_singular(ring[0])
                 });
 
-                check(tm, dht::partition_range({ring[2]}, {ring[3]}), {
+                check(tmptr, dht::partition_range({ring[2]}, {ring[3]}), {
                         dht::partition_range({ring[2]}, {ring[3]})
                 });
             }
 
             {
-                locator::token_metadata tm;
-                tm.update_normal_token(ring[2].token(), {"10.0.0.1"});
-                tm.update_normal_token(ring[5].token(), {"10.0.0.2"});
+                auto tmptr = locator::make_token_metadata_ptr();
+                tmptr->update_normal_token(ring[2].token(), {"10.0.0.1"});
+                tmptr->update_normal_token(ring[5].token(), {"10.0.0.2"});
 
-                check(tm, dht::partition_range::make_singular(ring[0]), {
+                check(tmptr, dht::partition_range::make_singular(ring[0]), {
                         dht::partition_range::make_singular(ring[0])
                 });
 
-                check(tm, dht::partition_range::make_singular(ring[2]), {
+                check(tmptr, dht::partition_range::make_singular(ring[2]), {
                         dht::partition_range::make_singular(ring[2])
                 });
 
-                check(tm, dht::partition_range({{dht::ring_position::ending_at(ring[2].token()), false}}, {ring[3]}), {
+                check(tmptr, dht::partition_range({{dht::ring_position::ending_at(ring[2].token()), false}}, {ring[3]}), {
                         dht::partition_range({{dht::ring_position::ending_at(ring[2].token()), false}}, {ring[3]})
                 });
 
-                check(tm, dht::partition_range({ring[3]}, {ring[4]}), {
+                check(tmptr, dht::partition_range({ring[3]}, {ring[4]}), {
                     dht::partition_range({ring[3]}, {ring[4]})
                 });
 
-                check(tm, dht::partition_range({ring[2]}, {ring[3]}), {
+                check(tmptr, dht::partition_range({ring[2]}, {ring[3]}), {
                     dht::partition_range({ring[2]}, {dht::ring_position::ending_at(ring[2].token())}),
                     dht::partition_range({{dht::ring_position::ending_at(ring[2].token()), false}}, {ring[3]})
                 });
 
-                check(tm, dht::partition_range({{ring[2], false}}, {ring[3]}), {
+                check(tmptr, dht::partition_range({{ring[2], false}}, {ring[3]}), {
                     dht::partition_range({{ring[2], false}}, {dht::ring_position::ending_at(ring[2].token())}),
                     dht::partition_range({{dht::ring_position::ending_at(ring[2].token()), false}}, {ring[3]})
                 });
