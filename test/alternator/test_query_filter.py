@@ -539,7 +539,6 @@ def test_query_filter_paging(test_table_sn_with_data):
 # In particular, test that QueryFilter may inspect attributes which will
 # not be returned by the query, because the AttributesToGet.
 # This test reproduces issue #6951.
-@pytest.mark.xfail(reason="issue #6951: cannot filter on non-returned attributes")
 def test_query_filter_and_attributes_to_get(test_table):
     p = random_string()
     test_table.put_item(Item={'p': p, 'c': 'hi', 'x': 'dog', 'y': 'cat'})

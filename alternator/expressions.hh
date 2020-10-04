@@ -27,6 +27,8 @@
 #include <unordered_set>
 #include <string_view>
 
+#include <seastar/util/noncopyable_function.hh>
+
 #include "expressions_types.hh"
 #include "utils/rjson.hh"
 
@@ -58,6 +60,11 @@ void resolve_condition_expression(parsed::condition_expression& ce,
 void validate_value(const rjson::value& v, const char* caller);
 
 bool condition_expression_on(const parsed::condition_expression& ce, std::string_view attribute);
+
+// for_condition_expression_on() runs the given function on the attributes
+// that the expression uses. It may run for the same attribute more than once
+// if the same attribute is used more than once in the expression.
+void for_condition_expression_on(const parsed::condition_expression& ce, const noncopyable_function<void(std::string_view)>& func);
 
 // calculate_value() behaves slightly different (especially, different
 // functions supported) when used in different types of expressions, as
