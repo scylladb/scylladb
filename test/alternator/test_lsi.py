@@ -125,8 +125,9 @@ def test_lsi_wrong(dynamodb):
             ])
         table.delete()
 
-# A simple scenario for LSI. Base table has just hash key, Index has an
-# additional sort key - one of the non-key attributes from the base table.
+# A simple scenario for LSI. Base table has a partition key and a sort key,
+# index has the same partition key key but a different sort key - one of
+# the non-key attributes from the base table.
 @pytest.fixture(scope="session")
 def test_table_lsi_1(dynamodb):
     table = create_test_table(dynamodb,
