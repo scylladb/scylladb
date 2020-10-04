@@ -583,7 +583,7 @@ void storage_service::join_token_ring(int delay) {
                     || cdc::should_propose_first_generation(get_broadcast_address(), _gossiper))) {
 
             _cdc_streams_ts = cdc::make_new_cdc_generation(db().local().get_config(),
-                    _bootstrap_tokens, get_token_metadata(), _gossiper,
+                    _bootstrap_tokens, get_token_metadata_ptr(), _gossiper,
                     _sys_dist_ks.local(), get_ring_delay(), _for_testing);
         }
     }
@@ -818,10 +818,10 @@ future<> storage_service::check_and_repair_cdc_streams() {
                 " node(s) being down or unreachable. It is recommended to check the network and"
                 " restart/remove the failed node(s), then retry checkAndRepairCdcStreams command";
         static const auto exception_translating_msg = "Translating the exception to `request_execution_exception`";
-        const auto& tm = get_token_metadata();
+        const auto tmptr = get_token_metadata_ptr();
         try {
             gen = _sys_dist_ks.local().read_cdc_topology_description(
-                    *latest, { tm.count_normal_token_owners() }).get0();
+                    *latest, { tmptr->count_normal_token_owners() }).get0();
         } catch (exceptions::request_timeout_exception& e) {
             cdc_log.error("{}: \"{}\". {}.", timeout_msg, e.what(), exception_translating_msg);
             throw exceptions::request_execution_exception(exceptions::exception_code::READ_TIMEOUT,
@@ -854,7 +854,7 @@ future<> storage_service::check_and_repair_cdc_streams() {
             for (const auto& entry : gen->entries()) {
                 gen_ends.insert(entry.token_range_end);
             }
-            for (const auto& metadata_token : tm.sorted_tokens()) {
+            for (const auto& metadata_token : tmptr->sorted_tokens()) {
                 if (!gen_ends.contains(metadata_token)) {
                     cdc_log.warn("CDC generation {} missing token {}. Regenerating.", latest, metadata_token);
                     should_regenerate = true;
@@ -871,7 +871,7 @@ future<> storage_service::check_and_repair_cdc_streams() {
             return;
         }
         const auto new_streams_ts = cdc::make_new_cdc_generation(db().local().get_config(),
-                {}, tm, _gossiper,
+                {}, std::move(tmptr), _gossiper,
                 _sys_dist_ks.local(), get_ring_delay(), false /* for_testing */);
         // Need to artificially update our STATUS so other nodes handle the timestamp change
         auto status = _gossiper.get_application_state_ptr(get_broadcast_address(), application_state::STATUS);
@@ -919,7 +919,7 @@ void storage_service::bootstrap() {
             assert(!_cdc_streams_ts);
 
             _cdc_streams_ts = cdc::make_new_cdc_generation(db().local().get_config(),
-                    _bootstrap_tokens, get_token_metadata(), _gossiper,
+                    _bootstrap_tokens, get_token_metadata_ptr(), _gossiper,
                     _sys_dist_ks.local(), get_ring_delay(), _for_testing);
         } else {
             // We should not be able to join the cluster if other nodes support CDC but we don't.
