@@ -364,3 +364,33 @@ def test_lsi_and_gsi(test_table_lsi_gsi):
         retrying_assert_index_query(test_table_lsi_gsi, index, expected_items,
             KeyConditions={'p': {'AttributeValueList': [p1], 'ComparisonOperator': 'EQ'},
                            'x1': {'AttributeValueList': [x1], 'ComparisonOperator': 'EQ'}})
+
+# This test is a version of test_filter_expression_and_projection_expression
+# from test_filter_expression, which involves a Query which projects only
+# one column but filters on another one, and the point is to verify that
+# the implementation got also the filtered column (for the filtering to work)
+# but did not return it with the results. This version does the same, except
+# that either the filtered column, or the projected column, is an LSI key.
+# In our implementation, LSI keys are implemented differently from ordinary
+# attributes - they are real Scylla columns and not just items in the
+# ":attrs" map - so this test checks that our implementation of the filtering
+# and projection (and their combination) did not mess up this special case.
+# This test reproduces issue #6951.
+def test_lsi_filter_expression_and_projection_expression(test_table_lsi_1):
+    p = random_string()
+    test_table_lsi_1.put_item(Item={'p': p, 'c': 'hi', 'b': 'dog', 'y': 'cat'})
+    test_table_lsi_1.put_item(Item={'p': p, 'c': 'yo', 'b': 'mouse', 'y': 'horse'})
+    # Case 1: b (the LSI key) is in filter but not in projection:
+    got_items = full_query(test_table_lsi_1,
+        KeyConditionExpression='p=:p',
+        FilterExpression='b=:b',
+        ProjectionExpression='y',
+        ExpressionAttributeValues={':p': p, ':b': 'mouse'})
+    assert(got_items == [{'y': 'horse'}])
+    # Case 2: b (the LSI key) is in the projection, but not the filter:
+    got_items = full_query(test_table_lsi_1,
+        KeyConditionExpression='p=:p',
+        FilterExpression='y=:y',
+        ProjectionExpression='b',
+        ExpressionAttributeValues={':p': p, ':y': 'cat'})
+    assert(got_items == [{'b': 'dog'}])

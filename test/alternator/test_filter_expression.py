@@ -677,6 +677,27 @@ def test_filter_expression_and_projection_expression(test_table):
     expected_items = [{'y': 'horse'}]
     assert(got_items == expected_items)
 
+# Same test as test_filter_expression_and_projection_expression above, just
+# here the projected attribute is a key column p, whereas it was a non-key
+# in the previous test. Although only key columns are being projected, it
+# is important that the implementation also reads the non-key columns (the
+# ":attrs" column) - they are needed for the filter. The current code reads
+# all the columns in any case, so passing this test is easy, but if in the
+# future we add an optimization to not read ":attrs" when not needed, this
+# test will make sure "when not needed" remembers also the filtering.
+# This test also reproduces issue #6951.
+def test_filter_expression_and_projection_expression_2(test_table):
+    p = random_string()
+    test_table.put_item(Item={'p': p, 'c': 'yo', 'x': 'mouse', 'y': 'horse'})
+    # Note that the filter is on the column x, but x is not included in the
+    # results because of ProjectionExpression. The filter should still work.
+    got_items = full_query(test_table,
+        KeyConditionExpression='p=:p',
+        FilterExpression='x=:x',
+        ProjectionExpression='p',
+        ExpressionAttributeValues={':p': p, ':x': 'mouse'})
+    assert(got_items == [{'p': p}])
+
 # It is not allowed to combine the new-style FilterExpression with the
 # old-style AttributesToGet. You must use ProjectionExpression instead
 # (tested in test_filter_expression_and_projection_expression() above).
