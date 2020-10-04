@@ -27,6 +27,14 @@
 #include "utils/date.h"
 #include <lua.hpp>
 
+// Lua 5.4 added an extra parameter to lua_resume
+
+#if LUA_VERSION_NUM >= 504
+#    define LUA_504_PLUS(x...) x
+#else
+#    define LUA_504_PLUS(x...)
+#endif
+
 using namespace seastar;
 
 static logging::logger lua_logger("lua");
@@ -1082,7 +1090,8 @@ future<bytes_opt> lua::run_script(lua::bitcode_view bitcode, const std::vector<d
         // The hook will be called after 1000 instructions.
         lua_sethook(l, debug_hook, LUA_MASKCALL | LUA_MASKCOUNT, 1000);
         auto start = ::now();
-        switch (lua_resume(l, nullptr, nargs)) {
+        LUA_504_PLUS(int nresults;)
+        switch (lua_resume(l, nullptr, nargs LUA_504_PLUS(, &nresults))) {
         case LUA_OK:
             return make_ready_future<std::optional<bytes_opt>>(convert_return(l, return_type));
         case LUA_YIELD: {
