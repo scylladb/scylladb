@@ -20,18 +20,12 @@
  */
 
 #include "connection_notifier.hh"
-#include "db/query_context.hh"
 #include "cql3/constants.hh"
 #include "database.hh"
-#include "service/storage_proxy.hh"
 
 #include <stdexcept>
 
-namespace db::system_keyspace {
-extern const char *const CLIENTS;
-}
-
-static sstring to_string(client_type ct) {
+sstring to_string(client_type ct) {
     switch (ct) {
         case client_type::cql: return "cql";
         case client_type::thrift: return "thrift";
@@ -52,12 +46,12 @@ future<> notify_new_client(client_data cd) {
             cd.username.value_or("anonymous")).discard_result();
 }
 
-future<> notify_disconnected_client(gms::inet_address addr, client_type ct, int port) {
+future<> notify_disconnected_client(net::inet_address addr, int port, client_type ct) {
     // FIXME: consider prepared statement
     const static sstring req
             = format("DELETE FROM system.{} where address=? AND port=? AND client_type=?;",
                      db::system_keyspace::CLIENTS);
-    return db::execute_cql(req, addr.addr(), port, to_string(ct)).discard_result();
+    return db::execute_cql(req, std::move(addr), port, to_string(ct)).discard_result();
 }
 
 future<> clear_clientlist() {

@@ -309,7 +309,7 @@ cql_server::unadvertise_connection(shared_ptr<connection> conn) {
     const auto ip = conn->get_client_state().get_client_address().addr();
     const auto port = conn->get_client_state().get_client_port();
     clogger.trace("Advertising disconnection of CQL client {}:{}", ip, port);
-    return notify_disconnected_client(ip, client_type::cql, port);
+    return notify_disconnected_client(ip, port, client_type::cql);
 }
 
 unsigned
@@ -579,11 +579,15 @@ future<> cql_server::connection::shutdown()
     return make_ready_future<>();
 }
 
+std::tuple<net::inet_address, int, client_type> cql_server::connection::make_client_key(const service::client_state& cli_state) {
+    return std::make_tuple(cli_state.get_client_address().addr(),
+            cli_state.get_client_port(),
+            cli_state.is_thrift() ? client_type::thrift : client_type::cql);
+}
+
 client_data cql_server::connection::make_client_data() const {
     client_data cd;
-    cd.ip = _client_state.get_client_address().addr();
-    cd.port = _client_state.get_client_port();
-    cd.ct = client_type::cql;
+    std::tie(cd.ip, cd.port, cd.ct) = make_client_key(_client_state);
     cd.shard_id = this_shard_id();
     cd.protocol_version = _version;
     if (const auto user_ptr = _client_state.user(); user_ptr) {
@@ -774,6 +778,12 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_au
         return sasl_challenge->get_authenticated_user().then([this, sasl_challenge, stream, &client_state, challenge = std::move(challenge), trace_state](auth::authenticated_user user) mutable {
             client_state.set_login(std::move(user));
             auto f = client_state.check_user_can_login();
+            if (client_state.user()->name) {
+                f = f.then([cli_key = make_client_key(client_state), username = *client_state.user()->name] {
+                    return std::apply(notify_client_change<changed_column::username>{},
+                            std::tuple_cat(std::move(cli_key), std::forward_as_tuple(username)));
+                });
+            }
             return f.then([this, stream, &client_state, challenge = std::move(challenge), trace_state]() mutable {
                 return make_ready_future<std::unique_ptr<cql_server::response>>(make_auth_success(stream, std::move(challenge), trace_state));
             });
