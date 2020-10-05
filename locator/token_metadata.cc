@@ -75,7 +75,7 @@ private:
 
     long _ring_version = 0;
 
-    std::vector<token> sort_tokens();
+    void sort_tokens();
 
     using tokens_iterator = tokens_iterator_impl;
 
@@ -419,32 +419,11 @@ public:
         for (auto endpoint : _leaving_endpoints) {
             all_left_metadata.remove_endpoint(endpoint);
         }
+        all_left_metadata.sort_tokens();
 
         return all_left_metadata;
     }
 
-public:
-    /**
-     * Create a copy of TokenMetadata with tokenToEndpointMap reflecting situation after all
-     * current leave, and move operations have finished.
-     *
-     * @return new token metadata
-     */
-    token_metadata_impl clone_after_all_settled() const;
-#if 0
-    public InetAddress getEndpoint(Token token)
-    {
-        lock.readLock().lock();
-        try
-        {
-            return tokenToEndpointMap.get(token);
-        }
-        finally
-        {
-            lock.readLock().unlock();
-        }
-    }
-#endif
 public:
     dht::token_range_vector get_primary_ranges_for(std::unordered_set<token> tokens) const;
 
@@ -958,10 +937,10 @@ token_metadata_impl::ring_range(const token& start, bool include_min) const {
 
 token_metadata_impl::token_metadata_impl(std::unordered_map<token, inet_address> token_to_endpoint_map, std::unordered_map<inet_address, utils::UUID> endpoints_map, topology topology) :
     _token_to_endpoint_map(token_to_endpoint_map), _endpoint_to_host_id_map(endpoints_map), _topology(topology) {
-    _sorted_tokens = sort_tokens();
+    sort_tokens();
 }
 
-std::vector<token> token_metadata_impl::sort_tokens() {
+void token_metadata_impl::sort_tokens() {
     std::vector<token> sorted;
     sorted.reserve(_token_to_endpoint_map.size());
 
@@ -971,7 +950,7 @@ std::vector<token> token_metadata_impl::sort_tokens() {
 
     std::sort(sorted.begin(), sorted.end());
 
-    return sorted;
+    _sorted_tokens = std::move(sorted);
 }
 
 const std::vector<token>& token_metadata_impl::sorted_tokens() const {
@@ -1052,7 +1031,7 @@ void token_metadata_impl::update_normal_tokens(const std::unordered_map<inet_add
     }
 
     if (should_sort_tokens) {
-        _sorted_tokens = sort_tokens();
+        sort_tokens();
     }
 }
 
@@ -1244,7 +1223,6 @@ void token_metadata_impl::remove_endpoint(inet_address endpoint) {
     _leaving_endpoints.erase(endpoint);
     del_replacing_endpoint(endpoint);
     _endpoint_to_host_id_map.erase(endpoint);
-    _sorted_tokens = sort_tokens();
     invalidate_cached_rings();
 }
 
@@ -1458,8 +1436,9 @@ void token_metadata_impl::calculate_pending_ranges_for_bootstrap(
                 new_pending_ranges->emplace(x.second, endpoint);
             }
         }
-        all_left_metadata->remove_endpoint(endpoint);
+        all_left_metadata->_impl->remove_endpoint(endpoint);
     }
+    all_left_metadata->_impl->sort_tokens();
 }
 
 future<> token_metadata_impl::update_pending_ranges(
@@ -1517,16 +1496,6 @@ void token_metadata_impl::del_replacing_endpoint(inet_address existing_node) {
                 _replacing_endpoints[existing_node], existing_node);
     }
     _replacing_endpoints.erase(existing_node);
-}
-
-token_metadata_impl token_metadata_impl::clone_after_all_settled() const {
-    token_metadata_impl metadata = clone_only_token_map();
-
-    for (auto endpoint : _leaving_endpoints) {
-        metadata.remove_endpoint(endpoint);
-    }
-
-    return metadata;
 }
 
 std::vector<gms::inet_address> token_metadata_impl::pending_endpoints_for(const token& token, const sstring& keyspace_name) const {
@@ -1778,6 +1747,7 @@ token_metadata::add_leaving_endpoint(inet_address endpoint) {
 void
 token_metadata::remove_endpoint(inet_address endpoint) {
     _impl->remove_endpoint(endpoint);
+    _impl->sort_tokens();
 }
 
 bool
@@ -1818,11 +1788,6 @@ token_metadata::clone_after_all_left() const {
     return token_metadata(std::make_unique<token_metadata_impl>(_impl->clone_after_all_left()));
 }
 
-token_metadata
-token_metadata::clone_after_all_settled() const {
-    return token_metadata(std::make_unique<token_metadata_impl>(_impl->clone_after_all_settled()));
-}
-
 dht::token_range_vector
 token_metadata::get_primary_ranges_for(std::unordered_set<token> tokens) const {
     return _impl->get_primary_ranges_for(std::move(tokens));
@@ -1851,22 +1816,6 @@ token_metadata::has_pending_ranges(sstring keyspace_name, inet_address endpoint)
 future<>
 token_metadata::update_pending_ranges(const abstract_replication_strategy& strategy, const sstring& keyspace_name) {
     return _impl->update_pending_ranges(*this, strategy, keyspace_name);
-}
-
-future<>
-token_metadata::calculate_pending_ranges_for_leaving(
-        const abstract_replication_strategy& strategy,
-        lw_shared_ptr<std::unordered_multimap<range<token>, inet_address>> new_pending_ranges,
-        lw_shared_ptr<token_metadata> all_left_metadata) const {
-    return _impl->calculate_pending_ranges_for_leaving(*this, strategy, std::move(new_pending_ranges), std::move(all_left_metadata));
-}
-
-void
-token_metadata::calculate_pending_ranges_for_bootstrap(
-        const abstract_replication_strategy& strategy,
-        lw_shared_ptr<std::unordered_multimap<range<token>, inet_address>> new_pending_ranges,
-        lw_shared_ptr<token_metadata> all_left_metadata) const {
-    _impl->calculate_pending_ranges_for_bootstrap(strategy, std::move(new_pending_ranges), std::move(all_left_metadata));
 }
 
 token
