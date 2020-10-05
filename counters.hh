@@ -181,7 +181,7 @@ public:
     int64_t logical_clock() const { return _logical_clock; }
 
     counter_shard& update(int64_t value_delta, int64_t clock_increment) noexcept {
-        _value += value_delta;
+        _value = uint64_t(_value) + uint64_t(value_delta); // signed int overflow is undefined hence the cast
         _logical_clock += clock_increment;
         return *this;
     }
