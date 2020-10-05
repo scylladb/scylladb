@@ -134,9 +134,6 @@ public:
         _end_of_stream = false;
         return _rd.fast_forward_to(std::move(pr), timeout);
     }
-    virtual size_t buffer_size() const override {
-        return flat_mutation_reader::impl::buffer_size() + _rd.buffer_size();
-    }
 };
 
 // Creates a mutation_reader wrapper which creates a new stream of mutations

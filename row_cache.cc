@@ -426,12 +426,6 @@ public:
     virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) override {
         return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
     }
-    virtual size_t buffer_size() const override {
-        if (_reader) {
-            return flat_mutation_reader::impl::buffer_size() + _reader->buffer_size();
-        }
-        return flat_mutation_reader::impl::buffer_size();
-    }
 };
 
 void cache_tracker::clear_continuity(cache_entry& ce) noexcept {
@@ -706,12 +700,6 @@ public:
     }
     virtual future<> fast_forward_to(position_range cr, db::timeout_clock::time_point timeout) override {
         return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
-    }
-    virtual size_t buffer_size() const override {
-        if (_reader) {
-            return flat_mutation_reader::impl::buffer_size() + _reader->buffer_size();
-        }
-        return flat_mutation_reader::impl::buffer_size();
     }
 };
 

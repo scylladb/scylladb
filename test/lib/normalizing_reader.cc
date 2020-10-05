@@ -92,9 +92,6 @@ future<> normalizing_reader::fast_forward_to(
     _end_of_stream = false;
     return _rd.fast_forward_to(std::move(pr), timeout);
 }
-size_t normalizing_reader::buffer_size() const {
-    return flat_mutation_reader::impl::buffer_size() + _rd.buffer_size();
-}
 
 flat_mutation_reader make_normalizing_reader(flat_mutation_reader rd) {
     return make_flat_mutation_reader<normalizing_reader>(std::move(rd));

@@ -1256,9 +1256,6 @@ class scrub_compaction final : public regular_compaction {
         virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) override {
             return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
         }
-        virtual size_t buffer_size() const override {
-            return flat_mutation_reader::impl::buffer_size() + _reader.buffer_size();
-        }
     };
 
 private:
