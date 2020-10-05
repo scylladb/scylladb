@@ -319,11 +319,26 @@ void set_storage_service(http_context& ctx, routes& r) {
     });
 
     ss::get_range_to_endpoint_map.set(r, [&ctx](std::unique_ptr<request> req) {
-        //TBD
-        unimplemented();
         auto keyspace = validate_keyspace(ctx, req->param);
         std::vector<ss::maplist_mapper> res;
-        return make_ready_future<json::json_return_type>(res);
+        return make_ready_future<json::json_return_type>(stream_range_as_array(service::get_local_storage_service().get_range_to_address_map(keyspace),
+                [](const std::pair<dht::token_range, std::vector<gms::inet_address>>& entry){
+            ss::maplist_mapper m;
+            if (entry.first.start()) {
+                m.key.push(entry.first.start().value().value().to_sstring());
+            } else {
+                m.key.push("");
+            }
+            if (entry.first.end()) {
+                m.key.push(entry.first.end().value().value().to_sstring());
+            } else {
+                m.key.push("");
+            }
+            for (const gms::inet_address& address : entry.second) {
+                m.value.push(address.to_sstring());
+            }
+            return m;
+        }));
     });
 
     ss::get_pending_range_to_endpoint_map.set(r, [&ctx](std::unique_ptr<request> req) {
