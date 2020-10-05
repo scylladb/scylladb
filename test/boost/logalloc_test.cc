@@ -38,6 +38,7 @@
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/util/defer.hh>
 #include <deque>
+#include "utils/lsa/weak_ptr.hh"
 #include "utils/phased_barrier.hh"
 
 #include "utils/logalloc.hh"
@@ -1817,6 +1818,73 @@ SEASTAR_THREAD_TEST_CASE(test_lsa_buffer_alloc_dealloc_patterns) {
         chk_buf(5, buf5);
         chk_buf(6, buf6);
     }
+}
+
+SEASTAR_THREAD_TEST_CASE(test_weak_ptr) {
+    logalloc::region region;
+
+    const int cookie = 172;
+    const int cookie2 = 341;
+
+    struct Obj : public lsa::weakly_referencable<Obj> {
+        int val;
+        Obj(int v) : val(v) {}
+    };
+
+    managed_ref<Obj> obj_ptr = with_allocator(region.allocator(), [&] {
+        return make_managed<Obj>(cookie);
+    });
+    auto del_obj_ptr = defer([&] {
+        with_allocator(region.allocator(), [&] {
+            obj_ptr = {};
+        });
+    });
+
+    managed_ref<Obj> obj2_ptr = with_allocator(region.allocator(), [&] {
+        return make_managed<Obj>(cookie2);
+    });
+    auto del_obj2_ptr = defer([&] {
+        with_allocator(region.allocator(), [&] {
+           obj2_ptr = {};
+        });
+    });
+
+    lsa::weak_ptr<Obj> obj_wptr = obj_ptr->weak_from_this();
+
+    BOOST_REQUIRE_EQUAL(obj_ptr.get(), obj_wptr.get());
+    BOOST_REQUIRE_EQUAL(obj_wptr->val, cookie);
+    BOOST_REQUIRE(obj_wptr);
+
+    region.full_compaction();
+
+    BOOST_REQUIRE_EQUAL(obj_ptr.get(), obj_wptr.get());
+    BOOST_REQUIRE_EQUAL(obj_wptr->val, cookie);
+
+    auto obj_wptr2 = obj_wptr->weak_from_this();
+
+    BOOST_REQUIRE_EQUAL(obj_ptr.get(), obj_wptr2.get());
+    BOOST_REQUIRE_EQUAL(obj_wptr2->val, cookie);
+    BOOST_REQUIRE(obj_wptr2);
+
+    auto obj_wptr3 = std::move(obj_wptr2);
+
+    BOOST_REQUIRE_EQUAL(obj_ptr.get(), obj_wptr3.get());
+    BOOST_REQUIRE_EQUAL(obj_wptr3->val, cookie);
+    BOOST_REQUIRE(obj_wptr3);
+    BOOST_REQUIRE(!obj_wptr2);
+    BOOST_REQUIRE(obj_wptr2.get() == nullptr);
+
+    obj_wptr3 = obj2_ptr->weak_from_this();
+    BOOST_REQUIRE_EQUAL(obj2_ptr.get(), obj_wptr3.get());
+    BOOST_REQUIRE_EQUAL(obj_wptr3->val, cookie2);
+    BOOST_REQUIRE(obj_wptr3);
+
+    with_allocator(region.allocator(), [&] {
+        obj_ptr = {};
+    });
+
+    BOOST_REQUIRE(obj_wptr.get() == nullptr);
+    BOOST_REQUIRE(!obj_wptr);
 }
 
 #endif
