@@ -371,6 +371,16 @@ cql_server::connection::read_frame() {
                 _version = current_version;
                 throw exceptions::protocol_exception(format("Invalid or unsupported protocol version: {:d}", client_version));
             }
+
+          auto client_state_notification_f = std::apply(notify_client_change<changed_column::protocol_version>{},
+                  std::tuple_cat(make_client_key(_client_state), std::make_tuple(_version)));
+
+          return client_state_notification_f.then_wrapped([this] (future<> f) {
+            try {
+                f.get();
+            } catch (...) {
+                clogger.info("exception while setting protocol_version in `system.clients`: {}", std::current_exception());
+            }
             return _read_buf.read_exactly(frame_size() - 1).then([this] (temporary_buffer<char> tail) {
                 temporary_buffer<char> full(frame_size());
                 full.get_write()[0] = _version;
@@ -385,6 +395,7 @@ cql_server::connection::read_frame() {
                 }
                 return make_ready_future<ret_type>(frame);
             });
+          });
         });
     } else {
         // Not the first frame, so we know the size.
