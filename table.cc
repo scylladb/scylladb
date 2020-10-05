@@ -1017,7 +1017,7 @@ table::on_compaction_completion(sstables::compaction_completion_desc& desc) {
 
     rebuild_statistics();
 
-    auto f = seastar::with_gate(_sstable_deletion_gate, [this, sstables_to_remove = desc.old_sstables] {
+    auto f = seastar::try_with_gate(_sstable_deletion_gate, [this, sstables_to_remove = desc.old_sstables] {
        return with_semaphore(_sstable_deletion_sem, 1, [sstables_to_remove = std::move(sstables_to_remove)] {
            return sstables::delete_atomically(std::move(sstables_to_remove));
        });
