@@ -47,7 +47,8 @@ with open('build/SCYLLA-VERSION-FILE') as f:
 with open('build/SCYLLA-RELEASE-FILE') as f:
     release = f.read().strip()
 
-shutil.rmtree('build/debian/debian', ignore_errors=True)
+if os.path.exists('build/debian/debian'):
+    shutil.rmtree('build/debian/debian')
 shutil.copytree('dist/debian/debian', 'build/debian/debian')
 
 if product != 'scylla':
