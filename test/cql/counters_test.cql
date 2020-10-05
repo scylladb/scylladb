@@ -22,3 +22,12 @@ DELETE c1 from ks.tbl_cnt WHERE pk = 1;
 SELECT pk, c1 FROM ks.tbl_cnt WHERE c1 = 1 ALLOW FILTERING;
 SELECT pk, c1 FROM ks.tbl_cnt WHERE c1 <= 1000 ALLOW FILTERING;
 SELECT pk, c1 FROM ks.tbl_cnt WHERE c1 > -1000 ALLOW FILTERING;
+
+
+CREATE TABLE counter_bug (t int, c counter, primary key(t));
+UPDATE counter_bug SET c = c + 9223372036854775807 where t = 0;
+SELECT * from counter_bug;
+UPDATE counter_bug SET c = c + 1 where t = 0;
+SELECT * from counter_bug;
+UPDATE counter_bug SET c = c - 1 where t = 0;
+SELECT * from counter_bug;

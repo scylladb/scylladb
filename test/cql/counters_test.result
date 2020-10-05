@@ -156,3 +156,51 @@ SELECT pk, c1 FROM ks.tbl_cnt WHERE c1 > -1000 ALLOW FILTERING;
 		}
 	]
 }
+
+
+CREATE TABLE counter_bug (t int, c counter, primary key(t));
+{
+	"status" : "ok"
+}
+UPDATE counter_bug SET c = c + 9223372036854775807 where t = 0;
+{
+	"status" : "ok"
+}
+SELECT * from counter_bug;
+{
+	"rows" : 
+	[
+		{
+			"c" : "9223372036854775807",
+			"t" : "0"
+		}
+	]
+}
+UPDATE counter_bug SET c = c + 1 where t = 0;
+{
+	"status" : "ok"
+}
+SELECT * from counter_bug;
+{
+	"rows" : 
+	[
+		{
+			"c" : "-9223372036854775808",
+			"t" : "0"
+		}
+	]
+}
+UPDATE counter_bug SET c = c - 1 where t = 0;
+{
+	"status" : "ok"
+}
+SELECT * from counter_bug;
+{
+	"rows" : 
+	[
+		{
+			"c" : "9223372036854775807",
+			"t" : "0"
+		}
+	]
+}
