@@ -91,7 +91,7 @@ const sstring& gossiper::get_partitioner_name() const noexcept {
     return _cfg.partitioner();
 }
 
-const std::set<inet_address>& gossiper::get_seeds() const {
+const std::set<inet_address>& gossiper::get_seeds() const noexcept {
     return _seeds_from_config;
 }
 
@@ -99,7 +99,7 @@ void gossiper::set_seeds(std::set<inet_address> seeds) {
     _seeds_from_config = std::move(seeds);
 }
 
-std::chrono::milliseconds gossiper::quarantine_delay() {
+std::chrono::milliseconds gossiper::quarantine_delay() const noexcept {
     auto ring_delay = std::chrono::milliseconds(_cfg.ring_delay_ms());
     return ring_delay * 2;
 }
@@ -959,7 +959,7 @@ std::set<inet_address> gossiper::get_unreachable_token_owners() {
 }
 
 // Return downtime in microseconds
-int64_t gossiper::get_endpoint_downtime(inet_address ep) {
+int64_t gossiper::get_endpoint_downtime(inet_address ep) const noexcept {
     auto it = _unreachable_endpoints.find(ep);
     if (it != _unreachable_endpoints.end()) {
         auto& downtime = it->second;
@@ -999,7 +999,7 @@ std::set<inet_address> gossiper::get_unreachable_members() {
     return ret;
 }
 
-int gossiper::get_max_endpoint_state_version(endpoint_state state) {
+int gossiper::get_max_endpoint_state_version(endpoint_state state) const noexcept {
     int max_version = state.get_heart_beat_state().get_heart_beat_version();
     for (auto& entry : state.get_application_state_map()) {
         auto& value = entry.second;
@@ -1186,7 +1186,7 @@ future<> gossiper::assassinate_endpoint(sstring address) {
     });
 }
 
-bool gossiper::is_known_endpoint(inet_address endpoint) {
+bool gossiper::is_known_endpoint(inet_address endpoint) const noexcept {
     return endpoint_state_map.contains(endpoint);
 }
 
@@ -1238,7 +1238,7 @@ bool gossiper::is_gossip_only_member(inet_address endpoint) {
     return !is_dead_state(*es) && !_token_metadata.is_member(endpoint);
 }
 
-clk::time_point gossiper::get_expire_time_for_endpoint(inet_address endpoint) {
+clk::time_point gossiper::get_expire_time_for_endpoint(inet_address endpoint) const noexcept {
     /* default expire_time is A_VERY_LONG_TIME */
     auto it = _expire_time_endpoint_map.find(endpoint);
     if (it == _expire_time_endpoint_map.end()) {
@@ -1249,7 +1249,7 @@ clk::time_point gossiper::get_expire_time_for_endpoint(inet_address endpoint) {
     }
 }
 
-const endpoint_state* gossiper::get_endpoint_state_for_endpoint_ptr(inet_address ep) const {
+const endpoint_state* gossiper::get_endpoint_state_for_endpoint_ptr(inet_address ep) const noexcept {
     auto it = endpoint_state_map.find(ep);
     if (it == endpoint_state_map.end()) {
         return nullptr;
@@ -1258,7 +1258,7 @@ const endpoint_state* gossiper::get_endpoint_state_for_endpoint_ptr(inet_address
     }
 }
 
-endpoint_state* gossiper::get_endpoint_state_for_endpoint_ptr(inet_address ep) {
+endpoint_state* gossiper::get_endpoint_state_for_endpoint_ptr(inet_address ep) noexcept {
     auto it = endpoint_state_map.find(ep);
     if (it == endpoint_state_map.end()) {
         return nullptr;
@@ -1275,7 +1275,7 @@ endpoint_state& gossiper::get_endpoint_state(inet_address ep) {
     return *ptr;
 }
 
-std::optional<endpoint_state> gossiper::get_endpoint_state_for_endpoint(inet_address ep) const {
+std::optional<endpoint_state> gossiper::get_endpoint_state_for_endpoint(inet_address ep) const noexcept {
     auto it = endpoint_state_map.find(ep);
     if (it == endpoint_state_map.end()) {
         return {};
@@ -1292,7 +1292,7 @@ future<> gossiper::reset_endpoint_state_map() {
     });
 }
 
-const std::unordered_map<inet_address, endpoint_state>& gms::gossiper::get_endpoint_states() const {
+const std::unordered_map<inet_address, endpoint_state>& gms::gossiper::get_endpoint_states() const noexcept {
     return endpoint_state_map;
 }
 
@@ -2099,7 +2099,7 @@ bool gossiper::is_alive(inet_address ep) const {
     return false;
 }
 
-const versioned_value* gossiper::get_application_state_ptr(inet_address endpoint, application_state appstate) const {
+const versioned_value* gossiper::get_application_state_ptr(inet_address endpoint, application_state appstate) const noexcept {
     auto* eps = get_endpoint_state_for_endpoint_ptr(std::move(endpoint));
     if (!eps) {
         return nullptr;
@@ -2354,11 +2354,11 @@ std::map<sstring, sstring> gossiper::get_simple_states() {
     return nodes_status;
 }
 
-int gossiper::get_down_endpoint_count() {
+int gossiper::get_down_endpoint_count() const noexcept {
     return endpoint_state_map.size() - get_up_endpoint_count();
 }
 
-int gossiper::get_up_endpoint_count() {
+int gossiper::get_up_endpoint_count() const noexcept {
     return boost::count_if(endpoint_state_map | boost::adaptors::map_values, std::mem_fn(&endpoint_state::is_alive));
 }
 
