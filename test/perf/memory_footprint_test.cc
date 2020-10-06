@@ -200,7 +200,7 @@ static sizes calculate_sizes(cache_tracker& tracker, const mutation_settings& se
             query::result_memory_accounter{ query::result_memory_limiter::unlimited_result_size }, query::result_options::only_result()).buf().size();
 
     tmpdir sstable_dir;
-    sstables::test_env env;
+    sstables::test_env::do_with_async([&] (sstables::test_env& env) {
     for (auto v  : sstables::all_sstable_versions) {
         auto sst = env.make_sstable(s,
             sstable_dir.path().string(),
@@ -213,6 +213,7 @@ static sizes calculate_sizes(cache_tracker& tracker, const mutation_settings& se
         sst->load().get();
         result.sstable[v] = sst->data_size();
     }
+    }).get();
 
     return result;
 }
