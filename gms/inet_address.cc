@@ -47,6 +47,10 @@
 
 using namespace seastar;
 
+static_assert(std::is_nothrow_default_constructible_v<gms::inet_address>);
+static_assert(std::is_nothrow_copy_constructible_v<gms::inet_address>);
+static_assert(std::is_nothrow_move_constructible_v<gms::inet_address>);
+
 future<gms::inet_address> gms::inet_address::lookup(sstring name, opt_family family, opt_family preferred) {
     return seastar::net::dns::get_host_by_name(name, family).then([preferred](seastar::net::hostent&& h) {
         for (auto& addr : h.addr_list) {
