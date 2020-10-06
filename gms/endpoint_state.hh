@@ -72,14 +72,14 @@ public:
                _is_alive          == other._is_alive;
     }
 
-    endpoint_state()
+    endpoint_state() noexcept
         : _heart_beat_state(0)
         , _update_timestamp(clk::now())
         , _is_alive(true) {
         update_is_normal();
     }
 
-    endpoint_state(heart_beat_state initial_hb_state)
+    endpoint_state(heart_beat_state initial_hb_state) noexcept
         : _heart_beat_state(initial_hb_state)
         , _update_timestamp(clk::now())
         , _is_alive(true) {
@@ -96,16 +96,16 @@ public:
     }
 
     // Valid only on shard 0
-    heart_beat_state& get_heart_beat_state() {
+    heart_beat_state& get_heart_beat_state() noexcept {
         return _heart_beat_state;
     }
 
     // Valid only on shard 0
-    const heart_beat_state& get_heart_beat_state() const {
+    const heart_beat_state& get_heart_beat_state() const noexcept {
         return _heart_beat_state;
     }
 
-    void set_heart_beat_state_and_update_timestamp(heart_beat_state hbs) {
+    void set_heart_beat_state_and_update_timestamp(heart_beat_state hbs) noexcept {
         update_timestamp();
         _heart_beat_state = hbs;
     }
@@ -116,11 +116,11 @@ public:
      * TODO replace this with operations that don't expose private state
      */
     // @Deprecated
-    std::map<application_state, versioned_value>& get_application_state_map() {
+    std::map<application_state, versioned_value>& get_application_state_map() noexcept {
         return _application_state;
     }
 
-    const std::map<application_state, versioned_value>& get_application_state_map() const {
+    const std::map<application_state, versioned_value>& get_application_state_map() const noexcept {
         return _application_state;
     }
 
@@ -140,27 +140,27 @@ public:
      *
      * Valid only on shard 0.
      */
-    clk::time_point get_update_timestamp() const {
+    clk::time_point get_update_timestamp() const noexcept {
         return _update_timestamp;
     }
 
-    void update_timestamp() {
+    void update_timestamp() noexcept {
         _update_timestamp = clk::now();
     }
 
-    bool is_alive() const {
+    bool is_alive() const noexcept {
         return _is_alive;
     }
 
-    void set_alive(bool alive) {
+    void set_alive(bool alive) noexcept {
         _is_alive = alive;
     }
 
-    void mark_alive() {
+    void mark_alive() noexcept {
         set_alive(true);
     }
 
-    void mark_dead() {
+    void mark_dead() noexcept {
         set_alive(false);
     }
 
@@ -182,7 +182,7 @@ public:
         return get_status() == sstring(versioned_value::SHUTDOWN);
     }
 
-    bool is_normal() const {
+    bool is_normal() const noexcept {
         return _is_normal;
     }
 
