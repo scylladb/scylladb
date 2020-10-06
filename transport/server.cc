@@ -793,8 +793,16 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_st
     std::unique_ptr<cql_server::response> res;
     if (auto& a = client_state.get_auth_service()->underlying_authenticator(); a.require_authentication()) {
         res = make_autheticate(stream, a.qualified_java_name(), trace_state);
+        client_state_notification_f = client_state_notification_f.then([ck = make_client_key(_client_state)] {
+            return std::apply(notify_client_change<changed_column::connection_stage>{},
+                    std::tuple_cat(std::move(ck), std::make_tuple(connection_stage_literal<client_connection_stage::authenticating>)));
+        });
     } else {
         res = make_ready(stream, trace_state);
+        client_state_notification_f = client_state_notification_f.then([ck = make_client_key(_client_state)] {
+            return std::apply(notify_client_change<changed_column::connection_stage>{},
+                    std::tuple_cat(std::move(ck), std::make_tuple(connection_stage_literal<client_connection_stage::ready>)));
+        });
     }
     return client_state_notification_f.then_wrapped([res = std::move(res)] (future<> f) mutable {
         try {
@@ -1156,7 +1164,17 @@ cql_server::connection::process_register(uint16_t stream, request_reader in, ser
         auto et = parse_event_type(event_type);
         _server._notifier->register_event(et, this);
     }
-    return make_ready_future<std::unique_ptr<cql_server::response>>(make_ready(stream, std::move(trace_state)));
+    auto client_state_notification_f = std::apply(notify_client_change<changed_column::connection_stage>{},
+            std::tuple_cat(make_client_key(_client_state), std::make_tuple(connection_stage_literal<client_connection_stage::ready>)));
+
+    return client_state_notification_f.then_wrapped([res = make_ready(stream, std::move(trace_state))] (future<> f) mutable {
+        try {
+            f.get();
+        } catch (...) {
+            clogger.info("exception while setting connection_stage in `system.clients`: {}", std::current_exception());
+        }
+        return std::move(res);
+    });
 }
 
 std::unique_ptr<cql_server::response> cql_server::connection::make_unavailable_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t required, int32_t alive, const tracing::trace_state_ptr& tr_state) const

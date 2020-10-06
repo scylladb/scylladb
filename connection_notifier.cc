@@ -30,18 +30,27 @@ sstring to_string(client_type ct) {
         case client_type::cql: return "cql";
         case client_type::thrift: return "thrift";
         case client_type::alternator: return "alternator";
-        default: throw std::runtime_error("Invalid client_type");
     }
+    throw std::runtime_error("Invalid client_type");
+}
+
+static sstring to_string(client_connection_stage ccs) {
+    switch (ccs) {
+        case client_connection_stage::established: return connection_stage_literal<client_connection_stage::established>;
+        case client_connection_stage::authenticating: return connection_stage_literal<client_connection_stage::authenticating>;
+        case client_connection_stage::ready: return connection_stage_literal<client_connection_stage::ready>;
+    }
+    throw std::runtime_error("Invalid client_connection_stage");
 }
 
 future<> notify_new_client(client_data cd) {
     // FIXME: consider prepared statement
     const static sstring req
-            = format("INSERT INTO system.{} (address, port, client_type, shard_id, protocol_version, username) "
-                     "VALUES (?, ?, ?, ?, ?, ?);", db::system_keyspace::CLIENTS);
+            = format("INSERT INTO system.{} (address, port, client_type, connection_stage, shard_id, protocol_version, username) "
+                     "VALUES (?, ?, ?, ?, ?, ?, ?);", db::system_keyspace::CLIENTS);
     
     return db::execute_cql(req,
-            std::move(cd.ip), cd.port, to_string(cd.ct), cd.shard_id,
+            std::move(cd.ip), cd.port, to_string(cd.ct), to_string(cd.connection_stage), cd.shard_id,
             cd.protocol_version.has_value() ? data_value(*cd.protocol_version) : data_value::make_null(int32_type),
             cd.username.value_or("anonymous")).discard_result();
 }

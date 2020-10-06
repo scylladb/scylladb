@@ -57,17 +57,28 @@ template <> constexpr const char* column_literal<changed_column::driver_version>
 template <> constexpr const char* column_literal<changed_column::hostname> = "hostname";
 template <> constexpr const char* column_literal<changed_column::protocol_version> = "protocol_version";
 
+enum class client_connection_stage {
+    established = 0,
+    authenticating,
+    ready,
+};
+
+template <client_connection_stage ccs> constexpr const char* connection_stage_literal = "";
+template <> constexpr const char* connection_stage_literal<client_connection_stage::established> = "ESTABLISHED";
+template <> constexpr const char* connection_stage_literal<client_connection_stage::authenticating> = "AUTHENTICATING";
+template <> constexpr const char* connection_stage_literal<client_connection_stage::ready> = "READY";
+
 // Representation of a row in `system.clients'. std::optionals are for nullable cells.
 struct client_data {
     net::inet_address ip;
     int32_t port;
     client_type ct;
+    client_connection_stage connection_stage = client_connection_stage::established;
     int32_t shard_id;  /// ID of server-side shard which is processing the connection.
 
     // `optional' column means that it's nullable (possibly because it's
     // unimplemented yet). If you want to fill ("implement") any of them,
     // remember to update the query in `notify_new_client()'.
-    std::optional<sstring> connection_stage;
     std::optional<sstring> driver_name;
     std::optional<sstring> driver_version;
     std::optional<sstring> hostname;
