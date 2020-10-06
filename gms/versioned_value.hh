@@ -90,7 +90,7 @@ public:
     int version;
     sstring value;
 public:
-    bool operator==(const versioned_value& other) const {
+    bool operator==(const versioned_value& other) const noexcept {
         return version == other.version &&
                value   == other.value;
     }
@@ -107,15 +107,15 @@ public:
 #endif
     }
 
-    versioned_value(sstring&& value, int version = version_generator::get_next_version())
+    versioned_value(sstring&& value, int version = version_generator::get_next_version()) noexcept
         : version(version), value(std::move(value)) {
     }
 
-    versioned_value()
+    versioned_value() noexcept
         : version(-1) {
     }
 
-    int compare_to(const versioned_value &value) {
+    int compare_to(const versioned_value &value) const noexcept {
         return version - value.version;
     }
 
@@ -137,7 +137,7 @@ public:
     // Reverse of `make_cdc_streams_timestamp_string`.
     static std::optional<db_clock::time_point> cdc_streams_timestamp_from_string(const sstring&);
 
-    static versioned_value clone_with_higher_version(const versioned_value& value) {
+    static versioned_value clone_with_higher_version(const versioned_value& value) noexcept {
         return versioned_value(value.value);
     }
 

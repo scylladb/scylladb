@@ -40,6 +40,9 @@
 
 namespace gms {
 
+static_assert(std::is_nothrow_default_constructible_v<versioned_value>);
+static_assert(std::is_nothrow_move_constructible_v<versioned_value>);
+
 constexpr char versioned_value::DELIMITER;
 constexpr const char versioned_value::DELIMITER_STR[];
 constexpr const char* versioned_value::STATUS_UNKNOWN;
