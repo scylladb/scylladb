@@ -163,8 +163,8 @@ public:
         : _sem(reader_concurrency_semaphore::no_limits{})
         , _cache(cache_size, entry_ttl)
         , _mutations(make_mutations(_s, external_make_value))
-        , _mutation_source([this] (schema_ptr, reader_permit, const dht::partition_range& range) {
-            auto rd = flat_mutation_reader_from_mutations(tests::make_permit(), _mutations, range);
+        , _mutation_source([this] (schema_ptr, reader_permit permit, const dht::partition_range& range) {
+            auto rd = flat_mutation_reader_from_mutations(std::move(permit), _mutations, range);
             rd.set_max_buffer_size(max_reader_buffer_size);
             return rd;
         }) {
