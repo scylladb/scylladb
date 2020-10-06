@@ -181,16 +181,16 @@ public:
         return std::string_view(value.c_str(), pos);
     }
 
-    bool is_shutdown() const {
-        return get_status() == sstring(versioned_value::SHUTDOWN);
+    bool is_shutdown() const noexcept {
+        return get_status() == versioned_value::SHUTDOWN;
     }
 
     bool is_normal() const noexcept {
         return _is_normal;
     }
 
-    void update_is_normal() {
-        _is_normal = get_status() == sstring(versioned_value::STATUS_NORMAL);
+    void update_is_normal() noexcept {
+        _is_normal = get_status() == versioned_value::STATUS_NORMAL;
     }
 
     bool is_cql_ready() const noexcept;
