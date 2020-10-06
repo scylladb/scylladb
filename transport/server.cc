@@ -601,6 +601,8 @@ client_data cql_server::connection::make_client_data() const {
     std::tie(cd.ip, cd.port, cd.ct) = make_client_key(_client_state);
     cd.shard_id = this_shard_id();
     cd.protocol_version = _version;
+    cd.driver_name = _client_state.get_driver_name();
+    cd.driver_version = _client_state.get_driver_version();
     if (const auto user_ptr = _client_state.user(); user_ptr) {
         cd.username = user_ptr->name;
     }
@@ -766,6 +768,21 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_st
              throw exceptions::protocol_exception(format("Unknown compression algorithm: {}", compression));
          }
     }
+
+    auto client_state_notification_f = make_ready_future<>();
+    if (auto driver_ver_opt = options.find("DRIVER_VERSION"); driver_ver_opt != options.end()) {
+        _client_state.set_driver_version(driver_ver_opt->second);
+        client_state_notification_f = std::apply(notify_client_change<changed_column::driver_version>{},
+                std::tuple_cat(make_client_key(_client_state), std::make_tuple(driver_ver_opt->second)));
+    }
+    if (auto driver_name_opt = options.find("DRIVER_NAME"); driver_name_opt != options.end()) {
+        _client_state.set_driver_name(driver_name_opt->second);
+        client_state_notification_f = client_state_notification_f.then([ck = make_client_key(_client_state), dn = driver_name_opt->second] {
+            return std::apply(notify_client_change<changed_column::driver_name>{},
+                    std::tuple_cat(std::move(ck), std::forward_as_tuple(dn)));
+        });
+    }
+
     cql_protocol_extension_enum_set cql_proto_exts;
     for (cql_protocol_extension ext : supported_cql_protocol_extensions()) {
         if (options.contains(protocol_extension_name(ext))) {
@@ -773,11 +790,20 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_st
         }
     }
     _client_state.set_protocol_extensions(std::move(cql_proto_exts));
-    auto& a = client_state.get_auth_service()->underlying_authenticator();
-    if (a.require_authentication()) {
-        return make_ready_future<std::unique_ptr<cql_server::response>>(make_autheticate(stream, a.qualified_java_name(), trace_state));
+    std::unique_ptr<cql_server::response> res;
+    if (auto& a = client_state.get_auth_service()->underlying_authenticator(); a.require_authentication()) {
+        res = make_autheticate(stream, a.qualified_java_name(), trace_state);
+    } else {
+        res = make_ready(stream, trace_state);
     }
-    return make_ready_future<std::unique_ptr<cql_server::response>>(make_ready(stream, trace_state));
+    return client_state_notification_f.then_wrapped([res = std::move(res)] (future<> f) mutable {
+        try {
+            f.get();
+        } catch (...) {
+            clogger.info("exception while setting driver_name/version in `system.clients`: {}", std::current_exception());
+        }
+        return std::move(res);
+    });
 }
 
 future<std::unique_ptr<cql_server::response>> cql_server::connection::process_auth_response(uint16_t stream, request_reader in, service::client_state& client_state,
