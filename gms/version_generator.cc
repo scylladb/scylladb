@@ -44,7 +44,7 @@ namespace version_generator {
 // For us, we run the gossiper on a single CPU, and don't need to use atomics.
 static int version = 0;
 
-int get_next_version()
+int get_next_version() noexcept
 {
     return ++version;
 }
