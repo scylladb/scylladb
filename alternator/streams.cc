@@ -87,16 +87,18 @@ struct rapidjson::internal::TypeHelper<ValueType, utils::UUID>
     : public from_string_helper<ValueType, utils::UUID>
 {};
 
+static db_clock::time_point as_timepoint(const utils::UUID& uuid) {
+    return db_clock::time_point{std::chrono::milliseconds(utils::UUID_gen::get_adjusted_timestamp(uuid))};
+}
+
 /**
  * Note: scylla tables do not have a timestamp as such, 
  * but the UUID (for newly created tables at least) is 
  * a timeuuid, so we can use this to fake creation timestamp
  */
 static sstring stream_label(const schema& log_schema) {
-    auto& uuid = log_schema.id();
-    auto ms = utils::UUID_gen::get_adjusted_timestamp(uuid);
-    std::chrono::system_clock::time_point ts{std::chrono::milliseconds(ms)};
-    auto tt = std::chrono::system_clock::to_time_t(ts);
+    auto ts = as_timepoint(log_schema.id());
+    auto tt = db_clock::to_time_t(ts);
     struct tm tm;
     ::localtime_r(&tt, &tm);
     return seastar::json::formatter::to_json(tm);
@@ -406,6 +408,9 @@ static std::chrono::seconds confidence_interval(const database& db) {
     return std::chrono::seconds(db.get_config().alternator_streams_time_window_s());
 }
 
+// Dynamo docs says no data shall live longer than 24h.
+static constexpr auto dynamodb_streams_max_window = 24h;
+
 future<executor::request_return_type> executor::describe_stream(client_state& client_state, service_permit permit, rjson::value request) {
     _stats.api_operations.describe_stream++;
 
@@ -479,10 +484,18 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
     // or on expired...
     // TODO: maybe add secondary index to topology table to enable this?
     return _sdks.cdc_get_versioned_streams({ tm.count_normal_token_owners() }).then([this, &db, schema, shard_start, limit, ret = std::move(ret), stream_desc = std::move(stream_desc)](std::map<db_clock::time_point, cdc::streams_version> topologies) mutable {
-        auto i = topologies.begin();
+
+        // filter out cdc generations older than the table or now() - dynamodb_streams_max_window (24h)
+        auto low_ts = std::max(as_timepoint(schema->id()), db_clock::now() - dynamodb_streams_max_window);
+
+        auto i = topologies.lower_bound(low_ts);
+        // need first gen _intersecting_ the timestamp.
+        if (i != topologies.begin()) {
+            i = std::prev(i);
+        }
+
         auto e = topologies.end();
         auto prev = e;
-        auto threshold = db_clock::now() - confidence_interval(db);
         auto shards = rjson::empty_array();
 
         std::optional<shard_id> last;
