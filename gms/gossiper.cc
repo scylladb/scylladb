@@ -75,7 +75,7 @@ constexpr int64_t gossiper::MAX_GENERATION_DIFFERENCE;
 
 distributed<gossiper> _the_gossiper;
 
-netw::msg_addr gossiper::get_msg_addr(inet_address to) {
+netw::msg_addr gossiper::get_msg_addr(inet_address to) const noexcept {
     return msg_addr{to, _default_cpuid};
 }
 
