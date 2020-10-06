@@ -110,7 +110,7 @@ public:
         _heart_beat_state = hbs;
     }
 
-    const versioned_value* get_application_state_ptr(application_state key) const;
+    const versioned_value* get_application_state_ptr(application_state key) const noexcept;
 
     /**
      * TODO replace this with operations that don't expose private state
@@ -190,7 +190,7 @@ public:
         _is_normal = get_status() == sstring(versioned_value::STATUS_NORMAL);
     }
 
-    bool is_cql_ready() const;
+    bool is_cql_ready() const noexcept;
 
     friend std::ostream& operator<<(std::ostream& os, const endpoint_state& x);
 };
