@@ -42,6 +42,10 @@
 
 namespace gms {
 
+static_assert(!std::is_default_constructible_v<heart_beat_state>);
+static_assert(std::is_nothrow_copy_constructible_v<heart_beat_state>);
+static_assert(std::is_nothrow_move_constructible_v<heart_beat_state>);
+
 const versioned_value* endpoint_state::get_application_state_ptr(application_state key) const {
     auto it = _application_state.find(key);
     if (it == _application_state.end()) {
