@@ -243,6 +243,9 @@ def test_get_shard_iterator(dynamodb, dynamodbstreams):
         shard_id = desc['StreamDescription']['Shards'][0]['ShardId'];
         seq = desc['StreamDescription']['Shards'][0]['SequenceNumberRange']['StartingSequenceNumber'];
 
+        # spec says shard_id must be 65 chars or less
+        assert len(shard_id) <= 65
+
         for type in ['AT_SEQUENCE_NUMBER', 'AFTER_SEQUENCE_NUMBER']: 
             iter = dynamodbstreams.get_shard_iterator(
                 StreamArn=arn, ShardId=shard_id, ShardIteratorType=type, SequenceNumber=seq

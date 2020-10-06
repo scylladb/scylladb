@@ -223,21 +223,20 @@ future<alternator::executor::request_return_type> alternator::executor::list_str
 struct shard_id {
     static constexpr auto marker = 'H';
 
-    utils::UUID table;
     db_clock::time_point time;
     cdc::stream_id id;
 
-    shard_id(utils::UUID tab, db_clock::time_point t, cdc::stream_id i)
-        : table(tab)
-        , time(t)
+    shard_id(db_clock::time_point t, cdc::stream_id i)
+        : time(t)
         , id(i)
     {}
     shard_id(const sstring&);
 
+    // dynamo specifies shardid as max 65 chars. 
     friend std::ostream& operator<<(std::ostream& os, const shard_id& id) {
         boost::io::ios_flags_saver fs(os);
-        return os << marker << id.table << std::hex
-            << ':' << id.time.time_since_epoch().count()
+        return os << marker << std::hex  
+            << id.time.time_since_epoch().count()
             << ':' << id.id.to_bytes()
             ;
     }
@@ -245,15 +244,13 @@ struct shard_id {
 
 shard_id::shard_id(const sstring& s) {
     auto i = s.find(':');
-    auto j = s.find(':', i + 1);
 
-    if (s.at(0) != marker || i == sstring::npos || j == sstring::npos) {
+    if (s.at(0) != marker || i == sstring::npos) {
         throw std::invalid_argument(s);
     }
 
-    table = utils::UUID(s.substr(1, i));
-    time = db_clock::time_point(db_clock::duration(std::stoull(s.substr(i + 1, j), nullptr, 16)));
-    id = cdc::stream_id(from_hex(s.substr(j + 1)));
+    time = db_clock::time_point(db_clock::duration(std::stoull(s.substr(1, i - 1), nullptr, 16)));
+    id = cdc::stream_id(from_hex(s.substr(i + 1)));
 }
 
 struct sequence_number {
@@ -523,11 +520,11 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
                         return t < id.token();
                     });
                     if (pid != pids.end()) {
-                        rjson::set(shard, "ParentShardId", shard_id(schema->id(), prev->first, *pid));
+                        rjson::set(shard, "ParentShardId", shard_id(prev->first, *pid));
                     }
                 }
 
-                last = shard_id(schema->id(), ts, id);
+                last.emplace(ts, id);
                 rjson::set(shard, "ShardId", *last);
 
                 auto range = rjson::empty_object();
@@ -598,44 +595,39 @@ struct shard_iterator {
     static auto constexpr inclusive_marker = 'I';
     static auto constexpr exclusive_marker = 'i';
 
-    shard_id shard;
+    static auto constexpr uuid_str_length = 36;
+
+    utils::UUID table;
     utils::UUID threshold;
+    shard_id shard;
     bool inclusive;
 
-    shard_iterator(shard_id i, utils::UUID th, bool inclusive)
-        : shard(i)
-        , threshold(th)
-        , inclusive(inclusive)
-    {}
-    shard_iterator(utils::UUID arn, db_clock::time_point ts, cdc::stream_id i, utils::UUID th, bool inclusive)
-        : shard(arn, ts, i)
-        , threshold(th)
-        , inclusive(inclusive)
-    {}
     shard_iterator(const sstring&);
 
+    shard_iterator(utils::UUID t, shard_id i, utils::UUID th, bool inclusive)
+        : table(t)
+        , threshold(th)
+        , shard(i)
+        , inclusive(inclusive)
+    {}
     friend std::ostream& operator<<(std::ostream& os, const shard_iterator& id) {
-        boost::io::ios_flags_saver fs(os);
-        return os << (id.inclusive ? inclusive_marker : exclusive_marker) << std::hex << id.threshold
+        return os << (id.inclusive ? inclusive_marker : exclusive_marker) << std::hex
+            << id.table
+            << ':' << id.threshold
             << ':' << id.shard
             ;
     }
-private:
-    shard_iterator(const sstring&, size_t);
 };
 
 shard_iterator::shard_iterator(const sstring& s) 
-    : shard_iterator(s, s.find(':'))
-{}
-
-shard_iterator::shard_iterator(const sstring& s, size_t i)
-    : shard(s.substr(i + 1))
-    , threshold(s.substr(1, i))
+    : table(s.substr(1, uuid_str_length))
+    , threshold(s.substr(2 + uuid_str_length, uuid_str_length))
+    , shard(s.substr(3 + 2 * uuid_str_length))
+    , inclusive(s.at(0) == inclusive_marker)
 {
-    if ((s.at(0) != inclusive_marker && s.at(0) != exclusive_marker) || i == sstring::npos) {
+    if (s.at(0) != inclusive_marker && s.at(0) != exclusive_marker) {
         throw std::invalid_argument(s);
     }
-    inclusive = (s[0] == inclusive_marker);
 }
 }
 
@@ -676,8 +668,11 @@ future<executor::request_return_type> executor::get_shard_iterator(client_state&
         sid = rjson::get<shard_id>(request, "ShardId");
     } catch (...) {
     }
-    if (!schema || !cdc::get_base_table(db, *schema) || !is_alternator_keyspace(schema->ks_name()) || sid->table != schema->id()) {
+    if (!schema || !cdc::get_base_table(db, *schema) || !is_alternator_keyspace(schema->ks_name())) {
         throw api_error::resource_not_found("Invalid StreamArn");
+    }
+    if (!sid) {
+        throw api_error::resource_not_found("Invalid ShardId");
     }
 
     utils::UUID threshold;
@@ -693,6 +688,8 @@ future<executor::request_return_type> executor::get_shard_iterator(client_state&
             inclusive_of_threshold = false;
             break;
         case shard_iterator_type::TRIM_HORIZON:
+            // zero UUID - lowest possible timestamp. Include all
+            // data not ttl:ed away.
             threshold = utils::UUID{};
             inclusive_of_threshold = true;
             break;
@@ -702,7 +699,7 @@ future<executor::request_return_type> executor::get_shard_iterator(client_state&
             break;
     }
 
-    shard_iterator iter(*sid, threshold, inclusive_of_threshold);
+    shard_iterator iter(stream_arn, *sid, threshold, inclusive_of_threshold);
 
     auto ret = rjson::empty_object();
     rjson::set(ret, "ShardIterator", iter);
@@ -751,14 +748,14 @@ future<executor::request_return_type> executor::get_records(client_state& client
     auto& db = _proxy.get_db().local();
     schema_ptr schema, base;
     try {
-        auto& log_table = db.find_column_family(iter.shard.table);
+        auto& log_table = db.find_column_family(iter.table);
         schema = log_table.schema();
         base = cdc::get_base_table(db, *schema);
     } catch (...) {        
     }
 
     if (!schema || !base || !is_alternator_keyspace(schema->ks_name())) {
-        throw api_error::resource_not_found(boost::lexical_cast<std::string>(iter.shard.table));
+        throw api_error::resource_not_found(boost::lexical_cast<std::string>(iter.table));
     }
 
     tracing::add_table_name(trace_state, schema->ks_name(), schema->cf_name());
@@ -932,7 +929,7 @@ future<executor::request_return_type> executor::get_records(client_state& client
 
         if (nrecords != 0) {
             // #9642. Set next iterators threshold to > last
-            shard_iterator next_iter(iter.shard, *timestamp, false);
+            shard_iterator next_iter(iter.table, iter.shard, *timestamp, false);
             // Note that here we unconditionally return NextShardIterator,
             // without checking if maybe we reached the end-of-shard. If the
             // shard did end, then the next read will have nrecords == 0 and
@@ -956,7 +953,7 @@ future<executor::request_return_type> executor::get_records(client_state& client
                 // a search from it until high_ts and found nothing, so we
                 // can also start the next search from high_ts.
                 // TODO: but why? It's simpler just to leave the iterator be.
-                shard_iterator next_iter(iter.shard, utils::UUID_gen::min_time_UUID(high_ts.time_since_epoch().count()), true);
+                shard_iterator next_iter(iter.table, iter.shard, utils::UUID_gen::min_time_UUID(high_ts.time_since_epoch().count()), true);
                 rjson::set(ret, "NextShardIterator", iter);
             }
             _stats.api_operations.get_records_latency.add(std::chrono::steady_clock::now() - start_time);
