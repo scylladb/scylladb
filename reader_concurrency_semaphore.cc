@@ -103,6 +103,10 @@ public:
             _semaphore.signal(res);
         }
     }
+
+    reader_resources resources() const {
+        return _resources;
+    }
 };
 
 reader_permit::reader_permit(reader_concurrency_semaphore& semaphore)
@@ -138,6 +142,10 @@ reader_permit::resource_units reader_permit::consume_memory(size_t memory) {
 
 reader_permit::resource_units reader_permit::consume_resources(reader_resources res) {
     return resource_units(*this, res);
+}
+
+reader_resources reader_permit::consumed_resources() const {
+    return _impl->resources();
 }
 
 void reader_concurrency_semaphore::signal(const resources& r) noexcept {

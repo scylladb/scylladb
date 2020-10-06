@@ -280,11 +280,7 @@ public:
         virtual future<> fast_forward_to(const dht::partition_range&, db::timeout_clock::time_point timeout) = 0;
         virtual future<> fast_forward_to(position_range, db::timeout_clock::time_point timeout) = 0;
 
-        // Altough for most cases this is a mere getter some readers might have
-        // one or more subreaders and will need to account for their buffer-size
-        // as well so we need to allow these readers to override the default
-        // implementation.
-        virtual size_t buffer_size() const {
+        size_t buffer_size() const {
             return _buffer_size;
         }
 
@@ -587,9 +583,6 @@ flat_mutation_reader transform(flat_mutation_reader r, T t) {
             _end_of_stream = false;
             return _reader.fast_forward_to(std::move(pr), timeout);
         }
-        virtual size_t buffer_size() const override {
-            return flat_mutation_reader::impl::buffer_size() + _reader.buffer_size();
-        }
     };
     return make_flat_mutation_reader<transforming_reader>(std::move(r), std::move(t));
 }
@@ -627,9 +620,6 @@ public:
         _end_of_stream = false;
         clear_buffer();
         return to_reference(_underlying).fast_forward_to(pr, timeout);
-    }
-    virtual size_t buffer_size() const override {
-        return flat_mutation_reader::impl::buffer_size() + to_reference(_underlying).buffer_size();
     }
 };
 flat_mutation_reader make_delegating_reader(flat_mutation_reader&);

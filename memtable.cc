@@ -487,12 +487,6 @@ public:
     virtual future<> fast_forward_to(position_range cr, db::timeout_clock::time_point timeout) override {
         throw std::runtime_error("This reader can't be fast forwarded to another partition.");
     };
-    virtual size_t buffer_size() const override {
-        if (_delegate) {
-            return flat_mutation_reader::impl::buffer_size() + _delegate->buffer_size();
-        }
-        return flat_mutation_reader::impl::buffer_size();
-    }
 };
 
 void memtable::add_flushed_memory(uint64_t delta) {
@@ -644,12 +638,6 @@ public:
     }
     virtual future<> fast_forward_to(position_range, db::timeout_clock::time_point timeout) override {
         return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
-    }
-    virtual size_t buffer_size() const override {
-        if (_partition_reader) {
-            return flat_mutation_reader::impl::buffer_size() + _partition_reader->buffer_size();
-        }
-        return flat_mutation_reader::impl::buffer_size();
     }
 };
 

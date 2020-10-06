@@ -294,13 +294,6 @@ future<> size_estimates_mutation_reader::fast_forward_to(position_range pr, db::
     return make_ready_future<>();
 }
 
-size_t size_estimates_mutation_reader::buffer_size() const {
-    if (_partition_reader) {
-        return flat_mutation_reader::impl::buffer_size() + _partition_reader->buffer_size();
-    }
-    return flat_mutation_reader::impl::buffer_size();
-}
-
 std::vector<db::system_keyspace::range_estimates>
 size_estimates_mutation_reader::estimates_for_current_keyspace(const database& db, std::vector<token_range> local_ranges) const {
     // For each specified range, estimate (crudely) mean partition size and partitions count.

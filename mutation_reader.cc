@@ -49,7 +49,6 @@ concept FragmentProducer = requires(Producer p, dht::partition_range part_range,
     { p.next_partition() };
     { p.fast_forward_to(part_range, timeout) } -> std::same_as<future<>>;
     { p.fast_forward_to(pos_range, timeout) } -> std::same_as<future<>>;
-    { p.buffer_size() } -> std::same_as<size_t>;
 };
 
 /**
@@ -128,10 +127,6 @@ public:
 
     future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) {
         return _producer.fast_forward_to(std::move(pr), timeout);
-    }
-
-    size_t buffer_size() const {
-        return _producer.buffer_size();
     }
 };
 
@@ -236,7 +231,6 @@ public:
     void next_partition();
     future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout);
     future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout);
-    size_t buffer_size() const;
 };
 
 // Combines multiple mutation_readers into one.
@@ -256,7 +250,6 @@ public:
     virtual void next_partition() override;
     virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override;
     virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) override;
-    virtual size_t buffer_size() const override;
 };
 
 // Dumb selector implementation for combined_mutation_reader that simply
@@ -562,10 +555,6 @@ future<> mutation_reader_merger::fast_forward_to(position_range pr, db::timeout_
     });
 }
 
-size_t mutation_reader_merger::buffer_size() const {
-    return boost::accumulate(_all_readers | boost::adaptors::transformed(std::mem_fn(&flat_mutation_reader::buffer_size)), size_t(0));
-}
-
 combined_mutation_reader::combined_mutation_reader(schema_ptr schema,
         reader_permit permit,
         std::unique_ptr<reader_selector> selector,
@@ -621,10 +610,6 @@ future<> combined_mutation_reader::fast_forward_to(position_range pr, db::timeou
     forward_buffer_to(pr.start());
     _end_of_stream = false;
     return _producer.fast_forward_to(std::move(pr), timeout);
-}
-
-size_t combined_mutation_reader::buffer_size() const {
-    return flat_mutation_reader::impl::buffer_size() + _producer.buffer_size();
 }
 
 flat_mutation_reader make_combined_reader(schema_ptr schema,
@@ -762,13 +747,6 @@ public:
         return with_reader([pr = std::move(pr), timeout] (flat_mutation_reader& reader) mutable {
             return reader.fast_forward_to(std::move(pr), timeout);
         }, timeout);
-    }
-    virtual size_t buffer_size() const override {
-        auto buffer_size = flat_mutation_reader::impl::buffer_size();
-        if (auto* state = std::get_if<admitted_state>(&_state)) {
-            buffer_size += state->reader.buffer_size();
-        }
-        return buffer_size;
     }
 };
 
@@ -2274,9 +2252,6 @@ public:
     }
     virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) override {
         return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
-    }
-    virtual size_t buffer_size() const override {
-        return flat_mutation_reader::impl::buffer_size() + _reader.buffer_size();
     }
 };
 
