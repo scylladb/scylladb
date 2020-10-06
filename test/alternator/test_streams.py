@@ -1270,7 +1270,7 @@ def test_stream_specification(test_table_stream_with_result, dynamodbstreams):
 @pytest.mark.xfail(reason="disabled stream is deleted - issue #7239")
 def test_streams_closed_read(test_table_ss_keys_only, dynamodbstreams):
     table, arn = test_table_ss_keys_only
-    iterators = latest_iterators(dynamodbstreams, arn)
+    shards_and_iterators = shards_and_latest_iterators(dynamodbstreams, arn)
     # Do an UpdateItem operation that is expected to leave one event in the
     # stream.
     table.update_item(Key={'p': random_string(), 'c': random_string()},
@@ -1286,7 +1286,7 @@ def test_streams_closed_read(test_table_ss_keys_only, dynamodbstreams):
     # eventually *one* of the stream shards will return one event:
     timeout = time.time() + 15
     while time.time() < timeout:
-        for iter in iterators:
+        for (shard_id, iter) in shards_and_iterators:
             response = dynamodbstreams.get_records(ShardIterator=iter)
             if 'Records' in response and response['Records'] != []:
                 # Found the shard with the data! Test that it only has
@@ -1301,10 +1301,105 @@ def test_streams_closed_read(test_table_ss_keys_only, dynamodbstreams):
                     response = dynamodbstreams.get_records(ShardIterator=response['NextShardIterator'])
                     assert len(response['Records']) == 0
                     assert not 'NextShardIterator' in response
+                # Until now we verified that we can read the closed shard
+                # using an old iterator. Let's test now that the closed
+                # shard id is also still valid, and a new iterator can be
+                # created for it, and the old data can be read from it:
+                iter = dynamodbstreams.get_shard_iterator(StreamArn=arn,
+                    ShardId=shard_id, ShardIteratorType='TRIM_HORIZON')['ShardIterator']
+                response = dynamodbstreams.get_records(ShardIterator=iter)
+                assert len(response['Records']) == 1
                 return
         time.sleep(0.5)
     pytest.fail("timed out")
 
+# In the above test (test_streams_closed_read) we used a disabled stream as
+# a means to generate a closed shard, and tested the behavior of that closed
+# shard. In the following test, we do more extensive testing on the the
+# behavior of a disabled stream and verify that it is sill usable (for 24
+# hours), reproducing issue #7239: The disabled stream's ARN should still be
+# listed for the table, this ARN should continue to work, listing the
+# stream's shards should give an indication that they are all closed - but
+# all these shards should still be readable.
+@pytest.mark.xfail(reason="disabled stream is deleted - issue #7239")
+def test_streams_disabled_stream(test_table_ss_keys_only, dynamodbstreams):
+    table, arn = test_table_ss_keys_only
+    iterators = latest_iterators(dynamodbstreams, arn)
+    # Do an UpdateItem operation that is expected to leave one event in the
+    # stream.
+    table.update_item(Key={'p': random_string(), 'c': random_string()},
+        UpdateExpression='SET x = :x', ExpressionAttributeValues={':x': 5})
+
+    # Wait for this one update to become available in the stream before we
+    # disable the stream. Otherwise, theoretically (although unlikely in
+    # practice) we may disable the stream before the update was saved to it.
+    timeout = time.time() + 15
+    found = False
+    while time.time() < timeout and not found:
+        for iter in iterators:
+            response = dynamodbstreams.get_records(ShardIterator=iter)
+            if 'Records' in response and len(response['Records']) > 0:
+                found = True
+                break
+        time.sleep(0.5)
+    assert found
+
+    # Disable streaming for this table. Note that the test_table_ss_keys_only
+    # fixture has "function" scope so it is fine to ruin table, it will not
+    # be used in other tests.
+    disable_stream(dynamodbstreams, table)
+
+    # Check that the stream ARN which we previously got for the disabled
+    # stream is still listed by ListStreams
+    arns = [stream['StreamArn'] for stream in dynamodbstreams.list_streams(TableName=table.name)['Streams']]
+    assert arn in arns
+
+    # DescribeStream on the disabled stream still works and lists its shards.
+    # All these shards are listed as being closed (i.e., should have
+    # EndingSequenceNumber). The basic details of the stream (e.g., the view
+    # type) are available and the status of the stream is DISABLED.
+    response = dynamodbstreams.describe_stream(StreamArn=arn)['StreamDescription']
+    assert response['StreamStatus'] == 'DISABLED'
+    assert response['StreamViewType'] == 'KEYS_ONLY'
+    assert response['TableName'] == table.name
+    shards_info = response['Shards']
+    while 'LastEvaluatedShardId' in response:
+        response = dynamodbstreams.describe_stream(StreamArn=arn, ExclusiveStartShardId=response['LastEvaluatedShardId'])['StreamDescription']
+        assert response['StreamStatus'] == 'DISABLED'
+        assert response['StreamViewType'] == 'KEYS_ONLY'
+        assert response['TableName'] == table.name
+        shards_info.extend(response['Shards'])
+    print('Number of shards in stream: {}'.format(len(shards_info)))
+    for shard in shards_info:
+        assert 'EndingSequenceNumber' in shard['SequenceNumberRange']
+        assert shard['SequenceNumberRange']['EndingSequenceNumber'].isdecimal()
+
+    # We can get TRIM_HORIZON iterators for all these shards, to read all
+    # the old data they still have (this data should be saved for 24 hours
+    # after the stream was disabled)
+    iterators = []
+    for shard in shards_info:
+        iterators.append(dynamodbstreams.get_shard_iterator(StreamArn=arn,
+            ShardId=shard['ShardId'], ShardIteratorType='TRIM_HORIZON')['ShardIterator'])
+
+    # We can read the one change we did in one of these iterators. The data
+    # should be available immediately - no need for retries with timeout.
+    nrecords = 0
+    for iter in iterators:
+        response = dynamodbstreams.get_records(ShardIterator=iter)
+        if 'Records' in response:
+            nrecords += len(response['Records'])
+        # The shard is closed, so NextShardIterator should either be missing
+        # now,  indicating that it is a closed shard (DynamoDB does this),
+        # or, it may (and currently does in Alternator) return an iterator
+        # and reading from *that* iterator should then tell us that
+        # we reached the end of the shard (i.e., zero results and
+        # missing NextShardIterator).
+        if 'NextShardIterator' in response:
+            response = dynamodbstreams.get_records(ShardIterator=response['NextShardIterator'])
+            assert len(response['Records']) == 0
+            assert not 'NextShardIterator' in response
+    assert nrecords == 1
 
 # TODO: tests on multiple partitions
 # TODO: write a test that disabling the stream and re-enabling it works, but
