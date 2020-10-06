@@ -102,9 +102,9 @@ future<> tracing::create_tracing(const backend_registry& br, sstring tracing_bac
     return tracing_instance().start(std::ref(br), std::move(tracing_backend_class_name));
 }
 
-future<> tracing::start_tracing() {
-    return tracing_instance().invoke_on_all([] (tracing& local_tracing) {
-        return local_tracing.start();
+future<> tracing::start_tracing(sharded<cql3::query_processor>& qp) {
+    return tracing_instance().invoke_on_all([&qp] (tracing& local_tracing) {
+        return local_tracing.start(qp.local());
     });
 }
 
@@ -146,7 +146,7 @@ trace_state_ptr tracing::create_session(const trace_info& secondary_session_info
     }
 }
 
-future<> tracing::start() {
+future<> tracing::start(cql3::query_processor& qp) {
     try {
         _tracing_backend_helper_ptr = _backend_registry.create_backend(_tracing_backend_helper_class_name, *this);
     } catch (no_such_tracing_backend& e) {
@@ -156,7 +156,7 @@ future<> tracing::start() {
         throw;
     }
 
-    return _tracing_backend_helper_ptr->start().then([this] {
+    return _tracing_backend_helper_ptr->start(qp).then([this] {
         _down = false;
         _write_timer.arm(write_period);
     });

@@ -53,6 +53,8 @@
 #include "log.hh"
 #include "seastarx.hh"
 
+namespace cql3 { class query_processor; }
+
 namespace tracing {
 
 using elapsed_clock = std::chrono::steady_clock;
@@ -176,7 +178,7 @@ protected:
 public:
     i_tracing_backend_helper(tracing& tr) : _local_tracing(tr) {}
     virtual ~i_tracing_backend_helper() {}
-    virtual future<> start() = 0;
+    virtual future<> start(cql3::query_processor& qp) = 0;
     virtual future<> stop() = 0;
 
     /**
@@ -431,11 +433,11 @@ public:
     }
 
     static future<> create_tracing(const backend_registry& br, sstring tracing_backend_helper_class_name);
-    static future<> start_tracing();
+    static future<> start_tracing(sharded<cql3::query_processor>& qp);
     tracing(const backend_registry& br, sstring tracing_backend_helper_class_name);
 
     // Initialize a tracing backend (e.g. tracing_keyspace or logstash)
-    future<> start();
+    future<> start(cql3::query_processor& qp);
 
     future<> stop();
 
