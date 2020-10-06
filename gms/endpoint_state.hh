@@ -164,18 +164,21 @@ public:
         set_alive(false);
     }
 
-    sstring get_status() const {
+    std::string_view get_status() const noexcept {
+        constexpr std::string_view empty = "";
         auto* app_state = get_application_state_ptr(application_state::STATUS);
         if (!app_state) {
-            return "";
+            return empty;
         }
-        auto value = app_state->value;
-        std::vector<sstring> pieces;
-        boost::split(pieces, value, boost::is_any_of(","));
-        if (pieces.empty()) {
-            return "";
+        const auto& value = app_state->value;
+        if (value.empty()) {
+            return empty;
         }
-        return pieces[0];
+        auto pos = value.find(',');
+        if (pos == sstring::npos) {
+            return std::string_view(value);
+        }
+        return std::string_view(value.c_str(), pos);
     }
 
     bool is_shutdown() const {
