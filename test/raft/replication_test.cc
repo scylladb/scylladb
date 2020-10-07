@@ -158,7 +158,7 @@ future<std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>> cr
     std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>> rafts;
 
     for (size_t i = 0; i < states.size(); i++) {
-        auto uuid = utils::make_random_uuid();
+        auto uuid = utils::UUID(0, i + 1);   // Custom sequential debug id; 0 is invalid
         config.servers.push_back(raft::server_address{uuid});
     }
 
