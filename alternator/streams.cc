@@ -1029,6 +1029,7 @@ void executor::add_stream_options(const rjson::value& stream_specification, sche
         cdc::options opts;
         opts.enabled(true);
         opts.set_delta_mode(cdc::delta_mode::keys);
+        opts.ttl(std::chrono::duration_cast<std::chrono::seconds>(dynamodb_streams_max_window).count());
 
         auto type = rjson::get_opt<stream_view_type>(stream_specification, "StreamViewType").value_or(stream_view_type::KEYS_ONLY);
         switch (type) {
