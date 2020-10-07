@@ -36,6 +36,8 @@ class large_data_handler {
 public:
     struct stats {
         int64_t partitions_bigger_than_threshold = 0; // number of large partition updates exceeding threshold_bytes
+        int64_t rows_bigger_than_threshold = 0; // number of large row updates exceeding threshold_bytes
+        int64_t cells_bigger_than_threshold = 0; // number of large cell updates exceeding threshold_bytes
     };
 
 private:
@@ -91,6 +93,7 @@ public:
             const clustering_key_prefix* clustering_key, uint64_t row_size) {
         assert(running());
         if (__builtin_expect(row_size > _row_threshold_bytes, false)) {
+            ++_stats.rows_bigger_than_threshold;
             return with_sem([&sst, &partition_key, clustering_key, row_size, this] {
                 return record_large_rows(sst, partition_key, clustering_key, row_size);
             });
@@ -104,6 +107,7 @@ public:
             const clustering_key_prefix* clustering_key, const column_definition& cdef, uint64_t cell_size) {
         assert(running());
         if (__builtin_expect(cell_size > _cell_threshold_bytes, false)) {
+            ++_stats.cells_bigger_than_threshold;
             return with_sem([&sst, &partition_key, clustering_key, &cdef, cell_size, this] {
                 return record_large_cells(sst, partition_key, clustering_key, cdef, cell_size);
             });
