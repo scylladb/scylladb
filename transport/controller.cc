@@ -33,12 +33,13 @@ namespace cql_transport {
 
 static logging::logger logger("cql_server_controller");
 
-controller::controller(distributed<database>& db, sharded<auth::service>& auth, sharded<service::migration_notifier>& mn, gms::gossiper& gossiper)
+controller::controller(distributed<database>& db, sharded<auth::service>& auth, sharded<service::migration_notifier>& mn, gms::gossiper& gossiper, sharded<cql3::query_processor>& qp)
     : _ops_sem(1)
     , _db(db)
     , _auth_service(auth)
     , _mnotifier(mn)
-    , _gossiper(gossiper) {
+    , _gossiper(gossiper)
+    , _qp(qp) {
 }
 
 future<> controller::start_server() {
@@ -88,7 +89,7 @@ future<> controller::do_start_server() {
         cql_server_smp_service_group_config.max_nonlocal_requests = 5000;
         cql_server_config.bounce_request_smp_service_group = create_smp_service_group(cql_server_smp_service_group_config).get0();
         const seastar::net::inet_address ip = gms::inet_address::lookup(addr, family, preferred).get0();
-        cserver->start(std::ref(cql3::get_query_processor()), std::ref(_auth_service), std::ref(_mnotifier), cql_server_config).get();
+        cserver->start(std::ref(_qp), std::ref(_auth_service), std::ref(_mnotifier), cql_server_config).get();
         struct listen_cfg {
             socket_address addr;
             bool is_shard_aware;

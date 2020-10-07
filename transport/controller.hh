@@ -32,6 +32,7 @@ class database;
 namespace auth { class service; }
 namespace service { class migration_notifier; }
 namespace gms { class gossiper; }
+namespace cql3 { class query_processor; }
 
 namespace cql_transport {
 
@@ -44,13 +45,14 @@ class controller {
     sharded<auth::service>& _auth_service;
     sharded<service::migration_notifier>& _mnotifier;
     gms::gossiper& _gossiper;
+    sharded<cql3::query_processor>& _qp;
 
     future<> set_cql_ready(bool ready);
     future<> do_start_server();
     future<> do_stop_server();
 
 public:
-    controller(distributed<database>&, sharded<auth::service>&, sharded<service::migration_notifier>&, gms::gossiper&);
+    controller(distributed<database>&, sharded<auth::service>&, sharded<service::migration_notifier>&, gms::gossiper&, sharded<cql3::query_processor>&);
     future<> start_server();
     future<> stop_server();
     future<> stop();
