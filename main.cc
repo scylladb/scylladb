@@ -420,6 +420,7 @@ static auto defer_verbose_shutdown(const char* what, Func&& func) {
 
 namespace debug {
 sharded<netw::messaging_service>* the_messaging_service;
+sharded<cql3::query_processor>* the_query_processor;
 }
 
 int main(int ac, char** av) {
@@ -491,7 +492,6 @@ int main(int ac, char** av) {
     seastar::sharded<service::cache_hitrate_calculator> cf_cache_hitrate_calculator;
     service::load_meter load_meter;
     debug::db = &db;
-    auto& qp = cql3::get_query_processor();
     auto& proxy = service::get_storage_proxy();
     auto& mm = service::get_migration_manager();
     api::http_context ctx(db, proxy, load_meter, token_metadata);
@@ -500,6 +500,7 @@ int main(int ac, char** av) {
     sharded<gms::feature_service> feature_service;
     sharded<db::snapshot_ctl> snapshot_ctl;
     sharded<netw::messaging_service> messaging;
+    sharded<cql3::query_processor> qp;
     sharded<semaphore> sst_dir_semaphore;
 
     return app.run(ac, av, [&] () -> future<int> {
@@ -892,6 +893,7 @@ int main(int ac, char** av) {
             });
             supervisor::notify("starting query processor");
             cql3::query_processor::memory_config qp_mcfg = {memory::stats().total_memory() / 256, memory::stats().total_memory() / 2560};
+            debug::the_query_processor = &qp;
             qp.start(std::ref(proxy), std::ref(db), std::ref(mm_notifier), qp_mcfg, std::ref(cql_config)).get();
             // #293 - do not stop anything
             // engine().at_exit([&qp] { return qp.stop(); });
