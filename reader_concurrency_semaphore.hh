@@ -139,22 +139,12 @@ public:
             ssize_t memory,
             sstring name,
             size_t max_queue_length = std::numeric_limits<size_t>::max(),
-            std::function<void()> prethrow_action = nullptr)
-        : _initial_resources(count, memory)
-        , _resources(count, memory)
-        , _wait_list(expiry_handler(name))
-        , _name(std::move(name))
-        , _max_queue_length(max_queue_length)
-        , _prethrow_action(std::move(prethrow_action)) {}
+            std::function<void()> prethrow_action = nullptr);
 
     /// Create a semaphore with practically unlimited count and memory.
     ///
     /// And conversely, no queue limit either.
-    explicit reader_concurrency_semaphore(no_limits, sstring name = "unlimited reader_concurrency_semaphore")
-        : reader_concurrency_semaphore(
-                std::numeric_limits<int>::max(),
-                std::numeric_limits<ssize_t>::max(),
-                std::move(name)) {}
+    explicit reader_concurrency_semaphore(no_limits, sstring name = "unlimited reader_concurrency_semaphore");
 
     ~reader_concurrency_semaphore();
 

@@ -208,6 +208,21 @@ void reader_concurrency_semaphore::signal(const resources& r) noexcept {
     }
 }
 
+reader_concurrency_semaphore::reader_concurrency_semaphore(int count, ssize_t memory, sstring name, size_t max_queue_length,
+        std::function<void()> prethrow_action)
+    : _initial_resources(count, memory)
+    , _resources(count, memory)
+    , _wait_list(expiry_handler(name))
+    , _name(std::move(name))
+    , _max_queue_length(max_queue_length)
+    , _prethrow_action(std::move(prethrow_action)) {}
+
+reader_concurrency_semaphore::reader_concurrency_semaphore(no_limits, sstring name)
+    : reader_concurrency_semaphore(
+            std::numeric_limits<int>::max(),
+            std::numeric_limits<ssize_t>::max(),
+            std::move(name)) {}
+
 reader_concurrency_semaphore::~reader_concurrency_semaphore() {
     broken(std::make_exception_ptr(broken_semaphore{}));
 }
