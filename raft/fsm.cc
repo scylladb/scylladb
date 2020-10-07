@@ -25,9 +25,9 @@
 namespace raft {
 
 fsm::fsm(server_id id, term_t current_term, server_id voted_for, log log,
-        failure_detector& failure_detector) :
+        failure_detector& failure_detector, fsm_config config) :
         _my_id(id), _current_term(current_term), _voted_for(voted_for),
-        _log(std::move(log)), _failure_detector(failure_detector) {
+        _log(std::move(log)), _failure_detector(failure_detector), _config(config) {
 
     _observed.advance(*this);
     set_configuration(_log.get_snapshot().config);
@@ -307,9 +307,9 @@ void fsm::tick() {
 }
 
 void fsm::append_entries(server_id from, append_request_recv&& request) {
-    logger.trace("append_entries[{}] received ct={}, prev idx={} prev term={} commit idx={}, idx={}",
+    logger.trace("append_entries[{}] received ct={}, prev idx={} prev term={} commit idx={}, idx={} num entries={}",
             _my_id, request.current_term, request.prev_log_idx, request.prev_log_term,
-            request.leader_commit_idx, request.entries.size() ? request.entries[0].idx : index_t(0));
+            request.leader_commit_idx, request.entries.size() ? request.entries[0].idx : index_t(0), request.entries.size());
 
     assert(is_follower());
     // 3.4. Leader election
@@ -459,6 +459,26 @@ void fsm::request_vote_reply(server_id from, vote_reply&& reply) {
     }
 }
 
+static size_t entry_size(const log_entry& e) {
+    struct overloaded {
+        size_t operator()(const command& c) {
+            return c.size();
+        }
+        size_t operator()(const configuration& c) {
+            size_t size = 0;
+            for (auto& s : c.servers) {
+                size += sizeof(s.id);
+                size += s.info.size();
+            }
+            return size;
+        }
+        size_t operator()(const log_entry::dummy& d) {
+            return 0;
+        }
+    };
+    return std::visit(overloaded{}, e.data) + sizeof(e);
+}
+
 void fsm::replicate_to(follower_progress& progress, bool allow_empty) {
 
     logger.trace("replicate_to[{}->{}]: called next={} match={}",
@@ -498,18 +518,25 @@ void fsm::replicate_to(follower_progress& progress, bool allow_empty) {
         };
 
         if (next_idx) {
-            const log_entry& entry = *_log[next_idx];
-            // TODO: send only one entry for now, but we should batch in the future
-            req.entries.push_back(std::cref(entry));
-            logger.trace("replicate_to[{}->{}]: send entry idx={}, term={}",
-                _my_id, progress.id, entry.idx, entry.term);
+            size_t size = 0;
+            while (next_idx <= _log.stable_idx() && size < _config.append_request_threshold) {
+                const log_entry& entry = *_log[next_idx];
+                req.entries.push_back(std::cref(entry));
+                logger.trace("replicate_to[{}->{}]: send entry idx={}, term={}",
+                             _my_id, progress.id, entry.idx, entry.term);
+                size += entry_size(entry);
+                next_idx++;
+                if (progress.state == follower_progress::state::PROBE) {
+                    break; // in PROBE mode send only one entry
+                }
+            }
 
             if (progress.state == follower_progress::state::PIPELINE) {
                 progress.in_flight++;
                 // Optimistically update next send index. In case
                 // a message is lost there will be negative reply that
                 // will re-send idx.
-                progress.next_idx++;
+                progress.next_idx = next_idx;
             }
         } else {
             logger.trace("replicate_to[{}->{}]: send empty", _my_id, progress.id);

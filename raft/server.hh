@@ -31,6 +31,11 @@ enum class wait_type {
 // A single uniquely identified participant of a Raft group.
 class server {
 public:
+    struct configuration {
+        // max size of appended entries in bytes
+        size_t append_request_threshold = 100000;
+    };
+
     virtual ~server() {}
     // Add command to replicated log
     // Returned future is resolved depending on wait_type parameter:
@@ -111,7 +116,7 @@ public:
 
 std::unique_ptr<server> create_server(server_id uuid, std::unique_ptr<rpc> rpc,
         std::unique_ptr<state_machine> state_machine, std::unique_ptr<storage> storage,
-        seastar::shared_ptr<failure_detector> failure_detector);
+        seastar::shared_ptr<failure_detector> failure_detector, server::configuration config);
 
 } // namespace raft
 

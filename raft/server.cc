@@ -38,7 +38,7 @@ class server_impl : public rpc_server, public server {
 public:
     explicit server_impl(server_id uuid, std::unique_ptr<rpc> rpc,
         std::unique_ptr<state_machine> state_machine, std::unique_ptr<storage> storage,
-        seastar::shared_ptr<failure_detector> failure_detector);
+        seastar::shared_ptr<failure_detector> failure_detector, server::configuration config);
 
     server_impl(server_impl&&) = delete;
 
@@ -70,6 +70,7 @@ private:
     // id of this server
     server_id _id;
     seastar::timer<lowres_clock> _ticker;
+    server::configuration _config;
 
     seastar::pipe<std::vector<log_entry_ptr>> _apply_entries = seastar::pipe<std::vector<log_entry_ptr>>(10);
 
@@ -119,10 +120,10 @@ private:
 
 server_impl::server_impl(server_id uuid, std::unique_ptr<rpc> rpc,
         std::unique_ptr<state_machine> state_machine, std::unique_ptr<storage> storage,
-        seastar::shared_ptr<failure_detector> failure_detector) :
+        seastar::shared_ptr<failure_detector> failure_detector, server::configuration config) :
                     _rpc(std::move(rpc)), _state_machine(std::move(state_machine)),
                     _storage(std::move(storage)), _failure_detector(failure_detector),
-                    _id(uuid) {
+                    _id(uuid), _config(config) {
     set_rpc_server(_rpc.get());
 }
 
@@ -132,7 +133,10 @@ future<> server_impl::start() {
     auto log_entries = co_await _storage->load_log();
     auto log = raft::log(std::move(snapshot), std::move(log_entries));
     index_t stable_idx = log.stable_idx();
-    _fsm = std::make_unique<fsm>(_id, term, vote, std::move(log), *_failure_detector);
+    _fsm = std::make_unique<fsm>(_id, term, vote, std::move(log), *_failure_detector,
+                                 fsm_config {
+                                     .append_request_threshold = _config.append_request_threshold
+                                 });
     assert(_fsm->get_current_term() != term_t(0));
 
     // start fiber to persist entries added to in-memory log
@@ -368,10 +372,10 @@ void server_impl::make_me_leader() {
 
 std::unique_ptr<server> create_server(server_id uuid, std::unique_ptr<rpc> rpc,
     std::unique_ptr<state_machine> state_machine, std::unique_ptr<storage> storage,
-    seastar::shared_ptr<failure_detector> failure_detector) {
+    seastar::shared_ptr<failure_detector> failure_detector, server::configuration config) {
     assert(uuid != raft::server_id{utils::UUID(0, 0)});
     return std::make_unique<raft::server_impl>(uuid, std::move(rpc), std::move(state_machine),
-        std::move(storage), failure_detector);
+        std::move(storage), failure_detector, config);
 }
 
 std::ostream& operator<<(std::ostream& os, const server_impl& s) {

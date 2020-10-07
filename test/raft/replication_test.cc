@@ -149,7 +149,7 @@ create_raft_server(raft::server_id uuid, state_machine::apply_fn apply,
     auto mstorage = std::make_unique<storage>(state);
     auto fd = seastar::make_shared<failure_detector>();
     auto raft = raft::create_server(uuid, std::move(mrpc), std::move(sm), std::move(mstorage),
-        std::move(fd));
+        std::move(fd), raft::server::configuration());
 
     return std::make_pair(std::move(raft), &rsm);
 }
