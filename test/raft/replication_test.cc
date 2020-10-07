@@ -130,9 +130,10 @@ public:
     virtual future<> abort() { return make_ready_future<>(); }
 };
 
+std::unordered_set<raft::server_id> SERVER_DISCONNECTED;
 class failure_detector : public raft::failure_detector {
     bool is_alive(raft::server_id server) override {
-        return true;
+        return SERVER_DISCONNECTED.find(server) == SERVER_DISCONNECTED.end();
     }
 };
 
