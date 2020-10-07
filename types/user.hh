@@ -45,9 +45,7 @@ public:
             , _is_multi_cell(is_multi_cell) {
     }
     static shared_ptr<const user_type_impl> get_instance(sstring keyspace, bytes name,
-            std::vector<bytes> field_names, std::vector<data_type> field_types, bool multi_cell) {
-        return intern::get_instance(std::move(keyspace), std::move(name), std::move(field_names), std::move(field_types), multi_cell);
-    }
+            std::vector<bytes> field_names, std::vector<data_type> field_types, bool multi_cell);
     data_type field_type(size_t i) const { return type(i); }
     const std::vector<data_type>& field_types() const { return _types; }
     bytes_view field_name(size_t i) const { return _field_names[i]; }
