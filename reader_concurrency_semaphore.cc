@@ -194,6 +194,10 @@ reader_resources reader_permit::consumed_resources() const {
     return _impl->resources();
 }
 
+void reader_concurrency_semaphore::expiry_handler::operator()(entry& e) noexcept {
+    e.pr.set_exception(named_semaphore_timed_out(_semaphore_name));
+}
+
 void reader_concurrency_semaphore::signal(const resources& r) noexcept {
     _resources += r;
     while (!_wait_list.empty() && has_available_units(_wait_list.front().res)) {

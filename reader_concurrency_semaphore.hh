@@ -107,9 +107,7 @@ private:
     public:
         explicit expiry_handler(sstring semaphore_name)
             : _semaphore_name(std::move(semaphore_name)) {}
-        void operator()(entry& e) noexcept {
-            e.pr.set_exception(named_semaphore_timed_out(_semaphore_name));
-        }
+        void operator()(entry& e) noexcept;
     };
 
 private:
