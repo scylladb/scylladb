@@ -391,7 +391,6 @@ void storage_service::prepare_to_join(
 
 void storage_service::maybe_start_sys_dist_ks() {
     supervisor::notify("starting system distributed keyspace");
-    _sys_dist_ks.start(std::ref(cql3::get_query_processor()), std::ref(service::get_migration_manager())).get();
     _sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start).get();
 }
 

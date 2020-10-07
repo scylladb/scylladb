@@ -1071,6 +1071,8 @@ int main(int ac, char** av) {
                 gms::stop_gossiping().get();
             });
 
+            sys_dist_ks.start(std::ref(qp), std::ref(mm)).get();
+
             ss.init_server().get();
             sst_format_selector.sync();
             ss.join_cluster().get();
