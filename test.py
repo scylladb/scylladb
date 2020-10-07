@@ -428,6 +428,7 @@ async def run_test(test, options, gentle_kill=False, env=dict()):
         UBSAN_OPTIONS = [
             "halt_on_error=1",
             "abort_on_error=1",
+            f"suppressions={os.getcwd()}/ubsan-suppressions.supp",
             os.getenv("UBSAN_OPTIONS"),
         ]
         ASAN_OPTIONS = [

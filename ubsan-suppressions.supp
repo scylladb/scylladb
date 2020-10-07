@@ -1,0 +1,2 @@
+# https://github.com/Tencent/rapidjson/commit/16872af88915176f49e389defb167f899e2c230a
+pointer-overflow:rapidjson/internal/stack.h
