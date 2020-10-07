@@ -176,6 +176,7 @@ public:
     data_consumer::primitive_consumer _primitive_parser;
     clustering_parser _clustering_parser;
     promoted_index_block_parser _block_parser;
+    reader_permit _permit;
     cached_file::stream _stream;
 private:
     // Feeds the stream into the consumer until the consumer is satisfied.
@@ -200,7 +201,7 @@ private:
     }
 
     future<pi_offset_type> read_block_offset(pi_index_type idx, tracing::trace_state_ptr trace_state) {
-        _stream = _cached_file.read(get_offset_entry_pos(idx), _pc, trace_state);
+        _stream = _cached_file.read(get_offset_entry_pos(idx), _pc, _permit, trace_state);
         return _stream.next().then([this, idx] (temporary_buffer<char>&& buf) {
             if (__builtin_expect(_primitive_parser.read_32(buf) == data_consumer::read_status::ready, true)) {
                 return make_ready_future<pi_offset_type>(_primitive_parser._u32);
@@ -214,7 +215,7 @@ private:
     // Postconditions:
     //   - block.start is engaged and valid.
     future<> read_block_start(promoted_index_block& block, tracing::trace_state_ptr trace_state) {
-        _stream = _cached_file.read(block.offset, _pc, trace_state);
+        _stream = _cached_file.read(block.offset, _pc, _permit, trace_state);
         _clustering_parser.reset();
         return consume_stream(_stream, _clustering_parser).then([this, &block] {
             auto mem_before = block.memory_usage();
@@ -226,7 +227,7 @@ private:
     // Postconditions:
     //   - block.end is engaged, all fields in the block are valid
     future<> read_block(promoted_index_block& block, tracing::trace_state_ptr trace_state) {
-        _stream = _cached_file.read(block.offset, _pc, trace_state);
+        _stream = _cached_file.read(block.offset, _pc, _permit, trace_state);
         _block_parser.reset();
         return consume_stream(_stream, _block_parser).then([this, &block] {
             auto mem_before = block.memory_usage();
@@ -280,7 +281,8 @@ public:
         , _cached_file(std::move(f))
         , _primitive_parser(permit)
         , _clustering_parser(s, permit, cvfl, true)
-        , _block_parser(s, std::move(permit), std::move(cvfl))
+        , _block_parser(s, permit, std::move(cvfl))
+        , _permit(std::move(permit))
     { }
 
     ~cached_promoted_index() {

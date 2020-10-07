@@ -292,7 +292,7 @@ std::unique_ptr<clustered_index_cursor> promoted_index::make_cursor(shared_sstab
     }
 
     if (_use_binary_search) {
-        cached_file f(_index_file, permit,
+        cached_file f(_index_file,
             index_page_cache_metrics,
             _promoted_index_start,
             _promoted_index_size,

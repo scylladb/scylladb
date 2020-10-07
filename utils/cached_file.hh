@@ -76,7 +76,6 @@ private:
 
     file _file;
     sstring _file_name; // for logging / tracing
-    reader_permit _permit;
     metrics& _metrics;
 
     using cache_type = std::map<page_idx_type, cached_page>;
@@ -114,6 +113,7 @@ public:
     class stream {
         cached_file* _cached_file;
         const io_priority_class* _pc;
+        std::optional<reader_permit> _permit;
         page_idx_type _page_idx;
         offset_type _offset_in_page;
         tracing::trace_state_ptr _trace_state;
@@ -124,10 +124,11 @@ public:
             , _pc(nullptr)
         { }
 
-        stream(cached_file& cf, const io_priority_class& pc, tracing::trace_state_ptr trace_state,
+        stream(cached_file& cf, const io_priority_class& pc, std::optional<reader_permit> permit, tracing::trace_state_ptr trace_state,
                 page_idx_type start_page, offset_type start_offset_in_page)
             : _cached_file(&cf)
             , _pc(&pc)
+            , _permit(std::move(permit))
             , _page_idx(start_page)
             , _offset_in_page(start_offset_in_page)
             , _trace_state(std::move(trace_state))
@@ -144,6 +145,9 @@ public:
             return _cached_file->get_page(_page_idx, *_pc, _trace_state).then([this] (temporary_buffer<char> page) {
                 if (_page_idx == _cached_file->_last_page) {
                     page.trim(_cached_file->_last_page_size);
+                }
+                if (_permit) {
+                    page = make_tracked_temporary_buffer(std::move(page), *_permit);
                 }
                 page.trim_front(_offset_in_page);
                 _offset_in_page = 0;
@@ -171,10 +175,9 @@ public:
     /// \param m Metrics object which should be updated from operations on this object.
     ///          The metrics object can be shared by many cached_file instances, in which case it
     ///          will reflect the sum of operations on all cached_file instances.
-    cached_file(file f, reader_permit permit, cached_file::metrics& m, offset_type start, offset_type size, sstring file_name = {})
+    cached_file(file f, cached_file::metrics& m, offset_type start, offset_type size, sstring file_name = {})
         : _file(std::move(f))
         , _file_name(std::move(file_name))
-        , _permit(std::move(permit))
         , _metrics(m)
         , _start(start)
         , _size(size)
@@ -256,14 +259,16 @@ public:
     /// The stream does not do any read-ahead.
     ///
     /// \param pos The offset of the first byte to read, relative to the cached file area.
-    stream read(offset_type pos, const io_priority_class& pc, tracing::trace_state_ptr trace_state = {}) {
+    /// \param permit Holds reader_permit under which returned buffers should be accounted.
+    ///               When disengaged, no accounting is done.
+    stream read(offset_type pos, const io_priority_class& pc, std::optional<reader_permit> permit, tracing::trace_state_ptr trace_state = {}) {
         if (pos >= _size) {
             return stream();
         }
         auto global_pos = _start + pos;
         auto offset = global_pos % page_size;
         auto page_idx = global_pos / page_size;
-        return stream(*this, pc, std::move(trace_state), page_idx, offset);
+        return stream(*this, pc, std::move(permit), std::move(trace_state), page_idx, offset);
     }
 
     /// \brief Returns the number of bytes in the area managed by this instance.

@@ -48,7 +48,7 @@ static sstring read_to_string(cached_file::stream& s, size_t limit = std::numeri
 }
 
 static sstring read_to_string(cached_file& cf, size_t off, size_t limit = std::numeric_limits<size_t>::max()) {
-    auto s = cf.read(off, default_priority_class());
+    auto s = cf.read(off, default_priority_class(), std::nullopt);
     return read_to_string(s, limit);
 }
 
@@ -90,7 +90,7 @@ SEASTAR_THREAD_TEST_CASE(test_reading_from_small_file) {
 
     {
         cached_file::metrics metrics;
-        cached_file cf(tf.f, tests::make_permit(), metrics, 0, tf.contents.size());
+        cached_file cf(tf.f, metrics, 0, tf.contents.size());
 
         {
             BOOST_REQUIRE_EQUAL(tf.contents, read_to_string(cf, 0));
@@ -127,7 +127,7 @@ SEASTAR_THREAD_TEST_CASE(test_reading_from_small_file) {
     {
         size_t off = 100;
         cached_file::metrics metrics;
-        cached_file cf(tf.f, tests::make_permit(), metrics, off, tf.contents.size() - off);
+        cached_file cf(tf.f, metrics, off, tf.contents.size() - off);
 
         BOOST_REQUIRE_EQUAL(tf.contents.substr(off), read_to_string(cf, 0));
         BOOST_REQUIRE_EQUAL(tf.contents.substr(off + 2), read_to_string(cf, 2));
@@ -140,7 +140,7 @@ SEASTAR_THREAD_TEST_CASE(test_invalidation) {
     test_file tf = make_test_file(page_size * 2);
 
     cached_file::metrics metrics;
-    cached_file cf(tf.f, tests::make_permit(), metrics, 0, page_size * 2);
+    cached_file cf(tf.f, metrics, 0, page_size * 2);
 
     // Reads one page, half of the first page and half of the second page.
     auto read = [&] {
@@ -231,7 +231,7 @@ SEASTAR_THREAD_TEST_CASE(test_invalidation_skewed_cached_file) {
 
     size_t offset = page_size / 2;
     cached_file::metrics metrics;
-    cached_file cf(tf.f, tests::make_permit(), metrics, offset, page_size * 2);
+    cached_file cf(tf.f, metrics, offset, page_size * 2);
 
     // Reads one page, half of the first page and half of the second page.
     auto read = [&] {
