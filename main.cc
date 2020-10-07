@@ -1250,7 +1250,7 @@ int main(int ac, char** av) {
                 c.max_nonlocal_requests = 5000;
                 smp_service_group ssg = create_smp_service_group(c).get0();
                 alternator_executor.start(std::ref(proxy), std::ref(mm), std::ref(sys_dist_ks), std::ref(service::get_storage_service()), ssg).get();
-                alternator_server.start(std::ref(alternator_executor)).get();
+                alternator_server.start(std::ref(alternator_executor), std::ref(qp)).get();
                 std::optional<uint16_t> alternator_port;
                 if (cfg->alternator_port()) {
                     alternator_port = cfg->alternator_port();

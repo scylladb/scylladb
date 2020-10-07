@@ -41,6 +41,7 @@ class server {
     http_server _http_server;
     http_server _https_server;
     executor& _executor;
+    cql3::query_processor& _qp;
 
     key_cache _key_cache;
     bool _enforce_authorization;
@@ -68,7 +69,7 @@ class server {
     json_parser _json_parser;
 
 public:
-    server(executor& executor);
+    server(executor& executor, cql3::query_processor& qp);
 
     future<> init(net::inet_address addr, std::optional<uint16_t> port, std::optional<uint16_t> https_port, std::optional<tls::credentials_builder> creds,
             bool enforce_authorization, semaphore* memory_limiter);
