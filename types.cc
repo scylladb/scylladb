@@ -1387,42 +1387,50 @@ static void validate_aux(const tuple_type_impl& t, bytes_view v, cql_serializati
 }
 
 namespace {
+template <typename UnderlyingView, typename FragmentRangeView>
 struct validate_visitor {
-    bytes_view v;
+    UnderlyingView underlying;
+    FragmentRangeView v;
+
     cql_serialization_format sf;
-    void operator()(const reversed_type_impl& t) { return t.underlying_type()->validate(v, sf); }
+    void operator()(const reversed_type_impl& t) { return t.underlying_type()->validate(underlying, sf); }
     void operator()(const abstract_type&) {}
     template <typename T> void operator()(const integer_type_impl<T>& t) {
         if (v.empty()) {
             return;
         }
-        if (v.size() != sizeof(T)) {
-            throw marshal_exception(format("Validation failed for type {}: got {:d} bytes", t.name(), v.size()));
+        if (v.size_bytes() != sizeof(T)) {
+            throw marshal_exception(format("Validation failed for type {}: got {:d} bytes", t.name(), v.size_bytes()));
         }
     }
     void operator()(const byte_type_impl& t) {
         if (v.empty()) {
             return;
         }
-        if (v.size() != 1) {
-            throw marshal_exception(format("Expected 1 byte for a tinyint ({:d})", v.size()));
+        if (v.size_bytes() != 1) {
+            throw marshal_exception(format("Expected 1 byte for a tinyint ({:d})", v.size_bytes()));
         }
     }
     void operator()(const short_type_impl& t) {
         if (v.empty()) {
             return;
         }
-        if (v.size() != 2) {
-            throw marshal_exception(format("Expected 2 bytes for a smallint ({:d})", v.size()));
+        if (v.size_bytes() != 2) {
+            throw marshal_exception(format("Expected 2 bytes for a smallint ({:d})", v.size_bytes()));
         }
     }
     void operator()(const ascii_type_impl&) {
-        if (!utils::ascii::validate(v)) {
-            throw marshal_exception("Validation failed - non-ASCII character in an ASCII string");
-        }
+        with_linearized(v, [this] (bytes_view bv) {
+            if (!utils::ascii::validate(bv)) {
+                throw marshal_exception("Validation failed - non-ASCII character in an ASCII string");
+            }
+        });
     }
     void operator()(const utf8_type_impl&) {
-        if (!utils::utf8::validate(v)) {
+        auto error = with_linearized(v, [this] (bytes_view bv) {
+            return !utils::utf8::validate(bv);
+        });
+        if (error) {
             throw marshal_exception("Validation failed - non-UTF8 character in a UTF8 string");
         }
     }
@@ -1431,19 +1439,20 @@ struct validate_visitor {
         if (v.empty()) {
             return;
         }
-        if (v.size() != 1) {
-            throw marshal_exception(format("Validation failed for boolean, got {:d} bytes", v.size()));
+        if (v.size_bytes() != 1) {
+            throw marshal_exception(format("Validation failed for boolean, got {:d} bytes", v.size_bytes()));
         }
     }
     void operator()(const timeuuid_type_impl& t) {
         if (v.empty()) {
             return;
         }
-        if (v.size() != 16) {
-            throw marshal_exception(format("Validation failed for timeuuid - got {:d} bytes", v.size()));
+        if (v.size_bytes() != 16) {
+            throw marshal_exception(format("Validation failed for timeuuid - got {:d} bytes", v.size_bytes()));
         }
-        auto msb = read_simple<uint64_t>(v);
-        auto lsb = read_simple<uint64_t>(v);
+        auto in = utils::linearizing_input_stream(v);
+        auto msb = in.template read_trivial<uint64_t>();
+        auto lsb = in.template read_trivial<uint64_t>();
         utils::UUID uuid(msb, lsb);
         if (uuid.version() != 1) {
             throw marshal_exception(format("Unsupported UUID version ({:d})", uuid.version()));
@@ -1453,17 +1462,19 @@ struct validate_visitor {
         if (v.empty()) {
             return;
         }
-        if (v.size() != sizeof(uint64_t)) {
-            throw marshal_exception(format("Validation failed for timestamp - got {:d} bytes", v.size()));
+        if (v.size_bytes() != sizeof(uint64_t)) {
+            throw marshal_exception(format("Validation failed for timestamp - got {:d} bytes", v.size_bytes()));
         }
     }
     void operator()(const duration_type_impl& t) {
-        if (v.size() < 3) {
-            throw marshal_exception(format("Expected at least 3 bytes for a duration, got {:d}", v.size()));
+        if (v.size_bytes() < 3) {
+            throw marshal_exception(format("Expected at least 3 bytes for a duration, got {:d}", v.size_bytes()));
         }
 
         common_counter_type months, days, nanoseconds;
-        std::tie(months, days, nanoseconds) = deserialize_counters(v);
+        std::tie(months, days, nanoseconds) = with_linearized(v, [] (bytes_view bv) {
+            return deserialize_counters(bv);
+        });
 
         auto check_counter_range = [] (common_counter_type value, auto counter_value_type_instance,
                                            std::string_view counter_name) {
@@ -1490,51 +1501,71 @@ struct validate_visitor {
         if (v.empty()) {
             return;
         }
-        if (v.size() != sizeof(T)) {
-            throw marshal_exception(format("Expected {:d} bytes for a floating type, got {:d}", sizeof(T), v.size()));
+        if (v.size_bytes() != sizeof(T)) {
+            throw marshal_exception(format("Expected {:d} bytes for a floating type, got {:d}", sizeof(T), v.size_bytes()));
         }
     }
     void operator()(const simple_date_type_impl& t) {
         if (v.empty()) {
             return;
         }
-        if (v.size() != 4) {
-            throw marshal_exception(format("Expected 4 byte long for date ({:d})", v.size()));
+        if (v.size_bytes() != 4) {
+            throw marshal_exception(format("Expected 4 byte long for date ({:d})", v.size_bytes()));
         }
     }
     void operator()(const time_type_impl& t) {
         if (v.empty()) {
             return;
         }
-        if (v.size() != 8) {
-            throw marshal_exception(format("Expected 8 byte long for time ({:d})", v.size()));
+        if (v.size_bytes() != 8) {
+            throw marshal_exception(format("Expected 8 byte long for time ({:d})", v.size_bytes()));
         }
     }
     void operator()(const uuid_type_impl& t) {
         if (v.empty()) {
             return;
         }
-        if (v.size() != 16) {
-            throw marshal_exception(format("Validation failed for uuid - got {:d} bytes", v.size()));
+        if (v.size_bytes() != 16) {
+            throw marshal_exception(format("Validation failed for uuid - got {:d} bytes", v.size_bytes()));
         }
     }
     void operator()(const inet_addr_type_impl& t) {
         if (v.empty()) {
             return;
         }
-        if (v.size() != sizeof(uint32_t) && v.size() != 16) {
-            throw marshal_exception(format("Validation failed for inet_addr - got {:d} bytes", v.size()));
+        if (v.size_bytes() != sizeof(uint32_t) && v.size_bytes() != 16) {
+            throw marshal_exception(format("Validation failed for inet_addr - got {:d} bytes", v.size_bytes()));
         }
     }
-    void operator()(const map_type_impl& t) { validate_aux(t, v, sf); }
-    void operator()(const set_type_impl& t) { validate_aux(t, v, sf); }
-    void operator()(const list_type_impl& t) { validate_aux(t, v, sf); }
-    void operator()(const tuple_type_impl& t) { validate_aux(t, v, sf); }
+    void operator()(const map_type_impl& t) {
+        with_linearized(v, [this, &t] (bytes_view bv) {
+            validate_aux(t, bv, sf);
+        });
+    }
+    void operator()(const set_type_impl& t) {
+        with_linearized(v, [this, &t] (bytes_view bv) {
+            validate_aux(t, bv, sf);
+        });
+    }
+    void operator()(const list_type_impl& t) {
+        with_linearized(v, [this, &t] (bytes_view bv) {
+            validate_aux(t, bv, sf);
+        });
+    }
+    void operator()(const tuple_type_impl& t) {
+        with_linearized(v, [this, &t] (bytes_view bv) {
+            validate_aux(t, bv, sf);
+        });
+    }
 };
 }
 
+void abstract_type::validate(const fragmented_temporary_buffer::view& view, cql_serialization_format sf) const {
+    visit(*this, validate_visitor{view, view, sf});
+}
+
 void abstract_type::validate(bytes_view v, cql_serialization_format sf) const {
-    visit(*this, validate_visitor{v, sf});
+    visit(*this, validate_visitor{v, single_fragment_range(v), sf});
 }
 
 static void serialize_aux(const tuple_type_impl& type, const tuple_type_impl::native_type* val, bytes::iterator& out) {
