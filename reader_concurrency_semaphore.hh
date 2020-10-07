@@ -93,6 +93,8 @@ public:
         uint64_t total_failed_reads = 0;
     };
 
+    struct permit_list;
+
 private:
     struct entry {
         promise<reader_permit::resource_units> pr;
@@ -122,6 +124,7 @@ private:
     uint64_t _next_id = 1;
     std::map<uint64_t, std::unique_ptr<inactive_read>> _inactive_reads;
     stats _stats;
+    std::unique_ptr<permit_list> _permit_list;
 
 private:
     bool has_available_units(const resources& r) const;

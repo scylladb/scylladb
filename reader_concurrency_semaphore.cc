@@ -68,7 +68,7 @@ void reader_permit::resource_units::reset(reader_resources res) {
     _resources = res;
 }
 
-class reader_permit::impl {
+class reader_permit::impl : public boost::intrusive::list_base_hook<boost::intrusive::link_mode<boost::intrusive::auto_unlink>> {
     reader_concurrency_semaphore& _semaphore;
     const schema* _schema;
     sstring _op_name;
@@ -145,14 +145,22 @@ public:
     }
 };
 
+struct reader_concurrency_semaphore::permit_list {
+    using list_type = boost::intrusive::list<reader_permit::impl, boost::intrusive::constant_time_size<false>>;
+
+    list_type permits;
+};
+
 reader_permit::reader_permit(reader_concurrency_semaphore& semaphore, const schema* const schema, std::string_view op_name)
     : _impl(::seastar::make_shared<reader_permit::impl>(semaphore, schema, op_name))
 {
+    semaphore._permit_list->permits.push_back(*_impl);
 }
 
 reader_permit::reader_permit(reader_concurrency_semaphore& semaphore, const schema* const schema, sstring&& op_name)
     : _impl(::seastar::make_shared<reader_permit::impl>(semaphore, schema, std::move(op_name)))
 {
+    semaphore._permit_list->permits.push_back(*_impl);
 }
 
 void reader_permit::on_waiting() {
@@ -219,7 +227,8 @@ reader_concurrency_semaphore::reader_concurrency_semaphore(int count, ssize_t me
     , _wait_list(expiry_handler(name))
     , _name(std::move(name))
     , _max_queue_length(max_queue_length)
-    , _prethrow_action(std::move(prethrow_action)) {}
+    , _prethrow_action(std::move(prethrow_action))
+    , _permit_list(std::make_unique<permit_list>()) {}
 
 reader_concurrency_semaphore::reader_concurrency_semaphore(no_limits, sstring name)
     : reader_concurrency_semaphore(
