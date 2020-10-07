@@ -3171,3 +3171,7 @@ std::ostream& operator<<(std::ostream& out, const data_value& v) {
     }
     return out << v.type()->to_string_impl(v);
 }
+
+shared_ptr<const reversed_type_impl> reversed_type_impl::get_instance(data_type type) {
+    return intern::get_instance(std::move(type));
+}

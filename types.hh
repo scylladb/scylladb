@@ -800,9 +800,7 @@ public:
         return _underlying_type;
     }
 
-    static shared_ptr<const reversed_type_impl> get_instance(data_type type) {
-        return intern::get_instance(std::move(type));
-    }
+    static shared_ptr<const reversed_type_impl> get_instance(data_type type);
 };
 using reversed_type = shared_ptr<const reversed_type_impl>;
 
