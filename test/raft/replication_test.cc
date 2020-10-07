@@ -7,6 +7,7 @@
 #include "raft/server.hh"
 #include "serializer.hh"
 #include "serializer_impl.hh"
+#include "xx_hasher.hh"
 
 
 // Test Raft library with declarative test definitions
@@ -25,6 +26,7 @@
 //
 //      (run_test)
 //      - Create the servers and initialize
+//      - Set up hasher
 //      - Process updates one by one
 //      - Wait until all servers have logs of size of total_values entries
 //      - Verify hash
@@ -52,9 +54,25 @@ int rand() {
 
 bool drop_replication = false;
 
+class hasher_int : public xx_hasher {
+public:
+    using xx_hasher::xx_hasher;
+    void update(const int val) noexcept {
+        xx_hasher::update(reinterpret_cast<const char *>(&val), sizeof(val));
+    }
+    static hasher_int hash_range(const int max) {
+        hasher_int h;
+        for (int i = 0; i < max; ++i) {
+            h.update(i);
+        }
+        return h;
+    }
+};
+
 class state_machine : public raft::state_machine {
 public:
-    using apply_fn = std::function<void(raft::server_id id, const std::vector<raft::command_cref>& commands)>;
+    using apply_fn = std::function<void(raft::server_id id,
+            const std::vector<raft::command_cref>& commands, seastar::shared_ptr<hasher_int> hasher)>;
 private:
     raft::server_id _id;
     apply_fn _apply;
@@ -62,10 +80,12 @@ private:
     size_t _seen = 0;
     promise<> _done;
 public:
+    seastar::shared_ptr<hasher_int> hasher;
     state_machine(raft::server_id id, apply_fn apply, size_t apply_entries) :
-        _id(id), _apply(std::move(apply)), _apply_entries(apply_entries) {}
+        _id(id), _apply(std::move(apply)), _apply_entries(apply_entries),
+        hasher(seastar::make_shared<hasher_int>()) {}
     future<> apply(const std::vector<raft::command_cref> commands) override {
-        _apply(_id, commands);
+        _apply(_id, commands, hasher);
         _seen += commands.size();
         if (_seen >= _apply_entries) {
             _done.set_value();
@@ -239,19 +259,15 @@ std::vector<raft::command> create_commands(std::vector<T> list) {
     return commands;
 }
 
-std::unordered_map<raft::server_id, int> sums;
-
-void apply_changes(raft::server_id id, const std::vector<raft::command_cref>& commands) {
+void apply_changes(raft::server_id id, const std::vector<raft::command_cref>& commands,
+        seastar::shared_ptr<hasher_int> hasher) {
     tlogger.debug("sm::apply_changes[{}] got {} entries", id, commands.size());
 
     for (auto&& d : commands) {
         auto is = ser::as_input_stream(d);
         int n = ser::deserialize(is, boost::type<int>());
-        auto it = sums.find(id);
-        if (it == sums.end()) {
-            sums[id] = 0;
-        }
-        sums[id] += n;
+        hasher->update(n);      // running hash (values and snapshots)
+        tlogger.debug("{}: apply_changes {}", id, n);
     }
 };
 
@@ -375,7 +391,20 @@ future<int> run_test(test_case test) {
         co_await r.first->abort(); // Stop servers
     }
 
-    co_return 0;
+    int fail = 0;
+
+    // Verify hash matches expected (snapshot and apply calls)
+    static const auto expected = hasher_int::hash_range(test.total_values).finalize_uint64();
+    for (size_t i = 0; i < rafts.size(); ++i) {
+        auto hash = rafts[i].second->hasher->finalize_uint64();
+        if (hash != expected) {
+            tlogger.debug("Hash doesn't match for server [{}]: {} != {}", i, hash, expected);
+            fail = -1;  // Fail
+            break;
+        }
+    }
+
+    co_return fail;
 }
 
 int main(int argc, char* argv[]) {
