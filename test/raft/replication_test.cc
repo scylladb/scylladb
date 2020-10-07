@@ -1,5 +1,4 @@
 #include <random>
-#include <fmt/format.h>
 #include <seastar/core/app-template.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/coroutine.hh>
