@@ -2670,6 +2670,12 @@ user_type_impl::idx_of_field(const bytes& name) const {
     return {};
 }
 
+shared_ptr<const user_type_impl>
+user_type_impl::get_instance(sstring keyspace, bytes name,
+        std::vector<bytes> field_names, std::vector<data_type> field_types, bool multi_cell) {
+    return intern::get_instance(std::move(keyspace), std::move(name), std::move(field_names), std::move(field_types), multi_cell);
+}
+
 sstring
 tuple_type_impl::make_name(const std::vector<data_type>& types) {
     // To keep format compatibility with Origin we never wrap
