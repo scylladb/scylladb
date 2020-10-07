@@ -243,8 +243,8 @@ future<> server::verify_signature(const request& req) {
         }
     }
 
-    auto cache_getter = [] (std::string username) {
-        return get_key_from_roles(cql3::get_query_processor().local(), std::move(username));
+    auto cache_getter = [&qp = _qp] (std::string username) {
+        return get_key_from_roles(qp, std::move(username));
     };
     return _key_cache.get_ptr(user, cache_getter).then([this, &req,
                                                     user = std::move(user),
