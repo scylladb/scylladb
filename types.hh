@@ -508,12 +508,8 @@ public:
     data_value deserialize_value(bytes_view v) const {
         return deserialize(v);
     };
-    void validate(bytes_view v, cql_serialization_format sf) const;
-    virtual void validate(const fragmented_temporary_buffer::view& view, cql_serialization_format sf) const {
-        with_linearized(view, [this, sf] (bytes_view bv) {
-            validate(bv, sf);
-        });
-    }
+    void validate(const fragmented_temporary_buffer::view& view, cql_serialization_format sf) const;
+    void validate(bytes_view view, cql_serialization_format sf) const;
     bool is_compatible_with(const abstract_type& previous) const;
     /*
      * Types which are wrappers over other types return the inner type.
