@@ -105,10 +105,10 @@ private:
     };
 
     class expiry_handler {
-        sstring _semaphore_name;
+        reader_concurrency_semaphore& _semaphore;
     public:
-        explicit expiry_handler(sstring semaphore_name)
-            : _semaphore_name(std::move(semaphore_name)) {}
+        explicit expiry_handler(reader_concurrency_semaphore& semaphore)
+            : _semaphore(semaphore) {}
         void operator()(entry& e) noexcept;
     };
 

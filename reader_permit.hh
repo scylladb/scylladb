@@ -96,8 +96,9 @@ public:
         admitted,
     };
 
-private:
     class impl;
+
+private:
     shared_ptr<impl> _impl;
 
 private:
