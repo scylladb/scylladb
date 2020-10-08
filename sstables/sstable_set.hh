@@ -111,7 +111,7 @@ public:
         schema_ptr,
         reader_permit,
         utils::estimated_histogram&,
-        const dht::partition_range&, // must be singular
+        const dht::ring_position&, // must contain a key
         const query::partition_slice&,
         const io_priority_class&,
         tracing::trace_state_ptr,

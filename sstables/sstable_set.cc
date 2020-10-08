@@ -474,11 +474,10 @@ public:
 // Filter out sstables for reader using bloom filter
 static std::vector<shared_sstable>
 filter_sstable_for_reader_by_pk(std::vector<shared_sstable>&& sstables, column_family& cf, const schema_ptr& schema,
-        const dht::partition_range& pr, const key& key) {
-    const dht::ring_position& pr_key = pr.start()->value();
+        const dht::ring_position& pos, const key& key) {
     auto sstable_has_not_key = [&, cmp = dht::ring_position_comparator(*schema)] (const shared_sstable& sst) {
-        return cmp(pr_key, sst->get_first_decorated_key()) < 0 ||
-               cmp(pr_key, sst->get_last_decorated_key()) > 0 ||
+        return cmp(pos, sst->get_first_decorated_key()) < 0 ||
+               cmp(pos, sst->get_last_decorated_key()) > 0 ||
                !sst->filter_has_key(key);
     };
     sstables.erase(boost::remove_if(sstables, sstable_has_not_key), sstables.end());
@@ -525,16 +524,16 @@ sstable_set::create_single_key_sstable_reader(
         schema_ptr schema,
         reader_permit permit,
         utils::estimated_histogram& sstable_histogram,
-        const dht::partition_range& pr,
+        const dht::ring_position& pos,
         const query::partition_slice& slice,
         const io_priority_class& pc,
         tracing::trace_state_ptr trace_state,
         streamed_mutation::forwarding fwd,
         mutation_reader::forwarding fwd_mr) const
 {
-    auto& pk = pr.start()->value().key();
+    auto& pk = pos.key();
     auto key = key::from_partition_key(*schema, *pk);
-    auto selected_sstables = filter_sstable_for_reader_by_pk(select(pr), *cf, schema, pr, key);
+    auto selected_sstables = filter_sstable_for_reader_by_pk(select({pos}), *cf, schema, pos, key);
     auto num_sstables = selected_sstables.size();
     if (!num_sstables) {
         return make_empty_flat_reader(schema, permit);
@@ -542,8 +541,8 @@ sstable_set::create_single_key_sstable_reader(
     auto readers = boost::copy_range<std::vector<flat_mutation_reader>>(
         filter_sstable_for_reader_by_ck(std::move(selected_sstables), *cf, schema, slice)
         | boost::adaptors::transformed([&] (const shared_sstable& sstable) {
-            tracing::trace(trace_state, "Reading key {} from sstable {}", pr, seastar::value_of([&sstable] { return sstable->get_filename(); }));
-            return sstable->read_row_flat(schema, permit, pr.start()->value(), slice, pc, trace_state, fwd);
+            tracing::trace(trace_state, "Reading key {} from sstable {}", pos, seastar::value_of([&sstable] { return sstable->get_filename(); }));
+            return sstable->read_row_flat(schema, permit, pos, slice, pc, trace_state, fwd);
         })
     );
 
