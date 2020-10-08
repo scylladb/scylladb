@@ -1346,7 +1346,7 @@ future<> sstable::update_info_for_opened_data() {
             _index_file_size = size;
             assert(!_cached_index_file);
             _cached_index_file = seastar::make_shared<cached_file>(_index_file,
-                                                                   index_page_cache_metrics, 0,
+                                                                   index_page_cache_metrics,
                                                                    _manager.get_cache_tracker().get_lru(),
                                                                    _manager.get_cache_tracker().region(),
                                                                    _index_file_size);

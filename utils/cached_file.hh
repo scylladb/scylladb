@@ -42,15 +42,6 @@ using namespace seastar;
 ///
 /// The object is movable but this is only allowed before readers are created.
 ///
-/// The cached_file can represent a subset of the file. The reason for this is so to satisfy
-/// two requirements. One is that we have a page-aligned caching, where pages are aligned
-/// relative to the start of the underlying file. This matches requirements of the seastar I/O engine
-/// on I/O requests.
-/// Another requirement is to have an effective way to populate the cache using an unaligned buffer
-/// which starts in the middle of the file when we know that we won't need to access bytes located
-/// before the buffer's position. See populate_front(). If we couldn't assume that, we wouldn't be
-/// able to insert an unaligned buffer into the cache.
-///
 class cached_file {
 public:
     // Must be aligned to _file.disk_read_dma_alignment(). 4K is always safe.
@@ -158,11 +149,10 @@ private:
     using cache_type = bplus::tree<page_idx_type, cached_page, page_idx_less_comparator, 12, bplus::key_search::linear>;
     cache_type _cache;
 
-    const offset_type _start;
     const offset_type _size;
     offset_type _cached_bytes = 0;
 
-    offset_type _last_page_size; // Ignores _start in case the start lies on the same page.
+    offset_type _last_page_size;
     page_idx_type _last_page;
 private:
     future<cached_page::ptr_type> get_page_ptr(page_idx_type idx, const io_priority_class& pc,
@@ -274,17 +264,16 @@ public:
     /// \param m Metrics object which should be updated from operations on this object.
     ///          The metrics object can be shared by many cached_file instances, in which case it
     ///          will reflect the sum of operations on all cached_file instances.
-    cached_file(file f, cached_file::metrics& m, offset_type start, lru& l, logalloc::region& reg, offset_type size, sstring file_name = {})
+    cached_file(file f, cached_file::metrics& m, lru& l, logalloc::region& reg, offset_type size, sstring file_name = {})
         : _file(std::move(f))
         , _file_name(std::move(file_name))
         , _metrics(m)
         , _lru(l)
         , _region(reg)
         , _cache(page_idx_less_comparator())
-        , _start(start)
         , _size(size)
     {
-        offset_type last_byte_offset = _start + (_size ? (_size - 1) : 0);
+        offset_type last_byte_offset = _size ? (_size - 1) : 0;
         _last_page_size = (last_byte_offset % page_size) + (_size ? 1 : 0);
         _last_page = last_byte_offset / page_size;
     }
@@ -297,30 +286,6 @@ public:
         assert(_cache.empty());
     }
 
-    /// \brief Populates cache from buf assuming that buf contains the data from the front of the area.
-    void populate_front(temporary_buffer<char> buf) {
-        // Align to page start. We can do this because the junk before _start won't be accessed.
-        auto pad = _start % page_size;
-        auto idx = _start / page_size;
-        buf = temporary_buffer<char>(buf.get_write() - pad, buf.size() + pad, buf.release());
-
-        while (buf.size() > page_size) {
-            auto page_buf = buf.share();
-            page_buf.trim(page_size);
-            ++_metrics.page_populations;
-            _metrics.cached_bytes += page_buf.size();
-            _cache.emplace(idx, cached_page(this, idx, std::move(page_buf)));
-            buf.trim_front(page_size);
-            ++idx;
-        }
-
-        if (buf.size() == page_size || (idx == _last_page && buf.size() >= _last_page_size)) {
-            ++_metrics.page_populations;
-            _metrics.cached_bytes += buf.size();
-            _cache.emplace(idx, cached_page(this, idx, std::move(buf)));
-        }
-    }
-
     /// \brief Invalidates [start, end) or less.
     ///
     /// Invariants:
@@ -328,13 +293,12 @@ public:
     ///   - all bytes outside [start, end) which were cached before the call will still be cached.
     ///
     void invalidate_at_most(offset_type start, offset_type end, tracing::trace_state_ptr trace_state = {}) {
-        auto lo_page = (_start + start) / page_size
+        auto lo_page = start / page_size
                        // If start is 0 then we can drop the containing page
-                       // even if _start is not aligned to the page start.
                        // Otherwise we cannot drop the page.
-                       + bool((_start + start) % page_size) * bool(start != 0);
+                       + bool(start % page_size) * bool(start != 0);
 
-        auto hi_page = (_start + end) / page_size;
+        auto hi_page = (end) / page_size;
 
         if (lo_page < hi_page) {
             auto count = evict_range(_cache.lower_bound(lo_page), _cache.lower_bound(hi_page));
@@ -347,7 +311,7 @@ public:
 
     /// \brief Equivalent to \ref invalidate_at_most(0, end).
     void invalidate_at_most_front(offset_type end, tracing::trace_state_ptr trace_state = {}) {
-        auto hi_page = (_start + end) / page_size;
+        auto hi_page = end / page_size;
         auto count = evict_range(_cache.begin(), _cache.lower_bound(hi_page));
         if (count) {
             tracing::trace(trace_state, "page cache: evicted {} page(s) in [0, {}), file={}", count,
@@ -364,11 +328,10 @@ public:
     /// \param pos The offset of the first byte to read, relative to the cached file area.
     /// \param permit Holds reader_permit under which returned buffers should be accounted.
     ///               When disengaged, no accounting is done.
-    stream read(offset_type pos, const io_priority_class& pc, std::optional<reader_permit> permit, tracing::trace_state_ptr trace_state = {}) {
-        if (pos >= _size) {
+    stream read(offset_type global_pos, const io_priority_class& pc, std::optional<reader_permit> permit, tracing::trace_state_ptr trace_state = {}) {
+        if (global_pos >= _size) {
             return stream();
         }
-        auto global_pos = _start + pos;
         auto offset = global_pos % page_size;
         auto page_idx = global_pos / page_size;
         return stream(*this, pc, std::move(permit), std::move(trace_state), page_idx, offset);

@@ -100,7 +100,7 @@ SEASTAR_THREAD_TEST_CASE(test_file_wrapper) {
     cached_file::metrics metrics;
     test_file tf = make_test_file(page_size * 3);
     logalloc::region region;
-    cached_file cf(tf.f, metrics, 0, cf_lru, region, page_size * 3);
+    cached_file cf(tf.f, metrics, cf_lru, region, page_size * 3);
     seastar::file f = make_cached_seastar_file(cf);
 
     BOOST_REQUIRE_EQUAL(tf.contents.substr(0, 1),
@@ -123,7 +123,7 @@ SEASTAR_THREAD_TEST_CASE(test_concurrent_population) {
     cached_file::metrics metrics;
     test_file tf = make_test_file(page_size * 3);
     logalloc::region region;
-    cached_file cf(tf.f, metrics, 0, cf_lru, region, page_size * 3);
+    cached_file cf(tf.f, metrics, cf_lru, region, page_size * 3);
     seastar::file f = make_cached_seastar_file(cf);
 
     seastar::when_all(
@@ -148,7 +148,7 @@ SEASTAR_THREAD_TEST_CASE(test_reading_from_small_file) {
     {
         cached_file::metrics metrics;
         logalloc::region region;
-        cached_file cf(tf.f, metrics, 0, cf_lru, region, tf.contents.size());
+        cached_file cf(tf.f, metrics, cf_lru, region, tf.contents.size());
 
         {
             BOOST_REQUIRE_EQUAL(tf.contents, read_to_string(cf, 0));
@@ -181,17 +181,6 @@ SEASTAR_THREAD_TEST_CASE(test_reading_from_small_file) {
             BOOST_REQUIRE_EQUAL(1, metrics.page_populations);
         }
     }
-
-    {
-        size_t off = 100;
-        cached_file::metrics metrics;
-        logalloc::region region;
-        cached_file cf(tf.f, metrics, off, cf_lru, region, tf.contents.size() - off);
-
-        BOOST_REQUIRE_EQUAL(tf.contents.substr(off), read_to_string(cf, 0));
-        BOOST_REQUIRE_EQUAL(tf.contents.substr(off + 2), read_to_string(cf, 2));
-        BOOST_REQUIRE_EQUAL(sstring(), read_to_string(cf, 3000));
-    }
 }
 
 SEASTAR_THREAD_TEST_CASE(test_eviction_via_lru) {
@@ -202,7 +191,7 @@ SEASTAR_THREAD_TEST_CASE(test_eviction_via_lru) {
     {
         cached_file::metrics metrics;
         logalloc::region region;
-        cached_file cf(tf.f, metrics, 0, cf_lru, region, tf.contents.size());
+        cached_file cf(tf.f, metrics, cf_lru, region, tf.contents.size());
 
         {
             BOOST_REQUIRE_EQUAL(tf.contents, read_to_string(cf, 0));
@@ -273,7 +262,7 @@ SEASTAR_THREAD_TEST_CASE(test_invalidation) {
 
     cached_file::metrics metrics;
     logalloc::region region;
-    cached_file cf(tf.f, metrics, 0, cf_lru, region, page_size * 2);
+    cached_file cf(tf.f, metrics, cf_lru, region, page_size * 2);
 
     // Reads one page, half of the first page and half of the second page.
     auto read = [&] {
@@ -351,107 +340,6 @@ SEASTAR_THREAD_TEST_CASE(test_invalidation) {
     metrics = {};
     cf.invalidate_at_most_front(page_size * 2);
     BOOST_REQUIRE_EQUAL(1, metrics.page_evictions);
-
-    read();
-    BOOST_REQUIRE_EQUAL(2, metrics.page_misses);
-    BOOST_REQUIRE_EQUAL(2, metrics.page_populations);
-    BOOST_REQUIRE_EQUAL(0, metrics.page_hits);
-}
-
-SEASTAR_THREAD_TEST_CASE(test_invalidation_skewed_cached_file) {
-    auto page_size = cached_file::page_size;
-    test_file tf = make_test_file(page_size * 3);
-
-    size_t offset = page_size / 2;
-    cached_file::metrics metrics;
-    logalloc::region region;
-    cached_file cf(tf.f, metrics, offset, cf_lru, region, page_size * 2);
-
-    // Reads one page, half of the first page and half of the second page.
-    auto read = [&] {
-        BOOST_REQUIRE_EQUAL(
-            tf.contents.substr(offset, page_size),
-            read_to_string(cf, 0, page_size));
-    };
-
-    read();
-    BOOST_REQUIRE_EQUAL(2, metrics.page_populations);
-    BOOST_REQUIRE_EQUAL(2, metrics.page_misses);
-
-    metrics = {};
-    read();
-    BOOST_REQUIRE_EQUAL(0, metrics.page_misses);
-    BOOST_REQUIRE_EQUAL(2, metrics.page_hits);
-
-    metrics = {};
-    cf.invalidate_at_most(0, 1);
-    BOOST_REQUIRE_EQUAL(0, metrics.page_evictions);
-    read();
-    BOOST_REQUIRE_EQUAL(0, metrics.page_misses);
-    BOOST_REQUIRE_EQUAL(2, metrics.page_hits);
-
-    metrics = {};
-    cf.invalidate_at_most(1, page_size - align_up(offset, page_size) - 1);
-    BOOST_REQUIRE_EQUAL(0, metrics.page_evictions);
-    read();
-    BOOST_REQUIRE_EQUAL(0, metrics.page_misses);
-    BOOST_REQUIRE_EQUAL(2, metrics.page_hits);
-
-    metrics = {};
-    cf.invalidate_at_most(0, page_size);
-    BOOST_REQUIRE_EQUAL(1, metrics.page_evictions);
-    read();
-    BOOST_REQUIRE_EQUAL(1, metrics.page_misses);
-    BOOST_REQUIRE_EQUAL(1, metrics.page_populations);
-    BOOST_REQUIRE_EQUAL(1, metrics.page_hits);
-
-    metrics = {};
-    cf.invalidate_at_most(1, page_size);
-    BOOST_REQUIRE_EQUAL(0, metrics.page_evictions);
-    read();
-    BOOST_REQUIRE_EQUAL(0, metrics.page_misses);
-    BOOST_REQUIRE_EQUAL(2, metrics.page_hits);
-
-    metrics = {};
-    cf.invalidate_at_most(1, align_up(offset, page_size) - offset + page_size);
-    BOOST_REQUIRE_EQUAL(1, metrics.page_evictions);
-    read();
-    BOOST_REQUIRE_EQUAL(1, metrics.page_misses);
-    BOOST_REQUIRE_EQUAL(1, metrics.page_populations);
-    BOOST_REQUIRE_EQUAL(1, metrics.page_hits);
-
-    metrics = {};
-    cf.invalidate_at_most(1, align_up(offset, page_size) - offset + page_size - 1);
-    BOOST_REQUIRE_EQUAL(0, metrics.page_evictions);
-    read();
-    BOOST_REQUIRE_EQUAL(0, metrics.page_misses);
-    BOOST_REQUIRE_EQUAL(0, metrics.page_populations);
-    BOOST_REQUIRE_EQUAL(2, metrics.page_hits);
-
-    metrics = {};
-    cf.invalidate_at_most(0, page_size * 3);
-    BOOST_REQUIRE_EQUAL(2, metrics.page_evictions);
-    read();
-    BOOST_REQUIRE_EQUAL(2, metrics.page_misses);
-    BOOST_REQUIRE_EQUAL(2, metrics.page_populations);
-    BOOST_REQUIRE_EQUAL(0, metrics.page_hits);
-
-    metrics = {};
-    cf.invalidate_at_most_front(0);
-    BOOST_REQUIRE_EQUAL(0, metrics.page_evictions);
-
-    metrics = {};
-    cf.invalidate_at_most_front(1);
-    BOOST_REQUIRE_EQUAL(0, metrics.page_evictions);
-
-    metrics = {};
-    cf.invalidate_at_most_front(align_up(offset, page_size) - offset + page_size);
-    BOOST_REQUIRE_EQUAL(2, metrics.page_evictions);
-    read();
-
-    metrics = {};
-    cf.invalidate_at_most_front(page_size * 3);
-    BOOST_REQUIRE_EQUAL(2, metrics.page_evictions);
 
     read();
     BOOST_REQUIRE_EQUAL(2, metrics.page_misses);
