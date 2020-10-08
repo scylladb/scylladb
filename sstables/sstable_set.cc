@@ -530,7 +530,7 @@ filter_sstable_for_reader_by_ck(std::vector<shared_sstable>&& sstables, column_f
 }
 
 flat_mutation_reader
-sstable_set::create_single_key_sstable_reader(
+sstable_set_impl::create_single_key_sstable_reader(
         column_family* cf,
         schema_ptr schema,
         reader_permit permit,
@@ -569,6 +569,22 @@ sstable_set::create_single_key_sstable_reader(
     }
     sstable_histogram.add(num_readers);
     return make_combined_reader(schema, std::move(permit), std::move(readers), fwd, fwd_mr);
+}
+
+flat_mutation_reader
+sstable_set::create_single_key_sstable_reader(
+        column_family* cf,
+        schema_ptr schema,
+        reader_permit permit,
+        utils::estimated_histogram& sstable_histogram,
+        const dht::ring_position& pos,
+        const query::partition_slice& slice,
+        const io_priority_class& pc,
+        tracing::trace_state_ptr trace_state,
+        streamed_mutation::forwarding fwd,
+        mutation_reader::forwarding fwd_mr) const {
+    return _impl->create_single_key_sstable_reader(cf, std::move(schema),
+            std::move(permit), sstable_histogram, pos, slice, pc, std::move(trace_state), fwd, fwd_mr);
 }
 
 flat_mutation_reader

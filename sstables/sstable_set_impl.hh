@@ -42,6 +42,18 @@ public:
     virtual void insert(shared_sstable sst) = 0;
     virtual void erase(shared_sstable sst) = 0;
     virtual std::unique_ptr<incremental_selector_impl> make_incremental_selector() const = 0;
+
+    virtual flat_mutation_reader create_single_key_sstable_reader(
+        column_family*,
+        schema_ptr,
+        reader_permit,
+        utils::estimated_histogram&,
+        const dht::ring_position&,
+        const query::partition_slice&,
+        const io_priority_class&,
+        tracing::trace_state_ptr,
+        streamed_mutation::forwarding,
+        mutation_reader::forwarding) const;
 };
 
 // default sstable_set, not specialized for anything
