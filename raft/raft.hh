@@ -235,7 +235,7 @@ public:
     // The function suppose to take a snapshot of a state machine
     // To be called during log compaction or when a leader brings
     // a lagging follower up-to-date
-    virtual future<snapshot_id> take_snaphot() = 0;
+    virtual future<snapshot_id> take_snapshot() = 0;
 
     // The function drops a snapshot with a provided id
     virtual void drop_snapshot(snapshot_id id) = 0;
@@ -270,7 +270,7 @@ public:
     // Send a snapshot snap to a server server_id.
     // A returned future is resolved when snapshot is sent and
     // successfully applied by a receiver. Will be waited to
-    // know if a snaphot transfer succeeded.
+    // know if a snapshot transfer succeeded.
     virtual future<> send_snapshot(server_id server_id, const install_snapshot& snap) = 0;
 
     // Send provided append_request to the supplied server, does
