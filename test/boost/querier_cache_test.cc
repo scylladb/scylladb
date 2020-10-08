@@ -749,15 +749,16 @@ SEASTAR_THREAD_TEST_CASE(test_immediate_evict_on_insert) {
     test_querier_cache t;
 
     auto& sem = t.get_semaphore();
-    auto permit = sem.make_permit();
+    auto permit1 = sem.make_permit();
+    auto permit2 = sem.make_permit();
 
-    permit.wait_admission(0, db::no_timeout).get();
+    permit1.wait_admission(0, db::no_timeout).get();
 
-    auto resources = permit.consume_resources(reader_resources(sem.available_resources().count, 0));
+    auto resources = permit1.consume_resources(reader_resources(sem.available_resources().count, 0));
 
     BOOST_CHECK_EQUAL(sem.available_resources().count, 0);
 
-    auto fut = permit.wait_admission(1, db::no_timeout);
+    auto fut = permit2.wait_admission(1, db::no_timeout);
 
     BOOST_CHECK_EQUAL(sem.waiters(), 1);
 
