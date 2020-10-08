@@ -47,6 +47,13 @@ static sstring read_to_string(cached_file::stream& s, size_t limit = std::numeri
     return b.substr(0, limit);
 }
 
+static sstring read_to_string(file& f, size_t start, size_t len) {
+    file_input_stream_options opt;
+    auto in = make_file_input_stream(f, start, len, opt);
+    auto buf = in.read_exactly(len).get0();
+    return sstring(buf.get(), buf.size());
+}
+
 static sstring read_to_string(cached_file& cf, size_t off, size_t limit = std::numeric_limits<size_t>::max()) {
     auto s = cf.read(off, default_priority_class(), std::nullopt);
     return read_to_string(s, limit);
@@ -83,6 +90,26 @@ test_file make_test_file(size_t size) {
         .f = std::move(f),
         .contents = std::move(contents)
     };
+}
+
+SEASTAR_THREAD_TEST_CASE(test_file_wrapper) {
+    auto page_size = cached_file::page_size;
+    cached_file::metrics metrics;
+    test_file tf = make_test_file(page_size * 3);
+    cached_file cf(tf.f, metrics, 0, page_size * 3);
+    seastar::file f = make_cached_seastar_file(cf);
+
+    BOOST_REQUIRE_EQUAL(tf.contents.substr(0, 1),
+        read_to_string(f, 0, 1));
+
+    BOOST_REQUIRE_EQUAL(tf.contents.substr(page_size - 1, 10),
+        read_to_string(f, page_size - 1, 10));
+
+    BOOST_REQUIRE_EQUAL(tf.contents.substr(page_size - 1, cf.size() - (page_size - 1)),
+        read_to_string(f, page_size - 1, cf.size() - (page_size - 1)));
+
+    BOOST_REQUIRE_EQUAL(tf.contents.substr(0, cf.size()),
+        read_to_string(f, 0, cf.size()));
 }
 
 SEASTAR_THREAD_TEST_CASE(test_reading_from_small_file) {

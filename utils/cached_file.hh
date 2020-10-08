@@ -280,4 +280,83 @@ public:
     size_t cached_bytes() const {
         return _cache.size() * page_size;
     }
+
+    /// \brief Returns the underlying file.
+    file& get_file() {
+        return _file;
+    }
 };
+
+class cached_file_impl : public file_impl {
+    cached_file& _cf;
+    tracing::trace_state_ptr _trace_state;
+private:
+    [[noreturn]] void unsupported() {
+        throw_with_backtrace<std::logic_error>("unsupported operation");
+    }
+public:
+    cached_file_impl(cached_file& cf, tracing::trace_state_ptr trace_state = {})
+        : file_impl(*get_file_impl(cf.get_file()))
+        , _cf(cf)
+        , _trace_state(std::move(trace_state))
+    { }
+
+    // unsupported
+    virtual future<size_t> write_dma(uint64_t pos, const void* buffer, size_t len, const io_priority_class& pc) override { unsupported(); }
+    virtual future<size_t> write_dma(uint64_t pos, std::vector<iovec> iov, const io_priority_class& pc) override { unsupported(); }
+    virtual future<> flush(void) override { unsupported(); }
+    virtual future<> truncate(uint64_t length) override { unsupported(); }
+    virtual future<> discard(uint64_t offset, uint64_t length) override { unsupported(); }
+    virtual future<> allocate(uint64_t position, uint64_t length) override { unsupported(); }
+    virtual subscription<directory_entry> list_directory(std::function<future<>(directory_entry)>) override { unsupported(); }
+
+    // delegating
+    virtual future<struct stat> stat(void) override { return _cf.get_file().stat(); }
+    virtual future<uint64_t> size(void) override { return _cf.get_file().size(); }
+    virtual future<> close() override { return _cf.get_file().close(); }
+    virtual std::unique_ptr<seastar::file_handle_impl> dup() override { return get_file_impl(_cf.get_file())->dup(); }
+
+    virtual future<temporary_buffer<uint8_t>> dma_read_bulk(uint64_t offset, size_t size, const io_priority_class& pc) override {
+        return do_with(_cf.read(offset, pc, std::nullopt, _trace_state), size, temporary_buffer<uint8_t>(),
+                [this, size] (cached_file::stream& s, size_t& size_left, temporary_buffer<uint8_t>& result) {
+            if (size_left == 0) {
+                return make_ready_future<temporary_buffer<uint8_t>>(std::move(result));
+            }
+            return repeat([this, &s, &size_left, &result, size] {
+                return s.next().then([this, &size_left, &result, size] (temporary_buffer<char> buf) {
+                    if (!buf) {
+                        throw seastar::file::eof_error();
+                    }
+                    if (!result) {
+                        if (buf.size() >= size_left) {
+                            result = temporary_buffer<uint8_t>(reinterpret_cast<uint8_t*>(buf.get_write()), size_left, buf.release());
+                            return stop_iteration::yes;
+                        }
+                        result = temporary_buffer<uint8_t>::aligned(_memory_dma_alignment, size_left);
+                    }
+                    size_t this_len = std::min(buf.size(), size_left);
+                    std::copy(buf.begin(), buf.begin() + this_len, result.get_write() + (size - size_left));
+                    size_left -= this_len;
+                    return stop_iteration(size_left == 0);
+                });
+            }).then([&] {
+                return std::move(result);
+            });
+        });
+    }
+
+    virtual future<size_t> read_dma(uint64_t pos, void* buffer, size_t len, const io_priority_class& pc) override {
+        unsupported(); // FIXME
+    }
+
+    virtual future<size_t> read_dma(uint64_t pos, std::vector<iovec> iov, const io_priority_class& pc) override {
+        unsupported(); // FIXME
+    }
+};
+
+// Creates a seastar::file object which will read through a given cached_file instance.
+// The cached_file object must be kept alive as long as the file is in use.
+inline
+file make_cached_seastar_file(cached_file& cf) {
+    return file(make_shared<cached_file_impl>(cf));
+}
