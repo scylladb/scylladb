@@ -822,9 +822,8 @@ public:
     }
 
     flat_mutation_reader make_sstable_reader() const override {
-        return ::make_local_shard_sstable_reader(_schema,
+        return _compacting->make_local_shard_sstable_reader(_schema,
                 _permit,
-                _compacting,
                 query::full_partition_range,
                 _schema->full_slice(),
                 _io_priority,
@@ -869,9 +868,8 @@ public:
     }
 
     flat_mutation_reader make_sstable_reader() const override {
-        return ::make_local_shard_sstable_reader(_schema,
+        return _compacting->make_local_shard_sstable_reader(_schema,
                 _permit,
-                _compacting,
                 query::full_partition_range,
                 _schema->full_slice(),
                 _io_priority,
@@ -1341,9 +1339,8 @@ public:
 
     // Use reader that makes sure no non-local mutation will not be filtered out.
     flat_mutation_reader make_sstable_reader() const override {
-        return ::make_range_sstable_reader(_schema,
+        return _compacting->make_range_sstable_reader(_schema,
                 _permit,
-                _compacting,
                 query::full_partition_range,
                 _schema->full_slice(),
                 _io_priority,

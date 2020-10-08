@@ -6083,9 +6083,8 @@ SEASTAR_TEST_CASE(purged_tombstone_consumer_sstable_test) {
             for (auto&& sst : all) {
                 compacting->insert(std::move(sst));
             }
-            auto reader = ::make_range_sstable_reader(s,
+            auto reader = compacting->make_range_sstable_reader(s,
                 tests::make_permit(),
-                compacting,
                 query::full_partition_range,
                 s->full_slice(),
                 service::get_local_compaction_priority(),
