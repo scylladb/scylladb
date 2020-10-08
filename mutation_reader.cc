@@ -1645,14 +1645,14 @@ future<> shard_reader::do_fill_buffer(db::timeout_clock::time_point timeout) {
         fill_buf_fut = smp::submit_to(_shard, [this, gs = global_schema_ptr(_schema), timeout] {
             auto ms = mutation_source([lifecycle_policy = _lifecycle_policy.get()] (
                         schema_ptr s,
-                        reader_permit,
+                        reader_permit permit,
                         const dht::partition_range& pr,
                         const query::partition_slice& ps,
                         const io_priority_class& pc,
                         tracing::trace_state_ptr ts,
                         streamed_mutation::forwarding,
                         mutation_reader::forwarding fwd_mr) {
-                return lifecycle_policy->create_reader(std::move(s), pr, ps, pc, std::move(ts), fwd_mr);
+                return lifecycle_policy->create_reader(std::move(s), std::move(permit), pr, ps, pc, std::move(ts), fwd_mr);
             });
             auto rreader = make_foreign(std::make_unique<evictable_reader>(evictable_reader::auto_pause::yes, std::move(ms),
                         gs.get(), _lifecycle_policy->semaphore().make_permit(), *_pr, _ps, _pc, _trace_state, _fwd_mr));

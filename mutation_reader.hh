@@ -470,6 +470,7 @@ public:
     /// remote shard stay alive, during the lifetime of the created reader.
     virtual flat_mutation_reader create_reader(
             schema_ptr schema,
+            reader_permit permit,
             const dht::partition_range& range,
             const query::partition_slice& slice,
             const io_priority_class& pc,
