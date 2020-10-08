@@ -2023,7 +2023,7 @@ components_writer::components_writer(sstable& sst, const schema& s, file_writer&
     , _index_needs_close(true)
     , _max_sstable_size(cfg.max_sstable_size)
     , _tombstone_written(false)
-    , _range_tombstones(s, reader_semaphore.make_permit())
+    , _range_tombstones(s, reader_semaphore.make_permit(&_schema, "components-writer"))
 {
     // This can be 0 in some cases, which is albeit benign, can wreak havoc
     // in lower-level writer code, so clamp it to [1, +inf) here, which is
@@ -2559,7 +2559,7 @@ future<> sstable::generate_summary(const io_priority_class& pc) {
                         [this, &pc, options = std::move(options), index_file, index_size] (summary_generator& s) mutable {
                     auto sem = std::make_unique<reader_concurrency_semaphore>(reader_concurrency_semaphore::no_limits{});
                     auto ctx = make_lw_shared<index_consume_entry_context<summary_generator>>(
-                            sem->make_permit(), s, trust_promoted_index::yes, *_schema, "", index_file, std::move(options), 0, index_size,
+                            sem->make_permit(_schema.get(), "generate-summary"), s, trust_promoted_index::yes, *_schema, "", index_file, std::move(options), 0, index_size,
                             (_version >= sstable_version_types::mc
                                 ? std::make_optional(get_clustering_values_fixed_lengths(get_serialization_header()))
                                 : std::optional<column_values_fixed_lengths>{}));
@@ -3296,7 +3296,7 @@ future<bool> sstable::has_partition_key(const utils::hashed_key& hk, const dht::
         return make_ready_future<bool>(false);
     }
     auto sem = std::make_unique<reader_concurrency_semaphore>(reader_concurrency_semaphore::no_limits{});
-    auto lh_index_ptr = std::make_unique<sstables::index_reader>(s, sem->make_permit(), default_priority_class(), tracing::trace_state_ptr());
+    auto lh_index_ptr = std::make_unique<sstables::index_reader>(s, sem->make_permit(_schema.get(), s->get_filename()), default_priority_class(), tracing::trace_state_ptr());
     auto& lh_index = *lh_index_ptr;
     return lh_index.advance_lower_and_check_if_present(dk).then([lh_index_ptr = std::move(lh_index_ptr), s, sem = std::move(sem)] (bool present) mutable {
         lh_index_ptr.reset(); // destroy before the semaphore

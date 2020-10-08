@@ -113,7 +113,7 @@ private:
     Querier make_querier(const dht::partition_range& range) {
         return Querier(_mutation_source,
             _s.schema(),
-            _sem.make_permit(),
+            _sem.make_permit(_s.schema().get(), "make-querier"),
             range,
             _s.schema()->full_slice(),
             service::get_local_sstable_query_read_priority(),
@@ -749,8 +749,8 @@ SEASTAR_THREAD_TEST_CASE(test_immediate_evict_on_insert) {
     test_querier_cache t;
 
     auto& sem = t.get_semaphore();
-    auto permit1 = sem.make_permit();
-    auto permit2 = sem.make_permit();
+    auto permit1 = sem.make_permit(t.get_schema().get(), get_name());
+    auto permit2 = sem.make_permit(t.get_schema().get(), get_name());
 
     permit1.wait_admission(0, db::no_timeout).get();
 

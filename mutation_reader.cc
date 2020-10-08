@@ -1654,8 +1654,9 @@ future<> shard_reader::do_fill_buffer(db::timeout_clock::time_point timeout) {
                         mutation_reader::forwarding fwd_mr) {
                 return lifecycle_policy->create_reader(std::move(s), std::move(permit), pr, ps, pc, std::move(ts), fwd_mr);
             });
+            auto s = gs.get();
             auto rreader = make_foreign(std::make_unique<evictable_reader>(evictable_reader::auto_pause::yes, std::move(ms),
-                        gs.get(), _lifecycle_policy->semaphore().make_permit(), *_pr, _ps, _pc, _trace_state, _fwd_mr));
+                        s, _lifecycle_policy->semaphore().make_permit(s.get(), "shard-reader"), *_pr, _ps, _pc, _trace_state, _fwd_mr));
             tracing::trace(_trace_state, "Creating shard reader on shard: {}", this_shard_id());
             auto f = rreader->fill_buffer(timeout);
             return f.then([rreader = std::move(rreader)] () mutable {

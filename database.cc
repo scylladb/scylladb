@@ -1379,7 +1379,8 @@ future<mutation> database::do_apply_counter_update(column_family& cf, const froz
             // counter state for each modified cell...
 
             tracing::trace(trace_state, "Reading counter values from the CF");
-            return counter_write_query(m_schema, cf.as_mutation_source(), get_reader_concurrency_semaphore().make_permit(), m.decorated_key(), slice, trace_state, timeout)
+            auto permit = get_reader_concurrency_semaphore().make_permit(m_schema.get(), "counter-read-before-write");
+            return counter_write_query(m_schema, cf.as_mutation_source(), std::move(permit), m.decorated_key(), slice, trace_state, timeout)
                     .then([this, &cf, &m, m_schema, timeout, trace_state] (auto mopt) {
                 // ...now, that we got existing state of all affected counter
                 // cells we can look for our shard in each of them, increment
@@ -2089,7 +2090,7 @@ flat_mutation_reader make_multishard_streaming_reader(distributed<database>& db,
     });
     auto&& full_slice = schema->full_slice();
     auto& cf = db.local().find_column_family(schema);
-    return make_flat_multi_range_reader(std::move(schema), cf.streaming_read_concurrency_semaphore().make_permit(), std::move(ms),
+    return make_flat_multi_range_reader(schema, cf.streaming_read_concurrency_semaphore().make_permit(schema.get(), "multishard-streaming-reader"), std::move(ms),
             std::move(range_generator), std::move(full_slice), service::get_local_streaming_priority(), {}, mutation_reader::forwarding::no);
 }
 

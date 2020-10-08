@@ -25,6 +25,7 @@
 
 #include "reader_concurrency_semaphore.hh"
 #include "utils/exceptions.hh"
+#include "schema.hh"
 
 logger rcslog("reader_concurrency_semaphore");
 
@@ -69,20 +70,47 @@ void reader_permit::resource_units::reset(reader_resources res) {
 
 class reader_permit::impl {
     reader_concurrency_semaphore& _semaphore;
+    const schema* _schema;
+    sstring _op_name;
+    std::string_view _op_name_view;
     reader_resources _resources;
     bool _admitted = false;
 
 public:
-    impl(reader_concurrency_semaphore& semaphore) : _semaphore(semaphore) { }
+    struct value_tag {};
+
+    impl(reader_concurrency_semaphore& semaphore, const schema* const schema, const std::string_view& op_name)
+        : _semaphore(semaphore)
+        , _schema(schema)
+        , _op_name_view(op_name)
+    { }
+    impl(reader_concurrency_semaphore& semaphore, const schema* const schema, sstring&& op_name)
+        : _semaphore(semaphore)
+        , _schema(schema)
+        , _op_name(std::move(op_name))
+        , _op_name_view(_op_name)
+    { }
     ~impl() {
         if (_resources) {
-            on_internal_error_noexcept(rcslog, format("reader_permit::impl::~impl(): detected a leak of {{count={}, memory={}}} resources",
-                        _resources.count, _resources.memory));
+            on_internal_error_noexcept(rcslog, format("reader_permit::impl::~impl(): permit {}.{}:{} detected a leak of {{count={}, memory={}}} resources",
+                        _schema ? _schema->ks_name() : "*",
+                        _schema ? _schema->cf_name() : "*",
+                        _op_name_view,
+                        _resources.count,
+                        _resources.memory));
         }
     }
 
     reader_concurrency_semaphore& semaphore() {
         return _semaphore;
+    }
+
+    const ::schema* get_schema() const {
+        return _schema;
+    }
+
+    std::string_view get_op_name() const {
+        return _op_name_view;
     }
 
     void on_admission() {
@@ -109,8 +137,14 @@ public:
     }
 };
 
-reader_permit::reader_permit(reader_concurrency_semaphore& semaphore)
-    : _impl(make_shared<impl>(semaphore)) {
+reader_permit::reader_permit(reader_concurrency_semaphore& semaphore, const schema* const schema, std::string_view op_name)
+    : _impl(::seastar::make_shared<reader_permit::impl>(semaphore, schema, op_name))
+{
+}
+
+reader_permit::reader_permit(reader_concurrency_semaphore& semaphore, const schema* const schema, sstring&& op_name)
+    : _impl(::seastar::make_shared<reader_permit::impl>(semaphore, schema, std::move(op_name)))
+{
 }
 
 void reader_permit::on_admission() {
@@ -257,8 +291,12 @@ future<reader_permit::resource_units> reader_concurrency_semaphore::do_wait_admi
     return fut;
 }
 
-reader_permit reader_concurrency_semaphore::make_permit() {
-    return reader_permit(*this);
+reader_permit reader_concurrency_semaphore::make_permit(const schema* const schema, const char* const op_name) {
+    return reader_permit(*this, schema, std::string_view(op_name));
+}
+
+reader_permit reader_concurrency_semaphore::make_permit(const schema* const schema, sstring&& op_name) {
+    return reader_permit(*this, schema, std::move(op_name));
 }
 
 void reader_concurrency_semaphore::broken(std::exception_ptr ex) {

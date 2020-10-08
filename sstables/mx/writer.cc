@@ -741,7 +741,7 @@ public:
         : sstable_writer::writer_impl(sst, s, pc, cfg)
         , _enc_stats(enc_stats)
         , _shard(shard)
-        , _range_tombstones(_schema, reader_semaphore.make_permit())
+        , _range_tombstones(_schema, reader_semaphore.make_permit(&s, "mx-writer"))
         , _tmp_bufs(_sst.sstable_buffer_size)
         , _sst_schema(make_sstable_schema(s, _enc_stats, _cfg))
         , _run_identifier(cfg.run_identifier)

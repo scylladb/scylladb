@@ -26,6 +26,7 @@
 #include "seastarx.hh"
 
 #include "db/timeout_clock.hh"
+#include "schema_fwd.hh"
 
 struct reader_resources {
     int count = 0;
@@ -94,7 +95,8 @@ private:
     shared_ptr<impl> _impl;
 
 private:
-    explicit reader_permit(reader_concurrency_semaphore& semaphore);
+    explicit reader_permit(reader_concurrency_semaphore& semaphore, const schema* const schema, std::string_view op_name);
+    explicit reader_permit(reader_concurrency_semaphore& semaphore, const schema* const schema, sstring&& op_name);
 
     void on_admission();
 
