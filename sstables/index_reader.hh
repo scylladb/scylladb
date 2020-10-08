@@ -230,7 +230,7 @@ public:
             auto data_size = data.size();
             std::unique_ptr<promoted_index> pi;
             if ((_trust_pi == trust_promoted_index::yes) && (promoted_index_size > 0)) {
-                pi = std::make_unique<promoted_index>(_s, *_deletion_time, _index_file,
+                pi = std::make_unique<promoted_index>(_s, *_deletion_time,
                     promoted_index_start, promoted_index_size, _num_pi_blocks, _use_binary_search);
             } else {
                 _num_pi_blocks = 0;
@@ -270,6 +270,14 @@ public:
     }
 };
 
+inline file make_tracked_index_file(sstable& sst, reader_permit permit, tracing::trace_state_ptr trace_state) {
+    auto f = make_tracked_file(sst.index_file(), std::move(permit));
+    if (!trace_state) {
+        return f;
+    }
+    return tracing::make_traced_file(std::move(f), std::move(trace_state), format("{}:", sst.filename(component_type::Index)));
+}
+
 inline
 std::unique_ptr<clustered_index_cursor> promoted_index::make_cursor(shared_sstable sst,
     reader_permit permit,
@@ -289,7 +297,8 @@ std::unique_ptr<clustered_index_cursor> promoted_index::make_cursor(shared_sstab
             *ck_values_fixed_lengths, *sst->_cached_index_file, options.io_priority_class, _num_blocks, trace_state);
     }
 
-    auto promoted_index_stream = make_file_input_stream(_index_file, _promoted_index_start, _promoted_index_size,options);
+    auto file = make_tracked_index_file(*sst, permit, std::move(trace_state));
+    auto promoted_index_stream = make_file_input_stream(std::move(file), _promoted_index_start, _promoted_index_size,options);
     return std::make_unique<scanning_clustered_index_cursor>(*sst->get_schema(), permit,
         std::move(promoted_index_stream), _promoted_index_size, _num_blocks, ck_values_fixed_lengths);
 }
@@ -375,14 +384,6 @@ class index_reader {
         index_consumer _consumer;
         index_consume_entry_context<index_consumer> _context;
 
-        static file get_file(sstable& sst, reader_permit permit, tracing::trace_state_ptr trace_state) {
-            auto f = make_tracked_file(sst._index_file, std::move(permit));
-            if (!trace_state) {
-                return f;
-            }
-            return tracing::make_traced_file(std::move(f), std::move(trace_state), format("{}:", sst.filename(component_type::Index)));
-        }
-
         inline static file_input_stream_options get_file_input_stream_options(shared_sstable sst, const io_priority_class& pc) {
             file_input_stream_options options;
             options.buffer_size = sst->sstable_buffer_size;
@@ -396,7 +397,7 @@ class index_reader {
             : _consumer(quantity)
             , _context(permit, _consumer,
                        trust_promoted_index(sst->has_correct_promoted_index_entries()), *sst->_schema,
-                       get_file(*sst, permit, trace_state),
+                       make_tracked_index_file(*sst, permit, trace_state),
                        get_file_input_stream_options(sst, pc), begin, end - begin,
                        (sst->get_version() >= sstable_version_types::mc
                            ? std::make_optional(get_clustering_values_fixed_lengths(sst->get_serialization_header()))

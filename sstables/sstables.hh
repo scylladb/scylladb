@@ -283,6 +283,9 @@ public:
     uint64_t index_size() const {
         return _index_file_size;
     }
+    file& index_file() {
+        return _index_file;
+    }
     uint64_t filter_size() const {
         return _filter_file_size;
     }

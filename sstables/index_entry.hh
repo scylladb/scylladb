@@ -207,7 +207,6 @@ public:
 
 class promoted_index {
     deletion_time _del_time;
-    file _index_file;
     uint64_t _promoted_index_start;
     uint32_t _promoted_index_size;
     uint32_t _num_blocks;
@@ -215,13 +214,11 @@ class promoted_index {
 public:
     promoted_index(const schema& s,
         deletion_time del_time,
-        file index_file,
         uint64_t promoted_index_start,
         uint32_t promoted_index_size,
         uint32_t num_blocks,
         bool use_binary_search)
             : _del_time{del_time}
-            , _index_file(std::move(index_file))
             , _promoted_index_start(promoted_index_start)
             , _promoted_index_size(promoted_index_size)
             , _num_blocks(num_blocks)
