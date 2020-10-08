@@ -253,19 +253,23 @@ def find_headers(repodir, excluded_dirs):
 modes = {
     'debug': {
         'cxxflags': '-DDEBUG -DDEBUG_LSA_SANITIZER -DSCYLLA_ENABLE_ERROR_INJECTION',
-        'cxx_ld_flags': '-Wstack-usage=%s' % (1024*40),
+        'cxx_ld_flags': '',
+        'stack-usage-threshold': 1024*40,
     },
     'release': {
         'cxxflags': '',
-        'cxx_ld_flags': '-O3 -ffunction-sections -fdata-sections -Wl,--gc-sections -Wstack-usage=%s' % (1024*13),
+        'cxx_ld_flags': '-O3 -ffunction-sections -fdata-sections -Wl,--gc-sections',
+        'stack-usage-threshold': 1024*13,
     },
     'dev': {
         'cxxflags': '-DSEASTAR_ENABLE_ALLOC_FAILURE_INJECTION -DSCYLLA_ENABLE_ERROR_INJECTION',
-        'cxx_ld_flags': '-O1 -Wstack-usage=%s' % (1024*21),
+        'cxx_ld_flags': '-O1',
+        'stack-usage-threshold': 1024*21,
     },
     'sanitize': {
         'cxxflags': '-DDEBUG -DDEBUG_LSA_SANITIZER -DSCYLLA_ENABLE_ERROR_INJECTION',
-        'cxx_ld_flags': '-Os -Wstack-usage=%s' % (1024*50),
+        'cxx_ld_flags': '-Os',
+        'stack-usage-threshold': 1024*50,
     }
 }
 
@@ -1121,6 +1125,27 @@ warnings = [
     '-Wno-ignored-attributes',
     '-Wno-overloaded-virtual',
     '-Wno-stringop-overflow',
+    '-Wno-unused-command-line-argument',
+    '-Wno-inconsistent-missing-override',
+    '-Wno-defaulted-function-deleted',
+    '-Wno-redeclared-class-member',
+    '-Wno-pessimizing-move',
+    '-Wno-redundant-move',
+    '-Wno-gnu-designator',
+    '-Wno-instantiation-after-specialization',
+    '-Wno-unused-private-field',
+    '-Wno-unsupported-friend',
+    '-Wno-unused-variable',
+    '-Wno-return-std-move',
+    '-Wno-delete-non-abstract-non-virtual-dtor',
+    '-Wno-unknown-attributes',
+    '-Wno-braced-scalar-init',
+    '-Wno-unused-value',
+    '-Wno-range-loop-construct',
+    '-Wno-unused-function',
+    '-Wno-implicit-int-float-conversion',
+    '-Wno-delete-abstract-non-virtual-dtor',
+    '-Wno-uninitialized-const-reference',
 ]
 
 warnings = [w
@@ -1136,6 +1161,10 @@ optimization_flags = [o
                       for o in optimization_flags
                       if flag_supported(flag=o, compiler=args.cxx)]
 modes['release']['cxx_ld_flags'] += ' ' + ' '.join(optimization_flags)
+
+if flag_supported(flag='-Wstack-usage=4096', compiler=args.cxx):
+    for mode in modes:
+        modes[mode]['cxx_ld_flags'] += f' -Wstack-usage={modes[mode]["stack-usage-threshold"]} -Wno-error=stack-usage='
 
 linker_flags = linker_flags(compiler=args.cxx)
 
@@ -1170,6 +1199,17 @@ pkgs.append('libsystemd')
 
 
 compiler_test_src = '''
+
+// clang pretends to be gcc (defined __GNUC__), so we
+// must check it first
+#ifdef __clang__
+
+#if __clang_major__ < 10
+    #error "MAJOR"
+#endif
+
+#elif defined(__GNUC__)
+
 #if __GNUC__ < 10
     #error "MAJOR"
 #elif __GNUC__ == 10
@@ -1180,6 +1220,12 @@ compiler_test_src = '''
             #error "PATCHLEVEL"
         #endif
     #endif
+#endif
+
+#else
+
+#error "Unrecognized compiler"
+
 #endif
 
 int main() { return 0; }
@@ -1269,8 +1315,6 @@ forced_ldflags += '--build-id=sha1,'
 forced_ldflags += f'--dynamic-linker={dynamic_linker}'
 
 args.user_ldflags = forced_ldflags + ' ' + args.user_ldflags
-
-args.user_cflags += ' -Wno-error=stack-usage='
 
 args.user_cflags += f"-ffile-prefix-map={curdir}=."
 
