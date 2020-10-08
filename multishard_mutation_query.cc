@@ -630,7 +630,7 @@ static future<reconcilable_result> do_query_mutations(
                     tracing::trace_state_ptr trace_state,
                     streamed_mutation::forwarding,
                     mutation_reader::forwarding fwd_mr) {
-                return make_multishard_combining_reader(ctx, std::move(s), pr, ps, pc, std::move(trace_state), fwd_mr);
+                return make_multishard_combining_reader(ctx, std::move(s), std::move(permit), pr, ps, pc, std::move(trace_state), fwd_mr);
             });
             auto reader = make_flat_multi_range_reader(s, ctx->permit(), std::move(ms), ranges,
                     cmd.slice, service::get_local_sstable_query_read_priority(), trace_state, mutation_reader::forwarding::no);

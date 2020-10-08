@@ -1768,6 +1768,7 @@ public:
             const dht::sharder& sharder,
             shared_ptr<reader_lifecycle_policy> lifecycle_policy,
             schema_ptr s,
+            reader_permit permit,
             const dht::partition_range& pr,
             const query::partition_slice& ps,
             const io_priority_class& pc,
@@ -1862,12 +1863,13 @@ multishard_combining_reader::multishard_combining_reader(
         const dht::sharder& sharder,
         shared_ptr<reader_lifecycle_policy> lifecycle_policy,
         schema_ptr s,
+        reader_permit permit,
         const dht::partition_range& pr,
         const query::partition_slice& ps,
         const io_priority_class& pc,
         tracing::trace_state_ptr trace_state,
         mutation_reader::forwarding fwd_mr)
-    : impl(std::move(s), lifecycle_policy->semaphore().make_permit()), _sharder(sharder) {
+    : impl(std::move(s), std::move(permit)), _sharder(sharder) {
 
     on_partition_range_change(pr);
 
@@ -1950,13 +1952,14 @@ reader_lifecycle_policy::try_resume(reader_concurrency_semaphore::inactive_read_
 flat_mutation_reader make_multishard_combining_reader(
         shared_ptr<reader_lifecycle_policy> lifecycle_policy,
         schema_ptr schema,
+        reader_permit permit,
         const dht::partition_range& pr,
         const query::partition_slice& ps,
         const io_priority_class& pc,
         tracing::trace_state_ptr trace_state,
         mutation_reader::forwarding fwd_mr) {
     const dht::sharder& sharder = schema->get_sharder();
-    return make_flat_mutation_reader<multishard_combining_reader>(sharder, std::move(lifecycle_policy), std::move(schema), pr, ps, pc,
+    return make_flat_mutation_reader<multishard_combining_reader>(sharder, std::move(lifecycle_policy), std::move(schema), std::move(permit), pr, ps, pc,
             std::move(trace_state), fwd_mr);
 }
 
@@ -1964,12 +1967,13 @@ flat_mutation_reader make_multishard_combining_reader_for_tests(
         const dht::sharder& sharder,
         shared_ptr<reader_lifecycle_policy> lifecycle_policy,
         schema_ptr schema,
+        reader_permit permit,
         const dht::partition_range& pr,
         const query::partition_slice& ps,
         const io_priority_class& pc,
         tracing::trace_state_ptr trace_state,
         mutation_reader::forwarding fwd_mr) {
-    return make_flat_mutation_reader<multishard_combining_reader>(sharder, std::move(lifecycle_policy), std::move(schema), pr, ps, pc,
+    return make_flat_mutation_reader<multishard_combining_reader>(sharder, std::move(lifecycle_policy), std::move(schema), std::move(permit), pr, ps, pc,
             std::move(trace_state), fwd_mr);
 }
 

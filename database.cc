@@ -2075,7 +2075,7 @@ flat_mutation_reader make_multishard_streaming_reader(distributed<database>& db,
         }
     };
     auto ms = mutation_source([&db] (schema_ptr s,
-            reader_permit,
+            reader_permit permit,
             const dht::partition_range& pr,
             const query::partition_slice& ps,
             const io_priority_class& pc,
@@ -2083,7 +2083,7 @@ flat_mutation_reader make_multishard_streaming_reader(distributed<database>& db,
             streamed_mutation::forwarding,
             mutation_reader::forwarding fwd_mr) {
         auto table_id = s->id();
-        return make_multishard_combining_reader(make_shared<streaming_reader_lifecycle_policy>(db, table_id), std::move(s), pr, ps, pc,
+        return make_multishard_combining_reader(make_shared<streaming_reader_lifecycle_policy>(db, table_id), std::move(s), std::move(permit), pr, ps, pc,
                 std::move(trace_state), fwd_mr);
     });
     auto&& full_slice = schema->full_slice();
