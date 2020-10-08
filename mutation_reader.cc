@@ -1560,6 +1560,7 @@ private:
 public:
     shard_reader(
             schema_ptr schema,
+            reader_permit permit,
             shared_ptr<reader_lifecycle_policy> lifecycle_policy,
             unsigned shard,
             const dht::partition_range& pr,
@@ -1567,7 +1568,7 @@ public:
             const io_priority_class& pc,
             tracing::trace_state_ptr trace_state,
             mutation_reader::forwarding fwd_mr)
-        : impl(std::move(schema), lifecycle_policy->semaphore().make_permit())
+        : impl(std::move(schema), std::move(permit))
         , _lifecycle_policy(std::move(lifecycle_policy))
         , _shard(shard)
         , _pr(&pr)
@@ -1872,7 +1873,7 @@ multishard_combining_reader::multishard_combining_reader(
 
     _shard_readers.reserve(_sharder.shard_count());
     for (unsigned i = 0; i < _sharder.shard_count(); ++i) {
-        _shard_readers.emplace_back(make_lw_shared<shard_reader>(_schema, lifecycle_policy, i, pr, ps, pc, trace_state, fwd_mr));
+        _shard_readers.emplace_back(make_lw_shared<shard_reader>(_schema, _permit, lifecycle_policy, i, pr, ps, pc, trace_state, fwd_mr));
     }
 }
 
