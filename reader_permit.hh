@@ -90,6 +90,12 @@ class reader_permit {
 public:
     class resource_units;
 
+    enum class state {
+        registered, // read is registered, but didn't attempt admission yet
+        waiting, // waiting for admission
+        admitted,
+    };
+
 private:
     class impl;
     shared_ptr<impl> _impl;
@@ -98,6 +104,7 @@ private:
     explicit reader_permit(reader_concurrency_semaphore& semaphore, const schema* const schema, std::string_view op_name);
     explicit reader_permit(reader_concurrency_semaphore& semaphore, const schema* const schema, sstring&& op_name);
 
+    void on_waiting();
     void on_admission();
 
 public:

@@ -74,7 +74,7 @@ class reader_permit::impl {
     sstring _op_name;
     std::string_view _op_name_view;
     reader_resources _resources;
-    bool _admitted = false;
+    reader_permit::state _state = reader_permit::state::registered;
 
 public:
     struct value_tag {};
@@ -113,21 +113,29 @@ public:
         return _op_name_view;
     }
 
+    reader_permit::state get_state() const {
+        return _state;
+    }
+
+    void on_waiting() {
+        _state = reader_permit::state::waiting;
+    }
+
     void on_admission() {
-        _admitted = true;
+        _state = reader_permit::state::admitted;
         _semaphore.consume(_resources);
     }
 
     void consume(reader_resources res) {
         _resources += res;
-        if (_admitted) {
+        if (_state == reader_permit::state::admitted) {
             _semaphore.consume(res);
         }
     }
 
     void signal(reader_resources res) {
         _resources -= res;
-        if (_admitted) {
+        if (_state == reader_permit::state::admitted) {
             _semaphore.signal(res);
         }
     }
@@ -145,6 +153,10 @@ reader_permit::reader_permit(reader_concurrency_semaphore& semaphore, const sche
 reader_permit::reader_permit(reader_concurrency_semaphore& semaphore, const schema* const schema, sstring&& op_name)
     : _impl(::seastar::make_shared<reader_permit::impl>(semaphore, schema, std::move(op_name)))
 {
+}
+
+void reader_permit::on_waiting() {
+    _impl->on_waiting();
 }
 
 void reader_permit::on_admission() {
@@ -287,6 +299,7 @@ future<reader_permit::resource_units> reader_concurrency_semaphore::do_wait_admi
     }
     promise<reader_permit::resource_units> pr;
     auto fut = pr.get_future();
+    permit.on_waiting();
     _wait_list.push_back(entry(std::move(pr), std::move(permit), r), timeout);
     return fut;
 }
