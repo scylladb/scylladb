@@ -235,7 +235,7 @@ public:
             } else {
                 _num_pi_blocks = 0;
             }
-            _consumer.consume_entry(index_entry{_s, std::move(_key), _position, std::move(pi)}, _entry_offset);
+            _consumer.consume_entry(index_entry{std::move(_key), _position, std::move(pi)}, _entry_offset);
             _deletion_time = std::nullopt;
             _num_pi_blocks = 0;
             _state = state::START;
@@ -314,7 +314,7 @@ public:
     }
 
     bool operator()(const index_entry& e, dht::ring_position_view rp) const {
-        return _tri_cmp(e.get_decorated_key(), rp) < 0;
+        return _tri_cmp(e.get_decorated_key(_tri_cmp.s), rp) < 0;
     }
 
     bool operator()(dht::ring_position_view rp, const summary_entry& e) const {
@@ -322,7 +322,7 @@ public:
     }
 
     bool operator()(dht::ring_position_view rp, const index_entry& e) const {
-        return _tri_cmp(e.get_decorated_key(), rp) > 0;
+        return _tri_cmp(e.get_decorated_key(_tri_cmp.s), rp) > 0;
     }
 };
 

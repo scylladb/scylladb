@@ -236,7 +236,6 @@ public:
 
 class index_entry {
 private:
-    std::reference_wrapper<const schema> _s;
     temporary_buffer<char> _key;
     mutable std::optional<dht::token> _token;
     uint64_t _position;
@@ -252,9 +251,9 @@ public:
         return key_view{get_key_bytes()};
     }
 
-    decorated_key_view get_decorated_key() const {
+    decorated_key_view get_decorated_key(const schema& s) const {
         if (!_token) {
-            _token.emplace(_s.get().get_partitioner().get_token(get_key()));
+            _token.emplace(s.get_partitioner().get_token(get_key()));
         }
         return decorated_key_view(*_token, get_key());
     }
@@ -269,9 +268,8 @@ public:
         return {};
     }
 
-    index_entry(const schema& s, temporary_buffer<char>&& key, uint64_t position, std::unique_ptr<promoted_index>&& index)
-        : _s(std::cref(s))
-        , _key(std::move(key))
+    index_entry(temporary_buffer<char>&& key, uint64_t position, std::unique_ptr<promoted_index>&& index)
+        : _key(std::move(key))
         , _position(position)
         , _index(std::move(index))
     {}

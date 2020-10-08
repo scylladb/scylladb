@@ -42,7 +42,7 @@ public:
         _r->read_partition_data().get();
         while (!_r->eof()) {
             auto& e = _r->current_partition_entry();
-            auto k = e.get_decorated_key();
+            auto k = e.get_decorated_key(s);
             auto token = dht::token(k.token());
             auto rp = dht::ring_position(token, k.key().to_partition_key(s));
 
