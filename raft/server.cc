@@ -286,7 +286,7 @@ future<> server_impl::io_fiber(index_t last_stable) {
             if (batch.snp) {
                 logger.trace("[{}] io_fiber storing snapshot {}", _id, batch.snp->id);
                 // Persist the snapshot
-                co_await _storage->store_snapshot(*batch.snp, 0);
+                co_await _storage->store_snapshot(*batch.snp, _config.snapshot_trailing);
                 // If this is locally generated snapshot there is no need to
                 // load it.
                 if (_last_loaded_snapshot_id != batch.snp->id) {
@@ -396,7 +396,7 @@ future<> server_impl::applier_fiber() {
                 logger.trace("[{}] applier fiber taking snapshot term={}, idx={}", _id, snp.term, snp.idx);
                 snp.id = co_await _state_machine->take_snapshot();
                 _last_loaded_snapshot_id = snp.id;
-                _fsm->apply_snapshot(snp);
+                _fsm->apply_snapshot(snp, _config.snapshot_trailing);
                 applied_since_snapshot = 0;
             }
         }

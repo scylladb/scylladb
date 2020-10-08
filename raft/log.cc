@@ -77,7 +77,9 @@ void log::truncate_tail(index_t idx) {
 }
 
 index_t log::start_idx() const {
-    return _snapshot.idx + index_t(1);
+    // log my contain entries included in the snapshot, so start idx
+    // may be smaller that snapshot index
+    return (_log.empty() ? _snapshot.idx  + index_t(1): _log[0]->idx);
 }
 
 term_t log::last_term() const {
@@ -100,7 +102,7 @@ std::pair<bool, term_t> log::match_term(index_t idx, term_t term) const {
     }
 
     // idx cannot point into the snapshot
-    assert(idx >= _snapshot.idx);
+    assert(idx >= start_idx() || idx == _snapshot.idx);
 
     term_t my_term;
 
@@ -153,9 +155,12 @@ index_t log::maybe_append(std::vector<log_entry>&& entries) {
     return last_new_idx;
 }
 
-void log::apply_snapshot(snapshot&& snp) {
-    // call truncate first since it uses old snapshot
-    truncate_tail(snp.idx);
+void log::apply_snapshot(snapshot&& snp, size_t trailing) {
+    if (snp.idx - start_idx() > index_t(trailing)) {
+       // call truncate first since it uses old snapshot
+       truncate_tail(index_t(snp.idx - trailing));
+    }
+
     _snapshot = std::move(snp);
 }
 

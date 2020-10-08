@@ -503,7 +503,7 @@ void fsm::replicate_to(follower_progress& progress, bool allow_empty) {
 
         allow_empty = false; // allow only one empty message
 
-        if (progress.next_idx <= _log.get_snapshot().idx) {
+        if (progress.next_idx < _log.start_idx()) {
             // The next index to be sent points to a snapshot so
             // we need to transfer the snasphot before we can
             // continue syncing the log.
@@ -614,8 +614,8 @@ void fsm::snapshot_status(server_id id, bool success) {
     // again and snapshot transfer will be attempted one more time.
 }
 
-void fsm::apply_snapshot(snapshot snp) {
-    _log.apply_snapshot(std::move(snp));
+void fsm::apply_snapshot(snapshot snp, size_t trailing) {
+    _log.apply_snapshot(std::move(snp), trailing);
 }
 
 void fsm::stop() {

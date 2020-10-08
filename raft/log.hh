@@ -45,7 +45,6 @@ private:
     void truncate_head(index_t i);
     void truncate_tail(index_t i);
     log_entry_ptr& get_entry(index_t);
-    index_t start_idx() const;
 public:
     log() = default ;
     explicit log(log_entries log) : _log(std::move(log)) { stable_to(index_t(_log.size())); };
@@ -65,6 +64,7 @@ public:
     // The voter denies its vote if its own log is more up-to-date
     // than that of the candidate.
     bool is_up_to_date(index_t idx, term_t term) const;
+    index_t start_idx() const;
     index_t next_idx() const;
     index_t last_idx() const;
     index_t stable_idx() const {
@@ -77,7 +77,10 @@ public:
         return _snapshot;
     }
 
-    void apply_snapshot(snapshot&& snp);
+    // This call will update the log to point to the new snaphot
+    // and will truncate the log prefix up to (snp.idx - trailing)
+    // entry.
+    void apply_snapshot(snapshot&& snp, size_t trailing);
 
     // 3.5
     // Raft maintains the following properties, which
