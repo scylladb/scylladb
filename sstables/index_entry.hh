@@ -211,7 +211,6 @@ class promoted_index {
     uint64_t _promoted_index_start;
     uint32_t _promoted_index_size;
     uint32_t _num_blocks;
-    temporary_buffer<char> _front; // pre-read front of the promoted index.
     bool _use_binary_search;
 public:
     promoted_index(const schema& s,
@@ -220,14 +219,12 @@ public:
         uint64_t promoted_index_start,
         uint32_t promoted_index_size,
         uint32_t num_blocks,
-        temporary_buffer<char> front,
         bool use_binary_search)
             : _del_time{del_time}
             , _index_file(std::move(index_file))
             , _promoted_index_start(promoted_index_start)
             , _promoted_index_size(promoted_index_size)
             , _num_blocks(num_blocks)
-            , _front(std::move(front))
             , _use_binary_search(use_binary_search)
     { }
 

@@ -230,17 +230,8 @@ public:
             auto data_size = data.size();
             std::unique_ptr<promoted_index> pi;
             if ((_trust_pi == trust_promoted_index::yes) && (promoted_index_size > 0)) {
-                temporary_buffer<char> buf = [&] {
-                    if (promoted_index_size <= data_size) {
-                        auto buf = data.share();
-                        buf.trim(promoted_index_size);
-                        return buf;
-                    } else {
-                        return std::move(data);
-                    }
-                }();
                 pi = std::make_unique<promoted_index>(_s, *_deletion_time, _index_file,
-                    promoted_index_start, promoted_index_size, _num_pi_blocks, std::move(buf), _use_binary_search);
+                    promoted_index_start, promoted_index_size, _num_pi_blocks, _use_binary_search);
             } else {
                 _num_pi_blocks = 0;
             }
@@ -298,18 +289,7 @@ std::unique_ptr<clustered_index_cursor> promoted_index::make_cursor(shared_sstab
             *ck_values_fixed_lengths, *sst->_cached_index_file, options.io_priority_class, _num_blocks, trace_state);
     }
 
-    input_stream<char> promoted_index_stream = [&] {
-        if (_promoted_index_size <= _front.size()) {
-            return make_buffer_input_stream(_front.share());
-        } else {
-            return make_prepended_input_stream(_front.share(),
-                make_file_input_stream(_index_file,
-                    _promoted_index_start + _front.size(),
-                    _promoted_index_size - _front.size(),
-                    options).detach());
-        }
-    }();
-
+    auto promoted_index_stream = make_file_input_stream(_index_file, _promoted_index_start, _promoted_index_size,options);
     return std::make_unique<scanning_clustered_index_cursor>(*sst->get_schema(), permit,
         std::move(promoted_index_stream), _promoted_index_size, _num_blocks, ck_values_fixed_lengths);
 }
