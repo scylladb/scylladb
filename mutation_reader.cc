@@ -37,14 +37,17 @@ static constexpr size_t merger_small_vector_size = 4;
 template<typename T>
 using merger_vector = utils::small_vector<T, merger_small_vector_size>;
 
+using mutation_fragment_batch = boost::iterator_range<merger_vector<mutation_fragment>::iterator>;
+
 template<typename Producer>
 concept FragmentProducer = requires(Producer p, dht::partition_range part_range, position_range pos_range,
         db::timeout_clock::time_point timeout) {
     // The returned fragments are expected to have the same
     // position_in_partition. Iterators and references are expected
     // to be valid until the next call to operator()().
-    { p(timeout) } -> std::same_as<future<boost::iterator_range<merger_vector<mutation_fragment>::iterator>>>;
-    // These have the same semantics as their
+    { p(timeout) } -> std::same_as<future<mutation_fragment_batch>>;
+
+    // The following functions have the same semantics as their
     // flat_mutation_reader counterparts.
     { p.next_partition() };
     { p.fast_forward_to(part_range, timeout) } -> std::same_as<future<>>;
@@ -91,7 +94,7 @@ class mutation_fragment_merger {
             return make_ready_future<>();
         }
 
-        return _producer(timeout).then([this] (boost::iterator_range<iterator> fragments) {
+        return _producer(timeout).then([this] (mutation_fragment_batch fragments) {
             _it = fragments.begin();
             _end = fragments.end();
         });
@@ -169,8 +172,6 @@ public:
         }
     };
 
-    using mutation_fragment_batch = boost::iterator_range<merger_vector<mutation_fragment>::iterator>;
-
     // Determines how many times a fragment should be taken from the same
     // reader in order to enter gallop mode. Must be greater than one.
     static constexpr int gallop_mode_entering_threshold = 3;
@@ -244,26 +245,34 @@ public:
     future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout);
 };
 
-// Combines multiple mutation_readers into one.
-class combined_mutation_reader : public flat_mutation_reader::impl {
-    mutation_fragment_merger<mutation_reader_merger> _producer;
+/* Merge a non-decreasing stream of mutation fragment batches
+ * produced by a FragmentProducer into a non-decreasing stream
+ * of mutation fragments.
+ *
+ * See `mutation_fragment_merger` for details.
+ *
+ * This class is a simple adapter over `mutation_fragment_merger` that provides
+ * a `flat_mutation_reader` interface. */
+template <FragmentProducer Producer>
+class merging_reader : public flat_mutation_reader::impl {
+    mutation_fragment_merger<Producer> _merger;
     streamed_mutation::forwarding _fwd_sm;
 public:
-    // The specified streamed_mutation::forwarding and
-    // mutation_reader::forwarding tag must be the same for all included
-    // readers.
-    combined_mutation_reader(schema_ptr schema,
+    merging_reader(schema_ptr schema,
             reader_permit permit,
-            std::unique_ptr<reader_selector> selector,
             streamed_mutation::forwarding fwd_sm,
-            mutation_reader::forwarding fwd_mr);
+            Producer&& producer)
+        : impl(std::move(schema), std::move(permit))
+        , _merger(_schema, std::move(producer))
+        , _fwd_sm(fwd_sm) {}
+
     virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override;
     virtual void next_partition() override;
     virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override;
     virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) override;
 };
 
-// Dumb selector implementation for combined_mutation_reader that simply
+// Dumb selector implementation for mutation_reader_merger that simply
 // forwards it's list of readers.
 class list_reader_selector : public reader_selector {
     std::vector<flat_mutation_reader> _readers;
@@ -443,7 +452,7 @@ mutation_reader_merger::mutation_reader_merger(schema_ptr schema,
     maybe_add_readers(std::nullopt);
 }
 
-future<mutation_reader_merger::mutation_fragment_batch> mutation_reader_merger::operator()(db::timeout_clock::time_point timeout) {
+future<mutation_fragment_batch> mutation_reader_merger::operator()(db::timeout_clock::time_point timeout) {
     // Avoid merging-related logic if we know that only a single reader owns
     // current partition.
     if (_single_reader.reader != reader_iterator{}) {
@@ -534,6 +543,18 @@ future<mutation_reader_merger::mutation_fragment_batch> mutation_reader_merger::
 }
 
 void mutation_reader_merger::next_partition() {
+    // If the last batch of fragments returned by operator() came from partition P,
+    // we must forward to the partition immediately following P (as per the `next_partition`
+    // contract in `flat_mutation_reader`).
+    //
+    // The readers in _next are those which returned the last batch of fragments, thus they are
+    // currently positioned either inside P or at the end of P, hence we need to forward them.
+    // Readers in _fragment_heap (or the _galloping_reader, if we're currently galloping) are obviously still in P,
+    // so we also need to forward those. Finally, _halted_readers must have been halted after returning
+    // a fragment from P, hence must be forwarded.
+    //
+    // The only readers that we must not forward are those in _reader_heap, since they already are positioned
+    // at the start of the next partition.
     prepare_forwardable_readers();
     for (auto& rk : _next) {
         rk.last_kind = mutation_fragment::kind::partition_end;
@@ -566,19 +587,10 @@ future<> mutation_reader_merger::fast_forward_to(position_range pr, db::timeout_
     });
 }
 
-combined_mutation_reader::combined_mutation_reader(schema_ptr schema,
-        reader_permit permit,
-        std::unique_ptr<reader_selector> selector,
-        streamed_mutation::forwarding fwd_sm,
-        mutation_reader::forwarding fwd_mr)
-    : impl(std::move(schema), std::move(permit))
-    , _producer(_schema, mutation_reader_merger(_schema, std::move(selector), fwd_sm, fwd_mr))
-    , _fwd_sm(fwd_sm) {
-}
-
-future<> combined_mutation_reader::fill_buffer(db::timeout_clock::time_point timeout) {
+template <FragmentProducer P>
+future<> merging_reader<P>::fill_buffer(db::timeout_clock::time_point timeout) {
     return repeat([this, timeout] {
-        return _producer(timeout).then([this] (mutation_fragment_opt mfo) {
+        return _merger(timeout).then([this] (mutation_fragment_opt mfo) {
             if (!mfo) {
                 _end_of_stream = true;
                 return stop_iteration::yes;
@@ -592,47 +604,49 @@ future<> combined_mutation_reader::fill_buffer(db::timeout_clock::time_point tim
     });
 }
 
-void combined_mutation_reader::next_partition() {
+template <FragmentProducer P>
+void merging_reader<P>::next_partition() {
     if (_fwd_sm == streamed_mutation::forwarding::yes) {
         clear_buffer();
         _end_of_stream = false;
-        _producer.next_partition();
+        _merger.next_partition();
     } else {
         clear_buffer_to_next_partition();
         // If the buffer is empty at this point then all fragments in it
-        // belonged to the current partition, so either:
-        // * All (forwardable) readers are still positioned in the
-        // inside of the current partition, or
-        // * They are between the current one and the next one.
-        // Either way we need to call next_partition on them.
+        // belonged to the current partition, hence the last fragment produced
+        // by the producer came from the current partition, meaning that the producer
+        // is still inside the current partition.
+        // Thus we need to call next_partition on it (see the `next_partition` contract
+        // of `flat_mutation_reader`, which `FragmentProducer` follows).
         if (is_buffer_empty()) {
-            _producer.next_partition();
+            _merger.next_partition();
         }
     }
 }
 
-future<> combined_mutation_reader::fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) {
+template <FragmentProducer P>
+future<> merging_reader<P>::fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) {
     clear_buffer();
     _end_of_stream = false;
-    return _producer.fast_forward_to(pr, timeout);
+    return _merger.fast_forward_to(pr, timeout);
 }
 
-future<> combined_mutation_reader::fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) {
+template <FragmentProducer P>
+future<> merging_reader<P>::fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) {
     forward_buffer_to(pr.start());
     _end_of_stream = false;
-    return _producer.fast_forward_to(std::move(pr), timeout);
+    return _merger.fast_forward_to(std::move(pr), timeout);
 }
 
 flat_mutation_reader make_combined_reader(schema_ptr schema,
         reader_permit permit,
-        std::unique_ptr<reader_selector> selectors,
+        std::unique_ptr<reader_selector> selector,
         streamed_mutation::forwarding fwd_sm,
         mutation_reader::forwarding fwd_mr) {
-    return make_flat_mutation_reader<combined_mutation_reader>(schema,
+    return make_flat_mutation_reader<merging_reader<mutation_reader_merger>>(schema,
             std::move(permit),
-            std::move(selectors),
             fwd_sm,
-            fwd_mr);
+            mutation_reader_merger(schema, std::move(selector), fwd_sm, fwd_mr));
 }
 
 flat_mutation_reader make_combined_reader(schema_ptr schema,
@@ -646,7 +660,7 @@ flat_mutation_reader make_combined_reader(schema_ptr schema,
     if (readers.size() == 1) {
         return std::move(readers.front());
     }
-    return make_flat_mutation_reader<combined_mutation_reader>(schema,
+    return make_combined_reader(schema,
             std::move(permit),
             std::make_unique<list_reader_selector>(schema, std::move(readers)),
             fwd_sm,

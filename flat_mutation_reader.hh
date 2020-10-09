@@ -392,8 +392,14 @@ public:
     // Skips to the next partition.
     //
     // Skips over the remaining fragments of the current partitions. If the
-    // reader is currently positioned at a partition boundary (partition
-    // start) nothing is done.
+    // reader is currently positioned at a partition start nothing is done.
+    //
+    // If the last produced fragment comes from partition `P`, then the reader
+    // is considered to still be in partition `P`, which means that `next_partition`
+    // will move the reader to the partition immediately following `P`.
+    // This case happens in particular when the last produced fragment was
+    // `partition_end` for `P`.
+    //
     // Only skips within the current partition range, i.e. if the current
     // partition is the last in the range the reader will be at EOS.
     //
