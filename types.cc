@@ -1403,6 +1403,7 @@ struct validate_visitor {
     FragmentRangeView v;
 
     cql_serialization_format sf;
+
     void operator()(const reversed_type_impl& t) { return t.underlying_type()->validate(underlying, sf); }
     void operator()(const abstract_type&) {}
     template <typename T> void operator()(const integer_type_impl<T>& t) {
@@ -1572,11 +1573,11 @@ struct validate_visitor {
 }
 
 void abstract_type::validate(const fragmented_temporary_buffer::view& view, cql_serialization_format sf) const {
-    visit(*this, validate_visitor{view, view, sf});
+    visit(*this, validate_visitor<const fragmented_temporary_buffer::view&, const fragmented_temporary_buffer::view&>{view, view, sf});
 }
 
 void abstract_type::validate(bytes_view v, cql_serialization_format sf) const {
-    visit(*this, validate_visitor{v, single_fragment_range(v), sf});
+    visit(*this, validate_visitor<bytes_view, single_fragment_range<mutable_view::no>>{v, single_fragment_range(v), sf});
 }
 
 static void serialize_aux(const tuple_type_impl& type, const tuple_type_impl::native_type* val, bytes::iterator& out) {
