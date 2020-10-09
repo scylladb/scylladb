@@ -20,6 +20,7 @@
  */
 
 #include <boost/icl/interval_map.hpp>
+#include <boost/range/adaptor/map.hpp>
 
 #include "compatible_ring_position.hh"
 #include "compaction_strategy_impl.hh"
@@ -361,6 +362,53 @@ public:
         return std::make_tuple(partition_range::make_open_ended_both_sides(), std::move(ssts), ring_position_view::max());
     }
 };
+
+time_series_sstable_set::time_series_sstable_set(schema_ptr schema)
+    : _schema(std::move(schema))
+    , _sstables(make_lw_shared<container_t>(position_in_partition::less_compare(*_schema))) {}
+
+time_series_sstable_set::time_series_sstable_set(const time_series_sstable_set& s)
+    : _schema(s._schema)
+    , _sstables(make_lw_shared(*s._sstables)) {}
+
+std::unique_ptr<sstable_set_impl> time_series_sstable_set::clone() const {
+    return std::make_unique<time_series_sstable_set>(*this);
+}
+
+std::vector<shared_sstable> time_series_sstable_set::select(const dht::partition_range& range) const {
+    return boost::copy_range<std::vector<shared_sstable>>(*_sstables | boost::adaptors::map_values);
+}
+
+// O(log n)
+void time_series_sstable_set::insert(shared_sstable sst) {
+    auto pos = sst->min_position();
+    _sstables->emplace(pos, std::move(sst));
+}
+
+// O(n) worst case, but should be close to O(log n) most of the time
+void time_series_sstable_set::erase(shared_sstable sst) {
+    auto [first, last] = _sstables->equal_range(sst->min_position());
+    auto it = std::find_if(first, last,
+            [&sst] (const std::pair<position_in_partition, shared_sstable>& p) { return sst == p.second; });
+    if (it != last) {
+        _sstables->erase(it);
+    }
+}
+
+std::unique_ptr<incremental_selector_impl> time_series_sstable_set::make_incremental_selector() const {
+    struct selector : public incremental_selector_impl {
+        const time_series_sstable_set& _set;
+
+        selector(const time_series_sstable_set& set) : _set(set) {}
+
+        virtual std::tuple<dht::partition_range, std::vector<shared_sstable>, dht::ring_position_view>
+        select(const dht::ring_position_view&) override {
+            return std::make_tuple(dht::partition_range::make_open_ended_both_sides(), _set.select(), dht::ring_position_view::max());
+        }
+    };
+
+    return std::make_unique<selector>(*this);
+}
 
 std::unique_ptr<incremental_selector_impl> partitioned_sstable_set::make_incremental_selector() const {
     return std::make_unique<incremental_selector>(_schema, _unleveled_sstables, _leveled_sstables, _leveled_sstables_change_cnt);
