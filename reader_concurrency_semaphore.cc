@@ -261,7 +261,7 @@ static permit_stats do_dump_reader_permit_diagnostics(std::ostream& os, const pe
     for (const auto& [k, v] : permits) {
         const auto& [s, op_name, k_state] = k;
         if (k_state == state) {
-            permit_summaries.emplace_back(s, op_name, v.memory, v.count);
+            permit_summaries.emplace_back(permit_summary{s, op_name, v.memory, v.count});
         }
     }
 
