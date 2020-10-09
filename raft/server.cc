@@ -59,7 +59,8 @@ public:
     future<> abort() override;
     term_t get_current_term() const override;
     future<> read_barrier() override;
-    void make_me_leader() override;
+    future<> elect_me_leader() override;
+    void elapse_election() override;
 private:
     std::unique_ptr<rpc> _rpc;
     std::unique_ptr<state_machine> _state_machine;
@@ -366,8 +367,19 @@ future<> server_impl::remove_server(server_id id, clock_type::duration timeout) 
     return make_ready_future<>();
 }
 
-void server_impl::make_me_leader() {
-    _fsm->become_leader();
+future<> server_impl::elect_me_leader() {
+    while (!_fsm->is_candidate() && !_fsm->is_leader()) {
+        _fsm->tick();
+    }
+    do {
+        co_await seastar::sleep(50us);
+    } while (!_fsm->is_leader());
+}
+
+void server_impl::elapse_election() {
+    while (_fsm->election_elapsed() < ELECTION_TIMEOUT) {
+        _fsm->tick();
+    }
 }
 
 std::unique_ptr<server> create_server(server_id uuid, std::unique_ptr<rpc> rpc,

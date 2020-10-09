@@ -180,11 +180,6 @@ class fsm {
     bool is_past_election_timeout() const {
         return _clock.now() - _last_election_time >= _randomized_election_timeout;
     }
-    // How much time has passed since last election or last
-    // time we heard from a valid leader.
-    logical_clock::duration election_elapsed() const {
-        return _clock.now() - _last_election_time;
-    }
 
     // A helper to send any kind of RPC message.
     template <typename Message>
@@ -289,6 +284,12 @@ public:
     // @sa can_read()
     term_t get_current_term() const {
         return _current_term;
+    }
+
+    // How much time has passed since last election or last
+    // time we heard from a valid leader.
+    logical_clock::duration election_elapsed() const {
+        return _clock.now() - _last_election_time;
     }
 
     // Should be called on leader only, throws otherwise.
