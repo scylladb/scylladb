@@ -233,8 +233,8 @@ void batch_statement::verify_batch_size(service::storage_proxy& proxy, const std
             for (auto&& m : mutations) {
                 ks_cf_pairs.insert(m.schema()->ks_name() + "." + m.schema()->cf_name());
             }
-            return format("Batch of prepared statements for {} is of size {:d}, exceeding specified {} threshold of {:d} by {:d}.",
-                    join(", ", ks_cf_pairs), size, type, threshold, size - threshold);
+            return format("Batch of {:d} prepared statements for {} is of size {:d} bytes, exceeding specified {} threshold of {:d} by {:d}.",
+                    mutations.size(), join(", ", ks_cf_pairs), size, type, threshold, size - threshold);
         };
         if (size > fail_threshold) {
             _logger.error(error("FAIL", fail_threshold).c_str());
