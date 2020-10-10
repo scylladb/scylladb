@@ -36,13 +36,16 @@ tempfile.tempdir = "./build/tmp"
 
 configure_args = str.join(' ', [shlex.quote(x) for x in sys.argv[1:]])
 
-for line in open('/etc/os-release'):
-    key, _, value = line.partition('=')
-    value = value.strip().strip('"')
-    if key == 'ID':
-        os_ids = [value]
-    if key == 'ID_LIKE':
-        os_ids += value.split(' ')
+try:
+    for line in open('/etc/os-release'):
+        key, _, value = line.partition('=')
+        value = value.strip().strip('"')
+        if key == 'ID':
+            os_ids = [value]
+        if key == 'ID_LIKE':
+            os_ids += value.split(' ')
+except FileNotFoundError:
+    os_ids = ["linux"]
 
 
 # distribution "internationalization", converting package names.
@@ -99,11 +102,10 @@ def have_pkg(package):
 def pkg_config(package, *options):
     # Add the directory containing the package to the search path, if a file is
     # specified instead of a name.
+    env = os.environ
     if package.endswith('.pc'):
         local_path = os.path.dirname(package)
-        env = { 'PKG_CONFIG_PATH' : '{}:{}'.format(local_path, os.environ.get('PKG_CONFIG_PATH', '')) }
-    else:
-        env = None
+        env.update({ 'PKG_CONFIG_PATH' : '{}:{}'.format(local_path, os.environ.get('PKG_CONFIG_PATH', '')) })
 
     output = subprocess.check_output(['pkg-config'] + list(options) + [package], env=env)
     return output.decode('utf-8').strip()
@@ -1359,7 +1361,7 @@ if any(filter(thrift_version.startswith, thrift_boost_versions)):
 for pkg in pkgs:
     args.user_cflags += ' ' + pkg_config(pkg, '--cflags')
     libs += ' ' + pkg_config(pkg, '--libs')
-args.user_cflags += '-I abseil'
+args.user_cflags += ' -I abseil'
 user_cflags = args.user_cflags + ' -fvisibility=hidden'
 user_ldflags = args.user_ldflags + ' -fvisibility=hidden'
 if args.staticcxx:
