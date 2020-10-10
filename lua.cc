@@ -288,6 +288,17 @@ concept CanHandleLuaTypes = requires(Func f) {
     { f(*static_cast<const lua_table*>(nullptr)) }                      -> std::same_as<lua_visit_ret_type<Func>>;
 };
 
+// This is used to test if a double fits in a long long, so
+// we expect overflows. Prevent the sanitizer from complaining.
+#ifdef __clang__
+[[clang::no_sanitize("undefined")]]
+#endif
+static
+long long
+cast_to_long_long_allow_overflow(double v) {
+    return (long long)v;
+}
+
 template <typename Func>
 requires CanHandleLuaTypes<Func>
 static auto visit_lua_value(lua_State* l, int index, Func&& f) {
@@ -298,7 +309,7 @@ static auto visit_lua_value(lua_State* l, int index, Func&& f) {
         auto operator()(const long long& v) { return f(utils::multiprecision_int(v)); }
         auto operator()(const utils::multiprecision_int& v) { return f(v); }
         auto operator()(const double& v) {
-            long long v2 = v;
+            long long v2 = cast_to_long_long_allow_overflow(v);
             if (v2 == v) {
                 return (*this)(v2);
             }
