@@ -58,7 +58,8 @@ struct log_heap_options {
     }
 
     size_t bucket_of(size_t value) const {
-#ifdef __SANITIZE_ADDRESS__
+#ifdef SANITIZE
+        // ubsan will otherwise complain about pow2_rank(0)
         if (value < min_size) {
             return 0;
         }
