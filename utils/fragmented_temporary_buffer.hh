@@ -264,6 +264,9 @@ class fragmented_temporary_buffer::istream {
     const char* _current_end;
     size_t _bytes_left = 0;
 private:
+    size_t contig_remain() const {
+        return _current_end - _current_position;
+    }
     void next_fragment() {
         _bytes_left -= _current->size();
         if (_bytes_left) {
@@ -340,33 +343,30 @@ public:
     }
 
     void skip(size_t n) noexcept {
-        auto new_end = _current_position + n;
-        if (__builtin_expect(new_end > _current_end, false)) {
+        if (__builtin_expect(contig_remain() < n, false)) {
             return skip_slow(n);
         }
-        _current_position = new_end;
+        _current_position += n;
     }
 
     template<typename T, typename ExceptionThrower = default_exception_thrower>
     requires fragmented_temporary_buffer_concepts::ExceptionThrower<ExceptionThrower>
     T read(ExceptionThrower&& exceptions = default_exception_thrower()) {
-        auto new_end = _current_position + sizeof(T);
-        if (__builtin_expect(new_end > _current_end, false)) {
+        if (__builtin_expect(contig_remain() < sizeof(T), false)) {
             return read_slow<T>(std::forward<ExceptionThrower>(exceptions));
         }
         T obj;
         std::copy_n(_current_position, sizeof(T), reinterpret_cast<char*>(&obj));
-        _current_position = new_end;
+        _current_position += sizeof(T);
         return obj;
     }
 
     template<typename Output, typename ExceptionThrower = default_exception_thrower>
     requires fragmented_temporary_buffer_concepts::ExceptionThrower<ExceptionThrower>
     Output read_to(size_t n, Output out, ExceptionThrower&& exceptions = default_exception_thrower()) {
-        auto new_end = _current_position + n;
-        if (__builtin_expect(new_end <= _current_end, true)) {
-            out = std::copy(_current_position, new_end, out);
-            _current_position = new_end;
+        if (__builtin_expect(contig_remain() >= n, true)) {
+            out = std::copy_n(_current_position, n, out);
+            _current_position += n;
             return out;
         }
         check_out_of_range(exceptions, n);
@@ -386,10 +386,9 @@ public:
     template<typename ExceptionThrower = default_exception_thrower>
     requires fragmented_temporary_buffer_concepts::ExceptionThrower<ExceptionThrower>
     view read_view(size_t n, ExceptionThrower&& exceptions = default_exception_thrower()) {
-        auto new_end = _current_position + n;
-        if (__builtin_expect(new_end <= _current_end, true)) {
+        if (__builtin_expect(contig_remain() >= n, true)) {
             auto v = view(_current, _current_position - _current->get(), n);
-            _current_position = new_end;
+            _current_position += n;
             return v;
         }
         check_out_of_range(exceptions, n);
@@ -407,10 +406,9 @@ public:
     template<typename ExceptionThrower = default_exception_thrower>
     requires fragmented_temporary_buffer_concepts::ExceptionThrower<ExceptionThrower>
     bytes_view read_bytes_view(size_t n, bytes_ostream& linearization_buffer, ExceptionThrower&& exceptions = default_exception_thrower()) {
-        auto new_end = _current_position + n;
-        if (__builtin_expect(new_end <= _current_end, true)) {
+        if (__builtin_expect(contig_remain() >= n, true)) {
             auto v = bytes_view(reinterpret_cast<const bytes::value_type*>(_current_position), n);
-            _current_position = new_end;
+            _current_position += n;
             return v;
         }
         check_out_of_range(exceptions, n);
