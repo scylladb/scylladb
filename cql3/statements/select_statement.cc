@@ -610,7 +610,10 @@ indexed_table_select_statement::do_execute_base_query(
         return repeat([this, &keys, &key_it, &merger, &proxy, &state, &options, cmd, timeout]() {
             // Starting with 1 key, we check if the result was a short read, and if not,
             // we continue exponentially, asking for 2x more key than before
-            auto key_it_end = std::min(key_it + std::distance(keys.begin(), key_it) + 1, keys.end());
+            auto already_done = std::distance(keys.begin(), key_it);
+            auto next_iteration = already_done + 1;
+            next_iteration = std::min<size_t>(next_iteration, keys.size() - already_done);
+            auto key_it_end = key_it + next_iteration;
             auto command = ::make_lw_shared<query::read_command>(*cmd);
 
             query::result_merger oneshot_merger(cmd->get_row_limit(), query::max_partitions);
