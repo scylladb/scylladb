@@ -406,7 +406,11 @@ int64_t time_type_impl::from_sstring(sstring_view s) {
     int64_t nanoseconds = 0;
     if (seconds_end < s.length()) {
         nanoseconds = std::stol(sstring(s.substr(seconds_end + 1)));
-        nanoseconds *= std::pow(10, 9 - (s.length() - (seconds_end + 1)));
+        auto nano_digits = s.length() - (seconds_end + 1);
+        if (nano_digits > 9) {
+            throw marshal_exception(format("more than 9 nanosecond digits: {}", s));
+        }
+        nanoseconds *= std::pow(10, 9 - nano_digits);
         if (nanoseconds < 0 || nanoseconds >= 1000 * 1000 * 1000) {
             throw marshal_exception(format("Nanosecond out of bounds ({:d}).", nanoseconds));
         }
