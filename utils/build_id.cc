@@ -20,7 +20,7 @@ static const Elf64_Nhdr* get_nt_build_id(dl_phdr_info* info) {
             continue;
         }
 
-        auto* p = reinterpret_cast<const char*>(base) + h->p_vaddr;
+        auto* p = reinterpret_cast<const char*>(base + h->p_vaddr);
         auto* e = p + h->p_memsz;
         while (p != e) {
             const auto* n = reinterpret_cast<const Elf64_Nhdr*>(p);
