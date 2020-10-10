@@ -5742,7 +5742,7 @@ SEASTAR_TEST_CASE(sstable_run_based_compaction_test) {
             };
 
             auto result = compact(std::move(desc.sstables), replacer);
-            observer->disconnect();
+            observer.reset();
             BOOST_REQUIRE_EQUAL(expected_output, result.size());
             BOOST_REQUIRE(expected_sst == sstable_run.end());
             return result;
