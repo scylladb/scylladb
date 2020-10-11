@@ -47,13 +47,15 @@ struct failure_detector: public raft::failure_detector {
     }
 };
 
+raft::fsm_config fsm_cfg{.append_request_threshold = 1};
+
 BOOST_AUTO_TEST_CASE(test_election_single_node) {
 
     failure_detector fd;
     server_id id1{utils::make_random_uuid()};
     raft::configuration cfg({id1});
     raft::log log{raft::snapshot{.config = cfg}};
-    raft::fsm fsm(id1, term_t{}, server_id{}, std::move(log), fd);
+    raft::fsm fsm(id1, term_t{}, server_id{}, std::move(log), fd, fsm_cfg);
 
     BOOST_CHECK(fsm.is_follower());
 
@@ -91,7 +93,7 @@ BOOST_AUTO_TEST_CASE(test_single_node_is_quiet) {
     raft::configuration cfg({id1});
     raft::log log{raft::snapshot{.config = cfg}};
 
-    raft::fsm fsm(id1, term_t{}, server_id{}, std::move(log), fd);
+    raft::fsm fsm(id1, term_t{}, server_id{}, std::move(log), fd, fsm_cfg);
 
     election_timeout(fsm);
 
@@ -114,7 +116,7 @@ BOOST_AUTO_TEST_CASE(test_election_two_nodes) {
     raft::configuration cfg({id1, id2});
     raft::log log{raft::snapshot{.config = cfg}};
 
-    raft::fsm fsm(id1, term_t{}, server_id{}, std::move(log), fd);
+    raft::fsm fsm(id1, term_t{}, server_id{}, std::move(log), fd, fsm_cfg);
 
     // Initial state is follower
     BOOST_CHECK(fsm.is_follower());
@@ -183,7 +185,7 @@ BOOST_AUTO_TEST_CASE(test_election_four_nodes) {
     raft::configuration cfg({id1, id2, id3, id4});
     raft::log log{raft::snapshot{.config = cfg}};
 
-    raft::fsm fsm(id1, term_t{}, server_id{}, std::move(log), fd);
+    raft::fsm fsm(id1, term_t{}, server_id{}, std::move(log), fd, fsm_cfg);
 
     // Initial state is follower
     BOOST_CHECK(fsm.is_follower());
@@ -231,7 +233,7 @@ BOOST_AUTO_TEST_CASE(test_log_matching_rule) {
     log.emplace_back(raft::log_entry{term_t{10}, index_t{1000}});
     log.stable_to(log.last_idx());
 
-    raft::fsm fsm(id1, term_t{10}, server_id{}, std::move(log), fd);
+    raft::fsm fsm(id1, term_t{10}, server_id{}, std::move(log), fd, fsm_cfg);
 
     // Initial state is follower
     BOOST_CHECK(fsm.is_follower());
