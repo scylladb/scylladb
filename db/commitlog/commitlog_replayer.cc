@@ -241,7 +241,8 @@ db::commitlog_replayer::impl::recover(sstring file, const sstring& fname_prefix)
 }
 
 future<> db::commitlog_replayer::impl::process(stats* s, commitlog::buffer_and_replay_position buf_rp) const {
-    auto&& [buf, rp] = buf_rp;
+    auto&& buf = buf_rp.buffer;
+    auto&& rp = buf_rp.position;
     try {
 
         commitlog_entry_reader cer(buf);
