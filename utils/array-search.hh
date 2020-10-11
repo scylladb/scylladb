@@ -33,6 +33,12 @@ static constexpr int64_t simple_key_unused_value = std::numeric_limits<int64_t>:
  *
  * Returns the index of the first element in the array that's greater
  * than the given value.
+ *
+ * To accomodate the single-instruction-multiple-data variant, observe
+ * the following:
+ *  - capacity must be a multiple of 4
+ *  - any items with indexes in [size, capacity) must be initialized
+ *    to std::numeric_limits<int64_t>::min()
  */
 int array_search_gt(int64_t val, const int64_t* array, const int capacity, const int size);
 
