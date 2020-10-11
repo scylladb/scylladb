@@ -213,8 +213,10 @@ public:
         const auto cache_key = make_cache_key(key);
 
         auto querier = make_querier<Querier>(range);
-        auto [dk, ck] = querier.consume_page(dummy_result_builder{}, row_limit, std::numeric_limits<uint32_t>::max(),
+        auto dk_ck = querier.consume_page(dummy_result_builder{}, row_limit, std::numeric_limits<uint32_t>::max(),
                 gc_clock::now(), db::no_timeout, query::max_result_size(std::numeric_limits<uint64_t>::max())).get0();
+        auto&& dk = dk_ck.first;
+        auto&& ck = dk_ck.second;
         const auto memory_usage = querier.memory_usage();
         _cache.insert(cache_key, std::move(querier), nullptr);
 
