@@ -232,7 +232,8 @@ thrift_server::do_accepts(int which, bool keepalive) {
     // Future is waited on indirectly in `stop()` (via `_stop_gate`).
     (void)with_gate(_stop_gate, [&, this] {
         return _listeners[which].accept().then([this, which, keepalive] (accept_result ar) {
-            auto&& [fd, addr] = ar;
+            auto&& fd = ar.connection;
+            auto&& addr = ar.remote_address;
             fd.set_nodelay(true);
             fd.set_keepalive(keepalive);
             // Future is waited on indirectly in `stop()` (via `_stop_gate`).
