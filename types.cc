@@ -1430,11 +1430,12 @@ struct validate_visitor {
         }
     }
     void operator()(const ascii_type_impl&) {
-        with_linearized(v, [this] (bytes_view bv) {
-            if (!utils::ascii::validate(bv)) {
+        // ASCII can be validated without linearization
+        for (auto& frag : v) {
+            if (!utils::ascii::validate(frag)) {
                 throw marshal_exception("Validation failed - non-ASCII character in an ASCII string");
             }
-        });
+        }
     }
     void operator()(const utf8_type_impl&) {
         auto error_pos = with_linearized(v, [this] (bytes_view bv) {
