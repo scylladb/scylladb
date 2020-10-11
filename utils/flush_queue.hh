@@ -61,15 +61,33 @@ private:
     seastar::gate _gate;
     bool _chain_exceptions;
 
+    template<typename Func>
+    static auto call_helper(Func&& func, future<> f) {
+        return f.then([func = std::move(func)] {
+            return func();
+        });
+    }
+
+    template<typename Func, typename Arg>
+    static auto call_helper(Func&& func, future<Arg> f) {
+        using futurator = futurize<std::result_of_t<Func(Arg&&)>>;
+        try {
+            return futurator::invoke(std::forward<Func>(func), f.get0());
+        } catch (...) {
+            return futurator::make_exception_future(std::current_exception());
+        }
+    }
+
     template<typename Func, typename... Args>
-    static auto call_helper(Func&& func, future<Args...> f) {
-        using futurator = futurize<std::result_of_t<Func(Args&&...)>>;
+    static auto call_helper(Func&& func, future<std::tuple<Args...>> f) {
+        using futurator = futurize<std::result_of_t<Func(std::tuple<Args&&...>)>>;
         try {
             return futurator::invoke(std::forward<Func>(func), f.get());
         } catch (...) {
             return futurator::make_exception_future(std::current_exception());
         }
     }
+
     template<typename... Types>
     static future<Types...> handle_failed_future(future<Types...> f, promise_type& pr) {
         assert(f.failed());
