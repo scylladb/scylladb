@@ -1944,7 +1944,9 @@ SEASTAR_THREAD_TEST_CASE(test_external_memory_usage) {
     };
 
     for (auto i = 0; i < 16; i++) {
-        auto [ m, size ] = generate();
+        auto m_and_size = generate();
+        auto&& m = m_and_size.first;
+        auto&& size = m_and_size.second;
 
         with_allocator(alloc, [&] {
             auto before = alloc.allocated_bytes();
