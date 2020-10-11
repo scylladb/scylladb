@@ -3960,7 +3960,8 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
 
     auto f = ::map_reduce(exec.begin(), exec.end(), [p = shared_from_this(), timeout = query_options.timeout(*this), used_replicas] (
                 std::pair<::shared_ptr<abstract_read_executor>, dht::token_range>& executor_and_token_range) {
-        auto& [rex, token_range] = executor_and_token_range;
+        auto& rex = std::get<0>(executor_and_token_range);
+        auto& token_range = std::get<1>(executor_and_token_range);
         utils::latency_counter lc;
         lc.start();
         return rex->execute(timeout).then_wrapped([p = std::move(p), lc, rex, used_replicas, token_range = std::move(token_range)] (
