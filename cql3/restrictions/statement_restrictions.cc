@@ -354,7 +354,7 @@ std::vector<const column_definition*> statement_restrictions::get_column_defs_fo
     std::vector<const column_definition*> column_defs_for_filtering;
     if (need_filtering()) {
         auto& sim = db.find_column_family(_schema).get_index_manager();
-        auto [opt_idx, _] = find_idx(sim);
+        auto opt_idx = std::get<0>(find_idx(sim));
         auto column_uses_indexing = [&opt_idx] (const column_definition* cdef, ::shared_ptr<single_column_restriction> restr) {
             return opt_idx && restr && is_supported_by(restr->expression, *opt_idx);
         };
