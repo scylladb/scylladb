@@ -32,9 +32,9 @@
 #include "idl/query.dist.hh"
 #include "serializer_impl.hh"
 #include "serialization_visitors.hh"
-#include "idl/query.dist.impl.hh"
-#include "idl/keys.dist.impl.hh"
 #include "idl/uuid.dist.impl.hh"
+#include "idl/keys.dist.impl.hh"
+#include "idl/query.dist.impl.hh"
 
 namespace query {
 
