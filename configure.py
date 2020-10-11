@@ -1160,7 +1160,8 @@ warnings = [w
 warnings = ' '.join(warnings + ['-Wno-error=deprecated-declarations'])
 
 optimization_flags = [
-    '--param inline-unit-growth=300',
+    '--param inline-unit-growth=300', # gcc
+    '-mllvm -inline-threshold=2500',  # clang
 ]
 optimization_flags = [o
                       for o in optimization_flags
