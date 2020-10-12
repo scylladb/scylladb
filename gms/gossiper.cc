@@ -1508,6 +1508,13 @@ void gossiper::handle_major_state_change(inet_address ep, const endpoint_state& 
         });
     }
 
+    auto* eps_new = get_endpoint_state_for_endpoint_ptr(ep);
+    if (eps_new) {
+        _subscribers.for_each([ep, eps_new] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
+            subscriber->on_join(ep, *eps_new);
+        });
+    }
+
     auto& ep_state = endpoint_state_map.at(ep);
     if (!is_dead_state(ep_state)) {
         mark_alive(ep, ep_state);
@@ -1516,12 +1523,6 @@ void gossiper::handle_major_state_change(inet_address ep, const endpoint_state& 
         mark_dead(ep, ep_state);
     }
 
-    auto* eps_new = get_endpoint_state_for_endpoint_ptr(ep);
-    if (eps_new) {
-        _subscribers.for_each([ep, eps_new] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
-            subscriber->on_join(ep, *eps_new);
-        });
-    }
     // check this at the end so nodes will learn about the endpoint
     if (is_shutdown(ep)) {
         mark_as_shutdown(ep);
