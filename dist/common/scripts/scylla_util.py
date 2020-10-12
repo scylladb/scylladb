@@ -329,9 +329,7 @@ class scylla_cpuinfo:
             return len(self._cpu_data["system"])
 
 
-# When a CLI tool is not installed, use relocatable CLI tool provided by Scylla
 scylla_env = os.environ.copy()
-scylla_env['PATH'] =  '{}:{}'.format(scyllabindir(), scylla_env['PATH'])
 
 def run(cmd, shell=False, silent=False, exception=True):
     stdout = subprocess.DEVNULL if silent else None
