@@ -728,6 +728,67 @@ sstable_set_impl::create_single_key_sstable_reader(
 }
 
 flat_mutation_reader
+time_series_sstable_set::create_single_key_sstable_reader(
+        column_family* cf,
+        schema_ptr schema,
+        reader_permit permit,
+        utils::estimated_histogram& sstable_histogram,
+        const dht::ring_position& pos,
+        const query::partition_slice& slice,
+        const io_priority_class& pc,
+        tracing::trace_state_ptr trace_state,
+        streamed_mutation::forwarding fwd_sm,
+        mutation_reader::forwarding fwd_mr) const {
+    // First check if the optimized algorithm for TWCS single partition queries can be applied.
+    // Multiple conditions must be satisfied:
+    // 1. The sstables must be sufficiently modern so they contain the min/max column metadata.
+    // 2. The schema cannot have static columns, since we're going to be opening new readers
+    //    into new sstables in the middle of the partition query. TWCS sstables will usually pass
+    //    this condition.
+    // 3. The sstables cannot have partition tombstones for the same reason as above.
+    //    TWCS sstables will usually pass this condition.
+    using sst_entry = std::pair<position_in_partition, shared_sstable>;
+    if (schema->has_static_columns()
+            || std::any_of(_sstables->begin(), _sstables->end(),
+                [] (const sst_entry& e) {
+                    return e.second->get_version() < sstable_version_types::md
+                        || e.second->may_have_partition_tombstones();
+    })) {
+        // Some of the conditions were not satisfied so we use the standard query path.
+        return sstable_set_impl::create_single_key_sstable_reader(
+                cf, std::move(schema), std::move(permit), sstable_histogram,
+                pos, slice, pc, std::move(trace_state), fwd_sm, fwd_mr);
+    }
+
+    auto pk_filter = make_pk_filter(pos, *schema);
+    auto it = std::find_if(_sstables->begin(), _sstables->end(), [&] (const sst_entry& e) { return pk_filter(*e.second); });
+    if (it == _sstables->end()) {
+        // No sstables contain data for the queried partition.
+        return make_empty_flat_reader(std::move(schema), std::move(permit));
+    }
+
+    auto ck_filter = [ranges = slice.get_all_ranges()] (const sstable& sst) { return sst.may_contain_rows(ranges); };
+    it = std::find_if(it, _sstables->end(), [&] (const sst_entry& e) { return ck_filter(*e.second); });
+    if (it == _sstables->end()) {
+        // Some sstables passed the partition key filter, but none passed the clustering key filter.
+        // However, we still have to emit a partition (even though it will be empty) so we don't fool the cache
+        // into thinking this partition doesn't exist in any sstable (#3552).
+        return flat_mutation_reader_from_mutations(std::move(permit), {mutation(schema, *pos.key())}, slice, fwd_sm);
+    }
+
+    auto filter = [pk_filter = std::move(pk_filter), ck_filter = std::move(ck_filter)]
+        (const sstable& sst) { return pk_filter(sst) && ck_filter(sst); };
+
+    auto create_reader = [schema, permit, &pos, &slice, &pc, trace_state, fwd_sm] (sstable& sst) {
+        return sst.read_row_flat(schema, permit, pos, slice, pc, trace_state, fwd_sm);
+    };
+
+    return make_clustering_combined_reader(
+            std::move(schema), std::move(permit), fwd_sm,
+            make_min_position_reader_queue(std::move(create_reader), std::move(filter)));
+}
+
+flat_mutation_reader
 sstable_set::create_single_key_sstable_reader(
         column_family* cf,
         schema_ptr schema,

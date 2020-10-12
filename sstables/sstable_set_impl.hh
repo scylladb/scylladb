@@ -129,6 +129,18 @@ public:
     std::unique_ptr<position_reader_queue> make_min_position_reader_queue(
         std::function<flat_mutation_reader(sstable&)> create_reader,
         std::function<bool(const sstable&)> filter) const;
+
+    virtual flat_mutation_reader create_single_key_sstable_reader(
+        column_family*,
+        schema_ptr,
+        reader_permit,
+        utils::estimated_histogram&,
+        const dht::ring_position&,
+        const query::partition_slice&,
+        const io_priority_class&,
+        tracing::trace_state_ptr,
+        streamed_mutation::forwarding,
+        mutation_reader::forwarding) const override;
 };
 
 } // namespace sstables
