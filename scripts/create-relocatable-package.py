@@ -120,9 +120,9 @@ have_gnutls = any([lib.startswith('libgnutls.so')
 gzip_process = subprocess.Popen("pigz > "+output, shell=True, stdin=subprocess.PIPE)
 
 ar = tarfile.open(fileobj=gzip_process.stdin, mode='w|')
-# relocatable package format version = 2
+# relocatable package format version = 2.1
 with open('build/.relocatable_package_version', 'w') as f:
-    f.write('2\n')
+    f.write('2.1\n')
 ar.add('build/.relocatable_package_version', arcname='.relocatable_package_version')
 
 for exe in executables:
