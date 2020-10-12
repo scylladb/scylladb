@@ -38,6 +38,11 @@ EOF
     exit 1
 }
 
+check_usermode_support() {
+    user=$(systemctl --help|grep -e '--user')
+    [ -n "$user" ]
+}
+
 root=/
 housekeeping=false
 nonroot=false
@@ -136,3 +141,7 @@ fi
 (cd $(readlink -f scylla-tools); ./install.sh --root "$root" --prefix "$prefix" ${args[@]})
 
 install -m755 uninstall.sh -Dt "$rprefix"
+
+if $nonroot && ! check_usermode_support; then
+    echo "WARNING: This distribution does not support systemd user mode, please configure and launch Scylla manually."
+fi
