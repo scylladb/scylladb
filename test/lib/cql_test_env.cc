@@ -464,13 +464,19 @@ public:
             ss.start(std::ref(abort_sources), std::ref(db), std::ref(gms::get_gossiper()), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(feature_service), sscfg, std::ref(mm_notif), std::ref(token_metadata), std::ref(ms), true).get();
             auto stop_storage_service = defer([&ss] { ss.stop().get(); });
 
+            sharded<semaphore> sst_dir_semaphore;
+            sst_dir_semaphore.start(cfg->initial_sstable_loading_concurrency()).get();
+            auto stop_sst_dir_sem = defer([&sst_dir_semaphore] {
+                sst_dir_semaphore.stop().get();
+            });
+
             database_config dbcfg;
             if (cfg_in.dbcfg) {
                 dbcfg = std::move(*cfg_in.dbcfg);
             } else {
                 dbcfg.available_memory = memory::stats().total_memory();
             }
-            db.start(std::ref(*cfg), dbcfg, std::ref(mm_notif), std::ref(feature_service), std::ref(token_metadata), std::ref(abort_sources)).get();
+            db.start(std::ref(*cfg), dbcfg, std::ref(mm_notif), std::ref(feature_service), std::ref(token_metadata), std::ref(abort_sources), std::ref(sst_dir_semaphore)).get();
             auto stop_db = defer([&db] {
                 db.stop().get();
             });

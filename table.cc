@@ -1411,11 +1411,13 @@ future<> table::snapshot(database& db, sstring name) {
         }
         auto jsondir = _config.datadir + "/snapshots/" + name;
         return do_with(std::move(tables), std::move(jsondir), [this, &db] (std::vector<sstables::shared_sstable>& tables, const sstring& jsondir) {
-            return io_check([&jsondir] { return recursive_touch_directory(jsondir); }).then([this, &jsondir, &tables] {
-                return parallel_for_each(tables, [&jsondir] (sstables::shared_sstable sstable) {
+            return io_check([&jsondir] { return recursive_touch_directory(jsondir); }).then([this, &db, &jsondir, &tables] {
+                return max_concurrent_for_each(tables, db.get_config().initial_sstable_loading_concurrency(), [&db, &jsondir] (sstables::shared_sstable sstable) {
+                  return with_semaphore(db.get_sharded_sst_dir_semaphore().local(), 1, [&jsondir, sstable] {
                     return io_check([sstable, &dir = jsondir] {
                         return sstable->create_links(dir);
                     });
+                  });
                 });
             }).then([&jsondir, &tables] {
                 return io_check(sync_directory, jsondir);

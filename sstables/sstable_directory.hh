@@ -85,7 +85,8 @@ private:
 
     // We may have hundreds of thousands of files to load. To protect against OOMs we will limit
     // how many of them we process at the same time.
-    semaphore _load_semaphore;
+    const size_t _load_parallelism;
+    semaphore& _load_semaphore;
 
     // Flags below control how to behave when scanning new SSTables.
     need_mutate_level _need_mutate_level;
@@ -131,6 +132,7 @@ private:
 public:
     sstable_directory(std::filesystem::path sstable_dir,
             unsigned load_parallelism,
+            semaphore& load_semaphore,
             need_mutate_level need_mutate,
             lack_of_toc_fatal fatal_nontoc,
             enable_dangerous_direct_import_of_cassandra_counters eddiocc,
