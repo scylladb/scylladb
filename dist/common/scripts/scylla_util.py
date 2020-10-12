@@ -488,9 +488,7 @@ class aws_instance:
         return curl(self.META_DATA_BASE_URL + "user-data")
 
 
-# When a CLI tool is not installed, use relocatable CLI tool provided by Scylla
 scylla_env = os.environ.copy()
-scylla_env['PATH'] =  '{}:{}'.format(scyllabindir(), scylla_env['PATH'])
 scylla_env['DEBIAN_FRONTEND'] = 'noninteractive'
 
 def run(cmd, shell=False, silent=False, exception=True):
