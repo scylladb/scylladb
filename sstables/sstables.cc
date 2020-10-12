@@ -3599,8 +3599,6 @@ std::ostream& operator<<(std::ostream& out, const deletion_time& dt) {
     return out << "{timestamp=" << dt.marked_for_delete_at << ", deletion_time=" << dt.marked_for_delete_at << "}";
 }
 
-}
-
 std::ostream& operator<<(std::ostream& out, const sstables::component_type& comp_type) {
     using ct = sstables::component_type;
     switch (comp_type) {
@@ -3619,6 +3617,8 @@ std::ostream& operator<<(std::ostream& out, const sstables::component_type& comp
     case ct::Unknown: out << "Unknown"; break;
     }
     return out;
+}
+
 }
 
 namespace seastar {

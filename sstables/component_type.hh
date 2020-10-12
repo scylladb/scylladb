@@ -42,8 +42,8 @@ enum class component_type {
     Unknown,
 };
 
+std::ostream& operator<<(std::ostream&, const sstables::component_type&);
+
 }
 
 using component_type = ::sstables::component_type;
-
-std::ostream& operator<<(std::ostream&, const sstables::component_type&);
