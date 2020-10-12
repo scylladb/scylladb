@@ -59,6 +59,13 @@ done
 
 FLAGS="$FLAGS"
 
+# configure.py will run SCYLLA-VERSION-GEN prior to this case
+# but just in case...
+if [ ! -f build/SCYLLA-PRODUCT-FILE ]; then
+    ./SCYLLA-VERSION-GEN
+fi
+PRODUCT=`cat build/SCYLLA-PRODUCT-FILE`
+
 if [ ! -e reloc/build_reloc.sh ]; then
     echo "run build_reloc.sh in top of scylla dir"
     exit 1
@@ -68,8 +75,8 @@ if [ "$CLEAN" = "yes" ]; then
     rm -rf build
 fi
 
-if [ -f build/$MODE/scylla-package.tar.gz ]; then
-    rm build/$MODE/scylla-package.tar.gz
+if [ -f build/$MODE/$PRODUCT-package.tar.gz ]; then
+    rm build/$MODE/$PRODUCT-package.tar.gz
 fi
 
 NINJA=$(which ninja-build) &&:
@@ -91,7 +98,7 @@ fi
 echo "Configuring with flags: '$FLAGS' ..."
 ./configure.py $FLAGS
 python3 -m compileall ./dist/common/scripts/ ./seastar/scripts/perftune.py ./tools/scyllatop
-$NINJA $JOBS build/$MODE/scylla-package.tar.gz
+$NINJA $JOBS build/$MODE/$PRODUCT-package.tar.gz
 BUILD_ID_END=$(readelf -SW build/$MODE/scylla | perl -ne '/.note.gnu.build-id *NOTE *[a-f,0-9]* *([a-f,0-9]*) *([a-f,0-9]*)/ && print ((hex $1) + (hex $2))')
 if (($BUILD_ID_END > 4096))
 then
