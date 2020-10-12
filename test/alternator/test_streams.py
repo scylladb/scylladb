@@ -484,12 +484,25 @@ def list_shards(dynamodbstreams, arn):
     assert len(response['Shards']) <= limit
     shards = [x['ShardId'] for x in response['Shards']]
     while 'LastEvaluatedShardId' in response:
+        # 7409 kinesis ignores LastEvaluatedShardId and just looks at last shard
+        assert shards[-1] == response['LastEvaluatedShardId']
         response = dynamodbstreams.describe_stream(StreamArn=arn, Limit=limit,
             ExclusiveStartShardId=response['LastEvaluatedShardId'])['StreamDescription']
         assert len(response['Shards']) <= limit
         shards.extend([x['ShardId'] for x in response['Shards']])
+
     print('Number of shards in stream: {}'.format(len(shards)))
     assert len(set(shards)) == len(shards)
+    # 7409 - kinesis required shards to be in lexical order.
+    # verify.
+    assert shards == sorted(shards)
+
+    # special test: ensure we get nothing more if we ask for starting at the last
+    # of the last
+    response = dynamodbstreams.describe_stream(StreamArn=arn,
+        ExclusiveStartShardId=shards[-1])['StreamDescription']
+    assert len(response['Shards']) == 0
+
     return shards
 
 # Utility function for getting shard iterators starting at "LATEST" for

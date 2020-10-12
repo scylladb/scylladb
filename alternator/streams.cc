@@ -519,14 +519,21 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
         // stored order, which is not neccesarily token order,
         // so the finding of "closest" token boundary (using upper bound)
         // could give somewhat weird results.
-        static auto cmp = [](const cdc::stream_id& id1, const cdc::stream_id& id2) {
+        static auto token_cmp = [](const cdc::stream_id& id1, const cdc::stream_id& id2) {
             return id1.token() < id2.token();
+        };
+
+        // #7409 - shards must be returned in lexicographical order,
+        // normal bytes compare is string_traits<int8_t>::compare.
+        // thus bytes 0x8000 is less than 0x0000. By doing unsigned
+        // compare instead we inadvertently will sort in string lexical.
+        static auto id_cmp = [](const cdc::stream_id& id1, const cdc::stream_id& id2) {
+            return compare_unsigned(id1.to_bytes(), id2.to_bytes()) < 0;
         };
 
         // need a prev even if we are skipping stuff
         if (i != first) {
             prev = std::prev(i);
-            std::stable_sort(prev->second.streams.begin(), prev->second.streams.end(), cmp);
         }
 
         for (; limit > 0 && i != e; prev = i, ++i) {
@@ -537,15 +544,19 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
             auto lo = sv.streams.begin();
             auto end = sv.streams.end();
 
-            // first sort by index. (see above)
-            std::stable_sort(lo, end, cmp);
+            // #7409 - shards must be returned in lexicographical order,
+            std::sort(lo, end, id_cmp);
 
             if (shard_start) {
                 // find next shard position
-                lo = std::upper_bound(lo, end, shard_start->id.token(), [](const dht::token& t, const cdc::stream_id& id) {
-                    return t < id.token();
-                });
+                lo = std::upper_bound(lo, end, shard_start->id, id_cmp);
                 shard_start = std::nullopt;
+            }
+
+            if (lo != end && prev != e) {
+                // We want older stuff sorted in token order so we can find matching
+                // token range when determining parent shard.
+                std::stable_sort(prev->second.streams.begin(), prev->second.streams.end(), token_cmp);
             }
 
             auto expired = [&]() -> std::optional<db_clock::time_point> {
