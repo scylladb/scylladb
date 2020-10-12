@@ -168,6 +168,11 @@ installconfig() {
     fi
 }
 
+check_usermode_support() {
+    user=$(systemctl --help|grep -e '--user')
+    [ -n "$user" ]
+}
+
 # change directory to the package's root directory
 cd "$(dirname "$0")"
 
@@ -393,7 +398,7 @@ if $nonroot; then
     # nonroot install is also 'offline install'
     touch $rprefix/SCYLLA-OFFLINE-FILE
     touch $rprefix/SCYLLA-NONROOT-FILE
-    if ! $packaging; then
+    if ! $packaging && check_usermode_support; then
         systemctl --user daemon-reload
     fi
     echo "Scylla non-root install completed."
