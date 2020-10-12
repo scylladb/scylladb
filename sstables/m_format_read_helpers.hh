@@ -98,5 +98,3 @@ inline gc_clock::time_point parse_expiry(const serialization_header& header,
 }
 
 };   // namespace sstables
-
-std::ostream& operator<<(std::ostream& out, sstables::bound_kind_m kind);
