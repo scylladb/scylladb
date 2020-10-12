@@ -73,7 +73,8 @@ if __name__ == '__main__':
             print('{} is busy'.format(disk))
             sys.exit(1)
 
-    if os.path.exists(args.raiddev):
+    raiddevname = os.path.basename(args.raiddev)
+    if os.path.exists(f'/sys/block/{raiddevname}/md/array_state'):
         print('{} is already using'.format(args.raiddev))
         sys.exit(1)
 
