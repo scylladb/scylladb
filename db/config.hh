@@ -273,6 +273,7 @@ public:
     named_value<sstring> replace_address_first_boot;
     named_value<bool> override_decommission;
     named_value<bool> enable_repair_based_node_ops;
+    named_value<bool> best_effort_to_removenode;
     named_value<uint32_t> ring_delay_ms;
     named_value<uint32_t> shadow_round_ms;
     named_value<uint32_t> fd_max_interval_ms;

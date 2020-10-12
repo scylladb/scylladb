@@ -493,9 +493,9 @@ public:
     future<> send_truncate(msg_addr, std::chrono::milliseconds, sstring, sstring);
 
     // Wrapper for REPLICATION_FINISHED verb
-    void register_replication_finished(std::function<future<> (inet_address from)>&& func);
+    void register_replication_finished(std::function<future<> (inet_address from, rpc::optional<bool> failed)>&& func);
     future<> unregister_replication_finished();
-    future<> send_replication_finished(msg_addr id, inet_address from);
+    future<> send_replication_finished(msg_addr id, inet_address from, bool failed);
 
     // Wrappers for PAXOS verbs
     void register_paxos_prepare(std::function<future<foreign_ptr<std::unique_ptr<service::paxos::prepare_response>>>(

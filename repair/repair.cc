@@ -34,6 +34,7 @@
 #include "message/messaging_service.hh"
 #include "sstables/sstables.hh"
 #include "database.hh"
+#include "db/config.hh"
 #include "hashers.hh"
 #include "locator/network_topology_strategy.hh"
 
@@ -1953,6 +1954,7 @@ static future<> do_decommission_removenode_with_repair(seastar::sharded<database
             }
             auto& ks = db.local().find_keyspace(keyspace_name);
             auto& strat = ks.get_replication_strategy();
+            bool best_effort = db.local().get_config().best_effort_to_removenode();
             // First get all ranges the leaving node is responsible for
             dht::token_range_vector ranges = strat.get_ranges(leaving_node);
             rlogger.info("{}: started with keyspace={}, leaving_node={}, nr_ranges={}", op, keyspace_name, leaving_node, ranges.size());
@@ -2070,9 +2072,10 @@ static future<> do_decommission_removenode_with_repair(seastar::sharded<database
                     rlogger.debug("{}: keyspace={}, range={}, current_replica_endpoints={}, new_replica_endpoints={}, neighbors={}, skipped",
                         op, keyspace_name, r, current_eps, new_eps, neighbors);
                 } else {
-                    rlogger.debug("{}: keyspace={}, range={}, current_replica_endpoints={}, new_replica_endpoints={}, neighbors={}",
-                        op, keyspace_name, r, current_eps, new_eps, neighbors);
-                    range_sources[r] = repair_neighbors(std::move(neighbors));
+                    std::vector<gms::inet_address> mandatory_neighbors = (is_removenode && !best_effort) ? neighbors : std::vector<gms::inet_address>{};
+                    rlogger.info("{}: keyspace={}, range={}, current_replica_endpoints={}, new_replica_endpoints={}, neighbors={}, mandatory_neighbor={}",
+                        op, keyspace_name, r, current_eps, new_eps, neighbors, mandatory_neighbors);
+                    range_sources[r] = repair_neighbors(std::move(neighbors), std::move(mandatory_neighbors));
                     if (is_removenode) {
                         ranges_for_removenode.push_back(r);
                     }

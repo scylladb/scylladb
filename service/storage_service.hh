@@ -222,6 +222,7 @@ public:
 private:
 
     std::unordered_set<inet_address> _replicating_nodes;
+    std::unordered_set<inet_address> _replicating_nodes_failed;
 
     std::optional<inet_address> _removing_node;
 
@@ -623,7 +624,7 @@ private:
      */
     std::unordered_multimap<inet_address, dht::token_range> get_new_source_ranges(const sstring& keyspaceName, const dht::token_range_vector& ranges);
 public:
-    future<> confirm_replication(inet_address node);
+    future<> confirm_replication(inet_address node, bool failed);
 
 private:
 
@@ -632,7 +633,7 @@ private:
      *
      * @param remote node to send notification to
      */
-    future<> send_replication_notification(inet_address remote);
+    future<> send_replication_notification(inet_address remote, bool failed);
 
     /**
      * Called when an endpoint is removed from the ring. This function checks

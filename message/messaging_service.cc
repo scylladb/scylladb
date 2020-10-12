@@ -1208,15 +1208,15 @@ future<> messaging_service::send_truncate(msg_addr id, std::chrono::milliseconds
 }
 
 // Wrapper for REPLICATION_FINISHED
-void messaging_service::register_replication_finished(std::function<future<> (inet_address)>&& func) {
+void messaging_service::register_replication_finished(std::function<future<> (inet_address, rpc::optional<bool> failed)>&& func) {
     register_handler(this, messaging_verb::REPLICATION_FINISHED, std::move(func));
 }
 future<> messaging_service::unregister_replication_finished() {
     return unregister_handler(messaging_verb::REPLICATION_FINISHED);
 }
-future<> messaging_service::send_replication_finished(msg_addr id, inet_address from) {
+future<> messaging_service::send_replication_finished(msg_addr id, inet_address from, bool failed) {
     // FIXME: getRpcTimeout : conf.request_timeout_in_ms
-    return send_message_timeout<void>(this, messaging_verb::REPLICATION_FINISHED, std::move(id), 10000ms, std::move(from));
+    return send_message_timeout<void>(this, messaging_verb::REPLICATION_FINISHED, std::move(id), 10000ms, std::move(from), failed);
 }
 
 // Wrapper for REPAIR_CHECKSUM_RANGE

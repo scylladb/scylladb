@@ -2182,6 +2182,7 @@ future<> storage_service::removenode(sstring host_id_string) {
             // Find the endpoints that are going to become responsible for data
             for (const auto& keyspace_name : non_system_keyspaces) {
                 auto& ks = ss.db().local().find_keyspace(keyspace_name);
+                bool best_effort = ss.db().local().get_config().best_effort_to_removenode();
                 // if the replication factor is 1 the data is lost so we shouldn't wait for confirmation
                 if (ks.get_replication_strategy().get_replication_factor() == 1) {
                     slogger.warn("keyspace={} has replication factor 1, the data is probably lost", keyspace_name);
@@ -2197,7 +2198,12 @@ future<> storage_service::removenode(sstring host_id_string) {
                     if (ss._gossiper.is_alive(ep)) {
                         ss._replicating_nodes.emplace(ep);
                     } else {
-                        slogger.warn("Endpoint {} is down and will not receive data for re-replication of {}", ep, endpoint);
+                        if (best_effort) {
+                            slogger.warn("Endpoint {} is down and will not receive data for re-replication of {}", ep, endpoint);
+                        } else {
+                            throw std::runtime_error(format("New owner {} for keyspace {} range {} is not alive for removenode operation to remove node {}",
+                                    ep, keyspace_name, x.first, endpoint));
+                        }
                     }
                 }
             }
@@ -2221,6 +2227,14 @@ future<> storage_service::removenode(sstring host_id_string) {
 
             // wait for ReplicationFinishedVerbHandler to signal we're done
             while (!(ss._replicating_nodes.empty() || ss._force_remove_completion)) {
+                if (!ss._replicating_nodes_failed.empty()) {
+                    auto msg = format("Nodes {} failed to perform restore_replica_count for removing node {}",
+                        ss._replicating_nodes_failed, endpoint);
+                    ss._replicating_nodes.clear();
+                    ss._replicating_nodes_failed.clear();
+                    slogger.warn("{}", msg);
+                    throw std::runtime_error(msg);
+                }
                 sleep_abortable(std::chrono::milliseconds(100), ss._abort_source).get();
             }
 
@@ -2235,6 +2249,7 @@ future<> storage_service::removenode(sstring host_id_string) {
             ss._gossiper.advertise_token_removed(endpoint, host_id).get();
 
             ss._replicating_nodes.clear();
+            ss._replicating_nodes_failed.clear();
             ss._removing_node = std::nullopt;
         });
     });
@@ -2474,8 +2489,10 @@ void storage_service::unbootstrap() {
 
 future<> storage_service::restore_replica_count(inet_address endpoint, inet_address notify_endpoint) {
     if (is_repair_based_node_ops_enabled()) {
-        return removenode_with_repair(_db, _messaging, _token_metadata, endpoint).finally([this, notify_endpoint] () {
-            return send_replication_notification(notify_endpoint);
+        return removenode_with_repair(_db, _messaging, _token_metadata, endpoint).then([this, notify_endpoint] {
+            return send_replication_notification(notify_endpoint, false);
+        }).handle_exception([this, notify_endpoint] (std::exception_ptr ep) {
+            return send_replication_notification(notify_endpoint, true);
         });
     }
   return seastar::async([this, endpoint, notify_endpoint] {
@@ -2498,13 +2515,15 @@ future<> storage_service::restore_replica_count(inet_address endpoint, inet_addr
         streamer->add_rx_ranges(keyspace_name, std::move(ranges_per_endpoint));
     }
     streamer->stream_async().then_wrapped([this, streamer, notify_endpoint] (auto&& f) {
+        bool failed = false;
         try {
             f.get();
-            return this->send_replication_notification(notify_endpoint);
+            return this->send_replication_notification(notify_endpoint, failed);
         } catch (...) {
+            failed = true;
             slogger.warn("Streaming to restore replica count failed: {}", std::current_exception());
             // We still want to send the notification
-            return this->send_replication_notification(notify_endpoint);
+            return this->send_replication_notification(notify_endpoint, failed);
         }
         return make_ready_future<>();
     }).get();
@@ -2529,7 +2548,7 @@ void storage_service::excise(std::unordered_set<token> tokens, inet_address endp
     excise(tokens, endpoint);
 }
 
-future<> storage_service::send_replication_notification(inet_address remote) {
+future<> storage_service::send_replication_notification(inet_address remote, bool failed) {
     // notify the remote token
     auto done = make_shared<bool>(false);
     auto local = get_broadcast_address();
@@ -2543,10 +2562,10 @@ future<> storage_service::send_replication_notification(inet_address remote) {
             // the number of retries.
             return *done || !_gossiper.is_alive(remote) || *sent >= 3;
         },
-        [this, done, sent, remote, local] {
+        [this, done, sent, remote, local, failed] {
             netw::msg_addr id{remote, 0};
             (*sent)++;
-            return _messaging.local().send_replication_finished(id, local).then_wrapped([id, done] (auto&& f) {
+            return _messaging.local().send_replication_finished(id, local, failed).then_wrapped([id, done] (auto&& f) {
                 try {
                     f.get();
                     *done = true;
@@ -2558,15 +2577,19 @@ future<> storage_service::send_replication_notification(inet_address remote) {
     );
 }
 
-future<> storage_service::confirm_replication(inet_address node) {
-    return run_with_no_api_lock([node] (storage_service& ss) {
+future<> storage_service::confirm_replication(inet_address node, bool failed) {
+    return run_with_no_api_lock([node, failed] (storage_service& ss) {
         auto removing_node = bool(ss._removing_node) ? format("{}", *ss._removing_node) : "NONE";
-        slogger.info("Got confirm_replication from {}, removing_node {}", node, removing_node);
+        slogger.info("Got confirm_replication from {}, removing_node {}, status={}", node, removing_node, failed ? "failed" : "successful");
         // replicatingNodes can be empty in the case where this node used to be a removal coordinator,
         // but restarted before all 'replication finished' messages arrived. In that case, we'll
         // still go ahead and acknowledge it.
         if (!ss._replicating_nodes.empty()) {
-            ss._replicating_nodes.erase(node);
+            if (failed) {
+                ss._replicating_nodes_failed.insert(node);
+            } else {
+                ss._replicating_nodes.erase(node);
+            }
         } else {
             slogger.info("Received unexpected REPLICATION_FINISHED message from {}. Was this node recently a removal coordinator?", node);
         }
@@ -2835,8 +2858,9 @@ future<> storage_service::keyspace_changed(const sstring& ks_name) {
 }
 
 void storage_service::init_messaging_service() {
-    _messaging.local().register_replication_finished([] (gms::inet_address from) {
-        return get_local_storage_service().confirm_replication(from);
+    _messaging.local().register_replication_finished([] (gms::inet_address from, rpc::optional<bool> failed_opt) {
+        bool failed = failed_opt ? *failed_opt: false;
+        return get_local_storage_service().confirm_replication(from, failed);
     });
 }
 
@@ -2914,6 +2938,7 @@ future<> storage_service::force_remove_completion() {
                         ss.excise(tokens_set, endpoint);
                     }
                     ss._replicating_nodes.clear();
+                    ss._replicating_nodes_failed.clear();
                     ss._removing_node = std::nullopt;
                 } else {
                     slogger.warn("No tokens to force removal on, call 'removenode' first");
