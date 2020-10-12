@@ -1318,7 +1318,7 @@ forced_ldflags += f'--dynamic-linker={dynamic_linker}'
 
 args.user_ldflags = forced_ldflags + ' ' + args.user_ldflags
 
-args.user_cflags += f"-ffile-prefix-map={curdir}=."
+args.user_cflags += f" -ffile-prefix-map={curdir}=."
 
 seastar_cflags = args.user_cflags
 
