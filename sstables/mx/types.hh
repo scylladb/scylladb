@@ -22,6 +22,7 @@
 #pragma once
 
 #include "clustering_bounds_comparator.hh"
+#include <iosfwd>
 
 namespace sstables {
 
@@ -93,5 +94,7 @@ inline bound_kind boundary_to_end_bound(bound_kind_m kind) {
     assert(is_boundary_between_adjacent_intervals(kind));
     return (kind == bound_kind_m::incl_end_excl_start) ? bound_kind::incl_end : bound_kind::excl_end;
 }
+
+std::ostream& operator<<(std::ostream& out, sstables::bound_kind_m kind);
 
 }

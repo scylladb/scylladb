@@ -98,35 +98,3 @@ inline gc_clock::time_point parse_expiry(const serialization_header& header,
 }
 
 };   // namespace sstables
-
-inline std::ostream& operator<<(std::ostream& out, sstables::bound_kind_m kind) {
-    switch (kind) {
-    case sstables::bound_kind_m::excl_end:
-        out << "excl_end";
-        break;
-    case sstables::bound_kind_m::incl_start:
-        out << "incl_start";
-        break;
-    case sstables::bound_kind_m::excl_end_incl_start:
-        out << "excl_end_incl_start";
-        break;
-    case sstables::bound_kind_m::static_clustering:
-        out << "static_clustering";
-        break;
-    case sstables::bound_kind_m::clustering:
-        out << "clustering";
-        break;
-    case sstables::bound_kind_m::incl_end_excl_start:
-        out << "incl_end_excl_start";
-        break;
-    case sstables::bound_kind_m::incl_end:
-        out << "incl_end";
-        break;
-    case sstables::bound_kind_m::excl_start:
-        out << "excl_start";
-        break;
-    default:
-        out << static_cast<unsigned>(kind);
-    }
-    return out;
-}
