@@ -184,6 +184,8 @@ public:
         return compaction_strategy_type::time_window;
     }
 
+    virtual std::unique_ptr<sstable_set_impl> make_sstable_set(schema_ptr schema) const override;
+
     virtual compaction_backlog_tracker& get_backlog_tracker() override {
         return _backlog_tracker;
     }

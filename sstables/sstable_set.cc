@@ -25,6 +25,7 @@
 #include "compatible_ring_position.hh"
 #include "compaction_strategy_impl.hh"
 #include "leveled_compaction_strategy.hh"
+#include "time_window_compaction_strategy.hh"
 
 #include "sstable_set_impl.hh"
 
@@ -528,6 +529,10 @@ std::unique_ptr<sstable_set_impl> compaction_strategy_impl::make_sstable_set(sch
 
 std::unique_ptr<sstable_set_impl> leveled_compaction_strategy::make_sstable_set(schema_ptr schema) const {
     return std::make_unique<partitioned_sstable_set>(std::move(schema));
+}
+
+std::unique_ptr<sstable_set_impl> time_window_compaction_strategy::make_sstable_set(schema_ptr schema) const {
+    return std::make_unique<time_series_sstable_set>(std::move(schema));
 }
 
 sstable_set make_partitioned_sstable_set(schema_ptr schema, lw_shared_ptr<sstable_list> all, bool use_level_metadata) {
