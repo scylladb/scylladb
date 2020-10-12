@@ -132,6 +132,7 @@ relocate_python3() {
     cp "$script" "$relocateddir"
     cat > "$install"<<EOF
 #!/usr/bin/env bash
+export LC_ALL=en_US.UTF-8
 x="\$(readlink -f "\$0")"
 b="\$(basename "\$x")"
 d="\$(dirname "\$x")"
