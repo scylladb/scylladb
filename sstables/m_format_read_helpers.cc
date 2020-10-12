@@ -58,8 +58,6 @@ future<int64_t> read_signed_vint(random_access_reader& in) {
     return read_vint_impl<int64_t>(in);
 }
 
-}  // namespace sstables
-
 std::ostream& operator<<(std::ostream& out, sstables::bound_kind_m kind) {
     switch (kind) {
     case sstables::bound_kind_m::excl_end:
@@ -91,3 +89,5 @@ std::ostream& operator<<(std::ostream& out, sstables::bound_kind_m kind) {
     }
     return out;
 }
+
+}  // namespace sstables
