@@ -410,6 +410,114 @@ std::unique_ptr<incremental_selector_impl> time_series_sstable_set::make_increme
     return std::make_unique<selector>(*this);
 }
 
+// Queue of readers of sstables in a time_series_sstable_set,
+// returning readers in order of the sstables' min_position()s.
+//
+// Skips sstables that don't pass the supplied filter.
+// Guarantees that the filter will be called at most once for each sstable;
+// exactly once after all sstables are iterated over.
+//
+// The readers are created lazily on-demand using the supplied factory function.
+class min_position_reader_queue : public position_reader_queue {
+    using container_t = time_series_sstable_set::container_t;
+    using value_t = container_t::value_type;
+
+    schema_ptr _schema;
+    lw_shared_ptr<const container_t> _sstables;
+
+    // Iterates over sstables in order of min_position().
+    // Invariant: _it == _end or filter(it->second) == true
+    container_t::const_iterator _it;
+    const container_t::const_iterator _end;
+
+    position_in_partition::tri_compare _cmp;
+
+    std::function<flat_mutation_reader(sstable&)> _create_reader;
+    std::function<bool(const sstable&)> _filter;
+
+    flat_mutation_reader create_reader(sstable& sst) {
+        return _create_reader(sst);
+    }
+
+    bool filter(const sstable& sst) const {
+        return _filter(sst);
+    }
+
+public:
+    min_position_reader_queue(schema_ptr schema,
+            lw_shared_ptr<const time_series_sstable_set::container_t> sstables,
+            std::function<flat_mutation_reader(sstable&)> create_reader,
+            std::function<bool(const sstable&)> filter)
+        : _schema(std::move(schema))
+        , _sstables(std::move(sstables))
+        , _it(_sstables->begin())
+        , _end(_sstables->end())
+        , _cmp(*_schema)
+        , _create_reader(std::move(create_reader))
+        , _filter(std::move(filter))
+    {
+        while (_it != _end && !this->filter(*_it->second)) {
+            ++_it;
+        }
+    }
+
+    virtual ~min_position_reader_queue() override = default;
+
+    // Open sstable readers to all sstables with smallest min_position() from the set
+    // {S: filter(S) and prev_min_pos < S.min_position() <= bound}, where `prev_min_pos` is the min_position()
+    // of the sstables returned from last non-empty pop() or -infinity if no sstables were previously returned,
+    // and `filter` is the filtering function provided when creating the queue.
+    //
+    // Note that there may be multiple returned sstables (all with the same position) or none.
+    //
+    // Note that S.min_position() is global for sstable S; if the readers are used to inspect specific partitions,
+    // the minimal positions in these partitions might actually all be greater than S.min_position().
+    virtual std::vector<reader_and_upper_bound> pop(position_in_partition_view bound) override {
+        if (empty(bound)) {
+            return {};
+        }
+
+        // by !empty(bound) and `_it` invariant:
+        //      _it != _end, _it->first <= bound, and filter(*_it->second) == true
+        assert(_cmp(_it->first, bound) <= 0);
+        // we don't assert(filter(*_it->second)) due to the requirement that `filter` is called at most once for each sstable
+
+        // Find all sstables with the same position as `_it` (they form a contiguous range in the container).
+        auto next = std::find_if(std::next(_it), _end, [this] (const value_t& v) { return _cmp(v.first, _it->first) != 0; });
+
+        // We'll return all sstables in the range [_it, next) which pass the filter
+        std::vector<reader_and_upper_bound> ret;
+        do {
+            // loop invariant: filter(*_it->second) == true
+            ret.emplace_back(create_reader(*_it->second), _it->second->max_position());
+            // restore loop invariant
+            do {
+                ++_it;
+            } while (_it != next && !filter(*_it->second));
+        } while (_it != next);
+
+        // filter(*_it->second) wasn't called yet since the inner `do..while` above checks _it != next first
+        // restore the `_it` invariant before returning
+        while (_it != _end && !filter(*_it->second)) {
+            ++_it;
+        }
+
+        return ret;
+    }
+
+    // Is the set of sstables {S: filter(S) and prev_min_pos < S.min_position() <= bound} empty?
+    // (see pop() for definition of `prev_min_pos`)
+    virtual bool empty(position_in_partition_view bound) const override {
+        return _it == _end || _cmp(_it->first, bound) > 0;
+    }
+};
+
+std::unique_ptr<position_reader_queue> time_series_sstable_set::make_min_position_reader_queue(
+        std::function<flat_mutation_reader(sstable&)> create_reader,
+        std::function<bool(const sstable&)> filter) const {
+    return std::make_unique<min_position_reader_queue>(_schema, _sstables, std::move(create_reader), std::move(filter));
+}
+
 std::unique_ptr<incremental_selector_impl> partitioned_sstable_set::make_incremental_selector() const {
     return std::make_unique<incremental_selector>(_schema, _unleveled_sstables, _leveled_sstables, _leveled_sstables_change_cnt);
 }

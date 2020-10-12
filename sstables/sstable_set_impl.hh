@@ -125,6 +125,10 @@ public:
     virtual void insert(shared_sstable sst) override;
     virtual void erase(shared_sstable sst) override;
     virtual std::unique_ptr<incremental_selector_impl> make_incremental_selector() const override;
+
+    std::unique_ptr<position_reader_queue> make_min_position_reader_queue(
+        std::function<flat_mutation_reader(sstable&)> create_reader,
+        std::function<bool(const sstable&)> filter) const;
 };
 
 } // namespace sstables
