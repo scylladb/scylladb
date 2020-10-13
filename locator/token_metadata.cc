@@ -46,6 +46,15 @@ static void remove_by_value(C& container, V value) {
     }
 }
 
+struct replacing_node_status {
+    gms::inet_address node;
+    bool is_prepare_state;
+};
+
+std::ostream& operator<<(std::ostream& os, const replacing_node_status& x) {
+    return os << "{" << x.node << " : " << x.is_prepare_state << "}";
+}
+
 class token_metadata_impl final {
 public:
     using UUID = utils::UUID;
@@ -65,7 +74,7 @@ private:
     std::unordered_map<token, inet_address> _bootstrap_tokens;
     std::unordered_set<inet_address> _leaving_endpoints;
     // The map between the existing node to be replaced and the replacing node
-    std::unordered_map<inet_address, inet_address> _replacing_endpoints;
+    std::unordered_map<inet_address, replacing_node_status> _replacing_endpoints;
 
     std::unordered_map<sstring, boost::icl::interval_map<token, std::unordered_set<inet_address>>> _pending_ranges_interval_map;
 
@@ -365,7 +374,7 @@ public:
     // Is any node being replaced by another node
     bool is_any_node_being_replaced() const;
 
-    void add_replacing_endpoint(inet_address existing_node, inet_address replacing_node);
+    void add_replacing_endpoint(inet_address existing_node, inet_address replacing_node, bool is_prepare_state);
 
     void del_replacing_endpoint(inet_address existing_node);
 #if 0
@@ -1414,12 +1423,18 @@ future<> token_metadata_impl::calculate_pending_ranges_for_replacing(
         return make_ready_future<>();
     }
     return do_with(_replacing_endpoints, strategy.get_address_ranges(unpimplified_this),
-            [this, new_pending_ranges] (std::unordered_map<inet_address, inet_address>& replacing_endpoints,
+            [this, new_pending_ranges] (std::unordered_map<inet_address, replacing_node_status>& replacing_endpoints,
                     std::unordered_multimap<inet_address, dht::token_range>& address_ranges) {
         return do_for_each(replacing_endpoints, [this, new_pending_ranges, &address_ranges]
-                (const std::pair<gms::inet_address, gms::inet_address>& node) {
+                (const std::pair<gms::inet_address, replacing_node_status>& node) {
             auto existing_node = node.first;
-            auto replacing_node = node.second;
+            auto replacing_node = node.second.node;
+            auto is_prepare_state = node.second.is_prepare_state;
+            if (is_prepare_state) {
+                tlogger.debug("Skip update pending ranges for existing_node={}, replacing_node={}, is_prepare_state={}",
+                        existing_node, replacing_node, is_prepare_state);
+                return make_ready_future<>();
+            }
             return do_for_each(address_ranges, [this, new_pending_ranges, existing_node, replacing_node]
                     (const std::pair<gms::inet_address, dht::token_range>& x) {
                 if (x.first == existing_node) {
@@ -1505,16 +1520,16 @@ void token_metadata_impl::add_leaving_endpoint(inet_address endpoint) {
      _leaving_endpoints.emplace(endpoint);
 }
 
-void token_metadata_impl::add_replacing_endpoint(inet_address existing_node, inet_address replacing_node) {
+void token_metadata_impl::add_replacing_endpoint(inet_address existing_node, inet_address replacing_node, bool prepare_state) {
     tlogger.info("Added node {} as pending replacing endpoint which replaces existing node {}",
             replacing_node, existing_node);
-    _replacing_endpoints[existing_node] = replacing_node;
+    _replacing_endpoints[existing_node] = replacing_node_status{replacing_node, prepare_state};
 }
 
 void token_metadata_impl::del_replacing_endpoint(inet_address existing_node) {
     if (_replacing_endpoints.contains(existing_node)) {
         tlogger.info("Removed node {} as pending replacing endpoint which replaces existing node {}",
-                _replacing_endpoints[existing_node], existing_node);
+                _replacing_endpoints[existing_node].node, existing_node);
     }
     _replacing_endpoints.erase(existing_node);
 }
@@ -1800,8 +1815,8 @@ token_metadata::is_any_node_being_replaced() const {
     return _impl->is_any_node_being_replaced();
 }
 
-void token_metadata::add_replacing_endpoint(inet_address existing_node, inet_address replacing_node) {
-    _impl->add_replacing_endpoint(existing_node, replacing_node);
+void token_metadata::add_replacing_endpoint(inet_address existing_node, inet_address replacing_node, bool is_prepare_state) {
+    _impl->add_replacing_endpoint(existing_node, replacing_node, is_prepare_state);
 }
 
 void token_metadata::del_replacing_endpoint(inet_address existing_node) {

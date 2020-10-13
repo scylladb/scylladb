@@ -367,6 +367,7 @@ void storage_service::prepare_to_join(
     }
     if (replacing_a_node_with_same_ip || replacing_a_node_with_diff_ip) {
         app_states.emplace(gms::application_state::TOKENS, versioned_value::tokens(_bootstrap_tokens));
+        app_states.emplace(gms::application_state::STATUS, versioned_value::prepare_replacing(true));
     }
     slogger.info("Starting up server gossip");
 
@@ -1043,7 +1044,7 @@ storage_service::get_range_to_address_map(const sstring& keyspace,
     return construct_range_to_endpoint_map(ks, get_all_ranges(sorted_tokens));
 }
 
-void storage_service::handle_state_replacing(inet_address replacing_node) {
+void storage_service::handle_state_replacing(inet_address replacing_node, bool is_prepare_state) {
     slogger.debug("endpoint={} handle_state_replacing", replacing_node);
     auto host_id = _gossiper.get_host_id(replacing_node);
     auto existing_node_opt = _token_metadata.get_endpoint_for_host_id(host_id);
@@ -1058,9 +1059,10 @@ void storage_service::handle_state_replacing(inet_address replacing_node) {
     auto existing_node = *existing_node_opt;
     auto existing_tokens = get_tokens_for(existing_node);
     auto replacing_tokens = get_tokens_for(replacing_node);
-    slogger.info("Node {} is replacing existing node {} with host_id={}, existing_tokens={}, replacing_tokens={}",
-            replacing_node, existing_node, host_id, existing_tokens, replacing_tokens);
-    _token_metadata.add_replacing_endpoint(existing_node, replacing_node);
+    auto op = is_prepare_state ? "preparing" : "starting";
+    slogger.info("Node {} is {} to replace existing node {} with host_id={}, existing_tokens={}, replacing_tokens={}",
+            replacing_node, op, existing_node, host_id, existing_tokens, replacing_tokens);
+    _token_metadata.add_replacing_endpoint(existing_node, replacing_node, is_prepare_state);
     update_pending_ranges().get();
 }
 
@@ -1406,8 +1408,10 @@ void storage_service::on_change(inet_address endpoint, application_state state, 
             handle_state_left(endpoint, pieces);
         } else if (move_name == sstring(versioned_value::STATUS_MOVING)) {
             handle_state_moving(endpoint, pieces);
+        } else if (move_name == sstring(versioned_value::STATUS_PREPARE_REPLACE)) {
+            handle_state_replacing(endpoint, true);
         } else if (move_name == sstring(versioned_value::HIBERNATE)) {
-            handle_state_replacing(endpoint);
+            handle_state_replacing(endpoint, false);
         } else {
             return; // did nothing.
         }

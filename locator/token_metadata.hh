@@ -240,7 +240,7 @@ public:
     // Is any node being replaced by another node
     bool is_any_node_being_replaced() const;
 
-    void add_replacing_endpoint(inet_address existing_node, inet_address replacing_node);
+    void add_replacing_endpoint(inet_address existing_node, inet_address replacing_node, bool is_prepare_state);
 
     void del_replacing_endpoint(inet_address existing_node);
 

@@ -599,7 +599,7 @@ private:
      *
      * @param endpoint node
      */
-    void handle_state_replacing(inet_address endpoint);
+    void handle_state_replacing(inet_address endpoint, bool is_prepare_state);
 
 private:
     void excise(std::unordered_set<token> tokens, inet_address endpoint);

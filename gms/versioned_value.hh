@@ -81,6 +81,7 @@ public:
     static constexpr const char* REMOVING_TOKEN = "removing";
     static constexpr const char* REMOVED_TOKEN = "removed";
 
+    static constexpr const char* STATUS_PREPARE_REPLACE = "PREPARE_REPLACE";
     static constexpr const char* HIBERNATE = "hibernate";
     static constexpr const char* SHUTDOWN = "shutdown";
 
@@ -205,6 +206,10 @@ public:
 
     static versioned_value hibernate(bool value) {
         return versioned_value(sstring(HIBERNATE) + sstring(DELIMITER_STR) + (value ? "true" : "false"));
+    }
+
+    static versioned_value prepare_replacing(bool value) {
+        return versioned_value(sstring(STATUS_PREPARE_REPLACE) + sstring(DELIMITER_STR) + (value ? "true" : "false"));
     }
 
     static versioned_value shutdown(bool value) {
