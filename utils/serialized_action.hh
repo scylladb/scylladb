@@ -38,15 +38,9 @@ private:
     seastar::shared_future<> _pending;
     seastar::semaphore _sem;
 private:
-    future<> do_trigger(seastar::shared_promise<> pr) {
+    future<> do_trigger() {
         _pending = {};
-        return futurize_invoke(_func).then_wrapped([pr = std::move(pr)] (auto&& f) mutable {
-            if (f.failed()) {
-                pr.set_exception(f.get_exception());
-            } else {
-                pr.set_value();
-            }
-        });
+        return futurize_invoke(_func);
     }
 public:
     serialized_action(std::function<future<>()> func)
@@ -69,13 +63,19 @@ public:
         }
         seastar::shared_promise<> pr;
         _pending = pr.get_shared_future();
-        return with_semaphore(_sem, 1, [this, pr = std::move(pr), later] () mutable {
+        return with_semaphore(_sem, 1, [this, later] () mutable {
             if (later) {
-                return seastar::later().then([this, pr = std::move(pr)] () mutable {
-                    return do_trigger(std::move(pr));
+                return seastar::later().then([this] () mutable {
+                    return do_trigger();
                 });
             }
-            return do_trigger(std::move(pr));
+            return do_trigger();
+        }).then_wrapped([pr = std::move(pr)] (auto&& f) mutable {
+            if (f.failed()) {
+                pr.set_exception(f.get_exception());
+            } else {
+                pr.set_value();
+            }
         });
     }
 
