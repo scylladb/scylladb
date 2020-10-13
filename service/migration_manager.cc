@@ -128,11 +128,6 @@ void migration_manager::init_messaging_service()
         using canonical_mutations = std::vector<canonical_mutation>;
         const auto cm_retval_supported = options && options->remote_supports_canonical_mutation_retval;
 
-        auto src = netw::messaging_service::get_source(cinfo);
-        if (!has_compatible_schema_tables_version(src.addr)) {
-            mlogger.debug("Ignoring schema request from incompatible node: {}", src);
-            return make_ready_future<rpc::tuple<frozen_mutations, canonical_mutations>>(rpc::tuple(frozen_mutations{}, canonical_mutations{}));
-        }
         auto features = _feat.cluster_schema_features();
         auto& proxy = get_storage_proxy();
         return db::schema_tables::convert_schema_to_mutations(proxy, features).then([&proxy, cm_retval_supported] (std::vector<canonical_mutation>&& cm) {
