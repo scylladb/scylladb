@@ -470,6 +470,7 @@ public:
     /// remote shard stay alive, during the lifetime of the created reader.
     virtual flat_mutation_reader create_reader(
             schema_ptr schema,
+            reader_permit permit,
             const dht::partition_range& range,
             const query::partition_slice& slice,
             const io_priority_class& pc,
@@ -546,6 +547,7 @@ public:
 flat_mutation_reader make_multishard_combining_reader(
         shared_ptr<reader_lifecycle_policy> lifecycle_policy,
         schema_ptr schema,
+        reader_permit permit,
         const dht::partition_range& pr,
         const query::partition_slice& ps,
         const io_priority_class& pc,
@@ -556,6 +558,7 @@ flat_mutation_reader make_multishard_combining_reader_for_tests(
         const dht::sharder& sharder,
         shared_ptr<reader_lifecycle_policy> lifecycle_policy,
         schema_ptr schema,
+        reader_permit permit,
         const dht::partition_range& pr,
         const query::partition_slice& ps,
         const io_priority_class& pc,

@@ -142,7 +142,7 @@ void stream_session::init_messaging_service_handler(netw::messaging_service& ms)
                 bool got_end_of_stream = false;
             };
             auto cmd_status = make_lw_shared<stream_mutation_fragments_cmd_status>();
-            auto permit = cf.streaming_read_concurrency_semaphore().make_permit();
+            auto permit = cf.streaming_read_concurrency_semaphore().make_permit(s.get(), "stream-session");
             auto get_next_mutation_fragment = [source, plan_id, from, s, cmd_status, permit] () mutable {
                 return source().then([plan_id, from, s, cmd_status, permit] (std::optional<std::tuple<frozen_mutation_fragment, rpc::optional<stream_mutation_fragments_cmd>>> opt) mutable {
                     if (opt) {

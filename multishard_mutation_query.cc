@@ -103,10 +103,6 @@ class read_context : public reader_lifecycle_policy {
             std::unique_ptr<const query::partition_slice> slice;
             utils::phased_barrier::operation read_operation;
 
-            explicit remote_parts(reader_concurrency_semaphore& semaphore)
-                : permit(semaphore.make_permit()) {
-            }
-
             remote_parts(
                     reader_permit permit,
                     std::unique_ptr<const dht::partition_range> range = nullptr,
@@ -128,10 +124,12 @@ class read_context : public reader_lifecycle_policy {
         reader_meta() = default;
 
         // Remote constructor.
-        reader_meta(reader_state s, remote_parts rp, reader_concurrency_semaphore::inactive_read_handle h = {})
+        reader_meta(reader_state s, std::optional<remote_parts> rp = {}, reader_concurrency_semaphore::inactive_read_handle h = {})
             : state(s)
-            , rparts(make_foreign(std::make_unique<remote_parts>(std::move(rp))))
             , handle(make_foreign(std::make_unique<reader_concurrency_semaphore::inactive_read_handle>(std::move(h)))) {
+            if (rp) {
+                rparts = make_foreign(std::make_unique<remote_parts>(std::move(*rp)));
+            }
         }
     };
 
@@ -216,7 +214,7 @@ public:
             tracing::trace_state_ptr trace_state)
             : _db(db)
             , _schema(std::move(s))
-            , _permit(_db.local().get_reader_concurrency_semaphore().make_permit())
+            , _permit(_db.local().get_reader_concurrency_semaphore().make_permit(_schema.get(), "multishard-mutation-query"))
             , _cmd(cmd)
             , _ranges(ranges)
             , _trace_state(std::move(trace_state))
@@ -240,6 +238,7 @@ public:
 
     virtual flat_mutation_reader create_reader(
             schema_ptr schema,
+            reader_permit permit,
             const dht::partition_range& pr,
             const query::partition_slice& ps,
             const io_priority_class& pc,
@@ -282,6 +281,7 @@ std::string_view read_context::reader_state_to_string(reader_state rs) {
 
 flat_mutation_reader read_context::create_reader(
         schema_ptr schema,
+        reader_permit permit,
         const dht::partition_range& pr,
         const query::partition_slice& ps,
         const io_priority_class& pc,
@@ -309,7 +309,7 @@ flat_mutation_reader read_context::create_reader(
     auto& table = _db.local().find_column_family(schema);
 
     if (!rm.rparts) {
-        rm.rparts = make_foreign(std::make_unique<reader_meta::remote_parts>(semaphore()));
+        rm.rparts = make_foreign(std::make_unique<reader_meta::remote_parts>(std::move(permit)));
     }
 
     rm.rparts->range = std::make_unique<const dht::partition_range>(pr);
@@ -527,7 +527,7 @@ future<> read_context::lookup_readers() {
             auto& semaphore = this->semaphore();
 
             if (!querier_opt) {
-                return reader_meta(reader_state::inexistent, reader_meta::remote_parts(semaphore));
+                return reader_meta(reader_state::inexistent);
             }
 
             auto& q = *querier_opt;
@@ -630,7 +630,7 @@ static future<reconcilable_result> do_query_mutations(
                     tracing::trace_state_ptr trace_state,
                     streamed_mutation::forwarding,
                     mutation_reader::forwarding fwd_mr) {
-                return make_multishard_combining_reader(ctx, std::move(s), pr, ps, pc, std::move(trace_state), fwd_mr);
+                return make_multishard_combining_reader(ctx, std::move(s), std::move(permit), pr, ps, pc, std::move(trace_state), fwd_mr);
             });
             auto reader = make_flat_multi_range_reader(s, ctx->permit(), std::move(ms), ranges,
                     cmd.slice, service::get_local_sstable_query_read_priority(), trace_state, mutation_reader::forwarding::no);

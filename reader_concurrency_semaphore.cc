@@ -25,6 +25,8 @@
 
 #include "reader_concurrency_semaphore.hh"
 #include "utils/exceptions.hh"
+#include "schema.hh"
+#include "utils/human_readable.hh"
 
 logger rcslog("reader_concurrency_semaphore");
 
@@ -67,17 +69,36 @@ void reader_permit::resource_units::reset(reader_resources res) {
     _resources = res;
 }
 
-class reader_permit::impl {
+class reader_permit::impl : public boost::intrusive::list_base_hook<boost::intrusive::link_mode<boost::intrusive::auto_unlink>> {
     reader_concurrency_semaphore& _semaphore;
+    const schema* _schema;
+    sstring _op_name;
+    std::string_view _op_name_view;
     reader_resources _resources;
-    bool _admitted = false;
+    reader_permit::state _state = reader_permit::state::registered;
 
 public:
-    impl(reader_concurrency_semaphore& semaphore) : _semaphore(semaphore) { }
+    struct value_tag {};
+
+    impl(reader_concurrency_semaphore& semaphore, const schema* const schema, const std::string_view& op_name)
+        : _semaphore(semaphore)
+        , _schema(schema)
+        , _op_name_view(op_name)
+    { }
+    impl(reader_concurrency_semaphore& semaphore, const schema* const schema, sstring&& op_name)
+        : _semaphore(semaphore)
+        , _schema(schema)
+        , _op_name(std::move(op_name))
+        , _op_name_view(_op_name)
+    { }
     ~impl() {
         if (_resources) {
-            on_internal_error_noexcept(rcslog, format("reader_permit::impl::~impl(): detected a leak of {{count={}, memory={}}} resources",
-                        _resources.count, _resources.memory));
+            on_internal_error_noexcept(rcslog, format("reader_permit::impl::~impl(): permit {}.{}:{} detected a leak of {{count={}, memory={}}} resources",
+                        _schema ? _schema->ks_name() : "*",
+                        _schema ? _schema->cf_name() : "*",
+                        _op_name_view,
+                        _resources.count,
+                        _resources.memory));
         }
     }
 
@@ -85,21 +106,37 @@ public:
         return _semaphore;
     }
 
+    const ::schema* get_schema() const {
+        return _schema;
+    }
+
+    std::string_view get_op_name() const {
+        return _op_name_view;
+    }
+
+    reader_permit::state get_state() const {
+        return _state;
+    }
+
+    void on_waiting() {
+        _state = reader_permit::state::waiting;
+    }
+
     void on_admission() {
-        _admitted = true;
+        _state = reader_permit::state::admitted;
         _semaphore.consume(_resources);
     }
 
     void consume(reader_resources res) {
         _resources += res;
-        if (_admitted) {
+        if (_state == reader_permit::state::admitted) {
             _semaphore.consume(res);
         }
     }
 
     void signal(reader_resources res) {
         _resources -= res;
-        if (_admitted) {
+        if (_state == reader_permit::state::admitted) {
             _semaphore.signal(res);
         }
     }
@@ -109,8 +146,26 @@ public:
     }
 };
 
-reader_permit::reader_permit(reader_concurrency_semaphore& semaphore)
-    : _impl(make_shared<impl>(semaphore)) {
+struct reader_concurrency_semaphore::permit_list {
+    using list_type = boost::intrusive::list<reader_permit::impl, boost::intrusive::constant_time_size<false>>;
+
+    list_type permits;
+};
+
+reader_permit::reader_permit(reader_concurrency_semaphore& semaphore, const schema* const schema, std::string_view op_name)
+    : _impl(::seastar::make_shared<reader_permit::impl>(semaphore, schema, op_name))
+{
+    semaphore._permit_list->permits.push_back(*_impl);
+}
+
+reader_permit::reader_permit(reader_concurrency_semaphore& semaphore, const schema* const schema, sstring&& op_name)
+    : _impl(::seastar::make_shared<reader_permit::impl>(semaphore, schema, std::move(op_name)))
+{
+    semaphore._permit_list->permits.push_back(*_impl);
+}
+
+void reader_permit::on_waiting() {
+    _impl->on_waiting();
 }
 
 void reader_permit::on_admission() {
@@ -148,6 +203,140 @@ reader_resources reader_permit::consumed_resources() const {
     return _impl->resources();
 }
 
+std::ostream& operator<<(std::ostream& os, reader_permit::state s) {
+    switch (s) {
+        case reader_permit::state::registered:
+            os << "registered";
+            break;
+        case reader_permit::state::waiting:
+            os << "waiting";
+            break;
+        case reader_permit::state::admitted:
+            os << "admitted";
+            break;
+    }
+    return os;
+}
+
+namespace {
+
+struct permit_stats {
+    uint64_t memory = 0;
+    uint64_t count = 0;
+
+    void add(uint64_t m) {
+        memory += m;
+        ++count;
+    }
+
+    permit_stats& operator+=(const permit_stats& o) {
+        memory += o.memory;
+        count += o.count;
+        return *this;
+    }
+};
+
+using permit_group_key = std::tuple<const schema*, std::string_view, reader_permit::state>;
+
+struct permit_group_key_hash {
+    size_t operator()(const permit_group_key& k) const {
+        using underlying_type = std::underlying_type_t<reader_permit::state>;
+        return std::hash<uintptr_t>()(reinterpret_cast<uintptr_t>(std::get<0>(k)))
+            ^ std::hash<std::string_view>()(std::get<1>(k))
+            ^ std::hash<underlying_type>()(static_cast<underlying_type>(std::get<2>(k)));
+    }
+};
+
+using permit_groups = std::unordered_map<permit_group_key, permit_stats, permit_group_key_hash>;
+
+static permit_stats do_dump_reader_permit_diagnostics(std::ostream& os, const permit_groups& permits, reader_permit::state state, bool sort_by_memory) {
+    struct permit_summary {
+        const schema* s;
+        std::string_view op_name;
+        uint64_t memory;
+        uint64_t count;
+    };
+
+    std::vector<permit_summary> permit_summaries;
+    for (const auto& [k, v] : permits) {
+        const auto& [s, op_name, k_state] = k;
+        if (k_state == state) {
+            permit_summaries.emplace_back(s, op_name, v.memory, v.count);
+        }
+    }
+
+    std::ranges::sort(permit_summaries, [sort_by_memory] (const permit_summary& a, const permit_summary& b) {
+        if (sort_by_memory) {
+            return a.memory < b.memory;
+        } else {
+            return a.count < b.count;
+        }
+    });
+
+    permit_stats total;
+
+    auto print_line = [&os, sort_by_memory] (auto col1, auto col2, auto col3) {
+        if (sort_by_memory) {
+            fmt::print(os, "{}\t{}\t{}\n", col2, col1, col3);
+        } else {
+            fmt::print(os, "{}\t{}\t{}\n", col1, col2, col3);
+        }
+    };
+
+    fmt::print(os, "Permits with state {}, sorted by {}\n", state, sort_by_memory ? "memory" : "count");
+    print_line("count", "memory", "name");
+    for (const auto& summary : permit_summaries) {
+        total.count += summary.count;
+        total.memory += summary.memory;
+        print_line(summary.count, utils::to_hr_size(summary.memory), fmt::format("{}.{}:{}",
+                    summary.s ? summary.s->ks_name() : "*",
+                    summary.s ? summary.s->cf_name() : "*",
+                    summary.op_name));
+    }
+    fmt::print(os, "\n");
+    print_line(total.count, utils::to_hr_size(total.memory), "total");
+    return total;
+}
+
+static void do_dump_reader_permit_diagnostics(std::ostream& os, const reader_concurrency_semaphore& semaphore,
+        const reader_concurrency_semaphore::permit_list& list, std::string_view problem) {
+    permit_groups permits;
+
+    for (const auto& permit : list.permits) {
+        permits[permit_group_key(permit.get_schema(), permit.get_op_name(), permit.get_state())].add(permit.resources().memory);
+    }
+
+    permit_stats total;
+
+    fmt::print(os, "Semaphore {}: {}, dumping permit diagnostics:\n", semaphore.name(), problem);
+    total += do_dump_reader_permit_diagnostics(os, permits, reader_permit::state::admitted, true);
+    fmt::print(os, "\n");
+    total += do_dump_reader_permit_diagnostics(os, permits, reader_permit::state::waiting, false);
+    fmt::print(os, "\n");
+    total += do_dump_reader_permit_diagnostics(os, permits, reader_permit::state::registered, false);
+    fmt::print(os, "\n");
+    fmt::print(os, "Total: permits: {}, memory: {}\n", total.count, utils::to_hr_size(total.memory));
+}
+
+static void maybe_dump_reader_permit_diagnostics(const reader_concurrency_semaphore& semaphore, const reader_concurrency_semaphore::permit_list& list,
+        std::string_view problem) {
+    if (rcslog.level() < log_level::debug) {
+        return;
+    }
+
+    std::ostringstream os;
+    do_dump_reader_permit_diagnostics(os, semaphore, list, problem);
+    rcslog.debug("{}", os.str());
+}
+
+} // anonymous namespace
+
+void reader_concurrency_semaphore::expiry_handler::operator()(entry& e) noexcept {
+    e.pr.set_exception(named_semaphore_timed_out(_semaphore._name));
+
+    maybe_dump_reader_permit_diagnostics(_semaphore, *_semaphore._permit_list, "timed out");
+}
+
 void reader_concurrency_semaphore::signal(const resources& r) noexcept {
     _resources += r;
     while (!_wait_list.empty() && has_available_units(_wait_list.front().res)) {
@@ -161,6 +350,22 @@ void reader_concurrency_semaphore::signal(const resources& r) noexcept {
         _wait_list.pop_front();
     }
 }
+
+reader_concurrency_semaphore::reader_concurrency_semaphore(int count, ssize_t memory, sstring name, size_t max_queue_length,
+        std::function<void()> prethrow_action)
+    : _initial_resources(count, memory)
+    , _resources(count, memory)
+    , _wait_list(expiry_handler(*this))
+    , _name(std::move(name))
+    , _max_queue_length(max_queue_length)
+    , _prethrow_action(std::move(prethrow_action))
+    , _permit_list(std::make_unique<permit_list>()) {}
+
+reader_concurrency_semaphore::reader_concurrency_semaphore(no_limits, sstring name)
+    : reader_concurrency_semaphore(
+            std::numeric_limits<int>::max(),
+            std::numeric_limits<ssize_t>::max(),
+            std::move(name)) {}
 
 reader_concurrency_semaphore::~reader_concurrency_semaphore() {
     broken(std::make_exception_ptr(broken_semaphore{}));
@@ -228,11 +433,13 @@ bool reader_concurrency_semaphore::may_proceed(const resources& r) const {
     return _wait_list.empty() && (has_available_units(r) || _resources.count == _initial_resources.count);
 }
 
-future<reader_permit::resource_units> reader_concurrency_semaphore::do_wait_admission(reader_permit permit, size_t memory, db::timeout_clock::time_point timeout) {
+future<reader_permit::resource_units> reader_concurrency_semaphore::do_wait_admission(reader_permit permit, size_t memory,
+        db::timeout_clock::time_point timeout) {
     if (_wait_list.size() >= _max_queue_length) {
         if (_prethrow_action) {
             _prethrow_action();
         }
+        maybe_dump_reader_permit_diagnostics(*this, *_permit_list, "wait queue overloaded");
         return make_exception_future<reader_permit::resource_units>(
                 std::make_exception_ptr(std::runtime_error(
                         format("{}: restricted mutation reader queue overload", _name))));
@@ -253,12 +460,17 @@ future<reader_permit::resource_units> reader_concurrency_semaphore::do_wait_admi
     }
     promise<reader_permit::resource_units> pr;
     auto fut = pr.get_future();
+    permit.on_waiting();
     _wait_list.push_back(entry(std::move(pr), std::move(permit), r), timeout);
     return fut;
 }
 
-reader_permit reader_concurrency_semaphore::make_permit() {
-    return reader_permit(*this);
+reader_permit reader_concurrency_semaphore::make_permit(const schema* const schema, const char* const op_name) {
+    return reader_permit(*this, schema, std::string_view(op_name));
+}
+
+reader_permit reader_concurrency_semaphore::make_permit(const schema* const schema, sstring&& op_name) {
+    return reader_permit(*this, schema, std::move(op_name));
 }
 
 void reader_concurrency_semaphore::broken(std::exception_ptr ex) {

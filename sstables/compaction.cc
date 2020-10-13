@@ -449,7 +449,7 @@ protected:
         : _cf(cf)
         , _sstable_creator(std::move(descriptor.creator))
         , _schema(cf.schema())
-        , _permit(_cf.compaction_concurrency_semaphore().make_permit())
+        , _permit(_cf.compaction_concurrency_semaphore().make_permit(_cf.schema().get(), "compaction"))
         , _sstables(std::move(descriptor.sstables))
         , _max_sstable_size(descriptor.max_sstable_bytes)
         , _sstable_level(descriptor.level)

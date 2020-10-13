@@ -111,6 +111,7 @@ public:
     }
     virtual flat_mutation_reader create_reader(
             schema_ptr schema,
+            reader_permit,
             const dht::partition_range& range,
             const query::partition_slice& slice,
             const io_priority_class& pc,
@@ -152,7 +153,7 @@ public:
         if (_evict_paused_readers) {
             _contexts[shard]->semaphore = std::make_unique<reader_concurrency_semaphore>(0, std::numeric_limits<ssize_t>::max(),
                     format("reader_concurrency_semaphore @shard_id={}", shard));
-            _contexts[shard]->permit = _contexts[shard]->semaphore->make_permit();
+            _contexts[shard]->permit = _contexts[shard]->semaphore->make_permit(nullptr, "tests::reader_lifecycle_policy");
             // Add a waiter, so that all registered inactive reads are
             // immediately evicted.
             // We don't care about the returned future.

@@ -1560,6 +1560,7 @@ private:
 public:
     shard_reader(
             schema_ptr schema,
+            reader_permit permit,
             shared_ptr<reader_lifecycle_policy> lifecycle_policy,
             unsigned shard,
             const dht::partition_range& pr,
@@ -1567,7 +1568,7 @@ public:
             const io_priority_class& pc,
             tracing::trace_state_ptr trace_state,
             mutation_reader::forwarding fwd_mr)
-        : impl(std::move(schema), lifecycle_policy->semaphore().make_permit())
+        : impl(std::move(schema), std::move(permit))
         , _lifecycle_policy(std::move(lifecycle_policy))
         , _shard(shard)
         , _pr(&pr)
@@ -1644,17 +1645,18 @@ future<> shard_reader::do_fill_buffer(db::timeout_clock::time_point timeout) {
         fill_buf_fut = smp::submit_to(_shard, [this, gs = global_schema_ptr(_schema), timeout] {
             auto ms = mutation_source([lifecycle_policy = _lifecycle_policy.get()] (
                         schema_ptr s,
-                        reader_permit,
+                        reader_permit permit,
                         const dht::partition_range& pr,
                         const query::partition_slice& ps,
                         const io_priority_class& pc,
                         tracing::trace_state_ptr ts,
                         streamed_mutation::forwarding,
                         mutation_reader::forwarding fwd_mr) {
-                return lifecycle_policy->create_reader(std::move(s), pr, ps, pc, std::move(ts), fwd_mr);
+                return lifecycle_policy->create_reader(std::move(s), std::move(permit), pr, ps, pc, std::move(ts), fwd_mr);
             });
+            auto s = gs.get();
             auto rreader = make_foreign(std::make_unique<evictable_reader>(evictable_reader::auto_pause::yes, std::move(ms),
-                        gs.get(), _lifecycle_policy->semaphore().make_permit(), *_pr, _ps, _pc, _trace_state, _fwd_mr));
+                        s, _lifecycle_policy->semaphore().make_permit(s.get(), "shard-reader"), *_pr, _ps, _pc, _trace_state, _fwd_mr));
             tracing::trace(_trace_state, "Creating shard reader on shard: {}", this_shard_id());
             auto f = rreader->fill_buffer(timeout);
             return f.then([rreader = std::move(rreader)] () mutable {
@@ -1767,6 +1769,7 @@ public:
             const dht::sharder& sharder,
             shared_ptr<reader_lifecycle_policy> lifecycle_policy,
             schema_ptr s,
+            reader_permit permit,
             const dht::partition_range& pr,
             const query::partition_slice& ps,
             const io_priority_class& pc,
@@ -1861,18 +1864,19 @@ multishard_combining_reader::multishard_combining_reader(
         const dht::sharder& sharder,
         shared_ptr<reader_lifecycle_policy> lifecycle_policy,
         schema_ptr s,
+        reader_permit permit,
         const dht::partition_range& pr,
         const query::partition_slice& ps,
         const io_priority_class& pc,
         tracing::trace_state_ptr trace_state,
         mutation_reader::forwarding fwd_mr)
-    : impl(std::move(s), lifecycle_policy->semaphore().make_permit()), _sharder(sharder) {
+    : impl(std::move(s), std::move(permit)), _sharder(sharder) {
 
     on_partition_range_change(pr);
 
     _shard_readers.reserve(_sharder.shard_count());
     for (unsigned i = 0; i < _sharder.shard_count(); ++i) {
-        _shard_readers.emplace_back(make_lw_shared<shard_reader>(_schema, lifecycle_policy, i, pr, ps, pc, trace_state, fwd_mr));
+        _shard_readers.emplace_back(make_lw_shared<shard_reader>(_schema, _permit, lifecycle_policy, i, pr, ps, pc, trace_state, fwd_mr));
     }
 }
 
@@ -1949,13 +1953,14 @@ reader_lifecycle_policy::try_resume(reader_concurrency_semaphore::inactive_read_
 flat_mutation_reader make_multishard_combining_reader(
         shared_ptr<reader_lifecycle_policy> lifecycle_policy,
         schema_ptr schema,
+        reader_permit permit,
         const dht::partition_range& pr,
         const query::partition_slice& ps,
         const io_priority_class& pc,
         tracing::trace_state_ptr trace_state,
         mutation_reader::forwarding fwd_mr) {
     const dht::sharder& sharder = schema->get_sharder();
-    return make_flat_mutation_reader<multishard_combining_reader>(sharder, std::move(lifecycle_policy), std::move(schema), pr, ps, pc,
+    return make_flat_mutation_reader<multishard_combining_reader>(sharder, std::move(lifecycle_policy), std::move(schema), std::move(permit), pr, ps, pc,
             std::move(trace_state), fwd_mr);
 }
 
@@ -1963,12 +1968,13 @@ flat_mutation_reader make_multishard_combining_reader_for_tests(
         const dht::sharder& sharder,
         shared_ptr<reader_lifecycle_policy> lifecycle_policy,
         schema_ptr schema,
+        reader_permit permit,
         const dht::partition_range& pr,
         const query::partition_slice& ps,
         const io_priority_class& pc,
         tracing::trace_state_ptr trace_state,
         mutation_reader::forwarding fwd_mr) {
-    return make_flat_mutation_reader<multishard_combining_reader>(sharder, std::move(lifecycle_policy), std::move(schema), pr, ps, pc,
+    return make_flat_mutation_reader<multishard_combining_reader>(sharder, std::move(lifecycle_policy), std::move(schema), std::move(permit), pr, ps, pc,
             std::move(trace_state), fwd_mr);
 }
 

@@ -828,7 +828,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering) {
             return less(a.decorated_key(), b.decorated_key());
         });
 
-        auto permit = sem.make_permit();
+        auto permit = sem.make_permit(schema.get(), get_name());
 
         auto mt = make_lw_shared<memtable>(schema);
         for (const auto& mut : muts) {

@@ -1235,7 +1235,7 @@ view_builder::view_builder(database& db, db::system_distributed_keyspace& sys_di
         : _db(db)
         , _sys_dist_ks(sys_dist_ks)
         , _mnotifier(mn)
-        , _permit(_db.get_reader_concurrency_semaphore().make_permit()) {
+        , _permit(_db.get_reader_concurrency_semaphore().make_permit(nullptr, "view_builder")) {
     setup_metrics();
 }
 

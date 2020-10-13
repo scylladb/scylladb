@@ -797,7 +797,7 @@ public:
             , _messaging(ms)
             , _cf(cf)
             , _schema(s)
-            , _permit(_cf.streaming_read_concurrency_semaphore().make_permit())
+            , _permit(_cf.streaming_read_concurrency_semaphore().make_permit(_schema.get(), "repair-meta"))
             , _range(range)
             , _cmp(repair_sync_boundary::tri_compare(*_schema))
             , _algo(algo)
