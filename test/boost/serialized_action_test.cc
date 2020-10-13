@@ -24,6 +24,7 @@
 #include <seastar/core/semaphore.hh>
 #include "utils/serialized_action.hh"
 #include <seastar/testing/test_case.hh>
+#include <seastar/testing/thread_test_case.hh>
 #include "utils/phased_barrier.hh"
 
 SEASTAR_TEST_CASE(test_serialized_action_triggering) {
@@ -88,4 +89,55 @@ SEASTAR_TEST_CASE(test_serialized_action_triggering) {
         BOOST_REQUIRE(history.size() == 4);
         BOOST_REQUIRE(history.back() == 5);
     });
+}
+
+SEASTAR_THREAD_TEST_CASE(test_serialized_action_exception) {
+    class expected_exception : public std::exception {
+    public:
+        virtual const char* what() const noexcept override {
+            return "expected_exception";
+        }
+    };
+
+    serialized_action simple_action([&] {
+        return make_exception_future<>(expected_exception());
+    });
+
+    // test that the exception returned by the serialized action
+    // is propageted to the caller of trigger().
+    BOOST_REQUIRE_THROW(simple_action.trigger(false).get(), expected_exception);
+    BOOST_REQUIRE_THROW(simple_action.trigger(true).get(), expected_exception);
+
+    int count = 0;
+    promise<> p;
+    seastar::semaphore sem{0};
+
+    serialized_action triggered_action([&] {
+        sem.signal(1);
+        return p.get_future().then([&] {
+            count++;
+            return make_exception_future<>(expected_exception());
+        });
+    });
+
+    auto release = [&] {
+        std::exchange(p, promise<>()).set_value();
+    };
+
+    // test that the exception returned by the serialized action
+    // is propageted to pending callers of trigger().
+    auto t1 = triggered_action.trigger();   // launch the action in the background.
+    sem.wait().get();                       // wait for t1 to block on `p`.
+    auto t2 = triggered_action.trigger();   // trigger the action again.
+    auto t3 = triggered_action.trigger();   // trigger the action again. t3 and t2 should share the same future.
+
+    release();                              // signal t1 to proceed (and return the exception).
+    BOOST_REQUIRE_THROW(t1.get(), expected_exception);
+    BOOST_REQUIRE_EQUAL(count, 1);
+
+    sem.wait().get();                       // wait for t2 to block on `p`.
+    release();                              // signal t2 to proceed (and return the exception).
+    BOOST_REQUIRE_THROW(t2.get(), expected_exception);
+    BOOST_REQUIRE_THROW(t3.get(), expected_exception);
+    BOOST_REQUIRE_EQUAL(count, 2);          // verify that `triggered_action` was called only once for t2 and t3.
 }
