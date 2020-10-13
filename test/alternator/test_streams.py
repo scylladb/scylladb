@@ -1028,6 +1028,11 @@ def test_streams_after_sequence_number(test_table_ss_keys_only, dynamodbstreams)
                 assert response['Records'][1]['dynamodb']['Keys'] == {'p': {'S': p}, 'c': {'S': c}}
                 sequence_number_1 = response['Records'][0]['dynamodb']['SequenceNumber']
                 sequence_number_2 = response['Records'][1]['dynamodb']['SequenceNumber']
+
+                # #7424 - AWS sdk assumes sequence numbers can be compared
+                # as bigints, and are monotonically growing.
+                assert int(sequence_number_1) < int(sequence_number_2)
+
                 # If we use the SequenceNumber of the first event to create an
                 # AFTER_SEQUENCE_NUMBER iterator, we can read the second event
                 # (only) again. We don't need a loop and a timeout, because this

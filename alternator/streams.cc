@@ -270,7 +270,17 @@ struct sequence_number {
 
         using namespace boost::multiprecision;
 
-        uint128_t hi = uint64_t(num.uuid.get_most_significant_bits());
+        /**
+         * #7424 - aws sdk assumes sequence numbers are
+         * monotonically growing bigints. 
+         *
+         * Timeuuids viewed as msb<<64|lsb are _not_,
+         * but they are still sorted as
+         *  timestamp() << 64|lsb
+         * so we can simpy unpack the mangled msb
+         * and use as hi 64 in our "bignum".
+         */
+        uint128_t hi = uint64_t(num.uuid.timestamp());
         uint128_t lo = uint64_t(num.uuid.get_least_significant_bits());
 
         return os << std::dec << ((hi << 64) | lo);
@@ -281,7 +291,8 @@ sequence_number::sequence_number(std::string_view v)
     : uuid([&] {
         using namespace boost::multiprecision;
         uint128_t tmp{v};
-        return utils::UUID(uint64_t(tmp >> 64), uint64_t(tmp & std::numeric_limits<uint64_t>::max()));
+        // see above
+        return utils::UUID_gen::get_time_UUID_raw(uint64_t(tmp >> 64), uint64_t(tmp & std::numeric_limits<uint64_t>::max()));
     }())
 {}
 

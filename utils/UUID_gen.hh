@@ -132,6 +132,14 @@ public:
         assert(uuid.is_timestamp());
         return uuid;
     }
+
+    static UUID get_time_UUID_raw(int64_t nanos, int64_t clock_seq_and_node)
+    {
+        auto uuid = UUID(create_time(nanos), clock_seq_and_node);
+        assert(uuid.is_timestamp());
+        return uuid;
+    }
+
     /**
      * Similar to get_time_UUID, but randomize the clock and sequence.
      * If you can guarantee that the when_in_micros() argument is unique for
