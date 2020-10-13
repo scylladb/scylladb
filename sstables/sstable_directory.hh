@@ -64,11 +64,12 @@ public:
 private:
     using scan_multimap = std::unordered_multimap<int64_t, std::filesystem::path>;
     using scan_descriptors = utils::chunked_vector<sstables::entry_descriptor>;
+    using scan_descriptors_map = std::unordered_map<int64_t, sstables::entry_descriptor>;
 
     struct scan_state {
         scan_multimap generations_found;
         scan_descriptors temp_toc_found;
-        scan_descriptors descriptors;
+        scan_descriptors_map descriptors;
     };
 
     // SSTable files to be deleted: things with a Temporary TOC, missing TOC files,
