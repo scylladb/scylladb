@@ -71,6 +71,10 @@ public:
         return _stable_idx;
     }
     term_t last_term() const;
+    // return the actual number of log entries in memory
+    size_t non_snapshoted_length() {
+        return _log.size();
+    }
 
     // The function returns current snapshot state of the log
     const snapshot& get_snapshot() const {
@@ -79,8 +83,8 @@ public:
 
     // This call will update the log to point to the new snaphot
     // and will truncate the log prefix up to (snp.idx - trailing)
-    // entry.
-    void apply_snapshot(snapshot&& snp, size_t trailing);
+    // entry. Return value specifies how many log entries were dropped
+    size_t apply_snapshot(snapshot&& snp, size_t trailing);
 
     // 3.5
     // Raft maintains the following properties, which

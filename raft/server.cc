@@ -145,6 +145,9 @@ server_impl::server_impl(server_id uuid, std::unique_ptr<rpc> rpc,
                     _storage(std::move(storage)), _failure_detector(failure_detector),
                     _id(uuid), _config(config) {
     set_rpc_server(_rpc.get());
+    if (_config.snapshot_threshold > _config.max_log_length) {
+        throw config_error("snapshot_threshold has to be smaller than max_log_lengths");
+    }
 }
 
 future<> server_impl::start() {
@@ -156,7 +159,8 @@ future<> server_impl::start() {
     index_t stable_idx = log.stable_idx();
     _fsm = std::make_unique<fsm>(_id, term, vote, std::move(log), *_failure_detector,
                                  fsm_config {
-                                     .append_request_threshold = _config.append_request_threshold
+                                     .append_request_threshold = _config.append_request_threshold,
+                                     .max_log_length = _config.max_log_length
                                  });
     assert(_fsm->get_current_term() != term_t(0));
 
@@ -182,6 +186,11 @@ template <typename T>
 future<> server_impl::add_entry_internal(T command, wait_type type) {
     logger.trace("An entry is submitted on a leader");
 
+    // wait for new slot to be available
+    co_await _fsm->wait();
+
+    logger.trace("An entry proceeds after wait");
+
     const log_entry& e = _fsm->add_entry(std::move(command));
 
     auto& container = type == wait_type::committed ? _awaited_commits : _awaited_applies;
@@ -189,7 +198,7 @@ future<> server_impl::add_entry_internal(T command, wait_type type) {
     // This will track the commit/apply status of the entry
     auto [it, inserted] = container.emplace(e.idx, op_status{e.term, promise<>()});
     assert(inserted);
-    return it->second.done.get_future();
+    co_return co_await it->second.done.get_future();
 }
 
 future<> server_impl::add_entry(command command, wait_type type) {

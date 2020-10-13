@@ -155,13 +155,17 @@ index_t log::maybe_append(std::vector<log_entry>&& entries) {
     return last_new_idx;
 }
 
-void log::apply_snapshot(snapshot&& snp, size_t trailing) {
+size_t log::apply_snapshot(snapshot&& snp, size_t trailing) {
+    size_t ret = 0;
     if (snp.idx - start_idx() > index_t(trailing)) {
+        ret = _log.size();
        // call truncate first since it uses old snapshot
        truncate_tail(index_t(snp.idx - trailing));
+       ret -= _log.size();
     }
 
     _snapshot = std::move(snp);
+    return ret;
 }
 
 std::ostream& operator<<(std::ostream& os, const log& l) {

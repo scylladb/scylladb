@@ -115,6 +115,10 @@ struct conf_change_in_progress : public error {
     conf_change_in_progress() : error("A configuration change is already in progress") {}
 };
 
+struct config_error : public error {
+    using error::error;
+};
+
 struct snapshot {
     // Index and term of last entry in the snapshot
     index_t idx = index_t(0);

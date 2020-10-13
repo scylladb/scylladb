@@ -41,6 +41,10 @@ struct fsm_output {
 struct fsm_config {
     // max size of appended entries in bytes
     size_t append_request_threshold;
+    // max number of entries of in-memory part of the log after
+    // which requests are stopped to be addmitted unill the log
+    // is shrunk back by snapshoting
+    size_t max_log_length;
 };
 
 // 3.4 Leader election
@@ -175,6 +179,19 @@ class fsm {
 
     // Signaled when there is a IO event to process.
     seastar::condition_variable _sm_events;
+
+    struct log_limiter_semaphore_guard {
+        seastar::semaphore sem;
+        server_id& leader;
+        log_limiter_semaphore_guard(fsm* fsm) :
+             sem(fsm->_config.max_log_length), leader(fsm->_current_leader) {}
+        ~log_limiter_semaphore_guard() {
+            sem.broken(not_a_leader(leader));
+        }
+    };
+    // Exists on a leader only and used to limit log size
+    std::optional<log_limiter_semaphore_guard> _log_limiter_semaphore;
+
     // Called when one of the replicas advances its match index
     // so it may be the case that some entries are committed now.
     // Signals _sm_events.
@@ -255,6 +272,10 @@ public:
     bool is_candidate() const {
         return std::holds_alternative<candidate>(_state);
     }
+
+    // call this function to wait for number of log entries to go below
+    // max_log_length
+    future<> wait();
 
     // Add an entry to in-memory log. The entry has to be
     // committed to the persistent Raft log afterwards.
