@@ -26,6 +26,7 @@
 #include "utils/anchorless_list.hh"
 #include "utils/logalloc.hh"
 #include "utils/coroutine.hh"
+#include "utils/chunked_vector.hh"
 
 #include <boost/intrusive/parent_from_member.hpp>
 #include <boost/intrusive/slist.hpp>
@@ -400,10 +401,13 @@ public:
     ::static_row static_row(bool digest_requested) const;
     bool static_row_continuous() const;
     mutation_partition squashed() const;
+
+    using range_tombstone_result = utils::chunked_vector<range_tombstone>;
+
     // Returns range tombstones overlapping with [start, end)
-    std::vector<range_tombstone> range_tombstones(position_in_partition_view start, position_in_partition_view end);
+    range_tombstone_result range_tombstones(position_in_partition_view start, position_in_partition_view end);
     // Returns all range tombstones
-    std::vector<range_tombstone> range_tombstones();
+    range_tombstone_result range_tombstones();
 };
 
 class partition_snapshot_ptr {

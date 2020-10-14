@@ -49,7 +49,7 @@ static thread_local mutation_application_stats app_stats_for_tests;
 // Verifies that tombstones in "list" are monotonic, overlap with the requested range,
 // and have information equivalent with "expected" in that range.
 static
-void check_tombstone_slice(const schema& s, std::vector<range_tombstone> list,
+void check_tombstone_slice(const schema& s, const utils::chunked_vector<range_tombstone>& list,
     const query::clustering_range& range,
     std::initializer_list<range_tombstone> expected)
 {
