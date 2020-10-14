@@ -249,6 +249,25 @@ the entry in the symbol table, whose value range includes the
 calculated value. This can be made easier by sorting the symbol table by
 the `Value` column.
 
+#### Optimized-out variables
+
+In release builds one will find that a significant portion of variables and
+function parameters are optimized out. This is very annoying but often one can
+find a way around to inspect the desired variables.
+
+For non-local variables, there is a good chance that a few frames up one can
+find another reference that wasn't optimized out. Or one can try to find another
+object, which is not optimized out, and which is also known to hold a reference
+to the variable.
+
+If the variable is local, one can try to look at the registers (`info
+registers`) and try to identify which one holds its value. This is relatively
+easy for pointers to objects as heap pointers are easily identifiable (they
+start with `0x6` and are composed of 12 digits, e.g.: `0x60f146e3fbc0`) and one
+can check the size of the object they point to with `scylla ptr`. If the
+pointed-to object is an instance of a class with virtual methods, the object can
+be easily identified by looking at its vtable pointer (`x/1a $ptr`).
+
 ### Debugging coredumps
 
 Up until release 3.0 we used to build and package Scylla separately for each
