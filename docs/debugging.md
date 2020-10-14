@@ -157,6 +157,11 @@ This is extremely useful when you wish to see the source code while you
 are debugging. The `TUI` mode can be activated by passing `-tui` to GDB
 on the command line, or any time by executing the `tui enable` to
 activate it and `tui disable` to deactivate it respectively.
+By default the source window has the focus in TUI mode, meaning that command
+completion, searching history and line editing doesn't work, e.g. if you use
+the up and down keys, you will scroll the source file up and down respectively,
+instead of moving in the command history. To focus the command window, issue
+`focus cmd`. To move the focus to the source window again, issue `focus src`.
 
 #### Thread Local Storage (TLS) variables
 
