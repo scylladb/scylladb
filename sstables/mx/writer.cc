@@ -42,7 +42,7 @@ namespace mc {
 
 namespace {
 
-thread_local reader_concurrency_semaphore reader_semaphore(reader_concurrency_semaphore::no_limits{}, "kx/lx writer");
+thread_local reader_concurrency_semaphore reader_semaphore(reader_concurrency_semaphore::no_limits{}, "mx writer");
 
 }
 
