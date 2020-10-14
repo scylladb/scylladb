@@ -93,16 +93,21 @@ protocol. Scylla supports several Scylla-only extensions to this protocol,
 described in [protocol-extensions.md](protocol-extensions.md).
 
 By default, Scylla listens to the CQL protocol on port 9042, which can be
-configured via the `native_transport_port` configuration option. Scylla also
-supports the CQL protocol via TLS/SSL encryption, which can be enabled via the
-`native_transport_port_ssl` configuration option (default port is 9142). Users
+configured via the `native_transport_port` configuration option.
+
+Scylla also supports the CQL protocol via TLS/SSL encryption which is
+disabled by default and can be enabled via the `native_transport_port_ssl`
+configuration option (the traditional choice is port 9142). Users
 that want to only support the encrypted CQL protocol can disable the
 unencrypted default CQL protocol by setting the `native_transport_port` to 0.
+
 The CQL protocol support can be disabled altogether by setting the
-`start_native_transport` option to `false`. These option names were chosen for
-backward-compatibility with Cassandra configuration files: They refers to CQL
-as the "native transport", to contrast with the older Thrift protocol
-(described below) which wasn't native to Cassandra.
+`start_native_transport` option to `false`.
+
+These option names were chosen for backward-compatibility with Cassandra
+configuration files: They refers to CQL as the "native transport", to
+contrast with the older Thrift protocol (described below) which wasn't
+native to Cassandra.
 
 There is also a `rpc_address` configuration option to set the IP address
 (and therefore network interface) on which Scylla should listen for the
