@@ -716,6 +716,7 @@ int main(int argc, char* argv[]) {
                                          .term = raft::term_t(1),
                                          .id = utils::UUID(0, 1)}}},   // must be 1+
          .updates = {entries{12}}},
+        // 2 nodes both taking snapshot while simple replication
         {.name = "take_snapshot", .nodes = 2,
          .config = {{.snapshot_threshold = 10, .snapshot_trailing = 5}, {.snapshot_threshold = 20, .snapshot_trailing = 10}},
          .updates = {entries{100}}},

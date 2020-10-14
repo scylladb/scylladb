@@ -98,7 +98,7 @@ private:
     // Contains active snapshot transfers, to be waited on exit.
     std::unordered_map<server_id, future<>> _snapshot_transfers;
 
-    // The optional is engaged when incomming snapshot is received
+    // The optional is engaged when incoming snapshot is received
     // And the promise signalled when it is successfully applied or there was an error
     std::optional<promise<snapshot_reply>> _snapshot_application_done;
 
@@ -111,10 +111,10 @@ private:
     // Drop waiter that we lost track of, can happen due to snapshot transfere
     void drop_waiters(std::map<index_t, op_status>& waiters, index_t idx);
 
-    // This fiber process fsm output, by doing the following steps in that order:
-    //  - persists current term and voter
-    //  - persists unstable log entries on disk.
-    //  - sends out messages
+    // This fiber processes FSM output by doing the following steps in order:
+    //  - persist the current term and vote
+    //  - persist unstable log entries on disk.
+    //  - send out messages
     future<> io_fiber(index_t stable_idx);
 
     // This fiber runs in the background and applies committed entries.
@@ -241,15 +241,16 @@ void server_impl::notify_waiters(std::map<index_t, op_status>& waiters,
         auto [entry_idx, status] = std::move(*it);
 
         // if there is a waiter entry with an index smaller than first entry
-        // it means that notification is out of order which is prohinited
+        // it means that notification is out of order which is prohibited
         assert(entry_idx >= first_idx);
 
         waiters.erase(it);
         if (status.term == entries[entry_idx - first_idx]->term) {
             status.done.set_value();
         } else {
-            // term does not match which means that between the entry was submitted
-            // and committed there was a leadership change and the entry was replaced.
+            // The terms do not match which means that between the
+            // times the entry was submitted and committed there
+            // was a leadership change and the entry was replaced.
             status.done.set_exception(dropped_entry());
         }
     }
@@ -341,20 +342,20 @@ future<> server_impl::io_fiber(index_t last_stable) {
             }
 
             if (batch.messages.size()) {
-                // after entries are persisted we can send messages
+                // After entries are persisted we can send messages.
                 co_await seastar::parallel_for_each(std::move(batch.messages), [this] (std::pair<server_id, rpc_message>& message) {
                     return send_message(message.first, std::move(message.second));
                 });
             }
 
-            // process committed entries
+            // Process committed entries.
             if (batch.committed.size()) {
                 notify_waiters(_awaited_commits, batch.committed);
                 co_await _apply_entries.writer.write(std::move(batch.committed));
             }
         }
     } catch (seastar::broken_condition_variable&) {
-        // log fiber is stopped explicitly.
+        // Log fiber is stopped explicitly.
     } catch (...) {
         logger.error("[{}] io fiber stopped because of the error: {}", _id, std::current_exception());
     }

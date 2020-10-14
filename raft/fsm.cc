@@ -195,7 +195,7 @@ fsm_output fsm::get_output() {
 
     // Return committed entries.
     // Observer commit index may be smaller than snapshot index
-    // in which case we should not attemp commiting entries belonging
+    // in which case we should not attempt committing entries belonging
     // to a snapshot.
     auto observed_ci =  std::max(_observed._commit_idx, _log.get_snapshot().idx);
     if (observed_ci < _commit_idx) {
@@ -210,7 +210,7 @@ fsm_output fsm::get_output() {
     }
 
     // Get a snapshot of all unsent messages.
-    // Do it after populting log_entries and committed arrays
+    // Do it after populating log_entries and committed arrays
     // to not lose messages in case arrays population throws
     std::swap(output.messages, _messages);
 
@@ -439,7 +439,7 @@ void fsm::request_vote(server_id from, vote_request&& request) {
     assert(_current_term == request.current_term);
 
     bool can_vote =
-	    // We can vote if this is a repeat of a vote we've already cast...
+        // We can vote if this is a repeat of a vote we've already cast...
         _voted_for == from ||
         // ...we haven't voted and we don't think there's a leader yet in this term...
         (_voted_for == server_id{} && _current_leader == server_id{});
@@ -539,7 +539,7 @@ void fsm::replicate_to(follower_progress& progress, bool allow_empty) {
         auto& s = _log.get_snapshot();
         if (progress.next_idx <= s.idx && progress.next_idx < (_log.start_idx() + 1)) {
             // The next index to be sent points to a snapshot so
-            // we need to transfer the snasphot before we can
+            // we need to transfer the snapshot before we can
             // continue syncing the log.
             progress.become_snapshot();
             send_to(progress.id, install_snapshot{_current_term, _log.get_snapshot()});
@@ -619,7 +619,7 @@ bool fsm::can_read() {
     // but in the future we may return true here if we can guaranty leadership
     // by means of a "stable leader" optimization. "Stable leader" ensures that
     // a follower does not vote for other leader if it recently (during a couple
-    // of last ticks) heard from existing one, so if the leader is already committed 
+    // of last ticks) heard from existing one, so if the leader is already committed
     // entries during this tick it guaranties that it communicated with
     // majority of nodes and no other leader could have been elected.
 
@@ -639,7 +639,7 @@ void fsm::snapshot_status(server_id id, std::optional<index_t> idx) {
 
     if (idx) {
         progress.next_idx = *idx + index_t(1);
-        // If snapshot was successfully transfered start replication immediately
+        // If snapshot was successfully transferred start replication immediately
         replicate_to(progress, false);
     }
     // Otherwise wait for a heartbeat. Next attempt will move us to snapshotting state
