@@ -51,13 +51,50 @@ const log_entry& fsm::add_entry(T command) {
     // It's only possible to add entries on a leader.
     check_is_leader();
 
-    _log.emplace_back(seastar::make_lw_shared<log_entry>(log_entry{_current_term, _log.next_idx(), std::move(command)}));
+    if constexpr (std::is_same_v<T, configuration>) {
+        if (_log.last_conf_idx() > _commit_idx ||
+            _tracker->get_configuration().is_joint()) {
+            // 4.1. Cluster membership changes/Safety.
+            //
+            // Leaders avoid overlapping configuration changes by
+            // not beginning a new change until the previous
+            // change’s entry has committed. It is only safe to
+            // start another membership change once a majority of
+            // the old cluster has moved to operating under the
+            // rules of C_new.
+            throw conf_change_in_progress();
+        }
+        // 4.3. Arbitrary configuration changes using joint consensus
+        //
+        // When the leader receives a request to change the
+        // configuration from C_old to C_new , it stores the
+        // configuration for joint consensus (C_old,new) as a log
+        // entry and replicates that entry using the normal Raft
+        // mechanism.
+        configuration tmp(_tracker->get_configuration());
+        tmp.enter_joint(command.current);
+        command = std::move(tmp);
+    }
+
+    _log.emplace_back(seastar::make_lw_shared<log_entry>({_current_term, _log.next_idx(), std::move(command)}));
     _sm_events.signal();
+
+    if constexpr (std::is_same_v<T, configuration>) {
+        // 4.1. Cluster membership changes/Safety.
+        //
+        // The new configuration takes effect on each server as
+        // soon as it is added to that server’s log: the C_new
+        // entry is replicated to the C_new servers, and
+        // a majority of the new configuration is used to
+        // determine the C_new entry’s commitment.
+        set_configuration();
+    }
 
     return *_log[_log.last_idx()];
 }
 
 template const log_entry& fsm::add_entry(command command);
+template const log_entry& fsm::add_entry(configuration command);
 template const log_entry& fsm::add_entry(log_entry::dummy dummy);
 
 void fsm::advance_commit_idx(index_t leader_commit_idx) {
@@ -150,6 +187,7 @@ void fsm::become_candidate() {
     // time out and start a new election by incrementing its term
     // and initiating another round of RequestVote RPCs.
     _last_election_time = _clock.now();
+
     _votes.emplace();
     set_configuration();
     _voted_for = _my_id;
@@ -253,8 +291,11 @@ fsm_output fsm::get_output() {
 
 void fsm::advance_stable_idx(index_t idx) {
     _log.stable_to(idx);
-    if (is_leader()) {
-        auto& progress = _tracker->find(_my_id);
+    // If this server is leader and is part of the current
+    // configuration, update it's progress and optionally
+    // commit new entries.
+    if (is_leader() && _tracker->leader_progress()) {
+        auto& progress = *_tracker->leader_progress();
         progress.match_idx = idx;
         progress.next_idx = index_t{idx + 1};
         replicate();
@@ -269,6 +310,8 @@ void fsm::maybe_commit() {
     if (new_commit_idx <= _commit_idx) {
         return;
     }
+    bool committed_conf_change = _commit_idx < _log.last_conf_idx() &&
+        new_commit_idx >= _log.last_conf_idx();
 
     if (_log[new_commit_idx]->term != _current_term) {
 
@@ -289,6 +332,28 @@ void fsm::maybe_commit() {
     // We have a quorum of servers with match_idx greater than the
     // current commit index. Commit && apply more entries.
     _sm_events.signal();
+
+    if (committed_conf_change) {
+        if (_tracker->get_configuration().is_joint()) {
+            // 4.3. Arbitrary configuration changes using joint consensus
+            //
+            // Once the joint consensus has been committed, the
+            // system then transitions to the new configuration.
+            configuration cfg(_tracker->get_configuration());
+            cfg.leave_joint();
+            _log.emplace_back(seastar::make_lw_shared<log_entry>({_current_term, _log.next_idx(), std::move(cfg)}));
+            set_configuration();
+        } else if (_tracker->leader_progress() == nullptr) {
+            // 4.2.2 Removing the current leader
+            //
+            // A leader that is removed from the configuration
+            // steps down once the C_new entry is committed.
+            //
+            // @todo: when leadership transfer extension is
+            // implemented, send TimeoutNow to a member of C_new
+            become_follower(server_id{});
+        }
+    }
 }
 
 void fsm::tick_leader() {
@@ -422,6 +487,12 @@ void fsm::append_entries_reply(server_id from, append_reply&& reply) {
 
         // check if any new entry can be committed
         maybe_commit();
+
+        // We may have resigned leadership if committed a new
+        // configuration.
+        if (!is_leader()) {
+            return;
+        }
     } else {
         // rejected
         append_reply::rejected rejected = std::get<append_reply::rejected>(reply.result);
