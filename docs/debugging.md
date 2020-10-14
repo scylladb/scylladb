@@ -210,7 +210,7 @@ We are interested in the size of the TLS header, which is in the
 `MemSiz` column and is `0x017bf0` in this example. The value of the
 `$tls_entry` can be found in the process' symbol table:
 
-    eu-readelf -s ./a.out
+    $ eu-readelf -s ./a.out
 
 	Symbol table [ 5] '.dynsym' contains 1288 entries:
 	 1 local symbol  String table: [ 9] '.dynstr'
