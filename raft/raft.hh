@@ -67,12 +67,17 @@ struct server_address {
 };
 
 struct configuration {
-    std::vector<server_address> servers;
+    // Used during the transitioning period of configuration
+    // changes.
+    std::vector<server_address> previous;
+    // Contains the current configuration. When configuration
+    // change is in progress, contains the new configuration.
+    std::vector<server_address> current;
 
     configuration(std::initializer_list<server_id> ids) {
-        servers.reserve(ids.size());
+        current.reserve(ids.size());
         for (auto&& id : ids) {
-            servers.emplace_back(server_address{std::move(id)});
+            current.emplace_back(server_address{std::move(id)});
         }
     }
     configuration() = default;

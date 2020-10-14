@@ -176,9 +176,8 @@ private:
     // TLA+ line 328
     std::vector<std::pair<server_id, rpc_message>> _messages;
 
-    // Currently used configuration, may be different from
-    // the committed during a configuration change.
-    configuration _current_config;
+    // Transitional (joint) or committed configuration.
+    configuration _configuration;
 
     // Signaled when there is a IO event to process.
     seastar::condition_variable _sm_events;
@@ -250,16 +249,18 @@ private:
     // Tick implementation on a leader
     void tick_leader();
 
-    // Set cluster configuration
+    // Reconfigure this instance to use the provided configuration.
+    // Called on start, configuration change, or when restoring
+    // to the previous configuration.
     void set_configuration(const configuration& config) {
-        _current_config = config;
-        // We unconditionally access _current_config
+        _configuration = config;
+        // We unconditionally access _configuration
         // to identify which entries are committed.
-        assert(_current_config.servers.size() > 0);
+        assert(_configuration.current.size() > 0);
         if (is_leader()) {
-            _tracker->set_configuration(_current_config.servers, _log.next_idx());
+            _tracker->set_configuration(_configuration.current, _log.next_idx());
         } else if (is_candidate()) {
-            _votes->set_configuration(_current_config.servers);
+            _votes->set_configuration(_configuration.current);
         }
     }
 public:

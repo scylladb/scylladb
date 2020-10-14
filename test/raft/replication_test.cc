@@ -324,11 +324,11 @@ future<std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>> cr
 
     for (size_t i = 0; i < states.size(); i++) {
         auto uuid = utils::UUID(0, i + 1);   // Custom sequential debug id; 0 is invalid
-        config.servers.push_back(raft::server_address{uuid});
+        config.current.push_back(raft::server_address{uuid});
     }
 
     for (size_t i = 0; i < states.size(); i++) {
-        auto& s = config.servers[i];
+        auto& s = config.current[i];
         states[i].snapshot.config = config;
         snapshots[s.id] = states[i].snp_value;
         auto& raft = *rafts.emplace_back(create_raft_server(s.id, apply, states[i], apply_entries, type)).first;
