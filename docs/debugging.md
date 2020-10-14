@@ -537,6 +537,14 @@ and [Opening the core on another OS](#opening-the-core-on-another-os).
 
 See [Avoid (some) symbol parsing related crashes](#avoid-some-symbol-parsing-related-crashes).
 
+GDB has trouble with frames inlined into the outermost frame in a seastar thread,
+or any green threads in general -- where the outermost frame is annotated with
+`.cfi_undefined rip`. See
+[GDB#26387](https://sourceware.org/bugzilla/show_bug.cgi?id=26387).
+To work around this, pass a limit to `bt`, such that it excludes the problematic
+frame. E.g. if `bt` prints 10 frames before GDB crashing, use `bt 9` to avoid the
+crash.
+
 #### GDB keeps stopping on some signals
 
 See [Tell GDB to not stop on signals used by seastar](#tell-gdb-to-not-stop-on-signals-used-by-seastar).
