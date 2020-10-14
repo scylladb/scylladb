@@ -77,6 +77,10 @@ public:
     // both columns have different timestamp or TTL set.
     //   m - the small mutation to be converted into CDC log rows.
     virtual void process_change(const mutation& m) = 0;
+
+    // Tells processor we have reached end of record - last part
+    // of a given timestamp batch
+    virtual void end_record() = 0;
 };
 
 bool should_split(const mutation& base_mutation);
