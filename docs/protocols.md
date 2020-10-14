@@ -116,7 +116,6 @@ a one-node test, should be overriden. Note that the same option `rpc_address`
 applies to both CQL and Thrift protocols.
 
 TODO: there is also `rpc_interface` option... Which wins? What's the default?
-TODO: again mention SSL, and `native_transport_port_ssl` (default 9142).
 
 # Thrift client protocol
 
@@ -127,7 +126,7 @@ but was recently dropped in Cassandra (version 4.0) and is likely to be
 dropped by Scylla in the future as well, so it is not recommended for new
 applications.
 
-By default scylla listens to the Thirft protocol on port 9160, which can be
+By default scylla listens to the Thrift protocol on port 9160, which can be
 configured via the `rpc_port` configuration option. Again, this confusing name
 was used for backward-compatibility with Cassandra's configuration files.
 Cassandra used the term "rpc" because Apache Thrift is a remote procedure
@@ -149,7 +148,7 @@ TODO: is there an SSL version of Thrift?
 Scylla also supports Amazon's DynamoDB API. The DynamoDB API is a JSON over
 HTTP (unencrypted) or HTTPS (encrypted) protocol. Support for this protocol
 is not turned on by default, and must be turned on manually by setting
-the `alternator_port` and/or `alternator_https_port` configuration option.
+the `alternator_port` and/or `alternator_https_port` configuration options.
 "Alternator" is the codename of Scylla's DynamoDB API support, and is
 documented in more detail in [alternator.md](alternator/alternator.md).
 
@@ -171,7 +170,7 @@ can be overridden by specifying in `alternator_encryption_options` the
 # Redis client protocol
 
 Scylla also has partial and experimental support for the Redis API.
-Again, because this support is experimental, it is not turned on by
+Because this support is experimental, it is not turned on by
 default, and must be turned on manually by setting the `redis_port`
 and/or `redis_ssl_port` configuration option.
 
