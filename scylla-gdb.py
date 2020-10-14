@@ -659,6 +659,52 @@ class boost_intrusive_list_printer(gdb.printing.PrettyPrinter):
         ptrs = [str(v.address) for v in self.val]
         return 'boost::intrusive::list of size {} = [{}] = [{}]'.format(len(items), ', '.join(ptrs), ', '.join(items))
 
+
+class nonwrapping_interval_printer(gdb.printing.PrettyPrinter):
+    def __init__(self, val):
+        self.val = val['_range']
+
+    def inspect_bound(self, bound_opt):
+        bound = std_optional(bound_opt)
+        if not bound:
+            return False, False, None
+
+        bound = bound.get()
+
+        return True, bool(bound['_inclusive']), bound['_value']
+
+    def to_string(self):
+        has_start, start_inclusive, start_value = self.inspect_bound(self.val['_start'])
+        has_end, end_inclusive, end_value = self.inspect_bound(self.val['_end'])
+
+        return '{}{}, {}{}'.format(
+            '[' if start_inclusive  else '(',
+            str(start_value) if has_start else '-inf',
+            str(end_value) if has_end else '+inf',
+            ']' if end_inclusive  else ')',
+        )
+
+
+class ring_position_printer(gdb.printing.PrettyPrinter):
+    def __init__(self, val):
+        self.val = val
+
+    def to_string(self):
+        pkey = std_optional(self.val['_key'])
+        if pkey:
+            # we can assume token_kind == token_kind::key
+            return '{{{}, {}}}'.format(str(self.val['_token']['_data']), str(pkey.get()['_bytes']))
+
+        token_bound = int(self.val['_token_bound'])
+        token_kind = str(self.val['_token']['_kind'])[17:] # ignore the dht::token_kind:: prefix
+        if token_kind == 'key':
+            token = str(self.val['_token']['_data'])
+        else:
+            token = token_kind
+
+        return '{{{}, {}}}'.format(token, token_bound)
+
+
 def build_pretty_printer():
     pp = gdb.printing.RegexpCollectionPrettyPrinter('scylla')
     pp.add_printer('sstring', r'^seastar::basic_sstring<char,.*>$', sstring_printer)
@@ -671,6 +717,9 @@ def build_pretty_printer():
     pp.add_printer('uuid', r'^utils::UUID$', uuid_printer)
     pp.add_printer('boost_intrusive_list', r'^boost::intrusive::list<.*>$', boost_intrusive_list_printer)
     pp.add_printer('inet_address_printer', r'^gms::inet_address$', inet_address_printer)
+    pp.add_printer('nonwrapping_interval', r'^nonwrapping_interval<.*$', nonwrapping_interval_printer)
+    pp.add_printer('nonwrapping_range', r'^nonwrapping_range<.*$', nonwrapping_interval_printer) # scylla < 4.3 calls it nonwrapping_range
+    pp.add_printer('ring_position', r'^dht::ring_position$', ring_position_printer)
     return pp
 
 
