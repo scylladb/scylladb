@@ -86,6 +86,12 @@ namespace raft {
 
 using server_address_set = std::unordered_set<server_address>;
 
+// A configuration change decomposed to joining and leaving
+// servers. Helps validate the configuration and update RPC.
+struct configuration_diff {
+    server_address_set joining, leaving;
+};
+
 struct configuration {
     // Contains the current configuration. When configuration
     // change is in progress, contains the new configuration.
@@ -102,6 +108,49 @@ struct configuration {
     }
     configuration(server_address_set current_arg = {}, server_address_set previous_arg = {})
         : current(std::move(current_arg)), previous(std::move(previous_arg)) {}
+
+    // Return true if the previous configuration is still
+    // in use
+    bool is_joint() const {
+        return !previous.empty();
+    }
+
+    // Check the proposed configuration and compute a diff
+    // between it and the current one.
+    configuration_diff diff(const server_address_set& c_new) const {
+
+        if (c_new.empty()) {
+            throw std::invalid_argument("Attempt to transition to an empty Raft configuration");
+        }
+        configuration_diff diff;
+        // joining
+        for (const auto& s : c_new) {
+            if (current.count(s) == 0) {
+                diff.joining.insert(s);
+            }
+        }
+        // leaving
+        for (const auto& s : current) {
+            if (c_new.count(s) == 0) {
+                diff.leaving.insert(s);
+            }
+        }
+        return diff;
+    }
+
+    // Enter a joint configuration given a new set of servers.
+    void enter_joint(server_address_set c_new) {
+        // @todo: validate that c_old & c_new are compatible.
+        assert(c_new.size());
+        previous = std::move(current);
+        current = std::move(c_new);
+    }
+
+    // Transition from C_old + C_new to C_new.
+    void leave_joint() {
+        assert(is_joint());
+        previous.clear();
+    }
 };
 
 struct log_entry {
