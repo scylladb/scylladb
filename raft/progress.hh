@@ -86,7 +86,7 @@ public:
     follower_progress& find(server_id dst) {
         return this->progress::find(dst)->second;
     }
-    void set_configuration(const std::vector<server_address>& servers, index_t next_idx);
+    void set_configuration(const server_address_set& servers, index_t next_idx);
 
     // Calculate the current commit index based on the current
     // simple or joint quorum.
@@ -114,7 +114,7 @@ class votes {
     // The candidate always votes for self.
     size_t _granted = 1;
 public:
-    void set_configuration(const std::vector<server_address>& servers) {
+    void set_configuration(const server_address_set& servers) {
         _cluster_size = servers.size();
     }
 
