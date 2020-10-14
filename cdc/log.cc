@@ -519,6 +519,7 @@ static schema_ptr create_log_schema(const schema& s, std::optional<utils::UUID> 
     b.with_column(log_meta_column_name_bytes("batch_seq_no"), int32_type, column_kind::clustering_key);
     b.with_column(log_meta_column_name_bytes("operation"), data_type_for<operation_native_type>());
     b.with_column(log_meta_column_name_bytes("ttl"), long_type);
+    b.with_column(log_meta_column_name_bytes("end_of_batch"), boolean_type);
     b.set_caching_options(caching_options::get_disabled_caching_options());
     auto add_columns = [&] (const schema::const_iterator_range_type& columns, bool is_data_col = false) {
         for (const auto& column : columns) {
@@ -880,12 +881,24 @@ public:
         return _base_schema;
     }
 
+    clustering_key create_ck(int batch) const {
+        return clustering_key::from_exploded(_log_schema, { _tuuid, int32_type->decompose(batch) });
+    }
+
     // Creates a new clustering row in the mutation, assigning it the next `cdc$batch_seq_no`.
     // The numbering of batch sequence numbers starts from 0.
     clustering_key allocate_new_log_row() {
-        auto log_ck = clustering_key::from_exploded(_log_schema, { _tuuid, int32_type->decompose(_batch_no++) });
+        auto log_ck = create_ck(_batch_no++);
         set_key_columns(log_ck, _base_schema.partition_key_columns(), _base_pk);
         return log_ck;
+    }
+
+    bool has_rows() const {
+        return _batch_no != 0;
+    }
+
+    clustering_key last_row_key() const {
+        return create_ck(_batch_no - 1);
     }
 
     // A common pattern is to allocate a row and then immediately set its `cdc$operation` column.
@@ -944,6 +957,11 @@ public:
         _log_mut.set_cell(log_ck, log_cdef, atomic_cell::make_live(*log_cdef.type, _ts, deleted_elements, _ttl));
     }
 
+    void end_record() {
+        if (has_rows()) {
+            _log_mut.set_cell(last_row_key(), log_meta_column_name_bytes("end_of_batch"), data_value(true), _ts, _ttl);
+        }
+    }
 private:
     void set_key_columns(const clustering_key& log_ck, schema::const_iterator_range_type columns, const std::vector<bytes>& key) {
         size_t pos = 0;
@@ -1514,6 +1532,11 @@ public:
             ._generate_delta_values = generate_delta_values(_builder->base_schema())
         };
         cdc::inspect_mutation(m, v);
+    }
+
+    void end_record() override {
+        assert(_builder);
+        _builder->end_record();
     }
 
     // Takes and returns generated cdc log mutations and associated statistics about parts touched during transformer's lifetime.
