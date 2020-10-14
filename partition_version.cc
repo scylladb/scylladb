@@ -650,12 +650,12 @@ partition_snapshot_ptr partition_entry::read(logalloc::region& r,
     return partition_snapshot_ptr(std::move(snp));
 }
 
-std::vector<range_tombstone>
+partition_snapshot::range_tombstone_result
 partition_snapshot::range_tombstones(position_in_partition_view start, position_in_partition_view end)
 {
     partition_version* v = &*version();
     if (!v->next()) {
-        return boost::copy_range<std::vector<range_tombstone>>(
+        return boost::copy_range<range_tombstone_result>(
             v->partition().row_tombstones().slice(*_schema, start, end));
     }
     range_tombstone_list list(*_schema);
@@ -665,10 +665,10 @@ partition_snapshot::range_tombstones(position_in_partition_view start, position_
         }
         v = v->next();
     }
-    return boost::copy_range<std::vector<range_tombstone>>(list.slice(*_schema, start, end));
+    return boost::copy_range<range_tombstone_result>(list.slice(*_schema, start, end));
 }
 
-std::vector<range_tombstone>
+partition_snapshot::range_tombstone_result
 partition_snapshot::range_tombstones()
 {
     return range_tombstones(
