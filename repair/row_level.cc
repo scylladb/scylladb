@@ -460,7 +460,7 @@ public:
     }
 };
 
-class repair_writer {
+class repair_writer : public enable_lw_shared_from_this<repair_writer> {
     schema_ptr _schema;
     uint64_t _estimated_partitions;
     size_t _nr_peer_nodes;
@@ -519,9 +519,10 @@ public:
             return _mq[node_idx]->pop_eventually();
         };
         table& t = db.local().find_column_family(_schema->id());
+        auto writer = shared_from_this();
         _writer_done[node_idx] = mutation_writer::distribute_reader_and_consume_on_shards(_schema,
                 make_generating_reader(_schema, std::move(get_next_mutation_fragment)),
-                [&db, reason = this->_reason, estimated_partitions = this->_estimated_partitions] (flat_mutation_reader reader) {
+                [&db, reason = this->_reason, estimated_partitions = this->_estimated_partitions, writer] (flat_mutation_reader reader) {
             auto& t = db.local().find_column_family(reader.schema());
             return db::view::check_needs_view_update_path(_sys_dist_ks->local(), t, reason).then([t = t.shared_from_this(), estimated_partitions, reader = std::move(reader)] (bool use_view_update_path) mutable {
                 //FIXME: for better estimations this should be transmitted from remote
@@ -549,13 +550,13 @@ public:
                 return consumer(std::move(reader));
             });
         },
-        t.stream_in_progress()).then([this, node_idx] (uint64_t partitions) {
+        t.stream_in_progress()).then([node_idx, writer] (uint64_t partitions) {
             rlogger.debug("repair_writer: keyspace={}, table={}, managed to write partitions={} to sstable",
-                _schema->ks_name(), _schema->cf_name(), partitions);
-        }).handle_exception([this, node_idx] (std::exception_ptr ep) {
+                writer->_schema->ks_name(), writer->_schema->cf_name(), partitions);
+        }).handle_exception([node_idx, writer] (std::exception_ptr ep) {
             rlogger.warn("repair_writer: keyspace={}, table={}, multishard_writer failed: {}",
-                    _schema->ks_name(), _schema->cf_name(), ep);
-            _mq[node_idx]->abort(ep);
+                    writer->_schema->ks_name(), writer->_schema->cf_name(), ep);
+            writer->_mq[node_idx]->abort(ep);
             return make_exception_future<>(std::move(ep));
         });
     }
@@ -659,7 +660,7 @@ private:
     size_t _nr_peer_nodes= 1;
     repair_stats _stats;
     repair_reader _repair_reader;
-    repair_writer _repair_writer;
+    lw_shared_ptr<repair_writer> _repair_writer;
     // Contains rows read from disk
     std::list<repair_row> _row_buf;
     // Contains rows we are working on to sync between peers
@@ -740,7 +741,7 @@ public:
                     _seed,
                     repair_reader::is_local_reader(_repair_master || _same_sharding_config)
               )
-            , _repair_writer(_schema, _estimated_partitions, _nr_peer_nodes, _reason)
+            , _repair_writer(make_lw_shared<repair_writer>(_schema, _estimated_partitions, _nr_peer_nodes, _reason))
             , _sink_source_for_get_full_row_hashes(_repair_meta_id, _nr_peer_nodes,
                     [] (uint32_t repair_meta_id, netw::messaging_service::msg_addr addr) {
                         return netw::get_local_messaging_service().make_sink_and_source_for_repair_get_full_row_hashes_with_rpc_stream(repair_meta_id, addr);
@@ -763,7 +764,7 @@ public:
         auto f2 = _sink_source_for_get_row_diff.close();
         auto f3 = _sink_source_for_put_row_diff.close();
         return when_all_succeed(std::move(gate_future), std::move(f1), std::move(f2), std::move(f3)).finally([this] {
-            return _repair_writer.wait_for_writer_done();
+            return _repair_writer->wait_for_writer_done();
         });
     }
 
@@ -1245,8 +1246,8 @@ private:
 
     future<> do_apply_rows(std::list<repair_row>&& row_diff, unsigned node_idx, update_working_row_buf update_buf) {
         return do_with(std::move(row_diff), [this, node_idx, update_buf] (std::list<repair_row>& row_diff) {
-            return with_semaphore(_repair_writer.sem(), 1, [this, node_idx, update_buf, &row_diff] {
-                _repair_writer.create_writer(_db, node_idx);
+            return with_semaphore(_repair_writer->sem(), 1, [this, node_idx, update_buf, &row_diff] {
+                _repair_writer->create_writer(_db, node_idx);
                 return repeat([this, node_idx, update_buf, &row_diff] () mutable {
                     if (row_diff.empty()) {
                         return make_ready_future<stop_iteration>(stop_iteration::yes);
@@ -1260,7 +1261,7 @@ private:
                     // to_repair_rows_list above where the repair_row is created.
                     mutation_fragment mf = std::move(r.get_mutation_fragment());
                     auto dk_with_hash = r.get_dk_with_hash();
-                    return _repair_writer.do_write(node_idx, std::move(dk_with_hash), std::move(mf)).then([&row_diff] {
+                    return _repair_writer->do_write(node_idx, std::move(dk_with_hash), std::move(mf)).then([&row_diff] {
                         row_diff.pop_front();
                         return make_ready_future<stop_iteration>(stop_iteration::no);
                     });
