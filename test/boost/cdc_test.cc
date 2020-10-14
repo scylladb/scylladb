@@ -326,6 +326,7 @@ SEASTAR_THREAD_TEST_CASE(test_cdc_log_schema) {
         // cdc log clustering key
         assert_has_column(cdc::log_meta_column_name("operation"), byte_type);
         assert_has_column(cdc::log_meta_column_name("ttl"), long_type);
+        assert_has_column(cdc::log_meta_column_name("end_of_batch"), boolean_type);
 
         // pk
         assert_has_column(cdc::log_data_column_name("pk"), int32_type);
@@ -534,6 +535,7 @@ SEASTAR_THREAD_TEST_CASE(test_pre_post_image_logging) {
             auto val_index = column_index(*rows, cdc::log_data_column_name("val"));
             auto val2_index = column_index(*rows, cdc::log_data_column_name("val2"));
             auto ttl_index = column_index(*rows, cdc::log_meta_column_name("ttl"));
+            auto eor_index = column_index(*rows, cdc::log_meta_column_name("end_of_batch"));
 
             auto val_type = int32_type;
             auto val = *first[0][val_index];
@@ -583,10 +585,12 @@ SEASTAR_THREAD_TEST_CASE(test_pre_post_image_logging) {
                 if (post_enabled) {
                     val = *post_image.back()[val_index];
                     val2 = *post_image.back()[val2_index];
+                    auto eor = *post_image.back()[eor_index];
 
                     BOOST_REQUIRE_EQUAL(int32_type->decompose(1111), *post_image.back()[ck2_index]);
                     BOOST_REQUIRE_EQUAL(data_value(nv), val_type->deserialize(bytes_view(val)));
                     BOOST_REQUIRE_EQUAL(data_value(22222), val_type->deserialize(bytes_view(val2)));
+                    BOOST_REQUIRE_EQUAL(data_value(true), boolean_type->deserialize(bytes_view(eor)));
                 }
 
                 const auto& ttl_cell = second[second.size() - 2][ttl_index];
