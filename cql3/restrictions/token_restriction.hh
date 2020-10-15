@@ -71,6 +71,11 @@ public:
     }
 
     void merge_with(::shared_ptr<restriction> restriction) override {
+        if (!has_token(restriction->expression)) {
+            throw exceptions::invalid_request_exception(
+                    format("Columns \"{}\" cannot be restricted by both a normal relation and a token relation",
+                            join(", ", get_column_defs())));
+        }
         expression = make_conjunction(std::move(expression), restriction->expression);
     }
 
