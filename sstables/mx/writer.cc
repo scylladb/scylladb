@@ -592,7 +592,6 @@ private:
         std::optional<clustering_info> last_clustering;
         size_t desired_block_size;
     } _pi_write_m;
-    column_stats _c_stats;
     utils::UUID _run_identifier;
     bool _write_regular_as_static; // See #4139
 
@@ -762,7 +761,6 @@ public:
         _cfg.monitor->on_write_started(_data_writer->offset_tracker());
         _sst._components->filter = utils::i_filter::get_filter(estimated_partitions, _schema.bloom_filter_fp_chance(), utils::filter_format::m_format);
         _pi_write_m.desired_block_size = cfg.promoted_index_block_size;
-        _sst._correctly_serialize_non_compound_range_tombstones = _cfg.correctly_serialize_non_compound_range_tombstones;
         _index_sampling_state.summary_byte_cost = _cfg.summary_byte_cost;
         prepare_summary(_sst._components->summary, estimated_partitions, _schema.min_index_interval());
     }
@@ -903,7 +901,7 @@ void writer::drain_tombstones(std::optional<position_in_partition_view> pos) {
     while (auto mfo = get_next_rt()) {
         range_tombstone rt {std::move(mfo)->as_range_tombstone()};
 
-        _sst.get_metadata_collector().update_min_max_components(rt);
+        _collector.update_min_max_components(rt);
 
         bool need_write_start = true;
         if (_end_open_marker) {
@@ -952,7 +950,7 @@ void writer::consume_new_partition(const dht::decorated_key& dk) {
     maybe_add_summary_entry(dk.token(), bytes_view(*_partition_key));
 
     _sst._components->filter->add(bytes_view(*_partition_key));
-    _sst.get_metadata_collector().add_key(bytes_view(*_partition_key));
+    _collector.add_key(bytes_view(*_partition_key));
 
     auto p_key = disk_string_view<uint16_t>();
     p_key.value = bytes_view(*_partition_key);
@@ -990,7 +988,7 @@ void writer::consume(tombstone t) {
     _tombstone_written = true;
 
     if (t) {
-        _sst.get_metadata_collector().update_min_max_components(clustering_key_prefix::make_empty(_schema));
+        _collector.update_min_max_components(clustering_key_prefix::make_empty(_schema));
     }
 }
 
@@ -1272,7 +1270,7 @@ void writer::write_clustered(const clustering_row& clustered_row, uint64_t prev_
     flush_tmp_bufs();
 
     // Collect statistics
-    _sst.get_metadata_collector().update_min_max_components(clustered_row.key());
+    _collector.update_min_max_components(clustered_row.key());
     collect_row_stats(_data_writer->offset() - current_pos, &clustered_row.key());
 }
 
@@ -1380,7 +1378,7 @@ stop_iteration writer::consume_end_of_partition() {
 
 
     // update is about merging column_stats with the data being stored by collector.
-    _sst.get_metadata_collector().update(std::move(_c_stats));
+    _collector.update(std::move(_c_stats));
     _c_stats.reset();
 
     if (!_first_key) {
@@ -1401,14 +1399,14 @@ void writer::consume_end_of_stream() {
     seal_summary(_sst._components->summary, std::move(_first_key), std::move(_last_key), _index_sampling_state).get();
 
     if (_sst.has_component(component_type::CompressionInfo)) {
-        _sst.get_metadata_collector().add_compression_ratio(_sst._components->compression.compressed_file_length(), _sst._components->compression.uncompressed_file_length());
+        _collector.add_compression_ratio(_sst._components->compression.compressed_file_length(), _sst._components->compression.uncompressed_file_length());
     }
 
     close_writer(_index_writer);
     _sst.set_first_and_last_keys();
 
     _sst._components->statistics.contents[metadata_type::Serialization] = std::make_unique<serialization_header>(std::move(_sst_schema.header));
-    seal_statistics(_sst.get_version(), _sst._components->statistics, _sst.get_metadata_collector(),
+    seal_statistics(_sst.get_version(), _sst._components->statistics, _collector, _sst.compaction_ancestors(),
         _sst._schema->get_partitioner().name(), _schema.bloom_filter_fp_chance(),
         _sst._schema, _sst.get_first_decorated_key(), _sst.get_last_decorated_key(), _enc_stats);
     close_data_writer();

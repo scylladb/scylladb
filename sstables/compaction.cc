@@ -487,9 +487,6 @@ protected:
     void setup_new_sstable(shared_sstable& sst) {
         _info->new_sstables.push_back(sst);
         _new_unused_sstables.push_back(sst);
-        sst->make_metadata_collector();
-        sst->get_metadata_collector().set_replay_position(_rp);
-        sst->get_metadata_collector().sstable_level(_sstable_level);
         for (auto ancestor : _ancestors) {
             sst->add_ancestor(ancestor);
         }
@@ -499,6 +496,16 @@ protected:
         writer->writer.consume_end_of_stream();
         writer->sst->open_data().get0();
         _info->end_size += writer->sst->bytes_on_disk();
+    }
+
+    sstable_writer_config make_sstable_writer_config() {
+        sstable_writer_config cfg = _cf.get_sstables_manager().configure_writer();
+        cfg.max_sstable_size = _max_sstable_size;
+        cfg.monitor = &default_write_monitor();
+        cfg.run_identifier = _run_identifier;
+        cfg.replay_position = _rp;
+        cfg.sstable_level = _sstable_level;
+        return cfg;
     }
 
     api::timestamp_type maximum_timestamp() const {
@@ -837,10 +844,7 @@ public:
         auto sst = _sstable_creator(this_shard_id());
         setup_new_sstable(sst);
 
-        sstable_writer_config cfg = _cf.get_sstables_manager().configure_writer();
-        cfg.max_sstable_size = _max_sstable_size;
-        cfg.monitor = &default_write_monitor();
-        cfg.run_identifier = _run_identifier;
+        sstable_writer_config cfg = make_sstable_writer_config();
         return compaction_writer{sst->get_writer(*_schema, partitions_per_sstable(), cfg, get_encoding_stats(), _io_priority), sst};
     }
 
@@ -904,10 +908,8 @@ public:
         _unused_sstables.push_back(sst);
 
         auto monitor = std::make_unique<compaction_write_monitor>(sst, _cf, maximum_timestamp(), _sstable_level);
-        sstable_writer_config cfg = _cf.get_sstables_manager().configure_writer();
-        cfg.max_sstable_size = _max_sstable_size;
+        sstable_writer_config cfg = make_sstable_writer_config();
         cfg.monitor = monitor.get();
-        cfg.run_identifier = _run_identifier;
         return compaction_writer{std::move(monitor), sst->get_writer(*_schema, partitions_per_sstable(), cfg, get_encoding_stats(), _io_priority), sst};
     }
 
@@ -1374,9 +1376,7 @@ public:
         auto sst = _sstable_creator(shard);
         setup_new_sstable(sst);
 
-        sstable_writer_config cfg = _cf.get_sstables_manager().configure_writer();
-        cfg.max_sstable_size = _max_sstable_size;
-        cfg.monitor = &default_write_monitor();
+        auto cfg = make_sstable_writer_config();
         // sstables generated for a given shard will share the same run identifier.
         cfg.run_identifier = _run_identifiers.at(shard);
         return compaction_writer{sst->get_writer(*_schema, partitions_per_sstable(shard), cfg, get_encoding_stats(), _io_priority, shard), sst};
@@ -1489,13 +1489,10 @@ get_fully_expired_sstables(column_family& cf, const std::vector<sstables::shared
     auto compacted_undeleted_gens = boost::copy_range<std::unordered_set<int64_t>>(cf.compacted_undeleted_sstables()
         | boost::adaptors::transformed(std::mem_fn(&sstables::sstable::generation)));
     auto has_undeleted_ancestor = [&compacted_undeleted_gens] (auto& candidate) {
-        // Get ancestors from metadata collector which is empty after restart. It works for this purpose because
+        // Get ancestors from sstable which is empty after restart. It works for this purpose because
         // we only need to check that a sstable compacted *in this instance* hasn't an ancestor undeleted.
         // Not getting it from sstable metadata because mc format hasn't it available.
-        if (!candidate->has_metadata_collector()) {
-            return false;
-        }
-        return boost::algorithm::any_of(candidate->get_metadata_collector().ancestors(), [&compacted_undeleted_gens] (auto gen) {
+        return boost::algorithm::any_of(candidate->compaction_ancestors(), [&compacted_undeleted_gens] (auto gen) {
             return compacted_undeleted_gens.contains(gen);
         });
     };
