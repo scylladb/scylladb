@@ -865,6 +865,18 @@ SEASTAR_THREAD_TEST_CASE(token) {
         const auto stmt = e.prepare("select p from t where token(p,q) = token(1,?)").get0();
         require_rows(e, stmt, {}, {I(11)}, {{I(1)}});
         require_rows(e, stmt, {}, {I(10)}, {});
+
+        const auto q = [&] (const char* stmt) { return e.execute_cql(stmt).get(); };
+        using ire = exceptions::invalid_request_exception;
+        using exception_predicate::message_contains;
+        const char* expect = "cannot be restricted by both a normal relation and a token relation";
+
+        BOOST_REQUIRE_EXCEPTION(q("select p from t where p = 0 and token(p, q) <= token(1,11)"), ire, message_contains(expect));
+        BOOST_REQUIRE_EXCEPTION(q("select p from t where token(p, q) <= token(1,11) and p = 0"), ire, message_contains(expect));
+        BOOST_REQUIRE_EXCEPTION(q("select p from t where p in (0,1) and token(p, q) <= token(1,11)"), ire, message_contains(expect));
+        BOOST_REQUIRE_EXCEPTION(q("select p from t where token(p, q) <= token(1,11) and p in (0,1)"), ire, message_contains(expect));
+        BOOST_REQUIRE_EXCEPTION(q("select p from t where p = 0 and q = 0 and token(p, q) <= token(1,11)"), ire, message_contains(expect));
+        BOOST_REQUIRE_EXCEPTION(q("select p from t where token(p, q) <= token(1,11) and p = 0 and q = 0"), ire, message_contains(expect));
     }).get();
 }
 
