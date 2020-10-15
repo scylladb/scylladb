@@ -24,6 +24,8 @@
 #include "schema_registry.hh"
 #include "log.hh"
 #include "db/schema_tables.hh"
+#include "database.hh"
+#include "view_info.hh"
 
 static logging::logger slogger("schema_registry");
 
@@ -150,6 +152,18 @@ schema_ptr schema_registry::get_or_load(table_schema_version v, const schema_loa
 schema_ptr schema_registry_entry::load(frozen_schema fs) {
     _frozen_schema = std::move(fs);
     auto s = get_schema();
+    // If this is a view so this schema also needs a reference to the base
+    // table.
+    if (s->is_view()) {
+        if (!s->view_info()->base_info()) {
+            auto& db = service::get_local_storage_proxy().get_db().local();
+            // This line might throw a no_such_column_family
+            // It should be fine since if we tried to register a view for which
+            // we don't know the base table, our registry is broken.
+            schema_ptr base_schema = db.find_schema(s->view_info()->base_id());
+            s->view_info()->set_base_info(s->view_info()->make_base_dependent_view_info(*base_schema));
+        }
+    }
     if (_state == state::LOADING) {
         _schema_promise.set_value(s);
         _schema_promise = {};
