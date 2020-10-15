@@ -201,6 +201,8 @@ class fsm {
         }
     }
 
+    void become_leader();
+
     void become_candidate();
 
     void become_follower(server_id leader);
@@ -253,8 +255,6 @@ public:
     bool is_candidate() const {
         return std::holds_alternative<candidate>(_state);
     }
-
-    void become_leader();
 
     // Add an entry to in-memory log. The entry has to be
     // committed to the persistent Raft log afterwards.
