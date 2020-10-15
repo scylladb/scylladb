@@ -83,8 +83,9 @@ bool follower_progress::can_send_to() {
     return false;
 }
 
-void tracker::set_configuration(const server_address_set& servers, index_t next_idx) {
-    for (auto& s : servers) {
+void tracker::set_configuration(configuration configuration, index_t next_idx) {
+    _configuration = std::move(configuration);
+    for (const auto& s : _configuration.current) {
         if (this->progress::find(s.id) != this->progress::end()) {
             continue;
         }

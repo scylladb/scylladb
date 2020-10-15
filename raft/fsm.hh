@@ -176,9 +176,6 @@ private:
     // TLA+ line 328
     std::vector<std::pair<server_id, rpc_message>> _messages;
 
-    // Transitional (joint) or committed configuration.
-    configuration _configuration;
-
     // Signaled when there is a IO event to process.
     seastar::condition_variable _sm_events;
 
@@ -250,19 +247,10 @@ private:
     void tick_leader();
 
     // Reconfigure this instance to use the provided configuration.
-    // Called on start, configuration change, or when restoring
-    // to the previous configuration.
-    void set_configuration(const configuration& config) {
-        _configuration = config;
-        // We unconditionally access _configuration
-        // to identify which entries are committed.
-        assert(_configuration.current.size() > 0);
-        if (is_leader()) {
-            _tracker->set_configuration(_configuration.current, _log.next_idx());
-        } else if (is_candidate()) {
-            _votes->set_configuration(_configuration.current);
-        }
-    }
+    // Called on start, state change to candidate or leader, or when
+    // a new configuration entry is added.
+    void set_configuration();
+
 public:
     explicit fsm(server_id id, term_t current_term, server_id voted_for, log log,
             failure_detector& failure_detector, fsm_config conf);
@@ -286,6 +274,9 @@ public:
     // call this function to wait for number of log entries to go below
     // max_log_length
     future<> wait();
+
+    // Return current configuration. Throws if not a leader.
+    const configuration& get_configuration() const;
 
     // Add an entry to in-memory log. The entry has to be
     // committed to the persistent Raft log afterwards.

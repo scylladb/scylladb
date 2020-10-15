@@ -75,6 +75,7 @@ using progress = std::unordered_map<server_id, follower_progress>;
 class tracker: private progress {
     // Copy of this server's id
     server_id _my_id;
+    configuration _configuration;
 public:
     using progress::begin, progress::end, progress::cbegin, progress::cend, progress::size;
 
@@ -86,7 +87,8 @@ public:
     follower_progress& find(server_id dst) {
         return this->progress::find(dst)->second;
     }
-    void set_configuration(const server_address_set& servers, index_t next_idx);
+    void set_configuration(configuration configuration, index_t next_idx);
+    const configuration& get_configuration() const { return _configuration; }
 
     // Calculate the current commit index based on the current
     // simple or joint quorum.
@@ -113,9 +115,11 @@ class votes {
     // Number of granted votes.
     // The candidate always votes for self.
     size_t _granted = 1;
+    configuration _configuration;
 public:
-    void set_configuration(const server_address_set& servers) {
-        _cluster_size = servers.size();
+    void set_configuration(configuration configuration) {
+        _configuration = std::move(configuration);
+        _cluster_size = _configuration.current.size();
     }
 
     void register_vote(server_id from, bool granted) {
@@ -133,6 +137,10 @@ public:
         assert(_responded <= _cluster_size);
         auto unknown = _cluster_size - _responded;
         return _granted + unknown >= quorum ? vote_result::UNKNOWN : vote_result::LOST;
+    }
+
+    const configuration& get_configuration() const {
+        return _configuration;
     }
 
     friend std::ostream& operator<<(std::ostream& os, const votes& v);
