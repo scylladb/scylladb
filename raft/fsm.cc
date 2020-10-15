@@ -614,6 +614,10 @@ void fsm::snapshot_status(server_id id, bool success) {
     // again and snapshot transfer will be attempted one more time.
 }
 
+void fsm::apply_snapshot(snapshot snp) {
+    _log.apply_snapshot(std::move(snp));
+}
+
 void fsm::stop() {
     _sm_events.broken();
 }

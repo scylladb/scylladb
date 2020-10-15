@@ -92,8 +92,11 @@ private:
     std::unordered_map<server_id, future<>> _snapshot_transfers;
 
     // The optional is engaged when incomming snapshot is received
-    // And signalled when it is successfully applied or there was an error
+    // And the promise signalled when it is successfully applied or there was an error
     std::optional<promise<snapshot_reply>> _snapshot_application_done;
+
+    // An id of last loaded snapshot into a state machine
+    snapshot_id _last_loaded_snapshot_id;
 
     // Called to commit entries (on a leader or otherwise).
     void notify_waiters(std::map<index_t, op_status>& waiters, const std::vector<log_entry_ptr>& entries);
@@ -153,6 +156,7 @@ future<> server_impl::start() {
 
     if (snp_id) {
         co_await _state_machine->load_snapshot(snp_id);
+        _last_loaded_snapshot_id = snp_id;
     }
 
     // start fiber to persist entries added to in-memory log
@@ -280,11 +284,18 @@ future<> server_impl::io_fiber(index_t last_stable) {
             }
 
             if (batch.snp) {
-                logger.trace("[{}] io_fiber process snapshot {}", _id, batch.snp->id);
+                logger.trace("[{}] io_fiber storing snapshot {}", _id, batch.snp->id);
                 // Persist the snapshot
                 co_await _storage->store_snapshot(*batch.snp, 0);
-                // Apply it to the state machine
-                co_await _state_machine->load_snapshot(batch.snp->id);
+                // If this is locally generated snapshot there is no need to
+                // load it.
+                if (_last_loaded_snapshot_id != batch.snp->id) {
+                    // Apply it to the state machine
+                    logger.trace("[{}] io_fiber applying snapshot {}", _id, batch.snp->id);
+                    co_await _state_machine->load_snapshot(batch.snp->id);
+                    _state_machine->drop_snapshot(_last_loaded_snapshot_id);
+                    _last_loaded_snapshot_id = batch.snp->id;
+                }
             }
 
             if (batch.log_entries.size()) {
@@ -352,6 +363,8 @@ future<> server_impl::apply_snapshot(server_id from, install_snapshot snp) {
 
 future<> server_impl::applier_fiber() {
     logger.trace("applier_fiber start");
+    size_t applied_since_snapshot = 0;
+
     try {
         while (true) {
             auto opt_batch = co_await _apply_entries.reader.read();
@@ -359,8 +372,13 @@ future<> server_impl::applier_fiber() {
                 // EOF
                 break;
             }
+
+            applied_since_snapshot += opt_batch->size();
+
             std::vector<command_cref> commands;
             commands.reserve(opt_batch->size());
+
+            index_t last_idx = opt_batch->back()->idx;
 
             std::ranges::copy(
                     *opt_batch |
@@ -370,6 +388,17 @@ future<> server_impl::applier_fiber() {
 
             co_await _state_machine->apply(std::move(commands));
             notify_waiters(_awaited_applies, *opt_batch);
+
+            if (applied_since_snapshot >= _config.snapshot_threshold) {
+                snapshot snp;
+                snp.term = get_current_term();
+                snp.idx = last_idx;
+                logger.trace("[{}] applier fiber taking snapshot term={}, idx={}", _id, snp.term, snp.idx);
+                snp.id = co_await _state_machine->take_snapshot();
+                _last_loaded_snapshot_id = snp.id;
+                _fsm->apply_snapshot(snp);
+                applied_since_snapshot = 0;
+            }
         }
     } catch (...) {
         logger.error("applier fiber {} stopped because of the error: {}", _id, std::current_exception());
