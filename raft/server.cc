@@ -401,7 +401,7 @@ future<> server_impl::applier_fiber() {
             }
         }
     } catch (...) {
-        logger.error("applier fiber {} stopped because of the error: {}", _id, std::current_exception());
+        logger.error("[{}] applier fiber stopped because of the error: {}", _id, std::current_exception());
     }
     co_return;
 }
