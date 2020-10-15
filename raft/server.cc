@@ -176,10 +176,6 @@ template <typename T>
 future<> server_impl::add_entry_internal(T command, wait_type type) {
     logger.trace("An entry is submitted on a leader");
 
-    // lock access to the raft log while it is been updated
-
-    // @todo: ensure the reference to the entry is stable between
-    // yields, before removing _log_lock.
     const log_entry& e = _fsm->add_entry(std::move(command));
 
     auto& container = type == wait_type::committed ? _awaited_commits : _awaited_applies;
