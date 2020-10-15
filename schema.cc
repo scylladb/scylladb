@@ -75,6 +75,20 @@ column_mapping_entry& column_mapping_entry::operator=(const column_mapping_entry
     return operator=(std::move(copy));
 }
 
+bool operator==(const column_mapping& lhs, const column_mapping& rhs) {
+    const auto& lhs_columns = lhs.columns(), rhs_columns = rhs.columns();
+    if (lhs_columns.size() != rhs_columns.size()) {
+        return false;
+    }
+    for (size_t i = 0, end = lhs_columns.size(); i < end; ++i) {
+        const column_mapping_entry& lhs_entry = lhs_columns[i], rhs_entry = rhs_columns[i];
+        if (lhs_entry.name() != rhs_entry.name() || lhs_entry.type() != rhs_entry.type()) {
+            return false;
+        }
+    }
+    return true;
+}
+
 template<typename Sequence>
 std::vector<data_type>
 get_column_types(const Sequence& column_definitions) {
