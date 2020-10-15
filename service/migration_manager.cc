@@ -1105,6 +1105,20 @@ future<schema_ptr> get_schema_definition(table_schema_version v, netw::messaging
                 return s;
             });
         });
+    }).then([] (schema_ptr s) {
+        // If this is a view so this schema also needs a reference to the base
+        // table.
+        if (s->is_view()) {
+            if (!s->view_info()->base_info()) {
+                auto& db = service::get_local_storage_proxy().get_db().local();
+                // This line might throw a no_such_column_family
+                // It should be fine since if we tried to register a view for which
+                // we don't know the base table, our registry is broken.
+                schema_ptr base_schema = db.find_schema(s->view_info()->base_id());
+                s->view_info()->set_base_info(s->view_info()->make_base_dependent_view_info(*base_schema));
+            }
+        }
+        return s;
     });
 }
 
