@@ -200,7 +200,7 @@ struct snapshot_reply {
     bool success;
 };
 
-using rpc_message = std::variant<append_request_send, append_reply, vote_request, vote_reply>;
+using rpc_message = std::variant<append_request_send, append_reply, vote_request, vote_reply, install_snapshot, snapshot_reply>;
 
 // we need something that can be truncated form both sides.
 // std::deque move constructor is not nothrow hence cannot be used

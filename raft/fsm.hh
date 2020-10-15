@@ -35,6 +35,7 @@ struct fsm_output {
     std::vector<std::pair<server_id, rpc_message>> messages;
     // Entries to apply.
     std::vector<log_entry_ptr> committed;
+    std::optional<snapshot> snp;
 };
 
 struct fsm_config {
@@ -127,16 +128,18 @@ class fsm {
         term_t _current_term;
         server_id _voted_for;
         index_t _commit_idx;
+        snapshot _snapshot;
 
         bool is_equal(const fsm& fsm) const {
             return _current_term == fsm._current_term && _voted_for == fsm._voted_for &&
-                _commit_idx == fsm._commit_idx;
+                _commit_idx == fsm._commit_idx && _snapshot.id == fsm._log.get_snapshot().id;
         }
 
         void advance(const fsm& fsm) {
             _current_term = fsm._current_term;
             _voted_for = fsm._voted_for;
             _commit_idx = fsm._commit_idx;
+            _snapshot = fsm._log.get_snapshot();
         }
     } _observed;
 
@@ -298,6 +301,13 @@ public:
     // tick period.
     bool can_read();
 
+    void snapshot_status(server_id id, bool success);
+
+    // This call will update the log to point to the new snaphot
+    // and will truncate the log prefix up to (snp.idx - trailing)
+    // entry.
+    void apply_snapshot(snapshot snp, size_t traling);
+
     friend std::ostream& operator<<(std::ostream& os, const fsm& f);
 };
 
@@ -345,6 +355,8 @@ void fsm::step(server_id from, Message&& msg) {
             // Instructs the leader to step down.
             append_reply reply{_current_term, _commit_idx, append_reply::rejected{msg.prev_log_idx, _log.last_idx()}};
             send_to(from, std::move(reply));
+        } else if constexpr (std::is_same_v<Message, install_snapshot>) {
+            send_to(from, snapshot_reply{ .success = false });
         } else {
             // Ignore other cases
             logger.trace("{} [term: {}] ignored a message with lower term from {} [term: {}]",
@@ -395,6 +407,15 @@ void fsm::step(server_id from, Message&& msg) {
                 return;
             }
             request_vote_reply(from, std::move(msg));
+        } else if constexpr (std::is_same_v<Message, install_snapshot>) {
+            if constexpr (!std::is_same_v<State, follower>) {
+                // snapshot can be installed only in follower
+                send_to(from, snapshot_reply{ .success = false });
+            } else {
+                // apply snapshot and reply with success
+                apply_snapshot(std::move(msg.snp), 0);
+                send_to(from, snapshot_reply{ .success = true });
+            }
         }
     };
 

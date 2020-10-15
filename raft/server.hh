@@ -32,6 +32,11 @@ enum class wait_type {
 class server {
 public:
     struct configuration {
+        // automatically snapshot state machine after applying
+        // this number of entries
+        size_t snapshot_threshold = 1024;
+        // how many entries to leave in the log after tacking a snapshot
+        size_t snapshot_trailing = 200;
         // max size of appended entries in bytes
         size_t append_request_threshold = 100000;
     };

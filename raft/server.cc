@@ -88,6 +88,16 @@ private:
     // the respective entry is applied.
     std::map<index_t, op_status> _awaited_applies;
 
+    // Contains active snapshot transfers, to be waited on exit.
+    std::unordered_map<server_id, future<>> _snapshot_transfers;
+
+    // The optional is engaged when incomming snapshot is received
+    // And the promise signalled when it is successfully applied or there was an error
+    std::optional<promise<snapshot_reply>> _snapshot_application_done;
+
+    // An id of last loaded snapshot into a state machine
+    snapshot_id _last_loaded_snapshot_id;
+
     // Called to commit entries (on a leader or otherwise).
     void notify_waiters(std::map<index_t, op_status>& waiters, const std::vector<log_entry_ptr>& entries);
 
@@ -113,6 +123,9 @@ private:
     // submitted to the new leader.
     future<> apply_dummy_entry();
 
+    // Send snapshot in the background and notify FSM about the result.
+    void send_snapshot(server_id id, install_snapshot&& snp);
+
     future<> _applier_status = make_ready_future<>();
     future<> _io_status = make_ready_future<>();
 
@@ -131,6 +144,7 @@ server_impl::server_impl(server_id uuid, std::unique_ptr<rpc> rpc,
 future<> server_impl::start() {
     auto [term, vote] = co_await _storage->load_term_and_vote();
     auto snapshot  = co_await _storage->load_snapshot();
+    auto snp_id = snapshot.id;
     auto log_entries = co_await _storage->load_log();
     auto log = raft::log(std::move(snapshot), std::move(log_entries));
     index_t stable_idx = log.stable_idx();
@@ -139,6 +153,11 @@ future<> server_impl::start() {
                                      .append_request_threshold = _config.append_request_threshold
                                  });
     assert(_fsm->get_current_term() != term_t(0));
+
+    if (snp_id) {
+        co_await _state_machine->load_snapshot(snp_id);
+        _last_loaded_snapshot_id = snp_id;
+    }
 
     // start fiber to persist entries added to in-memory log
     _io_status = io_fiber(stable_idx);
@@ -233,6 +252,16 @@ future<> server_impl::send_message(server_id id, Message m) {
             return _rpc->send_vote_request(id, m);
         } else if constexpr (std::is_same_v<T, vote_reply>) {
             return _rpc->send_vote_reply(id, m);
+        } else if constexpr (std::is_same_v<T, install_snapshot>) {
+            // Send in the background.
+            send_snapshot(id, std::move(m));
+            return make_ready_future<>();
+        } else if constexpr (std::is_same_v<T, snapshot_reply>) {
+            assert(_snapshot_application_done);
+            // send reply to install_snapshot here
+            _snapshot_application_done->set_value(std::move(m));
+            _snapshot_application_done = std::nullopt;
+            return make_ready_future<>();
         } else {
             static_assert(!sizeof(Message*), "not all message types are handled");
             return make_ready_future<>();
@@ -252,6 +281,21 @@ future<> server_impl::io_fiber(index_t last_stable) {
                 // term, but it's safe to update both in this
                 // case.
                 co_await _storage->store_term_and_vote(batch.term, batch.vote);
+            }
+
+            if (batch.snp) {
+                logger.trace("[{}] io_fiber storing snapshot {}", _id, batch.snp->id);
+                // Persist the snapshot
+                co_await _storage->store_snapshot(*batch.snp, _config.snapshot_trailing);
+                // If this is locally generated snapshot there is no need to
+                // load it.
+                if (_last_loaded_snapshot_id != batch.snp->id) {
+                    // Apply it to the state machine
+                    logger.trace("[{}] io_fiber applying snapshot {}", _id, batch.snp->id);
+                    co_await _state_machine->load_snapshot(batch.snp->id);
+                    _state_machine->drop_snapshot(_last_loaded_snapshot_id);
+                    _last_loaded_snapshot_id = batch.snp->id;
+                }
             }
 
             if (batch.log_entries.size()) {
@@ -289,12 +333,38 @@ future<> server_impl::io_fiber(index_t last_stable) {
     co_return;
 }
 
+void server_impl::send_snapshot(server_id dst, install_snapshot&& snp) {
+    future<> f = _rpc->send_snapshot(dst, std::move(snp)).then_wrapped([this, dst] (future<> f) {
+        _snapshot_transfers.erase(dst);
+        if (f.failed()) {
+            logger.error("[{}] Transferring snapshot to {} failed with: {}", _id, dst, f.get_exception());
+            _fsm->snapshot_status(dst, false);
+        } else {
+            logger.trace("[{}] Transferred snapshot to {}", _id, dst);
+            _fsm->snapshot_status(dst, true);
+        }
+
+    });
+    auto res = _snapshot_transfers.emplace(dst, std::move(f));
+    assert(res.second);
+}
+
 future<> server_impl::apply_snapshot(server_id from, install_snapshot snp) {
-    return make_ready_future<>();
+    _fsm->step(from, std::move(snp));
+    // Only one snapshot can be received at a time
+    assert(! _snapshot_application_done);
+    _snapshot_application_done = promise<snapshot_reply>();
+    return _snapshot_application_done->get_future().then([] (snapshot_reply&& reply) {
+        if (!reply.success) {
+            throw std::runtime_error("Snapshot application failed");
+        }
+    });
 }
 
 future<> server_impl::applier_fiber() {
     logger.trace("applier_fiber start");
+    size_t applied_since_snapshot = 0;
+
     try {
         while (true) {
             auto opt_batch = co_await _apply_entries.reader.read();
@@ -302,8 +372,13 @@ future<> server_impl::applier_fiber() {
                 // EOF
                 break;
             }
+
+            applied_since_snapshot += opt_batch->size();
+
             std::vector<command_cref> commands;
             commands.reserve(opt_batch->size());
+
+            index_t last_idx = opt_batch->back()->idx;
 
             std::ranges::copy(
                     *opt_batch |
@@ -313,6 +388,17 @@ future<> server_impl::applier_fiber() {
 
             co_await _state_machine->apply(std::move(commands));
             notify_waiters(_awaited_applies, *opt_batch);
+
+            if (applied_since_snapshot >= _config.snapshot_threshold) {
+                snapshot snp;
+                snp.term = get_current_term();
+                snp.idx = last_idx;
+                logger.trace("[{}] applier fiber taking snapshot term={}, idx={}", _id, snp.term, snp.idx);
+                snp.id = co_await _state_machine->take_snapshot();
+                _last_loaded_snapshot_id = snp.id;
+                _fsm->apply_snapshot(snp, _config.snapshot_trailing);
+                applied_since_snapshot = 0;
+            }
         }
     } catch (...) {
         logger.error("applier fiber {} stopped because of the error: {}", _id, std::current_exception());
@@ -350,8 +436,18 @@ future<> server_impl::abort() {
     _awaited_applies.clear();
     _ticker.cancel();
 
+    if (_snapshot_application_done) {
+        _snapshot_application_done->set_exception(std::runtime_error("Snapshot application aborted"));
+    }
+
+    auto snp_futures = std::views::values(_snapshot_transfers);
+    // For c++20 ranges iterator to an end is of a different type, so adaptor is needed
+    // since seastar primitives are not c++20 ready.
+    using CI = std::common_iterator<decltype(snp_futures.begin()), decltype(snp_futures.end())>;
+    auto snapshots = seastar::when_all_succeed(CI(snp_futures.begin()), CI(snp_futures.end()));
+
     return seastar::when_all_succeed(std::move(_io_status), std::move(_applier_status),
-            _rpc->abort(), _state_machine->abort(), _storage->abort()).discard_result();
+            _rpc->abort(), _state_machine->abort(), _storage->abort(), std::move(snapshots)).discard_result();
 }
 
 future<> server_impl::add_server(server_id id, bytes node_info, clock_type::duration timeout) {
