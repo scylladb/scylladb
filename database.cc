@@ -645,9 +645,18 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
         });
     }).then([&proxy, this] {
         return do_parse_schema_tables(proxy, db::schema_tables::TABLES, [this, &proxy] (schema_result_value_type &v) {
-            return create_tables_from_tables_partition(proxy, v.second).then([this] (std::map<sstring, schema_ptr> tables) {
-                return parallel_for_each(tables.begin(), tables.end(), [this] (auto& t) {
-                    return this->add_column_family_and_make_directory(t.second);
+            return create_tables_from_tables_partition(proxy, v.second).then([this, &proxy] (std::map<sstring, schema_ptr> tables) {
+                return parallel_for_each(tables.begin(), tables.end(), [this, &proxy] (auto& t) {
+                    return this->add_column_family_and_make_directory(t.second).then([&proxy, s = t.second] {
+                        // Recreate missing column mapping entries in case
+                        // we failed to persist them for some reason after a schema change
+                        return db::schema_tables::column_mapping_exists(s->id(), s->version()).then([&proxy, s] (bool cm_exists) {
+                            if (cm_exists) {
+                                return make_ready_future<>();
+                            }
+                            return db::schema_tables::store_column_mapping(proxy, s, false);
+                        });
+                    });
                 });
             });
             });

@@ -486,6 +486,8 @@ public:
     friend std::ostream& operator<<(std::ostream& out, const column_mapping& cm);
 };
 
+bool operator==(const column_mapping& lhs, const column_mapping& rhs);
+
 /**
  * Augments a schema with fields related to materialized views.
  * Effectively immutable.

@@ -297,6 +297,7 @@ scylla_tests = set([
     'test/boost/checksum_utils_test',
     'test/boost/chunked_vector_test',
     'test/boost/clustering_ranges_walker_test',
+    'test/boost/column_mapping_test',
     'test/boost/commitlog_test',
     'test/boost/compound_test',
     'test/boost/compress_test',

@@ -39,6 +39,7 @@
 #include "idl/keys.dist.impl.hh"
 #include "idl/mutation.dist.impl.hh"
 #include "flat_mutation_reader.hh"
+#include "converting_mutation_partition_applier.hh"
 
 //
 // Representation layout:
@@ -112,6 +113,13 @@ frozen_mutation::unfreeze(schema_ptr schema) const {
     mutation m(schema, key());
     partition_builder b(*schema, m.partition());
     partition().accept(*schema, b);
+    return m;
+}
+
+mutation frozen_mutation::unfreeze_upgrading(schema_ptr schema, const column_mapping& cm) const {
+    mutation m(schema, key());
+    converting_mutation_partition_applier v(cm, *schema, m.partition());
+    partition().accept(cm, v);
     return m;
 }
 

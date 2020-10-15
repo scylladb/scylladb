@@ -206,4 +206,6 @@ future<schema_ptr> get_schema_for_read(table_schema_version, netw::msg_addr from
 // Intended to be used in the write path, which relies on synchronized schema.
 future<schema_ptr> get_schema_for_write(table_schema_version, netw::msg_addr from, netw::messaging_service& ms);
 
+future<column_mapping> get_column_mapping(utils::UUID table_id, table_schema_version v);
+
 }
