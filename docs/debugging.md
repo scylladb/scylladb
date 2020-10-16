@@ -157,6 +157,11 @@ This is extremely useful when you wish to see the source code while you
 are debugging. The `TUI` mode can be activated by passing `-tui` to GDB
 on the command line, or any time by executing the `tui enable` to
 activate it and `tui disable` to deactivate it respectively.
+By default the source window has the focus in TUI mode, meaning that command
+completion, searching history and line editing doesn't work, e.g. if you use
+the up and down keys, you will scroll the source file up and down respectively,
+instead of moving in the command history. To focus the command window, issue
+`focus cmd`. To move the focus to the source window again, issue `focus src`.
 
 #### Thread Local Storage (TLS) variables
 
@@ -205,7 +210,7 @@ We are interested in the size of the TLS header, which is in the
 `MemSiz` column and is `0x017bf0` in this example. The value of the
 `$tls_entry` can be found in the process' symbol table:
 
-    eu-readelf -s ./a.out
+    $ eu-readelf -s ./a.out
 
 	Symbol table [ 5] '.dynsym' contains 1288 entries:
 	 1 local symbol  String table: [ 9] '.dynstr'
@@ -243,6 +248,25 @@ the address to the start of the object. In this case you have to locate
 the entry in the symbol table, whose value range includes the
 calculated value. This can be made easier by sorting the symbol table by
 the `Value` column.
+
+#### Optimized-out variables
+
+In release builds one will find that a significant portion of variables and
+function parameters are optimized out. This is very annoying but often one can
+find a way around to inspect the desired variables.
+
+For non-local variables, there is a good chance that a few frames up one can
+find another reference that wasn't optimized out. Or one can try to find another
+object, which is not optimized out, and which is also known to hold a reference
+to the variable.
+
+If the variable is local, one can try to look at the registers (`info
+registers`) and try to identify which one holds its value. This is relatively
+easy for pointers to objects as heap pointers are easily identifiable (they
+start with `0x6` and are composed of 12 digits, e.g.: `0x60f146e3fbc0`) and one
+can check the size of the object they point to with `scylla ptr`. If the
+pointed-to object is an instance of a class with virtual methods, the object can
+be easily identified by looking at its vtable pointer (`x/1a $ptr`).
 
 ### Debugging coredumps
 
@@ -537,11 +561,455 @@ and [Opening the core on another OS](#opening-the-core-on-another-os).
 
 See [Avoid (some) symbol parsing related crashes](#avoid-some-symbol-parsing-related-crashes).
 
+GDB has trouble with frames inlined into the outermost frame in a seastar thread,
+or any green threads in general -- where the outermost frame is annotated with
+`.cfi_undefined rip`. See
+[GDB#26387](https://sourceware.org/bugzilla/show_bug.cgi?id=26387).
+To work around this, pass a limit to `bt`, such that it excludes the problematic
+frame. E.g. if `bt` prints 10 frames before GDB crashing, use `bt 9` to avoid the
+crash.
+
 #### GDB keeps stopping on some signals
 
 See [Tell GDB to not stop on signals used by seastar](#tell-gdb-to-not-stop-on-signals-used-by-seastar).
 
-### Advanced guides
+### Debugging guides
 
-TODO: write guides for typical flows for debugging an OOM situation and
-any other situation that contains typical steps.
+Guides focusing on different aspects of debugging Scylla. These guides
+assume a release build of Scylla.
+
+#### The seastar memory allocator
+
+Seastar has its own memory allocator optimized for Seastar's
+thread-per-core architecture. Memory, just like CPU, is sharded among
+threads, meaning that each shard has its equally-sized exclusive memory area.
+
+The seastar allocator operates on three levels:
+* pages (4KB)
+* spans of pages (2^N pages, N ∈  [0, 31])
+* objects managed by small pools
+
+Small allocations (<= 16KB) are served by small memory pools. There is
+exactly one pool per supported size, and there is a limited number of
+sizes available between 1B (8B in practice) and 16KB. Allocations are served
+by the pool with the closest, but larger than equal size to the requested
+allocation, but alignments complicate this. Pools allocate spans
+themselves for the space to allocate objects in.
+
+Large allocations are served by allocating an entire span.
+
+The allocator keeps a description of all the pages and pools in memory
+in thread-local variables. Using these, it is possible to arrive at the
+metadata describing any allocation with a few steps:
+
+    address -> page -> span -> pool?
+
+This is exploited by the `scylla ptr` command which, given an address,
+prints the following information:
+* The allocation (small or large) this address is part of.
+* The offset of the address from the beginning of the allocation.
+* Is the object dead or live.
+
+Example:
+
+    (gdb) scylla ptr 0x6000000f3830
+    thread 1, small (size <= 512), live (0x6000000f3800 +48)
+
+It is possible to dump the state of the seastar allocator with the
+`scylla memory` command. This prints a report containing the state of
+all small pools as well as the availability of spans. It also prints
+other Scylla specific information.
+
+#### Continuations chains
+
+Continuation chains are everywhere in Scylla. Every execution flow takes the
+form of a continuation chain. This makes debugging very hard because the normal
+GDB commands for inspecting and controlling execution flow (`backtrace`, `up`,
+`down`, `step`, `next`, `return`, etc.) quickly fail to fulfill their purpose.
+One will quickly find that every backtrace just leads to the same event loop in
+the seastar reactor.
+
+Continuation chains are formed by tasks. The tasks form an intrusive forward
+linked list in memory. Each tasks links to the task that depends on it. Example:
+
+    future<> bar() {
+        return sleep(std::chrono::seconds(10)).then([] {
+        });
+    }
+
+    future<> foo() {
+        return bar().then([] {
+        });
+    }
+
+When foo() is called a continuation chain of 3 tasks will be created:
+* T0: sleep()
+* T1: bar()::lambda#1
+* T2: foo()::lambda#1
+
+T1 depends on T0, and T2 depends on T1. In memory they form a forward linked
+list like:
+
+    T0 -> T1 -> T2
+
+The links are provided by the promise-future pairs in these tasks. Each task
+contains a future half of one such pair and a promise half of another one. The
+future is for the value arriving from the previous task and the promise is for
+the value calculated in the local task, that the next task waits on.
+
+The `task` object have the following interface:
+
+    class task {
+        scheduling_group _sg;
+    public:
+        virtual void run_and_dispose() noexcept = 0;
+        virtual task* waiting_task() noexcept = 0;
+        scheduling_group group() const { return _sg; }
+        shared_backtrace get_backtrace() const;
+    };
+
+The only thing stored at a known offset is the scheduling group. Each task
+object also has an associated action that is executed when the task runs
+(`run_and_dispose()`), as well as pointer to the next task (returned by
+`waiting_task()`). However task being a polymorphic object the layout of the
+different kind of tasks is not known, so all we can say about them is that
+somewhere they contain a promise object, which has a pointer to the future object
+of the task that depends on them. Also note that continuations are just one kind
+of task, there are other kinds of tasks as well. Many seastar primites,
+like `do_with()`, `repeat()`, `do_until()`, etc. have their own task
+types.
+
+##### Traversing the continuation chain forward
+
+Or in other words finding out what are the continuations waiting on this one.
+This involves searching for all outbound references in the task and identifying
+the one which is also a task. As this is quite a labour-intensive task, there is
+a command in scylla-gdb.py which automates it, called `scylla fiber`. Example
+usage:
+
+    (gdb) scylla fiber 0x60001a305910
+    Starting task: (task*) 0x000060001a305910 0x0000000004aa5260 vtable for seastar::continuation<...> + 16
+    #0  (task*) 0x0000600016217c80 0x0000000004aa5288 vtable for seastar::continuation<...> + 16
+    #1  (task*) 0x000060000ac42940 0x0000000004aa2aa0 vtable for seastar::continuation<...> + 16
+    #2  (task*) 0x0000600023f59a50 0x0000000004ac1b30 vtable for seastar::continuation<...> + 16
+
+This is somewhat similar to a backtrace, in that it shows tasks that are waiting
+for this continuation to finish, similar to how upstream functions are waiting
+for the called function to finish before continuing their own execution.
+See `help scylla fiber` and `scylla fiber --help` for more information on usage.
+
+##### Traversing the continuation chain backward
+
+Or in other words find the continuations the current continuation is waiting on.
+This involves searching for all references to the task and identifying the one
+which is also a task. This is made quite easy with the `scylla find` command
+from `scylla-gdb.py`. By using the `--resolve` flag, the vtable symbol will be
+printed next to each inbound reference, making spotting the other task easy.
+Once found, repeat the same with the pointer of the other task, until a
+non-continuation future is found, e.g. a I/O, `smp::submit()`, etc.
+
+##### Seastar threads
+
+Seastar threads are a special kind of continuation. Each seastar thread hosts a
+stack but it can also be linked into a continuation chain. The stack of seastar
+threads is a regular stack and all the normal stack related GDB commands can be
+used in it. This can be used to inspect where exactly the seastar thread
+stopped when it was suspended to wait on some future. Local variables can be
+inspected too. The catch is how to make GDB context switch into the
+stack of the seastar stack. Unfortunately there is no method that works
+with GDB as of now, the `scylla thread` command crashes GDB and even if it
+didn't, it'd only works in live processes.
+To get this working a patched GDB is needed, see
+https://github.com/denesb/seastar-gdb for instructions on how to use.
+
+#### Debugging assert failures
+
+Assert failures are the easiest (easiest but not easy) coredumps to debug
+because we know the condition that failed, we know where and thus the
+investigation has a clear scope -- to find out why. This is not always easy
+though, especially if the root cause happened much earlier, and thus the state
+the node was in at that time is not observable in the coredump. The root cause
+might even be on another node altogether. In this case we try to gather as much
+information as possible and write debug patches that hopefully catch the problem
+earlier, and try to reproduce with them, hoping to get a new coredump that has
+more information.
+
+#### Debugging segmentation faults
+
+Segmentation faults are usually caused by use-after-free,
+use-after-move, dangling pointer/reference or memory corruption.
+Unfortunately, coredumps often contain very little immediate information on what
+exactly was wrong. It is rare to find something as obvious as a null pointer
+trying to be dereferenced. So one has to dig a little to find out what
+exactly triggered the SEGFAULT.
+The most useful command in this is `scylla ptr`, as it allows
+determining whether the address the current function is working with
+belongs to a live object or not.
+
+Once the immediate cause is found, only the "easy" part remains, finding
+out how it happened.
+In some cases this can be very difficult. For example in the case of a memory
+corruption overwriting memory belonging to another object, the overwrite
+could have happened much earlier, with no traces of what it was in the
+coredump. In this case the same method has to be used that was mentioned
+in the case of [debugging assert failures](#debugging-assert-failures):
+adding additional debug code and trying to reproduce, hoping to catch
+the perpetrator red-handed.
+
+#### Debugging deadlocks
+
+If the process that is stuck is known, start from there. Try to identify the
+continuation-chain that is stuck, then
+[follow it](#traversing-the-continuation-chain-backward)
+to find the future that is blocking it all.
+There is no way to differentiate a stuck continuation chain from one
+that is making progress unfortunately, so there are not tried-and-proven
+methods here either.
+
+#### Debugging Out Of Memory (OOM) crashes
+
+OOM crashes are usually the hardest to debug issues. Not only one has to
+determine the immediate cause which is often already hard enough, as
+usual one also has to determine what lead to this state, how did it happen.
+
+That said, finding the immediate cause has a pretty standard procedure.
+The first step is always issuing a `scylla memory` command and
+determining where the memory is. Lets look at a concrete example:
+
+    (gdb) scylla memory
+    Used memory:    7452069888
+    Free memory:      20082688
+    Total memory:   7472152576
+
+    LSA:
+      allocated:    1067712512
+      used:         1065353216
+      free:            2359296
+
+    Cache:
+      total:            393216
+      used:             160704
+      free:             232512
+
+    Memtables:
+     total:          1067319296
+     Regular:
+      real dirty:    1064566784
+      virt dirty:     811568656
+     System:
+      real dirty:        393216
+      virt dirty:        393216
+     Streaming:
+      real dirty:             0
+      virt dirty:             0
+
+    Coordinator:
+      bg write bytes:         42133 B
+      hints:                      0 B
+      view hints:                 0 B
+      00 "main"
+        fg writes:              0
+        bg writes:              0
+        fg reads:               0
+        bg reads:              -7
+      05 "statement"
+        fg writes:             14
+        bg writes:              5
+        fg reads:              94
+        bg reads:            2352
+
+    Replica:
+      Read Concurrency Semaphores:
+        user sstable reads:       84/100, remaining mem:     138033377 B, queued: 0
+        streaming sstable reads:   0/ 10, remaining mem:     149443051 B, queued: 0
+        system sstable reads:      0/ 10, remaining mem:     149443051 B, queued: 0
+      Execution Stages:
+        data query stage:
+             Total                            0
+        mutation query stage:
+             Total                            0
+        apply stage:
+          02 "streaming"                      287
+             Total                            287
+      Tables - Ongoing Operations:
+        pending writes phaser (top 10):
+                 12 cqlstress_lwt_example.blogposts
+                  2 system.paxos
+                 14 Total (all)
+        pending reads phaser (top 10):
+               1863 system.paxos
+                809 cqlstress_lwt_example.blogposts
+               2672 Total (all)
+        pending streams phaser (top 10):
+                  0 Total (all)
+
+    Small pools:
+    objsz spansz    usedobj       memory       unused  wst%
+        1   4096          0            0            0   0.0
+        1   4096          0            0            0   0.0
+        1   4096          0            0            0   0.0
+        1   4096          0            0            0   0.0
+        2   4096          0            0            0   0.0
+        2   4096          0            0            0   0.0
+        3   4096          0            0            0   0.0
+        3   4096          0            0            0   0.0
+        4   4096          0            0            0   0.0
+        5   4096          0            0            0   0.0
+        6   4096          0            0            0   0.0
+        7   4096          0            0            0   0.0
+        8   4096      15285       126976         4696   3.7
+       10   4096          0         8192         8192  99.9
+       12   4096        173         8192         6116  74.6
+       14   4096          0         8192         8192  99.8
+       16   4096      11151       184320         5904   1.0
+       20   4096       3570        77824         6424   7.9
+       24   4096      19131       462848         3704   0.4
+       28   4096       2572        77824         5808   7.3
+       32   4096      27021       868352         3680   0.4
+       40   4096      14680       593920         6720   0.7
+       48   4096       3318       163840         4576   2.4
+       56   4096      12077       692224        15912   0.9
+       64   4096      52719      3375104         1088   0.0
+       80   4096      16382      1323008        12448   0.6
+       96   4096      17045      1667072        30752   0.3
+      112   4096       3402       397312        16288   2.5
+      128   4096      17767      2281472         7296   0.3
+      160   4096      17722      2912256        76736   0.3
+      192   4096       8094      1585152        31104   0.4
+      224   4096      17087      3891200        63712   0.1
+      256   4096      77945     21274624      1320704   0.1
+      320   8192      13232      4366336       132096   0.7
+      384   8192       5571      2203648        64384   1.0
+      448   4096       4290      1986560        64640   1.7
+      512   4096       2830      1503232        54272   2.8
+      640  12288        960       655360        40960   3.9
+      768  12288       5751      4489216        72448   0.1
+      896   8192        326       311296        19200   4.6
+     1024   4096       4320      5677056      1253376   0.7
+     1280  20480        251       425984       104704  22.2
+     1536  12288       3818      6373376       508928   1.7
+     1792  16384       2711      4980736       122624   0.9
+     2048   8192        594      1343488       126976   9.5
+     2560  20480        122       458752       146432  25.7
+     3072  12288       6596     21823488      1560576   0.9
+     3584  28672          6       294912       273408  91.1
+     4096  16384       2039      8372224        20480   0.2
+     5120  20480       7885     43220992      2849792   0.3
+     6144  24576       8188     54099968      3792896   0.8
+     7168  28672         30       622592       407552  53.0
+     8192  32768       8091     66781184       499712   0.7
+    10240  40960      15058    165216256     11022336   0.4
+    12288  49152       7034     92471296      6037504   0.3
+    14336  57344       6815    111935488     14235648   0.2
+    16384  65536      14046    230555648       425984   0.2
+    Small allocations: 872148992 [B]
+    Page spans:
+    index      size [B]      free [B]     large [B] [spans]
+        0          4096       1888256             0       0
+        1          8192        663552             0       0
+        2         16384             0             0       0
+        3         32768         32768    2320334848   70811
+        4         65536         65536    3031105536   46251
+        5        131072        131072    1161822208    8864
+        6        262144       3145728             0       0
+        7        524288        524288             0       0
+        8       1048576       1048576             0       0
+        9       2097152             0       2097152       1
+       10       4194304      12582912             0       0
+       11       8388608             0             0       0
+       12      16777216             0             0       0
+       13      33554432             0             0       0
+       14      67108864             0      67108864       1
+       15     134217728             0             0       0
+       16     268435456             0             0       0
+       17     536870912             0             0       0
+       18    1073741824             0             0       0
+       19    2147483648             0             0       0
+       20    4294967296             0             0       0
+       21    8589934592             0             0       0
+       22   17179869184             0             0       0
+       23   34359738368             0             0       0
+       24   68719476736             0             0       0
+       25  137438953472             0             0       0
+       26  274877906944             0             0       0
+       27  549755813888             0             0       0
+       28 1099511627776             0             0       0
+       29 2199023255552             0             0       0
+       30 4398046511104             0             0       0
+       31 8796093022208             0             0       0
+    Large allocations: 6582468608 [B]
+
+We can see a couple of things at glance here: free memory is very low,
+cache is fully evicted. These are sure signs of a real OOM. Note that
+free memory doesn't have to be 0 in the case of an OOM. It is enough for
+a size pool to not be able to allocate more memory spans and thus fail
+a critical allocations we cannot recover from. Also cache is fully
+evicted doesn't mean it has 0 memory, but when it has just a couple of
+KB, it is considered fully evicted. Cache is evicted by the seastar memory
+allocator's memory reclamation mechanism, which is hooked up with the
+cache and will start trying to free up memory by evicting the cache,
+once memory runs low.
+The cause of the OOM in this case is too many reads (1863) on
+`system.paxos`. This can be seen in the replica section of the report.
+The Coordinator and replica sections contain high level stats of the
+state of the coordinator and replica respectively. These stats summarize
+the usual suspects. Sometimes just looking at these is enough to
+determine what is the cause of the OOM. If not, one has to look at the
+last section: the dump of the state of the small pools and the page
+spans. What we are looking for is a small pool or a span size that owns
+excessive amounts of memory. Once found (there can be more then one) the
+next task is to identify what the objects owning that memory are. Note
+that in the case of smaller allocations, the memory is usually occupied
+directly by some C++ object, why in the case of larger allocations, these are
+usually potentially fragmented buffers, owned by some other object.
+
+If the `scylla memory` output alone is not enough to explain what
+exactly is eating up all the memory, there are some further usual
+suspects that should be examined.
+
+##### Exploded task- and smp-queues and lots of objects
+
+Look for exploded task- and smp-queues with:
+
+    scylla task-queues        # lists all task queues on the local shard
+    scylla smp-queues         # lists smp queues
+
+Look for lots of objects with:
+
+    scylla task_histogram -a  # histogram of all objects with a vtable
+
+A huge number in any of these reports can indicate problems of exploding
+concurrency, or a shard not being to keep up. This can easily lead to work
+accumulating, in the form of tasks and associated objects, to the point of OOM.
+
+##### Expensive reads
+
+Another usual suspect is the number of sstables. This can be queried via
+`scylla sstables`. A large number of sstables for a single table (in the
+hundreds or more) can cause an otherwise non-problematic amount of reads to use
+excessive amount of memory, potentially leading to OOM.
+
+Reversed- and unpaged-reads (or both, combined) can also consume a huge amount
+of memory, to the point of a fiew of such reads causing OOM. The way to find
+these is to inspect readers in memory, trying to locate their partition slice
+and having a look at their respective options:
+* `partition_slice::option::reversed` is set for a reversed query
+* `partition_slice::option::allow_short_read` is cleared for an unpaged
+  query
+
+Note that scylla have protections against reverse queries since 4.0, and against
+unpaged queries since 4.3.
+
+#####  Other reasons
+
+If none of the usual suspects are present then all bets are off and one has to
+try to identify who the objects of the exploded size-class or span-size belong
+to. Unfortunately there are no proven methods here: some try to inspect
+the memory patterns and try to make sense of it, some try to build an
+object graph out of these objects and make sense of that. For the
+latter, the following commands might be of help:
+
+    scylla small-objects         # lists objects from a small pool
+    scylla generate-object-graph # generates and visualizes an object graph
+
+Good luck, you are off the charted path here.
