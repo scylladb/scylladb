@@ -119,38 +119,43 @@ enum class vote_result {
     LOST,
 };
 
-// Candidate's state specific to election
-class votes {
-    size_t _cluster_size = 1;
-    // Number of responses to RequestVote RPC.
-    // The candidate always votes for self.
-    size_t _responded = 1;
-    // Number of granted votes.
-    // The candidate always votes for self.
-    size_t _granted = 1;
-    configuration _configuration;
+// State of election in a single quorum
+class election_tracker {
+    size_t _responded = 0;
+    size_t _granted = 0;
 public:
-    void set_configuration(configuration configuration) {
-        _configuration = std::move(configuration);
-        _cluster_size = _configuration.current.size();
-    }
-
-    void register_vote(server_id from, bool granted) {
+    void register_vote(bool granted) {
         _responded++;
         if (granted) {
             _granted++;
         }
     }
-
-    vote_result tally_votes() const {
-        auto quorum = _cluster_size / 2 + 1;
+    vote_result tally_votes(size_t cluster_size) const {
+        auto quorum = cluster_size / 2 + 1;
         if (_granted >= quorum) {
             return vote_result::WON;
         }
-        assert(_responded <= _cluster_size);
-        auto unknown = _cluster_size - _responded;
+        assert(_responded <= cluster_size);
+        auto unknown = cluster_size - _responded;
         return _granted + unknown >= quorum ? vote_result::UNKNOWN : vote_result::LOST;
     }
+    friend std::ostream& operator<<(std::ostream& os, const election_tracker& v);
+};
+
+// Candidate's state specific to election
+class votes {
+    configuration _configuration;
+    server_address_set _voters;
+    election_tracker _current;
+    election_tracker _previous;
+public:
+    const server_address_set& voters() const {
+        return _voters;
+    }
+    void set_configuration(configuration configuration);
+
+    void register_vote(server_id from, bool granted);
+    vote_result tally_votes() const;
 
     const configuration& get_configuration() const {
         return _configuration;
