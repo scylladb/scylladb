@@ -447,6 +447,9 @@ public:
     bool is_atomic() const { return _is_atomic; }
 };
 
+bool operator==(const column_mapping_entry& lhs, const column_mapping_entry& rhs);
+bool operator!=(const column_mapping_entry& lhs, const column_mapping_entry& rhs);
+
 // Encapsulates information needed for converting mutations between different schema versions.
 //
 // Unsafe to access across shards.
