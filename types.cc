@@ -1438,9 +1438,7 @@ struct validate_visitor {
         }
     }
     void operator()(const utf8_type_impl&) {
-        auto error_pos = with_linearized(v, [this] (bytes_view bv) {
-            return utils::utf8::validate_with_error_position(bv);
-        });
+        auto error_pos = utils::utf8::validate_with_error_position_fragmented(v);
         if (error_pos) {
             throw marshal_exception(format("Validation failed - non-UTF8 character in a UTF8 string, at byte offset {}", *error_pos));
         }
