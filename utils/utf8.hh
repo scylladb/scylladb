@@ -31,6 +31,19 @@ namespace utils {
 
 namespace utf8 {
 
+namespace internal {
+
+struct partial_validation_results {
+    bool error;
+    size_t unvalidated_tail;
+    size_t bytes_needed_for_tail;
+};
+
+partial_validation_results validate_partial(const uint8_t* data, size_t len);
+
+}
+
+
 bool validate(const uint8_t *data, size_t len);
 
 inline bool validate(bytes_view string) {

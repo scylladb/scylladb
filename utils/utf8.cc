@@ -56,6 +56,8 @@ namespace utils {
 
 namespace utf8 {
 
+using namespace internal;
+
 struct codepoint_status {
     size_t bytes_validated;
     bool error;
@@ -136,12 +138,6 @@ static inline std::optional<size_t> validate_naive(const uint8_t *data, size_t l
 
     return std::nullopt;
 }
-
-struct partial_validation_results {
-    bool error;
-    size_t unvalidated_tail;
-    size_t bytes_needed_for_tail;
-};
 
 static
 partial_validation_results
@@ -235,9 +231,8 @@ alignas(16) static const uint8_t s_range_adjust_tbl[] = {
 };
 
 // 2x ~ 4x faster than naive method
-static
 partial_validation_results
-validate_partial(const uint8_t *data, size_t len) {
+internal::validate_partial(const uint8_t *data, size_t len) {
     if (len >= 16) {
         uint8x16_t prev_input = vdupq_n_u8(0);
         uint8x16_t prev_first_len = vdupq_n_u8(0);
@@ -415,9 +410,8 @@ alignas(16) static const int8_t s_ef_fe_tbl[] = {
 };
 
 // 5x faster than naive method
-static
 partial_validation_results
-validate_partial(const uint8_t *data, size_t len) {
+internal::validate_partial(const uint8_t *data, size_t len) {
     if (len >= 16) {
         __m128i prev_input = _mm_set1_epi8(0);
         __m128i prev_first_len = _mm_set1_epi8(0);
@@ -545,7 +539,6 @@ validate_partial(const uint8_t *data, size_t len) {
 
 #else
 // No SIMD implementation for this arch, fallback to naive method
-static
 partial_validation_results
 validate_partial(const uint8_t *data, size_t len) {
     return validate_partial_naive(data, len);
