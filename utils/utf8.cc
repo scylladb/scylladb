@@ -137,6 +137,29 @@ static inline std::optional<size_t> validate_naive(const uint8_t *data, size_t l
     return std::nullopt;
 }
 
+struct partial_validation_results {
+    bool error;
+    size_t unvalidated_tail;
+    size_t bytes_needed_for_tail;
+};
+
+static
+partial_validation_results
+validate_partial_naive(const uint8_t *data, size_t len) {
+    while (len) {
+        auto cs = evaluate_codepoint(data, len);
+        data += cs.bytes_validated;
+        len -= cs.bytes_validated;
+        if (cs.error) {
+            return partial_validation_results{.error = true};
+        }
+        if (cs.more_bytes_needed) {
+            return partial_validation_results{.unvalidated_tail = len, .bytes_needed_for_tail = cs.more_bytes_needed};
+        }
+    }
+    return partial_validation_results{};
+}
+
 #if defined(__aarch64__)
 #include <arm_neon.h>
 
@@ -212,7 +235,9 @@ alignas(16) static const uint8_t s_range_adjust_tbl[] = {
 };
 
 // 2x ~ 4x faster than naive method
-bool validate(const uint8_t *data, size_t len) {
+static
+partial_validation_results
+validate_partial(const uint8_t *data, size_t len) {
     if (len >= 16) {
         uint8x16_t prev_input = vdupq_n_u8(0);
         uint8x16_t prev_first_len = vdupq_n_u8(0);
@@ -308,7 +333,7 @@ bool validate(const uint8_t *data, size_t len) {
 
         // Delay error check till loop ends
         if (vmaxvq_u8(error)) {
-            return false;
+            return partial_validation_results{.error = true};
         }
 
         // Find previous token (not 80~BF)
@@ -328,8 +353,8 @@ bool validate(const uint8_t *data, size_t len) {
         len += lookahead;
     }
 
-    // Check for no error position in remaining bytes with naive method
-    return !validate_naive(data, len);
+    // Continue with remaining bytes with naive method
+    return validate_partial_naive(data, len);
 }
 
 #elif defined(__x86_64__)
@@ -390,7 +415,9 @@ alignas(16) static const int8_t s_ef_fe_tbl[] = {
 };
 
 // 5x faster than naive method
-bool validate(const uint8_t *data, size_t len) {
+static
+partial_validation_results
+validate_partial(const uint8_t *data, size_t len) {
     if (len >= 16) {
         __m128i prev_input = _mm_set1_epi8(0);
         __m128i prev_first_len = _mm_set1_epi8(0);
@@ -494,7 +521,7 @@ bool validate(const uint8_t *data, size_t len) {
         int error_reduced =
             _mm_movemask_epi8(_mm_cmpeq_epi8(error, _mm_set1_epi8(0)));
         if (error_reduced != 0xFFFF) {
-            return false;
+            return partial_validation_results{.error = true};
         }
 
         // Find previous token (not 80~BF)
@@ -512,17 +539,23 @@ bool validate(const uint8_t *data, size_t len) {
         len += lookahead;
     }
 
-    // Check for no error position in remaining bytes with naive method
-    return !validate_naive(data, len);
+    // Continue with remaining bytes with naive method
+    return validate_partial_naive(data, len);
 }
 
 #else
 // No SIMD implementation for this arch, fallback to naive method
-bool validate(const uint8_t *data, size_t len) {
-    // Check for no error position
-    return !validate_naive(data, len);
+static
+partial_validation_results
+validate_partial(const uint8_t *data, size_t len) {
+    return validate_partial_naive(data, len);
 }
 #endif
+
+bool validate(const uint8_t* data, size_t len) {
+    auto pvr = validate_partial(data, len);
+    return !pvr.error && !pvr.unvalidated_tail;
+}
 
 std::optional<size_t> validate_with_error_position(const uint8_t *data, size_t len) {
     // First pass - validate data (using optimized code)
