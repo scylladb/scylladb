@@ -56,21 +56,29 @@ namespace utils {
 
 namespace utf8 {
 
-// 3x faster than boost utf_to_utf
-static inline std::optional<size_t> validate_naive(const uint8_t *data, size_t len) {
-    size_t pos = 0;
+struct codepoint_status {
+    size_t bytes_validated;
+    bool error;
+    uint8_t more_bytes_needed;
+};
 
-    while (len) {
-        size_t bytes;
-        const uint8_t byte1 = data[0];
-
+static
+codepoint_status
+inline
+evaluate_codepoint(const uint8_t* data, size_t len) {
+    const uint8_t byte1 = data[0];
+    static const uint8_t len_from_first_nibble[16] = { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 3, 4 };
+    auto codepoint_len = len_from_first_nibble[byte1 >> 4];
+    if (codepoint_len > len) {
+        return codepoint_status{.more_bytes_needed = uint8_t(codepoint_len - len)};
+    } else {
         if (byte1 <= 0x7F) {
             // 00..7F
-            bytes = 1;
+            return codepoint_status{.bytes_validated = codepoint_len};
         } else if (len >= 2 && byte1 >= 0xC2 && byte1 <= 0xDF &&
                 (int8_t)data[1] <= (int8_t)0xBF) {
             // C2..DF, 80..BF
-            bytes = 2;
+            return codepoint_status{.bytes_validated = codepoint_len};
         } else if (len >= 3) {
             const uint8_t byte2 = data[1];
 
@@ -87,7 +95,7 @@ static inline std::optional<size_t> validate_naive(const uint8_t *data, size_t l
                      (byte1 == 0xED && byte2 <= 0x9F) ||
                      // EE..EF, 80..BF, 80..BF
                      (byte1 >= 0xEE && byte1 <= 0xEF))) {
-                bytes = 3;
+                return codepoint_status{.bytes_validated = codepoint_len};
             } else if (len >= 4) {
                 // Is byte4 between 0x80 ~ 0xBF
                 const int byte4_ok = (int8_t)data[3] <= (int8_t)0xBF;
@@ -99,20 +107,31 @@ static inline std::optional<size_t> validate_naive(const uint8_t *data, size_t l
                          (byte1 >= 0xF1 && byte1 <= 0xF3) ||
                          // F4, 80..8F, 80..BF, 80..BF
                          (byte1 == 0xF4 && byte2 <= 0x8F))) {
-                    bytes = 4;
+                    return codepoint_status{.bytes_validated = codepoint_len};
                 } else {
-                    return pos;
+                    return codepoint_status{.error = true};
                 }
             } else {
-                return pos;
+                return codepoint_status{.error = true};
             }
         } else {
+            return codepoint_status{.error = true};
+        }
+    }
+}
+
+// 3x faster than boost utf_to_utf
+static inline std::optional<size_t> validate_naive(const uint8_t *data, size_t len) {
+    size_t pos = 0;
+
+    while (len) {
+        auto cs = evaluate_codepoint(data, len);
+        pos += cs.bytes_validated;
+        data += cs.bytes_validated;
+        len -= cs.bytes_validated;
+        if (cs.error || cs.more_bytes_needed) {
             return pos;
         }
-
-        len -= bytes;
-        pos += bytes;
-        data += bytes;
     }
 
     return std::nullopt;
