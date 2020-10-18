@@ -1530,7 +1530,7 @@ void gossiper::handle_major_state_change(inet_address ep, const endpoint_state& 
 }
 
 bool gossiper::is_dead_state(const endpoint_state& eps) const {
-    sstring state = get_gossip_status(eps);
+    auto state = get_gossip_status(eps);
     for (auto& deadstate : DEAD_STATES) {
         if (state == deadstate) {
             return true;
@@ -1548,7 +1548,7 @@ bool gossiper::is_normal(const inet_address& endpoint) const {
 }
 
 bool gossiper::is_silent_shutdown_state(const endpoint_state& ep_state) const{
-    sstring state = get_gossip_status(ep_state);
+    auto state = get_gossip_status(ep_state);
     for (auto& deadstate : SILENT_SHUTDOWN_STATES) {
         if (state == deadstate) {
             return true;
@@ -2139,24 +2139,26 @@ void gossiper::force_newer_generation() {
     }
 }
 
-static sstring do_get_gossip_status(const gms::versioned_value* app_state) {
+static std::string_view do_get_gossip_status(const gms::versioned_value* app_state) noexcept {
     if (!app_state) {
         return gms::versioned_value::STATUS_UNKNOWN;
     }
-    auto value = app_state->value;
-    std::vector<sstring> pieces;
-    boost::split(pieces, value, boost::is_any_of(","));
-    if (pieces.empty()) {
+    const auto& value = app_state->value;
+    auto pos = value.find(',');
+    if (!value.size() || !pos) {
         return gms::versioned_value::STATUS_UNKNOWN;
     }
-    return pieces[0];
+    if (pos == sstring::npos) {
+        return std::string_view(value);
+    }
+    return std::string_view(value.data(), pos);
 }
 
-sstring gossiper::get_gossip_status(const endpoint_state& ep_state) const {
+std::string_view gossiper::get_gossip_status(const endpoint_state& ep_state) const noexcept {
     return do_get_gossip_status(ep_state.get_application_state_ptr(application_state::STATUS));
 }
 
-sstring gossiper::get_gossip_status(const inet_address& endpoint) const {
+std::string_view gossiper::get_gossip_status(const inet_address& endpoint) const noexcept {
     return do_get_gossip_status(get_application_state_ptr(endpoint, application_state::STATUS));
 }
 
@@ -2235,10 +2237,10 @@ bool gossiper::is_safe_for_bootstrap(inet_address endpoint) {
         logger.debug("is_safe_for_bootstrap: node={}, status=no state in gossip, allowed_to_bootstrap={}", endpoint, allowed);
         return allowed;
     }
-    sstring status = get_gossip_status(*eps);
-    std::unordered_set<sstring> allowed_statuses{
-        sstring(versioned_value::STATUS_LEFT),
-        sstring(versioned_value::REMOVED_TOKEN),
+    auto status = get_gossip_status(*eps);
+    std::unordered_set<std::string_view> allowed_statuses{
+        versioned_value::STATUS_LEFT,
+        versioned_value::REMOVED_TOKEN,
     };
     allowed = allowed_statuses.contains(status);
     logger.debug("is_safe_for_bootstrap: node={}, status={}, allowed_to_bootstrap={}", endpoint, status, allowed);

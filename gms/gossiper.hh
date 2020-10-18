@@ -541,8 +541,8 @@ public:
     void mark_as_shutdown(const inet_address& endpoint);
     void force_newer_generation();
 public:
-    sstring get_gossip_status(const endpoint_state& ep_state) const;
-    sstring get_gossip_status(const inet_address& endpoint) const;
+    std::string_view get_gossip_status(const endpoint_state& ep_state) const noexcept;
+    std::string_view get_gossip_status(const inet_address& endpoint) const noexcept;
 public:
     future<> wait_for_gossip_to_settle();
     future<> wait_for_range_setup();
