@@ -529,7 +529,9 @@ indexed_table_select_statement::do_execute_base_query(
 
     base_query_state query_state{cmd->get_row_limit() * queried_ranges_count, std::move(ranges_to_vnodes)};
     return do_with(std::move(query_state), [this, &proxy, &state, &options, cmd, timeout] (auto&& query_state) {
-        auto& [merger, ranges_to_vnodes, concurrency] = query_state;
+        auto& merger = query_state.merger;
+        auto& ranges_to_vnodes = query_state.ranges_to_vnodes;
+        auto& concurrency = query_state.concurrency;
         return repeat([this, &ranges_to_vnodes, &merger, &proxy, &state, &options, &concurrency, cmd, timeout]() {
             // Starting with 1 range, we check if the result was a short read, and if not,
             // we continue exponentially, asking for 2x more ranges than before
@@ -881,7 +883,10 @@ lw_shared_ptr<const service::pager::paging_state> indexed_table_select_statement
     if (!results->row_count() || *results->row_count() == 0) {
         return std::move(paging_state);
     }
-    auto [last_base_pk, last_base_ck] = result_view.get_last_partition_and_clustering_key();
+
+    auto&& last_partition_and_clustering_key = result_view.get_last_partition_and_clustering_key();
+    auto& last_base_pk = std::get<0>(last_partition_and_clustering_key);
+    auto& last_base_ck = std::get<1>(last_partition_and_clustering_key);
 
     bytes_opt indexed_column_value = _used_index_restrictions->value_for(*cdef, options);
 

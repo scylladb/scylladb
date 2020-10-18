@@ -61,7 +61,11 @@ BOOST_AUTO_TEST_CASE(test_atomic_cell) {
     };
 
     for (auto tc : cases) {
-        auto [live, fixed_size, value, expiring, counter_update] = tc;
+        auto& live = tc.live;
+        auto& fixed_size = tc.fixed_size;
+        auto& value = tc.value;
+        auto& expiring = tc.expiring;
+        auto& counter_update = tc.counter_update;
         auto timestamp = tests::random::get_int<api::timestamp_type>();
         auto ti = [&] {
             if (fixed_size) {

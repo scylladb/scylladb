@@ -1088,7 +1088,7 @@ struct process_row_visitor {
 
         // cdc$deleted_col, cdc$deleted_elements_col, col
         using result_t = std::tuple<bool, std::vector<bytes_view>, bytes_opt>;
-        auto [is_column_delete, deleted_keys, added_cells] = visit(*cdef.type, make_visitor(
+        auto result = visit(*cdef.type, make_visitor(
             [&] (const set_type_impl&) -> result_t {
                 _touched_parts.set<stats::part_type::SET>();
 
@@ -1178,6 +1178,9 @@ struct process_row_visitor {
                 throw std::runtime_error(format("cdc process_change: unknown type {}", o.name()));
             }
         ));
+        auto&& is_column_delete = std::get<0>(result);
+        auto&& deleted_keys = std::get<1>(result);
+        auto&& added_cells = std::get<2>(result);
 
         // FIXME: we're doing redundant work: first we serialize the set of deleted keys into a blob,
         // then we deserialize again when merging images below

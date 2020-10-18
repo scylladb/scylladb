@@ -2121,7 +2121,7 @@ SEASTAR_THREAD_TEST_CASE(test_foreign_reader_destroyed_with_pending_read_ahead) 
     do_with_cql_env([] (cql_test_env& env) -> future<> {
         const auto shard_of_interest = (this_shard_id() + 1) % smp::count;
         auto s = simple_schema();
-        auto [remote_control, remote_reader] = smp::submit_to(shard_of_interest, [gs = global_simple_schema(s)] {
+        auto remote_control_remote_reader = smp::submit_to(shard_of_interest, [gs = global_simple_schema(s)] {
             using control_type = foreign_ptr<std::unique_ptr<puppet_reader::control>>;
             using reader_type = foreign_ptr<std::unique_ptr<flat_mutation_reader>>;
 
@@ -2133,6 +2133,9 @@ SEASTAR_THREAD_TEST_CASE(test_foreign_reader_destroyed_with_pending_read_ahead) 
 
             return make_ready_future<std::tuple<control_type, reader_type>>(std::tuple(std::move(control), std::move(reader)));
         }).get0();
+
+        auto& remote_control = std::get<0>(remote_control_remote_reader);
+        auto& remote_reader = std::get<1>(remote_control_remote_reader);
 
         {
             auto reader = make_foreign_reader(s.schema(), tests::make_permit(), std::move(remote_reader));
@@ -2269,7 +2272,10 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_destroyed_with_pending
     do_with_cql_env([&] (cql_test_env& env) -> future<> {
         auto s = simple_schema();
 
-        auto [reader, sharder, remote_controls, _] = prepare_multishard_reader_for_read_ahead_test(s, operations_gate);
+        auto reader_sharder_remote_controls__ = prepare_multishard_reader_for_read_ahead_test(s, operations_gate);
+        auto&& reader = reader_sharder_remote_controls__.reader;
+        auto&& sharder = reader_sharder_remote_controls__.sharder;
+        auto&& remote_controls = reader_sharder_remote_controls__.remote_controls;
 
         // This will read shard 0's buffer only
         reader.fill_buffer(db::no_timeout).get();
@@ -2322,7 +2328,11 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_fast_forwarded_with_pe
     do_with_cql_env([&] (cql_test_env& env) -> future<> {
         auto s = simple_schema();
 
-        auto [reader, sharder, remote_controls, pr] = prepare_multishard_reader_for_read_ahead_test(s, operations_gate);
+        auto reader_sharder_remote_controls_pr = prepare_multishard_reader_for_read_ahead_test(s, operations_gate);
+        auto&& reader = reader_sharder_remote_controls_pr.reader;
+        auto&& sharder = reader_sharder_remote_controls_pr.sharder;
+        auto&& remote_controls = reader_sharder_remote_controls_pr.remote_controls;
+        auto&& pr = reader_sharder_remote_controls_pr.pr;
 
         reader.fill_buffer(db::no_timeout).get();
         BOOST_REQUIRE(reader.is_buffer_full());
