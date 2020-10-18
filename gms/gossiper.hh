@@ -147,8 +147,8 @@ private:
     std::unordered_map<gms::inet_address, syn_msg_pending> _syn_handlers;
     std::unordered_map<gms::inet_address, ack_msg_pending> _ack_handlers;
 public:
-    sstring get_cluster_name();
-    sstring get_partitioner_name();
+    const sstring& get_cluster_name() const noexcept;
+    const sstring& get_partitioner_name() const noexcept;
     inet_address get_broadcast_address() const {
         return utils::fb_utilities::get_broadcast_address();
     }

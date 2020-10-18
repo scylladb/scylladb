@@ -79,7 +79,7 @@ netw::msg_addr gossiper::get_msg_addr(inet_address to) const noexcept {
     return msg_addr{to, _default_cpuid};
 }
 
-sstring gossiper::get_cluster_name() {
+const sstring& gossiper::get_cluster_name() const noexcept {
     return _cluster_name;
 }
 
@@ -87,7 +87,7 @@ void gossiper::set_cluster_name(sstring name) {
     _cluster_name = name;
 }
 
-sstring gossiper::get_partitioner_name() {
+const sstring& gossiper::get_partitioner_name() const noexcept {
     return _cfg.partitioner();
 }
 
