@@ -58,7 +58,7 @@ public:
     // Can be called on a leader only, otherwise throws not_a_leader.
     // Cannot be called until previous add/remove server completes
     // otherwise conf_change_in_progress exception is thrown.
-    virtual future<> add_server(server_id id, bytes node_info, clock_type::duration timeout) = 0;
+    virtual future<> add_server(server_id id, server_info node_info, clock_type::duration timeout) = 0;
 
     // Remove a server from the cluster. If the server is not a member
     // of the cluster does nothing. Can be called on a leader only
