@@ -98,6 +98,7 @@ public:
         if (_seen >= _apply_entries) {
             _done.set_value();
         }
+        tlogger.debug("sm::apply[{}] got {}/{} entries", _id, _seen, _apply_entries);
         return make_ready_future<>();
     }
 
@@ -319,8 +320,9 @@ void apply_changes(raft::server_id id, const std::vector<raft::command_cref>& co
 //  - Configuration change
 using entries = unsigned;
 using new_leader = int;
+using partition = std::vector<size_t>;
 // TODO: config change
-using update = std::variant<entries, new_leader>;
+using update = std::variant<entries, new_leader, partition>;
 
 struct initial_log {
     std::vector<log_entry> le;
@@ -415,8 +417,33 @@ future<int> run_test(test_case test) {
             server_disconnected.erase(raft::server_id{utils::UUID(0, leader + 1)});
             tlogger.debug("confirmed leader on {}", next_leader);
             leader = next_leader;
+        } else if (std::holds_alternative<partition>(update)) {
+            auto p = std::get<partition>(update);
+            std::unordered_set<size_t> connected_servers(p.begin(), p.end());
+            for (size_t s = 0; s < test.nodes; ++s) {
+                if (connected_servers.find(s) == connected_servers.end()) {
+                    // Disconnect servers not in main partition
+                    server_disconnected.insert(raft::server_id{utils::UUID(0, s + 1)});
+                }
+            }
+            for (auto s: p) {
+                // Re connect servers in live partition
+                server_disconnected.erase(raft::server_id{utils::UUID(0, s + 1)});
+            }
+            if (connected_servers.find(leader) == connected_servers.end() && p.size() > 0) {
+                // Old leader disconnected, new leader is first server specified in partition
+                auto next_leader = p[0];
+                for (auto s: p) {
+                    rafts[s].first->elapse_election();
+                }
+                co_await rafts[next_leader].first->elect_me_leader();
+                leader = next_leader;
+                tlogger.debug("confirmed new leader on {}", next_leader);
+            }
         }
     }
+
+    server_disconnected.clear();    // Re-connect all servers
 
     if (next_val < test.total_values) {
         // Send remaining updates
@@ -564,6 +591,16 @@ int main(int argc, char* argv[]) {
         {.name = "take_snapshot", .nodes = 2,
          .config = {{.snapshot_threshold = 10, .snapshot_trailing = 5}, {.snapshot_threshold = 20, .snapshot_trailing = 10}},
          .updates = {entries{100}}},
+        // 2 nodes doing simple replication/snapshoting while leader's log size is limited
+        {.name = "backpressure", .type = sm_type::SUM, .nodes = 2,
+         .config = {{.snapshot_threshold = 10, .snapshot_trailing = 5, .max_log_length = 20}, {.snapshot_threshold = 20, .snapshot_trailing = 10}},
+         .updates = {entries{100}}},
+        // 3 nodes, add entries, drop leader 0, add entries [implicit re-join all]
+        {.name = "drops_01", .nodes = 3,
+         .updates = {entries{4},partition{1,2},entries{4}}},
+        // 3 nodes, add entries, drop follower 1, add entries [implicit re-join all]
+        {.name = "drops_02", .nodes = 3,
+         .updates = {entries{4},partition{0,2},entries{4},partition{2,1}}},
     };
 
     return app.run(argc, argv, [&replication_tests, &app] () -> future<int> {
