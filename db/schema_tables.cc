@@ -1182,7 +1182,7 @@ static schema_diff diff_table_or_view(distributed<service::storage_proxy>& proxy
         auto s_before = create_schema(std::move(before.at(key)));
         auto s = create_schema(std::move(after.at(key)));
         slogger.info("Altering {}.{} id={} version={}", s->ks_name(), s->cf_name(), s->id(), s->version());
-        d.altered.emplace_back(s_before, s);
+        d.altered.emplace_back(schema_diff::altered_schema{s_before, s});
     }
     return d;
 }
