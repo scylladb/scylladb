@@ -182,11 +182,14 @@ public:
         net[_id] = this;
     }
     virtual future<> send_snapshot(raft::server_id id, const raft::install_snapshot& snap) {
+        if (is_disconnected(id) || is_disconnected(_id)) {
+            return make_ready_future<>();
+        }
         snapshots[id] = snapshots[_id];
         return net[id]->_client->apply_snapshot(_id, std::move(snap));
     }
     virtual future<> send_append_entries(raft::server_id id, const raft::append_request_send& append_request) {
-        if (drop_replication && !(rand() % 5)) {
+        if (is_disconnected(id) || is_disconnected(_id) || (drop_replication && !(rand() % 5))) {
             return make_ready_future<>();
         }
         raft::append_request_recv req;
@@ -203,17 +206,23 @@ public:
         return make_ready_future<>();
     }
     virtual future<> send_append_entries_reply(raft::server_id id, const raft::append_reply& reply) {
-        if (drop_replication && !(rand() % 5)) {
+        if (is_disconnected(id) || is_disconnected(_id) || (drop_replication && !(rand() % 5))) {
             return make_ready_future<>();
         }
         net[id]->_client->append_entries_reply(_id, std::move(reply));
         return make_ready_future<>();
     }
     virtual future<> send_vote_request(raft::server_id id, const raft::vote_request& vote_request) {
+        if (is_disconnected(id) || is_disconnected(_id)) {
+            return make_ready_future<>();
+        }
         net[id]->_client->request_vote(_id, std::move(vote_request));
         return make_ready_future<>();
     }
     virtual future<> send_vote_reply(raft::server_id id, const raft::vote_reply& vote_reply) {
+        if (is_disconnected(id) || is_disconnected(_id)) {
+            return make_ready_future<>();
+        }
         net[id]->_client->request_vote_reply(_id, std::move(vote_reply));
         return make_ready_future<>();
     }
