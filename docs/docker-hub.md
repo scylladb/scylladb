@@ -341,6 +341,13 @@ The `--authorizer` command lines option allows to provide the authorizer class S
 
 **Since: 2.3**
 
+### Additional scylla command argument
+
+You can provide any additional argument that is supported by scylla (https://github.com/scylladb/scylla/blob/master/conf/scylla.yaml)
+Example: `--commitlog_sync batch --commitlog_sync_batch_window_in_ms 2`
+
+**Since: 4.3**
+
 ## JMX parameters
 
 JMX Scylla service is initialized from the `/scylla-jmx-service.sh` on
