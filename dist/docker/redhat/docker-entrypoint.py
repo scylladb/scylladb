@@ -18,9 +18,10 @@ def signal_handler(signum, frame):
 
 signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
+
 try:
-    arguments = commandlineparser.parse()
-    setup = scyllasetup.ScyllaSetup(arguments)
+    arguments, extra_arguments = commandlineparser.parse()
+    setup = scyllasetup.ScyllaSetup(arguments, extra_arguments=extra_arguments)
     setup.developerMode()
     setup.cpuSet()
     setup.io()

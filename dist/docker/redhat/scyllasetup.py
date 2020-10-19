@@ -5,7 +5,7 @@ import os
 
 
 class ScyllaSetup:
-    def __init__(self, arguments):
+    def __init__(self, arguments, extra_arguments):
         self._developerMode = arguments.developerMode
         self._seeds = arguments.seeds
         self._cpuset = arguments.cpuset
@@ -30,6 +30,7 @@ class ScyllaSetup:
         self._endpointSnitch = arguments.endpointSnitch
         self._replaceAddressFirstBoot = arguments.replaceAddressFirstBoot
         self._io_setup = arguments.io_setup
+        self._extra_args = extra_arguments
 
     def _run(self, *args, **kwargs):
         logging.info('running: {}'.format(args))
@@ -152,4 +153,4 @@ class ScyllaSetup:
         args += ["--blocked-reactor-notify-ms 999999999"]
 
         with open("/etc/scylla.d/docker.conf", "w") as cqlshrc:
-            cqlshrc.write("SCYLLA_DOCKER_ARGS=\"%s\"\n" % " ".join(args))
+            cqlshrc.write("SCYLLA_DOCKER_ARGS=\"%s\"\n" % (" ".join(args) + " " + " ".join(self._extra_args)))
