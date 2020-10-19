@@ -184,10 +184,8 @@ SEASTAR_THREAD_TEST_CASE(tuple_of_list) {
         cquery_nofail(e, "insert into t (p, l1, l2) values (2, [21,22], [201,202])");
         require_rows(e, "select * from t where (l1,l2)<([],[])", {});
         require_rows(e, "select l1 from t where (l1,l2)<([20],[200])", {{LI({11, 12})}});
-        require_rows(e, "select l1 from t where (l1,l2)>=([11,12],[101,102])",
-                     {{LI({11, 12})}, {LI({21, 22})}});
-        require_rows(e, "select l1 from t where (l1,l2)<([11,12],[101,103])",
-                     {{LI({11, 12})}});
+        require_rows(e, "select l1 from t where (l1,l2)>=([11,12],[101,102])", {{LI({11, 12})}, {LI({21, 22})}});
+        require_rows(e, "select l1 from t where (l1,l2)<([11,12],[101,103])", {{LI({11, 12})}});
     }).get();
 }
 
@@ -351,8 +349,7 @@ SEASTAR_THREAD_TEST_CASE(multi_col_eq) {
         require_rows(e, "select c1 from t where (c1)=('one')", {{T("one")}});
         require_rows(e, "select c1 from t where (c1)=('x')", {});
         auto stmt = e.prepare("select p from t where (c1,c2)=:t").get0();
-        require_rows(e, stmt, {{"t"}}, {make_tuple({utf8_type, float_type}, {sstring("two"), 12.f})},
-                         {{I(2)}});
+        require_rows(e, stmt, {{"t"}}, {make_tuple({utf8_type, float_type}, {sstring("two"), 12.f})}, {{I(2)}});
         require_rows(e, stmt, {{"t"}}, {make_tuple({utf8_type, float_type}, {sstring("x"), 12.f})}, {});
         stmt = e.prepare("select p from t where (c1,c2)=('two',?)").get0();
         require_rows(e, stmt, {}, {F(12)}, {{I(2)}});
@@ -375,15 +372,12 @@ SEASTAR_THREAD_TEST_CASE(multi_col_slice) {
         cquery_nofail(e, "insert into t (p, c1, c2) values (2, 'b', 2);");
         cquery_nofail(e, "insert into t (p, c1, c2) values (3, 'c', 13);");
         require_rows(e, "select c2 from t where (c1,c2)>('a',20)", {{F(2)}, {F(13)}});
-        require_rows(e, "select p from t where (c1,c2)>=('a',20) and (c1,c2)<('b',3)",
-                     {{I(2)}});
+        require_rows(e, "select p from t where (c1,c2)>=('a',20) and (c1,c2)<('b',3)", {{I(2)}});
         require_rows(e, "select * from t where (c1,c2)<('a',11)", {});
         require_rows(e, "select c1 from t where (c1,c2)<('a',12)", {{T("a")}});
         require_rows(e, "select c1 from t where (c1)>=('c')", {{T("c")}});
-        require_rows(e, "select c1 from t where (c1,c2)<=('c',13)",
-                     {{T("a")}, {T("b")}, {T("c")}});
-        require_rows(e, "select c1 from t where (c1,c2)>=('b',2) and (c1,c2)<=('b',2)",
-                     {{T("b")}});
+        require_rows(e, "select c1 from t where (c1,c2)<=('c',13)", {{T("a")}, {T("b")}, {T("c")}});
+        require_rows(e, "select c1 from t where (c1,c2)>=('b',2) and (c1,c2)<=('b',2)", {{T("b")}});
         auto stmt = e.prepare("select c1 from t where (c1,c2)<?").get0();
         require_rows(e, stmt, {}, {make_tuple({utf8_type, float_type}, {sstring("a"), 12.f})}, {{T("a")}});
         require_rows(e, stmt, {}, {make_tuple({utf8_type, float_type}, {sstring("a"), 11.f})}, {});
@@ -406,8 +400,7 @@ SEASTAR_THREAD_TEST_CASE(multi_col_slice_reversed) {
         cquery_nofail(e, "insert into t(p,c1,c2) values (1,11,21)");
         cquery_nofail(e, "insert into t(p,c1,c2) values (1,12,22)");
         cquery_nofail(e, "insert into t(p,c1,c2) values (1,12,23)");
-        require_rows(e, "select c1 from t where (c1,c2)>(10,99)",
-                         {{I(11)}, {I(12)}, {I(12)}});
+        require_rows(e, "select c1 from t where (c1,c2)>(10,99)", {{I(11)}, {I(12)}, {I(12)}});
         require_rows(e, "select c1 from t where (c1,c2)<(12,0)", {{I(11)}});
         require_rows(e, "select c1 from t where (c1,c2)>(12,22)", {{I(12)}});
         require_rows(e, "select c1 from t where (c1)>(12)", {});
@@ -687,8 +680,7 @@ SEASTAR_THREAD_TEST_CASE(list_in) {
         cquery_nofail(e, "insert into t (p, c) values ([4], [])");
         cquery_nofail(e, "insert into t (p, c) values ([5], [51,52,53])");
         require_rows(e, "select c from t where c in ([11,12],[11,13])", {});
-        require_rows(e, "select c from t where c in ([11,12,13],[11,13,12])",
-                         {{LI({11,12,13})}});
+        require_rows(e, "select c from t where c in ([11,12,13],[11,13,12])", {{LI({11,12,13})}});
         require_rows(e, "select c from t where c in ([11,12,13],[11,13,12],[41,42,43])",
                          {{LI({11,12,13})}, {LI({41,42,43})}});
         require_rows(e, "select c from t where p in ([1],[2],[4]) and c in ([11,12,13], [41,42,43])",
@@ -705,8 +697,7 @@ SEASTAR_THREAD_TEST_CASE(set_in) {
         cquery_nofail(e, "insert into t (p, c, r) values ({1,11}, {22,202}, '2')");
         require_rows(e, "select * from t where c in ({222}, {21})", {});
         require_rows(e, "select c from t where c in ({222}, {21,201})", {{SI({21, 201})}});
-        require_rows(e, "select c from t where c in ({22,202}, {21,201})",
-                         {{SI({21, 201})}, {SI({22, 202})}});
+        require_rows(e, "select c from t where c in ({22,202}, {21,201})", {{SI({21, 201})}, {SI({22, 202})}});
         require_rows(e, "select c from t where c in ({222}, {21,201}) and r='' allow filtering", {});
         require_rows(e, "select c from t where c in ({222}, {21,201}) and r='x' allow filtering", {});
         require_rows(e, "select c from t where c in ({22,202}, {21,201}) and r='2' allow filtering",
@@ -733,8 +724,8 @@ SEASTAR_THREAD_TEST_CASE(map_in) {
                          {{c1b, I(12)}});
         require_rows(e, "select c from t where c in ({10:11}, {10:10}, {10:10,11:11}) and r in (12,null) "
                          "allow filtering", {{c1b, I(12)}});
-        require_rows(e, "select c from t where c in ({10:11}, {10:10}, {10:10,11:11}) and p in ({1:1},{2:2})"
-                         , {{c1a}, {c1b}});
+        require_rows(e, "select c from t where c in ({10:11}, {10:10}, {10:10,11:11}) and p in ({1:1},{2:2})",
+                     {{c1a}, {c1b}});
     }).get();
 }
 
@@ -746,17 +737,13 @@ SEASTAR_THREAD_TEST_CASE(multi_col_in) {
         require_rows(e, "select ck1 from t where (ck1,ck2) in ((11,21),(12,22))", {{I(11)}});
         require_rows(e, "select ck1 from t where (ck1,ck2) in ((11,21))", {{I(11)}});
         cquery_nofail(e, "insert into t(pk,ck1,ck2) values (2,12,22)");
-        require_rows(e, "select ck1 from t where (ck1,ck2) in ((11,21),(12,22))",
-                         {{I(11)}, {I(12)}});
+        require_rows(e, "select ck1 from t where (ck1,ck2) in ((11,21),(12,22))", {{I(11)}, {I(12)}});
         cquery_nofail(e, "insert into t(pk,ck1,ck2) values (3,13,23)");
-        require_rows(e, "select ck1 from t where (ck1,ck2) in ((11,21),(12,22))",
-                         {{I(11)}, {I(12)}});
+        require_rows(e, "select ck1 from t where (ck1,ck2) in ((11,21),(12,22))", {{I(11)}, {I(12)}});
         require_rows(e, "select ck1 from t where (ck1,ck2) in ((13,23))", {{I(13)}});
         cquery_nofail(e, "insert into t(pk,ck1,ck2,r) values (4,13,23,'a')");
-        require_rows(e, "select pk from t where (ck1,ck2) in ((13,23))",
-                         {{I(3)}, {I(4)}});
-        require_rows(e, "select pk from t where (ck1) in ((13),(33),(44))",
-                         {{I(3)}, {I(4)}});
+        require_rows(e, "select pk from t where (ck1,ck2) in ((13,23))", {{I(3)}, {I(4)}});
+        require_rows(e, "select pk from t where (ck1) in ((13),(33),(44))", {{I(3)}, {I(4)}});
         // TODO: uncomment when #6200 is fixed.
         // require_rows(e, "select pk from t where (ck1,ck2) in ((13,23)) and r='a' allow filtering",
         //                  {{I(4), I(13), F(23), T("a")}});

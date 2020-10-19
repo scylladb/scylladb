@@ -105,8 +105,7 @@ SEASTAR_TEST_CASE(test_group_by_syntax) {
         BOOST_REQUIRE_EXCEPTION(
                 e.execute_cql("select * from t1 where p1 > 0 group by p2 allow filtering").get(), ire, order);
         BOOST_REQUIRE_EXCEPTION(
-                e.execute_cql("select * from t1 where (c1,c2) > (0,0) group by p1, p2, c3").get(),
-                ire, order);
+                e.execute_cql("select * from t1 where (c1,c2) > (0,0) group by p1, p2, c3").get(), ire, order);
         BOOST_REQUIRE_EXCEPTION(
                 e.execute_cql("select * from t1 where p1>0 and p2=0 group by c1 allow filtering").get(), ire, order);
         // Even when GROUP BY lists all primary-key columns:
