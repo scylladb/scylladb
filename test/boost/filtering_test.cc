@@ -65,16 +65,6 @@ SEASTAR_TEST_CASE(test_allow_filtering_check) {
             e.execute_cql(q + " ALLOW FILTERING").get();
         }
 
-        queries = {
-            "SELECT * FROM t WHERE c = 2",
-            "SELECT * FROM t WHERE c <= 4"
-        };
-
-        for (const sstring& q : queries) {
-            BOOST_CHECK_THROW(e.execute_cql(q).get(), exceptions::invalid_request_exception);
-            e.execute_cql(q + " ALLOW FILTERING").get();
-        }
-
         e.execute_cql("CREATE TABLE t2 (p int PRIMARY KEY, a int, b int);").get();
         e.require_table_exists("ks", "t2").get();
         e.execute_cql("CREATE INDEX ON t2(a)").get();
@@ -344,10 +334,7 @@ SEASTAR_TEST_CASE(test_allow_filtering_clustering_column) {
             int32_type->decompose(1)
         }});
 
-        BOOST_CHECK_THROW(e.execute_cql("SELECT * FROM t WHERE c = 2").get(), exceptions::invalid_request_exception);
-        BOOST_CHECK_THROW(e.execute_cql("SELECT * FROM t WHERE c > 2 AND c <= 4").get(), exceptions::invalid_request_exception);
-
-        msg = e.execute_cql("SELECT * FROM t WHERE c = 2 ALLOW FILTERING").get0();
+        msg = e.execute_cql("SELECT * FROM t WHERE c = 2").get0();
         assert_that(msg).is_rows().with_rows({
             {
                 int32_type->decompose(1),

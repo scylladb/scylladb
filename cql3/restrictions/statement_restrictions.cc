@@ -504,7 +504,6 @@ bool statement_restrictions::need_filtering() const {
         number_of_filtering_restrictions += _clustering_columns_restrictions->size() - _clustering_columns_restrictions->prefix_size();
     }
     return number_of_restricted_columns_for_indexing > 1
-            || (number_of_restricted_columns_for_indexing == 0 && _partition_key_restrictions->empty() && !_clustering_columns_restrictions->empty())
             || (number_of_restricted_columns_for_indexing != 0 && _nonprimary_key_restrictions->has_multiple_contains())
             || (number_of_restricted_columns_for_indexing != 0 && !_uses_secondary_indexing)
             || (_uses_secondary_indexing && number_of_filtering_restrictions > 1);

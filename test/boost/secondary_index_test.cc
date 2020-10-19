@@ -1273,7 +1273,7 @@ SEASTAR_TEST_CASE(test_filtering_indexed_column) {
         eventually([&] {
             auto msg = cquery_nofail(e, "select d from ks.test_index where c > 25 ALLOW FILTERING;");
             assert_that(msg).is_rows().with_rows({
-                {int32_type->decompose(44), int32_type->decompose(33)}
+                {int32_type->decompose(44)}
             });
         });
     });

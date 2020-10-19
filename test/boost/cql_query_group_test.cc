@@ -226,7 +226,7 @@ SEASTAR_TEST_CASE(test_group_by_text_key) {
         require_rows(e, "select avg(v) from t2 group by p", {{I(25), T(" ")}});
         require_rows(e, "select avg(v) from t2 group by p, c1", {{I(15), T(" "), T("")}, {I(35), T(" "), T("a")}});
         require_rows(e, "select sum(v) from t2 where c1='' group by p, c2 allow filtering",
-                     {{I(10), T(""), T(" "), T("")}, {I(20), T(""), T(" "), T("b")}});
+                     {{I(10), T(" "), T("")}, {I(20), T(" "), T("b")}});
         return make_ready_future<>();
     });
 }
