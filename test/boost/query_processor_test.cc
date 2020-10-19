@@ -342,7 +342,7 @@ SEASTAR_TEST_CASE(test_select_full_scan_metrics) {
 
         // Filtered by ck but not filtered by pk
         auto stat_ps4 = qp.get_cql_stats().select_partition_range_scan;
-        qp.execute_internal("select * from ks.fsm where ck = 1 allow filtering;").get();
+        qp.execute_internal("select * from ks.fsm where ck = 1;").get();
         BOOST_CHECK_EQUAL(stat_ps4 + 1, qp.get_cql_stats().select_partition_range_scan);
 
         // Filtered by unindexed non-cluster column
