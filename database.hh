@@ -378,7 +378,6 @@ public:
         utils::updateable_value<bool> compaction_enforce_min_threshold{false};
         bool enable_dangerous_direct_import_of_cassandra_counters = false;
         ::dirty_memory_manager* dirty_memory_manager = &default_dirty_memory_manager;
-        ::dirty_memory_manager* streaming_dirty_memory_manager = &default_dirty_memory_manager;
         reader_concurrency_semaphore* streaming_read_concurrency_semaphore;
         reader_concurrency_semaphore* compaction_concurrency_semaphore;
         ::cf_stats* cf_stats = nullptr;
@@ -418,20 +417,6 @@ private:
 
     lw_shared_ptr<memtable_list> _memtables;
 
-    utils::phased_barrier _streaming_flush_phaser;
-
-    // If mutations are fragmented during streaming the sstables cannot be made
-    // visible immediately after memtable flush, because that could cause
-    // readers to see only a part of a partition thus violating isolation
-    // guarantees.
-    // Mutations that are sent in fragments are kept separately in per-streaming
-    // plan memtables and the resulting sstables are not made visible until
-    // the streaming is complete.
-    struct monitored_sstable {
-        std::unique_ptr<database_sstable_write_monitor> monitor;
-        sstables::shared_sstable sstable;
-    };
-
     lw_shared_ptr<memtable_list> make_memory_only_memtable_list();
     lw_shared_ptr<memtable_list> make_memtable_list();
 
@@ -469,7 +454,6 @@ private:
     int _compaction_disabled = 0;
     bool _compaction_disabled_by_user = false;
     utils::phased_barrier _flush_barrier;
-    seastar::gate _streaming_flush_gate;
     std::vector<view_ptr> _views;
 
     std::unique_ptr<cell_locker> _counter_cell_locks; // Memory-intensive; allocate only when needed.
@@ -487,7 +471,7 @@ private:
 
     // Operations like truncate, flush, query, etc, may depend on a column family being alive to
     // complete.  Some of them have their own gate already (like flush), used in specialized wait
-    // logic (like the streaming_flush_gate). That is particularly useful if there is a particular
+    // logic. That is particularly useful if there is a particular
     // order in which we need to close those gates. For all the others operations that don't have
     // such needs, we have this generic _async_gate, which all potentially asynchronous operations
     // have to get.  It will be closed by stop().
@@ -745,7 +729,6 @@ public:
     // The mutation is always upgraded to current schema.
     void apply(const frozen_mutation& m, const schema_ptr& m_schema, db::rp_handle&& = {});
     void apply(const mutation& m, db::rp_handle&& = {});
-    void apply_streaming_mutation(schema_ptr, utils::UUID plan_id, const frozen_mutation&, bool fragmented);
 
     // Returns at most "cmd.limit" rows
     future<lw_shared_ptr<query::result>> query(schema_ptr,
@@ -761,7 +744,6 @@ public:
     void start();
     future<> stop();
     future<> flush();
-    future<> flush_streaming_mutations(utils::UUID plan_id, dht::partition_range_vector ranges = dht::partition_range_vector{});
     future<> clear(); // discards memtable(s) without flushing them to disk.
     future<db::replay_position> discard_sstables(db_clock::time_point);
 
@@ -1132,7 +1114,6 @@ public:
         utils::updateable_value<bool> compaction_enforce_min_threshold{false};
         bool enable_dangerous_direct_import_of_cassandra_counters = false;
         ::dirty_memory_manager* dirty_memory_manager = &default_dirty_memory_manager;
-        ::dirty_memory_manager* streaming_dirty_memory_manager = &default_dirty_memory_manager;
         reader_concurrency_semaphore* streaming_read_concurrency_semaphore;
         reader_concurrency_semaphore* compaction_concurrency_semaphore;
         ::cf_stats* cf_stats = nullptr;
@@ -1276,7 +1257,6 @@ private:
 
     dirty_memory_manager _system_dirty_memory_manager;
     dirty_memory_manager _dirty_memory_manager;
-    dirty_memory_manager _streaming_dirty_memory_manager;
 
     database_config _dbcfg;
     flush_controller _memtable_controller;

@@ -833,9 +833,6 @@ table::stop() {
         return when_all(await_pending_writes(), await_pending_reads(), await_pending_streams()).discard_result().finally([this] {
             return _memtables->request_flush().finally([this] {
                 return _compaction_manager.remove(this).then([this] {
-                    // Nest, instead of using when_all, so we don't lose any exceptions.
-                    return _streaming_flush_gate.close();
-                }).then([this] {
                     return _sstable_deletion_gate.close().then([this] {
                         return get_row_cache().invalidate([this] {
                             _sstables = _compaction_strategy.make_sstable_set(_schema);
@@ -1531,21 +1528,6 @@ future<std::unordered_map<sstring, table::snapshot_details>> table::get_snapshot
 
 future<> table::flush() {
     return _memtables->request_flush();
-}
-
-// FIXME: We can do much better than this in terms of cache management. Right
-// now, we only have to flush the touched ranges because of the possibility of
-// streaming containing token ownership changes.
-//
-// Right now we can't differentiate between that and a normal repair process,
-// so we always flush. When we can differentiate those streams, we should not
-// be indiscriminately touching the cache during repair. We will just have to
-// invalidate the entries that are relevant to things we already have in the cache.
-future<> table::flush_streaming_mutations(utils::UUID plan_id, dht::partition_range_vector ranges) {
-    tlogger.debug("Flushing streaming memtable, plan={}", plan_id);
-    return with_gate(_streaming_flush_gate, [this, plan_id, ranges = std::move(ranges)] () mutable {
-        return _streaming_flush_phaser.advance_and_await();
-    });
 }
 
 future<> table::clear() {

@@ -238,30 +238,7 @@ void stream_session::init_messaging_service_handler(netw::messaging_service& ms)
         const auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         return smp::submit_to(dst_cpu_id, [ranges = std::move(ranges), plan_id, cf_id, from] () mutable {
             auto session = get_session(plan_id, from, "STREAM_MUTATION_DONE", cf_id);
-            return session->get_db().invoke_on_all([ranges = std::move(ranges), plan_id, from, cf_id] (database& db) {
-                if (!db.column_family_exists(cf_id)) {
-                    sslog.warn("[Stream #{}] STREAM_MUTATION_DONE from {}: cf_id={} is missing, assume the table is dropped",
-                                plan_id, from, cf_id);
-                    return make_ready_future<>();
-                }
-                dht::partition_range_vector query_ranges;
-                try {
-                    auto& cf = db.find_column_family(cf_id);
-                    query_ranges.reserve(ranges.size());
-                    for (auto& range : ranges) {
-                        query_ranges.push_back(dht::to_partition_range(range));
-                    }
-                    return cf.flush_streaming_mutations(plan_id, std::move(query_ranges));
-                } catch (no_such_column_family&) {
-                    sslog.warn("[Stream #{}] STREAM_MUTATION_DONE from {}: cf_id={} is missing, assume the table is dropped",
-                                plan_id, from, cf_id);
-                    return make_ready_future<>();
-                } catch (...) {
-                    throw;
-                }
-            }).then([session, cf_id] {
-                session->receive_task_completed(cf_id);
-            });
+            session->receive_task_completed(cf_id);
         });
     });
     ms.register_complete_message([] (const rpc::client_info& cinfo, UUID plan_id, unsigned dst_cpu_id, rpc::optional<bool> failed) {
