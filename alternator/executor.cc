@@ -731,23 +731,21 @@ future<executor::request_return_type> executor::tag_resource(client_state& clien
 future<executor::request_return_type> executor::untag_resource(client_state& client_state, service_permit permit, rjson::value request) {
     _stats.api_operations.untag_resource++;
 
-    return seastar::async([this, &client_state, request = std::move(request)] () -> request_return_type {
-        const rjson::value* arn = rjson::find(request, "ResourceArn");
-        if (!arn || !arn->IsString()) {
-            return api_error::access_denied("Incorrect resource identifier");
-        }
-        const rjson::value* tags = rjson::find(request, "TagKeys");
-        if (!tags || !tags->IsArray()) {
-            return api_error::validation(format("Cannot parse tag keys"));
-        }
+    const rjson::value* arn = rjson::find(request, "ResourceArn");
+    if (!arn || !arn->IsString()) {
+        co_return api_error::access_denied("Incorrect resource identifier");
+    }
+    const rjson::value* tags = rjson::find(request, "TagKeys");
+    if (!tags || !tags->IsArray()) {
+        co_return api_error::validation(format("Cannot parse tag keys"));
+    }
 
-        schema_ptr schema = get_table_from_arn(_proxy, rjson::to_string_view(*arn));
+    schema_ptr schema = get_table_from_arn(_proxy, rjson::to_string_view(*arn));
 
-        std::map<sstring, sstring> tags_map = get_tags_of_table(schema);
-        update_tags_map(*tags, tags_map, update_tags_action::delete_tags);
-        update_tags(_mm, schema, std::move(tags_map)).get();
-        return json_string("");
-    });
+    std::map<sstring, sstring> tags_map = get_tags_of_table(schema);
+    update_tags_map(*tags, tags_map, update_tags_action::delete_tags);
+    co_await update_tags(_mm, schema, std::move(tags_map));
+    co_return json_string("");
 }
 
 future<executor::request_return_type> executor::list_tags_of_resource(client_state& client_state, service_permit permit, rjson::value request) {
