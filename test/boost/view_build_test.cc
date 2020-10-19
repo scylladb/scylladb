@@ -805,7 +805,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering) {
 
     const auto partition_size_sets = std::vector<std::vector<int>>{{12}, {8, 4}, {8, 16}, {22}, {8, 8, 8, 8}, {8, 8, 8, 16, 8}, {8, 20, 16, 16}, {50}, {21}, {21, 2}};
     const auto max_partition_set_size = std::ranges::max_element(partition_size_sets, [] (const std::vector<int>& a, const std::vector<int>& b) { return a.size() < b.size(); })->size();
-    auto pkeys = ranges::to<std::vector<dht::decorated_key>>(std::views::iota(size_t{0}, max_partition_set_size) | std::views::transform([schema] (int i) {
+    auto pkeys = ranges::to<std::vector<dht::decorated_key>>(boost::irange(size_t{0}, max_partition_set_size) | boost::adaptors::transformed([schema] (int i) {
         return dht::decorate_key(*schema, partition_key::from_single_value(*schema, int32_type->decompose(data_value(i))));
     }));
     std::ranges::sort(pkeys, dht::ring_position_less_comparator(*schema));
