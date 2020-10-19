@@ -171,8 +171,7 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
     , _cfg(cfg)
     // Allow system tables a pool of 10 MB memory to write, but never block on other regions.
     , _system_dirty_memory_manager(*this, 10 << 20, cfg.virtual_dirty_soft_limit(), default_scheduling_group())
-    , _dirty_memory_manager(*this, dbcfg.available_memory * 0.45, cfg.virtual_dirty_soft_limit(), dbcfg.statement_scheduling_group)
-    , _streaming_dirty_memory_manager(*this, dbcfg.available_memory * 0.10, cfg.virtual_dirty_soft_limit(), dbcfg.streaming_scheduling_group)
+    , _dirty_memory_manager(*this, dbcfg.available_memory * 0.50, cfg.virtual_dirty_soft_limit(), dbcfg.statement_scheduling_group)
     , _dbcfg(dbcfg)
     , _memtable_controller(make_flush_controller(_cfg, dbcfg.memtable_scheduling_group, service::get_local_memtable_flush_priority(), [this, limit = float(_dirty_memory_manager.throttle_threshold())] {
         auto backlog = (_dirty_memory_manager.virtual_dirty_memory()) / limit;
@@ -309,7 +308,6 @@ void
 database::setup_metrics() {
     _dirty_memory_manager.setup_collectd("regular");
     _system_dirty_memory_manager.setup_collectd("system");
-    _streaming_dirty_memory_manager.setup_collectd("streaming");
 
     namespace sm = seastar::metrics;
 
@@ -318,12 +316,12 @@ database::setup_metrics() {
     auto system_label_instance = class_label("system");
 
     _metrics.add_group("memory", {
-        sm::make_gauge("dirty_bytes", [this] { return _dirty_memory_manager.real_dirty_memory() + _system_dirty_memory_manager.real_dirty_memory() + _streaming_dirty_memory_manager.real_dirty_memory(); },
+        sm::make_gauge("dirty_bytes", [this] { return _dirty_memory_manager.real_dirty_memory() + _system_dirty_memory_manager.real_dirty_memory(); },
                        sm::description("Holds the current size of all (\"regular\", \"system\" and \"streaming\") non-free memory in bytes: used memory + released memory that hasn't been returned to a free memory pool yet. "
                                        "Total memory size minus this value represents the amount of available memory. "
                                        "If this value minus virtual_dirty_bytes is too high then this means that the dirty memory eviction lags behind.")),
 
-        sm::make_gauge("virtual_dirty_bytes", [this] { return _dirty_memory_manager.virtual_dirty_memory() + _system_dirty_memory_manager.virtual_dirty_memory() + _streaming_dirty_memory_manager.virtual_dirty_memory(); },
+        sm::make_gauge("virtual_dirty_bytes", [this] { return _dirty_memory_manager.virtual_dirty_memory() + _system_dirty_memory_manager.virtual_dirty_memory(); },
                        sm::description("Holds the size of all (\"regular\", \"system\" and \"streaming\") used memory in bytes. Compare it to \"dirty_bytes\" to see how many memory is wasted (neither used nor available).")),
     });
 
@@ -982,7 +980,6 @@ keyspace::make_column_family_config(const schema& s, const database& db) const {
     cfg.enable_dangerous_direct_import_of_cassandra_counters = _config.enable_dangerous_direct_import_of_cassandra_counters;
     cfg.compaction_enforce_min_threshold = _config.compaction_enforce_min_threshold;
     cfg.dirty_memory_manager = _config.dirty_memory_manager;
-    cfg.streaming_dirty_memory_manager = _config.streaming_dirty_memory_manager;
     cfg.streaming_read_concurrency_semaphore = _config.streaming_read_concurrency_semaphore;
     cfg.compaction_concurrency_semaphore = _config.compaction_concurrency_semaphore;
     cfg.cf_stats = _config.cf_stats;
@@ -1702,7 +1699,6 @@ database::make_keyspace_config(const keyspace_metadata& ksm) {
     cfg.enable_dangerous_direct_import_of_cassandra_counters = _cfg.enable_dangerous_direct_import_of_cassandra_counters();
     cfg.compaction_enforce_min_threshold = _cfg.compaction_enforce_min_threshold;
     cfg.dirty_memory_manager = &_dirty_memory_manager;
-    cfg.streaming_dirty_memory_manager = &_streaming_dirty_memory_manager;
     cfg.streaming_read_concurrency_semaphore = &_streaming_concurrency_sem;
     cfg.compaction_concurrency_semaphore = &_compaction_concurrency_sem;
     cfg.cf_stats = &_cf_stats;
@@ -1847,8 +1843,6 @@ database::stop() {
         return _system_dirty_memory_manager.shutdown();
     }).then([this] {
         return _dirty_memory_manager.shutdown();
-    }).then([this] {
-        return _streaming_dirty_memory_manager.shutdown();
     }).then([this] {
         return _memtable_controller.shutdown();
     }).then([this] {
