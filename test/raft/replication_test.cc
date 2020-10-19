@@ -163,6 +163,13 @@ public:
     virtual future<> abort() { return make_ready_future<>(); }
 };
 
+std::unordered_set<raft::server_id> SERVER_DISCONNECTED;
+class failure_detector : public raft::failure_detector {
+    bool is_alive(raft::server_id server) override {
+        return SERVER_DISCONNECTED.find(server) == SERVER_DISCONNECTED.end();
+    }
+};
+
 class rpc : public raft::rpc {
     static std::unordered_map<raft::server_id, rpc*> net;
     raft::server_id _id;
@@ -209,13 +216,6 @@ public:
     virtual void add_server(raft::server_id id, bytes node_info) {}
     virtual void remove_server(raft::server_id id) {}
     virtual future<> abort() { return make_ready_future<>(); }
-};
-
-std::unordered_set<raft::server_id> SERVER_DISCONNECTED;
-class failure_detector : public raft::failure_detector {
-    bool is_alive(raft::server_id server) override {
-        return SERVER_DISCONNECTED.find(server) == SERVER_DISCONNECTED.end();
-    }
 };
 
 std::unordered_map<raft::server_id, rpc*> rpc::net;
