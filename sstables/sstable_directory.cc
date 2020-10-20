@@ -252,11 +252,11 @@ sstable_directory::load_foreign_sstables(sstable_info_vector info_vec) {
 }
 
 future<>
-sstable_directory::remove_input_sstables_from_resharding(const std::vector<sstables::shared_sstable>& sstlist) {
+sstable_directory::remove_input_sstables_from_resharding(std::vector<sstables::shared_sstable> sstlist) {
     dirlog.debug("Removing {} resharded SSTables", sstlist.size());
-    return parallel_for_each(sstlist, [] (sstables::shared_sstable sst) {
+    return parallel_for_each(std::move(sstlist), [] (const sstables::shared_sstable& sst) {
         dirlog.trace("Removing resharded SSTable {}", sst->get_filename());
-        return sst->unlink();
+        return sst->unlink().then([sst] {});
     });
 }
 
@@ -395,7 +395,9 @@ sstable_directory::reshard(sstable_info_vector shared_info, compaction_manager& 
                     desc.creator = std::move(creator);
 
                     return sstables::compact_sstables(std::move(desc), table).then([this, &sstlist] (sstables::compaction_info result) {
-                        return when_all_succeed(collect_output_sstables_from_resharding(std::move(result.new_sstables)), remove_input_sstables_from_resharding(sstlist)).discard_result();
+                        // input sstables are moved, to guarantee their resources are released once we're done
+                        // resharding them.
+                        return when_all_succeed(collect_output_sstables_from_resharding(std::move(result.new_sstables)), remove_input_sstables_from_resharding(std::move(sstlist))).discard_result();
                     });
                 });
             });
