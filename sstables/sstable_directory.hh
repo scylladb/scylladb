@@ -119,7 +119,7 @@ private:
     future<> process_descriptor(sstables::entry_descriptor desc, const ::io_priority_class& iop);
     void validate(sstables::shared_sstable sst) const;
     void handle_component(scan_state& state, sstables::entry_descriptor desc, std::filesystem::path filename);
-    future<> remove_input_sstables_from_resharding(const std::vector<sstables::shared_sstable>& sstlist);
+    future<> remove_input_sstables_from_resharding(std::vector<sstables::shared_sstable> sstlist);
     future<> collect_output_sstables_from_resharding(std::vector<sstables::shared_sstable> resharded_sstables);
 
     future<> remove_input_sstables_from_reshaping(std::vector<sstables::shared_sstable> sstlist);
