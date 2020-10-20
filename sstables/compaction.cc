@@ -592,7 +592,7 @@ private:
         log_info(formatted_msg, report_start_desc());
         if (ssts->all()->size() < _sstables.size()) {
             log_debug("{} out of {} input sstables are fully expired sstables that will not be actually compacted",
-                      ssts->all()->size(), _sstables.size());
+                      _sstables.size() - ssts->all()->size(), _sstables.size());
         }
 
         _compacting = std::move(ssts);
