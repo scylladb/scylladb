@@ -24,6 +24,7 @@
 #pragma once
 
 #include <seastar/core/future.hh>
+#include <seastar/core/smp.hh>
 #include <vector>
 #include <functional>
 #include "observable.hh"
@@ -52,9 +53,10 @@ class updateable_value_source_base;
 // directly.
 class updateable_value_base {
 protected:
+    shard_id _owner;
     const updateable_value_source_base* _source = nullptr;
 public:
-    updateable_value_base() = default;
+    updateable_value_base() : _owner(this_shard_id()) {};
     explicit updateable_value_base(const updateable_value_source_base& source);
     ~updateable_value_base();
     updateable_value_base(const updateable_value_base&);
@@ -101,9 +103,10 @@ protected:
     // references to updateable_value_base. We consider adding and removing
     // such references const operations since they don't change the logical
     // state of the object (they don't allow changing the carried value).
-    mutable std::vector<updateable_value_base*> _refs; // all connected updateable_values on this shard
+    mutable std::vector<std::vector<updateable_value_base*>> _refs; // all connected updateable_values per owning shard
     void for_each_ref(std::function<void (updateable_value_base* ref)> func);
 protected:
+    updateable_value_source_base() : _refs(smp::count) {}
     ~updateable_value_source_base();
     void add_ref(updateable_value_base* ref) const;
     void del_ref(updateable_value_base* ref) const;
