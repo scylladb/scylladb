@@ -154,7 +154,9 @@ ar.reloc_add('licenses')
 ar.reloc_add('swagger-ui')
 ar.reloc_add('api')
 def exclude_submodules(tarinfo):
-    if tarinfo.name in ('scylla/tools/jmx', 'scylla/tools/java'):
+    if tarinfo.name in ('scylla/tools/jmx',
+                        'scylla/tools/java',
+                        'scylla/tools/python3'):
         return None
     return tarinfo
 ar.reloc_add('tools', filter=exclude_submodules)
