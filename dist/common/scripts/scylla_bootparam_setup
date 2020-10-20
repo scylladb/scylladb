@@ -27,11 +27,16 @@ import argparse
 import subprocess
 from scylla_util import *
 
+def set_clocksource(source):
+    print(f'Set {source} as clock source')
+    with open('/sys/devices/system/clocksource/clocksource0/current_clocksource', 'w') as f:
+        f.write(source)
+
 if __name__ == '__main__':
     if os.getuid() > 0:
         print('Requires root permission.')
         sys.exit(1)
-    parser = argparse.ArgumentParser(description='Optimize boot parameter settings for Scylla.')
+    parser = argparse.ArgumentParser(description='Optimize clocksource settings for Scylla.')
     parser.add_argument('--ami', action='store_true', default=False,
                         help='setup AMI instance')
     args = parser.parse_args()
@@ -42,6 +47,17 @@ if __name__ == '__main__':
         print('Unsupported bootloader')
         sys.exit(1)
 
+    with open('/sys/devices/system/clocksource/clocksource0/available_clocksource') as f:
+        sources = f.read().strip().split()
+    if 'kvm-clock' in sources:
+        clocksource = 'kvm-clock'
+    elif 'tsc' in sources:
+        clocksource = 'tsc'
+
+    # change clocksource immediately
+    set_clocksource(clocksource)
+
+    # set clocksource for next boot (grub2)
     if os.path.exists('/etc/default/grub'):
         cfg = sysconfig_parser('/etc/default/grub')
         for k in ['GRUB_CMDLINE_LINUX', 'GRUB_CMDLINE_LINUX_DEFAULT']:
@@ -54,19 +70,23 @@ if __name__ == '__main__':
 
         cmdline_linux = cfg.get(grub_key)
         if len(re.findall(r'.*clocksource', cmdline_linux)) == 0:
-            cmdline_linux += ' clocksource=tsc tsc=reliable'
-            cfg.set(grub_key, cmdline_linux)
-            cfg.commit()
-            if is_debian_variant():
-                run('update-grub')
-            else:
-                run('grub2-mkconfig -o /boot/grub2/grub.cfg')
+            cmdline_linux += f' clocksource={clocksource} tsc=reliable'
+        else:
+            cmdline_linux = re.sub(r'clocksource=.* tsc=reliable', f'clocksource={clocksource} tsc=reliable', cmdline_linux)
+        cfg.set(grub_key, cmdline_linux)
+        cfg.commit()
+        if is_debian_variant():
+            run('update-grub')
+        else:
+            run('grub2-mkconfig -o /boot/grub2/grub.cfg')
 
-#    if is_ec2() and os.path.exists('/boot/grub/menu.lst'):
+    # set clocksource for next boot (grub1)
     if os.path.exists('/boot/grub/menu.lst'):
         with open('/boot/grub/menu.lst') as f:
             cur = f.read()
         if len(re.findall(r'^\s*kernel.*clocksource', cur, flags=re.MULTILINE)) == 0:
-            new = re.sub(r'(^\s*kernel.*)', r'\1 clocksource=tsc tsc=reliable ', cur, flags=re.MULTILINE)
-            with open('/boot/grub/menu.lst', 'w') as f:
-                f.write(new)
+            new = re.sub(r'(^\s*kernel.*)', fr'\1 clocksource={clocksource} tsc=reliable ', cur, flags=re.MULTILINE)
+        else:
+            new = re.sub(r'(^\s*kernel.*) clocksource=.* tsc=reliable ', fr'\1 clocksource={clocksource} tsc=reliable ', cur, flags=re.MULTILINE)
+        with open('/boot/grub/menu.lst', 'w') as f:
+            f.write(new)
