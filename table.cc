@@ -603,13 +603,15 @@ void table::add_sstable(sstables::shared_sstable sstable) {
     // allow in-progress reads to continue using old list
     auto new_sstables = make_lw_shared<sstables::sstable_set>(*_sstables);
     new_sstables->insert(sstable);
-    _sstables = std::move(new_sstables);
-    update_stats_for_new_sstable(sstable->bytes_on_disk());
     if (sstable->requires_view_building()) {
         _sstables_staging.emplace(sstable->generation(), sstable);
     } else {
         add_sstable_to_backlog_tracker(_compaction_strategy.get_backlog_tracker(), sstable);
     }
+    // update _stables last in case either updating
+    // staging sstables or backlog tracker throws
+    _sstables = std::move(new_sstables);
+    update_stats_for_new_sstable(sstable->bytes_on_disk());
 }
 
 future<>
