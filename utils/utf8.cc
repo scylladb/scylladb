@@ -56,21 +56,31 @@ namespace utils {
 
 namespace utf8 {
 
-// 3x faster than boost utf_to_utf
-static inline std::optional<size_t> validate_naive(const uint8_t *data, size_t len) {
-    size_t pos = 0;
+using namespace internal;
 
-    while (len) {
-        size_t bytes;
-        const uint8_t byte1 = data[0];
+struct codepoint_status {
+    size_t bytes_validated;
+    bool error;
+    uint8_t more_bytes_needed;
+};
 
+static
+codepoint_status
+inline
+evaluate_codepoint(const uint8_t* data, size_t len) {
+    const uint8_t byte1 = data[0];
+    static const uint8_t len_from_first_nibble[16] = { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 3, 4 };
+    auto codepoint_len = len_from_first_nibble[byte1 >> 4];
+    if (codepoint_len > len) {
+        return codepoint_status{.more_bytes_needed = uint8_t(codepoint_len - len)};
+    } else {
         if (byte1 <= 0x7F) {
             // 00..7F
-            bytes = 1;
+            return codepoint_status{.bytes_validated = codepoint_len};
         } else if (len >= 2 && byte1 >= 0xC2 && byte1 <= 0xDF &&
                 (int8_t)data[1] <= (int8_t)0xBF) {
             // C2..DF, 80..BF
-            bytes = 2;
+            return codepoint_status{.bytes_validated = codepoint_len};
         } else if (len >= 3) {
             const uint8_t byte2 = data[1];
 
@@ -87,7 +97,7 @@ static inline std::optional<size_t> validate_naive(const uint8_t *data, size_t l
                      (byte1 == 0xED && byte2 <= 0x9F) ||
                      // EE..EF, 80..BF, 80..BF
                      (byte1 >= 0xEE && byte1 <= 0xEF))) {
-                bytes = 3;
+                return codepoint_status{.bytes_validated = codepoint_len};
             } else if (len >= 4) {
                 // Is byte4 between 0x80 ~ 0xBF
                 const int byte4_ok = (int8_t)data[3] <= (int8_t)0xBF;
@@ -99,23 +109,51 @@ static inline std::optional<size_t> validate_naive(const uint8_t *data, size_t l
                          (byte1 >= 0xF1 && byte1 <= 0xF3) ||
                          // F4, 80..8F, 80..BF, 80..BF
                          (byte1 == 0xF4 && byte2 <= 0x8F))) {
-                    bytes = 4;
+                    return codepoint_status{.bytes_validated = codepoint_len};
                 } else {
-                    return pos;
+                    return codepoint_status{.error = true};
                 }
             } else {
-                return pos;
+                return codepoint_status{.error = true};
             }
         } else {
+            return codepoint_status{.error = true};
+        }
+    }
+}
+
+// 3x faster than boost utf_to_utf
+static inline std::optional<size_t> validate_naive(const uint8_t *data, size_t len) {
+    size_t pos = 0;
+
+    while (len) {
+        auto cs = evaluate_codepoint(data, len);
+        pos += cs.bytes_validated;
+        data += cs.bytes_validated;
+        len -= cs.bytes_validated;
+        if (cs.error || cs.more_bytes_needed) {
             return pos;
         }
-
-        len -= bytes;
-        pos += bytes;
-        data += bytes;
     }
 
     return std::nullopt;
+}
+
+static
+partial_validation_results
+validate_partial_naive(const uint8_t *data, size_t len) {
+    while (len) {
+        auto cs = evaluate_codepoint(data, len);
+        data += cs.bytes_validated;
+        len -= cs.bytes_validated;
+        if (cs.error) {
+            return partial_validation_results{.error = true};
+        }
+        if (cs.more_bytes_needed) {
+            return partial_validation_results{.unvalidated_tail = len, .bytes_needed_for_tail = cs.more_bytes_needed};
+        }
+    }
+    return partial_validation_results{};
 }
 
 #if defined(__aarch64__)
@@ -193,7 +231,8 @@ alignas(16) static const uint8_t s_range_adjust_tbl[] = {
 };
 
 // 2x ~ 4x faster than naive method
-bool validate(const uint8_t *data, size_t len) {
+partial_validation_results
+internal::validate_partial(const uint8_t *data, size_t len) {
     if (len >= 16) {
         uint8x16_t prev_input = vdupq_n_u8(0);
         uint8x16_t prev_first_len = vdupq_n_u8(0);
@@ -289,7 +328,7 @@ bool validate(const uint8_t *data, size_t len) {
 
         // Delay error check till loop ends
         if (vmaxvq_u8(error)) {
-            return false;
+            return partial_validation_results{.error = true};
         }
 
         // Find previous token (not 80~BF)
@@ -309,8 +348,8 @@ bool validate(const uint8_t *data, size_t len) {
         len += lookahead;
     }
 
-    // Check for no error position in remaining bytes with naive method
-    return !validate_naive(data, len);
+    // Continue with remaining bytes with naive method
+    return validate_partial_naive(data, len);
 }
 
 #elif defined(__x86_64__)
@@ -371,7 +410,8 @@ alignas(16) static const int8_t s_ef_fe_tbl[] = {
 };
 
 // 5x faster than naive method
-bool validate(const uint8_t *data, size_t len) {
+partial_validation_results
+internal::validate_partial(const uint8_t *data, size_t len) {
     if (len >= 16) {
         __m128i prev_input = _mm_set1_epi8(0);
         __m128i prev_first_len = _mm_set1_epi8(0);
@@ -475,7 +515,7 @@ bool validate(const uint8_t *data, size_t len) {
         int error_reduced =
             _mm_movemask_epi8(_mm_cmpeq_epi8(error, _mm_set1_epi8(0)));
         if (error_reduced != 0xFFFF) {
-            return false;
+            return partial_validation_results{.error = true};
         }
 
         // Find previous token (not 80~BF)
@@ -493,17 +533,22 @@ bool validate(const uint8_t *data, size_t len) {
         len += lookahead;
     }
 
-    // Check for no error position in remaining bytes with naive method
-    return !validate_naive(data, len);
+    // Continue with remaining bytes with naive method
+    return validate_partial_naive(data, len);
 }
 
 #else
 // No SIMD implementation for this arch, fallback to naive method
-bool validate(const uint8_t *data, size_t len) {
-    // Check for no error position
-    return !validate_naive(data, len);
+partial_validation_results
+validate_partial(const uint8_t *data, size_t len) {
+    return validate_partial_naive(data, len);
 }
 #endif
+
+bool validate(const uint8_t* data, size_t len) {
+    auto pvr = validate_partial(data, len);
+    return !pvr.error && !pvr.unvalidated_tail;
+}
 
 std::optional<size_t> validate_with_error_position(const uint8_t *data, size_t len) {
     // First pass - validate data (using optimized code)

@@ -24,12 +24,15 @@
 #include <cstdint>
 #include <vector>
 #include <boost/test/unit_test.hpp>
+#include <random>
 
 #include "utils/utf8.hh"
+#include "utils/fragmented_temporary_buffer.hh"
 
 struct test_str {
    const void *data;
    size_t len;
+   size_t bad_pos = 0;
 };
 
 // Positive strings
@@ -70,21 +73,21 @@ static const std::vector<test_str> negative = {
     {"\xF4\x90\x88\xAA", 4},
     {"\xF4\x00\xBF\xBF", 4},
     {"\x00\x00\x00\x00\x00\xC2\x80\x00\x00\x00\xE1\x80\x80\x00\x00\xC2" \
-     "\xC2\x80\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", 32},
-    {"\x00\x00\x00\x00\x00\xC2\xC2\x80\x00\x00\xE1\x80\x80\x00\x00\x00", 16},
+     "\xC2\x80\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", 32, 15},
+    {"\x00\x00\x00\x00\x00\xC2\xC2\x80\x00\x00\xE1\x80\x80\x00\x00\x00", 16, 5},
     {"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00" \
-     "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xF1\x80", 32},
+     "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xF1\x80", 32, 30},
     {"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00" \
-     "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xF1", 32},
-    {"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00" \
-     "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xF1\x80" \
-     "\x80", 33},
+     "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xF1", 32, 31},
     {"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00" \
      "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xF1\x80" \
-     "\xC2\x80", 34},
+     "\x80", 33, 30},
+    {"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00" \
+     "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xF1\x80" \
+     "\xC2\x80", 34, 30},
     {"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00" \
      "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xF0" \
-     "\x80\x80\x80", 35},
+     "\x80\x80\x80", 35, 31},
 };
 
 // Round concatenate positive test strings to 1024 bytes
@@ -174,4 +177,62 @@ BOOST_AUTO_TEST_CASE(test_utf8_position) {
     test_string("abc\xe2\x82\x28", 3);
     test_string("abcd\xf0\x28\x8c\x28", 4);
     test_string("abcd\xc3\x28", 4);
+}
+
+BOOST_AUTO_TEST_CASE(test_utf8_fragmented) {
+    auto random_engine = std::default_random_engine(std::random_device()());
+    std::vector<int8_t> tmp;
+    tmp.reserve(20000); // avoid reallocations
+    std::optional<size_t> bad_pos;
+    for (unsigned i = 0; i < 100000; ++i) {
+        auto nr_positive_begin = std::uniform_int_distribution(0, 30)(random_engine);
+        auto nr_negative = std::uniform_int_distribution(0, 1)(random_engine);
+        auto nr_positive_end = std::uniform_int_distribution(0, 20)(random_engine);
+        auto nr_frags = std::uniform_int_distribution(1, 4)(random_engine);
+        tmp.clear();
+        bad_pos.reset();
+        auto random_test_str = [&] (const std::vector<test_str>& test_set) -> test_str {
+            auto idx = std::uniform_int_distribution<size_t>(0, test_set.size() - 1)(random_engine);
+            return test_set[idx];
+        };
+        auto add_test_str = [&] (test_str t) {
+	    auto data = reinterpret_cast<const int8_t*>(t.data);
+            tmp.insert(tmp.end(), data, data + t.len);
+        };
+        auto add_negative_test_str = [&] (test_str t) {
+            if (!bad_pos) {
+                bad_pos = tmp.size() + t.bad_pos;
+            }
+            add_test_str(t);
+        };
+        auto fragmentize = [&] (int nr_frags) -> fragmented_temporary_buffer {
+            std::vector<temporary_buffer<char>> vec;
+            std::vector<size_t> breakpoints;
+            vec.reserve(nr_frags);
+            breakpoints.reserve(nr_frags + 1);
+            breakpoints.push_back(0);
+            for (int i = 0; i < nr_frags - 1; ++i) {
+                 breakpoints.push_back(std::uniform_int_distribution<size_t>(0, tmp.size())(random_engine));
+            }
+            breakpoints.push_back(tmp.size());
+            std::sort(breakpoints.begin(), breakpoints.end());
+            auto data = reinterpret_cast<const char*>(tmp.data());
+            for (int i = 0; i < nr_frags; ++i) {
+                 vec.push_back(temporary_buffer<char>(data + breakpoints[i], breakpoints[i+1] - breakpoints[i]));
+            }
+            return fragmented_temporary_buffer(std::move(vec), tmp.size());
+        };
+        for (int j = 0; j != nr_positive_begin; ++j) {
+             add_test_str(random_test_str(positive));
+        }
+        for (int j = 0; j != nr_negative; ++j) {
+             add_negative_test_str(random_test_str(negative));
+        }
+        for (int j = 0; j != nr_positive_end; ++j) {
+             add_test_str(random_test_str(positive));
+        }
+        auto frag_buf = fragmentize(nr_frags);
+        auto result = utils::utf8::validate_with_error_position_fragmented(fragmented_temporary_buffer::view(frag_buf));
+        BOOST_REQUIRE(result == bad_pos);
+    }
 }
