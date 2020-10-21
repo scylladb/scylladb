@@ -227,6 +227,7 @@ private:
         return utils::fb_utilities::get_broadcast_address();
     }
     /* This abstraction maintains the token/endpoint metadata information */
+    mutable_token_metadata_ptr _pending_token_metadata_ptr;
     shared_token_metadata& _shared_token_metadata;
 
     // Maintains the set of known CDC generations used to pick streams for log writes (i.e., the partition keys of these log writes).

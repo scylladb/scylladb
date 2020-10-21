@@ -1705,12 +1705,27 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
     assert(this_shard_id() == 0);
 
     slogger.debug("Replicating token_metadata to all cores");
-    _shared_token_metadata.set(tmptr);
+    _pending_token_metadata_ptr = tmptr;
+    // clone a local copy of updated token_metadata on all other shards
     return container().invoke_on_others([tmptr] (storage_service& ss) {
         auto tm = *tmptr;
-        ss._shared_token_metadata.set(make_token_metadata_ptr(std::move(tm)));
-    }).handle_exception([] (auto e) {
-        on_internal_error(slogger, format("Failed to replicate _token_metadata: {}", e));
+        ss._pending_token_metadata_ptr = make_token_metadata_ptr(std::move(tm));
+    }).then_wrapped([this] (future<> f) {
+        if (f.failed()) {
+            return container().invoke_on_all([] (storage_service& ss) {
+                ss._pending_token_metadata_ptr = {};
+            }).finally([ep = f.get_exception()] () mutable {
+                return make_exception_future<>(std::move(ep));
+            });
+        }
+        return container().invoke_on_all([] (storage_service& ss) {
+            ss._shared_token_metadata.set(std::move(ss._pending_token_metadata_ptr));
+        }).handle_exception([] (auto e) noexcept {
+            // applying the changes on all shards should never fail
+            // it will end up in an inconsistent state that we can't recover from.
+            slogger.error("Failed to replicate token_metadata: {}. Aborting.", e);
+            abort();
+        });
     });
 }
 
