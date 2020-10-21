@@ -156,6 +156,15 @@ db::view::base_info_ptr view_info::make_base_dependent_view_info(const schema& b
 }
 
 bool view_info::has_base_non_pk_columns_in_view_pk() const {
+    // The base info is not always available, this is because
+    // the base info initialization is separate from the view
+    // info construction. If we are trying to get this info without
+    // initializing the base information it means that we have a
+    // schema integrity problem as the creator of owning view schema
+    // didn't make sure to initialize it with base information.
+    if (!_base_info) {
+        on_internal_error(vlogger, "Tried to perform a view query which is base info dependant without initializing it");
+    }
     return !_base_info->base_non_pk_columns_in_view_pk.empty();
 }
 
