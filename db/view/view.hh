@@ -48,11 +48,30 @@ namespace view {
 // This structure may change even though the view schema doesn't change, so
 // it needs to live outside view_ptr.
 struct base_dependent_view_info {
-    schema_ptr base_schema;
-
+private:
+    schema_ptr _base_schema;
     // Id of a regular base table column included in the view's PK, if any.
     // Scylla views only allow one such column, alternator can have up to two.
-    std::vector<column_id> base_non_pk_columns_in_view_pk;
+    std::vector<column_id> _base_non_pk_columns_in_view_pk;
+public:
+    const std::vector<column_id>& base_non_pk_columns_in_view_pk() const;
+    const schema_ptr& base_schema() const;
+
+    // Indicates if the view hase pk columns which are not part of the base
+    // pk, it seems that !base_non_pk_columns_in_view_pk.empty() is the same,
+    // but actually there are cases where we can compute this boolean without
+    // succeeding to reliably build the former.
+    const bool has_base_non_pk_columns_in_view_pk;
+
+    // If base_non_pk_columns_in_view_pk couldn't reliably be built, this base
+    // info can't be used for computing view updates, only for reading the materialized
+    // view.
+    const bool use_only_for_reads;
+
+    // A constructor for a base info that can facilitate reads and writes from the materialized view.
+    base_dependent_view_info(schema_ptr base_schema, std::vector<column_id>&& base_non_pk_columns_in_view_pk);
+    // A constructor for a base info that can facilitate only reads from the materialized view.
+    base_dependent_view_info(bool has_base_non_pk_columns_in_view_pk);
 };
 
 // Immutable snapshot of view's base-schema-dependent part.
