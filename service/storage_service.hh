@@ -110,7 +110,8 @@ struct storage_service_config {
  * This class will also maintain histograms of the load information
  * of other nodes in the cluster.
  */
-class storage_service : public service::migration_listener, public gms::i_endpoint_state_change_subscriber, public seastar::async_sharded_service<storage_service> {
+class storage_service : public service::migration_listener, public gms::i_endpoint_state_change_subscriber,
+        public seastar::async_sharded_service<storage_service>, public seastar::peering_sharded_service<storage_service> {
 private:
     using token = dht::token;
     using token_range_endpoints = dht::token_range_endpoints;

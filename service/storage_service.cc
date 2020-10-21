@@ -328,7 +328,7 @@ void storage_service::prepare_to_join(
     // (we won't be part of the storage ring though until we add a counterId to our state, below.)
     // Seed the host ID-to-endpoint map with our own ID.
     auto local_host_id = db::system_keyspace::get_local_host_id().get0();
-    get_storage_service().invoke_on_all([local_host_id] (auto& ss) {
+    container().invoke_on_all([local_host_id] (auto& ss) {
         ss._local_host_id = local_host_id;
     }).get();
     auto features = _feature_service.supported_feature_set();
@@ -398,7 +398,7 @@ void storage_service::maybe_start_sys_dist_ks() {
 void storage_service::join_token_ring(int delay) {
     // This function only gets called on shard 0, but we want to set _joined
     // on all shards, so this variable can be later read locally.
-    get_storage_service().invoke_on_all([] (auto&& ss) {
+    container().invoke_on_all([] (auto&& ss) {
         ss._joined = true;
     }).get();
     // We bootstrap if we haven't successfully bootstrapped before, as long as we are not a seed.
@@ -656,7 +656,7 @@ bool storage_service::do_handle_cdc_generation(db_clock::time_point ts) {
     };
 
     // Return `true` iff the generation was inserted on any of our shards.
-    return get_storage_service().map_reduce(orer(), [ts, &gen] (storage_service& ss) {
+    return container().map_reduce(orer(), [ts, &gen] (storage_service& ss) {
         auto gen_ = *gen;
         return ss._cdc_metadata.insert(ts, std::move(gen_));
     }).get0();
@@ -706,7 +706,7 @@ void storage_service::async_handle_cdc_generation(db_clock::time_point ts) {
 
     // It is safe to discard this future: we keep the storage_service, gossiper,
     // and system distributed keyspace alive for the whole duration of this operation.
-    (void)seastar::async([ts,
+    (void)seastar::async([this, ts,
         g = _gossiper.shared_from_this(), ss = this->shared_from_this(), sys_dist_ks = _sys_dist_ks.local_shared()
     ] {
         while (true) {
@@ -719,7 +719,7 @@ void storage_service::async_handle_cdc_generation(db_clock::time_point ts) {
                 }
                 return;
             } catch (cdc_generation_handling_nonfatal_exception& e) {
-                if (get_storage_service().map_reduce(ander(), [ts] (storage_service& ss) {
+                if (container().map_reduce(ander(), [ts] (storage_service& ss) {
                     return ss._cdc_metadata.known_or_obsolete(ts);
                 }).get0()) {
                     return;
@@ -745,7 +745,7 @@ void storage_service::handle_cdc_generation(std::optional<db_clock::time_point> 
         return;
     }
 
-    if (get_storage_service().map_reduce(ander(), [ts = *ts] (storage_service& ss) {
+    if (container().map_reduce(ander(), [ts = *ts] (storage_service& ss) {
         return !ss._cdc_metadata.prepare(ts);
     }).get0()) {
         return;
@@ -1599,11 +1599,11 @@ future<> storage_service::drain_on_shutdown() {
 }
 
 future<> storage_service::init_messaging_service_part() {
-    return get_storage_service().invoke_on_all(&service::storage_service::init_messaging_service);
+    return container().invoke_on_all(&service::storage_service::init_messaging_service);
 }
 
 future<> storage_service::uninit_messaging_service_part() {
-    return get_storage_service().invoke_on_all(&service::storage_service::uninit_messaging_service);
+    return container().invoke_on_all(&service::storage_service::uninit_messaging_service);
 }
 
 future<> storage_service::init_server(bind_messaging_port do_bind) {
@@ -1678,8 +1678,8 @@ future<> storage_service::replicate_tm_only() noexcept {
   try {
     auto tm = _token_metadata;
 
-    return do_with(std::move(tm), [] (token_metadata& tm) {
-        return get_storage_service().invoke_on_all([&tm] (storage_service& local_ss){
+    return do_with(std::move(tm), [this] (token_metadata& tm) {
+        return container().invoke_on_all([&tm] (storage_service& local_ss){
             if (this_shard_id() != 0) {
                 local_ss._token_metadata = tm;
             }
@@ -2238,7 +2238,7 @@ future<> storage_service::removenode(sstring host_id_string) {
 
 // Runs inside seastar::async context
 void storage_service::flush_column_families() {
-    service::get_storage_service().invoke_on_all([] (auto& ss) {
+    container().invoke_on_all([] (auto& ss) {
         auto& local_db = ss.db().local();
         auto non_system_cfs = local_db.get_column_families() | boost::adaptors::filtered([] (auto& uuid_and_cf) {
             auto cf = uuid_and_cf.second;
@@ -2258,7 +2258,7 @@ void storage_service::flush_column_families() {
     }).get();
     // flush the system ones after all the rest are done, just in case flushing modifies any system state
     // like CASSANDRA-5151. don't bother with progress tracking since system data is tiny.
-    service::get_storage_service().invoke_on_all([] (auto& ss) {
+    container().invoke_on_all([] (auto& ss) {
         auto& local_db = ss.db().local();
         auto system_cfs = local_db.get_column_families() | boost::adaptors::filtered([] (auto& uuid_and_cf) {
             auto cf = uuid_and_cf.second;
@@ -2833,7 +2833,7 @@ future<> storage_service::update_pending_ranges(sstring reason) {
 future<> storage_service::keyspace_changed(const sstring& ks_name) {
     // Update pending ranges since keyspace can be changed after we calculate pending ranges.
     sstring reason = format("keyspace {}", ks_name);
-    return get_storage_service().invoke_on(0, [reason = std::move(reason)] (auto& ss) mutable {
+    return container().invoke_on(0, [reason = std::move(reason)] (auto& ss) mutable {
         return ss.update_pending_ranges(reason).handle_exception([reason = std::move(reason)] (auto ep) {
             slogger.warn("Failure to update pending ranges for {} ignored", reason);
         });
@@ -3067,7 +3067,7 @@ future<> deinit_storage_service() {
 }
 
 void storage_service::notify_down(inet_address endpoint) {
-    get_storage_service().invoke_on_all([endpoint] (auto&& ss) {
+    container().invoke_on_all([endpoint] (auto&& ss) {
         ss._messaging.local().remove_rpc_client(netw::msg_addr{endpoint, 0});
         return seastar::async([&ss, endpoint] {
             for (auto&& subscriber : ss._lifecycle_subscribers) {
@@ -3083,7 +3083,7 @@ void storage_service::notify_down(inet_address endpoint) {
 }
 
 void storage_service::notify_left(inet_address endpoint) {
-    get_storage_service().invoke_on_all([endpoint] (auto&& ss) {
+    container().invoke_on_all([endpoint] (auto&& ss) {
         return seastar::async([&ss, endpoint] {
             for (auto&& subscriber : ss._lifecycle_subscribers) {
                 try {
@@ -3102,7 +3102,7 @@ void storage_service::notify_up(inet_address endpoint)
     if (!_gossiper.is_cql_ready(endpoint) || !_gossiper.is_alive(endpoint)) {
         return;
     }
-    get_storage_service().invoke_on_all([endpoint] (auto&& ss) {
+    container().invoke_on_all([endpoint] (auto&& ss) {
         return seastar::async([&ss, endpoint] {
             for (auto&& subscriber : ss._lifecycle_subscribers) {
                 try {
@@ -3122,7 +3122,7 @@ void storage_service::notify_joined(inet_address endpoint)
         return;
     }
 
-    get_storage_service().invoke_on_all([endpoint] (auto&& ss) {
+    container().invoke_on_all([endpoint] (auto&& ss) {
         return seastar::async([&ss, endpoint] {
             for (auto&& subscriber : ss._lifecycle_subscribers) {
                 try {
@@ -3146,7 +3146,7 @@ void storage_service::notify_cql_change(inet_address endpoint, bool ready)
 }
 
 future<bool> storage_service::is_cleanup_allowed(sstring keyspace) {
-    return get_storage_service().invoke_on(0, [keyspace = std::move(keyspace)] (storage_service& ss) {
+    return container().invoke_on(0, [keyspace = std::move(keyspace)] (storage_service& ss) {
         auto my_address = ss.get_broadcast_address();
         auto pending_ranges = ss.get_token_metadata().has_pending_ranges(keyspace, my_address);
         bool is_bootstrap_mode = ss._is_bootstrap_mode;
