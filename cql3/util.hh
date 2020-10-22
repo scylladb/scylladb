@@ -89,6 +89,10 @@ std::unique_ptr<cql3::statements::raw::select_statement> build_select_statement(
 /// character itself is quoted by doubling it.
 sstring maybe_quote(const sstring& s);
 
+// Check whether timestamp is not too far in the future as this probably
+// indicates its incorrectness (for example using other units than microseconds).
+void validate_timestamp(const query_options& options, const std::unique_ptr<attributes>& attrs);
+
 } // namespace util
 
 } // namespace cql3

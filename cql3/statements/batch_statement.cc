@@ -38,6 +38,7 @@
  */
 
 #include "batch_statement.hh"
+#include "cql3/util.hh"
 #include "raw/batch_statement.hh"
 #include "db/config.hh"
 #include "db/consistency_level_validations.hh"
@@ -259,6 +260,7 @@ static thread_local inheriting_concrete_execution_stage<
 
 future<shared_ptr<cql_transport::messages::result_message>> batch_statement::execute(
         service::storage_proxy& storage, service::query_state& state, const query_options& options) const {
+    cql3::util::validate_timestamp(options, _attrs);
     return batch_stage(this, seastar::ref(storage), seastar::ref(state),
                        seastar::cref(options), false, options.get_timestamp(state));
 }

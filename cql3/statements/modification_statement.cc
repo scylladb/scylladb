@@ -44,6 +44,7 @@
 #include "cql3/statements/raw/modification_statement.hh"
 #include "cql3/statements/prepared_statement.hh"
 #include "cql3/restrictions/single_column_restriction.hh"
+#include "cql3/util.hh"
 #include "validation.hh"
 #include "db/consistency_level_validations.hh"
 #include <seastar/core/shared_ptr.hh>
@@ -258,6 +259,7 @@ static thread_local inheriting_concrete_execution_stage<
 
 future<::shared_ptr<cql_transport::messages::result_message>>
 modification_statement::execute(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) const {
+    cql3::util::validate_timestamp(options, attrs);
     return modify_stage(this, seastar::ref(proxy), seastar::ref(qs), seastar::cref(options));
 }
 
