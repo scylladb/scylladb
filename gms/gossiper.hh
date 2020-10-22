@@ -89,16 +89,6 @@ class feature_service;
 struct bind_messaging_port_tag {};
 using bind_messaging_port = bool_class<bind_messaging_port_tag>;
 
-struct syn_msg_pending {
-    bool pending = false;
-    std::optional<gossip_digest_syn> syn_msg;
-};
-
-struct ack_msg_pending {
-    bool pending = false;
-    std::optional<utils::chunked_vector<gossip_digest>> ack_msg_digest;
-};
-
 /**
  * This module is responsible for Gossiping information for the local endpoint. This abstraction
  * maintains the list of live and dead endpoints. Periodically i.e. every 1 second this module
@@ -139,8 +129,31 @@ private:
     sstring _cluster_name;
     semaphore _callback_running{1};
     semaphore _apply_state_locally_semaphore{100};
-    std::unordered_map<gms::inet_address, syn_msg_pending> _syn_handlers;
-    std::unordered_map<gms::inet_address, ack_msg_pending> _ack_handlers;
+
+public:
+    template <typename Msg>
+    class msg_queue {
+        struct msg_pending {
+            bool pending = false;
+            std::optional<Msg> msg;
+        };
+        using msg_addr = gossiper::msg_addr;
+    public:
+        future<> add(msg_addr from, Msg&& msg);
+        void forget_endpoint(inet_address endpoint);
+        future<> do_send_msg(msg_addr from, Msg msg);
+        msg_queue(gossiper& g) : _gossiper(g) {}
+    private:
+        gossiper& _gossiper;
+        std::unordered_map<gms::inet_address, msg_pending> _handlers;
+        // For logging purposes.
+        static const char* msg_type();
+        static const char* msg_type_underscores();
+    };
+private:
+    msg_queue<gossip_digest_syn> _syn_queue;
+    msg_queue<utils::chunked_vector<gossip_digest>> _ack_queue;
+
 public:
     sstring get_cluster_name();
     sstring get_partitioner_name();
