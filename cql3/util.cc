@@ -119,5 +119,19 @@ void do_with_parser_impl(const sstring_view& cql, noncopyable_function<void (cql
 
 #endif
 
+void validate_timestamp(const query_options& options, const std::unique_ptr<attributes>& attrs) {
+    if (attrs->is_timestamp_set()) {
+        static constexpr int64_t MAX_DIFFERENCE = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::days(3)).count();
+        auto now = std::chrono::duration_cast<std::chrono::microseconds>(db_clock::now().time_since_epoch()).count();
+
+        auto timestamp = attrs->get_timestamp(now, options);
+
+        if (timestamp - now > MAX_DIFFERENCE) {
+            throw exceptions::invalid_request_exception("Cannot provide a timestamp more than 3 days into the future. If this was not intended, "
+            "make sure the timestamp is in microseconds");
+        }
+    }
+}
+
 
 }
