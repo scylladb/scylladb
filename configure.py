@@ -400,12 +400,12 @@ scylla_tests = set([
     'test/boost/bptree_test',
     'test/boost/double_decker_test',
     'test/boost/stall_free_test',
+    'test/boost/imr_test',
     'test/manual/ec2_snitch_test',
     'test/manual/enormous_table_scan_test',
     'test/manual/gce_snitch_test',
     'test/manual/gossip',
     'test/manual/hint_test',
-    'test/manual/imr_test',
     'test/manual/message',
     'test/manual/partition_data_test',
     'test/manual/row_locker_test',
@@ -1087,7 +1087,7 @@ deps['test/boost/anchorless_list_test'] = ['test/boost/anchorless_list_test.cc']
 deps['test/perf/perf_fast_forward'] += ['release.cc']
 deps['test/perf/perf_simple_query'] += ['release.cc']
 deps['test/boost/meta_test'] = ['test/boost/meta_test.cc']
-deps['test/manual/imr_test'] = ['test/manual/imr_test.cc', 'utils/logalloc.cc', 'utils/dynamic_bitset.cc']
+deps['test/boost/imr_test'] = ['test/boost/imr_test.cc', 'utils/logalloc.cc', 'utils/dynamic_bitset.cc']
 deps['test/boost/reusable_buffer_test'] = [
     "test/boost/reusable_buffer_test.cc",
     "test/lib/log.cc",
