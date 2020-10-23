@@ -1940,6 +1940,42 @@ deletable_row deletable_row::difference(const schema& s, column_kind kind, const
 row row::difference(const schema& s, column_kind kind, const row& other) const
 {
     row r;
+
+    if (_type == storage_type::array) {
+    auto c = _storage.array.begin();
+    auto c_end = _storage.array.end();
+    auto it = other._storage.array.begin();
+    auto it_end = other._storage.array.end();
+
+    while (c != c_end) {
+        while (it != it_end && it.key() < c.key()) {
+            ++it;
+        }
+        auto& cdef = s.column_at(kind, c.key());
+        if (it == it_end || it.key() != c.key()) {
+            r.append_cell(c.key(), c->cell.copy(*cdef.type));
+        } else if (cdef.is_counter()) {
+            auto cell = counter_cell_view::difference(c->cell.as_atomic_cell(cdef), it->cell.as_atomic_cell(cdef));
+            if (cell) {
+                r.append_cell(c.key(), std::move(*cell));
+            }
+        } else if (s.column_at(kind, c.key()).is_atomic()) {
+            if (compare_atomic_cell_for_merge(c->cell.as_atomic_cell(cdef), it->cell.as_atomic_cell(cdef)) > 0) {
+                r.append_cell(c.key(), c->cell.copy(*cdef.type));
+            }
+        } else {
+            auto diff = ::difference(*s.column_at(kind, c.key()).type,
+                    c->cell.as_collection_mutation(), it->cell.as_collection_mutation());
+            if (!static_cast<collection_mutation_view>(diff).is_empty()) {
+                r.append_cell(c.key(), std::move(diff));
+            }
+        }
+        c++;
+    }
+
+    return r;
+    }
+
     with_both_ranges(other, [&] (auto this_range, auto other_range) {
         auto it = other_range.begin();
         for (auto&& c : this_range) {
