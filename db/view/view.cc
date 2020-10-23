@@ -134,22 +134,86 @@ void view_info::set_base_info(db::view::base_info_ptr base_info) {
     _base_info = std::move(base_info);
 }
 
+// A constructor for a base info that can facilitate reads and writes from the materialized view.
+db::view::base_dependent_view_info::base_dependent_view_info(schema_ptr base_schema, std::vector<column_id>&& base_non_pk_columns_in_view_pk)
+        : _base_schema{std::move(base_schema)}
+        , _base_non_pk_columns_in_view_pk{std::move(base_non_pk_columns_in_view_pk)}
+        , has_base_non_pk_columns_in_view_pk{!_base_non_pk_columns_in_view_pk.empty()}
+        , use_only_for_reads{false} {
+
+}
+
+// A constructor for a base info that can facilitate only reads from the materialized view.
+db::view::base_dependent_view_info::base_dependent_view_info(bool has_base_non_pk_columns_in_view_pk)
+        : _base_schema{nullptr}
+        , has_base_non_pk_columns_in_view_pk{has_base_non_pk_columns_in_view_pk}
+        , use_only_for_reads{true} {
+}
+
+const std::vector<column_id>& db::view::base_dependent_view_info::base_non_pk_columns_in_view_pk() const {
+    if (use_only_for_reads) {
+        on_internal_error(vlogger, "base_non_pk_columns_in_view_pk(): operation unsupported when initialized only for view reads.");
+    }
+    return _base_non_pk_columns_in_view_pk;
+}
+
+const schema_ptr& db::view::base_dependent_view_info::base_schema() const {
+    if (use_only_for_reads) {
+        on_internal_error(vlogger, "base_schema(): operation unsupported when initialized only for view reads.");
+    }
+    return _base_schema;
+}
+
 db::view::base_info_ptr view_info::make_base_dependent_view_info(const schema& base) const {
     std::vector<column_id> base_non_pk_columns_in_view_pk;
+    bool has_base_non_pk_columns_in_view_pk = false;
+    bool can_only_read_from_view = false;
+
     for (auto&& view_col : boost::range::join(_schema.partition_key_columns(), _schema.clustering_key_columns())) {
+        if (view_col.is_computed()) {
+            // we are not going to find it in the base table...
+            continue;
+        }
         auto* base_col = base.get_column_definition(view_col.name());
         if (base_col && !base_col->is_primary_key()) {
             base_non_pk_columns_in_view_pk.push_back(base_col->id);
+            has_base_non_pk_columns_in_view_pk = true;
+        } else if (!base_col) {
+            // If we didn't find the column in the base column then it must have been deleted
+            // or not yet added (by alter command), this means it is for sure not a pk column
+            // in the base table. This can happen if the version of the base schema is not the
+            // one that the view was created with. Seting this schema as the base can't harm since
+            // if we got to such a situation then it means it is only going to be used for reading
+            // (computation of shadowable tombstones) and in that case the existence of such a column
+            // is the only thing that is of interest to us.
+            has_base_non_pk_columns_in_view_pk = true;
+            can_only_read_from_view = true;
+
+            // We can break the loop here since we have the info we wanted and the list
+            // of columns is not going to be reliable anyhow.
+            break;
         }
     }
-    return make_lw_shared<db::view::base_dependent_view_info>({
-        .base_schema = base.shared_from_this(),
-        .base_non_pk_columns_in_view_pk = std::move(base_non_pk_columns_in_view_pk)
-    });
+
+    if (can_only_read_from_view) {
+        return make_lw_shared<db::view::base_dependent_view_info>(has_base_non_pk_columns_in_view_pk);
+    } else {
+        return make_lw_shared<db::view::base_dependent_view_info>(base.shared_from_this(), std::move(base_non_pk_columns_in_view_pk));
+    }
+
 }
 
 bool view_info::has_base_non_pk_columns_in_view_pk() const {
-    return !_base_info->base_non_pk_columns_in_view_pk.empty();
+    // The base info is not always available, this is because
+    // the base info initialization is separate from the view
+    // info construction. If we are trying to get this info without
+    // initializing the base information it means that we have a
+    // schema integrity problem as the creator of owning view schema
+    // didn't make sure to initialize it with base information.
+    if (!_base_info) {
+        on_internal_error(vlogger, "Tried to perform a view query which is base info dependant without initializing it");
+    }
+    return _base_info->has_base_non_pk_columns_in_view_pk;
 }
 
 namespace db {
@@ -254,7 +318,7 @@ public:
     explicit view_updates(view_and_base vab)
             : _view(std::move(vab.view))
             , _view_info(*_view->view_info())
-            , _base(vab.base->base_schema)
+            , _base(vab.base->base_schema())
             , _base_info(vab.base)
             , _updates(8, partition_key::hashing(*_view), partition_key::equality(*_view)) {
     }
@@ -317,7 +381,7 @@ row_marker view_updates::compute_row_marker(const clustering_row& base_row) cons
     // they share liveness information. It's true especially in the only case currently allowed by CQL,
     // which assumes there's up to one non-pk column in the view key. It's also true in alternator,
     // which does not carry TTL information.
-    const auto& col_ids = _base_info->base_non_pk_columns_in_view_pk;
+    const auto& col_ids = _base_info->base_non_pk_columns_in_view_pk();
     if (!col_ids.empty()) {
         auto& def = _base->regular_column_at(col_ids[0]);
         // Note: multi-cell columns can't be part of the primary key.
@@ -548,7 +612,7 @@ void view_updates::delete_old_entry(const partition_key& base_key, const cluster
 
 void view_updates::do_delete_old_entry(const partition_key& base_key, const clustering_row& existing, const clustering_row& update, gc_clock::time_point now) {
     auto& r = get_view_row(base_key, existing);
-    const auto& col_ids = _base_info->base_non_pk_columns_in_view_pk;
+    const auto& col_ids = _base_info->base_non_pk_columns_in_view_pk();
     if (!col_ids.empty()) {
         // We delete the old row using a shadowable row tombstone, making sure that
         // the tombstone deletes everything in the row (or it might still show up).
@@ -689,7 +753,7 @@ void view_updates::generate_update(
         return;
     }
 
-    const auto& col_ids = _base_info->base_non_pk_columns_in_view_pk;
+    const auto& col_ids = _base_info->base_non_pk_columns_in_view_pk();
     if (col_ids.empty()) {
         // The view key is necessarily the same pre and post update.
         if (existing && existing->is_live(*_base)) {
@@ -947,10 +1011,10 @@ future<std::vector<frozen_mutation_and_schema>> generate_view_updates(
         flat_mutation_reader&& updates,
         flat_mutation_reader_opt&& existings) {
     auto vs = boost::copy_range<std::vector<view_updates>>(views_to_update | boost::adaptors::transformed([&] (view_and_base v) {
-        if (base->version() != v.base->base_schema->version()) {
+        if (base->version() != v.base->base_schema()->version()) {
             on_internal_error(vlogger, format("Schema version used for view updates ({}) does not match the current"
                                               " base schema version of the view ({}) for view {}.{} of {}.{}",
-                base->version(), v.base->base_schema->version(), v.view->ks_name(), v.view->cf_name(), base->ks_name(), base->cf_name()));
+                base->version(), v.base->base_schema()->version(), v.view->ks_name(), v.view->cf_name(), base->ks_name(), base->cf_name()));
         }
         return view_updates(std::move(v));
     }));
