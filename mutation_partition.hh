@@ -47,6 +47,7 @@
 #include "utils/intrusive_btree.hh"
 #include "utils/preempt.hh"
 #include "utils/managed_ref.hh"
+#include "utils/compact-radix-tree.hh"
 
 class mutation_fragment;
 
@@ -142,6 +143,7 @@ class row {
     enum class storage_type {
         vector,
         set,
+        array,
     };
     storage_type _type = storage_type::vector;
     size_type _size = 0;
@@ -168,11 +170,14 @@ private:
         }
     };
 
+    using sparse_array_type = compact_radix_tree::tree<cell_and_hash, column_id>;
+
     union storage {
         storage() { }
         ~storage() { }
         map_type set;
         vector_storage vector;
+        sparse_array_type array;
     } _storage;
 public:
     row();
@@ -194,6 +199,20 @@ public:
 
     template<typename Func>
     void remove_if(Func&& func) {
+        if (_type == storage_type::array) {
+        auto& _cells = _storage.array;
+
+        _cells.weed([func, this] (column_id id, cell_and_hash& cah) {
+            if (!func(id, cah.cell)) {
+                return false;
+            }
+
+            _size--;
+            return true;
+        });
+
+        }
+
         if (_type == storage_type::vector) {
             for (unsigned i = 0; i < _storage.vector.v.size(); i++) {
                 if (!_storage.vector.present.test(i)) {
@@ -260,6 +279,16 @@ public:
     // noexcept if Func doesn't throw.
     template<typename Func>
     void for_each_cell(Func&& func) {
+        if (_type == storage_type::array) {
+        auto& _cells = _storage.array;
+
+        _cells.walk([func] (column_id id, cell_and_hash& cah) {
+            maybe_invoke_with_hash(func, id, cah);
+            return true;
+        });
+
+        }
+
         if (_type == storage_type::vector) {
             for (auto i : bitsets::for_each_set(_storage.vector.present)) {
                 maybe_invoke_with_hash(func, i, _storage.vector.v[i]);
@@ -273,6 +302,16 @@ public:
 
     template<typename Func>
     void for_each_cell(Func&& func) const {
+        if (_type == storage_type::array) {
+        auto& _cells = _storage.array;
+
+        _cells.walk([func] (column_id id, const cell_and_hash& cah) {
+            maybe_invoke_with_hash(func, id, cah);
+            return true;
+        });
+
+        }
+
         if (_type == storage_type::vector) {
             for (auto i : bitsets::for_each_set(_storage.vector.present)) {
                 maybe_invoke_with_hash(func, i, _storage.vector.v[i]);
@@ -286,6 +325,15 @@ public:
 
     template<typename Func>
     void for_each_cell_until(Func&& func) const {
+        if (_type == storage_type::array) {
+        auto& _cells = _storage.array;
+
+        _cells.walk([func] (column_id id, const cell_and_hash& cah) {
+            return maybe_invoke_with_hash(func, id, cah) != stop_iteration::yes;
+        });
+
+        }
+
         if (_type == storage_type::vector) {
             for (auto i : bitsets::for_each_set(_storage.vector.present)) {
                 if (maybe_invoke_with_hash(func, i, _storage.vector.v[i]) == stop_iteration::yes) {
