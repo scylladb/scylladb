@@ -1748,6 +1748,30 @@ bool row::equal(column_kind kind, const schema& this_schema, const row& other, c
                && this_schema.column_at(kind, id1).name() == other_schema.column_at(kind, id2).name()
                && c1.equals(at1, c2);
     };
+
+    if (_type == storage_type::array) {
+    auto i1 = _storage.array.begin();
+    auto i1_end = _storage.array.end();
+    auto i2 = other._storage.array.begin();
+    auto i2_end = other._storage.array.end();
+
+    while (true) {
+        if (i1 == i1_end) {
+            return i2 == i2_end;
+        }
+        if (i2 == i2_end) {
+            return i1 == i1_end;
+        }
+
+        if (!cells_equal(i1.key(), i1->cell, i2.key(), i2->cell)) {
+            return false;
+        }
+
+        i1++;
+        i2++;
+    }
+    }
+
     return with_both_ranges(other, [&] (auto r1, auto r2) {
         return boost::equal(r1, r2, [&] (auto p1, auto p2) {
             return cells_equal(p1.first, p1.second, p2.first, p2.second);
