@@ -147,7 +147,7 @@ future<redis_message> hexists(service::storage_proxy& proxy, request& req, redis
     if (req.arguments_size() != 2) {
         throw wrong_arguments_exception(2, req.arguments_size(), req._command);
     }
-    return redis::read_hashes(proxy, options, req._args[0], std::move(req._args[1]), permit).then([] (auto result) {
+    return redis::read_hashes(proxy, options, req._args[0], req._args[1], permit).then([] (auto result) {
         return redis_message::number(result->empty() ? 0 : 1);
     });
 }
