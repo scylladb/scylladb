@@ -43,6 +43,7 @@ using boost::adaptors::transformed;
 
 namespace {
 
+static
 std::optional<atomic_cell_value_view> do_get_value(const schema& schema,
         const column_definition& cdef,
         const partition_key& key,
