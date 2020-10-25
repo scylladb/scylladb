@@ -414,6 +414,25 @@ public:
         return 0;
     }
 
+    template <std::invocable<bytes_view> Func>
+    std::invoke_result_t<Func, bytes_view> with_linearized(Func&& func) const {
+        const bytes_view::value_type* start = nullptr;
+        size_t size = 0;
+        if (!external()) {
+            start = _u.small.data;
+            size = _u.small.size;
+        } else if (!_u.ptr->next) {
+            start = _u.ptr->data;
+            size = _u.ptr->size;
+        }
+        if (start) {
+            return func(bytes_view(start, size));
+        } else {
+            auto data = do_linearize_pure();
+            return func(bytes_view(data.get(), _u.ptr->size));
+        }
+    }
+
     template <std::invocable<> Func>
     friend std::result_of_t<Func()> with_linearized_managed_bytes(Func&& func);
 };
