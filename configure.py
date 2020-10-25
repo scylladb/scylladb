@@ -1440,7 +1440,6 @@ abseil_libs = ['absl/' + lib for lib in [
     'base/libabsl_malloc_internal.a',
     'base/libabsl_spinlock_wait.a',
     'base/libabsl_base.a',
-    'base/libabsl_dynamic_annotations.a',
     'base/libabsl_raw_logging_internal.a',
     'base/libabsl_exponential_biased.a',
     'base/libabsl_throw_delegate.a']]
