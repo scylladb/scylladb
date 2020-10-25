@@ -44,7 +44,7 @@ using boost::adaptors::transformed;
 namespace {
 
 static
-std::optional<atomic_cell_value_view> do_get_value(const schema& schema,
+bytes_opt do_get_value(const schema& schema,
         const column_definition& cdef,
         const partition_key& key,
         const clustering_key_prefix& ckey,
@@ -52,9 +52,9 @@ std::optional<atomic_cell_value_view> do_get_value(const schema& schema,
         gc_clock::time_point now) {
     switch (cdef.kind) {
         case column_kind::partition_key:
-            return atomic_cell_value_view(key.get_component(schema, cdef.component_index()));
+            return to_bytes(key.get_component(schema, cdef.component_index()));
         case column_kind::clustering_key:
-            return atomic_cell_value_view(ckey.get_component(schema, cdef.component_index()));
+            return to_bytes(ckey.get_component(schema, cdef.component_index()));
         default:
             auto cell = cells.find_cell(cdef.id);
             if (!cell) {
@@ -62,7 +62,7 @@ std::optional<atomic_cell_value_view> do_get_value(const schema& schema,
             }
             assert(cdef.is_atomic());
             auto c = cell->as_atomic_cell(cdef);
-            return c.is_dead(now) ? std::nullopt : std::optional<atomic_cell_value_view>(c.value());
+            return c.is_dead(now) ? std::nullopt : bytes_opt(c.value().linearize());
     }
 }
 
@@ -139,9 +139,8 @@ bytes_opt get_value_from_partition_slice(
 
 /// Returns col's value from a mutation.
 bytes_opt get_value_from_mutation(const column_value& col, row_data_from_mutation data) {
-    const auto v = do_get_value(
+    return do_get_value(
             data.schema_, *col.col, data.partition_key_, data.clustering_key_, data.other_columns, data.now);
-    return v ? v->linearize() : bytes_opt();
 }
 
 /// Returns col's value from the fetched data.
