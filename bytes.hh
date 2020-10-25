@@ -35,6 +35,10 @@ using bytes_mutable_view = basic_mutable_view<bytes_view::value_type>;
 using bytes_opt = std::optional<bytes>;
 using sstring_view = std::string_view;
 
+inline bytes to_bytes(bytes&& b) {
+    return std::move(b);
+}
+
 inline sstring_view to_sstring_view(bytes_view view) {
     return {reinterpret_cast<const char*>(view.data()), view.size()};
 }
