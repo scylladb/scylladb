@@ -158,6 +158,7 @@ private:
         }
         return a->data[index];
     }
+    std::unique_ptr<bytes_view::value_type[]> do_linearize_pure() const;
     const bytes_view::value_type* do_linearize() const;
 public:
     using size_type = blob_storage::size_type;
