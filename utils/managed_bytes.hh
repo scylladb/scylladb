@@ -232,8 +232,8 @@ public:
     }
 
     managed_bytes(const managed_bytes& o) : managed_bytes(initialized_later(), o.size()) {
-        if (!external()) {
-            memcpy(data(), o.data(), size());
+        if (!o.external()) {
+            _u.small = o._u.small;
             return;
         }
         auto s = size();
@@ -299,7 +299,7 @@ public:
             return false;
         }
         if (!external()) {
-            return bytes_view(*this) == bytes_view(o);
+            return std::equal(_u.small.data, _u.small.data + _u.small.size, o._u.small.data);
         } else {
             auto a = _u.ptr;
             auto a_data = a->data;
