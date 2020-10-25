@@ -1589,7 +1589,7 @@ private:
         return counter_column_to_column_or_supercolumn(make_counter_column(col, cell));
     }
     static std::string partition_key_to_string(const schema& s, const partition_key& key) {
-        return bytes_to_string(to_legacy(*s.partition_key_type(), key));
+        return bytes_to_string(to_legacy(*s.partition_key_type(), key.representation()));
     }
 
     template<typename Aggregator, query_order QueryOrder>
