@@ -414,13 +414,13 @@ public:
         return 0;
     }
 
-    template <typename Func>
+    template <std::invocable<> Func>
     friend std::result_of_t<Func()> with_linearized_managed_bytes(Func&& func);
 };
 
 // Run func() while ensuring that reads of managed_bytes objects are
 // temporarlily linearized
-template <typename Func>
+template <std::invocable<> Func>
 inline
 std::result_of_t<Func()>
 with_linearized_managed_bytes(Func&& func) {
