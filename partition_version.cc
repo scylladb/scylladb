@@ -417,69 +417,69 @@ coroutine partition_entry::apply_to_incomplete(const schema& s,
             static_done = false] () mutable {
         auto&& allocator = reg.allocator();
         return alloc(reg, [&] {
-                size_t dirty_size = 0;
+            size_t dirty_size = 0;
 
-                if (!static_done) {
-                    partition_version& dst = *dst_snp->version();
-                    bool static_row_continuous = dst_snp->static_row_continuous();
-                    auto current = &*src_snp->version();
-                    while (current) {
-                        dirty_size += allocator.object_memory_size_in_allocator(current)
-                            + current->partition().static_row().external_memory_usage(s, column_kind::static_column);
-                        dst.partition().apply(current->partition().partition_tombstone());
-                        if (static_row_continuous) {
-                            lazy_row& static_row = dst.partition().static_row();
-                            if (can_move) {
-                                static_row.apply(s, column_kind::static_column,
-                                    std::move(current->partition().static_row()));
-                            } else {
-                                static_row.apply(s, column_kind::static_column, current->partition().static_row());
-                            }
-                        }
-                        dirty_size += current->partition().row_tombstones().external_memory_usage(s);
-                        range_tombstone_list& tombstones = dst.partition().row_tombstones();
-                        // FIXME: defer while applying range tombstones
+            if (!static_done) {
+                partition_version& dst = *dst_snp->version();
+                bool static_row_continuous = dst_snp->static_row_continuous();
+                auto current = &*src_snp->version();
+                while (current) {
+                    dirty_size += allocator.object_memory_size_in_allocator(current)
+                        + current->partition().static_row().external_memory_usage(s, column_kind::static_column);
+                    dst.partition().apply(current->partition().partition_tombstone());
+                    if (static_row_continuous) {
+                        lazy_row& static_row = dst.partition().static_row();
                         if (can_move) {
-                            tombstones.apply_monotonically(s, std::move(current->partition().row_tombstones()));
+                            static_row.apply(s, column_kind::static_column,
+                                std::move(current->partition().static_row()));
                         } else {
-                            tombstones.apply_monotonically(s, current->partition().row_tombstones());
+                            static_row.apply(s, column_kind::static_column, current->partition().static_row());
                         }
-                        current = current->next();
-                        can_move &= current && !current->is_referenced();
                     }
-                    acc.unpin_memory(dirty_size);
-                    static_done = true;
+                    dirty_size += current->partition().row_tombstones().external_memory_usage(s);
+                    range_tombstone_list& tombstones = dst.partition().row_tombstones();
+                    // FIXME: defer while applying range tombstones
+                    if (can_move) {
+                        tombstones.apply_monotonically(s, std::move(current->partition().row_tombstones()));
+                    } else {
+                        tombstones.apply_monotonically(s, current->partition().row_tombstones());
+                    }
+                    current = current->next();
+                    can_move &= current && !current->is_referenced();
                 }
+                acc.unpin_memory(dirty_size);
+                static_done = true;
+            }
 
-                if (!src_cur.maybe_refresh_static()) {
+            if (!src_cur.maybe_refresh_static()) {
+                return stop_iteration::yes;
+            }
+
+            do {
+                auto size = src_cur.memory_usage();
+                if (!src_cur.dummy()) {
+                    tracker.on_row_processed_from_memtable();
+                    auto ropt = cur.ensure_entry_if_complete(src_cur.position());
+                    if (ropt) {
+                        if (!ropt->inserted) {
+                            tracker.on_row_merged_from_memtable();
+                        }
+                        rows_entry& e = ropt->row;
+                        src_cur.consume_row([&](deletable_row&& row) {
+                            e.row().apply_monotonically(s, std::move(row));
+                        });
+                    } else {
+                        tracker.on_row_dropped_from_memtable();
+                    }
+                }
+                auto has_next = src_cur.erase_and_advance();
+                acc.unpin_memory(size);
+                if (!has_next) {
+                    dst_snp->unlock();
                     return stop_iteration::yes;
                 }
-
-                do {
-                    auto size = src_cur.memory_usage();
-                    if (!src_cur.dummy()) {
-                        tracker.on_row_processed_from_memtable();
-                        auto ropt = cur.ensure_entry_if_complete(src_cur.position());
-                        if (ropt) {
-                            if (!ropt->inserted) {
-                                tracker.on_row_merged_from_memtable();
-                            }
-                            rows_entry& e = ropt->row;
-                            src_cur.consume_row([&](deletable_row&& row) {
-                                e.row().apply_monotonically(s, std::move(row));
-                            });
-                        } else {
-                            tracker.on_row_dropped_from_memtable();
-                        }
-                    }
-                    auto has_next = src_cur.erase_and_advance();
-                    acc.unpin_memory(size);
-                    if (!has_next) {
-                        dst_snp->unlock();
-                        return stop_iteration::yes;
-                    }
-                } while (!preemptible || !need_preempt());
-                return stop_iteration::no;
+            } while (!preemptible || !need_preempt());
+            return stop_iteration::no;
         });
     });
 }

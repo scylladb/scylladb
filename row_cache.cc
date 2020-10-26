@@ -1112,29 +1112,29 @@ future<> row_cache::invalidate(external_updater eu, dht::partition_range_vector&
 
                 while (true) {
                     auto done = _update_section(_tracker.region(), [&] {
-                            auto cmp = dht::ring_position_comparator(*_schema);
-                            auto it = _partitions.lower_bound(*_prev_snapshot_pos, cmp);
-                            auto end = _partitions.lower_bound(dht::ring_position_view::for_range_end(range), cmp);
-                            return with_allocator(_tracker.allocator(), [&] {
-                                while (it != end) {
-                                    it = it.erase_and_dispose(dht::raw_token_less_comparator{},
-                                        [&] (cache_entry* p) mutable noexcept {
-                                            _tracker.on_partition_erase();
-                                            p->evict(_tracker);
-                                        });
-                                    // it != end is necessary for correctness. We cannot set _prev_snapshot_pos to end->position()
-                                    // because after resuming something may be inserted before "end" which falls into the next range.
-                                    if (need_preempt() && it != end) {
-                                        with_allocator(standard_allocator(), [&] {
-                                            _prev_snapshot_pos = it->key();
-                                        });
-                                        break;
-                                    }
+                        auto cmp = dht::ring_position_comparator(*_schema);
+                        auto it = _partitions.lower_bound(*_prev_snapshot_pos, cmp);
+                        auto end = _partitions.lower_bound(dht::ring_position_view::for_range_end(range), cmp);
+                        return with_allocator(_tracker.allocator(), [&] {
+                            while (it != end) {
+                                it = it.erase_and_dispose(dht::raw_token_less_comparator{},
+                                    [&] (cache_entry* p) mutable noexcept {
+                                        _tracker.on_partition_erase();
+                                        p->evict(_tracker);
+                                    });
+                                // it != end is necessary for correctness. We cannot set _prev_snapshot_pos to end->position()
+                                // because after resuming something may be inserted before "end" which falls into the next range.
+                                if (need_preempt() && it != end) {
+                                    with_allocator(standard_allocator(), [&] {
+                                        _prev_snapshot_pos = it->key();
+                                    });
+                                    break;
                                 }
-                                assert(it != _partitions.end());
-                                _tracker.clear_continuity(*it);
-                                return stop_iteration(it == end);
-                            });
+                            }
+                            assert(it != _partitions.end());
+                            _tracker.clear_continuity(*it);
+                            return stop_iteration(it == end);
+                        });
                     });
                     if (done == stop_iteration::yes) {
                         break;
