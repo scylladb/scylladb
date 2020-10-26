@@ -162,7 +162,7 @@ public:
         }
     }
 
-    managed_bytes(managed_bytes_view);
+    managed_bytes(const managed_bytes_view);
 
     managed_bytes(bytes_view v) : managed_bytes(initialized_later(), v.size()) {
         if (!external()) {

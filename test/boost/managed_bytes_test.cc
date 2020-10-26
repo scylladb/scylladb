@@ -69,6 +69,35 @@ SEASTAR_THREAD_TEST_CASE(test_managed_bytes_from_bytes) {
     BOOST_REQUIRE_EQUAL(to_bytes(m), b);
 }
 
+SEASTAR_THREAD_TEST_CASE(test_managed_bytes_from_manged_bytes_view) {
+    bytes b;
+    managed_bytes m;
+    managed_bytes_view mv;
+
+    m = managed_bytes(mv);
+    BOOST_REQUIRE_EQUAL(managed_bytes_view(m), mv);
+
+    b = random_bytes(1, 16);
+    mv = managed_bytes_view(b);
+    m = managed_bytes(mv);
+    BOOST_REQUIRE_EQUAL(managed_bytes_view(m), mv);
+
+    b = random_bytes(16, 256);
+    mv = managed_bytes_view(b);
+    m = managed_bytes(mv);
+    BOOST_REQUIRE_EQUAL(managed_bytes_view(m), mv);
+
+    b = random_bytes(256, 4096);
+    mv = managed_bytes_view(b);
+    m = managed_bytes(mv);
+    BOOST_REQUIRE_EQUAL(managed_bytes_view(m), mv);
+
+    b = random_bytes(4096, 131072);
+    mv = managed_bytes_view(b);
+    m = managed_bytes(mv);
+    BOOST_REQUIRE_EQUAL(managed_bytes_view(m), mv);
+}
+
 SEASTAR_THREAD_TEST_CASE(test_managed_bytes_equality) {
     bytes b, b2;
     managed_bytes m1, m2;
