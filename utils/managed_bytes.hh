@@ -140,16 +140,6 @@ private:
             p = n;
         }
     }
-    const bytes_view::value_type* read_linearize() const {
-        seastar::memory::on_alloc_point();
-        if (!external()) {
-            return _u.small.data;
-        } else  if (!_u.ptr->next) {
-            return _u.ptr->data;
-        } else {
-            return do_linearize();
-        }
-    }
     bytes_view::value_type& value_at_index(blob_storage::size_type index) {
         if (!external()) {
             return _u.small.data[index];
@@ -342,18 +332,9 @@ public:
         return !(*this == o);
     }
 
-    operator bytes_view() const {
-        return { data(), size() };
-    }
-
     bool is_fragmented() const {
         return external() && _u.ptr->next;
     }
-
-    operator bytes_mutable_view() {
-        assert(!is_fragmented());
-        return { data(), size() };
-    };
 
     bytes_view::value_type& operator[](size_type index) {
         return value_at_index(index);
@@ -372,37 +353,8 @@ public:
         }
     }
 
-    const blob_storage::char_type* begin() const {
-        return data();
-    }
-
-    const blob_storage::char_type* end() const {
-        return data() + size();
-    }
-
-    blob_storage::char_type* begin() {
-        return data();
-    }
-
-    blob_storage::char_type* end() {
-        return data() + size();
-    }
-
     bool empty() const {
         return _u.small.size == 0;
-    }
-
-    blob_storage::char_type* data() {
-        if (external()) {
-            assert(!_u.ptr->next);  // must be linearized
-            return _u.ptr->data;
-        } else {
-            return _u.small.data;
-        }
-    }
-
-    const blob_storage::char_type* data() const {
-        return read_linearize();
     }
 
     // Returns the amount of external memory used.
