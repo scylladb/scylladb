@@ -173,7 +173,8 @@ public:
         while (_offset < limit) {
             auto shift = _offset % clustering_block::max_block_size;
             if (_offset < _prefix.size(_schema)) {
-                bytes_view value = _prefix.get_component(_schema, _offset);
+              managed_bytes_view mvalue = _prefix.get_component(_schema, _offset);
+              mvalue.with_linearized([&] (bytes_view value) {
                 if (value.empty()) {
                     _current_block.header |= (uint64_t(1) << (shift * 2));
                 } else {
@@ -193,6 +194,7 @@ public:
                         _current_block.header |= (uint64_t(1) << ((shift * 2) + 1));
                     }
                 }
+              });
             } else {
                 // This (and all subsequent) values of the prefix are missing (null)
                 // This branch is only ever taken for an ephemerally_full_prefix

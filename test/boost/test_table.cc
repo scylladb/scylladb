@@ -227,7 +227,7 @@ static size_t maybe_generate_static_row(cql_test_env& env, const schema& schema,
     const auto size = value.size();
 
     env.execute_prepared(static_insert_id, {{
-            cql3::raw_value::make_value(bytes(part_desc.dkey.key().get_component(schema, 0))),
+            cql3::raw_value::make_value(to_bytes(part_desc.dkey.key().get_component(schema, 0))),
             cql3::raw_value::make_value(serialized(std::move(value)))}}).get();
     return size;
 }
@@ -282,8 +282,8 @@ static clustering_row_generation_result generate_clustering_rows(
         written_bytes += value.size();
 
         env.execute_prepared(clustering_insert_id, {{
-                cql3::raw_value::make_value(bytes(part_desc.dkey.key().get_component(schema, 0))),
-                cql3::raw_value::make_value(bytes(key.get_component(schema, 0))),
+                cql3::raw_value::make_value(to_bytes(part_desc.dkey.key().get_component(schema, 0))),
+                cql3::raw_value::make_value(to_bytes(key.get_component(schema, 0))),
                 cql3::raw_value::make_value(serialized(std::move(value)))}}).get();
         written_rows.insert(std::move(key));
     }
@@ -296,9 +296,9 @@ static clustering_row_generation_result generate_clustering_rows(
     for (const auto& range : delete_ranges) {
         const auto delete_id = clustering_delete_id_mappings[range.start()->is_inclusive()][range.end()->is_inclusive()];
         env.execute_prepared(delete_id, {{
-                cql3::raw_value::make_value(bytes(part_desc.dkey.key().get_component(schema, 0))),
-                cql3::raw_value::make_value(bytes(range.start()->value().get_component(schema, 0))),
-                cql3::raw_value::make_value(bytes(range.end()->value().get_component(schema, 0)))}}).get();
+                cql3::raw_value::make_value(to_bytes(part_desc.dkey.key().get_component(schema, 0))),
+                cql3::raw_value::make_value(to_bytes(range.start()->value().get_component(schema, 0))),
+                cql3::raw_value::make_value(to_bytes(range.end()->value().get_component(schema, 0)))}}).get();
     }
 
     std::sort(delete_ranges.begin(), delete_ranges.end(), clustering_range_less_compare(schema));

@@ -133,7 +133,7 @@ BOOST_AUTO_TEST_CASE(test_conversions_between_view_and_wrapper) {
     BOOST_REQUIRE(key2.equal(s, key));
     BOOST_REQUIRE(key.equal(s, key2));
 
-    BOOST_REQUIRE(*key.begin(s) == bytes("value"));
+    BOOST_REQUIRE(*key.begin(s) == to_managed_bytes("value"));
 }
 
 template<typename T>
