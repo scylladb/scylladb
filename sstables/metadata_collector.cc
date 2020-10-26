@@ -34,7 +34,7 @@ void metadata_collector::convert(disk_array<uint32_t, disk_string<uint16_t>>& to
     }
     mdclogger.trace("{}: convert: {}", _name, clustering_key_prefix::with_schema_wrapper(_schema, *from));
     for (auto& value : from->components()) {
-        to.elements.push_back(disk_string<uint16_t>{bytes(value.data(), value.size())});
+        to.elements.push_back(disk_string<uint16_t>{value.to_bytes()});
     }
 }
 

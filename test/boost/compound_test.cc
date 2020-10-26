@@ -28,10 +28,10 @@
 #include "schema_builder.hh"
 #include "dht/murmur3_partitioner.hh"
 
-static std::vector<bytes> to_bytes_vec(std::vector<sstring> values) {
-    std::vector<bytes> result;
+static std::vector<managed_bytes> to_bytes_vec(std::vector<sstring> values) {
+    std::vector<managed_bytes> result;
     for (auto&& v : values) {
-        result.emplace_back(to_bytes(v));
+        result.emplace_back(to_managed_bytes(v));
     }
     return result;
 }
@@ -39,7 +39,7 @@ static std::vector<bytes> to_bytes_vec(std::vector<sstring> values) {
 template <typename Compound>
 static
 range_assert<typename Compound::iterator>
-assert_that_components(Compound& t, bytes packed) {
+assert_that_components(Compound& t, managed_bytes packed) {
     return assert_that_range(t.begin(packed), t.end(packed));
 }
 
@@ -172,9 +172,9 @@ BOOST_AUTO_TEST_CASE(test_component_iterator_post_incrementation) {
     auto packed = t.serialize_value(to_bytes_vec({"el1", "el2", "el3"}));
     auto i = t.begin(packed);
     auto end = t.end(packed);
-    BOOST_REQUIRE_EQUAL(to_bytes("el1"), *i++);
-    BOOST_REQUIRE_EQUAL(to_bytes("el2"), *i++);
-    BOOST_REQUIRE_EQUAL(to_bytes("el3"), *i++);
+    BOOST_REQUIRE_EQUAL(to_managed_bytes("el1"), *i++);
+    BOOST_REQUIRE_EQUAL(to_managed_bytes("el2"), *i++);
+    BOOST_REQUIRE_EQUAL(to_managed_bytes("el3"), *i++);
     BOOST_REQUIRE(i == end);
 }
 
@@ -241,8 +241,8 @@ BOOST_AUTO_TEST_CASE(test_conversion_to_legacy_form_same_token_two_components) {
 BOOST_AUTO_TEST_CASE(test_legacy_ordering_of_singular) {
     compound_type<allow_prefixes::no> t({bytes_type});
 
-    auto make = [&t] (sstring value) -> bytes {
-        return t.serialize_single(to_bytes(value));
+    auto make = [&t] (sstring value) -> managed_bytes {
+        return t.serialize_single(to_managed_bytes(value));
     };
 
     legacy_compound_view<decltype(t)>::tri_comparator cmp(t);
@@ -257,8 +257,8 @@ BOOST_AUTO_TEST_CASE(test_legacy_ordering_of_singular) {
 BOOST_AUTO_TEST_CASE(test_legacy_ordering_of_composites) {
     compound_type<allow_prefixes::no> t({bytes_type, bytes_type});
 
-    auto make = [&t] (sstring v1, sstring v2) -> bytes {
-        return t.serialize_value(std::vector<bytes>{to_bytes(v1), to_bytes(v2)});
+    auto make = [&t] (sstring v1, sstring v2) -> managed_bytes {
+        return t.serialize_value(std::vector<managed_bytes>{to_managed_bytes(v1), to_managed_bytes(v2)});
     };
 
     legacy_compound_view<decltype(t)>::tri_comparator cmp(t);
@@ -375,7 +375,7 @@ BOOST_AUTO_TEST_CASE(test_full_compound_validity) {
     const auto c = compound_type<allow_prefixes::no>({byte_type, utf8_type});
 
     auto validate = [&] (bytes b) {
-        c.validate(b);
+        c.validate(managed_bytes_view(b));
     };
 
     BOOST_REQUIRE_NO_THROW(validate({'\x00', '\x01', 0, '\x00', '\x02', 'a', 'b'})); // full
@@ -390,7 +390,7 @@ BOOST_AUTO_TEST_CASE(test_prefix_compound_validity) {
     const auto c = compound_type<allow_prefixes::yes>({byte_type, utf8_type});
 
     auto validate = [&] (bytes b) {
-        c.validate(b);
+        c.validate(managed_bytes_view(b));
     };
 
     BOOST_REQUIRE_NO_THROW(validate({'\x00', '\x01', 0, '\x00', '\x02', 'a', 'b'})); // full

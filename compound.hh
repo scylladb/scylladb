@@ -78,7 +78,15 @@ private:
         for (auto&& val : values) {
             assert(val.size() <= std::numeric_limits<size_type>::max());
             write<size_type>(out, size_type(val.size()));
-            out = std::copy(val.begin(), val.end(), out);
+            using val_type = std::remove_cv_t<std::remove_reference_t<decltype(val)>>;
+            if constexpr (std::is_same_v<val_type, managed_bytes_view>
+                    || std::is_same_v<val_type, managed_bytes>) {
+                val.with_linearized([&] (bytes_view val) {
+                    out = std::copy(val.begin(), val.end(), out);
+                });
+            } else {
+                out = std::copy(val.begin(), val.end(), out);
+            }
         }
     }
     template <typename RangeOfSerializedComponents>
@@ -90,25 +98,26 @@ private:
         return len;
     }
 public:
-    bytes serialize_single(bytes&& v) const {
+    managed_bytes serialize_single(managed_bytes&& v) const {
         return serialize_value({std::move(v)});
     }
     template<typename RangeOfSerializedComponents>
-    static bytes serialize_value(RangeOfSerializedComponents&& values) {
+    static managed_bytes serialize_value(RangeOfSerializedComponents&& values) {
         auto size = serialized_size(values);
         if (size > std::numeric_limits<size_type>::max()) {
             throw std::runtime_error(format("Key size too large: {:d} > {:d}", size, std::numeric_limits<size_type>::max()));
         }
+        // FIXME: don't linearize
         bytes b(bytes::initialized_later(), size);
         auto i = b.begin();
         serialize_value(values, i);
-        return b;
+        return managed_bytes(b);
     }
     template<typename T>
-    static bytes serialize_value(std::initializer_list<T> values) {
+    static managed_bytes serialize_value(std::initializer_list<T> values) {
         return serialize_value(boost::make_iterator_range(values.begin(), values.end()));
     }
-    bytes serialize_optionals(const std::vector<bytes_opt>& values) const {
+    managed_bytes serialize_optionals(const std::vector<bytes_opt>& values) const {
         return serialize_value(values | boost::adaptors::transformed([] (const bytes_opt& bo) -> bytes_view {
             if (!bo) {
                 throw std::logic_error("attempted to create key component from empty optional");
@@ -116,7 +125,7 @@ public:
             return *bo;
         }));
     }
-    bytes serialize_value_deep(const std::vector<data_value>& values) const {
+    managed_bytes serialize_value_deep(const std::vector<data_value>& values) const {
         // TODO: Optimize
         std::vector<bytes> partial;
         partial.reserve(values.size());
@@ -127,13 +136,13 @@ public:
         }
         return serialize_value(partial);
     }
-    bytes decompose_value(const value_type& values) const {
+    managed_bytes decompose_value(const value_type& values) const {
         return serialize_value(values);
     }
-    class iterator : public std::iterator<std::input_iterator_tag, const bytes_view> {
+    class iterator : public std::iterator<std::input_iterator_tag, const managed_bytes_view> {
     private:
-        bytes_view _v;
-        bytes_view _current;
+        managed_bytes_view _v;
+        managed_bytes_view _current;
     private:
         void read_current() {
             size_type len;
@@ -147,15 +156,15 @@ public:
                     throw_with_backtrace<marshal_exception>(format("compound_type iterator - not enough bytes, expected {:d}, got {:d}", len, _v.size()));
                 }
             }
-            _current = bytes_view(_v.begin(), len);
+            _current = _v.substr(0, len);
             _v.remove_prefix(len);
         }
     public:
         struct end_iterator_tag {};
-        iterator(const bytes_view& v) : _v(v) {
+        iterator(const managed_bytes_view& v) : _v(v) {
             read_current();
         }
-        iterator(end_iterator_tag, const bytes_view& v) : _v(nullptr, 0) {}
+        iterator(end_iterator_tag, const managed_bytes_view& v) : _v() {}
         iterator& operator++() {
             read_current();
             return *this;
@@ -167,28 +176,77 @@ public:
         }
         const value_type& operator*() const { return _current; }
         const value_type* operator->() const { return &_current; }
-        bool operator!=(const iterator& i) const { return _v.begin() != i._v.begin(); }
-        bool operator==(const iterator& i) const { return _v.begin() == i._v.begin(); }
+        bool operator!=(const iterator& i) const { return _v.size() != i._v.size(); }
+        bool operator==(const iterator& i) const { return _v.size() == i._v.size(); }
     };
+    static iterator begin(const managed_bytes& v) {
+        return iterator(v);
+    }
+    static iterator begin(managed_bytes_view v) {
+        return iterator(v);
+    }
     static iterator begin(const bytes_view& v) {
         return iterator(v);
+    }
+    static iterator end(const managed_bytes& v) {
+        return iterator(typename iterator::end_iterator_tag(), v);
+    }
+    static iterator end(managed_bytes_view v) {
+        return iterator(typename iterator::end_iterator_tag(), v);
     }
     static iterator end(const bytes_view& v) {
         return iterator(typename iterator::end_iterator_tag(), v);
     }
+    static boost::iterator_range<iterator> components(const managed_bytes& v) {
+        return v.with_linearized([&] (bytes_view v) {
+            return components(v);
+        });
+    }
+    static boost::iterator_range<iterator> components(managed_bytes_view v) {
+        return v.with_linearized([&] (bytes_view v) {
+            return components(v);
+        });
+    }
     static boost::iterator_range<iterator> components(const bytes_view& v) {
         return { begin(v), end(v) };
+    }
+    value_type deserialize_value(const managed_bytes&  v) const{
+        return v.with_linearized([&] (bytes_view v) {
+            return deserialize_value(v);
+        });
+    }
+    value_type deserialize_value(managed_bytes_view v) const {
+        return v.with_linearized([&] (bytes_view v) {
+            return deserialize_value(v);
+        });
     }
     value_type deserialize_value(bytes_view v) const {
         std::vector<bytes> result;
         result.reserve(_types.size());
         std::transform(begin(v), end(v), std::back_inserter(result), [] (auto&& v) {
-            return bytes(v.begin(), v.end());
+            return v.to_bytes();
         });
         return result;
     }
+    bool less(const managed_bytes& b1, const managed_bytes& b2) const {
+        return b1.with_linearized([&] (bytes_view bv1) {
+            return b2.with_linearized([&] (bytes_view bv2) {
+                return less(bv1, bv2);
+            });
+        });
+    }
     bool less(bytes_view b1, bytes_view b2) const {
         return compare(b1, b2) < 0;
+    }
+    size_t hash(const managed_bytes& v) const{
+        return v.with_linearized([&] (bytes_view v) {
+            return hash(v);
+        });
+    }
+    size_t hash(managed_bytes_view v) const{
+        return v.with_linearized([&] (bytes_view v) {
+            return hash(v);
+        });
     }
     size_t hash(bytes_view v) const {
         if (_byte_order_equal) {
@@ -201,6 +259,20 @@ public:
             ++t;
         }
         return h;
+    }
+    int compare(managed_bytes_view b1, managed_bytes_view b2) const {
+        return b1.with_linearized([&] (bytes_view bv1) {
+            return b2.with_linearized([&] (bytes_view bv2) {
+                return compare(bv1, bv2);
+            });
+        });
+    }
+    int compare(const managed_bytes& b1, const managed_bytes& b2) const {
+        return b1.with_linearized([&] (bytes_view bv1) {
+            return b2.with_linearized([&] (bytes_view bv2) {
+                return compare(bv1, bv2);
+            });
+        });
     }
     int compare(bytes_view b1, bytes_view b2) const {
         if (_byte_order_comparable) {
@@ -216,15 +288,31 @@ public:
             });
     }
     // Retruns true iff given prefix has no missing components
+    bool is_full(managed_bytes_view v) const {
+        return v.with_linearized([&] (bytes_view v) {
+            return is_full(v);
+        });
+    }
+    bool is_full(const managed_bytes& v) const {
+        return v.with_linearized([&] (bytes_view v) {
+            return is_full(v);
+        });
+    }
     bool is_full(bytes_view v) const {
         assert(AllowPrefixes == allow_prefixes::yes);
         return std::distance(begin(v), end(v)) == (ssize_t)_types.size();
     }
+    bool is_empty(managed_bytes_view v) const {
+        return v.empty();
+    }
+    bool is_empty(const managed_bytes& v) const {
+        return v.empty();
+    }
     bool is_empty(bytes_view v) const {
         return begin(v) == end(v);
     }
-    void validate(bytes_view v) const {
-        std::vector<bytes_view> values(begin(v), end(v));
+    void validate(managed_bytes_view v) const {
+        std::vector<managed_bytes_view> values(begin(v), end(v));
         if (AllowPrefixes == allow_prefixes::no && values.size() < _types.size()) {
             throw marshal_exception(fmt::format("compound::validate(): non-prefixable compound cannot be a prefix"));
         }
@@ -236,6 +324,13 @@ public:
             //FIXME: is it safe to assume internal serialization-format format?
             _types[i]->validate(values[i], cql_serialization_format::internal());
         }
+    }
+    bool equal(const managed_bytes& v1, const managed_bytes& v2) const {
+        return v1.with_linearized([&] (bytes_view bv1) {
+            return v2.with_linearized([&] (bytes_view bv2) {
+                return equal(bv1, bv2);
+            });
+        });
     }
     bool equal(bytes_view v1, bytes_view v2) const {
         if (_byte_order_equal) {

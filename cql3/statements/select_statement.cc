@@ -445,7 +445,7 @@ generate_base_key_from_index_pk(const partition_key& index_pk, const std::option
         return KeyType::make_empty();
     }
 
-    std::vector<bytes_view> exploded_base_key;
+    std::vector<managed_bytes_view> exploded_base_key;
     exploded_base_key.reserve(base_columns.size());
 
     for (const column_definition& base_col : base_columns) {
@@ -860,7 +860,7 @@ indexed_table_select_statement::indexed_table_select_statement(schema_ptr schema
 
 template<typename KeyType>
 requires (std::is_same_v<KeyType, partition_key> || std::is_same_v<KeyType, clustering_key_prefix>)
-static void append_base_key_to_index_ck(std::vector<bytes_view>& exploded_index_ck, const KeyType& base_key, const column_definition& index_cdef) {
+static void append_base_key_to_index_ck(std::vector<managed_bytes_view>& exploded_index_ck, const KeyType& base_key, const column_definition& index_cdef) {
     auto key_view = base_key.view();
     auto begin = key_view.begin();
     if ((std::is_same_v<KeyType, partition_key> && index_cdef.is_partition_key())
@@ -898,7 +898,7 @@ lw_shared_ptr<const service::pager::paging_state> indexed_table_select_statement
         }
     }();
 
-    std::vector<bytes_view> exploded_index_ck;
+    std::vector<managed_bytes_view> exploded_index_ck;
     exploded_index_ck.reserve(_view_schema->clustering_key_size());
 
     bytes token_bytes;
