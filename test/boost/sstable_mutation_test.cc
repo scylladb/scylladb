@@ -75,7 +75,7 @@ future<> test_no_clustered(sstables::test_env& env, bytes&& key, std::unordered_
                 BOOST_REQUIRE(mutation);
                 auto& mp = mutation->partition();
                 for (auto&& e : mp.range(*s, nonwrapping_range<clustering_key_prefix>())) {
-                    BOOST_REQUIRE(to_bytes(e.key()) == to_bytes(""));
+                    BOOST_REQUIRE(to_bytes(e.key().representation()) == to_bytes(""));
                     BOOST_REQUIRE(e.row().cells().size() == map.size());
 
                     auto &row = e.row().cells();
