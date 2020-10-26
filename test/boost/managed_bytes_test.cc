@@ -231,3 +231,26 @@ SEASTAR_THREAD_TEST_CASE(test_managed_bytes_view_range) {
     }
     BOOST_REQUIRE_EQUAL(size, 0);
 }
+
+SEASTAR_THREAD_TEST_CASE(test_managed_bytes_view_equality) {
+    bytes b, b2;
+    managed_bytes_view m1, m2;
+
+    BOOST_REQUIRE_EQUAL(m1, m2);
+
+    b = random_bytes(1, 131072);
+    m1 = managed_bytes_view(b);
+    m2 = managed_bytes_view(b);
+    BOOST_REQUIRE_EQUAL(m1, m2);
+    BOOST_REQUIRE_EQUAL(compare_unsigned(m1, m2), 0);
+    do {
+        b2 = random_bytes(b.size());
+    } while (b2 == b);
+    m2 = managed_bytes_view(b2);
+    BOOST_REQUIRE_NE(m1, m2);
+    if (b < b2) {
+        BOOST_REQUIRE(compare_unsigned(m1, m2) < 0);
+    } else {
+        BOOST_REQUIRE(compare_unsigned(m1, m2) > 0);
+    }
+}
