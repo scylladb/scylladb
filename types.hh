@@ -26,6 +26,7 @@
 #include <iosfwd>
 #include "data/cell.hh"
 #include <sstream>
+#include <iterator>
 
 #include <seastar/core/sstring.hh>
 #include <seastar/core/shared_ptr.hh>
@@ -121,7 +122,10 @@ bool lexicographical_compare(TypesIterator types, InputIt1 first1, InputIt1 last
 // A trichotomic comparator returns an integer which is less, equal or greater
 // than zero when the first value is respectively smaller, equal or greater
 // than the second value.
-template <typename TypesIterator, typename InputIt1, typename InputIt2, typename Compare>
+template <std::input_iterator TypesIterator, std::input_iterator InputIt1, std::input_iterator InputIt2, typename Compare>
+requires requires (TypesIterator types, InputIt1 i1, InputIt2 i2, Compare cmp) {
+    { cmp(*types, *i1, *i2) } -> std::same_as<int>;
+}
 int lexicographical_tri_compare(TypesIterator types_first, TypesIterator types_last,
         InputIt1 first1, InputIt1 last1,
         InputIt2 first2, InputIt2 last2,
