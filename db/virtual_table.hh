@@ -46,6 +46,11 @@ protected:
     bool this_shard_owns(const dht::decorated_key&) const;
 
 public:
+    class query_restrictions {
+    public:
+        virtual const dht::partition_range& partition_range() const = 0;
+    };
+
     explicit virtual_table(schema_ptr s) : _s(std::move(s)) {}
 
     const schema_ptr& schema() const { return _s; }
@@ -62,7 +67,10 @@ class memtable_filling_virtual_table : public virtual_table {
 public:
     using virtual_table::virtual_table;
 
+    // Override one of these execute() overloads.
+    // The handler is always allowed to produce more data than implied by the query_restrictions.
     virtual future<> execute(std::function<void(mutation)> mutation_sink, db::timeout_clock::time_point timeout) { return make_ready_future<>(); }
+    virtual future<> execute(std::function<void(mutation)> mutation_sink, db::timeout_clock::time_point timeout, const query_restrictions&) { return execute(mutation_sink, timeout); }
 
     mutation_source as_mutation_source() override;
 };
