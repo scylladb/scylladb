@@ -429,18 +429,18 @@ public:
                     _delegate = delegate_reader(_permit, *_delegate_range, _slice, _pc, streamed_mutation::forwarding::no, _fwd_mr);
                 } else {
                     auto key_and_snp = read_section()(region(), [&] () -> std::optional<std::pair<dht::decorated_key, partition_snapshot_ptr>> {
-                            memtable_entry *e = fetch_entry();
-                            if (!e) {
-                                return { };
-                            } else {
-                                // FIXME: Introduce a memtable specific reader that will be returned from
-                                // memtable_entry::read and will allow filling the buffer without the overhead of
-                                // virtual calls, intermediate buffers and futures.
-                                auto key = e->key();
-                                auto snp = e->snapshot(*mtbl());
-                                advance_iterator();
-                                return std::pair(std::move(key), std::move(snp));
-                            }
+                        memtable_entry *e = fetch_entry();
+                        if (!e) {
+                            return { };
+                        } else {
+                            // FIXME: Introduce a memtable specific reader that will be returned from
+                            // memtable_entry::read and will allow filling the buffer without the overhead of
+                            // virtual calls, intermediate buffers and futures.
+                            auto key = e->key();
+                            auto snp = e->snapshot(*mtbl());
+                            advance_iterator();
+                            return std::pair(std::move(key), std::move(snp));
+                        }
                     });
                     if (key_and_snp) {
                         update_last(key_and_snp->first);
@@ -580,15 +580,15 @@ private:
     void get_next_partition() {
         uint64_t component_size = 0;
         auto key_and_snp = read_section()(region(), [&] () -> std::optional<std::pair<dht::decorated_key, partition_snapshot_ptr>> {
-                memtable_entry* e = fetch_entry();
-                if (e) {
-                    auto dk = e->key();
-                    auto snp = e->snapshot(*mtbl());
-                    component_size = _flushed_memory.compute_size(*e, *snp);
-                    advance_iterator();
-                    return std::pair(std::move(dk), std::move(snp));
-                }
-                return { };
+            memtable_entry* e = fetch_entry();
+            if (e) {
+                auto dk = e->key();
+                auto snp = e->snapshot(*mtbl());
+                component_size = _flushed_memory.compute_size(*e, *snp);
+                advance_iterator();
+                return std::pair(std::move(dk), std::move(snp));
+            }
+            return { };
         });
         if (key_and_snp) {
             _flushed_memory.update_bytes_read(component_size);
