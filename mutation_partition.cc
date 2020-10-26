@@ -1219,8 +1219,6 @@ static
 void
 apply_monotonically(const column_definition& def, cell_and_hash& dst,
                     atomic_cell_or_collection& src, cell_hash_opt src_hash) {
-    // Must be run via with_linearized_managed_bytes() context, but assume it is
-    // provided via an upper layer
     if (def.is_atomic()) {
         if (def.is_counter()) {
             counter_cell_view::apply(def, dst.cell, src); // FIXME: Optimize
@@ -2699,9 +2697,7 @@ stop_iteration mutation_cleaner_impl::merge_some(partition_snapshot& snp) noexce
             }
             try {
                 return _worker_state->alloc_section(region, [&] {
-                  return with_linearized_managed_bytes([&] {
                     return snp.merge_partition_versions(_app_stats);
-                  });
                 });
             } catch (...) {
                 // Merging failed, give up as there is no guarantee of forward progress.
