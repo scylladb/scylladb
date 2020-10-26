@@ -352,3 +352,18 @@ SEASTAR_THREAD_TEST_CASE(test_managed_bytes_view_appending_hash) {
     appending_hash<managed_bytes_view>{}(h2, mv);
     BOOST_REQUIRE_EQUAL(h1.finalize(), h2.finalize());
 }
+
+SEASTAR_THREAD_TEST_CASE(test_managed_bytes_hash) {
+    bytes b;
+    managed_bytes m;
+
+    BOOST_REQUIRE_EQUAL(std::hash<bytes>{}(b), std::hash<managed_bytes>{}(m));
+
+    b = random_bytes(0, 16);
+    m = managed_bytes(b);
+    BOOST_REQUIRE_EQUAL(std::hash<bytes>{}(b), std::hash<managed_bytes>{}(m));
+
+    b = random_bytes(16, 131072);
+    m = managed_bytes(b);
+    BOOST_REQUIRE_EQUAL(std::hash<bytes>{}(b), std::hash<managed_bytes>{}(m));
+}
