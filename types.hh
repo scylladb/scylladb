@@ -1055,6 +1055,13 @@ to_bytes(const sstring& x) {
     return bytes(reinterpret_cast<const int8_t*>(x.c_str()), x.size());
 }
 
+// FIXME: make more explicit
+inline
+managed_bytes
+to_managed_bytes(const sstring& x) {
+    return managed_bytes(reinterpret_cast<const int8_t*>(x.c_str()), x.size());
+}
+
 inline
 bytes_view
 to_bytes_view(const sstring& x) {
