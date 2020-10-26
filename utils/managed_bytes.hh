@@ -549,8 +549,13 @@ template<>
 struct appending_hash<managed_bytes_view> {
     template<typename Hasher>
     void operator()(Hasher& h, managed_bytes_view v) const {
-        feed_hash(h, v.size());
-        //h.update(reinterpret_cast<const char*>(v.begin()), v.size() * sizeof(bytes_view::value_type));
+        if (v.empty()) {
+            appending_hash<bytes_view>{}(h, bytes_view());
+            return;
+        }
+        for (auto it = v.begin(); it != v.end(); it++) {
+            appending_hash<bytes_view>{}(h, *it);
+        }
     }
 };
 

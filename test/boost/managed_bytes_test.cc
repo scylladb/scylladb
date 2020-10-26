@@ -25,6 +25,7 @@
 #include "test/lib/random_utils.hh"
 #include "utils/managed_bytes.hh"
 #include "utils/fragment_range.hh"
+#include "xx_hasher.hh"
 
 static bytes random_bytes(size_t min_len = 0, size_t max_len = 0) {
     size_t size = max_len ? tests::random::get_int(min_len, max_len) : min_len;
@@ -324,4 +325,30 @@ SEASTAR_THREAD_TEST_CASE(test_managed_bytes_view_substr) {
     v = bytes_view(b.data() + offset, std::min(b.size() - offset, len));
     mvs = mv.substr(offset, len);
     BOOST_REQUIRE_EQUAL(mvs, v);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_managed_bytes_view_appending_hash) {
+    bytes b;
+    auto hseed = tests::random::get_int<uint64_t>();
+    auto h1 = xx_hasher(hseed);
+    auto h2 = xx_hasher(hseed);
+    managed_bytes_view mv;
+
+    BOOST_REQUIRE_EQUAL(h1.finalize(), h2.finalize());
+
+    appending_hash<bytes>{}(h1, b);
+    appending_hash<managed_bytes_view>{}(h2, mv);
+    BOOST_REQUIRE_EQUAL(h1.finalize(), h2.finalize());
+
+    b = random_bytes(0, 16);
+    mv = managed_bytes_view(b);
+    appending_hash<bytes>{}(h1, b);
+    appending_hash<managed_bytes_view>{}(h2, mv);
+    BOOST_REQUIRE_EQUAL(h1.finalize(), h2.finalize());
+
+    b = random_bytes(16, 131072);
+    mv = managed_bytes_view(b);
+    appending_hash<bytes>{}(h1, b);
+    appending_hash<managed_bytes_view>{}(h2, mv);
+    BOOST_REQUIRE_EQUAL(h1.finalize(), h2.finalize());
 }
