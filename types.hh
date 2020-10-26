@@ -30,6 +30,7 @@
 #include <seastar/core/sstring.hh>
 #include <seastar/core/shared_ptr.hh>
 #include "utils/UUID.hh"
+#include "utils/managed_bytes.hh"
 #include <seastar/net/byteorder.hh>
 #include "db_clock.hh"
 #include "bytes.hh"
@@ -1119,12 +1120,30 @@ T read_simple(bytes_view& v) {
 }
 
 template<typename T>
+T read_simple(managed_bytes_view& v) {
+    if (v.size() < sizeof(T)) {
+        throw_with_backtrace<marshal_exception>(format("read_simple - not enough bytes (expected {:d}, got {:d})", sizeof(T), v.size()));
+    }
+    // FIXME: implement
+    return T();
+}
+
+template<typename T>
 T read_simple_exactly(bytes_view v) {
     if (v.size() != sizeof(T)) {
         throw_with_backtrace<marshal_exception>(format("read_simple_exactly - size mismatch (expected {:d}, got {:d})", sizeof(T), v.size()));
     }
     auto p = v.begin();
     return net::ntoh(*reinterpret_cast<const net::packed<T>*>(p));
+}
+
+template<typename T>
+T read_simple_exactly(managed_bytes_view v) {
+    if (v.size() != sizeof(T)) {
+        throw_with_backtrace<marshal_exception>(format("read_simple_exactly - size mismatch (expected {:d}, got {:d})", sizeof(T), v.size()));
+    }
+    // FIXME: implement
+    return T();
 }
 
 inline
@@ -1136,6 +1155,16 @@ read_simple_bytes(bytes_view& v, size_t n) {
     bytes_view ret(v.begin(), n);
     v.remove_prefix(n);
     return ret;
+}
+
+inline
+managed_bytes_view
+read_simple_bytes(managed_bytes_view& v, size_t n) {
+    if (v.size() < n) {
+        throw_with_backtrace<marshal_exception>(format("read_simple_bytes - not enough bytes (requested {:d}, got {:d})", n, v.size()));
+    }
+    // FIXME: implement
+    return managed_bytes_view();
 }
 
 template<typename T>
