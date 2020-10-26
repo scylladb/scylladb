@@ -24,6 +24,7 @@
 #include <seastar/testing/thread_test_case.hh>
 #include "test/lib/random_utils.hh"
 #include "utils/managed_bytes.hh"
+#include "utils/fragment_range.hh"
 
 static bytes random_bytes(size_t min_len = 0, size_t max_len = 0) {
     size_t size = max_len ? tests::random::get_int(min_len, max_len) : min_len;
@@ -147,4 +148,48 @@ SEASTAR_THREAD_TEST_CASE(test_managed_bytes_view_remove_prefix) {
     m.remove_prefix(n);
     BOOST_REQUIRE_EQUAL(to_bytes(m), bytes_view(b.data() + n, b.size() - n));
     BOOST_REQUIRE_THROW(m.remove_prefix(b.size() + 1), std::runtime_error);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_managed_bytes_range) {
+    bytes b;
+    managed_bytes m;
+
+    b = random_bytes(0, 131072);
+    m = managed_bytes(b);
+    auto v = fragment_range_view<managed_bytes>(m);
+    BOOST_REQUIRE_EQUAL(v.size_bytes(), b.size());
+    BOOST_REQUIRE_EQUAL(v.empty(), !b.size());
+
+    size_t size = 0;
+    for (auto f : m) {
+        size += f.size();
+    }
+    BOOST_REQUIRE_EQUAL(size, b.size());
+}
+
+SEASTAR_THREAD_TEST_CASE(test_managed_bytes_view_range) {
+    bytes b;
+    managed_bytes_view m;
+    size_t measured_size;
+
+    b = random_bytes(0, 131072);
+    m = managed_bytes_view(b);
+    auto v = fragment_range_view<managed_bytes_view>(m);
+    BOOST_REQUIRE_EQUAL(v.size_bytes(), b.size());
+    BOOST_REQUIRE_EQUAL(v.empty(), !b.size());
+
+    size_t size = 0;
+    for (auto f : m) {
+        size += f.size();
+    }
+    BOOST_REQUIRE_EQUAL(size, b.size());
+
+    m.remove_prefix(b.size());
+    BOOST_REQUIRE(v.empty());
+
+    size = 0;
+    for (auto f : m) {
+        size += f.size();
+    }
+    BOOST_REQUIRE_EQUAL(size, 0);
 }

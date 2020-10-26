@@ -76,6 +76,7 @@ struct blob_storage {
 } __attribute__((packed));
 
 class managed_bytes_view;
+class managed_bytes_view_fragment_iterator;
 
 // A managed version of "bytes" (can be used with LSA).
 class managed_bytes {
@@ -356,6 +357,14 @@ public:
         }
     }
 
+    // Conforms to FragmentRange<managed_bytes> concept
+    using fragment_type = bytes_view;
+    using fragment_iterator = managed_bytes_view_fragment_iterator;
+    using const_iterator = fragment_iterator;
+    const_iterator begin() const noexcept;
+    const_iterator end() const noexcept;
+    size_t size_bytes() const noexcept { return size(); }
+
     friend class managed_bytes_view;
 };
 
@@ -394,6 +403,35 @@ public:
     void remove_prefix(size_t prefix_len);
 
     friend class managed_bytes_view;
+    friend class managed_bytes_view_fragment_iterator;
+};
+
+class managed_bytes_view_fragment_iterator : public managed_bytes_view_base {
+public:
+    managed_bytes_view_fragment_iterator() = default;
+    managed_bytes_view_fragment_iterator(const managed_bytes_view_fragment_iterator&) = default;
+    managed_bytes_view_fragment_iterator(const managed_bytes_view_base& x) noexcept
+            : managed_bytes_view_base(x)
+    {}
+
+    managed_bytes_view_fragment_iterator& operator=(const managed_bytes_view_fragment_iterator&) = default;
+
+    bytes_view operator*() const noexcept {
+        return _current_fragment;
+    }
+    const bytes_view* operator->() const noexcept {
+        return &_current_fragment;
+    }
+
+    managed_bytes_view_fragment_iterator& operator++() noexcept {
+        remove_prefix(_current_fragment.size());
+        return *this;
+    }
+    managed_bytes_view_fragment_iterator operator++(int) noexcept {
+        managed_bytes_view_fragment_iterator tmp(*this);
+        ++(*this);
+        return tmp;
+    }
 };
 
 class managed_bytes_view : public managed_bytes_view_base {
@@ -412,6 +450,18 @@ public:
 
     template <std::invocable<bytes_view> Func>
     std::invoke_result_t<Func, bytes_view> with_linearized(Func&& func) const;
+
+    // Conforms to FragmentRange<managed_bytes_view> concept
+    using fragment_type = bytes_view;
+    using fragment_iterator = managed_bytes_view_fragment_iterator;
+    using const_iterator = fragment_iterator;
+    const_iterator begin() const noexcept {
+        return fragment_iterator(*this);
+    }
+    const_iterator end() const noexcept {
+        return fragment_iterator();
+    }
+    size_t size_bytes() const noexcept { return size(); }
 private:
     void do_linearize_pure(bytes_view::value_type*) const noexcept;
 

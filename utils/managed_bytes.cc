@@ -39,9 +39,20 @@ managed_bytes::do_linearize_pure() const {
     return data;
 }
 
+managed_bytes::const_iterator managed_bytes::begin() const noexcept {
+    return managed_bytes_view(*this).begin();
+}
+
+managed_bytes::const_iterator managed_bytes::end() const noexcept {
+    return managed_bytes_view(*this).end();
+}
+
 static_assert(std::is_nothrow_default_constructible_v<managed_bytes_view_base>);
 static_assert(std::is_nothrow_copy_constructible_v<managed_bytes_view_base>);
 static_assert(std::is_nothrow_move_constructible_v<managed_bytes_view_base>);
+
+static_assert(std::is_nothrow_default_constructible_v<managed_bytes_view::fragment_iterator>);
+static_assert(std::is_nothrow_copy_constructible_v<managed_bytes_view::fragment_iterator>);
 
 managed_bytes_view::managed_bytes_view(const managed_bytes& mb) {
     if (mb._u.small.size != -1) {
