@@ -236,7 +236,9 @@ int compare_unsigned(const managed_bytes_view v1, const managed_bytes_view v2) n
 }
 
 std::ostream& operator<<(std::ostream& os, const managed_bytes_view& v) {
-    // FIXME: implement
+    for (auto it = v.begin(); it != v.end(); it++) {
+        os << *it;
+    }
     return os;
 }
 
