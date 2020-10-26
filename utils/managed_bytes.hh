@@ -479,36 +479,36 @@ std::invoke_result_t<Func, bytes_view> managed_bytes_view::with_linearized(Func&
 }
 
 // These are used to resolve ambiguities because managed_bytes_view can be converted to managed_bytes and vice versa
-inline bool operator==(const managed_bytes& a, const managed_bytes_view_base& b) {
+inline bool operator==(const managed_bytes& a, const managed_bytes_view_base& b) noexcept {
     return managed_bytes_view(a) == b;
 }
 
-inline bool operator==(const managed_bytes_view_base& a, const managed_bytes& b) {
+inline bool operator==(const managed_bytes_view_base& a, const managed_bytes& b) noexcept {
     return a == managed_bytes_view(b);
 }
 
-inline bool operator!=(const managed_bytes& a, const managed_bytes_view_base& b) {
+inline bool operator!=(const managed_bytes& a, const managed_bytes_view_base& b) noexcept {
     return managed_bytes_view(a) != b;
 }
 
-inline bool operator!=(const managed_bytes_view_base& a, const managed_bytes& b) {
+inline bool operator!=(const managed_bytes_view_base& a, const managed_bytes& b) noexcept {
     return a != managed_bytes_view(b);
 }
 
 // These are used to resolve ambiguities because bytes_view can be converted to managed_bytes and managed_bytes_view
-inline bool operator==(const bytes_view& a, const managed_bytes_view_base& b) {
+inline bool operator==(const bytes_view& a, const managed_bytes_view_base& b) noexcept {
     return managed_bytes_view(a) == b;
 }
 
-inline bool operator==(const managed_bytes_view_base& a, const bytes_view& b) {
+inline bool operator==(const managed_bytes_view_base& a, const bytes_view& b) noexcept {
     return a == managed_bytes_view_base(b);
 }
 
-inline bool operator!=(const bytes_view& a, const managed_bytes_view_base& b) {
+inline bool operator!=(const bytes_view& a, const managed_bytes_view_base& b) noexcept {
     return managed_bytes_view_base(a) != b;
 }
 
-inline bool operator!=(const managed_bytes_view_base& a, const bytes_view& b) {
+inline bool operator!=(const managed_bytes_view_base& a, const bytes_view& b) noexcept {
     return a != managed_bytes_view_base(b);
 }
 
