@@ -378,11 +378,22 @@ public:
     bool operator!=(const managed_bytes_view& x) const;
 
     template <std::invocable<bytes_view> Func>
-    std::invoke_result_t<Func, bytes_view> with_linearized(Func&& func) const {
-        return func(bytes_view());
-    }
+    std::invoke_result_t<Func, bytes_view> with_linearized(Func&& func) const;
+private:
+    void do_linearize_pure(bytes_view::value_type*) const noexcept;
+
     friend std::ostream& operator<<(std::ostream& os, const managed_bytes_view& v);
 };
+
+template <std::invocable<bytes_view> Func>
+std::invoke_result_t<Func, bytes_view> managed_bytes_view::with_linearized(Func&& func) const {
+    if (!_next_fragments) {
+        return func(_current_fragment);
+    }
+    auto data = std::unique_ptr<bytes_view::value_type[]>(new bytes_view::value_type[_size]);
+    do_linearize_pure(data.get());
+    return func(bytes_view(data.get(), _size));
+}
 
 // These are used to resolve ambiguities because managed_bytes_view can be converted to managed_bytes and vice versa
 inline bool operator==(const managed_bytes& a, const managed_bytes_view& b) {

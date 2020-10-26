@@ -38,6 +38,7 @@ SEASTAR_THREAD_TEST_CASE(test_managed_bytes_from_bytes) {
     m.with_linearized([&] (bytes_view v) {
         BOOST_REQUIRE_EQUAL(v, b);
     });
+    BOOST_REQUIRE_EQUAL(to_bytes(m), b);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_managed_bytes_equality) {
@@ -60,4 +61,14 @@ SEASTAR_THREAD_TEST_CASE(test_managed_bytes_equality) {
     m2 = managed_bytes(pfx);
     BOOST_REQUIRE_NE(m1, m2);
     BOOST_REQUIRE_NE(m2, m1);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_managed_bytes_view_from_bytes) {
+    auto b = random_bytes(0, max_size);
+    auto m = managed_bytes(b);
+    auto mv = managed_bytes_view(m);
+    mv.with_linearized([&] (bytes_view v) {
+        BOOST_REQUIRE_EQUAL(v, b);
+    });
+    BOOST_REQUIRE_EQUAL(to_bytes(mv), b);
 }

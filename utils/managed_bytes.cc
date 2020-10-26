@@ -65,10 +65,21 @@ managed_bytes_view::operator[](size_t idx) const {
     return f->data[idx];
 }
 
+void
+managed_bytes_view::do_linearize_pure(bytes_view::value_type* data) const noexcept {
+    auto e = std::copy_n(_current_fragment.data(), _current_fragment.size(), data);
+    auto b = _next_fragments;
+    while (b) {
+        e = std::copy_n(b->data, b->frag_size, e);
+        b = b->next;
+    }
+}
+
 bytes
 managed_bytes_view::to_bytes() const {
-    // FIXME: implement
-    return bytes();
+    bytes ret(bytes::initialized_later(), size());
+    do_linearize_pure(ret.begin());
+    return ret;
 }
 
 bytes
