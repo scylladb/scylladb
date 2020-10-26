@@ -190,3 +190,21 @@ SEASTAR_THREAD_TEST_CASE(test_managed_bytes_view_equality_matrix) {
     BOOST_REQUIRE_EQUAL(mbv1, bv1);
     BOOST_REQUIRE_NE(mbv1, bv2);
 }
+
+SEASTAR_THREAD_TEST_CASE(test_managed_bytes_view_substr) {
+    auto b = random_bytes(1, max_size);
+    auto m = managed_bytes(b);
+    auto mv = managed_bytes_view(m);
+    auto offset = tests::random::get_int(size_t(0), b.size());
+    auto len = tests::random::get_int(size_t(0), b.size());
+    BOOST_TEST_MESSAGE(format("size={} offset={} len={}", b.size(), offset, len));
+    auto bv = bytes_view(b.data() + offset, std::min(b.size() - offset, len));
+    auto mvs = mv.substr(offset, len);
+    BOOST_REQUIRE_EQUAL(mvs, bv);
+    if (mvs.size()) {
+        offset = tests::random::get_int(size_t(0), mvs.size());
+        bv = bytes_view(bv.data() + offset, bv.size() - offset);
+        mvs = mvs.substr(offset, managed_bytes_view::npos);
+        BOOST_REQUIRE_EQUAL(mvs, bv);
+    }
+}

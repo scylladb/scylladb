@@ -458,7 +458,8 @@ public:
     size_t size() const { return _size; }
     bool empty() const { return _size == 0; }
     bytes_view::value_type operator[](size_t idx) const;
-    managed_bytes_view substr(size_t offset, size_t len) const;
+    static constexpr ssize_t npos = ssize_t(-1);
+    managed_bytes_view substr(size_t offset, ssize_t len = npos) const;
     bytes to_bytes() const;
     bool operator==(const managed_bytes_view& x) const;
     bool operator!=(const managed_bytes_view& x) const;
