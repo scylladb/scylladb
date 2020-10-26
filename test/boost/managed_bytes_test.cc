@@ -74,6 +74,25 @@ SEASTAR_THREAD_TEST_CASE(test_managed_bytes_view_from_bytes) {
     BOOST_REQUIRE_EQUAL(to_bytes(mv), b);
 }
 
+SEASTAR_THREAD_TEST_CASE(test_managed_bytes_view_from_managed_bytes) {
+    auto b = random_bytes(0, max_size);
+    auto m = managed_bytes(b);
+    auto mv = managed_bytes_view(m);
+    mv.with_linearized([&] (bytes_view v) {
+        BOOST_REQUIRE_EQUAL(v, b);
+    });
+    BOOST_REQUIRE_EQUAL(to_bytes(m), b);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_managed_bytes_view_from_bytes_view) {
+    auto b = random_bytes(0, max_size);
+    auto mv = managed_bytes_view(bytes_view(b));
+    mv.with_linearized([&] (bytes_view v) {
+        BOOST_REQUIRE_EQUAL(v, b);
+    });
+    BOOST_REQUIRE_EQUAL(to_bytes(mv), b);
+}
+
 SEASTAR_THREAD_TEST_CASE(test_managed_bytes_view_remove_prefix) {
     auto b = random_bytes(0, max_size);
     auto m = managed_bytes(b);
