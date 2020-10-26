@@ -428,9 +428,9 @@ deletable_row& view_updates::get_view_row(const partition_key& base_key, const c
         }
         switch (base_col->kind) {
         case column_kind::partition_key:
-            return base_key.get_component(*_base, base_col->position());
+            return to_bytes(base_key.get_component(*_base, base_col->position()));
         case column_kind::clustering_key:
-            return update.key().get_component(*_base, base_col->position());
+            return to_bytes(update.key().get_component(*_base, base_col->position()));
         default:
             auto& c = update.cells().cell_at(base_col->id);
             auto value_view = base_col->is_atomic() ? c.as_atomic_cell(cdef).value() : c.as_collection_mutation().data;

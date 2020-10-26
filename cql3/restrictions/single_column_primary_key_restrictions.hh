@@ -324,7 +324,7 @@ public:
         std::vector<bytes_opt> res;
         for (const ValueType& r : src) {
             for (const auto& component : r.components()) {
-                res.emplace_back(component);
+                res.emplace_back(to_bytes(component));
             }
         }
         return res;

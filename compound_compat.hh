@@ -54,9 +54,9 @@ template <typename CompoundType>
 class legacy_compound_view {
     static_assert(!CompoundType::is_prefixable, "Legacy view not defined for prefixes");
     CompoundType& _type;
-    bytes_view _packed;
+    managed_bytes_view _packed;
 public:
-    legacy_compound_view(CompoundType& c, bytes_view packed)
+    legacy_compound_view(CompoundType& c, managed_bytes_view packed)
         : _type(c)
         , _packed(packed)
     { }
@@ -140,18 +140,18 @@ public:
         { }
 
         // @k1 and @k2 must be serialized using @type, which was passed to the constructor.
-        int operator()(bytes_view k1, bytes_view k2) const {
+        int operator()(managed_bytes_view k1, managed_bytes_view k2) const {
             if (_type.is_singular()) {
                 return compare_unsigned(*_type.begin(k1), *_type.begin(k2));
             }
             return lexicographical_tri_compare(
                 _type.begin(k1), _type.end(k1),
                 _type.begin(k2), _type.end(k2),
-                [] (const bytes_view& c1, const bytes_view& c2) -> int {
+                [] (const managed_bytes_view& c1, const managed_bytes_view& c2) -> int {
                     if (c1.size() != c2.size() || !c1.size()) {
                         return c1.size() < c2.size() ? -1 : c1.size() ? 1 : 0;
                     }
-                    return memcmp(c1.begin(), c2.begin(), c1.size());
+                    return compare_unsigned(c1, c2);
                 });
         }
     };
@@ -181,7 +181,7 @@ public:
 // @packed is assumed to be serialized using supplied @type.
 template <typename CompoundType>
 static inline
-bytes to_legacy(CompoundType& type, bytes_view packed) {
+bytes to_legacy(CompoundType& type, managed_bytes_view packed) {
     legacy_compound_view<CompoundType> lv(type, packed);
     bytes legacy_form(bytes::initialized_later(), lv.size());
     std::copy(lv.begin(), lv.end(), legacy_form.begin());
@@ -256,6 +256,13 @@ private:
     template<typename Value, typename CharOutputIterator, typename = std::enable_if_t<!std::is_same<data_value, std::decay_t<Value>>::value>>
     static void write_value(Value&& val, CharOutputIterator& out) {
         out = std::copy(val.begin(), val.end(), out);
+    }
+    template<typename CharOutputIterator>
+    static void write_value(managed_bytes_view val, CharOutputIterator& out) {
+        // FIXME: don't linearize
+        val.with_linearized([&] (bytes_view val) {
+            out = std::copy(val.begin(), val.end(), out);
+        });
     }
     template <typename CharOutputIterator>
     static void write_value(const data_value& val, CharOutputIterator& out) {
