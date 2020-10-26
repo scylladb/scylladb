@@ -390,7 +390,10 @@ public:
         return !operator==(x);
     }
 
+    // throws std::runtime_error if prefix_len > size
     void remove_prefix(size_t prefix_len);
+private:
+    void remove_current() noexcept;
 
     friend class managed_bytes_view;
 };

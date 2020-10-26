@@ -72,3 +72,14 @@ SEASTAR_THREAD_TEST_CASE(test_managed_bytes_view_from_bytes) {
     });
     BOOST_REQUIRE_EQUAL(to_bytes(mv), b);
 }
+
+SEASTAR_THREAD_TEST_CASE(test_managed_bytes_view_remove_prefix) {
+    auto b = random_bytes(0, max_size);
+    auto m = managed_bytes(b);
+    auto mv = managed_bytes_view(m);
+    size_t n = b.size() ? tests::random::get_int(size_t(0), b.size()) : 0;
+    BOOST_TEST_MESSAGE(format("size={} remove_prefix={}", b.size(), n));
+    mv.remove_prefix(n);
+    BOOST_REQUIRE_EQUAL(to_bytes(mv), bytes_view(b.data() + n, b.size() - n));
+    BOOST_REQUIRE_THROW(mv.remove_prefix(b.size() + 1), std::runtime_error);
+}
