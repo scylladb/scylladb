@@ -448,9 +448,9 @@ public:
 class managed_bytes_view : public managed_bytes_view_base {
 public:
     managed_bytes_view() = default;
-    managed_bytes_view(const managed_bytes&);
-    managed_bytes_view(bytes_view bv);
-    explicit managed_bytes_view(const bytes&);
+    managed_bytes_view(const managed_bytes&) noexcept;
+    managed_bytes_view(bytes_view) noexcept;
+    explicit managed_bytes_view(const bytes&) noexcept;
     size_t size() const { return _size; }
     bool empty() const { return _size == 0; }
     bytes_view::value_type operator[](size_t idx) const;
@@ -556,12 +556,12 @@ inline bool operator!=(const managed_bytes_view& a, const bytes_view& b) {
 }
 
 inline
-managed_bytes_view::managed_bytes_view(bytes_view bv)
+managed_bytes_view::managed_bytes_view(bytes_view bv) noexcept
         : managed_bytes_view_base(bv)
 {}
 
 inline
-managed_bytes_view::managed_bytes_view(const bytes& b)
+managed_bytes_view::managed_bytes_view(const bytes& b) noexcept
         : managed_bytes_view(bytes_view(b)) {
 }
 
