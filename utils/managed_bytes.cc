@@ -23,14 +23,6 @@
 
 #include "managed_bytes.hh"
 
-thread_local managed_bytes::linearization_context managed_bytes::_linearization_context;
-thread_local std::unordered_map<const blob_storage*, std::unique_ptr<bytes_view::value_type[]>> managed_bytes::_lc_state;
-
-void
-managed_bytes::linearization_context::forget(const blob_storage* p) noexcept {
-    _lc_state.erase(p);
-}
-
 managed_bytes::managed_bytes(managed_bytes_view o) : managed_bytes(initialized_later(), o.size()) {
     // FIXME: implement
 }
@@ -45,20 +37,6 @@ managed_bytes::do_linearize_pure() const {
         b = b->next;
     }
     return data;
-}
-
-const bytes_view::value_type*
-managed_bytes::do_linearize() const {
-    auto& lc = _linearization_context;
-    assert(lc._nesting);
-    lc._state_ptr = &_lc_state;
-    auto b = _u.ptr;
-    auto i = _lc_state.find(b);
-    if (i == _lc_state.end()) {
-        auto data = do_linearize_pure();
-        i = _lc_state.emplace(_u.ptr, std::move(data)).first;
-    }
-    return i->second.get();
 }
 
 managed_bytes_view::managed_bytes_view(const managed_bytes& mb) {
