@@ -417,7 +417,6 @@ coroutine partition_entry::apply_to_incomplete(const schema& s,
             static_done = false] () mutable {
         auto&& allocator = reg.allocator();
         return alloc(reg, [&] {
-            return with_linearized_managed_bytes([&] {
                 size_t dirty_size = 0;
 
                 if (!static_done) {
@@ -481,7 +480,6 @@ coroutine partition_entry::apply_to_incomplete(const schema& s,
                     }
                 } while (!preemptible || !need_preempt());
                 return stop_iteration::no;
-            });
         });
     });
 }

@@ -73,9 +73,7 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
         template<typename Function>
         decltype(auto) in_alloc_section(Function&& fn) {
             return _read_section.with_reclaiming_disabled(_region, [&] {
-                return with_linearized_managed_bytes([&] {
                     return fn();
-                });
             });
         }
         void refresh_state(const query::clustering_range& ck_range,
