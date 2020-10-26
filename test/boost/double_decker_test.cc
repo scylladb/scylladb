@@ -20,10 +20,10 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#define BOOST_TEST_MODULE double_decker
+#include <seastar/testing/test_case.hh>
+#include <seastar/testing/thread_test_case.hh>
 
 #include <seastar/core/print.hh>
-#include <boost/test/unit_test.hpp>
 #include <fmt/core.h>
 #include <string>
 
@@ -136,7 +136,7 @@ using collection = double_decker<int, test_data, compound_key::less_compare, tes
                     bplus::key_search::both, bplus::with_debug::yes>;
 using oracle = std::set<compound_key, compound_key::less_compare>;
 
-BOOST_AUTO_TEST_CASE(test_lower_bound) {
+SEASTAR_THREAD_TEST_CASE(test_lower_bound) {
     collection c(compound_key::less_compare{});
     test_data::compare cmp;
 
@@ -161,7 +161,7 @@ BOOST_AUTO_TEST_CASE(test_lower_bound) {
     c.clear();
 }
 
-BOOST_AUTO_TEST_CASE(test_upper_bound) {
+SEASTAR_THREAD_TEST_CASE(test_upper_bound) {
     collection c(compound_key::less_compare{});
     test_data::compare cmp;
 
@@ -183,7 +183,7 @@ BOOST_AUTO_TEST_CASE(test_upper_bound) {
 
     c.clear();
 }
-BOOST_AUTO_TEST_CASE(test_self_iterator) {
+SEASTAR_THREAD_TEST_CASE(test_self_iterator) {
     collection c(compound_key::less_compare{});
     test_data::compare cmp;
 
@@ -211,7 +211,7 @@ BOOST_AUTO_TEST_CASE(test_self_iterator) {
     c.clear();
 }
 
-BOOST_AUTO_TEST_CASE(test_end_iterator) {
+SEASTAR_THREAD_TEST_CASE(test_end_iterator) {
     collection c(compound_key::less_compare{});
     test_data::compare cmp;
 
@@ -258,7 +258,7 @@ void compare_with_set(collection& c, oracle& s) {
     }
 }
 
-BOOST_AUTO_TEST_CASE(test_insert_via_emplace) {
+SEASTAR_THREAD_TEST_CASE(test_insert_via_emplace) {
     collection c(compound_key::less_compare{});
     test_data::compare cmp;
     oracle s;
@@ -282,7 +282,7 @@ BOOST_AUTO_TEST_CASE(test_insert_via_emplace) {
     c.clear();
 }
 
-BOOST_AUTO_TEST_CASE(test_insert_and_erase) {
+SEASTAR_THREAD_TEST_CASE(test_insert_and_erase) {
     collection c(compound_key::less_compare{});
     test_data::compare cmp;
     int nr = 0;
@@ -315,7 +315,7 @@ BOOST_AUTO_TEST_CASE(test_insert_and_erase) {
     }
 }
 
-BOOST_AUTO_TEST_CASE(test_compaction) {
+SEASTAR_THREAD_TEST_CASE(test_compaction) {
     logalloc::region reg;
     with_allocator(reg.allocator(), [&] {
         collection c(compound_key::less_compare{});
@@ -346,7 +346,7 @@ BOOST_AUTO_TEST_CASE(test_compaction) {
     });
 }
 
-BOOST_AUTO_TEST_CASE(test_range_erase) {
+SEASTAR_THREAD_TEST_CASE(test_range_erase) {
     std::vector<compound_key> keys;
     test_data::compare cmp;
 
