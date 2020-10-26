@@ -31,6 +31,10 @@ managed_bytes::linearization_context::forget(const blob_storage* p) noexcept {
     _lc_state.erase(p);
 }
 
+managed_bytes::managed_bytes(managed_bytes_view o) : managed_bytes(initialized_later(), o.size()) {
+    // FIXME: implement
+}
+
 std::unique_ptr<bytes_view::value_type[]>
 managed_bytes::do_linearize_pure() const {
     auto b = _u.ptr;
@@ -57,3 +61,80 @@ managed_bytes::do_linearize() const {
     return i->second.get();
 }
 
+managed_bytes_view::managed_bytes_view(const managed_bytes& mb) {
+    if (mb._u.small.size != -1) {
+        _current_fragment = bytes_view(mb._u.small.data, mb._u.small.size);
+        _size = mb._u.small.size;
+    } else {
+        auto p = mb._u.ptr;
+        _current_fragment = bytes_view(p->data, p->frag_size);
+        _next_fragments = p->next;
+        _size = p->size;
+    }
+}
+
+bytes_view::value_type
+managed_bytes_view::operator[](size_t idx) const {
+    if (idx < _current_fragment.size()) {
+        return _current_fragment[idx];
+    }
+    idx -= _current_fragment.size();
+    auto f = _next_fragments;
+    while (idx >= f->frag_size) {
+        idx -= f->frag_size;
+        f = f->next;
+    }
+    return f->data[idx];
+}
+
+bytes
+managed_bytes_view::to_bytes() const {
+    // FIXME: implement
+    return bytes();
+}
+
+bytes
+to_bytes(managed_bytes_view v) {
+    return v.to_bytes();
+}
+
+bytes
+to_bytes(const managed_bytes& b) {
+    return managed_bytes_view(b).to_bytes();
+}
+
+void managed_bytes_view::remove_prefix(size_t n) {
+    // FIXME: implement
+}
+
+managed_bytes_view
+managed_bytes_view::substr(size_t offset, size_t len) const {
+    // FIXME: implement
+    return managed_bytes_view();
+}
+
+bool
+managed_bytes_view::operator==(const managed_bytes_view& x) const {
+    // FIXME: implement
+    return true;
+}
+
+bool
+managed_bytes_view::operator!=(const managed_bytes_view& x) const {
+    // FIXME: implement
+    return true;
+}
+
+int compare_unsigned(const managed_bytes_view v1, const managed_bytes_view v2) {
+    // FIXME: implement
+    return 0;
+}
+
+std::ostream& operator<<(std::ostream& os, const managed_bytes_view& v) {
+    // FIXME: implement
+    return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const managed_bytes& b) {
+    return os << managed_bytes_view(b);
+}

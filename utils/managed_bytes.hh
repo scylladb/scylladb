@@ -30,6 +30,7 @@
 #include <seastar/util/alloc_failure_injector.hh>
 #include <unordered_map>
 #include <type_traits>
+#include <iosfwd>
 
 struct blob_storage {
     struct [[gnu::packed]] ref_type {
@@ -73,6 +74,8 @@ struct blob_storage {
         memcpy(data, o.data, frag_size);
     }
 } __attribute__((packed));
+
+class managed_bytes_view;
 
 // A managed version of "bytes" (can be used with LSA).
 class managed_bytes {
@@ -201,6 +204,8 @@ public:
             }
         }
     }
+
+    managed_bytes(managed_bytes_view);
 
     managed_bytes(bytes_view v) : managed_bytes(initialized_later(), v.size()) {
         if (!external()) {
@@ -435,7 +440,83 @@ public:
 
     template <std::invocable<> Func>
     friend std::result_of_t<Func()> with_linearized_managed_bytes(Func&& func);
+
+    friend class managed_bytes_view;
 };
+
+class managed_bytes_view {
+    bytes_view _current_fragment = {};
+    blob_storage* _next_fragments = nullptr;
+    size_t _size = 0;
+public:
+    managed_bytes_view() = default;
+    managed_bytes_view(const managed_bytes&);
+    managed_bytes_view(bytes_view);
+    explicit managed_bytes_view(const bytes&);
+    size_t size() const { return _size; }
+    bool empty() const { return _size == 0; }
+    bytes_view::value_type operator[](size_t idx) const;
+    void remove_prefix(size_t prefix_len);
+    managed_bytes_view substr(size_t offset, size_t len) const;
+    bytes to_bytes() const;
+    bool operator==(const managed_bytes_view& x) const;
+    bool operator!=(const managed_bytes_view& x) const;
+
+    template <std::invocable<bytes_view> Func>
+    std::invoke_result_t<Func, bytes_view> with_linearized(Func&& func) const {
+        return func(bytes_view());
+    }
+    friend std::ostream& operator<<(std::ostream& os, const managed_bytes_view& v);
+};
+
+// These are used to resolve ambiguities because managed_bytes_view can be converted to managed_bytes and vice versa
+inline bool operator==(const managed_bytes& a, const managed_bytes_view& b) {
+    return managed_bytes_view(a) == b;
+}
+
+inline bool operator==(const managed_bytes_view& a, const managed_bytes& b) {
+    return a == managed_bytes_view(b);
+}
+
+inline bool operator!=(const managed_bytes& a, const managed_bytes_view& b) {
+    return managed_bytes_view(a) != b;
+}
+
+inline bool operator!=(const managed_bytes_view& a, const managed_bytes& b) {
+    return a != managed_bytes_view(b);
+}
+
+// These are used to resolve ambiguities because bytes_view can be converted to managed_bytes and managed_bytes_view
+inline bool operator==(const bytes_view& a, const managed_bytes_view& b) {
+    return managed_bytes_view(a) == b;
+}
+
+inline bool operator==(const managed_bytes_view& a, const bytes_view& b) {
+    return a == managed_bytes_view(b);
+}
+
+inline bool operator!=(const bytes_view& a, const managed_bytes_view& b) {
+    return managed_bytes_view(a) != b;
+}
+
+inline bool operator!=(const managed_bytes_view& a, const bytes_view& b) {
+    return a != managed_bytes_view(b);
+}
+
+inline
+managed_bytes_view::managed_bytes_view(bytes_view bv)
+        : _current_fragment(bv)
+        , _size(bv.size()) {
+}
+
+inline
+managed_bytes_view::managed_bytes_view(const bytes& b)
+        : managed_bytes_view(bytes_view(b)) {
+}
+
+bytes to_bytes(const managed_bytes& b);
+bytes to_bytes(managed_bytes_view v);
+int compare_unsigned(const managed_bytes_view v1, const managed_bytes_view v2);
 
 // Run func() while ensuring that reads of managed_bytes objects are
 // temporarlily linearized
@@ -452,7 +533,8 @@ namespace std {
 template <>
 struct hash<managed_bytes> {
     size_t operator()(const managed_bytes& v) const {
-        return hash<bytes_view>()(v);
+        return 3; // FIXME!
+        //return hash<bytes_view>()(v);
     }
 };
 
@@ -464,3 +546,15 @@ size_t
 size_for_allocation_strategy(const blob_storage& bs) {
     return sizeof(bs) + bs.frag_size;
 }
+
+template<>
+struct appending_hash<managed_bytes_view> {
+    template<typename Hasher>
+    void operator()(Hasher& h, managed_bytes_view v) const {
+        feed_hash(h, v.size());
+        //h.update(reinterpret_cast<const char*>(v.begin()), v.size() * sizeof(bytes_view::value_type));
+    }
+};
+
+std::ostream& operator<<(std::ostream& os, const managed_bytes& b);
+std::ostream& operator<<(std::ostream& os, const managed_bytes_view& v);
