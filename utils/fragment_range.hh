@@ -27,6 +27,7 @@
 
 
 #include "bytes.hh"
+#include "utils/managed_bytes.hh"
 
 enum class mutable_view { no, yes, };
 

@@ -24,6 +24,7 @@
 #include <seastar/testing/thread_test_case.hh>
 #include "test/lib/random_utils.hh"
 #include "utils/managed_bytes.hh"
+#include "utils/fragment_range.hh"
 
 static constexpr size_t max_size = 512 * 1024;
 
@@ -82,4 +83,32 @@ SEASTAR_THREAD_TEST_CASE(test_managed_bytes_view_remove_prefix) {
     mv.remove_prefix(n);
     BOOST_REQUIRE_EQUAL(to_bytes(mv), bytes_view(b.data() + n, b.size() - n));
     BOOST_REQUIRE_THROW(mv.remove_prefix(b.size() + 1), std::runtime_error);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_managed_bytes_fragment_range_view) {
+    auto b = random_bytes(0, max_size);
+    auto m = managed_bytes(b);
+    auto fr = m.as_fragment_range();
+    auto v = fragment_range_view<managed_bytes_fragment_range_view>(fr);
+    BOOST_REQUIRE_EQUAL(v.size_bytes(), b.size());
+    BOOST_REQUIRE_EQUAL(v.empty(), !b.size());
+
+    size_t size = 0;
+    for (auto f : v) {
+        size += f.size();
+    }
+    BOOST_REQUIRE_EQUAL(size, b.size());
+
+    auto mv = managed_bytes_view(m);
+    size_t n = b.size() ? tests::random::get_int(size_t(0), b.size()) : 0;
+    mv.remove_prefix(n);
+    fr = mv.as_fragment_range();
+    v = fragment_range_view<managed_bytes_fragment_range_view>(fr);
+    BOOST_REQUIRE_EQUAL(v.empty(), !mv.size());
+
+    size = 0;
+    for (auto f : v) {
+        size += f.size();
+    }
+    BOOST_REQUIRE_EQUAL(size, mv.size());
 }

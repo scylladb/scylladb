@@ -76,6 +76,8 @@ struct blob_storage {
 } __attribute__((packed));
 
 class managed_bytes_view;
+class managed_bytes_fragment_range_view;
+class managed_bytes_view_fragment_iterator;
 
 // A managed version of "bytes" (can be used with LSA).
 class managed_bytes {
@@ -356,6 +358,8 @@ public:
         }
     }
 
+    managed_bytes_fragment_range_view as_fragment_range() const noexcept;
+
     friend class managed_bytes_view;
 };
 
@@ -396,6 +400,49 @@ private:
     void remove_current() noexcept;
 
     friend class managed_bytes_view;
+    friend class managed_bytes_view_fragment_iterator;
+};
+
+class managed_bytes_view_fragment_iterator : managed_bytes_view_base {
+public:
+    using fragment_type = bytes_view;
+    using iterator_category	= std::forward_iterator_tag;
+    using value_type = fragment_type;
+    using pointer = const fragment_type*;
+    using reference = const fragment_type&;
+    using difference_type = std::ptrdiff_t;
+
+    managed_bytes_view_fragment_iterator() = default;
+    managed_bytes_view_fragment_iterator(const managed_bytes_view_fragment_iterator&) = default;
+    managed_bytes_view_fragment_iterator(const managed_bytes_view_base& x) noexcept
+            : managed_bytes_view_base(x)
+    {}
+
+    managed_bytes_view_fragment_iterator& operator=(const managed_bytes_view_fragment_iterator&) = default;
+
+    bool operator==(const managed_bytes_view_fragment_iterator& x) const noexcept {
+        return managed_bytes_view_base::operator==(x);
+    }
+    bool operator!=(const managed_bytes_view_fragment_iterator& x) const noexcept {
+        return managed_bytes_view_base::operator!=(x);
+    }
+
+    fragment_type operator*() const noexcept {
+        return _current_fragment;
+    }
+    const fragment_type* operator->() const noexcept {
+        return &_current_fragment;
+    }
+
+    managed_bytes_view_fragment_iterator& operator++() noexcept {
+        remove_current();
+        return *this;
+    }
+    managed_bytes_view_fragment_iterator operator++(int) noexcept {
+        managed_bytes_view_fragment_iterator tmp(*this);
+        ++(*this);
+        return tmp;
+    }
 };
 
 class managed_bytes_view : public managed_bytes_view_base {
@@ -414,11 +461,55 @@ public:
 
     template <std::invocable<bytes_view> Func>
     std::invoke_result_t<Func, bytes_view> with_linearized(Func&& func) const;
+
+    managed_bytes_fragment_range_view as_fragment_range() const noexcept;
 private:
     void do_linearize_pure(bytes_view::value_type*) const noexcept;
 
+    using fragment_iterator = managed_bytes_view_fragment_iterator;
+    fragment_iterator begin_fragment() const noexcept {
+        return fragment_iterator(*this);
+    }
+    fragment_iterator end_fragment() const noexcept {
+        return fragment_iterator();
+    }
+
     friend std::ostream& operator<<(std::ostream& os, const managed_bytes_view& v);
+    friend class managed_bytes_fragment_range_view;
 };
+
+// Conforms to FragmentRange<managed_bytes_fragment_range_view>
+class managed_bytes_fragment_range_view {
+    managed_bytes_view _view;
+public:
+    using fragment_iterator = managed_bytes_view_fragment_iterator;
+    using fragment_type = fragment_iterator::fragment_type;
+    using const_iterator = fragment_iterator;
+
+    explicit managed_bytes_fragment_range_view(const managed_bytes_view& mv) noexcept
+            : _view(mv)
+    {}
+    explicit managed_bytes_fragment_range_view(managed_bytes_view&& mv) noexcept
+            : _view(std::move(mv))
+    {}
+    explicit managed_bytes_fragment_range_view(const managed_bytes& m) noexcept
+            : managed_bytes_fragment_range_view(managed_bytes_view(m))
+    {}
+
+    const_iterator begin() const noexcept { return _view.begin_fragment(); }
+    const_iterator end() const noexcept { return _view.end_fragment(); }
+
+    size_t size_bytes() const noexcept { return _view.size(); }
+    bool empty() const noexcept { return size_bytes() == 0; }
+};
+
+inline managed_bytes_fragment_range_view managed_bytes_view::as_fragment_range() const noexcept {
+    return managed_bytes_fragment_range_view(*this);
+}
+
+inline managed_bytes_fragment_range_view managed_bytes::as_fragment_range() const noexcept {
+    return managed_bytes_fragment_range_view(*this);
+}
 
 template <std::invocable<bytes_view> Func>
 std::invoke_result_t<Func, bytes_view> managed_bytes_view::with_linearized(Func&& func) const {
