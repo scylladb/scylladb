@@ -440,9 +440,9 @@ public:
     managed_bytes_view(const managed_bytes&);
     managed_bytes_view(bytes_view bv);
     explicit managed_bytes_view(const bytes&);
-    size_t size() const { return _size; }
-    bool empty() const { return _size == 0; }
-    bytes_view::value_type operator[](size_t idx) const;
+    size_t size() const noexcept { return _size; }
+    bool empty() const noexcept { return _size == 0; }
+    bytes_view::value_type operator[](size_t idx) const noexcept;
     managed_bytes_view substr(size_t offset, size_t len) const;
     bytes to_bytes() const;
     bool operator==(const managed_bytes_view& x) const;

@@ -67,7 +67,7 @@ managed_bytes_view::managed_bytes_view(const managed_bytes& mb) {
 }
 
 bytes_view::value_type
-managed_bytes_view::operator[](size_t idx) const {
+managed_bytes_view::operator[](size_t idx) const noexcept {
     if (idx < _current_fragment.size()) {
         return _current_fragment[idx];
     }
