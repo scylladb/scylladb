@@ -765,21 +765,6 @@ public:
     future<> clear(); // discards memtable(s) without flushing them to disk.
     future<db::replay_position> discard_sstables(db_clock::time_point);
 
-    // Make sure the generation numbers are sequential, starting from "start".
-    // Generations before "start" are left untouched.
-    //
-    // Return the highest generation number seen so far
-    //
-    // Word of warning: although this function will reshuffle anything over "start", it is
-    // very dangerous to do that with live SSTables. This is meant to be used with SSTables
-    // that are not yet managed by the system.
-    //
-    // Parameter all_generations stores the generation of all SSTables in the system, so it
-    // will be easy to determine which SSTable is new.
-    // An example usage would query all shards asking what is the highest SSTable number known
-    // to them, and then pass that + 1 as "start".
-    future<std::vector<sstables::entry_descriptor>> reshuffle_sstables(std::set<int64_t> all_generations, int64_t start);
-
     // FIXME: this is just an example, should be changed to something more
     // general. compact_all_sstables() starts a compaction of all sstables.
     // It doesn't flush the current memtable first. It's just a ad-hoc method,

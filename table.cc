@@ -852,33 +852,6 @@ table::stop() {
     });
 }
 
-future<std::vector<sstables::entry_descriptor>>
-table::reshuffle_sstables(std::set<int64_t> all_generations, int64_t start) {
-    struct work {
-        std::set<int64_t> all_generations; // Stores generation of all live sstables in the system.
-        work(int64_t start, std::set<int64_t> gens)
-            : all_generations(gens) {}
-    };
-
-    return do_with(work(start, std::move(all_generations)), [this] (work& work) {
-        tlogger.info("Reshuffling SSTables in {}...", _config.datadir);
-        return lister::scan_dir(_config.datadir, { directory_entry_type::regular }, [this, &work] (fs::path parent_dir, directory_entry de) {
-            auto comps = sstables::entry_descriptor::make_descriptor(parent_dir.native(), de.name);
-            if (comps.component != component_type::TOC) {
-                return make_ready_future<>();
-            }
-            // Skip generations that were already loaded by Scylla at a previous stage.
-            if (work.all_generations.contains(comps.generation)) {
-                return make_ready_future<>();
-            }
-            return make_exception_future<>(std::runtime_error("Loading SSTables from the main SSTable directory is unsafe and no longer supported."
-                   " You will find a directory called upload/ inside the table directory that can be used to load new SSTables into the system"));
-        }, &sstables::manifest_json_filter).then([&work] {
-            return make_ready_future<std::vector<sstables::entry_descriptor>>();
-        });
-    });
-}
-
 void table::set_metrics() {
     auto cf = column_family_label(_schema->cf_name());
     auto ks = keyspace_label(_schema->ks_name());
