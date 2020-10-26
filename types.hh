@@ -502,15 +502,21 @@ public:
     serialized_compare as_less_comparator() const ;
     serialized_tri_compare as_tri_comparator() const ;
     static data_type parse_type(const sstring& name);
+    size_t hash(managed_bytes_view v) const;
     size_t hash(bytes_view v) const;
     bool equal(bytes_view v1, bytes_view v2) const;
+    bool equal(managed_bytes_view v1, managed_bytes_view v2) const;
     int32_t compare(bytes_view v1, bytes_view v2) const;
+    int32_t compare(managed_bytes_view v1, managed_bytes_view v2) const;
+    data_value deserialize(managed_bytes_view v) const;
     data_value deserialize(bytes_view v) const;
+    data_value deserialize_value(managed_bytes_view v) const;
     data_value deserialize_value(bytes_view v) const {
         return deserialize(v);
     };
     void validate(const fragmented_temporary_buffer::view& view, cql_serialization_format sf) const;
     void validate(bytes_view view, cql_serialization_format sf) const;
+    void validate(managed_bytes_view view, cql_serialization_format sf) const;
     bool is_compatible_with(const abstract_type& previous) const;
     /*
      * Types which are wrappers over other types return the inner type.
@@ -700,7 +706,7 @@ bool less_compare(data_type t, bytes_view e1, bytes_view e2) {
 }
 
 static inline
-int tri_compare(data_type t, bytes_view e1, bytes_view e2) {
+int tri_compare(data_type t, managed_bytes_view e1, managed_bytes_view e2) {
     return t->compare(e1, e2);
 }
 

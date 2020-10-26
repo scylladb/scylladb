@@ -1578,6 +1578,13 @@ void abstract_type::validate(bytes_view v, cql_serialization_format sf) const {
     visit(*this, validate_visitor<bytes_view, single_fragment_range<mutable_view::no>>{v, single_fragment_range(v), sf});
 }
 
+void abstract_type::validate(managed_bytes_view v, cql_serialization_format sf) const {
+    // FIXME: don't linearize
+    return v.with_linearized([&] (bytes_view v) {
+        return validate(v, sf);
+    });
+}
+
 static void serialize_aux(const tuple_type_impl& type, const tuple_type_impl::native_type* val, bytes::iterator& out) {
     assert(val);
     auto& elems = *val;
@@ -1945,6 +1952,20 @@ data_value abstract_type::deserialize(bytes_view v) const {
     return visit(*this, deserialize_visitor{v});
 }
 
+data_value abstract_type::deserialize(managed_bytes_view v) const {
+    // FIXME: don't linearize
+    return v.with_linearized([&] (bytes_view v) {
+        return deserialize(v);
+    });
+}
+
+data_value abstract_type::deserialize_value(managed_bytes_view v) const {
+    // FIXME: avoid linearization
+    return v.with_linearized([&] (bytes_view v) {
+        return deserialize_value(v);
+    });
+}
+
 int32_t compare_aux(const tuple_type_impl& t, bytes_view v1, bytes_view v2) {
     // This is a slight modification of lexicographical_tri_compare:
     // when the only difference between the tuples is that one of them has additional trailing nulls,
@@ -2133,12 +2154,30 @@ int32_t abstract_type::compare(bytes_view v1, bytes_view v2) const {
     }
 }
 
+int32_t abstract_type::compare(managed_bytes_view v1, managed_bytes_view v2) const {
+    // FIXME: don't linearize
+    return v1.with_linearized([&] (bytes_view v1) {
+        return v2.with_linearized([&] (bytes_view v2) {
+            return compare(v1, v2);
+        });
+    });
+}
+
 bool abstract_type::equal(bytes_view v1, bytes_view v2) const {
     return ::visit(*this, [&](const auto& t) {
         if (is_byte_order_equal_visitor{}(t)) {
             return compare_unsigned(v1, v2) == 0;
         }
         return compare_visitor{v1, v2}(t) == 0;
+    });
+}
+
+bool abstract_type::equal(managed_bytes_view v1, managed_bytes_view v2) const {
+    // FIXME: don't linearize
+    return v1.with_linearized([&] (bytes_view v1) {
+        return v2.with_linearized([&] (bytes_view v2) {
+            return equal(v1, v2);
+        });
     });
 }
 
@@ -2236,6 +2275,14 @@ size_t abstract_type::hash(bytes_view v) const {
     };
     return visit(*this, visitor{v});
 }
+
+size_t abstract_type::hash(managed_bytes_view v) const {
+    // FIXME: hash without linearization
+    return v.with_linearized([&] (bytes_view v) {
+        return hash(v);
+    });
+}
+
 
 static size_t concrete_serialized_size(const byte_type_impl::native_type&) { return sizeof(int8_t); }
 static size_t concrete_serialized_size(const short_type_impl::native_type&) { return sizeof(int16_t); }
