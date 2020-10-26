@@ -124,6 +124,44 @@ SEASTAR_THREAD_TEST_CASE(test_managed_bytes_view_from_bytes) {
     BOOST_REQUIRE_EQUAL(to_bytes(m), b);
 }
 
+SEASTAR_THREAD_TEST_CASE(test_managed_bytes_view_from_managed_bytes) {
+    bytes b;
+    managed_bytes m;
+    managed_bytes_view mv;
+
+    m = managed_bytes();
+    m.with_linearized([&] (bytes_view v) {
+        BOOST_REQUIRE_EQUAL(v, bytes_view());
+    });
+    BOOST_REQUIRE_EQUAL(to_bytes(m), bytes_view());
+
+    b = random_bytes(1, 131072);
+    m = managed_bytes(b);
+    mv = managed_bytes_view(m);
+    mv.with_linearized([&] (bytes_view v) {
+        BOOST_REQUIRE_EQUAL(v, b);
+    });
+    BOOST_REQUIRE_EQUAL(to_bytes(m), b);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_managed_bytes_view_from_bytes_view) {
+    bytes b;
+    managed_bytes_view m;
+
+    m = bytes_view();
+    m.with_linearized([&] (bytes_view v) {
+        BOOST_REQUIRE_EQUAL(v, bytes_view());
+    });
+    BOOST_REQUIRE_EQUAL(to_bytes(m), bytes_view());
+
+    b = random_bytes(1, 131072);
+    m = managed_bytes_view(bytes_view(b));
+    m.with_linearized([&] (bytes_view v) {
+        BOOST_REQUIRE_EQUAL(v, b);
+    });
+    BOOST_REQUIRE_EQUAL(to_bytes(m), b);
+}
+
 SEASTAR_THREAD_TEST_CASE(test_managed_bytes_view_remove_prefix) {
     bytes b;
     managed_bytes_view m;
