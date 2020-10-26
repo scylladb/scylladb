@@ -131,3 +131,28 @@ SEASTAR_THREAD_TEST_CASE(test_managed_bytes_fragment_range_view) {
     }
     BOOST_REQUIRE_EQUAL(size, mv.size());
 }
+
+SEASTAR_THREAD_TEST_CASE(test_managed_bytes_view_equality) {
+    // test equality
+    auto b1 = random_bytes(0, max_size);
+    auto m1 = managed_bytes(b1);
+    auto mv1 = managed_bytes_view(m1);
+    auto m2 = managed_bytes(b1);
+    auto mv2 = managed_bytes_view(m2);
+    BOOST_REQUIRE_EQUAL(mv1, mv2);
+    BOOST_REQUIRE_EQUAL(compare_unsigned(mv1, mv2), 0);
+
+    // test inequality
+    bytes b2;
+    do {
+        b2 = random_bytes(b1.size());
+    } while (b2 == b1);
+    m2 = managed_bytes(b2);
+    mv2 = managed_bytes_view(m2);
+    BOOST_REQUIRE_NE(mv1, mv2);
+    if (compare_unsigned(b1, b2) < 0) {
+        BOOST_REQUIRE(compare_unsigned(mv1, mv2) < 0);
+    } else {
+        BOOST_REQUIRE(compare_unsigned(mv1, mv2) > 0);
+    }
+}

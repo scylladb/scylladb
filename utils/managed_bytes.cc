@@ -136,18 +136,50 @@ managed_bytes_view::substr(size_t offset, size_t len) const {
 
 bool
 managed_bytes_view::operator==(const managed_bytes_view& x) const {
-    // FIXME: implement
+    if (size() != x.size()) {
+        return false;
+    }
+
+    auto rv1 = this->as_fragment_range();
+    auto rv2 = x.as_fragment_range();
+    auto it1 = rv1.begin();
+    auto it2 = rv2.begin();
+    while (auto n = std::min(it1->size(), it2->size())) {
+        if (memcmp(it1->data(), it2->data(), n)) {
+            return false;
+        }
+        it1.remove_prefix(n);
+        it2.remove_prefix(n);
+    }
+    assert(it1 == rv1.end());
+    assert(it2 == rv2.end());
     return true;
 }
 
 bool
 managed_bytes_view::operator!=(const managed_bytes_view& x) const {
-    // FIXME: implement
-    return true;
+    return !operator==(x);
 }
 
 int compare_unsigned(const managed_bytes_view v1, const managed_bytes_view v2) {
-    // FIXME: implement
+    auto rv1 = v1.as_fragment_range();
+    auto rv2 = v2.as_fragment_range();
+    auto it1 = rv1.begin();
+    auto it2 = rv2.begin();
+    while (auto n = std::min(it1->size(), it2->size())) {
+        auto d = memcmp(it1->data(), it2->data(), n);
+        if (d) {
+            return d;
+        }
+        it1.remove_prefix(n);
+        it2.remove_prefix(n);
+    }
+    if (it1->size()) {
+        return 1;
+    }
+    if (it2->size()) {
+        return -1;
+    }
     return 0;
 }
 

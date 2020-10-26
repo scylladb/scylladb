@@ -443,6 +443,9 @@ public:
         ++(*this);
         return tmp;
     }
+
+    friend class managed_bytes_view;
+    friend int compare_unsigned(const managed_bytes_view v1, const managed_bytes_view v2);
 };
 
 class managed_bytes_view : public managed_bytes_view_base {
