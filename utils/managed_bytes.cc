@@ -158,8 +158,15 @@ void managed_bytes_view_base::remove_prefix(size_t n) {
         n -= trim;
         _size -= trim;
         if (_next_fragments) {
+            if (_size >= _next_fragments->frag_size) {
                 _current_fragment = bytes_view(_next_fragments->data, _next_fragments->frag_size);
                 _next_fragments = _next_fragments->next;
+            } else {
+                // We may need to cut the fragments short
+                // if `substr` truncated _size
+                _current_fragment = bytes_view(_next_fragments->data, _size);
+                _next_fragments = nullptr;
+            }
         } else {
             _current_fragment = {};
             if (n) {
@@ -171,8 +178,15 @@ void managed_bytes_view_base::remove_prefix(size_t n) {
 
 managed_bytes_view
 managed_bytes_view::substr(size_t offset, size_t len) const {
-    // FIXME: implement
-    return managed_bytes_view();
+    managed_bytes_view ret = *this;
+    ret.remove_prefix(offset);
+    if (len < ret.size()) {
+        if (!ret._next_fragments) {
+            ret._current_fragment = bytes_view(ret._current_fragment.data(), len);
+        }
+        ret._size = len;
+    }
+    return ret;
 }
 
 bool
