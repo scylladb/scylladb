@@ -208,3 +208,14 @@ SEASTAR_THREAD_TEST_CASE(test_managed_bytes_view_substr) {
         BOOST_REQUIRE_EQUAL(mvs, bv);
     }
 }
+
+SEASTAR_THREAD_TEST_CASE(test_managed_bytes_view_print) {
+    auto b = random_bytes(0, max_size);
+    std::ostringstream os1;
+    os1 << b;
+    auto m = managed_bytes(b);
+    auto mv = managed_bytes_view(m);
+    std::ostringstream os2;
+    os2 << mv;
+    BOOST_REQUIRE_EQUAL(os1.str(), os2.str());
+}
