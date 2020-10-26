@@ -23,8 +23,45 @@
 
 #include "managed_bytes.hh"
 
-managed_bytes::managed_bytes(managed_bytes_view o) : managed_bytes(initialized_later(), o.size()) {
-    // FIXME: implement
+managed_bytes::managed_bytes(managed_bytes_view o) noexcept : managed_bytes(initialized_later(), o.size()) {
+    if (!external()) {
+        auto dst = _u.small.data;
+        while (o.size()) {
+            auto bv = o._current_fragment;
+            auto n = bv.size();
+            memcpy(dst, bv.data(), n);
+            dst += n;
+            o.remove_prefix(n);
+        }
+        return;
+    }
+    auto b = _u.ptr;
+    auto dst = b->data;
+    size_t dst_size = b->frag_size;
+    auto advance_dst = [&] (size_t n) {
+        if (n < dst_size) {
+            dst += n;
+            dst_size -= n;
+        } else {
+            assert(n == dst_size);
+            b = b->next;
+            if (b) {
+                dst = b->data;
+                dst_size = b->frag_size;
+            } else {
+                dst = nullptr;
+                dst_size = 0;
+            }
+        }
+    };
+    while (o.size()) {
+        auto bv = o._current_fragment;
+        auto n = std::min(bv.size(), dst_size);
+        memcpy(dst, bv.data(), n);
+        advance_dst(n);
+        o.remove_prefix(n);
+    }
+    assert(!b);
 }
 
 std::unique_ptr<bytes_view::value_type[]>

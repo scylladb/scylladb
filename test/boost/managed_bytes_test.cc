@@ -42,6 +42,14 @@ SEASTAR_THREAD_TEST_CASE(test_managed_bytes_from_bytes) {
     BOOST_REQUIRE_EQUAL(to_bytes(m), b);
 }
 
+SEASTAR_THREAD_TEST_CASE(test_managed_bytes_from_manged_bytes_view) {
+    auto b = random_bytes(0, max_size);
+    auto m1 = managed_bytes(b);
+    auto mv = managed_bytes_view(m1);
+    auto m2 = managed_bytes(mv);
+    BOOST_REQUIRE_EQUAL(to_bytes(m2), b);
+}
+
 SEASTAR_THREAD_TEST_CASE(test_managed_bytes_equality) {
     auto b1 = random_bytes(0, max_size);
     auto m1 = managed_bytes(b1);

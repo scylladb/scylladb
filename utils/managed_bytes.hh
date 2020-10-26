@@ -163,7 +163,7 @@ public:
         }
     }
 
-    managed_bytes(managed_bytes_view);
+    managed_bytes(managed_bytes_view) noexcept;
 
     managed_bytes(bytes_view v) : managed_bytes(initialized_later(), v.size()) {
         if (!external()) {
@@ -399,6 +399,7 @@ public:
 private:
     void remove_current() noexcept;
 
+    friend class managed_bytes;
     friend class managed_bytes_view;
     friend class managed_bytes_view_fragment_iterator;
 };
