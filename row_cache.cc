@@ -65,7 +65,6 @@ cache_tracker::cache_tracker(mutation_application_stats& app_stats)
         return with_allocator(_region.allocator(), [this] {
           // Removing a partition may require reading large keys when we rebalance
           // the rbtree, so linearize anything we read
-          return with_linearized_managed_bytes([&] {
            try {
             if (!_garbage.empty()) {
                 _garbage.clear_some();
@@ -86,7 +85,6 @@ cache_tracker::cache_tracker(mutation_application_stats& app_stats)
             clear();
             return memory::reclaiming_result::reclaimed_something;
            }
-          });
         });
     });
 }
@@ -508,10 +506,8 @@ public:
             {
                 if (!mfopt) {
                     return _cache._read_section(_cache._tracker.region(), [&] {
-                        return with_linearized_managed_bytes([&] {
-                            this->handle_end_of_stream();
-                            return make_ready_future<read_result>(read_result(std::nullopt, std::nullopt));
-                        });
+                        this->handle_end_of_stream();
+                        return make_ready_future<read_result>(read_result(std::nullopt, std::nullopt));
                     });
                 }
                 _cache.on_partition_miss();
@@ -573,8 +569,7 @@ private:
     }
 
     flat_mutation_reader_opt do_read_from_primary(db::timeout_clock::time_point timeout) {
-        return _cache._read_section(_cache._tracker.region(), [this] {
-            return with_linearized_managed_bytes([&] () -> flat_mutation_reader_opt {
+        return _cache._read_section(_cache._tracker.region(), [this] () -> flat_mutation_reader_opt {
                 bool not_moved = true;
                 if (!_primary.valid()) {
                     not_moved = _primary.advance_to(as_ring_position_view(_lower_bound));
@@ -616,7 +611,6 @@ private:
                         return std::nullopt;
                     }
                 }
-            });
         });
     }
 
@@ -724,7 +718,6 @@ row_cache::make_reader(schema_ptr s,
         tracing::trace(trace_state, "Querying cache for range {} and slice {}",
                 range, seastar::value_of([&slice] { return slice.get_all_ranges(); }));
         auto mr = _read_section(_tracker.region(), [&] {
-            return with_linearized_managed_bytes([&] {
                 dht::ring_position_comparator cmp(*_schema);
                 auto&& pos = ctx->range().start()->value();
                 partitions_type::bound_hint hint;
@@ -741,7 +734,6 @@ row_cache::make_reader(schema_ptr s,
                     on_partition_miss();
                     return make_flat_mutation_reader<single_partition_populating_reader>(*this, std::move(ctx));
                 }
-            });
         });
 
         if (fwd == streamed_mutation::forwarding::yes) {
@@ -792,7 +784,6 @@ cache_entry& row_cache::do_find_or_create_entry(const dht::decorated_key& key,
     const previous_entry_pointer* previous, CreateEntry&& create_entry, VisitEntry&& visit_entry)
 {
     return with_allocator(_tracker.allocator(), [&] () -> cache_entry& {
-            return with_linearized_managed_bytes([&] () -> cache_entry& {
                 partitions_type::bound_hint hint;
                 dht::ring_position_comparator cmp(*_schema);
                 auto i = _partitions.lower_bound(key, cmp, hint);
@@ -815,7 +806,6 @@ cache_entry& row_cache::do_find_or_create_entry(const dht::decorated_key& key,
                 }
 
                 return *i;
-            });
     });
 }
 
@@ -897,21 +887,16 @@ void row_cache::invalidate_sync(memtable& m) noexcept {
     with_allocator(_tracker.allocator(), [&m, this] () {
         logalloc::reclaim_lock _(_tracker.region());
         bool blow_cache = false;
-        // Note: clear_and_dispose() ought not to look up any keys, so it doesn't require
-        // with_linearized_managed_bytes(), but invalidate() does.
         m.partitions.clear_and_dispose([this, &m, &blow_cache] (memtable_entry* entry) noexcept {
-            with_linearized_managed_bytes([&] () noexcept {
                 try {
                     invalidate_locked(entry->key());
                 } catch (...) {
                     blow_cache = true;
                 }
                 m.evict_entry(*entry, _tracker.memtable_cleaner());
-            });
         });
         if (blow_cache) {
-            // We failed to invalidate the key, presumably due to with_linearized_managed_bytes()
-            // running out of memory.  Recover using clear_now(), which doesn't throw.
+            // We failed to invalidate the key. Recover using clear_now(), which doesn't throw.
             clear_now();
         }
     });
@@ -963,13 +948,11 @@ future<> row_cache::do_update(external_updater eu, memtable& m, Updater updater)
                           {
                             if (!update) {
                                 _update_section(_tracker.region(), [&] {
-                                  with_linearized_managed_bytes([&] {
                                     memtable_entry& mem_e = *m.partitions.begin();
                                     size_entry = mem_e.size_in_allocator_without_rows(_tracker.allocator());
                                     partitions_type::bound_hint hint;
                                     auto cache_i = _partitions.lower_bound(mem_e.key(), cmp, hint);
                                     update = updater(_update_section, cache_i, mem_e, is_present, real_dirty_acc, hint);
-                                  });
                                 });
                             }
                             // We use cooperative deferring instead of futures so that
@@ -981,12 +964,10 @@ future<> row_cache::do_update(external_updater eu, memtable& m, Updater updater)
                             update = {};
                             real_dirty_acc.unpin_memory(size_entry);
                             _update_section(_tracker.region(), [&] {
-                              with_linearized_managed_bytes([&] {
                                 auto i = m.partitions.begin();
                                 i.erase_and_dispose(dht::raw_token_less_comparator{}, [&] (memtable_entry* e) noexcept {
                                     m.evict_entry(*e, _tracker.memtable_cleaner());
                                 });
-                              });
                             });
                             ++partition_count;
                           }
@@ -1070,7 +1051,6 @@ void row_cache::refresh_snapshot() {
 
 void row_cache::touch(const dht::decorated_key& dk) {
  _read_section(_tracker.region(), [&] {
-  with_linearized_managed_bytes([&] {
     auto i = _partitions.find(dk, dht::ring_position_comparator(*_schema));
     if (i != _partitions.end()) {
         for (partition_version& pv : i->partition().versions_from_oldest()) {
@@ -1079,13 +1059,11 @@ void row_cache::touch(const dht::decorated_key& dk) {
             }
         }
     }
-  });
  });
 }
 
 void row_cache::unlink_from_lru(const dht::decorated_key& dk) {
     _read_section(_tracker.region(), [&] {
-        with_linearized_managed_bytes([&] {
             auto i = _partitions.find(dk, dht::ring_position_comparator(*_schema));
             if (i != _partitions.end()) {
                 for (partition_version& pv : i->partition().versions_from_oldest()) {
@@ -1094,7 +1072,6 @@ void row_cache::unlink_from_lru(const dht::decorated_key& dk) {
                     }
                 }
             }
-        });
     });
 }
 
@@ -1135,7 +1112,6 @@ future<> row_cache::invalidate(external_updater eu, dht::partition_range_vector&
 
                 while (true) {
                     auto done = _update_section(_tracker.region(), [&] {
-                        return with_linearized_managed_bytes([&] {
                             auto cmp = dht::ring_position_comparator(*_schema);
                             auto it = _partitions.lower_bound(*_prev_snapshot_pos, cmp);
                             auto end = _partitions.lower_bound(dht::ring_position_view::for_range_end(range), cmp);
@@ -1159,7 +1135,6 @@ future<> row_cache::invalidate(external_updater eu, dht::partition_range_vector&
                                 _tracker.clear_continuity(*it);
                                 return stop_iteration(it == end);
                             });
-                        });
                     });
                     if (done == stop_iteration::yes) {
                         break;
@@ -1279,10 +1254,8 @@ void row_cache::upgrade_entry(cache_entry& e) {
         auto& r = _tracker.region();
         assert(!r.reclaiming_enabled());
         with_allocator(r.allocator(), [this, &e] {
-          with_linearized_managed_bytes([&] {
             e.partition().upgrade(e._schema, _schema, _tracker.cleaner(), &_tracker);
             e._schema = _schema;
-          });
         });
     }
 }
