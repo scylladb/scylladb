@@ -37,30 +37,35 @@ SEASTAR_THREAD_TEST_CASE(test_managed_bytes_from_bytes) {
     m.with_linearized([&] (bytes_view v) {
         BOOST_REQUIRE_EQUAL(v, bytes_view());
     });
+    BOOST_REQUIRE_EQUAL(to_bytes(m), bytes_view());
 
     b = random_bytes(1, 16);
     m = managed_bytes(b);
     m.with_linearized([&] (bytes_view v) {
         BOOST_REQUIRE_EQUAL(v, b);
     });
+    BOOST_REQUIRE_EQUAL(to_bytes(m), b);
 
     b = random_bytes(16, 256);
     m = managed_bytes(b);
     m.with_linearized([&] (bytes_view v) {
         BOOST_REQUIRE_EQUAL(v, b);
     });
+    BOOST_REQUIRE_EQUAL(to_bytes(m), b);
 
     b = random_bytes(256, 4096);
     m = managed_bytes(b);
     m.with_linearized([&] (bytes_view v) {
         BOOST_REQUIRE_EQUAL(v, b);
     });
+    BOOST_REQUIRE_EQUAL(to_bytes(m), b);
 
     b = random_bytes(4096, 131072);
     m = managed_bytes(b);
     m.with_linearized([&] (bytes_view v) {
         BOOST_REQUIRE_EQUAL(v, b);
     });
+    BOOST_REQUIRE_EQUAL(to_bytes(m), b);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_managed_bytes_equality) {
@@ -78,4 +83,42 @@ SEASTAR_THREAD_TEST_CASE(test_managed_bytes_equality) {
     } while (b2 == b);
     m2 = managed_bytes(b2);
     BOOST_REQUIRE_NE(m1, m2);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_managed_bytes_view_from_bytes) {
+    bytes b;
+    managed_bytes_view m;
+
+    m.with_linearized([&] (bytes_view v) {
+        BOOST_REQUIRE_EQUAL(v, bytes_view());
+    });
+    BOOST_REQUIRE_EQUAL(to_bytes(m), bytes_view());
+
+    b = random_bytes(1, 16);
+    m = managed_bytes_view(b);
+    m.with_linearized([&] (bytes_view v) {
+        BOOST_REQUIRE_EQUAL(v, b);
+    });
+    BOOST_REQUIRE_EQUAL(to_bytes(m), b);
+
+    b = random_bytes(16, 256);
+    m = managed_bytes_view(b);
+    m.with_linearized([&] (bytes_view v) {
+        BOOST_REQUIRE_EQUAL(v, b);
+    });
+    BOOST_REQUIRE_EQUAL(to_bytes(m), b);
+
+    b = random_bytes(256, 4096);
+    m = managed_bytes_view(b);
+    m.with_linearized([&] (bytes_view v) {
+        BOOST_REQUIRE_EQUAL(v, b);
+    });
+    BOOST_REQUIRE_EQUAL(to_bytes(m), b);
+
+    b = random_bytes(4096, 131072);
+    m = managed_bytes_view(b);
+    m.with_linearized([&] (bytes_view v) {
+        BOOST_REQUIRE_EQUAL(v, b);
+    });
+    BOOST_REQUIRE_EQUAL(to_bytes(m), b);
 }
