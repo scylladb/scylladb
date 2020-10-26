@@ -122,3 +122,29 @@ SEASTAR_THREAD_TEST_CASE(test_managed_bytes_view_from_bytes) {
     });
     BOOST_REQUIRE_EQUAL(to_bytes(m), b);
 }
+
+SEASTAR_THREAD_TEST_CASE(test_managed_bytes_view_remove_prefix) {
+    bytes b;
+    managed_bytes_view m;
+    size_t n;
+
+    m.remove_prefix(0);
+    BOOST_REQUIRE_EQUAL(to_bytes(m), bytes_view());
+    BOOST_REQUIRE_THROW(m.remove_prefix(1), std::runtime_error);
+
+    b = random_bytes(1, 16);
+    m = managed_bytes_view(b);
+    n = tests::random::get_int(size_t(0), b.size());
+    BOOST_TEST_MESSAGE(format("size={} remove_prefix={}", b.size(), n));
+    m.remove_prefix(n);
+    BOOST_REQUIRE_EQUAL(to_bytes(m), bytes_view(b.data() + n, b.size() - n));
+    BOOST_REQUIRE_THROW(m.remove_prefix(b.size() + 1), std::runtime_error);
+
+    b = random_bytes(16, 131072);
+    m = managed_bytes_view(b);
+    n = tests::random::get_int(size_t(0), b.size());
+    BOOST_TEST_MESSAGE(format("size={} remove_prefix={}", b.size(), n));
+    m.remove_prefix(n);
+    BOOST_REQUIRE_EQUAL(to_bytes(m), bytes_view(b.data() + n, b.size() - n));
+    BOOST_REQUIRE_THROW(m.remove_prefix(b.size() + 1), std::runtime_error);
+}

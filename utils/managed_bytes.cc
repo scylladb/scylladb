@@ -97,7 +97,25 @@ to_bytes(const managed_bytes& b) {
 }
 
 void managed_bytes_view_base::remove_prefix(size_t n) {
-    // FIXME: implement
+    do {
+        if (n < _current_fragment.size()) {
+            _current_fragment = bytes_view(_current_fragment.data() + n, _current_fragment.size() - n);
+            _size -= n;
+            return;
+        }
+        auto trim = _current_fragment.size();
+        n -= trim;
+        _size -= trim;
+        if (_next_fragments) {
+                _current_fragment = bytes_view(_next_fragments->data, _next_fragments->frag_size);
+                _next_fragments = _next_fragments->next;
+        } else {
+            _current_fragment = {};
+            if (n) {
+               throw std::runtime_error("Reached end of managed_bytes_view");
+            }
+        }
+    } while(n);
 }
 
 managed_bytes_view
