@@ -303,11 +303,11 @@ SEASTAR_TEST_CASE(test_blob) {
             auto src = bytes("123456");
             managed_bytes b(src);
 
-            BOOST_REQUIRE(bytes_view(b) == src);
+            BOOST_REQUIRE(managed_bytes_view(b) == managed_bytes_view(src));
 
             reg.full_compaction();
 
-            BOOST_REQUIRE(bytes_view(b) == src);
+            BOOST_REQUIRE(managed_bytes_view(b) == managed_bytes_view(src));
         });
     });
 }
