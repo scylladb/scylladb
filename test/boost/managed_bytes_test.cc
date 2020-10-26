@@ -25,6 +25,7 @@
 #include "test/lib/random_utils.hh"
 #include "utils/managed_bytes.hh"
 #include "utils/fragment_range.hh"
+#include "xx_hasher.hh"
 
 static constexpr size_t max_size = 512 * 1024;
 
@@ -218,4 +219,16 @@ SEASTAR_THREAD_TEST_CASE(test_managed_bytes_view_print) {
     std::ostringstream os2;
     os2 << mv;
     BOOST_REQUIRE_EQUAL(os1.str(), os2.str());
+}
+
+SEASTAR_THREAD_TEST_CASE(test_managed_bytes_view_appending_hash) {
+    auto b = random_bytes(0, max_size);
+    auto m = managed_bytes(b);
+    auto mv = managed_bytes_view(m);
+    auto hseed = tests::random::get_int<uint64_t>();
+    auto h1 = xx_hasher(hseed);
+    auto h2 = xx_hasher(hseed);
+    appending_hash<bytes_view>{}(h1, b);
+    appending_hash<managed_bytes_view>{}(h2, mv);
+    BOOST_REQUIRE_EQUAL(h1.finalize(), h2.finalize());
 }

@@ -80,21 +80,31 @@ std::ostream& operator<<(std::ostream& os, const bytes_view& b);
 
 }
 
+template<typename Hasher>
+inline void update_appending_hash(Hasher& h, const bytes& v) {
+    h.update(reinterpret_cast<const char*>(v.cbegin()), v.size() * sizeof(bytes::value_type));
+}
+
 template<>
 struct appending_hash<bytes> {
     template<typename Hasher>
     void operator()(Hasher& h, const bytes& v) const {
         feed_hash(h, v.size());
-        h.update(reinterpret_cast<const char*>(v.cbegin()), v.size() * sizeof(bytes::value_type));
+        update_appending_hash(h, v);
     }
 };
+
+template<typename Hasher>
+inline void update_appending_hash(Hasher& h, const bytes_view& v) {
+    h.update(reinterpret_cast<const char*>(v.begin()), v.size() * sizeof(bytes_view::value_type));
+}
 
 template<>
 struct appending_hash<bytes_view> {
     template<typename Hasher>
     void operator()(Hasher& h, bytes_view v) const {
         feed_hash(h, v.size());
-        h.update(reinterpret_cast<const char*>(v.begin()), v.size() * sizeof(bytes_view::value_type));
+        update_appending_hash(h, v);
     }
 };
 

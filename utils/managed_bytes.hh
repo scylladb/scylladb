@@ -598,7 +598,9 @@ struct appending_hash<managed_bytes_view> {
     template<typename Hasher>
     void operator()(Hasher& h, managed_bytes_view v) const {
         feed_hash(h, v.size());
-        //h.update(reinterpret_cast<const char*>(v.begin()), v.size() * sizeof(bytes_view::value_type));
+        for (auto f : v.as_fragment_range()) {
+            update_appending_hash(h, f);
+        }
     }
 };
 
