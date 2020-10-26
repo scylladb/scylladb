@@ -499,9 +499,10 @@ public:
 
     [[gnu::always_inline]]
     operator managed_bytes() && {
-        managed_bytes v(managed_bytes::initialized_later(), _stream.size());
+        bytes v(managed_bytes::initialized_later(), _stream.size());
+        // FIXME: read fragmented in the first place
         _stream.read(reinterpret_cast<char*>(v.begin()), _stream.size());
-        return v;
+        return managed_bytes(v);
     }
 
     [[gnu::always_inline]]
@@ -530,7 +531,10 @@ struct serializer<bytes> {
     }
     template<typename Output>
     static void write(Output& out, const managed_bytes& v) {
-        write(out, static_cast<bytes_view>(v));
+        // FIXME: don't linearize
+        v.with_linearized([&] (bytes_view v) {
+            write(out, v);
+        });
     }
     template<typename Output>
     static void write(Output& out, const bytes_ostream& v) {
