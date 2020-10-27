@@ -359,19 +359,51 @@ public:
     friend class managed_bytes_view;
 };
 
-class managed_bytes_view {
+class managed_bytes_view_base {
     bytes_view _current_fragment = {};
     blob_storage* _next_fragments = nullptr;
     size_t _size = 0;
 public:
+    managed_bytes_view_base() = default;
+    managed_bytes_view_base(const managed_bytes_view_base&) = default;
+    managed_bytes_view_base(managed_bytes_view_base&& o) noexcept
+            : _current_fragment(std::move(o._current_fragment))
+            , _next_fragments(o._next_fragments)
+            , _size(o._size)
+    {
+        o._current_fragment = {};
+        o._next_fragments = nullptr;
+        o._size = 0;
+    }
+    managed_bytes_view_base(bytes_view bv) noexcept
+            : _current_fragment(bv)
+            , _size(bv.size())
+    {}
+
+    managed_bytes_view_base& operator=(const managed_bytes_view_base&) = default;
+    managed_bytes_view_base& operator=(managed_bytes_view_base&&) = default;
+
+    bool operator==(const managed_bytes_view_base& x) const noexcept {
+        return _size == x._size && _current_fragment == x._current_fragment && _next_fragments == x._next_fragments;
+    }
+    bool operator!=(const managed_bytes_view_base& x) const noexcept {
+        return !operator==(x);
+    }
+
+    void remove_prefix(size_t prefix_len);
+
+    friend class managed_bytes_view;
+};
+
+class managed_bytes_view : public managed_bytes_view_base {
+public:
     managed_bytes_view() = default;
     managed_bytes_view(const managed_bytes&);
-    managed_bytes_view(bytes_view);
+    managed_bytes_view(bytes_view bv);
     explicit managed_bytes_view(const bytes&);
     size_t size() const { return _size; }
     bool empty() const { return _size == 0; }
     bytes_view::value_type operator[](size_t idx) const;
-    void remove_prefix(size_t prefix_len);
     managed_bytes_view substr(size_t offset, size_t len) const;
     bytes to_bytes() const;
     bool operator==(const managed_bytes_view& x) const;
@@ -396,44 +428,43 @@ std::invoke_result_t<Func, bytes_view> managed_bytes_view::with_linearized(Func&
 }
 
 // These are used to resolve ambiguities because managed_bytes_view can be converted to managed_bytes and vice versa
-inline bool operator==(const managed_bytes& a, const managed_bytes_view& b) {
+inline bool operator==(const managed_bytes& a, const managed_bytes_view_base& b) {
     return managed_bytes_view(a) == b;
 }
 
-inline bool operator==(const managed_bytes_view& a, const managed_bytes& b) {
+inline bool operator==(const managed_bytes_view_base& a, const managed_bytes& b) {
     return a == managed_bytes_view(b);
 }
 
-inline bool operator!=(const managed_bytes& a, const managed_bytes_view& b) {
+inline bool operator!=(const managed_bytes& a, const managed_bytes_view_base& b) {
     return managed_bytes_view(a) != b;
 }
 
-inline bool operator!=(const managed_bytes_view& a, const managed_bytes& b) {
+inline bool operator!=(const managed_bytes_view_base& a, const managed_bytes& b) {
     return a != managed_bytes_view(b);
 }
 
 // These are used to resolve ambiguities because bytes_view can be converted to managed_bytes and managed_bytes_view
-inline bool operator==(const bytes_view& a, const managed_bytes_view& b) {
+inline bool operator==(const bytes_view& a, const managed_bytes_view_base& b) {
     return managed_bytes_view(a) == b;
 }
 
-inline bool operator==(const managed_bytes_view& a, const bytes_view& b) {
-    return a == managed_bytes_view(b);
+inline bool operator==(const managed_bytes_view_base& a, const bytes_view& b) {
+    return a == managed_bytes_view_base(b);
 }
 
-inline bool operator!=(const bytes_view& a, const managed_bytes_view& b) {
-    return managed_bytes_view(a) != b;
+inline bool operator!=(const bytes_view& a, const managed_bytes_view_base& b) {
+    return managed_bytes_view_base(a) != b;
 }
 
-inline bool operator!=(const managed_bytes_view& a, const bytes_view& b) {
-    return a != managed_bytes_view(b);
+inline bool operator!=(const managed_bytes_view_base& a, const bytes_view& b) {
+    return a != managed_bytes_view_base(b);
 }
 
 inline
 managed_bytes_view::managed_bytes_view(bytes_view bv)
-        : _current_fragment(bv)
-        , _size(bv.size()) {
-}
+        : managed_bytes_view_base(bv)
+{}
 
 inline
 managed_bytes_view::managed_bytes_view(const bytes& b)
