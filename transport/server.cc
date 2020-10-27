@@ -309,7 +309,7 @@ cql_server::unadvertise_connection(shared_ptr<connection> conn) {
     const auto ip = conn->get_client_state().get_client_address().addr();
     const auto port = conn->get_client_state().get_client_port();
     clogger.trace("Advertising disconnection of CQL client {}:{}", ip, port);
-    return notify_disconnected_client(ip, client_type::cql, port);
+    return notify_disconnected_client(ip, port, client_type::cql);
 }
 
 unsigned
@@ -371,6 +371,16 @@ cql_server::connection::read_frame() {
                 _version = current_version;
                 throw exceptions::protocol_exception(format("Invalid or unsupported protocol version: {:d}", client_version));
             }
+
+          auto client_state_notification_f = std::apply(notify_client_change<changed_column::protocol_version>{},
+                  std::tuple_cat(make_client_key(_client_state), std::make_tuple(_version)));
+
+          return client_state_notification_f.then_wrapped([this] (future<> f) {
+            try {
+                f.get();
+            } catch (...) {
+                clogger.info("exception while setting protocol_version in `system.clients`: {}", std::current_exception());
+            }
             return _read_buf.read_exactly(frame_size() - 1).then([this] (temporary_buffer<char> tail) {
                 temporary_buffer<char> full(frame_size());
                 full.get_write()[0] = _version;
@@ -385,6 +395,7 @@ cql_server::connection::read_frame() {
                 }
                 return make_ready_future<ret_type>(frame);
             });
+          });
         });
     } else {
         // Not the first frame, so we know the size.
@@ -579,13 +590,19 @@ future<> cql_server::connection::shutdown()
     return make_ready_future<>();
 }
 
+std::tuple<net::inet_address, int, client_type> cql_server::connection::make_client_key(const service::client_state& cli_state) {
+    return std::make_tuple(cli_state.get_client_address().addr(),
+            cli_state.get_client_port(),
+            cli_state.is_thrift() ? client_type::thrift : client_type::cql);
+}
+
 client_data cql_server::connection::make_client_data() const {
     client_data cd;
-    cd.ip = _client_state.get_client_address().addr();
-    cd.port = _client_state.get_client_port();
-    cd.ct = client_type::cql;
+    std::tie(cd.ip, cd.port, cd.ct) = make_client_key(_client_state);
     cd.shard_id = this_shard_id();
     cd.protocol_version = _version;
+    cd.driver_name = _client_state.get_driver_name();
+    cd.driver_version = _client_state.get_driver_version();
     if (const auto user_ptr = _client_state.user(); user_ptr) {
         cd.username = user_ptr->name;
     }
@@ -751,6 +768,21 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_st
              throw exceptions::protocol_exception(format("Unknown compression algorithm: {}", compression));
          }
     }
+
+    auto client_state_notification_f = make_ready_future<>();
+    if (auto driver_ver_opt = options.find("DRIVER_VERSION"); driver_ver_opt != options.end()) {
+        _client_state.set_driver_version(driver_ver_opt->second);
+        client_state_notification_f = std::apply(notify_client_change<changed_column::driver_version>{},
+                std::tuple_cat(make_client_key(_client_state), std::make_tuple(driver_ver_opt->second)));
+    }
+    if (auto driver_name_opt = options.find("DRIVER_NAME"); driver_name_opt != options.end()) {
+        _client_state.set_driver_name(driver_name_opt->second);
+        client_state_notification_f = client_state_notification_f.then([ck = make_client_key(_client_state), dn = driver_name_opt->second] {
+            return std::apply(notify_client_change<changed_column::driver_name>{},
+                    std::tuple_cat(std::move(ck), std::forward_as_tuple(dn)));
+        });
+    }
+
     cql_protocol_extension_enum_set cql_proto_exts;
     for (cql_protocol_extension ext : supported_cql_protocol_extensions()) {
         if (options.contains(protocol_extension_name(ext))) {
@@ -758,11 +790,28 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_st
         }
     }
     _client_state.set_protocol_extensions(std::move(cql_proto_exts));
-    auto& a = client_state.get_auth_service()->underlying_authenticator();
-    if (a.require_authentication()) {
-        return make_ready_future<std::unique_ptr<cql_server::response>>(make_autheticate(stream, a.qualified_java_name(), trace_state));
+    std::unique_ptr<cql_server::response> res;
+    if (auto& a = client_state.get_auth_service()->underlying_authenticator(); a.require_authentication()) {
+        res = make_autheticate(stream, a.qualified_java_name(), trace_state);
+        client_state_notification_f = client_state_notification_f.then([ck = make_client_key(_client_state)] {
+            return std::apply(notify_client_change<changed_column::connection_stage>{},
+                    std::tuple_cat(std::move(ck), std::make_tuple(connection_stage_literal<client_connection_stage::authenticating>)));
+        });
+    } else {
+        res = make_ready(stream, trace_state);
+        client_state_notification_f = client_state_notification_f.then([ck = make_client_key(_client_state)] {
+            return std::apply(notify_client_change<changed_column::connection_stage>{},
+                    std::tuple_cat(std::move(ck), std::make_tuple(connection_stage_literal<client_connection_stage::ready>)));
+        });
     }
-    return make_ready_future<std::unique_ptr<cql_server::response>>(make_ready(stream, trace_state));
+    return client_state_notification_f.then_wrapped([res = std::move(res)] (future<> f) mutable {
+        try {
+            f.get();
+        } catch (...) {
+            clogger.info("exception while setting driver_name/version in `system.clients`: {}", std::current_exception());
+        }
+        return std::move(res);
+    });
 }
 
 future<std::unique_ptr<cql_server::response>> cql_server::connection::process_auth_response(uint16_t stream, request_reader in, service::client_state& client_state,
@@ -774,6 +823,12 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_au
         return sasl_challenge->get_authenticated_user().then([this, sasl_challenge, stream, &client_state, challenge = std::move(challenge), trace_state](auth::authenticated_user user) mutable {
             client_state.set_login(std::move(user));
             auto f = client_state.check_user_can_login();
+            if (client_state.user()->name) {
+                f = f.then([cli_key = make_client_key(client_state), username = *client_state.user()->name] {
+                    return std::apply(notify_client_change<changed_column::username>{},
+                            std::tuple_cat(std::move(cli_key), std::forward_as_tuple(username)));
+                });
+            }
             return f.then([this, stream, &client_state, challenge = std::move(challenge), trace_state]() mutable {
                 return make_ready_future<std::unique_ptr<cql_server::response>>(make_auth_success(stream, std::move(challenge), trace_state));
             });
@@ -1109,7 +1164,17 @@ cql_server::connection::process_register(uint16_t stream, request_reader in, ser
         auto et = parse_event_type(event_type);
         _server._notifier->register_event(et, this);
     }
-    return make_ready_future<std::unique_ptr<cql_server::response>>(make_ready(stream, std::move(trace_state)));
+    auto client_state_notification_f = std::apply(notify_client_change<changed_column::connection_stage>{},
+            std::tuple_cat(make_client_key(_client_state), std::make_tuple(connection_stage_literal<client_connection_stage::ready>)));
+
+    return client_state_notification_f.then_wrapped([res = make_ready(stream, std::move(trace_state))] (future<> f) mutable {
+        try {
+            f.get();
+        } catch (...) {
+            clogger.info("exception while setting connection_stage in `system.clients`: {}", std::current_exception());
+        }
+        return std::move(res);
+    });
 }
 
 std::unique_ptr<cql_server::response> cql_server::connection::make_unavailable_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t required, int32_t alive, const tracing::trace_state_ptr& tr_state) const

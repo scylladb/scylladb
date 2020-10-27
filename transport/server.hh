@@ -48,6 +48,7 @@ class registrations;
 }
 
 class database;
+enum class client_type;
 struct client_data;
 
 namespace cql_transport {
@@ -189,6 +190,7 @@ private:
         future<> process();
         future<> process_request();
         future<> shutdown();
+        static std::tuple<net::inet_address, int, client_type> make_client_key(const service::client_state& cli_state);
         client_data make_client_data() const;
         const service::client_state& get_client_state() const { return _client_state; }
     private:
