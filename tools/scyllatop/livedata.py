@@ -39,7 +39,7 @@ class LiveData(object):
     def _discoverMetrics(self):
         results = metric.Metric.discover(self._metric_source)
         logging.debug('_discoverMetrics: {} results discovered'.format(len(results)))
-        for symbol in results:
+        for symbol in list(results):
             if not self._matches(symbol, self._metricPatterns):
                 results.pop(symbol)
         logging.debug('_initializeMetrics: {} results matched'.format(len(results)))
