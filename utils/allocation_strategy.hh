@@ -185,6 +185,9 @@ public:
 
 class standard_allocation_strategy : public allocation_strategy {
 public:
+    constexpr standard_allocation_strategy() {
+        _preferred_max_contiguous_allocation = 128 * 1024;
+    }
     virtual void* alloc(migrate_fn, size_t size, size_t alignment) override {
         seastar::memory::on_alloc_point();
         // ASAN doesn't intercept aligned_alloc() and complains on free().
