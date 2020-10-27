@@ -95,90 +95,12 @@ class compaction_garbage_collector;
 // for space-efficiency reasons. Whenever a method accepts a column_kind,
 // the caller must always supply the same column_kind.
 //
-// Can be used as a range of row::cell_entry.
 //
 class row {
-
-    class cell_entry {
-        boost::intrusive::set_member_hook<> _link;
-        column_id _id;
-        cell_and_hash _cell_and_hash;
-        friend class row;
-    public:
-        cell_entry(column_id id, cell_and_hash c_a_h)
-            : _id(id)
-            , _cell_and_hash(std::move(c_a_h))
-        { }
-        cell_entry(column_id id, atomic_cell_or_collection cell)
-            : cell_entry(id, cell_and_hash{std::move(cell), cell_hash_opt()})
-        { }
-        cell_entry(column_id id)
-            : _id(id)
-        { }
-        cell_entry(cell_entry&&) noexcept;
-        cell_entry(const abstract_type&, const cell_entry&);
-
-        column_id id() const { return _id; }
-        const atomic_cell_or_collection& cell() const { return _cell_and_hash.cell; }
-        atomic_cell_or_collection& cell() { return _cell_and_hash.cell; }
-        const cell_hash_opt& hash() const { return _cell_and_hash.hash; }
-        const cell_and_hash& get_cell_and_hash() const { return _cell_and_hash; }
-        cell_and_hash& get_cell_and_hash() { return _cell_and_hash; }
-
-        struct compare {
-            bool operator()(const cell_entry& e1, const cell_entry& e2) const {
-                return e1._id < e2._id;
-            }
-            bool operator()(column_id id1, const cell_entry& e2) const {
-                return id1 < e2._id;
-            }
-            bool operator()(const cell_entry& e1, column_id id2) const {
-                return e1._id < id2;
-            }
-        };
-    };
-
     using size_type = std::make_unsigned_t<column_id>;
-
-    enum class storage_type {
-        vector,
-        set,
-        array,
-    };
-    storage_type _type = storage_type::vector;
     size_type _size = 0;
-
-    using map_type = boost::intrusive::set<cell_entry,
-        boost::intrusive::member_hook<cell_entry, boost::intrusive::set_member_hook<>, &cell_entry::_link>,
-        boost::intrusive::compare<cell_entry::compare>, boost::intrusive::constant_time_size<false>>;
-public:
-    static constexpr size_t max_vector_size = 32;
-    static constexpr size_t internal_count = 5;
-private:
-    using vector_type = managed_vector<cell_and_hash, internal_count, size_type>;
-
-    struct vector_storage {
-        std::bitset<max_vector_size> present;
-        vector_type v;
-
-        vector_storage() = default;
-        vector_storage(const vector_storage&) = default;
-        vector_storage(vector_storage&& other) noexcept
-                : present(other.present)
-                , v(std::move(other.v)) {
-            other.present = {};
-        }
-    };
-
     using sparse_array_type = compact_radix_tree::tree<cell_and_hash, column_id>;
-
-    union storage {
-        storage() { }
-        ~storage() { }
-        map_type set;
-        vector_storage vector;
-        sparse_array_type array;
-    } _storage;
+    sparse_array_type _cells;
 public:
     row();
     ~row();
@@ -187,8 +109,6 @@ public:
     row& operator=(row&& other) noexcept;
     size_t size() const { return _size; }
     bool empty() const { return _size == 0; }
-
-    void reserve(column_id);
 
     const atomic_cell_or_collection& cell_at(column_id id) const;
 
@@ -199,9 +119,6 @@ public:
 
     template<typename Func>
     void remove_if(Func&& func) {
-        if (_type == storage_type::array) {
-        auto& _cells = _storage.array;
-
         _cells.weed([func, this] (column_id id, cell_and_hash& cah) {
             if (!func(id, cah.cell)) {
                 return false;
@@ -210,56 +127,9 @@ public:
             _size--;
             return true;
         });
-
-        }
-
-        if (_type == storage_type::vector) {
-            for (unsigned i = 0; i < _storage.vector.v.size(); i++) {
-                if (!_storage.vector.present.test(i)) {
-                    continue;
-                }
-                auto& c = _storage.vector.v[i].cell;
-                if (func(i, c)) {
-                    c = atomic_cell_or_collection();
-                    _storage.vector.present.reset(i);
-                    _size--;
-                }
-            }
-        } else {
-            for (auto it = _storage.set.begin(); it != _storage.set.end();) {
-                if (func(it->id(), it->cell())) {
-                    auto& entry = *it;
-                    it = _storage.set.erase(it);
-                    current_allocator().destroy(&entry);
-                    _size--;
-                } else {
-                    ++it;
-                }
-            }
-        }
     }
 
 private:
-    auto get_range_vector() const {
-        auto id_range = boost::irange<column_id>(0, _storage.vector.v.size());
-        return boost::combine(id_range, _storage.vector.v)
-        | boost::adaptors::filtered([this] (const boost::tuple<const column_id&, const cell_and_hash&>& t) {
-            return _storage.vector.present.test(t.get<0>());
-        }) | boost::adaptors::transformed([] (const boost::tuple<const column_id&, const cell_and_hash&>& t) {
-            return std::pair<column_id, const atomic_cell_or_collection&>(t.get<0>(), t.get<1>().cell);
-        });
-    }
-    auto get_range_set() const {
-        auto range = boost::make_iterator_range(_storage.set.begin(), _storage.set.end());
-        return range | boost::adaptors::transformed([] (const cell_entry& c) {
-            return std::pair<column_id, const atomic_cell_or_collection&>(c.id(), c.cell());
-        });
-    }
-    template<typename Func>
-    auto with_both_ranges(const row& other, Func&& func) const;
-
-    void vector_to_set();
-
     template<typename Func>
     void consume_with(Func&&);
 
@@ -279,74 +149,25 @@ public:
     // noexcept if Func doesn't throw.
     template<typename Func>
     void for_each_cell(Func&& func) {
-        if (_type == storage_type::array) {
-        auto& _cells = _storage.array;
-
         _cells.walk([func] (column_id id, cell_and_hash& cah) {
             maybe_invoke_with_hash(func, id, cah);
             return true;
         });
-
-        }
-
-        if (_type == storage_type::vector) {
-            for (auto i : bitsets::for_each_set(_storage.vector.present)) {
-                maybe_invoke_with_hash(func, i, _storage.vector.v[i]);
-            }
-        } else {
-            for (auto& cell : _storage.set) {
-                maybe_invoke_with_hash(func, cell.id(), cell.get_cell_and_hash());
-            }
-        }
     }
 
     template<typename Func>
     void for_each_cell(Func&& func) const {
-        if (_type == storage_type::array) {
-        auto& _cells = _storage.array;
-
         _cells.walk([func] (column_id id, const cell_and_hash& cah) {
             maybe_invoke_with_hash(func, id, cah);
             return true;
         });
-
-        }
-
-        if (_type == storage_type::vector) {
-            for (auto i : bitsets::for_each_set(_storage.vector.present)) {
-                maybe_invoke_with_hash(func, i, _storage.vector.v[i]);
-            }
-        } else {
-            for (auto& cell : _storage.set) {
-                maybe_invoke_with_hash(func, cell.id(), cell.get_cell_and_hash());
-            }
-        }
     }
 
     template<typename Func>
     void for_each_cell_until(Func&& func) const {
-        if (_type == storage_type::array) {
-        auto& _cells = _storage.array;
-
         _cells.walk([func] (column_id id, const cell_and_hash& cah) {
             return maybe_invoke_with_hash(func, id, cah) != stop_iteration::yes;
         });
-
-        }
-
-        if (_type == storage_type::vector) {
-            for (auto i : bitsets::for_each_set(_storage.vector.present)) {
-                if (maybe_invoke_with_hash(func, i, _storage.vector.v[i]) == stop_iteration::yes) {
-                    break;
-                }
-            }
-        } else {
-            for (auto& cell : _storage.set) {
-                if (maybe_invoke_with_hash(func, cell.id(), cell.get_cell_and_hash()) == stop_iteration::yes) {
-                    break;
-                }
-            }
-        }
     }
 
     // Merges cell's value into the row.
@@ -482,7 +303,7 @@ public:
 
     void reserve(column_id nr) {
         if (nr) {
-            maybe_create().reserve(nr);
+            maybe_create();
         }
     }
 

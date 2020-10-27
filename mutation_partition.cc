@@ -827,22 +827,8 @@ void appending_hash<row>::operator()<legacy_xx_hasher_without_null_digest>(legac
 }
 
 cell_hash_opt row::cell_hash_for(column_id id) const {
-    if (_type == storage_type::array) {
-    auto& _cells = _storage.array;
-
     const cell_and_hash* cah = _cells.get(id);
     return cah != nullptr ? cah->hash : cell_hash_opt();
-
-    }
-
-    if (_type == storage_type::vector) {
-        return id < max_vector_size && _storage.vector.present.test(id) ? _storage.vector.v[id].hash : cell_hash_opt();
-    }
-    auto it = _storage.set.find(id, cell_entry::compare());
-    if (it != _storage.set.end()) {
-        return it->hash();
-    }
-    return cell_hash_opt();
 }
 
 void row::prepare_hash(const schema& s, column_kind kind) const {
@@ -934,8 +920,7 @@ static auto prefixed(const sstring& prefix, const RangeOfPrintable& r) {
 
 std::ostream&
 operator<<(std::ostream& os, const row::printer& p) {
-    if (p._row._type == row::storage_type::array) {
-    auto& cells = p._row._storage.array;
+    auto& cells = p._row._cells;
 
     os << "{{row:";
     cells.walk([&] (column_id id, const cell_and_hash& cah) {
@@ -944,28 +929,6 @@ operator<<(std::ostream& os, const row::printer& p) {
         return true;
     });
     return os << "}}";
-    }
-
-    auto add_printer = [&] (const auto& c) {
-        auto& column_def = p._schema.column_at(p._kind, c.first);
-        return std::pair<sstring, atomic_cell_or_collection::printer>(std::piecewise_construct,
-            std::forward_as_tuple(column_def.name_as_text()),
-            std::forward_as_tuple(column_def, c.second)
-        );
-    };
-
-    sstring cells;
-    switch (p._row._type) {
-    case row::storage_type::set:
-        cells = ::join(",", prefixed("\n      ", p._row.get_range_set() | boost::adaptors::transformed(add_printer)));
-        break;
-    case row::storage_type::vector:
-        cells = ::join(",", prefixed("\n      ", p._row.get_range_vector() | boost::adaptors::transformed(add_printer)));
-        break;
-    case row::storage_type::array:
-        break;
-    }
-    return fmt_print(os, "{{row: {}}}", cells);
 }
 
 std::ostream&
@@ -1207,35 +1170,11 @@ row::apply(const column_definition& column, atomic_cell_or_collection&& value, c
 
 template<typename Func>
 void row::consume_with(Func&& func) {
-    if (_type == storage_type::array) {
-    auto& _cells = _storage.array;
-
     _cells.weed([func, this] (column_id id, cell_and_hash& cah) {
         _size--;
         func(id, cah);
         return true;
     });
-
-    }
-
-    if (_type == storage_type::vector) {
-        unsigned i = 0;
-        for (; i < _storage.vector.v.size(); i++) {
-            if (_storage.vector.present.test(i)) {
-                func(i, _storage.vector.v[i]);
-                _storage.vector.present.reset(i);
-                --_size;
-            }
-        }
-    } else {
-        auto del = current_deleter<cell_entry>();
-        auto i = _storage.set.begin();
-        while (i != _storage.set.end()) {
-            func(i->id(), i->get_cell_and_hash());
-            i = _storage.set.erase_and_dispose(i, del);
-            --_size;
-        }
-    }
 }
 
 void
@@ -1247,9 +1186,6 @@ row::apply_monotonically(const column_definition& column, atomic_cell_or_collect
     // our mutations are not yet immutable
     auto id = column.id;
 
-    if (_type == storage_type::array) {
-    auto& _cells = _storage.array;
-
     cell_and_hash* cah = _cells.get(id);
     if (cah == nullptr) {
         // FIXME -- add .locate method to radix_tree to find or allocate a spot
@@ -1258,85 +1194,17 @@ row::apply_monotonically(const column_definition& column, atomic_cell_or_collect
     } else {
         ::apply_monotonically(column, *cah, value, std::move(hash));
     }
-
-    }
-
-    if (_type == storage_type::vector && id < max_vector_size) {
-        if (id >= _storage.vector.v.size()) {
-            _storage.vector.v.resize(id);
-            _storage.vector.v.emplace_back(std::move(value), std::move(hash));
-            _storage.vector.present.set(id);
-            _size++;
-        } else if (auto& cell_and_hash = _storage.vector.v[id]; !bool(cell_and_hash.cell)) {
-            cell_and_hash = { std::move(value), std::move(hash) };
-            _storage.vector.present.set(id);
-            _size++;
-        } else {
-            ::apply_monotonically(column, cell_and_hash, value, std::move(hash));
-        }
-    } else {
-        if (_type == storage_type::vector) {
-            vector_to_set();
-        }
-        auto i = _storage.set.lower_bound(id, cell_entry::compare());
-        if (i == _storage.set.end() || i->id() != id) {
-            cell_entry* e = current_allocator().construct<cell_entry>(id);
-            _storage.set.insert(i, *e);
-            _size++;
-            e->_cell_and_hash = { std::move(value), std::move(hash) };
-        } else {
-            ::apply_monotonically(column, i->_cell_and_hash, value, std::move(hash));
-        }
-    }
 }
 
 void
 row::append_cell(column_id id, atomic_cell_or_collection value) {
-    if (_type == storage_type::array) {
-    auto& _cells = _storage.array;
-
     _cells.emplace(id, std::move(value), cell_hash_opt());
-
-    }
-
-    if (_type == storage_type::vector && id < max_vector_size) {
-        if (_storage.vector.v.size() > id) {
-            on_internal_error(mplog, format("Attempted to append cell#{} to row already having {} cells", id, _storage.vector.v.size()));
-        }
-        _storage.vector.v.resize(id);
-        _storage.vector.v.emplace_back(cell_and_hash{std::move(value), cell_hash_opt()});
-        _storage.vector.present.set(id);
-    } else {
-        if (_type == storage_type::vector) {
-            vector_to_set();
-        }
-        auto e = current_allocator().construct<cell_entry>(id, std::move(value));
-        _storage.set.insert(_storage.set.end(), *e);
-    }
     _size++;
 }
 
 const cell_and_hash*
 row::find_cell_and_hash(column_id id) const {
-    if (_type == storage_type::array) {
-    auto& _cells = _storage.array;
-
     return _cells.get(id);
-
-    }
-
-    if (_type == storage_type::vector) {
-        if (id >= _storage.vector.v.size() || !_storage.vector.present.test(id)) {
-            return nullptr;
-        }
-        return &_storage.vector.v[id];
-    } else {
-        auto i = _storage.set.find(id, cell_entry::compare());
-        if (i == _storage.set.end()) {
-            return nullptr;
-        }
-        return &i->get_cell_and_hash();
-    }
 }
 
 const atomic_cell_or_collection*
@@ -1346,32 +1214,10 @@ row::find_cell(column_id id) const {
 }
 
 size_t row::external_memory_usage(const schema& s, column_kind kind) const {
-    size_t mem = 0;
-
-    if (_type == storage_type::array) {
-    auto& _cells = _storage.array;
-
     return _cells.memory_usage([&] (column_id id, const cell_and_hash& cah) noexcept {
             auto& cdef = s.column_at(kind, id);
             return cah.cell.external_memory_usage(*cdef.type);
     });
-
-    }
-
-    if (_type == storage_type::vector) {
-        mem += _storage.vector.v.used_space_external_memory_usage();
-        column_id id = 0;
-        for (auto&& c_a_h : _storage.vector.v) {
-            auto& cdef = s.column_at(kind, id++);
-            mem += c_a_h.cell.external_memory_usage(*cdef.type);
-        }
-    } else {
-        for (auto&& ce : _storage.set) {
-            auto& cdef = s.column_at(kind, ce.id());
-            mem += sizeof(cell_entry) + ce.cell().external_memory_usage(*cdef.type);
-        }
-    }
-    return mem;
 }
 
 size_t rows_entry::memory_usage(const schema& s) const {
@@ -1607,73 +1453,17 @@ void rows_entry::replace_with(rows_entry&& o) noexcept {
     _row = std::move(o._row);
 }
 
-row::row(const schema& s, column_kind kind, const row& o)
-    : _type(o._type)
-    , _size(o._size)
+row::row(const schema& s, column_kind kind, const row& o) : _size(o._size)
 {
-    if (_type == storage_type::array) {
-
     auto clone_cell_and_hash = [&s, &kind] (column_id id, const cell_and_hash& cah) {
         auto& cdef = s.column_at(kind, id);
         return cell_and_hash(cah.cell.copy(*cdef.type), cah.hash);
     };
 
-    _storage.array.clone_from(o._storage.array, clone_cell_and_hash);
-
-    }
-
-    if (_type == storage_type::vector) {
-        auto& other_vec = o._storage.vector;
-        auto& vec = *new (&_storage.vector) vector_storage;
-        try {
-            vec.present = other_vec.present;
-            vec.v.reserve(other_vec.v.size());
-            column_id id = 0;
-            for (auto& cell : other_vec.v) {
-                auto& cdef = s.column_at(kind, id++);
-                vec.v.emplace_back(cell_and_hash{cell.cell.copy(*cdef.type), cell.hash});
-            }
-        } catch (...) {
-            _storage.vector.~vector_storage();
-            throw;
-        }
-    } else {
-        auto cloner = [&] (const auto& x) {
-            auto& cdef = s.column_at(kind, x.id());
-            return current_allocator().construct<cell_entry>(*cdef.type, x);
-        };
-        new (&_storage.set) map_type;
-        try {
-            _storage.set.clone_from(o._storage.set, cloner, current_deleter<cell_entry>());
-        } catch (...) {
-            _storage.set.~map_type();
-            throw;
-        }
-    }
+    _cells.clone_from(o._cells, clone_cell_and_hash);
 }
 
 row::~row() {
-    if (_type == storage_type::vector) {
-        _storage.vector.~vector_storage();
-    } else {
-        _storage.set.clear_and_dispose(current_deleter<cell_entry>());
-        _storage.set.~map_type();
-    }
-}
-
-row::cell_entry::cell_entry(const abstract_type& type, const cell_entry& o)
-    : _id(o._id)
-    , _cell_and_hash{ o._cell_and_hash.cell.copy(type), o._cell_and_hash.hash }
-{ }
-
-row::cell_entry::cell_entry(cell_entry&& o) noexcept
-    : _link()
-    , _id(o._id)
-    , _cell_and_hash(std::move(o._cell_and_hash))
-{
-    using container_type = row::map_type;
-    container_type::node_algorithms::replace_node(o._link.this_ptr(), _link.this_ptr());
-    container_type::node_algorithms::init(o._link.this_ptr());
 }
 
 const atomic_cell_or_collection& row::cell_at(column_id id) const {
@@ -1682,56 +1472,6 @@ const atomic_cell_or_collection& row::cell_at(column_id id) const {
         throw_with_backtrace<std::out_of_range>(format("Column not found for id = {:d}", id));
     }
     return *cell;
-}
-
-void row::vector_to_set()
-{
-    assert(_type == storage_type::vector);
-    map_type set;
-    try {
-    for (auto i : bitsets::for_each_set(_storage.vector.present)) {
-        auto& c_a_h = _storage.vector.v[i];
-        auto e = current_allocator().construct<cell_entry>(i, std::move(c_a_h));
-        set.insert(set.end(), *e);
-    }
-    } catch (...) {
-        set.clear_and_dispose([this, del = current_deleter<cell_entry>()] (cell_entry* ce) noexcept {
-            _storage.vector.v[ce->id()] = std::move(ce->get_cell_and_hash());
-            del(ce);
-        });
-        throw;
-    }
-    _storage.vector.~vector_storage();
-    new (&_storage.set) map_type(std::move(set));
-    _type = storage_type::set;
-}
-
-void row::reserve(column_id last_column)
-{
-    if (_type == storage_type::vector && last_column >= internal_count) {
-        if (last_column >= max_vector_size) {
-            vector_to_set();
-        } else {
-            _storage.vector.v.reserve(last_column);
-        }
-    }
-}
-
-template<typename Func>
-auto row::with_both_ranges(const row& other, Func&& func) const {
-    if (_type == storage_type::vector) {
-        if (other._type == storage_type::vector) {
-            return func(get_range_vector(), other.get_range_vector());
-        } else {
-            return func(get_range_vector(), other.get_range_set());
-        }
-    } else {
-        if (other._type == storage_type::vector) {
-            return func(get_range_set(), other.get_range_vector());
-        } else {
-            return func(get_range_set(), other.get_range_set());
-        }
-    }
 }
 
 bool row::equal(column_kind kind, const schema& this_schema, const row& other, const schema& other_schema) const {
@@ -1749,11 +1489,10 @@ bool row::equal(column_kind kind, const schema& this_schema, const row& other, c
                && c1.equals(at1, c2);
     };
 
-    if (_type == storage_type::array) {
-    auto i1 = _storage.array.begin();
-    auto i1_end = _storage.array.end();
-    auto i2 = other._storage.array.begin();
-    auto i2_end = other._storage.array.end();
+    auto i1 = _cells.begin();
+    auto i1_end = _cells.end();
+    auto i2 = other._cells.begin();
+    auto i2_end = other._cells.end();
 
     while (true) {
         if (i1 == i1_end) {
@@ -1770,26 +1509,13 @@ bool row::equal(column_kind kind, const schema& this_schema, const row& other, c
         i1++;
         i2++;
     }
-    }
-
-    return with_both_ranges(other, [&] (auto r1, auto r2) {
-        return boost::equal(r1, r2, [&] (auto p1, auto p2) {
-            return cells_equal(p1.first, p1.second, p2.first, p2.second);
-        });
-    });
 }
 
 row::row() {
-    new (&_storage.vector) vector_storage;
 }
 
 row::row(row&& other) noexcept
-    : _type(other._type), _size(other._size) {
-    if (_type == storage_type::vector) {
-        new (&_storage.vector) vector_storage(std::move(other._storage.vector));
-    } else {
-        new (&_storage.set) map_type(std::move(other._storage.set));
-    }
+    : _size(other._size), _cells(std::move(other._cells)) {
     other._size = 0;
 }
 
@@ -1805,11 +1531,6 @@ void row::apply(const schema& s, column_kind kind, const row& other) {
     if (other.empty()) {
         return;
     }
-    if (other._type == storage_type::vector) {
-        reserve(other._storage.vector.v.size() - 1);
-    } else {
-        reserve(other._storage.set.rbegin()->id());
-    }
     other.for_each_cell([&] (column_id id, const cell_and_hash& c_a_h) {
         apply(s.column_at(kind, id), c_a_h.cell, c_a_h.hash);
     });
@@ -1822,11 +1543,6 @@ void row::apply(const schema& s, column_kind kind, row&& other) {
 void row::apply_monotonically(const schema& s, column_kind kind, row&& other) {
     if (other.empty()) {
         return;
-    }
-    if (other._type == storage_type::vector) {
-        reserve(other._storage.vector.v.size() - 1);
-    } else {
-        reserve(other._storage.set.rbegin()->id());
     }
     other.consume_with([&] (column_id id, cell_and_hash& c_a_h) {
         apply_monotonically(s.column_at(kind, id), std::move(c_a_h.cell), std::move(c_a_h.hash));
@@ -1965,11 +1681,10 @@ row row::difference(const schema& s, column_kind kind, const row& other) const
 {
     row r;
 
-    if (_type == storage_type::array) {
-    auto c = _storage.array.begin();
-    auto c_end = _storage.array.end();
-    auto it = other._storage.array.begin();
-    auto it_end = other._storage.array.end();
+    auto c = _cells.begin();
+    auto c_end = _cells.end();
+    auto it = other._cells.begin();
+    auto it_end = other._cells.end();
 
     while (c != c_end) {
         while (it != it_end && it.key() < c.key()) {
@@ -1997,36 +1712,6 @@ row row::difference(const schema& s, column_kind kind, const row& other) const
         c++;
     }
 
-    return r;
-    }
-
-    with_both_ranges(other, [&] (auto this_range, auto other_range) {
-        auto it = other_range.begin();
-        for (auto&& c : this_range) {
-            while (it != other_range.end() && it->first < c.first) {
-                ++it;
-            }
-            auto& cdef = s.column_at(kind, c.first);
-            if (it == other_range.end() || it->first != c.first) {
-                r.append_cell(c.first, c.second.copy(*cdef.type));
-            } else if (cdef.is_counter()) {
-                auto cell = counter_cell_view::difference(c.second.as_atomic_cell(cdef), it->second.as_atomic_cell(cdef));
-                if (cell) {
-                    r.append_cell(c.first, std::move(*cell));
-                }
-            } else if (s.column_at(kind, c.first).is_atomic()) {
-                if (compare_atomic_cell_for_merge(c.second.as_atomic_cell(cdef), it->second.as_atomic_cell(cdef)) > 0) {
-                    r.append_cell(c.first, c.second.copy(*cdef.type));
-                }
-            } else {
-                auto diff = ::difference(*s.column_at(kind, c.first).type,
-                        c.second.as_collection_mutation(), it->second.as_collection_mutation());
-                if (!static_cast<collection_mutation_view>(diff).is_empty()) {
-                    r.append_cell(c.first, std::move(diff));
-                }
-            }
-        }
-    });
     return r;
 }
 
