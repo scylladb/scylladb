@@ -1969,6 +1969,36 @@ public:
     }
 };
 
+// system.dual helper table
+class dual_table : public streaming_virtual_table {
+public:
+    dual_table() : streaming_virtual_table(build_schema()) {
+        _shard_aware = true;
+    }
+
+    static schema_ptr build_schema() {
+        auto id = generate_legacy_id(system_keyspace_name(), "dual");
+        return schema_builder(system_keyspace_name(), "dual", std::make_optional(id))
+            .with_column("DUMMY", utf8_type, column_kind::partition_key)
+            .with_version(system_keyspace::generate_schema_version(id))
+            .build();
+    }
+
+    future<> execute(reader_permit permit, result_collector& result, const query_restrictions& qr) override {
+        auto dk = dht::decorate_key(*_s, partition_key::from_single_value(*_s, data_value("X").serialize_nonnull()));
+        if (!this_shard_owns(dk)) {
+            return make_ready_future<>();
+        }
+        return result.emit_partition_start(std::move(dk)).then([&result, this] {
+            clustering_row cr(clustering_key::make_empty(*_s));
+            cr.marker() = row_marker(api::new_timestamp());
+            return result.emit_row(std::move(cr)).then([&result] {
+                return result.emit_partition_end();
+            });
+        });
+    }
+};
+
 class snapshots_table : public streaming_virtual_table {
     distributed<database>& _db;
 public:
@@ -2499,6 +2529,7 @@ void register_virtual_tables(distributed<database>& dist_db, distributed<service
     add_table(std::make_unique<runtime_info_table>(dist_db, ss));
     add_table(std::make_unique<versions_table>());
     add_table(std::make_unique<db_config_table>(cfg));
+    add_table(std::make_unique<dual_table>());
 }
 
 std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {

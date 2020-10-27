@@ -19,6 +19,10 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 #include "db/builtin_routine_registry.hh"
+#include "cql3/functions/system_function.hh"
+#include "cql3/functions/functions.hh"
+
+extern logging::logger dblog;
 
 namespace db {
 
@@ -34,6 +38,12 @@ seastar::shared_ptr<builtin_routine> builtin_routine_registry::find_routine(cons
         return {};
     }
     return it->second;
+}
+
+void add_system_function(sstring name, std::function<future<sstring>()> f) {
+    dblog.trace("{}", fmt::format("registering function {}", name));
+    auto function = ::make_shared<cql3::functions::system_function>(std::move(name), utf8_type, std::vector<data_type>{}, std::move(f));
+    cql3::functions::functions::add_function(std::move(function));
 }
 
 } // end of namespace db

@@ -41,8 +41,10 @@ public:
     // Return a builtin routine. Use with shard local instance of
     // builtin_routine_registry&.
     seastar::shared_ptr<builtin_routine> find_routine(const sstring& name);
-
 };
+
+// Got to be called separately on each shard
+void add_system_function(sstring name, std::function<future<sstring>()>);
 
 } // end of namespace db
 

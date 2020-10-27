@@ -508,6 +508,10 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         return scylla_version();
     });
 
+    db::add_system_function("scylla_version", [] { 
+        return make_ready_future<sstring>(scylla_version()); 
+    });
+
     ss::get_schema_version.set(r, [&ss](const_req req) {
         return ss.local().get_schema_version();
     });
