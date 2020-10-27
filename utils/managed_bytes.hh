@@ -445,8 +445,8 @@ public:
     bytes_view::value_type operator[](size_t idx) const noexcept;
     managed_bytes_view substr(size_t offset, size_t len) const;
     bytes to_bytes() const;
-    bool operator==(const managed_bytes_view& x) const;
-    bool operator!=(const managed_bytes_view& x) const;
+    bool operator==(const managed_bytes_view& x) const noexcept;
+    bool operator!=(const managed_bytes_view& x) const noexcept;
 
     template <std::invocable<bytes_view> Func>
     std::invoke_result_t<Func, bytes_view> with_linearized(Func&& func) const;
@@ -524,7 +524,7 @@ managed_bytes_view::managed_bytes_view(const bytes& b) noexcept
 
 bytes to_bytes(const managed_bytes& b);
 bytes to_bytes(managed_bytes_view v);
-int compare_unsigned(const managed_bytes_view v1, const managed_bytes_view v2);
+int compare_unsigned(const managed_bytes_view v1, const managed_bytes_view v2) noexcept;
 
 namespace std {
 

@@ -140,7 +140,7 @@ managed_bytes_view::substr(size_t offset, size_t len) const {
 }
 
 bool
-managed_bytes_view::operator==(const managed_bytes_view& x) const {
+managed_bytes_view::operator==(const managed_bytes_view& x) const noexcept {
     if (size() != x.size()) {
         return false;
     }
@@ -160,11 +160,11 @@ managed_bytes_view::operator==(const managed_bytes_view& x) const {
 }
 
 bool
-managed_bytes_view::operator!=(const managed_bytes_view& x) const {
+managed_bytes_view::operator!=(const managed_bytes_view& x) const noexcept {
     return !operator==(x);
 }
 
-int compare_unsigned(const managed_bytes_view v1, const managed_bytes_view v2) {
+int compare_unsigned(const managed_bytes_view v1, const managed_bytes_view v2) noexcept {
     auto it1 = v1.begin();
     auto it2 = v2.begin();
     while (it1 != v1.end() && it2 != v2.end()) {
