@@ -570,47 +570,47 @@ private:
 
     flat_mutation_reader_opt do_read_from_primary(db::timeout_clock::time_point timeout) {
         return _cache._read_section(_cache._tracker.region(), [this] () -> flat_mutation_reader_opt {
-                bool not_moved = true;
-                if (!_primary.valid()) {
-                    not_moved = _primary.advance_to(as_ring_position_view(_lower_bound));
-                }
+            bool not_moved = true;
+            if (!_primary.valid()) {
+                not_moved = _primary.advance_to(as_ring_position_view(_lower_bound));
+            }
 
-                if (_advance_primary && not_moved) {
-                    _primary.next();
-                    not_moved = false;
-                }
-                _advance_primary = false;
+            if (_advance_primary && not_moved) {
+                _primary.next();
+                not_moved = false;
+            }
+            _advance_primary = false;
 
-                if (not_moved || _primary.entry().continuous()) {
-                    if (!_primary.in_range()) {
-                        return std::nullopt;
-                    }
+            if (not_moved || _primary.entry().continuous()) {
+                if (!_primary.in_range()) {
+                    return std::nullopt;
+                }
+                cache_entry& e = _primary.entry();
+                auto fr = read_from_entry(e);
+                _lower_bound = dht::partition_range::bound{e.key(), false};
+                // Delay the call to next() so that we don't see stale continuity on next invocation.
+                _advance_primary = true;
+                return flat_mutation_reader_opt(std::move(fr));
+            } else {
+                if (_primary.in_range()) {
                     cache_entry& e = _primary.entry();
-                    auto fr = read_from_entry(e);
-                    _lower_bound = dht::partition_range::bound{e.key(), false};
-                    // Delay the call to next() so that we don't see stale continuity on next invocation.
-                    _advance_primary = true;
-                    return flat_mutation_reader_opt(std::move(fr));
+                    _secondary_range = dht::partition_range(_lower_bound,
+                        dht::partition_range::bound{e.key(), false});
+                    _lower_bound = dht::partition_range::bound{e.key(), true};
+                    _secondary_in_progress = true;
+                    return std::nullopt;
                 } else {
-                    if (_primary.in_range()) {
-                        cache_entry& e = _primary.entry();
-                        _secondary_range = dht::partition_range(_lower_bound,
-                            dht::partition_range::bound{e.key(), false});
-                        _lower_bound = dht::partition_range::bound{e.key(), true};
-                        _secondary_in_progress = true;
-                        return std::nullopt;
-                    } else {
-                        dht::ring_position_comparator cmp(*_read_context->schema());
-                        auto range = _pr->trim_front(std::optional<dht::partition_range::bound>(_lower_bound), cmp);
-                        if (!range) {
-                            return std::nullopt;
-                        }
-                        _lower_bound = dht::partition_range::bound{dht::ring_position::max()};
-                        _secondary_range = std::move(*range);
-                        _secondary_in_progress = true;
+                    dht::ring_position_comparator cmp(*_read_context->schema());
+                    auto range = _pr->trim_front(std::optional<dht::partition_range::bound>(_lower_bound), cmp);
+                    if (!range) {
                         return std::nullopt;
                     }
+                    _lower_bound = dht::partition_range::bound{dht::ring_position::max()};
+                    _secondary_range = std::move(*range);
+                    _secondary_in_progress = true;
+                    return std::nullopt;
                 }
+            }
         });
     }
 
@@ -718,22 +718,22 @@ row_cache::make_reader(schema_ptr s,
         tracing::trace(trace_state, "Querying cache for range {} and slice {}",
                 range, seastar::value_of([&slice] { return slice.get_all_ranges(); }));
         auto mr = _read_section(_tracker.region(), [&] {
-                dht::ring_position_comparator cmp(*_schema);
-                auto&& pos = ctx->range().start()->value();
-                partitions_type::bound_hint hint;
-                auto i = _partitions.lower_bound(pos, cmp, hint);
-                if (i != _partitions.end() && hint.match) {
-                    cache_entry& e = *i;
-                    upgrade_entry(e);
-                    on_partition_hit();
-                    return e.read(*this, *ctx);
-                } else if (i->continuous()) {
-                    return make_empty_flat_reader(std::move(s), ctx->permit());
-                } else {
-                    tracing::trace(trace_state, "Range {} not found in cache", range);
-                    on_partition_miss();
-                    return make_flat_mutation_reader<single_partition_populating_reader>(*this, std::move(ctx));
-                }
+            dht::ring_position_comparator cmp(*_schema);
+            auto&& pos = ctx->range().start()->value();
+            partitions_type::bound_hint hint;
+            auto i = _partitions.lower_bound(pos, cmp, hint);
+            if (i != _partitions.end() && hint.match) {
+                cache_entry& e = *i;
+                upgrade_entry(e);
+                on_partition_hit();
+                return e.read(*this, *ctx);
+            } else if (i->continuous()) {
+                return make_empty_flat_reader(std::move(s), ctx->permit());
+            } else {
+                tracing::trace(trace_state, "Range {} not found in cache", range);
+                on_partition_miss();
+                return make_flat_mutation_reader<single_partition_populating_reader>(*this, std::move(ctx));
+            }
         });
 
         if (fwd == streamed_mutation::forwarding::yes) {
@@ -784,28 +784,28 @@ cache_entry& row_cache::do_find_or_create_entry(const dht::decorated_key& key,
     const previous_entry_pointer* previous, CreateEntry&& create_entry, VisitEntry&& visit_entry)
 {
     return with_allocator(_tracker.allocator(), [&] () -> cache_entry& {
-                partitions_type::bound_hint hint;
-                dht::ring_position_comparator cmp(*_schema);
-                auto i = _partitions.lower_bound(key, cmp, hint);
-                if (i == _partitions.end() || !hint.match) {
-                    i = create_entry(i, hint);
-                } else {
-                    visit_entry(i);
-                }
+        partitions_type::bound_hint hint;
+        dht::ring_position_comparator cmp(*_schema);
+        auto i = _partitions.lower_bound(key, cmp, hint);
+        if (i == _partitions.end() || !hint.match) {
+            i = create_entry(i, hint);
+        } else {
+            visit_entry(i);
+        }
 
-                if (!previous) {
-                    return *i;
-                }
+        if (!previous) {
+            return *i;
+        }
 
-                if ((!previous->_key && i == _partitions.begin())
-                    || (previous->_key && i != _partitions.begin()
-                        && std::prev(i)->key().equal(*_schema, *previous->_key))) {
-                    i->set_continuous(true);
-                } else {
-                    on_mispopulate();
-                }
+        if ((!previous->_key && i == _partitions.begin())
+            || (previous->_key && i != _partitions.begin()
+                && std::prev(i)->key().equal(*_schema, *previous->_key))) {
+            i->set_continuous(true);
+        } else {
+            on_mispopulate();
+        }
 
-                return *i;
+        return *i;
     });
 }
 
@@ -888,12 +888,12 @@ void row_cache::invalidate_sync(memtable& m) noexcept {
         logalloc::reclaim_lock _(_tracker.region());
         bool blow_cache = false;
         m.partitions.clear_and_dispose([this, &m, &blow_cache] (memtable_entry* entry) noexcept {
-                try {
-                    invalidate_locked(entry->key());
-                } catch (...) {
-                    blow_cache = true;
-                }
-                m.evict_entry(*entry, _tracker.memtable_cleaner());
+            try {
+                invalidate_locked(entry->key());
+            } catch (...) {
+                blow_cache = true;
+            }
+            m.evict_entry(*entry, _tracker.memtable_cleaner());
         });
         if (blow_cache) {
             // We failed to invalidate the key. Recover using clear_now(), which doesn't throw.
@@ -1064,14 +1064,14 @@ void row_cache::touch(const dht::decorated_key& dk) {
 
 void row_cache::unlink_from_lru(const dht::decorated_key& dk) {
     _read_section(_tracker.region(), [&] {
-            auto i = _partitions.find(dk, dht::ring_position_comparator(*_schema));
-            if (i != _partitions.end()) {
-                for (partition_version& pv : i->partition().versions_from_oldest()) {
-                    for (rows_entry& row : pv.partition().clustered_rows()) {
-                        row.unlink_from_lru();
-                    }
+        auto i = _partitions.find(dk, dht::ring_position_comparator(*_schema));
+        if (i != _partitions.end()) {
+            for (partition_version& pv : i->partition().versions_from_oldest()) {
+                for (rows_entry& row : pv.partition().clustered_rows()) {
+                    row.unlink_from_lru();
                 }
             }
+        }
     });
 }
 
