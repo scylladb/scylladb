@@ -39,6 +39,10 @@ managed_bytes::do_linearize_pure() const {
     return data;
 }
 
+static_assert(std::is_nothrow_default_constructible_v<managed_bytes_view_base>);
+static_assert(std::is_nothrow_copy_constructible_v<managed_bytes_view_base>);
+static_assert(std::is_nothrow_move_constructible_v<managed_bytes_view_base>);
+
 managed_bytes_view::managed_bytes_view(const managed_bytes& mb) {
     if (mb._u.small.size != -1) {
         _current_fragment = bytes_view(mb._u.small.data, mb._u.small.size);
@@ -92,7 +96,7 @@ to_bytes(const managed_bytes& b) {
     return managed_bytes_view(b).to_bytes();
 }
 
-void managed_bytes_view::remove_prefix(size_t n) {
+void managed_bytes_view_base::remove_prefix(size_t n) {
     // FIXME: implement
 }
 
