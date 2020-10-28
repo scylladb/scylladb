@@ -480,24 +480,69 @@ public:
 class managed_bytes_view : public managed_bytes_view_base {
 public:
     managed_bytes_view() = default;
-    managed_bytes_view(const managed_bytes&) noexcept;
+    managed_bytes_view(const managed_bytes& mb) noexcept {
+        if (mb._u.small.size != -1) {
+            _current_fragment = bytes_view(mb._u.small.data, mb._u.small.size);
+            _size = mb._u.small.size;
+        } else {
+            auto p = mb._u.ptr;
+            _current_fragment = bytes_view(p->data, p->frag_size);
+            _next_fragments = p->next;
+            _size = p->size;
+        }
+    }
     managed_bytes_view(bytes_view) noexcept;
     explicit managed_bytes_view(const bytes&) noexcept;
     size_t size() const { return _size; }
     bool empty() const { return _size == 0; }
-    bytes_view::value_type operator[](size_t idx) const;
+    bytes_view::value_type operator[](size_t idx) const {
+        if (idx < _current_fragment.size()) {
+            return _current_fragment[idx];
+        }
+        idx -= _current_fragment.size();
+        auto f = _next_fragments;
+        while (idx >= f->frag_size) {
+            idx -= f->frag_size;
+            f = f->next;
+        }
+        return f->data[idx];
+    }
     static constexpr ssize_t npos = ssize_t(-1);
-    managed_bytes_view substr(size_t offset, ssize_t len = npos) const;
-    bytes to_bytes() const;
+    managed_bytes_view substr(size_t offset, ssize_t len = npos) const {
+        managed_bytes_view ret = *this;
+        ret.remove_prefix(offset);
+        if (len >= 0 && static_cast<size_t>(len) < ret.size()) {
+            ret._size = len;
+            if (static_cast<size_t>(len) <= ret._current_fragment.size()) {
+                ret._current_fragment = bytes_view(ret._current_fragment.data(), len);
+                ret._next_fragments = nullptr;
+            }
+        }
+        return ret;
+    }
+    bytes to_bytes() const {
+        bytes ret(bytes::initialized_later(), size());
+        do_linearize_pure(ret.begin());
+        return ret;
+    }
     bool operator==(const managed_bytes_view& x) const;
-    bool operator!=(const managed_bytes_view& x) const;
+    bool operator!=(const managed_bytes_view& x) const {
+        return !operator==(x);
+    }
 
     template <std::invocable<bytes_view> Func>
     std::invoke_result_t<Func, bytes_view> with_linearized(Func&& func) const;
 
     managed_bytes_fragment_range_view as_fragment_range() const noexcept;
 private:
-    void do_linearize_pure(bytes_view::value_type*) const noexcept;
+    void do_linearize_pure(bytes_view::value_type* data) const noexcept {
+        auto e = std::copy_n(_current_fragment.data(), _current_fragment.size(), data);
+        auto b = _next_fragments;
+        while (b) {
+            e = std::copy_n(b->data, b->frag_size, e);
+            b = b->next;
+        }
+    }
 
     using fragment_iterator = managed_bytes_view_fragment_iterator;
     fragment_iterator begin_fragment() const noexcept {
@@ -598,6 +643,35 @@ managed_bytes_view::managed_bytes_view(const bytes& b) noexcept
         : managed_bytes_view(bytes_view(b)) {
 }
 
+inline
+bool managed_bytes_view::operator==(const managed_bytes_view& x) const {
+    if (size() != x.size()) {
+        return false;
+    }
+
+    auto rv1 = this->as_fragment_range();
+    auto rv2 = x.as_fragment_range();
+    auto it1 = rv1.begin();
+    auto it2 = rv2.begin();
+    while (auto n = std::min(it1->size(), it2->size())) {
+        if (memcmp(it1->data(), it2->data(), n)) {
+            return false;
+        }
+        it1.remove_prefix(n);
+        it2.remove_prefix(n);
+    }
+    assert(it1 == rv1.end());
+    assert(it2 == rv2.end());
+    return true;
+}
+
+inline std::ostream& operator<<(std::ostream& os, const managed_bytes_view& v) {
+    for (auto f : v.as_fragment_range()) {
+        os << f;
+    }
+    return os;
+}
+
 bytes to_bytes(const managed_bytes& b);
 bytes to_bytes(managed_bytes_view v);
 int compare_unsigned(const managed_bytes_view v1, const managed_bytes_view v2);
@@ -641,4 +715,3 @@ size_for_allocation_strategy(const blob_storage& bs) {
 }
 
 std::ostream& operator<<(std::ostream& os, const managed_bytes& b);
-std::ostream& operator<<(std::ostream& os, const managed_bytes_view& v);

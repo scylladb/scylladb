@@ -87,49 +87,6 @@ static_assert(std::is_nothrow_default_constructible_v<managed_bytes_view>);
 static_assert(std::is_nothrow_copy_constructible_v<managed_bytes_view>);
 static_assert(std::is_nothrow_move_constructible_v<managed_bytes_view>);
 
-managed_bytes_view::managed_bytes_view(const managed_bytes& mb) noexcept {
-    if (mb._u.small.size != -1) {
-        _current_fragment = bytes_view(mb._u.small.data, mb._u.small.size);
-        _size = mb._u.small.size;
-    } else {
-        auto p = mb._u.ptr;
-        _current_fragment = bytes_view(p->data, p->frag_size);
-        _next_fragments = p->next;
-        _size = p->size;
-    }
-}
-
-bytes_view::value_type
-managed_bytes_view::operator[](size_t idx) const {
-    if (idx < _current_fragment.size()) {
-        return _current_fragment[idx];
-    }
-    idx -= _current_fragment.size();
-    auto f = _next_fragments;
-    while (idx >= f->frag_size) {
-        idx -= f->frag_size;
-        f = f->next;
-    }
-    return f->data[idx];
-}
-
-void
-managed_bytes_view::do_linearize_pure(bytes_view::value_type* data) const noexcept {
-    auto e = std::copy_n(_current_fragment.data(), _current_fragment.size(), data);
-    auto b = _next_fragments;
-    while (b) {
-        e = std::copy_n(b->data, b->frag_size, e);
-        b = b->next;
-    }
-}
-
-bytes
-managed_bytes_view::to_bytes() const {
-    bytes ret(bytes::initialized_later(), size());
-    do_linearize_pure(ret.begin());
-    return ret;
-}
-
 bytes
 to_bytes(managed_bytes_view v) {
     return v.to_bytes();
@@ -139,48 +96,6 @@ bytes
 to_bytes(const managed_bytes& b) {
     return managed_bytes_view(b).to_bytes();
 }
-
-managed_bytes_view
-managed_bytes_view::substr(size_t offset, ssize_t len) const {
-    managed_bytes_view ret = *this;
-    ret.remove_prefix(offset);
-    if (len >= 0 && static_cast<size_t>(len) < ret.size()) {
-        ret._size = len;
-        if (static_cast<size_t>(len) <= ret._current_fragment.size()) {
-            ret._current_fragment = bytes_view(ret._current_fragment.data(), len);
-            ret._next_fragments = nullptr;
-        }
-    }
-    return ret;
-}
-
-bool
-managed_bytes_view::operator==(const managed_bytes_view& x) const {
-    if (size() != x.size()) {
-        return false;
-    }
-
-    auto rv1 = this->as_fragment_range();
-    auto rv2 = x.as_fragment_range();
-    auto it1 = rv1.begin();
-    auto it2 = rv2.begin();
-    while (auto n = std::min(it1->size(), it2->size())) {
-        if (memcmp(it1->data(), it2->data(), n)) {
-            return false;
-        }
-        it1.remove_prefix(n);
-        it2.remove_prefix(n);
-    }
-    assert(it1 == rv1.end());
-    assert(it2 == rv2.end());
-    return true;
-}
-
-bool
-managed_bytes_view::operator!=(const managed_bytes_view& x) const {
-    return !operator==(x);
-}
-
 int compare_unsigned(const managed_bytes_view v1, const managed_bytes_view v2) {
     auto rv1 = v1.as_fragment_range();
     auto rv2 = v2.as_fragment_range();
@@ -201,13 +116,6 @@ int compare_unsigned(const managed_bytes_view v1, const managed_bytes_view v2) {
         return -1;
     }
     return 0;
-}
-
-std::ostream& operator<<(std::ostream& os, const managed_bytes_view& v) {
-    for (auto f : v.as_fragment_range()) {
-        os << f;
-    }
-    return os;
 }
 
 std::ostream& operator<<(std::ostream& os, const managed_bytes& b) {
