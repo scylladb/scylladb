@@ -83,6 +83,7 @@ public:
 template <typename T>
 standard_migrator<T>& get_standard_migrator()
 {
+    seastar::memory::disable_failure_guard dfg;
     static thread_local standard_migrator<T> instance;
     return instance;
 }
