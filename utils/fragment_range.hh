@@ -26,6 +26,7 @@ enum class mutable_view { no, yes, };
 #include <concepts>
 #include <boost/range/algorithm/copy.hpp>
 #include <boost/range/algorithm/for_each.hpp>
+#include <fmt/format.h>
 
 #include "bytes.hh"
 #include "utils/managed_bytes.hh"
@@ -153,4 +154,36 @@ decltype(auto) with_linearized(const FragmentedBuffer& buffer, Function&& fn)
         bv = b;
     }
     return fn(bv);
+}
+
+template <FragmentRange SourceBuffer, FragmentRange DestinationBuffer>
+requires std::is_same_v<typename DestinationBuffer::fragment_type, bytes_mutable_view>
+void copy_fragment_range(const SourceBuffer& src, DestinationBuffer& dst) {
+    if (src.empty()) {
+        return;
+    }
+    if (src.size_bytes() > dst.size_bytes()) {
+        throw std::runtime_error(
+                fmt::format("copy_fragment_range(): source buffer is larger than destination buffer: {} > {}", src.size_bytes(), dst.size_bytes()));
+    }
+
+    auto dst_it = dst.begin();
+    auto dst_fragment_it = dst_it->begin();
+
+    for (const auto src_frag : src) {
+        auto src_fragment_it = src_frag.begin();
+
+        while (src_fragment_it != src_frag.end()) {
+            const auto n = std::min(src_frag.end() - src_fragment_it, dst_it->end() - dst_fragment_it);
+            std::copy_n(src_fragment_it, n, dst_fragment_it);
+
+            src_fragment_it += n;
+            dst_fragment_it += n;
+
+            if (dst_fragment_it == dst_it->end()) {
+                ++dst_it;
+                dst_fragment_it = dst_it->begin();
+            }
+        }
+    }
 }
