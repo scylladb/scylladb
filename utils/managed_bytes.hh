@@ -395,9 +395,37 @@ public:
     }
 
     // throws std::runtime_error if prefix_len > size
-    void remove_prefix(size_t prefix_len);
+    void remove_prefix(size_t n) {
+        while (n) {
+            if (!_current_fragment.size()) {
+                throw std::runtime_error("Reached end of managed_bytes_view");
+            }
+            if (n < _current_fragment.size()) {
+                _current_fragment = bytes_view(_current_fragment.data() + n, _current_fragment.size() - n);
+                _size -= n;
+                return;
+            }
+            n -= _current_fragment.size();
+            remove_current();
+        }
+    }
 private:
-    void remove_current() noexcept;
+    void remove_current() noexcept {
+        _size -= _current_fragment.size();
+        if (_size && _next_fragments) {
+            if (_size > _next_fragments->frag_size) {
+                _current_fragment = bytes_view(_next_fragments->data, _next_fragments->frag_size);
+                _next_fragments = _next_fragments->next;
+            } else {
+                // We may need to cut the fragments short
+                // if `substr` truncated _size
+                _current_fragment = bytes_view(_next_fragments->data, _size);
+                _next_fragments = nullptr;
+            }
+        } else {
+            _current_fragment = {};
+        }
+    }
 
     friend class managed_bytes;
     friend class managed_bytes_view;

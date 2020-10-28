@@ -140,38 +140,6 @@ to_bytes(const managed_bytes& b) {
     return managed_bytes_view(b).to_bytes();
 }
 
-void managed_bytes_view_base::remove_prefix(size_t n) {
-    while (n) {
-        if (!_current_fragment.size()) {
-            throw std::runtime_error("Reached end of managed_bytes_view");
-        }
-        if (n < _current_fragment.size()) {
-            _current_fragment = bytes_view(_current_fragment.data() + n, _current_fragment.size() - n);
-            _size -= n;
-            return;
-        }
-        n -= _current_fragment.size();
-        remove_current();
-    }
-}
-
-void managed_bytes_view_base::remove_current() noexcept {
-    _size -= _current_fragment.size();
-    if (_size && _next_fragments) {
-        if (_size > _next_fragments->frag_size) {
-            _current_fragment = bytes_view(_next_fragments->data, _next_fragments->frag_size);
-            _next_fragments = _next_fragments->next;
-        } else {
-            // We may need to cut the fragments short
-            // if `substr` truncated _size
-            _current_fragment = bytes_view(_next_fragments->data, _size);
-            _next_fragments = nullptr;
-        }
-    } else {
-        _current_fragment = {};
-    }
-}
-
 managed_bytes_view
 managed_bytes_view::substr(size_t offset, ssize_t len) const {
     managed_bytes_view ret = *this;
