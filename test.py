@@ -509,7 +509,7 @@ def parse_cmd_line():
     """ Print usage and process command line options. """
     all_modes = ['debug', 'release', 'dev', 'sanitize']
     sysmem = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
-    testmem = 2e9
+    testmem = 6e9
     cpus_per_test_job = 1
     default_num_jobs_mem = ((sysmem - 4e9) // testmem)
     default_num_jobs_cpu = multiprocessing.cpu_count() // cpus_per_test_job
