@@ -91,8 +91,77 @@ using managed_bytes_fragment_range_mutable_view = managed_bytes_fragment_range_b
 template <mutable_view is_mutable>
 class managed_bytes_view_fragment_iterator;
 
+template <mutable_view is_mutable>
+class managed_bytes_iterator {
+public:
+    using iterator_category	= std::forward_iterator_tag;
+    using value_type = std::conditional_t<is_mutable == mutable_view::no, const bytes_view::value_type, bytes_view::value_type>;
+    using pointer = value_type*;
+    using reference = value_type&;
+    using difference_type = std::ptrdiff_t;
+
+    friend class managed_bytes;
+
+    template <mutable_view is_mutable_view>
+    friend class managed_bytes_basic_view;
+
+private:
+    pointer _current_begin = nullptr;
+    pointer _current_end = nullptr;
+    blob_storage* _next_fragment = nullptr;
+
+private:
+    void move_to_next_fragment() {
+        if (!_next_fragment) {
+            return;
+        }
+        _current_begin = _next_fragment->data;
+        _current_end = _next_fragment->data + _next_fragment->frag_size;
+        _next_fragment = _next_fragment->next;
+    }
+
+    managed_bytes_iterator(pointer current_begin, pointer current_end, blob_storage* next) noexcept
+        : _current_begin(current_begin)
+        , _current_end(current_end)
+        , _next_fragment(next)
+    { }
+
+public:
+    managed_bytes_iterator() = default;
+
+    reference operator*() const {
+        return *_current_begin;
+    }
+    pointer operator->() const {
+        return _current_begin;
+    }
+
+    managed_bytes_iterator& operator++() {
+        ++_current_begin;
+        if (_current_begin != _current_end) [[likely]] {
+            return *this;
+        }
+        move_to_next_fragment();
+        return *this;
+    }
+    managed_bytes_iterator operator++(int) {
+        auto it = *this;
+        ++(*this);
+        return it;
+    }
+
+    bool operator==(const managed_bytes_iterator& o) const {
+        return _current_begin == o._current_begin && _current_end == o._current_end && _next_fragment == o._next_fragment;
+    }
+};
+
 // A managed version of "bytes" (can be used with LSA).
 class managed_bytes {
+public:
+    using iterator = managed_bytes_iterator<mutable_view::yes>;
+    using const_iterator = managed_bytes_iterator<mutable_view::no>;
+
+private:
     static constexpr size_t max_inline_size = 15;
     struct small_blob {
         bytes_view::value_type data[max_inline_size];
@@ -373,6 +442,12 @@ public:
     managed_bytes_fragment_range_basic_view<mutable_view::yes> as_fragment_range() noexcept;
     managed_bytes_fragment_range_basic_view<mutable_view::no> as_fragment_range() const noexcept;
 
+    iterator begin(size_t offset = 0);
+    iterator end() { return iterator(); }
+
+    const_iterator begin(size_t offset = 0) const;
+    const_iterator end() const { return const_iterator(); }
+
     template <mutable_view is_mutable>
     friend class managed_bytes_basic_view;
 };
@@ -507,6 +582,10 @@ public:
 template <mutable_view is_mutable>
 class managed_bytes_basic_view : public managed_bytes_view_base<is_mutable> {
 public:
+    using iterator = managed_bytes_iterator<is_mutable>; // == const_iterator for non-mutable view
+    using const_iterator = managed_bytes_iterator<mutable_view::no>;
+
+public:
     managed_bytes_basic_view() = default;
     managed_bytes_basic_view(managed_bytes_view_base<is_mutable>::managed_bytes_type& mb) noexcept {
         using fragment_view_type = typename managed_bytes_view_base<is_mutable>::fragment_view_type;
@@ -564,6 +643,13 @@ public:
     std::invoke_result_t<Func, bytes_view> with_linearized(Func&& func) const;
 
     managed_bytes_fragment_range_basic_view<is_mutable> as_fragment_range() const noexcept;
+
+    iterator begin(size_t offset = 0);
+    iterator end() { return iterator(); }
+
+    const_iterator begin(size_t offset = 0) const;
+    const_iterator end() const { return const_iterator(); }
+
 private:
     void do_linearize_pure(bytes_view::value_type* data) const noexcept {
         auto e = std::copy_n(this->_current_fragment.data(), this->_current_fragment.size(), data);
