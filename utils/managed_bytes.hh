@@ -585,6 +585,8 @@ public:
     using iterator = managed_bytes_iterator<is_mutable>; // == const_iterator for non-mutable view
     using const_iterator = managed_bytes_iterator<mutable_view::no>;
 
+    using fragment_range_view = managed_bytes_fragment_range_basic_view<is_mutable>;
+
 public:
     managed_bytes_basic_view() = default;
     managed_bytes_basic_view(managed_bytes_view_base<is_mutable>::managed_bytes_type& mb) noexcept {
@@ -682,6 +684,7 @@ public:
     using fragment_iterator = managed_bytes_view_fragment_iterator<is_mutable>;
     using fragment_type = fragment_iterator::fragment_type;
     using const_iterator = fragment_iterator;
+    using iterator = const_iterator;
 
     explicit managed_bytes_fragment_range_basic_view(const managed_bytes_basic_view<is_mutable>& mv) noexcept
             : _view(mv)
