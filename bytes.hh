@@ -21,6 +21,11 @@
 
 #pragma once
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Warray-bounds"
+#include <xxhash.h>
+#pragma GCC diagnostic pop
+
 #include "seastarx.hh"
 #include <seastar/core/sstring.hh>
 #include "hashing.hh"
@@ -45,17 +50,6 @@ inline sstring_view to_sstring_view(bytes_view view) {
 
 inline bytes_view to_bytes_view(sstring_view view) {
     return {reinterpret_cast<const int8_t*>(view.data()), view.size()};
-}
-
-namespace std {
-
-template <>
-struct hash<bytes_view> {
-    size_t operator()(bytes_view v) const {
-        return hash<sstring_view>()({reinterpret_cast<const char*>(v.begin()), v.size()});
-    }
-};
-
 }
 
 struct fmt_hex {
@@ -107,6 +101,35 @@ struct appending_hash<bytes_view> {
         update_appending_hash(h, v);
     }
 };
+
+struct bytes_view_hasher : public hasher {
+    XXH64_state_t _state;
+
+    bytes_view_hasher(uint64_t seed = 0) noexcept {
+        XXH64_reset(&_state, seed);
+    }
+
+    void update(const char* ptr, size_t length) noexcept {
+        XXH64_update(&_state, ptr, length);
+    }
+
+    size_t finalize() {
+        return static_cast<size_t>(XXH64_digest(&_state));
+    }
+};
+
+namespace std {
+
+template <>
+struct hash<bytes_view> {
+    size_t operator()(bytes_view v) const {
+        bytes_view_hasher h;
+        appending_hash<bytes_view>{}(h, v);
+        return h.finalize();
+    }
+};
+
+}
 
 inline int32_t compare_unsigned(bytes_view v1, bytes_view v2) {
   auto size = std::min(v1.size(), v2.size());
