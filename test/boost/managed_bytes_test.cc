@@ -148,7 +148,7 @@ SEASTAR_THREAD_TEST_CASE(test_managed_bytes_view_remove_prefix) {
 
 SEASTAR_THREAD_TEST_CASE(test_managed_bytes_fragment_range_view) {
     auto b = random_bytes(0, max_size);
-    auto m = managed_bytes(b);
+    const auto m = managed_bytes(b);
     auto fr = m.as_fragment_range();
     auto v = fragment_range_view<managed_bytes_fragment_range_view>(fr);
     BOOST_REQUIRE_EQUAL(v.size_bytes(), b.size());

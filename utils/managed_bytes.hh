@@ -26,6 +26,7 @@
 #include <memory>
 #include "bytes.hh"
 #include "utils/allocation_strategy.hh"
+#include "utils/fragment_range.hh"
 #include <seastar/core/unaligned.hh>
 #include <seastar/util/alloc_failure_injector.hh>
 #include <unordered_map>
@@ -75,8 +76,19 @@ struct blob_storage {
     }
 } __attribute__((packed));
 
-class managed_bytes_view;
-class managed_bytes_fragment_range_view;
+template <mutable_view is_mutable>
+class managed_bytes_basic_view;
+
+using managed_bytes_view = managed_bytes_basic_view<mutable_view::no>;
+using managed_bytes_mutable_view = managed_bytes_basic_view<mutable_view::yes>;
+
+template <mutable_view is_mutable>
+class managed_bytes_fragment_range_basic_view;
+
+using managed_bytes_fragment_range_view = managed_bytes_fragment_range_basic_view<mutable_view::no>;
+using managed_bytes_fragment_range_mutable_view = managed_bytes_fragment_range_basic_view<mutable_view::yes>;
+
+template <mutable_view is_mutable>
 class managed_bytes_view_fragment_iterator;
 
 // A managed version of "bytes" (can be used with LSA).
@@ -163,7 +175,7 @@ public:
         }
     }
 
-    managed_bytes(managed_bytes_view) noexcept;
+    managed_bytes(managed_bytes_basic_view<mutable_view::no>) noexcept;
 
     managed_bytes(bytes_view v) : managed_bytes(initialized_later(), v.size()) {
         if (!external()) {
@@ -358,15 +370,25 @@ public:
         }
     }
 
-    managed_bytes_fragment_range_view as_fragment_range() const noexcept;
+    managed_bytes_fragment_range_basic_view<mutable_view::yes> as_fragment_range() noexcept;
+    managed_bytes_fragment_range_basic_view<mutable_view::no> as_fragment_range() const noexcept;
 
-    friend class managed_bytes_view;
+    template <mutable_view is_mutable>
+    friend class managed_bytes_basic_view;
 };
 
+template <mutable_view is_mutable>
 class managed_bytes_view_base {
-    bytes_view _current_fragment = {};
+public:
+    using managed_bytes_type = std::conditional_t<is_mutable == mutable_view::yes, managed_bytes, const managed_bytes>;
+
+protected:
+    using fragment_view_type = std::conditional_t<is_mutable == mutable_view::yes, bytes_mutable_view, bytes_view>;
+
+    fragment_view_type _current_fragment = {};
     blob_storage* _next_fragments = nullptr;
     size_t _size = 0;
+
 public:
     managed_bytes_view_base() = default;
     managed_bytes_view_base(const managed_bytes_view_base&) = default;
@@ -396,12 +418,13 @@ public:
 
     // throws std::runtime_error if prefix_len > size
     void remove_prefix(size_t n) {
+        using fragment_view_type = typename managed_bytes_view_base<is_mutable>::fragment_view_type;
         while (n) {
             if (!_current_fragment.size()) {
                 throw std::runtime_error("Reached end of managed_bytes_view");
             }
             if (n < _current_fragment.size()) {
-                _current_fragment = bytes_view(_current_fragment.data() + n, _current_fragment.size() - n);
+                _current_fragment = fragment_view_type(_current_fragment.data() + n, _current_fragment.size() - n);
                 _size -= n;
                 return;
             }
@@ -411,15 +434,16 @@ public:
     }
 private:
     void remove_current() noexcept {
+        using fragment_view_type = typename managed_bytes_view_base<is_mutable>::fragment_view_type;
         _size -= _current_fragment.size();
         if (_size && _next_fragments) {
             if (_size > _next_fragments->frag_size) {
-                _current_fragment = bytes_view(_next_fragments->data, _next_fragments->frag_size);
+                _current_fragment = fragment_view_type(_next_fragments->data, _next_fragments->frag_size);
                 _next_fragments = _next_fragments->next;
             } else {
                 // We may need to cut the fragments short
                 // if `substr` truncated _size
-                _current_fragment = bytes_view(_next_fragments->data, _size);
+                _current_fragment = fragment_view_type(_next_fragments->data, _size);
                 _next_fragments = nullptr;
             }
         } else {
@@ -428,13 +452,16 @@ private:
     }
 
     friend class managed_bytes;
-    friend class managed_bytes_view;
+    template <mutable_view is_mutable_view>
+    friend class managed_bytes_basic_view;
+    template <mutable_view is_mutable_view>
     friend class managed_bytes_view_fragment_iterator;
 };
 
-class managed_bytes_view_fragment_iterator : managed_bytes_view_base {
+template <mutable_view is_mutable>
+class managed_bytes_view_fragment_iterator : managed_bytes_view_base<is_mutable> {
 public:
-    using fragment_type = bytes_view;
+    using fragment_type = std::conditional_t<is_mutable == mutable_view::yes, bytes_mutable_view, bytes_view>;
     using iterator_category	= std::forward_iterator_tag;
     using value_type = fragment_type;
     using pointer = const fragment_type*;
@@ -443,28 +470,28 @@ public:
 
     managed_bytes_view_fragment_iterator() = default;
     managed_bytes_view_fragment_iterator(const managed_bytes_view_fragment_iterator&) = default;
-    managed_bytes_view_fragment_iterator(const managed_bytes_view_base& x) noexcept
-            : managed_bytes_view_base(x)
+    managed_bytes_view_fragment_iterator(const managed_bytes_view_base<is_mutable>& x) noexcept
+            : managed_bytes_view_base<is_mutable>(x)
     {}
 
     managed_bytes_view_fragment_iterator& operator=(const managed_bytes_view_fragment_iterator&) = default;
 
     bool operator==(const managed_bytes_view_fragment_iterator& x) const noexcept {
-        return managed_bytes_view_base::operator==(x);
+        return managed_bytes_view_base<is_mutable>::operator==(x);
     }
     bool operator!=(const managed_bytes_view_fragment_iterator& x) const noexcept {
-        return managed_bytes_view_base::operator!=(x);
+        return managed_bytes_view_base<is_mutable>::operator!=(x);
     }
 
     fragment_type operator*() const noexcept {
-        return _current_fragment;
+        return this->_current_fragment;
     }
     const fragment_type* operator->() const noexcept {
-        return &_current_fragment;
+        return &this->_current_fragment;
     }
 
     managed_bytes_view_fragment_iterator& operator++() noexcept {
-        remove_current();
+        managed_bytes_view_base<is_mutable>::remove_current();
         return *this;
     }
     managed_bytes_view_fragment_iterator operator++(int) noexcept {
@@ -473,34 +500,36 @@ public:
         return tmp;
     }
 
-    friend class managed_bytes_view;
+    friend class managed_bytes_basic_view<is_mutable>;
     friend int compare_unsigned(const managed_bytes_view v1, const managed_bytes_view v2);
 };
 
-class managed_bytes_view : public managed_bytes_view_base {
+template <mutable_view is_mutable>
+class managed_bytes_basic_view : public managed_bytes_view_base<is_mutable> {
 public:
-    managed_bytes_view() = default;
-    managed_bytes_view(const managed_bytes& mb) noexcept {
+    managed_bytes_basic_view() = default;
+    managed_bytes_basic_view(managed_bytes_view_base<is_mutable>::managed_bytes_type& mb) noexcept {
+        using fragment_view_type = typename managed_bytes_view_base<is_mutable>::fragment_view_type;
         if (mb._u.small.size != -1) {
-            _current_fragment = bytes_view(mb._u.small.data, mb._u.small.size);
-            _size = mb._u.small.size;
+            this->_current_fragment = fragment_view_type(mb._u.small.data, mb._u.small.size);
+            this->_size = mb._u.small.size;
         } else {
             auto p = mb._u.ptr;
-            _current_fragment = bytes_view(p->data, p->frag_size);
-            _next_fragments = p->next;
-            _size = p->size;
+            this->_current_fragment = fragment_view_type(p->data, p->frag_size);
+            this->_next_fragments = p->next;
+            this->_size = p->size;
         }
     }
-    managed_bytes_view(bytes_view) noexcept;
-    explicit managed_bytes_view(const bytes&) noexcept;
-    size_t size() const { return _size; }
-    bool empty() const { return _size == 0; }
+    managed_bytes_basic_view(bytes_view) noexcept;
+    explicit managed_bytes_basic_view(const bytes&) noexcept;
+    size_t size() const { return this->_size; }
+    bool empty() const { return this->_size == 0; }
     bytes_view::value_type operator[](size_t idx) const {
-        if (idx < _current_fragment.size()) {
-            return _current_fragment[idx];
+        if (idx < this->_current_fragment.size()) {
+            return this->_current_fragment[idx];
         }
-        idx -= _current_fragment.size();
-        auto f = _next_fragments;
+        idx -= this->_current_fragment.size();
+        auto f = this->_next_fragments;
         while (idx >= f->frag_size) {
             idx -= f->frag_size;
             f = f->next;
@@ -508,13 +537,14 @@ public:
         return f->data[idx];
     }
     static constexpr ssize_t npos = ssize_t(-1);
-    managed_bytes_view substr(size_t offset, ssize_t len = npos) const {
-        managed_bytes_view ret = *this;
+    managed_bytes_basic_view substr(size_t offset, ssize_t len = npos) const {
+        using fragment_view_type = typename managed_bytes_view_base<is_mutable>::fragment_view_type;
+        managed_bytes_basic_view ret = *this;
         ret.remove_prefix(offset);
         if (len >= 0 && static_cast<size_t>(len) < ret.size()) {
             ret._size = len;
             if (static_cast<size_t>(len) <= ret._current_fragment.size()) {
-                ret._current_fragment = bytes_view(ret._current_fragment.data(), len);
+                ret._current_fragment = fragment_view_type(ret._current_fragment.data(), len);
                 ret._next_fragments = nullptr;
             }
         }
@@ -525,26 +555,26 @@ public:
         do_linearize_pure(ret.begin());
         return ret;
     }
-    bool operator==(const managed_bytes_view& x) const;
-    bool operator!=(const managed_bytes_view& x) const {
+    bool operator==(const managed_bytes_basic_view& x) const;
+    bool operator!=(const managed_bytes_basic_view& x) const {
         return !operator==(x);
     }
 
     template <std::invocable<bytes_view> Func>
     std::invoke_result_t<Func, bytes_view> with_linearized(Func&& func) const;
 
-    managed_bytes_fragment_range_view as_fragment_range() const noexcept;
+    managed_bytes_fragment_range_basic_view<is_mutable> as_fragment_range() const noexcept;
 private:
     void do_linearize_pure(bytes_view::value_type* data) const noexcept {
-        auto e = std::copy_n(_current_fragment.data(), _current_fragment.size(), data);
-        auto b = _next_fragments;
+        auto e = std::copy_n(this->_current_fragment.data(), this->_current_fragment.size(), data);
+        auto b = this->_next_fragments;
         while (b) {
             e = std::copy_n(b->data, b->frag_size, e);
             b = b->next;
         }
     }
 
-    using fragment_iterator = managed_bytes_view_fragment_iterator;
+    using fragment_iterator = managed_bytes_view_fragment_iterator<is_mutable>;
     fragment_iterator begin_fragment() const noexcept {
         return fragment_iterator(*this);
     }
@@ -552,26 +582,29 @@ private:
         return fragment_iterator();
     }
 
-    friend std::ostream& operator<<(std::ostream& os, const managed_bytes_view& v);
-    friend class managed_bytes_fragment_range_view;
+    template <mutable_view is_mutable_view>
+    friend std::ostream& operator<<(std::ostream& os, const managed_bytes_basic_view& v);
+    template <mutable_view is_mutable_view>
+    friend class managed_bytes_fragment_range_basic_view;
 };
 
 // Conforms to FragmentRange<managed_bytes_fragment_range_view>
-class managed_bytes_fragment_range_view {
-    managed_bytes_view _view;
+template <mutable_view is_mutable>
+class managed_bytes_fragment_range_basic_view {
+    managed_bytes_basic_view<is_mutable> _view;
 public:
-    using fragment_iterator = managed_bytes_view_fragment_iterator;
+    using fragment_iterator = managed_bytes_view_fragment_iterator<is_mutable>;
     using fragment_type = fragment_iterator::fragment_type;
     using const_iterator = fragment_iterator;
 
-    explicit managed_bytes_fragment_range_view(const managed_bytes_view& mv) noexcept
+    explicit managed_bytes_fragment_range_basic_view(const managed_bytes_basic_view<is_mutable>& mv) noexcept
             : _view(mv)
     {}
-    explicit managed_bytes_fragment_range_view(managed_bytes_view&& mv) noexcept
+    explicit managed_bytes_fragment_range_basic_view(managed_bytes_basic_view<is_mutable>&& mv) noexcept
             : _view(std::move(mv))
     {}
-    explicit managed_bytes_fragment_range_view(const managed_bytes& m) noexcept
-            : managed_bytes_fragment_range_view(managed_bytes_view(m))
+    explicit managed_bytes_fragment_range_basic_view(managed_bytes_view_base<is_mutable>::managed_bytes_type& m) noexcept
+            : managed_bytes_fragment_range_basic_view(managed_bytes_basic_view<is_mutable>(m))
     {}
 
     const_iterator begin() const noexcept { return _view.begin_fragment(); }
@@ -581,70 +614,84 @@ public:
     bool empty() const noexcept { return size_bytes() == 0; }
 };
 
-inline managed_bytes_fragment_range_view managed_bytes_view::as_fragment_range() const noexcept {
-    return managed_bytes_fragment_range_view(*this);
+template <mutable_view is_mutable>
+managed_bytes_fragment_range_basic_view<is_mutable> managed_bytes_basic_view<is_mutable>::as_fragment_range() const noexcept {
+    return managed_bytes_fragment_range_basic_view<is_mutable>(*this);
 }
 
-inline managed_bytes_fragment_range_view managed_bytes::as_fragment_range() const noexcept {
-    return managed_bytes_fragment_range_view(*this);
+inline managed_bytes_fragment_range_basic_view<mutable_view::yes> managed_bytes::as_fragment_range() noexcept {
+    return managed_bytes_fragment_range_basic_view<mutable_view::yes>(*this);
 }
 
+inline managed_bytes_fragment_range_basic_view<mutable_view::no> managed_bytes::as_fragment_range() const noexcept {
+    return managed_bytes_fragment_range_basic_view<mutable_view::no>(*this);
+}
+
+template <mutable_view is_mutable>
 template <std::invocable<bytes_view> Func>
-std::invoke_result_t<Func, bytes_view> managed_bytes_view::with_linearized(Func&& func) const {
-    if (!_next_fragments) {
-        return func(_current_fragment);
+std::invoke_result_t<Func, bytes_view> managed_bytes_basic_view<is_mutable>::with_linearized(Func&& func) const {
+    if (!this->_next_fragments) {
+        return func(this->_current_fragment);
     }
-    auto data = std::unique_ptr<bytes_view::value_type[]>(new bytes_view::value_type[_size]);
+    auto data = std::unique_ptr<bytes_view::value_type[]>(new bytes_view::value_type[this->_size]);
     do_linearize_pure(data.get());
-    return func(bytes_view(data.get(), _size));
+    return func(bytes_view(data.get(), this->_size));
 }
 
 // These are used to resolve ambiguities because managed_bytes_view can be converted to managed_bytes and vice versa
-inline bool operator==(const managed_bytes& a, const managed_bytes_view& b) {
-    return managed_bytes_view(a) == b;
+template <mutable_view is_mutable>
+inline bool operator==(const managed_bytes& a, const managed_bytes_basic_view<is_mutable>& b) {
+    return managed_bytes_basic_view<is_mutable>(a) == b;
 }
 
-inline bool operator==(const managed_bytes_view& a, const managed_bytes& b) {
-    return a == managed_bytes_view(b);
+template <mutable_view is_mutable>
+inline bool operator==(const managed_bytes_basic_view<is_mutable>& a, const managed_bytes& b) {
+    return a == managed_bytes_basic_view<is_mutable>(b);
 }
 
-inline bool operator!=(const managed_bytes& a, const managed_bytes_view& b) {
-    return managed_bytes_view(a) != b;
+template <mutable_view is_mutable>
+inline bool operator!=(const managed_bytes& a, const managed_bytes_basic_view<is_mutable>& b) {
+    return managed_bytes_basic_view<is_mutable>(a) != b;
 }
 
-inline bool operator!=(const managed_bytes_view& a, const managed_bytes& b) {
-    return a != managed_bytes_view(b);
+template <mutable_view is_mutable>
+inline bool operator!=(const managed_bytes_basic_view<is_mutable>& a, const managed_bytes& b) {
+    return a != managed_bytes_basic_view<is_mutable>(b);
 }
 
 // These are used to resolve ambiguities because bytes_view can be converted to managed_bytes and managed_bytes_view
-inline bool operator==(const bytes_view& a, const managed_bytes_view& b) {
-    return managed_bytes_view(a) == b;
+template <mutable_view is_mutable>
+inline bool operator==(const bytes_view& a, const managed_bytes_basic_view<is_mutable>& b) {
+    return managed_bytes_basic_view<is_mutable>(a) == b;
 }
 
-inline bool operator==(const managed_bytes_view& a, const bytes_view& b) {
-    return a == managed_bytes_view(b);
+template <mutable_view is_mutable>
+inline bool operator==(const managed_bytes_basic_view<is_mutable>& a, const bytes_view& b) {
+    return a == managed_bytes_basic_view<is_mutable>(b);
 }
 
-inline bool operator!=(const bytes_view& a, const managed_bytes_view& b) {
-    return managed_bytes_view(a) != b;
+template <mutable_view is_mutable>
+inline bool operator!=(const bytes_view& a, const managed_bytes_basic_view<is_mutable>& b) {
+    return managed_bytes_basic_view<is_mutable>(a) != b;
 }
 
-inline bool operator!=(const managed_bytes_view& a, const bytes_view& b) {
-    return a != managed_bytes_view(b);
+template <mutable_view is_mutable>
+inline bool operator!=(const managed_bytes_basic_view<is_mutable>& a, const bytes_view& b) {
+    return a != managed_bytes_basic_view<is_mutable>(b);
 }
 
-inline
-managed_bytes_view::managed_bytes_view(bytes_view bv) noexcept
-        : managed_bytes_view_base(bv)
+template <mutable_view is_mutable>
+managed_bytes_basic_view<is_mutable>::managed_bytes_basic_view(bytes_view bv) noexcept
+        : managed_bytes_view_base<is_mutable>(bv)
 {}
 
-inline
-managed_bytes_view::managed_bytes_view(const bytes& b) noexcept
-        : managed_bytes_view(bytes_view(b)) {
+template <mutable_view is_mutable>
+managed_bytes_basic_view<is_mutable>::managed_bytes_basic_view(const bytes& b) noexcept
+        : managed_bytes_basic_view<is_mutable>(bytes_view(b)) {
 }
 
-inline
-bool managed_bytes_view::operator==(const managed_bytes_view& x) const {
+template <mutable_view is_mutable>
+bool managed_bytes_basic_view<is_mutable>::operator==(const managed_bytes_basic_view<is_mutable>& x) const {
     if (size() != x.size()) {
         return false;
     }
@@ -665,7 +712,8 @@ bool managed_bytes_view::operator==(const managed_bytes_view& x) const {
     return true;
 }
 
-inline std::ostream& operator<<(std::ostream& os, const managed_bytes_view& v) {
+template <mutable_view is_mutable>
+inline std::ostream& operator<<(std::ostream& os, const managed_bytes_basic_view<is_mutable>& v) {
     for (auto f : v.as_fragment_range()) {
         os << f;
     }

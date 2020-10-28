@@ -76,16 +76,24 @@ managed_bytes::do_linearize_pure() const {
     return data;
 }
 
-static_assert(std::is_nothrow_default_constructible_v<managed_bytes_view_base>);
-static_assert(std::is_nothrow_copy_constructible_v<managed_bytes_view_base>);
-static_assert(std::is_nothrow_move_constructible_v<managed_bytes_view_base>);
+static_assert(std::is_nothrow_default_constructible_v<managed_bytes_view_base<mutable_view::no>>);
+static_assert(std::is_nothrow_copy_constructible_v<managed_bytes_view_base<mutable_view::no>>);
+static_assert(std::is_nothrow_move_constructible_v<managed_bytes_view_base<mutable_view::no>>);
+static_assert(std::is_nothrow_default_constructible_v<managed_bytes_view_base<mutable_view::yes>>);
+static_assert(std::is_nothrow_copy_constructible_v<managed_bytes_view_base<mutable_view::yes>>);
+static_assert(std::is_nothrow_move_constructible_v<managed_bytes_view_base<mutable_view::yes>>);
 
-static_assert(std::is_nothrow_default_constructible_v<managed_bytes_view_fragment_iterator>);
-static_assert(std::is_nothrow_copy_constructible_v<managed_bytes_view_fragment_iterator>);
+static_assert(std::is_nothrow_default_constructible_v<managed_bytes_view_fragment_iterator<mutable_view::no>>);
+static_assert(std::is_nothrow_copy_constructible_v<managed_bytes_view_fragment_iterator<mutable_view::no>>);
+static_assert(std::is_nothrow_default_constructible_v<managed_bytes_view_fragment_iterator<mutable_view::yes>>);
+static_assert(std::is_nothrow_copy_constructible_v<managed_bytes_view_fragment_iterator<mutable_view::yes>>);
 
 static_assert(std::is_nothrow_default_constructible_v<managed_bytes_view>);
 static_assert(std::is_nothrow_copy_constructible_v<managed_bytes_view>);
 static_assert(std::is_nothrow_move_constructible_v<managed_bytes_view>);
+static_assert(std::is_nothrow_default_constructible_v<managed_bytes_mutable_view>);
+static_assert(std::is_nothrow_copy_constructible_v<managed_bytes_mutable_view>);
+static_assert(std::is_nothrow_move_constructible_v<managed_bytes_mutable_view>);
 
 bytes
 to_bytes(managed_bytes_view v) {
