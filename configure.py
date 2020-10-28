@@ -1154,6 +1154,8 @@ warnings = [
     '-Wno-implicit-int-float-conversion',
     '-Wno-delete-abstract-non-virtual-dtor',
     '-Wno-uninitialized-const-reference',
+    # https://gcc.gnu.org/bugzilla/show_bug.cgi?id=77728
+    '-Wno-psabi',
 ]
 
 warnings = [w
