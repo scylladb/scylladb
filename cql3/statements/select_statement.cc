@@ -59,6 +59,7 @@
 #include "db/timeout_clock.hh"
 #include "db/consistency_level_validations.hh"
 #include "database.hh"
+#include "test/lib/select_statement_utils.hh"
 #include <boost/algorithm/cxx11/any_of.hpp>
 
 bool is_system_keyspace(const sstring& name);
@@ -67,6 +68,8 @@ namespace cql3 {
 
 namespace statements {
 
+static constexpr int DEFAULT_INTERNAL_PAGING_SIZE = select_statement::DEFAULT_COUNT_PAGE_SIZE;
+thread_local int internal_paging_size = DEFAULT_INTERNAL_PAGING_SIZE;
 thread_local const lw_shared_ptr<const select_statement::parameters> select_statement::_default_parameters = make_lw_shared<select_statement::parameters>();
 
 select_statement::parameters::parameters()
@@ -338,7 +341,7 @@ select_statement::do_execute(service::storage_proxy& proxy,
     const bool aggregate = _selection->is_aggregate() || has_group_by();
     const bool nonpaged_filtering = restrictions_need_filtering && page_size <= 0;
     if (aggregate || nonpaged_filtering) {
-        page_size = DEFAULT_COUNT_PAGE_SIZE;
+        page_size = internal_paging_size;
     }
 
     auto key_ranges = _restrictions->get_partition_key_ranges(options);
@@ -1011,7 +1014,7 @@ indexed_table_select_statement::do_execute(service::storage_proxy& proxy,
         return do_with(cql3::selection::result_set_builder(*_selection, now, options.get_cql_serialization_format(), *_group_by_cell_indices), std::make_unique<cql3::query_options>(cql3::query_options(options)),
                 [this, &options, &proxy, &state, now, whole_partitions, partition_slices, restrictions_need_filtering] (cql3::selection::result_set_builder& builder, std::unique_ptr<cql3::query_options>& internal_options) {
             // page size is set to the internal count page size, regardless of the user-provided value
-            internal_options.reset(new cql3::query_options(std::move(internal_options), options.get_paging_state(), DEFAULT_COUNT_PAGE_SIZE));
+            internal_options.reset(new cql3::query_options(std::move(internal_options), options.get_paging_state(), internal_paging_size));
             return repeat([this, &builder, &options, &internal_options, &proxy, &state, now, whole_partitions, partition_slices, restrictions_need_filtering] () {
                 auto consume_results = [this, &builder, &options, &internal_options, &proxy, &state, restrictions_need_filtering] (foreign_ptr<lw_shared_ptr<query::result>> results, lw_shared_ptr<query::read_command> cmd, lw_shared_ptr<const service::pager::paging_state> paging_state) {
                     if (paging_state) {
@@ -1705,6 +1708,16 @@ std::vector<size_t> select_statement::prepare_group_by(const schema& schema, sel
     return indices;
 }
 
+}
+
+future<> set_internal_paging_size(int paging_size) {
+    return seastar::smp::invoke_on_all([paging_size] {
+        internal_paging_size = paging_size;
+    });
+}
+
+future<> reset_internal_paging_size() {
+    return set_internal_paging_size(DEFAULT_INTERNAL_PAGING_SIZE);
 }
 
 }
