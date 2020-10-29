@@ -334,7 +334,7 @@ future<> default_authorizer::revoke_all(const resource& resource) const {
 }
 
 const resource_set& default_authorizer::protected_resources() const {
-    static const resource_set resources({ make_data_resource(meta::AUTH_KS, PERMISSIONS_CF) });
+    static const resource_set resources({ make_data_resource(meta::AUTH_KS, PERMISSIONS_CF), make_data_resource(db::system_keyspace_name()) });
     return resources;
 }
 
