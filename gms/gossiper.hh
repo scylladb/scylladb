@@ -64,6 +64,7 @@
 #include <seastar/core/condition-variable.hh>
 #include <seastar/core/metrics_registration.hh>
 #include <seastar/core/abort_source.hh>
+#include <seastar/core/scheduling.hh>
 
 namespace db {
 class config;
@@ -97,6 +98,10 @@ struct syn_msg_pending {
 struct ack_msg_pending {
     bool pending = false;
     std::optional<utils::chunked_vector<gossip_digest>> ack_msg_digest;
+};
+
+struct gossip_config {
+    seastar::scheduling_group gossip_scheduling_group = seastar::scheduling_group();
 };
 
 /**
@@ -236,7 +241,7 @@ private:
     // The value must be kept alive until completes and not change.
     future<> replicate(inet_address, application_state key, const versioned_value& value);
 public:
-    explicit gossiper(abort_source& as, feature_service& features, const locator::token_metadata& tokens, netw::messaging_service& ms, db::config& cfg);
+    explicit gossiper(abort_source& as, feature_service& features, const locator::token_metadata& tokens, netw::messaging_service& ms, db::config& cfg, gossip_config gcfg = gossip_config());
 
     void check_seen_seeds();
 
@@ -557,6 +562,7 @@ private:
     const locator::token_metadata& _token_metadata;
     netw::messaging_service& _messaging;
     db::config& _cfg;
+    gossip_config _gcfg;
     failure_detector _fd;
     friend class feature;
     // Get features supported by a particular node

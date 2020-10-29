@@ -123,12 +123,13 @@ public:
     void on_restart(inet_address, endpoint_state) override {}
 };
 
-gossiper::gossiper(abort_source& as, feature_service& features, const locator::token_metadata& tokens, netw::messaging_service& ms, db::config& cfg)
+gossiper::gossiper(abort_source& as, feature_service& features, const locator::token_metadata& tokens, netw::messaging_service& ms, db::config& cfg, gossip_config gcfg)
         : _abort_source(as)
         , _feature_service(features)
         , _token_metadata(tokens)
         , _messaging(ms)
         , _cfg(cfg)
+        , _gcfg(gcfg)
         , _fd(cfg.phi_convict_threshold(),
                 std::chrono::milliseconds(cfg.fd_initial_value_ms()),
                 std::chrono::milliseconds(cfg.fd_max_interval_ms())) {
@@ -137,7 +138,7 @@ gossiper::gossiper(abort_source& as, feature_service& features, const locator::t
         return;
     }
 
-    _scheduled_gossip_task.set_callback([this] { run(); });
+    _scheduled_gossip_task.set_callback(_gcfg.gossip_scheduling_group, [this] { run(); });
     // half of QUARATINE_DELAY, to ensure _just_removed_endpoints has enough leeway to prevent re-gossip
     fat_client_timeout = quarantine_delay() / 2;
     /* register with the Failure Detector for receiving Failure detector events */
