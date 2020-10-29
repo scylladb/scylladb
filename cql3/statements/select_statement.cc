@@ -59,6 +59,7 @@
 #include "db/timeout_clock.hh"
 #include "db/consistency_level_validations.hh"
 #include "database.hh"
+#include "test/lib/select_statement_utils.hh"
 #include <boost/algorithm/cxx11/any_of.hpp>
 
 bool is_system_keyspace(const sstring& name);
@@ -67,6 +68,8 @@ namespace cql3 {
 
 namespace statements {
 
+static constexpr int DEFAULT_INTERNAL_PAGING_SIZE = select_statement::DEFAULT_COUNT_PAGE_SIZE;
+thread_local int internal_paging_size = DEFAULT_INTERNAL_PAGING_SIZE;
 thread_local const lw_shared_ptr<const select_statement::parameters> select_statement::_default_parameters = make_lw_shared<select_statement::parameters>();
 
 select_statement::parameters::parameters()
@@ -338,7 +341,7 @@ select_statement::do_execute(service::storage_proxy& proxy,
     const bool aggregate = _selection->is_aggregate() || has_group_by();
     const bool nonpaged_filtering = restrictions_need_filtering && page_size <= 0;
     if (aggregate || nonpaged_filtering) {
-        page_size = DEFAULT_COUNT_PAGE_SIZE;
+        page_size = internal_paging_size;
     }
 
     auto key_ranges = _restrictions->get_partition_key_ranges(options);
@@ -541,13 +544,29 @@ indexed_table_select_statement::do_execute_base_query(
             if (old_paging_state && concurrency == 1) {
                 auto base_pk = generate_base_key_from_index_pk<partition_key>(old_paging_state->get_partition_key(),
                         old_paging_state->get_clustering_key(), *_schema, *_view_schema);
+                auto row_ranges = command->slice.default_row_ranges();
                 if (old_paging_state->get_clustering_key() && _schema->clustering_key_size() > 0) {
                     auto base_ck = generate_base_key_from_index_pk<clustering_key>(old_paging_state->get_partition_key(),
                             old_paging_state->get_clustering_key(), *_schema, *_view_schema);
-                    command->slice.set_range(*_schema, base_pk,
-                            std::vector<query::clustering_range>{query::clustering_range::make_starting_with(range_bound<clustering_key>(base_ck, false))});
+
+                    query::trim_clustering_row_ranges_to(*_schema, row_ranges, base_ck, false);
+                    command->slice.set_range(*_schema, base_pk, row_ranges);
                 } else {
-                    command->slice.set_range(*_schema, base_pk, std::vector<query::clustering_range>{query::clustering_range::make_open_ended_both_sides()});
+                    // There is no clustering key in old_paging_state and/or no clustering key in 
+                    // _schema, therefore read an entire partition (whole clustering range).
+                    //
+                    // The only exception to applying no restrictions on clustering key
+                    // is a case when we have a secondary index on the first column
+                    // of clustering key. In such a case we should not read the
+                    // entire clustering range - only a range in which first column
+                    // of clustering key has the correct value. 
+                    //
+                    // This means that we should not set a open_ended_both_sides
+                    // clustering range on base_pk, instead intersect it with
+                    // _row_ranges (which contains the restrictions neccessary for the
+                    // case described above). The result of such intersection is just
+                    // _row_ranges, which we explicity set on base_pk.
+                    command->slice.set_range(*_schema, base_pk, row_ranges);
                 }
             }
             concurrency *= 2;
@@ -992,12 +1011,16 @@ indexed_table_select_statement::do_execute(service::storage_proxy& proxy,
     const bool aggregate = _selection->is_aggregate() || has_group_by();
     if (aggregate) {
         const bool restrictions_need_filtering = _restrictions->need_filtering();
-        return do_with(cql3::selection::result_set_builder(*_selection, now, options.get_cql_serialization_format()), std::make_unique<cql3::query_options>(cql3::query_options(options)),
+        return do_with(cql3::selection::result_set_builder(*_selection, now, options.get_cql_serialization_format(), *_group_by_cell_indices), std::make_unique<cql3::query_options>(cql3::query_options(options)),
                 [this, &options, &proxy, &state, now, whole_partitions, partition_slices, restrictions_need_filtering] (cql3::selection::result_set_builder& builder, std::unique_ptr<cql3::query_options>& internal_options) {
             // page size is set to the internal count page size, regardless of the user-provided value
-            internal_options.reset(new cql3::query_options(std::move(internal_options), options.get_paging_state(), DEFAULT_COUNT_PAGE_SIZE));
+            internal_options.reset(new cql3::query_options(std::move(internal_options), options.get_paging_state(), internal_paging_size));
             return repeat([this, &builder, &options, &internal_options, &proxy, &state, now, whole_partitions, partition_slices, restrictions_need_filtering] () {
-                auto consume_results = [this, &builder, &options, &internal_options, restrictions_need_filtering] (foreign_ptr<lw_shared_ptr<query::result>> results, lw_shared_ptr<query::read_command> cmd) {
+                auto consume_results = [this, &builder, &options, &internal_options, &proxy, &state, restrictions_need_filtering] (foreign_ptr<lw_shared_ptr<query::result>> results, lw_shared_ptr<query::read_command> cmd, lw_shared_ptr<const service::pager::paging_state> paging_state) {
+                    if (paging_state) {
+                        paging_state = generate_view_paging_state_from_base_query_results(paging_state, results, proxy, state, options);
+                    }
+                    internal_options.reset(new cql3::query_options(std::move(internal_options), paging_state ? make_lw_shared<service::pager::paging_state>(*paging_state) : nullptr));
                     if (restrictions_need_filtering) {
                         _stats.filtered_rows_read_total += *results->row_count();
                         query::result_view::consume(*results, cmd->slice, cql3::selection::result_set_builder::visitor(builder, *_schema, *_selection,
@@ -1005,24 +1028,24 @@ indexed_table_select_statement::do_execute(service::storage_proxy& proxy,
                     } else {
                         query::result_view::consume(*results, cmd->slice, cql3::selection::result_set_builder::visitor(builder, *_schema, *_selection));
                     }
+                    bool has_more_pages = paging_state && paging_state->get_remaining() > 0;
+                    return stop_iteration(!has_more_pages);
                 };
 
                 if (whole_partitions || partition_slices) {
                     return find_index_partition_ranges(proxy, state, *internal_options).then_unpack(
                             [this, now, &state, &internal_options, &proxy, consume_results = std::move(consume_results)] (dht::partition_range_vector partition_ranges, lw_shared_ptr<const service::pager::paging_state> paging_state) {
-                        bool has_more_pages = paging_state && paging_state->get_remaining() > 0;
-                        internal_options.reset(new cql3::query_options(std::move(internal_options), paging_state ? make_lw_shared<service::pager::paging_state>(*paging_state) : nullptr));
-                        return do_execute_base_query(proxy, std::move(partition_ranges), state, *internal_options, now, std::move(paging_state)).then_unpack(consume_results).then([has_more_pages] {
-                            return stop_iteration(!has_more_pages);
+                        return do_execute_base_query(proxy, std::move(partition_ranges), state, *internal_options, now, paging_state)
+                        .then_unpack([paging_state, consume_results = std::move(consume_results)](foreign_ptr<lw_shared_ptr<query::result>> results, lw_shared_ptr<query::read_command> cmd) {
+                            return consume_results(std::move(results), std::move(cmd), std::move(paging_state));
                         });
                     });
                 } else {
                     return find_index_clustering_rows(proxy, state, *internal_options).then_unpack(
                             [this, now, &state, &internal_options, &proxy, consume_results = std::move(consume_results)] (std::vector<primary_key> primary_keys, lw_shared_ptr<const service::pager::paging_state> paging_state) {
-                        bool has_more_pages = paging_state && paging_state->get_remaining() > 0;
-                        internal_options.reset(new cql3::query_options(std::move(internal_options), paging_state ? make_lw_shared<service::pager::paging_state>(*paging_state) : nullptr));
-                        return this->do_execute_base_query(proxy, std::move(primary_keys), state, *internal_options, now, std::move(paging_state)).then_unpack(consume_results).then([has_more_pages] {
-                            return stop_iteration(!has_more_pages);
+                        return this->do_execute_base_query(proxy, std::move(primary_keys), state, *internal_options, now, paging_state)
+                        .then_unpack([paging_state, consume_results = std::move(consume_results)](foreign_ptr<lw_shared_ptr<query::result>> results, lw_shared_ptr<query::read_command> cmd) {
+                            return consume_results(std::move(results), std::move(cmd), std::move(paging_state));
                         });
                     });
                 }
@@ -1685,6 +1708,16 @@ std::vector<size_t> select_statement::prepare_group_by(const schema& schema, sel
     return indices;
 }
 
+}
+
+future<> set_internal_paging_size(int paging_size) {
+    return seastar::smp::invoke_on_all([paging_size] {
+        internal_paging_size = paging_size;
+    });
+}
+
+future<> reset_internal_paging_size() {
+    return set_internal_paging_size(DEFAULT_INTERNAL_PAGING_SIZE);
 }
 
 }
