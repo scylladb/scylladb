@@ -1292,7 +1292,7 @@ SEASTAR_TEST_CASE(test_secondary_index_on_ck_first_column_and_aggregation) {
     // indexed_table_select_statement::do_execute.
 
     return do_with_cql_env_thread([] (cql_test_env& e) {
-        cql3::statements::set_internal_paging_size(page_scenarios_page_size).get();
+        cql3::statements::set_internal_paging_size_guard g(page_scenarios_page_size);
 
         // Explicitly reproduce the first failing example in issue #7355.
         cquery_nofail(e, "CREATE TABLE t1 (pk1 int, pk2 int, ck int, primary key((pk1, pk2), ck))");
@@ -1360,8 +1360,6 @@ SEASTAR_TEST_CASE(test_secondary_index_on_ck_first_column_and_aggregation) {
             }); 
           });
         });
-
-        cql3::statements::reset_internal_paging_size().get();
     });
 }
 
@@ -1371,7 +1369,7 @@ SEASTAR_TEST_CASE(test_secondary_index_on_pk_column_and_aggregation) {
     // indexed_table_select_statement::do_execute.
 
     return do_with_cql_env_thread([] (cql_test_env& e) {
-        cql3::statements::set_internal_paging_size(page_scenarios_page_size).get();
+        cql3::statements::set_internal_paging_size_guard g(page_scenarios_page_size);
 
         // Explicitly reproduce the second failing example in issue #7355.
         // This a case with a single large partition.
@@ -1422,8 +1420,6 @@ SEASTAR_TEST_CASE(test_secondary_index_on_pk_column_and_aggregation) {
         }, [&](int rows_inserted) {
             assert_select_count_and_select_rows_has_size(e, "FROM t3 WHERE pk2 = 1", rows_inserted);
         });
-
-        cql3::statements::reset_internal_paging_size().get();
     });
 }
 
@@ -1434,7 +1430,7 @@ SEASTAR_TEST_CASE(test_secondary_index_on_non_pk_ck_column_and_aggregation) {
     // case of indexed_table_select_statement::do_execute.
 
     return do_with_cql_env_thread([] (cql_test_env& e) {
-        cql3::statements::set_internal_paging_size(page_scenarios_page_size).get();
+        cql3::statements::set_internal_paging_size_guard g(page_scenarios_page_size);
 
         // Test a case when there are a lot of small partitions (more than a page size)
         // and there is a clustering key in base table.
@@ -1491,8 +1487,6 @@ SEASTAR_TEST_CASE(test_secondary_index_on_non_pk_ck_column_and_aggregation) {
             });
           });
         });
-
-        cql3::statements::reset_internal_paging_size().get();
     });
 }
 
