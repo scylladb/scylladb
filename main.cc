@@ -741,6 +741,7 @@ int main(int ac, char** av) {
             dbcfg.statement_scheduling_group = make_sched_group("statement", 1000);
             dbcfg.memtable_scheduling_group = make_sched_group("memtable", 1000);
             dbcfg.memtable_to_cache_scheduling_group = make_sched_group("memtable_to_cache", 200);
+            dbcfg.gossip_scheduling_group = make_sched_group("gossip", 1000);
             dbcfg.available_memory = memory::stats().total_memory();
 
             const auto& ssl_opts = cfg->server_encryption_options();
@@ -781,7 +782,7 @@ int main(int ac, char** av) {
             netw::messaging_service::scheduling_config scfg;
             scfg.statement_tenants = { {dbcfg.statement_scheduling_group, "$user"}, {default_scheduling_group(), "$system"} };
             scfg.streaming = dbcfg.streaming_scheduling_group;
-            scfg.gossip = scheduling_group();
+            scfg.gossip = dbcfg.gossip_scheduling_group;
 
             debug::the_messaging_service = &messaging;
             netw::init_messaging_service(messaging, std::move(mscfg), std::move(scfg), trust_store, cert, key, prio, clauth);
@@ -798,8 +799,11 @@ int main(int ac, char** av) {
             //FIXME: discarded future
             (void)cql_config_updater.start(std::ref(cql_config), std::ref(*cfg));
             auto stop_cql_config_updater = defer([&] { cql_config_updater.stop().get(); });
+
+            gms::gossip_config gcfg;
+            gcfg.gossip_scheduling_group = dbcfg.gossip_scheduling_group;
             auto& gossiper = gms::get_gossiper();
-            gossiper.start(std::ref(stop_signal.as_sharded_abort_source()), std::ref(feature_service), std::ref(token_metadata), std::ref(messaging), std::ref(*cfg)).get();
+            gossiper.start(std::ref(stop_signal.as_sharded_abort_source()), std::ref(feature_service), std::ref(token_metadata), std::ref(messaging), std::ref(*cfg), std::ref(gcfg)).get();
             // #293 - do not stop anything
             //engine().at_exit([]{ return gms::get_gossiper().stop(); });
             supervisor::notify("initializing storage service");
