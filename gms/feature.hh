@@ -143,6 +143,7 @@ extern const std::string_view LWT;
 extern const std::string_view PER_TABLE_PARTITIONERS;
 extern const std::string_view PER_TABLE_CACHING;
 extern const std::string_view DIGEST_FOR_NULL_VALUES;
+extern const std::string_view CORRECT_IDX_TOKEN_IN_SECONDARY_INDEX;
 
 }
 
