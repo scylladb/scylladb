@@ -485,7 +485,7 @@ public:
     managed_bytes_view_base& operator=(managed_bytes_view_base&&) = default;
 
     bool operator==(const managed_bytes_view_base& x) const noexcept {
-        return _size == x._size && _current_fragment == x._current_fragment && _next_fragments == x._next_fragments;
+        return _size == x._size && _current_fragment.data() == x._current_fragment.data() && _next_fragments == x._next_fragments;
     }
     bool operator!=(const managed_bytes_view_base& x) const noexcept {
         return !operator==(x);
@@ -493,7 +493,6 @@ public:
 
     // throws std::runtime_error if prefix_len > size
     void remove_prefix(size_t n) {
-        using fragment_view_type = typename managed_bytes_view_base<is_mutable>::fragment_view_type;
         while (n) {
             if (!_current_fragment.size()) {
                 throw std::runtime_error("Reached end of managed_bytes_view");
@@ -509,7 +508,6 @@ public:
     }
 private:
     void remove_current() noexcept {
-        using fragment_view_type = typename managed_bytes_view_base<is_mutable>::fragment_view_type;
         _size -= _current_fragment.size();
         if (_size && _next_fragments) {
             if (_size > _next_fragments->frag_size) {
@@ -586,6 +584,7 @@ public:
     using const_iterator = managed_bytes_iterator<mutable_view::no>;
 
     using fragment_range_view = managed_bytes_fragment_range_basic_view<is_mutable>;
+    using fragment_iterator = managed_bytes_view_fragment_iterator<is_mutable>;
 
 public:
     managed_bytes_basic_view() = default;
@@ -601,10 +600,15 @@ public:
             this->_size = p->size;
         }
     }
+    managed_bytes_basic_view(const managed_bytes_basic_view&) = default;
+    // Allow a view to implicitly convert to a non-mutable view
+    // FIXME: implement
+    managed_bytes_basic_view(const managed_bytes_basic_view<mutable_view::yes>& o) requires (is_mutable == mutable_view::no);
     managed_bytes_basic_view(bytes_view) noexcept;
     explicit managed_bytes_basic_view(const bytes&) noexcept;
     size_t size() const { return this->_size; }
     bool empty() const { return this->_size == 0; }
+    bool is_fragmented() const { return this->_next_fragments; }
     bytes_view::value_type operator[](size_t idx) const {
         if (idx < this->_current_fragment.size()) {
             return this->_current_fragment[idx];
@@ -652,6 +656,13 @@ public:
     const_iterator begin(size_t offset = 0) const;
     const_iterator end() const { return const_iterator(); }
 
+    fragment_iterator begin_fragment() const noexcept {
+        return fragment_iterator(*this);
+    }
+    fragment_iterator end_fragment() const noexcept {
+        return fragment_iterator();
+    }
+
 private:
     void do_linearize_pure(bytes_view::value_type* data) const noexcept {
         auto e = std::copy_n(this->_current_fragment.data(), this->_current_fragment.size(), data);
@@ -660,14 +671,6 @@ private:
             e = std::copy_n(b->data, b->frag_size, e);
             b = b->next;
         }
-    }
-
-    using fragment_iterator = managed_bytes_view_fragment_iterator<is_mutable>;
-    fragment_iterator begin_fragment() const noexcept {
-        return fragment_iterator(*this);
-    }
-    fragment_iterator end_fragment() const noexcept {
-        return fragment_iterator();
     }
 
     template <mutable_view is_mutable_view>
