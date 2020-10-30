@@ -33,6 +33,7 @@ import logging
 import multiprocessing
 import os
 import pathlib
+import re
 import shlex
 import shutil
 import signal
@@ -558,10 +559,14 @@ def parse_cmd_line():
         args.verbose = True
 
     if not args.modes:
-        out = subprocess.Popen(['ninja', 'mode_list'], stdout=subprocess.PIPE).communicate()[0].decode()
-        # [1/1] List configured modes
-        # debug release dev
-        args.modes = out.split('\n')[1].split(' ')
+        try:
+            out = subprocess.Popen(['ninja', 'mode_list'], stdout=subprocess.PIPE).communicate()[0].decode()
+            # [1/1] List configured modes
+            # debug release dev
+            args.modes= re.sub(r'.* List configured modes\n(.*)\n', r'\1', out, 1, re.DOTALL).split("\n")[-1].split(' ')
+        except Exception as e:
+            print(palette.fail("Failed to read output of `ninja mode_list`: please run ./configure.py first"))
+            raise
 
     def prepare_dir(dirname, pattern):
         # Ensure the dir exists
