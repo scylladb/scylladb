@@ -226,7 +226,7 @@ bool view_info::has_base_non_pk_columns_in_view_pk() const {
     // schema integrity problem as the creator of owning view schema
     // didn't make sure to initialize it with base information.
     if (!_base_info) {
-        on_internal_error(vlogger, "Tried to perform a view query which is base info dependant without initializing it");
+        on_internal_error(vlogger, "Tried to perform a view query which is base info dependent without initializing it");
     }
     return _base_info->has_base_non_pk_columns_in_view_pk;
 }
