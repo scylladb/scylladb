@@ -286,7 +286,7 @@ flat_mutation_reader read_context::create_reader(
         const query::partition_slice& ps,
         const io_priority_class& pc,
         tracing::trace_state_ptr trace_state,
-        mutation_reader::forwarding) {
+        mutation_reader::forwarding fwd_mr) {
     const auto shard = this_shard_id();
     auto& rm = _readers[shard];
 
@@ -318,7 +318,7 @@ flat_mutation_reader read_context::create_reader(
     rm.state = reader_state::used;
 
     return table.as_mutation_source().make_reader(std::move(schema), rm.rparts->permit, *rm.rparts->range, *rm.rparts->slice, pc,
-            std::move(trace_state));
+            std::move(trace_state), streamed_mutation::forwarding::no, fwd_mr);
 }
 
 void read_context::destroy_reader(shard_id shard, future<stopped_reader> reader_fut) noexcept {
