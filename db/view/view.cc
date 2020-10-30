@@ -182,11 +182,18 @@ db::view::base_info_ptr view_info::make_base_dependent_view_info(const schema& b
             // we are not going to find it in the base table...
             continue;
         }
-        auto* base_col = base.get_column_definition(view_col.name());
+        const bytes& view_col_name = view_col.name();
+        auto* base_col = base.get_column_definition(view_col_name);
         if (base_col && !base_col->is_primary_key()) {
             base_non_pk_columns_in_view_pk.push_back(base_col->id);
             has_base_non_pk_columns_in_view_pk = true;
         } else if (!base_col) {
+            vlogger.error("Column {} in view {}.{} was not found in the base table {}.{}",
+                    to_sstring_view(view_col_name), _schema.ks_name(), _schema.cf_name(), base.ks_name(), base.cf_name());
+            if (to_sstring_view(view_col_name) == "idx_token") {
+                vlogger.error("Missing idx_token column is caused by an incorrect upgrade of a secondary index. "
+                        "Please recreate index {}.{} to avoid future issues.", _schema.ks_name(), _schema.cf_name());
+            }
             // If we didn't find the column in the base column then it must have been deleted
             // or not yet added (by alter command), this means it is for sure not a pk column
             // in the base table. This can happen if the version of the base schema is not the
