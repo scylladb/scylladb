@@ -959,13 +959,13 @@ private:
 };
 
 static bytes get_bytes(const atomic_cell_view& acv) {
-    return acv.value().linearize();
+    return to_bytes(acv.value());
 }
 
 static bytes_view get_bytes_view(const atomic_cell_view& acv, std::vector<bytes>& buf) {
     return acv.value().is_fragmented()
-        ? bytes_view{buf.emplace_back(acv.value().linearize())}
-        : acv.value().first_fragment();
+        ? bytes_view{buf.emplace_back(to_bytes(acv.value()))}
+        : *acv.value().begin_fragment();
 }
 
 static ttl_opt get_ttl(const atomic_cell_view& acv) {

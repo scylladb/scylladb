@@ -685,7 +685,7 @@ void write_cell(RowWriter& w, const query::partition_slice& slice, ::atomic_cell
         } else {
             return std::move(wr).skip_expiry();
         }
-    }().write_fragmented_value(c.value());
+    }().write_fragmented_value(c.value().as_fragment_range());
     [&, wr = std::move(after_value)] () mutable {
         if (slice.options.contains<query::partition_slice::option::send_ttl>() && c.is_live_and_has_ttl()) {
             return std::move(wr).write_ttl(c.ttl());
@@ -712,7 +712,7 @@ void write_cell(RowWriter& w, const query::partition_slice& slice, data_type typ
 template<typename RowWriter>
 void write_counter_cell(RowWriter& w, const query::partition_slice& slice, ::atomic_cell_view c) {
     assert(c.is_live());
-  counter_cell_view::with_linearized(c, [&] (counter_cell_view ccv) {
+    auto ccv = counter_cell_view(c);
     auto wr = w.add().write();
     [&, wr = std::move(wr)] () mutable {
         if (slice.options.contains<query::partition_slice::option::send_timestamp>()) {
@@ -724,7 +724,6 @@ void write_counter_cell(RowWriter& w, const query::partition_slice& slice, ::ato
             .write_value(counter_cell_view::total_value_type()->decompose(ccv.total_value()))
             .skip_ttl()
             .end_qr_cell();
-  });
 }
 
 template<typename Hasher>

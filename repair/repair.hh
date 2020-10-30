@@ -28,6 +28,7 @@
 #include <seastar/core/sstring.hh>
 #include <seastar/core/sharded.hh>
 #include <seastar/core/future.hh>
+#include <seastar/core/condition-variable.hh>
 
 #include "database_fwd.hh"
 #include "frozen_mutation.hh"

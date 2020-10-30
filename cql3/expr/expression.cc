@@ -62,7 +62,7 @@ bytes_opt do_get_value(const schema& schema,
             }
             assert(cdef.is_atomic());
             auto c = cell->as_atomic_cell(cdef);
-            return c.is_dead(now) ? std::nullopt : bytes_opt(c.value().linearize());
+            return c.is_dead(now) ? std::nullopt : bytes_opt(to_bytes(c.value()));
     }
 }
 

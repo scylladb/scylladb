@@ -435,9 +435,9 @@ deletable_row& view_updates::get_view_row(const partition_key& base_key, const c
             auto& c = update.cells().cell_at(base_col->id);
             auto value_view = base_col->is_atomic() ? c.as_atomic_cell(cdef).value() : c.as_collection_mutation().data;
             if (value_view.is_fragmented()) {
-                return linearized_values.emplace_back(value_view.linearize());
+                return linearized_values.emplace_back(to_bytes(value_view));
             }
-            return value_view.first_fragment();
+            return *value_view.begin_fragment();
         }
     });
     auto& partition = partition_for(partition_key::from_range(_view->partition_key_columns() | get_value));

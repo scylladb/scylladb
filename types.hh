@@ -24,7 +24,6 @@
 #include <optional>
 #include <boost/functional/hash.hpp>
 #include <iosfwd>
-#include "data/cell.hh"
 #include <sstream>
 
 #include <seastar/core/sstring.hh>
@@ -35,7 +34,6 @@
 #include "db_clock.hh"
 #include "bytes.hh"
 #include "log.hh"
-#include "atomic_cell.hh"
 #include "cql_serialization_format.hh"
 #include "tombstone.hh"
 #include "to_string.hh"
@@ -464,7 +462,6 @@ class user_type_impl;
 class abstract_type : public enable_shared_from_this<abstract_type> {
     sstring _name;
     std::optional<uint32_t> _value_length_if_fixed;
-    data::type_imr_descriptor _imr_state;
 public:
     enum class kind : int8_t {
         ascii,
@@ -502,10 +499,9 @@ private:
 public:
     kind get_kind() const { return _kind; }
 
-    abstract_type(kind k, sstring name, std::optional<uint32_t> value_length_if_fixed, data::type_info ti)
-        : _name(name), _value_length_if_fixed(std::move(value_length_if_fixed)), _imr_state(ti), _kind(k) {}
+    abstract_type(kind k, sstring name, std::optional<uint32_t> value_length_if_fixed)
+        : _name(name), _value_length_if_fixed(std::move(value_length_if_fixed)), _kind(k) {}
     virtual ~abstract_type() {}
-    const data::type_imr_descriptor& imr_state() const { return _imr_state; }
     bool less(bytes_view v1, bytes_view v2) const { return compare(v1, v2) < 0; }
     // returns a callable that can be called with two byte_views, and calls this->less() on them.
     serialized_compare as_less_comparator() const ;
@@ -804,7 +800,7 @@ class reversed_type_impl : public abstract_type {
     data_type _underlying_type;
     reversed_type_impl(data_type t)
         : abstract_type(kind::reversed, "org.apache.cassandra.db.marshal.ReversedType(" + t->name() + ")",
-                        t->value_length_if_fixed(), t->imr_state().type_info())
+                        t->value_length_if_fixed())
         , _underlying_type(t)
     {}
 public:

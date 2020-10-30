@@ -36,9 +36,9 @@ converting_mutation_partition_applier::upgrade_cell(const abstract_type& new_typ
                                 atomic_cell::collection_member cm) {
     if (cell.is_live() && !old_type.is_counter()) {
         if (cell.is_live_and_has_ttl()) {
-            return atomic_cell::make_live(new_type, cell.timestamp(), cell.value().linearize(), cell.expiry(), cell.ttl(), cm);
+            return atomic_cell::make_live(new_type, cell.timestamp(), cell.value(), cell.expiry(), cell.ttl(), cm);
         }
-        return atomic_cell::make_live(new_type, cell.timestamp(), cell.value().linearize(), cm);
+        return atomic_cell::make_live(new_type, cell.timestamp(), cell.value(), cm);
     } else {
         return atomic_cell(new_type, cell);
     }

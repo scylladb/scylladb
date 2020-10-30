@@ -83,21 +83,20 @@ class basic_counter_shard_view {
         total_size = unsigned(logical_clock) + sizeof(int64_t),
     };
 private:
-    using pointer_type = std::conditional_t<is_mutable == mutable_view::no, const signed char*, signed char*>;
-    pointer_type _base;
+    managed_bytes_basic_view<is_mutable> _base;
 private:
     template<typename T>
     T read(offset off) const {
         T value;
-        std::copy_n(_base + static_cast<unsigned>(off), sizeof(T), reinterpret_cast<signed char*>(&value));
+        std::copy_n(_base.begin() + static_cast<unsigned>(off), sizeof(T), reinterpret_cast<signed char*>(&value));
         return value;
     }
 public:
     static constexpr auto size = size_t(offset::total_size);
 public:
     basic_counter_shard_view() = default;
-    explicit basic_counter_shard_view(pointer_type ptr) noexcept
-        : _base(ptr) { }
+    explicit basic_counter_shard_view(managed_bytes_basic_view<is_mutable> v) noexcept
+        : _base(v) { }
 
     counter_id id() const { return read<counter_id>(offset::id); }
     int64_t value() const { return read<int64_t>(offset::value); }
@@ -108,15 +107,15 @@ public:
         static constexpr size_t size = size_t(offset::total_size) - off;
 
         signed char tmp[size];
-        std::copy_n(_base + off, size, tmp);
-        std::copy_n(other._base + off, size, _base + off);
-        std::copy_n(tmp, size, other._base + off);
+        std::copy_n(_base.begin() + off, size, tmp);
+        std::copy_n(other._base.begin() + off, size, _base.begin() + off);
+        std::copy_n(tmp, size, other._base.begin() + off);
     }
 
     void set_value_and_clock(const basic_counter_shard_view& other) noexcept {
         static constexpr size_t off = size_t(offset::value);
         static constexpr size_t size = size_t(offset::total_size) - off;
-        std::copy_n(other._base + off, size, _base + off);
+        std::copy_n(other._base.begin() + off, size, _base.begin() + off);
     }
 
     bool operator==(const basic_counter_shard_view& other) const {
@@ -144,7 +143,7 @@ class counter_shard {
     int64_t _logical_clock;
 private:
     template<typename T>
-    static void write(const T& value, bytes::iterator& out) {
+    static void write(const T& value, atomic_cell_value_mutable_view::iterator& out) {
         out = std::copy_n(reinterpret_cast<const signed char*>(&value), sizeof(T), out);
     }
 private:
@@ -197,7 +196,7 @@ public:
     static constexpr size_t serialized_size() {
         return counter_shard_view::size;
     }
-    void serialize(bytes::iterator& out) const {
+    void serialize(atomic_cell_value_mutable_view::iterator& out) const {
         write(_id, out);
         write(_value, out);
         write(_logical_clock, out);
@@ -237,7 +236,7 @@ public:
     size_t serialized_size() const {
         return _shards.size() * counter_shard::serialized_size();
     }
-    void serialize(bytes::iterator& out) const {
+    void serialize(atomic_cell_value_mutable_view::iterator& out) const {
         for (auto&& cs : _shards) {
             cs.serialize(out);
         }
@@ -248,31 +247,18 @@ public:
     }
 
     atomic_cell build(api::timestamp_type timestamp) const {
-        // If we can assume that the counter shards never cross fragment boundaries
-        // the serialisation code gets much simpler.
-        static_assert(data::cell::maximum_external_chunk_length % counter_shard::serialized_size() == 0);
-
         auto ac = atomic_cell::make_live_uninitialized(*counter_type, timestamp, serialized_size());
 
         auto dst_it = ac.value().begin();
-        auto dst_current = *dst_it++;
         for (auto&& cs : _shards) {
-            if (dst_current.empty()) {
-                dst_current = *dst_it++;
-            }
-            assert(!dst_current.empty());
-            auto value_dst = dst_current.data();
-            cs.serialize(value_dst);
-            dst_current.remove_prefix(counter_shard::serialized_size());
+            cs.serialize(dst_it);
         }
         return ac;
     }
 
     static atomic_cell from_single_shard(api::timestamp_type timestamp, const counter_shard& cs) {
-        // We don't really need to bother with fragmentation here.
-        static_assert(data::cell::maximum_external_chunk_length >= counter_shard::serialized_size());
         auto ac = atomic_cell::make_live_uninitialized(*counter_type, timestamp, counter_shard::serialized_size());
-        auto dst = ac.value().first_fragment().begin();
+        auto dst = ac.value().begin();
         cs.serialize(dst);
         return ac;
     }
@@ -304,20 +290,16 @@ public:
 template<mutable_view is_mutable>
 class basic_counter_cell_view {
 protected:
-    using linearized_value_view = std::conditional_t<is_mutable == mutable_view::no,
-                                                     bytes_view, bytes_mutable_view>;
-    using pointer_type = std::conditional_t<is_mutable == mutable_view::no,
-                                            bytes_view::const_pointer, bytes_mutable_view::pointer>;
     basic_atomic_cell_view<is_mutable> _cell;
-    linearized_value_view _value;
 private:
     class shard_iterator : public std::iterator<std::input_iterator_tag, basic_counter_shard_view<is_mutable>> {
-        pointer_type _current;
+        managed_bytes_basic_view<is_mutable> _current;
+        size_t _pos = 0;
         basic_counter_shard_view<is_mutable> _current_view;
     public:
         shard_iterator() = default;
-        shard_iterator(pointer_type ptr) noexcept
-            : _current(ptr), _current_view(ptr) { }
+        shard_iterator(managed_bytes_basic_view<is_mutable> v) noexcept
+            : _current(v), _current_view(_current) { }
 
         basic_counter_shard_view<is_mutable>& operator*() noexcept {
             return _current_view;
@@ -326,8 +308,8 @@ private:
             return &_current_view;
         }
         shard_iterator& operator++() noexcept {
-            _current += counter_shard_view::size;
-            _current_view = basic_counter_shard_view<is_mutable>(_current);
+            _pos += counter_shard_view::size;
+            _current_view = basic_counter_shard_view<is_mutable>(_current.substr(_pos, counter_shard_view::size));
             return *this;
         }
         shard_iterator operator++(int) noexcept {
@@ -336,8 +318,8 @@ private:
             return it;
         }
         shard_iterator& operator--() noexcept {
-            _current -= counter_shard_view::size;
-            _current_view = basic_counter_shard_view<is_mutable>(_current);
+            _pos -= counter_shard_view::size;
+            _current_view = basic_counter_shard_view<is_mutable>(_current.substr(_pos, counter_shard_view::size));
             return *this;
         }
         shard_iterator operator--(int) noexcept {
@@ -354,23 +336,24 @@ private:
     };
 public:
     boost::iterator_range<shard_iterator> shards() const {
-        auto begin = shard_iterator(_value.data());
-        auto end = shard_iterator(_value.data() + _value.size());
+        auto value = _cell.value();
+        auto begin = shard_iterator(value);
+        auto end = shard_iterator();
         return boost::make_iterator_range(begin, end);
     }
 
     size_t shard_count() const {
-        return _cell.value().size_bytes() / counter_shard_view::size;
+        return _cell.value().size() / counter_shard_view::size;
     }
-protected:
+public:
     // ac must be a live counter cell
-    explicit basic_counter_cell_view(basic_atomic_cell_view<is_mutable> ac, linearized_value_view vv) noexcept
-        : _cell(ac), _value(vv)
+    explicit basic_counter_cell_view(basic_atomic_cell_view<is_mutable> ac) noexcept
+        : _cell(ac)
     {
         assert(_cell.is_live());
         assert(!_cell.is_counter_update());
     }
-public:
+
     api::timestamp_type timestamp() const { return _cell.timestamp(); }
 
     static data_type total_value_type() { return long_type; }
@@ -404,14 +387,6 @@ public:
 struct counter_cell_view : basic_counter_cell_view<mutable_view::no> {
     using basic_counter_cell_view::basic_counter_cell_view;
 
-    template<typename Function>
-    static decltype(auto) with_linearized(basic_atomic_cell_view<mutable_view::no> ac, Function&& fn) {
-        return ac.value().with_linearized([&] (bytes_view value_view) {
-            counter_cell_view ccv(ac, value_view);
-            return fn(ccv);
-        });
-    }
-
     // Reversibly applies two counter cells, at least one of them must be live.
     static void apply(const column_definition& cdef, atomic_cell_or_collection& dst, atomic_cell_or_collection& src);
 
@@ -426,9 +401,8 @@ struct counter_cell_mutable_view : basic_counter_cell_view<mutable_view::yes> {
     using basic_counter_cell_view::basic_counter_cell_view;
 
     explicit counter_cell_mutable_view(atomic_cell_mutable_view ac) noexcept
-        : basic_counter_cell_view<mutable_view::yes>(ac, ac.value().first_fragment())
+        : basic_counter_cell_view<mutable_view::yes>(ac)
     {
-        assert(!ac.value().is_fragmented());
     }
 
     void set_timestamp(api::timestamp_type ts) { _cell.set_timestamp(ts); }

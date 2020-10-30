@@ -24,6 +24,7 @@
 #include "error_injection_fcts.hh"
 #include "utils/error_injection.hh"
 #include "types/list.hh"
+#include <seastar/core/map_reduce.hh>
 
 namespace cql3
 {

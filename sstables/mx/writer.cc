@@ -1045,10 +1045,9 @@ void writer::write_cell(bytes_ostream& writer, const clustering_key_prefix* clus
     if (cdef.is_counter()) {
         if (!is_deleted) {
             assert(!cell.is_counter_update());
-            counter_cell_view::with_linearized(cell, [&] (counter_cell_view ccv) {
-                write_counter_value(ccv, writer, _sst.get_version(), [] (bytes_ostream& out, uint32_t value) {
-                    return write_vint(out, value);
-                });
+            auto ccv = counter_cell_view(cell);
+            write_counter_value(ccv, writer, _sst.get_version(), [] (bytes_ostream& out, uint32_t value) {
+                return write_vint(out, value);
             });
         }
     } else {

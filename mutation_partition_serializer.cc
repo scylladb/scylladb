@@ -45,7 +45,7 @@ template<typename Writer>
 auto write_live_cell(Writer&& writer, atomic_cell_view c)
 {
     return std::move(writer).write_created_at(c.timestamp())
-                            .write_fragmented_value(c.value())
+                            .write_fragmented_value(c.value().as_fragment_range())
                         .end_live_cell();
 }
 
@@ -60,14 +60,13 @@ auto write_counter_cell(Writer&& writer, atomic_cell_view c)
                                    .write_delta(delta)
                                    .end_counter_cell_update();
         } else {
-          return counter_cell_view::with_linearized(c, [&] (counter_cell_view ccv) {
+            auto ccv = counter_cell_view(c);
             auto shards = std::move(value).start_value_counter_cell_full()
                                           .start_shards();
             for (auto csv : ccv.shards()) {
                 shards.add_shards(counter_shard(csv));
             }
             return std::move(shards).end_shards().end_counter_cell_full();
-          });
         }
     }().end_counter_cell();
 }
@@ -79,7 +78,7 @@ auto write_expiring_cell(Writer&& writer, atomic_cell_view c)
                             .write_expiry(c.expiry())
                             .start_c()
                                 .write_created_at(c.timestamp())
-                                .write_fragmented_value(c.value())
+                                .write_fragmented_value(c.value().as_fragment_range())
                             .end_c()
                         .end_expiring_cell();
 }

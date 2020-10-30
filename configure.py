@@ -345,7 +345,6 @@ scylla_tests = set([
     'test/boost/intrusive_array_test',
     'test/boost/map_difference_test',
     'test/boost/memtable_test',
-    'test/boost/meta_test',
     'test/boost/multishard_mutation_query_test',
     'test/boost/murmur_hash_test',
     'test/boost/mutation_fragment_test',
@@ -400,7 +399,6 @@ scylla_tests = set([
     'test/boost/bptree_test',
     'test/boost/double_decker_test',
     'test/boost/stall_free_test',
-    'test/boost/imr_test',
     'test/boost/managed_bytes_test',
     'test/manual/ec2_snitch_test',
     'test/manual/enormous_table_scan_test',
@@ -844,7 +842,6 @@ scylla_core = (['database.cc',
                 'vint-serialization.cc',
                 'utils/arch/powerpc/crc32-vpmsum/crc32_wrapper.cc',
                 'querier.cc',
-                'data/cell.cc',
                 'mutation_writer/multishard_writer.cc',
                 'multishard_mutation_query.cc',
                 'reader_concurrency_semaphore.cc',
@@ -1015,7 +1012,6 @@ pure_boost_tests = set([
     'test/boost/like_matcher_test',
     'test/boost/linearizing_input_stream_test',
     'test/boost/map_difference_test',
-    'test/boost/meta_test',
     'test/boost/nonwrapping_range_test',
     'test/boost/observable_test',
     'test/boost/range_test',
@@ -1088,8 +1084,6 @@ deps['test/boost/estimated_histogram_test'] = ['test/boost/estimated_histogram_t
 deps['test/boost/anchorless_list_test'] = ['test/boost/anchorless_list_test.cc']
 deps['test/perf/perf_fast_forward'] += ['release.cc']
 deps['test/perf/perf_simple_query'] += ['release.cc']
-deps['test/boost/meta_test'] = ['test/boost/meta_test.cc']
-deps['test/boost/imr_test'] = ['test/boost/imr_test.cc', 'utils/logalloc.cc', 'utils/dynamic_bitset.cc']
 deps['test/boost/reusable_buffer_test'] = [
     "test/boost/reusable_buffer_test.cc",
     "test/lib/log.cc",

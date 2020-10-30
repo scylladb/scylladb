@@ -22,7 +22,6 @@
 #include "types/collection.hh"
 #include "types/user.hh"
 #include "concrete_types.hh"
-#include "atomic_cell_or_collection.hh"
 #include "mutation_partition.hh"
 #include "compaction_garbage_collector.hh"
 #include "combine.hh"
@@ -30,40 +29,28 @@
 #include "collection_mutation.hh"
 
 collection_mutation::collection_mutation(const abstract_type& type, collection_mutation_view v)
-    : _data(imr_object_type::make(data::cell::make_collection(v.data), &type.imr_state().lsa_migrator())) {}
+    : _data(v.data) {}
 
-collection_mutation::collection_mutation(const abstract_type& type, const bytes_ostream& data)
-	: _data(imr_object_type::make(data::cell::make_collection(fragment_range_view(data)), &type.imr_state().lsa_migrator())) {}
-
-static collection_mutation_view get_collection_mutation_view(const uint8_t* ptr)
-{
-    auto f = data::cell::structure::get_member<data::cell::tags::flags>(ptr);
-    auto ti = data::type_info::make_collection();
-    data::cell::context ctx(f, ti);
-    auto view = data::cell::structure::get_member<data::cell::tags::cell>(ptr).as<data::cell::tags::collection>(ctx);
-    auto dv = data::cell::variable_value::make_view(view, f.get<data::cell::tags::external_data>());
-    return collection_mutation_view { dv };
-}
+collection_mutation::collection_mutation(const abstract_type& type, managed_bytes data)
+    : _data(std::move(data)) {}
 
 collection_mutation::operator collection_mutation_view() const
 {
-    return get_collection_mutation_view(_data.get());
+    return collection_mutation_view(_data);
 }
 
 collection_mutation_view atomic_cell_or_collection::as_collection_mutation() const {
-    return get_collection_mutation_view(_data.get());
+    return collection_mutation_view(_data);
 }
 
 bool collection_mutation_view::is_empty() const {
-    auto in = collection_mutation_input_stream(data);
+    auto in = collection_mutation_input_stream(data.as_fragment_range());
     auto has_tomb = in.read_trivial<bool>();
     return !has_tomb && in.read_trivial<uint32_t>() == 0;
 }
 
-template <typename F>
-requires std::is_invocable_r_v<const data::type_info&, F, collection_mutation_input_stream&>
-static bool is_any_live(const atomic_cell_value_view& data, tombstone tomb, gc_clock::time_point now, F&& read_cell_type_info) {
-    auto in = collection_mutation_input_stream(data);
+bool collection_mutation_view::is_any_live(const abstract_type& type, tombstone tomb, gc_clock::time_point now) const {
+    auto in = collection_mutation_input_stream(data.as_fragment_range());
     auto has_tomb = in.read_trivial<bool>();
     if (has_tomb) {
         auto ts = in.read_trivial<api::timestamp_type>();
@@ -73,9 +60,10 @@ static bool is_any_live(const atomic_cell_value_view& data, tombstone tomb, gc_c
 
     auto nr = in.read_trivial<uint32_t>();
     for (uint32_t i = 0; i != nr; ++i) {
-        auto& type_info = read_cell_type_info(in);
+        auto key_size = in.read_trivial<uint32_t>();
+        in.skip(key_size);
         auto vsize = in.read_trivial<uint32_t>();
-        auto value = atomic_cell_view::from_bytes(type_info, in.read(vsize));
+        auto value = atomic_cell_view::from_bytes(type, in.read(vsize));
         if (value.is_live(tomb, now, false)) {
             return true;
         }
@@ -84,33 +72,8 @@ static bool is_any_live(const atomic_cell_value_view& data, tombstone tomb, gc_c
     return false;
 }
 
-bool collection_mutation_view::is_any_live(const abstract_type& type, tombstone tomb, gc_clock::time_point now) const {
-    return visit(type, make_visitor(
-    [&] (const collection_type_impl& ctype) {
-        auto& type_info = ctype.value_comparator()->imr_state().type_info();
-        return ::is_any_live(data, tomb, now, [&type_info] (collection_mutation_input_stream& in) -> const data::type_info& {
-            auto key_size = in.read_trivial<uint32_t>();
-            in.skip(key_size);
-            return type_info;
-        });
-    },
-    [&] (const user_type_impl& utype) {
-        return ::is_any_live(data, tomb, now, [&utype] (collection_mutation_input_stream& in) -> const data::type_info& {
-            auto key_size = in.read_trivial<uint32_t>();
-            auto key = in.read(key_size);
-            return utype.type(deserialize_field_index(key))->imr_state().type_info();
-        });
-    },
-    [&] (const abstract_type& o) -> bool {
-        throw std::runtime_error(format("collection_mutation_view::is_any_live: unknown type {}", o.name()));
-    }
-    ));
-}
-
-template <typename F>
-requires std::is_invocable_r_v<const data::type_info&, F, collection_mutation_input_stream&>
-static api::timestamp_type last_update(const atomic_cell_value_view& data, F&& read_cell_type_info) {
-    auto in = collection_mutation_input_stream(data);
+api::timestamp_type collection_mutation_view::last_update(const abstract_type& type) const {
+    auto in = collection_mutation_input_stream(data.as_fragment_range());
     api::timestamp_type max = api::missing_timestamp;
     auto has_tomb = in.read_trivial<bool>();
     if (has_tomb) {
@@ -120,37 +83,14 @@ static api::timestamp_type last_update(const atomic_cell_value_view& data, F&& r
 
     auto nr = in.read_trivial<uint32_t>();
     for (uint32_t i = 0; i != nr; ++i) {
-        auto& type_info = read_cell_type_info(in);
+        const auto key_size = in.read_trivial<uint32_t>();
+        in.skip(key_size);
         auto vsize = in.read_trivial<uint32_t>();
-        auto value = atomic_cell_view::from_bytes(type_info, in.read(vsize));
+        auto value = atomic_cell_view::from_bytes(type, in.read(vsize));
         max = std::max(value.timestamp(), max);
     }
 
     return max;
-}
-
-
-api::timestamp_type collection_mutation_view::last_update(const abstract_type& type) const {
-    return visit(type, make_visitor(
-    [&] (const collection_type_impl& ctype) {
-        auto& type_info = ctype.value_comparator()->imr_state().type_info();
-        return ::last_update(data, [&type_info] (collection_mutation_input_stream& in) -> const data::type_info& {
-            auto key_size = in.read_trivial<uint32_t>();
-            in.skip(key_size);
-            return type_info;
-        });
-    },
-    [&] (const user_type_impl& utype) {
-        return ::last_update(data, [&utype] (collection_mutation_input_stream& in) -> const data::type_info& {
-            auto key_size = in.read_trivial<uint32_t>();
-            auto key = in.read(key_size);
-            return utype.type(deserialize_field_index(key))->imr_state().type_info();
-        });
-    },
-    [&] (const abstract_type& o) -> api::timestamp_type {
-        throw std::runtime_error(format("collection_mutation_view::last_update: unknown type {}", o.name()));
-    }
-    ));
 }
 
 std::ostream& operator<<(std::ostream& os, const collection_mutation_view::printer& cmvp) {
@@ -280,15 +220,18 @@ static collection_mutation serialize_collection_mutation(
     if (tomb) {
         size += sizeof(tomb.timestamp) + sizeof(tomb.deletion_time);
     }
-    bytes_ostream ret;
-    ret.reserve(size);
-    auto out = ret.write_begin();
+    managed_bytes ret(managed_bytes::initialized_later(), size);
+    auto out = ret.begin();
     *out++ = bool(tomb);
     if (tomb) {
         write(out, tomb.timestamp);
         write(out, tomb.deletion_time.time_since_epoch().count());
     }
-    auto writeb = [&out] (bytes_view v) {
+    auto writek = [&out] (bytes_view v) {
+        serialize_int32(out, v.size());
+        out = std::copy_n(v.begin(), v.size(), out);
+    };
+    auto writev = [&out] (managed_bytes_view v) {
         serialize_int32(out, v.size());
         out = std::copy_n(v.begin(), v.size(), out);
     };
@@ -297,9 +240,9 @@ static collection_mutation serialize_collection_mutation(
     for (auto&& kv : cells) {
         auto&& k = kv.first;
         auto&& v = kv.second;
-        writeb(k);
+        writek(k);
 
-        writeb(v.serialize());
+        writev(v.serialize());
     }
     return collection_mutation(type, ret);
 }
@@ -448,13 +391,12 @@ deserialize_collection_mutation(const abstract_type& type, collection_mutation_i
     return visit(type, make_visitor(
     [&] (const collection_type_impl& ctype) {
         // value_comparator(), ugh
-        auto& type_info = ctype.value_comparator()->imr_state().type_info();
-        return deserialize_collection_mutation(in, [&type_info] (collection_mutation_input_stream& in) {
+        return deserialize_collection_mutation(in, [&ctype] (collection_mutation_input_stream& in) {
             // FIXME: we could probably avoid the need for size
             auto ksize = in.read_trivial<uint32_t>();
             auto key = in.read(ksize);
             auto vsize = in.read_trivial<uint32_t>();
-            auto value = atomic_cell_view::from_bytes(type_info, in.read(vsize));
+            auto value = atomic_cell_view::from_bytes(*ctype.value_comparator(), in.read(vsize));
             return std::make_pair(key, value);
         });
     },
@@ -464,8 +406,7 @@ deserialize_collection_mutation(const abstract_type& type, collection_mutation_i
             auto ksize = in.read_trivial<uint32_t>();
             auto key = in.read(ksize);
             auto vsize = in.read_trivial<uint32_t>();
-            auto value = atomic_cell_view::from_bytes(
-                    utype.type(deserialize_field_index(key))->imr_state().type_info(), in.read(vsize));
+            auto value = atomic_cell_view::from_bytes(*utype.type(deserialize_field_index(key)), in.read(vsize));
             return std::make_pair(key, value);
         });
     },

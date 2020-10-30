@@ -31,7 +31,6 @@
 #include <iosfwd>
 
 class abstract_type;
-class bytes_ostream;
 class compaction_garbage_collector;
 class row_tombstone;
 
@@ -70,7 +69,7 @@ struct collection_mutation_view_description {
     collection_mutation serialize(const abstract_type&) const;
 };
 
-using collection_mutation_input_stream = utils::linearizing_input_stream<atomic_cell_value_view, marshal_exception>;
+using collection_mutation_input_stream = utils::linearizing_input_stream<managed_bytes_view::fragment_range_view, marshal_exception>;
 
 // Given a linearized collection_mutation_view, returns an auxiliary struct allowing the inspection of each cell.
 // The struct is an observer of the data given by the collection_mutation_view and is only valid while the
@@ -80,7 +79,7 @@ collection_mutation_view_description deserialize_collection_mutation(const abstr
 
 class collection_mutation_view {
 public:
-    atomic_cell_value_view data;
+    managed_bytes_view data;
 
     // Is this a noop mutation?
     bool is_empty() const;
@@ -97,7 +96,7 @@ public:
     // calls it on the corresponding description of `this`.
     template <typename F>
     inline decltype(auto) with_deserialized(const abstract_type& type, F f) const {
-        auto stream = collection_mutation_input_stream(data);
+        auto stream = collection_mutation_input_stream(data.as_fragment_range());
         return f(deserialize_collection_mutation(type, stream));
     }
 
@@ -122,12 +121,11 @@ public:
 //  The mutation may also contain a collection-wide tombstone.
 class collection_mutation {
 public:
-    using imr_object_type =  imr::utils::object<data::cell::structure>;
-    imr_object_type _data;
+    managed_bytes _data;
 
     collection_mutation() {}
     collection_mutation(const abstract_type&, collection_mutation_view);
-    collection_mutation(const abstract_type& type, const bytes_ostream& data);
+    collection_mutation(const abstract_type&, managed_bytes);
     operator collection_mutation_view() const;
 };
 
