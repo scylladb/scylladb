@@ -511,7 +511,10 @@ public:
     managed_bytes_view_base& operator=(managed_bytes_view_base&&) = default;
 
     bool operator==(const managed_bytes_view_base& x) const noexcept {
-        return _size == x._size && _current_fragment.data() == x._current_fragment.data() && _next_fragments == x._next_fragments;
+        return _size == x._size &&
+                _current_fragment.data() == x._current_fragment.data() &&
+                _current_fragment.size() == x._current_fragment.size() &&
+                _next_fragments == x._next_fragments;
     }
     bool operator!=(const managed_bytes_view_base& x) const noexcept {
         return !operator==(x);
