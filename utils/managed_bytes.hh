@@ -458,10 +458,20 @@ public:
     managed_bytes_fragment_range_basic_view<mutable_view::yes> as_fragment_range() noexcept;
     managed_bytes_fragment_range_basic_view<mutable_view::no> as_fragment_range() const noexcept;
 
-    iterator begin(size_t offset = 0);
+    iterator begin() {
+        if (external()) {
+            return iterator(_u.ptr->data, _u.ptr->data + _u.ptr->frag_size, _u.ptr->next);
+        }
+        return iterator(_u.small.data, _u.small.data + _u.small.size, nullptr);
+    }
     iterator end() { return iterator(); }
 
-    const_iterator begin(size_t offset = 0) const;
+    const_iterator begin() const {
+        if (external()) {
+            return const_iterator(_u.ptr->data, _u.ptr->data + _u.ptr->frag_size, _u.ptr->next);
+        }
+        return const_iterator(_u.small.data, _u.small.data + _u.small.size, nullptr);
+    }
     const_iterator end() const { return const_iterator(); }
 
     template <mutable_view is_mutable>
@@ -666,11 +676,19 @@ public:
 
     managed_bytes_fragment_range_basic_view<is_mutable> as_fragment_range() const noexcept;
 
-    iterator begin(size_t offset = 0);
-    iterator end() { return iterator(); }
+    iterator begin() {
+        return iterator(this->_current_fragment.data(), this->_current_fragment.data() + this->_current_fragment.size(), this->_next_fragments);
+    }
+    iterator end() {
+        return iterator();
+    }
 
-    const_iterator begin(size_t offset = 0) const;
-    const_iterator end() const { return const_iterator(); }
+    const_iterator begin() const {
+        return const_iterator(this->_current_fragment.data(), this->_current_fragment.data() + this->_current_fragment.size(), this->_next_fragments);
+    }
+    const_iterator end() const {
+        return const_iterator();
+    }
 
     fragment_iterator begin_fragment() const noexcept {
         return fragment_iterator(*this);
