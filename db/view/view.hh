@@ -71,7 +71,7 @@ public:
     // A constructor for a base info that can facilitate reads and writes from the materialized view.
     base_dependent_view_info(schema_ptr base_schema, std::vector<column_id>&& base_non_pk_columns_in_view_pk);
     // A constructor for a base info that can facilitate only reads from the materialized view.
-    base_dependent_view_info(bool has_base_non_pk_columns_in_view_pk);
+    explicit base_dependent_view_info(bool has_base_non_pk_columns_in_view_pk);
 };
 
 // Immutable snapshot of view's base-schema-dependent part.
