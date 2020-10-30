@@ -152,22 +152,27 @@ db::view::base_dependent_view_info::base_dependent_view_info(schema_ptr base_sch
 }
 
 // A constructor for a base info that can facilitate only reads from the materialized view.
-db::view::base_dependent_view_info::base_dependent_view_info(bool has_base_non_pk_columns_in_view_pk)
+db::view::base_dependent_view_info::base_dependent_view_info(bool has_base_non_pk_columns_in_view_pk, std::optional<bytes>&& column_missing_in_base)
         : _base_schema{nullptr}
+        , _column_missing_in_base{std::move(column_missing_in_base)}
         , has_base_non_pk_columns_in_view_pk{has_base_non_pk_columns_in_view_pk}
         , use_only_for_reads{true} {
 }
 
 const std::vector<column_id>& db::view::base_dependent_view_info::base_non_pk_columns_in_view_pk() const {
     if (use_only_for_reads) {
-        on_internal_error(vlogger, "base_non_pk_columns_in_view_pk(): operation unsupported when initialized only for view reads.");
+        on_internal_error(vlogger,
+                format("base_non_pk_columns_in_view_pk(): operation unsupported when initialized only for view reads. "
+                "Missing column in the base table: {}", to_sstring_view(_column_missing_in_base.value_or(bytes()))));
     }
     return _base_non_pk_columns_in_view_pk;
 }
 
 const schema_ptr& db::view::base_dependent_view_info::base_schema() const {
     if (use_only_for_reads) {
-        on_internal_error(vlogger, "base_schema(): operation unsupported when initialized only for view reads.");
+        on_internal_error(vlogger,
+                format("base_schema(): operation unsupported when initialized only for view reads. "
+                "Missing column in the base table: {}", to_sstring_view(_column_missing_in_base.value_or(bytes()))));
     }
     return _base_schema;
 }
@@ -198,7 +203,7 @@ db::view::base_info_ptr view_info::make_base_dependent_view_info(const schema& b
             // if we got to such a situation then it means it is only going to be used for reading
             // (computation of shadowable tombstones) and in that case the existence of such a column
             // is the only thing that is of interest to us.
-            return make_lw_shared<db::view::base_dependent_view_info>(true);
+            return make_lw_shared<db::view::base_dependent_view_info>(true, view_col_name);
         }
     }
 
