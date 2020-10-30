@@ -52,9 +52,7 @@ struct appending_hash<atomic_cell_view> {
         feed_hash(h, cell.timestamp());
         if (cell.is_live()) {
             if (cdef.is_counter()) {
-                counter_cell_view::with_linearized(cell, [&] (counter_cell_view ccv) {
-                    ::feed_hash(h, ccv);
-                });
+                ::feed_hash(h, counter_cell_view(cell));
                 return;
             }
             if (cell.is_live_and_has_ttl()) {

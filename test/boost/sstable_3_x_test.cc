@@ -1607,14 +1607,15 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_counters_read) {
         assertions.push_back([&, timestamp, value, clock] (const column_definition& def,
                                                            const atomic_cell_or_collection* cell) {
             BOOST_REQUIRE(def.is_counter());
-            counter_cell_view::with_linearized(cell->as_atomic_cell(def), [&] (counter_cell_view cv) {
+            {
+                counter_cell_view cv(cell->as_atomic_cell(def));
                 BOOST_REQUIRE_EQUAL(timestamp, cv.timestamp());
                 BOOST_REQUIRE_EQUAL(1, cv.shard_count());
                 auto shard = cv.get_shard(HOST_ID);
                 BOOST_REQUIRE(shard);
                 BOOST_REQUIRE_EQUAL(value, shard->value());
                 BOOST_REQUIRE_EQUAL(clock, shard->logical_clock());
-            });
+            }
         });
 
         return assertions;

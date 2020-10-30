@@ -433,15 +433,7 @@ deletable_row& view_updates::get_view_row(const partition_key& base_key, const c
         default:
             auto& c = update.cells().cell_at(base_col->id);
             auto value_view = base_col->is_atomic() ? c.as_atomic_cell(cdef).value() : c.as_collection_mutation().data;
-            // FIXME: don't linearize.
-            // This is hard right now, because we are dealing with two different types:
-            // managed_bytes_view and data::basic_value_view, and we can't put both types in one
-            // container.
-            // If IMR transitions to managed_bytes_view, this should be revisited.
-            if (value_view.is_fragmented()) {
-                return managed_bytes_view(linearized_values.emplace_back(value_view.linearize()));
-            }
-            return value_view.first_fragment();
+            return value_view;
         }
     });
     auto& partition = partition_for(partition_key::from_range(_view->partition_key_columns() | get_value));

@@ -27,10 +27,10 @@
 #include <boost/range/irange.hpp>
 #include <boost/range/algorithm/generate.hpp>
 
-#include "data/cell.hh"
-
 #include "test/lib/random_utils.hh"
 #include "utils/disk-error-handler.hh"
+#include "atomic_cell.hh"
+#include "types.hh"
 
 BOOST_AUTO_TEST_CASE(test_atomic_cell) {
     struct test_case {
@@ -44,16 +44,14 @@ BOOST_AUTO_TEST_CASE(test_atomic_cell) {
     auto cases = std::vector<test_case> {
         // Live, fixed-size, empty cell
         { true, true, bytes(), false },
-        // Live, fixed-size cell
-        { true, true, tests::random::get_bytes(data::cell::maximum_internal_storage_length / 2), false, false },
-        // Live, variable-size (small), cell
-        { true, false, tests::random::get_bytes(data::cell::maximum_internal_storage_length / 2), false, false },
-        // Live, variable-size (large), cell
-        { true, false, tests::random::get_bytes(data::cell::maximum_external_chunk_length * 5), false, false },
-        // Live, variable-size, empty cell
+        // Live, small cell
+        { true, false, tests::random::get_bytes(1024), false, false },
+        // Live, large cell
+        { true, false, tests::random::get_bytes(129 * 1024), false, false },
+        // Live, empty cell
         { true, false, bytes(), false, false },
-        // Live, expiring, variable-size cell
-        { true, false, tests::random::get_bytes(data::cell::maximum_internal_storage_length / 2), true, false },
+        // Live, expiring cell
+        { true, false, tests::random::get_bytes(1024), true, false },
         // Dead cell
         { false, false, bytes(), false, false },
         // Counter update cell
@@ -67,32 +65,12 @@ BOOST_AUTO_TEST_CASE(test_atomic_cell) {
         auto& expiring = tc.expiring;
         auto& counter_update = tc.counter_update;
         auto timestamp = tests::random::get_int<api::timestamp_type>();
-        auto ti = [&] {
-            if (fixed_size) {
-                return data::type_info::make_fixed_size(value.size());
-            } else {
-                return data::type_info::make_variable_size();
-            }
-        }();
         auto ttl = gc_clock::duration(tests::random::get_int<int32_t>(1, std::numeric_limits<int32_t>::max()));
         auto expiry_time = gc_clock::time_point(gc_clock::duration(tests::random::get_int<int32_t>(1, std::numeric_limits<int32_t>::max())));
         auto deletion_time = expiry_time;
         auto counter_update_value = tests::random::get_int<int64_t>();
 
-        std::optional<imr::alloc::object_allocator> allocator;
-        allocator.emplace();
-
-        auto test_cell = [&] (auto builder) {
-            auto expected_size = data::cell::size_of(builder, *allocator);
-            if (fixed_size) {
-                BOOST_CHECK_GE(expected_size, value.size());
-            }
-
-            allocator->allocate_all();
-
-            auto buffer = std::make_unique<uint8_t[]>(expected_size);
-            BOOST_CHECK_EQUAL(data::cell::serialize(buffer.get(), builder, *allocator), expected_size);
-
+        auto test_cell = [&] (auto cell) {
             auto verify_cell = [&] (auto view) {
                 if (!live) {
                     BOOST_CHECK(!view.is_live());
@@ -106,57 +84,29 @@ BOOST_AUTO_TEST_CASE(test_atomic_cell) {
                     BOOST_CHECK_EQUAL(view.counter_update_value(), counter_update_value);
                 } else {
                     BOOST_CHECK(!view.is_counter_update());
-                    BOOST_CHECK(view.value() == value);
+                    BOOST_CHECK(view.value() == managed_bytes_view(bytes_view(value)));
                 }
-                BOOST_CHECK_EQUAL(view.is_expiring(), expiring);
+                BOOST_CHECK_EQUAL(view.is_live_and_has_ttl(), expiring);
                 if (expiring) {
                     BOOST_CHECK(view.ttl() == ttl);
                     BOOST_CHECK(view.expiry() == expiry_time);
                 }
             };
 
-            auto view = data::cell::make_atomic_cell_view(ti, buffer.get());
+            auto view = atomic_cell_view(cell);
             verify_cell(view);
-
-            allocator.emplace();
-
-            auto copier = data::cell::copy_fn(ti, buffer.get());
-            BOOST_CHECK_EQUAL(data::cell::size_of(copier, *allocator), expected_size);
-
-            allocator->allocate_all();
-
-            auto copied = std::make_unique<uint8_t[]>(expected_size);
-            BOOST_CHECK_EQUAL(data::cell::serialize(copied.get(), copier, *allocator), expected_size);
-
-            auto view2 = data::cell::make_atomic_cell_view(ti, copied.get());
-            verify_cell(view2);
-
-            auto ctx = data::cell::context(buffer.get(), ti);
-            BOOST_CHECK_EQUAL(data::cell::structure::serialized_object_size(buffer.get(), ctx), expected_size);
-            auto moved = std::make_unique<uint8_t[]>(expected_size);
-            std::copy_n(buffer.get(), expected_size, moved.get());
-            imr::methods::move<data::cell::structure>(moved.get());
-
-            auto view3 = data::cell::make_atomic_cell_view(ti, moved.get());
-            verify_cell(view3);
-
-            imr::methods::destroy<data::cell::structure>(moved.get());
-            imr::methods::destroy<data::cell::structure>(copied.get());
         };
 
         if (live) {
             if (counter_update) {
-                test_cell(data::cell::make_live_counter_update(timestamp, counter_update_value));
+                test_cell(atomic_cell::make_live_counter_update(timestamp, counter_update_value));
             } else if (expiring) {
-                test_cell(data::cell::make_live(ti, timestamp, value, expiry_time, ttl));
+                test_cell(atomic_cell::make_live(*bytes_type, timestamp, value, expiry_time, ttl));
             } else {
-                test_cell(data::cell::make_live(ti, timestamp, value));
+                test_cell(atomic_cell::make_live(*bytes_type, timestamp, value));
             }
         } else {
-            test_cell(data::cell::make_dead(timestamp, deletion_time));
+            test_cell(atomic_cell::make_dead(timestamp, deletion_time));
         }
     }
 }
-
-
-

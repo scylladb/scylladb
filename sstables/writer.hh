@@ -29,7 +29,6 @@
 #include "vint-serialization.hh"
 #include <seastar/core/byteorder.hh>
 #include "version.hh"
-#include "data/value_view.hh"
 #include "counters.hh"
 #include "service/storage_service.hh"
 
@@ -375,10 +374,11 @@ inline void write(sstable_version_types v, file_writer& out, const disk_string_v
 template<typename SizeType>
 inline void write(sstable_version_types ver, file_writer& out, const disk_data_value_view<SizeType>& v) {
     SizeType length;
-    check_truncate_and_assign(length, v.value.size_bytes());
+    check_truncate_and_assign(length, v.value.size());
     write(ver, out, length);
-    using boost::range::for_each;
-    for_each(v.value, [&] (bytes_view fragment) { write(ver, out, fragment); });
+    for (bytes_view frag : fragment_range(v.value)) {
+        write(ver, out, frag);
+    }
 }
 
 template <typename Members>
@@ -573,18 +573,6 @@ void write_cell_value(sstable_version_types v, W& out, const abstract_type& type
             write_vint(out, value.size());
             write(v, out, value);
         }
-    }
-}
-
-template <typename W>
-requires Writer<W>
-void write_cell_value(sstable_version_types v, W& out, const abstract_type& type, atomic_cell_value_view value) {
-    if (!value.empty()) {
-        if (!type.value_length_if_fixed()) {
-            write_vint(out, value.size_bytes());
-        }
-        using boost::range::for_each;
-        for_each(value, [&] (bytes_view fragment) { write(v, out, fragment); });
     }
 }
 

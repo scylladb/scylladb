@@ -32,6 +32,7 @@
 #include "gms/gossiper.hh"
 #include "utils/small_vector.hh"
 #include "lister.hh"
+#include "enum_set.hh"
 
 namespace service {
 class storage_proxy;
