@@ -1964,6 +1964,6 @@ with open(buildfile_tmp, 'w') as f:
         rule debian_files_gen
             command = ./dist/debian/debian_files_gen.py
         build $builddir/debian/debian: debian_files_gen | always
-        ''').format(modes_list=' '.join(build_modes), **globals()))
+        ''').format(**globals()))
 
 os.rename(buildfile_tmp, buildfile)
