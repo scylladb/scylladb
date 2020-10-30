@@ -149,6 +149,22 @@ public:
         ++(*this);
         return it;
     }
+    managed_bytes_iterator& operator+=(unsigned n) {
+        while (n) {
+            if (const auto dist = _current_end - _current_begin; n >= dist) {
+                n -= dist;
+                move_to_next_fragment();
+            } else {
+                _current_begin += n;
+                n = 0;
+            }
+        }
+        return *this;
+    }
+    managed_bytes_iterator operator+(unsigned n) {
+        auto it = *this;
+        return it += n;
+    }
 
     bool operator==(const managed_bytes_iterator& o) const {
         return _current_begin == o._current_begin && _current_end == o._current_end && _next_fragment == o._next_fragment;
