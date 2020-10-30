@@ -631,8 +631,11 @@ public:
     }
     managed_bytes_basic_view(const managed_bytes_basic_view&) = default;
     // Allow a view to implicitly convert to a non-mutable view
-    // FIXME: implement
-    managed_bytes_basic_view(const managed_bytes_basic_view<mutable_view::yes>& o) requires (is_mutable == mutable_view::no);
+    managed_bytes_basic_view(const managed_bytes_basic_view<mutable_view::yes>& o) noexcept requires (is_mutable == mutable_view::no) {
+        this->_current_fragment = o._current_fragment;
+        this->_next_fragments = o._next_fragments;
+        this->_size = o._size;
+    }
     managed_bytes_basic_view(bytes_view) noexcept;
     explicit managed_bytes_basic_view(const bytes&) noexcept;
     size_t size() const { return this->_size; }
