@@ -655,9 +655,10 @@ def print_summary(failed_tests):
     if failed_tests:
         print("The following test(s) have failed: {}".format(
             palette.path(" ".join([t.name for t in failed_tests]))))
-        for test in failed_tests:
-            test.print_summary()
-            print("-"*78)
+        if not output_is_a_tty:
+            for test in failed_tests:
+                test.print_summary()
+                print("-"*78)
         print("Summary: {} of the total {} tests failed".format(
             len(failed_tests), TestSuite.test_count()))
 
