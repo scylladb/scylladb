@@ -509,6 +509,10 @@ public:
             qp.start(std::ref(proxy), std::ref(db), std::ref(mm_notif), qp_mcfg, std::ref(cql_config)).get();
             auto stop_qp = defer([&qp] { qp.stop().get(); });
 
+            // In main.cc we call db::system_keyspace::setup which calls
+            // minimal_setup and init_local_cache
+            db::system_keyspace::minimal_setup(db, qp);
+
             db::batchlog_manager_config bmcfg;
             bmcfg.replay_rate = 100000000;
             bmcfg.write_request_timeout = 2s;
@@ -543,9 +547,6 @@ public:
                 cdc.stop().get();
             });
 
-            // In main.cc we call db::system_keyspace::setup which calls
-            // minimal_setup and init_local_cache
-            db::system_keyspace::minimal_setup(db, qp);
             auto stop_system_keyspace = defer([] { db::qctx = {}; });
             start_large_data_handler(db).get();
 
