@@ -398,7 +398,7 @@ class aws_instance:
     def is_aws_instance(cls):
         """Check if it's AWS instance via query to metadata server."""
         try:
-            curl(cls.META_DATA_BASE_URL, max_retries=2)
+            curl(cls.META_DATA_BASE_URL, max_retries=2, retry_interval=1)
             return True
         except (urllib.error.URLError, urllib.error.HTTPError):
             return False
