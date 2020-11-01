@@ -152,41 +152,50 @@ db::view::base_dependent_view_info::base_dependent_view_info(schema_ptr base_sch
 }
 
 // A constructor for a base info that can facilitate only reads from the materialized view.
-db::view::base_dependent_view_info::base_dependent_view_info(bool has_base_non_pk_columns_in_view_pk)
+db::view::base_dependent_view_info::base_dependent_view_info(bool has_base_non_pk_columns_in_view_pk, std::optional<bytes>&& column_missing_in_base)
         : _base_schema{nullptr}
+        , _column_missing_in_base{std::move(column_missing_in_base)}
         , has_base_non_pk_columns_in_view_pk{has_base_non_pk_columns_in_view_pk}
         , use_only_for_reads{true} {
 }
 
 const std::vector<column_id>& db::view::base_dependent_view_info::base_non_pk_columns_in_view_pk() const {
     if (use_only_for_reads) {
-        on_internal_error(vlogger, "base_non_pk_columns_in_view_pk(): operation unsupported when initialized only for view reads.");
+        on_internal_error(vlogger,
+                format("base_non_pk_columns_in_view_pk(): operation unsupported when initialized only for view reads. "
+                "Missing column in the base table: {}", to_sstring_view(_column_missing_in_base.value_or(bytes()))));
     }
     return _base_non_pk_columns_in_view_pk;
 }
 
 const schema_ptr& db::view::base_dependent_view_info::base_schema() const {
     if (use_only_for_reads) {
-        on_internal_error(vlogger, "base_schema(): operation unsupported when initialized only for view reads.");
+        on_internal_error(vlogger,
+                format("base_schema(): operation unsupported when initialized only for view reads. "
+                "Missing column in the base table: {}", to_sstring_view(_column_missing_in_base.value_or(bytes()))));
     }
     return _base_schema;
 }
 
 db::view::base_info_ptr view_info::make_base_dependent_view_info(const schema& base) const {
     std::vector<column_id> base_non_pk_columns_in_view_pk;
-    bool has_base_non_pk_columns_in_view_pk = false;
-    bool can_only_read_from_view = false;
 
     for (auto&& view_col : boost::range::join(_schema.partition_key_columns(), _schema.clustering_key_columns())) {
         if (view_col.is_computed()) {
             // we are not going to find it in the base table...
             continue;
         }
-        auto* base_col = base.get_column_definition(view_col.name());
+        const bytes& view_col_name = view_col.name();
+        auto* base_col = base.get_column_definition(view_col_name);
         if (base_col && !base_col->is_primary_key()) {
             base_non_pk_columns_in_view_pk.push_back(base_col->id);
-            has_base_non_pk_columns_in_view_pk = true;
         } else if (!base_col) {
+            vlogger.error("Column {} in view {}.{} was not found in the base table {}.{}",
+                    to_sstring_view(view_col_name), _schema.ks_name(), _schema.cf_name(), base.ks_name(), base.cf_name());
+            if (to_sstring_view(view_col_name) == "idx_token") {
+                vlogger.error("Missing idx_token column is caused by an incorrect upgrade of a secondary index. "
+                        "Please recreate index {}.{} to avoid future issues.", _schema.ks_name(), _schema.cf_name());
+            }
             // If we didn't find the column in the base column then it must have been deleted
             // or not yet added (by alter command), this means it is for sure not a pk column
             // in the base table. This can happen if the version of the base schema is not the
@@ -194,21 +203,11 @@ db::view::base_info_ptr view_info::make_base_dependent_view_info(const schema& b
             // if we got to such a situation then it means it is only going to be used for reading
             // (computation of shadowable tombstones) and in that case the existence of such a column
             // is the only thing that is of interest to us.
-            has_base_non_pk_columns_in_view_pk = true;
-            can_only_read_from_view = true;
-
-            // We can break the loop here since we have the info we wanted and the list
-            // of columns is not going to be reliable anyhow.
-            break;
+            return make_lw_shared<db::view::base_dependent_view_info>(true, view_col_name);
         }
     }
 
-    if (can_only_read_from_view) {
-        return make_lw_shared<db::view::base_dependent_view_info>(has_base_non_pk_columns_in_view_pk);
-    } else {
-        return make_lw_shared<db::view::base_dependent_view_info>(base.shared_from_this(), std::move(base_non_pk_columns_in_view_pk));
-    }
-
+    return make_lw_shared<db::view::base_dependent_view_info>(base.shared_from_this(), std::move(base_non_pk_columns_in_view_pk));
 }
 
 bool view_info::has_base_non_pk_columns_in_view_pk() const {
@@ -219,7 +218,7 @@ bool view_info::has_base_non_pk_columns_in_view_pk() const {
     // schema integrity problem as the creator of owning view schema
     // didn't make sure to initialize it with base information.
     if (!_base_info) {
-        on_internal_error(vlogger, "Tried to perform a view query which is base info dependant without initializing it");
+        on_internal_error(vlogger, "Tried to perform a view query which is base info dependent without initializing it");
     }
     return _base_info->has_base_non_pk_columns_in_view_pk;
 }
