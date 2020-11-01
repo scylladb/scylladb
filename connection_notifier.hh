@@ -50,12 +50,12 @@ enum class changed_column {
 };
 
 template <changed_column column> constexpr const char* column_literal = "";
-template <> constexpr const char* column_literal<changed_column::username> = "username";
-template <> constexpr const char* column_literal<changed_column::connection_stage> = "connection_stage";
-template <> constexpr const char* column_literal<changed_column::driver_name> = "driver_name";
-template <> constexpr const char* column_literal<changed_column::driver_version> = "driver_version";
-template <> constexpr const char* column_literal<changed_column::hostname> = "hostname";
-template <> constexpr const char* column_literal<changed_column::protocol_version> = "protocol_version";
+template <> inline constexpr const char* column_literal<changed_column::username> = "username";
+template <> inline constexpr const char* column_literal<changed_column::connection_stage> = "connection_stage";
+template <> inline constexpr const char* column_literal<changed_column::driver_name> = "driver_name";
+template <> inline constexpr const char* column_literal<changed_column::driver_version> = "driver_version";
+template <> inline constexpr const char* column_literal<changed_column::hostname> = "hostname";
+template <> inline constexpr const char* column_literal<changed_column::protocol_version> = "protocol_version";
 
 enum class client_connection_stage {
     established = 0,
@@ -64,9 +64,9 @@ enum class client_connection_stage {
 };
 
 template <client_connection_stage ccs> constexpr const char* connection_stage_literal = "";
-template <> constexpr const char* connection_stage_literal<client_connection_stage::established> = "ESTABLISHED";
-template <> constexpr const char* connection_stage_literal<client_connection_stage::authenticating> = "AUTHENTICATING";
-template <> constexpr const char* connection_stage_literal<client_connection_stage::ready> = "READY";
+template <> inline constexpr const char* connection_stage_literal<client_connection_stage::established> = "ESTABLISHED";
+template <> inline constexpr const char* connection_stage_literal<client_connection_stage::authenticating> = "AUTHENTICATING";
+template <> inline constexpr const char* connection_stage_literal<client_connection_stage::ready> = "READY";
 
 // Representation of a row in `system.clients'. std::optionals are for nullable cells.
 struct client_data {
