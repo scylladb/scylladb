@@ -159,8 +159,10 @@ class fsm {
     // candidate state.
     std::optional<votes> _votes;
 
+protected: // For testing
     // A state for each follower, maintained only on the leader.
     std::optional<tracker> _tracker;
+private:
     // Holds all replies to AppendEntries RPC which are not
     // yet sent out. If AppendEntries request is accepted, we must
     // withhold a reply until the respective entry is persisted in
