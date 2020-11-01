@@ -46,7 +46,7 @@ if __name__ == '__main__':
 
     if swap_exists():
         print('swap already configured, exiting setup')
-        sys.exit(1)
+        sys.exit(0)
 
     diskfree = psutil.disk_usage(args.swap_directory).free
     if args.swap_size:
