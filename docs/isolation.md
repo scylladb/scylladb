@@ -8,7 +8,7 @@ As an example of such control consider compaction. Scylla wants to ensure that t
 To implement performance isolation, Scylla uses existing Seastar isolation features such as scheduling groups (for CPU-time isolation) and I/O priority classes (for disk work isolation). These Seastar features will not be described in detail here, and the reader is assumed to be familiar with them or to refer to Seastar's documentation. The focus of this document is how Scylla chose to use these features to implement isolation.
 
 ## Scheduling groups (CPU scheduler)
-Seastar defines the following Seastar scheduling groups. The groups have a global scope (i.e., not per-table, per-keyspace, etc.). They are created in `main.cc`, and saved in a `database_config` structure of the database object (see `database.h`).
+Scylla defines the following Seastar scheduling groups. The groups have a global scope (i.e., not per-table, per-keyspace, etc.). They are created in `main.cc`, and saved in a `database_config` structure of the database object (see `database.hh`).
 
 The groups currently defined are:
 
@@ -37,8 +37,7 @@ Ideally, we would have liked to use the same list of I/O priority classes (which
 | default                                         | TODO
 | commitlog                                       | 1000
 | mt_flush                                        | 1000
-| stream_read                                     | 200
-| stream_write                                    | 200
+| streaming                                       | 200
 | sstable_query_read                              | 1000
 | compaction                                      | 1000
 
