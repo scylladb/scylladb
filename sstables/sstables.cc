@@ -1987,7 +1987,6 @@ future<> sstable::create_links(const sstring& dir, int64_t generation) const {
     return sstable_write_io_check(idempotent_link_file, filename(component_type::TOC), dst).then([this, &dir] {
         return sstable_write_io_check(sync_directory, dir);
     }).then([this, dir, generation] {
-        // FIXME: Should clean already-created links if we failed midway.
         return parallel_for_each(all_components(), [this, dir, generation] (auto p) {
             if (p.first == component_type::TOC) {
                 return make_ready_future<>();
