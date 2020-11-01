@@ -92,7 +92,7 @@ def scyllabindir():
 
 
 # @param headers dict of k:v
-def curl(url, headers=None, byte=False, timeout=3, max_retries=5):
+def curl(url, headers=None, byte=False, timeout=3, max_retries=5, retry_interval=5):
     retries = 0
     while True:
         try:
@@ -104,7 +104,7 @@ def curl(url, headers=None, byte=False, timeout=3, max_retries=5):
                     return res.read().decode('utf-8')
         except urllib.error.HTTPError:
             logging.warning("Failed to grab %s..." % url)
-            time.sleep(5)
+            time.sleep(retry_interval)
             retries += 1
             if retries >= max_retries:
                 raise
