@@ -1980,34 +1980,34 @@ future<> sstable::check_create_links_replay(const sstring& dst_dir, int64_t dst_
 /// \param generation - the generation of the destination sstable
 future<> sstable::create_links(const sstring& dir, int64_t generation) const {
     sstlog.trace("create_links: {} -> {} generation={}", get_filename(), dir, generation);
-  return do_with(dir, all_components(), [this, generation] (const sstring& dir, auto& comps) {
-    return check_create_links_replay(dir, generation, comps).then([this, &dir, generation, &comps] {
-        // TemporaryTOC is always first, TOC is always last
-        auto dst = sstable::filename(dir, _schema->ks_name(), _schema->cf_name(), _version, generation, _format, component_type::TemporaryTOC);
-    return sstable_write_io_check(idempotent_link_file, filename(component_type::TOC), dst).then([this, &dir] {
-        return sstable_write_io_check(sync_directory, dir);
-    }).then([this, dir, generation] {
-        return parallel_for_each(all_components(), [this, dir, generation] (auto p) {
-            if (p.first == component_type::TOC) {
-                return make_ready_future<>();
-            }
-            auto src = sstable::filename(_dir, _schema->ks_name(), _schema->cf_name(), _version, _generation, _format, p.second);
-            auto dst = sstable::filename(dir, _schema->ks_name(), _schema->cf_name(), _version, generation, _format, p.second);
-            return sstable_write_io_check(idempotent_link_file, std::move(src), std::move(dst));
+    return do_with(dir, all_components(), [this, generation] (const sstring& dir, auto& comps) {
+        return check_create_links_replay(dir, generation, comps).then([this, &dir, generation, &comps] {
+            // TemporaryTOC is always first, TOC is always last
+            auto dst = sstable::filename(dir, _schema->ks_name(), _schema->cf_name(), _version, generation, _format, component_type::TemporaryTOC);
+            return sstable_write_io_check(idempotent_link_file, filename(component_type::TOC), dst).then([this, &dir] {
+                return sstable_write_io_check(sync_directory, dir);
+            }).then([this, dir, generation] {
+                return parallel_for_each(all_components(), [this, dir, generation] (auto p) {
+                    if (p.first == component_type::TOC) {
+                        return make_ready_future<>();
+                    }
+                    auto src = sstable::filename(_dir, _schema->ks_name(), _schema->cf_name(), _version, _generation, _format, p.second);
+                    auto dst = sstable::filename(dir, _schema->ks_name(), _schema->cf_name(), _version, generation, _format, p.second);
+                    return sstable_write_io_check(idempotent_link_file, std::move(src), std::move(dst));
+                });
+            }).then([this, dir] {
+                return sstable_write_io_check(sync_directory, dir);
+            });
+        }).then([dir, this, generation] {
+            auto src = sstable::filename(dir, _schema->ks_name(), _schema->cf_name(), _version, generation, _format, component_type::TemporaryTOC);
+            auto dst = sstable::filename(dir, _schema->ks_name(), _schema->cf_name(), _version, generation, _format, component_type::TOC);
+            return sstable_write_io_check(rename_file, src, dst);
+        }).then([this, dir] {
+            return sstable_write_io_check(sync_directory, dir);
+        }).then([this, dir, generation] {
+            sstlog.trace("create_links: {} -> {} generation={}: done", get_filename(), dir, generation);
         });
-    }).then([this, dir] {
-        return sstable_write_io_check(sync_directory, dir);
     });
-    }).then([dir, this, generation] {
-        auto src = sstable::filename(dir, _schema->ks_name(), _schema->cf_name(), _version, generation, _format, component_type::TemporaryTOC);
-        auto dst = sstable::filename(dir, _schema->ks_name(), _schema->cf_name(), _version, generation, _format, component_type::TOC);
-        return sstable_write_io_check(rename_file, src, dst);
-    }).then([this, dir] {
-        return sstable_write_io_check(sync_directory, dir);
-    }).then([this, dir, generation] {
-        sstlog.trace("create_links: {} -> {} generation={}: done", get_filename(), dir, generation);
-    });
-  });
 }
 
 future<> sstable::set_generation(int64_t new_generation) {
