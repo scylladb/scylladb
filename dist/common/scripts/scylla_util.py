@@ -17,7 +17,6 @@
 
 import configparser
 import io
-import logging
 import os
 import re
 import shlex
@@ -103,7 +102,6 @@ def curl(url, headers=None, byte=False, timeout=3, max_retries=5, retry_interval
                 else:
                     return res.read().decode('utf-8')
         except urllib.error.HTTPError:
-            logging.warning("Failed to grab %s..." % url)
             time.sleep(retry_interval)
             retries += 1
             if retries >= max_retries:
