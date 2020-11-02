@@ -539,7 +539,6 @@ def test_query_filter_paging(test_table_sn_with_data):
 # In particular, test that QueryFilter may inspect attributes which will
 # not be returned by the query, because the AttributesToGet.
 # This test reproduces issue #6951.
-@pytest.mark.xfail(reason="issue #6951: cannot filter on non-returned attributes")
 def test_query_filter_and_attributes_to_get(test_table):
     p = random_string()
     test_table.put_item(Item={'p': p, 'c': 'hi', 'x': 'dog', 'y': 'cat'})
@@ -561,7 +560,6 @@ def test_query_filter_and_attributes_to_get(test_table):
 # It is not allowed to combine the old-style QueryFilter with the
 # new-style ProjectionExpression. You must use AttributesToGet instead
 # (tested in test_query_filter_and_attributes_to_get() above).
-@pytest.mark.xfail(reason="missing check for expression and non-expression query parameters")
 def test_query_filter_and_projection_expression(test_table):
     p = random_string()
     # DynamoDB complains: "Can not use both expression and non-expression
