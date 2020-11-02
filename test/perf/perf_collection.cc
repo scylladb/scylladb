@@ -33,27 +33,37 @@ struct key_compare {
     bool operator()(const per_key_t& a, const per_key_t& b) const noexcept { return a < b; }
 };
 
-#include "utils/bptree.hh"
-
-using namespace bplus;
-using namespace seastar;
-
-constexpr int TEST_NODE_SIZE = 4;
-
-/* On node size 32 (this test) linear search works better */
-using test_tree = tree<per_key_t, unsigned long, key_compare, TEST_NODE_SIZE, key_search::linear>;
-
 class collection_tester {
 public:
     virtual void insert(per_key_t k) = 0;
     virtual void lower_bound(per_key_t k) = 0;
+    virtual void scan(int batch) = 0;
     virtual void erase(per_key_t k) = 0;
     virtual void drain(int batch) = 0;
+    virtual void clear() = 0;
     virtual void show_stats() = 0;
+    virtual void insert_and_erase(per_key_t k) = 0;
     virtual ~collection_tester() {};
 };
 
+template <typename Col>
+void scan_collection(Col& c, int batch) {
+    int x = 0;
+    auto i = c.begin();
+    while (i != c.end()) {
+        i++;
+        if (++x % batch == 0) {
+            seastar::thread::yield();
+        }
+    }
+}
+
+#include "utils/bptree.hh"
+
 class bptree_tester : public collection_tester {
+    /* On node size 32 (this test) linear search works better */
+    using test_tree = bplus::tree<per_key_t, unsigned long, key_compare, 4, bplus::key_search::linear>;
+
     test_tree _t;
 public:
     bptree_tester() : _t(key_compare{}) {}
@@ -61,6 +71,9 @@ public:
     virtual void lower_bound(per_key_t k) override {
         auto i = _t.lower_bound(k);
         assert(i != _t.end());
+    }
+    virtual void scan(int batch) override {
+        scan_collection(_t, batch);
     }
     virtual void erase(per_key_t k) override { _t.erase(k); }
     virtual void drain(int batch) override {
@@ -72,6 +85,12 @@ public:
                 seastar::thread::yield();
             }
         }
+    }
+    virtual void clear() override { _t.clear(); }
+    virtual void insert_and_erase(per_key_t k) override {
+        auto i = _t.emplace(k, 0);
+        assert(i.second);
+        i.first.erase(key_compare{});
     }
     virtual void show_stats() {
         struct bplus::stats st = _t.get_stats();
@@ -85,9 +104,76 @@ public:
         }
         fmt::print("datas:     {}\n", st.datas);
     }
-    virtual ~bptree_tester() {
-        _t.clear();
+    virtual ~bptree_tester() { clear(); }
+};
+
+#include "intrusive_set_external_comparator.hh"
+
+class isec_tester : public collection_tester {
+    class isec_node {
+        friend class isec_tester;
+        intrusive_set_external_comparator_member_hook link;
+        per_key_t key;
+    public:
+        explicit isec_node(per_key_t k) : key(k) {}
+    };
+    class compare {
+        key_compare cmp;
+    public:
+        bool operator()(const isec_node& a, const isec_node& b) const {
+            return cmp(a.key, b.key);
+        }
+        bool operator()(per_key_t a, const isec_node& b) const {
+            return cmp(a, b.key);
+        }
+        bool operator()(const isec_node& a, per_key_t b) const {
+            return cmp(a.key, b);
+        }
+    };
+
+    using test_tree = intrusive_set_external_comparator<isec_node, &isec_node::link>;
+    test_tree _t;
+public:
+    virtual void insert(per_key_t k) override {
+        auto i = _t.lower_bound(k, compare{});
+        auto n = std::make_unique<isec_node>(k);
+        _t.insert_before(i, *n);
+        n.release();
     }
+    virtual void lower_bound(per_key_t k) override {
+        auto i = _t.lower_bound(k, compare{});
+        assert(i != _t.end());
+    }
+    virtual void scan(int batch) override {
+        scan_collection(_t, batch);
+    }
+    virtual void erase(per_key_t k) override {
+        auto i = _t.find(k, compare{});
+        _t.erase_and_dispose(i, [] (isec_node* n) { delete n; });
+    }
+    virtual void drain(int batch) override {
+        int x = 0;
+        while (true) {
+            isec_node* n = _t.unlink_leftmost_without_rebalance();
+            if (n == nullptr) {
+                break;
+            }
+            delete n;
+            if (++x % batch == 0) {
+                seastar::thread::yield();
+            }
+        }
+    }
+    virtual void clear() override {
+        _t.clear_and_dispose([] (isec_node* n) { delete n; });
+    }
+    virtual void insert_and_erase(per_key_t k) override {
+        isec_node n(k);
+        auto i = _t.insert_before(_t.end(), n);
+        _t.erase(i);
+    }
+    virtual void show_stats() { }
+    virtual ~isec_tester() { clear(); }
 };
 
 class set_tester : public collection_tester {
@@ -97,6 +183,9 @@ public:
     virtual void lower_bound(per_key_t k) override {
         auto i = _s.lower_bound(k);
         assert(i != _s.end());
+    }
+    virtual void scan(int batch) override {
+        scan_collection(_s, batch);
     }
     virtual void erase(per_key_t k) override { _s.erase(k); }
     virtual void drain(int batch) override {
@@ -108,6 +197,12 @@ public:
                 seastar::thread::yield();
             }
         }
+    }
+    virtual void clear() override { _s.clear(); }
+    virtual void insert_and_erase(per_key_t k) override {
+        auto i = _s.insert(k);
+        assert(i.second);
+        _s.erase(i.first);
     }
     virtual void show_stats() { }
     virtual ~set_tester() = default;
@@ -121,6 +216,9 @@ public:
         auto i = _m.lower_bound(k);
         assert(i != _m.end());
     }
+    virtual void scan(int batch) override {
+        scan_collection(_m, batch);
+    }
     virtual void erase(per_key_t k) override { _m.erase(k); }
     virtual void drain(int batch) override {
         int x = 0;
@@ -131,6 +229,12 @@ public:
                 seastar::thread::yield();
             }
         }
+    }
+    virtual void clear() override { _m.clear(); }
+    virtual void insert_and_erase(per_key_t k) override {
+        auto i = _m.insert({k, 0});
+        assert(i.second);
+        _m.erase(i.first);
     }
     virtual void show_stats() { }
     virtual ~map_tester() = default;
@@ -144,7 +248,7 @@ int main(int argc, char **argv) {
         ("batch", bpo::value<int>()->default_value(50), "number of operations between deferring points")
         ("iters", bpo::value<int>()->default_value(1), "number of iterations")
         ("col", bpo::value<std::string>()->default_value("bptree"), "collection to test")
-        ("test", bpo::value<std::string>()->default_value("erase"), "what to test (erase, drain, find)")
+        ("test", bpo::value<std::string>()->default_value("erase"), "what to test (erase, drain, clear, find, oneshot)")
         ("stats", bpo::value<bool>()->default_value(false), "show stats");
 
     return app.run(argc, argv, [&app] {
@@ -164,6 +268,8 @@ int main(int argc, char **argv) {
                 c = std::make_unique<set_tester>();
             } else if (col == "map") {
                 c = std::make_unique<map_tester>();
+            } else if (col == "isec") {
+                c = std::make_unique<isec_tester>();
             } else {
                 fmt::print("Unknown collection\n");
                 return;
@@ -183,6 +289,20 @@ int main(int argc, char **argv) {
             for (auto rep = 0; rep < iters; rep++) {
                 std::shuffle(keys.begin(), keys.end(), g);
                 seastar::thread::yield();
+
+                if (tst == "oneshot") {
+                    auto d = duration_in_seconds([&] {
+                        for (int i = 0; i < count; i++) {
+                            c->insert_and_erase(keys[i]);
+                            if ((i + 1) % batch == 0) {
+                                seastar::thread::yield();
+                            }
+                        }
+                    });
+
+                    fmt::print("one-shot: {:.6f} ms\n", d.count() * 1000);
+                    continue;
+                }
 
                 auto d = duration_in_seconds([&] {
                     for (int i = 0; i < count; i++) {
@@ -219,6 +339,12 @@ int main(int argc, char **argv) {
                     });
 
                     fmt::print("drain: {:.6f} ms\n", d.count() * 1000);
+                } else if (tst == "clear") {
+                    d = duration_in_seconds([&] {
+                        c->clear();
+                    });
+
+                    fmt::print("clear: {:.6f} ms\n", d.count() * 1000);
                 } else if (tst == "find") {
                     std::shuffle(keys.begin(), keys.end(), g);
                     seastar::thread::yield();
@@ -233,7 +359,15 @@ int main(int argc, char **argv) {
                     });
 
                     fmt::print("find: {:.6f} ms\n", d.count() * 1000);
+                } else if (tst == "scan") {
+                    d = duration_in_seconds([&] {
+                        c->scan(batch);
+                    });
+
+                    fmt::print("scan: {:.6f} ms\n", d.count() * 1000);
                 }
+
+                c->clear();
             }
         });
     });
