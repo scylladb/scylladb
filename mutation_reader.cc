@@ -2052,11 +2052,13 @@ public:
         }
     }
     void abort(std::exception_ptr ep) {
-        _end_of_stream = true;
         _ex = std::move(ep);
         if (_full) {
             _full->set_exception(_ex);
             _full.reset();
+        } else if (_not_full) {
+            _not_full->set_exception(_ex);
+            _not_full.reset();
         }
     }
 };
