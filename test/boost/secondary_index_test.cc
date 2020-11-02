@@ -1518,6 +1518,37 @@ SEASTAR_TEST_CASE(test_computed_columns) {
     });
 }
 
+// Ref: #3423 - rows should be returned in token order,
+// using signed comparison (ref: #7443)
+SEASTAR_TEST_CASE(test_token_order) {
+    return do_with_cql_env_thread([] (auto& e) {
+        cquery_nofail(e, "CREATE TABLE t (pk int, v int, PRIMARY KEY(pk))");
+        cquery_nofail(e, "CREATE INDEX ON t(v)");
+
+        for (int i = 0; i < 7; i++) {
+            cquery_nofail(e, format("INSERT INTO t (pk, v) VALUES ({}, 1)", i).c_str());
+        }
+
+        std::vector<std::vector<bytes_opt>> expected_rows = {
+            { int32_type->decompose(5) }, // token(pk) = -7509452495886106294
+            { int32_type->decompose(1) }, // token(pk) = -4069959284402364209
+            { int32_type->decompose(0) }, // token(pk) = -3485513579396041028
+            { int32_type->decompose(2) }, // token(pk) = -3248873570005575792
+            { int32_type->decompose(4) }, // token(pk) = -2729420104000364805
+            { int32_type->decompose(6) }, // token(pk) = +2705480034054113608
+            { int32_type->decompose(3) }, // token(pk) = +9010454139840013625
+        };
+
+        eventually([&] {
+            auto nonindex_order = cquery_nofail(e, "SELECT pk FROM t");
+            auto index_order = cquery_nofail(e, "SELECT pk FROM t WHERE v = 1");
+
+            assert_that(nonindex_order).is_rows().with_rows(expected_rows);
+            assert_that(index_order).is_rows().with_rows(expected_rows);
+        });
+    });
+}
+
 // Ref: #5708 - filtering should be applied on an indexed column
 // if the restriction is not eligible for indexing (it's not EQ)
 SEASTAR_TEST_CASE(test_filtering_indexed_column) {
