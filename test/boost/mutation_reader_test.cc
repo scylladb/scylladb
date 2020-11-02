@@ -2715,7 +2715,7 @@ SEASTAR_THREAD_TEST_CASE(test_queue_reader) {
         }
     }
 
-    // abort()
+    // abort() -- check that consumer is aborted
     {
         auto [reader, handle] = make_queue_reader(gen.schema(), tests::make_permit());
         auto fill_buffer_fut = reader.fill_buffer(db::no_timeout);
@@ -2730,6 +2730,28 @@ SEASTAR_THREAD_TEST_CASE(test_queue_reader) {
 
         BOOST_REQUIRE_THROW(fill_buffer_fut.get(), std::runtime_error);
         BOOST_REQUIRE_THROW(handle.push(mutation_fragment(*gen.schema(), tests::make_permit(), partition_end{})).get(), std::runtime_error);
+        BOOST_REQUIRE(!reader.is_end_of_stream());
+    }
+
+    // abort() -- check that producer is aborted
+    {
+        auto [reader, handle] = make_queue_reader(gen.schema(), tests::make_permit());
+        reader.set_max_buffer_size(1);
+
+        auto expected_reader = flat_mutation_reader_from_mutations(tests::make_permit(), expected_muts);
+
+        auto push_fut = make_ready_future<>();
+        while (push_fut.available()) {
+            push_fut = handle.push(std::move(*expected_reader(db::no_timeout).get0()));
+        }
+
+        BOOST_REQUIRE(!push_fut.available());
+
+        handle.abort(std::make_exception_ptr<std::runtime_error>(std::runtime_error("error")));
+
+        BOOST_REQUIRE_THROW(reader.fill_buffer(db::no_timeout).get(), std::runtime_error);
+        BOOST_REQUIRE_THROW(push_fut.get(), std::runtime_error);
+        BOOST_REQUIRE(!reader.is_end_of_stream());
     }
 
     // Detached handle
