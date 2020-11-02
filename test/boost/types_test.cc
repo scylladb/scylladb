@@ -100,6 +100,13 @@ BOOST_AUTO_TEST_CASE(test_byte_type_string_conversions) {
     BOOST_REQUIRE_EQUAL(byte_type->to_string(bytes()), "");
 }
 
+BOOST_AUTO_TEST_CASE(test_ascii_type_string_conversions) {
+    BOOST_REQUIRE(ascii_type->equal(ascii_type->from_string("ascii"), ascii_type->decompose("ascii")));
+    BOOST_REQUIRE_EQUAL(ascii_type->to_string(ascii_type->decompose("ascii")), "ascii");
+
+    test_parsing_fails(ascii_type, "¡Hola!");
+}
+
 BOOST_AUTO_TEST_CASE(test_short_type_string_conversions) {
     BOOST_REQUIRE(short_type->equal(short_type->from_string("12345"), short_type->decompose(int16_t(12345))));
     BOOST_REQUIRE_EQUAL(short_type->to_string(short_type->decompose(int16_t(12345))), "12345");
