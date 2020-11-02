@@ -20,8 +20,11 @@
  */
 #include "server.hh"
 
+#include <boost/range/adaptor/filtered.hpp>
+#include <boost/range/adaptor/transformed.hpp>
+#include <boost/range/adaptor/map.hpp>
+#include <boost/range/algorithm/copy.hpp>
 #include <map>
-#include <ranges>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/future-util.hh>
 #include <seastar/core/coroutine.hh>
@@ -376,10 +379,10 @@ future<> server_impl::applier_fiber() {
 
             index_t last_idx = opt_batch->back()->idx;
 
-            std::ranges::copy(
+            boost::range::copy(
                     *opt_batch |
-                    std::views::filter([] (log_entry_ptr& entry) { return std::holds_alternative<command>(entry->data); }) |
-                    std::views::transform([] (log_entry_ptr& entry) { return std::cref(std::get<command>(entry->data)); }),
+                    boost::adaptors::filtered([] (log_entry_ptr& entry) { return std::holds_alternative<command>(entry->data); }) |
+                    boost::adaptors::transformed([] (log_entry_ptr& entry) { return std::cref(std::get<command>(entry->data)); }),
                     std::back_inserter(commands));
 
             co_await _state_machine->apply(std::move(commands));
@@ -436,11 +439,8 @@ future<> server_impl::abort() {
         _snapshot_application_done->set_exception(std::runtime_error("Snapshot application aborted"));
     }
 
-    auto snp_futures = std::views::values(_snapshot_transfers);
-    // For c++20 ranges iterator to an end is of a different type, so adaptor is needed
-    // since seastar primitives are not c++20 ready.
-    using CI = std::common_iterator<decltype(snp_futures.begin()), decltype(snp_futures.end())>;
-    auto snapshots = seastar::when_all_succeed(CI(snp_futures.begin()), CI(snp_futures.end()));
+    auto snp_futures = _snapshot_transfers | boost::adaptors::map_values;
+    auto snapshots = seastar::when_all_succeed(snp_futures.begin(), snp_futures.end());
 
     return seastar::when_all_succeed(std::move(_io_status), std::move(_applier_status),
             _rpc->abort(), _state_machine->abort(), _storage->abort(), std::move(snapshots)).discard_result();
