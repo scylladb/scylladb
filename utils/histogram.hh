@@ -256,9 +256,15 @@ public:
 
     rate_moving_average rate() const {
         rate_moving_average res;
-        if (_count > 0) {
-            double elapsed = std::chrono::duration_cast<std::chrono::seconds>(latency_counter::now() - start_time).count();
+        double elapsed = std::chrono::duration_cast<std::chrono::seconds>(latency_counter::now() - start_time).count();
+        // We condition also in elapsed because it can happen that the call
+        // for the rate calculation was performed too early and will not yield
+        // meaningful results (i.e mean_rate is infinity) so the best thing is
+        // to return 0 as it best reflects the state.
+        if ((_count > 0) && (elapsed >= 1.0)) [[likely]] {
             res.mean_rate = (_count / elapsed);
+        } else {
+            res.mean_rate = 0;
         }
         res.count = _count;
         for (int i = 0; i < 3; i++) {
