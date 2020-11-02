@@ -101,6 +101,10 @@
 
 namespace netw {
 
+static_assert(!std::is_default_constructible_v<msg_addr>);
+static_assert(std::is_nothrow_copy_constructible_v<msg_addr>);
+static_assert(std::is_nothrow_move_constructible_v<msg_addr>);
+
 // thunk from rpc serializers to generate serializers
 template <typename T, typename Output>
 void write(serializer, Output& out, const T& data) {
@@ -189,12 +193,12 @@ constexpr int32_t messaging_service::current_version;
 
 distributed<messaging_service> _the_messaging_service;
 
-bool operator==(const msg_addr& x, const msg_addr& y) {
+bool operator==(const msg_addr& x, const msg_addr& y) noexcept {
     // Ignore cpu id for now since we do not really support shard to shard connections
     return x.addr == y.addr;
 }
 
-bool operator<(const msg_addr& x, const msg_addr& y) {
+bool operator<(const msg_addr& x, const msg_addr& y) noexcept {
     // Ignore cpu id for now since we do not really support shard to shard connections
     if (x.addr < y.addr) {
         return true;
@@ -207,7 +211,7 @@ std::ostream& operator<<(std::ostream& os, const msg_addr& x) {
     return os << x.addr << ":" << x.cpu_id;
 }
 
-size_t msg_addr::hash::operator()(const msg_addr& id) const {
+size_t msg_addr::hash::operator()(const msg_addr& id) const noexcept {
     // Ignore cpu id for now since we do not really support // shard to shard connections
     return std::hash<bytes_view>()(id.addr.bytes());
 }

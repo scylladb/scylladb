@@ -75,11 +75,11 @@ constexpr int64_t gossiper::MAX_GENERATION_DIFFERENCE;
 
 distributed<gossiper> _the_gossiper;
 
-netw::msg_addr gossiper::get_msg_addr(inet_address to) {
+netw::msg_addr gossiper::get_msg_addr(inet_address to) const noexcept {
     return msg_addr{to, _default_cpuid};
 }
 
-sstring gossiper::get_cluster_name() {
+const sstring& gossiper::get_cluster_name() const noexcept {
     return _cluster_name;
 }
 
@@ -87,11 +87,11 @@ void gossiper::set_cluster_name(sstring name) {
     _cluster_name = name;
 }
 
-sstring gossiper::get_partitioner_name() {
+const sstring& gossiper::get_partitioner_name() const noexcept {
     return _cfg.partitioner();
 }
 
-const std::set<inet_address>& gossiper::get_seeds() const {
+const std::set<inet_address>& gossiper::get_seeds() const noexcept {
     return _seeds_from_config;
 }
 
@@ -99,7 +99,7 @@ void gossiper::set_seeds(std::set<inet_address> seeds) {
     _seeds_from_config = std::move(seeds);
 }
 
-std::chrono::milliseconds gossiper::quarantine_delay() {
+std::chrono::milliseconds gossiper::quarantine_delay() const noexcept {
     auto ring_delay = std::chrono::milliseconds(_cfg.ring_delay_ms());
     return ring_delay * 2;
 }
@@ -959,7 +959,7 @@ std::set<inet_address> gossiper::get_unreachable_token_owners() {
 }
 
 // Return downtime in microseconds
-int64_t gossiper::get_endpoint_downtime(inet_address ep) {
+int64_t gossiper::get_endpoint_downtime(inet_address ep) const noexcept {
     auto it = _unreachable_endpoints.find(ep);
     if (it != _unreachable_endpoints.end()) {
         auto& downtime = it->second;
@@ -999,7 +999,7 @@ std::set<inet_address> gossiper::get_unreachable_members() {
     return ret;
 }
 
-int gossiper::get_max_endpoint_state_version(endpoint_state state) {
+int gossiper::get_max_endpoint_state_version(endpoint_state state) const noexcept {
     int max_version = state.get_heart_beat_state().get_heart_beat_version();
     for (auto& entry : state.get_application_state_map()) {
         auto& value = entry.second;
@@ -1186,7 +1186,7 @@ future<> gossiper::assassinate_endpoint(sstring address) {
     });
 }
 
-bool gossiper::is_known_endpoint(inet_address endpoint) {
+bool gossiper::is_known_endpoint(inet_address endpoint) const noexcept {
     return endpoint_state_map.contains(endpoint);
 }
 
@@ -1238,7 +1238,7 @@ bool gossiper::is_gossip_only_member(inet_address endpoint) {
     return !is_dead_state(*es) && !_token_metadata.is_member(endpoint);
 }
 
-clk::time_point gossiper::get_expire_time_for_endpoint(inet_address endpoint) {
+clk::time_point gossiper::get_expire_time_for_endpoint(inet_address endpoint) const noexcept {
     /* default expire_time is A_VERY_LONG_TIME */
     auto it = _expire_time_endpoint_map.find(endpoint);
     if (it == _expire_time_endpoint_map.end()) {
@@ -1249,7 +1249,7 @@ clk::time_point gossiper::get_expire_time_for_endpoint(inet_address endpoint) {
     }
 }
 
-const endpoint_state* gossiper::get_endpoint_state_for_endpoint_ptr(inet_address ep) const {
+const endpoint_state* gossiper::get_endpoint_state_for_endpoint_ptr(inet_address ep) const noexcept {
     auto it = endpoint_state_map.find(ep);
     if (it == endpoint_state_map.end()) {
         return nullptr;
@@ -1258,7 +1258,7 @@ const endpoint_state* gossiper::get_endpoint_state_for_endpoint_ptr(inet_address
     }
 }
 
-endpoint_state* gossiper::get_endpoint_state_for_endpoint_ptr(inet_address ep) {
+endpoint_state* gossiper::get_endpoint_state_for_endpoint_ptr(inet_address ep) noexcept {
     auto it = endpoint_state_map.find(ep);
     if (it == endpoint_state_map.end()) {
         return nullptr;
@@ -1275,7 +1275,7 @@ endpoint_state& gossiper::get_endpoint_state(inet_address ep) {
     return *ptr;
 }
 
-std::optional<endpoint_state> gossiper::get_endpoint_state_for_endpoint(inet_address ep) const {
+std::optional<endpoint_state> gossiper::get_endpoint_state_for_endpoint(inet_address ep) const noexcept {
     auto it = endpoint_state_map.find(ep);
     if (it == endpoint_state_map.end()) {
         return {};
@@ -1292,7 +1292,7 @@ future<> gossiper::reset_endpoint_state_map() {
     });
 }
 
-const std::unordered_map<inet_address, endpoint_state>& gms::gossiper::get_endpoint_states() const {
+const std::unordered_map<inet_address, endpoint_state>& gms::gossiper::get_endpoint_states() const noexcept {
     return endpoint_state_map;
 }
 
@@ -1530,7 +1530,7 @@ void gossiper::handle_major_state_change(inet_address ep, const endpoint_state& 
 }
 
 bool gossiper::is_dead_state(const endpoint_state& eps) const {
-    sstring state = get_gossip_status(eps);
+    auto state = get_gossip_status(eps);
     for (auto& deadstate : DEAD_STATES) {
         if (state == deadstate) {
             return true;
@@ -1548,7 +1548,7 @@ bool gossiper::is_normal(const inet_address& endpoint) const {
 }
 
 bool gossiper::is_silent_shutdown_state(const endpoint_state& ep_state) const{
-    sstring state = get_gossip_status(ep_state);
+    auto state = get_gossip_status(ep_state);
     for (auto& deadstate : SILENT_SHUTDOWN_STATES) {
         if (state == deadstate) {
             return true;
@@ -2099,7 +2099,7 @@ bool gossiper::is_alive(inet_address ep) const {
     return false;
 }
 
-const versioned_value* gossiper::get_application_state_ptr(inet_address endpoint, application_state appstate) const {
+const versioned_value* gossiper::get_application_state_ptr(inet_address endpoint, application_state appstate) const noexcept {
     auto* eps = get_endpoint_state_for_endpoint_ptr(std::move(endpoint));
     if (!eps) {
         return nullptr;
@@ -2139,24 +2139,26 @@ void gossiper::force_newer_generation() {
     }
 }
 
-static sstring do_get_gossip_status(const gms::versioned_value* app_state) {
+static std::string_view do_get_gossip_status(const gms::versioned_value* app_state) noexcept {
     if (!app_state) {
         return gms::versioned_value::STATUS_UNKNOWN;
     }
-    auto value = app_state->value;
-    std::vector<sstring> pieces;
-    boost::split(pieces, value, boost::is_any_of(","));
-    if (pieces.empty()) {
+    const auto& value = app_state->value;
+    auto pos = value.find(',');
+    if (!value.size() || !pos) {
         return gms::versioned_value::STATUS_UNKNOWN;
     }
-    return pieces[0];
+    if (pos == sstring::npos) {
+        return std::string_view(value);
+    }
+    return std::string_view(value.data(), pos);
 }
 
-sstring gossiper::get_gossip_status(const endpoint_state& ep_state) const {
+std::string_view gossiper::get_gossip_status(const endpoint_state& ep_state) const noexcept {
     return do_get_gossip_status(ep_state.get_application_state_ptr(application_state::STATUS));
 }
 
-sstring gossiper::get_gossip_status(const inet_address& endpoint) const {
+std::string_view gossiper::get_gossip_status(const inet_address& endpoint) const noexcept {
     return do_get_gossip_status(get_application_state_ptr(endpoint, application_state::STATUS));
 }
 
@@ -2235,10 +2237,10 @@ bool gossiper::is_safe_for_bootstrap(inet_address endpoint) {
         logger.debug("is_safe_for_bootstrap: node={}, status=no state in gossip, allowed_to_bootstrap={}", endpoint, allowed);
         return allowed;
     }
-    sstring status = get_gossip_status(*eps);
-    std::unordered_set<sstring> allowed_statuses{
-        sstring(versioned_value::STATUS_LEFT),
-        sstring(versioned_value::REMOVED_TOKEN),
+    auto status = get_gossip_status(*eps);
+    std::unordered_set<std::string_view> allowed_statuses{
+        versioned_value::STATUS_LEFT,
+        versioned_value::REMOVED_TOKEN,
     };
     allowed = allowed_statuses.contains(status);
     logger.debug("is_safe_for_bootstrap: node={}, status={}, allowed_to_bootstrap={}", endpoint, status, allowed);
@@ -2352,11 +2354,11 @@ std::map<sstring, sstring> gossiper::get_simple_states() {
     return nodes_status;
 }
 
-int gossiper::get_down_endpoint_count() {
+int gossiper::get_down_endpoint_count() const noexcept {
     return endpoint_state_map.size() - get_up_endpoint_count();
 }
 
-int gossiper::get_up_endpoint_count() {
+int gossiper::get_up_endpoint_count() const noexcept {
     return boost::count_if(endpoint_state_map | boost::adaptors::map_values, std::mem_fn(&endpoint_state::is_alive));
 }
 

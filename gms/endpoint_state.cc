@@ -42,7 +42,16 @@
 
 namespace gms {
 
-const versioned_value* endpoint_state::get_application_state_ptr(application_state key) const {
+static_assert(!std::is_default_constructible_v<heart_beat_state>);
+static_assert(std::is_nothrow_copy_constructible_v<heart_beat_state>);
+static_assert(std::is_nothrow_move_constructible_v<heart_beat_state>);
+
+static_assert(std::is_nothrow_default_constructible_v<std::map<application_state, versioned_value>>);
+
+// Note: although std::map::find is not guaranteed to be noexcept
+// it depends on the comperator used and in this case comparing application_state
+// is noexcept.  Therefore, we can safely mark this method noexcept.
+const versioned_value* endpoint_state::get_application_state_ptr(application_state key) const noexcept {
     auto it = _application_state.find(key);
     if (it == _application_state.end()) {
         return nullptr;
@@ -61,7 +70,7 @@ std::ostream& operator<<(std::ostream& os, const endpoint_state& x) {
     return os;
 }
 
-bool endpoint_state::is_cql_ready() const {
+bool endpoint_state::is_cql_ready() const noexcept {
     auto* app_state = get_application_state_ptr(application_state::RPC_READY);
     if (!app_state) {
         return false;
