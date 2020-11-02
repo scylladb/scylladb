@@ -2360,6 +2360,14 @@ struct from_string_visitor {
     sstring_view s;
     bytes operator()(const reversed_type_impl& r) { return r.underlying_type()->from_string(s); }
     template <typename T> bytes operator()(const integer_type_impl<T>& t) { return decompose_value(parse_int(t, s)); }
+    bytes operator()(const ascii_type_impl&) {
+        auto bv = bytes_view(reinterpret_cast<const int8_t*>(s.begin()), s.size());
+        if (utils::ascii::validate(bv)) {
+            return to_bytes(bv);
+        } else {
+            throw marshal_exception(format("Value not compatible with type {}: '{}'", ascii_type_name, s));
+        }
+    }
     bytes operator()(const string_type_impl&) {
         return to_bytes(bytes_view(reinterpret_cast<const int8_t*>(s.begin()), s.size()));
     }
