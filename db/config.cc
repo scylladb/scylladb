@@ -932,11 +932,11 @@ std::unordered_map<sstring, db::experimental_features_t::feature> db::experiment
     // to UNUSED switch for a while, then remove altogether.
     // Change Data Capture is no longer experimental. Map it
     // to UNUSED_CDC switch for a while, then remove altogether.
-    return {{"lwt", UNUSED}, {"udf", UDF}, {"cdc", UNUSED_CDC}};
+    return {{"lwt", UNUSED}, {"udf", UDF}, {"cdc", UNUSED_CDC}, {"alternator-streams", ALTERNATOR_STREAMS}};
 }
 
 std::vector<enum_option<db::experimental_features_t>> db::experimental_features_t::all() {
-    return {UDF};
+    return {UDF, ALTERNATOR_STREAMS};
 }
 
 template struct utils::config_file::named_value<seastar::log_level>;
