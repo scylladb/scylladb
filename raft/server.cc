@@ -262,7 +262,7 @@ future<> server_impl::send_message(server_id id, Message m) {
             _snapshot_application_done = std::nullopt;
             return make_ready_future<>();
         } else {
-            static_assert(!sizeof(Message*), "not all message types are handled");
+            static_assert(!sizeof(T*), "not all message types are handled");
             return make_ready_future<>();
         }
     }, std::move(m));
