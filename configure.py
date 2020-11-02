@@ -478,9 +478,9 @@ arg_parser.add_argument('--ldflags', action='store', dest='user_ldflags', defaul
                         help='Extra flags for the linker')
 arg_parser.add_argument('--target', action='store', dest='target', default=default_target_arch(),
                         help='Target architecture (-march)')
-arg_parser.add_argument('--compiler', action='store', dest='cxx', default='g++',
+arg_parser.add_argument('--compiler', action='store', dest='cxx', default='clang++',
                         help='C++ compiler path')
-arg_parser.add_argument('--c-compiler', action='store', dest='cc', default='gcc',
+arg_parser.add_argument('--c-compiler', action='store', dest='cc', default='clang',
                         help='C compiler path')
 add_tristate(arg_parser, name='dpdk', dest='dpdk',
                         help='Use dpdk (from seastar dpdk sources) (default=True for release builds)')
