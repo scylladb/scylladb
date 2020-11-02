@@ -336,11 +336,14 @@ private:
     }
 };
 
+using is_dirty_on_master = bool_class<class is_dirty_on_master_tag>;
+
 class repair_row {
     std::optional<frozen_mutation_fragment> _fm;
     lw_shared_ptr<const decorated_key_with_hash> _dk_with_hash;
     std::optional<repair_sync_boundary> _boundary;
     std::optional<repair_hash> _hash;
+    is_dirty_on_master _dirty_on_master;
     lw_shared_ptr<mutation_fragment> _mf;
 public:
     repair_row() = default;
@@ -348,12 +351,17 @@ public:
             std::optional<position_in_partition> pos,
             lw_shared_ptr<const decorated_key_with_hash> dk_with_hash,
             std::optional<repair_hash> hash,
+            is_dirty_on_master dirty_on_master,
             lw_shared_ptr<mutation_fragment> mf = {})
             : _fm(std::move(fm))
             , _dk_with_hash(std::move(dk_with_hash))
             , _boundary(pos ? std::optional<repair_sync_boundary>(repair_sync_boundary{_dk_with_hash->dk, std::move(*pos)}) : std::nullopt)
             , _hash(std::move(hash))
+            , _dirty_on_master(dirty_on_master)
             , _mf(std::move(mf)) {
+    }
+    lw_shared_ptr<mutation_fragment>& get_mutation_fragment_ptr () {
+        return _mf;
     }
     mutation_fragment& get_mutation_fragment() {
         if (!_mf) {
@@ -393,6 +401,9 @@ public:
             throw std::runtime_error("empty hash");
         }
         return *_hash;
+    }
+    is_dirty_on_master dirty_on_master() const {
+        return _dirty_on_master;
     }
 };
 
@@ -740,6 +751,7 @@ private:
     tracker_link_type _tracker_link;
     row_level_repair* _row_level_repair_ptr;
     std::vector<repair_node_state> _all_node_states;
+    is_dirty_on_master _dirty_on_master = is_dirty_on_master::no;
 public:
     std::vector<repair_node_state>& all_nodes() {
         return _all_node_states;
@@ -1152,7 +1164,7 @@ private:
             return stop_iteration::no;
         }
         auto hash = do_hash_for_mf(*_repair_reader.get_current_dk(), mf);
-        repair_row r(freeze(*_schema, mf), position_in_partition(mf.position()), _repair_reader.get_current_dk(), hash);
+        repair_row r(freeze(*_schema, mf), position_in_partition(mf.position()), _repair_reader.get_current_dk(), hash, is_dirty_on_master::no);
         rlogger.trace("Reading: r.boundary={}, r.hash={}", r.boundary(), r.hash());
         _metrics.row_from_disk_nr++;
         _metrics.row_from_disk_bytes += r.size();
@@ -1383,14 +1395,57 @@ private:
             // and _working_row_buf are ordered.
             utils::merge_to_gently(_working_row_buf, row_diff,
                  [this] (const repair_row& x, const repair_row& y) { return _cmp(x.boundary(), y.boundary()) < 0; });
+            for (auto& r : row_diff) {
+                thread::maybe_yield();
+                _working_row_buf_combined_hash.add(r.hash());
+            }
         }
         if (update_hash_set) {
             _peer_row_hash_sets[node_idx] = boost::copy_range<repair_hash_set>(row_diff |
                     boost::adaptors::transformed([] (repair_row& r) { thread::maybe_yield(); return r.hash(); }));
         }
-        do_apply_rows(std::move(row_diff), node_idx, update_buf).get();
+        // Repair rows in row_diff will be flushed to disk by flush_rows_in_working_row_buf,
+        // so we skip calling do_apply_rows here.
+        _dirty_on_master = is_dirty_on_master::yes;
+    }
+public:
+    // Must run inside a seastar thread
+    void flush_rows_in_working_row_buf() {
+        if (_dirty_on_master) {
+            _dirty_on_master = is_dirty_on_master::no;
+        } else {
+            return;
+        }
+        auto cmp = position_in_partition::tri_compare(*_schema);
+        lw_shared_ptr<mutation_fragment> last_mf;
+        lw_shared_ptr<const decorated_key_with_hash> last_dk;
+        for (auto& r : _working_row_buf) {
+            thread::maybe_yield();
+            if (!r.dirty_on_master()) {
+                continue;
+            }
+            _repair_writer->create_writer(_db, node_idx);
+            auto mf = r.get_mutation_fragment_ptr();
+            const auto& pk = r.get_dk_with_hash()->dk.key();
+            if (last_mf && last_dk &&
+                    cmp(last_mf->position(), mf->position()) == 0 &&
+                    pk.legacy_equal(*_schema, last_dk->dk.key()) &&
+                    last_mf->mergeable_with(*mf)) {
+                last_mf->apply(*_schema, std::move(*mf));
+            } else {
+                if (last_mf && last_dk) {
+                    _repair_writer->do_write(std::move(last_dk), std::move(*last_mf)).get();
+                }
+                last_mf = mf;
+                last_dk = r.get_dk_with_hash();
+            }
+        }
+        if (last_mf && last_dk) {
+            _repair_writer->do_write(std::move(last_dk), std::move(*last_mf)).get();
+        }
     }
 
+private:
     future<>
     apply_rows_on_follower(repair_rows_on_wire rows) {
         if (rows.empty()) {
@@ -1446,7 +1501,7 @@ private:
                         auto mf = make_lw_shared<mutation_fragment>(fmf.unfreeze(*_schema, _permit));
                         auto hash = do_hash_for_mf(*dk_ptr, *mf);
                         position_in_partition pos(mf->position());
-                        row_list.push_back(repair_row(std::move(fmf), std::move(pos), dk_ptr, std::move(hash), std::move(mf)));
+                        row_list.push_back(repair_row(std::move(fmf), std::move(pos), dk_ptr, std::move(hash), is_dirty_on_master::yes, std::move(mf)));
                     });
                 } else {
                     last_mf = {};
@@ -1464,7 +1519,7 @@ private:
                         } else {
                             last_mf = mf;
                             // On repair follower node, only decorated_key_with_hash and the mutation_fragment inside repair_row are used.
-                            row_list.push_back(repair_row({}, {}, dk_ptr, {}, std::move(mf)));
+                            row_list.push_back(repair_row({}, {}, dk_ptr, {}, is_dirty_on_master::no, std::move(mf)));
                         }
                     });
                 }
@@ -2681,6 +2736,7 @@ private:
             }
             rlogger.debug("After get_row_diff node {}, hash_sets={}", master.myip(), master.working_row_hashes().get0().size());
         }
+        master.flush_rows_in_working_row_buf();
         return op_status::next_step;
     }
 
