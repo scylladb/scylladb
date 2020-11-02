@@ -885,8 +885,17 @@ future<executor::request_return_type> executor::get_records(client_state& client
     auto partition_slice = query::partition_slice(
         std::move(bounds)
         , {}, std::move(regular_columns), selection->get_query_options());
+
+	auto& opts = base->cdc_options();
+	auto mul = 2; // key-only, allow for delete + insert
+    if (opts.preimage()) {
+        ++mul;
+    }
+    if (opts.postimage()) {
+        ++mul;
+    }
     auto command = ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice, _proxy.get_max_result_size(partition_slice),
-            query::row_limit(limit * 4));
+            query::row_limit(limit * mul));
 
     return _proxy.query(schema, std::move(command), std::move(partition_ranges), cl, service::storage_proxy::coordinator_query_options(default_timeout(), std::move(permit), client_state)).then(
             [this, schema, partition_slice = std::move(partition_slice), selection = std::move(selection), start_time = std::move(start_time), limit, key_names = std::move(key_names), attr_names = std::move(attr_names), type, iter, high_ts] (service::storage_proxy::coordinator_query_result qr) mutable {       
