@@ -2913,10 +2913,6 @@ future<> maybe_update_legacy_secondary_index_mv_schema(service::migration_manage
     // format, where "token" is not marked as computed. Once we're sure that all indexes have their
     // columns marked as computed (because they were either created on a node that supports computed
     // columns or were fixed by this utility function), it's safe to remove this function altogether.
-    if (!db.features().cluster_supports_computed_columns()) {
-        return make_ready_future<>();
-    }
-
     if (v->clustering_key_size() == 0) {
         return make_ready_future<>();
     }
