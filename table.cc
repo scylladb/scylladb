@@ -1217,6 +1217,7 @@ table::table(schema_ptr schema, config config, db::commitlog* cl, compaction_man
     , _sstables(make_lw_shared<sstables::sstable_set>(_compaction_strategy.make_sstable_set(_schema)))
     , _cache(_schema, sstables_as_snapshot_source(), row_cache_tracker, is_continuous::yes)
     , _commitlog(cl)
+    , _durable_writes(true)
     , _compaction_manager(compaction_manager)
     , _index_manager(*this)
     , _counter_cell_locks(_schema->is_counter() ? std::make_unique<cell_locker>(_schema, cl_stats) : nullptr)

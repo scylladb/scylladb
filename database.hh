@@ -464,6 +464,7 @@ private:
 
     // Provided by the database that owns this commitlog
     db::commitlog* _commitlog;
+    bool _durable_writes;
     compaction_manager& _compaction_manager;
     secondary_index::secondary_index_manager _index_manager;
     int _compaction_disabled = 0;
@@ -875,6 +876,14 @@ public:
 
     cache_temperature get_global_cache_hit_rate() const {
         return _global_cache_hit_rate;
+    }
+
+    bool durable_writes() const {
+        return _durable_writes;
+    }
+
+    void set_durable_writes(bool dw) {
+        _durable_writes = dw;
     }
 
     void set_global_cache_hit_rate(cache_temperature rate) {
