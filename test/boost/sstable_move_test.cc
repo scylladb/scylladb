@@ -1,0 +1,67 @@
+/*
+ * Copyright (C) 2020 ScyllaDB
+ */
+
+/*
+ * This file is part of Scylla.
+ *
+ * Scylla is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * Scylla is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+#include <filesystem>
+#include <seastar/testing/test_case.hh>
+#include <seastar/testing/thread_test_case.hh>
+
+#include "test/lib/tmpdir.hh"
+#include "test/lib/sstable_test_env.hh"
+#include "sstable_test.hh"
+
+using namespace sstables;
+namespace fs = std::filesystem;
+
+// Must be called from a seastar thread
+static auto copy_sst_to_tmpdir(fs::path tmp_path, test_env& env, sstables::schema_ptr schema_ptr, fs::path src_path, unsigned long gen) {
+    auto sst = env.reusable_sst(schema_ptr, src_path.native(), gen).get0();
+    auto dst_path = tmp_path / src_path.filename() / format("gen-{}", gen);
+    recursive_touch_directory(dst_path.native()).get();
+    for (auto p : sst->all_components()) {
+        auto src_path = fs::path(sst->filename(p.first));
+        copy_file(src_path, dst_path / src_path.filename());
+    }
+    return env.reusable_sst(schema_ptr, dst_path.native(), gen).get0();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_sstable_move) {
+    tmpdir tmp;
+    auto env = test_env();
+    auto stop_env = defer([&env] { env.stop().get(); });
+
+    int64_t gen = 1;
+    auto sst = copy_sst_to_tmpdir(tmp.path(), env, uncompressed_schema(), fs::path(uncompressed_dir()), gen);
+
+    for (auto i = 0; i < 2; i++) {
+        ++gen;
+        auto cur_dir = sst->get_dir();
+        auto new_dir = format("{}/gen-{}", fs::path(cur_dir).parent_path().native(), gen);
+        touch_directory(new_dir).get();
+        sst->move_to_new_dir(new_dir, gen, true).get();
+        // the source directory must be empty now
+        remove_file(cur_dir).get();
+    }
+
+    // close  the sst and make we can load it from the new directory.
+    auto new_dir = sst->get_dir();
+    sst->close_files().get();
+    sst = env.reusable_sst(uncompressed_schema(), new_dir, gen).get0();
+}
