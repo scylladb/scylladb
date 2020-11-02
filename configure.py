@@ -522,8 +522,6 @@ arg_parser.add_argument('--with-antlr3', dest='antlr3_exec', action='store', def
                         help='path to antlr3 executable')
 arg_parser.add_argument('--with-ragel', dest='ragel_exec', action='store', default='ragel',
         help='path to ragel executable')
-arg_parser.add_argument('--build-raft', dest='build_raft', action='store_true', default=False,
-                        help='build raft code')
 add_tristate(arg_parser, name='stack-guards', dest='stack_guards', help='Use stack guards')
 arg_parser.add_argument('--verbose', dest='verbose', action='store_true',
                         help='Make configure.py output more verbose (useful for debugging the build process itself)')
@@ -531,10 +529,6 @@ arg_parser.add_argument('--test-repeat', dest='test_repeat', action='store', typ
                          help='Set number of times to repeat each unittest.')
 arg_parser.add_argument('--test-timeout', dest='test_timeout', action='store', type=str, default='7200')
 args = arg_parser.parse_args()
-
-if not args.build_raft:
-    all_artifacts.difference_update(raft_tests)
-    tests.difference_update(raft_tests)
 
 defines = ['XXH_PRIVATE_API',
            'SEASTAR_TESTING_MAIN',
@@ -1498,9 +1492,6 @@ libs = ' '.join([maybe_static(args.staticyamlcpp, '-lyaml-cpp'), '-latomic', '-l
 
 if not args.staticboost:
     args.user_cflags += ' -DBOOST_TEST_DYN_LINK'
-
-if build_raft:
-    args.user_cflags += ' -DENABLE_SCYLLA_RAFT'
 
 # thrift version detection, see #4538
 proc_res = subprocess.run(["thrift", "-version"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
