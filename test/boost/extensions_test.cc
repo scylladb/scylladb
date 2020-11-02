@@ -118,7 +118,6 @@ SEASTAR_TEST_CASE(cdc_schema_extension) {
     // Extensions have to be registered here - config needs to have them before construction of test env.
     ext->add_schema_extension<cdc::cdc_extension>(cdc::cdc_extension::NAME);
     auto cfg = ::make_shared<db::config>(ext);
-    cfg->experimental_features({db::experimental_features_t::feature::CDC});
 
     return do_with_cql_env([] (cql_test_env& e) {
         auto assert_ext_correctness = [] (cql_test_env& e, cdc::cdc_extension expected_ext) {

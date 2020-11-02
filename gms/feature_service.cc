@@ -118,10 +118,6 @@ feature_config feature_config_from_db_config(db::config& cfg, std::set<sstring> 
         }
     }
 
-    if (!cfg.check_experimental(db::experimental_features_t::CDC)) {
-        fcfg._disabled_features.insert(sstring(gms::features::CDC));
-    }
-
     return fcfg;
 }
 
