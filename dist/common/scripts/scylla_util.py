@@ -17,7 +17,6 @@
 
 import configparser
 import io
-import logging
 import os
 import re
 import shlex
@@ -92,7 +91,7 @@ def scyllabindir():
 
 
 # @param headers dict of k:v
-def curl(url, headers=None, byte=False, timeout=3, max_retries=5):
+def curl(url, headers=None, byte=False, timeout=3, max_retries=5, retry_interval=5):
     retries = 0
     while True:
         try:
@@ -103,8 +102,7 @@ def curl(url, headers=None, byte=False, timeout=3, max_retries=5):
                 else:
                     return res.read().decode('utf-8')
         except urllib.error.HTTPError:
-            logging.warning("Failed to grab %s..." % url)
-            time.sleep(5)
+            time.sleep(retry_interval)
             retries += 1
             if retries >= max_retries:
                 raise
@@ -398,7 +396,7 @@ class aws_instance:
     def is_aws_instance(cls):
         """Check if it's AWS instance via query to metadata server."""
         try:
-            curl(cls.META_DATA_BASE_URL, max_retries=2)
+            curl(cls.META_DATA_BASE_URL, max_retries=2, retry_interval=1)
             return True
         except (urllib.error.URLError, urllib.error.HTTPError):
             return False
