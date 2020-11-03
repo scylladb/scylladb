@@ -62,7 +62,7 @@ private:
         }
     }
     void do_reserve_for_push_back();
-    void make_room(size_t n);
+    size_t make_room(size_t n, bool stop_after_one);
     chunk_ptr new_chunk(size_t n);
     T* addr(size_t i) const {
         return &_chunks[i / max_chunk_capacity()][i % max_chunk_capacity()];
@@ -97,6 +97,9 @@ public:
     }
     size_t size() const {
         return _size;
+    }
+    size_t capacity() const {
+        return _capacity;
     }
     T& operator[](size_t i) {
         return *addr(i);
@@ -146,8 +149,21 @@ public:
     void resize(size_t n);
     void reserve(size_t n) {
         if (n > _capacity) {
-            make_room(n);
+            make_room(n, false);
         }
+    }
+    /// Reserve some of the memory.
+    ///
+    /// To avoid stalls on reserving very large vectors.
+    /// To drive the reservation to completion, call this repeatedly with the
+    /// value returned from the previous call until it returns 0.
+    ///
+    /// \returns the memory that remains to be reserved
+    size_t reserve_partial(size_t n) {
+        if (n > _capacity) {
+            return make_room(n, true);
+        }
+        return 0;
     }
 
     size_t memory_size() const {
@@ -352,8 +368,8 @@ chunked_vector<T, max_contiguous_allocation>::migrate(T* begin, T* end, T* resul
 }
 
 template <typename T, size_t max_contiguous_allocation>
-void
-chunked_vector<T, max_contiguous_allocation>::make_room(size_t n) {
+size_t
+chunked_vector<T, max_contiguous_allocation>::make_room(size_t n, bool stop_after_one) {
     // First, if the last chunk is below max_chunk_capacity(), enlarge it
 
     auto last_chunk_capacity_deficit = _chunks.size() * max_chunk_capacity() - _capacity;
@@ -375,11 +391,14 @@ chunked_vector<T, max_contiguous_allocation>::make_room(size_t n) {
 
     // Add more chunks as needed
 
-    while (_capacity < n) {
+    bool stop = false;
+    while (_capacity < n && !stop) {
         auto now = std::min(n - _capacity, max_chunk_capacity());
         _chunks.push_back(new_chunk(now));
         _capacity += now;
+        stop = stop_after_one;
     }
+    return (n - _capacity);
 }
 
 template <typename T, size_t max_contiguous_allocation>

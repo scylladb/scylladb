@@ -176,3 +176,18 @@ BOOST_AUTO_TEST_CASE(tests_constructor_exception_safety) {
         BOOST_REQUIRE(checker.ok());
     }
 }
+
+BOOST_AUTO_TEST_CASE(tests_reserve_partial) {
+    auto rand = std::default_random_engine();
+    auto size_dist = std::uniform_int_distribution<unsigned>(1, 1 << 12);
+
+    for (int i = 0; i < 100; ++i) {
+        utils::chunked_vector<uint8_t> v;
+        const auto orig_size = size_dist(rand);
+        auto size = orig_size;
+        while (size) {
+            size = v.reserve_partial(size);
+        }
+        BOOST_REQUIRE_EQUAL(v.capacity(), orig_size);
+    }
+}
