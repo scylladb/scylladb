@@ -1504,7 +1504,7 @@ SEASTAR_TEST_CASE(test_computed_columns) {
         auto global2 = e.local_db().find_schema("ks", "global2_index");
 
         bytes token_column_name("idx_token");
-        data_value token_computation(token_column_computation().serialize());
+        data_value token_computation(legacy_token_column_computation().serialize());
         BOOST_REQUIRE_EQUAL(local1->get_column_definition(token_column_name), nullptr);
         BOOST_REQUIRE_EQUAL(local2->get_column_definition(token_column_name), nullptr);
         BOOST_REQUIRE(global1->get_column_definition(token_column_name)->is_computed());

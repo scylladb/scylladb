@@ -3054,7 +3054,7 @@ future<> maybe_update_legacy_secondary_index_mv_schema(service::migration_manage
     // and as such it must be recreated properly.
     if (!base_schema->columns_by_name().contains(first_view_ck.name())) {
         schema_builder builder{schema_ptr(v)};
-        builder.mark_column_computed(first_view_ck.name(), std::make_unique<token_column_computation>());
+        builder.mark_column_computed(first_view_ck.name(), std::make_unique<legacy_token_column_computation>());
         return mm.announce_view_update(view_ptr(builder.build()), true);
     }
     return make_ready_future<>();
