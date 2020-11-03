@@ -528,6 +528,12 @@ public:
     /// \return TRUE if hints are allowed to be generated to \param ep.
     bool check_dc_for(ep_key_type ep) const noexcept;
 
+    /// \brief Checks if hints are disabled for all endpoints
+    /// \return TRUE if hints are disabled.
+    bool is_disabled_for_all() const noexcept {
+        return _host_filter.is_disabled_for_all();
+    }
+
     /// \return Size of mutations of hints in-flight (to the disk) at the moment.
     uint64_t size_of_hints_in_progress() const noexcept {
         return _stats.size_of_hints_in_progress;

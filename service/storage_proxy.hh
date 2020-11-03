@@ -264,7 +264,7 @@ private:
     // just skip an entry if request no longer exists.
     circular_buffer<response_id_type> _throttled_writes;
     db::hints::resource_manager _hints_resource_manager;
-    std::optional<db::hints::manager> _hints_manager;
+    db::hints::manager _hints_manager;
     db::hints::manager _hints_for_views_manager;
     scheduling_group_key _stats_key;
     storage_proxy_stats::global_stats _global_stats;
