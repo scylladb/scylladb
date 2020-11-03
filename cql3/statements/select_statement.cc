@@ -891,6 +891,23 @@ static void append_base_key_to_index_ck(std::vector<bytes_view>& exploded_index_
     std::move(begin, key_view.end(), std::back_inserter(exploded_index_ck));
 }
 
+bytes indexed_table_select_statement::compute_idx_token(const partition_key& key) const {
+    const column_definition& cdef = *_view_schema->clustering_key_columns().begin();
+    clustering_row empty_row(clustering_key_prefix::make_empty());
+    bytes_opt computed_value;
+    if (!cdef.is_computed()) {
+        // FIXME(pgrabowski): this legacy code is here for backward compatibility and should be removed
+        // once "computed_columns feature" is supported by every node
+        computed_value = legacy_token_column_computation().compute_value(*_schema, key, empty_row);
+    } else {
+        computed_value = cdef.get_computation().compute_value(*_schema, key, empty_row);
+    }
+    if (!computed_value) {
+        throw std::logic_error(format("No value computed for idx_token column {}", cdef.name()));
+    }
+    return *computed_value;
+}
+
 lw_shared_ptr<const service::pager::paging_state> indexed_table_select_statement::generate_view_paging_state_from_base_query_results(lw_shared_ptr<const service::pager::paging_state> paging_state,
         const foreign_ptr<lw_shared_ptr<query::result>>& results, service::storage_proxy& proxy, service::query_state& state, const query_options& options) const {
     const column_definition* cdef = _schema->get_column_definition(to_bytes(_index.target_column()));
@@ -924,7 +941,7 @@ lw_shared_ptr<const service::pager::paging_state> indexed_table_select_statement
     if (_index.metadata().local()) {
         exploded_index_ck.push_back(bytes_view(*indexed_column_value));
     } else {
-        token_bytes = dht::get_token(*_schema, last_base_pk).data();
+        token_bytes = compute_idx_token(last_base_pk);
         exploded_index_ck.push_back(bytes_view(token_bytes));
         append_base_key_to_index_ck<partition_key>(exploded_index_ck, last_base_pk, *cdef);
     }
@@ -1108,7 +1125,7 @@ query::partition_slice indexed_table_select_statement::get_partition_slice_for_g
             // Computed token column needs to be added to index view restrictions
             const column_definition& token_cdef = *_view_schema->clustering_key_columns().begin();
             auto base_pk = partition_key::from_optional_exploded(*_schema, single_pk_restrictions->values(options));
-            bytes token_value = dht::get_token(*_schema, base_pk).data();
+            bytes token_value = compute_idx_token(base_pk);
             auto token_restriction = ::make_shared<restrictions::single_column_restriction>(token_cdef);
             token_restriction->expression = expr::binary_operator{
                     &token_cdef, expr::oper_t::EQ,
