@@ -149,6 +149,9 @@ class TestSuite(ABC):
             if shortname in disable_tests or (mode not in ["release", "dev"] and shortname in skip_tests):
                 continue
             t = os.path.join(self.name, shortname)
+            # Skip tests which are not configured, and hence are not built
+            if os.path.join("test", t) not in options.tests:
+                continue
             patterns = options.name if options.name else [t]
             if options.skip_pattern and options.skip_pattern in t:
                 continue
@@ -583,6 +586,15 @@ def parse_cmd_line():
         prepare_dir(os.path.join(args.tmpdir, mode), "*.reject")
         prepare_dir(os.path.join(args.tmpdir, mode, "xml"), "*.xml")
 
+    # Get the list of tests configured by configure.py
+    try:
+        out = subprocess.Popen(['ninja', 'unit_test_list'], stdout=subprocess.PIPE).communicate()[0].decode()
+        # [1/1] List configured unit tests
+        args.tests = set(re.sub(r'.* List configured unit tests\n(.*)\n', r'\1', out, 1, re.DOTALL).split("\n"))
+    except Exception as e:
+        print(palette.fail("Failed to read output of `ninja unit_test_list`: please run ./configure.py first"))
+        raise
+
     return args
 
 
@@ -595,8 +607,12 @@ def find_tests(options):
                 suite.add_test_list(mode, options)
 
     if not TestSuite.test_count():
-        print("Test {} not found".format(palette.path(options.name[0])))
-        sys.exit(1)
+        if len(options.name):
+            print("Test {} not found".format(palette.path(options.name[0])))
+            sys.exit(1)
+        else:
+            print(palette.warn("No tests found. Please enable tests in ./configure.py first."))
+            sys.exit(0)
 
     logging.info("Found %d tests, repeat count is %d, starting %d concurrent jobs",
                  TestSuite.test_count(), options.repeat, options.jobs)
