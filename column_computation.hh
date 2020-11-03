@@ -57,7 +57,7 @@ public:
 /*
  * Computes token value of partition key and returns it as bytes.
  *
- * Should NOT be used, because ordering
+ * Should NOT be used (use token_column_computation), because ordering
  * of bytes is different than ordering of tokens (signed vs unsigned comparison).
  *
  * The type name stored for computations of this class is "token" - this was
@@ -67,6 +67,27 @@ class legacy_token_column_computation : public column_computation {
 public:
     virtual column_computation_ptr clone() const override {
         return std::make_unique<legacy_token_column_computation>(*this);
+    }
+    virtual bytes serialize() const override;
+    virtual bytes_opt compute_value(const schema& schema, const partition_key& key, const clustering_row& row) const override;
+};
+
+
+/*
+ * Computes token value of partition key and returns it as long_type.
+ * The return type means that it can be trivially sorted (for example
+ * if computed column using this computation is a clustering key),
+ * preserving the correct order of tokens (using signed comparisons).
+ *
+ * Please use this class instead of legacy_token_column_computation.
+ * 
+ * The type name stored for computations of this class is "token_v2".
+ * (the name "token" refers to the depracated legacy_token_column_computation)
+ */
+class token_column_computation : public column_computation {
+public:
+    virtual column_computation_ptr clone() const override {
+        return std::make_unique<token_column_computation>(*this);
     }
     virtual bytes serialize() const override;
     virtual bytes_opt compute_value(const schema& schema, const partition_key& key, const clustering_row& row) const override;
