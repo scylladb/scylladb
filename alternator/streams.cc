@@ -290,7 +290,9 @@ struct sequence_number {
 sequence_number::sequence_number(std::string_view v) 
     : uuid([&] {
         using namespace boost::multiprecision;
-        uint128_t tmp{v};
+        // workaround for weird clang 10 bug when calling constructor with
+        // view directly.
+        uint128_t tmp{std::string(v)};
         // see above
         return utils::UUID_gen::get_time_UUID_raw(uint64_t(tmp >> 64), uint64_t(tmp & std::numeric_limits<uint64_t>::max()));
     }())
