@@ -47,6 +47,7 @@ SEASTAR_TEST_CASE(test_boot_shutdown){
     return seastar::async([] {
         distributed<database> db;
         database_config dbcfg;
+        dbcfg.available_memory = memory::stats().total_memory();
         auto cfg = std::make_unique<db::config>();
         sharded<service::migration_notifier> mm_notif;
         sharded<abort_source> abort_sources;
