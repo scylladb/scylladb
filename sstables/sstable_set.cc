@@ -63,96 +63,526 @@ std::ostream& operator<<(std::ostream& os, const sstables::sstable_run& run) {
     return os;
 }
 
-sstable_set::sstable_set(std::unique_ptr<sstable_set_impl> impl, schema_ptr s)
-        : _impl(std::move(impl))
-        , _schema(std::move(s))
-        , _all(make_lw_shared<sstable_list>(sstable_list())) {
-    if (!_impl->empty()) {
-        throw std::logic_error("Can't create an sstable_set using a non-empty sstable_set_impl");
+sstable_set_data::sstable_set_data(std::unique_ptr<sstable_set_impl> impl)
+    : impl(std::move(impl)) {
+}
+
+void sstable_set_data::insert(shared_sstable sst) {
+    auto it = sstables_and_times_added.find(sst);
+    if (it != sstables_and_times_added.end()) {
+        // the sstable has already been added in some version
+        it->second++;
+        return;
     }
-}
-
-sstable_set::sstable_set(const sstable_set& x)
-        : _impl(x._impl->clone())
-        , _schema(x._schema)
-        , _all(make_lw_shared<sstable_list>(*x._all))
-        , _all_runs(x._all_runs) {
-}
-
-sstable_set::sstable_set(sstable_set&&) noexcept = default;
-
-sstable_set&
-sstable_set::operator=(const sstable_set& x) {
-    if (this != &x) {
-        auto tmp = sstable_set(x);
-        *this = std::move(tmp);
-    }
-    return *this;
-}
-
-sstable_set&
-sstable_set::operator=(sstable_set&&) noexcept = default;
-
-std::vector<shared_sstable>
-sstable_set::select(const dht::partition_range& range) const {
-    return _impl->select(range);
-}
-
-std::vector<sstable_run>
-sstable_set::select_sstable_runs(const std::vector<shared_sstable>& sstables) const {
-    auto run_ids = boost::copy_range<std::unordered_set<utils::UUID>>(sstables | boost::adaptors::transformed(std::mem_fn(&sstable::run_identifier)));
-    return boost::copy_range<std::vector<sstable_run>>(run_ids | boost::adaptors::transformed([this] (utils::UUID run_id) {
-        return _all_runs.at(run_id);
-    }));
-}
-
-void
-sstable_set::insert(shared_sstable sst) {
-    _impl->insert(sst);
     try {
-        _all->insert(sst);
-        try {
-            _all_runs[sst->run_identifier()].insert(sst);
-        } catch (...) {
-            _all->erase(sst);
-            throw;
-        }
+        impl->insert(sst);
+        all_runs[sst->run_identifier()].insert(sst);
+        sstables_and_times_added.emplace(sst, 1);
     } catch (...) {
-        _impl->erase(sst);
+        impl->erase(sst);
+        auto runs_it = all_runs.find(sst->run_identifier());
+        if (runs_it != all_runs.end()) {
+            runs_it->second.erase(sst);
+            if (runs_it->second.empty()) {
+                all_runs.erase(runs_it);
+            }
+        }
         throw;
     }
 }
 
-void
-sstable_set::erase(shared_sstable sst) {
-    _impl->erase(sst);
-    _all->erase(sst);
-    _all_runs[sst->run_identifier()].erase(sst);
+std::vector<shared_sstable> sstable_set_data::select(const dht::partition_range& range) const {
+    return impl->select(range);
 }
 
-sstable_set::~sstable_set() = default;
+std::unordered_set<shared_sstable> sstable_set_data::select_by_run_id(utils::UUID run_id) const {
+    return all_runs.at(run_id);
+}
 
-sstable_set::incremental_selector::incremental_selector(std::unique_ptr<incremental_selector_impl> impl, const schema& s)
-    : _impl(std::move(impl))
-    , _cmp(s) {
+// Called when a version that was adding an sstable was removed or when the sstable was later erased in that version.
+void sstable_set_data::remove(shared_sstable sst) {
+    if (--sstables_and_times_added.at(sst) == 0) {
+        impl->erase(sst);
+        all_runs[sst->run_identifier()].erase(sst);
+        sstables_and_times_added.erase(sst);
+    }
+}
+
+sstable_set_version_reference::~sstable_set_version_reference() {
+    if (_p) {
+        _p->remove_reference();
+        if (_p->can_merge_with_next()) {
+            // merging will destroy the last reference to the version and the version will be deleted as a result
+            _p->merge_with_next();
+        } else if (_p->can_delete()) {
+            delete _p;
+            _p = nullptr;
+        }
+    }
+}
+
+sstable_set_version_reference::sstable_set_version_reference(sstable_set_version* p) : _p(p) {
+    if (_p) {
+        _p->add_reference();
+    }
+}
+
+sstable_set_version_reference::sstable_set_version_reference(const sstable_set_version_reference& ref)  : _p(ref._p) {
+    if (_p) {
+        _p->add_reference();
+    }
+}
+
+sstable_set_version_reference::sstable_set_version_reference(sstable_set_version_reference&& ref) noexcept : _p(ref._p) {
+    ref._p = nullptr;
+}
+
+sstable_set_version_reference& sstable_set_version_reference::operator=(const sstable_set_version_reference& ref) {
+    *this = sstable_set_version_reference(ref);
+    return *this;
+}
+
+sstable_set_version_reference& sstable_set_version_reference::operator=(sstable_set_version_reference&& ref) noexcept {
+    if (this != &ref) {
+        // Destroying this reference may invalide other references, so we're taking over the pointer managed by
+        // the moved reference, and reassigning it after calling the destructor
+        auto ptr = ref._p;
+        ref._p = nullptr;
+        this->~sstable_set_version_reference();
+        _p = ptr;
+    }
+    return *this;
+}
+
+static sstable_set_version_reference make_sstable_set_version(std::unique_ptr<sstable_set_impl> impl, schema_ptr s) {
+    sstable_set_version* new_version = new sstable_set_version(std::move(impl), std::move(s));
+    return new_version->get_reference_to_this();
+}
+
+sstable_list::sstable_list(std::unique_ptr<sstable_set_impl> impl, schema_ptr s)
+    : _version(make_sstable_set_version(std::move(impl), std::move(s))) {
+}
+
+sstable_list::sstable_list(const sstable_list& sstl)
+    : _version(sstl._version->get_reference_to_new_copy()) {
+    // copying an sstable_list creates a new sstable_set_version
+}
+
+sstable_list::sstable_list(sstable_list&& sstl) noexcept = default;
+
+sstable_list& sstable_list::operator=(const sstable_list& sstl) {
+    if (this != &sstl) {
+        *this = sstable_list(sstl);
+    }
+    return *this;
+}
+
+sstable_list& sstable_list::operator=(sstable_list&& sstl) noexcept {
+    if (this != &sstl) {
+        this->~sstable_list();
+        _version = std::move(sstl._version);
+    }
+    return *this;
+}
+
+// Moves the iterator to the next sstable which is contained by the associated sstable_set, or to the end
+// If the iterator already references a satisfying sstable, no changes are made.
+void sstable_list::const_iterator::advance() {
+    while (_it != (*_ver)->all().end() && !(*_ver)->contains(_it->first)) {
+        _it++;
+    }
+}
+
+sstable_list::const_iterator::const_iterator(std::map<shared_sstable, unsigned>::const_iterator it, const sstable_set_version_reference* ver)
+    : _it(std::move(it))
+    , _ver(ver) {
+        advance();
+}
+
+sstable_list::const_iterator& sstable_list::const_iterator::operator++() {
+    assert(_it != (*_ver)->all().end());
+    _it++;
+    advance();
+    return *this;
+}
+
+sstable_list::const_iterator sstable_list::const_iterator::operator++(int) {
+    const_iterator it = *this;
+    operator++();
+    return it;
+}
+
+const shared_sstable& sstable_list::const_iterator::operator*() const {
+    return _it->first;
+}
+
+bool sstable_list::const_iterator::operator==(const const_iterator& it) const {
+    assert(_ver == it._ver);
+    return _it == it._it;
+}
+
+sstable_list::const_iterator sstable_list::begin() const {
+    return const_iterator(_version->all().begin(), &_version);
+}
+
+sstable_list::const_iterator sstable_list::end() const {
+    return const_iterator(_version->all().end(), &_version);
+}
+
+size_t sstable_list::size() const {
+    return _version->size();
+}
+
+void sstable_list::insert(shared_sstable sst) {
+    _version = _version->insert(sst);
+}
+
+void sstable_list::erase(shared_sstable sst) {
+    _version = _version->erase(sst);
+}
+
+bool sstable_list::contains(shared_sstable sst) const {
+    return _version->contains(sst);
+}
+
+bool sstable_list::empty() const {
+    return _version->size() == 0;
+}
+
+const sstable_set_version& sstable_list::version() const {
+    return *_version;
+}
+
+sstable_set::sstable_set(std::unique_ptr<sstable_set_impl> impl, schema_ptr s) {
+    if (!impl->empty()) {
+        throw std::logic_error("Can't create an sstable_set using a non-empty sstable_set_impl");
+    }
+    _all = make_lw_shared<sstable_list>(std::move(impl), std::move(s));
+}
+
+sstable_set::sstable_set(const sstable_set& x)
+    : _all(make_lw_shared<sstable_list>(*x._all)) {
+}
+
+sstable_set::sstable_set(sstable_set&& x) noexcept = default;
+
+sstable_set& sstable_set::operator=(const sstable_set& ssts) {
+    *this = sstable_set(ssts);
+    return *this;
+}
+
+sstable_set& sstable_set::operator=(sstable_set&& ssts) noexcept = default;
+
+
+std::vector<shared_sstable> sstable_set::select(const dht::partition_range& range) const {
+    return _all->version().select(range);
+}
+
+// Return all runs which contain any of the input sstables.
+std::vector<sstable_run> sstable_set::select_sstable_runs(const std::vector<shared_sstable>& sstables) const {
+    return _all->version().select_sstable_runs(sstables);
+}
+
+lw_shared_ptr<const sstable_list> sstable_set::all() const {
+    return _all;
+}
+
+void sstable_set::insert(shared_sstable sst) {
+    _all->insert(sst);
+}
+
+void sstable_set::erase(shared_sstable sst) {
+    _all->erase(sst);
 }
 
 sstable_set::incremental_selector::~incremental_selector() = default;
 
 sstable_set::incremental_selector::incremental_selector(sstable_set::incremental_selector&&) noexcept = default;
 
-sstable_set::incremental_selector::selection
-sstable_set::incremental_selector::select(const dht::ring_position_view& pos) const {
+sstable_set::incremental_selector::incremental_selector(std::unique_ptr<incremental_selector_impl> impl, const schema& s, lw_shared_ptr<sstable_list> sstl)
+    : _impl(std::move(impl))
+    , _cmp(s)
+    , _sstl(std::move(sstl)) {
+}
+
+sstable_set::incremental_selector::selection sstable_set::incremental_selector::select(const dht::ring_position_view& pos) const {
     if (!_current_range_view || !_current_range_view->contains(pos, _cmp)) {
-        std::tie(_current_range, _current_sstables, _current_next_position) = _impl->select(pos);
+        std::vector<shared_sstable> current_versioned_sstables;
+        std::tie(_current_range, current_versioned_sstables, _current_next_position) = _impl->select(pos);
+        _current_sstables = boost::copy_range<std::vector<shared_sstable>>(current_versioned_sstables
+                             | boost::adaptors::filtered([this] (shared_sstable sst) { return _sstl->contains(sst); })
+                             | boost::adaptors::transformed([] (shared_sstable sst) { return sst; }));
         _current_range_view = _current_range->transform([] (const dht::ring_position& rp) { return dht::ring_position_view(rp); });
     }
     return {_current_sstables, _current_next_position};
 }
 
-sstable_set::incremental_selector
-sstable_set::make_incremental_selector() const {
-    return incremental_selector(_impl->make_incremental_selector(), *_schema);
+sstables::sstable_set::incremental_selector sstable_set::make_incremental_selector() const {
+    return incremental_selector(_all->version().make_incremental_selector(), *_all->version().get_schema(), _all);
+}
+
+sstable_set_version::~sstable_set_version() {
+    for (auto& added_sst : _added) {
+        _base_set->remove(added_sst);
+    }
+    if (_prev) {
+        _prev->_next.erase(this);
+    }
+}
+
+// the sstable_set_impl must be empty
+sstable_set_version::sstable_set_version(std::unique_ptr<sstable_set_impl> impl, schema_ptr schema)
+    : _base_set(make_lw_shared<sstable_set_data>(std::move(impl)))
+    , _schema(std::move(schema)) {
+}
+
+// Creates a new version based on ver
+sstable_set_version::sstable_set_version(sstable_set_version* ver)
+    : _base_set(ver->_base_set)
+    , _schema(ver->_schema)
+    , _prev(ver) {
+        _prev->_next.insert(this);
+}
+
+// Merges changes made in this version into the next version (can be called only when there is a single next version,
+// and no further changes can be made to this one, i.e. no sstable_list references this version).
+void sstable_set_version::merge_with_next() noexcept {
+    auto next_version = *_next.begin();
+    next_version->_added = std::move(_added);
+    next_version->_erased = std::move(_erased);
+    auto next_nh = _next.extract(*_next.begin());
+    if (_prev) {
+        _prev->_next.erase(this);
+        _prev->_next.insert(std::move(next_nh));
+    }
+    next_version->_prev = std::move(_prev); // destroys this by overwriting the last reference
+}
+
+void sstable_set_version::propagate_inserted_sstable(const shared_sstable& sst) noexcept {
+    if (_reference_count > _next.size()) {
+        // If there exists a reference outside child versions (from sstable_list), this version can still be read from, so we can't modify it
+        return;
+    }
+    for (auto& ver_chck : _next) {
+        if (!ver_chck->_added.contains(sst)) {
+            return;
+        }
+    }
+    // Remove the sstable from child versions and get a node handle to insert in this version
+    auto sst_nh = (*_next.begin())->_added.extract(sst);
+    for (auto& ver_chck : _next) {
+        auto nh = ver_chck->_added.extract(sst_nh.value());
+        if (!nh.empty()) {
+            _base_set->remove(nh.value());
+        }
+    }
+    auto it = _erased.find(sst_nh.value());
+    if (it != _erased.end()) {
+        // If the sstable was erased in this version and added in all its children, its as if it weren't added or inserted in any of them
+        // because we won't read from this version anymore.
+        _erased.erase(it);
+        _base_set->remove(sst_nh.value());
+    } else {
+        auto added_it = _added.insert(std::move(sst_nh)).position;
+        if (_prev) {
+            _prev->propagate_inserted_sstable(*added_it);
+        }
+    }
+}
+
+void sstable_set_version::propagate_erased_sstable(const shared_sstable& sst) noexcept {
+    if (_reference_count > _next.size()) {
+        // If there exists a reference outside child versions (from sstable_list), this version can still be read from, so we can't modify it
+        return;
+    }
+    for (auto& ver_chck : _next) {
+        if (!ver_chck->_erased.contains(sst)) {
+            return;
+        }
+    }
+    // Remove the sstable from child versions and get a node handle to insert in this version
+    auto sst_nh = (*_next.begin())->_erased.extract(sst);
+    for (auto& ver_chck : _next) {
+        ver_chck->_erased.extract(sst_nh.value());
+    }
+    auto it = _added.find(sst_nh.value());
+    if (it != _added.end()) {
+        // If the sstable was added in this version and erased in all its children, its as if it weren't added or inserted in any of them
+        // because we won't read from this version anymore.
+        _added.erase(it);
+        _base_set->remove(sst_nh.value());
+    } else {
+        auto erased_it = _erased.insert(std::move(sst_nh)).position;
+        if (_prev) {
+            _prev->propagate_erased_sstable(*erased_it);
+        }
+    }
+}
+
+// Called when a reference to the version gets removed - if the reference was from an sstable_list, it's the first time we can propagate any
+// changes, and if the reference was from another sstable_set_version, we want to check if there were any changes that were present in all
+// versions based on this one, but absent in the version that was just removed.
+void sstable_set_version::propagate_changes_from_next_versions() noexcept {
+    if (_reference_count > _next.size() || _next.empty()) {
+        // If there exists a reference outside child versions (from sstable_list), this version can still be read from, so we can't modify it
+        // Or there are no child versions so there is nothing to propagate
+        return;
+    }
+    sstable_set_version* next_ver = *_next.begin();
+    // Propagate additions
+    for (auto ver : _next) {
+        if (ver->_added.size() < next_ver->_added.size()) {
+            next_ver = ver;
+        }
+    }
+    for (auto it = next_ver->_added.begin(); it != next_ver->_added.end();) {
+        auto& sst = *it;
+        it++;
+        propagate_inserted_sstable(sst);
+    }
+
+    next_ver = *_next.begin();
+    // Propagate erasures
+    for (auto ver : _next) {
+        if (ver->_erased.size() < next_ver->_erased.size()) {
+            next_ver = ver;
+        }
+    }
+    for (auto it = next_ver->_erased.begin(); it != next_ver->_erased.end();) {
+        auto& sst = *it;
+        it++;
+        propagate_erased_sstable(sst);
+    }
+}
+
+const sstable_set_version* sstable_set_version::get_previous_version() const {
+    return _prev.get();
+}
+
+bool sstable_set_version::can_merge_with_next() const noexcept {
+    return _reference_count == 1 && _next.size() == 1;
+}
+
+bool sstable_set_version::can_delete() const noexcept {
+    return _reference_count == 0;
+}
+
+void sstable_set_version::add_reference() noexcept {
+    _reference_count++;
+}
+
+void sstable_set_version::remove_reference() noexcept {
+    _reference_count--;
+    propagate_changes_from_next_versions();
+}
+
+schema_ptr sstable_set_version::get_schema() const {
+    return _schema;
+}
+
+std::vector<shared_sstable> sstable_set_version::select(const dht::partition_range& range) const {
+    return boost::copy_range<std::vector<shared_sstable>>(_base_set->select(range)
+         | boost::adaptors::filtered([this] (shared_sstable sst) { return this->contains(sst); }));
+}
+
+// Return all runs which contain any of the input sstables.
+std::vector<sstable_run> sstable_set_version::select_sstable_runs(const std::vector<shared_sstable>& sstables) const {
+    auto run_ids = boost::copy_range<std::unordered_set<utils::UUID>>(sstables | boost::adaptors::transformed(std::mem_fn(&sstable::run_identifier)));
+    return boost::copy_range<std::vector<sstable_run>>(run_ids | boost::adaptors::transformed([this] (utils::UUID run_id) {
+        return sstable_run(boost::copy_range<std::unordered_set<shared_sstable>>(_base_set->select_by_run_id(run_id)
+                         | boost::adaptors::filtered([this] (shared_sstable sst) { return this->contains(sst); })));
+    }));
+}
+
+const std::map<shared_sstable, unsigned>& sstable_set_version::all() const {
+    return _base_set->sstables_and_times_added;
+}
+
+// Provides strong exception guarantee
+sstable_set_version_reference sstable_set_version::insert(shared_sstable sst) {
+    if (this->contains(sst)) {
+        return get_reference_to_this();
+    }
+    if (_next.size()) {
+        auto sstvr = get_reference_to_new_copy();
+        // The new version has no copies based on it, so inserting into it doesn't create another version
+        return sstvr->insert(sst);
+    }
+    auto it = _erased.find(sst);
+    if (it != _erased.end()) {
+        _erased.erase(it);
+    } else {
+        _base_set->insert(sst);
+        try {
+            _added.insert(sst);
+            if (_prev) {
+                _prev->propagate_inserted_sstable(sst);
+            }
+        } catch (...) {
+            _base_set->remove(sst);
+            throw;
+        }
+    }
+    return get_reference_to_this();
+}
+
+// Provides strong exception guarantee
+sstable_set_version_reference sstable_set_version::erase(shared_sstable sst) {
+    if (!this->contains(sst)) {
+        return get_reference_to_this();
+    }
+    if (_next.size()) {
+        auto sstvr = get_reference_to_new_copy();
+        // The new version has no copies based on it, so erasing from it doesn't create another version
+        return sstvr->erase(sst);
+    }
+    auto it = _added.find(sst);
+    if (it != _added.end()) {
+        _added.erase(it);
+        _base_set->remove(sst);
+    } else {
+        _erased.insert(sst);
+        if (_prev) {
+            _prev->propagate_erased_sstable(sst);
+        }
+    }
+    return get_reference_to_this();
+}
+
+bool sstable_set_version::contains(shared_sstable sst) const {
+    return _added.contains(sst) || (!_erased.contains(sst) && _prev && _prev->contains(sst));
+}
+
+size_t sstable_set_version::size() const {
+    return _added.size() - _erased.size() + (_prev ? _prev->size() : 0);
+}
+
+std::unique_ptr<incremental_selector_impl> sstable_set_version::make_incremental_selector() const {
+    return _base_set->impl->make_incremental_selector();
+}    
+
+flat_mutation_reader
+sstable_set_version::create_single_key_sstable_reader(
+        column_family* cf,
+        schema_ptr schema,
+        reader_permit permit,
+        utils::estimated_histogram& sstable_histogram,
+        const dht::partition_range& pr,
+        const query::partition_slice& slice,
+        const io_priority_class& pc,
+        tracing::trace_state_ptr trace_state,
+        streamed_mutation::forwarding fwd,
+        mutation_reader::forwarding fwd_mr) const {
+    return _base_set->impl->create_single_key_sstable_reader(cf, std::move(schema),
+            std::move(permit), sstable_histogram, pr, slice, pc, std::move(trace_state), fwd, fwd_mr);
+}
+
+sstable_set_version_reference sstable_set_version::get_reference_to_this() {
+    return sstable_set_version_reference(this);
+}
+
+sstable_set_version_reference sstable_set_version::get_reference_to_new_copy() {
+    return sstable_set_version_reference(new sstable_set_version(this));
 }
 
 std::unique_ptr<sstable_set_impl> bag_sstable_set::clone() const {
@@ -844,7 +1274,7 @@ sstable_set::create_single_key_sstable_reader(
         streamed_mutation::forwarding fwd,
         mutation_reader::forwarding fwd_mr) const {
     assert(pr.is_singular() && pr.start()->value().has_key());
-    return _impl->create_single_key_sstable_reader(cf, std::move(schema),
+    return _all->version().create_single_key_sstable_reader(cf, std::move(schema),
             std::move(permit), sstable_histogram, pr, slice, pc, std::move(trace_state), fwd, fwd_mr);
 }
 
