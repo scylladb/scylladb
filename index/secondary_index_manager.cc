@@ -48,6 +48,7 @@
 #include "schema_builder.hh"
 #include "database.hh"
 #include "db/view/view.hh"
+#include "service/storage_service.hh"
 
 #include <boost/range/adaptor/map.hpp>
 #include <boost/algorithm/cxx11/any_of.hpp>
@@ -144,7 +145,13 @@ view_ptr secondary_index_manager::create_view_for_index(const index_metadata& im
         builder.with_column(index_target->name(), index_target->type, column_kind::partition_key);
         // Additional token column is added to ensure token order on secondary index queries
         bytes token_column_name = get_available_token_column_name(*schema);
-        builder.with_computed_column(token_column_name, bytes_type, column_kind::clustering_key, std::make_unique<token_column_computation>());
+        if (service::get_local_storage_service().db().local().features().cluster_supports_correct_idx_token_in_secondary_index()) {
+            builder.with_computed_column(token_column_name, long_type, column_kind::clustering_key, std::make_unique<token_column_computation>());
+        } else {
+            // FIXME(pgrabowski): this legacy code is here for backward compatibility and should be removed
+            // once "supports_correct_idx_token_in_secondary_index" is supported by every node
+            builder.with_computed_column(token_column_name, bytes_type, column_kind::clustering_key, std::make_unique<legacy_token_column_computation>());            
+        }
         for (auto& col : schema->partition_key_columns()) {
             if (col == *index_target) {
                 continue;

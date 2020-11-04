@@ -280,9 +280,9 @@ SEASTAR_TEST_CASE(test_many_columns) {
             auto res = e.execute_cql("SELECT * from tab WHERE b = 2").get0();
             assert_that(res).is_rows().with_size(3)
                 .with_rows({
+                {{int32_type->decompose(0)}, {int32_type->decompose(2)}, {int32_type->decompose(0)}, {int32_type->decompose(0)}, {int32_type->decompose(0)}, {int32_type->decompose(0)}},
                 {{int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(3)}, {int32_type->decompose(4)}, {int32_type->decompose(5)}, {int32_type->decompose(6)}},
                 {{int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(3)}, {int32_type->decompose(7)}, {int32_type->decompose(5)}, {int32_type->decompose(0)}},
-                {{int32_type->decompose(0)}, {int32_type->decompose(2)}, {int32_type->decompose(0)}, {int32_type->decompose(0)}, {int32_type->decompose(0)}, {int32_type->decompose(0)}},
             });
         });
         BOOST_TEST_PASSPOINT();
@@ -290,9 +290,9 @@ SEASTAR_TEST_CASE(test_many_columns) {
             auto res = e.execute_cql("SELECT * from tab WHERE c = 3").get0();
             assert_that(res).is_rows().with_size(3)
                 .with_rows({
+                {{int32_type->decompose(0)}, {int32_type->decompose(0)}, {int32_type->decompose(3)}, {int32_type->decompose(0)}, {int32_type->decompose(0)}, {int32_type->decompose(0)}},
                 {{int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(3)}, {int32_type->decompose(4)}, {int32_type->decompose(5)}, {int32_type->decompose(6)}},
                 {{int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(3)}, {int32_type->decompose(7)}, {int32_type->decompose(5)}, {int32_type->decompose(0)}},
-                {{int32_type->decompose(0)}, {int32_type->decompose(0)}, {int32_type->decompose(3)}, {int32_type->decompose(0)}, {int32_type->decompose(0)}, {int32_type->decompose(0)}},
             });
         });
         BOOST_TEST_PASSPOINT();
@@ -300,8 +300,8 @@ SEASTAR_TEST_CASE(test_many_columns) {
             auto res = e.execute_cql("SELECT * from tab WHERE d = 4").get0();
             assert_that(res).is_rows().with_size(2)
                 .with_rows({
-                {{int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(3)}, {int32_type->decompose(4)}, {int32_type->decompose(5)}, {int32_type->decompose(6)}},
                 {{int32_type->decompose(0)}, {int32_type->decompose(0)}, {int32_type->decompose(0)}, {int32_type->decompose(4)}, {int32_type->decompose(0)}, {int32_type->decompose(0)}},
+                {{int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(3)}, {int32_type->decompose(4)}, {int32_type->decompose(5)}, {int32_type->decompose(6)}},
             });
         });
         BOOST_TEST_PASSPOINT();
@@ -309,9 +309,9 @@ SEASTAR_TEST_CASE(test_many_columns) {
             auto res = e.execute_cql("SELECT * from tab WHERE e = 5").get0();
             assert_that(res).is_rows().with_size(3)
                 .with_rows({
+                {{int32_type->decompose(0)}, {int32_type->decompose(0)}, {int32_type->decompose(0)}, {int32_type->decompose(0)}, {int32_type->decompose(5)}, {int32_type->decompose(0)}},
                 {{int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(3)}, {int32_type->decompose(4)}, {int32_type->decompose(5)}, {int32_type->decompose(6)}},
                 {{int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(3)}, {int32_type->decompose(7)}, {int32_type->decompose(5)}, {int32_type->decompose(0)}},
-                {{int32_type->decompose(0)}, {int32_type->decompose(0)}, {int32_type->decompose(0)}, {int32_type->decompose(0)}, {int32_type->decompose(5)}, {int32_type->decompose(0)}},
             });
         });
         BOOST_TEST_PASSPOINT();
@@ -319,8 +319,8 @@ SEASTAR_TEST_CASE(test_many_columns) {
             auto res = e.execute_cql("SELECT * from tab WHERE f = 6").get0();
             assert_that(res).is_rows().with_size(2)
                 .with_rows({
-                {{int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(3)}, {int32_type->decompose(4)}, {int32_type->decompose(5)}, {int32_type->decompose(6)}},
                 {{int32_type->decompose(0)}, {int32_type->decompose(0)}, {int32_type->decompose(0)}, {int32_type->decompose(7)}, {int32_type->decompose(0)}, {int32_type->decompose(6)}},
+                {{int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(3)}, {int32_type->decompose(4)}, {int32_type->decompose(5)}, {int32_type->decompose(6)}},
             });
         });
     });
@@ -477,7 +477,7 @@ SEASTAR_TEST_CASE(test_simple_index_paging) {
             expect_more_pages(res, true);
 
             assert_that(res).is_rows().with_rows({{
-                {int32_type->decompose(3)}, {int32_type->decompose(2)}, {int32_type->decompose(1)},
+                {int32_type->decompose(1)}, {int32_type->decompose(1)}, {int32_type->decompose(1)},
             }});
 
             qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
@@ -487,7 +487,7 @@ SEASTAR_TEST_CASE(test_simple_index_paging) {
             paging_state = extract_paging_state(res);
 
             assert_that(res).is_rows().with_rows({{
-                {int32_type->decompose(1)}, {int32_type->decompose(1)}, {int32_type->decompose(1)},
+                {int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(1)},
             }});
 
             qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
@@ -496,7 +496,7 @@ SEASTAR_TEST_CASE(test_simple_index_paging) {
             paging_state = extract_paging_state(res);
 
             assert_that(res).is_rows().with_rows({{
-                {int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(1)},
+                {int32_type->decompose(3)}, {int32_type->decompose(2)}, {int32_type->decompose(1)},
             }});
 
             // Due to implementation differences from origin (Scylla is allowed to return empty pages with has_more_pages == true
@@ -521,7 +521,7 @@ SEASTAR_TEST_CASE(test_simple_index_paging) {
             auto paging_state = extract_paging_state(res);
 
             assert_that(res).is_rows().with_rows({{
-                {int32_type->decompose(3)}, {int32_type->decompose(2)}, {int32_type->decompose(1)},
+                {int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(1)},
             }});
 
             qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
@@ -529,7 +529,7 @@ SEASTAR_TEST_CASE(test_simple_index_paging) {
             res = e.execute_cql("SELECT * FROM tab WHERE c = 2", std::move(qo)).get0();
 
             assert_that(res).is_rows().with_rows({{
-                {int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(1)},
+                {int32_type->decompose(3)}, {int32_type->decompose(2)}, {int32_type->decompose(1)},
             }});
         });
 
@@ -540,7 +540,7 @@ SEASTAR_TEST_CASE(test_simple_index_paging) {
             auto paging_state = extract_paging_state(res);
 
             assert_that(res).is_rows().with_rows({{
-                {int32_type->decompose(3)}, {int32_type->decompose(2)}, {int32_type->decompose(1)},
+                {int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(1)},
             }});
 
             // Override the actual paging state with one with empty keys,
@@ -1514,6 +1514,37 @@ SEASTAR_TEST_CASE(test_computed_columns) {
         assert_that(msg).is_rows().with_rows({
             {{bytes_type->decompose(token_computation)}},
             {{bytes_type->decompose(token_computation)}}
+        });
+    });
+}
+
+// Ref: #3423 - rows should be returned in token order,
+// using signed comparison (ref: #7443)
+SEASTAR_TEST_CASE(test_token_order) {
+    return do_with_cql_env_thread([] (auto& e) {
+        cquery_nofail(e, "CREATE TABLE t (pk int, v int, PRIMARY KEY(pk))");
+        cquery_nofail(e, "CREATE INDEX ON t(v)");
+
+        for (int i = 0; i < 7; i++) {
+            cquery_nofail(e, format("INSERT INTO t (pk, v) VALUES ({}, 1)", i).c_str());
+        }
+
+        std::vector<std::vector<bytes_opt>> expected_rows = {
+            { int32_type->decompose(5) }, // token(pk) = -7509452495886106294
+            { int32_type->decompose(1) }, // token(pk) = -4069959284402364209
+            { int32_type->decompose(0) }, // token(pk) = -3485513579396041028
+            { int32_type->decompose(2) }, // token(pk) = -3248873570005575792
+            { int32_type->decompose(4) }, // token(pk) = -2729420104000364805
+            { int32_type->decompose(6) }, // token(pk) = +2705480034054113608
+            { int32_type->decompose(3) }, // token(pk) = +9010454139840013625
+        };
+
+        eventually([&] {
+            auto nonindex_order = cquery_nofail(e, "SELECT pk FROM t");
+            auto index_order = cquery_nofail(e, "SELECT pk FROM t WHERE v = 1");
+
+            assert_that(nonindex_order).is_rows().with_rows(expected_rows);
+            assert_that(index_order).is_rows().with_rows(expected_rows);
         });
     });
 }

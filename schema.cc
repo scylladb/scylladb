@@ -1602,19 +1602,33 @@ column_computation_ptr column_computation::deserialize(const rjson::value& parse
         throw std::runtime_error(format("Type {} is not convertible to string", *type_json));
     }
     if (rjson::to_string_view(*type_json) == "token") {
+        return std::make_unique<legacy_token_column_computation>();
+    }
+    if (rjson::to_string_view(*type_json) == "token_v2") {
         return std::make_unique<token_column_computation>();
     }
     throw std::runtime_error(format("Incorrect column computation type {} found when parsing {}", *type_json, parsed));
 }
 
-bytes token_column_computation::serialize() const {
+bytes legacy_token_column_computation::serialize() const {
     rjson::value serialized = rjson::empty_object();
     rjson::set(serialized, "type", rjson::from_string("token"));
     return to_bytes(rjson::print(serialized));
 }
 
-bytes_opt token_column_computation::compute_value(const schema& schema, const partition_key& key, const clustering_row& row) const {
+bytes_opt legacy_token_column_computation::compute_value(const schema& schema, const partition_key& key, const clustering_row& row) const {
     return dht::get_token(schema, key).data();
+}
+
+bytes token_column_computation::serialize() const {
+    rjson::value serialized = rjson::empty_object();
+    rjson::set(serialized, "type", rjson::from_string("token_v2"));
+    return to_bytes(rjson::print(serialized));
+}
+
+bytes_opt token_column_computation::compute_value(const schema& schema, const partition_key& key, const clustering_row& row) const {
+    auto long_value = dht::token::to_int64(dht::get_token(schema, key));
+    return long_type->decompose(long_value);
 }
 
 bool operator==(const raw_view_info& x, const raw_view_info& y) {

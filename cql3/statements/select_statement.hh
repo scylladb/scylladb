@@ -300,6 +300,8 @@ private:
 
     query::partition_slice get_partition_slice_for_local_index_posting_list(const query_options& options) const;
     query::partition_slice get_partition_slice_for_global_index_posting_list(const query_options& options) const;
+
+    bytes compute_idx_token(const partition_key& key) const;
 };
 
 }
