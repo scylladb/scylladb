@@ -54,7 +54,8 @@ public:
         const io_priority_class&,
         tracing::trace_state_ptr,
         streamed_mutation::forwarding,
-        mutation_reader::forwarding) const;
+        mutation_reader::forwarding,
+        const sstable_list&) const;
 };
 
 // default sstable_set, not specialized for anything
@@ -144,7 +145,8 @@ public:
         const io_priority_class&,
         tracing::trace_state_ptr,
         streamed_mutation::forwarding,
-        mutation_reader::forwarding) const override;
+        mutation_reader::forwarding,
+        const sstable_list&) const override;
 };
 
 } // namespace sstables
