@@ -146,13 +146,11 @@ def test_describe_table_arn(test_table):
     assert 'TableArn' in got and got['TableArn'].startswith('arn:')
 
 # Test that the table has a TableId.
-# TODO: Figure out what is this TableId supposed to be, it is just a
-# unique id that is created with the table and never changes? Or anything
-# else?
-@pytest.mark.xfail(reason="DescribeTable does not return TableId")
+# DynamoDB documentation states that this id must look like a UUID.
 def test_describe_table_id(test_table):
     got = test_table.meta.client.describe_table(TableName=test_table.name)['Table']
     assert 'TableId' in got
+    assert re.fullmatch('[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', got['TableId'])
 
 # DescribeTable error path: trying to describe a non-existent table should
 # result in a ResourceNotFoundException.

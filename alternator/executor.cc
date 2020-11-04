@@ -404,6 +404,7 @@ future<executor::request_return_type> executor::describe_table(client_state& cli
     // returned.
     rjson::set(table_description, "TableStatus", "ACTIVE");
     rjson::set(table_description, "TableArn", generate_arn_for_table(*schema));
+    rjson::set(table_description, "TableId", rjson::from_string(schema->id().to_sstring()));
     // FIXME: Instead of hardcoding, we should take into account which mode was chosen
     // when the table was created. But, Spark jobs expect something to be returned
     // and PAY_PER_REQUEST seems closer to reality than PROVISIONED.
