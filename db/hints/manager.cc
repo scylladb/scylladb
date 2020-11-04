@@ -533,6 +533,50 @@ bool manager::can_hint_for(ep_key_type ep) const noexcept {
     return true;
 }
 
+future<> manager::change_host_filter(host_filter filter) {
+    if (!started()) {
+        return make_exception_future<>(std::logic_error("change_host_filter: called before the hints_manager was started"));
+    }
+
+    return with_gate(_draining_eps_gate, [this, filter = std::move(filter)] () mutable {
+        return with_semaphore(drain_lock(), 1, [this, filter = std::move(filter)] () mutable {
+            if (draining_all()) {
+                return make_exception_future<>(std::logic_error("change_host_filter: cannot change the configuration because hints all hints were drained"));
+            }
+
+            manager_logger.debug("change_host_filter: changing from {} to {}", _host_filter, filter);
+
+            // Change the host_filter now and save the old one so that we can
+            // roll back in case of failure
+            std::swap(_host_filter, filter);
+
+            // Iterate over existing hint directories and see if we can enable an endpoint manager
+            // for some of them
+            return lister::scan_dir(_hints_dir, { directory_entry_type::directory }, [this] (fs::path datadir, directory_entry de) {
+                const ep_key_type ep = ep_key_type(de.name);
+                if (_ep_managers.contains(ep) || !_host_filter.can_hint_for(_local_snitch_ptr, ep)) {
+                    return make_ready_future<>();
+                }
+                return get_ep_manager(ep).populate_segments_to_replay();
+            }).handle_exception([this, filter = std::move(filter)] (auto ep) mutable {
+                // Bring back the old filter. The finally() block will cause us to stop
+                // the additional ep_hint_managers that we started
+                _host_filter = std::move(filter);
+            }).finally([this] {
+                // Remove endpoint managers which are rejected by the filter
+                return parallel_for_each(_ep_managers, [this] (auto& pair) {
+                    if (_host_filter.can_hint_for(_local_snitch_ptr, pair.first)) {
+                        return make_ready_future<>();
+                    }
+                    return pair.second.stop(drain::no).finally([this, ep = pair.first] {
+                        _ep_managers.erase(ep);
+                    });
+                });
+            });
+        });
+    });
+}
+
 bool manager::check_dc_for(ep_key_type ep) const noexcept {
     try {
         // If target's DC is not a "hintable" DCs - don't hint.

@@ -502,6 +502,11 @@ public:
     future<> stop();
     bool store_hint(gms::inet_address ep, schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state) noexcept;
 
+    /// \brief Changes the host_filter currently used, stopping and starting ep_managers relevant to the new host_filter.
+    /// \param filter the new host_filter
+    /// \return A future that resolves when the operation is complete.
+    future<> change_host_filter(host_filter filter);
+
     /// \brief Check if a hint may be generated to the give end point
     /// \param ep end point to check
     /// \return true if we should generate the hint to the given end point if it becomes unavailable
