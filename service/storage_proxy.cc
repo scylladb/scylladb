@@ -1789,6 +1789,7 @@ storage_proxy::storage_proxy(distributed<database>& db, storage_proxy::config cf
     , _next_response_id(std::chrono::system_clock::now().time_since_epoch()/1ms)
     , _hints_resource_manager(cfg.available_memory / 10)
     , _hints_manager(_db.local().get_config().hints_directory(), cfg.hinted_handoff_enabled, _db.local().get_config().max_hint_window_in_ms(), _hints_resource_manager, _db)
+    , _hints_directory_initializer(std::move(cfg.hints_directory_initializer))
     , _hints_for_views_manager(_db.local().get_config().view_hints_directory(), {}, _db.local().get_config().max_hint_window_in_ms(), _hints_resource_manager, _db)
     , _stats_key(stats_key)
     , _features(feat)
@@ -5207,6 +5208,25 @@ future<> storage_proxy::start_hints_manager(shared_ptr<gms::gossiper> gossiper_p
 
 void storage_proxy::allow_replaying_hints() noexcept {
     return _hints_resource_manager.allow_replaying();
+}
+
+future<> storage_proxy::change_hints_host_filter(db::hints::host_filter new_filter) {
+    if (new_filter == _hints_manager.get_host_filter()) {
+        return make_ready_future<>();
+    }
+
+    return _hints_directory_initializer.ensure_created_and_verified().then([this] {
+        return _hints_directory_initializer.ensure_rebalanced();
+    }).then([this] {
+        // This function is idempotent
+        return _hints_resource_manager.register_manager(_hints_manager);
+    }).then([this, new_filter = std::move(new_filter)] () mutable {
+        return _hints_manager.change_host_filter(std::move(new_filter));
+    });
+}
+
+const db::hints::host_filter& storage_proxy::get_hints_host_filter() const {
+    return _hints_manager.get_host_filter();
 }
 
 void storage_proxy::on_join_cluster(const gms::inet_address& endpoint) {};

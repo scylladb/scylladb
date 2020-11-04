@@ -496,7 +496,9 @@ public:
                 ss.enable_all_features();
             }).get();
 
-            service::storage_proxy::config spcfg;
+            service::storage_proxy::config spcfg {
+                .hints_directory_initializer = db::hints::directory_initializer::make_dummy(),
+            };
             spcfg.available_memory = memory::stats().total_memory();
             db::view::node_update_backlog b(smp::count, 10ms);
             scheduling_group_key_config sg_conf =

@@ -201,29 +201,39 @@ void set_storage_proxy(http_context& ctx, routes& r) {
     });
 
     sp::get_hinted_handoff_enabled.set(r, [&ctx](std::unique_ptr<request> req)  {
-        auto enabled = ctx.db.local().get_config().hinted_handoff_enabled();
-        return make_ready_future<json::json_return_type>(enabled.to_configuration_string());
+        const auto& filter = service::get_storage_proxy().local().get_hints_host_filter();
+        return make_ready_future<json::json_return_type>(!filter.is_disabled_for_all());
     });
 
     sp::set_hinted_handoff_enabled.set(r, [](std::unique_ptr<request> req)  {
-        //TBD
-        unimplemented();
         auto enable = req->get_query_param("enable");
-        return make_ready_future<json::json_return_type>(json_void());
+        auto filter = (enable == "true" || enable == "1")
+                ? db::hints::host_filter(db::hints::host_filter::enabled_for_all_tag {})
+                : db::hints::host_filter(db::hints::host_filter::disabled_for_all_tag {});
+        return service::get_storage_proxy().invoke_on_all([filter = std::move(filter)] (service::storage_proxy& sp) {
+            return sp.change_hints_host_filter(filter);
+        }).then([] {
+            return make_ready_future<json::json_return_type>(json_void());
+        });
     });
 
     sp::get_hinted_handoff_enabled_by_dc.set(r, [](std::unique_ptr<request> req)  {
-        //TBD
-        unimplemented();
         std::vector<sstring> res;
+        const auto& filter = service::get_storage_proxy().local().get_hints_host_filter();
+        const auto& dcs = filter.get_dcs();
+        res.reserve(res.size());
+        std::copy(dcs.begin(), dcs.end(), std::back_inserter(res));
         return make_ready_future<json::json_return_type>(res);
     });
 
     sp::set_hinted_handoff_enabled_by_dc_list.set(r, [](std::unique_ptr<request> req)  {
-        //TBD
-        unimplemented();
-        auto enable = req->get_query_param("dcs");
-        return make_ready_future<json::json_return_type>(json_void());
+        auto dcs = req->get_query_param("dcs");
+        auto filter = db::hints::host_filter::parse_from_dc_list(std::move(dcs));
+        return service::get_storage_proxy().invoke_on_all([filter = std::move(filter)] (service::storage_proxy& sp) {
+            return sp.change_hints_host_filter(filter);
+        }).then([] {
+            return make_ready_future<json::json_return_type>(json_void());
+        });
     });
 
     sp::get_max_hint_window.set(r, [](std::unique_ptr<request> req)  {

@@ -507,6 +507,10 @@ public:
     /// \return A future that resolves when the operation is complete.
     future<> change_host_filter(host_filter filter);
 
+    const host_filter& get_host_filter() const noexcept {
+        return _host_filter;
+    }
+
     /// \brief Check if a hint may be generated to the give end point
     /// \param ep end point to check
     /// \return true if we should generate the hint to the given end point if it becomes unavailable

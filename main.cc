@@ -852,7 +852,9 @@ int main(int ac, char** av) {
 
             init_gossiper(gossiper, *cfg, listen_address, seed_provider, cluster_name);
             supervisor::notify("starting storage proxy");
-            service::storage_proxy::config spcfg;
+            service::storage_proxy::config spcfg {
+                .hints_directory_initializer = hints_dir_initializer,
+            };
             spcfg.hinted_handoff_enabled = hinted_handoff_enabled;
             spcfg.available_memory = memory::stats().total_memory();
             smp_service_group_config storage_proxy_smp_service_group_config;
