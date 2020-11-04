@@ -1956,6 +1956,13 @@ with open(buildfile_tmp, 'w') as f:
         build mode_list: mode_list
         default {modes_list}
         ''').format(modes_list=' '.join(default_modes), **globals()))
+    unit_test_list = set(test for test in build_artifacts if test in set(tests))
+    f.write(textwrap.dedent('''\
+        rule unit_test_list
+            command = /usr/bin/env echo -e '{unit_test_list}'
+            description = List configured unit tests
+        build unit_test_list: unit_test_list
+        ''').format(unit_test_list="\\n".join(unit_test_list)))
     f.write(textwrap.dedent('''\
         build always: phony
         rule scylla_version_gen
@@ -1964,6 +1971,6 @@ with open(buildfile_tmp, 'w') as f:
         rule debian_files_gen
             command = ./dist/debian/debian_files_gen.py
         build $builddir/debian/debian: debian_files_gen | always
-        ''').format(modes_list=' '.join(build_modes), **globals()))
+        ''').format(**globals()))
 
 os.rename(buildfile_tmp, buildfile)

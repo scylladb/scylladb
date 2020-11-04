@@ -8,8 +8,6 @@ run_first:
     - cql_query_test
     - mutation_reader_test
     - view_schema_test
-disable:
-    - raft_fsm_test
 # Custom command line arguments for some of the tests
 custom_args:
     mutation_reader_test:
