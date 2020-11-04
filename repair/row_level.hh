@@ -55,3 +55,5 @@ future<> repair_cf_range_row_level(repair_info& ri,
         const std::vector<gms::inet_address>& all_peer_nodes);
 
 future<> shutdown_all_row_level_repair();
+
+future<> repair_set_limiter(size_t rate, size_t burst);

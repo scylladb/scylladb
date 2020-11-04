@@ -834,6 +834,38 @@
          ]
       },
       {
+         "path":"/storage_service/repair_limit/",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Set the bandwidth limiter for repair",
+               "type":"void",
+               "nickname":"repair_set_limiter",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"rate",
+                     "description":"Limit on sustained bytes per second for repair",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"long",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"burst",
+                     "description":"Limit on max number of bytes per request for repair",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"long",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
          "path":"/storage_service/repair_status/",
          "operations":[
             {

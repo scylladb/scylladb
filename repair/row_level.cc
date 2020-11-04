@@ -53,6 +53,91 @@
 
 extern logging::logger rlogger;
 
+class token_bucket {
+private:
+    size_t _fill_rate;
+    size_t _max_tokens;
+    size_t _current_tokens;
+    seastar::condition_variable _cond;
+    seastar::timer<std::chrono::steady_clock> _fill_timer;
+    std::chrono::milliseconds _fill_interval{10};
+    size_t _max_oversized_request = 0;
+private:
+    void fill() {
+        auto tokens = _fill_rate * _fill_interval.count() / std::chrono::milliseconds(1000).count();
+        _current_tokens = std::min(_max_tokens, _current_tokens + tokens);
+        _cond.broadcast();
+    }
+    bool enabled() {
+        return _fill_rate != 0;
+    }
+public:
+    token_bucket(size_t fill_rate, size_t max_tokens)
+        : _fill_rate(fill_rate)
+        , _max_tokens(max_tokens)
+        , _current_tokens(max_tokens) {
+        _fill_timer.set_callback([this] { fill(); });
+        set_limit(fill_rate, max_tokens);
+    }
+    future<> consume(size_t tokens) {
+        if (!enabled()) {
+            return make_ready_future<>();
+        }
+        if (tokens > _max_tokens) {
+            if (tokens > _max_oversized_request) {
+                _max_oversized_request = tokens;
+                rlogger.warn("bandwidth_limiter: Number of bytes={} requested are bigger than max allowed number of bytes per request={}", tokens, _max_tokens);
+            }
+            tokens = _max_tokens;
+        }
+        return _cond.wait([this, tokens] {
+            bool wake_up = tokens <= _current_tokens || !enabled();
+            if (wake_up) {
+                if (enabled()) {
+                    _current_tokens -= tokens;
+                } else {
+                    _current_tokens = _max_tokens;
+                }
+            }
+            return wake_up;
+        });
+    }
+    size_t get_rate() {
+        return _fill_rate;
+    }
+    size_t get_max_tokens() {
+        return _max_tokens;
+    }
+    void set_limit(size_t fill_rate, size_t max_tokens) {
+        _fill_rate = fill_rate;
+        if (max_tokens == 0) {
+            _max_tokens = 10 * _fill_rate;
+        } else {
+            _max_tokens = max_tokens;
+        }
+        if (enabled()) {
+            rlogger.info0("bandwidth_limiter: Set rate={} bytes/second, max_bytes_per_request={} bytes/request, status=enabled", _fill_rate, _max_tokens);
+            if (!_fill_timer.armed()) {
+                _fill_timer.arm_periodic(_fill_interval);
+            }
+        } else {
+            rlogger.info0("bandwidth_limiter: Set rate={} bytes/second, max_bytes_per_request={} bytes/request, status=disabled", _fill_rate, _max_tokens);
+            _fill_timer.cancel();
+        }
+        _cond.broadcast();
+    }
+};
+
+// Bandwidth limitation is disabled by default
+static thread_local token_bucket _token_bucket(0, 0);
+
+future<> repair_set_limiter(size_t rate, size_t burst) {
+    return smp::invoke_on_all([rate, burst] {
+        rlogger.debug("Set repair bandwidth limiter rate={} bytes/second, burst={} bytes/request", rate, burst);
+        _token_bucket.set_limit(rate, burst);
+    });
+}
+
 struct shard_config {
     unsigned shard;
     unsigned shard_count;
@@ -621,7 +706,8 @@ public:
         return make_ready_future<>();
     }
 
-    future<> do_write(lw_shared_ptr<const decorated_key_with_hash> dk, mutation_fragment mf) {
+    future<> do_write(lw_shared_ptr<const decorated_key_with_hash> dk, mutation_fragment mf, size_t sz) {
+      return _token_bucket.consume(sz).then([this, dk = std::move(dk), mf = std::move(mf), sz] () mutable {
         if (_current_dk_written_to_sstable) {
             if (_current_dk_written_to_sstable->dk.equal(*_schema, dk->dk)) {
                 return _mq->push(std::move(mf));
@@ -634,6 +720,7 @@ public:
         } else {
             return write_start_and_mf(std::move(dk), std::move(mf));
         }
+      });
     }
 
     future<> write_end_of_stream() {
@@ -1141,27 +1228,30 @@ private:
         return repair_hash(h.finalize_uint64());
     }
 
-    stop_iteration handle_mutation_fragment(mutation_fragment& mf, size_t& cur_size, size_t& new_rows_size, std::list<repair_row>& cur_rows) {
+    future<stop_iteration> handle_mutation_fragment(mutation_fragment mf, size_t& cur_size, size_t& new_rows_size, std::list<repair_row>& cur_rows) {
         if (mf.is_partition_start()) {
             auto& start = mf.as_partition_start();
             _repair_reader.set_current_dk(start.key());
             if (!start.partition_tombstone()) {
                 // Ignore partition_start with empty partition tombstone
-                return stop_iteration::no;
+                return make_ready_future<stop_iteration>(stop_iteration::no);
             }
         } else if (mf.is_end_of_partition()) {
             _repair_reader.clear_current_dk();
-            return stop_iteration::no;
+            return make_ready_future<stop_iteration>(stop_iteration::no);
         }
         auto hash = do_hash_for_mf(*_repair_reader.get_current_dk(), mf);
         repair_row r(freeze(*_schema, mf), position_in_partition(mf.position()), _repair_reader.get_current_dk(), hash, is_dirty_on_master::no);
         rlogger.trace("Reading: r.boundary={}, r.hash={}", r.boundary(), r.hash());
+        size_t sz = r.size();
         _metrics.row_from_disk_nr++;
         _metrics.row_from_disk_bytes += r.size();
         cur_size += r.size();
         new_rows_size += r.size();
         cur_rows.push_back(std::move(r));
-        return stop_iteration::no;
+        return _token_bucket.consume(sz).then([] {
+            return make_ready_future<stop_iteration>(stop_iteration::no);
+        });
     }
 
     // Read rows from sstable until the size of rows exceeds _max_row_buf_size  - current_size
@@ -1179,9 +1269,9 @@ private:
                 return _repair_reader.read_mutation_fragment().then([this, &cur_size, &new_rows_size, &cur_rows] (mutation_fragment_opt mfopt) mutable {
                     if (!mfopt) {
                         _repair_reader.on_end_of_stream();
-                        return stop_iteration::yes;
+                        return make_ready_future<stop_iteration>(stop_iteration::yes);
                     }
-                    return handle_mutation_fragment(*mfopt, cur_size, new_rows_size, cur_rows);
+                    return handle_mutation_fragment(std::move(*mfopt), cur_size, new_rows_size, cur_rows);
                 });
             }).then_wrapped([this, &cur_rows, &new_rows_size] (future<> fut) mutable {
                 if (fut.failed()) {
@@ -1350,6 +1440,7 @@ private:
                         return make_ready_future<stop_iteration>(stop_iteration::yes);
                     }
                     repair_row& r = row_diff.front();
+                    auto sz = r.size();
                     if (update_buf) {
                         _working_row_buf_combined_hash.add(r.hash());
                     }
@@ -1358,7 +1449,7 @@ private:
                     // to_repair_rows_list above where the repair_row is created.
                     mutation_fragment mf = std::move(r.get_mutation_fragment());
                     auto dk_with_hash = r.get_dk_with_hash();
-                    return _repair_writer->do_write(std::move(dk_with_hash), std::move(mf)).then([&row_diff] {
+                    return _repair_writer->do_write(std::move(dk_with_hash), std::move(mf), sz).then([&row_diff] {
                         row_diff.pop_front();
                         return make_ready_future<stop_iteration>(stop_iteration::no);
                     });
@@ -1409,6 +1500,7 @@ public:
         auto cmp = position_in_partition::tri_compare(*_schema);
         lw_shared_ptr<mutation_fragment> last_mf;
         lw_shared_ptr<const decorated_key_with_hash> last_dk;
+        size_t last_sz;
         for (auto& r : _working_row_buf) {
             thread::maybe_yield();
             if (!r.dirty_on_master()) {
@@ -1424,14 +1516,15 @@ public:
                 last_mf->apply(*_schema, std::move(*mf));
             } else {
                 if (last_mf && last_dk) {
-                    _repair_writer->do_write(std::move(last_dk), std::move(*last_mf)).get();
+                    _repair_writer->do_write(std::move(last_dk), std::move(*last_mf), last_sz).get();
                 }
                 last_mf = mf;
                 last_dk = r.get_dk_with_hash();
+                last_sz = r.size();
             }
         }
         if (last_mf && last_dk) {
-            _repair_writer->do_write(std::move(last_dk), std::move(*last_mf)).get();
+            _repair_writer->do_write(std::move(last_dk), std::move(*last_mf), last_sz).get();
         }
     }
 
@@ -1508,7 +1601,7 @@ private:
                         } else {
                             last_mf = mf;
                             // On repair follower node, only decorated_key_with_hash and the mutation_fragment inside repair_row are used.
-                            row_list.push_back(repair_row({}, {}, dk_ptr, {}, is_dirty_on_master::no, std::move(mf)));
+                            row_list.push_back(repair_row({std::move(fmf)}, {}, dk_ptr, {}, is_dirty_on_master::no, std::move(mf)));
                         }
                     });
                 }

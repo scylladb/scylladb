@@ -33,6 +33,7 @@
 #include "db/system_keyspace.hh"
 #include "seastar/http/exception.hh"
 #include "repair/repair.hh"
+#include "repair/row_level.hh"
 #include "locator/snitch_base.hh"
 #include "column_family.hh"
 #include "log.hh"
@@ -189,6 +190,17 @@ void set_repair(http_context& ctx, routes& r, sharded<netw::messaging_service>& 
                 throw httpd::bad_param_exception(e.what());
             }
             return make_ready_future<json::json_return_type>(json::json_return_type(res));
+        });
+    });
+
+    ss::repair_set_limiter.set(r, [&ctx](std::unique_ptr<request> req) {
+        auto rate = boost::lexical_cast<size_t>(req->get_query_param("rate"));
+        size_t burst = 0;
+        if (!req->get_query_param("burst").empty()) {
+            burst = boost::lexical_cast<size_t>(req->get_query_param("burst"));
+        }
+        return repair_set_limiter(rate, burst).then([] {
+            return make_ready_future<json::json_return_type>(json_void());
         });
     });
 
