@@ -571,7 +571,7 @@ public:
         _mq[node_idx] = std::move(queue_handle);
         auto writer = shared_from_this();
         _writer_done[node_idx] = mutation_writer::distribute_reader_and_consume_on_shards(_schema, std::move(queue_reader),
-                [&db, reason = this->_reason, estimated_partitions = this->_estimated_partitions, writer] (flat_mutation_reader reader) {
+                [&db, reason = this->_reason, estimated_partitions = this->_estimated_partitions] (flat_mutation_reader reader) {
             auto& t = db.local().find_column_family(reader.schema());
             return db::view::check_needs_view_update_path(_sys_dist_ks->local(), t, reason).then([t = t.shared_from_this(), estimated_partitions, reader = std::move(reader)] (bool use_view_update_path) mutable {
                 //FIXME: for better estimations this should be transmitted from remote
