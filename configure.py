@@ -520,17 +520,6 @@ arg_parser.add_argument('--test-repeat', dest='test_repeat', action='store', typ
 arg_parser.add_argument('--test-timeout', dest='test_timeout', action='store', type=str, default='7200')
 args = arg_parser.parse_args()
 
-coroutines_test_src = '''
-#define GCC_VERSION (__GNUC__ * 10000 + __GNUC_MINOR__ * 100 + __GNUC_PATCHLEVEL__)
-#if GCC_VERSION < 100201
-    #error "Coroutines support requires at leat gcc 10.2.1"
-#endif
-'''
-compiler_supports_coroutines = try_compile(compiler=args.cxx, source=coroutines_test_src)
-
-if args.build_raft and not compiler_supports_coroutines:
-    raise Exception("--build-raft is requested, while the used compiler does not support coroutines")
-
 if not args.build_raft:
     all_artifacts.difference_update(raft_tests)
     tests.difference_update(raft_tests)
@@ -1331,9 +1320,6 @@ args.user_cflags += f" -ffile-prefix-map={curdir}=."
 
 seastar_cflags = args.user_cflags
 
-if build_raft:
-    seastar_cflags += ' -fcoroutines'
-
 if args.target != '':
     seastar_cflags += ' -march=' + args.target
 seastar_ldflags = args.user_ldflags
@@ -1469,7 +1455,7 @@ if not args.staticboost:
     args.user_cflags += ' -DBOOST_TEST_DYN_LINK'
 
 if build_raft:
-    args.user_cflags += ' -DENABLE_SCYLLA_RAFT -fcoroutines'
+    args.user_cflags += ' -DENABLE_SCYLLA_RAFT'
 
 # thrift version detection, see #4538
 proc_res = subprocess.run(["thrift", "-version"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)

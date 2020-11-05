@@ -104,7 +104,7 @@ public:
     future<raft::snapshot_id> take_snapshot() override {
         snapshots[_id].hasher = *hasher;
         tlogger.debug("sm[{}] takes snapshot {}", _id, snapshots[_id].hasher.finalize_uint64());
-        return make_ready_future<raft::snapshot_id>(utils::make_random_uuid());
+        return make_ready_future<raft::snapshot_id>(raft::snapshot_id{utils::make_random_uuid()});
     }
     void drop_snapshot(raft::snapshot_id id) override {
         snapshots.erase(_id);
@@ -138,7 +138,7 @@ class storage : public raft::storage {
 public:
     storage(raft::server_id id, initial_state conf) : _id(id), _conf(std::move(conf)) {}
     storage() {}
-    virtual future<> store_term_and_vote(raft::term_t term, raft::server_id vote) { co_return seastar::sleep(1us); }
+    virtual future<> store_term_and_vote(raft::term_t term, raft::server_id vote) { return seastar::sleep(1us); }
     virtual future<std::pair<raft::term_t, raft::server_id>> load_term_and_vote() {
         auto term_and_vote = std::make_pair(_conf.term, _conf.vote);
         return make_ready_future<std::pair<raft::term_t, raft::server_id>>(term_and_vote);
@@ -151,7 +151,7 @@ public:
     future<raft::snapshot> load_snapshot() override {
         return make_ready_future<raft::snapshot>(_conf.snapshot);
     }
-    virtual future<> store_log_entries(const std::vector<raft::log_entry_ptr>& entries) { co_return seastar::sleep(1us); };
+    virtual future<> store_log_entries(const std::vector<raft::log_entry_ptr>& entries) { return seastar::sleep(1us); };
     virtual future<raft::log_entries> load_log() {
         raft::log_entries log;
         for (auto&& e : _conf.log) {
