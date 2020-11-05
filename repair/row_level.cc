@@ -336,11 +336,14 @@ private:
     }
 };
 
+using is_dirty_on_master = bool_class<class is_dirty_on_master_tag>;
+
 class repair_row {
     std::optional<frozen_mutation_fragment> _fm;
     lw_shared_ptr<const decorated_key_with_hash> _dk_with_hash;
     std::optional<repair_sync_boundary> _boundary;
     std::optional<repair_hash> _hash;
+    is_dirty_on_master _dirty_on_master;
     lw_shared_ptr<mutation_fragment> _mf;
 public:
     repair_row() = default;
@@ -348,12 +351,17 @@ public:
             std::optional<position_in_partition> pos,
             lw_shared_ptr<const decorated_key_with_hash> dk_with_hash,
             std::optional<repair_hash> hash,
+            is_dirty_on_master dirty_on_master,
             lw_shared_ptr<mutation_fragment> mf = {})
             : _fm(std::move(fm))
             , _dk_with_hash(std::move(dk_with_hash))
             , _boundary(pos ? std::optional<repair_sync_boundary>(repair_sync_boundary{_dk_with_hash->dk, std::move(*pos)}) : std::nullopt)
             , _hash(std::move(hash))
+            , _dirty_on_master(dirty_on_master)
             , _mf(std::move(mf)) {
+    }
+    lw_shared_ptr<mutation_fragment>& get_mutation_fragment_ptr () {
+        return _mf;
     }
     mutation_fragment& get_mutation_fragment() {
         if (!_mf) {
@@ -393,6 +401,9 @@ public:
             throw std::runtime_error("empty hash");
         }
         return *_hash;
+    }
+    is_dirty_on_master dirty_on_master() const {
+        return _dirty_on_master;
     }
 };
 
@@ -514,15 +525,14 @@ class repair_writer : public enable_lw_shared_from_this<repair_writer> {
     reader_permit _permit;
     uint64_t _estimated_partitions;
     size_t _nr_peer_nodes;
-    // Needs more than one for repair master
-    std::vector<std::optional<future<>>> _writer_done;
-    std::vector<std::optional<queue_reader_handle>> _mq;
+    std::optional<future<>> _writer_done;
+    std::optional<queue_reader_handle> _mq;
     // Current partition written to disk
-    std::vector<lw_shared_ptr<const decorated_key_with_hash>> _current_dk_written_to_sstable;
+    lw_shared_ptr<const decorated_key_with_hash> _current_dk_written_to_sstable;
     // Is current partition still open. A partition is opened when a
     // partition_start is written and is closed when a partition_end is
     // written.
-    std::vector<bool> _partition_opened;
+    bool _partition_opened;
     streaming::stream_reason _reason;
     named_semaphore _sem{1, named_semaphore_exception_factory{"repair_writer"}};
 public:
@@ -537,40 +547,32 @@ public:
             , _estimated_partitions(estimated_partitions)
             , _nr_peer_nodes(nr_peer_nodes)
             , _reason(reason) {
-        init_writer();
     }
 
-    future<> write_start_and_mf(lw_shared_ptr<const decorated_key_with_hash> dk, mutation_fragment mf, unsigned node_idx)  {
-        _current_dk_written_to_sstable[node_idx] = dk;
+    future<> write_start_and_mf(lw_shared_ptr<const decorated_key_with_hash> dk, mutation_fragment mf)  {
+        _current_dk_written_to_sstable = dk;
         if (mf.is_partition_start()) {
-            return _mq[node_idx]->push(std::move(mf)).then([this, node_idx] {
-                _partition_opened[node_idx] = true;
+            return _mq->push(std::move(mf)).then([this] {
+                _partition_opened = true;
             });
         } else {
             auto start = mutation_fragment(*_schema, _permit, partition_start(dk->dk, tombstone()));
-            return _mq[node_idx]->push(std::move(start)).then([this, node_idx, mf = std::move(mf)] () mutable {
-                _partition_opened[node_idx] = true;
-                return _mq[node_idx]->push(std::move(mf));
+            return _mq->push(std::move(start)).then([this, mf = std::move(mf)] () mutable {
+                _partition_opened = true;
+                return _mq->push(std::move(mf));
             });
         }
     };
 
-    void init_writer() {
-        _writer_done.resize(_nr_peer_nodes);
-        _mq.resize(_nr_peer_nodes);
-        _current_dk_written_to_sstable.resize(_nr_peer_nodes);
-        _partition_opened.resize(_nr_peer_nodes, false);
-    }
-
-    void create_writer(sharded<database>& db, unsigned node_idx) {
-        if (_writer_done[node_idx]) {
+    void create_writer(sharded<database>& db) {
+        if (_writer_done) {
             return;
         }
         table& t = db.local().find_column_family(_schema->id());
         auto [queue_reader, queue_handle] = make_queue_reader(_schema, _permit);
-        _mq[node_idx] = std::move(queue_handle);
+        _mq = std::move(queue_handle);
         auto writer = shared_from_this();
-        _writer_done[node_idx] = mutation_writer::distribute_reader_and_consume_on_shards(_schema, std::move(queue_reader),
+        _writer_done = mutation_writer::distribute_reader_and_consume_on_shards(_schema, std::move(queue_reader),
                 [&db, reason = this->_reason, estimated_partitions = this->_estimated_partitions] (flat_mutation_reader reader) {
             auto& t = db.local().find_column_family(reader.schema());
             return db::view::check_needs_view_update_path(_sys_dist_ks->local(), t, reason).then([t = t.shared_from_this(), estimated_partitions, reader = std::move(reader)] (bool use_view_update_path) mutable {
@@ -599,49 +601,49 @@ public:
                 return consumer(std::move(reader));
             });
         },
-        t.stream_in_progress()).then([node_idx, writer] (uint64_t partitions) {
+        t.stream_in_progress()).then([writer] (uint64_t partitions) {
             rlogger.debug("repair_writer: keyspace={}, table={}, managed to write partitions={} to sstable",
                 writer->_schema->ks_name(), writer->_schema->cf_name(), partitions);
-        }).handle_exception([node_idx, writer] (std::exception_ptr ep) {
+        }).handle_exception([writer] (std::exception_ptr ep) {
             rlogger.warn("repair_writer: keyspace={}, table={}, multishard_writer failed: {}",
                     writer->_schema->ks_name(), writer->_schema->cf_name(), ep);
-            writer->_mq[node_idx]->abort(ep);
+            writer->_mq->abort(ep);
             return make_exception_future<>(std::move(ep));
         });
     }
 
-    future<> write_partition_end(unsigned node_idx) {
-        if (_partition_opened[node_idx]) {
-            return _mq[node_idx]->push(mutation_fragment(*_schema, _permit, partition_end())).then([this, node_idx] {
-                _partition_opened[node_idx] = false;
+    future<> write_partition_end() {
+        if (_partition_opened) {
+            return _mq->push(mutation_fragment(*_schema, _permit, partition_end())).then([this] {
+                _partition_opened = false;
             });
         }
         return make_ready_future<>();
     }
 
-    future<> do_write(unsigned node_idx, lw_shared_ptr<const decorated_key_with_hash> dk, mutation_fragment mf) {
-        if (_current_dk_written_to_sstable[node_idx]) {
-            if (_current_dk_written_to_sstable[node_idx]->dk.equal(*_schema, dk->dk)) {
-                return _mq[node_idx]->push(std::move(mf));
+    future<> do_write(lw_shared_ptr<const decorated_key_with_hash> dk, mutation_fragment mf) {
+        if (_current_dk_written_to_sstable) {
+            if (_current_dk_written_to_sstable->dk.equal(*_schema, dk->dk)) {
+                return _mq->push(std::move(mf));
             } else {
-                return write_partition_end(node_idx).then([this,
-                        node_idx, dk = std::move(dk), mf = std::move(mf)] () mutable {
-                    return write_start_and_mf(std::move(dk), std::move(mf), node_idx);
+                return write_partition_end().then([this,
+                        dk = std::move(dk), mf = std::move(mf)] () mutable {
+                    return write_start_and_mf(std::move(dk), std::move(mf));
                 });
             }
         } else {
-            return write_start_and_mf(std::move(dk), std::move(mf), node_idx);
+            return write_start_and_mf(std::move(dk), std::move(mf));
         }
     }
 
-    future<> write_end_of_stream(unsigned node_idx) {
-        if (_mq[node_idx]) {
-          return with_semaphore(_sem, 1, [this, node_idx] {
+    future<> write_end_of_stream() {
+        if (_mq) {
+          return with_semaphore(_sem, 1, [this] {
             // Partition_end is never sent on wire, so we have to write one ourselves.
-            return write_partition_end(node_idx).then([this, node_idx] () mutable {
-                _mq[node_idx]->push_end_of_stream();
-            }).handle_exception([this, node_idx] (std::exception_ptr ep) {
-                _mq[node_idx]->abort(ep);
+            return write_partition_end().then([this] () mutable {
+                _mq->push_end_of_stream();
+            }).handle_exception([this] (std::exception_ptr ep) {
+                _mq->abort(ep);
                 rlogger.warn("repair_writer: keyspace={}, table={}, write_end_of_stream failed: {}",
                         _schema->ks_name(), _schema->cf_name(), ep);
                 return make_exception_future<>(std::move(ep));
@@ -652,18 +654,17 @@ public:
         }
     }
 
-    future<> do_wait_for_writer_done(unsigned node_idx) {
-        if (_writer_done[node_idx]) {
-            return std::move(*(_writer_done[node_idx]));
+    future<> do_wait_for_writer_done() {
+        if (_writer_done) {
+            return std::move(*(_writer_done));
         } else {
             return make_ready_future<>();
         }
     }
 
     future<> wait_for_writer_done() {
-        return parallel_for_each(boost::irange(unsigned(0), unsigned(_nr_peer_nodes)), [this] (unsigned node_idx) {
-            return when_all_succeed(write_end_of_stream(node_idx), do_wait_for_writer_done(node_idx)).discard_result();
-        }).handle_exception([this] (std::exception_ptr ep) {
+        return when_all_succeed(write_end_of_stream(), do_wait_for_writer_done()).discard_result().handle_exception(
+                [this] (std::exception_ptr ep) {
             rlogger.warn("repair_writer: keyspace={}, table={}, wait_for_writer_done failed: {}",
                     _schema->ks_name(), _schema->cf_name(), ep);
             return make_exception_future<>(std::move(ep));
@@ -740,6 +741,7 @@ private:
     tracker_link_type _tracker_link;
     row_level_repair* _row_level_repair_ptr;
     std::vector<repair_node_state> _all_node_states;
+    is_dirty_on_master _dirty_on_master = is_dirty_on_master::no;
 public:
     std::vector<repair_node_state>& all_nodes() {
         return _all_node_states;
@@ -1152,7 +1154,7 @@ private:
             return stop_iteration::no;
         }
         auto hash = do_hash_for_mf(*_repair_reader.get_current_dk(), mf);
-        repair_row r(freeze(*_schema, mf), position_in_partition(mf.position()), _repair_reader.get_current_dk(), hash);
+        repair_row r(freeze(*_schema, mf), position_in_partition(mf.position()), _repair_reader.get_current_dk(), hash, is_dirty_on_master::no);
         rlogger.trace("Reading: r.boundary={}, r.hash={}", r.boundary(), r.hash());
         _metrics.row_from_disk_nr++;
         _metrics.row_from_disk_bytes += r.size();
@@ -1339,11 +1341,11 @@ private:
         }
     }
 
-    future<> do_apply_rows(std::list<repair_row>&& row_diff, unsigned node_idx, update_working_row_buf update_buf) {
-        return do_with(std::move(row_diff), [this, node_idx, update_buf] (std::list<repair_row>& row_diff) {
-            return with_semaphore(_repair_writer->sem(), 1, [this, node_idx, update_buf, &row_diff] {
-                _repair_writer->create_writer(_db, node_idx);
-                return repeat([this, node_idx, update_buf, &row_diff] () mutable {
+    future<> do_apply_rows(std::list<repair_row>&& row_diff, update_working_row_buf update_buf) {
+        return do_with(std::move(row_diff), [this, update_buf] (std::list<repair_row>& row_diff) {
+            return with_semaphore(_repair_writer->sem(), 1, [this, update_buf, &row_diff] {
+                _repair_writer->create_writer(_db);
+                return repeat([this, update_buf, &row_diff] () mutable {
                     if (row_diff.empty()) {
                         return make_ready_future<stop_iteration>(stop_iteration::yes);
                     }
@@ -1356,7 +1358,7 @@ private:
                     // to_repair_rows_list above where the repair_row is created.
                     mutation_fragment mf = std::move(r.get_mutation_fragment());
                     auto dk_with_hash = r.get_dk_with_hash();
-                    return _repair_writer->do_write(node_idx, std::move(dk_with_hash), std::move(mf)).then([&row_diff] {
+                    return _repair_writer->do_write(std::move(dk_with_hash), std::move(mf)).then([&row_diff] {
                         row_diff.pop_front();
                         return make_ready_future<stop_iteration>(stop_iteration::no);
                     });
@@ -1368,7 +1370,7 @@ private:
     // Give a list of rows, apply the rows to disk and update the _working_row_buf and _peer_row_hash_sets if requested
     // Must run inside a seastar thread
     void apply_rows_on_master_in_thread(repair_rows_on_wire rows, gms::inet_address from, update_working_row_buf update_buf,
-            update_peer_row_hash_sets update_hash_set, unsigned node_idx = 0) {
+            update_peer_row_hash_sets update_hash_set, unsigned node_idx) {
         if (rows.empty()) {
             return;
         }
@@ -1383,22 +1385,64 @@ private:
             // and _working_row_buf are ordered.
             utils::merge_to_gently(_working_row_buf, row_diff,
                  [this] (const repair_row& x, const repair_row& y) { return _cmp(x.boundary(), y.boundary()) < 0; });
+            for (auto& r : row_diff) {
+                thread::maybe_yield();
+                _working_row_buf_combined_hash.add(r.hash());
+            }
         }
         if (update_hash_set) {
             _peer_row_hash_sets[node_idx] = boost::copy_range<repair_hash_set>(row_diff |
                     boost::adaptors::transformed([] (repair_row& r) { thread::maybe_yield(); return r.hash(); }));
         }
-        do_apply_rows(std::move(row_diff), node_idx, update_buf).get();
+        // Repair rows in row_diff will be flushed to disk by flush_rows_in_working_row_buf,
+        // so we skip calling do_apply_rows here.
+        _dirty_on_master = is_dirty_on_master::yes;
+    }
+public:
+    // Must run inside a seastar thread
+    void flush_rows_in_working_row_buf() {
+        if (_dirty_on_master) {
+            _dirty_on_master = is_dirty_on_master::no;
+        } else {
+            return;
+        }
+        auto cmp = position_in_partition::tri_compare(*_schema);
+        lw_shared_ptr<mutation_fragment> last_mf;
+        lw_shared_ptr<const decorated_key_with_hash> last_dk;
+        for (auto& r : _working_row_buf) {
+            thread::maybe_yield();
+            if (!r.dirty_on_master()) {
+                continue;
+            }
+            _repair_writer->create_writer(_db);
+            auto mf = r.get_mutation_fragment_ptr();
+            const auto& pk = r.get_dk_with_hash()->dk.key();
+            if (last_mf && last_dk &&
+                    cmp(last_mf->position(), mf->position()) == 0 &&
+                    pk.legacy_equal(*_schema, last_dk->dk.key()) &&
+                    last_mf->mergeable_with(*mf)) {
+                last_mf->apply(*_schema, std::move(*mf));
+            } else {
+                if (last_mf && last_dk) {
+                    _repair_writer->do_write(std::move(last_dk), std::move(*last_mf)).get();
+                }
+                last_mf = mf;
+                last_dk = r.get_dk_with_hash();
+            }
+        }
+        if (last_mf && last_dk) {
+            _repair_writer->do_write(std::move(last_dk), std::move(*last_mf)).get();
+        }
     }
 
+private:
     future<>
     apply_rows_on_follower(repair_rows_on_wire rows) {
         if (rows.empty()) {
             return make_ready_future<>();
         }
         return to_repair_rows_list(std::move(rows)).then([this] (std::list<repair_row> row_diff) {
-            unsigned node_idx = 0;
-            return do_apply_rows(std::move(row_diff), node_idx, update_working_row_buf::no);
+            return do_apply_rows(std::move(row_diff), update_working_row_buf::no);
         });
     }
 
@@ -1446,7 +1490,7 @@ private:
                         auto mf = make_lw_shared<mutation_fragment>(fmf.unfreeze(*_schema, _permit));
                         auto hash = do_hash_for_mf(*dk_ptr, *mf);
                         position_in_partition pos(mf->position());
-                        row_list.push_back(repair_row(std::move(fmf), std::move(pos), dk_ptr, std::move(hash), std::move(mf)));
+                        row_list.push_back(repair_row(std::move(fmf), std::move(pos), dk_ptr, std::move(hash), is_dirty_on_master::yes, std::move(mf)));
                     });
                 } else {
                     last_mf = {};
@@ -1464,7 +1508,7 @@ private:
                         } else {
                             last_mf = mf;
                             // On repair follower node, only decorated_key_with_hash and the mutation_fragment inside repair_row are used.
-                            row_list.push_back(repair_row({}, {}, dk_ptr, {}, std::move(mf)));
+                            row_list.push_back(repair_row({}, {}, dk_ptr, {}, is_dirty_on_master::no, std::move(mf)));
                         }
                     });
                 }
@@ -2681,6 +2725,7 @@ private:
             }
             rlogger.debug("After get_row_diff node {}, hash_sets={}", master.myip(), master.working_row_hashes().get0().size());
         }
+        master.flush_rows_in_working_row_buf();
         return op_status::next_step;
     }
 
