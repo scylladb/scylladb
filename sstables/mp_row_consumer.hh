@@ -374,6 +374,7 @@ private:
         _fwd_end = _fwd ? position_in_partition::before_all_clustered_rows() : position_in_partition::after_all_clustered_rows();
         _out_of_range = false;
         _range_tombstones.reset();
+        _ready = {};
         _first_row_encountered = false;
     }
 public:
