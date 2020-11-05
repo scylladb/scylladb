@@ -261,7 +261,7 @@ struct log_entry {
     int value;
 };
 
-std::vector<raft::log_entry> create_log(std::initializer_list<log_entry> list, unsigned start_idx) {
+std::vector<raft::log_entry> create_log(std::vector<log_entry> list, unsigned start_idx) {
     std::vector<raft::log_entry> log;
 
     unsigned i = start_idx;
@@ -310,7 +310,7 @@ using new_leader = int;
 using update = std::variant<entries, new_leader>;
 
 struct initial_log {
-    std::initializer_list<log_entry> le;
+    std::vector<log_entry> le;
 };
 
 struct initial_snapshot {
