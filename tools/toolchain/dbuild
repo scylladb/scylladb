@@ -172,7 +172,7 @@ docker_common_args+=(
        -v "$MAVEN_LOCAL_REPO:$MAVEN_LOCAL_REPO:z" \
        -v /etc/localtime:/etc/localtime:ro \
        -w "$PWD" \
-       -e HOME \
+       -e HOME="$HOME" \
        "${docker_args[@]}" \
        "$image" \
        "${args[@]}"
