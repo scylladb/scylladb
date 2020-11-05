@@ -204,7 +204,7 @@ void gossiper::do_sort(utils::chunked_vector<gossip_digest>& g_digest_list) {
 future<> gossiper::handle_syn_msg(msg_addr from, gossip_digest_syn syn_msg) {
     logger.trace("handle_syn_msg():from={},cluster_name:peer={},local={},partitioner_name:peer={},local={}",
         from, syn_msg.cluster_id(), get_cluster_name(), syn_msg.partioner(), get_partitioner_name());
-    if (!this->is_enabled()) {
+    if (!this->is_enabled() || _in_long_shadow_round) {
         return make_ready_future<>();
     }
 
@@ -317,7 +317,7 @@ future<> gossiper::handle_ack_msg(msg_addr id, gossip_digest_ack ack_msg) {
     assert(_msg_processing > 0);
 
     return f.then([this, from = id, ack_msg_digest = std::move(g_digest_list), mp = std::move(mp), g = this->shared_from_this()] () mutable {
-        if (this->is_in_shadow_round()) {
+        if (this->is_in_shadow_round() || _in_long_shadow_round) {
             this->finish_shadow_round();
             // don't bother doing anything else, we have what we came for
             return make_ready_future<>();
@@ -676,6 +676,10 @@ future<> gossiper::apply_state_locally(std::map<inet_address, endpoint_state> ma
     });
 }
 
+void gossiper::come_out_of_shadow() {
+    _in_long_shadow_round = false;
+}
+
 // Runs inside seastar::async context
 void gossiper::remove_endpoint(inet_address endpoint) {
     // do subscribers first so anything in the subscriber that depends on gossiper state won't get confused
@@ -778,9 +782,11 @@ void gossiper::run() {
 
             logger.trace("My heartbeat is now {}", endpoint_state_map[br_addr].get_heart_beat_state().get_heart_beat_version());
             utils::chunked_vector<gossip_digest> g_digests;
-            this->make_random_gossip_digest(g_digests);
+            if (!_in_long_shadow_round) {
+                this->make_random_gossip_digest(g_digests);
+            }
 
-            if (g_digests.size() > 0) {
+            if (g_digests.size() > 0 || _in_long_shadow_round) {
                 gossip_digest_syn message(get_cluster_name(), get_partitioner_name(), g_digests);
 
                 if (_endpoints_to_talk_with.empty()) {

@@ -590,6 +590,7 @@ void storage_service::join_token_ring(int delay) {
     replicate_to_all_cores().get();
     // start participating in the ring.
     set_gossip_tokens(_bootstrap_tokens, _cdc_streams_ts);
+    _gossiper.come_out_of_shadow();
     set_mode(mode::NORMAL, "node is now in normal status", true);
 
     if (_token_metadata.sorted_tokens().empty()) {
@@ -918,7 +919,8 @@ void storage_service::bootstrap() {
             { gms::application_state::CDC_STREAMS_TIMESTAMP, versioned_value::cdc_streams_timestamp(_cdc_streams_ts) },
             { gms::application_state::STATUS, versioned_value::bootstrapping(_bootstrap_tokens) },
         }).get();
-
+        set_mode(mode::JOINING, "Coming out of the shadow");
+        _gossiper.come_out_of_shadow();
         set_mode(mode::JOINING, format("sleeping {} ms for pending range setup", get_ring_delay().count()), true);
         _gossiper.wait_for_range_setup().get();
     } else {
@@ -931,6 +933,7 @@ void storage_service::bootstrap() {
             { gms::application_state::CDC_STREAMS_TIMESTAMP, versioned_value::cdc_streams_timestamp(_cdc_streams_ts) },
             { gms::application_state::STATUS, versioned_value::hibernate(true) },
         }).get();
+        _gossiper.come_out_of_shadow();
         set_mode(mode::JOINING, format("Wait until peer nodes know the bootstrap tokens of local node"), true);
         _gossiper.wait_for_range_setup().get();
         auto replace_addr = db().local().get_replace_address();
@@ -2043,6 +2046,7 @@ future<> storage_service::start_gossiping(bind_messaging_port do_bind) {
                 ss._gossiper.start_gossiping(utils::get_generation_number(), gms::bind_messaging_port(bool(do_bind))).then([&ss] {
                     ss._initialized = true;
                 }).get();
+                ss._gossiper.come_out_of_shadow();
             }
         });
     });

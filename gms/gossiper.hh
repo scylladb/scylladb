@@ -115,6 +115,9 @@ struct gossip_config {
  * of the three above mentioned messages updates the Failure Detector with the liveness information.
  * Upon hearing a GossipShutdownMessage, this module will instantly mark the remote node as down in
  * the Failure Detector.
+ *
+ * Initially, this gossiper will stay silent about what he knows, including himself.
+ * In order to start spreading gossip, call come_out_of_shadow().
  */
 class gossiper : public i_failure_detection_event_listener, public seastar::async_sharded_service<gossiper>, public seastar::peering_sharded_service<gossiper> {
 public:
@@ -226,6 +229,7 @@ private:
     std::map<inet_address, clk::time_point> _expire_time_endpoint_map;
 
     bool _in_shadow_round = false;
+    bool _in_long_shadow_round = true;
 
     std::unordered_map<inet_address, clk::time_point> _shadow_unreachable_endpoints;
     utils::chunked_vector<inet_address> _shadow_live_endpoints;
@@ -524,6 +528,10 @@ public:
     bool is_in_shadow_round() const;
 
     void goto_shadow_round();
+
+    // After this call the gossiper starts gossipping about the current node with other nodes.
+    // Before this, the current node is learning from other nodes but stays silent about himself.
+    void come_out_of_shadow();
 
 public:
     void add_expire_time_for_endpoint(inet_address endpoint, clk::time_point expire_time);
