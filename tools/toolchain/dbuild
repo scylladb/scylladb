@@ -205,7 +205,7 @@ container=$(
 
 kill_it() {
     if [[ -n "$container" ]]; then
-        docker rm -f "$container" > /dev/null
+        $tool rm -f "$container" > /dev/null
         container=
     fi
     cleanup
