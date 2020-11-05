@@ -114,7 +114,18 @@ public:
     std::unordered_set<shared_sstable> select_by_run_id(utils::UUID run_id) const;
     const std::map<shared_sstable, unsigned>& all() const;
     void remove(shared_sstable sst);
-    std::unique_ptr<incremental_selector_impl> make_incremental_selector();
+    std::unique_ptr<incremental_selector_impl> make_incremental_selector();    
+    flat_mutation_reader create_single_key_sstable_reader(
+        column_family*,
+        schema_ptr,
+        reader_permit,
+        utils::estimated_histogram&,
+        const dht::ring_position&,
+        const query::partition_slice&,
+        const io_priority_class&,
+        tracing::trace_state_ptr,
+        streamed_mutation::forwarding,
+        mutation_reader::forwarding) const;
 };
 
 class sstable_set_version;
@@ -329,6 +340,17 @@ public:
     bool contains(shared_sstable sst) const;
     size_t size() const;
     std::unique_ptr<incremental_selector_impl> make_incremental_selector() const;
+    flat_mutation_reader create_single_key_sstable_reader(
+        column_family*,
+        schema_ptr,
+        reader_permit,
+        utils::estimated_histogram&,
+        const dht::ring_position&,
+        const query::partition_slice&,
+        const io_priority_class&,
+        tracing::trace_state_ptr,
+        streamed_mutation::forwarding,
+        mutation_reader::forwarding) const;
 public:
     sstable_set_version_reference get_reference_to_this();
     sstable_set_version_reference get_reference_to_new_copy();

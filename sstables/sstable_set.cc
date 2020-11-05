@@ -116,6 +116,22 @@ std::unique_ptr<incremental_selector_impl> sstable_set_data::make_incremental_se
     return _impl->make_incremental_selector();
 }
 
+flat_mutation_reader
+sstable_set_data::create_single_key_sstable_reader(
+        column_family* cf,
+        schema_ptr schema,
+        reader_permit permit,
+        utils::estimated_histogram& sstable_histogram,
+        const dht::ring_position& pos,
+        const query::partition_slice& slice,
+        const io_priority_class& pc,
+        tracing::trace_state_ptr trace_state,
+        streamed_mutation::forwarding fwd,
+        mutation_reader::forwarding fwd_mr) const {
+    return _impl->create_single_key_sstable_reader(cf, std::move(schema),
+            std::move(permit), sstable_histogram, pos, slice, pc, std::move(trace_state), fwd, fwd_mr);
+}
+
 sstable_set_version_reference::~sstable_set_version_reference() {
     if (_p) {
         _p->remove_reference();
@@ -565,6 +581,22 @@ size_t sstable_set_version::size() const {
 
 std::unique_ptr<incremental_selector_impl> sstable_set_version::make_incremental_selector() const {
     return _base_set->make_incremental_selector();
+}    
+
+flat_mutation_reader
+sstable_set_version::create_single_key_sstable_reader(
+        column_family* cf,
+        schema_ptr schema,
+        reader_permit permit,
+        utils::estimated_histogram& sstable_histogram,
+        const dht::ring_position& pos,
+        const query::partition_slice& slice,
+        const io_priority_class& pc,
+        tracing::trace_state_ptr trace_state,
+        streamed_mutation::forwarding fwd,
+        mutation_reader::forwarding fwd_mr) const {
+    return _base_set->create_single_key_sstable_reader(cf, std::move(schema),
+            std::move(permit), sstable_histogram, pos, slice, pc, std::move(trace_state), fwd, fwd_mr);
 }
 
 sstable_set_version_reference sstable_set_version::get_reference_to_this() {
@@ -1261,7 +1293,7 @@ sstable_set::create_single_key_sstable_reader(
         tracing::trace_state_ptr trace_state,
         streamed_mutation::forwarding fwd,
         mutation_reader::forwarding fwd_mr) const {
-    return _impl->create_single_key_sstable_reader(cf, std::move(schema),
+    return _all->version().create_single_key_sstable_reader(cf, std::move(schema),
             std::move(permit), sstable_histogram, pos, slice, pc, std::move(trace_state), fwd, fwd_mr);
 }
 
