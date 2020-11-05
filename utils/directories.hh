@@ -21,7 +21,8 @@
 
 #pragma once
 
-#include <unordered_set>
+#include <set>
+#include <vector>
 #include <seastar/core/future.hh>
 #include <seastar/core/smp.hh>
 #include "utils/file_lock.hh"
@@ -36,9 +37,25 @@ namespace utils {
 
 class directories {
 public:
-    future<> init(db::config& cfg, bool hinted_handoff_enabled);
+    class set {
+    public:
+        void add(fs::path path);
+        void add(sstring path);
+        void add(std::vector<sstring> path);
+        void add_sharded(sstring path);
+
+        const std::set<fs::path> get_paths() const {
+            return _paths;
+        }
+
+    private:
+        std::set<fs::path> _paths;
+    };
+
+    directories(bool developer_mode);
+    future<> create_and_verify(set dir_set);
 private:
-    future<> touch_and_lock(fs::path path);
+    bool _developer_mode;
     std::vector<file_lock> _locks;
 };
 

@@ -496,7 +496,7 @@ int main(int ac, char** av) {
     auto& mm = service::get_migration_manager();
     api::http_context ctx(db, proxy, load_meter, token_metadata);
     httpd::http_server_control prometheus_server;
-    utils::directories dirs;
+    std::optional<utils::directories> dirs = {};
     sharded<gms::feature_service> feature_service;
     sharded<db::snapshot_ctl> snapshot_ctl;
     sharded<netw::messaging_service> messaging;
@@ -835,7 +835,16 @@ int main(int ac, char** av) {
             verify_seastar_io_scheduler(opts.contains("max-io-requests"), opts.contains("io-properties") || opts.contains("io-properties-file"),
                                         cfg->developer_mode()).get();
 
-            dirs.init(*cfg, bool(hinted_handoff_enabled)).get();
+            supervisor::notify("creating and verifying directories");
+            utils::directories::set dir_set;
+            dir_set.add(cfg->data_file_directories());
+            dir_set.add(cfg->commitlog_directory());
+            if (bool(hinted_handoff_enabled)) {
+                dir_set.add_sharded(cfg->hints_directory());
+            }
+            dir_set.add_sharded(cfg->view_hints_directory());
+            dirs.emplace(cfg->developer_mode());
+            dirs->create_and_verify(std::move(dir_set)).get();
 
             // We need the compaction manager ready early so we can reshard.
             db.invoke_on_all([&proxy, &stop_signal] (database& db) {

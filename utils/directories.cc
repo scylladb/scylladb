@@ -38,18 +38,16 @@ static future<> disk_sanity(fs::path path, bool developer_mode) {
     });
 };
 
-future<> directories::touch_and_lock(fs::path path) {
-    return io_check([path] { return recursive_touch_directory(path.native()); }).then_wrapped([this, path] (future<> f) {
+static future<file_lock> touch_and_lock(fs::path path) {
+    return io_check([path] { return recursive_touch_directory(path.native()); }).then_wrapped([path] (future<> f) {
         try {
             f.get();
-            return file_lock::acquire(path / ".lock").then([this](file_lock lock) {
-               _locks.emplace_back(std::move(lock));
-            }).handle_exception([path](auto ep) {
+            return file_lock::acquire(path / ".lock").then_wrapped([path](future<file_lock> f) {
                 // only do this because "normal" unhandled exception exit in seastar
                 // _drops_ system_error message ("what()") and thus does not quite deliver
                 // the relevant info to the user
                 try {
-                    std::rethrow_exception(ep);
+                    return make_ready_future<file_lock>(f.get());
                 } catch (std::exception& e) {
                     startlog.error("Could not initialize {}: {}", path, e.what());
                     throw;
@@ -64,47 +62,46 @@ future<> directories::touch_and_lock(fs::path path) {
     });
 }
 
-static void add(fs::path path, std::set<fs::path>& to) {
-    to.insert(path);
+void directories::set::add(fs::path path) {
+    _paths.insert(path);
 }
 
-static void add(sstring path, std::set<fs::path>& to) {
-    add(fs::path(path), to);
+void directories::set::add(sstring path) {
+    add(fs::path(path));
 }
 
-static void add(std::vector<sstring> paths, std::set<fs::path>& to) {
+void directories::set::add(std::vector<sstring> paths) {
     for (auto& path : paths) {
-        add(path, to);
+        add(path);
     }
 }
 
-static void add_sharded(sstring p, std::set<fs::path>& to) {
+void directories::set::add_sharded(sstring p) {
     fs::path path(p);
 
     for (unsigned i = 0; i < smp::count; i++) {
-         add(path / seastar::to_sstring(i).c_str(), to);
+        add(path / seastar::to_sstring(i).c_str());
     }
 }
 
-future<> directories::init(db::config& cfg, bool hinted_handoff_enabled) {
-    std::set<fs::path> paths;
+directories::directories(bool developer_mode)
+        : _developer_mode(developer_mode)
+{ }
 
-    add(cfg.data_file_directories(), paths);
-    add(cfg.commitlog_directory(), paths);
-    if (hinted_handoff_enabled) {
-        add_sharded(cfg.hints_directory(), paths);
-    }
-    add_sharded(cfg.view_hints_directory(), paths);
-
-    supervisor::notify("creating and verifying directories");
-    return parallel_for_each(paths, [this, &cfg] (fs::path path) {
-        return touch_and_lock(path).then([path = std::move(path), &cfg] {
-            return disk_sanity(path, cfg.developer_mode()).then([path = std::move(path)] {
-                return distributed_loader::verify_owner_and_mode(path).handle_exception([](auto ep) {
-                    startlog.error("Failed owner and mode verification: {}", ep);
-                    return make_exception_future<>(ep);
+future<> directories::create_and_verify(directories::set dir_set) {
+    return do_with(std::vector<file_lock>(), [this, dir_set = std::move(dir_set)] (std::vector<file_lock>& locks) {
+        return parallel_for_each(dir_set.get_paths(), [this, &locks] (fs::path path) {
+            return touch_and_lock(path).then([path = std::move(path), developer_mode = _developer_mode, &locks] (file_lock lock) {
+                locks.emplace_back(std::move(lock));
+                return disk_sanity(path, developer_mode).then([path = std::move(path)] {
+                    return distributed_loader::verify_owner_and_mode(path).handle_exception([](auto ep) {
+                        startlog.error("Failed owner and mode verification: {}", ep);
+                        return make_exception_future<>(ep);
+                    });
                 });
             });
+        }).then([this, &locks] {
+            std::move(locks.begin(), locks.end(), std::back_inserter(_locks));
         });
     });
 }
