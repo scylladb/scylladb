@@ -2051,7 +2051,7 @@ future<std::vector<view_build_progress>> load_view_build_progress() {
         }
         return progress;
     }).handle_exception([] (const std::exception_ptr& eptr) {
-        slogger.error("Failed to load view build progress: {}", eptr);
+        slogger.warn("Failed to load view build progress: {}", eptr);
         return std::vector<view_build_progress>();
     });
 }
