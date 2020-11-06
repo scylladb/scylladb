@@ -193,12 +193,12 @@ statement_restrictions::statement_restrictions(database& db,
     const expr::allow_local_index allow_local(
             !_partition_key_restrictions->has_unrestricted_components(*_schema)
             && _partition_key_restrictions->is_all_eq());
-    const bool has_queriable_clustering_column_index = _clustering_columns_restrictions->has_supporting_index(sim, allow_local);
-    const bool has_queriable_pk_index = _partition_key_restrictions->has_supporting_index(sim, allow_local);
-    const bool has_queriable_regular_index = _nonprimary_key_restrictions->has_supporting_index(sim, allow_local);
+    _has_queriable_ck_index = _clustering_columns_restrictions->has_supporting_index(sim, allow_local);
+    _has_queriable_pk_index = _partition_key_restrictions->has_supporting_index(sim, allow_local);
+    _has_queriable_regular_index = _nonprimary_key_restrictions->has_supporting_index(sim, allow_local);
 
     // At this point, the select statement if fully constructed, but we still have a few things to validate
-    process_partition_key_restrictions(has_queriable_pk_index, for_view, allow_filtering);
+    process_partition_key_restrictions(for_view, allow_filtering);
 
     // Some but not all of the partition key columns have been specified;
     // hence we need turn these restrictions into index expressions.
@@ -227,10 +227,10 @@ statement_restrictions::statement_restrictions(database& db,
         }
     }
 
-    process_clustering_columns_restrictions(has_queriable_clustering_column_index, select_a_collection, for_view, allow_filtering);
+    process_clustering_columns_restrictions(select_a_collection, for_view, allow_filtering);
 
     // Covers indexes on the first clustering column (among others).
-    if (_is_key_range && has_queriable_clustering_column_index) {
+    if (_is_key_range && _has_queriable_ck_index) {
         _uses_secondary_indexing = true;
     }
 
@@ -265,7 +265,7 @@ statement_restrictions::statement_restrictions(database& db,
     }
 
     if (!_nonprimary_key_restrictions->empty()) {
-        if (has_queriable_regular_index) {
+        if (_has_queriable_regular_index) {
             _uses_secondary_indexing = true;
         } else if (!allow_filtering) {
             throw exceptions::invalid_request_exception("Cannot execute this query as it might involve data filtering and "
@@ -401,7 +401,7 @@ std::vector<const column_definition*> statement_restrictions::get_column_defs_fo
     return column_defs_for_filtering;
 }
 
-void statement_restrictions::process_partition_key_restrictions(bool has_queriable_index, bool for_view, bool allow_filtering) {
+void statement_restrictions::process_partition_key_restrictions(bool for_view, bool allow_filtering) {
     // If there is a queriable index, no special condition are required on the other restrictions.
     // But we still need to know 2 things:
     // - If we don't have a queriable index, is the query ok
@@ -412,17 +412,17 @@ void statement_restrictions::process_partition_key_restrictions(bool has_queriab
         _is_key_range = true;
     } else if (_partition_key_restrictions->empty()) {
         _is_key_range = true;
-        _uses_secondary_indexing = has_queriable_index;
+        _uses_secondary_indexing = _has_queriable_pk_index;
     }
 
     if (_partition_key_restrictions->needs_filtering(*_schema)) {
-        if (!allow_filtering && !for_view && !has_queriable_index) {
+        if (!allow_filtering && !for_view && !_has_queriable_pk_index) {
             throw exceptions::invalid_request_exception("Cannot execute this query as it might involve data filtering and "
                 "thus may have unpredictable performance. If you want to execute "
                 "this query despite the performance unpredictability, use ALLOW FILTERING");
         }
         _is_key_range = true;
-        _uses_secondary_indexing = has_queriable_index;
+        _uses_secondary_indexing = _has_queriable_pk_index;
     }
 
 }
@@ -435,7 +435,7 @@ bool statement_restrictions::has_unrestricted_clustering_columns() const {
     return _clustering_columns_restrictions->has_unrestricted_components(*_schema);
 }
 
-void statement_restrictions::process_clustering_columns_restrictions(bool has_queriable_index, bool select_a_collection, bool for_view, bool allow_filtering) {
+void statement_restrictions::process_clustering_columns_restrictions(bool select_a_collection, bool for_view, bool allow_filtering) {
     if (!has_clustering_columns_restriction()) {
         return;
     }
@@ -445,13 +445,13 @@ void statement_restrictions::process_clustering_columns_restrictions(bool has_qu
             "Cannot restrict clustering columns by IN relations when a collection is selected by the query");
     }
     if (find_atom(_clustering_columns_restrictions->expression, expr::is_on_collection)
-        && !has_queriable_index && !allow_filtering) {
+        && !_has_queriable_ck_index && !allow_filtering) {
         throw exceptions::invalid_request_exception(
             "Cannot restrict clustering columns by a CONTAINS relation without a secondary index or filtering");
     }
 
     if (has_clustering_columns_restriction() && _clustering_columns_restrictions->needs_filtering(*_schema)) {
-        if (has_queriable_index) {
+        if (_has_queriable_ck_index) {
             _uses_secondary_indexing = true;
         } else if (!allow_filtering && !for_view) {
             auto clustering_columns_iter = _schema->clustering_key_columns().begin();

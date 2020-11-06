@@ -102,6 +102,8 @@ private:
      */
     bool _is_key_range = false;
 
+    bool _has_queriable_regular_index = false, _has_queriable_pk_index = false, _has_queriable_ck_index = false;
+
 public:
     /**
      * Creates a new empty <code>StatementRestrictions</code>.
@@ -209,7 +211,7 @@ public:
      */
     bool has_unrestricted_clustering_columns() const;
 private:
-    void process_partition_key_restrictions(bool has_queriable_index, bool for_view, bool allow_filtering);
+    void process_partition_key_restrictions(bool for_view, bool allow_filtering);
 
     /**
      * Processes the clustering column restrictions.
@@ -218,7 +220,7 @@ private:
      * @param select_a_collection <code>true</code> if the query should return a collection column
      * @throws InvalidRequestException if the request is invalid
      */
-    void process_clustering_columns_restrictions(bool has_queriable_index, bool select_a_collection, bool for_view, bool allow_filtering);
+    void process_clustering_columns_restrictions(bool select_a_collection, bool for_view, bool allow_filtering);
 
     /**
      * Returns the <code>Restrictions</code> for the specified type of columns.
