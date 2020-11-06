@@ -853,12 +853,14 @@ void manager::end_point_hints_manager::sender::send_hints_maybe() noexcept {
 
 static future<> scan_for_hints_dirs(const sstring& hints_directory, std::function<future<> (fs::path dir, directory_entry de, unsigned shard_id)> f) {
     return lister::scan_dir(hints_directory, { directory_entry_type::directory }, [f = std::move(f)] (fs::path dir, directory_entry de) mutable {
+        unsigned shard_id;
         try {
-            return f(std::move(dir), std::move(de), std::stoi(de.name.c_str()));
+            shard_id = std::stoi(de.name.c_str());
         } catch (std::invalid_argument& ex) {
             manager_logger.debug("Ignore invalid directory {}", de.name);
             return make_ready_future<>();
         }
+        return f(std::move(dir), std::move(de), shard_id);
     });
 }
 
