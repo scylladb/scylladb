@@ -230,6 +230,9 @@ batch_size_fail_threshold_in_kb: 50
 # - PasswordAuthenticator relies on username/password pairs to authenticate
 #   users. It keeps usernames and hashed passwords in system_auth.credentials table.
 #   Please increase system_auth keyspace replication factor if you use this authenticator.
+# - com.scylladb.auth.TransitionalAuthenticator requires username/password pair
+#   to authenticate in the same manner as PasswordAuthenticator, but improper credentials
+#   result in being logged in as an anonymous user. Use for upgrading clusters' auth.
 # authenticator: AllowAllAuthenticator
 
 # Authorization backend, implementing IAuthorizer; used to limit access/provide permissions
@@ -239,6 +242,9 @@ batch_size_fail_threshold_in_kb: 50
 # - AllowAllAuthorizer allows any action to any user - set it to disable authorization.
 # - CassandraAuthorizer stores permissions in system_auth.permissions table. Please
 #   increase system_auth keyspace replication factor if you use this authorizer.
+# - com.scylladb.auth.TransitionalAuthorizer wraps around the CassandraAuthorizer, using it for
+#   authorizing permission management. Otherwise, it allows all. Use for upgrading
+#   clusters' auth.
 # authorizer: AllowAllAuthorizer
 
 # initial_token allows you to specify tokens manually.  While you can use # it with
