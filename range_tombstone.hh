@@ -154,13 +154,13 @@ public:
             return false;
         }
         if (less(position(), pos)) {
-            set_start(s, pos);
+            set_start(pos);
         }
         return true;
     }
 
     // Assumes !pos.is_clustering_row(), because range_tombstone bounds can't represent such positions
-    void set_start(const schema& s, position_in_partition_view pos) {
+    void set_start(position_in_partition_view pos) {
         bound_view new_start = pos.as_start_bound_view();
         start = new_start.prefix();
         start_kind = new_start.kind();

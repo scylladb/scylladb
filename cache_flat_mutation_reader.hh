@@ -508,7 +508,7 @@ void cache_flat_mutation_reader::copy_from_cache_to_buffer() {
         // This guarantees that rts starts after any emitted clustering_row
         // and not before any emitted range tombstone.
         if (!less(_lower_bound, rts.position())) {
-            rts.set_start(*_schema, _lower_bound);
+            rts.set_start(_lower_bound);
         } else {
             _lower_bound = position_in_partition(rts.position());
             _lower_bound_changed = true;
@@ -644,7 +644,7 @@ void cache_flat_mutation_reader::add_to_buffer(range_tombstone&& rt) {
         return;
     }
     if (!less(_lower_bound, rt.position())) {
-        rt.set_start(*_schema, _lower_bound);
+        rt.set_start(_lower_bound);
     } else {
         _lower_bound = position_in_partition(rt.position());
         _lower_bound_changed = true;

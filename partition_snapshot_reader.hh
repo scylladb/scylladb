@@ -86,7 +86,7 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
             if (!last_row) {
                 // New range. Collect all relevant range tombstone.
                 for (auto&& v : _snapshot->versions()) {
-                    range_tombstones.apply(v.partition().row_tombstones(), ck_range, true);
+                    range_tombstones.apply(v.partition().row_tombstones(), ck_range);
                 }
             }
 

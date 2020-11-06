@@ -597,9 +597,9 @@ public:
         _list.apply(_schema, list);
     }
     // Apply those range tombstones from the list, that overlap with the
-    // range. If `trim_front` is set, range tombstones will be trimmed to the
-    // start of the clustering range.
-    void apply(const range_tombstone_list&, const query::clustering_range&, bool trim_front = false);
+    // range. Range tombstones will be trimmed to the start of the
+    // clustering range.
+    void apply(const range_tombstone_list&, const query::clustering_range&);
     void reset();
     bool empty() const;
     friend std::ostream& operator<<(std::ostream& out, const range_tombstone_stream&);
