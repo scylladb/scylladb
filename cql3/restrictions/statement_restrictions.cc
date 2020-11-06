@@ -490,23 +490,62 @@ std::vector<query::clustering_range> statement_restrictions::get_clustering_boun
     return _clustering_columns_restrictions->bounds_ranges(options);
 }
 
-bool statement_restrictions::need_filtering() const {
-    uint32_t number_of_restricted_columns_for_indexing = 0;
-    for (auto&& restrictions : _index_restrictions) {
-        number_of_restricted_columns_for_indexing += restrictions->size();
-    }
+namespace {
 
-    int number_of_filtering_restrictions = _nonprimary_key_restrictions->size();
-    // If the whole partition key is restricted, it does not imply filtering
-    if (_partition_key_restrictions->has_unrestricted_components(*_schema) || !_partition_key_restrictions->is_all_eq()) {
-        number_of_filtering_restrictions += _partition_key_restrictions->size() + _clustering_columns_restrictions->size();
-    } else if (_clustering_columns_restrictions->has_unrestricted_components(*_schema)) {
-        number_of_filtering_restrictions += _clustering_columns_restrictions->size() - _clustering_columns_restrictions->prefix_size();
+/// True iff get_partition_slice_for_global_index_posting_list() will be able to calculate the token value from the
+/// given restrictions.  Keep in sync with the get_partition_slice_for_global_index_posting_list() source.
+bool token_known(const statement_restrictions& r) {
+    return !r.has_partition_key_unrestricted_components() && r.get_partition_key_restrictions()->is_all_eq();
+}
+
+} // anonymous namespace
+
+bool statement_restrictions::need_filtering() const {
+    using namespace expr;
+
+    const auto npart = _partition_key_restrictions->size();
+    if (npart > 0 && npart < _schema->partition_key_size()) {
+        // Can't calculate the token value, so a naive base-table query must be filtered.  Same for any index tables,
+        // except if there's only one restriction supported by an index.
+        return !(npart == 1 && _has_queriable_pk_index &&
+                 _clustering_columns_restrictions->empty() && _nonprimary_key_restrictions->empty());
     }
-    return number_of_restricted_columns_for_indexing > 1
-            || (number_of_restricted_columns_for_indexing != 0 && _nonprimary_key_restrictions->has_multiple_contains())
-            || (number_of_restricted_columns_for_indexing != 0 && !_uses_secondary_indexing)
-            || (_uses_secondary_indexing && number_of_filtering_restrictions > 1);
+    if (_partition_key_restrictions->needs_filtering(*_schema)) {
+        // We most likely cannot calculate token(s).  Neither base-table nor index-table queries can avoid filtering.
+        return true;
+    }
+    // Now we know the partition key is either unrestricted or fully restricted.
+
+    const auto nreg = _nonprimary_key_restrictions->size();
+    if (nreg > 1 || (nreg == 1 && !_has_queriable_regular_index)) {
+        return true; // Regular columns are unsorted in storage and no single index suffices.
+    }
+    if (nreg == 1) { // Single non-key restriction supported by an index.
+        // Will the index-table query require filtering?  That depends on whether its clustering key is restricted to a
+        // continuous range.  Recall that this clustering key is (token, pk, ck) of the base table.
+        if (npart == 0 && _clustering_columns_restrictions->empty()) {
+            return false; // No clustering key restrictions => whole partitions.
+        }
+        return !token_known(*this) || _clustering_columns_restrictions->needs_filtering(*_schema);
+    }
+    // Now we know there are no nonkey restrictions.
+
+    if (dynamic_pointer_cast<multi_column_restriction>(_clustering_columns_restrictions)) {
+        // Multicolumn bounds mean lexicographic order, implying a continuous clustering range.  Multicolumn IN means a
+        // finite set of continuous ranges.  Multicolumn restrictions cannot currently be combined with single-column
+        // clustering restrictions.  Therefore, a continuous clustering range is guaranteed.
+        return false;
+    }
+    if (!_clustering_columns_restrictions->needs_filtering(*_schema)) { // Guaranteed continuous clustering range.
+        return false;
+    }
+    // Now we know there are some clustering-column restrictions that are out-of-order or not EQ.  A naive base-table
+    // query must be filtered.  What about an index-table query?  That can only avoid filtering if there is exactly one
+    // EQ supported by an index.
+    return !(_clustering_columns_restrictions->size() == 1 && _has_queriable_ck_index);
+
+    // TODO: it is also possible to avoid filtering here if a non-empty CK prefix is specified and token_known, plus
+    // there's exactly one out-of-order-but-index-supported clustering-column restriction.
 }
 
 void statement_restrictions::validate_secondary_index_selections(bool selects_only_static_columns) {
