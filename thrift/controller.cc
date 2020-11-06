@@ -27,10 +27,11 @@
 
 static logging::logger clogger("thrift_controller");
 
-thrift_controller::thrift_controller(distributed<database>& db, sharded<auth::service>& auth)
+thrift_controller::thrift_controller(distributed<database>& db, sharded<auth::service>& auth, sharded<cql3::query_processor>& qp)
     : _ops_sem(1)
     , _db(db)
-    , _auth_service(auth) {
+    , _auth_service(auth)
+    , _qp(qp) {
 }
 
 future<> thrift_controller::start_server() {
@@ -61,7 +62,7 @@ future<> thrift_controller::do_start_server() {
     tsc.timeout_config = make_timeout_config(cfg);
     tsc.max_request_size = cfg.thrift_max_message_length_in_mb() * (uint64_t(1) << 20);
     return gms::inet_address::lookup(addr, family, preferred).then([this, tserver, addr, port, keepalive, tsc] (gms::inet_address ip) {
-        return tserver->start(std::ref(_db), std::ref(cql3::get_query_processor()), std::ref(_auth_service), tsc).then([tserver, port, addr, ip, keepalive] {
+        return tserver->start(std::ref(_db), std::ref(_qp), std::ref(_auth_service), tsc).then([tserver, port, addr, ip, keepalive] {
             // #293 - do not stop anything
             //engine().at_exit([tserver] {
             //    return tserver->stop();

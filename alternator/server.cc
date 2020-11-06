@@ -243,8 +243,8 @@ future<> server::verify_signature(const request& req) {
         }
     }
 
-    auto cache_getter = [] (std::string username) {
-        return get_key_from_roles(cql3::get_query_processor().local(), std::move(username));
+    auto cache_getter = [&qp = _qp] (std::string username) {
+        return get_key_from_roles(qp, std::move(username));
     };
     return _key_cache.get_ptr(user, cache_getter).then([this, &req,
                                                     user = std::move(user),
@@ -328,10 +328,11 @@ void server::set_routes(routes& r) {
 //FIXME: A way to immediately invalidate the cache should be considered,
 // e.g. when the system table which stores the keys is changed.
 // For now, this propagation may take up to 1 minute.
-server::server(executor& exec)
+server::server(executor& exec, cql3::query_processor& qp)
         : _http_server("http-alternator")
         , _https_server("https-alternator")
         , _executor(exec)
+        , _qp(qp)
         , _key_cache(1024, 1min, slogger)
         , _enforce_authorization(false)
         , _enabled_servers{}

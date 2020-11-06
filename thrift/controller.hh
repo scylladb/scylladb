@@ -30,6 +30,7 @@ using namespace seastar;
 class thrift_server;
 class database;
 namespace auth { class service; }
+namespace cql3 { class query_processor; }
 
 class thrift_controller {
     std::unique_ptr<distributed<thrift_server>> _server;
@@ -38,12 +39,13 @@ class thrift_controller {
 
     distributed<database>& _db;
     sharded<auth::service>& _auth_service;
+    sharded<cql3::query_processor>& _qp;
 
     future<> do_start_server();
     future<> do_stop_server();
 
 public:
-    thrift_controller(distributed<database>&, sharded<auth::service>&);
+    thrift_controller(distributed<database>&, sharded<auth::service>&, sharded<cql3::query_processor>&);
     future<> start_server();
     future<> stop_server();
     future<> stop();

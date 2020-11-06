@@ -113,6 +113,7 @@ public:
 private:
     sharded<gms::feature_service>& _feature_service;
     sharded<database>& _db;
+    sharded<cql3::query_processor>& _qp;
     sharded<auth::service>& _auth_service;
     sharded<db::view::view_builder>& _view_builder;
     sharded<db::view::view_update_generator>& _view_update_generator;
@@ -143,12 +144,14 @@ public:
     single_node_cql_env(
             sharded<gms::feature_service>& feature_service,
             sharded<database>& db,
+            sharded<cql3::query_processor>& qp,
             sharded<auth::service>& auth_service,
             sharded<db::view::view_builder>& view_builder,
             sharded<db::view::view_update_generator>& view_update_generator,
             sharded<service::migration_notifier>& mnotifier)
             : _feature_service(feature_service)
             , _db(db)
+            , _qp(qp)
             , _auth_service(auth_service)
             , _view_builder(view_builder)
             , _view_update_generator(view_update_generator)
@@ -308,7 +311,7 @@ public:
     }
 
     cql3::query_processor& local_qp() override {
-        return cql3::get_local_query_processor();
+        return _qp.local();
     }
 
     sharded<database>& db() override {
@@ -316,7 +319,7 @@ public:
     }
 
     distributed<cql3::query_processor>& qp() override {
-        return cql3::get_query_processor();
+        return _qp;
     }
 
     auth::service& local_auth_service() override {
@@ -504,10 +507,14 @@ public:
             mm.start(std::ref(mm_notif), std::ref(feature_service), std::ref(ms)).get();
             auto stop_mm = defer([&mm] { mm.stop().get(); });
 
-            auto& qp = cql3::get_query_processor();
+            sharded<cql3::query_processor> qp;
             cql3::query_processor::memory_config qp_mcfg = {memory::stats().total_memory() / 256, memory::stats().total_memory() / 2560};
             qp.start(std::ref(proxy), std::ref(db), std::ref(mm_notif), qp_mcfg, std::ref(cql_config)).get();
             auto stop_qp = defer([&qp] { qp.stop().get(); });
+
+            // In main.cc we call db::system_keyspace::setup which calls
+            // minimal_setup and init_local_cache
+            db::system_keyspace::minimal_setup(db, qp);
 
             db::batchlog_manager_config bmcfg;
             bmcfg.replay_rate = 100000000;
@@ -543,9 +550,6 @@ public:
                 cdc.stop().get();
             });
 
-            // In main.cc we call db::system_keyspace::setup which calls
-            // minimal_setup and init_local_cache
-            db::system_keyspace::minimal_setup(db, qp);
             auto stop_system_keyspace = defer([] { db::qctx = {}; });
             start_large_data_handler(db).get();
 
@@ -559,6 +563,8 @@ public:
 
             db::system_keyspace::init_local_cache().get();
             auto stop_local_cache = defer([] { db::system_keyspace::deinit_local_cache().get(); });
+
+            sys_dist_ks.start(std::ref(qp), std::ref(mm)).get();
 
             service::get_local_storage_service().init_server(service::bind_messaging_port(false)).get();
             service::get_local_storage_service().join_cluster().get();
@@ -611,7 +617,7 @@ public:
                 // The default user may already exist if this `cql_test_env` is starting with previously populated data.
             }
 
-            single_node_cql_env env(feature_service, db, auth_service, view_builder, view_update_generator, mm_notif);
+            single_node_cql_env env(feature_service, db, qp, auth_service, view_builder, view_update_generator, mm_notif);
             env.start().get();
             auto stop_env = defer([&env] { env.stop().get(); });
 

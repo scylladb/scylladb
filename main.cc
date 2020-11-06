@@ -420,6 +420,7 @@ static auto defer_verbose_shutdown(const char* what, Func&& func) {
 
 namespace debug {
 sharded<netw::messaging_service>* the_messaging_service;
+sharded<cql3::query_processor>* the_query_processor;
 }
 
 int main(int ac, char** av) {
@@ -491,7 +492,6 @@ int main(int ac, char** av) {
     seastar::sharded<service::cache_hitrate_calculator> cf_cache_hitrate_calculator;
     service::load_meter load_meter;
     debug::db = &db;
-    auto& qp = cql3::get_query_processor();
     auto& proxy = service::get_storage_proxy();
     auto& mm = service::get_migration_manager();
     api::http_context ctx(db, proxy, load_meter, token_metadata);
@@ -500,6 +500,7 @@ int main(int ac, char** av) {
     sharded<gms::feature_service> feature_service;
     sharded<db::snapshot_ctl> snapshot_ctl;
     sharded<netw::messaging_service> messaging;
+    sharded<cql3::query_processor> qp;
     sharded<semaphore> sst_dir_semaphore;
 
     return app.run(ac, av, [&] () -> future<int> {
@@ -892,6 +893,7 @@ int main(int ac, char** av) {
             });
             supervisor::notify("starting query processor");
             cql3::query_processor::memory_config qp_mcfg = {memory::stats().total_memory() / 256, memory::stats().total_memory() / 2560};
+            debug::the_query_processor = &qp;
             qp.start(std::ref(proxy), std::ref(db), std::ref(mm_notifier), qp_mcfg, std::ref(cql_config)).get();
             // #293 - do not stop anything
             // engine().at_exit([&qp] { return qp.stop(); });
@@ -1071,6 +1073,8 @@ int main(int ac, char** av) {
                 gms::stop_gossiping().get();
             });
 
+            sys_dist_ks.start(std::ref(qp), std::ref(mm)).get();
+
             ss.init_server().get();
             sst_format_selector.sync();
             ss.join_cluster().get();
@@ -1185,7 +1189,7 @@ int main(int ac, char** av) {
                 db.revert_initial_system_read_concurrency_boost();
             }).get();
 
-            cql_transport::controller cql_server_ctl(db, auth_service, mm_notifier, gossiper.local());
+            cql_transport::controller cql_server_ctl(db, auth_service, mm_notifier, gossiper.local(), qp);
 
             ss.register_client_shutdown_hook("native transport", [&cql_server_ctl] {
                 cql_server_ctl.stop().get();
@@ -1209,7 +1213,7 @@ int main(int ac, char** av) {
                 api::unset_transport_controller(ctx).get();
             });
 
-            ::thrift_controller thrift_ctl(db, auth_service);
+            ::thrift_controller thrift_ctl(db, auth_service, qp);
 
             ss.register_client_shutdown_hook("rpc server", [&thrift_ctl] {
                 thrift_ctl.stop().get();
@@ -1250,7 +1254,7 @@ int main(int ac, char** av) {
                 c.max_nonlocal_requests = 5000;
                 smp_service_group ssg = create_smp_service_group(c).get0();
                 alternator_executor.start(std::ref(proxy), std::ref(mm), std::ref(sys_dist_ks), std::ref(service::get_storage_service()), ssg).get();
-                alternator_server.start(std::ref(alternator_executor)).get();
+                alternator_server.start(std::ref(alternator_executor), std::ref(qp)).get();
                 std::optional<uint16_t> alternator_port;
                 if (cfg->alternator_port()) {
                     alternator_port = cfg->alternator_port();
