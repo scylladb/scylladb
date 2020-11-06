@@ -104,6 +104,9 @@ private:
     // Called to commit entries (on a leader or otherwise).
     void notify_waiters(std::map<index_t, op_status>& waiters, const std::vector<log_entry_ptr>& entries);
 
+    // Drop waiter that we lost track of, can happen due to snapshot transfere
+    void drop_waiters(std::map<index_t, op_status>& waiters, index_t idx);
+
     // This fiber process fsm output, by doing the following steps in that order:
     //  - persists current term and voter
     //  - persists unstable log entries on disk.
@@ -239,6 +242,18 @@ void server_impl::notify_waiters(std::map<index_t, op_status>& waiters,
     }
 }
 
+void server_impl::drop_waiters(std::map<index_t, op_status>& waiters, index_t idx) {
+    while (waiters.size() != 0) {
+        auto it = waiters.begin();
+        if (it->first > idx) {
+            break;
+        }
+        auto [entry_idx, status] = std::move(*it);
+        waiters.erase(it);
+        status.done.set_exception(commit_status_unknown());
+    }
+}
+
 template <typename Message>
 future<> server_impl::send_message(server_id id, Message m) {
     return std::visit([this, id] (auto&& m) {
@@ -293,6 +308,7 @@ future<> server_impl::io_fiber(index_t last_stable) {
                     logger.trace("[{}] io_fiber applying snapshot {}", _id, batch.snp->id);
                     co_await _state_machine->load_snapshot(batch.snp->id);
                     _state_machine->drop_snapshot(_last_loaded_snapshot_id);
+                    drop_waiters(_awaited_commits, batch.snp->idx);
                     _last_loaded_snapshot_id = batch.snp->id;
                 }
             }

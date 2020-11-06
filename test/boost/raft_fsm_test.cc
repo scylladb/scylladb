@@ -145,7 +145,9 @@ BOOST_AUTO_TEST_CASE(test_election_two_nodes) {
     // -> immediately convert to follower
     fd.alive = false;
     election_threshold(fsm);
-    fsm.step(id2, raft::vote_request{output.term + term_t{1}});
+    // Use current_term + 2 to switch fsm to follower
+    // even if it itself switched to a candidate
+    fsm.step(id2, raft::vote_request{output.term + term_t{2}});
     BOOST_CHECK(fsm.is_follower());
 
     // Check that the candidate converts to a follower as well

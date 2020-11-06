@@ -103,6 +103,10 @@ struct dropped_entry : public error {
     dropped_entry() : error("Entry was dropped because of a leader change") {}
 };
 
+struct commit_status_unknown : public error {
+    commit_status_unknown() : error("Commit staus of the entry is unknown") {}
+};
+
 struct stopped_error : public error {
     stopped_error() : error("Raft instance is stopped") {}
 };
