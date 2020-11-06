@@ -506,6 +506,43 @@ SEASTAR_THREAD_TEST_CASE(test_selective_token_range_sharder) {
     return test_something_with_some_interesting_ranges_and_sharder_with_token_range(do_test_selective_token_range_sharder);
 }
 
+SEASTAR_THREAD_TEST_CASE(test_selective_token_range_sharder_empty_ranges) {
+    auto input_sharder = dht::sharder(2, 0);
+    auto make_bound = [] (dht::token t, bool inclusive) {
+        return range_bound<dht::token>(std::move(t), inclusive);
+    };
+
+    dht::token min_regular_token = dht::token::from_int64(std::numeric_limits<int64_t>::min() + 1);
+    dht::token max_regular_token = dht::token::from_int64(std::numeric_limits<int64_t>::max());
+
+    // (shard, range) pairs
+    std::pair<int, dht::token_range> empty_cases[] = {
+            {0, dht::token_range::make_ending_with(make_bound(dht::minimum_token(), true))},
+            {0, dht::token_range::make_ending_with(make_bound(min_regular_token, false))},
+            {1, dht::token_range::make_starting_with(make_bound(dht::maximum_token(), true))},
+            {1, dht::token_range::make_starting_with(make_bound(max_regular_token, false))},
+            {1, dht::token_range::make_ending_with(make_bound(token_from_long(0), false))},
+            {0, dht::token_range::make_starting_with(make_bound(token_from_long(-1), false))},
+    };
+    std::pair<int, dht::token_range> nonempty_cases[] = {
+            {0, dht::token_range::make_ending_with(make_bound(min_regular_token, true))},
+            {1, dht::token_range::make_starting_with(make_bound(max_regular_token, true))},
+            {0, dht::token_range::make_open_ended_both_sides()},
+            {1, dht::token_range::make_ending_with(make_bound(token_from_long(0), true))},
+            {0, dht::token_range::make_starting_with(make_bound(token_from_long(-1), true))},
+            {1, dht::token_range::make(make_bound(token_from_long(-1), false), make_bound(token_from_long(1), false))},
+    };
+
+    for (const auto& [shard, range] : empty_cases) {
+        auto result = dht::selective_token_range_sharder(input_sharder, range, shard).next();
+        BOOST_REQUIRE(!result);
+    }
+    for (const auto& [shard, range] : nonempty_cases) {
+        auto result = dht::selective_token_range_sharder(input_sharder, range, shard).next();
+        BOOST_REQUIRE(result);
+    }
+}
+
 SEASTAR_THREAD_TEST_CASE(test_find_first_token_for_shard) {
     const unsigned cpu_count = 3;
     const unsigned ignore_msb_bits = 10;

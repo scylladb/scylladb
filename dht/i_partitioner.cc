@@ -179,6 +179,23 @@ unsigned shard_of(const schema& s, const token& t) {
     return s.get_sharder().shard_of(t);
 }
 
+static bool token_range_is_not_empty(const dht::token_range& r) {
+    bool is_bounded = r.start() && !r.start()->value().is_minimum() && r.end() && !r.end()->value().is_maximum();
+    if (is_bounded) {
+        // token_range is a nonwrapping_interval, so (end() >= start()), so
+        // (r.end() && !r.end()->value().is_maximum()) implies !r.start()->value().is_maximum()
+        // (r.start() && !r.start()->value().is_minimum()) implies !r.end()->value().is_minimum()
+        uint64_t start_raw = r.start()->value().raw();
+        uint64_t end_raw = r.end()->value().raw();
+        return end_raw - start_raw >= (!r.start()->is_inclusive() + !r.end()->is_inclusive());
+    } else {
+        const static dht::token_range full_range = dht::token_range::make(
+                range_bound<dht::token>(token::from_int64(std::numeric_limits<int64_t>::min() + 1), true),
+                range_bound<dht::token>(token::from_int64(std::numeric_limits<int64_t>::max()), true));
+        return r.overlaps(full_range, dht::token_comparator());
+    }
+}
+
 std::optional<dht::token_range>
 selective_token_range_sharder::next() {
     if (_done) {
@@ -191,7 +208,7 @@ selective_token_range_sharder::next() {
         auto intersection = _range.intersection(std::move(candidate), dht::token_comparator());
         _start_token = _sharder.token_for_next_shard(end_token, _shard);
         _start_boundary = range_bound<dht::token>(_start_token);
-        if (intersection) {
+        if (intersection && token_range_is_not_empty(*intersection)) {
             return *intersection;
         }
     }

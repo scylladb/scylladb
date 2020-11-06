@@ -129,6 +129,7 @@ public:
 
 // Incrementally divides a `partition_range` into sub-ranges wholly owned by a single shard.
 // Unlike ring_position_range_sharder, it only returns result for a shard number provided by the caller.
+// Skips ranges which contain no tokens.
 class selective_token_range_sharder {
     const sharder& _sharder;
     dht::token_range _range;
