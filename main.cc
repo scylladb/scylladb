@@ -839,12 +839,15 @@ int main(int ac, char** av) {
             utils::directories::set dir_set;
             dir_set.add(cfg->data_file_directories());
             dir_set.add(cfg->commitlog_directory());
-            if (bool(hinted_handoff_enabled)) {
-                dir_set.add_sharded(cfg->hints_directory());
-            }
-            dir_set.add_sharded(cfg->view_hints_directory());
             dirs.emplace(cfg->developer_mode());
             dirs->create_and_verify(std::move(dir_set)).get();
+
+            auto hints_dir_initializer = db::hints::directory_initializer::make(*dirs, cfg->hints_directory()).get();
+            auto view_hints_dir_initializer = db::hints::directory_initializer::make(*dirs, cfg->view_hints_directory()).get();
+            if (hinted_handoff_enabled) {
+                hints_dir_initializer.ensure_created_and_verified().get();
+            }
+            view_hints_dir_initializer.ensure_created_and_verified().get();
 
             // We need the compaction manager ready early so we can reshard.
             db.invoke_on_all([&proxy, &stop_signal] (database& db) {
@@ -1031,9 +1034,9 @@ int main(int ac, char** av) {
 
             supervisor::notify("starting hinted handoff manager");
             if (hinted_handoff_enabled) {
-                db::hints::manager::rebalance(cfg->hints_directory()).get();
+                hints_dir_initializer.ensure_rebalanced().get();
             }
-            db::hints::manager::rebalance(cfg->view_hints_directory()).get();
+            view_hints_dir_initializer.ensure_rebalanced().get();
 
             proxy.invoke_on_all([] (service::storage_proxy& local_proxy) {
                 auto& ss = service::get_local_storage_service();

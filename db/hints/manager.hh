@@ -45,6 +45,10 @@ namespace service {
 class storage_service;
 }
 
+namespace utils {
+class directories;
+}
+
 namespace db {
 namespace hints {
 
@@ -52,6 +56,25 @@ using node_to_hint_store_factory_type = utils::loading_shared_values<gms::inet_a
 using hints_store_ptr = node_to_hint_store_factory_type::entry_ptr;
 using hint_entry_reader = commitlog_entry_reader;
 using timer_clock_type = seastar::lowres_clock;
+
+/// A helper class which tracks hints directory creation
+/// and allows to perform hints directory initialization lazily.
+class directory_initializer {
+private:
+    class impl;
+    ::std::shared_ptr<impl> _impl;
+
+    directory_initializer(::std::shared_ptr<impl> impl);
+
+public:
+    /// Creates an initializer that does nothing. Useful in tests.
+    static directory_initializer make_dummy();
+    static future<directory_initializer> make(utils::directories& dirs, sstring hints_directory);
+
+    ~directory_initializer();
+    future<> ensure_created_and_verified();
+    future<> ensure_rebalanced();
+};
 
 class manager : public service::endpoint_lifecycle_subscriber {
 private:
@@ -556,6 +579,12 @@ public:
     void allow_replaying() noexcept {
         _state.set(state::replay_allowed);
     }
+
+    /// \brief Creates an object which aids in hints directory initialization.
+    /// This object can saafely be copied and used from any shard.
+    /// \arg dirs The utils::directories object, used to create and lock hints directories
+    /// \arg hints_directory The directory with hints which should be initialized
+    directory_initializer make_directory_initializer(utils::directories& dirs, fs::path hints_directory);
 
     /// \brief Rebalance hints segments among all present shards.
     ///

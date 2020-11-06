@@ -38,6 +38,7 @@
 #include "service/priority_manager.hh"
 #include "database.hh"
 #include "service_permit.hh"
+#include "utils/directories.hh"
 
 using namespace std::literals::chrono_literals;
 
@@ -1018,6 +1019,93 @@ void manager::update_backlog(size_t backlog, size_t max_backlog) {
     } else {
         forbid_hints_for_eps_with_pending_hints();
     }
+}
+
+class directory_initializer::impl {
+    enum class state {
+        uninitialized = 0,
+        created_and_validated = 1,
+        rebalanced = 2,
+    };
+
+    utils::directories& _dirs;
+    sstring _hints_directory;
+    state _state = state::uninitialized;
+    seastar::named_semaphore _lock = {1, named_semaphore_exception_factory{"hints directory initialization lock"}};
+
+public:
+    impl(utils::directories& dirs, sstring hints_directory)
+            : _dirs(dirs)
+            , _hints_directory(std::move(hints_directory))
+    { }
+
+    future<> ensure_created_and_verified() {
+        if (_state > state::uninitialized) {
+            return make_ready_future<>();
+        }
+
+        return with_semaphore(_lock, 1, [this] () {
+            utils::directories::set dir_set;
+            dir_set.add_sharded(_hints_directory);
+            return _dirs.create_and_verify(std::move(dir_set)).then([this] {
+                manager_logger.debug("Creating and validating hint directories: {}", _hints_directory);
+                _state = state::created_and_validated;
+            });
+        });
+    }
+
+    future<> ensure_rebalanced() {
+        if (_state < state::created_and_validated) {
+            return make_exception_future<>(std::logic_error("hints directory needs to be created and validated before rebalancing"));
+        }
+
+        if (_state > state::created_and_validated) {
+            return make_ready_future<>();
+        }
+
+        return with_semaphore(_lock, 1, [this] () {
+            manager_logger.debug("Rebalancing hints in {}", _hints_directory);
+            return manager::rebalance(_hints_directory).then([this] {
+                _state = state::rebalanced;
+            });
+        });
+    }
+};
+
+directory_initializer::directory_initializer(std::shared_ptr<directory_initializer::impl> impl)
+        : _impl(std::move(impl))
+{ }
+
+directory_initializer::~directory_initializer()
+{ }
+
+directory_initializer directory_initializer::make_dummy() {
+    return directory_initializer{nullptr};
+}
+
+future<directory_initializer> directory_initializer::make(utils::directories& dirs, sstring hints_directory) {
+    return smp::submit_to(0, [&dirs, hints_directory = std::move(hints_directory)] () mutable {
+        auto impl = std::make_shared<directory_initializer::impl>(dirs, std::move(hints_directory));
+        return make_ready_future<directory_initializer>(directory_initializer(std::move(impl)));
+    });
+}
+
+future<> directory_initializer::ensure_created_and_verified() {
+    if (!_impl) {
+        return make_ready_future<>();
+    }
+    return smp::submit_to(0, [impl = this->_impl] () mutable {
+        return impl->ensure_created_and_verified().then([impl] {});
+    });
+}
+
+future<> directory_initializer::ensure_rebalanced() {
+    if (!_impl) {
+        return make_ready_future<>();
+    }
+    return smp::submit_to(0, [impl = this->_impl] () mutable {
+        return impl->ensure_rebalanced().then([impl] {});
+    });
 }
 
 }
