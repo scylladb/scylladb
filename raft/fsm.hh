@@ -198,7 +198,7 @@ private:
     // Called when one of the replicas advances its match index
     // so it may be the case that some entries are committed now.
     // Signals _sm_events.
-    void check_committed();
+    void maybe_commit();
     // Check if the randomized election timeout has expired.
     bool is_past_election_timeout() const {
         return _clock.now() - _last_election_time >= _randomized_election_timeout;

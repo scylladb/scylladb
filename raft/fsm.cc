@@ -238,11 +238,11 @@ void fsm::advance_stable_idx(index_t idx) {
         progress.match_idx = idx;
         progress.next_idx = index_t{idx + 1};
         replicate();
-        check_committed();
+        maybe_commit();
     }
 }
 
-void fsm::check_committed() {
+void fsm::maybe_commit() {
 
     index_t new_commit_idx = _tracker->committed(_commit_idx);
 
@@ -259,11 +259,12 @@ void fsm::check_committed() {
         // an entry from the current term has been committed in
         // this way, then all prior entries are committed
         // indirectly because of the Log Matching Property.
-        logger.trace("check_committed[{}]: cannot commit because of term {} != {}",
+        logger.trace("maybe_commit[{}]: cannot commit because of term {} != {}",
             _my_id, _log[new_commit_idx]->term, _current_term);
         return;
     }
-    logger.trace("check_committed[{}]: commit {}", _my_id, new_commit_idx);
+    logger.trace("maybe_commit[{}]: commit {}", _my_id, new_commit_idx);
+
     _commit_idx = new_commit_idx;
     // We have a quorum of servers with match_idx greater than the
     // current commit index. Commit && apply more entries.
@@ -400,7 +401,7 @@ void fsm::append_entries_reply(server_id from, append_reply&& reply) {
         progress.become_pipeline();
 
         // check if any new entry can be committed
-        check_committed();
+        maybe_commit();
     } else {
         // rejected
         append_reply::rejected rejected = std::get<append_reply::rejected>(reply.result);
