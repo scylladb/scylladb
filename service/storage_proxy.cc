@@ -1808,11 +1808,9 @@ storage_proxy::storage_proxy(distributed<database>& db, storage_proxy::config cf
         slogger.trace("hinted DCs: {}", *cfg.hinted_handoff_enabled);
         _hints_manager.emplace(dbcfg.hints_directory(), *cfg.hinted_handoff_enabled, dbcfg.max_hint_window_in_ms(), _hints_resource_manager, _db);
         _hints_manager->register_metrics("hints_manager");
-        _hints_resource_manager.register_manager(*_hints_manager);
     }
 
     _hints_for_views_manager.register_metrics("hints_for_views_manager");
-    _hints_resource_manager.register_manager(_hints_for_views_manager);
 }
 
 storage_proxy::unique_response_handler::unique_response_handler(storage_proxy& p_, response_id_type id_) : id(id_), p(p_) {}
@@ -5201,7 +5199,15 @@ storage_proxy::query_nonsingular_mutations_locally(schema_ptr s,
 }
 
 future<> storage_proxy::start_hints_manager(shared_ptr<gms::gossiper> gossiper_ptr, shared_ptr<service::storage_service> ss_ptr) {
-    return _hints_resource_manager.start(shared_from_this(), gossiper_ptr, ss_ptr);
+    future<> f = make_ready_future<>();
+    if (_hints_manager) {
+        f = _hints_resource_manager.register_manager(*_hints_manager);
+    }
+    return f.then([this] {
+        return _hints_resource_manager.register_manager(_hints_for_views_manager);
+    }).then([this, gossiper_ptr, ss_ptr] {
+        return _hints_resource_manager.start(shared_from_this(), gossiper_ptr, ss_ptr);
+    });
 }
 
 void storage_proxy::allow_replaying_hints() noexcept {
