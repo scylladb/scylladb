@@ -101,7 +101,7 @@ def curl(url, headers=None, byte=False, timeout=3, max_retries=5, retry_interval
                     return res.read()
                 else:
                     return res.read().decode('utf-8')
-        except urllib.error.HTTPError:
+        except urllib.error.URLError:
             time.sleep(retry_interval)
             retries += 1
             if retries >= max_retries:
