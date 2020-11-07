@@ -96,7 +96,7 @@ def curl(url, byte=False):
                     return res.read()
                 else:
                     return res.read().decode('utf-8')
-        except urllib.error.HTTPError:
+        except urllib.error.URLError:
             logging.warn("Failed to grab %s..." % url)
             time.sleep(5)
             retries += 1
