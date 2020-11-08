@@ -177,7 +177,21 @@ public:
                 if (value.empty()) {
                     _current_block.header |= (uint64_t(1) << (shift * 2));
                 } else {
-                    _current_block.values.push_back({value, *_prefix.get_compound_type(_schema)->types()[_offset]});
+                    const auto& compound_type = _prefix.get_compound_type(_schema);
+                    const auto& types = compound_type->types();
+                    if (_offset < types.size()) {
+                        const auto& type = *types[_offset];
+                        _current_block.values.push_back({value, type});
+                    } else {
+                        // FIXME: might happen due to bad thrift key.
+                        // See https://github.com/scylladb/scylla/issues/7568
+                        //
+                        // Consider turning into exception when the issue is fixed
+                        // and the key is rejected in thrift handler layer, and if
+                        // the bad key could not find its way to existing sstables.
+                        slogger.warn("prefix {} (size={}): offset {} >= types.size {}", _prefix, _prefix.size(_schema), _offset, types.size());
+                        _current_block.header |= (uint64_t(1) << ((shift * 2) + 1));
+                    }
                 }
             } else {
                 // This (and all subsequent) values of the prefix are missing (null)
