@@ -118,6 +118,26 @@ struct cql_server_config {
 
 class cql_server : public seastar::peering_sharded_service<cql_server> {
 private:
+    struct transport_stats {
+        // server stats
+        uint64_t connects;
+        uint64_t connections;
+        uint64_t requests_served;
+        uint32_t requests_serving;
+        uint64_t requests_blocked_memory;
+        uint64_t requests_shed;
+
+        // cql message stats
+        uint64_t startups;
+        uint64_t auth_responses;
+        uint64_t options_requests;
+        uint64_t query_requests;
+        uint64_t prepare_requests;
+        uint64_t execute_requests;
+        uint64_t batch_requests;
+        uint64_t register_requests;
+    };
+private:
     class event_notifier;
 
     static constexpr cql_protocol_version_type current_version = cql_serialization_format::latest_version;
@@ -131,12 +151,7 @@ private:
     seastar::metrics::metric_groups _metrics;
     std::unique_ptr<event_notifier> _notifier;
 private:
-    uint64_t _connects = 0;
-    uint64_t _connections = 0;
-    uint64_t _requests_served = 0;
-    uint32_t _requests_serving = 0;
-    uint64_t _requests_blocked_memory = 0;
-    uint64_t _requests_shed = 0;
+    transport_stats _stats = {};
     auth::service& _auth_service;
 public:
     cql_server(distributed<cql3::query_processor>& qp, auth::service&,
