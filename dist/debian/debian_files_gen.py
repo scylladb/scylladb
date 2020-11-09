@@ -54,7 +54,7 @@ shutil.copytree('dist/debian/debian', 'build/debian/debian')
 if product != 'scylla':
     for p in Path('build/debian/debian').glob('scylla-*'):
         if str(p).endswith('scylla-server.service'):
-            p.rename(p.parent / '{}-server.'.format(product, p.name))
+            p.rename(p.parent / '{}-server.{}'.format(product, p.name))
         else:
             p.rename(p.parent / p.name.replace('scylla-', f'{product}-'))
 
