@@ -1984,7 +1984,7 @@ future<> sstable::create_links(const sstring& dir, int64_t generation) const {
         return check_create_links_replay(dir, generation, comps).then([this, &dir, generation, &comps] {
             // TemporaryTOC is always first, TOC is always last
             auto dst = sstable::filename(dir, _schema->ks_name(), _schema->cf_name(), _version, generation, _format, component_type::TemporaryTOC);
-            return sstable_write_io_check(idempotent_link_file, filename(component_type::TOC), dst).then([this, &dir] {
+            return sstable_write_io_check(idempotent_link_file, filename(component_type::TOC), std::move(dst)).then([this, &dir] {
                 return sstable_write_io_check(sync_directory, dir);
             }).then([this, &dir, generation, &comps] {
                 return parallel_for_each(comps, [this, &dir, generation] (auto p) {
@@ -2001,7 +2001,7 @@ future<> sstable::create_links(const sstring& dir, int64_t generation) const {
         }).then([this, &dir, generation] {
             auto src = sstable::filename(dir, _schema->ks_name(), _schema->cf_name(), _version, generation, _format, component_type::TemporaryTOC);
             auto dst = sstable::filename(dir, _schema->ks_name(), _schema->cf_name(), _version, generation, _format, component_type::TOC);
-            return sstable_write_io_check(rename_file, src, dst);
+            return sstable_write_io_check(rename_file, std::move(src), std::move(dst));
         }).then([this, &dir] {
             return sstable_write_io_check(sync_directory, dir);
         }).then([this, &dir, generation] {
