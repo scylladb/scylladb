@@ -57,19 +57,20 @@ class node_ops_metrics {
 public:
     node_ops_metrics() {
         namespace sm = seastar::metrics;
-        _metrics.add_group("node_maintenance_operations", {
-            sm::make_gauge("bootstrap_finished_percentage", sm::description("Number of finished percentage for bootstrap operation on this shard."),
-                [this] { return bootstrap_finished_percentage(); }),
-            sm::make_gauge("replace_finished_percentage", sm::description("Number of finished percentage for replace operation on this shard."),
-                [this] { return replace_finished_percentage(); }),
-            sm::make_gauge("rebuild_finished_percentage", sm::description("Number of finished percentage for rebuild operation on this shard."),
-                [this] { return rebuild_finished_percentage(); }),
-            sm::make_gauge("decommission_finished_percentage", sm::description("Number of finished percentage for decommission operation on this shard."),
-                [this] { return decommission_finished_percentage(); }),
-            sm::make_gauge("removenode_finished_percentage", sm::description("Number of finished percentage for removenode operation on this shard."),
-                [this] { return removenode_finished_percentage(); }),
-            sm::make_gauge("repair_finished_percentage", sm::description("Number of finished percentage for repair operation on this shard."),
-                [this] { return repair_finished_percentage(); }),
+        auto ops_label_type = sm::label("ops");
+        _metrics.add_group("node_ops", {
+            sm::make_gauge("finished_percentage", [this] { return bootstrap_finished_percentage(); },
+                    sm::description("Number of finished percentage for bootstrap operation on this shard."), {ops_label_type("bootstrap")}),
+            sm::make_gauge("finished_percentage", [this] { return replace_finished_percentage(); },
+                    sm::description("Number of finished percentage for replace operation on this shard."), {ops_label_type("replace")}),
+            sm::make_gauge("finished_percentage", [this] { return rebuild_finished_percentage(); },
+                    sm::description("Number of finished percentage for rebuild operation on this shard."), {ops_label_type("rebuild")}),
+            sm::make_gauge("finished_percentage", [this] { return decommission_finished_percentage(); },
+                    sm::description("Number of finished percentage for decommission operation on this shard."), {ops_label_type("decommission")}),
+            sm::make_gauge("finished_percentage", [this] { return removenode_finished_percentage(); },
+                    sm::description("Number of finished percentage for removenode operation on this shard."), {ops_label_type("removenode")}),
+            sm::make_gauge("finished_percentage", [this] { return repair_finished_percentage(); },
+                    sm::description("Number of finished percentage for repair operation on this shard."), {ops_label_type("repair")}),
         });
     }
     uint64_t bootstrap_total_ranges{0};
