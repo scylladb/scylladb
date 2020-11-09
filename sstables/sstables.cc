@@ -1986,8 +1986,8 @@ future<> sstable::create_links(const sstring& dir, int64_t generation) const {
             auto dst = sstable::filename(dir, _schema->ks_name(), _schema->cf_name(), _version, generation, _format, component_type::TemporaryTOC);
             return sstable_write_io_check(idempotent_link_file, filename(component_type::TOC), dst).then([this, &dir] {
                 return sstable_write_io_check(sync_directory, dir);
-            }).then([this, dir, generation] {
-                return parallel_for_each(all_components(), [this, dir, generation] (auto p) {
+            }).then([this, &dir, generation] {
+                return parallel_for_each(all_components(), [this, &dir, generation] (auto p) {
                     if (p.first == component_type::TOC) {
                         return make_ready_future<>();
                     }
@@ -1995,16 +1995,16 @@ future<> sstable::create_links(const sstring& dir, int64_t generation) const {
                     auto dst = sstable::filename(dir, _schema->ks_name(), _schema->cf_name(), _version, generation, _format, p.second);
                     return sstable_write_io_check(idempotent_link_file, std::move(src), std::move(dst));
                 });
-            }).then([this, dir] {
+            }).then([this, &dir] {
                 return sstable_write_io_check(sync_directory, dir);
             });
-        }).then([dir, this, generation] {
+        }).then([this, &dir, generation] {
             auto src = sstable::filename(dir, _schema->ks_name(), _schema->cf_name(), _version, generation, _format, component_type::TemporaryTOC);
             auto dst = sstable::filename(dir, _schema->ks_name(), _schema->cf_name(), _version, generation, _format, component_type::TOC);
             return sstable_write_io_check(rename_file, src, dst);
-        }).then([this, dir] {
+        }).then([this, &dir] {
             return sstable_write_io_check(sync_directory, dir);
-        }).then([this, dir, generation] {
+        }).then([this, &dir, generation] {
             sstlog.trace("create_links: {} -> {} generation={}: done", get_filename(), dir, generation);
         });
     });
