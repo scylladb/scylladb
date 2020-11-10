@@ -704,6 +704,9 @@ public:
     size_t total_memory_in_use() const {
         return _non_lsa_memory_in_use + _segments_in_use * segment::size;
     }
+    size_t total_free_memory() const {
+        return _free_segments * segment::size;
+    }
     struct reservation_goal;
     void set_region(segment* seg, region::impl* r) {
         set_region(descriptor(seg), r);
@@ -2348,6 +2351,10 @@ uint64_t memory_allocated() {
 
 uint64_t memory_compacted() {
     return shard_segment_pool.statistics().memory_compacted;
+}
+
+occupancy_stats lsa_global_occupancy_stats() {
+    return occupancy_stats(shard_segment_pool.total_free_memory(), shard_segment_pool.total_memory_in_use());
 }
 
 }
