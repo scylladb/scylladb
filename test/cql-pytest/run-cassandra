@@ -1,0 +1,150 @@
+#!/bin/bash
+
+# Exit if any one of the commands below fails
+set -e
+
+script_path=$(dirname $(readlink -e $0))
+
+# By default, we assume 'cassandra' is in the user's path. A specific
+# cassandra script can be chosen by setting the CASSANDRA variable.
+CASSANDRA=${CASSANDRA-cassandra}
+if ! `which "$CASSANDRA" >/dev/null 2>&1`
+then
+    echo "Error: Can't find $CASSANDRA. Please set the CASSANDRA environment variable to the path of the Cassandra startup script." >&2
+    exit 1
+fi
+
+# Our tests use python3 and the Cassandra driver. If they are not installed
+# there isn't much point of even starting Cassandra
+if ! python3 -c 'from cassandra.cluster import Cluster' >/dev/null 2>&1
+then
+    echo "Error: python3 and python3-cassandra-driver must be installed to run these tests." >&2
+    exit 1
+fi
+
+# Pick a loopback IP address for Cassandra to run, in an attempt not to collide
+# other concurrent runs of Scylla. CCM uses 127.0.0.<nodenum>, so if we use
+# 127.1.*.* it will collide with it. Moreover, we'll take the last two
+# bytes of the address from the current process - so as to allow multiple
+# concurrent runs of this code to use a different address.
+CASSANDRA_IP=127.1.$(($$ >> 8 & 255)).$(($$ & 255))
+echo "Running Cassandra on $CASSANDRA_IP"
+
+tmp_dir="$(readlink -e ${TMPDIR-/tmp})"/scylla-test-$$
+mkdir "$tmp_dir"
+
+# We run the cleanup() function on exit for any reason - successful finish
+# of the script, an error (since we have "set -e"), or a signal.
+# It ensures that Cassandra is killed and its temporary storage directory is
+# deleted. It also shows Cassandra's output log.
+code=17
+summary=
+cleanup() {
+    kill -9 $SCYLLA_PROCESS 2>/dev/null || :
+    echo
+    echo "Cassandra log:"
+    echo
+    # we want to cat "$tmp_dir/log", but this can take a long time,
+    # especially if stdout is piped, and be interrupted. We don't want
+    # the "rm" below to not happen, so we need to open the file later,
+    # and cat it later:
+    exec 3<"$tmp_dir/log"
+    rm -rf --preserve-root "$tmp_dir"
+    cat <&3
+    echo $summary
+    exit $code
+}
+trap 'cleanup' EXIT
+
+# Unfortunately, Cassandra doesn't take command-line parameters. We need
+# to write a configuration file, and feed it to Cassandra. Some of the
+# parameters we did not deliberately want to override - they just don't
+# have a default and we must set them.
+export CASSANDRA_CONF="$tmp_dir/conf"
+mkdir "$CASSANDRA_CONF"
+cat << EOF >$CASSANDRA_CONF/cassandra.yaml
+hints_directory: $tmp_dir/hints
+data_file_directories:
+    - $tmp_dir/data
+commitlog_directory: $tmp_dir/commitlog
+saved_caches_directory: $tmp_dir/data/saved_caches
+commitlog_sync: periodic
+commitlog_sync_period_in_ms: 10000
+partitioner: org.apache.cassandra.dht.Murmur3Partitioner
+endpoint_snitch: SimpleSnitch
+seed_provider:
+    - class_name: org.apache.cassandra.locator.SimpleSeedProvider
+      parameters:
+          - seeds: "$CASSANDRA_IP"
+listen_address: $CASSANDRA_IP
+auto_snapshot: false
+enable_materialized_views: true
+EOF
+export CASSANDRA_LOG_DIR="$tmp_dir/logs"
+export CASSANDRA_INCLUDE=
+# Cassandra can create some subdirectories on its own, but some it doesn't...
+mkdir $CASSANDRA_LOG_DIR
+mkdir $tmp_dir/hints
+ 
+"$CASSANDRA" -f >"$tmp_dir/log" 2>&1 &
+CASSANDRA_PROCESS=$!
+
+# Test that CQL is serving.
+check_cql() {
+    python3 -c 'from cassandra.cluster import Cluster; Cluster(["'$CASSANDRA_IP'"]).connect()'
+}
+echo "Cassandra is: $CASSANDRA."
+echo -n "Booting Cassandra..."
+ok=
+SECONDS=0
+while ((SECONDS < 200))
+do
+    sleep 1
+    echo -n .
+    if ! kill -0 $CASSANDRA_PROCESS 2>/dev/null
+    then
+        summary="Error: Cassandra failed to boot after $SECONDS seconds."
+        break
+    fi
+    err=`check_cql 2>&1` && ok=yes && break
+    case "$err" in
+    *NoHostAvailable:*)
+        # This is what we expect while Cassandra is still booting.
+        ;;
+    *ImportError:*|*"command not found"*)
+        summary="Error: need python3 and python3-cassandra-driver for running tests."
+        echo
+        echo $summary
+        break;;
+    *)
+        summary="Unknown error to connect to Scylla: '$err'"
+        echo
+        echo $summary
+        break;;
+    esac
+done
+if test -n "$ok" && kill -0 $CASSANDRA_PROCESS 2>/dev/null
+then
+    echo "Done ($SECONDS seconds)"
+else
+    echo
+    if test -z "$summary"
+    then
+        summary="Error: Cassandra failed to boot after $SECONDS seconds."
+        echo $summary
+    fi
+    exit 1
+fi
+
+cd "$script_path"
+set +e
+pytest --host $CASSANDRA_IP -o junit_family=xunit2 "$@"
+code=$?
+case $code in
+0) summary="Cassandra tests pass";;
+*) summary="Cassandra tests failure";;
+esac
+
+# Note that the cleanup() function runs now, just like on any exit from
+# any reason in this script. It will delete the temporary files and
+# announce the failure or success of the test.
