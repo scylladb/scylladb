@@ -162,6 +162,7 @@ def exclude_submodules(tarinfo):
 ar.reloc_add('tools', filter=exclude_submodules)
 ar.reloc_add('scylla-gdb.py')
 ar.reloc_add('build/debian/debian', arcname='debian')
+ar.reloc_add('ubsan-suppressions.supp')
 
 # Complete the tar output, and wait for the gzip process to complete
 ar.close()
