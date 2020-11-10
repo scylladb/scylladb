@@ -1600,7 +1600,7 @@ sstable::read_scylla_metadata(const io_priority_class& pc) noexcept {
 }
 
 void
-sstable::write_scylla_metadata(const io_priority_class& pc, shard_id shard, sstable_enabled_features features, struct run_identifier identifier) {
+sstable::write_scylla_metadata(const io_priority_class& pc, shard_id shard, sstable_enabled_features features, struct run_identifier identifier, has_partition_tombstones hpt) {
     auto&& first_key = get_first_decorated_key();
     auto&& last_key = get_last_decorated_key();
     auto sm = create_sharding_metadata(_schema, first_key, last_key, shard);
@@ -1618,6 +1618,9 @@ sstable::write_scylla_metadata(const io_priority_class& pc, shard_id shard, ssta
     _components->scylla_metadata->data.set<scylla_metadata_type::Sharding>(std::move(sm));
     _components->scylla_metadata->data.set<scylla_metadata_type::Features>(std::move(features));
     _components->scylla_metadata->data.set<scylla_metadata_type::RunIdentifier>(std::move(identifier));
+    if (hpt != has_partition_tombstones::Unknown) {
+        _components->scylla_metadata->data.set<scylla_metadata_type::HasPartitionTombstones>(std::move(hpt));
+    }
 
     write_simple<component_type::Scylla>(*_components->scylla_metadata, pc);
 }

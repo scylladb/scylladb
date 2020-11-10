@@ -663,7 +663,7 @@ void sstable_writer_k_l::consume_end_of_stream()
         features.disable(sstable_feature::NonCompoundRangeTombstones);
     }
     run_identifier identifier{_run_identifier};
-    _sst.write_scylla_metadata(_pc, _shard, std::move(features), std::move(identifier));
+    _sst.write_scylla_metadata(_pc, _shard, std::move(features), std::move(identifier), has_partition_tombstones::Unknown);
 
     if (!_leave_unsealed) {
         _sst.seal_sstable(_backup).get();

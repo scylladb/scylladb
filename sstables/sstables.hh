@@ -553,7 +553,7 @@ private:
     void write_compression(const io_priority_class& pc);
 
     future<> read_scylla_metadata(const io_priority_class& pc) noexcept;
-    void write_scylla_metadata(const io_priority_class& pc, shard_id shard, sstable_enabled_features features, run_identifier identifier);
+    void write_scylla_metadata(const io_priority_class& pc, shard_id shard, sstable_enabled_features features, run_identifier identifier, has_partition_tombstones);
 
     future<> read_filter(const io_priority_class& pc);
 
@@ -673,6 +673,11 @@ public:
 
     utils::UUID run_identifier() const {
         return _run_identifier;
+    }
+
+    // false => no partition tombstones, true => we don't know
+    bool may_have_partition_tombstones() const {
+        return _components->scylla_metadata->has_partition_tombstones() != has_partition_tombstones::No;
     }
 
     bool has_correct_max_deletion_time() const {

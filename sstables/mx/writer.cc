@@ -608,6 +608,7 @@ private:
     } _pi_write_m;
     utils::UUID _run_identifier;
     bool _write_regular_as_static; // See #4139
+    has_partition_tombstones _has_partition_tombstones = has_partition_tombstones::No;
 
     void init_file_writers();
 
@@ -1003,6 +1004,7 @@ void writer::consume(tombstone t) {
 
     if (t) {
         _collector.update_min_max_components(clustering_key_prefix::make_empty(_schema));
+        _has_partition_tombstones = has_partition_tombstones::Yes;
     }
 }
 
@@ -1436,7 +1438,7 @@ void writer::consume_end_of_stream() {
         features.disable(sstable_feature::CorrectStaticCompact);
     }
     run_identifier identifier{_run_identifier};
-    _sst.write_scylla_metadata(_pc, _shard, std::move(features), std::move(identifier));
+    _sst.write_scylla_metadata(_pc, _shard, std::move(features), std::move(identifier), _has_partition_tombstones);
     if (!_cfg.leave_unsealed) {
         _sst.seal_sstable(_cfg.backup).get();
     }

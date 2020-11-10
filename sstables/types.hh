@@ -498,6 +498,7 @@ enum class scylla_metadata_type : uint32_t {
     Features = 2,
     ExtensionAttributes = 3,
     RunIdentifier = 4,
+    HasPartitionTombstones = 5,
 };
 
 struct run_identifier {
@@ -509,6 +510,12 @@ struct run_identifier {
     auto describe_type(sstable_version_types v, Describer f) { return f(id); }
 };
 
+enum class has_partition_tombstones : uint8_t {
+    Unknown = 0,
+    Yes = 1,
+    No = 2,
+};
+
 struct scylla_metadata {
     using extension_attributes = disk_hash<uint32_t, disk_string<uint32_t>, disk_string<uint32_t>>;
 
@@ -516,7 +523,8 @@ struct scylla_metadata {
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::Sharding, sharding_metadata>,
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::Features, sstable_enabled_features>,
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::ExtensionAttributes, extension_attributes>,
-            disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::RunIdentifier, run_identifier>
+            disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::RunIdentifier, run_identifier>,
+            disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::HasPartitionTombstones, has_partition_tombstones>
             > data;
 
     sstable_enabled_features get_features() const {
@@ -543,6 +551,11 @@ struct scylla_metadata {
     std::optional<utils::UUID> get_optional_run_identifier() const {
         auto* m = data.get<scylla_metadata_type::RunIdentifier, run_identifier>();
         return m ? std::make_optional(m->id) : std::nullopt;
+    }
+
+    has_partition_tombstones has_partition_tombstones() const {
+        auto v = data.get<scylla_metadata_type::HasPartitionTombstones, sstables::has_partition_tombstones>();
+        return v ? *v : has_partition_tombstones::Unknown;
     }
 
     template <typename Describer>
