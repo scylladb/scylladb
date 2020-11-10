@@ -105,8 +105,7 @@ SEASTAR_TEST_CASE(test_group_by_syntax) {
         BOOST_REQUIRE_EXCEPTION(
                 e.execute_cql("select * from t1 where p1 > 0 group by p2 allow filtering").get(), ire, order);
         BOOST_REQUIRE_EXCEPTION(
-                e.execute_cql("select * from t1 where (c1,c2) > (0,0) group by p1, p2, c3 allow filtering").get(),
-                ire, order);
+                e.execute_cql("select * from t1 where (c1,c2) > (0,0) group by p1, p2, c3").get(), ire, order);
         BOOST_REQUIRE_EXCEPTION(
                 e.execute_cql("select * from t1 where p1>0 and p2=0 group by c1 allow filtering").get(), ire, order);
         // Even when GROUP BY lists all primary-key columns:
@@ -225,8 +224,8 @@ SEASTAR_TEST_CASE(test_group_by_text_key) {
         cquery_nofail(e, "insert into t2 (p, c1, c2, v) values (' ', 'a', 'b', 40)");
         require_rows(e, "select avg(v) from t2 group by p", {{I(25), T(" ")}});
         require_rows(e, "select avg(v) from t2 group by p, c1", {{I(15), T(" "), T("")}, {I(35), T(" "), T("a")}});
-        require_rows(e, "select sum(v) from t2 where c1='' group by p, c2 allow filtering",
-                     {{I(10), T(""), T(" "), T("")}, {I(20), T(""), T(" "), T("b")}});
+        require_rows(e, "select sum(v) from t2 where c1='' group by p, c2",
+                     {{I(10), T(" "), T("")}, {I(20), T(" "), T("b")}});
         return make_ready_future<>();
     });
 }

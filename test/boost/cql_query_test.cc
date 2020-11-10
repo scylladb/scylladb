@@ -247,7 +247,7 @@ SEASTAR_TEST_CASE(test_map_elements_validation) {
 SEASTAR_TEST_CASE(test_in_clause_validation) {
     return do_with_cql_env_thread([](cql_test_env& e) {
         auto test_inline = [&] (sstring value, bool should_throw) {
-            auto cql = sprint("SELECT r1 FROM tbl WHERE (c1,r1) IN ((1, '%s')) ALLOW FILTERING", value);
+            auto cql = sprint("SELECT r1 FROM tbl WHERE (c1,r1) IN ((1, '%s'))", value);
             if (should_throw) {
                 BOOST_REQUIRE_THROW(e.execute_cql(cql).get(), exceptions::invalid_request_exception);
             } else {
@@ -258,7 +258,7 @@ SEASTAR_TEST_CASE(test_in_clause_validation) {
         test_inline("definietly not a date value", true);
         test_inline("2015-05-03", false);
         e.execute_cql("CREATE TABLE tbl2 (p1 int, c1 int, r1 text, PRIMARY KEY (p1, c1,r1))").get();
-        auto id = e.prepare("SELECT r1 FROM tbl2 WHERE (c1,r1) IN ? ALLOW FILTERING").get0();
+        auto id = e.prepare("SELECT r1 FROM tbl2 WHERE (c1,r1) IN ?").get0();
         auto test_bind = [&] (sstring value, bool should_throw) {
             auto my_tuple_type = tuple_type_impl::get_instance({int32_type, utf8_type});
             auto my_list_type = list_type_impl::get_instance(my_tuple_type, true);
@@ -424,7 +424,7 @@ SEASTAR_TEST_CASE(test_select_statement) {
             });
         }).then([&e] {
             // Test full partition range, singular clustering range
-            return e.execute_cql("select * from cf where c1 = 1 and c2 = 2 allow filtering;").then([] (shared_ptr<cql_transport::messages::result_message> msg) {
+            return e.execute_cql("select * from cf where c1 = 1 and c2 = 2;").then([] (shared_ptr<cql_transport::messages::result_message> msg) {
                 assert_that(msg).is_rows()
                     .with_size(3)
                     .with_row({
@@ -2395,14 +2395,14 @@ SEASTAR_TEST_CASE(test_in_restriction) {
         e.execute_cql("insert into tir2 (p1, c1, r1) values (1, 2, 3);").get();
         e.execute_cql("insert into tir2 (p1, c1, r1) values (2, 3, 4);").get();
         {
-            auto msg = e.execute_cql("select r1 from tir2 where (c1,r1) in ((0, 1),(1,2),(0,1),(1,2),(3,3)) ALLOW FILTERING;").get0();
+            auto msg = e.execute_cql("select r1 from tir2 where (c1,r1) in ((0, 1),(1,2),(0,1),(1,2),(3,3));").get0();
             assert_that(msg).is_rows().with_rows({
-                {int32_type->decompose(1), int32_type->decompose(0)},
-                {int32_type->decompose(2), int32_type->decompose(1)},
+                {int32_type->decompose(1)},
+                {int32_type->decompose(2)},
             });
         }
         {
-            auto prepared_id = e.prepare("select r1 from tir2 where (c1,r1) in ? ALLOW FILTERING;").get0();
+            auto prepared_id = e.prepare("select r1 from tir2 where (c1,r1) in ?;").get0();
             auto my_tuple_type = tuple_type_impl::get_instance({int32_type,int32_type});
             auto my_list_type = list_type_impl::get_instance(my_tuple_type, true);
             std::vector<tuple_type_impl::native_type> native_tuples = {
@@ -2422,8 +2422,8 @@ SEASTAR_TEST_CASE(test_in_restriction) {
             raw_values.emplace_back(cql3::raw_value::make_value(in_values_list));
             auto msg = e.execute_prepared(prepared_id,raw_values).get0();
             assert_that(msg).is_rows().with_rows({
-                {int32_type->decompose(1), int32_type->decompose(0)},
-                {int32_type->decompose(2), int32_type->decompose(1)},
+                {int32_type->decompose(1)},
+                {int32_type->decompose(2)},
             });
         }
     });
@@ -4525,7 +4525,7 @@ SEASTAR_TEST_CASE(test_select_serial_consistency) {
             }
         };
         check_fails("select * from t allow filtering");
-        check_fails("select * from t where  b > 0 allow filtering");
+        check_fails("select * from t where  b > 0");
         check_fails("select * from t where  a in (1, 3)");
         prepared_on_shard(e, "select * from t where a = 1", {}, {{I(1), I(1)}, {I(1), I(2)}}, db::consistency_level::SERIAL);
     });
@@ -4582,8 +4582,8 @@ SEASTAR_TEST_CASE(test_impossible_where) {
         cquery_nofail(e, "INSERT INTO  t2(p,c) VALUES (0, 0)");
         cquery_nofail(e, "INSERT INTO  t2(p,c) VALUES (1, 10)");
         cquery_nofail(e, "INSERT INTO  t2(p,c) VALUES (2, 20)");
-        require_rows(e, "SELECT * FROM t2 WHERE c>10 AND c<10 ALLOW FILTERING", {});
-        require_rows(e, "SELECT * FROM t2 WHERE c>=10 AND c<=0 ALLOW FILTERING", {});
+        require_rows(e, "SELECT * FROM t2 WHERE c>10 AND c<10", {});
+        require_rows(e, "SELECT * FROM t2 WHERE c>=10 AND c<=0", {});
     });
 }
 
