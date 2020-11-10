@@ -1576,10 +1576,9 @@ future<> update_cdc_streams_timestamp(db_clock::time_point tp) {
 
 future<> force_blocking_flush(sstring cfname) {
     assert(qctx);
-    return qctx->_db.invoke_on_all([cfname = std::move(cfname)](database& db) {
+    return qctx->_qp.invoke_on_all([cfname = std::move(cfname)] (cql3::query_processor& qp) {
         // if (!Boolean.getBoolean("cassandra.unsafesystem"))
-        column_family& cf = db.find_column_family(NAME, cfname);
-        return cf.flush();
+        return qp.db().flush(NAME, cfname);
     });
 }
 

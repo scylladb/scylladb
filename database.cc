@@ -2033,6 +2033,11 @@ future<> database::flush_all_memtables() {
     });
 }
 
+future<> database::flush(const sstring& ksname, const sstring& cfname) {
+    auto& cf = find_column_family(ksname, cfname);
+    return cf.flush();
+}
+
 future<> database::truncate(sstring ksname, sstring cfname, timestamp_func tsf) {
     auto& ks = find_keyspace(ksname);
     auto& cf = find_column_family(ksname, cfname);
