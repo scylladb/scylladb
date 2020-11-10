@@ -1560,6 +1560,228 @@ SEASTAR_TEST_CASE(test_token_order) {
     });
 }
 
+SEASTAR_TEST_CASE(test_select_with_token_range_cases) {
+    return do_with_cql_env_thread([] (auto& e) {
+        cquery_nofail(e, "CREATE TABLE t (pk int, v int, PRIMARY KEY(pk))");
+
+        for (int i = 0; i < 7; i++) {
+            // v=1 in each row, so WHERE v = 1 will select them all
+            cquery_nofail(e, format("INSERT INTO t (pk, v) VALUES ({}, 1)", i).c_str());
+        }
+
+        auto get_result_rows = [&](int start, int end) {
+            std::vector<std::vector<bytes_opt>> result;
+            for (int i = start; i <= end; i++) {
+                result.push_back({ testset_pks[i][0], int32_type->decompose(1) });
+            }
+            return result;
+        };
+
+        auto get_query = [&](sstring token_restriction) {
+            return format("SELECT * FROM t WHERE v = 1 AND {} ALLOW FILTERING", token_restriction);
+        };
+
+        auto q = [&](sstring token_restriction) {
+            return cquery_nofail(e, get_query(token_restriction).c_str());
+        };
+
+        auto inclusive_inclusive_range = [](int64_t start, int64_t end) { return format("token(pk) >= {} AND token(pk) <= {}", start, end); };
+        auto exclusive_inclusive_range = [](int64_t start, int64_t end) { return format("token(pk) > {} AND token(pk) <= {}", start, end); };
+        auto inclusive_exclusive_range = [](int64_t start, int64_t end) { return format("token(pk) >= {} AND token(pk) < {}", start, end); };
+        auto exclusive_exclusive_range = [](int64_t start, int64_t end) { return format("token(pk) > {} AND token(pk) < {}", start, end); };
+
+        auto inclusive_infinity_range = [](int64_t start) { return format("token(pk) >= {}", start); };
+        auto exclusive_infinity_range = [](int64_t start) { return format("token(pk) > {}", start); };
+
+        auto infinity_inclusive_range = [](int64_t end) { return format("token(pk) <= {}", end); };
+        auto infinity_exclusive_range = [](int64_t end) { return format("token(pk) < {}", end); };
+
+        auto equal_range = [](int64_t value) { return format("token(pk) = {}", value); };
+
+        auto do_tests = [&] {
+            assert_that(q(inclusive_inclusive_range(testset_tokens[1], testset_tokens[5]))).is_rows().with_rows(get_result_rows(1, 5));
+            assert_that(q(inclusive_inclusive_range(testset_tokens[1], testset_tokens[5] - 1))).is_rows().with_rows(get_result_rows(1, 4));
+            assert_that(q(inclusive_inclusive_range(testset_tokens[1], testset_tokens[5] + 1))).is_rows().with_rows(get_result_rows(1, 5));
+            assert_that(q(inclusive_inclusive_range(testset_tokens[1] + 1, testset_tokens[5]))).is_rows().with_rows(get_result_rows(2, 5));
+
+            assert_that(q(exclusive_inclusive_range(testset_tokens[1], testset_tokens[4]))).is_rows().with_rows(get_result_rows(2, 4));
+
+            assert_that(q(inclusive_exclusive_range(testset_tokens[1], testset_tokens[4]))).is_rows().with_rows(get_result_rows(1, 3));
+
+            assert_that(q(exclusive_exclusive_range(testset_tokens[1], testset_tokens[4]))).is_rows().with_rows(get_result_rows(2, 3));
+
+            assert_that(q(inclusive_infinity_range(testset_tokens[3]))).is_rows().with_rows(get_result_rows(3, testset_pks.size() - 1));
+
+            assert_that(q(exclusive_infinity_range(testset_tokens[3]))).is_rows().with_rows(get_result_rows(4, testset_pks.size() - 1));
+
+            assert_that(q(infinity_inclusive_range(testset_tokens[3]))).is_rows().with_rows(get_result_rows(0, 3));
+
+            assert_that(q(infinity_exclusive_range(testset_tokens[3]))).is_rows().with_rows(get_result_rows(0, 2));
+            
+            assert_that(q("token(pk) < 0")).is_rows().with_rows(get_result_rows(0, 4));
+
+            assert_that(q("token(pk) > 0")).is_rows().with_rows(get_result_rows(5, testset_pks.size() - 1));
+
+            assert_that(q(equal_range(testset_tokens[3]))).is_rows().with_rows(get_result_rows(3, 3));
+
+            // empty range
+            assert_that(q("token(pk) < 5 AND token(pk) > 100")).is_rows().with_size(0);
+
+            // prepared statement
+            auto prepared_id = e.prepare(get_query("token(pk) >= ? AND token(pk) <= ?")).get0();
+            auto msg = e.execute_prepared(prepared_id, {
+                cql3::raw_value::make_value(long_type->decompose(testset_tokens[1])), cql3::raw_value::make_value(long_type->decompose(testset_tokens[5]))
+            }).get0();
+            assert_that(msg).is_rows().with_rows(get_result_rows(1, 5));
+
+            msg = e.execute_prepared(prepared_id, {
+                cql3::raw_value::make_value(long_type->decompose(testset_tokens[2])), cql3::raw_value::make_value(long_type->decompose(testset_tokens[6]))
+            }).get0();
+            assert_that(msg).is_rows().with_rows(get_result_rows(2, 6));
+        };
+
+        eventually(do_tests);
+
+        cquery_nofail(e, "CREATE INDEX t_global ON t(v)");
+
+        eventually(do_tests);
+
+        cquery_nofail(e, "DROP INDEX t_global");
+        cquery_nofail(e, "CREATE INDEX t_local ON t((pk), v)");
+
+        eventually(do_tests);
+    });
+}
+
+struct testset_row {
+    int pk1, pk2;
+    int64_t token;
+    int ck1, ck2;
+    int v, v2;
+};
+
+SEASTAR_TEST_CASE(test_select_with_token_range_filtering) {
+    return do_with_cql_env_thread([] (auto& e) {
+        // Do tests for each column (excluding partition key columns - cannot mix partition column 
+        // restrictions and TOKEN restrictions). First run the query without index, then with global index,
+        // and finally with local index.
+
+        cquery_nofail(e, "CREATE TABLE t (pk1 int, pk2 int, ck1 int, ck2 int, v int, v2 int, PRIMARY KEY((pk1, pk2), ck1, ck2))");
+
+        std::map<std::pair<int, int>, int64_t> pk_to_token = {
+            {{3, 3}, -5763496297744201138},
+            {{2, 2}, -3974863545882308264},
+            {{1, 3},   793791837967961899},
+            {{2, 1},  1222388547083740924},
+            {{2, 3},  3312996362008120679},
+            {{1, 2},  4881097376275569167},
+            {{1, 1},  5765203080415074583},
+            {{3, 2},  6375086356864122089},
+            {{3, 1},  8740098777817515610}
+        };
+
+        std::vector<testset_row> rows;
+        auto insert_row = [&](testset_row row) {
+            cquery_nofail(e, format("INSERT INTO t(pk1, pk2, ck1, ck2, v, v2) VALUES ({}, {}, {}, {}, {}, {})", row.pk1, row.pk2, row.ck1, row.ck2, row.v, row.v2).c_str());
+            rows.push_back(row);
+        };
+
+        for (int pk1 = 1; pk1 <= 3; pk1++) {
+            for (int pk2 = 1; pk2 <= 3; pk2++) {
+                insert_row(testset_row{pk1, pk2, pk_to_token[{pk1, pk2}], 1, 1, 1, 1});
+                insert_row(testset_row{pk1, pk2, pk_to_token[{pk1, pk2}], 1, 3, 2, 1});
+                insert_row(testset_row{pk1, pk2, pk_to_token[{pk1, pk2}], 2, 1, 3, 1});
+            }
+        }
+
+        auto do_test = [&](sstring token_restriction, sstring column_restrictions, std::function<bool(const testset_row&)> matches_row) {
+            auto expected_rows = boost::copy_range<std::vector<std::vector<bytes_opt>>>(rows |
+                boost::adaptors::filtered(std::move(matches_row)) | boost::adaptors::transformed([] (const testset_row& row) {
+                return std::vector<bytes_opt> { 
+                    int32_type->decompose(row.pk1), int32_type->decompose(row.pk2), 
+                    int32_type->decompose(row.ck1), int32_type->decompose(row.ck2), 
+                    int32_type->decompose(row.v), int32_type->decompose(row.v2) 
+                };
+            }));
+            auto msg = cquery_nofail(e, format("SELECT pk1, pk2, ck1, ck2, v, v2 FROM t WHERE {} AND {} ALLOW FILTERING", token_restriction, column_restrictions).c_str());
+            assert_that(msg).is_rows().with_rows_ignore_order(expected_rows);
+        };
+
+        auto do_tests_ck1 = [&] {
+            do_test("token(pk1, pk2) >= token(1, 2)", "ck1 = 1", [&](const testset_row& row) { return row.ck1 == 1 && row.token >= pk_to_token[{1, 2}]; });
+            do_test("token(pk1, pk2) >= token(1, 2)", "ck1 = 1 AND v2 = 1", [&](const testset_row& row) { return row.ck1 == 1 && row.v2 == 1 && row.token >= pk_to_token[{1, 2}]; });
+            do_test("token(pk1, pk2) >= token(1, 2)", "ck1 = 1 AND ck2 = 3", [&](const testset_row& row) { return row.ck1 == 1 && row.ck2 == 3 && row.token >= pk_to_token[{1, 2}]; });
+            do_test("token(pk1, pk2) >= token(1, 2)", "ck1 = 1 AND ck2 = 3 AND v = 2", [&](const testset_row& row) { return row.ck1 == 1 && row.ck2 == 3 && row.v == 2 && row.token >= pk_to_token[{1, 2}]; });
+            do_test("token(pk1, pk2) >= token(1, 2)", "ck1 = 1 AND v = 3", [&](const testset_row& row) { return row.ck1 == 1 && row.v == 3 && row.token >= pk_to_token[{1, 2}]; });
+        };
+
+        auto do_tests_ck2 = [&] {
+            do_test("token(pk1, pk2) <= token(1, 3)", "ck2 = 1", [&](const testset_row& row) { return row.ck2 == 1 && row.token <= pk_to_token[{1, 3}]; });
+            do_test("token(pk1, pk2) <= token(1, 3)", "ck2 = 1 AND ck1 = 1", [&](const testset_row& row) { return row.ck2 == 1 && row.ck1 == 1 && row.token <= pk_to_token[{1, 3}]; });
+            do_test("token(pk1, pk2) <= token(1, 3)", "ck2 = 1 AND v2 = 1", [&](const testset_row& row) { return row.ck2 == 1 && row.v2 == 1 && row.token <= pk_to_token[{1, 3}]; });
+        };
+
+        auto do_tests_v = [&] {
+            do_test("token(pk1, pk2) <= token(3, 2)", "v = 2", [&](const testset_row& row) { return row.v == 2 && row.token <= pk_to_token[{3, 2}]; });
+            do_test("token(pk1, pk2) <= token(3, 2)", "v = 2 AND ck1 = 1", [&](const testset_row& row) { return row.v == 2 && row.ck1 == 1 && row.token <= pk_to_token[{3, 2}]; });
+            do_test("token(pk1, pk2) <= token(3, 2)", "v = 2 AND ck1 = 1 AND ck2 = 3", [&](const testset_row& row) { return row.v == 2 && row.ck1 == 1 && row.ck2 == 3 && row.token <= pk_to_token[{3, 2}]; });
+        };
+
+        auto do_tests_v2 = [&] {
+            do_test("token(pk1, pk2) <= token(3, 2)", "v2 = 1", [&](const testset_row& row) { return row.v2 == 1 && row.token <= pk_to_token[{3, 2}]; });
+            do_test("token(pk1, pk2) <= token(3, 2)", "v2 = 1 AND ck1 = 1", [&](const testset_row& row) { return row.v2 == 1 && row.ck1 == 1 && row.token <= pk_to_token[{3, 2}]; });
+            do_test("token(pk1, pk2) <= token(3, 2)", "v2 = 1 AND ck1 = 1 AND ck2 = 1", [&](const testset_row& row) { return row.v2 == 1 && row.ck1 == 1 && row.ck2 == 1 && row.token <= pk_to_token[{3, 2}]; });
+            do_test("token(pk1, pk2) <= token(3, 2)", "v2 = 1 AND ck2 = 1", [&](const testset_row& row) { return row.v2 == 1 && row.ck2 == 1 && row.token <= pk_to_token[{3, 2}]; });
+        };
+
+        do_tests_ck1();
+        cquery_nofail(e, "CREATE INDEX t_global ON t(ck1)");
+        eventually(do_tests_ck1);
+        cquery_nofail(e, "DROP INDEX t_global");
+        cquery_nofail(e, "CREATE INDEX t_local ON t((pk1, pk2), ck1)");
+        eventually(do_tests_ck1);
+        cquery_nofail(e, "DROP INDEX t_local");
+
+        do_tests_ck2();
+        cquery_nofail(e, "CREATE INDEX t_global ON t(ck2)");
+        eventually(do_tests_ck2);
+        cquery_nofail(e, "DROP INDEX t_global");
+        cquery_nofail(e, "CREATE INDEX t_local ON t((pk1, pk2), ck2)");
+        eventually(do_tests_ck2);
+        cquery_nofail(e, "DROP INDEX t_local");
+
+        do_tests_v();
+        cquery_nofail(e, "CREATE INDEX t_global ON t(v)");
+        eventually(do_tests_v);
+        cquery_nofail(e, "DROP INDEX t_global");
+        cquery_nofail(e, "CREATE INDEX t_local ON t((pk1, pk2), v)");
+        eventually(do_tests_v);
+        cquery_nofail(e, "DROP INDEX t_local");
+
+        do_tests_v2();
+        cquery_nofail(e, "CREATE INDEX t_global ON t(v2)");
+        eventually(do_tests_v2);
+        cquery_nofail(e, "DROP INDEX t_global");
+        cquery_nofail(e, "CREATE INDEX t_local ON t((pk1, pk2), v2)");
+        eventually(do_tests_v2);
+        cquery_nofail(e, "DROP INDEX t_local");
+
+        // Two indexes
+        cquery_nofail(e, "CREATE INDEX t_global ON t(v2)");
+        cquery_nofail(e, "CREATE INDEX t_global2 ON t(ck2)");
+        eventually(do_tests_v2);
+        eventually(do_tests_ck2);
+        cquery_nofail(e, "DROP INDEX t_global");
+        cquery_nofail(e, "DROP INDEX t_global2");
+        cquery_nofail(e, "CREATE INDEX t_local ON t((pk1, pk2), v2)");
+        cquery_nofail(e, "CREATE INDEX t_local2 ON t((pk1, pk2), ck2)");
+        eventually(do_tests_v2);
+        eventually(do_tests_ck2);
+        cquery_nofail(e, "DROP INDEX t_local");
+        cquery_nofail(e, "DROP INDEX t_local2");
+    });
+}
+
 // Ref: #5708 - filtering should be applied on an indexed column
 // if the restriction is not eligible for indexing (it's not EQ)
 SEASTAR_TEST_CASE(test_filtering_indexed_column) {
