@@ -892,6 +892,10 @@ public:
         return _pending_writes_phaser.advance_and_await();
     }
 
+    size_t writes_in_progress() const {
+        return _pending_writes_phaser.operations_in_progress();
+    }
+
     utils::phased_barrier::operation read_in_progress() {
         return _pending_reads_phaser.start();
     }
@@ -900,12 +904,20 @@ public:
         return _pending_reads_phaser.advance_and_await();
     }
 
+    size_t reads_in_progress() const {
+        return _pending_reads_phaser.operations_in_progress();
+    }
+
     utils::phased_barrier::operation stream_in_progress() {
         return _pending_streams_phaser.start();
     }
 
     future<> await_pending_streams() {
         return _pending_streams_phaser.advance_and_await();
+    }
+
+    size_t streams_in_progress() const {
+        return _pending_streams_phaser.operations_in_progress();
     }
 
     void add_or_update_view(view_ptr v);
