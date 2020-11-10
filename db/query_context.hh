@@ -82,19 +82,4 @@ struct query_context {
 
 // This does not have to be thread local, because all cores will share the same context.
 extern std::unique_ptr<query_context> qctx;
-
-template <typename... Args>
-static future<::shared_ptr<cql3::untyped_result_set>> execute_cql(sstring text, Args&&... args) {
-    assert(qctx);
-    return qctx->execute_cql(text, std::forward<Args>(args)...);
-}
-
-template <typename... Args>
-static future<::shared_ptr<cql3::untyped_result_set>> execute_cql_with_timeout(sstring cql,
-        db::timeout_clock::time_point timeout,
-        Args&&... args) {
-    assert(qctx);
-    return qctx->execute_cql_with_timeout(cql, timeout, std::forward<Args>(args)...);
-}
-
 }
