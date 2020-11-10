@@ -1518,6 +1518,27 @@ SEASTAR_TEST_CASE(test_computed_columns) {
     });
 }
 
+// Sorted by token value. See testset_tokens for token values.
+static const std::vector<std::vector<bytes_opt>> testset_pks = {
+    { int32_type->decompose(5) },
+    { int32_type->decompose(1) },
+    { int32_type->decompose(0) },
+    { int32_type->decompose(2) },
+    { int32_type->decompose(4) },
+    { int32_type->decompose(6) },
+    { int32_type->decompose(3) },
+};
+
+static const std::vector<int64_t> testset_tokens = {
+    { -7509452495886106294 },
+    { -4069959284402364209 },
+    { -3485513579396041028 },
+    { -3248873570005575792 },
+    { -2729420104000364805 },
+    { +2705480034054113608 },
+    { +9010454139840013625 },
+};
+
 // Ref: #3423 - rows should be returned in token order,
 // using signed comparison (ref: #7443)
 SEASTAR_TEST_CASE(test_token_order) {
@@ -1529,22 +1550,12 @@ SEASTAR_TEST_CASE(test_token_order) {
             cquery_nofail(e, format("INSERT INTO t (pk, v) VALUES ({}, 1)", i).c_str());
         }
 
-        std::vector<std::vector<bytes_opt>> expected_rows = {
-            { int32_type->decompose(5) }, // token(pk) = -7509452495886106294
-            { int32_type->decompose(1) }, // token(pk) = -4069959284402364209
-            { int32_type->decompose(0) }, // token(pk) = -3485513579396041028
-            { int32_type->decompose(2) }, // token(pk) = -3248873570005575792
-            { int32_type->decompose(4) }, // token(pk) = -2729420104000364805
-            { int32_type->decompose(6) }, // token(pk) = +2705480034054113608
-            { int32_type->decompose(3) }, // token(pk) = +9010454139840013625
-        };
-
         eventually([&] {
             auto nonindex_order = cquery_nofail(e, "SELECT pk FROM t");
             auto index_order = cquery_nofail(e, "SELECT pk FROM t WHERE v = 1");
 
-            assert_that(nonindex_order).is_rows().with_rows(expected_rows);
-            assert_that(index_order).is_rows().with_rows(expected_rows);
+            assert_that(nonindex_order).is_rows().with_rows(testset_pks);
+            assert_that(index_order).is_rows().with_rows(testset_pks);
         });
     });
 }
