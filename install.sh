@@ -109,6 +109,7 @@ adjust_bin() {
 [[ -z "\$LD_PRELOAD" ]] || { echo "\$0: not compatible with LD_PRELOAD" >&2; exit 110; }
 export GNUTLS_SYSTEM_PRIORITY_FILE="\${GNUTLS_SYSTEM_PRIORITY_FILE-$prefix/libreloc/gnutls.config}"
 export LD_LIBRARY_PATH="$prefix/libreloc"
+export UBSAN_OPTIONS="${UBSAN_OPTIONS:+$UBSAN_OPTIONS:}suppressions=$prefix/libexec/ubsan-suppressions.supp"
 exec -a "\$0" "$prefix/libexec/$bin" "\$@"
 EOF
     chmod +x "$root/$prefix/bin/$bin"
@@ -261,6 +262,7 @@ install -m755 libexec/* -Dt "$rprefix/libexec"
 for bin in libexec/*; do
 	adjust_bin "${bin#libexec/}"
 done
+install -m644 ubsan-suppressions.supp -Dt "$rprefix/libexec"
 
 install -d -m755 "$rdoc"/scylla
 install -m644 README.md -Dt "$rdoc"/scylla/
