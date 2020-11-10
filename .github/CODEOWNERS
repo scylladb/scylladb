@@ -79,3 +79,9 @@ db/hints/* @haaawk @piodul @vladzcloudius
 # REDIS
 redis/* @nyh @syuu1228
 redis-test/* @nyh @syuu1228
+
+# READERS
+reader_* @denesb
+querier* @denesb
+test/boost/mutation_reader_test.cc @denesb
+test/boost/querier_cache_test.cc @denesb
