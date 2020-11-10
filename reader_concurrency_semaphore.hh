@@ -91,6 +91,8 @@ public:
         uint64_t total_successful_reads = 0;
         // Total number of failed reads executed through this semaphore.
         uint64_t total_failed_reads = 0;
+        // Total number of reads rejected because the admission queue reached its max capacity
+        uint64_t total_reads_shed_due_to_overload = 0;
     };
 
     struct permit_list;
