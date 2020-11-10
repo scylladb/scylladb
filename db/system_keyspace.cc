@@ -1314,16 +1314,6 @@ typedef std::unordered_map<truncation_key, truncation_record> truncation_map;
 
 static constexpr uint8_t current_version = 1;
 
-/**
- * This method is used to remove information about truncation time for specified column family
- */
-future<> remove_truncation_record(utils::UUID id) {
-    sstring req = format("DELETE * from system.{} WHERE table_uuid = ?", TRUNCATED);
-    return qctx->qp().execute_internal(req, {id}).discard_result().then([] {
-        return force_blocking_flush(TRUNCATED);
-    });
-}
-
 static future<truncation_record> get_truncation_record(utils::UUID cf_id) {
     sstring req = format("SELECT * from system.{} WHERE table_uuid = ?", TRUNCATED);
     return qctx->qp().execute_internal(req, {cf_id}).then([cf_id](::shared_ptr<cql3::untyped_result_set> rs) {
@@ -1534,12 +1524,6 @@ future<> update_peer_info(gms::inet_address ep, sstring column_name, Value value
 template future<> update_peer_info<sstring>(gms::inet_address ep, sstring column_name, sstring);
 template future<> update_peer_info<utils::UUID>(gms::inet_address ep, sstring column_name, utils::UUID);
 template future<> update_peer_info<net::inet_address>(gms::inet_address ep, sstring column_name, net::inet_address);
-
-future<> update_hints_dropped(gms::inet_address ep, utils::UUID time_period, int value) {
-    // with 30 day TTL
-    sstring req = format("UPDATE system.{} USING TTL 2592000 SET hints_dropped[ ? ] = ? WHERE peer = ?", PEER_EVENTS);
-    return execute_cql(req, time_period, value, ep.addr()).discard_result();
-}
 
 future<> set_scylla_local_param(const sstring& key, const sstring& value) {
     sstring req = format("UPDATE system.{} SET value = ? WHERE key = ?", SCYLLA_LOCAL);
