@@ -226,8 +226,8 @@ using namespace v3;
 
 using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
 
-future<> save_system_schema(const sstring & ksname) {
-    auto& ks = db::qctx->db().find_keyspace(ksname);
+future<> save_system_schema(cql3::query_processor& qp, const sstring & ksname) {
+    auto& ks = qp.db().find_keyspace(ksname);
     auto ksm = ks.metadata();
 
     // delete old, possibly obsolete entries in schema tables
@@ -235,15 +235,15 @@ future<> save_system_schema(const sstring & ksname) {
         auto deletion_timestamp = schema_creation_timestamp() - 1;
         return qctx->execute_cql(format("DELETE FROM {}.{} USING TIMESTAMP {} WHERE keyspace_name = ?", NAME, cf,
             deletion_timestamp), ksm->name()).discard_result();
-    }).then([ksm] {
+    }).then([ksm, &qp] {
         auto mvec  = make_create_keyspace_mutations(ksm, schema_creation_timestamp(), true);
-        return qctx->proxy().mutate_locally(std::move(mvec), tracing::trace_state_ptr());
+        return qp.proxy().mutate_locally(std::move(mvec), tracing::trace_state_ptr());
     });
 }
 
 /** add entries to system_schema.* for the hardcoded system definitions */
-future<> save_system_keyspace_schema() {
-    return save_system_schema(NAME);
+future<> save_system_keyspace_schema(cql3::query_processor& qp) {
+    return save_system_schema(qp, NAME);
 }
 
 namespace v3 {

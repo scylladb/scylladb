@@ -1276,11 +1276,11 @@ future<> setup(distributed<database>& db,
         return build_bootstrap_info();
     }).then([&cfg] {
         return check_health(cfg.cluster_name());
-    }).then([] {
-        return db::schema_tables::save_system_keyspace_schema();
-    }).then([] {
+    }).then([&qp] {
+        return db::schema_tables::save_system_keyspace_schema(qp.local());
+    }).then([&qp] {
         // #2514 - make sure "system" is written to system_schema.keyspaces.
-        return db::schema_tables::save_system_schema(NAME);
+        return db::schema_tables::save_system_schema(qp.local(), NAME);
     }).then([&db] {
         return cache_truncation_record(db);
     }).then([&ms] {
