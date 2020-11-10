@@ -54,14 +54,25 @@ concept FragmentProducer = requires(Producer p, dht::partition_range part_range,
 /**
  * Merge mutation-fragments produced by producer.
  *
- * Merge a non-decreasing stream of mutation-fragments into strictly
- * increasing stream. The merger is stateful, it's intended to be kept
+ * Merge a non-decreasing stream of mutation fragment batches into
+ * a non-decreasing stream of mutation fragments.
+ *
+ * A batch is a sequence of fragments. For each such batch we merge
+ * the maximal mergeable subsequences of fragments and emit them
+ * as single fragments.
+ *
+ * For example, a batch <f1, f2, f3, f4, f5>, where f1 and f2 are mergeable,
+ * f2 is not mergeable with f3, f3 is not mergeable with f4, and f4 and f5
+ * are mergeable, will result in the following sequence:
+ * merge(f1, f2), f3, merge(f4, f5).
+ *
+ * The merger is stateful, it's intended to be kept
  * around *at least* for merging an entire partition. That is, creating
  * a new instance for each batch of fragments will produce incorrect
  * results.
  *
  * Call operator() to get the next mutation fragment. operator() will
- * consume fragments from the producer using operator().
+ * consume batches from the producer using operator().
  * Any fast-forwarding has to be communicated to the merger object using
  * fast_forward_to() and next_partition(), as appropriate.
  */
