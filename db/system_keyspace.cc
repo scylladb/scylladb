@@ -1265,7 +1265,6 @@ future<> setup(distributed<database>& db,
                distributed<cql3::query_processor>& qp,
                distributed<gms::feature_service>& feat,
                sharded<netw::messaging_service>& ms) {
-    minimal_setup(db, qp);
     return setup_version(feat, ms).then([&db] {
         return update_schema_version(db.local().get_version());
     }).then([] {
