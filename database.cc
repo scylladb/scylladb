@@ -57,6 +57,7 @@
 #include <boost/range/algorithm/find_if.hpp>
 #include <boost/range/algorithm/sort.hpp>
 #include <boost/range/adaptor/map.hpp>
+#include <boost/container/static_vector.hpp>
 #include "frozen_mutation.hh"
 #include <seastar/core/do_with.hh>
 #include "service/migration_manager.hh"
@@ -82,6 +83,7 @@
 
 #include "checked-file-impl.hh"
 #include "utils/disk-error-handler.hh"
+#include "utils/human_readable.hh"
 
 #include "db/timeout_clock.hh"
 #include "db/large_data_handler.hh"
@@ -90,6 +92,7 @@
 
 #include "user_types_metadata.hh"
 #include <seastar/core/shared_ptr_incomplete.hh>
+#include <seastar/util/memory_diagnostics.hh>
 
 #include "schema_builder.hh"
 
@@ -165,6 +168,174 @@ bool string_pair_eq::operator()(spair lhs, spair rhs) const {
 
 utils::UUID database::empty_version = utils::UUID_gen::get_name_UUID(bytes{});
 
+namespace {
+
+class memory_diagnostics_line_writer {
+    std::array<char, 4096> _line_buf;
+    memory::memory_diagnostics_writer _wr;
+
+public:
+    memory_diagnostics_line_writer(memory::memory_diagnostics_writer wr) : _wr(std::move(wr)) { }
+    void operator() (const char* fmt) {
+        _wr(fmt);
+    }
+    void operator() (const char* fmt, const auto& param1, const auto&... params) {
+        const auto begin = _line_buf.begin();
+        auto it = fmt::format_to(begin, fmt, param1, params...);
+        _wr(std::string_view(begin, it - begin));
+    }
+};
+
+const boost::container::static_vector<std::pair<size_t, boost::container::static_vector<table*, 16>>, 10>
+phased_barrier_top_10_counts(const std::unordered_map<utils::UUID, lw_shared_ptr<column_family>>& tables, std::function<size_t(table&)> op_count_getter) {
+    using table_list = boost::container::static_vector<table*, 16>;
+    using count_and_tables = std::pair<size_t, table_list>;
+    const auto less = [] (const count_and_tables& a, const count_and_tables& b) {
+        return a.first < b.first;
+    };
+
+    boost::container::static_vector<count_and_tables, 10> res;
+    count_and_tables* min_element = nullptr;
+
+    for (const auto& [tid, table] : tables) {
+        const auto count = op_count_getter(*table);
+        if (!count) {
+            continue;
+        }
+        if (res.size() < res.capacity()) {
+            auto& elem = res.emplace_back(count, table_list({table.get()}));
+            if (!min_element || min_element->first > count) {
+                min_element = &elem;
+            }
+            continue;
+        }
+        if (min_element->first > count) {
+            continue;
+        }
+
+        auto it = boost::find_if(res, [count] (const count_and_tables& x) {
+            return x.first == count;
+        });
+        if (it != res.end()) {
+            it->second.push_back(table.get());
+            continue;
+        }
+
+        // If we are here, min_element->first < count
+        *min_element = {count, table_list({table.get()})};
+        min_element = &*boost::min_element(res, less);
+    }
+
+    boost::sort(res, less);
+
+    return res;
+}
+
+} // anonymous namespace
+
+void database::setup_scylla_memory_diagnostics_producer() {
+    memory::set_additional_diagnostics_producer([this] (memory::memory_diagnostics_writer wr) {
+        auto writeln = memory_diagnostics_line_writer(std::move(wr));
+
+        const auto lsa_occupancy_stats = logalloc::lsa_global_occupancy_stats();
+        writeln("LSA\n");
+        writeln("  allocated: {}\n", utils::to_hr_size(lsa_occupancy_stats.total_space()));
+        writeln("  used:      {}\n", utils::to_hr_size(lsa_occupancy_stats.used_space()));
+        writeln("  free:      {}\n\n", utils::to_hr_size(lsa_occupancy_stats.free_space()));
+
+        const auto row_cache_occupancy_stats = _row_cache_tracker.region().occupancy();
+        writeln("Cache:\n");
+        writeln("  total: {}\n", utils::to_hr_size(row_cache_occupancy_stats.total_space()));
+        writeln("  used:  {}\n", utils::to_hr_size(row_cache_occupancy_stats.used_space()));
+        writeln("  free:  {}\n\n", utils::to_hr_size(row_cache_occupancy_stats.free_space()));
+
+        writeln("Memtables:\n");
+        writeln(" total: {}\n", utils::to_hr_size(lsa_occupancy_stats.total_space() - row_cache_occupancy_stats.total_space()));
+
+        writeln(" Regular:\n");
+        writeln("  real dirty: {}\n", utils::to_hr_size(_dirty_memory_manager.real_dirty_memory()));
+        writeln("  virt dirty: {}\n", utils::to_hr_size(_dirty_memory_manager.virtual_dirty_memory()));
+        writeln(" System:\n");
+        writeln("  real dirty: {}\n", utils::to_hr_size(_system_dirty_memory_manager.real_dirty_memory()));
+        writeln("  virt dirty: {}\n\n", utils::to_hr_size(_system_dirty_memory_manager.virtual_dirty_memory()));
+
+        writeln("Replica:\n");
+
+        writeln("  Read Concurrency Semaphores:\n");
+        const std::pair<const char*, reader_concurrency_semaphore&> semaphores[] = {
+                {"user", _read_concurrency_sem},
+                {"streaming", _streaming_concurrency_sem},
+                {"system", _system_read_concurrency_sem},
+                {"compaction", _compaction_concurrency_sem},
+        };
+        for (const auto& [name, sem] : semaphores) {
+            const auto initial_res = sem.initial_resources();
+            const auto available_res = sem.available_resources();
+            if (sem.is_unlimited()) {
+                writeln("    {}: {}/∞, {}/∞\n",
+                        name,
+                        initial_res.count - available_res.count,
+                        utils::to_hr_size(initial_res.memory - available_res.memory),
+                        sem.waiters());
+            } else {
+                writeln("    {}: {}/{}, {}/{}, queued: {}\n",
+                        name,
+                        initial_res.count - available_res.count,
+                        initial_res.count,
+                        utils::to_hr_size(initial_res.memory - available_res.memory),
+                        utils::to_hr_size(initial_res.memory),
+                        sem.waiters());
+            }
+        }
+
+        writeln("  Execution Stages:\n");
+        const std::pair<const char*, inheriting_execution_stage::stats> execution_stage_summaries[] = {
+                {"data query stage", _data_query_stage.get_stats()},
+                {"mutation query stage", _mutation_query_stage.get_stats()},
+                {"apply stage", _apply_stage.get_stats()},
+        };
+        for (const auto& [name, exec_stage_summary] : execution_stage_summaries) {
+            writeln("    {}:\n", name);
+            size_t total = 0;
+            for (const auto& [sg, stats ] : exec_stage_summary) {
+                const auto count = stats.function_calls_enqueued - stats.function_calls_executed;
+                if (!count) {
+                    continue;
+                }
+                writeln("      {}\t{}\n", sg.name(), count);
+                total += count;
+            }
+            writeln("         Total: {}\n", total);
+        }
+
+        writeln("  Tables - Ongoing Operations:\n");
+        const std::pair<const char*, std::function<size_t(table&)>> phased_barriers[] = {
+                {"Pending writes", std::mem_fn(&table::writes_in_progress)},
+                {"Pending reads", std::mem_fn(&table::reads_in_progress)},
+                {"Pending streams", std::mem_fn(&table::streams_in_progress)},
+        };
+        for (const auto& [name, op_count_getter] : phased_barriers) {
+            writeln("    {} (top 10):\n", name);
+            auto total = 0;
+            for (const auto& [count, table_list] : phased_barrier_top_10_counts(_column_families, op_count_getter)) {
+                total += count;
+                writeln("      {}", count);
+                if (table_list.empty()) {
+                    writeln("\n");
+                    continue;
+                }
+                auto it = table_list.begin();
+                for (; it != table_list.end() - 1; ++it) {
+                    writeln(" {}.{},", (*it)->schema()->ks_name(), (*it)->schema()->cf_name());
+                }
+                writeln(" {}.{}\n", (*it)->schema()->ks_name(), (*it)->schema()->cf_name());
+            }
+            writeln("      {} Total (all)\n", total);
+        }
+        writeln("\n");
+    });
+}
+
 database::database(const db::config& cfg, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat, const locator::shared_token_metadata& stm, abort_source& as, sharded<semaphore>& sst_dir_sem)
     : _stats(make_lw_shared<db_stats>())
     , _cl_stats(std::make_unique<cell_locker_stats>())
@@ -232,6 +403,8 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
         dblog.debug("Enabling infinite bound range deletions");
         _supports_infinite_bound_range_deletions = true;
     });
+
+    setup_scylla_memory_diagnostics_producer();
 }
 
 const db::extensions& database::extensions() const {
