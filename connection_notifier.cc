@@ -49,7 +49,7 @@ future<> notify_new_client(client_data cd) {
             = format("INSERT INTO system.{} (address, port, client_type, connection_stage, shard_id, protocol_version, username) "
                      "VALUES (?, ?, ?, ?, ?, ?, ?);", db::system_keyspace::CLIENTS);
     
-    return db::execute_cql(req,
+    return db::qctx->execute_cql(req,
             std::move(cd.ip), cd.port, to_string(cd.ct), to_string(cd.connection_stage), cd.shard_id,
             cd.protocol_version.has_value() ? data_value(*cd.protocol_version) : data_value::make_null(int32_type),
             cd.username.value_or("anonymous")).discard_result();
@@ -60,7 +60,7 @@ future<> notify_disconnected_client(net::inet_address addr, int port, client_typ
     const static sstring req
             = format("DELETE FROM system.{} where address=? AND port=? AND client_type=?;",
                      db::system_keyspace::CLIENTS);
-    return db::execute_cql(req, std::move(addr), port, to_string(ct)).discard_result();
+    return db::qctx->execute_cql(req, std::move(addr), port, to_string(ct)).discard_result();
 }
 
 future<> clear_clientlist() {

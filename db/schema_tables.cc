@@ -233,7 +233,7 @@ future<> save_system_schema(const sstring & ksname) {
     // delete old, possibly obsolete entries in schema tables
     return parallel_for_each(all_table_names(schema_features::full()), [ksm] (sstring cf) {
         auto deletion_timestamp = schema_creation_timestamp() - 1;
-        return db::execute_cql(format("DELETE FROM {}.{} USING TIMESTAMP {} WHERE keyspace_name = ?", NAME, cf,
+        return qctx->execute_cql(format("DELETE FROM {}.{} USING TIMESTAMP {} WHERE keyspace_name = ?", NAME, cf,
             deletion_timestamp), ksm->name()).discard_result();
     }).then([ksm] {
         auto mvec  = make_create_keyspace_mutations(ksm, schema_creation_timestamp(), true);

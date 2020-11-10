@@ -83,7 +83,7 @@ static future<> try_record(std::string_view large_table, const sstables::sstable
     std::string pk_str = key_to_str(partition_key.to_partition_key(s), s);
     auto timestamp = db_clock::now();
     large_data_logger.warn("Writing large {} {}/{}: {}{} ({} bytes)", desc, ks_name, cf_name, pk_str, extra_path, size);
-    return db::execute_cql(req, ks_name, cf_name, sstable_name, size, pk_str, timestamp, args...)
+    return db::qctx->execute_cql(req, ks_name, cf_name, sstable_name, size, pk_str, timestamp, args...)
             .discard_result()
             .handle_exception([ks_name, cf_name, large_table, sstable_name] (std::exception_ptr ep) {
                 large_data_logger.warn("Failed to add a record to system.large_{}s: ks = {}, table = {}, sst = {} exception = {}",
@@ -133,7 +133,7 @@ future<> cql_table_large_data_handler::delete_large_data_entries(const schema& s
     const sstring req =
             format("DELETE FROM system.{} WHERE keyspace_name = ? AND table_name = ? AND sstable_name = ?",
                     large_table_name);
-    return db::execute_cql(req, s.ks_name(), s.cf_name(), sstable_name)
+    return db::qctx->execute_cql(req, s.ks_name(), s.cf_name(), sstable_name)
             .discard_result()
             .handle_exception([&s, sstable_name, large_table_name] (std::exception_ptr ep) {
                 large_data_logger.warn("Failed to drop entries from {}: ks = {}, table = {}, sst = {} exception = {}",

@@ -101,6 +101,6 @@ struct notify_client_change {
                 = format("UPDATE system.{} SET {}=? WHERE address=? AND port=? AND client_type=?;",
                         db::system_keyspace::CLIENTS, column_literal<column_enum_val>);
 
-        return db::execute_cql(req, std::forward<T>(value), std::move(addr), port, to_string(ct)).discard_result();
+        return db::qctx->execute_cql(req, std::forward<T>(value), std::move(addr), port, to_string(ct)).discard_result();
     }
 };
