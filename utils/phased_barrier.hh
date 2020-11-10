@@ -80,6 +80,11 @@ public:
     phase_type phase() const {
         return _phase;
     }
+
+    // Number of operations in current phase.
+    size_t operations_in_progress() const {
+        return _gate->get_count();
+    }
 };
 
 }
