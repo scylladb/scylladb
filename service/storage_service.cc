@@ -573,10 +573,15 @@ void storage_service::join_token_ring(int delay) {
         if (!db().local().is_replacing()
                 && (!db::system_keyspace::bootstrap_complete()
                     || cdc::should_propose_first_generation(get_broadcast_address(), _gossiper))) {
-
-            _cdc_streams_ts = cdc::make_new_cdc_generation(db().local().get_config(),
-                    _bootstrap_tokens, get_token_metadata_ptr(), _gossiper,
-                    _sys_dist_ks.local(), get_ring_delay(), _for_testing);
+            try {
+                _cdc_streams_ts = cdc::make_new_cdc_generation(db().local().get_config(),
+                        _bootstrap_tokens, get_token_metadata_ptr(), _gossiper,
+                        _sys_dist_ks.local(), get_ring_delay(), _for_testing);
+            } catch (...) {
+                cdc_log.warn(
+                    "Could not create a new CDC generation: {}. This may make it impossible to use CDC. Use nodetool checkAndRepairCdcStreams to fix CDC generation",
+                    std::current_exception());
+            }
         }
     }
 
