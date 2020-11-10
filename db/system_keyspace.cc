@@ -1341,12 +1341,12 @@ static future<> cache_truncation_record(distributed<database>& db) {
             auto ts = row.get_as<db_clock::time_point>("truncated_at");
 
             return db.invoke_on_all([table_uuid, ts] (database& db) mutable {
-                    try {
-                        table& cf = db.find_column_family(table_uuid);
-                        cf.cache_truncation_record(ts);
-                    } catch (no_such_column_family&) {
-                        slogger.debug("Skip caching truncation time for {} since the table is no longer present", table_uuid);
-                    }
+                try {
+                    table& cf = db.find_column_family(table_uuid);
+                    cf.cache_truncation_record(ts);
+                } catch (no_such_column_family&) {
+                    slogger.debug("Skip caching truncation time for {} since the table is no longer present", table_uuid);
+                }
             });
         });
     });
