@@ -1340,16 +1340,13 @@ static future<> cache_truncation_record(distributed<database>& db) {
             auto table_uuid = row.get_as<utils::UUID>("table_uuid");
             auto ts = row.get_as<db_clock::time_point>("truncated_at");
 
-            auto cpus = boost::irange(0u, smp::count);
-            return parallel_for_each(cpus.begin(), cpus.end(), [table_uuid, ts, &db] (unsigned int c) mutable {
-                return smp::submit_to(c, [table_uuid, ts, &db] () mutable {
+            return db.invoke_on_all([table_uuid, ts] (database& db) mutable {
                     try {
-                        table& cf = db.local().find_column_family(table_uuid);
+                        table& cf = db.find_column_family(table_uuid);
                         cf.cache_truncation_record(ts);
                     } catch (no_such_column_family&) {
                         slogger.debug("Skip caching truncation time for {} since the table is no longer present", table_uuid);
                     }
-                });
             });
         });
     });
