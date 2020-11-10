@@ -457,6 +457,32 @@ public:
         });
     }
     future<> close_files();
+
+    /* Returns a lower-bound for the set of `position_in_partition`s appearing in the sstable across all partitions.
+     *
+     * Might be `before_all_keys` if, for example, the sstable comes from outside Scylla and lacks sufficient metadata,
+     * or the sstable's schema does not have clustering columns.
+     *
+     * But if the schema has clustering columns and the sstable is sufficiently ``modern'',
+     * the returned value should be equal to the smallest clustering key occuring in the sstable (across all partitions).
+     *
+     * The lower bound is inclusive: there might be a clustering row with position equal to min_position.
+     */
+    const position_in_partition& min_position() const {
+        return _position_range.start();
+    }
+
+    /* Similar to min_position, but returns an upper-bound.
+     * However, the upper-bound is exclusive: all positions are smaller than max_position.
+     *
+     * If certain conditions are satisfied (the same as for `min_position`, see above),
+     * the returned value should be equal to after_key(ck), where ck is the greatest clustering key
+     * occuring in the sstable (across all partitions).
+     */
+    const position_in_partition& max_position() const {
+        return _position_range.end();
+    }
+
 private:
     size_t sstable_buffer_size;
 
