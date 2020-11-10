@@ -226,6 +226,7 @@ public:
     explicit mutation_query_stage();
     template <typename... Args>
     future<reconcilable_result> operator()(Args&&... args) { return _execution_stage(std::forward<Args>(args)...); }
+    inheriting_execution_stage::stats get_stats() const { return _execution_stage.get_stats(); }
 };
 
 // Performs a query for counter updates.
