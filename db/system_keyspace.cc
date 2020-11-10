@@ -1157,8 +1157,8 @@ schema_ptr aggregates() {
 
 } //</legacy>
 
-static future<> setup_version(distributed<gms::feature_service>& feat, sharded<netw::messaging_service>& ms) {
-    return gms::inet_address::lookup(qctx->db().get_config().rpc_address()).then([&feat, &ms](gms::inet_address a) {
+static future<> setup_version(distributed<gms::feature_service>& feat, sharded<netw::messaging_service>& ms, const db::config& cfg) {
+    return gms::inet_address::lookup(cfg.rpc_address()).then([&feat, &ms, &cfg](gms::inet_address a) {
         sstring req = sprint("INSERT INTO system.%s (key, release_version, cql_version, thrift_version, native_protocol_version, data_center, rack, partitioner, rpc_address, broadcast_address, listen_address, supported_features) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                         , db::system_keyspace::LOCAL);
         auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
@@ -1170,7 +1170,7 @@ static future<> setup_version(distributed<gms::feature_service>& feat, sharded<n
                              to_sstring(cql_serialization_format::latest_version),
                              snitch->get_datacenter(utils::fb_utilities::get_broadcast_address()),
                              snitch->get_rack(utils::fb_utilities::get_broadcast_address()),
-                             sstring(qctx->db().get_config().partitioner()),
+                             sstring(cfg.partitioner()),
                              a.addr(),
                              utils::fb_utilities::get_broadcast_address().addr(),
                              ms.local().listen_address().addr(),
@@ -1265,7 +1265,8 @@ future<> setup(distributed<database>& db,
                distributed<cql3::query_processor>& qp,
                distributed<gms::feature_service>& feat,
                sharded<netw::messaging_service>& ms) {
-    return setup_version(feat, ms).then([&db] {
+    const db::config& cfg = db.local().get_config();
+    return setup_version(feat, ms, cfg).then([&db] {
         return update_schema_version(db.local().get_version());
     }).then([] {
         return init_local_cache();
