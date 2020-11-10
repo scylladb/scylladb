@@ -489,21 +489,18 @@ class aws_instance:
         return curl(self.META_DATA_BASE_URL + "user-data")
 
 
-scylla_env = os.environ.copy()
-scylla_env['DEBIAN_FRONTEND'] = 'noninteractive'
-
-def run(cmd, shell=False, silent=False, exception=True):
+def run(cmd, shell=False, silent=False, exception=True, env=None):
     stdout = subprocess.DEVNULL if silent else None
     stderr = subprocess.DEVNULL if silent else None
     if not shell:
         cmd = shlex.split(cmd)
-    return subprocess.run(cmd, stdout=stdout, stderr=stderr, shell=shell, check=exception, env=scylla_env).returncode
+    return subprocess.run(cmd, stdout=stdout, stderr=stderr, shell=shell, check=exception, env=env).returncode
 
 
-def out(cmd, shell=False, exception=True, timeout=None):
+def out(cmd, shell=False, exception=True, timeout=None, env=None):
     if not shell:
         cmd = shlex.split(cmd)
-    return subprocess.run(cmd, capture_output=True, shell=shell, timeout=timeout, check=exception, encoding='utf-8', env=scylla_env).stdout.strip()
+    return subprocess.run(cmd, capture_output=True, shell=shell, timeout=timeout, check=exception, encoding='utf-8', env=env).stdout.strip()
 
 
 def get_id_like():
@@ -693,7 +690,9 @@ def yum_install(pkg):
 def apt_install(pkg):
     if is_offline():
         pkg_error_exit(pkg)
-    return run(f'apt-get install -y {pkg}')
+    apt_env = os.environ.copy()
+    apt_env['DEBIAN_FRONTEND'] = 'noninteractive'
+    return run(f'apt-get install -y {pkg}', env=apt_env)
 
 def emerge_install(pkg):
     if is_offline():
@@ -714,7 +713,9 @@ def yum_uninstall(pkg):
     return run(f'yum remove -y {pkg}')
 
 def apt_uninstall(pkg):
-    return run(f'apt-get remove -y {pkg}')
+    apt_env = os.environ.copy()
+    apt_env['DEBIAN_FRONTEND'] = 'noninteractive'
+    return run(f'apt-get remove -y {pkg}', env=apt_env)
 
 def emerge_uninstall(pkg):
     return run(f'emerge --deselect {pkg}')
