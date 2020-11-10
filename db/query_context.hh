@@ -29,8 +29,6 @@
 #include "exceptions/exceptions.hh"
 #include "timeout_config.hh"
 
-class database;
-
 namespace service {
 class storage_proxy;
 }
@@ -38,9 +36,8 @@ class storage_proxy;
 
 namespace db {
 struct query_context {
-    distributed<database>& _db;
     distributed<cql3::query_processor>& _qp;
-    query_context(distributed<database>& db, distributed<cql3::query_processor>& qp) : _db(db), _qp(qp) {}
+    query_context(distributed<cql3::query_processor>& qp) : _qp(qp) {}
 
     template <typename... Args>
     future<::shared_ptr<cql3::untyped_result_set>> execute_cql(sstring req, Args&&... args) {
@@ -65,14 +62,6 @@ struct query_context {
                 { data_value(std::forward<Args>(args))... },
                 true);
         });
-    }
-
-    database& db() {
-        return _db.local();
-    }
-
-    service::storage_proxy& proxy() {
-        return _qp.local().proxy();
     }
 
     cql3::query_processor& qp() {

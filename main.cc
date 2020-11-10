@@ -908,7 +908,7 @@ int main(int ac, char** av) {
             // engine().at_exit([] { return db::get_batchlog_manager().stop(); });
             sstables::init_metrics().get();
 
-            db::system_keyspace::minimal_setup(db, qp);
+            db::system_keyspace::minimal_setup(qp);
 
             db::sstables_format_selector sst_format_selector(gossiper.local(), feature_service, db);
 

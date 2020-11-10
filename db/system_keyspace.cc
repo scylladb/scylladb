@@ -1255,8 +1255,8 @@ future<> deinit_local_cache() {
     return _local_cache.stop();
 }
 
-void minimal_setup(distributed<database>& db, distributed<cql3::query_processor>& qp) {
-    qctx = std::make_unique<query_context>(db, qp);
+void minimal_setup(distributed<cql3::query_processor>& qp) {
+    qctx = std::make_unique<query_context>(qp);
 }
 
 static future<> cache_truncation_record(distributed<database>& db);
