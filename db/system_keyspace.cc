@@ -1179,7 +1179,7 @@ static future<> setup_version(distributed<gms::feature_service>& feat, sharded<n
     });
 }
 
-future<> check_health();
+future<> check_health(const sstring& cluster_name);
 future<> force_blocking_flush(sstring cfname);
 
 // Changing the real load_dc_rack_info into a future would trigger a tidal wave of futurization that would spread
@@ -1274,8 +1274,8 @@ future<> setup(distributed<database>& db,
         return build_dc_rack_info();
     }).then([] {
         return build_bootstrap_info();
-    }).then([] {
-        return check_health();
+    }).then([&cfg] {
+        return check_health(cfg.cluster_name());
     }).then([] {
         return db::schema_tables::save_system_keyspace_schema();
     }).then([] {
@@ -1589,17 +1589,16 @@ future<> force_blocking_flush(sstring cfname) {
  * 2. no files are there: great (new node is assumed)
  * 3. files are present but you can't read them: bad
  */
-future<> check_health() {
+future<> check_health(const sstring& cluster_name) {
     using namespace cql_transport::messages;
     sstring req = format("SELECT cluster_name FROM system.{} WHERE key=?", LOCAL);
-    return qctx->execute_cql(req, sstring(LOCAL)).then([] (::shared_ptr<cql3::untyped_result_set> msg) {
+    return qctx->execute_cql(req, sstring(LOCAL)).then([&cluster_name] (::shared_ptr<cql3::untyped_result_set> msg) {
         if (msg->empty() || !msg->one().has("cluster_name")) {
             // this is a brand new node
             sstring ins_req = format("INSERT INTO system.{} (key, cluster_name) VALUES (?, ?)", LOCAL);
-            return qctx->execute_cql(ins_req, sstring(LOCAL), qctx->db().get_config().cluster_name()).discard_result();
+            return qctx->execute_cql(ins_req, sstring(LOCAL), cluster_name).discard_result();
         } else {
             auto saved_cluster_name = msg->one().get_as<sstring>("cluster_name");
-            auto cluster_name = qctx->db().get_config().cluster_name();
 
             if (cluster_name != saved_cluster_name) {
                 throw exceptions::configuration_exception("Saved cluster name " + saved_cluster_name + " != configured name " + cluster_name);
