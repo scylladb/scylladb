@@ -111,6 +111,7 @@ struct write_stats {
     uint64_t throttled_writes = 0; // total number of writes ever delayed due to throttling
     uint64_t throttled_base_writes = 0; // current number of base writes delayed due to view update backlog
     uint64_t background_writes_failed = 0;
+    uint64_t writes_failed_due_to_too_many_in_flight_hints = 0;
 
     uint64_t cas_write_unfinished_commit = 0;
     uint64_t cas_write_condition_not_met = 0;

@@ -1506,6 +1506,10 @@ void storage_proxy_stats::write_stats::register_stats() {
                     sm::description("number of CQL read requests which arrived to a non-replica and had to be forwarded to a replica"),
                     {storage_proxy_stats::current_scheduling_group_label()}),
 
+            sm::make_total_operations("writes_failed_due_to_too_many_in_flight_hints", writes_failed_due_to_too_many_in_flight_hints,
+                    sm::description("number of CQL write requests which failed because the hinted handoff mechanism is overloaded "
+                    "and cannot store any more in-flight hints"),
+                    {storage_proxy_stats::current_scheduling_group_label()}),
         });
 }
 
@@ -1928,6 +1932,7 @@ storage_proxy::create_write_response_handler_helper(schema_ptr s, const dht::tok
     auto all = boost::range::join(natural_endpoints, pending_endpoints);
 
     if (cannot_hint(all, type)) {
+        get_stats().writes_failed_due_to_too_many_in_flight_hints++;
         // avoid OOMing due to excess hints.  we need to do this check even for "live" nodes, since we can
         // still generate hints for those if it's overloaded or simply dead but not yet known-to-be-dead.
         // The idea is that if we have over maxHintsInProgress hints in flight, this is probably due to
