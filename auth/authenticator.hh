@@ -64,6 +64,8 @@ namespace db {
     class config;
 }
 
+namespace cql3::statements { class schema_altering_statement; }
+
 namespace auth {
 
 class authenticated_user;
@@ -149,6 +151,9 @@ public:
     /// System resources used internally as part of the implementation. These are made inaccessible to users.
     ///
     virtual const resource_set& protected_resources() const = 0;
+
+    /// True iff alteration is safe for continuous functioning of this authenticator.
+    virtual bool safe(const cql3::statements::schema_altering_statement&) const { return true; }
 
     virtual ::shared_ptr<sasl_challenge> new_sasl_challenge() const = 0;
 };

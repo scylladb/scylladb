@@ -35,6 +35,8 @@
 #include "seastarx.hh"
 #include "exceptions/exceptions.hh"
 
+namespace cql3::statements { class schema_altering_statement; }
+
 namespace auth {
 
 struct role_config final {
@@ -107,6 +109,9 @@ public:
     virtual std::string_view qualified_java_name() const noexcept = 0;
 
     virtual const resource_set& protected_resources() const = 0;
+
+    /// True iff alteration is safe for continuous functioning of this role manager.
+    virtual bool safe(const cql3::statements::schema_altering_statement&) const { return true; }
 
     virtual future<> start() = 0;
 
