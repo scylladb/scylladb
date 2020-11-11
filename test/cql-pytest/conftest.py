@@ -27,7 +27,7 @@ import pytest
 from cassandra.cluster import Cluster, ConsistencyLevel, ExecutionProfile, EXEC_PROFILE_DEFAULT
 from cassandra.policies import RoundRobinPolicy
 
-from util import test_object_name, new_test_table
+from util import unique_name, new_test_table
 
 # By default, tests run against a CQL server (Scylla or Cassandra) listening
 # on localhost:9042. Add the --host and --port options to allow overiding
@@ -64,7 +64,7 @@ def cql(request):
 # tests will reuse the same keyspace.
 @pytest.fixture(scope="session")
 def test_keyspace(cql):
-    name = test_object_name()
+    name = unique_name()
     cql.execute("CREATE KEYSPACE " + name + " WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 }")
     yield name
     cql.execute("DROP KEYSPACE " + name)

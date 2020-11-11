@@ -36,15 +36,15 @@ def random_string(length=10, chars=string.ascii_uppercase + string.digits):
 # A function for picking a unique name for test keyspace or table.
 # This name doesn't need to be quoted in CQL - it only contains
 # lowercase letters, numbers, and underscores, and starts with a letter.
-test_object_prefix = 'cql_test_'
-def test_object_name():
+unique_name_prefix = 'cql_test_'
+def unique_name():
     current_ms = int(round(time.time() * 1000))
-    # In the off chance that test_object_name() is called twice in the same millisecond...
-    if test_object_name.last_ms >= current_ms:
-        current_ms = test_object_name.last_ms + 1
-    test_object_name.last_ms = current_ms
-    return test_object_prefix + str(current_ms)
-test_object_name.last_ms = 0
+    # If unique_name() is called twice in the same millisecond...
+    if unique_name.last_ms >= current_ms:
+        current_ms = unique_name.last_ms + 1
+    unique_name.last_ms = current_ms
+    return unique_name_prefix + str(current_ms)
+unique_name.last_ms = 0
 
 # A utility function for creating a new temporary table with a given schema.
 # It can be used in a "with", as:
@@ -52,7 +52,7 @@ test_object_name.last_ms = 0
 # This is not a fixture - see those in conftest.py.
 @contextmanager
 def new_test_table(cql, keyspace, schema):
-    table = keyspace + "." + test_object_name()
+    table = keyspace + "." + unique_name()
     cql.execute("CREATE TABLE " + table + "(" + schema + ")")
     yield table
     cql.execute("DROP TABLE " + table)
