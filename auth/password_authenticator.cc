@@ -54,6 +54,7 @@
 #include "auth/common.hh"
 #include "auth/passwords.hh"
 #include "auth/roles-metadata.hh"
+#include "cql3/statements/schema_altering_statement.hh"
 #include "cql3/untyped_result_set.hh"
 #include "log.hh"
 #include "service/migration_manager.hh"
@@ -310,6 +311,10 @@ future<custom_options> password_authenticator::query_custom_options(std::string_
 const resource_set& password_authenticator::protected_resources() const {
     static const resource_set resources({make_data_resource(meta::AUTH_KS, meta::roles_table::name)});
     return resources;
+}
+
+bool password_authenticator::safe(const cql3::statements::schema_altering_statement& stmt) const {
+    return !protected_resources().contains(make_data_resource(stmt.keyspace(), stmt.column_family()));
 }
 
 ::shared_ptr<sasl_challenge> password_authenticator::new_sasl_challenge() const {

@@ -91,6 +91,8 @@ public:
 
     virtual const resource_set& protected_resources() const override;
 
+    bool safe(const cql3::statements::schema_altering_statement&) const override;
+
     virtual ::shared_ptr<sasl_challenge> new_sasl_challenge() const override;
 
 private:

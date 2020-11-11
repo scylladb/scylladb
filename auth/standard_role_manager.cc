@@ -35,6 +35,7 @@
 #include "auth/common.hh"
 #include "auth/roles-metadata.hh"
 #include "cql3/query_processor.hh"
+#include "cql3/statements/schema_altering_statement.hh"
 #include "cql3/untyped_result_set.hh"
 #include "db/consistency_level_type.hh"
 #include "exceptions/exceptions.hh"
@@ -130,6 +131,10 @@ const resource_set& standard_role_manager::protected_resources() const {
             make_data_resource(meta::AUTH_KS, meta::role_members_table::name)});
 
     return resources;
+}
+
+bool standard_role_manager::safe(const cql3::statements::schema_altering_statement& stmt) const {
+    return !protected_resources().contains(make_data_resource(stmt.keyspace(), stmt.column_family()));
 }
 
 future<> standard_role_manager::create_metadata_tables_if_missing() const {

@@ -137,6 +137,10 @@ public:
         return _authenticator->protected_resources();
     }
 
+    bool safe(const cql3::statements::schema_altering_statement& s) const override {
+        return _authenticator->safe(s);
+    }
+
     virtual ::shared_ptr<sasl_challenge> new_sasl_challenge() const override {
         class sasl_wrapper : public sasl_challenge {
         public:

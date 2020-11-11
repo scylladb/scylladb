@@ -58,6 +58,7 @@ extern "C" {
 #include "auth/permission.hh"
 #include "auth/role_or_anonymous.hh"
 #include "cql3/query_processor.hh"
+#include "cql3/statements/schema_altering_statement.hh"
 #include "cql3/untyped_result_set.hh"
 #include "exceptions/exceptions.hh"
 #include "log.hh"
@@ -336,6 +337,10 @@ future<> default_authorizer::revoke_all(const resource& resource) const {
 const resource_set& default_authorizer::protected_resources() const {
     static const resource_set resources({ make_data_resource(meta::AUTH_KS, PERMISSIONS_CF) });
     return resources;
+}
+
+bool default_authorizer::safe(const cql3::statements::schema_altering_statement& stmt) const {
+    return !protected_resources().contains(make_data_resource(stmt.keyspace(), stmt.column_family()));
 }
 
 }

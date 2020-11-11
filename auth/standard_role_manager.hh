@@ -59,6 +59,8 @@ public:
 
     virtual const resource_set& protected_resources() const override;
 
+    bool safe(const cql3::statements::schema_altering_statement&) const override;
+
     virtual future<> start() override;
 
     virtual future<> stop() override;
