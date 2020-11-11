@@ -188,6 +188,16 @@ db::commitlog::descriptor::operator db::replay_position() const {
     return replay_position(id);
 }
 
+struct db::commitlog::entry_writer {
+    force_sync sync;
+    explicit entry_writer(force_sync sync_) : sync(sync_) {}
+    virtual size_t size(segment&) = 0;
+    // Returns segment-independent size of the entry. Must be <= than segment-dependant size.
+    virtual size_t size() = 0;
+    virtual void write(segment&, output&) = 0;
+    virtual ~entry_writer() {};
+};
+
 const std::string db::commitlog::descriptor::SEPARATOR("-");
 const std::string db::commitlog::descriptor::FILENAME_PREFIX(
         "CommitLog" + SEPARATOR);

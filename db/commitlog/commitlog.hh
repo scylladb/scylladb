@@ -392,16 +392,8 @@ public:
             const sstring&, const sstring&, seastar::io_priority_class read_io_prio_class, commit_load_reader_func, position_type = 0, const db::extensions* = nullptr);
 private:
     commitlog(config);
-
-    struct entry_writer {
-        force_sync sync;
-        explicit entry_writer(force_sync sync_) : sync(sync_) {}
-        virtual size_t size(segment&) = 0;
-        // Returns segment-independent size of the entry. Must be <= than segment-dependant size.
-        virtual size_t size() = 0;
-        virtual void write(segment&, output&) = 0;
-        virtual ~entry_writer() {};
-    };
+    
+    struct entry_writer;
 };
 
 }
