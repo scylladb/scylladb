@@ -70,7 +70,15 @@ alter_table_statement::alter_table_statement(shared_ptr<cf_name> name,
 }
 
 future<> alter_table_statement::check_access(service::storage_proxy& proxy, const service::client_state& state) const {
-    return state.has_column_family_access(keyspace(), column_family(), auth::permission::ALTER);
+    return state.has_column_family_access(keyspace(), column_family(), auth::permission::ALTER).then([this, &state] {
+        const auto table = column_family();
+        if (!state.get_auth_service()->underlying_role_manager().safe(*this) ||
+            !state.get_auth_service()->underlying_authenticator().safe(*this) ||
+            !state.get_auth_service()->underlying_authorizer().safe(*this)) {
+            throw exceptions::unauthorized_exception(format("{} is protected", table));
+        }
+        return make_ready_future();
+    });
 }
 
 void alter_table_statement::validate(service::storage_proxy& proxy, const service::client_state& state) const

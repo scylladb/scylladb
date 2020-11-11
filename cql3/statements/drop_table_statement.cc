@@ -58,7 +58,15 @@ future<> drop_table_statement::check_access(service::storage_proxy& proxy, const
 {
     // invalid_request_exception is only thrown synchronously.
     try {
-        return state.has_column_family_access(keyspace(), column_family(), auth::permission::DROP);
+        return state.has_column_family_access(keyspace(), column_family(), auth::permission::DROP).then([this, &state] {
+            const auto table = column_family();
+            if (!state.get_auth_service()->underlying_role_manager().safe(*this) ||
+                !state.get_auth_service()->underlying_authenticator().safe(*this) ||
+                !state.get_auth_service()->underlying_authorizer().safe(*this)) {
+                throw exceptions::unauthorized_exception(format("{} is protected", table));
+            }
+            return make_ready_future();
+        });
     } catch (exceptions::invalid_request_exception&) {
         if (!_if_exists) {
             throw;

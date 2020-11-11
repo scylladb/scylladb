@@ -182,11 +182,6 @@ future<permission_set> get_permissions(const service&, const authenticated_user&
 bool is_enforcing(const service&);
 
 ///
-/// Protected resources cannot be modified even if the performer has permissions to do so.
-///
-bool is_protected(const service&, const resource&) noexcept;
-
-///
 /// Create a role with optional authentication information.
 ///
 /// \returns an exceptional future with \ref role_already_exists if the user or role exists.

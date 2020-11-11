@@ -187,11 +187,6 @@ future<> service::client_state::has_access(const sstring& ks, auth::permission p
     if (p == auth::permission::SELECT && readable_system_resources.contains(resource)) {
         return make_ready_future();
     }
-    if (alteration_permissions.contains(p)) {
-        if (auth::is_protected(*_auth_service, resource)) {
-            throw exceptions::unauthorized_exception(format("{} is protected", resource));
-        }
-    }
 
     if (service::get_local_storage_service().db().local().features().cluster_supports_cdc() && resource.kind() == auth::resource_kind::data) {
         const auto resource_view = auth::data_resource_view(resource);

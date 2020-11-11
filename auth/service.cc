@@ -371,12 +371,6 @@ bool is_enforcing(const service& ser)  {
     return enforcing_authorizer || enforcing_authenticator;
 }
 
-bool is_protected(const service& ser, const resource& r) noexcept {
-    return ser.underlying_role_manager().protected_resources().contains(r)
-            || ser.underlying_authenticator().protected_resources().contains(r)
-            || ser.underlying_authorizer().protected_resources().contains(r);
-}
-
 static void validate_authentication_options_are_supported(
         const authentication_options& options,
         const authentication_option_set& supported) {
