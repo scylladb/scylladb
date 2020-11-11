@@ -609,10 +609,12 @@ private:
                                          std::move(gc_consumer));
 
             return seastar::async([cfc = std::move(cfc), reader = std::move(reader), this] () mutable {
-                reader.consume_in_thread(std::move(cfc), make_partition_filter(), db::no_timeout);
+                reader.consume_in_thread(std::move(cfc), db::no_timeout);
             });
         });
-        return consumer(make_sstable_reader());
+        // producer will filter out a partition before it reaches the consumer(s)
+        auto producer = make_filtering_reader(make_sstable_reader(), make_partition_filter());
+        return consumer(std::move(producer));
     }
 
     virtual reader_consumer make_interposer_consumer(reader_consumer end_consumer) {
