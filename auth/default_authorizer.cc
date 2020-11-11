@@ -58,7 +58,7 @@ extern "C" {
 #include "auth/permission.hh"
 #include "auth/role_or_anonymous.hh"
 #include "cql3/query_processor.hh"
-#include "cql3/statements/schema_altering_statement.hh"
+#include "cql3/statements/alter_table_statement.hh"
 #include "cql3/untyped_result_set.hh"
 #include "exceptions/exceptions.hh"
 #include "log.hh"
@@ -340,7 +340,20 @@ const resource_set& default_authorizer::protected_resources() const {
 }
 
 bool default_authorizer::safe(const cql3::statements::schema_altering_statement& stmt) const {
-    return !protected_resources().contains(make_data_resource(stmt.keyspace(), stmt.column_family()));
+    if (!protected_resources().contains(make_data_resource(stmt.keyspace(), stmt.column_family()))) {
+        return true;
+    }
+    if (auto alter = dynamic_cast<const cql3::statements::alter_table_statement*>(&stmt)) {
+        using alter_type = cql3::statements::alter_table_statement::type;
+        switch (alter->get_type()) {
+        case alter_type::add:
+        case alter_type::opts:
+            return true;
+        default:
+            return false;
+        }
+    }
+    return false;
 }
 
 }

@@ -78,6 +78,7 @@ public:
                           shared_ptr<cf_prop_defs> properties,
                           renames_type renames);
 
+    type get_type() const { return _type; }
     virtual future<> check_access(service::storage_proxy& proxy, const service::client_state& state) const override;
     virtual void validate(service::storage_proxy& proxy, const service::client_state& state) const override;
     virtual future<shared_ptr<cql_transport::event::schema_change>> announce_migration(service::storage_proxy& proxy, bool is_local_only) const override;
