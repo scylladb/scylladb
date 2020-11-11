@@ -221,6 +221,26 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_test_table_temporary_toc) {
   }).get();
 }
 
+// Test always-benign incomplete SSTable: with extraneous temporaryTOC found
+SEASTAR_TEST_CASE(sstable_directory_test_table_extra_temporary_toc) {
+    return sstables::test_env::do_with_async([] (test_env& env) {
+        auto dir = tmpdir();
+        auto sst = make_sstable_for_this_shard(std::bind(new_sstable, std::ref(env), dir.path(), 1));
+        link_file(sst->filename(sstables::component_type::TOC), sst->filename(sstables::component_type::TemporaryTOC)).get();
+
+        with_sstable_directory(dir.path(), 1,
+                sstable_directory::need_mutate_level::no,
+                sstable_directory::lack_of_toc_fatal::yes,
+                sstable_directory::enable_dangerous_direct_import_of_cassandra_counters::no,
+                sstable_directory::allow_loading_materialized_view::no,
+                sstable_from_existing_file(env),
+                [] (sharded<sstables::sstable_directory>& sstdir) {
+            auto expect_ok = distributed_loader::process_sstable_dir(sstdir);
+            BOOST_REQUIRE_NO_THROW(expect_ok.get());
+        });
+    });
+}
+
 // Test the absence of TOC. Behavior is controllable by a flag
 SEASTAR_THREAD_TEST_CASE(sstable_directory_test_table_missing_toc) {
   sstables::test_env::do_with_async([] (test_env& env) {

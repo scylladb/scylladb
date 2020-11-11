@@ -79,7 +79,7 @@ sstable_directory::handle_component(scan_state& state, sstables::entry_descripto
         _files_for_removal.insert(filename.native());
         break;
     case component_type::TOC:
-        state.descriptors.push_back(std::move(desc));
+        state.descriptors.emplace(desc.generation, std::move(desc));
         break;
     case component_type::TemporaryTOC:
         state.temp_toc_found.push_back(std::move(desc));
@@ -184,6 +184,7 @@ sstable_directory::process_sstable_dir(const ::io_priority_class& iop) {
                     _files_for_removal.insert(path.native());
                 }
                 state.generations_found.erase(range.first, range.second);
+                state.descriptors.erase(desc.generation);
             }
 
             _max_generation_seen =  boost::accumulate(state.generations_found | boost::adaptors::map_keys, int64_t(0), [] (int64_t a, int64_t b) {
@@ -195,7 +196,8 @@ sstable_directory::process_sstable_dir(const ::io_priority_class& iop) {
 
             // _descriptors is everything with a TOC. So after we remove this, what's left is
             // SSTables for which a TOC was not found.
-            return parallel_for_each_restricted(state.descriptors, [this, &state, &iop] (sstables::entry_descriptor desc) {
+            return parallel_for_each_restricted(state.descriptors, [this, &state, &iop] (std::tuple<int64_t, sstables::entry_descriptor>&& t) {
+                auto& desc = std::get<1>(t);
                 state.generations_found.erase(desc.generation);
                 // This will try to pre-load this file and throw an exception if it is invalid
                 return process_descriptor(std::move(desc), iop);
