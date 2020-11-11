@@ -80,6 +80,14 @@ def test_create_keyspace_invalid_name(cql):
     cql.execute('CREATE KEYSPACE "123"' + rep)
     cql.execute('DROP KEYSPACE "123"')
 
+# Test that attempts to reproduce an issue with double WITH keyword in CREATE
+# KEYSPACE statement -- CASSANDRA-9565.
+def test_create_keyspace_double_with(cql):
+    with pytest.raises(SyntaxException):
+        cql.execute('CREATE KEYSPACE WITH WITH DURABLE_WRITES = true')
+    with pytest.raises(SyntaxException):
+        cql.execute('CREATE KEYSPACE ks WITH WITH DURABLE_WRITES = true')
+
 # Test trying a non-existent keyspace - with or without the IF EXISTS flag.
 # This test demonstrates a change of the exception produced between Cassandra 4.0
 # and earlier versions (with Scylla behaving like the earlier versions).
