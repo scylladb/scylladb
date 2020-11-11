@@ -59,7 +59,7 @@ public:
         _with_schema = value;
         compute_size();
     }
-    bool with_schema() {
+    bool with_schema() const {
         return _with_schema;
     }
     schema_ptr schema() const {

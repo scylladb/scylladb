@@ -151,9 +151,12 @@ public:
         static const std::string FILENAME_PREFIX;
         static const std::string FILENAME_EXTENSION;
 
+        static inline constexpr uint32_t segment_version_1 = 1u;
+        static inline constexpr uint32_t segment_version_2 = 2u;
+
         descriptor(descriptor&&) noexcept = default;
         descriptor(const descriptor&) = default;
-        descriptor(segment_id_type i, const std::string& fname_prefix, uint32_t v = 1, sstring = {});
+        descriptor(segment_id_type i, const std::string& fname_prefix, uint32_t v = segment_version_2, sstring = {});
         descriptor(replay_position p, const std::string& fname_prefix = FILENAME_PREFIX);
         descriptor(const sstring& filename, const std::string& fname_prefix = FILENAME_PREFIX);
 
