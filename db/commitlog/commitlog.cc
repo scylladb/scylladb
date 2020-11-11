@@ -1903,6 +1903,63 @@ future<db::rp_handle> db::commitlog::add_entry(const cf_id_type& id, const commi
     });
 }
 
+future<std::vector<db::rp_handle>> 
+db::commitlog::add_entries(std::vector<commitlog_entry_writer> entry_writers, db::timeout_clock::time_point timeout) {
+    class cl_entries_writer final : public entry_writer {
+        std::vector<commitlog_entry_writer> _writers;
+        std::unordered_set<table_schema_version> _known;
+    public:
+        std::vector<rp_handle> res;
+
+        cl_entries_writer(force_sync sync, std::vector<commitlog_entry_writer> entry_writers)
+            : entry_writer(sync, entry_writers.size()), _writers(std::move(entry_writers))
+        {
+            res.reserve(_writers.size());
+        }
+        const cf_id_type& id(size_t i) const override {
+            return _writers.at(i).schema()->id();
+        }
+        size_t size(segment& seg) override {
+            size_t res = 0;
+            for (auto i = _writers.begin(), e = _writers.end(); i != e; ++i) {
+                auto known = seg.is_schema_version_known(i->schema());
+                if (!known) {
+                    known = _known.contains(i->schema()->version());
+                }
+                if (!known) {
+                    _known.emplace(i->schema()->version());
+                }
+                i->set_with_schema(!known);
+                res += i->size();
+            }
+            return res;
+        }
+        size_t size(segment& seg, size_t i) override {
+            return _writers.at(i).size(); // we have already set schema known/unknown
+        }
+        size_t size() const override {
+            return std::accumulate(_writers.begin(), _writers.end(), size_t(0), [](size_t acc, const commitlog_entry_writer& w) {
+                return w.mutation_size() + acc;
+            });
+        }
+        void write(segment& seg, output& out, size_t i) const override {
+            auto& w = _writers.at(i);
+            if (w.with_schema()) {
+                seg.add_schema_version(w.schema());
+            }
+            w.write(out);
+        }
+        void result(size_t i, rp_handle h) override {
+            assert(i == res.size());
+            res.emplace_back(std::move(h));
+        }
+    };
+
+    force_sync sync(std::any_of(entry_writers.begin(), entry_writers.end(), [](auto& w) { return bool(w.sync()); }));
+    auto writer = ::make_shared<cl_entries_writer>(sync, std::move(entry_writers));
+    return _segment_manager->allocate_when_possible(writer, timeout).then([writer] {
+        return std::move(writer->res);
+    });
 }
 
 db::commitlog::commitlog(config cfg)

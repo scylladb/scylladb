@@ -231,6 +231,13 @@ public:
     future<rp_handle> add_entry(const cf_id_type& id, const commitlog_entry_writer& entry_writer, db::timeout_clock::time_point timeout);
 
     /**
+     * Add N entries to the commit log as a single operation (in a single segment).
+     * Resolves with timed_out_error when timeout is reached.
+     * @param entry_writers a vector of writers responsible for writing respective entry
+     */
+    future<std::vector<rp_handle>> add_entries(std::vector<commitlog_entry_writer> entry_writers, db::timeout_clock::time_point timeout);
+
+    /**
      * Modifies the per-CF dirty cursors of any commit log segments for the column family according to the position
      * given. Discards any commit log segments that are no longer used.
      *
@@ -395,7 +402,7 @@ public:
             const sstring&, const sstring&, seastar::io_priority_class read_io_prio_class, commit_load_reader_func, position_type = 0, const db::extensions* = nullptr);
 private:
     commitlog(config);
-    
+
     struct entry_writer;
 };
 
