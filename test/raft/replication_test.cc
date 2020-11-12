@@ -163,10 +163,10 @@ public:
     virtual future<> abort() { return make_ready_future<>(); }
 };
 
-std::unordered_set<raft::server_id> SERVER_DISCONNECTED;
+std::unordered_set<raft::server_id> server_disconnected;
 class failure_detector : public raft::failure_detector {
     bool is_alive(raft::server_id server) override {
-        return SERVER_DISCONNECTED.find(server) == SERVER_DISCONNECTED.end();
+        return server_disconnected.find(server) == server_disconnected.end();
     }
 };
 
@@ -392,14 +392,14 @@ future<int> run_test(test_case test) {
         } else if (std::holds_alternative<new_leader>(update)) {
             unsigned next_leader = std::get<new_leader>(update);
             assert(next_leader < rafts.size());
-            SERVER_DISCONNECTED.insert(raft::server_id{utils::UUID(0, leader + 1)});
+            server_disconnected.insert(raft::server_id{utils::UUID(0, leader + 1)});
             for (size_t s = 0; s < test.nodes; ++s) {
                 if (s != leader) {
                     rafts[s].first->elapse_election();
                 }
             }
             co_await rafts[next_leader].first->elect_me_leader();
-            SERVER_DISCONNECTED.erase(raft::server_id{utils::UUID(0, leader + 1)});
+            server_disconnected.erase(raft::server_id{utils::UUID(0, leader + 1)});
             tlogger.debug("confirmed leader on {}", next_leader);
             leader = next_leader;
         }
