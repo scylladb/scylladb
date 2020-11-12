@@ -436,6 +436,7 @@ bool reader_concurrency_semaphore::may_proceed(const resources& r) const {
 future<reader_permit::resource_units> reader_concurrency_semaphore::do_wait_admission(reader_permit permit, size_t memory,
         db::timeout_clock::time_point timeout) {
     if (_wait_list.size() >= _max_queue_length) {
+        _stats.total_reads_shed_due_to_overload++;
         if (_prethrow_action) {
             _prethrow_action();
         }

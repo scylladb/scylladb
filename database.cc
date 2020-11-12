@@ -456,6 +456,11 @@ database::setup_metrics() {
                                        " to be able to admit new ones, if there is a shortage of permits."),
                        {user_label_instance}),
 
+        sm::make_derive("reads_shed_due_to_overload", _read_concurrency_sem.get_stats().total_reads_shed_due_to_overload,
+                       sm::description("The number of reads shed because the admission queue reached its max capacity."
+                                       " When the queue is full, excessive reads are shed to avoid overload."),
+                       {user_label_instance}),
+
         sm::make_gauge("active_reads", [this] { return max_count_streaming_concurrent_reads - _streaming_concurrency_sem.available_resources().count; },
                        sm::description("Holds the number of currently active read operations issued on behalf of streaming "),
                        {streaming_label_instance}),
@@ -481,6 +486,11 @@ database::setup_metrics() {
                                        " to be able to admit new ones, if there is a shortage of permits."),
                        {streaming_label_instance}),
 
+        sm::make_derive("reads_shed_due_to_overload", _streaming_concurrency_sem.get_stats().total_reads_shed_due_to_overload,
+                       sm::description("The number of reads shed because the admission queue reached its max capacity."
+                                       " When the queue is full, excessive reads are shed to avoid overload."),
+                       {streaming_label_instance}),
+
         sm::make_gauge("active_reads", [this] { return max_count_system_concurrent_reads - _system_read_concurrency_sem.available_resources().count; },
                        sm::description("Holds the number of currently active read operations from \"system\" keyspace tables. "),
                        {system_label_instance}),
@@ -503,6 +513,11 @@ database::setup_metrics() {
                        sm::description("The number of paused system reads evicted to free up permits"
                                        " Permits are required for new reads to start, and the database will evict inactive reads (if any)"
                                        " to be able to admit new ones, if there is a shortage of permits."),
+                       {system_label_instance}),
+
+        sm::make_derive("reads_shed_due_to_overload", _system_read_concurrency_sem.get_stats().total_reads_shed_due_to_overload,
+                       sm::description("The number of reads shed because the admission queue reached its max capacity."
+                                       " When the queue is full, excessive reads are shed to avoid overload."),
                        {system_label_instance}),
 
         sm::make_gauge("total_result_bytes", [this] { return get_result_memory_limiter().total_used_memory(); },
