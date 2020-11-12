@@ -28,7 +28,6 @@ from util import new_test_table
 # is filtering, this order is not expected to change. Furthermore, when this
 # filtering happens to use a secondary index, again the order is not expected
 # to change.
-@pytest.mark.xfail(reason="fails because of issue #7443")
 def test_partition_order_with_si(cql, test_keyspace):
     schema = 'pk int, x int, PRIMARY KEY ((pk))'
     with new_test_table(cql, test_keyspace, schema) as table:
