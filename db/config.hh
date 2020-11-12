@@ -81,7 +81,7 @@ namespace db {
 
 /// Enumeration of all valid values for the `experimental` config entry.
 struct experimental_features_t {
-    enum feature { UNUSED, UDF, CDC };
+    enum feature { UNUSED, UDF, UNUSED_CDC, ALTERNATOR_STREAMS };
     static std::unordered_map<sstring, feature> map(); // See enum_option.
     static std::vector<enum_option<experimental_features_t>> all();
 };

@@ -607,7 +607,7 @@ future<> test_schema_digest_does_not_change_with_disabled_features(sstring data_
     auto db_cfg_ptr = ::make_shared<db::config>(std::move(extensions));
     auto& db_cfg = *db_cfg_ptr;
     db_cfg.enable_user_defined_functions({true}, db::config::config_source::CommandLine);
-    db_cfg.experimental_features({experimental_features_t::UDF, experimental_features_t::CDC}, db::config::config_source::CommandLine);
+    db_cfg.experimental_features({experimental_features_t::UDF}, db::config::config_source::CommandLine);
     if (regenerate) {
         db_cfg.data_file_directories({data_dir}, db::config::config_source::CommandLine);
     } else {

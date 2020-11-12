@@ -154,7 +154,7 @@ bool should_propose_first_generation(const gms::inet_address& me, const gms::gos
 future<db_clock::time_point> get_local_streams_timestamp();
 
 /* Generate a new set of CDC streams and insert it into the distributed cdc_generation_descriptions table.
- * Returns the timestamp of this new generation.
+ * Returns the timestamp of this new generation
  *
  * Should be called when starting the node for the first time (i.e., joining the ring).
  *

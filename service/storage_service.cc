@@ -298,7 +298,7 @@ void storage_service::prepare_to_join(
         _token_metadata.update_normal_tokens(my_tokens, get_broadcast_address());
 
         _cdc_streams_ts = db::system_keyspace::get_saved_cdc_streams_timestamp().get0();
-        if (!_cdc_streams_ts && db().local().get_config().check_experimental(db::experimental_features_t::CDC)) {
+        if (!_cdc_streams_ts) {
             // We could not have completed joining if we didn't generate and persist a CDC streams timestamp,
             // unless we are restarting after upgrading from non-CDC supported version.
             // In that case we won't begin a CDC generation: it should be done by one of the nodes
@@ -550,7 +550,7 @@ void storage_service::join_token_ring(int delay) {
         assert(should_bootstrap() || db().local().is_replacing() || !_cdc_streams_ts);
     }
 
-    if (!_cdc_streams_ts && db().local().get_config().check_experimental(db::experimental_features_t::CDC)) {
+    if (!_cdc_streams_ts) {
         // If we didn't choose a CDC streams timestamp at this point, then either
         // 1. we're replacing a node which didn't gossip a CDC streams timestamp for whatever reason,
         // 2. we've already bootstrapped, but are upgrading from a non-CDC version,
@@ -570,10 +570,15 @@ void storage_service::join_token_ring(int delay) {
         if (!db().local().is_replacing()
                 && (!db::system_keyspace::bootstrap_complete()
                     || cdc::should_propose_first_generation(get_broadcast_address(), _gossiper))) {
-
-            _cdc_streams_ts = cdc::make_new_cdc_generation(db().local().get_config(),
-                    _bootstrap_tokens, _token_metadata, _gossiper,
-                    _sys_dist_ks.local(), get_ring_delay(), _for_testing);
+            try {
+                _cdc_streams_ts = cdc::make_new_cdc_generation(db().local().get_config(),
+                        _bootstrap_tokens, _token_metadata, _gossiper,
+                        _sys_dist_ks.local(), get_ring_delay(), _for_testing);
+            } catch (...) {
+                cdc_log.warn(
+                    "Could not create a new CDC generation: {}. This may make it impossible to use CDC. Use nodetool checkAndRepairCdcStreams to fix CDC generation",
+                    std::current_exception());
+            }
         }
     }
 
@@ -893,24 +898,18 @@ void storage_service::bootstrap() {
         // It doesn't hurt: other nodes will (potentially) just do more generation switches.
         // We do this because with this new attempt at bootstrapping we picked a different set of tokens.
 
-        if (db().local().get_config().check_experimental(db::experimental_features_t::CDC)) {
-            // Update pending ranges now, so we correctly count ourselves as a pending replica
-            // when inserting the new CDC generation.
-            _token_metadata.add_bootstrap_tokens(_bootstrap_tokens, get_broadcast_address());
-            update_pending_ranges().get();
+        // Update pending ranges now, so we correctly count ourselves as a pending replica
+        // when inserting the new CDC generation.
+        _token_metadata.add_bootstrap_tokens(_bootstrap_tokens, get_broadcast_address());
+        update_pending_ranges().get();
 
-            // After we pick a generation timestamp, we start gossiping it, and we stick with it.
-            // We don't do any other generation switches (unless we crash before complecting bootstrap).
-            assert(!_cdc_streams_ts);
+        // After we pick a generation timestamp, we start gossiping it, and we stick with it.
+        // We don't do any other generation switches (unless we crash before complecting bootstrap).
+        assert(!_cdc_streams_ts);
 
-            _cdc_streams_ts = cdc::make_new_cdc_generation(db().local().get_config(),
-                    _bootstrap_tokens, _token_metadata, _gossiper,
-                    _sys_dist_ks.local(), get_ring_delay(), _for_testing);
-        } else {
-            // We should not be able to join the cluster if other nodes support CDC but we don't.
-            // The check should have been made somewhere in prepare_to_join (`check_knows_remote_features`).
-            assert(!_feature_service.cluster_supports_cdc());
-        }
+        _cdc_streams_ts = cdc::make_new_cdc_generation(db().local().get_config(),
+                _bootstrap_tokens, _token_metadata, _gossiper,
+                _sys_dist_ks.local(), get_ring_delay(), _for_testing);
 
         _gossiper.add_local_application_state({
             // Order is important: both the CDC streams timestamp and tokens must be known when a node handles our status.
@@ -2036,9 +2035,8 @@ future<> storage_service::start_gossiping(bind_messaging_port do_bind) {
         return seastar::async([&ss, do_bind] {
             if (!ss._initialized) {
                 slogger.warn("Starting gossip by operator request");
-                bool cdc_enabled = ss.db().local().get_config().check_experimental(db::experimental_features_t::CDC);
                 ss.set_gossip_tokens(db::system_keyspace::get_local_tokens().get0(),
-                        cdc_enabled ? std::make_optional(cdc::get_local_streams_timestamp().get0()) : std::nullopt);
+                        std::make_optional(cdc::get_local_streams_timestamp().get0()));
                 ss._gossiper.force_newer_generation();
                 ss._gossiper.start_gossiping(utils::get_generation_number(), gms::bind_messaging_port(bool(do_bind))).then([&ss] {
                     ss._initialized = true;

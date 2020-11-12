@@ -92,6 +92,7 @@ private:
     gms::feature _per_table_partitioners_feature;
     gms::feature _per_table_caching_feature;
     gms::feature _digest_for_null_values_feature;
+    gms::feature _alternator_streams_feature;
 
 public:
     bool cluster_supports_user_defined_functions() const {
@@ -159,6 +160,10 @@ public:
 
     bool cluster_supports_lwt() const {
         return bool(_lwt_feature);
+    }
+
+    bool cluster_supports_alternator_streams() const {
+        return bool(_alternator_streams_feature);
     }
 };
 

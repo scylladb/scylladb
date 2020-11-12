@@ -1047,6 +1047,9 @@ void executor::add_stream_options(const rjson::value& stream_specification, sche
         if (!db.features().cluster_supports_cdc()) {
             throw api_error::validation("StreamSpecification: streams (CDC) feature not enabled in cluster.");
         }
+        if (!db.features().cluster_supports_alternator_streams()) {
+            throw api_error::validation("StreamSpecification: alternator streams feature not enabled in cluster.");
+        }
 
         cdc::options opts;
         opts.enabled(true);
