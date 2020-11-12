@@ -1099,6 +1099,58 @@ def test_streams_trim_horizon(test_table_ss_keys_only, dynamodbstreams):
         time.sleep(0.5)
     pytest.fail("timed out")
 
+# Test the StartingSequenceNumber information returned by DescribeStream.
+# The DynamoDB documentation explains that StartingSequenceNumber is
+# "The first sequence number for the stream records contained within a shard"
+# which suggests that is should be the sequence number of the first event
+# that can actually be read from the shard. However, in Alternator the
+# StartingSequenceNumber may be *before* any of the events on the shard -
+# it is the time that the shard was created. In Alternator, it is possible
+# that no event appeared on this shard for some time after it was created,
+# and it is also possible that after more than 24 hours, some of the original
+# items that existed in the shard have expired. Nevertheless, we believe
+# that the important thing is that reading a shard starting at
+# StartingSequenceNumber will result in reading all the available items -
+# similar to how TRIM_HORIZON works. This is what the following test verifies.
+def test_streams_starting_sequence_number(test_table_ss_keys_only, dynamodbstreams):
+    table, arn = test_table_ss_keys_only
+    # Do two UpdateItem operations to the same key, that are expected to leave
+    # two events in the stream.
+    p = random_string()
+    c = random_string()
+    table.update_item(Key={'p': p, 'c': c},
+        UpdateExpression='SET x = :val1', ExpressionAttributeValues={':val1': 3})
+    table.update_item(Key={'p': p, 'c': c},
+        UpdateExpression='SET x = :val1', ExpressionAttributeValues={':val1': 5})
+    # Get for all the stream shards the iterator starting at the shard's
+    # StartingSequenceNumber:
+    response = dynamodbstreams.describe_stream(StreamArn=arn)
+    shards = response['StreamDescription']['Shards']
+    while 'LastEvaluatedShardId' in response:
+        response = dynamodbstreams.describe_stream(StreamArn=arn,
+            ExclusiveStartShardId=response['LastEvaluatedShardId'])
+        shards.extend(response['StreamDescription']['Shards'])
+    iterators = []
+    for shard in shards:
+        shard_id = shard['ShardId']
+        start = shard['SequenceNumberRange']['StartingSequenceNumber']
+        assert start.isdecimal()
+        iterators.append(dynamodbstreams.get_shard_iterator(StreamArn=arn,
+            ShardId=shard_id, ShardIteratorType='AT_SEQUENCE_NUMBER',
+            SequenceNumber=start)['ShardIterator'])
+
+    # Eventually, *one* of the stream shards will return the two events:
+    timeout = time.time() + 15
+    while time.time() < timeout:
+        for iter in iterators:
+            response = dynamodbstreams.get_records(ShardIterator=iter)
+            if 'Records' in response and len(response['Records']) == 2:
+                assert response['Records'][0]['dynamodb']['Keys'] == {'p': {'S': p}, 'c': {'S': c}}
+                assert response['Records'][1]['dynamodb']['Keys'] == {'p': {'S': p}, 'c': {'S': c}}
+                return
+        time.sleep(0.5)
+    pytest.fail("timed out")
+
 # Above we tested some specific operations in small tests aimed to reproduce
 # a specific bug, in the following tests we do a all the different operations,
 # PutItem, DeleteItem, BatchWriteItem and UpdateItem, and check the resulting
