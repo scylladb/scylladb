@@ -46,6 +46,17 @@ def unique_name():
     return unique_name_prefix + str(current_ms)
 unique_name.last_ms = 0
 
+# A utility function for creating a new temporary keyspace with given options.
+# It can be used in a "with", as:
+#   with create_test_keyspace(cql, '...') as keyspace:
+# This is not a fixture - see those in conftest.py.
+@contextmanager
+def new_test_keyspace(cql, opts):
+    keyspace = unique_name()
+    cql.execute("CREATE KEYSPACE " + keyspace + " " + opts)
+    yield keyspace
+    cql.execute("DROP KEYSPACE " + keyspace)
+
 # A utility function for creating a new temporary table with a given schema.
 # It can be used in a "with", as:
 #   with create_test_table(cql, keyspace, '...') as table:

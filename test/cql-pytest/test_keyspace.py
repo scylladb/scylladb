@@ -18,6 +18,7 @@
 # Tests for basic keyspace operations: CREATE KEYSPACE, DROP KEYSPACE,
 # ALTER KEYSPACE
 
+from util import new_test_keyspace, unique_name
 import pytest
 from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, ConfigurationException
 
@@ -80,6 +81,13 @@ def test_create_keyspace_invalid_name(cql):
     cql.execute('CREATE KEYSPACE "123"' + rep)
     cql.execute('DROP KEYSPACE "123"')
 
+# Test trying to ALTER a keyspace with invalid options.
+@pytest.mark.xfail(reason="fails because of issue #7595")
+def test_create_keyspace_nonexistent_dc(cql):
+    with pytest.raises(ConfigurationException):
+        ks = unique_name()
+        cql.execute(f"CREATE KEYSPACE {ks} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', 'nonexistentdc' : 1 }}")
+
 # Test that attempts to reproduce an issue with double WITH keyword in CREATE
 # KEYSPACE statement -- CASSANDRA-9565.
 def test_create_keyspace_double_with(cql):
@@ -100,7 +108,42 @@ def test_drop_keyspace_nonexistent(cql):
     with pytest.raises( (InvalidRequest, ConfigurationException) ):
         cql.execute('DROP KEYSPACE nonexistent_keyspace')
 
+# Test trying to ALTER a keyspace.
+def test_alter_keyspace(cql):
+    with new_test_keyspace(cql, "WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 }") as keyspace:
+        cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'SimpleStrategy', 'replication_factor' : 3 }} AND DURABLE_WRITES = false")
+
+# Test trying to ALTER a keyspace with invalid options.
+def test_alter_keyspace_invalid(cql):
+    with new_test_keyspace(cql, "WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 }") as keyspace:
+        with pytest.raises(ConfigurationException):
+            cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'NoSuchStrategy' }}")
+        with pytest.raises(ConfigurationException):
+            cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'SimpleStrategy' }}")
+        with pytest.raises(ConfigurationException):
+            cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'SimpleStrategy', 'replication_factor' : 'foo' }}")
+
+# Test trying to ALTER a keyspace with invalid options.
+@pytest.mark.xfail(reason="fails because of issue #7595")
+def test_alter_keyspace_nonexistent_dc(cql):
+    with new_test_keyspace(cql, "WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 }") as keyspace:
+        with pytest.raises(ConfigurationException):
+            cql.execute(f"ALTER KEYSPACE {keyspace} WITH replication = {{ 'class' : 'NetworkTopologyStrategy', 'nonexistentdc' : 1 }}")
+
+# Test trying to ALTER a non-existing keyspace
+def test_alter_keyspace_nonexisting(cql):
+    cql.execute('DROP KEYSPACE IF EXISTS nonexistent_keyspace')
+    with pytest.raises(InvalidRequest):
+        cql.execute("ALTER KEYSPACE nonexistent_keyspace WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 }")
+
+# Test that attempts to reproduce an issue with double WITH keyword in ALTER
+# KEYSPACE statement -- CASSANDRA-9565.
+def test_alter_keyspace_double_with(cql):
+    with pytest.raises(SyntaxException):
+        cql.execute('ALTER KEYSPACE WITH WITH DURABLE_WRITES = true')
+    with pytest.raises(SyntaxException):
+        cql.execute('ALTER KEYSPACE ks WITH WITH DURABLE_WRITES = true')
+
 # TODO: more tests for "WITH REPLICATION" syntax in CREATE TABLE.
 # TODO: check the "AND DURABLE_WRITES" option of CREATE TABLE.
-# TODO: test ALTER KEYSPACE
 # TODO: confirm case insensitivity without quotes, and case sensitivity with them.
