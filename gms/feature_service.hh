@@ -93,6 +93,7 @@ private:
     gms::feature _per_table_caching_feature;
     gms::feature _digest_for_null_values_feature;
     gms::feature _correct_idx_token_in_secondary_index_feature;
+    gms::feature _alternator_streams_feature;
 
 public:
     bool cluster_supports_user_defined_functions() const {
@@ -164,6 +165,10 @@ public:
 
     bool cluster_supports_correct_idx_token_in_secondary_index() const {
         return bool(_correct_idx_token_in_secondary_index_feature);
+    }
+
+    bool cluster_supports_alternator_streams() const {
+        return bool(_alternator_streams_feature);
     }
 };
 

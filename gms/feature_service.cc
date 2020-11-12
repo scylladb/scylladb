@@ -63,6 +63,7 @@ constexpr std::string_view features::PER_TABLE_PARTITIONERS = "PER_TABLE_PARTITI
 constexpr std::string_view features::PER_TABLE_CACHING = "PER_TABLE_CACHING";
 constexpr std::string_view features::DIGEST_FOR_NULL_VALUES = "DIGEST_FOR_NULL_VALUES";
 constexpr std::string_view features::CORRECT_IDX_TOKEN_IN_SECONDARY_INDEX = "CORRECT_IDX_TOKEN_IN_SECONDARY_INDEX";
+constexpr std::string_view features::ALTERNATOR_STREAMS = "ALTERNATOR_STREAMS";
 
 static logging::logger logger("features");
 
@@ -88,6 +89,7 @@ feature_service::feature_service(feature_config cfg) : _config(cfg)
         , _per_table_caching_feature(*this, features::PER_TABLE_CACHING)
         , _digest_for_null_values_feature(*this, features::DIGEST_FOR_NULL_VALUES)
         , _correct_idx_token_in_secondary_index_feature(*this, features::CORRECT_IDX_TOKEN_IN_SECONDARY_INDEX)
+        , _alternator_streams_feature(*this, features::ALTERNATOR_STREAMS)
 {}
 
 feature_config feature_config_from_db_config(db::config& cfg, std::set<sstring> disabled) {
@@ -118,8 +120,8 @@ feature_config feature_config_from_db_config(db::config& cfg, std::set<sstring> 
         }
     }
 
-    if (!cfg.check_experimental(db::experimental_features_t::CDC)) {
-        fcfg._disabled_features.insert(sstring(gms::features::CDC));
+    if (!cfg.check_experimental(db::experimental_features_t::ALTERNATOR_STREAMS)) {
+        fcfg._disabled_features.insert(sstring(gms::features::ALTERNATOR_STREAMS));
     }
 
     return fcfg;
@@ -189,7 +191,8 @@ std::set<std::string_view> feature_service::known_feature_set() {
         gms::features::UDF,
         gms::features::CDC,
         gms::features::DIGEST_FOR_NULL_VALUES,
-        gms::features::CORRECT_IDX_TOKEN_IN_SECONDARY_INDEX
+        gms::features::CORRECT_IDX_TOKEN_IN_SECONDARY_INDEX,
+        gms::features::ALTERNATOR_STREAMS,
     };
 
     for (const sstring& s : _config._disabled_features) {
@@ -269,7 +272,8 @@ void feature_service::enable(const std::set<std::string_view>& list) {
         std::ref(_per_table_partitioners_feature),
         std::ref(_per_table_caching_feature),
         std::ref(_digest_for_null_values_feature),
-        std::ref(_correct_idx_token_in_secondary_index_feature)
+        std::ref(_correct_idx_token_in_secondary_index_feature),
+        std::ref(_alternator_streams_feature),
     })
     {
         if (list.contains(f.name())) {
