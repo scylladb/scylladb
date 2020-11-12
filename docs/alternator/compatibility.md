@@ -107,8 +107,10 @@ they should be easy to detect. Here is a list of these unimplemented features:
   modify the table's replication strategy.
   https://github.com/scylladb/scylla/issues/5062
 
-* The DynamoDB Streams API for capturing change is supported, but with
-  some caveats:
+* The DynamoDB Streams API for capturing change is supported, but still
+  considered experimental so needs to be enabled explicitly with the
+  `--experimental-features=alternator-streams` configuration option.
+  Alternator streams also differ in some respects from DynamoDB Streams:
   * The number of separate "shards" in Alternator's streams is significantly
     larger than is typical on DynamoDB.
   * While in DynamoDB data usually appears in the stream less than a second
