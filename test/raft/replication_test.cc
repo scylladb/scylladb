@@ -164,9 +164,13 @@ public:
 };
 
 std::unordered_set<raft::server_id> server_disconnected;
+bool is_disconnected(raft::server_id id) {
+    return server_disconnected.find(id) != server_disconnected.end();
+}
+
 class failure_detector : public raft::failure_detector {
     bool is_alive(raft::server_id server) override {
-        return server_disconnected.find(server) == server_disconnected.end();
+        return !is_disconnected(server);
     }
 };
 
