@@ -5,9 +5,9 @@ Before you can start using ScyllaDB Alternator, you will have to have an up
 and running scylla cluster configured to expose the alternator port.
 This section will guide you through the steps for setting up the cluster:
 ### Get Scylla with alternator support from a docker:
-1. Because Alternator is still experimental and improves quickly, it is
-   recommended to run the latest nightly build. Make sure you have the latest
-   nightly image by running: `docker pull scylladb/scylla-nightly:latest`
+1. Because Alternator is still improving quickly, it is recommended to run
+   the latest nightly build. Make sure you have the latest nightly image by
+   running: `docker pull scylladb/scylla-nightly:latest`
 2. Follow the steps in the [Scylla official download web page](https://www.scylladb.com/download/open-source/#docker)
    add to every "docker run" command: `-p 8000:8000` before the image name
    and `--alternator-port=8000 --alternator-write-isolation=always` at the end.
