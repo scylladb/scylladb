@@ -193,7 +193,7 @@ db::view::base_info_ptr view_info::make_base_dependent_view_info(const schema& b
             vlogger.error("Column {} in view {}.{} was not found in the base table {}.{}",
                     to_sstring_view(view_col_name), _schema.ks_name(), _schema.cf_name(), base.ks_name(), base.cf_name());
             if (to_sstring_view(view_col_name) == "idx_token") {
-                vlogger.error("Missing idx_token column is caused by an incorrect upgrade of a secondary index. "
+                vlogger.warn("Missing idx_token column is caused by an incorrect upgrade of a secondary index. "
                         "Please recreate index {}.{} to avoid future issues.", _schema.ks_name(), _schema.cf_name());
             }
             // If we didn't find the column in the base column then it must have been deleted
