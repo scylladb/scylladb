@@ -1029,8 +1029,7 @@ int main(int ac, char** av) {
             proxy.invoke_on_all([] (service::storage_proxy& local_proxy) {
                 auto& ss = service::get_local_storage_service();
                 ss.register_subscriber(&local_proxy);
-                //FIXME: discarded future
-                (void)local_proxy.start_hints_manager(gms::get_local_gossiper().shared_from_this(), ss.shared_from_this());
+                return local_proxy.start_hints_manager(gms::get_local_gossiper().shared_from_this(), ss.shared_from_this());
             }).get();
 
             supervisor::notify("starting messaging service");
