@@ -181,12 +181,12 @@ const std::vector<token_range_description>& topology_description::entries() cons
 class topology_description_generator final {
     const db::config& _cfg;
     const std::unordered_set<dht::token>& _bootstrap_tokens;
-    const locator::token_metadata& _token_metadata;
+    const locator::token_metadata_ptr _tmptr;
     const gms::gossiper& _gossiper;
 
     // Compute a set of tokens that split the token ring into vnodes
     auto get_tokens() const {
-        auto tokens = _token_metadata.sorted_tokens();
+        auto tokens = _tmptr->sorted_tokens();
         auto it = tokens.insert(
                 tokens.end(), _bootstrap_tokens.begin(), _bootstrap_tokens.end());
         std::sort(it, tokens.end());
@@ -201,7 +201,7 @@ class topology_description_generator final {
         if (_bootstrap_tokens.contains(end)) {
             return {smp::count, _cfg.murmur3_partitioner_ignore_msb_bits()};
         } else {
-            auto endpoint = _token_metadata.get_endpoint(end);
+            auto endpoint = _tmptr->get_endpoint(end);
             if (!endpoint) {
                 throw std::runtime_error(
                         format("Can't find endpoint for token {}", end));
@@ -235,11 +235,11 @@ public:
     topology_description_generator(
             const db::config& cfg,
             const std::unordered_set<dht::token>& bootstrap_tokens,
-            const locator::token_metadata& token_metadata,
+            const locator::token_metadata_ptr tmptr,
             const gms::gossiper& gossiper)
         : _cfg(cfg)
         , _bootstrap_tokens(bootstrap_tokens)
-        , _token_metadata(token_metadata)
+        , _tmptr(std::move(tmptr))
         , _gossiper(gossiper)
     {}
 
@@ -298,19 +298,19 @@ future<db_clock::time_point> get_local_streams_timestamp() {
 db_clock::time_point make_new_cdc_generation(
         const db::config& cfg,
         const std::unordered_set<dht::token>& bootstrap_tokens,
-        const locator::token_metadata& tm,
+        const locator::token_metadata_ptr tmptr,
         const gms::gossiper& g,
         db::system_distributed_keyspace& sys_dist_ks,
         std::chrono::milliseconds ring_delay,
         bool for_testing) {
     using namespace std::chrono;
-    auto gen = topology_description_generator(cfg, bootstrap_tokens, tm, g).generate();
+    auto gen = topology_description_generator(cfg, bootstrap_tokens, tmptr, g).generate();
 
     // Begin the race.
     auto ts = db_clock::now() + (
             (for_testing || ring_delay == milliseconds(0)) ? milliseconds(0) : (
                 2 * ring_delay + duration_cast<milliseconds>(generation_leeway)));
-    sys_dist_ks.insert_cdc_topology_description(ts, std::move(gen), { tm.count_normal_token_owners() }).get();
+    sys_dist_ks.insert_cdc_topology_description(ts, std::move(gen), { tmptr->count_normal_token_owners() }).get();
 
     return ts;
 }

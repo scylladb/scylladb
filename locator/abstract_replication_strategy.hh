@@ -28,6 +28,7 @@
 #include "dht/i_partitioner.hh"
 #include "token_metadata.hh"
 #include "snitch_base.hh"
+#include <seastar/util/bool_class.hh>
 
 // forward declaration since database.hh includes this file
 class keyspace;
@@ -44,6 +45,9 @@ enum class replication_strategy_type {
     everywhere_topology,
 };
 
+class can_yield_tag;
+using can_yield = bool_class<can_yield_tag>;
+
 class abstract_replication_strategy {
 private:
     long _last_invalidated_ring_version = 0;
@@ -53,13 +57,13 @@ private:
     static logging::logger logger;
 
     std::unordered_map<token, std::vector<inet_address>>&
-    get_cached_endpoints();
+    get_cached_endpoints(const token_metadata& tm);
 protected:
     sstring _ks_name;
     // TODO: Do we need this member at all?
     //keyspace* _keyspace = nullptr;
     std::map<sstring, sstring> _config_options;
-    const token_metadata& _token_metadata;
+    const shared_token_metadata& _shared_token_metadata;
     snitch_ptr& _snitch;
     replication_strategy_type _my_type;
 
@@ -83,19 +87,19 @@ protected:
 public:
     abstract_replication_strategy(
         const sstring& keyspace_name,
-        const token_metadata& token_metadata,
+        const shared_token_metadata& stm,
         snitch_ptr& snitch,
         const std::map<sstring, sstring>& config_options,
         replication_strategy_type my_type);
-    virtual std::vector<inet_address> calculate_natural_endpoints(const token& search_token, const token_metadata& tm) const = 0;
+    virtual std::vector<inet_address> calculate_natural_endpoints(const token& search_token, const token_metadata& tm, can_yield = can_yield::no) const = 0;
     virtual ~abstract_replication_strategy() {}
-    static std::unique_ptr<abstract_replication_strategy> create_replication_strategy(const sstring& ks_name, const sstring& strategy_name, const token_metadata& token_metadata, const std::map<sstring, sstring>& config_options);
+    static std::unique_ptr<abstract_replication_strategy> create_replication_strategy(const sstring& ks_name, const sstring& strategy_name, const shared_token_metadata& stm, const std::map<sstring, sstring>& config_options);
     static void validate_replication_strategy(const sstring& ks_name,
                                               const sstring& strategy_name,
-                                              const token_metadata& token_metadata,
+                                              const shared_token_metadata& stm,
                                               const std::map<sstring, sstring>& config_options);
-    virtual std::vector<inet_address> get_natural_endpoints(const token& search_token);
-    virtual std::vector<inet_address> get_natural_endpoints_without_node_being_replaced(const token& search_token);
+    std::vector<inet_address> get_natural_endpoints(const token& search_token, can_yield = can_yield::no);
+    std::vector<inet_address> get_natural_endpoints_without_node_being_replaced(const token& search_token, can_yield = can_yield::no);
     virtual void validate_options() const = 0;
     virtual std::optional<std::set<sstring>> recognized_options() const = 0;
     virtual size_t get_replication_factor() const = 0;
@@ -112,16 +116,19 @@ public:
     // The list is sorted, and its elements are non overlapping and non wrap-around.
     // It the analogue of Origin's getAddressRanges().get(endpoint).
     // This function is not efficient, and not meant for the fast path.
-    dht::token_range_vector get_ranges(inet_address ep) const;
-    dht::token_range_vector get_ranges_in_thread(inet_address ep) const;
+    dht::token_range_vector get_ranges(inet_address ep, can_yield can_yield = can_yield::no) const {
+        return do_get_ranges(ep, _shared_token_metadata.get(), can_yield);
+    }
 
     // Use the token_metadata provided by the caller instead of _token_metadata
-    dht::token_range_vector get_ranges(inet_address ep, const token_metadata& tm) const;
-    // Caller must ensure that token_metadata will not change throughout the call
-    dht::token_range_vector get_ranges_in_thread(inet_address ep, const token_metadata& tm) const;
+    // Caller must ensure that token_metadata will not change throughout the call if can_yield::yes
+    dht::token_range_vector get_ranges(inet_address ep, const token_metadata_ptr tmptr, can_yield can_yield = can_yield::no) const {
+        return do_get_ranges(ep, std::move(tmptr), can_yield);
+    }
 private:
-    // Caller must ensure that token_metadata will not change throughout the call if can_yield==true.
-    dht::token_range_vector do_get_ranges(inet_address ep, const token_metadata& tm, bool can_yield) const;
+    // Caller must ensure that token_metadata will not change throughout the call if can_yield::yes.
+    dht::token_range_vector do_get_ranges(inet_address ep, const token_metadata_ptr tmptr, can_yield) const;
+    virtual std::vector<inet_address> do_get_natural_endpoints(const token& search_token, const token_metadata& tm, can_yield);
 
 public:
     // get_primary_ranges() returns the list of "primary ranges" for the given
@@ -130,19 +137,20 @@ public:
     // returned calculate_natural_endpoints().
     // This function is the analogue of Origin's
     // StorageService.getPrimaryRangesForEndpoint().
-    dht::token_range_vector get_primary_ranges(inet_address ep);
+    dht::token_range_vector get_primary_ranges(inet_address ep, can_yield);
     // get_primary_ranges_within_dc() is similar to get_primary_ranges()
     // except it assigns a primary node for each range within each dc,
     // instead of one node globally.
-    dht::token_range_vector get_primary_ranges_within_dc(inet_address ep);
+    dht::token_range_vector get_primary_ranges_within_dc(inet_address ep, can_yield);
 
-    std::unordered_multimap<inet_address, dht::token_range> get_address_ranges(const token_metadata& tm) const;
+    std::unordered_multimap<inet_address, dht::token_range> get_address_ranges(const token_metadata& tm, can_yield) const;
+    std::unordered_multimap<inet_address, dht::token_range> get_address_ranges(const token_metadata& tm, inet_address endpoint, can_yield) const;
 
-    std::unordered_map<dht::token_range, std::vector<inet_address>> get_range_addresses(const token_metadata& tm) const;
+    std::unordered_map<dht::token_range, std::vector<inet_address>> get_range_addresses(const token_metadata& tm, can_yield) const;
 
-    dht::token_range_vector get_pending_address_ranges(const token_metadata& tm, token pending_token, inet_address pending_address) const;
+    dht::token_range_vector get_pending_address_ranges(const token_metadata_ptr tmptr, token pending_token, inet_address pending_address, can_yield) const;
 
-    dht::token_range_vector get_pending_address_ranges(const token_metadata& tm, std::unordered_set<token> pending_tokens, inet_address pending_address) const;
+    dht::token_range_vector get_pending_address_ranges(const token_metadata_ptr tmptr, std::unordered_set<token> pending_tokens, inet_address pending_address, can_yield) const;
 };
 
 }

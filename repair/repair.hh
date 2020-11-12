@@ -34,10 +34,9 @@
 #include "utils/UUID.hh"
 #include "utils/hash.hh"
 #include "streaming/stream_plan.hh"
+#include "locator/token_metadata.hh"
 
 class flat_mutation_reader;
-
-namespace locator { class token_metadata; }
 
 class database;
 class repair_service;
@@ -78,11 +77,11 @@ struct repair_uniq_id {
 std::ostream& operator<<(std::ostream& os, const repair_uniq_id& x);
 
 // The tokens are the tokens assigned to the bootstrap node.
-future<> bootstrap_with_repair(seastar::sharded<database>& db, seastar::sharded<netw::messaging_service>& ms, locator::token_metadata tm, std::unordered_set<dht::token> bootstrap_tokens);
-future<> decommission_with_repair(seastar::sharded<database>& db, seastar::sharded<netw::messaging_service>& ms, locator::token_metadata tm);
-future<> removenode_with_repair(seastar::sharded<database>& db, seastar::sharded<netw::messaging_service>& ms, locator::token_metadata tm, gms::inet_address leaving_node);
-future<> rebuild_with_repair(seastar::sharded<database>& db, seastar::sharded<netw::messaging_service>& ms, locator::token_metadata tm, sstring source_dc);
-future<> replace_with_repair(seastar::sharded<database>& db, seastar::sharded<netw::messaging_service>& ms, locator::token_metadata tm, std::unordered_set<dht::token> replacing_tokens);
+future<> bootstrap_with_repair(seastar::sharded<database>& db, seastar::sharded<netw::messaging_service>& ms, locator::token_metadata_ptr tmptr, std::unordered_set<dht::token> bootstrap_tokens);
+future<> decommission_with_repair(seastar::sharded<database>& db, seastar::sharded<netw::messaging_service>& ms, locator::token_metadata_ptr tmptr);
+future<> removenode_with_repair(seastar::sharded<database>& db, seastar::sharded<netw::messaging_service>& ms, locator::token_metadata_ptr tmptr, gms::inet_address leaving_node);
+future<> rebuild_with_repair(seastar::sharded<database>& db, seastar::sharded<netw::messaging_service>& ms, locator::token_metadata_ptr tmptr, sstring source_dc);
+future<> replace_with_repair(seastar::sharded<database>& db, seastar::sharded<netw::messaging_service>& ms, locator::token_metadata_ptr tmptr, std::unordered_set<dht::token> replacing_tokens);
 
 // NOTE: repair_start() can be run on any node, but starts a node-global
 // operation.

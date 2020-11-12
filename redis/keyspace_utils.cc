@@ -167,7 +167,7 @@ future<> create_keyspace_if_not_exists_impl(db::config& config, int default_repl
         }
         attrs->add_property(cql3::statements::ks_prop_defs::KW_REPLICATION, replication_properties); 
         attrs->validate();
-        const auto& tm = proxy.get_token_metadata();
+        const auto& tm = *proxy.get_token_metadata_ptr();
         return service::get_local_migration_manager().announce_new_keyspace(attrs->as_ks_metadata(name, tm), false);
     };
     auto table_gen = [] (sstring ks_name, sstring cf_name, schema_ptr schema) {

@@ -50,6 +50,7 @@ namespace dht {
 class boot_strapper {
     using inet_address = gms::inet_address;
     using token_metadata = locator::token_metadata;
+    using token_metadata_ptr = locator::token_metadata_ptr;
     using token = dht::token;
     distributed<database>& _db;
     abort_source& _abort_source;
@@ -57,14 +58,14 @@ class boot_strapper {
     inet_address _address;
     /* token of the node being bootstrapped. */
     std::unordered_set<token> _tokens;
-    token_metadata _token_metadata;
+    const token_metadata_ptr _token_metadata_ptr;
 public:
-    boot_strapper(distributed<database>& db, abort_source& abort_source, inet_address addr, std::unordered_set<token> tokens, token_metadata tmd)
+    boot_strapper(distributed<database>& db, abort_source& abort_source, inet_address addr, std::unordered_set<token> tokens, const token_metadata_ptr tmptr)
         : _db(db)
         , _abort_source(abort_source)
         , _address(addr)
         , _tokens(tokens)
-        , _token_metadata(tmd) {
+        , _token_metadata_ptr(std::move(tmptr)) {
     }
 
     future<> bootstrap(streaming::stream_reason reason);
@@ -74,9 +75,9 @@ public:
      * otherwise, if num_tokens == 1, pick a token to assume half the load of the most-loaded node.
      * else choose num_tokens tokens at random
      */
-    static std::unordered_set<token> get_bootstrap_tokens(const token_metadata& metadata, database& db);
+    static std::unordered_set<token> get_bootstrap_tokens(const token_metadata_ptr tmptr, database& db);
 
-    static std::unordered_set<token> get_random_tokens(const token_metadata& metadata, size_t num_tokens);
+    static std::unordered_set<token> get_random_tokens(const token_metadata_ptr tmptr, size_t num_tokens);
 #if 0
     public static class StringSerializer implements IVersionedSerializer<String>
     {
@@ -98,6 +99,11 @@ public:
         }
     }
 #endif
+
+private:
+    const token_metadata& get_token_metadata() {
+        return *_token_metadata_ptr;
+    }
 };
 
 } // namespace dht

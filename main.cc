@@ -486,7 +486,7 @@ int main(int ac, char** av) {
 
     print_starting_message(ac, av, parsed_opts);
 
-    sharded<locator::token_metadata> token_metadata;
+    sharded<locator::shared_token_metadata> token_metadata;
     sharded<service::migration_notifier> mm_notifier;
     distributed<database> db;
     seastar::sharded<service::cache_hitrate_calculator> cf_cache_hitrate_calculator;

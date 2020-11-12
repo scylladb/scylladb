@@ -63,6 +63,7 @@
 #include "service_permit.hh"
 #include "service/client_state.hh"
 #include "cdc/stats.hh"
+#include "locator/token_metadata.hh"
 
 class reconcilable_result;
 class frozen_mutation_and_schema;
@@ -72,12 +73,6 @@ namespace seastar::rpc {
 
 template <typename... T>
 class tuple;
-
-}
-
-namespace locator {
-
-class token_metadata;
 
 }
 
@@ -126,10 +121,10 @@ class query_ranges_to_vnodes_generator {
     dht::partition_range_vector _ranges;
     dht::partition_range_vector::iterator _i; // iterator to current range in _ranges
     bool _local;
-    const locator::token_metadata& _tm;
+    const locator::token_metadata_ptr _tmptr;
     void process_one_range(size_t n, dht::partition_range_vector& ranges);
 public:
-    query_ranges_to_vnodes_generator(const locator::token_metadata& tm, schema_ptr s, dht::partition_range_vector ranges, bool local = false);
+    query_ranges_to_vnodes_generator(const locator::token_metadata_ptr tmptr, schema_ptr s, dht::partition_range_vector ranges, bool local = false);
     query_ranges_to_vnodes_generator(const query_ranges_to_vnodes_generator&) = delete;
     query_ranges_to_vnodes_generator(query_ranges_to_vnodes_generator&&) = default;
     // generate next 'n' vnodes, may return less than requested number of ranges
@@ -245,13 +240,13 @@ public:
 
     const gms::feature_service& features() const { return _features; }
 
-    const locator::token_metadata& get_token_metadata() const { return _token_metadata; }
+    locator::token_metadata_ptr get_token_metadata_ptr() const noexcept;
 
     query::max_result_size get_max_result_size(const query::partition_slice& slice) const;
 
 private:
     distributed<database>& _db;
-    const locator::token_metadata& _token_metadata;
+    const locator::shared_token_metadata& _shared_token_metadata;
     smp_service_group _read_smp_service_group;
     smp_service_group _write_smp_service_group;
     smp_service_group _hints_write_smp_service_group;
@@ -438,7 +433,7 @@ private:
     future<> mutate_counters(Range&& mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state, service_permit permit, clock_type::time_point timeout);
 public:
     storage_proxy(distributed<database>& db, config cfg, db::view::node_update_backlog& max_view_update_backlog,
-            scheduling_group_key stats_key, gms::feature_service& feat, const locator::token_metadata& tokens, netw::messaging_service& ms);
+            scheduling_group_key stats_key, gms::feature_service& feat, const locator::shared_token_metadata& stm, netw::messaging_service& ms);
     ~storage_proxy();
     const distributed<database>& get_db() const {
         return _db;

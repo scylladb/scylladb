@@ -24,7 +24,7 @@
 #include <seastar/http/httpd.hh>
 
 namespace service { class load_meter; }
-namespace locator { class token_metadata; }
+namespace locator { class shared_token_metadata; }
 namespace cql_transport { class controller; }
 class thrift_controller;
 namespace db { class snapshot_ctl; }
@@ -39,13 +39,15 @@ struct http_context {
     distributed<database>& db;
     distributed<service::storage_proxy>& sp;
     service::load_meter& lmeter;
-    const sharded<locator::token_metadata>& token_metadata;
+    const sharded<locator::shared_token_metadata>& shared_token_metadata;
 
     http_context(distributed<database>& _db,
             distributed<service::storage_proxy>& _sp,
-            service::load_meter& _lm, const sharded<locator::token_metadata>& _tm)
-            : db(_db), sp(_sp), lmeter(_lm), token_metadata(_tm) {
+            service::load_meter& _lm, const sharded<locator::shared_token_metadata>& _stm)
+            : db(_db), sp(_sp), lmeter(_lm), shared_token_metadata(_stm) {
     }
+
+    const locator::token_metadata& get_token_metadata();
 };
 
 future<> set_server_init(http_context& ctx);

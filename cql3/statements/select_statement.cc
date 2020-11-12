@@ -516,7 +516,7 @@ indexed_table_select_statement::do_execute_base_query(
     auto cmd = prepare_command_for_base_query(proxy, options, state, now, bool(paging_state));
     auto timeout = db::timeout_clock::now() + options.get_timeout_config().*get_timeout_config_selector();
     uint32_t queried_ranges_count = partition_ranges.size();
-    service::query_ranges_to_vnodes_generator ranges_to_vnodes(proxy.get_token_metadata(), _schema, std::move(partition_ranges));
+    service::query_ranges_to_vnodes_generator ranges_to_vnodes(proxy.get_token_metadata_ptr(), _schema, std::move(partition_ranges));
 
     struct base_query_state {
         query::result_merger merger;

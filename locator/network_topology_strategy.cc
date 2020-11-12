@@ -59,7 +59,7 @@ bool operator==(const endpoint_dc_rack& d1, const endpoint_dc_rack& d2) {
 
 network_topology_strategy::network_topology_strategy(
     const sstring& keyspace_name,
-    const token_metadata& token_metadata,
+    const shared_token_metadata& token_metadata,
     snitch_ptr& snitch,
     const std::map<sstring, sstring>& config_options) :
         abstract_replication_strategy(keyspace_name,
@@ -104,7 +104,7 @@ network_topology_strategy::network_topology_strategy(
 
 std::vector<inet_address>
 network_topology_strategy::calculate_natural_endpoints(
-    const token& search_token, const token_metadata& tm) const {
+    const token& search_token, const token_metadata& tm, can_yield can_yield) const {
 
     using endpoint_set = utils::sequenced_set<inet_address>;
     using endpoint_dc_rack_set = std::unordered_set<endpoint_dc_rack>;
@@ -246,6 +246,9 @@ network_topology_strategy::calculate_natural_endpoints(
         if (dcs_to_fill == 0) {
             break;
         }
+        if (can_yield) {
+            seastar::thread::maybe_yield();
+        }
 
         inet_address ep = *tm.get_endpoint(next);
         auto& loc = tp.get_location(ep);
@@ -274,7 +277,7 @@ std::optional<std::set<sstring>> network_topology_strategy::recognized_options()
     return std::nullopt;
 }
 
-using registry = class_registrator<abstract_replication_strategy, network_topology_strategy, const sstring&, const token_metadata&, snitch_ptr&, const std::map<sstring, sstring>&>;
+using registry = class_registrator<abstract_replication_strategy, network_topology_strategy, const sstring&, const shared_token_metadata&, snitch_ptr&, const std::map<sstring, sstring>&>;
 static registry registrator("org.apache.cassandra.locator.NetworkTopologyStrategy");
 static registry registrator_short_name("NetworkTopologyStrategy");
 }

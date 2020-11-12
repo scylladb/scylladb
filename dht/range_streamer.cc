@@ -107,6 +107,7 @@ range_streamer::get_range_fetch_map(const std::unordered_map<dht::token_range, s
     return range_fetch_map_map;
 }
 
+// Must be called from a seastar thread
 std::unordered_map<dht::token_range, std::vector<inet_address>>
 range_streamer::get_all_ranges_with_sources_for(const sstring& keyspace_name, dht::token_range_vector desired_ranges) {
     logger.debug("{} ks={}", __func__, keyspace_name);
@@ -114,8 +115,8 @@ range_streamer::get_all_ranges_with_sources_for(const sstring& keyspace_name, dh
     auto& ks = _db.local().find_keyspace(keyspace_name);
     auto& strat = ks.get_replication_strategy();
 
-    auto tm = _metadata.clone_only_token_map();
-    auto range_addresses = strat.get_range_addresses(tm);
+    auto tm = get_token_metadata().clone_only_token_map().get0();
+    auto range_addresses = strat.get_range_addresses(tm, locator::can_yield::yes);
 
     logger.debug("keyspace={}, desired_ranges.size={}, range_addresses.size={}", keyspace_name, desired_ranges.size(), range_addresses.size());
 
@@ -146,6 +147,7 @@ range_streamer::get_all_ranges_with_sources_for(const sstring& keyspace_name, dh
     return range_sources;
 }
 
+// Must be called from a seastar thread
 std::unordered_map<dht::token_range, std::vector<inet_address>>
 range_streamer::get_all_ranges_with_strict_sources_for(const sstring& keyspace_name, dht::token_range_vector desired_ranges) {
     logger.debug("{} ks={}", __func__, keyspace_name);
@@ -155,12 +157,12 @@ range_streamer::get_all_ranges_with_strict_sources_for(const sstring& keyspace_n
     auto& strat = ks.get_replication_strategy();
 
     //Active ranges
-    auto metadata_clone = _metadata.clone_only_token_map();
-    auto range_addresses = strat.get_range_addresses(metadata_clone);
+    auto metadata_clone = get_token_metadata().clone_only_token_map().get0();
+    auto range_addresses = strat.get_range_addresses(metadata_clone, locator::can_yield::yes);
 
     //Pending ranges
     metadata_clone.update_normal_tokens(_tokens, _address);
-    auto pending_range_addresses  = strat.get_range_addresses(metadata_clone);
+    auto pending_range_addresses  = strat.get_range_addresses(metadata_clone, locator::can_yield::yes);
 
     //Collects the source that will have its range moved to the new node
     std::unordered_map<dht::token_range, std::vector<inet_address>> range_sources;
@@ -221,7 +223,7 @@ bool range_streamer::use_strict_sources_for_ranges(const sstring& keyspace_name)
     return !_db.local().is_replacing()
            && use_strict_consistency()
            && !_tokens.empty()
-           && _metadata.get_all_endpoints().size() != strat.get_replication_factor();
+           && get_token_metadata().get_all_endpoints().size() != strat.get_replication_factor();
 }
 
 void range_streamer::add_tx_ranges(const sstring& keyspace_name, std::unordered_map<inet_address, dht::token_range_vector> ranges_per_endpoint) {

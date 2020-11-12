@@ -40,6 +40,7 @@
 #include "database_fwd.hh"
 #include "db_clock.hh"
 #include "dht/token.hh"
+#include "locator/token_metadata.hh"
 
 namespace seastar {
     class abort_source;
@@ -54,10 +55,6 @@ namespace gms {
     class inet_address;
     class gossiper;
 } // namespace gms
-
-namespace locator {
-    class token_metadata;
-} // namespace locator
 
 namespace cdc {
 
@@ -168,7 +165,7 @@ future<db_clock::time_point> get_local_streams_timestamp();
 db_clock::time_point make_new_cdc_generation(
         const db::config& cfg,
         const std::unordered_set<dht::token>& bootstrap_tokens,
-        const locator::token_metadata& tm,
+        const locator::token_metadata_ptr tmptr,
         const gms::gossiper& g,
         db::system_distributed_keyspace& sys_dist_ks,
         std::chrono::milliseconds ring_delay,
