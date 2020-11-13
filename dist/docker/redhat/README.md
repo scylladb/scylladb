@@ -31,21 +31,19 @@ Do the following in the top-level Scylla source directory:
 
 1. Build your own Scylla in whatever build mode you prefer, e.g., dev.
 
-2. Run `./reloc/build_reloc.sh --mode dev`
+2. Run `ninja dist-rpm`
 
-3. Run `./reloc/build_rpm.sh --reloc-pkg build/dev/scylla-package.tar.gz`
+3. cd to `dist/docker/redhat`
 
-4. cd to `dist/docker/redhat`
-
-5. Docker stubbornly refuses to allow using files from outside the current
+4. Docker stubbornly refuses to allow using files from outside the current
    directory in preparing images, so we must copy the RPMs prepared above
    into the current directory (a symbolic link would _not_ work):
-   `rm -r rpms; cp -a ../../../build/redhat/RPMS/x86_64 rpms`
+   `rm -r rpms; cp -a ../../../build/dist/dev/redhat/RPMS/x86_64/ rpms`
 
-6. Add the following lines near the end of Dockerfile, after the `RUN curl`:
+5. Add the following lines near the end of Dockerfile, after the `RUN curl`:
    ```
    COPY rpms /rpms
    RUN yum install -y /rpms/*.rpm
    ```
 
-7. Finally, run `docker build -t <image-name> .`
+6. Finally, run `docker build -t <image-name> .`
