@@ -34,8 +34,7 @@ while [ $# -gt 0 ]; do
 done
 
 if [ ! -e $RELOC_PKG ]; then
-    echo "$RELOC_PKG does not exist."
-    echo "Run ./reloc/build_reloc.sh first."
+    echo "$RELOC_PKG does not exist. Please build it with 'ninja' before running this script."
     exit 1
 fi
 RELOC_PKG=$(readlink -f $RELOC_PKG)
