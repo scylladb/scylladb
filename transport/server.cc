@@ -159,7 +159,7 @@ cql_server::cql_server(distributed<cql3::query_processor>& qp, auth::service& au
 {
     namespace sm = seastar::metrics;
 
-    _metrics.add_group("transport", {
+    auto ls = {
         sm::make_derive("startups", _stats.startups,
                         sm::description("Counts the total number of received CQL STARTUP messages.")),
 
@@ -207,12 +207,30 @@ cql_server::cql_server(distributed<cql3::query_processor>& qp, auth::service& au
         sm::make_derive("requests_shed", _stats.requests_shed,
                         sm::description("Holds an incrementing counter with the requests that were shed due to overload (threshold configured via max_concurrent_requests_per_shard). "
                                             "The first derivative of this value shows how often we shed requests due to overload in the \"CQL transport\" component.")),
-       sm::make_gauge("requests_memory_available", [this] { return _memory_available.current(); },
+        sm::make_gauge("requests_memory_available", [this] { return _memory_available.current(); },
                         sm::description(
                             seastar::format("Holds the amount of available memory for admitting new requests (max is {}B)."
-                                            "Zero value indicates that our bottleneck is memory and more specifically - the memory quota allocated for the \"CQL transport\" component.", _max_request_size))),
+                                            "Zero value indicates that our bottleneck is memory and more specifically - the memory quota allocated for the \"CQL transport\" component.", _max_request_size)))
+    };
 
-    });
+    std::vector<sm::metric_definition> transport_metrics;
+    for (auto& m : ls) {
+        transport_metrics.emplace_back(std::move(m));
+    }
+
+    sm::label cql_error_label("type");
+    for (const auto& e : exceptions::exception_map()) {
+        _stats.errors.insert({e.first, 0});
+        auto label_instance = cql_error_label(e.second);
+
+        transport_metrics.emplace_back(
+            sm::make_derive("cql_errors_total", sm::description("Counts the total number of returned CQL errors."),
+                        {label_instance},
+                        [this, code = e.first] { auto it = _stats.errors.find(code); return it != _stats.errors.end() ? it->second : 0; })
+        );
+    }
+
+    _metrics.add_group("transport", std::move(transport_metrics));
 }
 
 future<> cql_server::stop() {
@@ -534,24 +552,34 @@ future<foreign_ptr<std::unique_ptr<cql_server::response>>>
             tracing::set_response_size(trace_state, response->size());
             return response;
         } catch (const exceptions::unavailable_exception& ex) {
+            try { ++_server._stats.errors[ex.code()]; } catch(...) {};
             return make_unavailable_error(stream, ex.code(), ex.what(), ex.consistency, ex.required, ex.alive, trace_state);
         } catch (const exceptions::read_timeout_exception& ex) {
+            try { ++_server._stats.errors[ex.code()]; } catch(...) {};
             return make_read_timeout_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.block_for, ex.data_present, trace_state);
         } catch (const exceptions::read_failure_exception& ex) {
+            try { ++_server._stats.errors[ex.code()]; } catch(...) {};
             return make_read_failure_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.failures, ex.block_for, ex.data_present, trace_state);
         } catch (const exceptions::mutation_write_timeout_exception& ex) {
+            try { ++_server._stats.errors[ex.code()]; } catch(...) {};
             return make_mutation_write_timeout_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.block_for, ex.type, trace_state);
         } catch (const exceptions::mutation_write_failure_exception& ex) {
+            try { ++_server._stats.errors[ex.code()]; } catch(...) {};
             return make_mutation_write_failure_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.failures, ex.block_for, ex.type, trace_state);
         } catch (const exceptions::already_exists_exception& ex) {
+            try { ++_server._stats.errors[ex.code()]; } catch(...) {};
             return make_already_exists_error(stream, ex.code(), ex.what(), ex.ks_name, ex.cf_name, trace_state);
         } catch (const exceptions::prepared_query_not_found_exception& ex) {
+            try { ++_server._stats.errors[ex.code()]; } catch(...) {};
             return make_unprepared_error(stream, ex.code(), ex.what(), ex.id, trace_state);
         } catch (const exceptions::cassandra_exception& ex) {
+            try { ++_server._stats.errors[ex.code()]; } catch(...) {};
             return make_error(stream, ex.code(), ex.what(), trace_state);
         } catch (std::exception& ex) {
+            try { ++_server._stats.errors[exceptions::exception_code::SERVER_ERROR]; } catch(...) {};
             return make_error(stream, exceptions::exception_code::SERVER_ERROR, ex.what(), trace_state);
         } catch (...) {
+            try { ++_server._stats.errors[exceptions::exception_code::SERVER_ERROR]; } catch(...) {};
             return make_error(stream, exceptions::exception_code::SERVER_ERROR, "unknown error", trace_state);
         }
     });
@@ -587,10 +615,13 @@ future<> cql_server::connection::process()
             try {
                 f.get();
             } catch (const exceptions::cassandra_exception& ex) {
+                try { ++_server._stats.errors[ex.code()]; } catch(...) {};
                 write_response(make_error(0, ex.code(), ex.what(), tracing::trace_state_ptr()));
             } catch (std::exception& ex) {
+                try { ++_server._stats.errors[exceptions::exception_code::SERVER_ERROR]; } catch(...) {};
                 write_response(make_error(0, exceptions::exception_code::SERVER_ERROR, ex.what(), tracing::trace_state_ptr()));
             } catch (...) {
+                try { ++_server._stats.errors[exceptions::exception_code::SERVER_ERROR]; } catch(...) {};
                 write_response(make_error(0, exceptions::exception_code::SERVER_ERROR, "unknown error", tracing::trace_state_ptr()));
             }
         });
