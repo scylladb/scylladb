@@ -77,6 +77,8 @@ enum class exception_code : int32_t {
     UNPREPARED      = 0x2500
 };
 
+const std::unordered_map<exception_code, sstring>& exception_map();
+
 class cassandra_exception : public std::exception {
 private:
     exception_code _code;
