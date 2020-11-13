@@ -98,6 +98,7 @@ public:
         if (_seen >= _apply_entries) {
             _done.set_value();
         }
+        tlogger.debug("sm::apply[{}] got {}/{} entries", _id, _seen, _apply_entries);
         return make_ready_future<>();
     }
 
@@ -163,6 +164,17 @@ public:
     virtual future<> abort() { return make_ready_future<>(); }
 };
 
+std::unordered_set<raft::server_id> server_disconnected;
+bool is_disconnected(raft::server_id id) {
+    return server_disconnected.find(id) != server_disconnected.end();
+}
+
+class failure_detector : public raft::failure_detector {
+    bool is_alive(raft::server_id server) override {
+        return !is_disconnected(server);
+    }
+};
+
 class rpc : public raft::rpc {
     static std::unordered_map<raft::server_id, rpc*> net;
     raft::server_id _id;
@@ -171,11 +183,14 @@ public:
         net[_id] = this;
     }
     virtual future<> send_snapshot(raft::server_id id, const raft::install_snapshot& snap) {
+        if (is_disconnected(id) || is_disconnected(_id)) {
+            return make_ready_future<>();
+        }
         snapshots[id] = snapshots[_id];
         return net[id]->_client->apply_snapshot(_id, std::move(snap));
     }
     virtual future<> send_append_entries(raft::server_id id, const raft::append_request_send& append_request) {
-        if (drop_replication && !(rand() % 5)) {
+        if (is_disconnected(id) || is_disconnected(_id) || (drop_replication && !(rand() % 5))) {
             return make_ready_future<>();
         }
         raft::append_request_recv req;
@@ -192,30 +207,29 @@ public:
         return make_ready_future<>();
     }
     virtual future<> send_append_entries_reply(raft::server_id id, const raft::append_reply& reply) {
-        if (drop_replication && !(rand() % 5)) {
+        if (is_disconnected(id) || is_disconnected(_id) || (drop_replication && !(rand() % 5))) {
             return make_ready_future<>();
         }
         net[id]->_client->append_entries_reply(_id, std::move(reply));
         return make_ready_future<>();
     }
     virtual future<> send_vote_request(raft::server_id id, const raft::vote_request& vote_request) {
+        if (is_disconnected(id) || is_disconnected(_id)) {
+            return make_ready_future<>();
+        }
         net[id]->_client->request_vote(_id, std::move(vote_request));
         return make_ready_future<>();
     }
     virtual future<> send_vote_reply(raft::server_id id, const raft::vote_reply& vote_reply) {
+        if (is_disconnected(id) || is_disconnected(_id)) {
+            return make_ready_future<>();
+        }
         net[id]->_client->request_vote_reply(_id, std::move(vote_reply));
         return make_ready_future<>();
     }
     virtual void add_server(raft::server_id id, bytes node_info) {}
     virtual void remove_server(raft::server_id id) {}
     virtual future<> abort() { return make_ready_future<>(); }
-};
-
-std::unordered_set<raft::server_id> SERVER_DISCONNECTED;
-class failure_detector : public raft::failure_detector {
-    bool is_alive(raft::server_id server) override {
-        return SERVER_DISCONNECTED.find(server) == SERVER_DISCONNECTED.end();
-    }
 };
 
 std::unordered_map<raft::server_id, rpc*> rpc::net;
@@ -306,8 +320,9 @@ void apply_changes(raft::server_id id, const std::vector<raft::command_cref>& co
 //  - Configuration change
 using entries = unsigned;
 using new_leader = int;
+using partition = std::vector<size_t>;
 // TODO: config change
-using update = std::variant<entries, new_leader>;
+using update = std::variant<entries, new_leader, partition>;
 
 struct initial_log {
     std::vector<log_entry> le;
@@ -392,18 +407,43 @@ future<int> run_test(test_case test) {
         } else if (std::holds_alternative<new_leader>(update)) {
             unsigned next_leader = std::get<new_leader>(update);
             assert(next_leader < rafts.size());
-            SERVER_DISCONNECTED.insert(raft::server_id{utils::UUID(0, leader + 1)});
+            server_disconnected.insert(raft::server_id{utils::UUID(0, leader + 1)});
             for (size_t s = 0; s < test.nodes; ++s) {
                 if (s != leader) {
                     rafts[s].first->elapse_election();
                 }
             }
             co_await rafts[next_leader].first->elect_me_leader();
-            SERVER_DISCONNECTED.erase(raft::server_id{utils::UUID(0, leader + 1)});
+            server_disconnected.erase(raft::server_id{utils::UUID(0, leader + 1)});
             tlogger.debug("confirmed leader on {}", next_leader);
             leader = next_leader;
+        } else if (std::holds_alternative<partition>(update)) {
+            auto p = std::get<partition>(update);
+            std::unordered_set<size_t> connected_servers(p.begin(), p.end());
+            for (size_t s = 0; s < test.nodes; ++s) {
+                if (connected_servers.find(s) == connected_servers.end()) {
+                    // Disconnect servers not in main partition
+                    server_disconnected.insert(raft::server_id{utils::UUID(0, s + 1)});
+                }
+            }
+            for (auto s: p) {
+                // Re connect servers in live partition
+                server_disconnected.erase(raft::server_id{utils::UUID(0, s + 1)});
+            }
+            if (connected_servers.find(leader) == connected_servers.end() && p.size() > 0) {
+                // Old leader disconnected, new leader is first server specified in partition
+                auto next_leader = p[0];
+                for (auto s: p) {
+                    rafts[s].first->elapse_election();
+                }
+                co_await rafts[next_leader].first->elect_me_leader();
+                leader = next_leader;
+                tlogger.debug("confirmed new leader on {}", next_leader);
+            }
         }
     }
+
+    server_disconnected.clear();    // Re-connect all servers
 
     if (next_val < test.total_values) {
         // Send remaining updates
@@ -551,6 +591,16 @@ int main(int argc, char* argv[]) {
         {.name = "take_snapshot", .nodes = 2,
          .config = {{.snapshot_threshold = 10, .snapshot_trailing = 5}, {.snapshot_threshold = 20, .snapshot_trailing = 10}},
          .updates = {entries{100}}},
+        // 2 nodes doing simple replication/snapshoting while leader's log size is limited
+        {.name = "backpressure", .type = sm_type::SUM, .nodes = 2,
+         .config = {{.snapshot_threshold = 10, .snapshot_trailing = 5, .max_log_length = 20}, {.snapshot_threshold = 20, .snapshot_trailing = 10}},
+         .updates = {entries{100}}},
+        // 3 nodes, add entries, drop leader 0, add entries [implicit re-join all]
+        {.name = "drops_01", .nodes = 3,
+         .updates = {entries{4},partition{1,2},entries{4}}},
+        // 3 nodes, add entries, drop follower 1, add entries [implicit re-join all]
+        {.name = "drops_02", .nodes = 3,
+         .updates = {entries{4},partition{0,2},entries{4},partition{2,1}}},
     };
 
     return app.run(argc, argv, [&replication_tests, &app] () -> future<int> {
