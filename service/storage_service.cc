@@ -534,8 +534,8 @@ void storage_service::join_token_ring(int delay) {
     }
 
     slogger.debug("Setting tokens to {}", _bootstrap_tokens);
-    with_token_metadata_lock([this] {
-        return get_mutable_token_metadata_ptr().then([this] (mutable_token_metadata_ptr tmptr) {
+    mutate_token_metadata([this] (mutable_token_metadata_ptr tmptr) {
+            // FIXME: indentation
             // This node must know about its chosen tokens before other nodes do
             // since they may start sending writes to this node after it gossips status = NORMAL.
             // Therefore, in case we haven't updated _token_metadata with our tokens yet, do it now.
@@ -545,7 +545,6 @@ void storage_service::join_token_ring(int delay) {
             // might send reads/writes to this node. Replicate it early to make
             // sure the tokens are valid on all the shards.
             return replicate_to_all_cores(std::move(tmptr));
-        });
     }).get();
 
     if (!db::system_keyspace::bootstrap_complete()) {
@@ -903,12 +902,11 @@ void storage_service::bootstrap() {
 
         // Update pending ranges now, so we correctly count ourselves as a pending replica
         // when inserting the new CDC generation.
-        with_token_metadata_lock([this] {
-            return get_mutable_token_metadata_ptr().then([this] (mutable_token_metadata_ptr tmptr) {
+        mutate_token_metadata([this] (mutable_token_metadata_ptr tmptr) {
+                // FIXME: indentation
                 auto endpoint = get_broadcast_address();
                 tmptr->add_bootstrap_tokens(_bootstrap_tokens, endpoint);
                 return update_pending_ranges(std::move(tmptr), format("bootstrapping node {}", endpoint));
-            });
         }).get();
 
         // After we pick a generation timestamp, we start gossiping it, and we stick with it.
@@ -1316,13 +1314,12 @@ void storage_service::handle_state_removing(inet_address endpoint, std::vector<s
             std::unordered_set<token> tmp(remove_tokens.begin(), remove_tokens.end());
             excise(std::move(tmp), endpoint, extract_expire_time(pieces));
         } else if (sstring(gms::versioned_value::REMOVING_TOKEN) == state) {
-            with_token_metadata_lock([this, remove_tokens = std::move(remove_tokens), endpoint] {
-                return get_mutable_token_metadata_ptr().then([this, remove_tokens = std::move(remove_tokens), endpoint] (mutable_token_metadata_ptr tmptr) mutable {
+            mutate_token_metadata([this, remove_tokens = std::move(remove_tokens), endpoint] (mutable_token_metadata_ptr tmptr) mutable {
+                    // FIXME: indentation
                     slogger.debug("Tokens {} removed manually (endpoint was {})", remove_tokens, endpoint);
                     // Note that the endpoint is being removed
                     tmptr->add_leaving_endpoint(endpoint);
                     return update_pending_ranges(std::move(tmptr), format("handle_state_removing {}", endpoint));
-                });
             }).get();
             // find the endpoint coordinating this removal that we need to notify when we're done
             auto* value = _gossiper.get_application_state_ptr(endpoint, application_state::REMOVAL_COORDINATOR);
@@ -2602,12 +2599,11 @@ future<> storage_service::confirm_replication(inet_address node) {
 // Runs inside seastar::async context
 void storage_service::leave_ring() {
     db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::NEEDS_BOOTSTRAP).get();
-    with_token_metadata_lock([this] {
-        return get_mutable_token_metadata_ptr().then([this] (mutable_token_metadata_ptr tmptr) {
+    mutate_token_metadata([this] (mutable_token_metadata_ptr tmptr) {
+            // FIXME: indentation
             auto endpoint = get_broadcast_address();
             tmptr->remove_endpoint(endpoint);
             return update_pending_ranges(std::move(tmptr), format("leave_ring {}", endpoint));
-        });
     }).get();
 
     auto expire_time = _gossiper.compute_expire_time().time_since_epoch().count();
@@ -2647,12 +2643,11 @@ storage_service::stream_ranges(std::unordered_map<sstring, std::unordered_multim
 
 future<> storage_service::start_leaving() {
     return _gossiper.add_local_application_state(application_state::STATUS, versioned_value::leaving(db::system_keyspace::get_local_tokens().get0())).then([this] {
-        return with_token_metadata_lock([this] {
-            return get_mutable_token_metadata_ptr().then([this] (mutable_token_metadata_ptr tmptr) {
+        return mutate_token_metadata([this] (mutable_token_metadata_ptr tmptr) {
+                // FIXME: indentation
                 auto endpoint = get_broadcast_address();
                 tmptr->add_leaving_endpoint(endpoint);
                 return update_pending_ranges(std::move(tmptr), format("start_leaving {}", endpoint));
-            });
         });
     });
 }
@@ -2849,6 +2844,15 @@ future<> storage_service::with_token_metadata_lock(std::function<future<> ()> fu
     });
 }
 
+future<> storage_service::mutate_token_metadata(std::function<future<> (mutable_token_metadata_ptr)> func) noexcept {
+    return with_token_metadata_lock([this, func = std::move(func)] () mutable {
+        return get_mutable_token_metadata_ptr().then([this, func = std::move(func)] (mutable_token_metadata_ptr tmptr) mutable {
+            return func(tmptr);
+            // TODO: replicate to all cores
+        });
+    });
+}
+
 future<> storage_service::update_pending_ranges(mutable_token_metadata_ptr tmptr, sstring reason) {
     assert(this_shard_id() == 0);
 
@@ -2864,9 +2868,9 @@ future<> storage_service::update_pending_ranges(mutable_token_metadata_ptr tmptr
         });
     }).then_wrapped([this, reason = std::move(reason), tmptr] (future<> f) mutable {
         if (f.failed()) {
-            auto ep = f.get_exception();
-            slogger.error("Failed to update pending ranges for {}: {}", reason, ep);
-            return make_exception_future<>(std::move(ep));
+             auto ep = f.get_exception();
+             slogger.error("Failed to update pending ranges for {}: {}", reason, ep);
+             return make_exception_future<>(std::move(ep));
         }
         // update_pending_ranges will modify token_metadata, we need to replicate to other cores
         return replicate_to_all_cores(std::move(tmptr));
@@ -2875,10 +2879,8 @@ future<> storage_service::update_pending_ranges(mutable_token_metadata_ptr tmptr
 }
 
 future<> storage_service::update_pending_ranges(sstring reason) {
-    return with_token_metadata_lock([this, reason = std::move(reason)] () mutable {
-        return get_mutable_token_metadata_ptr().then([this, reason = std::move(reason)] (mutable_token_metadata_ptr tmptr) mutable {
-            return update_pending_ranges(std::move(tmptr), std::move(reason));
-        });
+    return mutate_token_metadata([this, reason = std::move(reason)] (mutable_token_metadata_ptr tmptr) mutable {
+        return update_pending_ranges(std::move(tmptr), std::move(reason));
     });
 }
 
@@ -2894,14 +2896,13 @@ future<> storage_service::keyspace_changed(const sstring& ks_name) {
 
 future<> storage_service::update_topology(inet_address endpoint) {
     return service::get_storage_service().invoke_on(0, [endpoint] (auto& ss) {
-        return ss.with_token_metadata_lock([&ss, endpoint] {
-            return ss.get_mutable_token_metadata_ptr().then([&ss, endpoint] (mutable_token_metadata_ptr tmptr) mutable {
+        return ss.mutate_token_metadata([&ss, endpoint] (mutable_token_metadata_ptr tmptr) mutable {
+                // FIXME: indentation
                 // initiate the token metadata endpoints cache reset
                 tmptr->invalidate_cached_rings();
                 // re-read local rack and DC info
                 tmptr->update_topology(endpoint);
                 return ss.replicate_to_all_cores(std::move(tmptr));
-            });
         });
     });
 }

@@ -171,6 +171,12 @@ private:
     future<token_metadata_lock> get_token_metadata_lock() noexcept;
     future<> with_token_metadata_lock(std::function<future<> ()>) noexcept;
 
+    // Acquire the token_metadata lock and get a mutable_token_metadata_ptr.
+    // Pass that ptr to \c func, and when successfully done,
+    // TODO: replicate it to all cores.
+    // Note: must be called on shard 0.
+    future<> mutate_token_metadata(std::function<future<> (mutable_token_metadata_ptr)> func) noexcept;
+
     // Update pending ranges locally and then replicate to all cores.
     // Should be serialized under token_metadata_lock.
     // Must be called on shard 0.
