@@ -534,18 +534,12 @@ void storage_service::join_token_ring(int delay) {
     }
 
     slogger.debug("Setting tokens to {}", _bootstrap_tokens);
-    with_token_metadata_lock([this] {
-        return get_mutable_token_metadata_ptr().then([this] (mutable_token_metadata_ptr tmptr) {
-            // This node must know about its chosen tokens before other nodes do
-            // since they may start sending writes to this node after it gossips status = NORMAL.
-            // Therefore, in case we haven't updated _token_metadata with our tokens yet, do it now.
-            tmptr->update_normal_tokens(_bootstrap_tokens, get_broadcast_address());
-
-            // Replicate the tokens early because once gossip runs other nodes
-            // might send reads/writes to this node. Replicate it early to make
-            // sure the tokens are valid on all the shards.
-            return replicate_to_all_cores(std::move(tmptr));
-        });
+    mutate_token_metadata([this] (mutable_token_metadata_ptr tmptr) {
+        // This node must know about its chosen tokens before other nodes do
+        // since they may start sending writes to this node after it gossips status = NORMAL.
+        // Therefore, in case we haven't updated _token_metadata with our tokens yet, do it now.
+        tmptr->update_normal_tokens(_bootstrap_tokens, get_broadcast_address());
+        return make_ready_future<>();
     }).get();
 
     if (!db::system_keyspace::bootstrap_complete()) {
@@ -903,12 +897,10 @@ void storage_service::bootstrap() {
 
         // Update pending ranges now, so we correctly count ourselves as a pending replica
         // when inserting the new CDC generation.
-        with_token_metadata_lock([this] {
-            return get_mutable_token_metadata_ptr().then([this] (mutable_token_metadata_ptr tmptr) {
-                auto endpoint = get_broadcast_address();
-                tmptr->add_bootstrap_tokens(_bootstrap_tokens, endpoint);
-                return update_pending_ranges(std::move(tmptr), format("bootstrapping node {}", endpoint));
-            });
+        mutate_token_metadata([this] (mutable_token_metadata_ptr tmptr) {
+            auto endpoint = get_broadcast_address();
+            tmptr->add_bootstrap_tokens(_bootstrap_tokens, endpoint);
+            return update_pending_ranges(std::move(tmptr), format("bootstrapping node {}", endpoint));
         }).get();
 
         // After we pick a generation timestamp, we start gossiping it, and we stick with it.
@@ -1068,7 +1060,8 @@ void storage_service::handle_state_replacing(inet_address replacing_node) {
     slogger.info("Node {} is replacing existing node {} with host_id={}, existing_tokens={}, replacing_tokens={}",
             replacing_node, existing_node, host_id, existing_tokens, replacing_tokens);
     tmptr->add_replacing_endpoint(existing_node, replacing_node);
-    update_pending_ranges(std::move(tmptr), format("handle_state_replacing {}", replacing_node)).get();
+    update_pending_ranges(tmptr, format("handle_state_replacing {}", replacing_node)).get();
+    replicate_to_all_cores(std::move(tmptr)).get();
 }
 
 void storage_service::handle_state_bootstrap(inet_address endpoint) {
@@ -1102,7 +1095,8 @@ void storage_service::handle_state_bootstrap(inet_address endpoint) {
     if (_gossiper.uses_host_id(endpoint)) {
         tmptr->update_host_id(_gossiper.get_host_id(endpoint), endpoint);
     }
-    update_pending_ranges(std::move(tmptr), format("handle_state_bootstrap {}", endpoint)).get();
+    update_pending_ranges(tmptr, format("handle_state_bootstrap {}", endpoint)).get();
+    replicate_to_all_cores(std::move(tmptr)).get();
 }
 
 void storage_service::handle_state_normal(inet_address endpoint) {
@@ -1196,7 +1190,8 @@ void storage_service::handle_state_normal(inet_address endpoint) {
     // a race where natural endpoint was updated to contain node A, but A was
     // not yet removed from pending endpoints
     tmptr->update_normal_tokens(owned_tokens, endpoint);
-    update_pending_ranges(std::move(tmptr), format("handle_state_normal {}", endpoint)).get();
+    update_pending_ranges(tmptr, format("handle_state_normal {}", endpoint)).get();
+    replicate_to_all_cores(std::move(tmptr)).get();
     tmlock.reset();
 
     for (auto ep : endpoints_to_remove) {
@@ -1264,7 +1259,8 @@ void storage_service::handle_state_leaving(inet_address endpoint) {
     // normally
     tmptr->add_leaving_endpoint(endpoint);
 
-    update_pending_ranges(std::move(tmptr), format("handle_state_leaving", endpoint)).get();
+    update_pending_ranges(tmptr, format("handle_state_leaving", endpoint)).get();
+    replicate_to_all_cores(std::move(tmptr)).get();
 }
 
 void storage_service::handle_state_left(inet_address endpoint, std::vector<sstring> pieces) {
@@ -1316,13 +1312,11 @@ void storage_service::handle_state_removing(inet_address endpoint, std::vector<s
             std::unordered_set<token> tmp(remove_tokens.begin(), remove_tokens.end());
             excise(std::move(tmp), endpoint, extract_expire_time(pieces));
         } else if (sstring(gms::versioned_value::REMOVING_TOKEN) == state) {
-            with_token_metadata_lock([this, remove_tokens = std::move(remove_tokens), endpoint] {
-                return get_mutable_token_metadata_ptr().then([this, remove_tokens = std::move(remove_tokens), endpoint] (mutable_token_metadata_ptr tmptr) mutable {
-                    slogger.debug("Tokens {} removed manually (endpoint was {})", remove_tokens, endpoint);
-                    // Note that the endpoint is being removed
-                    tmptr->add_leaving_endpoint(endpoint);
-                    return update_pending_ranges(std::move(tmptr), format("handle_state_removing {}", endpoint));
-                });
+            mutate_token_metadata([this, remove_tokens = std::move(remove_tokens), endpoint] (mutable_token_metadata_ptr tmptr) mutable {
+                slogger.debug("Tokens {} removed manually (endpoint was {})", remove_tokens, endpoint);
+                // Note that the endpoint is being removed
+                tmptr->add_leaving_endpoint(endpoint);
+                return update_pending_ranges(std::move(tmptr), format("handle_state_removing {}", endpoint));
             }).get();
             // find the endpoint coordinating this removal that we need to notify when we're done
             auto* value = _gossiper.get_application_state_ptr(endpoint, application_state::REMOVAL_COORDINATOR);
@@ -1449,7 +1443,8 @@ void storage_service::on_remove(gms::inet_address endpoint) {
     auto tmlock = get_token_metadata_lock().get0();
     auto tmptr = get_mutable_token_metadata_ptr().get0();
     tmptr->remove_endpoint(endpoint);
-    update_pending_ranges(std::move(tmptr), format("on_remove {}", endpoint)).get();
+    update_pending_ranges(tmptr, format("on_remove {}", endpoint)).get();
+    replicate_to_all_cores(std::move(tmptr)).get();
 }
 
 void storage_service::on_dead(gms::inet_address endpoint, gms::endpoint_state state) {
@@ -2225,7 +2220,8 @@ future<> storage_service::removenode(sstring host_id_string) {
             slogger.info("removenode: endpoint = {}, replicating_nodes = {}", endpoint, ss._replicating_nodes);
             ss._removing_node = endpoint;
             tmptr->add_leaving_endpoint(endpoint);
-            ss.update_pending_ranges(std::move(tmptr), format("removenode {}", endpoint)).get();
+            ss.update_pending_ranges(tmptr, format("removenode {}", endpoint)).get();
+            ss.replicate_to_all_cores(std::move(tmptr)).get();
             tmlock.reset();
 
             // the gossiper will handle spoofing this node's state to REMOVING_TOKEN for us
@@ -2547,7 +2543,8 @@ void storage_service::excise(std::unordered_set<token> tokens, inet_address endp
 
     notify_left(endpoint);
 
-    update_pending_ranges(std::move(tmptr), format("excise {}", endpoint)).get();
+    update_pending_ranges(tmptr, format("excise {}", endpoint)).get();
+    replicate_to_all_cores(std::move(tmptr)).get();
 }
 
 void storage_service::excise(std::unordered_set<token> tokens, inet_address endpoint, int64_t expire_time) {
@@ -2602,12 +2599,10 @@ future<> storage_service::confirm_replication(inet_address node) {
 // Runs inside seastar::async context
 void storage_service::leave_ring() {
     db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::NEEDS_BOOTSTRAP).get();
-    with_token_metadata_lock([this] {
-        return get_mutable_token_metadata_ptr().then([this] (mutable_token_metadata_ptr tmptr) {
-            auto endpoint = get_broadcast_address();
-            tmptr->remove_endpoint(endpoint);
-            return update_pending_ranges(std::move(tmptr), format("leave_ring {}", endpoint));
-        });
+    mutate_token_metadata([this] (mutable_token_metadata_ptr tmptr) {
+        auto endpoint = get_broadcast_address();
+        tmptr->remove_endpoint(endpoint);
+        return update_pending_ranges(std::move(tmptr), format("leave_ring {}", endpoint));
     }).get();
 
     auto expire_time = _gossiper.compute_expire_time().time_since_epoch().count();
@@ -2647,12 +2642,10 @@ storage_service::stream_ranges(std::unordered_map<sstring, std::unordered_multim
 
 future<> storage_service::start_leaving() {
     return _gossiper.add_local_application_state(application_state::STATUS, versioned_value::leaving(db::system_keyspace::get_local_tokens().get0())).then([this] {
-        return with_token_metadata_lock([this] {
-            return get_mutable_token_metadata_ptr().then([this] (mutable_token_metadata_ptr tmptr) {
-                auto endpoint = get_broadcast_address();
-                tmptr->add_leaving_endpoint(endpoint);
-                return update_pending_ranges(std::move(tmptr), format("start_leaving {}", endpoint));
-            });
+        return mutate_token_metadata([this] (mutable_token_metadata_ptr tmptr) {
+            auto endpoint = get_broadcast_address();
+            tmptr->add_leaving_endpoint(endpoint);
+            return update_pending_ranges(std::move(tmptr), format("start_leaving {}", endpoint));
         });
     });
 }
@@ -2849,12 +2842,22 @@ future<> storage_service::with_token_metadata_lock(std::function<future<> ()> fu
     });
 }
 
+future<> storage_service::mutate_token_metadata(std::function<future<> (mutable_token_metadata_ptr)> func) noexcept {
+    return with_token_metadata_lock([this, func = std::move(func)] () mutable {
+        return get_mutable_token_metadata_ptr().then([this, func = std::move(func)] (mutable_token_metadata_ptr tmptr) mutable {
+            return func(tmptr).then([this, tmptr = std::move(tmptr)] () mutable {
+                return replicate_to_all_cores(std::move(tmptr));
+            });
+        });
+    });
+}
+
 future<> storage_service::update_pending_ranges(mutable_token_metadata_ptr tmptr, sstring reason) {
     assert(this_shard_id() == 0);
 
     // long start = System.currentTimeMillis();
-    return do_with(_db.local().get_non_system_keyspaces(), [this, tmptr] (auto& keyspaces){
-        return do_for_each(keyspaces, [this, tmptr] (auto& keyspace_name) {
+    return do_with(_db.local().get_non_system_keyspaces(), [this, tmptr = std::move(tmptr)] (auto& keyspaces) mutable {
+        return do_for_each(keyspaces, [this, tmptr = std::move(tmptr)] (auto& keyspace_name) mutable {
             auto& ks = this->_db.local().find_keyspace(keyspace_name);
             auto& strategy = ks.get_replication_strategy();
             slogger.debug("Updating pending ranges for keyspace={} starts", keyspace_name);
@@ -2862,23 +2865,16 @@ future<> storage_service::update_pending_ranges(mutable_token_metadata_ptr tmptr
                 slogger.debug("Updating pending ranges for keyspace={} ends", keyspace_name);
             });
         });
-    }).then_wrapped([this, reason = std::move(reason), tmptr] (future<> f) mutable {
-        if (f.failed()) {
-            auto ep = f.get_exception();
-            slogger.error("Failed to update pending ranges for {}: {}", reason, ep);
-            return make_exception_future<>(std::move(ep));
-        }
-        // update_pending_ranges will modify token_metadata, we need to replicate to other cores
-        return replicate_to_all_cores(std::move(tmptr));
+    }).handle_exception([this, reason = std::move(reason)] (std::exception_ptr ep) mutable {
+        slogger.error("Failed to update pending ranges for {}: {}", reason, ep);
+        return make_exception_future<>(std::move(ep));
     });
     // slogger.debug("finished calculation for {} keyspaces in {}ms", keyspaces.size(), System.currentTimeMillis() - start);
 }
 
 future<> storage_service::update_pending_ranges(sstring reason) {
-    return with_token_metadata_lock([this, reason = std::move(reason)] () mutable {
-        return get_mutable_token_metadata_ptr().then([this, reason = std::move(reason)] (mutable_token_metadata_ptr tmptr) mutable {
-            return update_pending_ranges(std::move(tmptr), std::move(reason));
-        });
+    return mutate_token_metadata([this, reason = std::move(reason)] (mutable_token_metadata_ptr tmptr) mutable {
+        return update_pending_ranges(std::move(tmptr), std::move(reason));
     });
 }
 
@@ -2894,14 +2890,12 @@ future<> storage_service::keyspace_changed(const sstring& ks_name) {
 
 future<> storage_service::update_topology(inet_address endpoint) {
     return service::get_storage_service().invoke_on(0, [endpoint] (auto& ss) {
-        return ss.with_token_metadata_lock([&ss, endpoint] {
-            return ss.get_mutable_token_metadata_ptr().then([&ss, endpoint] (mutable_token_metadata_ptr tmptr) mutable {
-                // initiate the token metadata endpoints cache reset
-                tmptr->invalidate_cached_rings();
-                // re-read local rack and DC info
-                tmptr->update_topology(endpoint);
-                return ss.replicate_to_all_cores(std::move(tmptr));
-            });
+        return ss.mutate_token_metadata([&ss, endpoint] (mutable_token_metadata_ptr tmptr) mutable {
+            // initiate the token metadata endpoints cache reset
+            tmptr->invalidate_cached_rings();
+            // re-read local rack and DC info
+            tmptr->update_topology(endpoint);
+            return make_ready_future<>();
         });
     });
 }
