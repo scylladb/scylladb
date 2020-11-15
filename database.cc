@@ -392,6 +392,8 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
     , _shared_token_metadata(stm)
     , _sst_dir_semaphore(sst_dir_sem)
 {
+    assert(dbcfg.available_memory != 0); // Detect misconfigured unit tests, see #7544
+
     local_schema_registry().init(*this); // TODO: we're never unbound.
     setup_metrics();
 
