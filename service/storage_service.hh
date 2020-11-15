@@ -173,7 +173,7 @@ private:
 
     // Acquire the token_metadata lock and get a mutable_token_metadata_ptr.
     // Pass that ptr to \c func, and when successfully done,
-    // TODO: replicate it to all cores.
+    // replicate it to all cores.
     // Note: must be called on shard 0.
     future<> mutate_token_metadata(std::function<future<> (mutable_token_metadata_ptr)> func) noexcept;
 
