@@ -23,6 +23,7 @@
 #include <stdexcept>
 
 #include <seastar/core/future-util.hh>
+#include <seastar/core/coroutine.hh>
 #include <seastar/core/sleep.hh>
 
 #include <seastar/testing/test_case.hh>
@@ -36,8 +37,9 @@
 #include "sstables/sstables.hh"
 #include "cdc/cdc_extension.hh"
 #include "db/paxos_grace_seconds_extension.hh"
-
 #include "transport/messages/result_message.hh"
+#include "init.hh"
+#include "cql3/query_processor.hh"
 
 SEASTAR_TEST_CASE(simple_schema_extension) {
     class dummy_ext : public schema_extension {
@@ -173,4 +175,50 @@ SEASTAR_TEST_CASE(paxos_grace_seconds_extension) {
 
         return f;
     }, cfg);
+}
+
+SEASTAR_TEST_CASE(test_type_notification) {
+    class myconfigurable : public configurable {
+    public:
+        cql3::query_processor*
+            _local_qp = nullptr;
+        sharded<cql3::query_processor>*
+            _qp = nullptr;
+
+        future<> initialize(const boost::program_options::variables_map&, const db::config&, db::extensions& exts) override {
+            exts.register_type_listener(boost::type<cql3::query_processor>{}, [this](cql3::query_processor* qp) {
+                _local_qp = qp;
+            });
+            exts.register_type_listener(boost::type<sharded<cql3::query_processor>>{}, [this](sharded<cql3::query_processor>* qp) {
+                _qp = qp;
+            });
+            return make_ready_future<>();
+        }
+    };
+
+    std::function<void(int)> apa = [](int) {};
+    std::any ola(std::move(apa));
+    std::any_cast<std::function<void(int)>>(ola);
+
+    static_assert(std::is_object<std::function<void(sharded<cql3::query_processor>&)>>::value);
+
+    auto mc = make_shared<myconfigurable>();
+
+    BOOST_CHECK_EQUAL(mc->_local_qp, nullptr);
+    BOOST_CHECK_EQUAL(mc->_qp, nullptr);
+
+    co_await do_with_cql_env([mc] (cql_test_env& e) {
+        // ensure objects inited
+        BOOST_REQUIRE(mc->_local_qp);
+        BOOST_REQUIRE(mc->_qp);
+        BOOST_CHECK_EQUAL(mc->_local_qp, &mc->_qp->local());
+
+        return make_ready_future<>();
+    });
+
+    // check the object were zeroed after env destrunction
+    BOOST_CHECK_EQUAL(mc->_local_qp, nullptr);
+    BOOST_CHECK_EQUAL(mc->_qp, nullptr);
+
+    co_return;
 }
