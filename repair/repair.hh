@@ -76,12 +76,21 @@ struct repair_uniq_id {
 };
 std::ostream& operator<<(std::ostream& os, const repair_uniq_id& x);
 
+struct node_ops_info {
+    utils::UUID ops_uuid;
+    bool abort = false;
+    std::list<gms::inet_address> ignore_nodes;
+    void check_abort();
+};
+
 // The tokens are the tokens assigned to the bootstrap node.
 future<> bootstrap_with_repair(seastar::sharded<database>& db, seastar::sharded<netw::messaging_service>& ms, locator::token_metadata_ptr tmptr, std::unordered_set<dht::token> bootstrap_tokens);
 future<> decommission_with_repair(seastar::sharded<database>& db, seastar::sharded<netw::messaging_service>& ms, locator::token_metadata_ptr tmptr);
-future<> removenode_with_repair(seastar::sharded<database>& db, seastar::sharded<netw::messaging_service>& ms, locator::token_metadata_ptr tmptr, gms::inet_address leaving_node);
+future<> removenode_with_repair(seastar::sharded<database>& db, seastar::sharded<netw::messaging_service>& ms, locator::token_metadata_ptr tmptr, gms::inet_address leaving_node, shared_ptr<node_ops_info> ops);
 future<> rebuild_with_repair(seastar::sharded<database>& db, seastar::sharded<netw::messaging_service>& ms, locator::token_metadata_ptr tmptr, sstring source_dc);
 future<> replace_with_repair(seastar::sharded<database>& db, seastar::sharded<netw::messaging_service>& ms, locator::token_metadata_ptr tmptr, std::unordered_set<dht::token> replacing_tokens);
+
+future<> abort_repair_node_ops(utils::UUID ops_uuid);
 
 // NOTE: repair_start() can be run on any node, but starts a node-global
 // operation.
@@ -244,6 +253,7 @@ public:
     bool _row_level_repair;
     uint64_t _sub_ranges_nr = 0;
     std::unordered_set<sstring> dropped_tables;
+    std::optional<utils::UUID> _ops_uuid;
 public:
     repair_info(seastar::sharded<database>& db_,
             seastar::sharded<netw::messaging_service>& ms_,
@@ -253,7 +263,8 @@ public:
             repair_uniq_id id_,
             const std::vector<sstring>& data_centers_,
             const std::vector<sstring>& hosts_,
-            streaming::stream_reason reason_);
+            streaming::stream_reason reason_,
+            std::optional<utils::UUID> ops_uuid);
     future<> do_streaming();
     void check_failed_ranges();
     future<> request_transfer_ranges(const sstring& cf,
@@ -272,6 +283,9 @@ public:
     const std::vector<sstring>& table_names() {
         return cfs;
     }
+    const std::optional<utils::UUID>& ops_uuid() const {
+        return _ops_uuid;
+    };
 };
 
 // The repair_tracker tracks ongoing repair operations and their progress.
@@ -324,6 +338,7 @@ public:
     future<> run(repair_uniq_id id, std::function<void ()> func);
     future<repair_status> repair_await_completion(int id, std::chrono::steady_clock::time_point timeout);
     float report_progress(streaming::stream_reason reason);
+    void abort_repair_node_ops(utils::UUID ops_uuid);
 };
 
 future<uint64_t> estimate_partitions(seastar::sharded<database>& db, const sstring& keyspace,
@@ -463,6 +478,27 @@ enum class row_level_diff_detect_algorithm : uint8_t {
 };
 
 std::ostream& operator<<(std::ostream& out, row_level_diff_detect_algorithm algo);
+
+enum class node_ops_cmd : uint32_t {
+     removenode_prepare,
+     removenode_heartbeat,
+     removenode_sync_data,
+     removenode_abort,
+     removenode_done,
+};
+
+// The cmd and ops_uuid are mandatory for each request.
+// The ignore_nodes and leaving_node are optional.
+struct node_ops_cmd_request {
+    node_ops_cmd cmd;
+    utils::UUID ops_uuid;
+    std::list<gms::inet_address> ignore_nodes;
+    std::list<gms::inet_address> leaving_nodes;
+};
+
+struct node_ops_cmd_response {
+    bool ok;
+};
 
 namespace std {
 template<>

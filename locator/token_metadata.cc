@@ -332,6 +332,7 @@ public:
     void remove_bootstrap_tokens(std::unordered_set<token> tokens);
 
     void add_leaving_endpoint(inet_address endpoint);
+    void del_leaving_endpoint(inet_address endpoint);
 public:
     void remove_endpoint(inet_address endpoint);
 #if 0
@@ -1546,6 +1547,10 @@ void token_metadata_impl::add_leaving_endpoint(inet_address endpoint) {
      _leaving_endpoints.emplace(endpoint);
 }
 
+void token_metadata_impl::del_leaving_endpoint(inet_address endpoint) {
+     _leaving_endpoints.erase(endpoint);
+}
+
 void token_metadata_impl::add_replacing_endpoint(inet_address existing_node, inet_address replacing_node) {
     tlogger.info("Added node {} as pending replacing endpoint which replaces existing node {}",
             replacing_node, existing_node);
@@ -1804,6 +1809,11 @@ token_metadata::remove_bootstrap_tokens(std::unordered_set<token> tokens) {
 void
 token_metadata::add_leaving_endpoint(inet_address endpoint) {
     _impl->add_leaving_endpoint(endpoint);
+}
+
+void
+token_metadata::del_leaving_endpoint(inet_address endpoint) {
+    _impl->del_leaving_endpoint(endpoint);
 }
 
 void

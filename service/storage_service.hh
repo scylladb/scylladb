@@ -63,6 +63,12 @@
 #include <seastar/core/rwlock.hh>
 #include "sstables/version.hh"
 #include "cdc/metadata.hh"
+#include <seastar/core/shared_ptr.hh>
+#include <seastar/core/lowres_clock.hh>
+
+class node_ops_cmd_request;
+class node_ops_cmd_response;
+class node_ops_info;
 
 namespace cql_transport { class controller; }
 
@@ -101,6 +107,28 @@ using bind_messaging_port = bool_class<bind_messaging_port_tag>;
 
 struct storage_service_config {
     size_t available_memory;
+};
+
+class node_ops_meta_data {
+    utils::UUID _ops_uuid;
+    gms::inet_address _coordinator;
+    std::function<future<> ()> _abort;
+    std::function<void ()> _signal;
+    shared_ptr<node_ops_info> _ops;
+    seastar::timer<lowres_clock> _watchdog;
+    std::chrono::seconds _watchdog_interval{30};
+    bool _aborted = false;
+public:
+    explicit node_ops_meta_data(
+            utils::UUID ops_uuid,
+            gms::inet_address coordinator,
+            shared_ptr<node_ops_info> ops,
+            std::function<future<> ()> abort_func,
+            std::function<void ()> signal_func);
+    shared_ptr<node_ops_info> get_ops_info();
+    future<> abort();
+    void update_watchdog();
+    void cancel_watchdog();
 };
 
 /**
@@ -158,6 +186,17 @@ private:
      * and would only slow down tests (by having them wait).
      */
     bool _for_testing;
+
+    std::unordered_map<utils::UUID, node_ops_meta_data> _node_ops;
+    std::list<std::optional<utils::UUID>> _node_ops_abort_queue;
+    seastar::condition_variable _node_ops_abort_cond;
+    named_semaphore _node_ops_abort_sem{1, named_semaphore_exception_factory{"node_ops_abort_sem"}};
+    future<> _node_ops_abort_thread;
+    void node_ops_update_heartbeat(utils::UUID ops_uuid);
+    void node_ops_done(utils::UUID ops_uuid);
+    void node_ops_abort(utils::UUID ops_uuid);
+    void node_ops_singal_abort(std::optional<utils::UUID> ops_uuid);
+    future<> node_ops_abort_thread();
 public:
     storage_service(abort_source& as, distributed<database>& db, gms::gossiper& gossiper, sharded<db::system_distributed_keyspace>&, sharded<db::view::view_update_generator>&, gms::feature_service& feature_service, storage_service_config config, sharded<service::migration_notifier>& mn, locator::shared_token_metadata& stm, sharded<netw::messaging_service>& ms, /* only for tests */ bool for_testing = false);
 
@@ -767,7 +806,8 @@ public:
      *
      * @param hostIdString token for the node
      */
-    future<> removenode(sstring host_id_string);
+    future<> removenode(sstring host_id_string, std::list<gms::inet_address> ignore_nodes);
+    future<node_ops_cmd_response> node_ops_cmd_handler(gms::inet_address coordinator, node_ops_cmd_request req);
 
     future<sstring> get_operation_mode();
 

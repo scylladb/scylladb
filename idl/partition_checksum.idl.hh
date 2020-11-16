@@ -103,3 +103,22 @@ enum class repair_row_level_start_status: uint8_t {
 struct repair_row_level_start_response {
     repair_row_level_start_status status;
 };
+
+enum class node_ops_cmd : uint32_t {
+     removenode_prepare,
+     removenode_heartbeat,
+     removenode_sync_data,
+     removenode_abort,
+     removenode_done,
+};
+
+struct node_ops_cmd_request {
+    node_ops_cmd cmd;
+    utils::UUID ops_uuid;
+    std::list<gms::inet_address> ignore_nodes;
+    std::list<gms::inet_address> leaving_nodes;
+};
+
+struct node_ops_cmd_response {
+    bool ok;
+};
