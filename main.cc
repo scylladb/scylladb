@@ -805,6 +805,10 @@ int main(int ac, char** av) {
             service::storage_service_config sscfg;
             sscfg.available_memory = memory::stats().total_memory();
             service::init_storage_service(stop_signal.as_sharded_abort_source(), db, gossiper, sys_dist_ks, view_update_generator, feature_service, sscfg, mm_notifier, token_metadata, messaging, cdc_generation_service).get();
+
+            // todo: localize storage service
+            auto ss_denotify = ext->notify_type(service::get_storage_service());
+
             supervisor::notify("starting per-shard database core");
 
             sst_dir_semaphore.start(cfg->initial_sstable_loading_concurrency()).get();
@@ -824,6 +828,9 @@ int main(int ac, char** av) {
                     });
                 }).get();
             });
+
+            auto db_denotify = ext->notify_type(db);
+
             api::set_server_config(ctx).get();
             verify_seastar_io_scheduler(opts.contains("max-io-requests"), opts.contains("io-properties") || opts.contains("io-properties-file"),
                                         cfg->developer_mode()).get();
@@ -903,12 +910,19 @@ int main(int ac, char** av) {
             auto stop_migration_manager = defer_verbose_shutdown("migration manager", [&mm] {
                 mm.stop().get();
             });
+
+            auto mm_denotify = ext->notify_type(mm);
+
             supervisor::notify("starting query processor");
             cql3::query_processor::memory_config qp_mcfg = {memory::stats().total_memory() / 256, memory::stats().total_memory() / 2560};
             debug::the_query_processor = &qp;
             qp.start(std::ref(proxy), std::ref(db), std::ref(mm_notifier), qp_mcfg, std::ref(cql_config)).get();
             // #293 - do not stop anything
             // engine().at_exit([&qp] { return qp.stop(); });
+
+            // make query processor visible to extension objects
+            auto qp_denotify = ext->notify_type(qp);
+
             supervisor::notify("initializing batchlog manager");
             db::batchlog_manager_config bm_cfg;
             bm_cfg.write_request_timeout = cfg->write_request_timeout_in_ms() * 1ms;
