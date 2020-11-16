@@ -27,6 +27,7 @@
 #include <time.h>
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/adaptor/filtered.hpp>
+#include <boost/algorithm/string/trim_all.hpp>
 #include "service/storage_service.hh"
 #include "service/load_meter.hh"
 #include "db/commitlog/commitlog.hh"
@@ -496,7 +497,22 @@ void set_storage_service(http_context& ctx, routes& r) {
 
     ss::remove_node.set(r, [](std::unique_ptr<request> req) {
         auto host_id = req->get_query_param("host_id");
-        return service::get_local_storage_service().removenode(host_id).then([] {
+        std::vector<sstring> ignore_nodes_strs= split(req->get_query_param("ignore_nodes"), ",");
+        auto ignore_nodes = std::list<gms::inet_address>();
+        for (std::string n : ignore_nodes_strs) {
+            try {
+                std::replace(n.begin(), n.end(), '\"', ' ');
+                std::replace(n.begin(), n.end(), '\'', ' ');
+                boost::trim_all(n);
+                if (!n.empty()) {
+                    auto node = gms::inet_address(n);
+                    ignore_nodes.push_back(node);
+                }
+            } catch (...) {
+                throw std::runtime_error(format("Failed to parse ignore_nodes parameter: ignore_nodes={}, node={}", ignore_nodes_strs, n));
+            }
+        }
+        return service::get_local_storage_service().removenode(host_id, std::move(ignore_nodes)).then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
     });

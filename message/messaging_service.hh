@@ -143,7 +143,8 @@ enum class messaging_verb : int32_t {
     HINT_MUTATION = 42,
     PAXOS_PRUNE = 43,
     GOSSIP_GET_ENDPOINT_STATES = 44,
-    LAST = 45,
+    NODE_OPS_CMD = 45,
+    LAST = 46,
 };
 
 } // namespace netw
@@ -393,6 +394,11 @@ public:
     void register_repair_get_diff_algorithms(std::function<future<std::vector<row_level_diff_detect_algorithm>> (const rpc::client_info& cinfo)>&& func);
     future<> unregister_repair_get_diff_algorithms();
     future<std::vector<row_level_diff_detect_algorithm>> send_repair_get_diff_algorithms(msg_addr id);
+
+    // Wrapper for NODE_OPS_CMD
+    void register_node_ops_cmd(std::function<future<node_ops_cmd_response> (const rpc::client_info& cinfo, node_ops_cmd_request)>&& func);
+    future<> unregister_node_ops_cmd();
+    future<node_ops_cmd_response> send_node_ops_cmd(msg_addr id, node_ops_cmd_request);
 
     // Wrapper for GOSSIP_ECHO verb
     void register_gossip_echo(std::function<future<> ()>&& func);

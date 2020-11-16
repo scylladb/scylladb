@@ -1105,6 +1105,14 @@
                      "allowMultiple":false,
                      "type":"string",
                      "paramType":"query"
+                  },
+                  {
+                     "name":"ignore_nodes",
+                     "description":"List of dead nodes to ingore in removenode operation",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
                   }
                ]
             }

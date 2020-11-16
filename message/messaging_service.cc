@@ -504,6 +504,7 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::REPAIR_GET_ROW_DIFF_WITH_RPC_STREAM:
     case messaging_verb::REPAIR_PUT_ROW_DIFF_WITH_RPC_STREAM:
     case messaging_verb::REPAIR_GET_FULL_ROW_HASHES_WITH_RPC_STREAM:
+    case messaging_verb::NODE_OPS_CMD:
     case messaging_verb::HINT_MUTATION:
         return 1;
     case messaging_verb::CLIENT_ID:
@@ -1347,6 +1348,17 @@ future<> messaging_service::unregister_repair_get_diff_algorithms() {
 }
 future<std::vector<row_level_diff_detect_algorithm>> messaging_service::send_repair_get_diff_algorithms(msg_addr id) {
     return send_message<future<std::vector<row_level_diff_detect_algorithm>>>(this, messaging_verb::REPAIR_GET_DIFF_ALGORITHMS, std::move(id));
+}
+
+// Wrapper for NODE_OPS_CMD
+void messaging_service::register_node_ops_cmd(std::function<future<node_ops_cmd_response> (const rpc::client_info& cinfo, node_ops_cmd_request)>&& func) {
+    register_handler(this, messaging_verb::NODE_OPS_CMD, std::move(func));
+}
+future<> messaging_service::unregister_node_ops_cmd() {
+    return unregister_handler(messaging_verb::NODE_OPS_CMD);
+}
+future<node_ops_cmd_response> messaging_service::send_node_ops_cmd(msg_addr id, node_ops_cmd_request req) {
+    return send_message<future<node_ops_cmd_response>>(this, messaging_verb::NODE_OPS_CMD, std::move(id), std::move(req));
 }
 
 void
