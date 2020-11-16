@@ -2368,8 +2368,13 @@ struct from_string_visitor {
             throw marshal_exception(format("Value not compatible with type {}: '{}'", ascii_type_name, s));
         }
     }
-    bytes operator()(const string_type_impl&) {
-        return to_bytes(bytes_view(reinterpret_cast<const int8_t*>(s.begin()), s.size()));
+    bytes operator()(const utf8_type_impl&) {
+        auto bv = bytes_view(reinterpret_cast<const int8_t*>(s.begin()), s.size());
+        if (auto pos = utils::utf8::validate_with_error_position(bv); !pos.has_value()) {
+            return to_bytes(bv);
+        } else {
+            throw marshal_exception(format("Value not compatible with type {}: '{}' at position {}", utf8_type_name, s, pos));
+        }
     }
     bytes operator()(const bytes_type_impl&) { return from_hex(s); }
     bytes operator()(const boolean_type_impl& t) {

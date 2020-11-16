@@ -107,6 +107,13 @@ BOOST_AUTO_TEST_CASE(test_ascii_type_string_conversions) {
     test_parsing_fails(ascii_type, "¡Hola!");
 }
 
+BOOST_AUTO_TEST_CASE(test_utf8_type_string_conversions) {
+    BOOST_REQUIRE(utf8_type->equal(utf8_type->from_string("utf8"), utf8_type->decompose("utf8")));
+    BOOST_REQUIRE_EQUAL(utf8_type->to_string(utf8_type->decompose("utf8")), "utf8");
+
+    // test_parsing_fails(ascii_type, ""); <- something to fail validation
+}
+
 BOOST_AUTO_TEST_CASE(test_short_type_string_conversions) {
     BOOST_REQUIRE(short_type->equal(short_type->from_string("12345"), short_type->decompose(int16_t(12345))));
     BOOST_REQUIRE_EQUAL(short_type->to_string(short_type->decompose(int16_t(12345))), "12345");
