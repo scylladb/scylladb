@@ -57,13 +57,8 @@ void init_gossiper(sharded<gms::gossiper>& gossiper
  */
 class configurable {
 public:
-    configurable() {
-        // We auto register. Not that like cycle is assumed to be forever
-        // and scope should be managed elsewhere.
-        register_configurable(*this);
-    }
-    virtual ~configurable()
-    {}
+    configurable();
+    virtual ~configurable();
     // Hook to add command line options and/or add main config options
     virtual void append_options(db::config&, boost::program_options::options_description_easy_init&)
     {};
@@ -81,6 +76,4 @@ public:
     static future<> init_all(const boost::program_options::variables_map&, const db::config&, db::extensions&);
     static future<> init_all(const db::config&, db::extensions&);
     static void append_all(db::config&, boost::program_options::options_description_easy_init&);
-private:
-    static void register_configurable(configurable &);
 };

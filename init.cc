@@ -84,8 +84,17 @@ std::vector<std::reference_wrapper<configurable>>& configurable::configurables()
     return configurables;
 }
 
-void configurable::register_configurable(configurable & c) {
-    configurables().emplace_back(std::ref(c));
+configurable::configurable() {
+    // We auto register. Not that like cycle is assumed to either be forever/static
+    // or in a controlled test env where we don't need to lock this
+    configurables().emplace_back(std::ref(*this));
+}
+
+configurable::~configurable() {
+    auto& configs = configurables();
+    configs.erase(std::remove_if(configs.begin(), configs.end(), [this](const configurable& c) {
+        return this == &c;
+    }), configs.end());
 }
 
 void configurable::append_all(db::config& cfg, boost::program_options::options_description_easy_init& init) {
