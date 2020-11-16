@@ -37,6 +37,8 @@
 
 namespace seastar { class file; struct logging_settings; }
 
+class cql_test_config;
+
 namespace db {
 
 namespace fs = std::filesystem;
@@ -347,6 +349,9 @@ public:
 
     static const sstring default_tls_priority;
 private:
+    // for testing
+    friend class ::cql_test_config;
+
     template<typename T>
     struct log_legacy_value : public named_value<T> {
         using MyBase = named_value<T>;

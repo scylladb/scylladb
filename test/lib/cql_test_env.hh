@@ -71,6 +71,8 @@ public:
     cql_test_config(const cql_test_config&);
     cql_test_config(shared_ptr<db::config>);
     ~cql_test_config();
+
+    db::extensions& extensions() const;
 };
 
 class cql_test_env {

@@ -45,6 +45,7 @@
 #include "auth/service.hh"
 #include "auth/common.hh"
 #include "db/config.hh"
+#include "db/extensions.hh"
 #include "db/batchlog_manager.hh"
 #include "schema_builder.hh"
 #include "test/lib/tmpdir.hh"
@@ -63,6 +64,7 @@
 #include "db/system_distributed_keyspace.hh"
 #include "db/sstables-format-selector.hh"
 #include "debug.hh"
+#include "init.hh"
 
 using namespace std::chrono_literals;
 
@@ -414,6 +416,10 @@ public:
             cfg->ring_delay_ms.set(500);
             cfg->shutdown_announce_in_ms.set(0);
             cfg->broadcast_to_all_shards().get();
+
+            auto& ext = cfg_in.extensions();
+            configurable::init_all(*cfg, ext).get();
+
             create_directories((data_dir_path + "/system").c_str());
             create_directories(cfg->commitlog_directory().c_str());
             create_directories(cfg->hints_directory().c_str());
@@ -531,6 +537,9 @@ public:
             cql3::query_processor::memory_config qp_mcfg = {memory::stats().total_memory() / 256, memory::stats().total_memory() / 2560};
             qp.start(std::ref(proxy), std::ref(db), std::ref(mm_notif), qp_mcfg, std::ref(cql_config)).get();
             auto stop_qp = defer([&qp] { qp.stop().get(); });
+
+            // make query processor visible to extension objects
+            auto qp_denotify = ext.notify_type(qp);
 
             // In main.cc we call db::system_keyspace::setup which calls
             // minimal_setup and init_local_cache
@@ -691,6 +700,10 @@ future<> do_with_cql_env_thread(std::function<void(cql_test_env&)> func, cql_tes
             return func(e);
         });
     }, std::move(cfg_in));
+}
+
+db::extensions& cql_test_config::extensions() const {
+    return *db_config->_extensions;
 }
 
 namespace debug {
