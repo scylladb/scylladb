@@ -5214,12 +5214,12 @@ void storage_proxy::on_leave_cluster(const gms::inet_address& endpoint) {};
 
 void storage_proxy::on_up(const gms::inet_address& endpoint) {};
 
-void storage_proxy::on_down(const gms::inet_address& endpoint) {
+void storage_proxy::retire_view_response_handlers(noncopyable_function<bool(const abstract_write_response_handler&)> filter_fun) {
     assert(thread::running_in_thread());
     auto it = _view_update_handlers_list->begin();
     while (it != _view_update_handlers_list->end()) {
         auto guard = it->shared_from_this();
-        if (it->get_targets().contains(endpoint) && _response_handlers.contains(it->id())) {
+        if (filter_fun(*it) && _response_handlers.contains(it->id())) {
             it->timeout_cb();
         }
         ++it;
@@ -5228,18 +5228,20 @@ void storage_proxy::on_down(const gms::inet_address& endpoint) {
             seastar::thread::yield();
         }
     }
+}
+
+void storage_proxy::on_down(const gms::inet_address& endpoint) {
+    return retire_view_response_handlers([endpoint] (const abstract_write_response_handler& handler) {
+        return handler.get_targets().contains(endpoint);
+    });
 };
 
 future<> storage_proxy::drain_on_shutdown() {
-    return do_with(::shared_ptr<abstract_write_response_handler>(), [this] (::shared_ptr<abstract_write_response_handler>& intrusive_list_guard) {
-        return do_for_each(*_view_update_handlers_list, [this, &intrusive_list_guard] (abstract_write_response_handler& handler) {
-            if (_response_handlers.contains(handler.id())) {
-                intrusive_list_guard = handler.shared_from_this();
-                handler.timeout_cb();
-            }
-        });
-    }).then([this] {
-        return _hints_resource_manager.stop();
+    //NOTE: the thread is spawned here because there are delicate lifetime issues to consider
+    // and writing them down with plain futures is error-prone.
+    return async([this] {
+        retire_view_response_handlers([] (const abstract_write_response_handler&) { return true; });
+        _hints_resource_manager.stop().get();
     });
 }
 
