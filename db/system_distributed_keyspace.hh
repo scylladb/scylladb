@@ -64,6 +64,10 @@ private:
     service::migration_manager& _mm;
 
 public:
+    /* Should writes to the given table always be synchronized by commitlog (flushed to disk)
+     * before being acknowledged? */
+    static bool is_extra_durable(const sstring& cf_name);
+
     system_distributed_keyspace(cql3::query_processor&, service::migration_manager&);
 
     future<> start();
