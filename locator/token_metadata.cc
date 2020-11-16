@@ -2101,4 +2101,11 @@ future<token_metadata_lock> shared_token_metadata::get_lock() noexcept {
     return get_units(_sem, 1);
 }
 
+future<> shared_token_metadata::mutate_token_metadata(seastar::noncopyable_function<future<> (token_metadata&)> func) {
+    auto lk = co_await get_lock();
+    auto tm = co_await _shared->clone_async();
+    co_await func(tm);
+    set(make_token_metadata_ptr(std::move(tm)));
+}
+
 } // namespace locator

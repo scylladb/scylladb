@@ -369,15 +369,21 @@ public:
         return _shared;
     }
 
-    mutable_token_metadata_ptr clone() const {
-        return make_token_metadata_ptr(*_shared);
-    }
-
     void set(mutable_token_metadata_ptr tmptr) noexcept {
         _shared = std::move(tmptr);
     }
 
     future<token_metadata_lock> get_lock() noexcept;
+
+    // mutate_token_metadata acquires the shared_token_metadata lock,
+    // clones the token_metadata (using clone_async)
+    // and calls an asynchronous functor on
+    // the cloned copy of the token_metadata to mutate it.
+    //
+    // If the functor is successful, the mutated clone
+    // is set back to to the shared_token_metadata,
+    // otherwise, the clone is destroyed.
+    future<> mutate_token_metadata(seastar::noncopyable_function<future<> (token_metadata&)> func);
 };
 
 }

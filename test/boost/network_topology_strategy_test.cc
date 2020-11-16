@@ -38,6 +38,7 @@
 #include <boost/algorithm/cxx11/iota.hpp>
 #include "test/lib/log.hh"
 #include "test/lib/cql_test_env.hh"
+#include <seastar/core/coroutine.hh>
 
 using namespace locator;
 
@@ -194,7 +195,6 @@ void simple_test() {
 
     locator::shared_token_metadata stm;
 
-    auto tmptr = stm.clone();
     std::vector<ring_point> ring_points = {
         { 1.0,  inet_address("192.100.10.1") },
         { 2.0,  inet_address("192.101.10.1") },
@@ -209,12 +209,13 @@ void simple_test() {
         { 11.0, inet_address("192.102.40.2") }
     };
     // Initialize the token_metadata
+  stm.mutate_token_metadata([&ring_points] (token_metadata& tm) -> future<> {
     for (unsigned i = 0; i < ring_points.size(); i++) {
-        tmptr->update_normal_token(
+        co_await tm.update_normal_token(
             {dht::token::kind::key, d2t(ring_points[i].point / ring_points.size())},
-            ring_points[i].host).get();
+            ring_points[i].host);
     }
-    stm.set(tmptr);
+  }).get();
 
     /////////////////////////////////////
     // Create the replication strategy
@@ -252,9 +253,10 @@ void simple_test() {
     // points will be taken from the cache when it shouldn't and the
     // corresponding check will fail.
     //
-    tmptr = stm.clone();
-    tmptr->invalidate_cached_rings();
-    stm.set(std::move(tmptr));
+    stm.mutate_token_metadata([] (token_metadata& tm) {
+        tm.invalidate_cached_rings();
+        return make_ready_future<>();
+    }).get();
     full_ring_check(ring_points, options320, ars_ptr);
 }
 
@@ -275,7 +277,6 @@ void heavy_origin_test() {
     std::vector<int> dc_endpoints = {128, 256, 512};
     std::vector<int> dc_replication = {2, 6, 6};
 
-    auto tmptr = stm.clone();
     std::map<sstring, sstring> config_options;
     std::unordered_map<inet_address, std::unordered_set<token>> tokens;
     std::vector<ring_point> ring_points;
@@ -316,8 +317,9 @@ void heavy_origin_test() {
         }
     }
 
-    tmptr->update_normal_tokens(tokens).get();
-    stm.set(std::move(tmptr));
+    stm.mutate_token_metadata([&tokens] (token_metadata& tm) {
+        return tm.update_normal_tokens(tokens);
+    }).get();
 
     auto ars_uptr = abstract_replication_strategy::create_replication_strategy(
         "test keyspace", "NetworkTopologyStrategy", stm, config_options);
@@ -607,17 +609,17 @@ SEASTAR_THREAD_TEST_CASE(testCalculateEndpoints) {
 
     for (size_t run = 0; run < RUNS; ++run) {
         shared_token_metadata stm;
-        auto tmptr = stm.clone();
         // not doing anything sharded. We can just play fast and loose with the snitch.
         (void)snitch.stop();
         snitch = generate_snitch(datacenters, nodes);
 
+      stm.mutate_token_metadata([&nodes] (token_metadata& tm) -> future<> {
         for (auto& node : nodes) {
             for (size_t i = 0; i < VNODES; ++i) {
-                tmptr->update_normal_token(dht::token::get_random_token(), node).get();
+                co_await tm.update_normal_token(dht::token::get_random_token(), node);
             }
         }
-        stm.set(std::move(tmptr));
+      }).get();
         test_equivalence(stm, snitch, datacenters);
     }
 }
