@@ -530,17 +530,17 @@ void fsm::replicate_to(follower_progress& progress, bool allow_empty) {
                 .prev_log_term = prev_term,
                 .leader_commit_idx = _commit_idx
             },
-            std::vector<log_entry_cref>()
+            std::vector<log_entry_ptr>()
         };
 
         if (next_idx) {
             size_t size = 0;
             while (next_idx <= _log.stable_idx() && size < _config.append_request_threshold) {
-                const log_entry& entry = *_log[next_idx];
-                req.entries.push_back(std::cref(entry));
+                const auto& entry = _log[next_idx];
+                req.entries.push_back(entry);
                 logger.trace("replicate_to[{}->{}]: send entry idx={}, term={}",
-                             _my_id, progress.id, entry.idx, entry.term);
-                size += entry_size(entry);
+                             _my_id, progress.id, entry->idx, entry->term);
+                size += entry_size(*entry);
                 next_idx++;
                 if (progress.state == follower_progress::state::PROBE) {
                     break; // in PROBE mode send only one entry

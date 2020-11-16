@@ -200,7 +200,7 @@ public:
         req.prev_log_term = append_request.prev_log_term;
         req.leader_commit_idx = append_request.leader_commit_idx;
         for (auto&& e: append_request.entries) {
-            req.entries.push_back(e);
+            req.entries.push_back(*e);
         }
         net[id]->_client->append_entries(_id, std::move(req));
         //co_return seastar::sleep(1us);
