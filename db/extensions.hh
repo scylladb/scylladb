@@ -44,10 +44,15 @@
 #include <stdexcept>
 #include <functional>
 #include <map>
+#include <unordered_map>
 #include <variant>
 #include <vector>
+#include <any>
+#include <typeinfo>
 
+#include <boost/type.hpp>
 #include <seastar/core/sstring.hh>
+#include <seastar/core/sharded.hh>
 
 #include "bytes.hh"
 #include "schema_fwd.hh"
@@ -128,9 +133,59 @@ public:
      * config apply.
      */
     void add_extension_to_schema(schema_ptr, const sstring&, shared_ptr<schema_extension>);
+
+    template<typename T, typename Func>
+    void register_type_listener(boost::type<T>, Func&& fin, std::string qualifier = {}) {
+        std::function<void(T*)> f = std::forward<Func>(fin);
+        _type_listeners.emplace(typeid(T), type_callback{ std::move(qualifier), std::move(f) });
+    }
+
+    class type_release {
+        std::function<void()> func;
+        friend class extensions;
+        type_release(std::function<void()>);
+    public:
+        type_release(type_release&&);
+        ~type_release();
+
+        type_release& operator=(type_release&&);
+        void release();
+    };
+
+    template<typename T>
+    [[nodiscard]] type_release notify_type(T& t, const std::string& qualifier = {}) const {
+        do_notify_type(&t, qualifier);
+        return type_release([this, qualifier] { do_notify_type<T>(nullptr, qualifier); });
+    }
+    template<typename T>
+    [[nodiscard]] type_release notify_type(seastar::sharded<T>& t, const std::string& qualifier = {}) const {
+        do_notify_type(&t, qualifier);
+        do_notify_type<T>(&t.local(), qualifier);
+        return type_release([this, qualifier] { do_notify_type<seastar::sharded<T>>(nullptr, qualifier); do_notify_type<T>(nullptr, qualifier); });
+    }
 private:
+    template<typename T>
+    void do_notify_type(T* t, const std::string& qualifier) const {
+        auto r = _type_listeners.equal_range(typeid(T));
+        auto i = r.first;
+        auto e = r.second;
+        while (i != e) {
+            auto& tc = i->second;
+            if (qualifier.empty() || tc.qualifier.empty() || tc.qualifier == qualifier) {
+                auto* f = std::any_cast<std::function<void(T*)>>(&tc.function);
+                (*f)(t);
+            }
+            ++i;
+        }
+    }
+    struct type_callback {
+        std::string qualifier;
+        std::any function;
+    };
+
     std::map<sstring, schema_ext_create_func> _schema_extensions;
     std::map<sstring, sstable_file_io_extension> _sstable_file_io_extensions;
     std::map<sstring, commitlog_file_extension_ptr> _commitlog_file_extensions;
+    std::unordered_multimap<std::type_index, type_callback> _type_listeners;
 };
 }

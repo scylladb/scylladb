@@ -67,3 +67,23 @@ void db::extensions::add_commitlog_file_extension(sstring n, commitlog_file_exte
 void db::extensions::add_extension_to_schema(schema_ptr s, const sstring& name, shared_ptr<schema_extension> ext) {
     const_cast<schema *>(s.get())->extensions()[name] = std::move(ext);
 }
+
+db::extensions::type_release::type_release(std::function<void()> f)
+    : func(std::move(f))
+{}
+
+db::extensions::type_release::type_release(type_release&&) = default;
+db::extensions::type_release& db::extensions::type_release::operator=(type_release&&) = default;
+
+db::extensions::type_release::~type_release() {
+    if (func) {
+        try {
+            func();
+        } catch (...) {
+        }
+    }
+}
+
+void db::extensions::type_release::release() {
+    func = {};
+}
