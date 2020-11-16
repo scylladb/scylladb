@@ -431,6 +431,8 @@ private:
 
     template<typename Range>
     future<> mutate_counters(Range&& mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state, service_permit permit, clock_type::time_point timeout);
+
+    void retire_view_response_handlers(noncopyable_function<bool(const abstract_write_response_handler&)> filter_fun);
 public:
     storage_proxy(distributed<database>& db, config cfg, db::view::node_update_backlog& max_view_update_backlog,
             scheduling_group_key stats_key, gms::feature_service& feat, const locator::shared_token_metadata& stm, netw::messaging_service& ms);
