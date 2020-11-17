@@ -72,7 +72,14 @@ public:
         }
         return result;
     }
-    class position_range_iterator : public std::iterator<std::input_iterator_tag, const position_range> {
+    class position_range_iterator {
+    public:
+        using iterator_category = std::input_iterator_tag;
+        using value_type = const position_range;
+        using difference_type = std::ptrdiff_t;
+        using pointer = const position_range*;
+        using reference = const position_range&;
+    private:
         set_type::iterator _i;
     public:
         position_range_iterator(set_type::iterator i) : _i(i) {}

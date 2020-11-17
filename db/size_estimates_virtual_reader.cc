@@ -67,7 +67,14 @@ struct virtual_row_comparator {
 };
 
 // Iterating over the cartesian product of cf_names and token_ranges.
-class virtual_row_iterator : public std::iterator<std::input_iterator_tag, const virtual_row> {
+class virtual_row_iterator {
+public:
+    using iterator_category = std::input_iterator_tag;
+    using value_type = const virtual_row;
+    using difference_type = std::ptrdiff_t;
+    using pointer = const virtual_row*;
+    using reference = const virtual_row&;
+private:
     std::reference_wrapper<const std::vector<bytes>> _cf_names;
     std::reference_wrapper<const std::vector<token_range>> _ranges;
     size_t _cf_names_idx = 0;

@@ -148,7 +148,14 @@ public:
     using UUID = utils::UUID;
     using inet_address = gms::inet_address;
 private:
-    class tokens_iterator : public std::iterator<std::input_iterator_tag, token> {
+    class tokens_iterator {
+    public:
+        using iterator_category = std::input_iterator_tag;
+        using value_type = token;
+        using difference_type = std::ptrdiff_t;
+        using pointer = token*;
+        using reference = token&;
+    private:
         using impl_type = tokens_iterator_impl;
         std::unique_ptr<impl_type> _impl;
     public:

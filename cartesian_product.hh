@@ -33,9 +33,13 @@ template<typename T>
 struct cartesian_product {
     const std::vector<std::vector<T>>& _vec_of_vecs;
 public:
-    class iterator : public std::iterator<std::forward_iterator_tag, std::vector<T>> {
+    class iterator {
     public:
+        using iterator_category = std::forward_iterator_tag;
         using value_type = std::vector<T>;
+        using difference_type = std::ptrdiff_t;
+        using pointer = std::vector<T>*;
+        using reference = std::vector<T>&;
     private:
         size_t _pos;
         const std::vector<std::vector<T>>* _vec_of_vecs;

@@ -61,7 +61,14 @@ public:
         , _packed(packed)
     { }
 
-    class iterator : public std::iterator<std::input_iterator_tag, bytes::value_type> {
+    class iterator {
+    public:
+        using iterator_category = std::input_iterator_tag;
+        using value_type = bytes::value_type;
+        using difference_type = std::ptrdiff_t;
+        using pointer = bytes::value_type*;
+        using reference = bytes::value_type&;
+    private:
         bool _singular;
         // Offset within virtual output space of a component.
         //
@@ -339,7 +346,14 @@ public:
         return eoc_byte == 0 ? eoc::none : (eoc_byte < 0 ? eoc::start : eoc::end);
     }
 
-    class iterator : public std::iterator<std::input_iterator_tag, const component_view> {
+    class iterator {
+    public:
+        using iterator_category = std::input_iterator_tag;
+        using value_type = const component_view;
+        using difference_type = std::ptrdiff_t;
+        using pointer = const component_view*;
+        using reference = const component_view&;
+    private:
         bytes_view _v;
         component_view _current;
         bool _strict_mode = true;

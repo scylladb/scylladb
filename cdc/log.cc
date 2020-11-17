@@ -600,7 +600,14 @@ db_context db_context::builder::build() {
 
 // iterators for collection merge
 template<typename T>
-class collection_iterator : public std::iterator<std::input_iterator_tag, const T> {
+class collection_iterator {
+public:
+    using iterator_category = std::input_iterator_tag;
+    using value_type = const T;
+    using difference_type = std::ptrdiff_t;
+    using pointer = const T*;
+    using reference = const T&;
+private:
     bytes_view _v, _next;
     size_t _rem = 0;
     T _current;
