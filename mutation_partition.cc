@@ -594,6 +594,22 @@ mutation_partition::clustered_row(const schema& s, position_in_partition_view po
     return i->row();
 }
 
+deletable_row&
+mutation_partition::append_clustered_row(const schema& s, position_in_partition_view pos, is_dummy dummy, is_continuous continuous) {
+    check_schema(s);
+    const auto less = rows_entry::compare(s);
+    auto i = _rows.end();
+    if (!_rows.empty() && !less(*std::prev(i), pos)) {
+        throw std::runtime_error(format("mutation_partition::append_clustered_row(): cannot append clustering row with key {} to the partition"
+                ", last clustering row is equal or greater: {}", i->key(), std::prev(i)->key()));
+    }
+    auto e = alloc_strategy_unique_ptr<rows_entry>(current_allocator().construct<rows_entry>(s, pos, dummy, continuous));
+    i = _rows.insert(i, *e, less);
+    e.release();
+
+    return i->row();
+}
+
 mutation_partition::rows_type::const_iterator
 mutation_partition::lower_bound(const schema& schema, const query::clustering_range& r) const {
     check_schema(schema);

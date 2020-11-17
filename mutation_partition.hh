@@ -1456,6 +1456,10 @@ public:
     deletable_row& clustered_row(const schema& s, clustering_key&& key);
     deletable_row& clustered_row(const schema& s, clustering_key_view key);
     deletable_row& clustered_row(const schema& s, position_in_partition_view pos, is_dummy, is_continuous);
+    // Throws if the row already exists or if the row was not inserted to the
+    // last position (one or more greater row already exists).
+    // Weak exception guarantees.
+    deletable_row& append_clustered_row(const schema& s, position_in_partition_view pos, is_dummy, is_continuous);
 public:
     tombstone partition_tombstone() const { return _tombstone; }
     lazy_row& static_row() { return _static_row; }
