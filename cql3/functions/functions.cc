@@ -76,7 +76,7 @@ functions::init() noexcept {
     // that has less information in it. Given how unlikely it is that
     // we will run out of memory this early, having a better core dump
     // if we do seems like a good trade-off.
-    memory::disable_failure_guard dfg;
+    memory::scoped_critical_alloc_section dfg;
 
     std::unordered_multimap<function_name, shared_ptr<function>> ret;
     auto declare = [&ret] (shared_ptr<function> f) { ret.emplace(f->name(), f); };

@@ -842,7 +842,7 @@ BOOST_AUTO_TEST_CASE(test_exception_safety) {
     memory::with_allocation_failures([&] () {
         auto list = original;
         auto d = defer([&] {
-            memory::disable_failure_guard dfg;
+            memory::scoped_critical_alloc_section dfg;
             assert_that(*s, list).has_no_less_information_than(original);
         });
         list.apply_monotonically(*s, to_apply);
@@ -853,7 +853,7 @@ BOOST_AUTO_TEST_CASE(test_exception_safety) {
     memory::with_allocation_failures([&] () {
         auto list = original;
         auto d = defer([&] () {
-            memory::disable_failure_guard dfg;
+            memory::scoped_critical_alloc_section dfg;
             assert_that(*s, list).is_equal_to_either(original, expected);
         });
         list.apply_reversibly(*s, to_apply).cancel();

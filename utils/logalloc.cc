@@ -185,7 +185,7 @@ public:
 static
 migrators&
 static_migrators() noexcept {
-    memory::disable_failure_guard dfg;
+    memory::scoped_critical_alloc_section dfg;
     static thread_local lw_shared_ptr<migrators> obj = make_lw_shared<migrators>();
     return *obj;
 }
@@ -229,7 +229,7 @@ private:
 private:
     template<typename Function>
     void run_and_handle_errors(Function&& fn) noexcept {
-        memory::disable_failure_guard dfg;
+        memory::scoped_critical_alloc_section dfg;
         if (_broken) {
             return;
         }
@@ -351,7 +351,7 @@ static logging::logger llogger("lsa");
 static logging::logger timing_logger("lsa-timing");
 
 static tracker& get_tracker_instance() noexcept {
-    memory::disable_failure_guard dfg;
+    memory::scoped_critical_alloc_section dfg;
     static thread_local tracker obj;
     return obj;
 }
@@ -954,7 +954,7 @@ size_t segment_pool::segments_in_use() const {
 }
 
 static segment_pool& get_shard_segment_pool() noexcept {
-    memory::disable_failure_guard dfg;
+    memory::scoped_critical_alloc_section dfg;
     static thread_local segment_pool obj;
     return obj;
 }
@@ -1505,7 +1505,7 @@ public:
         // degroup_temporarily allocates via binomial_heap::push(), which should not
         // fail, because we have a matching deallocation before that and we don't
         // allocate between them.
-        memory::disable_failure_guard dfg;
+        memory::scoped_critical_alloc_section dfg;
 
         compaction_lock dct1(*this);
         compaction_lock dct2(other);

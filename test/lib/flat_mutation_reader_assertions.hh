@@ -345,7 +345,7 @@ public:
         if (!mo) {
             BOOST_FAIL(format("Expected {}, but got end of stream, at: {}", m, seastar::current_backtrace()));
         }
-        memory::disable_failure_guard dfg;
+        memory::scoped_critical_alloc_section dfg;
         assert_that(*mo).is_equal_to(m, ck_ranges);
         return *this;
     }
@@ -447,7 +447,7 @@ public:
             return *this;
         }
         BOOST_REQUIRE(bool(mo));
-        memory::disable_failure_guard dfg;
+        memory::scoped_critical_alloc_section dfg;
         mutation got = *mo;
         got.partition().compact_for_compaction(*m.schema(), always_gc, query_time);
         assert_that(got).is_equal_to(m, ck_ranges);

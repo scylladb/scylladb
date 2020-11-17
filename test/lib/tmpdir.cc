@@ -28,7 +28,7 @@
 // noexcept. This is only for testing, so a std::unexpected call if
 // remove fails is fine.
 void tmpdir::remove() noexcept {
-    memory::disable_failure_guard dfg;
+    memory::scoped_critical_alloc_section dfg;
     if (!_path.empty()) {
         fs::remove_all(_path);
     }
