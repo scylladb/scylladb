@@ -277,7 +277,14 @@ public:
         return ac;
     }
 
-    class inserter_iterator : public std::iterator<std::output_iterator_tag, counter_shard> {
+    class inserter_iterator {
+    public:
+        using iterator_category = std::output_iterator_tag;
+        using value_type = counter_shard;
+        using difference_type = std::ptrdiff_t;
+        using pointer = counter_shard*;
+        using reference = counter_shard&;
+    private:
         counter_cell_builder* _builder;
     public:
         explicit inserter_iterator(counter_cell_builder& b) : _builder(&b) { }
@@ -311,7 +318,14 @@ protected:
     basic_atomic_cell_view<is_mutable> _cell;
     linearized_value_view _value;
 private:
-    class shard_iterator : public std::iterator<std::input_iterator_tag, basic_counter_shard_view<is_mutable>> {
+    class shard_iterator {
+    public:
+        using iterator_category = std::input_iterator_tag;
+        using value_type = basic_counter_shard_view<is_mutable>;
+        using difference_type = std::ptrdiff_t;
+        using pointer = basic_counter_shard_view<is_mutable>*;
+        using reference = basic_counter_shard_view<is_mutable>&;
+    private:
         pointer_type _current;
         basic_counter_shard_view<is_mutable> _current_view;
     public:
