@@ -208,3 +208,11 @@ SEASTAR_TEST_CASE(role_permissions_table_is_protected) {
         require_table_protected(env, "system_auth.role_permissions");
     }, auth_on());
 }
+
+SEASTAR_TEST_CASE(alter_opts_on_system_auth_tables) {
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        cquery_nofail(env, "ALTER TABLE system_auth.roles WITH speculative_retry = 'NONE'");
+        cquery_nofail(env, "ALTER TABLE system_auth.role_members WITH gc_grace_seconds = 123");
+        cquery_nofail(env, "ALTER TABLE system_auth.role_permissions WITH min_index_interval = 456");
+    }, auth_on());
+}

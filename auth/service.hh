@@ -186,6 +186,10 @@ bool is_enforcing(const service&);
 struct command_desc {
     auth::permission permission; ///< Nature of the command's alteration.
     const resource& resource; ///< Resource impacted by this command.
+    enum class type {
+        ALTER_WITH_OPTS, ///< Command is ALTER ... WITH ...
+        OTHER
+    } type_ = type::OTHER;
 };
 
 ///

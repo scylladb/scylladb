@@ -118,11 +118,11 @@ future<> service::client_state::has_keyspace_access(const sstring& ks,
 }
 
 future<> service::client_state::has_column_family_access(const sstring& ks,
-                const sstring& cf, auth::permission p) const {
+                const sstring& cf, auth::permission p, auth::command_desc::type t) const {
     validation::validate_column_family(ks, cf);
 
-    return do_with(ks, auth::make_data_resource(ks, cf), [this, p](const auto& ks, const auto& r) {
-        return has_access(ks, {p, r});
+    return do_with(ks, auth::make_data_resource(ks, cf), [this, p, t](const auto& ks, const auto& r) {
+        return has_access(ks, {p, r, t});
     });
 }
 
