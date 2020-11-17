@@ -155,7 +155,14 @@ struct compression {
         uint64_t at(std::size_t i, state& s) const;
         void push_back(uint64_t offset, state& s);
     public:
-        class const_iterator : public std::iterator<std::random_access_iterator_tag, const uint64_t> {
+        class const_iterator {
+        public:
+            using iterator_category = std::random_access_iterator_tag;
+            using value_type = const uint64_t;
+            using difference_type = std::ptrdiff_t;
+            using pointer = const uint64_t*;
+            using reference = const uint64_t&;
+        private:
             friend class segmented_offsets;
             struct end_tag {};
 
