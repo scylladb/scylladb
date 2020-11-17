@@ -64,6 +64,7 @@ public:
     future<> read_barrier() override;
     future<> elect_me_leader() override;
     void elapse_election() override;
+    bool is_leader() override;
 private:
     std::unique_ptr<rpc> _rpc;
     std::unique_ptr<state_machine> _state_machine;
@@ -491,6 +492,10 @@ future<> server_impl::elect_me_leader() {
     do {
         co_await seastar::sleep(50us);
     } while (!_fsm->is_leader());
+}
+
+bool server_impl::is_leader() {
+    return _fsm->is_leader();
 }
 
 void server_impl::elapse_election() {
