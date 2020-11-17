@@ -340,7 +340,7 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_heavy) {
  * static impl of "old" network topology strategy endpoint calculation.
  */
 static size_t get_replication_factor(const sstring& dc,
-                const std::unordered_map<sstring, size_t>& datacenters) {
+                const std::unordered_map<sstring, size_t>& datacenters) noexcept {
     auto dc_factor = datacenters.find(dc);
     return (dc_factor == datacenters.end()) ? 0 : dc_factor->second;
 }
@@ -348,17 +348,25 @@ static size_t get_replication_factor(const sstring& dc,
 static bool has_sufficient_replicas(const sstring& dc,
                 const std::unordered_map<sstring, std::unordered_set<inet_address>>& dc_replicas,
                 const std::unordered_map<sstring, std::unordered_set<inet_address>>& all_endpoints,
-                const std::unordered_map<sstring, size_t>& datacenters) {
-
-    return dc_replicas.at(dc).size()
-                    >= std::min(all_endpoints.at(dc).size(),
+                const std::unordered_map<sstring, size_t>& datacenters) noexcept {
+    auto dc_replicas_it = dc_replicas.find(dc);
+    if (dc_replicas_it == dc_replicas.end()) {
+        BOOST_TEST_FAIL(format("has_sufficient_replicas: dc {} not found in dc_replicas: {}", dc, dc_replicas));
+    }
+    auto endpoint_it = all_endpoints.find(dc);
+    if (endpoint_it == all_endpoints.end()) {
+        BOOST_TEST_MESSAGE(format("has_sufficient_replicas: dc {} not found in all_endpoints: {}", dc, all_endpoints));
+        return true;
+    }
+    return dc_replicas_it->second.size()
+                    >= std::min(endpoint_it->second.size(),
                                     get_replication_factor(dc, datacenters));
 }
 
 static bool has_sufficient_replicas(
                 const std::unordered_map<sstring, std::unordered_set<inet_address>>& dc_replicas,
                 const std::unordered_map<sstring, std::unordered_set<inet_address>>& all_endpoints,
-                const std::unordered_map<sstring, size_t>& datacenters) {
+                const std::unordered_map<sstring, size_t>& datacenters) noexcept {
 
     for (auto& dc : datacenters | boost::adaptors::map_keys) {
         if (!has_sufficient_replicas(dc, dc_replicas, all_endpoints,
