@@ -194,68 +194,68 @@ void simple_test() {
 
     locator::shared_token_metadata stm;
 
-        auto tmptr = stm.clone();
-        std::vector<ring_point> ring_points = {
-            { 1.0,  inet_address("192.100.10.1") },
-            { 2.0,  inet_address("192.101.10.1") },
-            { 3.0,  inet_address("192.102.10.1") },
-            { 4.0,  inet_address("192.100.20.1") },
-            { 5.0,  inet_address("192.101.20.1") },
-            { 6.0,  inet_address("192.102.20.1") },
-            { 7.0,  inet_address("192.100.30.1") },
-            { 8.0,  inet_address("192.101.30.1") },
-            { 9.0,  inet_address("192.102.30.1") },
-            { 10.0, inet_address("192.102.40.1") },
-            { 11.0, inet_address("192.102.40.2") }
-        };
-        // Initialize the token_metadata
-        for (unsigned i = 0; i < ring_points.size(); i++) {
-            tmptr->update_normal_token(
-                {dht::token::kind::key, d2t(ring_points[i].point / ring_points.size())},
-                ring_points[i].host);
-        }
-        stm.set(tmptr);
+    auto tmptr = stm.clone();
+    std::vector<ring_point> ring_points = {
+        { 1.0,  inet_address("192.100.10.1") },
+        { 2.0,  inet_address("192.101.10.1") },
+        { 3.0,  inet_address("192.102.10.1") },
+        { 4.0,  inet_address("192.100.20.1") },
+        { 5.0,  inet_address("192.101.20.1") },
+        { 6.0,  inet_address("192.102.20.1") },
+        { 7.0,  inet_address("192.100.30.1") },
+        { 8.0,  inet_address("192.101.30.1") },
+        { 9.0,  inet_address("192.102.30.1") },
+        { 10.0, inet_address("192.102.40.1") },
+        { 11.0, inet_address("192.102.40.2") }
+    };
+    // Initialize the token_metadata
+    for (unsigned i = 0; i < ring_points.size(); i++) {
+        tmptr->update_normal_token(
+            {dht::token::kind::key, d2t(ring_points[i].point / ring_points.size())},
+            ring_points[i].host);
+    }
+    stm.set(tmptr);
 
-        /////////////////////////////////////
-        // Create the replication strategy
-        std::map<sstring, sstring> options323 = {
-            {"100", "3"},
-            {"101", "2"},
-            {"102", "3"}
-        };
+    /////////////////////////////////////
+    // Create the replication strategy
+    std::map<sstring, sstring> options323 = {
+        {"100", "3"},
+        {"101", "2"},
+        {"102", "3"}
+    };
 
-        auto ars_uptr = abstract_replication_strategy::create_replication_strategy(
-            "test keyspace", "NetworkTopologyStrategy", stm, options323);
+    auto ars_uptr = abstract_replication_strategy::create_replication_strategy(
+        "test keyspace", "NetworkTopologyStrategy", stm, options323);
 
-        auto ars_ptr = ars_uptr.get();
+    auto ars_ptr = ars_uptr.get();
 
-        full_ring_check(ring_points, options323, ars_ptr);
+    full_ring_check(ring_points, options323, ars_ptr);
 
-        ///////////////
-        // Create the replication strategy
-        std::map<sstring, sstring> options320 = {
-            {"100", "3"},
-            {"101", "2"},
-            {"102", "0"}
-        };
+    ///////////////
+    // Create the replication strategy
+    std::map<sstring, sstring> options320 = {
+        {"100", "3"},
+        {"101", "2"},
+        {"102", "0"}
+    };
 
-        ars_uptr = abstract_replication_strategy::create_replication_strategy(
-            "test keyspace", "NetworkTopologyStrategy", stm, options320);
+    ars_uptr = abstract_replication_strategy::create_replication_strategy(
+        "test keyspace", "NetworkTopologyStrategy", stm, options320);
 
-        ars_ptr = ars_uptr.get();
+    ars_ptr = ars_uptr.get();
 
-        full_ring_check(ring_points, options320, ars_ptr);
+    full_ring_check(ring_points, options320, ars_ptr);
 
-        //
-        // Check cache invalidation: invalidate the cache and run a full ring
-        // check once again. If cache is not properly invalidated one of the
-        // points will be taken from the cache when it shouldn't and the
-        // corresponding check will fail.
-        //
-        tmptr = stm.clone();
-        tmptr->invalidate_cached_rings();
-        stm.set(std::move(tmptr));
-        full_ring_check(ring_points, options320, ars_ptr);
+    //
+    // Check cache invalidation: invalidate the cache and run a full ring
+    // check once again. If cache is not properly invalidated one of the
+    // points will be taken from the cache when it shouldn't and the
+    // corresponding check will fail.
+    //
+    tmptr = stm.clone();
+    tmptr->invalidate_cached_rings();
+    stm.set(std::move(tmptr));
+    full_ring_check(ring_points, options320, ars_ptr);
 }
 
 // Run in a seastar thread.
@@ -271,60 +271,60 @@ void heavy_origin_test() {
 
     locator::shared_token_metadata stm;
 
-        std::vector<int> dc_racks = {2, 4, 8};
-        std::vector<int> dc_endpoints = {128, 256, 512};
-        std::vector<int> dc_replication = {2, 6, 6};
+    std::vector<int> dc_racks = {2, 4, 8};
+    std::vector<int> dc_endpoints = {128, 256, 512};
+    std::vector<int> dc_replication = {2, 6, 6};
 
-        auto tmptr = stm.clone();
-        std::map<sstring, sstring> config_options;
-        std::unordered_map<inet_address, std::unordered_set<token>> tokens;
-        std::vector<ring_point> ring_points;
+    auto tmptr = stm.clone();
+    std::map<sstring, sstring> config_options;
+    std::unordered_map<inet_address, std::unordered_set<token>> tokens;
+    std::vector<ring_point> ring_points;
 
-        size_t total_eps = 0;
-        for (size_t dc = 0; dc < dc_racks.size(); ++dc) {
-            for (int rack = 0; rack < dc_racks[dc]; ++rack) {
-                total_eps += dc_endpoints[dc]/dc_racks[dc];
+    size_t total_eps = 0;
+    for (size_t dc = 0; dc < dc_racks.size(); ++dc) {
+        for (int rack = 0; rack < dc_racks[dc]; ++rack) {
+            total_eps += dc_endpoints[dc]/dc_racks[dc];
+        }
+    }
+
+    int total_rf = 0;
+    std::default_random_engine random_engine{};
+    std::vector<double> token_points(total_eps, 0.0);
+    boost::algorithm::iota(token_points, 1.0);
+    std::shuffle(token_points.begin(), token_points.end(), random_engine);
+    auto token_point_iterator = token_points.begin();
+    for (size_t dc = 0; dc < dc_racks.size(); ++dc) {
+        total_rf += dc_replication[dc];
+        config_options.emplace(to_sstring(dc),
+                                to_sstring(dc_replication[dc]));
+        for (int rack = 0; rack < dc_racks[dc]; ++rack) {
+            for (int ep = 1; ep <= dc_endpoints[dc]/dc_racks[dc]; ++ep) {
+                double token_point = *token_point_iterator++;
+                // 10.dc.rack.ep
+                int32_t ip = 0x0a000000 + ((int8_t)dc << 16) +
+                                ((int8_t)rack << 8) + (int8_t)ep;
+                inet_address address(ip);
+                ring_point rp = {token_point, address};
+
+                ring_points.emplace_back(rp);
+                tokens[address].emplace(token{dht::token::kind::key, d2t(token_point / total_eps)});
+
+                testlog.debug("adding node {} at {}", address, token_point);
+
+                token_point++;
             }
         }
+    }
 
-        int total_rf = 0;
-        std::default_random_engine random_engine{};
-        std::vector<double> token_points(total_eps, 0.0);
-        boost::algorithm::iota(token_points, 1.0);
-        std::shuffle(token_points.begin(), token_points.end(), random_engine);
-        auto token_point_iterator = token_points.begin();
-        for (size_t dc = 0; dc < dc_racks.size(); ++dc) {
-            total_rf += dc_replication[dc];
-            config_options.emplace(to_sstring(dc),
-                                   to_sstring(dc_replication[dc]));
-            for (int rack = 0; rack < dc_racks[dc]; ++rack) {
-                for (int ep = 1; ep <= dc_endpoints[dc]/dc_racks[dc]; ++ep) {
-                    double token_point = *token_point_iterator++;
-                    // 10.dc.rack.ep
-                    int32_t ip = 0x0a000000 + ((int8_t)dc << 16) +
-                                 ((int8_t)rack << 8) + (int8_t)ep;
-                    inet_address address(ip);
-                    ring_point rp = {token_point, address};
+    tmptr->update_normal_tokens(tokens);
+    stm.set(std::move(tmptr));
 
-                    ring_points.emplace_back(rp);
-                    tokens[address].emplace(token{dht::token::kind::key, d2t(token_point / total_eps)});
+    auto ars_uptr = abstract_replication_strategy::create_replication_strategy(
+        "test keyspace", "NetworkTopologyStrategy", stm, config_options);
 
-                    testlog.debug("adding node {} at {}", address, token_point);
+    auto ars_ptr = ars_uptr.get();
 
-                    token_point++;
-                }
-            }
-        }
-
-        tmptr->update_normal_tokens(tokens);
-        stm.set(std::move(tmptr));
-
-        auto ars_uptr = abstract_replication_strategy::create_replication_strategy(
-            "test keyspace", "NetworkTopologyStrategy", stm, config_options);
-
-        auto ars_ptr = ars_uptr.get();
-
-        full_ring_check(ring_points, config_options, ars_ptr);
+    full_ring_check(ring_points, config_options, ars_ptr);
 }
 
 
@@ -578,40 +578,40 @@ SEASTAR_THREAD_TEST_CASE(testCalculateEndpoints) {
         i_endpoint_snitch::stop_snitch().get();
     });
 
-        constexpr size_t NODES = 100;
-        constexpr size_t VNODES = 64;
-        constexpr size_t RUNS = 10;
+    constexpr size_t NODES = 100;
+    constexpr size_t VNODES = 64;
+    constexpr size_t RUNS = 10;
 
-        std::unordered_map<sstring, size_t> datacenters = {
-                        { "rf1", 1 },
-                        { "rf3", 3 },
-                        { "rf5_1", 5 },
-                        { "rf5_2", 5 },
-                        { "rf5_3", 5 },
-        };
-        std::vector<inet_address> nodes;
-        nodes.reserve(NODES);
-        std::generate_n(std::back_inserter(nodes), NODES, [i = 0u]() mutable {
-           return inet_address((127u << 24) | ++i);
-        });
+    std::unordered_map<sstring, size_t> datacenters = {
+                    { "rf1", 1 },
+                    { "rf3", 3 },
+                    { "rf5_1", 5 },
+                    { "rf5_2", 5 },
+                    { "rf5_3", 5 },
+    };
+    std::vector<inet_address> nodes;
+    nodes.reserve(NODES);
+    std::generate_n(std::back_inserter(nodes), NODES, [i = 0u]() mutable {
+        return inet_address((127u << 24) | ++i);
+    });
 
-        auto& snitch = i_endpoint_snitch::get_local_snitch_ptr();
+    auto& snitch = i_endpoint_snitch::get_local_snitch_ptr();
 
-        for (size_t run = 0; run < RUNS; ++run) {
-            shared_token_metadata stm;
-            auto tmptr = stm.clone();
-            // not doing anything sharded. We can just play fast and loose with the snitch.
-            (void)snitch.stop();
-            snitch = generate_snitch(datacenters, nodes);
+    for (size_t run = 0; run < RUNS; ++run) {
+        shared_token_metadata stm;
+        auto tmptr = stm.clone();
+        // not doing anything sharded. We can just play fast and loose with the snitch.
+        (void)snitch.stop();
+        snitch = generate_snitch(datacenters, nodes);
 
-            for (auto& node : nodes) {
-                for (size_t i = 0; i < VNODES; ++i) {
-                    tmptr->update_normal_token(dht::token::get_random_token(), node);
-                }
+        for (auto& node : nodes) {
+            for (size_t i = 0; i < VNODES; ++i) {
+                tmptr->update_normal_token(dht::token::get_random_token(), node);
             }
-            stm.set(std::move(tmptr));
-            test_equivalence(stm, snitch, datacenters);
         }
+        stm.set(std::move(tmptr));
+        test_equivalence(stm, snitch, datacenters);
+    }
 }
 
 SEASTAR_TEST_CASE(test_invalid_dcs) {
