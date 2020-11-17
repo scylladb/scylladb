@@ -892,6 +892,10 @@ public:
         return _pending_writes_phaser.advance_and_await();
     }
 
+    size_t writes_in_progress() const {
+        return _pending_writes_phaser.operations_in_progress();
+    }
+
     utils::phased_barrier::operation read_in_progress() {
         return _pending_reads_phaser.start();
     }
@@ -900,12 +904,20 @@ public:
         return _pending_reads_phaser.advance_and_await();
     }
 
+    size_t reads_in_progress() const {
+        return _pending_reads_phaser.operations_in_progress();
+    }
+
     utils::phased_barrier::operation stream_in_progress() {
         return _pending_streams_phaser.start();
     }
 
     future<> await_pending_streams() {
         return _pending_streams_phaser.advance_and_await();
+    }
+
+    size_t streams_in_progress() const {
+        return _pending_streams_phaser.operations_in_progress();
     }
 
     void add_or_update_view(view_ptr v);
@@ -1335,6 +1347,7 @@ private:
     void create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm);
     friend void db::system_keyspace::make(database& db, bool durable, bool volatile_testing_only);
     void setup_metrics();
+    void setup_scylla_memory_diagnostics_producer();
 
     friend class db_apply_executor;
     future<> do_apply(schema_ptr, const frozen_mutation&, tracing::trace_state_ptr tr_state, db::timeout_clock::time_point timeout, db::commitlog::force_sync sync);

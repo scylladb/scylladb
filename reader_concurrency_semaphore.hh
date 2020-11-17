@@ -218,6 +218,10 @@ public:
         return _initial_resources;
     }
 
+    bool is_unlimited() const {
+        return _initial_resources == reader_resources{std::numeric_limits<int>::max(), std::numeric_limits<ssize_t>::max()};
+    }
+
     const resources available_resources() const {
         return _resources;
     }
