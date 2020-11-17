@@ -165,6 +165,7 @@ public:
             read_current();
         }
         iterator(end_iterator_tag, const managed_bytes_view& v) : _v() {}
+        iterator() : iterator(end_iterator_tag()) {}
         iterator& operator++() {
             read_current();
             return *this;
