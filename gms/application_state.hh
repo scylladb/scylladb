@@ -65,8 +65,8 @@ enum class application_state {
     SHARD_COUNT,
     IGNORE_MSB_BITS,
     CDC_STREAMS_TIMESTAMP,
+    CLUSTER_INFO,
     // pad to allow adding new states to existing cluster
-    X9,
     X10,
 };
 

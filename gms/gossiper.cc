@@ -1757,7 +1757,8 @@ future<> gossiper::do_shadow_round(std::unordered_set<gms::inet_address> nodes, 
             gms::application_state::STATUS,
             gms::application_state::HOST_ID,
             gms::application_state::TOKENS,
-            gms::application_state::SUPPORTED_FEATURES}};
+            gms::application_state::SUPPORTED_FEATURES,
+            gms::application_state::CLUSTER_INFO}};
         logger.info("Gossip shadow round started with nodes={}", nodes);
         std::unordered_set<gms::inet_address> nodes_talked;
         size_t nodes_down = 0;
@@ -2324,6 +2325,44 @@ void gossiper::check_knows_remote_features(std::set<std::string_view>& local_fea
     } else {
         throw std::runtime_error(format("Feature check failed. This node can not join the cluster because it does not understand the feature. Local node {} features = {}, Remote common_features = {}", local_endpoint, local_features, common_features));
     }
+}
+
+void gossiper::check_cluster_info_matches(const std::unordered_set<gms::inet_address>& initial_contact_nodes) {
+    if (initial_contact_nodes.empty()) {
+        throw std::runtime_error("Checking CLUSTER_INFO against empty seed list");
+    }
+    for (const auto& contact_point : initial_contact_nodes) {
+        const auto cluster_info = get_application_state_ptr(contact_point, application_state::CLUSTER_INFO);
+        if (!cluster_info) {
+            continue;
+        }
+
+        std::vector<sstring> clust_info_tokenized;
+        boost::split(clust_info_tokenized, cluster_info->value, boost::is_any_of(sstring(versioned_value::DELIMITER_STR)));
+        if (clust_info_tokenized.size() == 0u) {
+            throw std::runtime_error(format("Received an empty CLUSTER_INFO: {}", cluster_info->value));
+        }
+
+        const auto& my_snitch_name = locator::i_endpoint_snitch::get_local_snitch_ptr()->get_name();
+        const auto& my_cluster_name = get_cluster_name();
+        for (auto i = 0u; i < clust_info_tokenized.size(); ++i) {
+            std::vector<sstring> key_and_value;
+            boost::split(key_and_value, clust_info_tokenized[i], boost::is_any_of(sstring(":")));
+            if (key_and_value.size() != 2) {
+                throw std::runtime_error(format("Received CLUSTER_INFO with wrong syntax: {}", cluster_info->value));
+            }
+            const auto& key = key_and_value[0];
+            const auto& val = key_and_value[1];
+            if (key == versioned_value::SNITCH_NAME && val != my_snitch_name) {
+                throw std::runtime_error(format("Snitch check failed. This node cannot join the cluster because it uses {} and not {}", my_snitch_name, val));
+            }
+            else if (key == versioned_value::CLUSTER_NAME && val != my_cluster_name) {
+                throw std::runtime_error(format("Cluster name check failed. This node cannot join the cluster because it uses '{}' and not '{}'", my_cluster_name, val));
+            }
+        }
+        return; // We got at least 1 confirmation
+    }
+    throw std::runtime_error(format("CLUSTER_INFO check failed - could not find any peer"));
 }
 
 sstring gossiper::get_all_endpoint_states() {

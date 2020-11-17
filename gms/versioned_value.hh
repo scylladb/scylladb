@@ -87,6 +87,9 @@ public:
     // values for ApplicationState.REMOVAL_COORDINATOR
     static constexpr const char* REMOVAL_COORDINATOR = "REMOVER";
 
+    static constexpr const char* SNITCH_NAME = "SNITCH_NAME";
+    static constexpr const char* CLUSTER_NAME = "CLUSTER_NAME";
+
     int version;
     sstring value;
 public:
@@ -217,6 +220,12 @@ public:
 
     static versioned_value rack(const sstring& rack_id) {
         return versioned_value(rack_id);
+    }
+
+    static versioned_value cluster_info(const sstring& snitch_name, const sstring& cluster_name) {
+        return versioned_value(version_string({
+                sstring(SNITCH_NAME)  + ":" + snitch_name,
+                sstring(CLUSTER_NAME) + ":" + cluster_name}));
     }
 
     static versioned_value shard_count(int shard_count) {

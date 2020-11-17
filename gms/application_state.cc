@@ -68,6 +68,7 @@ static const std::map<application_state, sstring> application_state_names = {
     {application_state::SHARD_COUNT,            "SHARD_COUNT"},
     {application_state::IGNORE_MSB_BITS,        "IGNOR_MSB_BITS"},
     {application_state::CDC_STREAMS_TIMESTAMP,  "CDC_STREAMS_TIMESTAMP"},
+    {application_state::CLUSTER_INFO,           "CLUSTER_INFO"},
 };
 
 std::ostream& operator<<(std::ostream& os, const application_state& m) {
