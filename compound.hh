@@ -156,6 +156,7 @@ public:
             read_current();
         }
         iterator(end_iterator_tag, const bytes_view& v) : _v(nullptr, 0) {}
+        iterator() {}
         iterator& operator++() {
             read_current();
             return *this;
