@@ -27,7 +27,14 @@
 
 #include "types.hh"
 
-struct tuple_deserializing_iterator : public std::iterator<std::input_iterator_tag, const bytes_view_opt> {
+struct tuple_deserializing_iterator {
+public:
+    using iterator_category = std::input_iterator_tag;
+    using value_type = const bytes_view_opt;
+    using difference_type = std::ptrdiff_t;
+    using pointer = const bytes_view_opt*;
+    using reference = const bytes_view_opt&;
+private:
     bytes_view _v;
     bytes_view_opt _current;
 public:
