@@ -25,6 +25,7 @@
 #include "utils/sequenced_set.hh"
 #include "locator/network_topology_strategy.hh"
 #include <seastar/testing/test_case.hh>
+#include <seastar/testing/thread_test_case.hh>
 #include <seastar/core/sstring.hh>
 #include "log.hh"
 #include <vector>
@@ -180,13 +181,19 @@ void full_ring_check(const std::vector<ring_point>& ring_points,
     }
 }
 
-future<> simple_test() {
+// Run in a seastar thread.
+void simple_test() {
     utils::fb_utilities::set_broadcast_address(gms::inet_address("localhost"));
     utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address("localhost"));
 
     // Create the RackInferringSnitch
-    return i_endpoint_snitch::create_snitch("RackInferringSnitch").then([] {
-      return do_with(locator::shared_token_metadata(), [] (locator::shared_token_metadata& stm) {
+    i_endpoint_snitch::create_snitch("RackInferringSnitch").get();
+    auto stop_snitch = defer([] {
+        i_endpoint_snitch::stop_snitch().get();
+    });
+
+    locator::shared_token_metadata stm;
+
         auto tmptr = stm.clone();
         std::vector<ring_point> ring_points = {
             { 1.0,  inet_address("192.100.10.1") },
@@ -249,19 +256,21 @@ future<> simple_test() {
         tmptr->invalidate_cached_rings();
         stm.set(std::move(tmptr));
         full_ring_check(ring_points, options320, ars_ptr);
-
-        return i_endpoint_snitch::stop_snitch();
-      });
-    });
 }
 
-future<> heavy_origin_test() {
+// Run in a seastar thread.
+void heavy_origin_test() {
     utils::fb_utilities::set_broadcast_address(gms::inet_address("localhost"));
     utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address("localhost"));
 
     // Create the RackInferringSnitch
-    return i_endpoint_snitch::create_snitch("RackInferringSnitch").then([] {
-      return do_with(locator::shared_token_metadata(), [] (locator::shared_token_metadata& stm) {
+    i_endpoint_snitch::create_snitch("RackInferringSnitch").get();
+    auto stop_snitch = defer([] {
+        i_endpoint_snitch::stop_snitch().get();
+    });
+
+    locator::shared_token_metadata stm;
+
         std::vector<int> dc_racks = {2, 4, 8};
         std::vector<int> dc_endpoints = {128, 256, 512};
         std::vector<int> dc_replication = {2, 6, 6};
@@ -316,18 +325,14 @@ future<> heavy_origin_test() {
         auto ars_ptr = ars_uptr.get();
 
         full_ring_check(ring_points, config_options, ars_ptr);
-
-        return i_endpoint_snitch::stop_snitch();
-      });
-    });
 }
 
 
-SEASTAR_TEST_CASE(NetworkTopologyStrategy_simple) {
+SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_simple) {
     return simple_test();
 }
 
-SEASTAR_TEST_CASE(NetworkTopologyStrategy_heavy) {
+SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_heavy) {
     return heavy_origin_test();
 }
 
@@ -564,11 +569,15 @@ std::unique_ptr<i_endpoint_snitch> generate_snitch(const std::unordered_map<sstr
     return std::make_unique<my_snitch>(std::move(node_to_rack), std::move(node_to_dc));
 }
 
-SEASTAR_TEST_CASE(testCalculateEndpoints) {
+SEASTAR_THREAD_TEST_CASE(testCalculateEndpoints) {
     utils::fb_utilities::set_broadcast_address(gms::inet_address("localhost"));
     utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address("localhost"));
 
-    return i_endpoint_snitch::create_snitch("RackInferringSnitch").then([] {
+    i_endpoint_snitch::create_snitch("RackInferringSnitch").get();
+    auto stop_snitch = defer([] {
+        i_endpoint_snitch::stop_snitch().get();
+    });
+
         constexpr size_t NODES = 100;
         constexpr size_t VNODES = 64;
         constexpr size_t RUNS = 10;
@@ -603,9 +612,6 @@ SEASTAR_TEST_CASE(testCalculateEndpoints) {
             stm.set(std::move(tmptr));
             test_equivalence(stm, snitch, datacenters);
         }
-
-        return i_endpoint_snitch::stop_snitch();
-    });
 }
 
 SEASTAR_TEST_CASE(test_invalid_dcs) {
