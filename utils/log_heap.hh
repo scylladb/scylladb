@@ -152,7 +152,14 @@ private:
     ssize_t _watermark = -1;
 public:
     template <bool IsConst>
-    class hist_iterator : public std::iterator<std::input_iterator_tag, std::conditional_t<IsConst, const T, T>> {
+    class hist_iterator {
+    public:
+        using iterator_category = std::input_iterator_tag;
+        using value_type = std::conditional_t<IsConst, const T, T>;
+        using difference_type = std::ptrdiff_t;
+        using pointer = std::conditional_t<IsConst, const T, T>*;
+        using reference = std::conditional_t<IsConst, const T, T>&;
+    private:
         using hist_type = std::conditional_t<IsConst, const log_heap, log_heap>;
         using iterator_type = std::conditional_t<IsConst, typename bucket::const_iterator, typename bucket::iterator>;
 
