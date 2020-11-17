@@ -130,7 +130,13 @@ public:
     bytes decompose_value(const value_type& values) const {
         return serialize_value(values);
     }
-    class iterator : public std::iterator<std::input_iterator_tag, const bytes_view> {
+    class iterator {
+    public:
+        using iterator_category = std::input_iterator_tag;
+        using value_type = const bytes_view;
+        using difference_type = std::ptrdiff_t;
+        using pointer = const bytes_view*;
+        using reference = const bytes_view&;
     private:
         bytes_view _v;
         bytes_view _current;
