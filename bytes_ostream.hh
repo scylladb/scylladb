@@ -65,7 +65,14 @@ private:
     size_type _size;
     size_type _initial_chunk_size = default_chunk_size;
 public:
-    class fragment_iterator : public std::iterator<std::input_iterator_tag, bytes_view> {
+    class fragment_iterator {
+    public:
+        using iterator_category = std::input_iterator_tag;
+        using value_type = bytes_view;
+        using difference_type = std::ptrdiff_t;
+        using pointer = bytes_view*;
+        using reference = bytes_view&;
+    private:
         chunk* _current = nullptr;
     public:
         fragment_iterator() = default;
