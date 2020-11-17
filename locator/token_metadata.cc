@@ -875,8 +875,13 @@ public:
     friend class token_metadata;
 };
 
-class tokens_iterator_impl :
-        public std::iterator<std::input_iterator_tag, token> {
+class tokens_iterator_impl {
+public:
+    using iterator_category = std::input_iterator_tag;
+    using value_type = token;
+    using difference_type = std::ptrdiff_t;
+    using pointer = token*;
+    using reference = token&;
 private:
     tokens_iterator_impl(std::vector<token>::const_iterator it, size_t pos)
     : _cur_it(it), _ring_pos(pos), _insert_min(false) {}
