@@ -30,8 +30,14 @@ bytes_view read_collection_value(bytes_view& in, cql_serialization_format sf);
 
 // iterator that takes a set or list in serialized form, and emits
 // each element, still in serialized form
-class listlike_partial_deserializing_iterator
-          : public std::iterator<std::input_iterator_tag, bytes_view> {
+class listlike_partial_deserializing_iterator {
+public:
+    using iterator_category = std::input_iterator_tag;
+    using value_type = bytes_view;
+    using difference_type = std::ptrdiff_t;
+    using pointer = bytes_view*;
+    using reference = bytes_view&;
+private:
     bytes_view* _in;
     int _remain;
     bytes_view _cur;
