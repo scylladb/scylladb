@@ -21,6 +21,7 @@
 
 #include <seastar/core/seastar.hh>
 #include <seastar/core/print.hh>
+#include <seastar/util/lazy.hh>
 #include <seastar/util/log.hh>
 
 #include "reader_concurrency_semaphore.hh"
@@ -320,13 +321,13 @@ static void do_dump_reader_permit_diagnostics(std::ostream& os, const reader_con
 
 static void maybe_dump_reader_permit_diagnostics(const reader_concurrency_semaphore& semaphore, const reader_concurrency_semaphore::permit_list& list,
         std::string_view problem) {
-    if (rcslog.level() < log_level::debug) {
-        return;
-    }
+    static thread_local logger::rate_limit rate_limit(std::chrono::seconds(30));
 
-    std::ostringstream os;
-    do_dump_reader_permit_diagnostics(os, semaphore, list, problem);
-    rcslog.debug("{}", os.str());
+    rcslog.log(log_level::info, rate_limit, "{}", value_of([&] {
+        std::ostringstream os;
+        do_dump_reader_permit_diagnostics(os, semaphore, list, problem);
+        return os.str();
+    }));
 }
 
 } // anonymous namespace
