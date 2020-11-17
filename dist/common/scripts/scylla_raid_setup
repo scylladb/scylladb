@@ -36,7 +36,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Configure RAID volume for Scylla.')
     parser.add_argument('--disks', required=True,
                         help='specify disks for RAID')
-    parser.add_argument('--raiddev', default='/dev/md0',
+    parser.add_argument('--raiddev',
                         help='MD device name for RAID')
     parser.add_argument('--enable-on-nextboot', '--update-fstab', action='store_true', default=False,
                         help='mount RAID on next boot')
@@ -73,10 +73,25 @@ if __name__ == '__main__':
             print('{} is busy'.format(disk))
             sys.exit(1)
 
-    raiddevname = os.path.basename(args.raiddev)
-    if os.path.exists(f'/sys/block/{raiddevname}/md/array_state'):
-        print('{} is already using'.format(args.raiddev))
-        sys.exit(1)
+    if len(disks) == 1 and not args.force_raid:
+        raid = False
+        fsdev = disks[0]
+    else:
+        raid = True
+        if args.raiddev is None:
+            raiddevs_to_try = [f'/dev/md{i}' for i in range(10)]
+        else:
+            raiddevs_to_try = [args.raiddev, ]
+        for fsdev in raiddevs_to_try:
+            raiddevname = os.path.basename(fsdev)
+            if not os.path.exists(f'/sys/block/{raiddevname}/md/array_state'):
+                break
+            print(f'{fsdev} is already using')
+        else:
+            if args.raiddev is None:
+                print("Can't find unused /dev/mdX")
+            sys.exit(1)
+        print(f'{fsdev} will be used to setup a RAID')
 
     if os.path.ismount(mount_at):
         print('{} is already mounted'.format(mount_at))
@@ -94,13 +109,6 @@ if __name__ == '__main__':
         md_service = systemd_unit('mdmonitor.service')
     except SystemdException:
         md_service = systemd_unit('mdadm.service')
-
-    if len(disks) == 1 and not args.force_raid:
-        raid = False
-        fsdev = disks[0]
-    else:
-        raid = True
-        fsdev = args.raiddev
 
     print('Creating {type} for scylla using {nr_disk} disk(s): {disks}'.format(type='RAID0' if raid else 'XFS volume', nr_disk=len(disks), disks=args.disks))
     if distro.name() == 'Ubuntu' and distro.version() == '14.04':
