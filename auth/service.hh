@@ -181,10 +181,17 @@ future<permission_set> get_permissions(const service&, const authenticated_user&
 ///
 bool is_enforcing(const service&);
 
+/// A description of a CQL command from which auth::service can tell whether or not this command could endanger
+/// internal data on which auth::service depends.
+struct command_desc {
+    auth::permission permission; ///< Nature of the command's alteration.
+    const resource& resource; ///< Resource impacted by this command.
+};
+
 ///
 /// Protected resources cannot be modified even if the performer has permissions to do so.
 ///
-bool is_protected(const service&, const resource&) noexcept;
+bool is_protected(const service&, command_desc) noexcept;
 
 ///
 /// Create a role with optional authentication information.

@@ -106,14 +106,14 @@ future<> service::client_state::has_all_keyspaces_access(
     validate_login();
 
     return do_with(auth::resource(auth::resource_kind::data), [this, p](const auto& r) {
-        return ensure_has_permission(p, r);
+        return ensure_has_permission({p, r});
     });
 }
 
 future<> service::client_state::has_keyspace_access(const sstring& ks,
                 auth::permission p) const {
     return do_with(ks, auth::make_data_resource(ks), [this, p](auto const& ks, auto const& r) {
-        return has_access(ks, p, r);
+        return has_access(ks, {p, r});
     });
 }
 
@@ -122,7 +122,7 @@ future<> service::client_state::has_column_family_access(const sstring& ks,
     validation::validate_column_family(ks, cf);
 
     return do_with(ks, auth::make_data_resource(ks, cf), [this, p](const auto& ks, const auto& r) {
-        return has_access(ks, p, r);
+        return has_access(ks, {p, r});
     });
 }
 
@@ -131,11 +131,11 @@ future<> service::client_state::has_schema_access(const schema& s, auth::permiss
             s.ks_name(),
             auth::make_data_resource(s.ks_name(),s.cf_name()),
             [this, p](auto const& ks, auto const& r) {
-        return has_access(ks, p, r);
+        return has_access(ks, {p, r});
     });
 }
 
-future<> service::client_state::has_access(const sstring& ks, auth::permission p, const auth::resource& resource) const {
+future<> service::client_state::has_access(const sstring& ks, auth::command_desc cmd) const {
     if (ks.empty()) {
         throw exceptions::invalid_request_exception("You have not set a keyspace for this session");
     }
@@ -149,7 +149,7 @@ future<> service::client_state::has_access(const sstring& ks, auth::permission p
             auth::permission::CREATE, auth::permission::ALTER, auth::permission::DROP>();
 
     // we only care about schema modification.
-    if (alteration_permissions.contains(p)) {
+    if (alteration_permissions.contains(cmd.permission)) {
         // prevent system keyspace modification
         auto name = ks;
         std::transform(name.begin(), name.end(), name.begin(), ::tolower);
@@ -163,13 +163,14 @@ future<> service::client_state::has_access(const sstring& ks, auth::permission p
         //
 
         const bool dropping_anything_in_tracing = (name == tracing::trace_keyspace_helper::KEYSPACE_NAME)
-                && (p == auth::permission::DROP);
+                && (cmd.permission == auth::permission::DROP);
 
-        const bool dropping_auth_keyspace = (resource == auth::make_data_resource(auth::meta::AUTH_KS))
-                && (p == auth::permission::DROP);
+        const bool dropping_auth_keyspace = (cmd.resource == auth::make_data_resource(auth::meta::AUTH_KS))
+                && (cmd.permission == auth::permission::DROP);
 
         if (dropping_anything_in_tracing || dropping_auth_keyspace) {
-            throw exceptions::unauthorized_exception(format("Cannot {} {}", auth::permissions::to_string(p), resource));
+            throw exceptions::unauthorized_exception(
+                    format("Cannot {} {}", auth::permissions::to_string(cmd.permission), cmd.resource));
         }
     }
 
@@ -184,66 +185,70 @@ future<> service::client_state::has_access(const sstring& ks, auth::permission p
         return tmp;
     }();
 
-    if (p == auth::permission::SELECT && readable_system_resources.contains(resource)) {
+    if (cmd.permission == auth::permission::SELECT && readable_system_resources.contains(cmd.resource)) {
         return make_ready_future();
     }
-    if (alteration_permissions.contains(p)) {
-        if (auth::is_protected(*_auth_service, resource)) {
-            throw exceptions::unauthorized_exception(format("{} is protected", resource));
+    if (alteration_permissions.contains(cmd.permission)) {
+        if (auth::is_protected(*_auth_service, cmd)) {
+            throw exceptions::unauthorized_exception(format("{} is protected", cmd.resource));
         }
     }
 
-    if (service::get_local_storage_service().db().local().features().cluster_supports_cdc() && resource.kind() == auth::resource_kind::data) {
-        const auto resource_view = auth::data_resource_view(resource);
+    if (service::get_local_storage_service().db().local().features().cluster_supports_cdc()
+        && cmd.resource.kind() == auth::resource_kind::data) {
+        const auto resource_view = auth::data_resource_view(cmd.resource);
         if (resource_view.table()) {
-            if (p == auth::permission::DROP) {
+            if (cmd.permission == auth::permission::DROP) {
                 if (cdc::is_log_for_some_table(ks, *resource_view.table())) {
-                    throw exceptions::unauthorized_exception(format("Cannot {} cdc log table {}", auth::permissions::to_string(p), resource));
+                    throw exceptions::unauthorized_exception(
+                            format("Cannot {} cdc log table {}", auth::permissions::to_string(cmd.permission), cmd.resource));
                 }
             }
 
             static constexpr auto cdc_topology_description_forbidden_permissions = auth::permission_set::of<
                     auth::permission::ALTER, auth::permission::DROP>();
 
-            if (cdc_topology_description_forbidden_permissions.contains(p)) {
+            if (cdc_topology_description_forbidden_permissions.contains(cmd.permission)) {
                 if (ks == db::system_distributed_keyspace::NAME
                         && (resource_view.table() == db::system_distributed_keyspace::CDC_DESC
                         || resource_view.table() == db::system_distributed_keyspace::CDC_TOPOLOGY_DESCRIPTION)) {
-                    throw exceptions::unauthorized_exception(format("Cannot {} {}", auth::permissions::to_string(p), resource));
+                    throw exceptions::unauthorized_exception(
+                            format("Cannot {} {}", auth::permissions::to_string(cmd.permission), cmd.resource));
                 }
             }
         }
     }
 
-    return ensure_has_permission(p, resource);
+    return ensure_has_permission(cmd);
 }
 
-future<bool> service::client_state::check_has_permission(auth::permission p, const auth::resource& r) const {
+future<bool> service::client_state::check_has_permission(auth::command_desc cmd) const {
     if (_is_internal) {
         return make_ready_future<bool>(true);
     }
 
-    return do_with(r.parent(), [this, p, &r](const auto& parent_r) {
-        return auth::get_permissions(*_auth_service, *_user, r).then([this, p, &parent_r](auth::permission_set set) {
+    return do_with(cmd.resource.parent(), [this, cmd](const std::optional<auth::resource>& parent_r) {
+        return auth::get_permissions(*_auth_service, *_user, cmd.resource).then(
+                [this, p = cmd.permission, &parent_r](auth::permission_set set) {
             if (set.contains(p)) {
                 return make_ready_future<bool>(true);
             }
             if (parent_r) {
-                return check_has_permission(p, *parent_r);
+                return check_has_permission({p, *parent_r});
             }
             return make_ready_future<bool>(false);
         });
     });
 }
 
-future<> service::client_state::ensure_has_permission(auth::permission p, const auth::resource& r) const {
-    return check_has_permission(p, r).then([this, p, &r](bool ok) {
+future<> service::client_state::ensure_has_permission(auth::command_desc cmd) const {
+    return check_has_permission(cmd).then([this, cmd](bool ok) {
         if (!ok) {
             throw exceptions::unauthorized_exception(
                 format("User {} has no {} permission on {} or any of its parents",
                         *_user,
-                        auth::permissions::to_string(p),
-                        r));
+                        auth::permissions::to_string(cmd.permission),
+                        cmd.resource));
         }
     });
 }
