@@ -398,6 +398,7 @@ public:
         iterator(end_iterator_tag) : _v(nullptr, 0) {}
 
     public:
+        iterator() : iterator(end_iterator_tag()) {}
         iterator& operator++() {
             read_current();
             return *this;
