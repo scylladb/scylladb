@@ -371,10 +371,13 @@ bool is_enforcing(const service& ser)  {
     return enforcing_authorizer || enforcing_authenticator;
 }
 
-bool is_protected(const service& ser, const resource& r) noexcept {
-    return ser.underlying_role_manager().protected_resources().contains(r)
-            || ser.underlying_authenticator().protected_resources().contains(r)
-            || ser.underlying_authorizer().protected_resources().contains(r);
+bool is_protected(const service& ser, command_desc cmd) noexcept {
+    if (cmd.type_ == command_desc::type::ALTER_WITH_OPTS) {
+        return false; // Table attributes are OK to modify; see #7057.
+    }
+    return ser.underlying_role_manager().protected_resources().contains(cmd.resource)
+            || ser.underlying_authenticator().protected_resources().contains(cmd.resource)
+            || ser.underlying_authorizer().protected_resources().contains(cmd.resource);
 }
 
 static void validate_authentication_options_are_supported(

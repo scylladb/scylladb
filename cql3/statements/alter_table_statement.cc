@@ -70,7 +70,9 @@ alter_table_statement::alter_table_statement(shared_ptr<cf_name> name,
 }
 
 future<> alter_table_statement::check_access(service::storage_proxy& proxy, const service::client_state& state) const {
-    return state.has_column_family_access(keyspace(), column_family(), auth::permission::ALTER);
+    using cdt = auth::command_desc::type;
+    return state.has_column_family_access(keyspace(), column_family(), auth::permission::ALTER,
+                                          _type == type::opts ? cdt::ALTER_WITH_OPTS : cdt::OTHER);
 }
 
 void alter_table_statement::validate(service::storage_proxy& proxy, const service::client_state& state) const
