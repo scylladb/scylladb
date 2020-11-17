@@ -89,6 +89,10 @@ def interactive_choose_nic():
             if is_valid_nic(n):
                 return n
 
+def interactive_ask_rsyslog_server():
+    print("Please input rsyslog remote server, use ip:port format.")
+    return input('ip:port> ').strip()
+
 def interactive_choose_swap_directory():
     print('Please input swapfile directory:')
     while True:
@@ -278,6 +282,10 @@ if __name__ == '__main__':
                         help='skip memory setup')
     parser.add_argument('--no-swap-setup', action='store_true', default=False,
                         help='skip swap setup')
+    parser.add_argument('--no-rsyslog-setup', action='store_true', default=False,
+                        help='skip rsyslog setup')
+    parser.add_argument('--rsyslog-server',
+                        help='specify a remote rsyslog server to send Scylla logs to. Use ip:port format, if no port is given, Scylla-Monitoring rsyslog will be used')
     if len(sys.argv) == 1:
         interactive = True
         group.required = False # interactive mode: no option is required.
@@ -320,6 +328,8 @@ if __name__ == '__main__':
     fstrim_setup = not args.no_fstrim_setup
     memory_setup = not args.no_memory_setup
     swap_setup = not args.no_swap_setup
+    rsyslog_setup = not args.no_rsyslog_setup
+    rsyslog_server = args.rsyslog_server
     selinux_reboot_required = False
     set_clocksource = False
 
@@ -549,6 +559,15 @@ if __name__ == '__main__':
                     options += f' --swap-size {swap_size}'
 
                 run_setup_script('swap', 'scylla_swap_setup' + options)
+
+        if os.path.isdir('/etc/rsyslog.d'):
+            rsyslog_setup = interactive_ask_service('Do you want to configure rsyslog to send log to a remote repository?', 'Answer yes to setup rsyslog to a remote server, Answer no to do nothing.', rsyslog_setup)
+            args.no_rsyslog_setup = not rsyslog_setup
+            if rsyslog_setup:
+                if interactive:
+                    rsyslog_server = interactive_ask_rsyslog_server()
+                if rsyslog_server:
+                    run_setup_script('rsyslog', 'scylla_rsyslog_setup --remote-server ' + rsyslog_server)
 
     print('ScyllaDB setup finished.')
 
