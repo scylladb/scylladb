@@ -62,7 +62,7 @@ public:
     }
 
     virtual void accept_row(position_in_partition_view key, const row_tombstone& deleted_at, const row_marker& rm, is_dummy dummy, is_continuous continuous) override {
-        deletable_row& r = _partition.clustered_row(_schema, key, dummy, continuous);
+        deletable_row& r = _partition.append_clustered_row(_schema, key, dummy, continuous);
         r.apply(rm);
         r.apply(deleted_at);
         _current_row = &r;
