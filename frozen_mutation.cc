@@ -112,14 +112,24 @@ frozen_mutation::unfreeze(schema_ptr schema) const {
     check_schema_version(schema_version(), *schema);
     mutation m(schema, key());
     partition_builder b(*schema, m.partition());
-    partition().accept(*schema, b);
+    try {
+        partition().accept(*schema, b);
+    } catch (...) {
+        std::throw_with_nested(std::runtime_error(format(
+                "frozen_mutation::unfreeze(): failed unfreezing mutation {} of {}.{}", key(), schema->ks_name(), schema->cf_name())));
+    }
     return m;
 }
 
 mutation frozen_mutation::unfreeze_upgrading(schema_ptr schema, const column_mapping& cm) const {
     mutation m(schema, key());
     converting_mutation_partition_applier v(cm, *schema, m.partition());
-    partition().accept(cm, v);
+    try {
+        partition().accept(cm, v);
+    } catch (...) {
+        std::throw_with_nested(std::runtime_error(format(
+                "frozen_mutation::unfreeze_upgrading(): failed unfreezing mutation {} of {}.{}", key(), schema->ks_name(), schema->cf_name())));
+    }
     return m;
 }
 
