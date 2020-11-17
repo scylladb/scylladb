@@ -126,6 +126,7 @@ public:
 
 struct snapshot_value {
     sm_value value;
+    raft::index_t idx;
 };
 
 // Lets assume one snapshot per server
@@ -159,6 +160,7 @@ public:
     future<raft::snapshot_id> take_snapshot() override {
         snapshots[_id].value = value;
         tlogger.debug("sm[{}] takes snapshot {}", _id, snapshots[_id].value.get_value());
+        snapshots[_id].idx = raft::index_t{_seen};
         return make_ready_future<raft::snapshot_id>(raft::snapshot_id{utils::make_random_uuid()});
     }
     void drop_snapshot(raft::snapshot_id id) override {
@@ -167,6 +169,10 @@ public:
     future<> load_snapshot(raft::snapshot_id id) override {
         value = snapshots[_id].value;
         tlogger.debug("sm[{}] loads snapshot {}", _id, snapshots[_id].value.get_value());
+        _seen = snapshots[_id].idx;
+        if (_seen >= _apply_entries) {
+            _done.set_value();
+        }
         return make_ready_future<>();
     };
     future<> abort() override { return make_ready_future<>(); }
@@ -442,6 +448,7 @@ future<int> run_test(test_case test) {
         if (i < test.initial_snapshots.size()) {
             states[i].snapshot = test.initial_snapshots[i].snap;
             states[i].snp_value.value = sm_value_for(test.initial_snapshots[i].snap.idx);
+            states[i].snp_value.idx = test.initial_snapshots[i].snap.idx;
             start_idx = states[i].snapshot.idx + 1;
         }
         if (i < test.initial_states.size()) {
@@ -669,6 +676,10 @@ int main(int argc, char* argv[]) {
         // 3 nodes, add entries, drop follower 1, add entries [implicit re-join all]
         {.name = "drops_02", .nodes = 3,
          .updates = {entries{4},partition{0,2},entries{4},partition{2,1}}},
+        // Snapshot automatic take and load
+        {.name = "take_snapshot_and_stream", .nodes = 3,
+         .config = {{.snapshot_threshold = 10, .snapshot_trailing = 5}},
+         .updates = {entries{5}, partition{0,1}, entries{10}, partition{0, 2}, entries{20}}},
     };
 
     return app.run(argc, argv, [&replication_tests, &app] () -> future<int> {
