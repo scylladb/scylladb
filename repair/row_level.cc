@@ -1416,10 +1416,10 @@ public:
             }
             _repair_writer->create_writer(_db);
             auto mf = r.get_mutation_fragment_ptr();
-            const auto& pk = r.get_dk_with_hash()->dk.key();
+            const auto& dk = r.get_dk_with_hash()->dk;
             if (last_mf && last_dk &&
                     cmp(last_mf->position(), mf->position()) == 0 &&
-                    pk.legacy_equal(*_schema, last_dk->dk.key()) &&
+                    dk.tri_compare(*_schema, last_dk->dk) == 0 &&
                     last_mf->mergeable_with(*mf)) {
                 last_mf->apply(*_schema, std::move(*mf));
             } else {
@@ -1447,20 +1447,26 @@ private:
     }
 
     future<repair_rows_on_wire> to_repair_rows_on_wire(std::list<repair_row> row_list) {
-        return do_with(repair_rows_on_wire(), std::move(row_list), [this] (repair_rows_on_wire& rows, std::list<repair_row>& row_list) {
-            return get_repair_rows_size(row_list).then([this, &rows, &row_list] (size_t row_bytes) {
+        lw_shared_ptr<const decorated_key_with_hash> last_dk_with_hash;
+        return do_with(repair_rows_on_wire(), std::move(row_list), std::move(last_dk_with_hash),
+                [this] (repair_rows_on_wire& rows, std::list<repair_row>& row_list, lw_shared_ptr<const decorated_key_with_hash>& last_dk_with_hash) {
+            return get_repair_rows_size(row_list).then([this, &rows, &row_list, &last_dk_with_hash] (size_t row_bytes) {
                 _metrics.tx_row_nr += row_list.size();
                 _metrics.tx_row_bytes += row_bytes;
-                return do_for_each(row_list, [this, &rows] (repair_row& r) {
-                    auto pk = r.get_dk_with_hash()->dk.key();
+                return do_for_each(row_list, [this, &rows, &last_dk_with_hash] (repair_row& r) {
+                    const auto& dk_with_hash = r.get_dk_with_hash();
                     // No need to search from the beginning of the rows. Look at the end of repair_rows_on_wire is enough.
                     if (rows.empty()) {
+                        auto pk = dk_with_hash->dk.key();
+                        last_dk_with_hash = dk_with_hash;
                         rows.push_back(repair_row_on_wire(std::move(pk), {std::move(r.get_frozen_mutation())}));
                     } else {
                         auto& row = rows.back();
-                        if (pk.legacy_equal(*_schema, row.get_key())) {
+                        if (last_dk_with_hash && dk_with_hash->dk.tri_compare(*_schema, last_dk_with_hash->dk) == 0) {
                             row.push_mutation_fragment(std::move(r.get_frozen_mutation()));
                         } else {
+                            auto pk = dk_with_hash->dk.key();
+                            last_dk_with_hash = dk_with_hash;
                             rows.push_back(repair_row_on_wire(std::move(pk), {std::move(r.get_frozen_mutation())}));
                         }
                     }
