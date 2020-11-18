@@ -1788,6 +1788,8 @@ storage_proxy::storage_proxy(distributed<database>& db, storage_proxy::config cf
     , _write_ack_smp_service_group(cfg.write_ack_smp_service_group)
     , _next_response_id(std::chrono::system_clock::now().time_since_epoch()/1ms)
     , _hints_resource_manager(cfg.available_memory / 10)
+    , _hints_manager(_db.local().get_config().hints_directory(), cfg.hinted_handoff_enabled, _db.local().get_config().max_hint_window_in_ms(), _hints_resource_manager, _db)
+    , _hints_directory_initializer(std::move(cfg.hints_directory_initializer))
     , _hints_for_views_manager(_db.local().get_config().view_hints_directory(), {}, _db.local().get_config().max_hint_window_in_ms(), _hints_resource_manager, _db)
     , _stats_key(stats_key)
     , _features(feat)
@@ -1802,17 +1804,9 @@ storage_proxy::storage_proxy(distributed<database>& db, storage_proxy::config cf
                        sm::description("number of currently throttled write requests")),
     });
 
-    if (cfg.hinted_handoff_enabled) {
-        const db::config& dbcfg = _db.local().get_config();
-        supervisor::notify("creating hints manager");
-        slogger.trace("hinted DCs: {}", *cfg.hinted_handoff_enabled);
-        _hints_manager.emplace(dbcfg.hints_directory(), *cfg.hinted_handoff_enabled, dbcfg.max_hint_window_in_ms(), _hints_resource_manager, _db);
-        _hints_manager->register_metrics("hints_manager");
-        _hints_resource_manager.register_manager(*_hints_manager);
-    }
-
+    slogger.trace("hinted DCs: {}", cfg.hinted_handoff_enabled.to_configuration_string());
+    _hints_manager.register_metrics("hints_manager");
     _hints_for_views_manager.register_metrics("hints_for_views_manager");
-    _hints_resource_manager.register_manager(_hints_for_views_manager);
 }
 
 storage_proxy::unique_response_handler::unique_response_handler(storage_proxy& p_, response_id_type id_) : id(id_), p(p_) {}
@@ -1939,7 +1933,7 @@ storage_proxy::create_write_response_handler_helper(schema_ptr s, const dht::tok
         // The idea is that if we have over maxHintsInProgress hints in flight, this is probably due to
         // a small number of nodes causing problems, so we should avoid shutting down writes completely to
         // healthy nodes.  Any node with no hintsInProgress is considered healthy.
-        throw overloaded_exception(_hints_manager->size_of_hints_in_progress());
+        throw overloaded_exception(_hints_manager.size_of_hints_in_progress());
     }
 
     // filter live endpoints from dead ones
@@ -2485,7 +2479,7 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
 template<typename Range>
 bool storage_proxy::cannot_hint(const Range& targets, db::write_type type) const {
     // if hints are disabled we "can always hint" since there's going to be no hint generated in this case
-    return hints_enabled(type) && boost::algorithm::any_of(targets, std::bind(&db::hints::manager::too_many_in_flight_hints_for, &*_hints_manager, std::placeholders::_1));
+    return hints_enabled(type) && boost::algorithm::any_of(targets, std::bind(&db::hints::manager::too_many_in_flight_hints_for, &_hints_manager, std::placeholders::_1));
 }
 
 future<> storage_proxy::send_to_endpoint(
@@ -4709,11 +4703,11 @@ void query_ranges_to_vnodes_generator::process_one_range(size_t n, dht::partitio
 }
 
 bool storage_proxy::hints_enabled(db::write_type type) const noexcept {
-    return (bool(_hints_manager) && type != db::write_type::CAS) || type == db::write_type::VIEW;
+    return (!_hints_manager.is_disabled_for_all() && type != db::write_type::CAS) || type == db::write_type::VIEW;
 }
 
 db::hints::manager& storage_proxy::hints_manager_for(db::write_type type) {
-    return type == db::write_type::VIEW ? _hints_for_views_manager : *_hints_manager;
+    return type == db::write_type::VIEW ? _hints_for_views_manager : _hints_manager;
 }
 
 future<> storage_proxy::truncate_blocking(sstring keyspace, sstring cfname) {
@@ -5201,11 +5195,38 @@ storage_proxy::query_nonsingular_mutations_locally(schema_ptr s,
 }
 
 future<> storage_proxy::start_hints_manager(shared_ptr<gms::gossiper> gossiper_ptr, shared_ptr<service::storage_service> ss_ptr) {
-    return _hints_resource_manager.start(shared_from_this(), gossiper_ptr, ss_ptr);
+    future<> f = make_ready_future<>();
+    if (!_hints_manager.is_disabled_for_all()) {
+        f = _hints_resource_manager.register_manager(_hints_manager);
+    }
+    return f.then([this] {
+        return _hints_resource_manager.register_manager(_hints_for_views_manager);
+    }).then([this, gossiper_ptr, ss_ptr] {
+        return _hints_resource_manager.start(shared_from_this(), gossiper_ptr, ss_ptr);
+    });
 }
 
 void storage_proxy::allow_replaying_hints() noexcept {
     return _hints_resource_manager.allow_replaying();
+}
+
+future<> storage_proxy::change_hints_host_filter(db::hints::host_filter new_filter) {
+    if (new_filter == _hints_manager.get_host_filter()) {
+        return make_ready_future<>();
+    }
+
+    return _hints_directory_initializer.ensure_created_and_verified().then([this] {
+        return _hints_directory_initializer.ensure_rebalanced();
+    }).then([this] {
+        // This function is idempotent
+        return _hints_resource_manager.register_manager(_hints_manager);
+    }).then([this, new_filter = std::move(new_filter)] () mutable {
+        return _hints_manager.change_host_filter(std::move(new_filter));
+    });
+}
+
+const db::hints::host_filter& storage_proxy::get_hints_host_filter() const {
+    return _hints_manager.get_host_filter();
 }
 
 void storage_proxy::on_join_cluster(const gms::inet_address& endpoint) {};

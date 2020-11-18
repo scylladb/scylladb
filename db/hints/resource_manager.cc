@@ -65,15 +65,17 @@ size_t resource_manager::sending_queue_length() const {
 
 const std::chrono::seconds space_watchdog::_watchdog_period = std::chrono::seconds(1);
 
-space_watchdog::space_watchdog(shard_managers_set& managers, per_device_limits_map& per_device_limits_map)
+space_watchdog::space_watchdog(shard_managers_set& managers, per_device_limits_map& per_device_limits_map, seastar::named_semaphore& operation_lock)
     : _shard_managers(managers)
     , _per_device_limits_map(per_device_limits_map)
+    , _operation_lock(operation_lock)
 {}
 
 void space_watchdog::start() {
     _started = seastar::async([this] {
         while (!_as.abort_requested()) {
             try {
+                const auto units = get_units(_operation_lock, 1).get();
                 on_timer();
             } catch (...) {
                 resource_manager_logger.trace("space_watchdog: unexpected exception - stop all hints generators");
@@ -176,8 +178,12 @@ void space_watchdog::on_timer() {
 }
 
 future<> resource_manager::start(shared_ptr<service::storage_proxy> proxy_ptr, shared_ptr<gms::gossiper> gossiper_ptr, shared_ptr<service::storage_service> ss_ptr) {
-    return parallel_for_each(_shard_managers, [proxy_ptr, gossiper_ptr, ss_ptr](manager& m) {
-        return m.start(proxy_ptr, gossiper_ptr, ss_ptr);
+    _proxy_ptr = std::move(proxy_ptr);
+    _gossiper_ptr = std::move(gossiper_ptr);
+    _ss_ptr = std::move(ss_ptr);
+    set_running();
+    return parallel_for_each(_shard_managers, [this](manager& m) {
+        return m.start(_proxy_ptr, _gossiper_ptr, _ss_ptr);
     }).then([this]() {
         return prepare_per_device_limits();
     }).then([this]() {
@@ -186,10 +192,12 @@ future<> resource_manager::start(shared_ptr<service::storage_proxy> proxy_ptr, s
 }
 
 void resource_manager::allow_replaying() noexcept {
+    set_replay_allowed();
     boost::for_each(_shard_managers, [] (manager& m) { m.allow_replaying(); });
 }
 
 future<> resource_manager::stop() noexcept {
+    unset_running();
     return parallel_for_each(_shard_managers, [](manager& m) {
         return m.stop();
     }).finally([this]() {
@@ -197,8 +205,25 @@ future<> resource_manager::stop() noexcept {
     });
 }
 
-void resource_manager::register_manager(manager& m) {
-    _shard_managers.insert(m);
+future<> resource_manager::register_manager(manager& m) {
+    const auto [it, inserted] = _shard_managers.insert(m);
+    if (!inserted) {
+        // Already registered
+        return make_ready_future<>();
+    }
+    if (!running()) {
+        return make_ready_future<>();
+    }
+
+    return m.start(_proxy_ptr, _gossiper_ptr, _ss_ptr).then([this, &m] {
+        return with_semaphore(_operation_lock, 1, [this, &m] () {
+            return prepare_per_device_limits().then([this, &m] {
+                if (this->replay_allowed()) {
+                    m.allow_replaying();
+                }
+            });
+        });
+    });
 }
 
 future<> resource_manager::prepare_per_device_limits() {

@@ -40,9 +40,14 @@
 #include "utils/loading_shared_values.hh"
 #include "utils/fragmented_temporary_buffer.hh"
 #include "db/hints/resource_manager.hh"
+#include "db/hints/host_filter.hh"
 
 namespace service {
 class storage_service;
+}
+
+namespace utils {
+class directories;
 }
 
 namespace db {
@@ -52,6 +57,25 @@ using node_to_hint_store_factory_type = utils::loading_shared_values<gms::inet_a
 using hints_store_ptr = node_to_hint_store_factory_type::entry_ptr;
 using hint_entry_reader = commitlog_entry_reader;
 using timer_clock_type = seastar::lowres_clock;
+
+/// A helper class which tracks hints directory creation
+/// and allows to perform hints directory initialization lazily.
+class directory_initializer {
+private:
+    class impl;
+    ::std::shared_ptr<impl> _impl;
+
+    directory_initializer(::std::shared_ptr<impl> impl);
+
+public:
+    /// Creates an initializer that does nothing. Useful in tests.
+    static directory_initializer make_dummy();
+    static future<directory_initializer> make(utils::directories& dirs, sstring hints_directory);
+
+    ~directory_initializer();
+    future<> ensure_created_and_verified();
+    future<> ensure_rebalanced();
+};
 
 class manager : public service::endpoint_lifecycle_subscriber {
 private:
@@ -450,7 +474,7 @@ private:
     dev_t _hints_dir_device_id = 0;
 
     node_to_hint_store_factory_type _store_factory;
-    std::unordered_set<sstring> _hinted_dcs;
+    host_filter _host_filter;
     shared_ptr<service::storage_proxy> _proxy_anchor;
     shared_ptr<gms::gossiper> _gossiper_anchor;
     shared_ptr<service::storage_service> _strorage_service_anchor;
@@ -469,7 +493,7 @@ private:
     seastar::named_semaphore _drain_lock = {1, named_semaphore_exception_factory{"drain lock"}};
 
 public:
-    manager(sstring hints_directory, std::vector<sstring> hinted_dcs, int64_t max_hint_window_ms, resource_manager&res_manager, distributed<database>& db);
+    manager(sstring hints_directory, host_filter filter, int64_t max_hint_window_ms, resource_manager&res_manager, distributed<database>& db);
     virtual ~manager();
     manager(manager&&) = delete;
     manager& operator=(manager&&) = delete;
@@ -477,6 +501,15 @@ public:
     future<> start(shared_ptr<service::storage_proxy> proxy_ptr, shared_ptr<gms::gossiper> gossiper_ptr, shared_ptr<service::storage_service> ss_ptr);
     future<> stop();
     bool store_hint(gms::inet_address ep, schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state) noexcept;
+
+    /// \brief Changes the host_filter currently used, stopping and starting ep_managers relevant to the new host_filter.
+    /// \param filter the new host_filter
+    /// \return A future that resolves when the operation is complete.
+    future<> change_host_filter(host_filter filter);
+
+    const host_filter& get_host_filter() const noexcept {
+        return _host_filter;
+    }
 
     /// \brief Check if a hint may be generated to the give end point
     /// \param ep end point to check
@@ -503,6 +536,12 @@ public:
     /// \param ep End point identificator
     /// \return TRUE if hints are allowed to be generated to \param ep.
     bool check_dc_for(ep_key_type ep) const noexcept;
+
+    /// \brief Checks if hints are disabled for all endpoints
+    /// \return TRUE if hints are disabled.
+    bool is_disabled_for_all() const noexcept {
+        return _host_filter.is_disabled_for_all();
+    }
 
     /// \return Size of mutations of hints in-flight (to the disk) at the moment.
     uint64_t size_of_hints_in_progress() const noexcept {
@@ -556,6 +595,12 @@ public:
     void allow_replaying() noexcept {
         _state.set(state::replay_allowed);
     }
+
+    /// \brief Creates an object which aids in hints directory initialization.
+    /// This object can saafely be copied and used from any shard.
+    /// \arg dirs The utils::directories object, used to create and lock hints directories
+    /// \arg hints_directory The directory with hints which should be initialized
+    directory_initializer make_directory_initializer(utils::directories& dirs, fs::path hints_directory);
 
     /// \brief Rebalance hints segments among all present shards.
     ///

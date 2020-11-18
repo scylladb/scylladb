@@ -64,6 +64,8 @@
 #include "service/client_state.hh"
 #include "cdc/stats.hh"
 #include "locator/token_metadata.hh"
+#include "db/hints/host_filter.hh"
+#include "db/config.hh"
 
 class reconcilable_result;
 class frozen_mutation_and_schema;
@@ -153,7 +155,8 @@ class storage_proxy : public seastar::async_sharded_service<storage_proxy>, publ
 public:
     using clock_type = lowres_clock;
     struct config {
-        std::optional<std::vector<sstring>> hinted_handoff_enabled = {};
+        db::config::hinted_handoff_enabled_type hinted_handoff_enabled = {};
+        db::hints::directory_initializer hints_directory_initializer;
         size_t available_memory;
         smp_service_group read_smp_service_group = default_smp_service_group();
         smp_service_group write_smp_service_group = default_smp_service_group();
@@ -262,7 +265,8 @@ private:
     // just skip an entry if request no longer exists.
     circular_buffer<response_id_type> _throttled_writes;
     db::hints::resource_manager _hints_resource_manager;
-    std::optional<db::hints::manager> _hints_manager;
+    db::hints::manager _hints_manager;
+    db::hints::directory_initializer _hints_directory_initializer;
     db::hints::manager _hints_for_views_manager;
     scheduling_group_key _stats_key;
     storage_proxy_stats::global_stats _global_stats;
@@ -596,6 +600,9 @@ public:
     future<> start_hints_manager(shared_ptr<gms::gossiper> gossiper_ptr, shared_ptr<service::storage_service> ss_ptr);
     void allow_replaying_hints() noexcept;
     future<> drain_on_shutdown();
+
+    future<> change_hints_host_filter(db::hints::host_filter new_filter);
+    const db::hints::host_filter& get_hints_host_filter() const;
 
     const stats& get_stats() const {
         return scheduling_group_get_specific<storage_proxy_stats::stats>(_stats_key);

@@ -78,13 +78,14 @@ private:
     size_t _total_size = 0;
     shard_managers_set& _shard_managers;
     per_device_limits_map& _per_device_limits_map;
+    seastar::named_semaphore& _operation_lock;
 
     future<> _started = make_ready_future<>();
     seastar::abort_source _as;
     int _files_count = 0;
 
 public:
-    space_watchdog(shard_managers_set& managers, per_device_limits_map& per_device_limits_map);
+    space_watchdog(shard_managers_set& managers, per_device_limits_map& per_device_limits_map, seastar::named_semaphore& operation_lock);
     void start();
     future<> stop() noexcept;
 
@@ -119,9 +120,44 @@ class resource_manager {
     const size_t _min_send_hint_budget;
     seastar::named_semaphore _send_limiter;
 
+    seastar::named_semaphore _operation_lock;
     space_watchdog::shard_managers_set _shard_managers;
     space_watchdog::per_device_limits_map _per_device_limits_map;
     space_watchdog _space_watchdog;
+
+    shared_ptr<service::storage_proxy> _proxy_ptr;
+    shared_ptr<gms::gossiper> _gossiper_ptr;
+    shared_ptr<service::storage_service> _ss_ptr;
+
+    enum class state {
+        running,
+        replay_allowed,
+    };
+    using state_set = enum_set<super_enum<state,
+        state::running,
+        state::replay_allowed>>;
+
+    state_set _state;
+
+    void set_running() noexcept {
+        _state.set(state::running);
+    }
+
+    void unset_running() noexcept {
+        _state.remove(state::running);
+    }
+
+    bool running() const noexcept {
+        return _state.contains(state::running);
+    }
+
+    void set_replay_allowed() noexcept {
+        _state.set(state::replay_allowed);
+    }
+
+    bool replay_allowed() const noexcept {
+        return _state.contains(state::replay_allowed);
+    }
 
 public:
     static constexpr size_t hint_segment_size_in_mb = 32;
@@ -133,7 +169,8 @@ public:
         : _max_send_in_flight_memory(std::max(max_send_in_flight_memory, max_hints_send_queue_length))
         , _min_send_hint_budget(_max_send_in_flight_memory / max_hints_send_queue_length)
         , _send_limiter(_max_send_in_flight_memory, named_semaphore_exception_factory{"send limiter"})
-        , _space_watchdog(_shard_managers, _per_device_limits_map)
+        , _operation_lock(1, named_semaphore_exception_factory{"operation lock"})
+        , _space_watchdog(_shard_managers, _per_device_limits_map, _operation_lock)
     {}
 
     resource_manager(resource_manager&&) = delete;
@@ -145,7 +182,7 @@ public:
     future<> start(shared_ptr<service::storage_proxy> proxy_ptr, shared_ptr<gms::gossiper> gossiper_ptr, shared_ptr<service::storage_service> ss_ptr);
     void allow_replaying() noexcept;
     future<> stop() noexcept;
-    void register_manager(manager& m);
+    future<> register_manager(manager& m);
     future<> prepare_per_device_limits();
 };
 

@@ -38,6 +38,7 @@
 #include "service/priority_manager.hh"
 #include "database.hh"
 #include "service_permit.hh"
+#include "utils/directories.hh"
 
 using namespace std::literals::chrono_literals;
 
@@ -50,9 +51,9 @@ const std::string manager::FILENAME_PREFIX("HintsLog" + commitlog::descriptor::S
 const std::chrono::seconds manager::hint_file_write_timeout = std::chrono::seconds(2);
 const std::chrono::seconds manager::hints_flush_period = std::chrono::seconds(10);
 
-manager::manager(sstring hints_directory, std::vector<sstring> hinted_dcs, int64_t max_hint_window_ms, resource_manager& res_manager, distributed<database>& db)
+manager::manager(sstring hints_directory, host_filter filter, int64_t max_hint_window_ms, resource_manager& res_manager, distributed<database>& db)
     : _hints_dir(fs::path(hints_directory) / format("{:d}", this_shard_id()))
-    , _hinted_dcs(hinted_dcs.begin(), hinted_dcs.end())
+    , _host_filter(std::move(filter))
     , _local_snitch_ptr(locator::i_endpoint_snitch::get_local_snitch_ptr())
     , _max_hint_window_us(max_hint_window_ms * 1000)
     , _local_db(db.local())
@@ -532,12 +533,56 @@ bool manager::can_hint_for(ep_key_type ep) const noexcept {
     return true;
 }
 
+future<> manager::change_host_filter(host_filter filter) {
+    if (!started()) {
+        return make_exception_future<>(std::logic_error("change_host_filter: called before the hints_manager was started"));
+    }
+
+    return with_gate(_draining_eps_gate, [this, filter = std::move(filter)] () mutable {
+        return with_semaphore(drain_lock(), 1, [this, filter = std::move(filter)] () mutable {
+            if (draining_all()) {
+                return make_exception_future<>(std::logic_error("change_host_filter: cannot change the configuration because hints all hints were drained"));
+            }
+
+            manager_logger.debug("change_host_filter: changing from {} to {}", _host_filter, filter);
+
+            // Change the host_filter now and save the old one so that we can
+            // roll back in case of failure
+            std::swap(_host_filter, filter);
+
+            // Iterate over existing hint directories and see if we can enable an endpoint manager
+            // for some of them
+            return lister::scan_dir(_hints_dir, { directory_entry_type::directory }, [this] (fs::path datadir, directory_entry de) {
+                const ep_key_type ep = ep_key_type(de.name);
+                if (_ep_managers.contains(ep) || !_host_filter.can_hint_for(_local_snitch_ptr, ep)) {
+                    return make_ready_future<>();
+                }
+                return get_ep_manager(ep).populate_segments_to_replay();
+            }).handle_exception([this, filter = std::move(filter)] (auto ep) mutable {
+                // Bring back the old filter. The finally() block will cause us to stop
+                // the additional ep_hint_managers that we started
+                _host_filter = std::move(filter);
+            }).finally([this] {
+                // Remove endpoint managers which are rejected by the filter
+                return parallel_for_each(_ep_managers, [this] (auto& pair) {
+                    if (_host_filter.can_hint_for(_local_snitch_ptr, pair.first)) {
+                        return make_ready_future<>();
+                    }
+                    return pair.second.stop(drain::no).finally([this, ep = pair.first] {
+                        _ep_managers.erase(ep);
+                    });
+                });
+            });
+        });
+    });
+}
+
 bool manager::check_dc_for(ep_key_type ep) const noexcept {
     try {
         // If target's DC is not a "hintable" DCs - don't hint.
         // If there is an end point manager then DC has already been checked and found to be ok.
-        return _hinted_dcs.empty() || have_ep_manager(ep) ||
-               _hinted_dcs.contains(_local_snitch_ptr->get_datacenter(ep));
+        return _host_filter.is_enabled_for_all() || have_ep_manager(ep) ||
+               _host_filter.can_hint_for(_local_snitch_ptr, ep);
     } catch (...) {
         // if we failed to check the DC - block this hint
         return false;
@@ -1018,6 +1063,93 @@ void manager::update_backlog(size_t backlog, size_t max_backlog) {
     } else {
         forbid_hints_for_eps_with_pending_hints();
     }
+}
+
+class directory_initializer::impl {
+    enum class state {
+        uninitialized = 0,
+        created_and_validated = 1,
+        rebalanced = 2,
+    };
+
+    utils::directories& _dirs;
+    sstring _hints_directory;
+    state _state = state::uninitialized;
+    seastar::named_semaphore _lock = {1, named_semaphore_exception_factory{"hints directory initialization lock"}};
+
+public:
+    impl(utils::directories& dirs, sstring hints_directory)
+            : _dirs(dirs)
+            , _hints_directory(std::move(hints_directory))
+    { }
+
+    future<> ensure_created_and_verified() {
+        if (_state > state::uninitialized) {
+            return make_ready_future<>();
+        }
+
+        return with_semaphore(_lock, 1, [this] () {
+            utils::directories::set dir_set;
+            dir_set.add_sharded(_hints_directory);
+            return _dirs.create_and_verify(std::move(dir_set)).then([this] {
+                manager_logger.debug("Creating and validating hint directories: {}", _hints_directory);
+                _state = state::created_and_validated;
+            });
+        });
+    }
+
+    future<> ensure_rebalanced() {
+        if (_state < state::created_and_validated) {
+            return make_exception_future<>(std::logic_error("hints directory needs to be created and validated before rebalancing"));
+        }
+
+        if (_state > state::created_and_validated) {
+            return make_ready_future<>();
+        }
+
+        return with_semaphore(_lock, 1, [this] () {
+            manager_logger.debug("Rebalancing hints in {}", _hints_directory);
+            return manager::rebalance(_hints_directory).then([this] {
+                _state = state::rebalanced;
+            });
+        });
+    }
+};
+
+directory_initializer::directory_initializer(std::shared_ptr<directory_initializer::impl> impl)
+        : _impl(std::move(impl))
+{ }
+
+directory_initializer::~directory_initializer()
+{ }
+
+directory_initializer directory_initializer::make_dummy() {
+    return directory_initializer{nullptr};
+}
+
+future<directory_initializer> directory_initializer::make(utils::directories& dirs, sstring hints_directory) {
+    return smp::submit_to(0, [&dirs, hints_directory = std::move(hints_directory)] () mutable {
+        auto impl = std::make_shared<directory_initializer::impl>(dirs, std::move(hints_directory));
+        return make_ready_future<directory_initializer>(directory_initializer(std::move(impl)));
+    });
+}
+
+future<> directory_initializer::ensure_created_and_verified() {
+    if (!_impl) {
+        return make_ready_future<>();
+    }
+    return smp::submit_to(0, [impl = this->_impl] () mutable {
+        return impl->ensure_created_and_verified().then([impl] {});
+    });
+}
+
+future<> directory_initializer::ensure_rebalanced() {
+    if (!_impl) {
+        return make_ready_future<>();
+    }
+    return smp::submit_to(0, [impl = this->_impl] () mutable {
+        return impl->ensure_rebalanced().then([impl] {});
+    });
 }
 
 }

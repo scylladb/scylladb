@@ -68,7 +68,7 @@
                "summary":"Get the hinted handoff enabled by dc",
                "type":"array",
                "items":{
-                  "type":"mapper_list"
+                  "type":"array"
                },
                "nickname":"get_hinted_handoff_enabled_by_dc",
                "produces":[
