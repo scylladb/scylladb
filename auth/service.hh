@@ -185,7 +185,7 @@ bool is_enforcing(const service&);
 /// internal data on which auth::service depends.
 struct command_desc {
     auth::permission permission; ///< Nature of the command's alteration.
-    const resource& resource; ///< Resource impacted by this command.
+    const ::auth::resource& resource; ///< Resource impacted by this command.
     enum class type {
         ALTER_WITH_OPTS, ///< Command is ALTER ... WITH ...
         OTHER
