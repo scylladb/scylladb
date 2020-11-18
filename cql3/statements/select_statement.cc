@@ -831,6 +831,16 @@ indexed_table_select_statement::prepare(database& db,
     const auto& im = index_opt->metadata();
     sstring index_table_name = im.name() + "_index";
     schema_ptr view_schema = db.find_schema(schema->ks_name(), index_table_name);
+    std::optional<global_index_prepare_data> global_index_data;
+
+    if (!im.local()) {
+        // Fill in the global_index_prepare_data structure
+        const column_definition& token_cdef = *view_schema->clustering_key_columns().begin();
+
+        global_index_data.emplace(global_index_prepare_data{
+            token_cdef
+        });
+    }
 
     return ::make_shared<cql3::statements::indexed_table_select_statement>(
             schema,
@@ -846,7 +856,8 @@ indexed_table_select_statement::prepare(database& db,
             stats,
             *index_opt,
             std::move(used_index_restrictions),
-            view_schema);
+            view_schema,
+            std::move(global_index_data));
 
 }
 
@@ -862,11 +873,13 @@ indexed_table_select_statement::indexed_table_select_statement(schema_ptr schema
                                                            cql_stats &stats,
                                                            const secondary_index::index& index,
                                                            ::shared_ptr<restrictions::restrictions> used_index_restrictions,
-                                                           schema_ptr view_schema)
+                                                           schema_ptr view_schema,
+                                                           std::optional<global_index_prepare_data> global_index_prepare_data)
     : select_statement{schema, bound_terms, parameters, selection, restrictions, group_by_cell_indices, is_reversed, ordering_comparator, limit, per_partition_limit, stats}
     , _index{index}
     , _used_index_restrictions(used_index_restrictions)
     , _view_schema(view_schema)
+    , _global_index_prepare_data(std::move(global_index_prepare_data))
 {
     if (_index.metadata().local()) {
         _get_partition_ranges_for_posting_list = [this] (const query_options& options) { return get_partition_ranges_for_local_index_posting_list(options); };
@@ -1122,13 +1135,11 @@ query::partition_slice indexed_table_select_statement::get_partition_slice_for_g
         // Only EQ restrictions on base partition key can be used in an index view query
         if (single_pk_restrictions && single_pk_restrictions->is_all_eq()) {
             auto clustering_restrictions = ::make_shared<restrictions::single_column_clustering_key_restrictions>(_view_schema, *single_pk_restrictions);
-            // Computed token column needs to be added to index view restrictions
-            const column_definition& token_cdef = *_view_schema->clustering_key_columns().begin();
             auto base_pk = partition_key::from_optional_exploded(*_schema, single_pk_restrictions->values(options));
             bytes token_value = compute_idx_token(base_pk);
-            auto token_restriction = ::make_shared<restrictions::single_column_restriction>(token_cdef);
+            auto token_restriction = ::make_shared<restrictions::single_column_restriction>(_global_index_prepare_data->_token_cdef);
             token_restriction->expression = expr::binary_operator{
-                    &token_cdef, expr::oper_t::EQ,
+                    &_global_index_prepare_data->_token_cdef, expr::oper_t::EQ,
                     ::make_shared<cql3::constants::value>(cql3::raw_value::make_value(token_value))};
             clustering_restrictions->merge_with(token_restriction);
 

@@ -175,9 +175,19 @@ public:
 };
 
 class indexed_table_select_statement : public select_statement {
+public:
+    // Struct which stores data related to global index,
+    // computed on the prepare stage
+    struct global_index_prepare_data {
+        // Column definition of computed token column in global index view
+        const column_definition& _token_cdef;
+    };
+
+private:
     secondary_index::index _index;
     ::shared_ptr<restrictions::restrictions> _used_index_restrictions;
     schema_ptr _view_schema;
+    std::optional<global_index_prepare_data> _global_index_prepare_data;
     noncopyable_function<dht::partition_range_vector(const query_options&)> _get_partition_ranges_for_posting_list;
     noncopyable_function<query::partition_slice(const query_options&)> _get_partition_slice_for_posting_list;
 public:
@@ -207,7 +217,8 @@ public:
                                    cql_stats &stats,
                                    const secondary_index::index& index,
                                    ::shared_ptr<restrictions::restrictions> used_index_restrictions,
-                                   schema_ptr view_schema);
+                                   schema_ptr view_schema,
+                                   std::optional<global_index_prepare_data> global_index_prepare_data);
 
 private:
     virtual future<::shared_ptr<cql_transport::messages::result_message>> do_execute(service::storage_proxy& proxy,
