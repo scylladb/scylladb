@@ -226,6 +226,9 @@ extern bool is_on_collection(const binary_operator&);
 /// column_value.
 extern expression replace_column_def(const expression&, const column_definition*);
 
+/// Replaces every token in an expression with the given column_definition.
+extern expression replace_token(const expression&, const column_definition*);
+
 inline oper_t pick_operator(statements::bound b, bool inclusive) {
     return is_start(b) ?
             (inclusive ? oper_t::GTE : oper_t::GT) :
