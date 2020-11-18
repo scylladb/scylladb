@@ -506,14 +506,25 @@ future<int> run_test(test_case test) {
                 server_disconnected.erase(raft::server_id{utils::UUID(0, s + 1)});
             }
             if (connected_servers.find(leader) == connected_servers.end() && p.size() > 0) {
-                // Old leader disconnected, new leader is first server specified in partition
-                auto next_leader = p[0];
+                // Old leader disconnected: elapse election, then tick till leader
+                rafts[leader].first->elapse_election(); // elapse previous leader
                 for (auto s: p) {
                     rafts[s].first->elapse_election();
                 }
-                co_await rafts[next_leader].first->elect_me_leader();
-                leader = next_leader;
-                tlogger.debug("confirmed new leader on {}", next_leader);
+                for (bool have_leader = false; !have_leader; ) {
+                    for (auto s: p) {
+                        rafts[s].first->tick();
+                    }
+                    co_await seastar::sleep(1us);        // yield
+                    for (auto s: p) {
+                        if (rafts[s].first->is_leader()) {
+                            have_leader = true;
+                            leader = s;
+                            break;
+                        }
+                    }
+                }
+                tlogger.debug("confirmed new leader on {}", leader);
             }
         }
     }
