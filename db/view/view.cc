@@ -1240,6 +1240,14 @@ future<> mutate_MV(
                 }
             }
         }
+        // It's still possible that a target endpoint is dupliated in the remote endpoints list,
+        // so let's get rid of the duplicate if it exists
+        if (target_endpoint) {
+            auto remote_it = std::find(remote_endpoints.begin(), remote_endpoints.end(), *target_endpoint);
+            if (remote_it != remote_endpoints.end()) {
+                remote_endpoints.erase(remote_it);
+            }
+        }
 
         if (target_endpoint && *target_endpoint == my_address) {
             ++stats.view_updates_pushed_local;
