@@ -1904,6 +1904,9 @@ SEASTAR_TEST_CASE(test_continuity_merging) {
 class measuring_allocator final : public allocation_strategy {
     size_t _allocated_bytes;
 public:
+    measuring_allocator() {
+        _preferred_max_contiguous_allocation = standard_allocator().preferred_max_contiguous_allocation();
+    }
     virtual void* alloc(migrate_fn mf, size_t size, size_t alignment) override {
         _allocated_bytes += size;
         return standard_allocator().alloc(mf, size, alignment);
