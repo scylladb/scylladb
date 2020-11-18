@@ -54,6 +54,7 @@
 #include <seastar/core/distributed.hh>
 #include "validation.hh"
 #include "transport/messages/result_message.hh"
+#include "cql3/restrictions/single_column_primary_key_restrictions.hh"
 
 namespace cql3 {
 
@@ -181,6 +182,12 @@ public:
     struct global_index_prepare_data {
         // Column definition of computed token column in global index view
         const column_definition& _token_cdef;
+
+        // Will global posting list partition be sliced according to base query TOKEN restriction
+        bool _is_token_partition_slice;
+
+        // Clustering restrictions of global posting list precomputed at prepare stage
+        shared_ptr<restrictions::single_column_clustering_key_restrictions> _posting_list_clustering_restrictions;
     };
 
 private:

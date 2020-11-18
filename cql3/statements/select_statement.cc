@@ -46,7 +46,6 @@
 #include "cql3/functions/as_json_function.hh"
 #include "cql3/selection/selection.hh"
 #include "cql3/util.hh"
-#include "cql3/restrictions/single_column_primary_key_restrictions.hh"
 #include "cql3/selection/selector_factories.hh"
 #include <seastar/core/shared_ptr.hh>
 #include "query-result-reader.hh"
@@ -837,8 +836,24 @@ indexed_table_select_statement::prepare(database& db,
         // Fill in the global_index_prepare_data structure
         const column_definition& token_cdef = *view_schema->clustering_key_columns().begin();
 
+        const bool is_token_v2_index = token_cdef.type == long_type;
+        const auto& partition_key_restriction_expression = restrictions->get_partition_key_restrictions()->expression;
+        // Global posting list partition slice according to the token restriction is only supported
+        // with new token_column_computation type (computation name: token_v2)
+        bool is_token_partition_slice = has_token(partition_key_restriction_expression) && is_token_v2_index;
+
+        ::shared_ptr<restrictions::single_column_clustering_key_restrictions> posting_list_clustering_restrictions;
+        if (is_token_partition_slice) {
+            posting_list_clustering_restrictions = ::make_shared<restrictions::single_column_clustering_key_restrictions>(view_schema, false);
+
+            auto token_restriction = ::make_shared<restrictions::single_column_restriction>(token_cdef);
+            token_restriction->expression = expr::replace_token(partition_key_restriction_expression, &token_cdef);
+
+            posting_list_clustering_restrictions->merge_with(token_restriction);
+        }
+
         global_index_data.emplace(global_index_prepare_data{
-            token_cdef
+            token_cdef, is_token_partition_slice, std::move(posting_list_clustering_restrictions)
         });
     }
 
@@ -1132,8 +1147,8 @@ query::partition_slice indexed_table_select_statement::get_partition_slice_for_g
 
     if (!_restrictions->has_partition_key_unrestricted_components()) {
         auto single_pk_restrictions = dynamic_pointer_cast<restrictions::single_column_partition_key_restrictions>(_restrictions->get_partition_key_restrictions());
-        // Only EQ restrictions on base partition key can be used in an index view query
         if (single_pk_restrictions && single_pk_restrictions->is_all_eq()) {
+            // EQ restrictions on base partition key
             auto clustering_restrictions = ::make_shared<restrictions::single_column_clustering_key_restrictions>(_view_schema, *single_pk_restrictions);
             auto base_pk = partition_key::from_optional_exploded(*_schema, single_pk_restrictions->values(options));
             bytes token_value = compute_idx_token(base_pk);
@@ -1155,6 +1170,10 @@ query::partition_slice indexed_table_select_statement::get_partition_slice_for_g
             }
 
             partition_slice_builder.with_ranges(clustering_restrictions->bounds_ranges(options));
+        } else if (_global_index_prepare_data->_is_token_partition_slice) {
+            // TOKEN restriction on base partition key
+            auto bounds = _global_index_prepare_data->_posting_list_clustering_restrictions->bounds_ranges(options);
+            partition_slice_builder.with_ranges(std::move(bounds));
         }
     }
 

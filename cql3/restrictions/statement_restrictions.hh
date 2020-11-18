@@ -414,7 +414,23 @@ public:
     }
 
     bool ck_restrictions_need_filtering() const {
-        return _partition_key_restrictions->has_unrestricted_components(*_schema) || _clustering_columns_restrictions->needs_filtering(*_schema);
+        return !_clustering_columns_restrictions->empty() && 
+            (_partition_key_restrictions->has_unrestricted_components(*_schema) 
+            //
+            // An index table's clustering key is (token(pk), pk, ck) of the base table. 
+            // If pk is specified, we can calculate token; but if token is specified, we CANNOT calculate pk. 
+            // (Currently token and pk restrictions cannot mix together.) 
+            //
+            // Therefore, if both token and ck are restricted, the clustering slice of the index 
+            // table is not continuous (see below), and we may need to filter out some of the rows fetched.
+            //
+            // Example: for restriction on token(pk1, pk2) and ck1
+            // (token(pk1, pk2), pk1, pk2, ck1, ck2)
+            //  ^ restricted               ^ restricted
+            // 
+            //  In this example clustering slice is not continuous (missing restrictions on pk).
+            || (_uses_secondary_indexing && has_token(_partition_key_restrictions->expression)) 
+            || _clustering_columns_restrictions->needs_filtering(*_schema));
     }
 
     /**
