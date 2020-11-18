@@ -1902,7 +1902,7 @@ SEASTAR_TEST_CASE(test_continuity_merging) {
 }
 
 class measuring_allocator final : public allocation_strategy {
-    size_t _allocated_bytes;
+    size_t _allocated_bytes = 0;
 public:
     measuring_allocator() {
         _preferred_max_contiguous_allocation = standard_allocator().preferred_max_contiguous_allocation();
