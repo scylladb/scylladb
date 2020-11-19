@@ -185,7 +185,9 @@ future<> resource_manager::start(shared_ptr<service::storage_proxy> proxy_ptr, s
     return parallel_for_each(_shard_managers, [this](manager& m) {
         return m.start(_proxy_ptr, _gossiper_ptr, _ss_ptr);
     }).then([this]() {
-        return prepare_per_device_limits();
+        return do_for_each(_shard_managers, [this](manager& m) {
+            return prepare_per_device_limits(m);
+        });
     }).then([this]() {
         return _space_watchdog.start();
     });
@@ -217,7 +219,7 @@ future<> resource_manager::register_manager(manager& m) {
 
     return m.start(_proxy_ptr, _gossiper_ptr, _ss_ptr).then([this, &m] {
         return with_semaphore(_operation_lock, 1, [this, &m] () {
-            return prepare_per_device_limits().then([this, &m] {
+            return prepare_per_device_limits(m).then([this, &m] {
                 if (this->replay_allowed()) {
                     m.allow_replaying();
                 }
@@ -226,8 +228,7 @@ future<> resource_manager::register_manager(manager& m) {
     });
 }
 
-future<> resource_manager::prepare_per_device_limits() {
-    return do_for_each(_shard_managers, [this] (manager& shard_manager) mutable {
+future<> resource_manager::prepare_per_device_limits(manager& shard_manager) {
         dev_t device_id = shard_manager.hints_dir_device_id();
         auto it = _per_device_limits_map.find(device_id);
         if (it == _per_device_limits_map.end()) {
@@ -249,7 +250,6 @@ future<> resource_manager::prepare_per_device_limits() {
             it->second.managers.emplace_back(std::ref(shard_manager));
             return make_ready_future<>();
         }
-    });
 }
 
 }

@@ -159,6 +159,8 @@ class resource_manager {
         return _state.contains(state::replay_allowed);
     }
 
+    future<> prepare_per_device_limits(manager& shard_manager);
+
 public:
     static constexpr size_t hint_segment_size_in_mb = 32;
     static constexpr size_t max_hints_per_ep_size_mb = 128; // 4 files 32MB each
@@ -183,7 +185,6 @@ public:
     void allow_replaying() noexcept;
     future<> stop() noexcept;
     future<> register_manager(manager& m);
-    future<> prepare_per_device_limits();
 };
 
 }
