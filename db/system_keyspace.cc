@@ -589,7 +589,8 @@ static schema_ptr clients() {
                 {"ssl_cipher_suite", utf8_type},
                 {"ssl_enabled", boolean_type},
                 {"ssl_protocol", utf8_type},
-                {"username", utf8_type}
+                {"username", utf8_type},
+                {"params", map_type_impl::get_instance(utf8_type, utf8_type, false)}
             },
             // static columns
             {},
