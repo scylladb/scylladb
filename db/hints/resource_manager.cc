@@ -223,10 +223,14 @@ future<> resource_manager::register_manager(manager& m) {
                 return make_ready_future<>();
             }
             if (!running()) {
+                // The hints manager will be started later by resource_manager::start()
                 return make_ready_future<>();
             }
 
+            // If the resource_manager was started, start the hints manager, too.
             return m.start(_proxy_ptr, _gossiper_ptr, _ss_ptr).then([this, &m] {
+                // Calculate device limits for this manager so that it is accounted for
+                // by the space_watchdog
                 return prepare_per_device_limits(m).then([this, &m] {
                     if (this->replay_allowed()) {
                         m.allow_replaying();
