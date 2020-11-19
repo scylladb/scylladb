@@ -169,7 +169,7 @@ db_clock::time_point make_new_cdc_generation(
         const gms::gossiper& g,
         db::system_distributed_keyspace& sys_dist_ks,
         std::chrono::milliseconds ring_delay,
-        bool for_testing);
+        bool add_delay);
 
 /* Retrieves CDC streams generation timestamp from the given endpoint's application state (broadcasted through gossip).
  * We might be during a rolling upgrade, so the timestamp might not be there (if the other node didn't upgrade yet),
