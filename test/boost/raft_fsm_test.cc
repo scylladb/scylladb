@@ -69,7 +69,8 @@ BOOST_AUTO_TEST_CASE(test_election_single_node) {
     BOOST_CHECK(output.term);
     BOOST_CHECK(output.vote);
     BOOST_CHECK(output.messages.empty());
-    BOOST_CHECK(output.log_entries.empty());
+    // A new leader applies one dummy entry
+    BOOST_CHECK(output.log_entries.size() == 1 && std::holds_alternative<raft::log_entry::dummy>(output.log_entries[0]->data));
     BOOST_CHECK(output.committed.empty());
     // The leader does not become candidate simply because
     // a timeout has elapsed, i.e. there are no spurious
@@ -81,7 +82,8 @@ BOOST_AUTO_TEST_CASE(test_election_single_node) {
     BOOST_CHECK(!output.vote);
     BOOST_CHECK(output.messages.empty());
     BOOST_CHECK(output.log_entries.empty());
-    BOOST_CHECK(output.committed.empty());
+    // Dummy entry is now commited
+    BOOST_CHECK(output.committed.size() == 1 && std::holds_alternative<raft::log_entry::dummy>(output.committed[0]->data));
 }
 
 // Test that adding an entry to a single-node cluster
