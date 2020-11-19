@@ -327,10 +327,19 @@ stop_iteration mutation_partition::apply_monotonically(const schema& s, mutation
     while (p_i != p._rows.end()) {
       try {
         rows_entry& src_e = *p_i;
-        if (i != _rows.end() && cmp(*i, src_e) < 0) {
-            i = _rows.lower_bound(src_e, cmp);
+
+        bool miss = true;
+        if (i != _rows.end()) {
+            auto x = cmp(*i, src_e);
+            if (x < 0) {
+                bool match;
+                i = _rows.lower_bound(src_e, match, cmp);
+                miss = !match;
+            } else {
+                miss = x > 0;
+            }
         }
-        if (i == _rows.end() || cmp(src_e, *i) < 0) {
+        if (miss) {
             bool insert = true;
             if (i != _rows.end() && i->continuous()) {
                 // When falling into a continuous range, preserve continuity.
