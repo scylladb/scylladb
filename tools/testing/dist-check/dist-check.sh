@@ -60,7 +60,8 @@ docker_images=(
 
 for docker_image in "${docker_images[@]}"
 do
-    install_sh="$(pwd)/tools/testing/dist-check/$docker_image.sh"
+    docker_script="${docker_image//:/-}"
+    install_sh="$(pwd)/tools/testing/dist-check/$docker_script.sh"
     if [ -f "$install_sh" ]; then
         docker run -i --rm -v $(pwd):$(pwd) $docker_image /bin/bash -c "cd $(pwd) && $install_sh --mode $MODE"
     else
