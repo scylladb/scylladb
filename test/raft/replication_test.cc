@@ -224,8 +224,11 @@ bool is_disconnected(raft::server_id id) {
 }
 
 class failure_detector : public raft::failure_detector {
+    raft::server_id _id;
+public:
+    failure_detector(raft::server_id id) : _id(id) {}
     bool is_alive(raft::server_id server) override {
-        return !is_disconnected(server);
+        return !(is_disconnected(server) || is_disconnected(_id));
     }
 };
 
@@ -302,7 +305,7 @@ create_raft_server(raft::server_id uuid, state_machine::apply_fn apply, initial_
     auto& rsm = *sm;
     auto mrpc = std::make_unique<rpc>(uuid);
     auto mstorage = std::make_unique<storage>(uuid, state);
-    auto fd = seastar::make_shared<failure_detector>();
+    auto fd = seastar::make_shared<failure_detector>(uuid);
 
     auto raft = raft::create_server(uuid, std::move(mrpc), std::move(sm), std::move(mstorage),
         std::move(fd), state.server_config);
