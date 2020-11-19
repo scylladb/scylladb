@@ -73,3 +73,6 @@ bytes make_blob(size_t blob_size);
 
 void for_each_schema_change(std::function<void(schema_ptr, const std::vector<mutation>&,
                                                schema_ptr, const std::vector<mutation>&)>);
+
+void compare_readers(const schema&, flat_mutation_reader authority, flat_mutation_reader tested);
+void compare_readers(const schema&, flat_mutation_reader authority, flat_mutation_reader tested, const std::vector<position_range>& fwd_ranges);

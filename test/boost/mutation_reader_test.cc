@@ -44,6 +44,7 @@
 #include "test/lib/reader_lifecycle_policy.hh"
 #include "test/lib/reader_permit.hh"
 #include "test/lib/random_utils.hh"
+#include "test/lib/simple_position_reader_queue.hh"
 
 #include "dht/sharder.hh"
 #include "mutation_reader.hh"
@@ -3520,4 +3521,140 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_self_validation) {
             last_fragment_position,
             make_second_buffer(pkeys[3]),
             max_buffer_size);
+}
+
+struct mutation_bounds {
+    mutation m;
+    position_in_partition lower;
+    position_in_partition upper;
+};
+
+struct clustering_order_merger_test_generator {
+    struct scenario {
+        std::vector<mutation_bounds> readers_data;
+        std::vector<position_range> fwd_ranges;
+    };
+
+    schema_ptr _s;
+    partition_key _pk;
+
+    clustering_order_merger_test_generator()
+        : _s(make_schema()), _pk(partition_key::from_single_value(*_s, int32_type->decompose(0)))
+    {}
+
+    static schema_ptr make_schema() {
+        return schema_builder("ks", "t")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_column("ck", int32_type, column_kind::clustering_key)
+            .with_column("v", int32_type, column_kind::regular_column)
+            .build();
+    }
+
+    clustering_key mk_ck(int k) const {
+        return clustering_key::from_single_value(*_s, int32_type->decompose(k));
+    }
+
+    position_in_partition mk_pos_for(int k) const {
+        return position_in_partition::for_key(mk_ck(k));
+    }
+
+    mutation mk_mutation(const std::map<int, int>& kvs) const {
+        mutation m(_s, _pk);
+        auto& cdef = *_s->get_column_definition(to_bytes("v"));
+        for (auto [k, v]: kvs) {
+            m.set_clustered_cell(mk_ck(k), cdef,
+                    atomic_cell::make_live(*cdef.type, 42, cdef.type->decompose(v)));
+        }
+        return m;
+    }
+
+    dht::decorated_key decorated_pk() const {
+        return dht::decorate_key(*_s, _pk);
+    }
+
+    scenario generate_scenario(std::mt19937& engine) const {
+        std::set<int> all_ks;
+        std::vector<mutation_bounds> readers_data;
+
+        auto num_readers = tests::random::get_int(1, 10, engine);
+        while (num_readers--) {
+            auto len = tests::random::get_int(0, 15, engine);
+            auto ks = tests::random::random_subset<int>(100, len, engine);
+            std::map<int, int> kvs;
+            for (auto k: ks) {
+                all_ks.insert(k);
+                kvs.emplace(k, tests::random::get_int(0, 100, engine));
+            }
+
+            auto lower = (kvs.empty() ? 0 : kvs.begin()->first) - tests::random::get_int(0, 5, engine);
+            auto upper = (kvs.empty() ? 0 : std::prev(kvs.end())->first) + tests::random::get_int(0, 5, engine);
+
+            readers_data.push_back(mutation_bounds{mk_mutation(kvs), mk_pos_for(lower), mk_pos_for(upper)});
+        }
+
+        std::sort(readers_data.begin(), readers_data.end(), [less = position_in_partition::less_compare(*_s)]
+                (const mutation_bounds& a, const mutation_bounds& b) { return less(a.lower, b.lower); });
+
+        std::vector<position_in_partition> positions { position_in_partition::before_all_clustered_rows() };
+        for (auto k: all_ks) {
+            auto ck = mk_ck(k);
+            positions.push_back(position_in_partition::before_key(ck));
+            positions.push_back(position_in_partition::for_key(ck));
+            positions.push_back(position_in_partition::after_key(ck));
+        }
+        positions.push_back(position_in_partition::after_all_clustered_rows());
+
+        auto num_ranges = tests::random::get_int(1ul, std::max(all_ks.size() / 3, 1ul));
+        positions = tests::random::random_subset(std::move(positions), num_ranges * 2, engine);
+        std::sort(positions.begin(), positions.end(), position_in_partition::less_compare(*_s));
+
+        std::vector<position_range> fwd_ranges;
+        for (int i = 0; i < num_ranges; ++i) {
+            assert(2*i+1 < positions.size());
+            fwd_ranges.push_back(position_range(std::move(positions[2*i]), std::move(positions[2*i+1])));
+        }
+
+        return scenario {
+            std::move(readers_data),
+            std::move(fwd_ranges)
+        };
+    }
+};
+
+SEASTAR_THREAD_TEST_CASE(test_clustering_order_merger_in_memory) {
+    clustering_order_merger_test_generator g;
+
+    auto make_authority = [] (mutation mut, streamed_mutation::forwarding fwd) {
+        return flat_mutation_reader_from_mutations(tests::make_permit(), {std::move(mut)}, fwd);
+    };
+
+    auto make_tested = [s = g._s] (std::vector<mutation_bounds> ms, streamed_mutation::forwarding fwd) {
+        auto rs = boost::copy_range<std::vector<reader_bounds>>(std::move(ms)
+                | boost::adaptors::transformed([fwd] (auto&& mb) {
+                    return reader_bounds{
+                        flat_mutation_reader_from_mutations(tests::make_permit(), {std::move(mb.m)}, fwd),
+                        std::move(mb.lower), std::move(mb.upper)};
+                }));
+        auto q = std::make_unique<simple_position_reader_queue>(*s, std::move(rs));
+        return make_clustering_combined_reader(s, tests::make_permit(), fwd, std::move(q));
+    };
+
+    auto seed = tests::random::get_int<uint32_t>();
+    std::cout << "test_clustering_order_merger_in_memory seed: " << seed << std::endl;
+    auto engine = std::mt19937(seed);
+
+    for (int run = 0; run < 1000; ++run) {
+        auto scenario = g.generate_scenario(engine);
+        auto merged = std::accumulate(scenario.readers_data.begin(), scenario.readers_data.end(),
+                mutation(g._s, g._pk), [] (mutation curr, const mutation_bounds& mb) { return std::move(curr) + mb.m; });
+
+        {
+            auto fwd = streamed_mutation::forwarding::no;
+            compare_readers(*g._s, make_authority(merged, fwd), make_tested(scenario.readers_data, fwd));
+        }
+
+        auto fwd = streamed_mutation::forwarding::yes;
+        compare_readers(*g._s, make_authority(std::move(merged), fwd),
+                make_tested(std::move(scenario.readers_data), fwd), scenario.fwd_ranges);
+    }
 }
