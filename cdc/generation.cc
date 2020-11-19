@@ -302,13 +302,13 @@ db_clock::time_point make_new_cdc_generation(
         const gms::gossiper& g,
         db::system_distributed_keyspace& sys_dist_ks,
         std::chrono::milliseconds ring_delay,
-        bool for_testing) {
+        bool add_delay) {
     using namespace std::chrono;
     auto gen = topology_description_generator(cfg, bootstrap_tokens, tmptr, g).generate();
 
     // Begin the race.
     auto ts = db_clock::now() + (
-            (for_testing || ring_delay == milliseconds(0)) ? milliseconds(0) : (
+            (!add_delay || ring_delay == milliseconds(0)) ? milliseconds(0) : (
                 2 * ring_delay + duration_cast<milliseconds>(generation_leeway)));
     sys_dist_ks.insert_cdc_topology_description(ts, std::move(gen), { tmptr->count_normal_token_owners() }).get();
 
