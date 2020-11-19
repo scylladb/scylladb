@@ -65,17 +65,17 @@ size_t resource_manager::sending_queue_length() const {
 
 const std::chrono::seconds space_watchdog::_watchdog_period = std::chrono::seconds(1);
 
-space_watchdog::space_watchdog(shard_managers_set& managers, per_device_limits_map& per_device_limits_map, seastar::named_semaphore& operation_lock)
+space_watchdog::space_watchdog(shard_managers_set& managers, per_device_limits_map& per_device_limits_map)
     : _shard_managers(managers)
     , _per_device_limits_map(per_device_limits_map)
-    , _operation_lock(operation_lock)
+    , _update_lock(1, named_semaphore_exception_factory{"update lock"})
 {}
 
 void space_watchdog::start() {
     _started = seastar::async([this] {
         while (!_as.abort_requested()) {
             try {
-                const auto units = get_units(_operation_lock, 1).get();
+                const auto units = get_units(_update_lock, 1).get();
                 on_timer();
             } catch (...) {
                 resource_manager_logger.trace("space_watchdog: unexpected exception - stop all hints generators");
@@ -181,7 +181,8 @@ future<> resource_manager::start(shared_ptr<service::storage_proxy> proxy_ptr, s
     _proxy_ptr = std::move(proxy_ptr);
     _gossiper_ptr = std::move(gossiper_ptr);
     _ss_ptr = std::move(ss_ptr);
-    set_running();
+
+    return with_semaphore(_operation_lock, 1, [this] () {
     return parallel_for_each(_shard_managers, [this](manager& m) {
         return m.start(_proxy_ptr, _gossiper_ptr, _ss_ptr);
     }).then([this]() {
@@ -190,6 +191,9 @@ future<> resource_manager::start(shared_ptr<service::storage_proxy> proxy_ptr, s
         });
     }).then([this]() {
         return _space_watchdog.start();
+    }).then([this]() {
+        set_running();
+    });
     });
 }
 
@@ -199,15 +203,20 @@ void resource_manager::allow_replaying() noexcept {
 }
 
 future<> resource_manager::stop() noexcept {
-    unset_running();
+    return with_semaphore(_operation_lock, 1, [this] () {
     return parallel_for_each(_shard_managers, [](manager& m) {
         return m.stop();
     }).finally([this]() {
         return _space_watchdog.stop();
+    }).then([this]() {
+        unset_running();
+    });
     });
 }
 
 future<> resource_manager::register_manager(manager& m) {
+    return with_semaphore(_operation_lock, 1, [this, &m] () {
+    return with_semaphore(_space_watchdog.update_lock(), 1, [this, &m] {
     const auto [it, inserted] = _shard_managers.insert(m);
     if (!inserted) {
         // Already registered
@@ -218,13 +227,16 @@ future<> resource_manager::register_manager(manager& m) {
     }
 
     return m.start(_proxy_ptr, _gossiper_ptr, _ss_ptr).then([this, &m] {
-        return with_semaphore(_operation_lock, 1, [this, &m] () {
-            return prepare_per_device_limits(m).then([this, &m] {
-                if (this->replay_allowed()) {
-                    m.allow_replaying();
-                }
-            });
+        return prepare_per_device_limits(m).then([this, &m] {
+            if (this->replay_allowed()) {
+                m.allow_replaying();
+            }
         });
+    }).handle_exception([this, &m] (auto ep) {
+        _shard_managers.erase(m);
+        return make_exception_future<>(ep);
+    });
+    });
     });
 }
 
