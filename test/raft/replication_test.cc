@@ -617,6 +617,8 @@ int main(int argc, char* argv[]) {
         {.name = "non_empty_leader_log", .nodes = 2,
          .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3}}}},
          .updates = {entries{4}}},
+        {.name = "non_empty_leader_log_no_new_entries", .nodes = 2, .total_values = 4,
+         .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3}}}}},
         // 1 nodes, 12 client entries
         {.name = "simple_1_auto_12", .nodes = 1,
          .initial_states = {}, .updates = {entries{12}}},
