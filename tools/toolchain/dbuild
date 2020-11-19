@@ -164,6 +164,7 @@ fi
 tmpdir=$(mktemp -d)
 
 docker_common_args+=(
+       --security-opt seccomp=unconfined \
        --pids-limit -1 \
        --network host \
        --cap-add SYS_PTRACE \
