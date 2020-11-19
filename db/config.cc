@@ -31,6 +31,7 @@
 #include <seastar/core/print.hh>
 #include <seastar/util/log.hh>
 
+#include "cdc/cdc_extension.hh"
 #include "config.hh"
 #include "extensions.hh"
 #include "log.hh"
@@ -793,6 +794,10 @@ db::config::config()
 
 db::config::~config()
 {}
+
+void db::config::add_cdc_extension() {
+    _extensions->add_schema_extension<cdc::cdc_extension>(cdc::cdc_extension::NAME);
+}
 
 void db::config::setup_directories() {
     maybe_in_workdir(commitlog_directory, "commitlog");

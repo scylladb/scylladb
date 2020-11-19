@@ -92,6 +92,9 @@ public:
     config(std::shared_ptr<db::extensions>);
     ~config();
 
+    // For testing only
+    void add_cdc_extension();
+
     /// True iff the feature is enabled.
     bool check_experimental(experimental_features_t::feature f) const;
 

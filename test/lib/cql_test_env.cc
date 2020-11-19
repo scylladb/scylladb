@@ -75,6 +75,8 @@ cql_test_config::cql_test_config(shared_ptr<db::config> cfg)
     // which all get thrown away when the test is done. This can cause timeouts
     // if /tmp is not tmpfs.
     db_config->commitlog_use_o_dsync.set(false);
+
+    db_config->add_cdc_extension();
 }
 
 cql_test_config::cql_test_config(const cql_test_config&) = default;
