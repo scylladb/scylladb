@@ -149,9 +149,6 @@ class TestSuite(ABC):
             if shortname in disable_tests or (mode not in ["release", "dev"] and shortname in skip_tests):
                 continue
             t = os.path.join(self.name, shortname)
-            # Skip tests which are not configured, and hence are not built
-            if os.path.join("test", t) not in options.tests:
-                continue
             patterns = options.name if options.name else [t]
             if options.skip_pattern and options.skip_pattern in t:
                 continue
@@ -175,6 +172,9 @@ class UnitTestSuite(TestSuite):
     def add_test(self, shortname, mode, options):
         """Create a UnitTest class with possibly custom command line
         arguments and add it to the list of tests"""
+        # Skip tests which are not configured, and hence are not built
+        if os.path.join("test", self.name, shortname) not in options.tests:
+            return
 
         # Default seastar arguments, if not provided in custom test options,
         # are two cores and 2G of RAM

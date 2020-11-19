@@ -147,7 +147,7 @@ def find_scylla():
         exit(1)
     return max(scyllas, key=os.path.getmtime)
 
-scylla = os.getenv('SCYLLA') or find_scylla()
+scylla = os.path.abspath(os.getenv('SCYLLA') or find_scylla())
 
 def run_scylla_cmd(pid, dir):
     ip = pid_to_ip(pid)
