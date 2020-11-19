@@ -570,7 +570,7 @@ void storage_service::join_token_ring(int delay) {
             try {
                 _cdc_streams_ts = cdc::make_new_cdc_generation(db().local().get_config(),
                         _bootstrap_tokens, get_token_metadata_ptr(), _gossiper,
-                        _sys_dist_ks.local(), get_ring_delay(), !_for_testing);
+                        _sys_dist_ks.local(), get_ring_delay(), !_for_testing && !is_first_node());
             } catch (...) {
                 cdc_log.warn(
                     "Could not create a new CDC generation: {}. This may make it impossible to use CDC. Use nodetool checkAndRepairCdcStreams to fix CDC generation",
@@ -909,7 +909,7 @@ void storage_service::bootstrap() {
 
         _cdc_streams_ts = cdc::make_new_cdc_generation(db().local().get_config(),
                 _bootstrap_tokens, get_token_metadata_ptr(), _gossiper,
-                _sys_dist_ks.local(), get_ring_delay(), !_for_testing);
+                _sys_dist_ks.local(), get_ring_delay(), !_for_testing && !is_first_node());
 
         _gossiper.add_local_application_state({
             // Order is important: both the CDC streams timestamp and tokens must be known when a node handles our status.
