@@ -1531,6 +1531,7 @@ public:
     void set_format_by_config();
 
     future<> flush_all_memtables();
+    future<> flush(const sstring& ks, const sstring& cf);
 
     // See #937. Truncation now requires a callback to get a time stamp
     // that must be guaranteed to be the same for all shards.

@@ -161,10 +161,10 @@ std::vector<schema_ptr> all_tables(schema_features);
 std::vector<sstring> all_table_names(schema_features);
 
 // saves/creates "ks" + all tables etc, while first deleting all old schema entries (will be rewritten)
-future<> save_system_schema(const sstring & ks);
+future<> save_system_schema(cql3::query_processor& qp, const sstring & ks);
 
 // saves/creates "system_schema" keyspace
-future<> save_system_keyspace_schema();
+future<> save_system_keyspace_schema(cql3::query_processor& qp);
 
 future<utils::UUID> calculate_schema_digest(distributed<service::storage_proxy>& proxy, schema_features);
 

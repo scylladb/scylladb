@@ -516,7 +516,7 @@ public:
 
             // In main.cc we call db::system_keyspace::setup which calls
             // minimal_setup and init_local_cache
-            db::system_keyspace::minimal_setup(db, qp);
+            db::system_keyspace::minimal_setup(qp);
 
             db::batchlog_manager_config bmcfg;
             bmcfg.replay_rate = 100000000;

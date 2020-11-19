@@ -170,7 +170,7 @@ schema_ptr aggregates();
 table_schema_version generate_schema_version(utils::UUID table_id, uint16_t offset = 0);
 
 // Only for testing.
-void minimal_setup(distributed<database>& db, distributed<cql3::query_processor>& qp);
+void minimal_setup(distributed<cql3::query_processor>& qp);
 
 future<> init_local_cache();
 future<> deinit_local_cache();
@@ -202,8 +202,6 @@ template <typename Value>
 future<> update_peer_info(gms::inet_address ep, sstring column_name, Value value);
 
 future<> remove_endpoint(gms::inet_address ep);
-
-future<> update_hints_dropped(gms::inet_address ep, utils::UUID time_period, int value);
 
 future<> set_scylla_local_param(const sstring& key, const sstring& value);
 future<std::optional<sstring>> get_scylla_local_param(const sstring& key);
@@ -414,7 +412,6 @@ enum class bootstrap_state {
 
     future<> save_truncation_record(utils::UUID, db_clock::time_point truncated_at, db::replay_position);
     future<> save_truncation_record(const column_family&, db_clock::time_point truncated_at, db::replay_position);
-    future<> remove_truncation_record(utils::UUID);
     future<replay_positions> get_truncated_position(utils::UUID);
     future<db::replay_position> get_truncated_position(utils::UUID, uint32_t shard);
     future<db_clock::time_point> get_truncated_at(utils::UUID);
