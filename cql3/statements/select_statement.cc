@@ -367,6 +367,7 @@ select_statement::do_execute(service::storage_proxy& proxy,
 
     command->slice.options.set<query::partition_slice::option::allow_short_read>();
     auto timeout_duration = options.get_timeout_config().*get_timeout_config_selector();
+    auto timeout = db::timeout_clock::now() + timeout_duration;
     auto p = service::pager::query_pagers::pager(_schema, _selection,
             state, options, command, std::move(key_ranges), restrictions_need_filtering ? _restrictions : nullptr);
 
@@ -374,10 +375,9 @@ select_statement::do_execute(service::storage_proxy& proxy,
         return do_with(
                 cql3::selection::result_set_builder(*_selection, now,
                         options.get_cql_serialization_format(), *_group_by_cell_indices),
-                [this, p, page_size, now, timeout_duration, restrictions_need_filtering](auto& builder) {
+                [this, p, page_size, now, timeout, restrictions_need_filtering](auto& builder) {
                     return do_until([p] {return p->is_exhausted();},
-                            [p, &builder, page_size, now, timeout_duration] {
-                                auto timeout = db::timeout_clock::now() + timeout_duration;
+                            [p, &builder, page_size, now, timeout] {
                                 return p->fetch_page(builder, page_size, now, timeout);
                             }
                     ).then([this, p, &builder, restrictions_need_filtering] {
@@ -401,7 +401,6 @@ select_statement::do_execute(service::storage_proxy& proxy,
                         " you must either remove the ORDER BY or the IN and sort client side, or disable paging for this query");
     }
 
-    auto timeout = db::timeout_clock::now() + timeout_duration;
     if (_selection->is_trivial() && !restrictions_need_filtering && !_per_partition_limit) {
         return p->fetch_page_generator(page_size, now, timeout, _stats).then([this, p] (result_generator generator) {
             auto meta = [&] () -> shared_ptr<const cql3::metadata> {
