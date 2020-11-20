@@ -119,7 +119,7 @@ public:
      * @param column_def the column definition
      * @return the restriction associated to the specified column
      */
-    ::shared_ptr<restriction> get_restriction(const column_definition& column_def) const {
+    ::shared_ptr<single_column_restriction> get_restriction(const column_definition& column_def) const {
         auto i = _restrictions.find(&column_def);
         if (i == _restrictions.end()) {
             return {};

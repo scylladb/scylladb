@@ -323,6 +323,13 @@ SEASTAR_TEST_CASE(test_many_columns) {
                 {{int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(3)}, {int32_type->decompose(4)}, {int32_type->decompose(5)}, {int32_type->decompose(6)}},
             });
         });
+        BOOST_TEST_PASSPOINT();
+        eventually([&] {
+            // #7659
+            cquery_nofail(e, "SELECT * FROM tab WHERE d=0 AND f>0 ALLOW FILTERING");
+            cquery_nofail(e, "SELECT * FROM tab WHERE f=0 AND d>0 ALLOW FILTERING");
+            cquery_nofail(e, "SELECT * FROM tab WHERE f=0 AND f>0 ALLOW FILTERING");
+        });
     });
 }
 
