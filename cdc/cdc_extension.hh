@@ -20,10 +20,16 @@
 
 #pragma once
 
+#include <map>
+
+#include <seastar/core/sstring.hh>
+
+#include "bytes.hh"
 #include "serializer.hh"
 #include "db/extensions.hh"
 #include "cdc/cdc_options.hh"
 #include "schema.hh"
+#include "serializer_impl.hh"
 
 namespace cdc {
 
