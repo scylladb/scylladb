@@ -1827,10 +1827,11 @@ static utils::multiprecision_int deserialize_value(const varint_type_impl&, byte
     return negative ? -num : num;
 }
 
-template <typename T> static T deserialize_value(const floating_type_impl<T>&, bytes_view v) {
+template<typename T, FragmentedView View>
+T deserialize_value(const floating_type_impl<T>&, View v) {
     typename int_of_size<T>::itype i = read_simple<typename int_of_size<T>::itype>(v);
-    if (!v.empty()) {
-        throw marshal_exception(format("cannot deserialize floating - {:d} bytes left", v.size()));
+    if (v.size_bytes()) {
+        throw marshal_exception(format("cannot deserialize floating - {:d} bytes left", v.size_bytes()));
     }
     T d;
     memcpy(&d, &i, sizeof(T));
