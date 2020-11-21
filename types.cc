@@ -1837,7 +1837,8 @@ template <typename T> static T deserialize_value(const floating_type_impl<T>&, b
     return d;
 }
 
-static big_decimal deserialize_value(const decimal_type_impl& , bytes_view v) {
+template<FragmentedView View>
+big_decimal deserialize_value(const decimal_type_impl&, View v) {
     auto scale = read_simple<int32_t>(v);
     auto unscaled = deserialize_value(static_cast<const varint_type_impl&>(*varint_type), v);
     return big_decimal(scale, unscaled);
