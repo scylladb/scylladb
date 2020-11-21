@@ -26,8 +26,8 @@ import argparse
 import subprocess
 import time
 import tempfile
-import subprocess
 from scylla_util import *
+from subprocess import run
 
 if __name__ == '__main__':
     if os.getuid() > 0:
@@ -42,7 +42,7 @@ if __name__ == '__main__':
 
 # Gentoo may uses OpenRC
     if is_gentoo_variant():
-        run('sysctl -p /etc/sysctl.d/99-scylla-coredump.conf')
+        run('sysctl -p /etc/sysctl.d/99-scylla-coredump.conf', shell=True, check=True)
 # Other distributions can use systemd-coredump, so setup it
     else:
         if is_debian_variant():
@@ -80,11 +80,11 @@ WantedBy=multi-user.target
             systemd_unit('var-lib-systemd-coredump.mount').enable()
             systemd_unit('var-lib-systemd-coredump.mount').start()
         if os.path.exists('/usr/lib/sysctl.d/50-coredump.conf'):
-            run('sysctl -p /usr/lib/sysctl.d/50-coredump.conf')
+            run('sysctl -p /usr/lib/sysctl.d/50-coredump.conf', shell=True, check=True)
         else:
             with open('/etc/sysctl.d/99-scylla-coredump.conf', 'w') as f:
                 f.write('kernel.core_pattern=|/usr/lib/systemd/systemd-coredump %p %u %g %s %t %e"')
-            run('sysctl -p /etc/sysctl.d/99-scylla-coredump.conf')
+            run('sysctl -p /etc/sysctl.d/99-scylla-coredump.conf', shell=True, check=True)
 
         fp = tempfile.NamedTemporaryFile()
         fp.write(b'kill -SEGV $$')
@@ -98,7 +98,7 @@ WantedBy=multi-user.target
         # need to wait for systemd-coredump to complete collecting coredump
         time.sleep(3)
         try:
-            coreinfo = out('coredumpctl --no-pager --no-legend info {}'.format(pid))
+            coreinfo = run('coredumpctl --no-pager --no-legend info {}'.format(pid), shell=True, check=True, capture_output=True, encoding='utf-8').stdout.strip()
         except subprocess.CalledProcessError:
             print('Does not able to detect coredump, failed to configure systemd-coredump.')
             sys.exit(1)

@@ -26,6 +26,7 @@ import argparse
 import psutil
 from pathlib import Path
 from scylla_util import *
+from subprocess import run
 
 def GB(n):
     return n * 1024 * 1024 * 1024
@@ -78,10 +79,10 @@ if __name__ == '__main__':
     if swapfile.exists():
         print('swapfile {} already exists'.format(swapfile))
         sys.exit(1)
-    run('dd if=/dev/zero of={} bs=1M count={}'.format(swapfile, swapsize_mb))
+    run('dd if=/dev/zero of={} bs=1M count={}'.format(swapfile, swapsize_mb), shell=True, check=True)
     swapfile.chmod(0o600)
-    run('mkswap -f {}'.format(swapfile))
-    swapunit_bn = out('systemd-escape -p --suffix=swap {}'.format(swapfile))
+    run('mkswap -f {}'.format(swapfile), shell=True, check=True)
+    swapunit_bn = run('systemd-escape -p --suffix=swap {}'.format(swapfile), shell=True, check=True, capture_output=True, encoding='utf-8').stdout.strip()
     swapunit = Path('/etc/systemd/system/{}'.format(swapunit_bn))
     if swapunit.exists():
         print('swap unit {} already exists'.format(swapunit))

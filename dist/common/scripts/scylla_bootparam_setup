@@ -24,8 +24,8 @@ import os
 import re
 import sys
 import argparse
-import subprocess
 from scylla_util import *
+from subprocess import run
 
 if __name__ == '__main__':
     if os.getuid() > 0:
@@ -58,9 +58,9 @@ if __name__ == '__main__':
             cfg.set(grub_key, cmdline_linux)
             cfg.commit()
             if is_debian_variant():
-                run('update-grub')
+                run('update-grub', shell=True, check=True)
             else:
-                run('grub2-mkconfig -o /boot/grub2/grub.cfg')
+                run('grub2-mkconfig -o /boot/grub2/grub.cfg', shell=True, check=True)
 
 #    if is_ec2() and os.path.exists('/boot/grub/menu.lst'):
     if os.path.exists('/boot/grub/menu.lst'):
