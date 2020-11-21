@@ -1861,16 +1861,18 @@ static inet_address deserialize_value(const inet_addr_type_impl&, bytes_view v) 
     }
 }
 
-static utils::UUID deserialize_value(const uuid_type_impl&, bytes_view v) {
+template<FragmentedView View>
+utils::UUID deserialize_value(const uuid_type_impl&, View v) {
     auto msb = read_simple<uint64_t>(v);
     auto lsb = read_simple<uint64_t>(v);
-    if (!v.empty()) {
-        throw marshal_exception(format("cannot deserialize uuid, {:d} bytes left", v.size()));
+    if (v.size_bytes()) {
+        throw marshal_exception(format("cannot deserialize uuid, {:d} bytes left", v.size_bytes()));
     }
     return utils::UUID(msb, lsb);
 }
 
-static utils::UUID deserialize_value(const timeuuid_type_impl&, bytes_view v) {
+template<FragmentedView View>
+utils::UUID deserialize_value(const timeuuid_type_impl&, View v) {
     return deserialize_value(static_cast<const uuid_type_impl&>(*uuid_type), v);
 }
 
