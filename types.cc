@@ -1879,7 +1879,8 @@ static db_clock::time_point deserialize_value(const timestamp_date_base_class&, 
     return db_clock::time_point(db_clock::duration(v2));
 }
 
-static uint32_t deserialize_value(const simple_date_type_impl&, bytes_view v) {
+template<FragmentedView View>
+uint32_t deserialize_value(const simple_date_type_impl&, View v) {
     return read_simple_exactly<uint32_t>(v);
 }
 
