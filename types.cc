@@ -1899,9 +1899,24 @@ static T deserialize_value(const integer_type_impl<T>& t, bytes_view v) {
     return read_simple_exactly<T>(v);
 }
 
-static sstring deserialize_value(const string_type_impl&, bytes_view v) {
+template<FragmentedView View>
+sstring deserialize_value(const string_type_impl&, View v) {
     // FIXME: validation?
-    return sstring(reinterpret_cast<const char*>(v.begin()), v.size());
+    sstring buf(sstring::initialized_later(), v.size_bytes());
+    auto out = buf.begin();
+    while (v.size_bytes()) {
+        out = std::copy(v.current_fragment().begin(), v.current_fragment().end(), out);
+        v.remove_current();
+    }
+    return buf;
+}
+
+template<typename T>
+requires requires (const T& t, bytes_view v) {
+    deserialize_value(t, single_fragmented_view(v));
+}
+decltype(auto) deserialize_value(const T& t, bytes_view v) {
+    return deserialize_value(t, single_fragmented_view(v));
 }
 
 namespace {
