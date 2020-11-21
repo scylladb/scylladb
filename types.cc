@@ -1874,7 +1874,8 @@ static utils::UUID deserialize_value(const timeuuid_type_impl&, bytes_view v) {
     return deserialize_value(static_cast<const uuid_type_impl&>(*uuid_type), v);
 }
 
-static db_clock::time_point deserialize_value(const timestamp_date_base_class&, bytes_view v) {
+template<FragmentedView View>
+db_clock::time_point deserialize_value(const timestamp_date_base_class&, View v) {
     auto v2 = read_simple_exactly<uint64_t>(v);
     return db_clock::time_point(db_clock::duration(v2));
 }
