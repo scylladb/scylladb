@@ -1894,8 +1894,8 @@ static bool deserialize_value(const boolean_type_impl&, bytes_view v) {
     return *v.begin() != 0;
 }
 
-template<typename T>
-static T deserialize_value(const integer_type_impl<T>& t, bytes_view v) {
+template<typename T, FragmentedView View>
+T deserialize_value(const integer_type_impl<T>& t, View v) {
     return read_simple_exactly<T>(v);
 }
 
