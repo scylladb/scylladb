@@ -154,3 +154,27 @@ decltype(auto) with_linearized(const FragmentedBuffer& buffer, Function&& fn)
     }
     return fn(bv);
 }
+
+template<typename T>
+concept FragmentedView = requires (T view, size_t n) {
+    typename T::fragment_type;
+    requires std::is_same_v<typename T::fragment_type, bytes_view>
+            || std::is_same_v<typename T::fragment_type, bytes_mutable_view>;
+    // No preconditions.
+    { view.current_fragment() } -> std::convertible_to<const typename T::fragment_type&>;
+    // No preconditions.
+    { view.size_bytes() } -> std::convertible_to<size_t>;
+    // Precondition: n <= size_bytes()
+    { view.prefix(n) } -> std::same_as<T>;
+    // Precondition: n <= size_bytes()
+    view.remove_prefix(n);
+    // Precondition: size_bytes() > 0
+    view.remove_current();
+};
+
+template<typename T>
+concept FragmentedMutableView = requires (T view) {
+    requires FragmentedView<T>;
+    requires std::is_same_v<typename T::fragment_type, bytes_mutable_view>;
+};
+
