@@ -197,6 +197,29 @@ public:
         }
     }
 
+    void remove_current() noexcept {
+        _total_size -= _current_size;
+        ++_current;
+        if (_total_size) {
+            _current_size = std::min(_current->size(), _total_size);
+            _current_position = _current->get();
+        } else {
+            _current_size = 0;
+            _current_position = nullptr;
+        }
+    }
+
+    view prefix(size_t n) const {
+        auto tmp = *this;
+        tmp._total_size = std::min(tmp._total_size, n);
+        tmp._current_size = std::min(tmp._current_size, n);
+        return tmp;
+    }
+
+    bytes_view current_fragment() const noexcept {
+        return bytes_view(reinterpret_cast<const bytes_view::value_type*>(_current_position), _current_size);
+    }
+
     // Invalidates iterators
     void remove_suffix(size_t n) noexcept {
         _total_size -= n;
@@ -241,6 +264,7 @@ public:
     }
 };
 static_assert(FragmentRange<fragmented_temporary_buffer::view>);
+static_assert(FragmentedView<fragmented_temporary_buffer::view>);
 
 inline fragmented_temporary_buffer::operator view() const noexcept
 {
