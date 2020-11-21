@@ -1887,11 +1887,12 @@ static int64_t deserialize_value(const time_type_impl&, bytes_view v) {
     return read_simple_exactly<int64_t>(v);
 }
 
-static bool deserialize_value(const boolean_type_impl&, bytes_view v) {
-    if (v.size() != 1) {
-        throw marshal_exception(format("cannot deserialize boolean, size mismatch ({:d})", v.size()));
+template<FragmentedView View>
+bool deserialize_value(const boolean_type_impl&, View v) {
+    if (v.size_bytes() != 1) {
+        throw marshal_exception(format("cannot deserialize boolean, size mismatch ({:d})", v.size_bytes()));
     }
-    return *v.begin() != 0;
+    return v.current_fragment().front() != 0;
 }
 
 template<typename T, FragmentedView View>
