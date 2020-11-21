@@ -29,6 +29,7 @@ import distro
 import shutil
 
 from scylla_util import *
+from subprocess import run
 
 if __name__ == '__main__':
     if os.getuid() > 0:
@@ -54,7 +55,7 @@ if __name__ == '__main__':
         ntp = systemd_unit('ntp.service')
         ntp.stop()
         # ignore error, ntpd may able to adjust clock later
-        run('ntpdate ntp.ubuntu.com', exception=False)
+        run('ntpdate ntp.ubuntu.com', shell=True)
         ntp.start()
 
     if is_gentoo_variant():
@@ -66,7 +67,7 @@ if __name__ == '__main__':
         server = match.group(1)
         ntpd = systemd_unit('ntpd.service')
         ntpd.stop()
-        run('ntpdate {}'.format(server))
+        run('ntpdate {}'.format(server), shell=True, check=True)
         ntpd.enable()
         ntpd.start()
 
@@ -84,7 +85,7 @@ if __name__ == '__main__':
             chronyd = systemd_unit('chronyd.service')
             chronyd.enable()
             chronyd.restart()
-            run('chronyc makestep')
+            run('chronyc makestep', shell=True, check=True)
         else:
             if not shutil.which('ntpd') or not shutil.which('ntpdate'):
                 yum_install('ntp ntpdate')
@@ -100,6 +101,6 @@ if __name__ == '__main__':
             ntpd = systemd_unit('ntpd.service')
             ntpd.stop()
             # ignore error, ntpd may able to adjust clock later
-            run('ntpdate {}'.format(server), exception=False)
+            run('ntpdate {}'.format(server), shell=True)
             ntpd.enable()
             ntpd.start()

@@ -27,9 +27,10 @@ import platform
 import distro
 
 from scylla_util import *
+from subprocess import run
 
 def get_mode_cpuset(nic, mode):
-    mode_cpu_mask = out('/opt/scylladb/scripts/perftune.py --tune net --nic {} --mode {} --get-cpu-mask-quiet'.format(nic, mode))
+    mode_cpu_mask = run('/opt/scylladb/scripts/perftune.py --tune net --nic {} --mode {} --get-cpu-mask-quiet'.format(nic, mode), shell=True, check=True, capture_output=True, encoding='utf-8').stdout.strip()
     return hex2list(mode_cpu_mask)
 
 def get_cur_cpuset():
@@ -78,7 +79,7 @@ def create_perftune_conf(cfg):
 
         mode = get_tune_mode(nic)
         params += ' --mode {mode} --dump-options-file'.format(mode=mode)
-        yaml = out('/opt/scylladb/scripts/perftune.py ' + params)
+        yaml = run('/opt/scylladb/scripts/perftune.py ' + params, shell=True, check=True, capture_output=True, encoding='utf-8').stdout.strip()
         with open('/etc/scylla.d/perftune.yaml', 'w') as f:
             f.write(yaml)
         return True
@@ -119,26 +120,26 @@ if __name__ == '__main__':
         user = cfg.get('USER')
         group = cfg.get('GROUP')
         bridge = cfg.get('BRIDGE')
-        run('ip tuntap del mode tap dev {TAP}'.format(TAP=tap))
-        run('ip tuntap add mode tap dev {TAP} user {USER} one_queue vnet_hdr'.format(TAP=tap, USER=user))
-        run('ip link set dev {TAP} up'.format(TAP=tap))
-        run('ip link set dev {TAP} master {BRIDGE}'.format(TAP=tap, BRIDGE=bridge))
-        run('chown {USER}.{GROUP} /dev/vhost-net'.format(USER=user, GROUP=group))
+        run('ip tuntap del mode tap dev {TAP}'.format(TAP=tap), shell=True, check=True)
+        run('ip tuntap add mode tap dev {TAP} user {USER} one_queue vnet_hdr'.format(TAP=tap, USER=user), shell=True, check=True)
+        run('ip link set dev {TAP} up'.format(TAP=tap), shell=True, check=True)
+        run('ip link set dev {TAP} master {BRIDGE}'.format(TAP=tap, BRIDGE=bridge), shell=True, check=True)
+        run('chown {USER}.{GROUP} /dev/vhost-net'.format(USER=user, GROUP=group), shell=True, check=True)
     elif mode == 'dpdk':
         ethpciid = cfg.get('ETHPCIID')
         nr_hugepages = cfg.get('NR_HUGEPAGES')
-        run('modprobe uio')
-        run('modprobe uio_pci_generic')
-        run('/opt/scylladb/scripts/dpdk-devbind.py --force --bind=uio_pci_generic {ETHPCIID}'.format(ETHPCIID=ethpciid))
+        run('modprobe uio', shell=True, check=True)
+        run('modprobe uio_pci_generic', shell=True, check=True)
+        run('/opt/scylladb/scripts/dpdk-devbind.py --force --bind=uio_pci_generic {ETHPCIID}'.format(ETHPCIID=ethpciid), shell=True, check=True)
         for n in glob.glob('/sys/devices/system/node/node?'):
             with open('{n}/hugepages/hugepages-2048kB/nr_hugepages'.format(n=n), 'w') as f:
                 f.write(nr_hugepages)
         if distro.name() == 'Ubuntu':
-            run('hugeadm --create-mounts')
+            run('hugeadm --create-mounts', shell=True, check=True)
     else:
         try:
             if create_perftune_conf(cfg):
-                run("{} --options-file /etc/scylla.d/perftune.yaml".format(perftune_base_command()))
+                run("{} --options-file /etc/scylla.d/perftune.yaml".format(perftune_base_command()), shell=True, check=True)
         except Exception as e:
             print(f'Exception occurred while creating perftune.yaml: {e}')
             print('To fix the error, please re-run scylla_setup.')

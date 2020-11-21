@@ -26,6 +26,7 @@ import tempfile
 import tarfile
 from scylla_util import *
 import argparse
+from subprocess import run
 
 VERSION='1.0.1'
 INSTALL_DIR=scylladir()+'/Prometheus/node_exporter'
@@ -52,7 +53,7 @@ if __name__ == '__main__':
             sys.exit(1)
 
     if is_gentoo_variant():
-        run('emerge -uq app-metrics/node_exporter')
+        run('emerge -uq app-metrics/node_exporter', shell=True, check=True)
         print('app-metrics/node_exporter does not install systemd service files, please fill a bug if you need them.')
         sys.exit(1)
     else:

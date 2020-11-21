@@ -24,6 +24,7 @@ import os
 import sys
 import subprocess
 from scylla_util import *
+from subprocess import run
 
 if __name__ == '__main__':
     if os.getuid() > 0:
@@ -34,9 +35,9 @@ if __name__ == '__main__':
         print("scylla_selinux_setup only supports Red Hat variants")
         sys.exit(0)
 
-    res = out('sestatus')
+    res = run('sestatus', shell=True, check=True, capture_output=True, encoding='utf-8').stdout.strip()
     if res.split(None)[2] != 'disabled':
-        run('setenforce 0')
+        run('setenforce 0', shell=True, check=True)
         cfg = sysconfig_parser('/etc/sysconfig/selinux')
         cfg.set('SELINUX', 'disabled')
         cfg.commit()

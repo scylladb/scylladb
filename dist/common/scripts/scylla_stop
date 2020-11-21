@@ -23,6 +23,7 @@
 import os
 import sys
 from scylla_util import *
+from subprocess import run
 
 if __name__ == '__main__':
     if os.getuid() > 0:
@@ -35,7 +36,7 @@ if __name__ == '__main__':
 
 
     if cfg.get('NETWORK_MODE') == 'virtio':
-        run('ip tuntap del mode tap dev {TAP}'.format(TAP=cfg.get('TAP')))
+        run('ip tuntap del mode tap dev {TAP}'.format(TAP=cfg.get('TAP')), shell=True, check=True)
     elif cfg.get('NETWORK_MODE') == 'dpdk':
-        run('/opt/scylladb/scripts/dpdk-devbind.py -u {ETHPCIID}'.format(ETHPCIID=cfg.get('ETHPCIID')))
-        run('/opt/scylladb/scripts/dpdk-devbind.py -b {ETHDRV} {ETHPCIID}'.format(ETHDRV=cfg.get('ETHDRV'), ETHPCIID=cfg.get('ETHPCIID')))
+        run('/opt/scylladb/scripts/dpdk-devbind.py -u {ETHPCIID}'.format(ETHPCIID=cfg.get('ETHPCIID')), shell=True, check=True)
+        run('/opt/scylladb/scripts/dpdk-devbind.py -b {ETHDRV} {ETHPCIID}'.format(ETHDRV=cfg.get('ETHDRV'), ETHPCIID=cfg.get('ETHPCIID')), shell=True, check=True)

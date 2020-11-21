@@ -24,6 +24,7 @@ import os
 import sys
 import shutil
 from scylla_util import *
+from subprocess import run, DEVNULL
 
 if __name__ == '__main__':
     if os.getuid() > 0:
@@ -34,11 +35,11 @@ if __name__ == '__main__':
         pkg_install('xfsprogs')
 
     os.makedirs('/var/tmp/mnt', exist_ok=True)
-    run('dd if=/dev/zero of=/var/tmp/kernel-check.img bs=1M count=128', silent=True)
-    run('mkfs.xfs /var/tmp/kernel-check.img', silent=True)
-    run('mount /var/tmp/kernel-check.img /var/tmp/mnt -o loop', silent=True)
-    ret = run('iotune --fs-check --evaluation-directory /var/tmp/mnt', exception=False)
-    run('umount /var/tmp/mnt')
+    run('dd if=/dev/zero of=/var/tmp/kernel-check.img bs=1M count=128', shell=True, check=True, stdout=DEVNULL, stderr=DEVNULL)
+    run('mkfs.xfs /var/tmp/kernel-check.img', shell=True, check=True, stdout=DEVNULL, stderr=DEVNULL)
+    run('mount /var/tmp/kernel-check.img /var/tmp/mnt -o loop', shell=True, check=True, stdout=DEVNULL, stderr=DEVNULL)
+    ret = run('iotune --fs-check --evaluation-directory /var/tmp/mnt', shell=True).returncode
+    run('umount /var/tmp/mnt', shell=True, check=True)
     shutil.rmtree('/var/tmp/mnt')
     os.remove('/var/tmp/kernel-check.img')
     if ret == 0:

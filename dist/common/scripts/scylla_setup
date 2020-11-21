@@ -29,6 +29,7 @@ import io
 import stat
 import distro
 from scylla_util import *
+from subprocess import run, DEVNULL
 
 interactive = False
 HOUSEKEEPING_TIMEOUT = 60
@@ -115,9 +116,9 @@ def do_verify_package(pkg):
     if is_offline():
         res = 0 if pkg_files[pkg].exists() else 1
     elif is_debian_variant():
-        res = run('dpkg -s {}'.format(pkg), silent=True, exception=False)
+        res = run('dpkg -s {}'.format(pkg), shell=True, stdout=DEVNULL, stderr=DEVNULL).returncode
     elif is_redhat_variant():
-        res = run('rpm -q {}'.format(pkg), silent=True, exception=False)
+        res = run('rpm -q {}'.format(pkg), shell=True, stdout=DEVNULL, stderr=DEVNULL).returncode
     elif is_gentoo_variant():
         res = 0 if len(glob.glob('/var/db/pkg/*/{}-*'.format(pkg))) else 1
     else:
@@ -129,9 +130,9 @@ def do_verify_package(pkg):
 
 def list_block_devices():
     devices = []
-    s = out('lsblk --help')
+    s = run('lsblk --help', shell=True, check=True, capture_output=True, encoding='utf-8').stdout.strip()
     if re.search(r'\s*-p', s, flags=re.MULTILINE):
-        s = out('lsblk -pnr')
+        s = run('lsblk -pnr', shell=True, check=True, capture_output=True, encoding='utf-8').stdout.strip()
         res = re.findall(r'^(\S+) \S+ \S+ \S+ \S+ (\S+)', s, flags=re.MULTILINE)
         for r in res:
             if r[1] != 'rom' and r[1] != 'loop':
@@ -155,7 +156,7 @@ def get_unused_disks():
 
 def run_setup_script(name, script):
     global interactive
-    res = run('{}/{}'.format(scriptsdir(), script), exception=False)
+    res = run('{}/{}'.format(scriptsdir(), script), shell=True).returncode
     if res != 0:
         if interactive:
             colorprint('{red}{name} setup failed. Press any key to continue...{nocolor}', name=name)
@@ -341,13 +342,13 @@ if __name__ == '__main__':
         if ec2_check:
             if interactive:
                 nic = interactive_choose_nic()
-            run('{}/scylla_ec2_check --nic {}'.format(scriptsdir(), nic))
+            run('{}/scylla_ec2_check --nic {}'.format(scriptsdir(), nic), shell=True, check=True)
 
     if not is_nonroot():
         kernel_check = interactive_ask_service('Do you want to run check your kernel version?', 'Yes - runs a  script to verify that the kernel for this instance qualifies to run Scylla. No - skips the kernel check.', kernel_check)
         args.no_kernel_check = not kernel_check
         if kernel_check:
-            run('{}/scylla_kernel_check'.format(scriptsdir()))
+            run('{}/scylla_kernel_check'.format(scriptsdir()), shell=True, check=True)
 
         verify_package = interactive_ask_service('Do you want to verify the ScyllaDB packages are installed?', 'Yes - runs a script to confirm that ScyllaDB is installed. No - skips the installation check.', verify_package)
         args.no_verify_package = not verify_package
@@ -379,19 +380,19 @@ if __name__ == '__main__':
                 hk_restart.mask()
                 hk_restart.stop()
 
-        cur_version=out('scylla --version', exception=False)
+        cur_version=run('scylla --version', shell=True, capture_output=True, encoding='utf-8').stdout.strip()
         if len(cur_version) > 0:
             if is_debian_variant():
-                new_version=out('sudo -u scylla {}/scylla-housekeeping --uuid-file /var/lib/scylla-housekeeping/housekeeping.uuid --repo-files \'/etc/apt/sources.list.d/scylla*.list\' version --version {} --mode i'.format(scriptsdir(), cur_version), shell=True, exception=False, timeout=HOUSEKEEPING_TIMEOUT)
+                new_version=run('sudo -u scylla {}/scylla-housekeeping --uuid-file /var/lib/scylla-housekeeping/housekeeping.uuid --repo-files \'/etc/apt/sources.list.d/scylla*.list\' version --version {} --mode i'.format(scriptsdir(), cur_version), shell=True, capture_output=True, encoding='utf-8', timeout=HOUSEKEEPING_TIMEOUT).stdout.strip()
             else:
-                new_version=out('sudo -u scylla {}/scylla-housekeeping --uuid-file /var/lib/scylla-housekeeping/housekeeping.uuid --repo-files \'/etc/yum.repos.d/scylla*.repo\' version --version {} --mode i'.format(scriptsdir(), cur_version), shell=True, exception=False, timeout=HOUSEKEEPING_TIMEOUT)
+                new_version=run('sudo -u scylla {}/scylla-housekeeping --uuid-file /var/lib/scylla-housekeeping/housekeeping.uuid --repo-files \'/etc/yum.repos.d/scylla*.repo\' version --version {} --mode i'.format(scriptsdir(), cur_version), shell=True, capture_output=True, encoding='utf-8', timeout=HOUSEKEEPING_TIMEOUT).stdout.strip()
             if len(new_version) > 0:
                 print(new_version)
         else:
             if is_debian_variant():
-                new_version=out('sudo -u scylla {}/scylla-housekeeping --uuid-file /var/lib/scylla-housekeeping/housekeeping.uuid --repo-files \'/etc/apt/sources.list.d/scylla*.list\' version --version unknown --mode u'.format(scriptsdir()), shell=True, exception=False, timeout=HOUSEKEEPING_TIMEOUT)
+                new_version=run('sudo -u scylla {}/scylla-housekeeping --uuid-file /var/lib/scylla-housekeeping/housekeeping.uuid --repo-files \'/etc/apt/sources.list.d/scylla*.list\' version --version unknown --mode u'.format(scriptsdir()), shell=True, capture_output=True, encoding='utf-8', timeout=HOUSEKEEPING_TIMEOUT).stdout.strip()
             else:
-                new_version=out('sudo -u scylla {}/scylla-housekeeping --uuid-file /var/lib/scylla-housekeeping/housekeeping.uuid --repo-files \'/etc/yum.repos.d/scylla*.repo\' version --version unknown --mode u'.format(scriptsdir()), shell=True, exception=False, timeout=HOUSEKEEPING_TIMEOUT)
+                new_version=run('sudo -u scylla {}/scylla-housekeeping --uuid-file /var/lib/scylla-housekeeping/housekeeping.uuid --repo-files \'/etc/yum.repos.d/scylla*.repo\' version --version unknown --mode u'.format(scriptsdir()), shell=True, capture_output=True, encoding='utf-8', timeout=HOUSEKEEPING_TIMEOUT)
             print('A Scylla executable was not found, please check your installation {}'.format(new_version))
 
         if is_redhat_variant():
@@ -492,7 +493,7 @@ if __name__ == '__main__':
             run_setup_script('Performance Tuning', 'scylla_sysconfig_setup --nic {nic} {setup_args}'.format(nic=nic, setup_args=setup_args))
 
     if is_nonroot():
-        params = out('systemctl --no-pager show user@1000.service')
+        params = run('systemctl --no-pager show user@1000.service', shell=True, check=True, capture_output=True, encoding='utf-8').stdout.strip()
         res = re.findall(r'^LimitNOFILE=(.*)$', params, flags=re.MULTILINE)
         if res and int(res[0]) < 10000:
             colorprint('{red}NOFILE hard limit is too low, enabling developer mode{nocolor}')
