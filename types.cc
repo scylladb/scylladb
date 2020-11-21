@@ -1883,7 +1883,8 @@ static uint32_t deserialize_value(const simple_date_type_impl&, bytes_view v) {
     return read_simple_exactly<uint32_t>(v);
 }
 
-static int64_t deserialize_value(const time_type_impl&, bytes_view v) {
+template<FragmentedView View>
+int64_t deserialize_value(const time_type_impl&, View v) {
     return read_simple_exactly<int64_t>(v);
 }
 
