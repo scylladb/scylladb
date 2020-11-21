@@ -1843,9 +1843,12 @@ static big_decimal deserialize_value(const decimal_type_impl& , bytes_view v) {
     return big_decimal(scale, unscaled);
 }
 
-static cql_duration deserialize_value(const duration_type_impl& t, bytes_view v) {
+template<FragmentedView View>
+cql_duration deserialize_value(const duration_type_impl& t, View v) {
     common_counter_type months, days, nanoseconds;
-    std::tie(months, days, nanoseconds) = deserialize_counters(v);
+    std::tie(months, days, nanoseconds) = with_linearized(v, [] (bytes_view bv) {
+        return deserialize_counters(bv);
+    });
     return cql_duration(months_counter(months), days_counter(days), nanoseconds_counter(nanoseconds));
 }
 
