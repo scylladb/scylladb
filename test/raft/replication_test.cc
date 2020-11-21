@@ -475,11 +475,10 @@ future<int> run_test(test_case test) {
             unsigned next_leader = std::get<new_leader>(update);
             if (next_leader != leader) {
                 assert(next_leader < rafts.size());
+                // Make current leader a follower: disconnect, timeout, re-connect
                 server_disconnected.insert(raft::server_id{utils::UUID(0, leader + 1)});
                 for (size_t s = 0; s < test.nodes; ++s) {
-                    if (s != leader) {
-                        rafts[s].first->elapse_election();
-                    }
+                    rafts[s].first->elapse_election();
                 }
                 co_await rafts[next_leader].first->elect_me_leader();
                 server_disconnected.erase(raft::server_id{utils::UUID(0, leader + 1)});
