@@ -1849,15 +1849,18 @@ static cql_duration deserialize_value(const duration_type_impl& t, bytes_view v)
     return cql_duration(months_counter(months), days_counter(days), nanoseconds_counter(nanoseconds));
 }
 
-static inet_address deserialize_value(const inet_addr_type_impl&, bytes_view v) {
-    switch (v.size()) {
+template<FragmentedView View>
+inet_address deserialize_value(const inet_addr_type_impl&, View v) {
+    switch (v.size_bytes()) {
     case 4:
         // gah. read_simple_be, please...
         return inet_address(::in_addr{net::hton(read_simple<uint32_t>(v))});
-    case 16:
-        return inet_address(*reinterpret_cast<const ::in6_addr*>(v.data()));
+    case 16:;
+        ::in6_addr buf;
+        read_fragmented(v, sizeof(buf), reinterpret_cast<bytes::value_type*>(&buf));
+        return inet_address(buf);
     default:
-        throw marshal_exception(format("cannot deserialize inet_address, unsupported size {:d} bytes", v.size()));
+        throw marshal_exception(format("cannot deserialize inet_address, unsupported size {:d} bytes", v.size_bytes()));
     }
 }
 
