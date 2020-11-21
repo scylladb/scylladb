@@ -1811,16 +1811,20 @@ static data_value deserialize_aux(const tuple_type_impl& t, bytes_view v) {
     return data_value::make(t.shared_from_this(), std::make_unique<tuple_type_impl::native_type>(std::move(ret)));
 }
 
-static utils::multiprecision_int deserialize_value(const varint_type_impl&, bytes_view v) {
-    auto negative = v.front() < 0;
+template<FragmentedView View>
+utils::multiprecision_int deserialize_value(const varint_type_impl&, View v) {
+    bool negative = v.current_fragment().front() < 0;
     utils::multiprecision_int num;
-    for (uint8_t b : v) {
+  while (v.size_bytes()) {
+    for (uint8_t b : v.current_fragment()) {
         if (negative) {
             b = ~b;
         }
         num <<= 8;
         num += b;
     }
+    v.remove_current();
+  }
     if (negative) {
         num += 1;
     }
