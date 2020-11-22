@@ -509,8 +509,29 @@ struct run_identifier {
     auto describe_type(sstable_version_types v, Describer f) { return f(id); }
 };
 
+// Types of large data statistics.
+//
+// Note: For extensibility, never reuse an identifier,
+// only add new ones, since these are stored on stable storage.
+enum class large_data_type : uint32_t {
+    partition_size = 1,     // partition size, in bytes
+    row_size = 2,           // row size, in bytes
+    cell_size = 3,          // cell size, in bytes
+    rows_in_partition = 4,  // number of rows in a partition
+};
+
+struct large_data_stats_entry {
+    uint64_t max_value;
+    uint64_t threshold;
+    uint32_t above_threshold;
+
+    template <typename Describer>
+    auto describe_type(sstable_version_types v, Describer f) { return f(max_value, threshold, above_threshold); }
+};
+
 struct scylla_metadata {
     using extension_attributes = disk_hash<uint32_t, disk_string<uint32_t>, disk_string<uint32_t>>;
+    using large_data_stats = disk_hash<uint32_t, large_data_type, large_data_stats_entry>;
 
     disk_set_of_tagged_union<scylla_metadata_type,
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::Sharding, sharding_metadata>,
