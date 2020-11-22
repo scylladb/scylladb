@@ -24,6 +24,7 @@
 #include <cstdint>
 #include "schema_fwd.hh"
 #include "system_keyspace.hh"
+#include "sstables/shared_sstable.hh"
 
 namespace sstables {
 class sstable;
@@ -113,7 +114,7 @@ public:
         return make_ready_future<bool>(false);
     }
 
-    future<> maybe_delete_large_data_entries(const schema& s, sstring filename, uint64_t data_size);
+    future<> maybe_delete_large_data_entries(sstables::shared_sstable sst);
 
     const large_data_handler::stats& stats() const { return _stats; }
 

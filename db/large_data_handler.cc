@@ -77,24 +77,28 @@ template <typename T> static std::string key_to_str(const T& key, const schema& 
     return oss.str();
 }
 
-future<> large_data_handler::maybe_delete_large_data_entries(const schema& s, sstring filename, uint64_t data_size) {
+future<> large_data_handler::maybe_delete_large_data_entries(sstables::shared_sstable sst) {
     assert(running());
+    auto schema = sst->get_schema();
+    auto filename = sst->get_filename();
+    auto data_size = sst->data_size();
+
     future<> large_partitions = make_ready_future<>();
     if (__builtin_expect(data_size > _partition_threshold_bytes, false)) {
-        large_partitions = with_sem([&s, filename, this] () mutable {
-            return delete_large_data_entries(s, std::move(filename), db::system_keyspace::LARGE_PARTITIONS);
+        large_partitions = with_sem([schema, filename, this] () mutable {
+            return delete_large_data_entries(*schema, std::move(filename), db::system_keyspace::LARGE_PARTITIONS);
         });
     }
     future<> large_rows = make_ready_future<>();
     if (__builtin_expect(data_size > _row_threshold_bytes, false)) {
-        large_rows = with_sem([&s, filename, this] () mutable {
-            return delete_large_data_entries(s, std::move(filename), db::system_keyspace::LARGE_ROWS);
+        large_rows = with_sem([schema, filename, this] () mutable {
+            return delete_large_data_entries(*schema, std::move(filename), db::system_keyspace::LARGE_ROWS);
         });
     }
     future<> large_cells = make_ready_future<>();
     if (__builtin_expect(data_size > _cell_threshold_bytes, false)) {
-        large_cells = with_sem([&s, filename, this] () mutable {
-            return delete_large_data_entries(s, std::move(filename), db::system_keyspace::LARGE_CELLS);
+        large_cells = with_sem([schema, filename, this] () mutable {
+            return delete_large_data_entries(*schema, std::move(filename), db::system_keyspace::LARGE_CELLS);
         });
     }
     return when_all(std::move(large_partitions), std::move(large_rows), std::move(large_cells)).discard_result();

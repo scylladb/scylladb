@@ -2661,7 +2661,7 @@ sstable::unlink()
     });
 
     name = get_filename();
-    fut = get_large_data_handler().maybe_delete_large_data_entries(*get_schema(), name, data_size());
+    fut = get_large_data_handler().maybe_delete_large_data_entries(shared_from_this());
     auto update_large_data_fut = fut.then_wrapped([name = std::move(name)] (future<> f) {
         if (f.failed()) {
             // Just log and ignore failures to delete large data entries.
