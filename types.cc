@@ -1078,18 +1078,27 @@ serialize_map(const map_type_impl& t, const void* value, bytes::iterator& out, c
     }
 }
 
+template <FragmentedView View>
 data_value
-map_type_impl::deserialize(bytes_view in, cql_serialization_format sf) const {
+map_type_impl::deserialize(View in, cql_serialization_format sf) const {
     native_type m;
     auto size = read_collection_size(in, sf);
     for (int i = 0; i < size; ++i) {
-        auto kb = read_collection_value(in, sf);
-        auto k = _keys->deserialize(kb);
-        auto vb = read_collection_value(in, sf);
-        auto v = _values->deserialize(vb);
+        // FIXME: don't linearize
+        auto k = with_linearized(read_collection_value(in, sf), [&] (bytes_view bv) {
+            return _keys->deserialize(bv);
+        });
+        auto v = with_linearized(read_collection_value(in, sf), [&] (bytes_view bv) {
+            return _values->deserialize(bv);
+        });
         m.insert(m.end(), std::make_pair(std::move(k), std::move(v)));
     }
     return make_value(std::move(m));
+}
+
+data_value
+map_type_impl::deserialize(bytes_view in, cql_serialization_format sf) const {
+    return deserialize(single_fragmented_view(in), sf);
 }
 
 static void validate_aux(const map_type_impl& t, bytes_view v, cql_serialization_format sf) {
