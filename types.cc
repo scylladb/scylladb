@@ -1987,11 +1987,12 @@ decltype(auto) deserialize_value(const T& t, bytes_view v) {
 }
 
 namespace {
+template <FragmentedView View>
 struct deserialize_visitor {
-    bytes_view v;
+    View v;
     data_value operator()(const reversed_type_impl& t) { return t.underlying_type()->deserialize(v); }
     template <typename T> data_value operator()(const T& t) {
-        if (v.empty()) {
+        if (!v.size_bytes()) {
             return t.make_empty();
         }
         return t.make_value(deserialize_value(t, v));
@@ -2003,7 +2004,7 @@ struct deserialize_visitor {
          return t.make_value(deserialize_value(t, v));
     }
     data_value operator()(const bytes_type_impl& t) {
-        return t.make_value(std::make_unique<bytes_type_impl::native_type>(v.begin(), v.end()));
+        return t.make_value(std::make_unique<bytes_type_impl::native_type>(linearized(v)));
     }
     data_value operator()(const counter_type_impl& t) {
         return static_cast<const long_type_impl&>(*long_type).make_value(read_simple_exactly<int64_t>(v));
@@ -2023,9 +2024,15 @@ struct deserialize_visitor {
 };
 }
 
-data_value abstract_type::deserialize(bytes_view v) const {
-    return visit(*this, deserialize_visitor{v});
+template <FragmentedView View>
+data_value abstract_type::deserialize(View v) const {
+    return visit(*this, deserialize_visitor<View>{v});
 }
+// Explicit instantiation.
+// This should be repeated for every type passed to deserialize().
+template data_value abstract_type::deserialize<>(fragmented_temporary_buffer::view) const;
+template data_value abstract_type::deserialize<>(single_fragmented_view) const;
+template data_value abstract_type::deserialize<>(ser::buffer_view<bytes_ostream::fragment_iterator>) const;
 
 int32_t compare_aux(const tuple_type_impl& t, bytes_view v1, bytes_view v2) {
     // This is a slight modification of lexicographical_tri_compare:
