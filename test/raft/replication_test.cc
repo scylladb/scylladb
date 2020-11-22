@@ -473,17 +473,19 @@ future<int> run_test(test_case test) {
             next_val += n;
         } else if (std::holds_alternative<new_leader>(update)) {
             unsigned next_leader = std::get<new_leader>(update);
-            assert(next_leader < rafts.size());
-            server_disconnected.insert(raft::server_id{utils::UUID(0, leader + 1)});
-            for (size_t s = 0; s < test.nodes; ++s) {
-                if (s != leader) {
-                    rafts[s].first->elapse_election();
+            if (next_leader != leader) {
+                assert(next_leader < rafts.size());
+                server_disconnected.insert(raft::server_id{utils::UUID(0, leader + 1)});
+                for (size_t s = 0; s < test.nodes; ++s) {
+                    if (s != leader) {
+                        rafts[s].first->elapse_election();
+                    }
                 }
+                co_await rafts[next_leader].first->elect_me_leader();
+                server_disconnected.erase(raft::server_id{utils::UUID(0, leader + 1)});
+                tlogger.debug("confirmed leader on {}", next_leader);
+                leader = next_leader;
             }
-            co_await rafts[next_leader].first->elect_me_leader();
-            server_disconnected.erase(raft::server_id{utils::UUID(0, leader + 1)});
-            tlogger.debug("confirmed leader on {}", next_leader);
-            leader = next_leader;
         } else if (std::holds_alternative<partition>(update)) {
             auto p = std::get<partition>(update);
             std::unordered_set<size_t> connected_servers(p.begin(), p.end());
