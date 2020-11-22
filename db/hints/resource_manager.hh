@@ -78,16 +78,20 @@ private:
     size_t _total_size = 0;
     shard_managers_set& _shard_managers;
     per_device_limits_map& _per_device_limits_map;
-    seastar::named_semaphore& _operation_lock;
+    seastar::named_semaphore _update_lock;
 
     future<> _started = make_ready_future<>();
     seastar::abort_source _as;
     int _files_count = 0;
 
 public:
-    space_watchdog(shard_managers_set& managers, per_device_limits_map& per_device_limits_map, seastar::named_semaphore& operation_lock);
+    space_watchdog(shard_managers_set& managers, per_device_limits_map& per_device_limits_map);
     void start();
     future<> stop() noexcept;
+
+    seastar::named_semaphore& update_lock() {
+        return _update_lock;
+    }
 
 private:
     /// \brief Check that hints don't occupy too much disk space.
@@ -159,6 +163,8 @@ class resource_manager {
         return _state.contains(state::replay_allowed);
     }
 
+    future<> prepare_per_device_limits(manager& shard_manager);
+
 public:
     static constexpr size_t hint_segment_size_in_mb = 32;
     static constexpr size_t max_hints_per_ep_size_mb = 128; // 4 files 32MB each
@@ -170,7 +176,7 @@ public:
         , _min_send_hint_budget(_max_send_in_flight_memory / max_hints_send_queue_length)
         , _send_limiter(_max_send_in_flight_memory, named_semaphore_exception_factory{"send limiter"})
         , _operation_lock(1, named_semaphore_exception_factory{"operation lock"})
-        , _space_watchdog(_shard_managers, _per_device_limits_map, _operation_lock)
+        , _space_watchdog(_shard_managers, _per_device_limits_map)
     {}
 
     resource_manager(resource_manager&&) = delete;
@@ -180,10 +186,16 @@ public:
     size_t sending_queue_length() const;
 
     future<> start(shared_ptr<service::storage_proxy> proxy_ptr, shared_ptr<gms::gossiper> gossiper_ptr, shared_ptr<service::storage_service> ss_ptr);
-    void allow_replaying() noexcept;
     future<> stop() noexcept;
+
+    /// \brief Allows replaying hints for managers which are registered now or will be in the future.
+    void allow_replaying() noexcept;
+
+    /// \brief Registers the hints::manager in resource_manager, and starts it, if resource_manager is already running.
+    ///
+    /// The hints::managers can be added either before or after resource_manager starts.
+    /// If resource_manager is already started, the hints manager will also be started.
     future<> register_manager(manager& m);
-    future<> prepare_per_device_limits();
 };
 
 }

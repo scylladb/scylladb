@@ -65,17 +65,17 @@ size_t resource_manager::sending_queue_length() const {
 
 const std::chrono::seconds space_watchdog::_watchdog_period = std::chrono::seconds(1);
 
-space_watchdog::space_watchdog(shard_managers_set& managers, per_device_limits_map& per_device_limits_map, seastar::named_semaphore& operation_lock)
+space_watchdog::space_watchdog(shard_managers_set& managers, per_device_limits_map& per_device_limits_map)
     : _shard_managers(managers)
     , _per_device_limits_map(per_device_limits_map)
-    , _operation_lock(operation_lock)
+    , _update_lock(1, named_semaphore_exception_factory{"update lock"})
 {}
 
 void space_watchdog::start() {
     _started = seastar::async([this] {
         while (!_as.abort_requested()) {
             try {
-                const auto units = get_units(_operation_lock, 1).get();
+                const auto units = get_units(_update_lock, 1).get();
                 on_timer();
             } catch (...) {
                 resource_manager_logger.trace("space_watchdog: unexpected exception - stop all hints generators");
@@ -181,13 +181,19 @@ future<> resource_manager::start(shared_ptr<service::storage_proxy> proxy_ptr, s
     _proxy_ptr = std::move(proxy_ptr);
     _gossiper_ptr = std::move(gossiper_ptr);
     _ss_ptr = std::move(ss_ptr);
-    set_running();
-    return parallel_for_each(_shard_managers, [this](manager& m) {
-        return m.start(_proxy_ptr, _gossiper_ptr, _ss_ptr);
-    }).then([this]() {
-        return prepare_per_device_limits();
-    }).then([this]() {
-        return _space_watchdog.start();
+
+    return with_semaphore(_operation_lock, 1, [this] () {
+        return parallel_for_each(_shard_managers, [this](manager& m) {
+            return m.start(_proxy_ptr, _gossiper_ptr, _ss_ptr);
+        }).then([this]() {
+            return do_for_each(_shard_managers, [this](manager& m) {
+                return prepare_per_device_limits(m);
+            });
+        }).then([this]() {
+            return _space_watchdog.start();
+        }).then([this]() {
+            set_running();
+        });
     });
 }
 
@@ -197,59 +203,69 @@ void resource_manager::allow_replaying() noexcept {
 }
 
 future<> resource_manager::stop() noexcept {
-    unset_running();
-    return parallel_for_each(_shard_managers, [](manager& m) {
-        return m.stop();
-    }).finally([this]() {
-        return _space_watchdog.stop();
+    return with_semaphore(_operation_lock, 1, [this] () {
+        return parallel_for_each(_shard_managers, [](manager& m) {
+            return m.stop();
+        }).finally([this]() {
+            return _space_watchdog.stop();
+        }).then([this]() {
+            unset_running();
+        });
     });
 }
 
 future<> resource_manager::register_manager(manager& m) {
-    const auto [it, inserted] = _shard_managers.insert(m);
-    if (!inserted) {
-        // Already registered
-        return make_ready_future<>();
-    }
-    if (!running()) {
-        return make_ready_future<>();
-    }
+    return with_semaphore(_operation_lock, 1, [this, &m] () {
+        return with_semaphore(_space_watchdog.update_lock(), 1, [this, &m] {
+            const auto [it, inserted] = _shard_managers.insert(m);
+            if (!inserted) {
+                // Already registered
+                return make_ready_future<>();
+            }
+            if (!running()) {
+                // The hints manager will be started later by resource_manager::start()
+                return make_ready_future<>();
+            }
 
-    return m.start(_proxy_ptr, _gossiper_ptr, _ss_ptr).then([this, &m] {
-        return with_semaphore(_operation_lock, 1, [this, &m] () {
-            return prepare_per_device_limits().then([this, &m] {
-                if (this->replay_allowed()) {
-                    m.allow_replaying();
-                }
+            // If the resource_manager was started, start the hints manager, too.
+            return m.start(_proxy_ptr, _gossiper_ptr, _ss_ptr).then([this, &m] {
+                // Calculate device limits for this manager so that it is accounted for
+                // by the space_watchdog
+                return prepare_per_device_limits(m).then([this, &m] {
+                    if (this->replay_allowed()) {
+                        m.allow_replaying();
+                    }
+                });
+            }).handle_exception([this, &m] (auto ep) {
+                _shard_managers.erase(m);
+                return make_exception_future<>(ep);
             });
         });
     });
 }
 
-future<> resource_manager::prepare_per_device_limits() {
-    return do_for_each(_shard_managers, [this] (manager& shard_manager) mutable {
-        dev_t device_id = shard_manager.hints_dir_device_id();
-        auto it = _per_device_limits_map.find(device_id);
-        if (it == _per_device_limits_map.end()) {
-            return is_mountpoint(shard_manager.hints_dir().parent_path()).then([this, device_id, &shard_manager](bool is_mountpoint) {
-                auto [it, inserted] = _per_device_limits_map.emplace(device_id, space_watchdog::per_device_limits{});
-                // Since we possibly deferred, we need to recheck the _per_device_limits_map.
-                if (inserted) {
-                    // By default, give each group of managers 10% of the available disk space. Give each shard an equal share of the available space.
-                    it->second.max_shard_disk_space_size = std::filesystem::space(shard_manager.hints_dir().c_str()).capacity / (10 * smp::count);
-                    // If hints directory is a mountpoint, we assume it's on dedicated (i.e. not shared with data/commitlog/etc) storage.
-                    // Then, reserve 90% of all space instead of 10% above.
-                    if (is_mountpoint) {
-                        it->second.max_shard_disk_space_size *= 9;
-                    }
+future<> resource_manager::prepare_per_device_limits(manager& shard_manager) {
+    dev_t device_id = shard_manager.hints_dir_device_id();
+    auto it = _per_device_limits_map.find(device_id);
+    if (it == _per_device_limits_map.end()) {
+        return is_mountpoint(shard_manager.hints_dir().parent_path()).then([this, device_id, &shard_manager](bool is_mountpoint) {
+            auto [it, inserted] = _per_device_limits_map.emplace(device_id, space_watchdog::per_device_limits{});
+            // Since we possibly deferred, we need to recheck the _per_device_limits_map.
+            if (inserted) {
+                // By default, give each group of managers 10% of the available disk space. Give each shard an equal share of the available space.
+                it->second.max_shard_disk_space_size = std::filesystem::space(shard_manager.hints_dir().c_str()).capacity / (10 * smp::count);
+                // If hints directory is a mountpoint, we assume it's on dedicated (i.e. not shared with data/commitlog/etc) storage.
+                // Then, reserve 90% of all space instead of 10% above.
+                if (is_mountpoint) {
+                    it->second.max_shard_disk_space_size *= 9;
                 }
-                it->second.managers.emplace_back(std::ref(shard_manager));
-            });
-        } else {
+            }
             it->second.managers.emplace_back(std::ref(shard_manager));
-            return make_ready_future<>();
-        }
-    });
+        });
+    } else {
+        it->second.managers.emplace_back(std::ref(shard_manager));
+        return make_ready_future<>();
+    }
 }
 
 }
