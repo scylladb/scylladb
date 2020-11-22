@@ -1833,24 +1833,31 @@ static void serialize(const abstract_type& t, const void* value, bytes::iterator
     return ::serialize(t, value, out, cql_serialization_format::internal());
 }
 
-static data_value deserialize_aux(const tuple_type_impl& t, bytes_view v) {
+template <FragmentedView View>
+data_value deserialize_aux(const tuple_type_impl& t, View v) {
     tuple_type_impl::native_type ret;
     ret.reserve(t.all_types().size());
     auto ti = t.all_types().begin();
-    auto vi = tuple_deserializing_iterator::start(v);
-    while (ti != t.all_types().end() && vi != tuple_deserializing_iterator::finish(v)) {
+    while (ti != t.all_types().end() && v.size_bytes()) {
         data_value obj = data_value::make_null(*ti);
-        if (*vi) {
-            obj = (*ti)->deserialize(**vi);
+        std::optional<View> e = read_tuple_element(v);
+        if (e) {
+            // FIXME: don't linearize
+            with_linearized(*e, [&] (bytes_view bv) {
+                obj = (*ti)->deserialize(bv);
+            });
         }
         ret.push_back(std::move(obj));
         ++ti;
-        ++vi;
     }
     while (ti != t.all_types().end()) {
         ret.push_back(data_value::make_null(*ti++));
     }
     return data_value::make(t.shared_from_this(), std::make_unique<tuple_type_impl::native_type>(std::move(ret)));
+}
+
+data_value deserialize_aux(const tuple_type_impl& t, bytes_view v) {
+    return deserialize_aux(t, single_fragmented_view(v));
 }
 
 template<FragmentedView View>
