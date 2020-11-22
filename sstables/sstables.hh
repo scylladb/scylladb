@@ -517,6 +517,13 @@ private:
     sstables_stats _stats;
     tracker_link_type _tracker_link;
     manager_link_type _manager_link;
+
+    // The _large_data_stats map stores e.g. largest partitions, rows, cells sizes,
+    // and max number of rows in a partition.
+    //
+    // It can be disengaged normally when loading legacy sstables that do not have this
+    // information in their scylla metadata.
+    std::optional<scylla_metadata::large_data_stats> _large_data_stats;
 public:
     const bool has_component(component_type f) const;
     sstables_manager& manager() { return _manager; }
