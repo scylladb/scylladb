@@ -69,11 +69,7 @@ private:
     mutable large_data_handler::stats _stats;
 
 public:
-    explicit large_data_handler(uint64_t partition_threshold_bytes, uint64_t row_threshold_bytes, uint64_t cell_threshold_bytes, uint64_t rows_count_threshold)
-        : _partition_threshold_bytes(partition_threshold_bytes)
-        , _row_threshold_bytes(row_threshold_bytes)
-        , _cell_threshold_bytes(cell_threshold_bytes)
-        , _rows_count_threshold(rows_count_threshold) {}
+    explicit large_data_handler(uint64_t partition_threshold_bytes, uint64_t row_threshold_bytes, uint64_t cell_threshold_bytes, uint64_t rows_count_threshold);
     virtual ~large_data_handler() {}
 
     // Once large_data_handler is stopped no further updates will be accepted.
