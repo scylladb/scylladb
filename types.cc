@@ -1255,19 +1255,28 @@ serialize_set(const set_type_impl& t, const void* value, bytes::iterator& out, c
     }
 }
 
+template <FragmentedView View>
 data_value
-set_type_impl::deserialize(bytes_view in, cql_serialization_format sf) const {
+set_type_impl::deserialize(View in, cql_serialization_format sf) const {
     auto nr = read_collection_size(in, sf);
     native_type s;
     s.reserve(nr);
     for (int i = 0; i != nr; ++i) {
-        auto e = _elements->deserialize(read_collection_value(in, sf));
+        // FIXME: don't linearize
+        auto e = with_linearized(read_collection_value(in, sf), [&] (bytes_view bv) {
+            return _elements->deserialize(bv);
+        });
         if (e.is_null()) {
             throw marshal_exception("Cannot deserialize a set");
         }
         s.push_back(std::move(e));
     }
     return make_value(std::move(s));
+}
+
+data_value
+set_type_impl::deserialize(bytes_view in, cql_serialization_format sf) const {
+    return deserialize(single_fragmented_view(in), sf);
 }
 
 bytes
