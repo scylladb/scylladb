@@ -46,15 +46,17 @@ large_data_handler::large_data_handler(uint64_t partition_threshold_bytes, uint6
         partition_threshold_bytes, row_threshold_bytes, cell_threshold_bytes, rows_count_threshold);
 }
 
-future<> large_data_handler::maybe_record_large_partitions(const sstables::sstable& sst, const sstables::key& key, uint64_t partition_size) {
+future<bool> large_data_handler::maybe_record_large_partitions(const sstables::sstable& sst, const sstables::key& key, uint64_t partition_size) {
     assert(running());
     if (partition_size > _partition_threshold_bytes) {
         ++_stats.partitions_bigger_than_threshold;
         return with_sem([&sst, &key, partition_size, this] {
             return record_large_partitions(sst, key, partition_size);
+        }).then([] {
+            return true;
         });
     }
-    return make_ready_future<>();
+    return make_ready_future<bool>(false);
 }
 
 void large_data_handler::start() {

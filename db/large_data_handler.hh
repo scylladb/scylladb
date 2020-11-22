@@ -77,34 +77,40 @@ public:
     void start();
     future<> stop();
 
-    void maybe_log_too_many_rows(const sstables::sstable& sst, const sstables::key& partition_key, uint64_t rows_count) {
+    bool maybe_log_too_many_rows(const sstables::sstable& sst, const sstables::key& partition_key, uint64_t rows_count) {
         if (__builtin_expect(rows_count > _rows_count_threshold, false)) {
             log_too_many_rows(sst, partition_key, rows_count);
+            return true;
         }
+        return false;
     }
 
-    future<> maybe_record_large_rows(const sstables::sstable& sst, const sstables::key& partition_key,
+    future<bool> maybe_record_large_rows(const sstables::sstable& sst, const sstables::key& partition_key,
             const clustering_key_prefix* clustering_key, uint64_t row_size) {
         assert(running());
         if (__builtin_expect(row_size > _row_threshold_bytes, false)) {
             return with_sem([&sst, &partition_key, clustering_key, row_size, this] {
                 return record_large_rows(sst, partition_key, clustering_key, row_size);
+            }).then([] {
+                return true;
             });
         }
-        return make_ready_future<>();
+        return make_ready_future<bool>(false);
     }
 
-    future<> maybe_record_large_partitions(const sstables::sstable& sst, const sstables::key& partition_key, uint64_t partition_size);
+    future<bool> maybe_record_large_partitions(const sstables::sstable& sst, const sstables::key& partition_key, uint64_t partition_size);
 
-    future<> maybe_record_large_cells(const sstables::sstable& sst, const sstables::key& partition_key,
+    future<bool> maybe_record_large_cells(const sstables::sstable& sst, const sstables::key& partition_key,
             const clustering_key_prefix* clustering_key, const column_definition& cdef, uint64_t cell_size) {
         assert(running());
         if (__builtin_expect(cell_size > _cell_threshold_bytes, false)) {
             return with_sem([&sst, &partition_key, clustering_key, &cdef, cell_size, this] {
                 return record_large_cells(sst, partition_key, clustering_key, cdef, cell_size);
+            }).then([] {
+                return true;
             });
         }
-        return make_ready_future<>();
+        return make_ready_future<bool>(false);
     }
 
     future<> maybe_delete_large_data_entries(const schema& s, sstring filename, uint64_t data_size) {
