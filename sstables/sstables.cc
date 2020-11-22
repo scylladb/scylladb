@@ -2947,6 +2947,16 @@ std::ostream& operator<<(std::ostream& out, const sstables::component_type& comp
     return out;
 }
 
+std::optional<large_data_stats_entry> sstable::get_large_data_stat(large_data_type t) const noexcept {
+    if (_large_data_stats) {
+        auto it = _large_data_stats->map.find(t);
+        if (it != _large_data_stats->map.end()) {
+            return std::make_optional<large_data_stats_entry>(it->second);
+        }
+    }
+    return std::make_optional<large_data_stats_entry>();
+}
+
 }
 
 namespace seastar {

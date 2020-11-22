@@ -811,6 +811,11 @@ public:
             || _position_range.is_all_clustered_rows(*_schema);
     }
 
+    // Return the large_data_stats_entry identified by large_data_type
+    // iff _large_data_stats is available and the requested entry is in
+    // the map.  Otherwise, return a disengaged optional.
+    std::optional<large_data_stats_entry> get_large_data_stat(large_data_type t) const noexcept;
+
     // Allow the test cases from sstable_test.cc to test private methods. We use
     // a placeholder to avoid cluttering this class too much. The sstable_test class
     // will then re-export as public every method it needs.
