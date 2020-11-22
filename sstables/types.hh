@@ -498,6 +498,7 @@ enum class scylla_metadata_type : uint32_t {
     Features = 2,
     ExtensionAttributes = 3,
     RunIdentifier = 4,
+    LargeDataStats = 5,
 };
 
 struct run_identifier {
@@ -537,7 +538,8 @@ struct scylla_metadata {
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::Sharding, sharding_metadata>,
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::Features, sstable_enabled_features>,
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::ExtensionAttributes, extension_attributes>,
-            disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::RunIdentifier, run_identifier>
+            disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::RunIdentifier, run_identifier>,
+            disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::LargeDataStats, large_data_stats>
             > data;
 
     sstable_enabled_features get_features() const {
