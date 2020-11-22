@@ -77,6 +77,29 @@ template <typename T> static std::string key_to_str(const T& key, const schema& 
     return oss.str();
 }
 
+future<> large_data_handler::maybe_delete_large_data_entries(const schema& s, sstring filename, uint64_t data_size) {
+    assert(running());
+    future<> large_partitions = make_ready_future<>();
+    if (__builtin_expect(data_size > _partition_threshold_bytes, false)) {
+        large_partitions = with_sem([&s, filename, this] () mutable {
+            return delete_large_data_entries(s, std::move(filename), db::system_keyspace::LARGE_PARTITIONS);
+        });
+    }
+    future<> large_rows = make_ready_future<>();
+    if (__builtin_expect(data_size > _row_threshold_bytes, false)) {
+        large_rows = with_sem([&s, filename, this] () mutable {
+            return delete_large_data_entries(s, std::move(filename), db::system_keyspace::LARGE_ROWS);
+        });
+    }
+    future<> large_cells = make_ready_future<>();
+    if (__builtin_expect(data_size > _cell_threshold_bytes, false)) {
+        large_cells = with_sem([&s, filename, this] () mutable {
+            return delete_large_data_entries(s, std::move(filename), db::system_keyspace::LARGE_CELLS);
+        });
+    }
+    return when_all(std::move(large_partitions), std::move(large_rows), std::move(large_cells)).discard_result();
+}
+
 template <typename... Args>
 static future<> try_record(std::string_view large_table, const sstables::sstable& sst,  const sstables::key& partition_key, int64_t size,
         std::string_view desc, std::string_view extra_path, const std::vector<sstring> &extra_fields, Args&&... args) {

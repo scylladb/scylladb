@@ -113,28 +113,7 @@ public:
         return make_ready_future<bool>(false);
     }
 
-    future<> maybe_delete_large_data_entries(const schema& s, sstring filename, uint64_t data_size) {
-        assert(running());
-        future<> large_partitions = make_ready_future<>();
-        if (__builtin_expect(data_size > _partition_threshold_bytes, false)) {
-            large_partitions = with_sem([&s, filename, this] () mutable {
-                return delete_large_data_entries(s, std::move(filename), db::system_keyspace::LARGE_PARTITIONS);
-            });
-        }
-        future<> large_rows = make_ready_future<>();
-        if (__builtin_expect(data_size > _row_threshold_bytes, false)) {
-            large_rows = with_sem([&s, filename, this] () mutable {
-                return delete_large_data_entries(s, std::move(filename), db::system_keyspace::LARGE_ROWS);
-            });
-        }
-        future<> large_cells = make_ready_future<>();
-        if (__builtin_expect(data_size > _cell_threshold_bytes, false)) {
-            large_cells = with_sem([&s, filename, this] () mutable {
-                return delete_large_data_entries(s, std::move(filename), db::system_keyspace::LARGE_CELLS);
-            });
-        }
-        return when_all(std::move(large_partitions), std::move(large_rows), std::move(large_cells)).discard_result();
-    }
+    future<> maybe_delete_large_data_entries(const schema& s, sstring filename, uint64_t data_size);
 
     const large_data_handler::stats& stats() const { return _stats; }
 
