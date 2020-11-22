@@ -1084,13 +1084,8 @@ map_type_impl::deserialize(View in, cql_serialization_format sf) const {
     native_type m;
     auto size = read_collection_size(in, sf);
     for (int i = 0; i < size; ++i) {
-        // FIXME: don't linearize
-        auto k = with_linearized(read_collection_value(in, sf), [&] (bytes_view bv) {
-            return _keys->deserialize(bv);
-        });
-        auto v = with_linearized(read_collection_value(in, sf), [&] (bytes_view bv) {
-            return _values->deserialize(bv);
-        });
+        auto k = _keys->deserialize(read_collection_value(in, sf));
+        auto v = _values->deserialize(read_collection_value(in, sf));
         m.insert(m.end(), std::make_pair(std::move(k), std::move(v)));
     }
     return make_value(std::move(m));
@@ -1262,10 +1257,7 @@ set_type_impl::deserialize(View in, cql_serialization_format sf) const {
     native_type s;
     s.reserve(nr);
     for (int i = 0; i != nr; ++i) {
-        // FIXME: don't linearize
-        auto e = with_linearized(read_collection_value(in, sf), [&] (bytes_view bv) {
-            return _elements->deserialize(bv);
-        });
+        auto e = _elements->deserialize(read_collection_value(in, sf));
         if (e.is_null()) {
             throw marshal_exception("Cannot deserialize a set");
         }
@@ -1372,10 +1364,7 @@ list_type_impl::deserialize(View in, cql_serialization_format sf) const {
     native_type s;
     s.reserve(nr);
     for (int i = 0; i != nr; ++i) {
-        // FIXME: don't linearize
-        auto e = with_linearized(read_collection_value(in, sf), [&] (bytes_view bv) {
-            return _elements->deserialize(bv);
-        });
+        auto e = _elements->deserialize(read_collection_value(in, sf));
         if (e.is_null()) {
             throw marshal_exception("Cannot deserialize a list");
         }
