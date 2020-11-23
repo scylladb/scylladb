@@ -47,7 +47,7 @@ public:
     virtual bool is_compatible_with_frozen(const collection_type_impl& previous) const override;
     virtual bool is_value_compatible_with_frozen(const collection_type_impl& previous) const override;
     using abstract_type::deserialize;
-    data_value deserialize(bytes_view v, cql_serialization_format sf) const;
+    using collection_type_impl::deserialize;
     template <FragmentedView View> data_value deserialize(View v, cql_serialization_format sf) const;
     static bytes serialize_partially_deserialized_form(
             const std::vector<bytes_view>& v, cql_serialization_format sf);

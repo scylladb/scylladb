@@ -1091,11 +1091,6 @@ map_type_impl::deserialize(View in, cql_serialization_format sf) const {
     return make_value(std::move(m));
 }
 
-data_value
-map_type_impl::deserialize(bytes_view in, cql_serialization_format sf) const {
-    return deserialize(single_fragmented_view(in), sf);
-}
-
 static void validate_aux(const map_type_impl& t, bytes_view v, cql_serialization_format sf) {
     auto size = read_collection_size(v, sf);
     for (int i = 0; i < size; ++i) {
@@ -1266,11 +1261,6 @@ set_type_impl::deserialize(View in, cql_serialization_format sf) const {
     return make_value(std::move(s));
 }
 
-data_value
-set_type_impl::deserialize(bytes_view in, cql_serialization_format sf) const {
-    return deserialize(single_fragmented_view(in), sf);
-}
-
 bytes
 set_type_impl::serialize_partially_deserialized_form(
         const std::vector<bytes_view>& v, cql_serialization_format sf) {
@@ -1371,11 +1361,6 @@ list_type_impl::deserialize(View in, cql_serialization_format sf) const {
         s.push_back(std::move(e));
     }
     return make_value(std::move(s));
-}
-
-data_value
-list_type_impl::deserialize(bytes_view in, cql_serialization_format sf) const {
-    return deserialize(single_fragmented_view(in), sf);
 }
 
 static sstring vector_to_string(const std::vector<data_value>& v, std::string_view sep) {

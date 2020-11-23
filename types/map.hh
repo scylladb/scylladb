@@ -55,7 +55,7 @@ public:
     static int32_t compare_maps(data_type keys_comparator, data_type values_comparator,
                         bytes_view o1, bytes_view o2);
     using abstract_type::deserialize;
-    data_value deserialize(bytes_view v, cql_serialization_format sf) const;
+    using collection_type_impl::deserialize;
     template <FragmentedView View> data_value deserialize(View v, cql_serialization_format sf) const;
     static bytes serialize_partially_deserialized_form(const std::vector<std::pair<bytes_view, bytes_view>>& v,
             cql_serialization_format sf);
