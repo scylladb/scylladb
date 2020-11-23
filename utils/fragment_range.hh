@@ -201,3 +201,16 @@ decltype(auto) with_linearized(const View& v, Function&& fn)
         return fn(linearized(v));
     }
 }
+
+class single_fragmented_view {
+    bytes_view _view;
+public:
+    using fragment_type = bytes_view;
+    explicit single_fragmented_view(bytes_view bv) : _view(bv) {}
+    size_t size_bytes() const { return _view.size(); }
+    void remove_prefix(size_t n) { _view.remove_prefix(n); }
+    void remove_current() { _view = bytes_view(); }
+    bytes_view current_fragment() const { return _view; }
+    single_fragmented_view prefix(size_t n) { return single_fragmented_view(_view.substr(0, n)); }
+};
+static_assert(FragmentedView<single_fragmented_view>);
