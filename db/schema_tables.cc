@@ -3093,7 +3093,6 @@ future<column_mapping> get_column_mapping(utils::UUID table_id, table_schema_ver
     auto cm_fut = qctx->qp().execute_internal(
         GET_COLUMN_MAPPING_QUERY,
         db::consistency_level::LOCAL_ONE,
-        infinite_timeout_config,
         {table_id, version}
     );
     return cm_fut.then([version] (shared_ptr<cql3::untyped_result_set> results) {
@@ -3136,7 +3135,6 @@ future<bool> column_mapping_exists(utils::UUID table_id, table_schema_version ve
     return qctx->qp().execute_internal(
         GET_COLUMN_MAPPING_QUERY,
         db::consistency_level::LOCAL_ONE,
-        infinite_timeout_config,
         {table_id, version}
     ).then([] (shared_ptr<cql3::untyped_result_set> results) {
         return !results->empty();
@@ -3150,7 +3148,6 @@ future<> drop_column_mapping(utils::UUID table_id, table_schema_version version)
     return qctx->qp().execute_internal(
         DEL_COLUMN_MAPPING_QUERY,
         db::consistency_level::LOCAL_ONE,
-        infinite_timeout_config,
         {table_id, version}).discard_result();
 }
 

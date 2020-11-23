@@ -228,7 +228,7 @@ SEASTAR_TEST_CASE(scan_enormous_table_test) {
         std::unique_ptr<cql3::query_options> qo;
         uint64_t fetched_rows_log_counter = 1e7;
         do {
-            qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
+            qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, std::vector<cql3::raw_value>{},
                     cql3::query_options::specific_options{10000, paging_state, {}, api::new_timestamp()});
             msg = e.execute_cql("select * from enormous_table;", std::move(qo)).get0();
             rows_fetched += count_rows_fetched(msg);

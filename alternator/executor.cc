@@ -2845,7 +2845,7 @@ static future<executor::request_return_type> do_query(service::storage_proxy& pr
     auto query_state_ptr = std::make_unique<service::query_state>(client_state, trace_state, std::move(permit));
 
     command->slice.options.set<query::partition_slice::option::allow_short_read>();
-    auto query_options = std::make_unique<cql3::query_options>(cl, infinite_timeout_config, std::vector<cql3::raw_value>{});
+    auto query_options = std::make_unique<cql3::query_options>(cl, std::vector<cql3::raw_value>{});
     query_options = std::make_unique<cql3::query_options>(std::move(query_options), std::move(paging_state));
     auto p = service::pager::query_pagers::pager(schema, selection, *query_state_ptr, *query_options, command, std::move(partition_ranges), nullptr);
 

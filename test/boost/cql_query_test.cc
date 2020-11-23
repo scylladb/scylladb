@@ -3013,7 +3013,7 @@ SEASTAR_TEST_CASE(test_empty_partition_range_scan) {
         e.execute_cql("create table empty_partition_range_scan.tb (a int, b int, c int, val int, PRIMARY KEY ((a,b),c) );").get();
 
 
-        auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
+        auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, std::vector<cql3::raw_value>{},
                 cql3::query_options::specific_options{1, nullptr, {}, api::new_timestamp()});
         auto res = e.execute_cql("select * from empty_partition_range_scan.tb where token (a,b) > 1 and token(a,b) <= 1;", std::move(qo)).get0();
         assert_that(res).is_rows().is_empty();
@@ -4418,7 +4418,6 @@ static std::unique_ptr<cql3::query_options> q_serial_opts(
     const auto& so = cql3::query_options::specific_options::DEFAULT;
     auto qo = std::make_unique<cql3::query_options>(
             cl,
-            infinite_timeout_config,
             values,
             // Ensure (optional) serial consistency is always specified.
             cql3::query_options::specific_options{
@@ -4633,7 +4632,7 @@ SEASTAR_THREAD_TEST_CASE(test_query_limit) {
                     const auto select_query = format("SELECT * FROM test WHERE pk = {} ORDER BY ck {};", pk, is_reversed ? "DESC" : "ASC");
 
                     int32_t page_size = is_paged ? 10000 : -1;
-                    auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
+                    auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, std::vector<cql3::raw_value>{},
                                 cql3::query_options::specific_options{page_size, nullptr, {}, api::new_timestamp()});
 
                     const auto* expected_rows = is_reversed ? &reversed_rows : &normal_rows;

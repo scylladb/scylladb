@@ -215,8 +215,7 @@ public:
     // creating namespaces, etc) is explicitly forbidden via this interface.
     future<::shared_ptr<untyped_result_set>>
     execute_internal(const sstring& query_string, const std::initializer_list<data_value>& values = { }) {
-        return execute_internal(query_string, db::consistency_level::ONE,
-                infinite_timeout_config, values, true);
+        return execute_internal(query_string, db::consistency_level::ONE, values, true);
     }
 
     statements::prepared_statement::checked_weak_ptr prepare_internal(const sstring& query);
@@ -305,14 +304,19 @@ public:
     future<::shared_ptr<untyped_result_set>> execute_internal(
             const sstring& query_string,
             db::consistency_level,
-            const timeout_config& timeout_config,
+            const std::initializer_list<data_value>& = { },
+            bool cache = false);
+    future<::shared_ptr<untyped_result_set>> execute_internal(
+            const sstring& query_string,
+            db::consistency_level,
+            service::query_state& query_state,
             const std::initializer_list<data_value>& = { },
             bool cache = false);
 
     future<::shared_ptr<untyped_result_set>> execute_with_params(
             statements::prepared_statement::checked_weak_ptr p,
             db::consistency_level,
-            const timeout_config& timeout_config,
+            service::query_state& query_state,
             const std::initializer_list<data_value>& = { });
 
     future<::shared_ptr<cql_transport::messages::result_message::prepared>>
@@ -341,7 +345,6 @@ private:
             const statements::prepared_statement::checked_weak_ptr& p,
             const std::initializer_list<data_value>&,
             db::consistency_level,
-            const timeout_config& timeout_config,
             int32_t page_size = -1) const;
 
     future<::shared_ptr<cql_transport::messages::result_message>>

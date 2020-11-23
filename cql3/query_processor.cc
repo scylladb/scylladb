@@ -619,7 +619,6 @@ query_options query_processor::make_internal_options(
         const statements::prepared_statement::checked_weak_ptr& p,
         const std::initializer_list<data_value>& values,
         db::consistency_level cl,
-        const timeout_config& timeout_config,
         int32_t page_size) const {
     if (p->bound_names.size() != values.size()) {
         throw std::invalid_argument(
@@ -643,11 +642,10 @@ query_options query_processor::make_internal_options(
         api::timestamp_type ts = api::missing_timestamp;
         return query_options(
                 cl,
-                timeout_config,
                 bound_values,
                 cql3::query_options::specific_options{page_size, std::move(paging_state), serial_consistency, ts});
     }
-    return query_options(cl, timeout_config, bound_values);
+    return query_options(cl, bound_values);
 }
 
 statements::prepared_statement::checked_weak_ptr query_processor::prepare_internal(const sstring& query_string) {
@@ -671,7 +669,7 @@ struct internal_query_state {
 ::shared_ptr<internal_query_state> query_processor::create_paged_state(const sstring& query_string,
         const std::initializer_list<data_value>& values, int32_t page_size) {
     auto p = prepare_internal(query_string);
-    auto opts = make_internal_options(p, values, db::consistency_level::ONE, infinite_timeout_config, page_size);
+    auto opts = make_internal_options(p, values, db::consistency_level::ONE, page_size);
     ::shared_ptr<internal_query_state> res = ::make_shared<internal_query_state>(
             internal_query_state{
                     query_string,
@@ -789,7 +787,16 @@ future<::shared_ptr<untyped_result_set>>
 query_processor::execute_internal(
         const sstring& query_string,
         db::consistency_level cl,
-        const timeout_config& timeout_config,
+        const std::initializer_list<data_value>& values,
+        bool cache) {
+    return execute_internal(query_string, cl, *_internal_state, values, cache);
+}
+
+future<::shared_ptr<untyped_result_set>>
+query_processor::execute_internal(
+        const sstring& query_string,
+        db::consistency_level cl,
+        service::query_state& query_state,
         const std::initializer_list<data_value>& values,
         bool cache) {
 
@@ -797,13 +804,13 @@ query_processor::execute_internal(
         log.trace("execute_internal: {}\"{}\" ({})", cache ? "(cached) " : "", query_string, ::join(", ", values));
     }
     if (cache) {
-        return execute_with_params(prepare_internal(query_string), cl, timeout_config, values);
+        return execute_with_params(prepare_internal(query_string), cl, query_state, values);
     } else {
         auto p = parse_statement(query_string)->prepare(_db, _cql_stats);
         p->statement->raw_cql_statement = query_string;
         p->statement->validate(_proxy, *_internal_state);
         auto checked_weak_ptr = p->checked_weak_from_this();
-        return execute_with_params(std::move(checked_weak_ptr), cl, timeout_config, values).finally([p = std::move(p)] {});
+        return execute_with_params(std::move(checked_weak_ptr), cl, query_state, values).finally([p = std::move(p)] {});
     }
 }
 
@@ -811,11 +818,11 @@ future<::shared_ptr<untyped_result_set>>
 query_processor::execute_with_params(
         statements::prepared_statement::checked_weak_ptr p,
         db::consistency_level cl,
-        const timeout_config& timeout_config,
+        service::query_state& query_state,
         const std::initializer_list<data_value>& values) {
-    auto opts = make_internal_options(p, values, cl, timeout_config);
-    return do_with(std::move(opts), [this, p = std::move(p)](auto & opts) {
-        return p->statement->execute(_proxy, *_internal_state, opts).then([](auto msg) {
+    auto opts = make_internal_options(p, values, cl);
+    return do_with(std::move(opts), [this, &query_state, p = std::move(p)](auto & opts) {
+        return p->statement->execute(_proxy, query_state, opts).then([](auto msg) {
             return make_ready_future<::shared_ptr<untyped_result_set>>(::make_shared<untyped_result_set>(msg));
         });
     });

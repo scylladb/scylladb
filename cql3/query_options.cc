@@ -50,12 +50,11 @@ const cql_config default_cql_config;
 thread_local const query_options::specific_options query_options::specific_options::DEFAULT{-1, {}, {}, api::missing_timestamp};
 
 thread_local query_options query_options::DEFAULT{default_cql_config,
-    db::consistency_level::ONE, infinite_timeout_config, std::nullopt,
+    db::consistency_level::ONE, std::nullopt,
     std::vector<cql3::raw_value_view>(), false, query_options::specific_options::DEFAULT, cql_serialization_format::latest()};
 
 query_options::query_options(const cql_config& cfg,
                            db::consistency_level consistency,
-                           const ::timeout_config& timeout_config,
                            std::optional<std::vector<sstring_view>> names,
                            std::vector<cql3::raw_value> values,
                            std::vector<cql3::raw_value_view> value_views,
@@ -64,7 +63,6 @@ query_options::query_options(const cql_config& cfg,
                            cql_serialization_format sf)
    : _cql_config(cfg)
    , _consistency(consistency)
-   , _timeout_config(timeout_config)
    , _names(std::move(names))
    , _values(std::move(values))
    , _value_views(value_views)
@@ -76,7 +74,6 @@ query_options::query_options(const cql_config& cfg,
 
 query_options::query_options(const cql_config& cfg,
                              db::consistency_level consistency,
-                             const ::timeout_config& timeout_config,
                              std::optional<std::vector<sstring_view>> names,
                              std::vector<cql3::raw_value> values,
                              bool skip_metadata,
@@ -84,7 +81,6 @@ query_options::query_options(const cql_config& cfg,
                              cql_serialization_format sf)
     : _cql_config(cfg)
     , _consistency(consistency)
-    , _timeout_config(timeout_config)
     , _names(std::move(names))
     , _values(std::move(values))
     , _value_views()
@@ -97,7 +93,6 @@ query_options::query_options(const cql_config& cfg,
 
 query_options::query_options(const cql_config& cfg,
                              db::consistency_level consistency,
-                             const ::timeout_config& timeout_config,
                              std::optional<std::vector<sstring_view>> names,
                              std::vector<cql3::raw_value_view> value_views,
                              bool skip_metadata,
@@ -105,7 +100,6 @@ query_options::query_options(const cql_config& cfg,
                              cql_serialization_format sf)
     : _cql_config(cfg)
     , _consistency(consistency)
-    , _timeout_config(timeout_config)
     , _names(std::move(names))
     , _values()
     , _value_views(std::move(value_views))
@@ -115,12 +109,11 @@ query_options::query_options(const cql_config& cfg,
 {
 }
 
-query_options::query_options(db::consistency_level cl, const ::timeout_config& timeout_config, std::vector<cql3::raw_value> values,
+query_options::query_options(db::consistency_level cl, std::vector<cql3::raw_value> values,
         specific_options options)
     : query_options(
           default_cql_config,
           cl,
-          timeout_config,
           {},
           std::move(values),
           false,
@@ -133,7 +126,6 @@ query_options::query_options(db::consistency_level cl, const ::timeout_config& t
 query_options::query_options(std::unique_ptr<query_options> qo, lw_shared_ptr<service::pager::paging_state> paging_state)
         : query_options(qo->_cql_config,
         qo->_consistency,
-        qo->get_timeout_config(),
         std::move(qo->_names),
         std::move(qo->_values),
         std::move(qo->_value_views),
@@ -146,7 +138,6 @@ query_options::query_options(std::unique_ptr<query_options> qo, lw_shared_ptr<se
 query_options::query_options(std::unique_ptr<query_options> qo, lw_shared_ptr<service::pager::paging_state> paging_state, int32_t page_size)
         : query_options(qo->_cql_config,
         qo->_consistency,
-        qo->get_timeout_config(),
         std::move(qo->_names),
         std::move(qo->_values),
         std::move(qo->_value_views),
@@ -158,7 +149,7 @@ query_options::query_options(std::unique_ptr<query_options> qo, lw_shared_ptr<se
 
 query_options::query_options(std::vector<cql3::raw_value> values)
     : query_options(
-          db::consistency_level::ONE, infinite_timeout_config, std::move(values))
+          db::consistency_level::ONE, std::move(values))
 {}
 
 void query_options::prepare(const std::vector<lw_shared_ptr<column_specification>>& specs)

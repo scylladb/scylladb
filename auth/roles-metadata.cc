@@ -68,14 +68,13 @@ future<bool> default_role_row_satisfies(
         return qp.execute_internal(
                 query,
                 db::consistency_level::ONE,
-                infinite_timeout_config,
                 {meta::DEFAULT_SUPERUSER_NAME},
                 true).then([&qp, &p](::shared_ptr<cql3::untyped_result_set> results) {
             if (results->empty()) {
                 return qp.execute_internal(
                         query,
                         db::consistency_level::QUORUM,
-                        internal_distributed_timeout_config(),
+                        internal_distributed_query_state(),
                         {meta::DEFAULT_SUPERUSER_NAME},
                         true).then([&p](::shared_ptr<cql3::untyped_result_set> results) {
                     if (results->empty()) {
@@ -100,7 +99,7 @@ future<bool> any_nondefault_role_row_satisfies(
         return qp.execute_internal(
                 query,
                 db::consistency_level::QUORUM,
-                internal_distributed_timeout_config()).then([&p](::shared_ptr<cql3::untyped_result_set> results) {
+                internal_distributed_query_state()).then([&p](::shared_ptr<cql3::untyped_result_set> results) {
             if (results->empty()) {
                 return false;
             }

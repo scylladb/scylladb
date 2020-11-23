@@ -189,7 +189,7 @@ public:
         db::consistency_level cl = db::consistency_level::ONE) override {
 
         const auto& so = cql3::query_options::specific_options::DEFAULT;
-        auto options = std::make_unique<cql3::query_options>(cl, infinite_timeout_config,
+        auto options = std::make_unique<cql3::query_options>(cl,
                 std::move(values), cql3::query_options::specific_options{
                             so.page_size,
                             so.state,
@@ -226,7 +226,7 @@ public:
             throw std::runtime_error(format("get_stmt_mutations: not a modification statement: {}", text));
         }
         auto& qo = cql3::query_options::DEFAULT;
-        auto timeout = db::timeout_clock::now() + qo.get_timeout_config().write_timeout;
+        auto timeout = db::timeout_clock::now() + qs->get_client_state().get_timeout_config().write_timeout;
 
         return modif_stmt->get_mutations(local_qp().proxy(), qo, timeout, false, qo.get_timestamp(*qs), *qs)
             .finally([qs, modif_stmt = std::move(modif_stmt)] {});
