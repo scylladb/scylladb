@@ -1197,19 +1197,6 @@ View read_simple_bytes(View& v, size_t n) {
     return prefix;
 }
 
-template<typename T>
-std::optional<T> read_simple_opt(bytes_view& v) {
-    if (v.empty()) {
-        return {};
-    }
-    if (v.size() != sizeof(T)) {
-        throw_with_backtrace<marshal_exception>(format("read_simple_opt - size mismatch (expected {:d}, got {:d})", sizeof(T), v.size()));
-    }
-    auto p = v.begin();
-    v.remove_prefix(sizeof(T));
-    return { net::ntoh(*reinterpret_cast<const net::packed<T>*>(p)) };
-}
-
 inline sstring read_simple_short_string(bytes_view& v) {
     uint16_t len = read_simple<uint16_t>(v);
     if (v.size() < len) {
