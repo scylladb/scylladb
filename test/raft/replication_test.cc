@@ -588,7 +588,7 @@ future<int> run_test(test_case test) {
     for (auto& s : persisted_snapshots) {
         auto& [snp, val] = s.second;
         auto digest = val.value.get_value();
-        expected = sm_value_for(snp.idx).get_value();
+        expected = sm_value_for(val.idx).get_value();
         if (digest != expected) {
             tlogger.debug("Persisted snapshot {} doesn't match {} != {}", snp.id, digest, expected);
             fail = -1;
