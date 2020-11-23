@@ -441,11 +441,17 @@ void fsm::request_vote(server_id from, vote_request&& request) {
             "voted for {} [log_term: {}, log_index: {}]",
             _my_id, _current_term, _log.last_idx(), _log.last_term(), _voted_for,
             from, request.last_log_term, request.last_log_idx);
-
+        // If a server grants a vote, it must reset its election
+        // timer. See Raft Summary.
+        _last_election_time = _clock.now();
         _voted_for = from;
 
         send_to(from, vote_reply{_current_term, true});
     } else {
+        // If a vote is not granted, this server is a potential
+        // viable candidate, so it should not reset its election
+        // timer, to avoid election disruption by non-viable
+        // candidates.
         logger.trace("{} [term: {}, index: {}, log_term: {}, voted_for: {}] "
             "rejected vote for {} [log_term: {}, log_index: {}]",
             _my_id, _current_term, _log.last_idx(), _log.last_term(), _voted_for,

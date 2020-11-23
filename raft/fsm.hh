@@ -151,9 +151,10 @@ class fsm {
     // Start of the current election epoch - a time point relative
     // to which we expire election timeout.
     logical_clock::time_point _last_election_time = logical_clock::min();
-    // A random value in range [election_timeout, 2 * election_timeout),
-    // reset on each term change.
-    logical_clock::duration _randomized_election_timeout = ELECTION_TIMEOUT;
+    // A random value in range [election_timeout + 1, 2 * election_timeout),
+    // reset on each term change. For testing, it's necessary to have the value
+    // at election_timeout without becoming a candidate.
+    logical_clock::duration _randomized_election_timeout = ELECTION_TIMEOUT + logical_clock::duration{1};
     // Votes received during an election round. Available only in
     // candidate state.
     std::optional<votes> _votes;

@@ -123,6 +123,8 @@ public:
     // Ad hoc functions for testing
     virtual future<> elect_me_leader() = 0;
     virtual void elapse_election() = 0;
+    virtual bool is_leader() = 0;
+    virtual void tick() = 0;
 };
 
 std::unique_ptr<server> create_server(server_id uuid, std::unique_ptr<rpc> rpc,

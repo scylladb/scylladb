@@ -126,6 +126,7 @@ public:
 
 struct snapshot_value {
     sm_value value;
+    raft::index_t idx;
 };
 
 // Lets assume one snapshot per server
@@ -159,6 +160,7 @@ public:
     future<raft::snapshot_id> take_snapshot() override {
         snapshots[_id].value = value;
         tlogger.debug("sm[{}] takes snapshot {}", _id, snapshots[_id].value.get_value());
+        snapshots[_id].idx = raft::index_t{_seen};
         return make_ready_future<raft::snapshot_id>(raft::snapshot_id{utils::make_random_uuid()});
     }
     void drop_snapshot(raft::snapshot_id id) override {
@@ -167,6 +169,10 @@ public:
     future<> load_snapshot(raft::snapshot_id id) override {
         value = snapshots[_id].value;
         tlogger.debug("sm[{}] loads snapshot {}", _id, snapshots[_id].value.get_value());
+        _seen = snapshots[_id].idx;
+        if (_seen >= _apply_entries) {
+            _done.set_value();
+        }
         return make_ready_future<>();
     };
     future<> abort() override { return make_ready_future<>(); }
@@ -224,8 +230,11 @@ bool is_disconnected(raft::server_id id) {
 }
 
 class failure_detector : public raft::failure_detector {
+    raft::server_id _id;
+public:
+    failure_detector(raft::server_id id) : _id(id) {}
     bool is_alive(raft::server_id server) override {
-        return !is_disconnected(server);
+        return !(is_disconnected(server) || is_disconnected(_id));
     }
 };
 
@@ -302,7 +311,7 @@ create_raft_server(raft::server_id uuid, state_machine::apply_fn apply, initial_
     auto& rsm = *sm;
     auto mrpc = std::make_unique<rpc>(uuid);
     auto mstorage = std::make_unique<storage>(uuid, state);
-    auto fd = seastar::make_shared<failure_detector>();
+    auto fd = seastar::make_shared<failure_detector>(uuid);
 
     auto raft = raft::create_server(uuid, std::move(mrpc), std::move(sm), std::move(mstorage),
         std::move(fd), state.server_config);
@@ -379,7 +388,10 @@ void apply_changes(raft::server_id id, const std::vector<raft::command_cref>& co
 //  - Configuration change
 using entries = unsigned;
 using new_leader = int;
-using partition = std::vector<size_t>;
+struct leader {
+    size_t id;
+};
+using partition = std::vector<std::variant<leader,int>>;
 // TODO: config change
 using update = std::variant<entries, new_leader, partition>;
 
@@ -439,6 +451,7 @@ future<int> run_test(test_case test) {
         if (i < test.initial_snapshots.size()) {
             states[i].snapshot = test.initial_snapshots[i].snap;
             states[i].snp_value.value = sm_value_for(test.initial_snapshots[i].snap.idx);
+            states[i].snp_value.idx = test.initial_snapshots[i].snap.idx;
             start_idx = states[i].snapshot.idx + 1;
         }
         if (i < test.initial_states.size()) {
@@ -470,39 +483,68 @@ future<int> run_test(test_case test) {
             next_val += n;
         } else if (std::holds_alternative<new_leader>(update)) {
             unsigned next_leader = std::get<new_leader>(update);
-            assert(next_leader < rafts.size());
-            server_disconnected.insert(raft::server_id{utils::UUID(0, leader + 1)});
-            for (size_t s = 0; s < test.nodes; ++s) {
-                if (s != leader) {
+            if (next_leader != leader) {
+                assert(next_leader < rafts.size());
+                // Make current leader a follower: disconnect, timeout, re-connect
+                server_disconnected.insert(raft::server_id{utils::UUID(0, leader + 1)});
+                for (size_t s = 0; s < test.nodes; ++s) {
                     rafts[s].first->elapse_election();
                 }
+                co_await rafts[next_leader].first->elect_me_leader();
+                server_disconnected.erase(raft::server_id{utils::UUID(0, leader + 1)});
+                tlogger.debug("confirmed leader on {}", next_leader);
+                leader = next_leader;
             }
-            co_await rafts[next_leader].first->elect_me_leader();
-            server_disconnected.erase(raft::server_id{utils::UUID(0, leader + 1)});
-            tlogger.debug("confirmed leader on {}", next_leader);
-            leader = next_leader;
         } else if (std::holds_alternative<partition>(update)) {
             auto p = std::get<partition>(update);
-            std::unordered_set<size_t> connected_servers(p.begin(), p.end());
+            server_disconnected.clear();
+            std::unordered_set<size_t> partition_servers;
+            struct leader new_leader;
+            bool have_new_leader = false;
+            for (auto s: p) {
+                size_t id;
+                if (std::holds_alternative<struct leader>(s)) {
+                    have_new_leader = true;
+                    new_leader = std::get<struct leader>(s);
+                    id = new_leader.id;
+                } else {
+                    id = std::get<int>(s);
+                }
+                partition_servers.insert(id);
+            }
             for (size_t s = 0; s < test.nodes; ++s) {
-                if (connected_servers.find(s) == connected_servers.end()) {
+                if (partition_servers.find(s) == partition_servers.end()) {
                     // Disconnect servers not in main partition
                     server_disconnected.insert(raft::server_id{utils::UUID(0, s + 1)});
                 }
             }
-            for (auto s: p) {
-                // Re connect servers in live partition
-                server_disconnected.erase(raft::server_id{utils::UUID(0, s + 1)});
-            }
-            if (connected_servers.find(leader) == connected_servers.end() && p.size() > 0) {
-                // Old leader disconnected, new leader is first server specified in partition
-                auto next_leader = p[0];
-                for (auto s: p) {
+            if (have_new_leader && new_leader.id != leader) {
+                // New leader specified, elect it
+                for (size_t s = 0; s < test.nodes; ++s) {
                     rafts[s].first->elapse_election();
                 }
-                co_await rafts[next_leader].first->elect_me_leader();
-                leader = next_leader;
-                tlogger.debug("confirmed new leader on {}", next_leader);
+                co_await rafts[new_leader.id].first->elect_me_leader();
+                tlogger.debug("confirmed leader on {}", new_leader.id);
+                leader = new_leader.id;
+            } else if (partition_servers.find(leader) == partition_servers.end() && p.size() > 0) {
+                // Old leader disconnected and not specified new, free election
+                for (size_t s = 0; s < test.nodes; ++s) {
+                    rafts[s].first->elapse_election();
+                }
+                for (bool have_leader = false; !have_leader; ) {
+                    for (auto s: partition_servers) {
+                        rafts[s].first->tick();
+                    }
+                    co_await seastar::sleep(1us);        // yield
+                    for (auto s: partition_servers) {
+                        if (rafts[s].first->is_leader()) {
+                            have_leader = true;
+                            leader = s;
+                            break;
+                        }
+                    }
+                }
+                tlogger.debug("confirmed new leader on {}", leader);
             }
         }
     }
@@ -665,6 +707,16 @@ int main(int argc, char* argv[]) {
         // 3 nodes, add entries, drop follower 1, add entries [implicit re-join all]
         {.name = "drops_02", .nodes = 3,
          .updates = {entries{4},partition{0,2},entries{4},partition{2,1}}},
+        // 3 nodes, add entries, drop leader 0, custom leader, add entries [implicit re-join all]
+        {.name = "drops_03", .nodes = 3,
+         .updates = {entries{4},partition{leader{1},2},entries{4}}},
+        // 4 nodes, add entries, drop follower 1, custom leader, add entries [implicit re-join all]
+        {.name = "drops_04", .nodes = 4,
+         .updates = {entries{4},partition{0,2,3},entries{4},partition{1,leader{2},3}}},
+        // Snapshot automatic take and load
+        {.name = "take_snapshot_and_stream", .nodes = 3,
+         .config = {{.snapshot_threshold = 10, .snapshot_trailing = 5}},
+         .updates = {entries{5}, partition{0,1}, entries{10}, partition{0, 2}, entries{20}}},
     };
 
     return app.run(argc, argv, [&replication_tests, &app] () -> future<int> {
