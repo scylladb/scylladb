@@ -125,7 +125,7 @@ private:
         service::client_state client_state;
 
         core_local_state(auth::service& auth_service)
-            : client_state(service::client_state::external_tag{}, auth_service)
+            : client_state(service::client_state::external_tag{}, auth_service, infinite_timeout_config)
         {
             client_state.set_login(auth::authenticated_user(testing_superuser));
         }

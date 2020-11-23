@@ -591,7 +591,7 @@ cql_server::connection::connection(cql_server& server, socket_address server_add
     , _fd(std::move(fd))
     , _read_buf(_fd.input())
     , _write_buf(_fd.output())
-    , _client_state(service::client_state::external_tag{}, server._auth_service, addr)
+    , _client_state(service::client_state::external_tag{}, server._auth_service, server.timeout_config(), addr)
 {
     ++_server._total_connections;
     ++_server._current_connections;
