@@ -1823,6 +1823,32 @@ static void serialize(const abstract_type& t, const void* value, bytes::iterator
 }
 
 template <FragmentedView View>
+data_value collection_type_impl::deserialize(View v, cql_serialization_format sf) const {
+    struct visitor {
+        View v;
+        cql_serialization_format sf;
+        data_value operator()(const abstract_type&) {
+            on_internal_error(tlogger, "collection_type_impl::deserialize called on a non-collection type. This should be impossible.");
+        }
+        data_value operator()(const list_type_impl& t) {
+            return t.deserialize(v, sf);
+        }
+        data_value operator()(const map_type_impl& t) {
+            return t.deserialize(v, sf);
+        }
+        data_value operator()(const set_type_impl& t) {
+            return t.deserialize(v, sf);
+        }
+    };
+    return ::visit(*this, visitor{v, sf});
+}
+// Explicit instantiation.
+// This should be repeated for every View type passed to collection_type_impl::deserialize.
+template data_value collection_type_impl::deserialize<>(ser::buffer_view<bytes_ostream::fragment_iterator>, cql_serialization_format) const;
+template data_value collection_type_impl::deserialize<>(fragmented_temporary_buffer::view, cql_serialization_format) const;
+template data_value collection_type_impl::deserialize<>(single_fragmented_view, cql_serialization_format) const;
+
+template <FragmentedView View>
 data_value deserialize_aux(const tuple_type_impl& t, View v) {
     tuple_type_impl::native_type ret;
     ret.reserve(t.all_types().size());
