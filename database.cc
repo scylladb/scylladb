@@ -848,7 +848,13 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
             return create_views_from_schema_partition(proxy, v.second).then([this, &mm] (std::vector<view_ptr> views) {
                 return parallel_for_each(views.begin(), views.end(), [this, &mm] (auto&& v) {
                     return this->add_column_family_and_make_directory(v).then([this, &mm, v] {
-                        return maybe_update_legacy_secondary_index_mv_schema(mm.local(), *this, v);
+                        // TODO: Remove once computed columns are guaranteed to be featured in the whole cluster.
+                        view_ptr fixed_v = maybe_fix_legacy_secondary_index_mv_schema(*this, v, nullptr, preserve_version::no);
+                        if (fixed_v) {
+                            return mm.local().announce_view_update(view_ptr(fixed_v));
+                        } else {
+                            return make_ready_future<>();
+                        }
                     });
                 });
             });
