@@ -1842,10 +1842,6 @@ data_value deserialize_aux(const tuple_type_impl& t, View v) {
     return data_value::make(t.shared_from_this(), std::make_unique<tuple_type_impl::native_type>(std::move(ret)));
 }
 
-data_value deserialize_aux(const tuple_type_impl& t, bytes_view v) {
-    return deserialize_aux(t, single_fragmented_view(v));
-}
-
 template<FragmentedView View>
 utils::multiprecision_int deserialize_value(const varint_type_impl&, View v) {
     bool negative = v.current_fragment().front() < 0;
