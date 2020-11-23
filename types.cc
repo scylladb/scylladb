@@ -1831,10 +1831,7 @@ data_value deserialize_aux(const tuple_type_impl& t, View v) {
         data_value obj = data_value::make_null(*ti);
         std::optional<View> e = read_tuple_element(v);
         if (e) {
-            // FIXME: don't linearize
-            with_linearized(*e, [&] (bytes_view bv) {
-                obj = (*ti)->deserialize(bv);
-            });
+            obj = (*ti)->deserialize(*e);
         }
         ret.push_back(std::move(obj));
         ++ti;
