@@ -140,6 +140,36 @@ public:
         return !_total_size;
     }
 
+    // FragmentedView implementation
+    void remove_prefix(size_t n) {
+        while (n >= _first.size() && n > 0) {
+            n -= _first.size();
+            remove_current();
+        }
+        _total_size -= n;
+        _first.remove_prefix(n);
+    }
+    void remove_current() {
+        _total_size -= _first.size();
+        if (_total_size) {
+            auto next_data = reinterpret_cast<const bytes::value_type*>((*_next).begin());
+            size_t next_size = std::min(_total_size, (*_next).size());
+            _first = bytes_view(next_data, next_size);
+            ++_next;
+        } else {
+            _first = bytes_view();
+        }
+    }
+    buffer_view prefix(size_t n) const {
+        auto tmp = *this;
+        tmp._total_size = std::min(tmp._total_size, n);
+        tmp._first = tmp._first.substr(0, n);
+        return tmp;
+    }
+    bytes_view current_fragment() {
+        return _first;
+    }
+
     bytes linearize() const {
         bytes b(bytes::initialized_later(), size_bytes());
         using boost::range::for_each;
@@ -164,6 +194,7 @@ public:
         return fn(bv);
     }
 };
+static_assert(FragmentedView<buffer_view<bytes_ostream::fragment_iterator>>);
 
 using size_type = uint32_t;
 
