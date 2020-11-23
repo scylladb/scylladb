@@ -165,6 +165,7 @@ schema_registry& local_schema_registry();
 // chain will last.
 class global_schema_ptr {
     schema_ptr _ptr;
+    schema_ptr _base_schema;
     unsigned _cpu_of_origin;
 public:
     // Note: the schema_ptr must come from the current shard and can't be nullptr.
