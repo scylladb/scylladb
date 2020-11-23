@@ -137,14 +137,12 @@ sets::value::from_serialized(const fragmented_temporary_buffer::view& val, const
         // Collections have this small hack that validate cannot be called on a serialized object,
         // but compose does the validation (so we're fine).
         // FIXME: deserializeForNativeProtocol?!
-      return with_linearized(val, [&] (bytes_view v) {
-        auto s = value_cast<set_type_impl::native_type>(type.deserialize(v, sf));
+        auto s = value_cast<set_type_impl::native_type>(type.deserialize(val, sf));
         std::set<bytes, serialized_compare> elements(type.get_elements_type()->as_less_comparator());
         for (auto&& element : s) {
             elements.insert(elements.end(), type.get_elements_type()->decompose(element));
         }
         return value(std::move(elements));
-      });
     } catch (marshal_exception& e) {
         throw exceptions::invalid_request_exception(e.what());
     }
