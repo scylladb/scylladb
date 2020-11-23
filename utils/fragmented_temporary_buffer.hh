@@ -185,10 +185,11 @@ public:
             n -= _current_size;
             ++_current;
             _current_size = std::min(_current->size(), _total_size);
+            _current_position = _current->get();
         }
         _total_size -= n;
         _current_size -= n;
-        _current_position = _current->get() + n;
+        _current_position += n;
         if (!_current_size && _total_size) {
             ++_current;
             _current_size = std::min(_current->size(), _total_size);
