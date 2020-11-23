@@ -178,3 +178,26 @@ concept FragmentedMutableView = requires (T view) {
     requires std::is_same_v<typename T::fragment_type, bytes_mutable_view>;
 };
 
+template<FragmentedView View>
+requires (!FragmentRange<View>)
+bytes linearized(View v)
+{
+    bytes b(bytes::initialized_later(), v.size_bytes());
+    auto out = b.begin();
+    while (v.size_bytes()) {
+        out = std::copy(v.current_fragment().begin(), v.current_fragment().end(), out);
+        v.remove_current();
+    }
+    return b;
+}
+
+template<FragmentedView View, typename Function>
+requires (!FragmentRange<View>) && std::invocable<Function, bytes_view>
+decltype(auto) with_linearized(const View& v, Function&& fn)
+{
+    if (v.size_bytes() == v.current_fragment().size()) [[likely]] {
+        return fn(v.current_fragment());
+    } else {
+        return fn(linearized(v));
+    }
+}
