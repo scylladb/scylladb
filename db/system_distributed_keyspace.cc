@@ -155,17 +155,20 @@ future<> system_distributed_keyspace::stop() {
     return make_ready_future<>();
 }
 
-static const timeout_config internal_distributed_timeout_config = [] {
+static service::query_state& internal_distributed_query_state() {
     using namespace std::chrono_literals;
     const auto t = 10s;
-    return timeout_config{ t, t, t, t, t, t, t };
-}();
+    static timeout_config tc{ t, t, t, t, t, t, t };
+    static thread_local service::client_state cs(service::client_state::internal_tag{}, tc);
+    static thread_local service::query_state qs(cs, empty_service_permit());
+    return qs;
+};
 
 future<std::unordered_map<utils::UUID, sstring>> system_distributed_keyspace::view_status(sstring ks_name, sstring view_name) const {
     return _qp.execute_internal(
             format("SELECT host_id, status FROM {}.{} WHERE keyspace_name = ? AND view_name = ?", NAME, VIEW_BUILD_STATUS),
             db::consistency_level::ONE,
-            internal_distributed_timeout_config,
+            internal_distributed_query_state(),
             { std::move(ks_name), std::move(view_name) },
             false).then([this] (::shared_ptr<cql3::untyped_result_set> cql_result) {
         return boost::copy_range<std::unordered_map<utils::UUID, sstring>>(*cql_result
@@ -182,7 +185,7 @@ future<> system_distributed_keyspace::start_view_build(sstring ks_name, sstring 
         return _qp.execute_internal(
                 format("INSERT INTO {}.{} (keyspace_name, view_name, host_id, status) VALUES (?, ?, ?, ?)", NAME, VIEW_BUILD_STATUS),
                 db::consistency_level::ONE,
-                internal_distributed_timeout_config,
+                internal_distributed_query_state(),
                 { std::move(ks_name), std::move(view_name), std::move(host_id), "STARTED" },
                 false).discard_result();
     });
@@ -193,7 +196,7 @@ future<> system_distributed_keyspace::finish_view_build(sstring ks_name, sstring
         return _qp.execute_internal(
                 format("UPDATE {}.{} SET status = ? WHERE keyspace_name = ? AND view_name = ? AND host_id = ?", NAME, VIEW_BUILD_STATUS),
                 db::consistency_level::ONE,
-                internal_distributed_timeout_config,
+                internal_distributed_query_state(),
                 { "SUCCESS", std::move(ks_name), std::move(view_name), std::move(host_id) },
                 false).discard_result();
     });
@@ -203,7 +206,7 @@ future<> system_distributed_keyspace::remove_view(sstring ks_name, sstring view_
     return _qp.execute_internal(
             format("DELETE FROM {}.{} WHERE keyspace_name = ? AND view_name = ?", NAME, VIEW_BUILD_STATUS),
             db::consistency_level::ONE,
-            internal_distributed_timeout_config,
+            internal_distributed_query_state(),
             { std::move(ks_name), std::move(view_name) },
             false).discard_result();
 }
@@ -281,7 +284,7 @@ system_distributed_keyspace::insert_cdc_topology_description(
     return _qp.execute_internal(
             format("INSERT INTO {}.{} (time, description) VALUES (?,?)", NAME, CDC_TOPOLOGY_DESCRIPTION),
             quorum_if_many(ctx.num_token_owners),
-            internal_distributed_timeout_config,
+            internal_distributed_query_state(),
             { time, make_list_value(cdc_generation_description_type, prepare_cdc_generation_description(description)) },
             false).discard_result();
 }
@@ -293,7 +296,7 @@ system_distributed_keyspace::read_cdc_topology_description(
     return _qp.execute_internal(
             format("SELECT description FROM {}.{} WHERE time = ?", NAME, CDC_TOPOLOGY_DESCRIPTION),
             quorum_if_many(ctx.num_token_owners),
-            internal_distributed_timeout_config,
+            internal_distributed_query_state(),
             { time },
             false
     ).then([] (::shared_ptr<cql3::untyped_result_set> cql_result) -> std::optional<cdc::topology_description> {
@@ -321,7 +324,7 @@ system_distributed_keyspace::expire_cdc_topology_description(
     return _qp.execute_internal(
             format("UPDATE {}.{} SET expired = ? WHERE time = ?", NAME, CDC_TOPOLOGY_DESCRIPTION),
             quorum_if_many(ctx.num_token_owners),
-            internal_distributed_timeout_config,
+            internal_distributed_query_state(),
             { expiration_time, streams_ts },
             false).discard_result();
 }
@@ -342,7 +345,7 @@ system_distributed_keyspace::create_cdc_desc(
     return _qp.execute_internal(
             format("INSERT INTO {}.{} (time, streams) VALUES (?,?)", NAME, CDC_DESC),
             quorum_if_many(ctx.num_token_owners),
-            internal_distributed_timeout_config,
+            internal_distributed_query_state(),
             { time, make_set_value(cdc_streams_set_type, prepare_cdc_streams(streams)) },
             false).discard_result();
 }
@@ -355,7 +358,7 @@ system_distributed_keyspace::expire_cdc_desc(
     return _qp.execute_internal(
             format("UPDATE {}.{} SET expired = ? WHERE time = ?", NAME, CDC_DESC),
             quorum_if_many(ctx.num_token_owners),
-            internal_distributed_timeout_config,
+            internal_distributed_query_state(),
             { expiration_time, streams_ts },
             false).discard_result();
 }
@@ -367,7 +370,7 @@ system_distributed_keyspace::cdc_desc_exists(
     return _qp.execute_internal(
             format("SELECT time FROM {}.{} WHERE time = ?", NAME, CDC_DESC),
             quorum_if_many(ctx.num_token_owners),
-            internal_distributed_timeout_config,
+            internal_distributed_query_state(),
             { streams_ts },
             false
     ).then([] (::shared_ptr<cql3::untyped_result_set> cql_result) -> bool {
@@ -380,7 +383,7 @@ system_distributed_keyspace::cdc_get_versioned_streams(context ctx) {
     return _qp.execute_internal(
             format("SELECT * FROM {}.{}", NAME, CDC_DESC),
             quorum_if_many(ctx.num_token_owners),
-            internal_distributed_timeout_config,
+            internal_distributed_query_state(),
             {},
             false
     ).then([] (::shared_ptr<cql3::untyped_result_set> cql_result) {

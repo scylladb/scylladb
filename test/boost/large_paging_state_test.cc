@@ -63,7 +63,7 @@ SEASTAR_TEST_CASE(test_use_high_bits_of_remaining_rows_in_paging_state) {
             e.execute_prepared(id, {cql3_pk, cql3_ck}).get();
         }
 
-        auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
+        auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, std::vector<cql3::raw_value>{},
                     cql3::query_options::specific_options{5, nullptr, {}, api::new_timestamp()});
         auto msg = e.execute_cql("select * from test;", std::move(qo)).get0();
         auto paging_state = extract_paging_state(msg);
@@ -75,7 +75,7 @@ SEASTAR_TEST_CASE(test_use_high_bits_of_remaining_rows_in_paging_state) {
         paging_state->set_remaining(test_remaining);
 
         while (has_more_pages(msg)) {
-            qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
+            qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, std::vector<cql3::raw_value>{},
                     cql3::query_options::specific_options{5, paging_state, {}, api::new_timestamp()});
             msg = e.execute_cql("SELECT * FROM test;", std::move(qo)).get0();
             rows_fetched = count_rows_fetched(msg);
@@ -101,7 +101,7 @@ SEASTAR_TEST_CASE(test_use_high_bits_of_remaining_rows_in_paging_state_filtering
             e.execute_prepared(id, {cql3_pk, cql3_ck}).get();
         }
 
-        auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
+        auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, std::vector<cql3::raw_value>{},
                     cql3::query_options::specific_options{5, nullptr, {}, api::new_timestamp()});
         auto msg = e.execute_cql("select * from test where ck > 10;", std::move(qo)).get0();
         auto paging_state = extract_paging_state(msg);
@@ -113,7 +113,7 @@ SEASTAR_TEST_CASE(test_use_high_bits_of_remaining_rows_in_paging_state_filtering
         paging_state->set_remaining(test_remaining);
 
         while (has_more_pages(msg)) {
-            qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
+            qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, std::vector<cql3::raw_value>{},
                     cql3::query_options::specific_options{5, paging_state, {}, api::new_timestamp()});
             msg = e.execute_cql("SELECT * FROM test where ck > 10;", std::move(qo)).get0();
             rows_fetched = count_rows_fetched(msg);

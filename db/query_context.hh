@@ -55,10 +55,18 @@ struct query_context {
                 // let the `storage_proxy` time out the query down the call chain
                 db::timeout_clock::duration::zero();
 
-        return do_with(timeout_config{d, d, d, d, d, d, d}, [this, req = std::move(req), &args...] (auto& tcfg) {
+        struct timeout_context {
+            std::unique_ptr<service::client_state> client_state;
+            service::query_state query_state;
+            timeout_context(db::timeout_clock::duration d)
+                    : client_state(std::make_unique<service::client_state>(service::client_state::internal_tag{}, timeout_config{d, d, d, d, d, d, d}))
+                    , query_state(*client_state, empty_service_permit())
+            {}
+        };
+        return do_with(timeout_context(d), [this, req = std::move(req), &args...] (auto& tctx) {
             return _qp.local().execute_internal(req,
                 cql3::query_options::DEFAULT.get_consistency(),
-                tcfg,
+                tctx.query_state,
                 { data_value(std::forward<Args>(args))... },
                 true);
         });

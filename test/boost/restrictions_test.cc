@@ -45,7 +45,7 @@ std::unique_ptr<cql3::query_options> to_options(
     static auto& d = cql3::query_options::DEFAULT;
     return std::make_unique<cql3::query_options>(
             cfg,
-            d.get_consistency(), d.get_timeout_config(), std::move(names), std::move(values), d.skip_metadata(),
+            d.get_consistency(), std::move(names), std::move(values), d.skip_metadata(),
             d.get_specific_options(), d.get_cql_serialization_format());
 }
 

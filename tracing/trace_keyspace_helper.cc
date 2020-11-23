@@ -63,9 +63,13 @@ const sstring trace_keyspace_helper::EVENTS("events");
 const sstring trace_keyspace_helper::NODE_SLOW_QUERY_LOG("node_slow_log");
 const sstring trace_keyspace_helper::NODE_SLOW_QUERY_LOG_TIME_IDX("node_slow_log_time_idx");
 
-timeout_config tracing_db_timeout_config {
-    5s, 5s, 5s, 5s, 5s, 5s, 5s,
-};
+static service::client_state& tracing_client_state() {
+    static timeout_config tracing_db_timeout_config {
+        5s, 5s, 5s, 5s, 5s, 5s, 5s,
+    };
+    static thread_local service::client_state s(service::client_state::internal_tag{}, tracing_db_timeout_config);
+    return s;
+}
 
 struct trace_keyspace_backend_sesssion_state final : public backend_session_state_base {
     int64_t last_nanos = 0;
@@ -75,7 +79,7 @@ struct trace_keyspace_backend_sesssion_state final : public backend_session_stat
 
 trace_keyspace_helper::trace_keyspace_helper(tracing& tr)
             : i_tracing_backend_helper(tr)
-            , _dummy_query_state(service::client_state::for_internal_calls(), empty_service_permit())
+            , _dummy_query_state(tracing_client_state(), empty_service_permit())
             , _sessions(KEYSPACE_NAME, SESSIONS,
                         sprint("CREATE TABLE IF NOT EXISTS %s.%s ("
                                   "session_id uuid,"
@@ -313,7 +317,7 @@ cql3::query_options trace_keyspace_helper::make_session_mutation_data(const one_
     };
 
     return cql3::query_options(cql3::default_cql_config,
-            db::consistency_level::ANY, tracing_db_timeout_config, std::move(names), std::move(values), false, cql3::query_options::specific_options::DEFAULT, cql_serialization_format::latest());
+            db::consistency_level::ANY, std::move(names), std::move(values), false, cql3::query_options::specific_options::DEFAULT, cql_serialization_format::latest());
 }
 
 cql3::query_options trace_keyspace_helper::make_session_time_idx_mutation_data(const one_session_records& session_records) {
@@ -331,7 +335,7 @@ cql3::query_options trace_keyspace_helper::make_session_time_idx_mutation_data(c
     };
 
     return cql3::query_options(cql3::default_cql_config,
-            db::consistency_level::ANY, tracing_db_timeout_config, std::nullopt, std::move(values), false, cql3::query_options::specific_options::DEFAULT, cql_serialization_format::latest());
+            db::consistency_level::ANY, std::nullopt, std::move(values), false, cql3::query_options::specific_options::DEFAULT, cql_serialization_format::latest());
 }
 
 cql3::query_options trace_keyspace_helper::make_slow_query_mutation_data(const one_session_records& session_records, const utils::UUID& start_time_id) {
@@ -374,7 +378,7 @@ cql3::query_options trace_keyspace_helper::make_slow_query_mutation_data(const o
     });
 
     return cql3::query_options(cql3::default_cql_config,
-            db::consistency_level::ANY, tracing_db_timeout_config, std::nullopt, std::move(values), false, cql3::query_options::specific_options::DEFAULT, cql_serialization_format::latest());
+            db::consistency_level::ANY, std::nullopt, std::move(values), false, cql3::query_options::specific_options::DEFAULT, cql_serialization_format::latest());
 }
 
 cql3::query_options trace_keyspace_helper::make_slow_query_time_idx_mutation_data(const one_session_records& session_records, const utils::UUID& start_time_id) {
@@ -395,7 +399,7 @@ cql3::query_options trace_keyspace_helper::make_slow_query_time_idx_mutation_dat
     });
 
     return cql3::query_options(cql3::default_cql_config,
-            db::consistency_level::ANY, tracing_db_timeout_config, std::nullopt, std::move(values), false, cql3::query_options::specific_options::DEFAULT, cql_serialization_format::latest());
+            db::consistency_level::ANY, std::nullopt, std::move(values), false, cql3::query_options::specific_options::DEFAULT, cql_serialization_format::latest());
 }
 
 std::vector<cql3::raw_value> trace_keyspace_helper::make_event_mutation_data(one_session_records& session_records, const event_record& record) {
@@ -431,7 +435,7 @@ future<> trace_keyspace_helper::apply_events_mutation(cql3::query_processor& qp,
         std::for_each(events_records.begin(), events_records.end(), [&values, all_records = records, this] (event_record& one_event_record) { values.emplace_back(make_event_mutation_data(*all_records, one_event_record)); });
 
         return do_with(
-            cql3::query_options::make_batch_options(cql3::query_options(cql3::default_cql_config, db::consistency_level::ANY, tracing_db_timeout_config, std::nullopt, std::vector<cql3::raw_value>{}, false, cql3::query_options::specific_options::DEFAULT, cql_serialization_format::latest()), std::move(values)),
+            cql3::query_options::make_batch_options(cql3::query_options(cql3::default_cql_config, db::consistency_level::ANY, std::nullopt, std::vector<cql3::raw_value>{}, false, cql3::query_options::specific_options::DEFAULT, cql_serialization_format::latest()), std::move(values)),
             cql3::statements::batch_statement(cql3::statements::batch_statement::type::UNLOGGED, std::move(modifications), cql3::attributes::none(), qp.get_cql_stats()),
             [this] (auto& batch_options, auto& batch) {
                 return batch.execute(service::get_storage_proxy().local(), _dummy_query_state, batch_options).then([] (shared_ptr<cql_transport::messages::result_message> res) { return now(); });

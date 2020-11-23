@@ -108,7 +108,7 @@ future<> wait_for_schema_agreement(::service::migration_manager& mm, const datab
     });
 }
 
-const timeout_config& internal_distributed_timeout_config() noexcept {
+::service::query_state& internal_distributed_query_state() noexcept {
 #ifdef DEBUG
     // Give the much slower debug tests more headroom for completing auth queries.
     static const auto t = 30s;
@@ -116,7 +116,9 @@ const timeout_config& internal_distributed_timeout_config() noexcept {
     static const auto t = 5s;
 #endif
     static const timeout_config tc{t, t, t, t, t, t, t};
-    return tc;
+    static thread_local ::service::client_state cs(::service::client_state::internal_tag{}, tc);
+    static thread_local ::service::query_state qs(cs, empty_service_permit());
+    return qs;
 }
 
 }
