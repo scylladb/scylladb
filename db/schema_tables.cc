@@ -1226,7 +1226,42 @@ static void merge_tables_and_views(distributed<service::storage_proxy>& proxy,
         return create_table_from_mutations(proxy, std::move(sm));
     });
     auto views_diff = diff_table_or_view(proxy, std::move(views_before), std::move(views_after), [&] (schema_mutations sm) {
-        return create_view_from_mutations(proxy, std::move(sm));
+        // The view schema mutation should be created with reference to the base table schema because we definitely know it by now.
+        // If we don't do it we are leaving a window where write commands to this schema are illegal.
+        // There are 3 possibilities:
+        // 1. The table was altered - in this case we want the view to correspond to this new table schema.
+        // 2. The table was just created - the table is guarantied to be published with the view in that case.
+        // 3. The view itself was altered - in that case we already know the base table so we can take it from
+        //    the database object.
+        view_ptr vp = create_view_from_mutations(proxy, std::move(sm));
+        schema_ptr base_schema;
+        for (auto&& s : tables_diff.altered) {
+            if (s.new_schema.get()->ks_name() == vp->ks_name() && s.new_schema.get()->cf_name() == vp->view_info()->base_name() ) {
+                base_schema = s.new_schema;
+                break;
+            }
+        }
+        if (!base_schema) {
+            for (auto&& s : tables_diff.created) {
+                if (s.get()->ks_name() == vp->ks_name() && s.get()->cf_name() == vp->view_info()->base_name() ) {
+                    base_schema = s;
+                    break;
+                }
+            }
+        }
+
+        if (!base_schema) {
+            base_schema = proxy.local().local_db().find_schema(vp->ks_name(), vp->view_info()->base_name());
+        }
+
+        // Now when we have a referenced base - just in case we are registering an old view (this can happen in a mixed cluster)
+        // lets make it write enabled by updating it's compute columns.
+        view_ptr fixed_vp = maybe_fix_legacy_secondary_index_mv_schema(proxy.local().get_db().local(), vp, base_schema, preserve_version::yes);
+        if(fixed_vp) {
+            vp = fixed_vp;
+        }
+        vp->view_info()->set_base_info(vp->view_info()->make_base_dependent_view_info(*base_schema));
+        return vp;
     });
 
     proxy.local().get_db().invoke_on_all([&] (database& db) {
