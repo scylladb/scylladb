@@ -355,16 +355,12 @@ bytes_opt next_value(query::result_row_view::iterator_type& iter, const column_d
     if (cdef->type->is_multi_cell()) {
         auto cell = iter.next_collection_cell();
         if (cell) {
-            return cell->with_linearized([] (bytes_view data) {
-                return bytes(data.cbegin(), data.cend());
-            });
+            return linearized(*cell);
         }
     } else {
         auto cell = iter.next_atomic_cell();
         if (cell) {
-            return cell->value().with_linearized([] (bytes_view data) {
-                return bytes(data.cbegin(), data.cend());
-            });
+            return linearized(cell->value());
         }
     }
     return std::nullopt;
