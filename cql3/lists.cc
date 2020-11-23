@@ -301,9 +301,7 @@ lists::setter_by_index::execute(mutation& m, const clustering_key_prefix& prefix
         return;
     }
 
-    auto idx = with_linearized(*index, [] (bytes_view v) {
-        return value_cast<int32_t>(data_type_for<int32_t>()->deserialize(v));
-    });
+    auto idx = value_cast<int32_t>(data_type_for<int32_t>()->deserialize(*index));
     auto&& existing_list_opt = params.get_prefetched_list(m.key(), prefix, column);
     if (!existing_list_opt) {
         throw exceptions::invalid_request_exception("Attempted to set an element on a list which is null");
