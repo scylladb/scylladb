@@ -388,7 +388,10 @@ void apply_changes(raft::server_id id, const std::vector<raft::command_cref>& co
 //  - Configuration change
 using entries = unsigned;
 using new_leader = int;
-using partition = std::vector<size_t>;
+struct leader {
+    size_t id;
+};
+using partition = std::vector<std::variant<leader,int>>;
 // TODO: config change
 using update = std::variant<entries, new_leader, partition>;
 
@@ -494,29 +497,46 @@ future<int> run_test(test_case test) {
             }
         } else if (std::holds_alternative<partition>(update)) {
             auto p = std::get<partition>(update);
-            std::unordered_set<size_t> connected_servers(p.begin(), p.end());
+            server_disconnected.clear();
+            std::unordered_set<size_t> partition_servers;
+            struct leader new_leader;
+            bool have_new_leader = false;
+            for (auto s: p) {
+                size_t id;
+                if (std::holds_alternative<struct leader>(s)) {
+                    have_new_leader = true;
+                    new_leader = std::get<struct leader>(s);
+                    id = new_leader.id;
+                } else {
+                    id = std::get<int>(s);
+                }
+                partition_servers.insert(id);
+            }
             for (size_t s = 0; s < test.nodes; ++s) {
-                if (connected_servers.find(s) == connected_servers.end()) {
+                if (partition_servers.find(s) == partition_servers.end()) {
                     // Disconnect servers not in main partition
                     server_disconnected.insert(raft::server_id{utils::UUID(0, s + 1)});
                 }
             }
-            for (auto s: p) {
-                // Re connect servers in live partition
-                server_disconnected.erase(raft::server_id{utils::UUID(0, s + 1)});
-            }
-            if (connected_servers.find(leader) == connected_servers.end() && p.size() > 0) {
-                // Old leader disconnected: elapse election, then tick till leader
-                rafts[leader].first->elapse_election(); // elapse previous leader
-                for (auto s: p) {
+            if (have_new_leader && new_leader.id != leader) {
+                // New leader specified, elect it
+                for (size_t s = 0; s < test.nodes; ++s) {
+                    rafts[s].first->elapse_election();
+                }
+                co_await rafts[new_leader.id].first->elect_me_leader();
+                tlogger.debug("confirmed leader on {}", new_leader.id);
+                leader = new_leader.id;
+            } else if (partition_servers.find(leader) == partition_servers.end() && p.size() > 0) {
+                // Old leader disconnected and not specified new, free election
+                for (size_t s = 0; s < test.nodes; ++s) {
                     rafts[s].first->elapse_election();
                 }
                 for (bool have_leader = false; !have_leader; ) {
-                    for (auto s: p) {
+                    for (auto s: partition_servers) {
                         rafts[s].first->tick();
                     }
                     co_await seastar::sleep(1us);        // yield
-                    for (auto s: p) {
+                    for (auto s: partition_servers) {
                         if (rafts[s].first->is_leader()) {
                             have_leader = true;
                             leader = s;
@@ -687,6 +707,12 @@ int main(int argc, char* argv[]) {
         // 3 nodes, add entries, drop follower 1, add entries [implicit re-join all]
         {.name = "drops_02", .nodes = 3,
          .updates = {entries{4},partition{0,2},entries{4},partition{2,1}}},
+        // 3 nodes, add entries, drop leader 0, custom leader, add entries [implicit re-join all]
+        {.name = "drops_03", .nodes = 3,
+         .updates = {entries{4},partition{leader{1},2},entries{4}}},
+        // 4 nodes, add entries, drop follower 1, custom leader, add entries [implicit re-join all]
+        {.name = "drops_04", .nodes = 4,
+         .updates = {entries{4},partition{0,2,3},entries{4},partition{1,leader{2},3}}},
         // Snapshot automatic take and load
         {.name = "take_snapshot_and_stream", .nodes = 3,
          .config = {{.snapshot_threshold = 10, .snapshot_trailing = 5}},
