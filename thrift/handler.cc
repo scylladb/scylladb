@@ -976,7 +976,7 @@ public:
                 throw make_exception<InvalidRequestException>("Compressed query strings are not supported");
             }
             auto& qp = _query_processor.local();
-            auto opts = std::make_unique<cql3::query_options>(qp.get_cql_config(), cl_from_thrift(consistency), _timeout_config, std::nullopt, std::vector<cql3::raw_value_view>(),
+            auto opts = std::make_unique<cql3::query_options>(qp.get_cql_config(), cl_from_thrift(consistency), std::nullopt, std::vector<cql3::raw_value_view>(),
                             false, cql3::query_options::specific_options::DEFAULT, cql_serialization_format::latest());
             auto f = qp.execute_direct(query, _query_state, *opts);
             return f.then([cob = std::move(cob), opts = std::move(opts)](auto&& ret) {
@@ -1056,7 +1056,7 @@ public:
                 return cql3::raw_value::make_value(to_bytes(s));
             });
             auto& qp = _query_processor.local();
-            auto opts = std::make_unique<cql3::query_options>(qp.get_cql_config(), cl_from_thrift(consistency), _timeout_config, std::nullopt, std::move(bytes_values),
+            auto opts = std::make_unique<cql3::query_options>(qp.get_cql_config(), cl_from_thrift(consistency), std::nullopt, std::move(bytes_values),
                             false, cql3::query_options::specific_options::DEFAULT, cql_serialization_format::latest());
             auto f = qp.execute_prepared(std::move(prepared), std::move(cache_key), _query_state, *opts, needs_authorization);
             return f.then([cob = std::move(cob), opts = std::move(opts)](auto&& ret) {

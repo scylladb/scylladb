@@ -181,17 +181,20 @@ future<> system_distributed_keyspace::stop() {
     return make_ready_future<>();
 }
 
-static timeout_config get_timeout_config(db::timeout_clock::duration t) {
-    return timeout_config{ t, t, t, t, t, t, t };
-}
-
-static const timeout_config internal_distributed_timeout_config = get_timeout_config(std::chrono::seconds(10));
+static service::query_state& internal_distributed_query_state() {
+    using namespace std::chrono_literals;
+    const auto t = 10s;
+    static timeout_config tc{ t, t, t, t, t, t, t };
+    static thread_local service::client_state cs(service::client_state::internal_tag{}, tc);
+    static thread_local service::query_state qs(cs, empty_service_permit());
+    return qs;
+};
 
 future<std::unordered_map<utils::UUID, sstring>> system_distributed_keyspace::view_status(sstring ks_name, sstring view_name) const {
     return _qp.execute_internal(
             format("SELECT host_id, status FROM {}.{} WHERE keyspace_name = ? AND view_name = ?", NAME, VIEW_BUILD_STATUS),
             db::consistency_level::ONE,
-            internal_distributed_timeout_config,
+            internal_distributed_query_state(),
             { std::move(ks_name), std::move(view_name) },
             false).then([this] (::shared_ptr<cql3::untyped_result_set> cql_result) {
         return boost::copy_range<std::unordered_map<utils::UUID, sstring>>(*cql_result
@@ -208,7 +211,7 @@ future<> system_distributed_keyspace::start_view_build(sstring ks_name, sstring 
         return _qp.execute_internal(
                 format("INSERT INTO {}.{} (keyspace_name, view_name, host_id, status) VALUES (?, ?, ?, ?)", NAME, VIEW_BUILD_STATUS),
                 db::consistency_level::ONE,
-                internal_distributed_timeout_config,
+                internal_distributed_query_state(),
                 { std::move(ks_name), std::move(view_name), std::move(host_id), "STARTED" },
                 false).discard_result();
     });
@@ -219,7 +222,7 @@ future<> system_distributed_keyspace::finish_view_build(sstring ks_name, sstring
         return _qp.execute_internal(
                 format("UPDATE {}.{} SET status = ? WHERE keyspace_name = ? AND view_name = ? AND host_id = ?", NAME, VIEW_BUILD_STATUS),
                 db::consistency_level::ONE,
-                internal_distributed_timeout_config,
+                internal_distributed_query_state(),
                 { "SUCCESS", std::move(ks_name), std::move(view_name), std::move(host_id) },
                 false).discard_result();
     });
@@ -229,7 +232,7 @@ future<> system_distributed_keyspace::remove_view(sstring ks_name, sstring view_
     return _qp.execute_internal(
             format("DELETE FROM {}.{} WHERE keyspace_name = ? AND view_name = ?", NAME, VIEW_BUILD_STATUS),
             db::consistency_level::ONE,
-            internal_distributed_timeout_config,
+            internal_distributed_query_state(),
             { std::move(ks_name), std::move(view_name) },
             false).discard_result();
 }
@@ -307,7 +310,7 @@ system_distributed_keyspace::insert_cdc_topology_description(
     return _qp.execute_internal(
             format("INSERT INTO {}.{} (time, description) VALUES (?,?)", NAME, CDC_TOPOLOGY_DESCRIPTION),
             quorum_if_many(ctx.num_token_owners),
-            internal_distributed_timeout_config,
+            internal_distributed_query_state(),
             { time, make_list_value(cdc_generation_description_type, prepare_cdc_generation_description(description)) },
             false).discard_result();
 }
@@ -319,7 +322,7 @@ system_distributed_keyspace::read_cdc_topology_description(
     return _qp.execute_internal(
             format("SELECT description FROM {}.{} WHERE time = ?", NAME, CDC_TOPOLOGY_DESCRIPTION),
             quorum_if_many(ctx.num_token_owners),
-            internal_distributed_timeout_config,
+            internal_distributed_query_state(),
             { time },
             false
     ).then([] (::shared_ptr<cql3::untyped_result_set> cql_result) -> std::optional<cdc::topology_description> {
@@ -347,7 +350,7 @@ system_distributed_keyspace::expire_cdc_topology_description(
     return _qp.execute_internal(
             format("UPDATE {}.{} SET expired = ? WHERE time = ?", NAME, CDC_TOPOLOGY_DESCRIPTION),
             quorum_if_many(ctx.num_token_owners),
-            internal_distributed_timeout_config,
+            internal_distributed_query_state(),
             { expiration_time, streams_ts },
             false).discard_result();
 }
@@ -413,7 +416,7 @@ system_distributed_keyspace::create_cdc_desc(
     co_await _qp.execute_internal(
             format("INSERT INTO {}.{} (key, time) VALUES (?, ?)", NAME, CDC_TIMESTAMPS),
             quorum_if_many(ctx.num_token_owners),
-            internal_distributed_timeout_config,
+            internal_distributed_query_state(),
             { CDC_TIMESTAMPS_KEY, time },
             false).discard_result();
 }
@@ -426,7 +429,7 @@ system_distributed_keyspace::expire_cdc_desc(
     return _qp.execute_internal(
             format("UPDATE {}.{} SET expired = ? WHERE time = ?", NAME, CDC_TIMESTAMPS),
             quorum_if_many(ctx.num_token_owners),
-            internal_distributed_timeout_config,
+            internal_distributed_query_state(),
             { expiration_time, streams_ts },
             false).discard_result();
 }
@@ -471,7 +474,7 @@ system_distributed_keyspace::cdc_desc_exists(
     co_return co_await _qp.execute_internal(
             format("SELECT time FROM {}.{} WHERE key = ? AND time = ?", NAME, CDC_TIMESTAMPS),
             quorum_if_many(ctx.num_token_owners),
-            internal_distributed_timeout_config,
+            internal_distributed_query_state(),
             { CDC_TIMESTAMPS_KEY, streams_ts },
             false
     ).then([] (::shared_ptr<cql3::untyped_result_set> cql_result) -> bool {
@@ -484,7 +487,7 @@ system_distributed_keyspace::cdc_get_versioned_streams(db_clock::time_point not_
     auto timestamps_cql = co_await _qp.execute_internal(
             format("SELECT time FROM {}.{} WHERE key = ?", NAME, CDC_TIMESTAMPS),
             quorum_if_many(ctx.num_token_owners),
-            internal_distributed_timeout_config,
+            internal_distributed_query_state(),
             { CDC_TIMESTAMPS_KEY },
             false);
 
@@ -506,7 +509,7 @@ system_distributed_keyspace::cdc_get_versioned_streams(db_clock::time_point not_
         auto streams_cql = co_await _qp.execute_internal(
                 format("SELECT streams FROM {}.{} WHERE time = ?", NAME, CDC_DESC_V2),
                 quorum_if_many(ctx.num_token_owners),
-                internal_distributed_timeout_config,
+                internal_distributed_query_state(),
                 { ts },
                 false);
 
@@ -526,11 +529,10 @@ future<std::vector<db_clock::time_point>>
 system_distributed_keyspace::get_cdc_desc_v1_timestamps(context ctx) {
     std::vector<db_clock::time_point> res;
     co_await _qp.query_internal(
-            format("SELECT time FROM {}.{}", NAME, CDC_DESC_V1),
-            quorum_if_many(ctx.num_token_owners),
             // This is a long and expensive scan (mostly due to #8061).
             // Give it a bit more time than usual.
-            get_timeout_config(std::chrono::seconds(60)),
+            format("SELECT time FROM {}.{} USING TIMEOUT 60s", NAME, CDC_DESC_V1),
+            quorum_if_many(ctx.num_token_owners),
             {},
             1000,
             [&] (const cql3::untyped_result_set_row& r) {

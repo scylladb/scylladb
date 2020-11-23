@@ -35,6 +35,7 @@
 #include "log.hh"
 #include "seastarx.hh"
 #include "utils/exponential_backoff_retry.hh"
+#include "service/query_state.hh"
 
 using namespace std::chrono_literals;
 
@@ -87,6 +88,6 @@ future<> wait_for_schema_agreement(::service::migration_manager&, const database
 ///
 /// Time-outs for internal, non-local CQL queries.
 ///
-const timeout_config& internal_distributed_timeout_config() noexcept;
+::service::query_state& internal_distributed_query_state() noexcept;
 
 }
