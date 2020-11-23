@@ -44,6 +44,7 @@
 #include "auth/service.hh"
 #include "exceptions/exceptions.hh"
 #include "unimplemented.hh"
+#include "timeout_config.hh"
 #include "timestamp.hh"
 #include "db_clock.hh"
 #include "database_fwd.hh"
@@ -88,10 +89,17 @@ public:
     };
 private:
     client_state(const client_state* cs, seastar::sharded<auth::service>* auth_service)
-            : _keyspace(cs->_keyspace),  _user(cs->_user), _auth_state(cs->_auth_state),
-              _is_internal(cs->_is_internal), _is_thrift(cs->_is_thrift), _remote_address(cs->_remote_address),
-              _auth_service(auth_service ? &auth_service->local() : nullptr),
-              _enabled_protocol_extensions(cs->_enabled_protocol_extensions) {}
+            : _keyspace(cs->_keyspace)
+            ,  _user(cs->_user)
+            , _auth_state(cs->_auth_state)
+            , _is_internal(cs->_is_internal)
+            , _is_thrift(cs->_is_thrift)
+            , _remote_address(cs->_remote_address)
+            , _auth_service(auth_service ? &auth_service->local() : nullptr)
+            , _default_timeout_config(cs->_default_timeout_config)
+            , _timeout_config(cs->_timeout_config)
+            , _enabled_protocol_extensions(cs->_enabled_protocol_extensions)
+    {}
     friend client_state_for_another_shard;
 private:
     sstring _keyspace;
@@ -136,6 +144,10 @@ private:
     // Only populated for external client state.
     auth::service* _auth_service{nullptr};
 
+    // For restoring default values in the timeout config
+    timeout_config _default_timeout_config;
+    timeout_config _timeout_config;
+
 public:
     struct internal_tag {};
     struct external_tag {};
@@ -162,11 +174,13 @@ public:
         _driver_version = std::move(driver_version);
     }
 
-    client_state(external_tag, auth::service& auth_service, const socket_address& remote_address = socket_address(), bool thrift = false)
+    client_state(external_tag, auth::service& auth_service, timeout_config timeout_config, const socket_address& remote_address = socket_address(), bool thrift = false)
             : _is_internal(false)
             , _is_thrift(thrift)
             , _remote_address(remote_address)
-            , _auth_service(&auth_service) {
+            , _auth_service(&auth_service)
+            , _default_timeout_config(timeout_config)
+            , _timeout_config(timeout_config) {
         if (!auth_service.underlying_authenticator().require_authentication()) {
             _user = auth::authenticated_user();
         }
@@ -180,10 +194,16 @@ public:
         return _remote_address.port();
     }
 
+    const timeout_config& get_timeout_config() const {
+        return _timeout_config;
+    }
+
     client_state(internal_tag)
             : _keyspace("system")
             , _is_internal(true)
             , _is_thrift(false)
+            , _default_timeout_config(infinite_timeout_config)
+            , _timeout_config(infinite_timeout_config)
     {}
 
     client_state(const client_state&) = delete;

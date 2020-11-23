@@ -201,9 +201,9 @@ enum class query_order { no, yes };
 class thrift_handler : public CassandraCobSvIf {
     distributed<database>& _db;
     distributed<cql3::query_processor>& _query_processor;
+    ::timeout_config _timeout_config;
     service::client_state _client_state;
     service::query_state _query_state;
-    ::timeout_config _timeout_config;
 private:
     template <typename Cob, typename Func>
     void
@@ -220,9 +220,9 @@ public:
     explicit thrift_handler(distributed<database>& db, distributed<cql3::query_processor>& qp, auth::service& auth_service, ::timeout_config timeout_config)
         : _db(db)
         , _query_processor(qp)
-        , _client_state(service::client_state::external_tag{}, auth_service, socket_address(), true)
-        , _query_state(_client_state, /*FIXME: pass real permit*/empty_service_permit())
         , _timeout_config(timeout_config)
+        , _client_state(service::client_state::external_tag{}, auth_service, _timeout_config, socket_address(), true)
+        , _query_state(_client_state, /*FIXME: pass real permit*/empty_service_permit())
     { }
 
     const sstring& current_keyspace() const {
