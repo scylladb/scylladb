@@ -1791,23 +1791,6 @@ load_dc_rack_info() {
     return _local_cache.local()._cached_dc_rack_info;
 }
 
-
-future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>
-query_mutations(distributed<service::storage_proxy>& proxy, const sstring& cf_name) {
-    return query_mutations(proxy, db::system_keyspace::NAME, cf_name);
-}
-
-future<lw_shared_ptr<query::result_set>>
-query(distributed<service::storage_proxy>& proxy, const sstring& cf_name) {
-    return query(proxy, db::system_keyspace::NAME, cf_name);
-}
-
-future<lw_shared_ptr<query::result_set>>
-query(distributed<service::storage_proxy>& proxy, const sstring& cf_name, const dht::decorated_key& key, query::clustering_range row_range)
-{
-    return query(proxy, db::system_keyspace::NAME, cf_name, key, row_range);
-}
-
 future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>
 query_mutations(distributed<service::storage_proxy>& proxy, const sstring& ks_name, const sstring& cf_name) {
     database& db = proxy.local().get_db().local();

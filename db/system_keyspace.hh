@@ -209,21 +209,6 @@ future<std::optional<sstring>> get_scylla_local_param(const sstring& key);
 std::vector<schema_ptr> all_tables();
 void make(database& db, bool durable, bool volatile_testing_only = false);
 
-future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>
-query_mutations(distributed<service::storage_proxy>& proxy, const sstring& cf_name);
-
-// Returns all data from given system table.
-// Intended to be used by code which is not performance critical.
-future<lw_shared_ptr<query::result_set>> query(distributed<service::storage_proxy>& proxy, const sstring& cf_name);
-
-// Returns a slice of given system table.
-// Intended to be used by code which is not performance critical.
-future<lw_shared_ptr<query::result_set>> query(
-    distributed<service::storage_proxy>& proxy,
-    const sstring& cf_name,
-    const dht::decorated_key& key,
-    query::clustering_range row_ranges = query::clustering_range::make_open_ended_both_sides());
-
 /// overloads
 
 future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>
