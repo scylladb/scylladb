@@ -227,9 +227,7 @@ public:
             } else if (value.is_unset_value()) {
                 return;
             }
-            auto increment = with_linearized(*value, [] (bytes_view value_view) {
-                return value_cast<int64_t>(long_type->deserialize_value(value_view));
-            });
+            auto increment = value_cast<int64_t>(long_type->deserialize_value(*value));
             m.set_cell(prefix, column, make_counter_update_cell(increment, params));
         }
     };
@@ -244,9 +242,7 @@ public:
             } else if (value.is_unset_value()) {
                 return;
             }
-            auto increment = with_linearized(*value, [] (bytes_view value_view) {
-                return value_cast<int64_t>(long_type->deserialize_value(value_view));
-            });
+            auto increment = value_cast<int64_t>(long_type->deserialize_value(*value));
             if (increment == std::numeric_limits<int64_t>::min()) {
                 throw exceptions::invalid_request_exception(format("The negation of {:d} overflows supported counter precision (signed 8 bytes integer)", increment));
             }
