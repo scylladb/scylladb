@@ -433,6 +433,11 @@ public:
     //
     // When forwarding mode is not enabled, fast_forward_to()
     // cannot be used.
+    //
+    // `fast_forward_to` can be called only when the reader is within a partition
+    // and it affects the set of fragments returned from that partition.
+    // In particular one must first enter a partition by fetching a `partition_start`
+    // fragment before calling `fast_forward_to`.
     future<> fast_forward_to(position_range cr, db::timeout_clock::time_point timeout) {
         return _impl->fast_forward_to(std::move(cr), timeout);
     }
