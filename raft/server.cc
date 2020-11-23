@@ -48,7 +48,7 @@ public:
     ~server_impl() {}
 
     // rpc_server interface
-    void append_entries(server_id from, append_request_recv append_request) override;
+    void append_entries(server_id from, append_request append_request) override;
     void append_entries_reply(server_id from, append_reply reply) override;
     void request_vote(server_id from, vote_request vote_request) override;
     void request_vote_reply(server_id from, vote_reply vote_reply) override;
@@ -210,7 +210,7 @@ future<> server_impl::add_entry(command command, wait_type type) {
 future<> server_impl::apply_dummy_entry() {
     return add_entry_internal(log_entry::dummy(), wait_type::applied);
 }
-void server_impl::append_entries(server_id from, append_request_recv append_request) {
+void server_impl::append_entries(server_id from, append_request append_request) {
     _fsm->step(from, std::move(append_request));
 }
 
@@ -271,7 +271,7 @@ future<> server_impl::send_message(server_id id, Message m) {
         using T = std::decay_t<decltype(m)>;
         if constexpr (std::is_same_v<T, append_reply>) {
             return _rpc->send_append_entries_reply(id, m);
-        } else if constexpr (std::is_same_v<T, append_request_send>) {
+        } else if constexpr (std::is_same_v<T, append_request>) {
             return _rpc->send_append_entries(id, m);
         } else if constexpr (std::is_same_v<T, vote_request>) {
             return _rpc->send_vote_request(id, m);

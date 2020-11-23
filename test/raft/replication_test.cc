@@ -261,21 +261,11 @@ public:
         snapshots[id] = snapshots[_id];
         return net[id]->_client->apply_snapshot(_id, std::move(snap));
     }
-    virtual future<> send_append_entries(raft::server_id id, const raft::append_request_send& append_request) {
+    virtual future<> send_append_entries(raft::server_id id, const raft::append_request& append_request) {
         if (is_disconnected(id) || is_disconnected(_id) || (drop_replication && !(rand() % 5))) {
             return make_ready_future<>();
         }
-        raft::append_request_recv req;
-        req.current_term = append_request.current_term;
-        req.leader_id = append_request.leader_id;
-        req.prev_log_idx = append_request.prev_log_idx;
-        req.prev_log_term = append_request.prev_log_term;
-        req.leader_commit_idx = append_request.leader_commit_idx;
-        for (auto&& e: append_request.entries) {
-            req.entries.push_back(*e);
-        }
-        net[id]->_client->append_entries(_id, std::move(req));
-        //co_return seastar::sleep(1us);
+        net[id]->_client->append_entries(_id, append_request);
         return make_ready_future<>();
     }
     virtual future<> send_append_entries_reply(raft::server_id id, const raft::append_reply& reply) {

@@ -195,7 +195,7 @@ BOOST_AUTO_TEST_CASE(test_election_four_nodes) {
     BOOST_CHECK(fsm.is_follower());
 
     // Inform FSM about a new leader at a new term
-    fsm.step(id4, raft::append_request_recv{term_t{1}, id4, index_t{1}, term_t{1}});
+    fsm.step(id4, raft::append_request{term_t{1}, id4, index_t{1}, term_t{1}});
 
     (void) fsm.get_output();
 
@@ -234,7 +234,7 @@ BOOST_AUTO_TEST_CASE(test_log_matching_rule) {
     raft::configuration cfg({id1, id2, id3});
     raft::log log(raft::snapshot{.idx = index_t{999}, .config = cfg});
 
-    log.emplace_back(raft::log_entry{term_t{10}, index_t{1000}});
+    log.emplace_back(seastar::make_lw_shared<raft::log_entry>(raft::log_entry{term_t{10}, index_t{1000}}));
     log.stable_to(log.last_idx());
 
     raft::fsm fsm(id1, term_t{10}, server_id{}, std::move(log), fd, fsm_cfg);

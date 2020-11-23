@@ -232,7 +232,7 @@ class fsm {
     // and allow_empty is true, send a heartbeat.
     void replicate_to(follower_progress& progress, bool allow_empty);
     void replicate();
-    void append_entries(server_id from, append_request_recv&& append_request);
+    void append_entries(server_id from, append_request&& append_request);
     void append_entries_reply(server_id from, append_reply&& reply);
 
     void request_vote(server_id from, vote_request&& vote_request);
@@ -353,7 +353,7 @@ void fsm::step(server_id from, Message&& msg) {
         logger.trace("{} [term: {}] received a message with higher term from {} [term: {}]",
             _my_id, _current_term, from, msg.current_term);
 
-        if constexpr (std::is_same_v<Message, append_request_recv>) {
+        if constexpr (std::is_same_v<Message, append_request>) {
             become_follower(from);
         } else {
             if constexpr (std::is_same_v<Message, vote_request>) {
@@ -373,7 +373,7 @@ void fsm::step(server_id from, Message&& msg) {
         update_current_term(msg.current_term);
 
     } else if (msg.current_term < _current_term) {
-        if constexpr (std::is_same_v<Message, append_request_recv>) {
+        if constexpr (std::is_same_v<Message, append_request>) {
             // Instructs the leader to step down.
             append_reply reply{_current_term, _commit_idx, append_reply::rejected{msg.prev_log_idx, _log.last_idx()}};
             send_to(from, std::move(reply));
@@ -387,7 +387,7 @@ void fsm::step(server_id from, Message&& msg) {
         return;
 
     } else /* _current_term == msg.current_term */ {
-        if constexpr (std::is_same_v<Message, append_request_recv> ||
+        if constexpr (std::is_same_v<Message, append_request> ||
                       std::is_same_v<Message, install_snapshot>) {
             if (is_candidate()) {
                 // 3.4 Leader Election
@@ -412,7 +412,7 @@ void fsm::step(server_id from, Message&& msg) {
     auto visitor = [this, from, msg = std::move(msg)](auto state) mutable {
         using State = decltype(state);
 
-        if constexpr (std::is_same_v<Message, append_request_recv>) {
+        if constexpr (std::is_same_v<Message, append_request>) {
             // Got AppendEntries RPC from self
             append_entries(from, std::move(msg));
         } else if constexpr (std::is_same_v<Message, append_reply>) {
