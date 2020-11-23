@@ -161,8 +161,8 @@ select_statement::select_statement(schema_ptr schema,
     _opts.set_if<query::partition_slice::option::reversed>(_is_reversed);
 }
 
-db::timeout_clock::duration select_statement::get_timeout(const query_options& options) const {
-    return _attrs->is_timeout_set() ? _attrs->get_timeout(options) : options.get_timeout_config().*get_timeout_config_selector();
+db::timeout_clock::duration select_statement::get_timeout(const service::client_state& state, const query_options& options) const {
+    return _attrs->is_timeout_set() ? _attrs->get_timeout(options) : state.get_timeout_config().*get_timeout_config_selector();
 }
 
 ::shared_ptr<const cql3::metadata> select_statement::get_result_metadata() const {
@@ -371,7 +371,7 @@ select_statement::do_execute(service::storage_proxy& proxy,
     }
 
     command->slice.options.set<query::partition_slice::option::allow_short_read>();
-    auto timeout_duration = get_timeout(options);
+    auto timeout_duration = get_timeout(state.get_client_state(), options);
     auto timeout = db::timeout_clock::now() + timeout_duration;
     auto p = service::pager::query_pagers::pager(_schema, _selection,
             state, options, command, std::move(key_ranges), restrictions_need_filtering ? _restrictions : nullptr);
@@ -518,7 +518,7 @@ indexed_table_select_statement::do_execute_base_query(
         lw_shared_ptr<const service::pager::paging_state> paging_state) const {
     using value_type = std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, lw_shared_ptr<query::read_command>>;
     auto cmd = prepare_command_for_base_query(proxy, options, state, now, bool(paging_state));
-    auto timeout = db::timeout_clock::now() + get_timeout(options);
+    auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
     uint32_t queried_ranges_count = partition_ranges.size();
     service::query_ranges_to_vnodes_generator ranges_to_vnodes(proxy.get_token_metadata_ptr(), _schema, std::move(partition_ranges));
 
@@ -612,7 +612,7 @@ indexed_table_select_statement::do_execute_base_query(
         lw_shared_ptr<const service::pager::paging_state> paging_state) const {
     using value_type = std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, lw_shared_ptr<query::read_command>>;
     auto cmd = prepare_command_for_base_query(proxy, options, state, now, bool(paging_state));
-    auto timeout = db::timeout_clock::now() + get_timeout(options);
+    auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
 
     struct base_query_state {
         query::result_merger merger;
@@ -694,7 +694,7 @@ select_statement::execute(service::storage_proxy& proxy,
     // is specified we need to get "limit" rows from each partition since there
     // is no way to tell which of these rows belong to the query result before
     // doing post-query ordering.
-    auto timeout = db::timeout_clock::now() + get_timeout(options);
+    auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
     if (needs_post_query_ordering() && _limit) {
         return do_with(std::forward<dht::partition_range_vector>(partition_ranges), [this, &proxy, &state, &options, cmd, timeout](auto& prs) {
             assert(cmd->partition_limit == query::max_partitions);
@@ -1259,7 +1259,7 @@ indexed_table_select_statement::find_index_partition_ranges(service::storage_pro
 {
     using value_type = std::tuple<dht::partition_range_vector, lw_shared_ptr<const service::pager::paging_state>>;
     auto now = gc_clock::now();
-    auto timeout = db::timeout_clock::now() + get_timeout(options);
+    auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
     return read_posting_list(proxy, options, get_limit(options), state, now, timeout, false).then(
             [this, now, &options] (::shared_ptr<cql_transport::messages::result_message::rows> rows) {
         auto rs = cql3::untyped_result_set(rows);
@@ -1300,7 +1300,7 @@ indexed_table_select_statement::find_index_clustering_rows(service::storage_prox
 {
     using value_type = std::tuple<std::vector<indexed_table_select_statement::primary_key>, lw_shared_ptr<const service::pager::paging_state>>;
     auto now = gc_clock::now();
-    auto timeout = db::timeout_clock::now() + get_timeout(options);
+    auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
     return read_posting_list(proxy, options, get_limit(options), state, now, timeout, true).then(
             [this, now, &options] (::shared_ptr<cql_transport::messages::result_message::rows> rows) {
 
