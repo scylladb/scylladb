@@ -323,7 +323,7 @@ public:
     // tick period.
     bool can_read();
 
-    void snapshot_status(server_id id, bool success);
+    void snapshot_status(server_id id, std::optional<index_t> idx);
 
     // This call will update the log to point to the new snaphot
     // and will truncate the log prefix up to (snp.idx - trailing)

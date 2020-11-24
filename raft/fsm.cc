@@ -615,7 +615,7 @@ bool fsm::can_read() {
     return false;
 }
 
-void fsm::snapshot_status(server_id id, bool success) {
+void fsm::snapshot_status(server_id id, std::optional<index_t> idx) {
     auto& progress = _tracker->find(id);
 
     if (progress.state != follower_progress::state::SNAPSHOT) {
@@ -626,8 +626,8 @@ void fsm::snapshot_status(server_id id, bool success) {
     // No matter if snapshot transfer failed or not move back to probe state
     progress.become_probe();
 
-    if (success) {
-        progress.next_idx = _log.get_snapshot().idx + index_t(1);
+    if (idx) {
+        progress.next_idx = *idx + index_t(1);
         // If snapshot was successfully transfered start replication immediately
         replicate_to(progress, false);
     }
