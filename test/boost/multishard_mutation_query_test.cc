@@ -84,7 +84,7 @@ SEASTAR_THREAD_TEST_CASE(test_abandoned_read) {
         auto cmd = query::read_command(s->id(), s->version(), s->full_slice(), 7, gc_clock::now(), std::nullopt, query::max_partitions,
                 utils::make_random_uuid(), query::is_first_page::yes, query::max_result_size(query::result_memory_limiter::unlimited_result_size), 0);
 
-        query_mutations_on_all_shards(env.db(), s, cmd, {query::full_partition_range}, nullptr, db::no_timeout).get();
+        query_mutations_on_all_shards(env.db(), s, cmd, {query::full_partition_range}, nullptr, db::no_timeout, multishard_mutation_query_config{}).get();
 
         check_cache_population(env.db(), 1);
 
@@ -133,7 +133,7 @@ read_partitions_with_paged_scan(distributed<database>& db, schema_ptr s, uint32_
 
     // First page is special, needs to have `is_first_page` set.
     {
-        auto res = std::get<0>(query_mutations_on_all_shards(db, s, cmd, {range}, nullptr, db::no_timeout).get0());
+        auto res = std::get<0>(query_mutations_on_all_shards(db, s, cmd, {range}, nullptr, db::no_timeout, multishard_mutation_query_config{}).get0());
         for (auto& part : res->partitions()) {
             auto mut = part.mut().unfreeze(s);
             results.emplace_back(std::move(mut));
@@ -177,7 +177,7 @@ read_partitions_with_paged_scan(distributed<database>& db, schema_ptr s, uint32_
             cmd.slice.set_range(*s, last_pkey.key(), std::move(ckranges));
         }
 
-        auto res = std::get<0>(query_mutations_on_all_shards(db, s, cmd, {pkrange}, nullptr, db::no_timeout).get0());
+        auto res = std::get<0>(query_mutations_on_all_shards(db, s, cmd, {pkrange}, nullptr, db::no_timeout, multishard_mutation_query_config{}).get0());
 
         if (is_stateful) {
             tests::require(aggregate_querier_cache_stat(db, &query::querier_cache::stats::lookups) >= npages);

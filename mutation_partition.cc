@@ -2386,7 +2386,10 @@ static do_mutation_query(schema_ptr s,
 
     return do_with(std::move(q), [=, &slice, accounter = std::move(accounter), trace_ptr = std::move(trace_ptr), cache_ctx = std::move(cache_ctx)] (
                 query::mutation_querier& q) mutable {
-        auto rrb = reconcilable_result_builder(*s, slice, std::move(accounter));
+        auto rrb = reconcilable_result_builder(*s, slice, std::move(accounter),
+                reconcilable_result_builder_config{
+                    .tombstone_thresholds = class_config.tombstone_thresholds,
+                });
         return q.consume_page(std::move(rrb), row_limit, partition_limit, query_time, timeout, class_config.max_memory_for_unlimited_query).then(
                 [=, &q, trace_ptr = std::move(trace_ptr), cache_ctx = std::move(cache_ctx)] (reconcilable_result r) mutable {
             if (q.are_limits_reached() || r.is_short_read()) {

@@ -22,6 +22,7 @@
 #pragma once
 
 #include <cinttypes>
+#include "tombstone_thresholds.hh"
 
 class reader_concurrency_semaphore;
 
@@ -39,6 +40,7 @@ struct max_result_size {
 struct query_class_config {
     reader_concurrency_semaphore& semaphore;
     max_result_size max_memory_for_unlimited_query;
+    ::tombstone_thresholds tombstone_thresholds;
 };
 
 }

@@ -1413,6 +1413,13 @@ database::get_query_class_config(const query::read_command& cmd) {
     return query::query_class_config{
             .semaphore = semaphore,
             .max_memory_for_unlimited_query = *cmd.max_result_size,
+            .tombstone_thresholds = &semaphore == &_read_concurrency_sem
+                ? tombstone_thresholds{
+                    .tombstone_warn_threshold = _cfg.tombstone_warn_threshold(),
+                    .tombstone_fail_threshold = _cfg.tombstone_failure_threshold(),
+                    }
+                // system/streaming reads bypass the tombstone failure thresholds to avoid killing the system
+                : tombstone_thresholds{},
     };
 }
 

@@ -617,11 +617,12 @@ static future<reconcilable_result> do_query_mutations(
         const dht::partition_range_vector& ranges,
         tracing::trace_state_ptr trace_state,
         db::timeout_clock::time_point timeout,
-        query::result_memory_accounter&& accounter) {
+        query::result_memory_accounter&& accounter,
+        multishard_mutation_query_config cfg) {
     return do_with(seastar::make_shared<read_context>(db, s, cmd, ranges, trace_state), [&db, s, &cmd, &ranges, trace_state, timeout,
-            accounter = std::move(accounter)] (shared_ptr<read_context>& ctx) mutable {
+            accounter = std::move(accounter), cfg] (shared_ptr<read_context>& ctx) mutable {
         return ctx->lookup_readers().then([&ctx, s = std::move(s), &cmd, &ranges, trace_state, timeout,
-                accounter = std::move(accounter)] () mutable {
+                accounter = std::move(accounter), cfg] () mutable {
             auto ms = mutation_source([&] (schema_ptr s,
                     reader_permit permit,
                     const dht::partition_range& pr,
@@ -638,9 +639,12 @@ static future<reconcilable_result> do_query_mutations(
             auto compaction_state = make_lw_shared<compact_for_mutation_query_state>(*s, cmd.timestamp, cmd.slice, cmd.get_row_limit(),
                     cmd.partition_limit);
 
-            return do_with(std::move(reader), std::move(compaction_state), [&, accounter = std::move(accounter), timeout] (
+            return do_with(std::move(reader), std::move(compaction_state), [&, accounter = std::move(accounter), timeout, cfg] (
                         flat_mutation_reader& reader, lw_shared_ptr<compact_for_mutation_query_state>& compaction_state) mutable {
-                auto rrb = reconcilable_result_builder(*reader.schema(), cmd.slice, std::move(accounter));
+                auto rrb_cfg = reconcilable_result_builder_config{
+                    .tombstone_thresholds = cfg.tombstone_thresholds,
+                };
+                auto rrb = reconcilable_result_builder(*reader.schema(), cmd.slice, std::move(accounter), rrb_cfg);
                 return query::consume_page(reader, compaction_state, cmd.slice, std::move(rrb), cmd.get_row_limit(), cmd.partition_limit, cmd.timestamp,
                         timeout, *cmd.max_result_size).then([&] (consume_result&& result) mutable {
                     return make_ready_future<page_consume_result>(page_consume_result(std::move(result), reader.detach_buffer(), std::move(compaction_state)));
@@ -672,7 +676,8 @@ future<std::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_tempera
         const query::read_command& cmd,
         const dht::partition_range_vector& ranges,
         tracing::trace_state_ptr trace_state,
-        db::timeout_clock::time_point timeout) {
+        db::timeout_clock::time_point timeout,
+        multishard_mutation_query_config cfg) {
     if (cmd.get_row_limit() == 0 || cmd.slice.partition_row_limit() == 0 || cmd.partition_limit == 0) {
         return make_ready_future<std::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>>(
             std::tuple(
@@ -682,8 +687,8 @@ future<std::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_tempera
 
     const auto short_read_allowed = query::short_read(cmd.slice.options.contains<query::partition_slice::option::allow_short_read>());
     return db.local().get_result_memory_limiter().new_mutation_read(*cmd.max_result_size, short_read_allowed).then([&, s = std::move(s),
-            trace_state = std::move(trace_state), timeout] (query::result_memory_accounter accounter) mutable {
-        return do_query_mutations(db, s, cmd, ranges, std::move(trace_state), timeout, std::move(accounter)).then_wrapped(
+            trace_state = std::move(trace_state), timeout, cfg] (query::result_memory_accounter accounter) mutable {
+        return do_query_mutations(db, s, cmd, ranges, std::move(trace_state), timeout, std::move(accounter), cfg).then_wrapped(
                     [&db, s = std::move(s)] (future<reconcilable_result>&& f) {
             auto& local_db = db.local();
             auto& stats = local_db.get_stats();

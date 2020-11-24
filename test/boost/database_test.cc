@@ -510,7 +510,7 @@ SEASTAR_THREAD_TEST_CASE(read_max_size) {
                     });
                 }},
                 {"query_mutations_on_all_shards()", [&e, &partition_ranges] (schema_ptr s, const query::read_command& cmd) -> future<size_t> {
-                    return query_mutations_on_all_shards(e.db(), s, cmd, partition_ranges, {}, db::no_timeout).then(
+                    return query_mutations_on_all_shards(e.db(), s, cmd, partition_ranges, {}, db::no_timeout, {}).then(
                             [] (const std::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>& res) {
                         return std::get<0>(res)->memory_usage();
                     });

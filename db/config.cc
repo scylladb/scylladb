@@ -490,9 +490,9 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     /* Tombstone settings */
     /* When executing a scan, within or across a partition, tombstones must be kept in memory to allow returning them to the coordinator. The coordinator uses them to ensure other replicas know about the deleted rows. Workloads that generate numerous tombstones may cause performance problems and exhaust the server heap. See Cassandra anti-patterns: Queues and queue-like datasets. Adjust these thresholds only if you understand the impact and want to scan more tombstones. Additionally, you can adjust these thresholds at runtime using the StorageServiceMBean. */
     /* Related information: Cassandra anti-patterns: Queues and queue-like datasets */
-    , tombstone_warn_threshold(this, "tombstone_warn_threshold", value_status::Unused, 1000,
+    , tombstone_warn_threshold(this, "tombstone_warn_threshold", liveness::LiveUpdate, value_status::Used, 1000,
         "The maximum number of tombstones a query can scan before warning.")
-    , tombstone_failure_threshold(this, "tombstone_failure_threshold", value_status::Unused, 100000,
+    , tombstone_failure_threshold(this, "tombstone_failure_threshold", liveness::LiveUpdate, value_status::Used, 100000,
         "The maximum number of tombstones a query can scan before aborting.")
     /* Network timeout settings */
     , range_request_timeout_in_ms(this, "range_request_timeout_in_ms", value_status::Used, 10000,
