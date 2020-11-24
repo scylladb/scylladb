@@ -1407,12 +1407,21 @@ compare_atomic_cell_for_merge(atomic_cell_view left, atomic_cell_view right) {
     return 0;
 }
 
+query::query_class_config
+database::get_query_class_config(const query::read_command& cmd) {
+    auto& semaphore = get_reader_concurrency_semaphore();
+    return query::query_class_config{
+            .semaphore = semaphore,
+            .max_memory_for_unlimited_query = *cmd.max_result_size,
+    };
+}
+
 future<std::tuple<lw_shared_ptr<query::result>, cache_temperature>>
 database::query(schema_ptr s, const query::read_command& cmd, query::result_options opts, const dht::partition_range_vector& ranges,
                 tracing::trace_state_ptr trace_state, db::timeout_clock::time_point timeout) {
     column_family& cf = find_column_family(cmd.cf_id);
-    auto& semaphore = get_reader_concurrency_semaphore();
-    auto class_config = query::query_class_config{.semaphore = semaphore, .max_memory_for_unlimited_query = *cmd.max_result_size};
+    auto class_config = get_query_class_config(cmd);
+    auto& semaphore = class_config.semaphore;
     query::querier_cache_context cache_ctx(_querier_cache, cmd.query_uuid, cmd.is_first_page);
     return _data_query_stage(&cf,
             std::move(s),
@@ -1443,8 +1452,8 @@ database::query_mutations(schema_ptr s, const query::read_command& cmd, const dh
   return get_result_memory_limiter().new_mutation_read(*cmd.max_result_size, short_read_allwoed).then(
           [&, s = std::move(s), trace_state = std::move(trace_state), timeout] (query::result_memory_accounter accounter) {
     column_family& cf = find_column_family(cmd.cf_id);
-    auto& semaphore = get_reader_concurrency_semaphore();
-    auto class_config = query::query_class_config{.semaphore = semaphore, .max_memory_for_unlimited_query = *cmd.max_result_size};
+    auto class_config = get_query_class_config(cmd);
+    auto& semaphore = class_config.semaphore;
     query::querier_cache_context cache_ctx(_querier_cache, cmd.query_uuid, cmd.is_first_page);
     return _mutation_query_stage(std::move(s),
             cf.as_mutation_source(),

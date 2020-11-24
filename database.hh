@@ -1361,6 +1361,7 @@ private:
     Future update_write_metrics(Future&& f);
     void update_write_metrics_for_timed_out_write();
     future<> create_keyspace(const lw_shared_ptr<keyspace_metadata>&, bool is_bootstrap);
+    query::query_class_config get_query_class_config(const query::read_command& cmd);
 public:
     static utils::UUID empty_version;
 
