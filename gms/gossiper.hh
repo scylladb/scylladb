@@ -577,6 +577,7 @@ private:
 public:
     void append_endpoint_state(std::stringstream& ss, const endpoint_state& state);
 public:
+    void check_snitch_name_matches() const;
     sstring get_all_endpoint_states();
     std::map<sstring, sstring> get_simple_states();
     int get_down_endpoint_count() const noexcept;

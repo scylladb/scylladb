@@ -281,6 +281,7 @@ void storage_service::prepare_to_join(
         slogger.info("Checking remote features with gossip, initial_contact_nodes={}", initial_contact_nodes);
         _gossiper.do_shadow_round(initial_contact_nodes, gms::bind_messaging_port(bool(do_bind))).get();
         _gossiper.check_knows_remote_features(local_features, loaded_peer_features);
+        _gossiper.check_snitch_name_matches();
         _gossiper.reset_endpoint_state_map().get();
         for (auto ep : loaded_endpoints) {
             _gossiper.add_saved_endpoint(ep);
@@ -368,6 +369,9 @@ void storage_service::prepare_to_join(
     if (replacing_a_node_with_same_ip || replacing_a_node_with_diff_ip) {
         app_states.emplace(gms::application_state::TOKENS, versioned_value::tokens(_bootstrap_tokens));
     }
+    const auto& snitch_name = locator::i_endpoint_snitch::get_local_snitch_ptr()->get_name();
+    app_states.emplace(gms::application_state::SNITCH_NAME, versioned_value::snitch_name(snitch_name));
+
     slogger.info("Starting up server gossip");
 
     auto generation_number = db::system_keyspace::increment_and_get_generation().get0();
@@ -1743,6 +1747,7 @@ future<> storage_service::check_for_endpoint_collision(std::unordered_set<gms::i
             slogger.info("Checking remote features with gossip");
             _gossiper.do_shadow_round(initial_contact_nodes, gms::bind_messaging_port(bool(do_bind))).get();
             _gossiper.check_knows_remote_features(local_features, loaded_peer_features);
+            _gossiper.check_snitch_name_matches();
             auto addr = get_broadcast_address();
             if (!_gossiper.is_safe_for_bootstrap(addr)) {
                 throw std::runtime_error(sprint("A node with address %s already exists, cancelling join. "

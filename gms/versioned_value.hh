@@ -219,6 +219,10 @@ public:
         return versioned_value(rack_id);
     }
 
+    static versioned_value snitch_name(const sstring& snitch_name) {
+        return versioned_value(snitch_name);
+    }
+
     static versioned_value shard_count(int shard_count) {
         return versioned_value(format("{}", shard_count));
     }

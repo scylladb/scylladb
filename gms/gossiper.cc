@@ -1757,7 +1757,8 @@ future<> gossiper::do_shadow_round(std::unordered_set<gms::inet_address> nodes, 
             gms::application_state::STATUS,
             gms::application_state::HOST_ID,
             gms::application_state::TOKENS,
-            gms::application_state::SUPPORTED_FEATURES}};
+            gms::application_state::SUPPORTED_FEATURES,
+            gms::application_state::SNITCH_NAME}};
         logger.info("Gossip shadow round started with nodes={}", nodes);
         std::unordered_set<gms::inet_address> nodes_talked;
         size_t nodes_down = 0;
@@ -2323,6 +2324,20 @@ void gossiper::check_knows_remote_features(std::set<std::string_view>& local_fea
                 local_endpoint, local_features, common_features);
     } else {
         throw std::runtime_error(format("Feature check failed. This node can not join the cluster because it does not understand the feature. Local node {} features = {}, Remote common_features = {}", local_endpoint, local_features, common_features));
+    }
+}
+
+void gossiper::check_snitch_name_matches() const {
+    const auto& my_snitch_name = locator::i_endpoint_snitch::get_local_snitch_ptr()->get_name();
+    for (const auto& [address, state] : endpoint_state_map) {
+        const auto remote_snitch_name = state.get_application_state_ptr(application_state::SNITCH_NAME);
+        if (!remote_snitch_name) {
+            continue;
+        }
+
+        if (remote_snitch_name->value != my_snitch_name) {
+            throw std::runtime_error(format("Snitch check failed. This node cannot join the cluster because it uses {} and not {}", my_snitch_name, remote_snitch_name->value));
+        }
     }
 }
 
