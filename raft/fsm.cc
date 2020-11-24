@@ -379,6 +379,11 @@ void fsm::append_entries_reply(server_id from, append_reply&& reply) {
         }
     }
 
+    if (progress.state == follower_progress::state::SNAPSHOT) {
+        logger.trace("append_entries_reply[{}->{}]: ignored in snapshot state", _my_id, from);
+        return;
+    }
+
     progress.commit_idx = reply.commit_idx;
 
     if (std::holds_alternative<append_reply::accepted>(reply.result)) {
