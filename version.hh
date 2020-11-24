@@ -43,24 +43,24 @@ public:
         return v;
     }
 
-    bool operator==(version v) const {
+    bool operator==(const version& v) const {
         return _version == v._version;
     }
 
-    bool operator!=(version v) const {
+    bool operator!=(const version& v) const {
         return _version != v._version;
     }
 
-    bool operator<(version v) const {
+    bool operator<(const version& v) const {
         return _version < v._version;
     }
-    bool operator<=(version v) {
+    bool operator<=(const version& v) {
         return _version <= v._version;
     }
-    bool operator>(version v) {
+    bool operator>(const version& v) {
         return _version > v._version;
     }
-    bool operator>=(version v) {
+    bool operator>=(const version& v) {
         return _version >= v._version;
     }
 };
