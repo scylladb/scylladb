@@ -2294,6 +2294,7 @@ void reconcilable_result_builder::consume(tombstone t) {
 
 stop_iteration reconcilable_result_builder::consume(static_row&& sr, tombstone, bool is_alive) {
     _static_row_is_alive = is_alive;
+    _dead_rows_since_last_live_row = 0;
     _memory_accounter.update(sr.memory_usage(_schema));
     return _mutation_consumer->consume(std::move(sr));
 }
@@ -2302,12 +2303,32 @@ stop_iteration reconcilable_result_builder::consume(clustering_row&& cr, row_tom
     _live_rows += is_alive;
     auto stop = _memory_accounter.update_and_check(cr.memory_usage(_schema));
     if (is_alive) {
+        _dead_rows_since_last_live_row = 0;
         // We are considering finishing current read only after consuming a
         // live clustering row. While sending a single live row is enough to
         // guarantee progress, not ending the result on a live row would
         // mean that the next page fetch will read all tombstones after the
         // last live row again.
         _stop = stop;
+    } else {
+        ++_dead_rows_since_last_live_row;
+        if (_dead_rows_since_last_live_row >= _dead_rows_threshold) {
+            auto pk = _mutation_consumer->current_position_for_debug();
+            auto msg = format(
+                    "long run ({}) of tombstones encountered {}.{} pk={} ck={}",
+                    _dead_rows_since_last_live_row,
+                    _schema.ks_name(),
+                    _schema.cf_name(),
+                    pk.pk.with_schema(_schema),
+                    pk.ck ? std::make_optional(pk.ck->with_schema(_schema)) : std::nullopt);
+            if (_dead_rows_since_last_live_row >= _cfg.tombstone_thresholds.tombstone_fail_threshold) {
+                mplog.warn("failing query due to {}", msg);
+                throw std::runtime_error(std::move(msg));
+            }
+            if (_dead_rows_since_last_live_row == _cfg.tombstone_thresholds.tombstone_warn_threshold) {
+                mplog.warn("{}", msg);
+            }
+        }
     }
     return _mutation_consumer->consume(std::move(cr)) || _stop;
 }

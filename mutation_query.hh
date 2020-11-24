@@ -29,6 +29,7 @@
 #include "querier.hh"
 #include "utils/chunked_vector.hh"
 #include "query_class_config.hh"
+#include "tombstone_thresholds.hh"
 #include <seastar/core/execution_stage.hh>
 
 class reconcilable_result;
@@ -136,6 +137,10 @@ public:
     printer pretty_printer(schema_ptr) const;
 };
 
+struct reconcilable_result_builder_config {
+    ::tombstone_thresholds tombstone_thresholds;
+};
+
 class reconcilable_result_builder {
     const schema& _schema;
     const query::partition_slice& _slice;
@@ -148,14 +153,22 @@ class reconcilable_result_builder {
     std::optional<streamed_mutation_freezer> _mutation_consumer;
 
     uint64_t _live_rows{};
+    uint32_t _dead_rows_since_last_live_row = 0;
+    uint32_t _dead_rows_threshold = std::numeric_limits<uint32_t>::max();
+    reconcilable_result_builder_config _cfg;
     // make this the last member so it is destroyed first. #7240
     utils::chunked_vector<partition> _result;
 public:
     reconcilable_result_builder(const schema& s, const query::partition_slice& slice,
-                                query::result_memory_accounter&& accounter)
+                                query::result_memory_accounter&& accounter,
+                                reconcilable_result_builder_config cfg = {})
         : _schema(s), _slice(slice)
         , _memory_accounter(std::move(accounter))
-    { }
+        , _cfg(cfg)
+    {
+        auto& tt = cfg.tombstone_thresholds;
+        _dead_rows_threshold = std::min(tt.tombstone_warn_threshold, tt.tombstone_fail_threshold);
+    }
 
     void consume_new_partition(const dht::decorated_key& dk);
     void consume(tombstone t);
