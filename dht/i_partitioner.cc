@@ -354,11 +354,12 @@ to_partition_range(dht::token_range r) {
     return { std::move(start), std::move(end) };
 }
 
-dht::partition_range_vector to_partition_ranges(const dht::token_range_vector& ranges) {
+dht::partition_range_vector to_partition_ranges(const dht::token_range_vector& ranges, utils::can_yield can_yield) {
     dht::partition_range_vector prs;
     prs.reserve(ranges.size());
     for (auto& range : ranges) {
         prs.push_back(dht::to_partition_range(range));
+        utils::maybe_yield(can_yield);
     }
     return prs;
 }
