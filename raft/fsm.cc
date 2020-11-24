@@ -635,12 +635,19 @@ void fsm::snapshot_status(server_id id, std::optional<index_t> idx) {
     // again and snapshot transfer will be attempted one more time.
 }
 
-void fsm::apply_snapshot(snapshot snp, size_t trailing) {
+bool fsm::apply_snapshot(snapshot snp, size_t trailing) {
+    const auto& current_snp = _log.get_snapshot();
+    if (snp.idx <= current_snp.idx) {
+        logger.error("apply_snapshot[{}]: ignore outdated snapshot {}/{} current one is {}/{}",
+                        _my_id, snp.id, snp.idx, current_snp.id, current_snp.idx);
+        return false;
+    }
     size_t units = _log.apply_snapshot(std::move(snp), trailing);
     if (is_leader()) {
         logger.trace("apply_snapshot[{}]: signal {} available units", _my_id, units);
         _log_limiter_semaphore->sem.signal(units);
     }
+    return true;
 }
 
 void fsm::stop() {
