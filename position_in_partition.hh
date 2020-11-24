@@ -593,6 +593,7 @@ public:
     position_in_partition&& end() && { return std::move(_end); }
     bool contains(const schema& s, position_in_partition_view pos) const;
     bool overlaps(const schema& s, position_in_partition_view start, position_in_partition_view end) const;
+    bool is_all_clustered_rows(const schema&) const;
 
     friend std::ostream& operator<<(std::ostream&, const position_range&);
 };
@@ -609,4 +610,9 @@ inline
 bool position_range::overlaps(const schema& s, position_in_partition_view start, position_in_partition_view end) const {
     position_in_partition::less_compare less(s);
     return !less(end, _start) && less(start, _end);
+}
+
+inline
+bool position_range::is_all_clustered_rows(const schema& s) const {
+    return _start.is_before_all_clustered_rows(s) && _end.is_after_all_clustered_rows(s);
 }

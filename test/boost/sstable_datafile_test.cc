@@ -6083,9 +6083,8 @@ SEASTAR_TEST_CASE(purged_tombstone_consumer_sstable_test) {
             for (auto&& sst : all) {
                 compacting->insert(std::move(sst));
             }
-            auto reader = ::make_range_sstable_reader(s,
+            auto reader = compacting->make_range_sstable_reader(s,
                 tests::make_permit(),
-                compacting,
                 query::full_partition_range,
                 s->full_slice(),
                 service::get_local_compaction_priority(),
@@ -6683,5 +6682,45 @@ SEASTAR_TEST_CASE(test_zero_estimated_partitions) {
         }
 
         return make_ready_future<>();
+    });
+}
+
+SEASTAR_TEST_CASE(test_may_have_partition_tombstones) {
+    return test_env::do_with_async([] (test_env& env) {
+        storage_service_for_tests ssft;
+        simple_schema ss;
+        auto s = ss.schema();
+        auto pks = ss.make_pkeys(2);
+
+        auto tmp = tmpdir();
+        unsigned gen = 0;
+        for (auto version : all_sstable_versions) {
+            if (version < sstable_version_types::md) {
+                continue;
+            }
+
+            auto mut1 = mutation(s, pks[0]);
+            auto mut2 = mutation(s, pks[1]);
+            mut1.partition().apply_insert(*s, ss.make_ckey(0), ss.new_timestamp());
+            mut1.partition().apply_delete(*s, ss.make_ckey(1), ss.new_tombstone());
+            ss.add_row(mut1, ss.make_ckey(2), "val");
+            ss.delete_range(mut1, query::clustering_range::make({ss.make_ckey(3)}, {ss.make_ckey(5)}));
+            ss.add_row(mut2, ss.make_ckey(6), "val");
+
+            auto sst_gen = [&env, s, &tmp, &gen, version] () {
+                return env.make_sstable(s, tmp.path().string(), ++gen, version, big);
+            };
+
+            {
+                auto sst = make_sstable_containing(sst_gen, {mut1, mut2});
+                sst->load().get();
+                BOOST_REQUIRE(!sst->may_have_partition_tombstones());
+            }
+
+            mut2.partition().apply(ss.new_tombstone());
+            auto sst = make_sstable_containing(sst_gen, {mut1, mut2});
+            sst->load().get();
+            BOOST_REQUIRE(sst->may_have_partition_tombstones());
+        }
     });
 }

@@ -28,7 +28,6 @@
 #include "query-request.hh"
 #include "service/migration_listener.hh"
 #include "service/migration_manager.hh"
-#include "sstables/sstable_set.hh"
 #include "utils/exponential_backoff_retry.hh"
 #include "utils/serialized_action.hh"
 #include "utils/UUID.hh"
