@@ -112,6 +112,13 @@ public:
     stop_iteration consume(range_tombstone&& rt);
 
     frozen_mutation consume_end_of_stream();
+
+    struct primary_key {
+        partition_key pk;
+        std::optional<clustering_key_prefix> ck;
+    };
+
+    primary_key current_position_for_debug() const;
 };
 
 static constexpr size_t default_frozen_fragment_size = 128 * 1024;

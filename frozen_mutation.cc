@@ -177,6 +177,18 @@ frozen_mutation streamed_mutation_freezer::consume_end_of_stream() {
     return frozen_mutation(std::move(out), std::move(_key));
 }
 
+streamed_mutation_freezer::primary_key
+streamed_mutation_freezer::current_position_for_debug() const {
+    std::optional<clustering_key_prefix> ck;
+    if (!_crs.empty()) {
+        ck.emplace(_crs.back().key());
+    }
+    return {
+        .pk = _key,
+        .ck = std::move(ck),
+    };
+}
+
 class fragmenting_mutation_freezer {
     const schema& _schema;
     std::optional<partition_key> _key;
