@@ -2396,7 +2396,7 @@ std::unordered_multimap<dht::token_range, inet_address> storage_service::get_cha
         seastar::thread::maybe_yield();
         auto& ks = _db.local().find_keyspace(keyspace_name);
         auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
-        auto eps = ks.get_replication_strategy().calculate_natural_endpoints(end_token, metadata, locator::can_yield::yes);
+        auto eps = ks.get_replication_strategy().calculate_natural_endpoints(end_token, metadata, utils::can_yield::yes);
         current_replica_endpoints.emplace(r, std::move(eps));
     }
 
@@ -2419,7 +2419,7 @@ std::unordered_multimap<dht::token_range, inet_address> storage_service::get_cha
         seastar::thread::maybe_yield();
         auto& ks = _db.local().find_keyspace(keyspace_name);
         auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
-        auto new_replica_endpoints = ks.get_replication_strategy().calculate_natural_endpoints(end_token, temp, locator::can_yield::yes);
+        auto new_replica_endpoints = ks.get_replication_strategy().calculate_natural_endpoints(end_token, temp, utils::can_yield::yes);
 
         auto rg = current_replica_endpoints.equal_range(r);
         for (auto it = rg.first; it != rg.second; it++) {
@@ -2721,7 +2721,7 @@ storage_service::get_new_source_ranges(const sstring& keyspace_name, const dht::
     auto& ks = _db.local().find_keyspace(keyspace_name);
     auto& strat = ks.get_replication_strategy();
     auto tm = get_token_metadata().clone_only_token_map().get0();
-    std::unordered_map<dht::token_range, std::vector<inet_address>> range_addresses = strat.get_range_addresses(tm, locator::can_yield::yes);
+    std::unordered_map<dht::token_range, std::vector<inet_address>> range_addresses = strat.get_range_addresses(tm, utils::can_yield::yes);
     std::unordered_multimap<inet_address, dht::token_range> source_ranges;
 
     // find alive sources for our new ranges

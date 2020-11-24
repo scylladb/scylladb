@@ -29,6 +29,7 @@
 #include "token_metadata.hh"
 #include "snitch_base.hh"
 #include <seastar/util/bool_class.hh>
+#include "utils/maybe_yield.hh"
 
 // forward declaration since database.hh includes this file
 class keyspace;
@@ -45,8 +46,7 @@ enum class replication_strategy_type {
     everywhere_topology,
 };
 
-class can_yield_tag;
-using can_yield = bool_class<can_yield_tag>;
+using can_yield = utils::can_yield;
 
 class abstract_replication_strategy {
 private:
