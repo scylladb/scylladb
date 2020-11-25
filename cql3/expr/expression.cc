@@ -776,9 +776,11 @@ bool is_supported_by(const expression& expr, const secondary_index::index& idx) 
                             return idx.supports_expression(*col.col, oper.op);
                         },
                         [&] (const std::vector<column_value>& cvs) {
-                            return boost::algorithm::any_of(cvs, [&] (const column_value& c) {
-                                return idx.supports_expression(*c.col, oper.op);
-                            });
+                            if (cvs.size() == 1) {
+                                return idx.supports_expression(*cvs[0].col, oper.op);
+                            }
+                            // We don't use index table for multi-column restrictions, as it cannot avoid filtering.
+                            return false;
                         },
                         [&] (const token&) { return false; },
                     }, oper.lhs);
