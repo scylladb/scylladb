@@ -51,7 +51,6 @@ Group:          Applications/Databases
 Summary:        The Scylla database server
 License:        AGPLv3
 URL:            http://www.scylladb.com/
-Conflicts: kernel < 3.10.0-514
 Requires:       %{product}-conf %{product}-python3
 Conflicts:      abrt
 AutoReqProv:    no
