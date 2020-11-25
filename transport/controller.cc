@@ -89,7 +89,7 @@ future<> controller::do_start_server() {
         cql_server_smp_service_group_config.max_nonlocal_requests = 5000;
         cql_server_config.bounce_request_smp_service_group = create_smp_service_group(cql_server_smp_service_group_config).get0();
         const seastar::net::inet_address ip = gms::inet_address::lookup(addr, family, preferred).get0();
-        cserver->start(std::ref(_qp), std::ref(_auth_service), std::ref(_mnotifier), cql_server_config).get();
+
         struct listen_cfg {
             socket_address addr;
             bool is_shard_aware;
@@ -139,14 +139,21 @@ future<> controller::do_start_server() {
             }
         }
 
-        parallel_for_each(configs, [cserver, keepalive](const listen_cfg & cfg) {
-            return cserver->invoke_on_all(&cql_transport::cql_server::listen, cfg.addr, cfg.cred, cfg.is_shard_aware, keepalive).then([cfg] {
-                logger.info("Starting listening for CQL clients on {} ({}, {})"
-                        , cfg.addr, cfg.cred ? "encrypted" : "unencrypted", cfg.is_shard_aware ? "shard-aware" : "non-shard-aware"
-                );
-            });
-        }).get();
+        cserver->start(std::ref(_qp), std::ref(_auth_service), std::ref(_mnotifier), cql_server_config).get();
 
+        try {
+            parallel_for_each(configs, [cserver, keepalive](const listen_cfg & cfg) {
+                return cserver->invoke_on_all(&cql_transport::cql_server::listen, cfg.addr, cfg.cred, cfg.is_shard_aware, keepalive).then([cfg] {
+                    logger.info("Starting listening for CQL clients on {} ({}, {})"
+                            , cfg.addr, cfg.cred ? "encrypted" : "unencrypted", cfg.is_shard_aware ? "shard-aware" : "non-shard-aware"
+                    );
+                });
+            }).get();
+        } catch (...) {
+            cserver->stop().get();
+            throw;
+        }
+        
         set_cql_ready(true).get();
     });
 }
