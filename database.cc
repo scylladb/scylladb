@@ -847,11 +847,17 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
         return do_parse_schema_tables(proxy, db::schema_tables::VIEWS, [this, &proxy, &mm] (schema_result_value_type &v) {
             return create_views_from_schema_partition(proxy, v.second).then([this, &mm] (std::vector<view_ptr> views) {
                 return parallel_for_each(views.begin(), views.end(), [this, &mm] (auto&& v) {
-                    return this->add_column_family_and_make_directory(v).then([this, &mm, v] {
+                    // TODO: Remove once computed columns are guaranteed to be featured in the whole cluster.
+                    // we fix here the schema in place in oreder to avoid races (write commands comming from other coordinators).
+                    view_ptr fixed_v = maybe_fix_legacy_secondary_index_mv_schema(*this, v, nullptr, preserve_version::yes);
+                    bool view_needs_fixing = bool(fixed_v);
+                    view_ptr v_to_add = view_needs_fixing ? fixed_v : v;
+                    return this->add_column_family_and_make_directory(v_to_add).then([this, &mm, v, view_needs_fixing] {
                         // TODO: Remove once computed columns are guaranteed to be featured in the whole cluster.
-                        view_ptr fixed_v = maybe_fix_legacy_secondary_index_mv_schema(*this, v, nullptr, preserve_version::no);
-                        if (fixed_v) {
-                            return mm.local().announce_view_update(view_ptr(fixed_v), true);
+                        if (view_needs_fixing && _feat.cluster_schema_features().contains(schema_feature::COMPUTED_COLUMNS)) {
+                            // now really fix the view by creating a new and updated version.
+                            view_ptr fixed_v = maybe_fix_legacy_secondary_index_mv_schema(*this, v, nullptr, preserve_version::no);
+                            return mm.local().announce_view_update(view_ptr(fixed_v));
                         } else {
                             return make_ready_future<>();
                         }
