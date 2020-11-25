@@ -107,6 +107,10 @@ future<> redis_service::listen(distributed<auth::service>& auth_service, db::con
                 });
             });
         });
+    }).handle_exception([this](auto ep) {
+        return _server->stop().then([ep = std::move(ep)]() mutable {
+            return make_exception_future<>(std::move(ep));
+        });
     });
 }
 
