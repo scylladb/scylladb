@@ -412,6 +412,10 @@ elif ! $packaging; then
     chown -R scylla:scylla $rdata
     chown -R scylla:scylla $rhkdata
 
+    for file in dist/common/sysctl.d/*.conf; do
+        bn=$(basename "$file")
+        sysctl -p "$rusr"/lib/sysctl.d/"$bn"
+    done
     $rprefix/scripts/scylla_post_install.sh
     echo "Scylla offline install completed."
 fi
