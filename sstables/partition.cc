@@ -136,21 +136,6 @@ class sstable_mutation_reader : public mp_row_consumer_reader {
     streamed_mutation::forwarding _fwd;
     read_monitor& _monitor;
 public:
-    sstable_mutation_reader(shared_sstable sst, schema_ptr schema,
-         reader_permit permit,
-         const io_priority_class &pc,
-         tracing::trace_state_ptr trace_state,
-         streamed_mutation::forwarding fwd,
-         read_monitor& mon)
-        : mp_row_consumer_reader(std::move(schema), permit, std::move(sst))
-        , _consumer(this, _schema, std::move(permit), _schema->full_slice(), pc, std::move(trace_state), fwd, _sst)
-        , _initialize([this] {
-            _context = data_consume_rows<DataConsumeRowsContext>(*_schema, _sst, _consumer);
-            _monitor.on_read_started(_context->reader_position());
-            return make_ready_future<>();
-        })
-        , _fwd(fwd)
-        , _monitor(mon) { }
     sstable_mutation_reader(shared_sstable sst,
          schema_ptr schema,
          reader_permit permit,
