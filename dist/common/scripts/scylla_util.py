@@ -187,7 +187,7 @@ class gcp_instance:
         """get list of nvme disks from metadata server"""
         import json
         try:
-            disksREST=self.__instance_metadata("disks")
+            disksREST=self.__instance_metadata("disks", True)
             disksobj=json.loads(disksREST)
             nvmedisks=list(filter(self.isNVME, disksobj))
         except Exception as e:
