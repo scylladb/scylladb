@@ -201,59 +201,6 @@ public:
         return _generation;
     }
 
-    // read_row() reads the entire sstable row (partition) at a given
-    // partition key k, or a subset of this row. The subset is defined by
-    // a filter on the clustering keys which we want to read, which
-    // additionally determines also if all the static columns will also be
-    // returned in the result.
-    flat_mutation_reader read_row_flat(
-        schema_ptr schema,
-        reader_permit permit,
-        dht::ring_position_view key,
-        const query::partition_slice& slice,
-        const io_priority_class& pc = default_priority_class(),
-        tracing::trace_state_ptr trace_state = {},
-        streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
-        read_monitor& monitor = default_read_monitor());
-
-    flat_mutation_reader read_row_flat(schema_ptr schema, reader_permit permit, dht::ring_position_view key) {
-        auto& full_slice = schema->full_slice();
-        return read_row_flat(std::move(schema), std::move(permit), std::move(key), full_slice);
-    }
-
-    // Returns a mutation_reader for given range of partitions
-    flat_mutation_reader read_range_rows_flat(
-        schema_ptr schema,
-        reader_permit permit,
-        const dht::partition_range& range,
-        const query::partition_slice& slice,
-        const io_priority_class& pc = default_priority_class(),
-        tracing::trace_state_ptr trace_state = {},
-        streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
-        mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes,
-        read_monitor& monitor = default_read_monitor());
-
-    flat_mutation_reader read_range_rows_flat(schema_ptr schema, reader_permit permit, const dht::partition_range& range) {
-        auto& full_slice = schema->full_slice();
-        return read_range_rows_flat(std::move(schema), std::move(permit), range, full_slice);
-    }
-
-    // read_rows_flat() returns each of the rows in the sstable, in sequence,
-    // converted to a "mutation" data structure.
-    // This function is implemented efficiently - doing buffered, sequential
-    // read of the data file (no need to access the index file).
-    // A "mutation_reader" object is returned with which the caller can
-    // fetch mutations in sequence, and allows stop iteration any time
-    // after getting each row.
-    //
-    // The caller must ensure (e.g., using do_with()) that the context object,
-    // as well as the sstable, remains alive as long as a read() is in
-    // progress (i.e., returned a future which hasn't completed yet).
-    flat_mutation_reader read_rows_flat(schema_ptr schema,
-                              reader_permit permit,
-                              const io_priority_class& pc = default_priority_class(),
-                              streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
-
     // Returns a mutation_reader for given range of partitions
     flat_mutation_reader make_reader(
             schema_ptr schema,
