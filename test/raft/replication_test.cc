@@ -61,6 +61,9 @@ public:
     virtual void update(int val) noexcept = 0;
     virtual int64_t get_value() noexcept = 0;
     virtual std::unique_ptr<sm_value_impl> copy() const = 0;
+    virtual bool eq(sm_value_impl* o) noexcept {
+        return get_value() == o->get_value();
+    }
 };
 
 class sm_value {
@@ -76,6 +79,9 @@ public:
     }
     int64_t get_value() {
         return _impl->get_value();
+    }
+    bool operator==(const sm_value& o) const noexcept {
+        return _impl->eq(&*o._impl);
     }
     sm_value& operator=(const sm_value& o) {
         if (o._impl) {
@@ -121,6 +127,9 @@ public:
     }
     std::unique_ptr<sm_value_impl> copy() const override {
         return std::make_unique<sum_sm>(_sum);
+    }
+    bool eq(sm_value_impl* o) noexcept override {
+        return true;
     }
 };
 
@@ -585,10 +594,10 @@ future<int> run_test(test_case test) {
     // TODO: check that snapshot is taken when it should be
     for (auto& s : persisted_snapshots) {
         auto& [snp, val] = s.second;
-        auto digest = val.value.get_value();
-        expected = sm_value_for(val.idx).get_value();
-        if (digest != expected) {
-            tlogger.debug("Persisted snapshot {} doesn't match {} != {}", snp.id, digest, expected);
+        auto& digest = val.value;
+        auto expected = sm_value_for(val.idx);
+        if (!(digest == expected)) {
+            tlogger.debug("Persisted snapshot {} doesn't match {} != {}", snp.id, digest.get_value(), expected.get_value());
             fail = -1;
             break;
         }
