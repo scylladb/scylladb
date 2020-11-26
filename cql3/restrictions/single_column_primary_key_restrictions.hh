@@ -171,8 +171,7 @@ public:
 
     virtual void merge_with(::shared_ptr<restriction> restriction) override {
         if (find_atom(restriction->expression, [] (const expr::binary_operator& b) {
-                    return std::holds_alternative<std::vector<expr::column_value>>(b.lhs)
-                            && std::get<std::vector<expr::column_value>>(b.lhs).size() > 1;
+                    return std::holds_alternative<std::vector<expr::column_value>>(b.lhs);
                 })) {
             throw exceptions::invalid_request_exception(
                 "Mixing single column relations and multi column relations on clustering columns is not allowed");
