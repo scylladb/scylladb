@@ -66,6 +66,7 @@ constexpr std::string_view password_authenticator_name("org.apache.cassandra.aut
 
 // name of the hash column.
 static constexpr std::string_view SALTED_HASH = "salted_hash";
+static constexpr std::string_view OPTIONS = "options";
 static constexpr std::string_view DEFAULT_USER_NAME = meta::DEFAULT_SUPERUSER_NAME;
 static const sstring DEFAULT_USER_PASSWORD = sstring(meta::DEFAULT_SUPERUSER_NAME);
 
@@ -203,11 +204,11 @@ bool password_authenticator::require_authentication() const {
 }
 
 authentication_option_set password_authenticator::supported_options() const {
-    return authentication_option_set{authentication_option::password};
+    return authentication_option_set{authentication_option::password, authentication_option::options};
 }
 
 authentication_option_set password_authenticator::alterable_options() const {
-    return authentication_option_set{authentication_option::password};
+    return authentication_option_set{authentication_option::password, authentication_option::options};
 }
 
 future<authenticated_user> password_authenticator::authenticate(
@@ -262,21 +263,46 @@ future<authenticated_user> password_authenticator::authenticate(
     });
 }
 
+future<> password_authenticator::maybe_update_custom_options(std::string_view role_name, const authentication_options& options) const {
+    static const sstring query = format("UPDATE {} SET {} = ? WHERE {} = ?",
+            meta::roles_table::qualified_name,
+            OPTIONS,
+            meta::roles_table::role_col_name);
+
+    if (!options.options) {
+        return make_ready_future<>();
+    }
+
+    std::vector<std::pair<data_value, data_value>> entries;
+    for (const auto& entry : *options.options) {
+        entries.push_back({data_value(entry.first), data_value(entry.second)});
+    }
+    auto map_value = make_map_value(map_type_impl::get_instance(utf8_type, utf8_type, false), entries);
+
+    return _qp.execute_internal(
+            query,
+            consistency_for_user(role_name),
+            internal_distributed_query_state(),
+            {std::move(map_value), sstring(role_name)}).discard_result();
+}
+
 future<> password_authenticator::create(std::string_view role_name, const authentication_options& options) const {
     if (!options.password) {
-        return make_ready_future<>();
+        return maybe_update_custom_options(role_name, options);
     }
 
     return _qp.execute_internal(
             update_row_query(),
             consistency_for_user(role_name),
             internal_distributed_query_state(),
-            {passwords::hash(*options.password, rng_for_salt), sstring(role_name)}).discard_result();
+            {passwords::hash(*options.password, rng_for_salt), sstring(role_name)}).discard_result().then([this, role_name, &options] {
+                return maybe_update_custom_options(role_name, options);
+            });
 }
 
 future<> password_authenticator::alter(std::string_view role_name, const authentication_options& options) const {
     if (!options.password) {
-        return make_ready_future<>();
+        return maybe_update_custom_options(role_name, options);
     }
 
     static const sstring query = format("UPDATE {} SET {} = ? WHERE {} = ?",
@@ -288,7 +314,9 @@ future<> password_authenticator::alter(std::string_view role_name, const authent
             query,
             consistency_for_user(role_name),
             internal_distributed_query_state(),
-            {passwords::hash(*options.password, rng_for_salt), sstring(role_name)}).discard_result();
+            {passwords::hash(*options.password, rng_for_salt), sstring(role_name)}).discard_result().then([this, role_name, &options] {
+                return maybe_update_custom_options(role_name, options);
+            }).discard_result();
 }
 
 future<> password_authenticator::drop(std::string_view name) const {
@@ -304,7 +332,22 @@ future<> password_authenticator::drop(std::string_view name) const {
 }
 
 future<custom_options> password_authenticator::query_custom_options(std::string_view role_name) const {
-    return make_ready_future<custom_options>();
+    static const sstring query = format("SELECT {} FROM {} WHERE {} = ?",
+            OPTIONS,
+            meta::roles_table::qualified_name,
+            meta::roles_table::role_col_name);
+
+    return _qp.execute_internal(
+            query, consistency_for_user(role_name),
+            internal_distributed_query_state(),
+            {sstring(role_name)}).then([](::shared_ptr<cql3::untyped_result_set> rs) {
+        custom_options opts;
+        const auto& row = rs->one();
+        if (row.has(OPTIONS)) {
+            row.get_map_data<sstring, sstring>(OPTIONS, std::inserter(opts, opts.end()), utf8_type, utf8_type);
+        }
+        return opts;
+    });
 }
 
 const resource_set& password_authenticator::protected_resources() const {
