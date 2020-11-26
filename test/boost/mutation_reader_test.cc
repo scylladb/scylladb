@@ -912,7 +912,7 @@ class tracking_reader : public flat_mutation_reader::impl {
 public:
     tracking_reader(schema_ptr schema, reader_permit permit, lw_shared_ptr<sstables::sstable> sst)
         : impl(schema, permit)
-        , _reader(sst->read_range_rows_flat(
+        , _reader(sst->make_reader(
                         schema,
                         permit,
                         query::full_partition_range,
@@ -3720,12 +3720,12 @@ SEASTAR_THREAD_TEST_CASE(test_clustering_order_merger_sstable_set) {
         return flat_mutation_reader_from_mutations(tests::make_permit(), {std::move(mut)}, fwd);
     };
 
-    auto make_tested = [s = g._s, pos = dht::ring_position(g.decorated_pk())]
+    auto make_tested = [s = g._s, pr = dht::partition_range::make_singular(dht::ring_position(g.decorated_pk()))]
             (const time_series_sstable_set& sst_set,
                 const std::unordered_set<int64_t>& included_gens, streamed_mutation::forwarding fwd) {
         auto q = sst_set.make_min_position_reader_queue(
-            [s, pos, fwd] (sstable& sst) {
-                return sst.read_row_flat(s, tests::make_permit(), pos,
+            [s, &pr, fwd] (sstable& sst) {
+                return sst.make_reader(s, tests::make_permit(), pr,
                             s->full_slice(), seastar::default_priority_class(), nullptr, fwd);
             },
             [included_gens] (const sstable& sst) { return included_gens.contains(sst.generation()); });

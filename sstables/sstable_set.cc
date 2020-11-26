@@ -713,7 +713,7 @@ sstable_set_impl::create_single_key_sstable_reader(
         filter_sstable_for_reader_by_ck(std::move(selected_sstables), *cf, schema, slice)
         | boost::adaptors::transformed([&] (const shared_sstable& sstable) {
             tracing::trace(trace_state, "Reading key {} from sstable {}", pos, seastar::value_of([&sstable] { return sstable->get_filename(); }));
-            return sstable->read_row_flat(schema, permit, pos, slice, pc, trace_state, fwd);
+            return sstable->make_reader(schema, permit, pr, slice, pc, trace_state, fwd);
         })
     );
 
@@ -791,7 +791,7 @@ time_series_sstable_set::create_single_key_sstable_reader(
     }
 
     auto create_reader = [schema, permit, &pos, &slice, &pc, trace_state, fwd_sm] (sstable& sst) {
-        return sst.read_row_flat(schema, permit, pos, slice, pc, trace_state, fwd_sm);
+        return sst.make_reader(schema, permit, pos, slice, pc, trace_state, fwd_sm);
     };
 
     // We're going to pass this filter into min_position_reader_queue. The queue guarantees that
@@ -848,7 +848,7 @@ sstable_set::make_range_sstable_reader(
 {
     auto reader_factory_fn = [s, permit, &slice, &pc, trace_state, fwd, fwd_mr, &monitor_generator]
             (shared_sstable& sst, const dht::partition_range& pr) mutable {
-        return sst->read_range_rows_flat(s, permit, pr, slice, pc, trace_state, fwd, fwd_mr, monitor_generator(sst));
+        return sst->make_reader(s, permit, pr, slice, pc, trace_state, fwd, fwd_mr, monitor_generator(sst));
     };
     return make_combined_reader(s, std::move(permit), std::make_unique<incremental_reader_selector>(s,
                     shared_from_this(),
@@ -873,7 +873,7 @@ sstable_set::make_local_shard_sstable_reader(
 {
     auto reader_factory_fn = [s, permit, &slice, &pc, trace_state, fwd, fwd_mr, &monitor_generator]
             (shared_sstable& sst, const dht::partition_range& pr) mutable {
-        flat_mutation_reader reader = sst->read_range_rows_flat(s, permit, pr, slice, pc,
+        flat_mutation_reader reader = sst->make_reader(s, permit, pr, slice, pc,
                 trace_state, fwd, fwd_mr, monitor_generator(sst));
         if (sst->is_shared()) {
             auto filter = [&s = *s](const dht::decorated_key& dk) -> bool {
