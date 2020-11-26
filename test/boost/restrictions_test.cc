@@ -408,6 +408,22 @@ SEASTAR_THREAD_TEST_CASE(multi_col_slice_reversed) {
     }).get();
 }
 
+SEASTAR_THREAD_TEST_CASE(multi_and_single_together) {
+    do_with_cql_env_thread([](cql_test_env& e) {
+        cquery_nofail(e, "create table t (p int, c1 int, c2 float, primary key (p, c1, c2)) "
+                      "with clustering order by (c1 desc, c2 asc)");
+        cquery_nofail(e, "insert into t(p,c1,c2) values (1,11,21)");
+        cquery_nofail(e, "insert into t(p,c1,c2) values (1,12,22)");
+        cquery_nofail(e, "insert into t(p,c1,c2) values (1,12,23)");
+        const auto q = [&] (const char* stmt) { return e.execute_cql(stmt).get(); };
+        using ire = exceptions::invalid_request_exception;
+        const auto expected = exception_predicate::message_contains("Mixing");
+        // TODO: one day mixing single- and multi-column will become allowed, and we'll have to change these:
+        BOOST_REQUIRE_EXCEPTION(q("select c1 from t where c2=21 and (c1)>(10)"), ire, expected); // #7710
+        BOOST_REQUIRE_EXCEPTION(q("select c2 from t where (c1,c2)>(10,99) and c2>=23"), ire, expected);
+    }).get();
+}
+
 SEASTAR_THREAD_TEST_CASE(set_contains) {
     do_with_cql_env_thread([](cql_test_env& e) {
         cquery_nofail(e, "create table t (p frozen<set<int>>, c frozen<set<int>>, s set<text>, st set<int> static, primary key (p, c))");
