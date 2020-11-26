@@ -129,10 +129,9 @@ rm -rf $RPM_BUILD_ROOT
 %attr(0755,scylla,scylla) %dir %{_sharedstatedir}/scylla-housekeeping
 %ghost /etc/systemd/system/scylla-helper.slice.d/
 %ghost /etc/systemd/system/scylla-helper.slice.d/memory.conf
-%ghost /etc/systemd/system/scylla-server.service.d/
 %ghost /etc/systemd/system/scylla-server.service.d/capabilities.conf
 %ghost /etc/systemd/system/scylla-server.service.d/mounts.conf
-%ghost /etc/systemd/system/scylla-server.service.d/dependencies.conf
+/etc/systemd/system/scylla-server.service.d/dependencies.conf
 %ghost /etc/systemd/system/var-lib-systemd-coredump.mount
 %ghost /etc/systemd/system/scylla-cpupower.service
 
