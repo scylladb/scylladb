@@ -138,6 +138,19 @@ public:
 
     const large_data_handler::stats& stats() const { return _stats; }
 
+    uint64_t get_partition_threshold_bytes() const noexcept {
+        return _partition_threshold_bytes;
+    }
+    uint64_t get_row_threshold_bytes() const noexcept {
+        return _row_threshold_bytes;
+    }
+    uint64_t get_cell_threshold_bytes() const noexcept {
+        return _cell_threshold_bytes;
+    }
+    uint64_t get_rows_count_threshold() const noexcept {
+        return _rows_count_threshold;
+    }
+
 protected:
     virtual void log_too_many_rows(const sstables::sstable& sst, const sstables::key& partition_key, uint64_t rows_count) const = 0;
     virtual future<> record_large_cells(const sstables::sstable& sst, const sstables::key& partition_key,
