@@ -128,7 +128,7 @@ public:
 };
 
 std::unique_ptr<server> create_server(server_id uuid, std::unique_ptr<rpc> rpc,
-        std::unique_ptr<state_machine> state_machine, std::unique_ptr<storage> storage,
+        std::unique_ptr<state_machine> state_machine, std::unique_ptr<persistence> persistence,
         seastar::shared_ptr<failure_detector> failure_detector, server::configuration config);
 
 } // namespace raft

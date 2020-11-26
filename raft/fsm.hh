@@ -108,7 +108,7 @@ class fsm {
     server_id _current_leader;
     // What state the server is in. The default is follower.
     std::variant<follower, candidate, leader> _state;
-    // _current_term, _voted_for && _log are persisted in storage
+    // _current_term, _voted_for && _log are persisted in persistence
     // The latest term the server has seen.
     term_t _current_term;
     // Candidate id that received a vote in the current term (or

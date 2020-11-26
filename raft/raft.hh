@@ -212,11 +212,11 @@ using rpc_message = std::variant<append_request_send, append_reply, vote_request
 // std::deque move constructor is not nothrow hence cannot be used
 using log_entries = boost::container::deque<log_entry_ptr>;
 
-// rpc, storage and satte_machine classes will have to be implemented by the
+// rpc, persistence and state_machine classes will have to be implemented by the
 // raft user to provide network, persistency and busyness logic support
 // repectively.
 class rpc;
-class storage;
+class persistence;
 
 // Any of the functions may return an error, but it will kill the
 // raft instance that uses it. Depending on what state the failure
@@ -341,15 +341,15 @@ public:
     void set_rpc_server(class rpc *rpc) { rpc->_client = this; }
 };
 
-// This class represents persistent storage state. If any of the
+// This class represents persistent storage state for the internal fsm. If any of the
 // function returns an error the Raft instance will be aborted.
-class storage {
+class persistence {
 public:
-    virtual ~storage() {}
+    virtual ~persistence() {}
 
     // Persist given term and vote.
     // Can be called concurrently with other save-* functions in
-    // the storage and with itself but an implementation has to
+    // the persistence and with itself but an implementation has to
     // make sure that the result is returned back in the calling order.
     virtual future<> store_term_and_vote(term_t term, server_id vote) = 0;
 
@@ -395,8 +395,8 @@ public:
     // entries.
     virtual future<> truncate_log(index_t idx) = 0;
 
-    // Stop the storage instance by aborting the work that can be
-    // aborted and waiting for all the rest to complete any
+    // Stop the persistence instance by aborting the work that can be
+    // aborted and waiting for all the rest to complete. Any
     // unfinished store/load operation may return an error after
     // this function is called.
     virtual future<> abort() = 0;

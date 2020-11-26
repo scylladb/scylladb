@@ -202,12 +202,12 @@ struct initial_state {
     raft::server::configuration server_config = raft::server::configuration{.append_request_threshold = 200};
 };
 
-class storage : public raft::storage {
+class persistence : public raft::persistence {
     raft::server_id _id;
     initial_state _conf;
 public:
-    storage(raft::server_id id, initial_state conf) : _id(id), _conf(std::move(conf)) {}
-    storage() {}
+    persistence(raft::server_id id, initial_state conf) : _id(id), _conf(std::move(conf)) {}
+    persistence() {}
     virtual future<> store_term_and_vote(raft::term_t term, raft::server_id vote) { return seastar::sleep(1us); }
     virtual future<std::pair<raft::term_t, raft::server_id>> load_term_and_vote() {
         auto term_and_vote = std::make_pair(_conf.term, _conf.vote);
@@ -319,10 +319,10 @@ create_raft_server(raft::server_id uuid, state_machine::apply_fn apply, initial_
     auto sm = std::make_unique<state_machine>(uuid, std::move(apply), std::move(val), apply_entries);
     auto& rsm = *sm;
     auto mrpc = std::make_unique<rpc>(uuid);
-    auto mstorage = std::make_unique<storage>(uuid, state);
+    auto mpersistence = std::make_unique<persistence>(uuid, state);
     auto fd = seastar::make_shared<failure_detector>(uuid);
 
-    auto raft = raft::create_server(uuid, std::move(mrpc), std::move(sm), std::move(mstorage),
+    auto raft = raft::create_server(uuid, std::move(mrpc), std::move(sm), std::move(mpersistence),
         std::move(fd), state.server_config);
 
     return std::make_pair(std::move(raft), &rsm);

@@ -17,7 +17,7 @@ For more details about Raft see https://raft.github.io/
 -----
 
 In order to use the library the application has to provide implementations
-for RPC, storage and state machine APIs, defined in raft/raft.hh. The
+for RPC, persistence and state machine APIs, defined in raft/raft.hh. The
 purpose of these interfaces is:
 - provide a way to communicate between Raft protocol instances
 - persist the required protocol state on disk,
@@ -32,7 +32,7 @@ of the Raft consistency protocol on its environment:
   in which messages can be lost, reordered, retransmitted more than
   once, but not corrupted. Specifically, it's an error to
   deliver a message to a Raft server which was not sent to it.
-- storage should provide a durable persistent storage, which
+- persistence should provide a durable persistent storage, which
   survives between state machine restarts and does not corrupt
   its state.
 - Raft library calls `state_machine::apply_entry()` for entries
@@ -54,7 +54,7 @@ is not supported.
 For an example of first usage see `replication_test.cc` in test/raft/.
 
 In a nutshell:
-- create instances of RPC, storage, and state machine
+- create instances of RPC, persistence, and state machine
 - pass them to an instance of Raft server - the facade to the Raft cluster
   on this node
 - repeat the above for every node in the cluster
@@ -64,8 +64,8 @@ In a nutshell:
 
 ### Subsequent usages
 
-Similar to the first usage, but `storage::load_term_and_vote()`
-`storage::load_log()`, `storage::load_snapshot()` are expected to
+Similar to the first usage, but `persistence::load_term_and_vote()`
+`persistence::load_log()`, `persistence::load_snapshot()` are expected to
 return valid protocol state as persisted by the previous incarnation
 of an instance of class server.
 
