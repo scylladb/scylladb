@@ -254,6 +254,18 @@ public:
                               const io_priority_class& pc = default_priority_class(),
                               streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
 
+    // Returns a mutation_reader for given range of partitions
+    flat_mutation_reader make_reader(
+            schema_ptr schema,
+            reader_permit permit,
+            const dht::partition_range& range,
+            const query::partition_slice& slice,
+            const io_priority_class& pc = default_priority_class(),
+            tracing::trace_state_ptr trace_state = {},
+            streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
+            mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes,
+            read_monitor& monitor = default_read_monitor());
+
     // Returns mutation_source containing all writes contained in this sstable.
     // The mutation_source shares ownership of this sstable.
     mutation_source as_mutation_source();

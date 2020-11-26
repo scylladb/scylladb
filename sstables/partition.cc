@@ -528,4 +528,39 @@ sstable::read_range_rows_flat(schema_ptr schema,
         shared_from_this(), std::move(schema), std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr, mon);
 }
 
+flat_mutation_reader
+sstable::make_reader(
+        schema_ptr schema,
+        reader_permit permit,
+        const dht::partition_range& range,
+        const query::partition_slice& slice,
+        const io_priority_class& pc,
+        tracing::trace_state_ptr trace_state,
+        streamed_mutation::forwarding fwd,
+        mutation_reader::forwarding fwd_mr,
+        read_monitor& mon) {
+    // FIXME: I want to add `&& fwd_mr == mutation_reader::forwarding::no` below
+    // but can't because many call sites use the default value for
+    // `mutation_reader::forwarding` which is `yes`.
+    if (range.is_singular() && range.start()->value().has_key()) {
+        get_stats().on_single_partition_read();
+        if (_version >= version_types::mc) {
+            return make_flat_mutation_reader<sstable_mutation_reader<data_consume_rows_context_m, mp_row_consumer_m>>(
+                shared_from_this(), std::move(schema), std::move(permit), dht::ring_position_view::for_range_start(range), slice, pc,
+                std::move(trace_state), fwd, mutation_reader::forwarding::no, mon);
+        }
+        return make_flat_mutation_reader<sstable_mutation_reader<data_consume_rows_context, mp_row_consumer_k_l>>(
+                shared_from_this(), std::move(schema), std::move(permit), dht::ring_position_view::for_range_start(range), slice, pc,
+                std::move(trace_state), fwd, mutation_reader::forwarding::no, mon);
+    } else {
+        get_stats().on_range_partition_read();
+        if (_version >= version_types::mc) {
+            return make_flat_mutation_reader<sstable_mutation_reader<data_consume_rows_context_m, mp_row_consumer_m>>(
+                shared_from_this(), std::move(schema), std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr, mon);
+        }
+        return make_flat_mutation_reader<sstable_mutation_reader<data_consume_rows_context, mp_row_consumer_k_l>>(
+            shared_from_this(), std::move(schema), std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr, mon);
+    }
+}
+
 }
