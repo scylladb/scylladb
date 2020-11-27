@@ -174,17 +174,7 @@ public:
         _driver_version = std::move(driver_version);
     }
 
-    client_state(external_tag, auth::service& auth_service, timeout_config timeout_config, const socket_address& remote_address = socket_address(), bool thrift = false)
-            : _is_internal(false)
-            , _is_thrift(thrift)
-            , _remote_address(remote_address)
-            , _auth_service(&auth_service)
-            , _default_timeout_config(timeout_config)
-            , _timeout_config(timeout_config) {
-        if (!auth_service.underlying_authenticator().require_authentication()) {
-            _user = auth::authenticated_user();
-        }
-    }
+    client_state(external_tag, auth::service& auth_service, timeout_config timeout_config, const socket_address& remote_address = socket_address(), bool thrift = false);
 
     gms::inet_address get_client_address() const {
         return gms::inet_address(_remote_address);
@@ -338,6 +328,7 @@ public:
                                       auth::command_desc::type = auth::command_desc::type::OTHER) const;
     future<> has_schema_access(const schema& s, auth::permission p) const;
 
+    future<> update_per_role_params();
 private:
     future<> has_access(const sstring& keyspace, auth::command_desc) const;
 

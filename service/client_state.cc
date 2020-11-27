@@ -53,11 +53,62 @@
 #include "db/system_distributed_keyspace.hh"
 #include "database.hh"
 #include "cdc/log.hh"
+#include "concrete_types.hh"
 
 thread_local api::timestamp_type service::client_state::_last_timestamp_micros = 0;
 
 void service::client_state::set_login(auth::authenticated_user user) {
     _user = std::move(user);
+}
+
+service::client_state::client_state(external_tag, auth::service& auth_service, timeout_config timeout_config, const socket_address& remote_address, bool thrift)
+        : _is_internal(false)
+        , _is_thrift(thrift)
+        , _remote_address(remote_address)
+        , _auth_service(&auth_service)
+        , _default_timeout_config(timeout_config)
+        , _timeout_config(timeout_config) {
+    if (!auth_service.underlying_authenticator().require_authentication()) {
+        _user = auth::authenticated_user();
+    }
+}
+
+future<> service::client_state::update_per_role_params() {
+    if (!_user || auth::is_anonymous(*_user)) {
+        return make_ready_future<>();
+    }
+    //FIXME: replace with a coroutine once they're widely accepted
+    return seastar::async([this] {
+        auth::role_set roles = _auth_service->get_roles(*_user->name).get();
+        db::timeout_clock::duration read_timeout = db::timeout_clock::duration::max();
+        db::timeout_clock::duration write_timeout = db::timeout_clock::duration::max();
+
+        auto get_duration = [&] (const sstring& repr) {
+            data_value v = duration_type->deserialize(duration_type->from_string(repr));
+            cql_duration duration = static_pointer_cast<const duration_type_impl>(duration_type)->from_value(v);
+            return std::chrono::duration_cast<lowres_clock::duration>(std::chrono::nanoseconds(duration.nanoseconds));
+        };
+
+        for (const auto& role : roles) {
+            auto options = _auth_service->underlying_authenticator().query_custom_options(role).get();
+            auto read_timeout_it = options.find("read_timeout");
+            if (read_timeout_it != options.end()) {
+                read_timeout = std::min(read_timeout, get_duration(read_timeout_it->second));
+            }
+            auto write_timeout_it = options.find("write_timeout");
+            if (write_timeout_it != options.end()) {
+                write_timeout = std::min(write_timeout, get_duration(write_timeout_it->second));
+            }
+         }
+        _timeout_config.read_timeout = read_timeout == db::timeout_clock::duration::max() ?
+                _default_timeout_config.read_timeout : read_timeout;
+        _timeout_config.range_read_timeout = read_timeout == db::timeout_clock::duration::max() ?
+                _default_timeout_config.range_read_timeout : read_timeout;
+         _timeout_config.write_timeout = write_timeout == db::timeout_clock::duration::max() ?
+                _default_timeout_config.write_timeout : write_timeout;
+        _timeout_config.counter_write_timeout = write_timeout == db::timeout_clock::duration::max() ?
+                _default_timeout_config.counter_write_timeout : write_timeout;
+    });
 }
 
 future<> service::client_state::check_user_can_login() {

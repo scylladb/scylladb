@@ -59,6 +59,7 @@
 #include "gms/feature_service.hh"
 #include "transport/messages/result_message.hh"
 #include "unimplemented.hh"
+#include "concrete_types.hh"
 
 namespace cql3 {
 
@@ -137,9 +138,10 @@ create_role_statement::execute(service::storage_proxy&,
             [this, &state](const auth::role_config& config, const auth::authentication_options& authen_options) {
         const auto& cs = state.get_client_state();
         auto& as = *cs.get_auth_service();
-
         return auth::create_role(as, _role, config, authen_options).then([this, &cs] {
             return grant_permissions_to_creator(cs);
+        }).then([&state] () mutable {
+            return state.get_client_state().update_per_role_params();
         }).then([] {
             return void_result_message();
         }).handle_exception_type([this](const auth::role_already_exists& e) {
@@ -224,8 +226,9 @@ alter_role_statement::execute(service::storage_proxy&, service::query_state& sta
             extract_authentication_options(_options),
             [this, &state](const auth::role_config_update& update, const auth::authentication_options& authen_options) {
         auto& as = *state.get_client_state().get_auth_service();
-
-        return auth::alter_role(as, _role, update, authen_options).then([] {
+        return auth::alter_role(as, _role, update, authen_options).then([&state] () mutable {
+            return state.get_client_state().update_per_role_params();
+        }).then([] {
             return void_result_message();
         }).handle_exception_type([](const auth::nonexistant_role& e) {
             return make_exception_future<result_message_ptr>(exceptions::invalid_request_exception(e.what()));
