@@ -39,8 +39,11 @@ public:
     auto operator<=>(const tagged_uint64&) const = default;
     explicit operator bool() const { return _val != 0; }
 
-    operator uint64_t() const {
+    uint64_t get_value() const {
         return _val;
+    }
+    operator uint64_t() const {
+        return get_value();
     }
     tagged_uint64& operator++() { // pre increment
         ++_val;
