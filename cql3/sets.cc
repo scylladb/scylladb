@@ -237,9 +237,7 @@ sets::marker::bind(const query_options& options) {
     } else {
         auto& type = static_cast<const set_type_impl&>(*_receiver->type);
         try {
-            with_linearized(*value, [&] (bytes_view v) {
-                type.validate(v, options.get_cql_serialization_format());
-            });
+            type.validate(*value, options.get_cql_serialization_format());
         } catch (marshal_exception& e) {
             throw exceptions::invalid_request_exception(
                     format("Exception while binding column {:s}: {:s}", _receiver->name->to_cql_string(), e.what()));
