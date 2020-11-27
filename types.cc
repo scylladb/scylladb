@@ -1091,7 +1091,8 @@ map_type_impl::deserialize(View in, cql_serialization_format sf) const {
     return make_value(std::move(m));
 }
 
-static void validate_aux(const map_type_impl& t, bytes_view v, cql_serialization_format sf) {
+template <FragmentedView View>
+static void validate_aux(const map_type_impl& t, View v, cql_serialization_format sf) {
     auto size = read_collection_size(v, sf);
     for (int i = 0; i < size; ++i) {
         t.get_keys_type()->validate(read_collection_value(v, sf), sf);
@@ -1564,9 +1565,7 @@ struct validate_visitor {
         }
     }
     void operator()(const map_type_impl& t) {
-        with_linearized(v, [this, &t] (bytes_view bv) {
-            validate_aux(t, bv, sf);
-        });
+        validate_aux(t, v, sf);
     }
     void operator()(const set_type_impl& t) {
         with_linearized(v, [this, &t] (bytes_view bv) {
