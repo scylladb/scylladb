@@ -1401,16 +1401,15 @@ tuple_type_impl::get_instance(std::vector<data_type> types) {
     return intern::get_instance(std::move(types));
 }
 
-static void validate_aux(const tuple_type_impl& t, bytes_view v, cql_serialization_format sf) {
+template <FragmentedView View>
+static void validate_aux(const tuple_type_impl& t, View v, cql_serialization_format sf) {
     auto ti = t.all_types().begin();
-    auto vi = tuple_deserializing_iterator::start(v);
-    auto end = tuple_deserializing_iterator::finish(v);
-    while (ti != t.all_types().end() && vi != end) {
-        if (*vi) {
-            (*ti)->validate(**vi, sf);
+    while (ti != t.all_types().end() && v.size_bytes()) {
+        std::optional<View> e = read_tuple_element(v);
+        if (e) {
+            (*ti)->validate(*e, sf);
         }
         ++ti;
-        ++vi;
     }
 }
 
@@ -1577,9 +1576,7 @@ struct validate_visitor {
         });
     }
     void operator()(const tuple_type_impl& t) {
-        with_linearized(v, [this, &t] (bytes_view bv) {
-            validate_aux(t, bv, sf);
-        });
+        validate_aux(t, v, sf);
     }
 };
 }
