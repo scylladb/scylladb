@@ -1328,15 +1328,17 @@ list_type_impl::is_value_compatible_with_frozen(const collection_type_impl& prev
     return is_value_compatible_with_internal(*_elements, *lp._elements);
 }
 
-static void validate_aux(const list_type_impl& t, bytes_view v, cql_serialization_format sf) {
+template <FragmentedView View>
+static void validate_aux(const list_type_impl& t, View v, cql_serialization_format sf) {
     auto nr = read_collection_size(v, sf);
     for (int i = 0; i != nr; ++i) {
         t.get_elements_type()->validate(read_collection_value(v, sf), sf);
     }
-    if (!v.empty()) {
+    if (v.size_bytes()) {
+        auto hex = with_linearized(v, [] (bytes_view bv) { return to_hex(bv); });
         throw marshal_exception(format("Validation failed for type {}: bytes remaining after "
                                        "reading all {} elements of the list -> [{}]",
-                t.name(), nr, to_hex(v)));
+                t.name(), nr, hex));
     }
 }
 
@@ -1571,9 +1573,7 @@ struct validate_visitor {
         validate_aux(t, v, sf);
     }
     void operator()(const list_type_impl& t) {
-        with_linearized(v, [this, &t] (bytes_view bv) {
-            validate_aux(t, bv, sf);
-        });
+        validate_aux(t, v, sf);
     }
     void operator()(const tuple_type_impl& t) {
         validate_aux(t, v, sf);
