@@ -379,6 +379,11 @@ void fsm::append_entries_reply(server_id from, append_reply&& reply) {
         }
     }
 
+    if (progress.state == follower_progress::state::SNAPSHOT) {
+        logger.trace("append_entries_reply[{}->{}]: ignored in snapshot state", _my_id, from);
+        return;
+    }
+
     progress.commit_idx = reply.commit_idx;
 
     if (std::holds_alternative<append_reply::accepted>(reply.result)) {
@@ -615,7 +620,7 @@ bool fsm::can_read() {
     return false;
 }
 
-void fsm::snapshot_status(server_id id, bool success) {
+void fsm::snapshot_status(server_id id, std::optional<index_t> idx) {
     auto& progress = _tracker->find(id);
 
     if (progress.state != follower_progress::state::SNAPSHOT) {
@@ -626,8 +631,8 @@ void fsm::snapshot_status(server_id id, bool success) {
     // No matter if snapshot transfer failed or not move back to probe state
     progress.become_probe();
 
-    if (success) {
-        progress.next_idx = _log.get_snapshot().idx + index_t(1);
+    if (idx) {
+        progress.next_idx = *idx + index_t(1);
         // If snapshot was successfully transfered start replication immediately
         replicate_to(progress, false);
     }
@@ -635,12 +640,19 @@ void fsm::snapshot_status(server_id id, bool success) {
     // again and snapshot transfer will be attempted one more time.
 }
 
-void fsm::apply_snapshot(snapshot snp, size_t trailing) {
+bool fsm::apply_snapshot(snapshot snp, size_t trailing) {
+    const auto& current_snp = _log.get_snapshot();
+    if (snp.idx <= current_snp.idx) {
+        logger.error("apply_snapshot[{}]: ignore outdated snapshot {}/{} current one is {}/{}",
+                        _my_id, snp.id, snp.idx, current_snp.id, current_snp.idx);
+        return false;
+    }
     size_t units = _log.apply_snapshot(std::move(snp), trailing);
     if (is_leader()) {
         logger.trace("apply_snapshot[{}]: signal {} available units", _my_id, units);
         _log_limiter_semaphore->sem.signal(units);
     }
+    return true;
 }
 
 void fsm::stop() {

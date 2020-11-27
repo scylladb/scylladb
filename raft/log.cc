@@ -157,6 +157,7 @@ index_t log::maybe_append(std::vector<log_entry>&& entries) {
 
 size_t log::apply_snapshot(snapshot&& snp, size_t trailing) {
     size_t ret = 0;
+    assert (snp.idx >= start_idx());
     if (snp.idx - start_idx() > index_t(trailing)) {
         ret = _log.size();
        // call truncate first since it uses old snapshot

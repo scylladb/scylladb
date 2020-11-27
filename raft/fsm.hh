@@ -323,12 +323,12 @@ public:
     // tick period.
     bool can_read();
 
-    void snapshot_status(server_id id, bool success);
+    void snapshot_status(server_id id, std::optional<index_t> idx);
 
     // This call will update the log to point to the new snaphot
     // and will truncate the log prefix up to (snp.idx - trailing)
-    // entry.
-    void apply_snapshot(snapshot snp, size_t traling);
+    // entry. Retruns false if the snapshot is older than existing one.
+    bool apply_snapshot(snapshot snp, size_t traling);
 
     friend std::ostream& operator<<(std::ostream& os, const fsm& f);
 };
@@ -430,14 +430,12 @@ void fsm::step(server_id from, Message&& msg) {
             }
             request_vote_reply(from, std::move(msg));
         } else if constexpr (std::is_same_v<Message, install_snapshot>) {
-            if constexpr (!std::is_same_v<State, follower>) {
+            bool success = false;
+            if constexpr (std::is_same_v<State, follower>) {
                 // snapshot can be installed only in follower
-                send_to(from, snapshot_reply{ .success = false });
-            } else {
-                // apply snapshot and reply with success
-                apply_snapshot(std::move(msg.snp), 0);
-                send_to(from, snapshot_reply{ .success = true });
+                success = apply_snapshot(std::move(msg.snp), 0);
             }
+            send_to(from, snapshot_reply{ .success = success });
         }
     };
 
