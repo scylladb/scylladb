@@ -59,6 +59,7 @@
 #include "gms/feature_service.hh"
 #include "transport/messages/result_message.hh"
 #include "unimplemented.hh"
+#include "concrete_types.hh"
 
 namespace cql3 {
 
@@ -117,6 +118,32 @@ future<> create_role_statement::grant_permissions_to_creator(const service::clie
     });
 }
 
+static void validate_timeout_options(const auth::custom_options& role_options) {
+    if (role_options.empty()) {
+        return;
+    }
+    auto check_duration = [&] (const sstring& repr) {
+        data_value v = duration_type->deserialize(duration_type->from_string(repr));
+        cql_duration duration = static_pointer_cast<const duration_type_impl>(duration_type)->from_value(v);
+        if (duration.months || duration.days || duration.nanoseconds > 86'400'000'000'000) {
+            throw exceptions::invalid_request_exception("Timeout values cannot be longer than 24h");
+        }
+        if (duration.nanoseconds % 1'000'000 != 0) {
+            throw exceptions::invalid_request_exception("Timeout values must be expressed in millisecond granularity");
+        }
+        if (duration.nanoseconds < 0) {
+            throw exceptions::invalid_request_exception("Timeout values must not be negative");
+        }
+    };
+
+    for (auto opt : {"read_timeout", "write_timeout"}) {
+        auto it = role_options.find(opt);
+        if (it != role_options.end()) {
+            check_duration(it->second);
+        }
+    }
+}
+
 void create_role_statement::validate(service::storage_proxy& p, const service::client_state&) const {
     validate_cluster_support(p);
 }
@@ -149,6 +176,7 @@ create_role_statement::execute(service::storage_proxy&,
             [this, &state](const auth::role_config& config, const auth::authentication_options& authen_options) {
         const auto& cs = state.get_client_state();
         auto& as = *cs.get_auth_service();
+        validate_timeout_options(authen_options.role_options);
 
         return auth::create_role(as, _role, config, authen_options).then([this, &cs] {
             return grant_permissions_to_creator(cs);
@@ -232,6 +260,7 @@ alter_role_statement::execute(service::storage_proxy&, service::query_state& sta
             extract_authentication_options(_options),
             [this, &state](const auth::role_config_update& update, const auth::authentication_options& authen_options) {
         auto& as = *state.get_client_state().get_auth_service();
+        validate_timeout_options(authen_options.role_options);
 
         return auth::alter_role(as, _role, update, authen_options).then([] {
             return void_result_message();
