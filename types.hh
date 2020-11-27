@@ -504,16 +504,26 @@ public:
     size_t hash(bytes_view v) const;
     bool equal(bytes_view v1, bytes_view v2) const;
     int32_t compare(bytes_view v1, bytes_view v2) const;
+
+private:
     // Explicitly instantiated in .cc
-    template <FragmentedView View> data_value deserialize(View v) const;
+    template <FragmentedView View> data_value deserialize_impl(View v) const;
+public:
+    template <FragmentedView View> data_value deserialize(View v) const {
+        if (v.size_bytes() == v.current_fragment().size()) [[likely]] {
+            return deserialize_impl(single_fragmented_view(v.current_fragment()));
+        } else {
+            return deserialize_impl(v);
+        }
+    }
     data_value deserialize(bytes_view v) const {
-        return deserialize(single_fragmented_view(v));
+        return deserialize_impl(single_fragmented_view(v));
     }
     template <FragmentedView View> data_value deserialize_value(View v) const {
         return deserialize(v);
     }
     data_value deserialize_value(bytes_view v) const {
-        return deserialize(single_fragmented_view(v));
+        return deserialize_impl(single_fragmented_view(v));
     };
     void validate(const fragmented_temporary_buffer::view& view, cql_serialization_format sf) const;
     void validate(bytes_view view, cql_serialization_format sf) const;

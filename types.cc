@@ -2018,14 +2018,14 @@ struct deserialize_visitor {
 }
 
 template <FragmentedView View>
-data_value abstract_type::deserialize(View v) const {
+data_value abstract_type::deserialize_impl(View v) const {
     return visit(*this, deserialize_visitor<View>{v});
 }
 // Explicit instantiation.
 // This should be repeated for every type passed to deserialize().
-template data_value abstract_type::deserialize<>(fragmented_temporary_buffer::view) const;
-template data_value abstract_type::deserialize<>(single_fragmented_view) const;
-template data_value abstract_type::deserialize<>(ser::buffer_view<bytes_ostream::fragment_iterator>) const;
+template data_value abstract_type::deserialize_impl<>(fragmented_temporary_buffer::view) const;
+template data_value abstract_type::deserialize_impl<>(single_fragmented_view) const;
+template data_value abstract_type::deserialize_impl<>(ser::buffer_view<bytes_ostream::fragment_iterator>) const;
 
 int32_t compare_aux(const tuple_type_impl& t, bytes_view v1, bytes_view v2) {
     // This is a slight modification of lexicographical_tri_compare:
