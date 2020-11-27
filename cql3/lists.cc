@@ -227,9 +227,7 @@ lists::marker::bind(const query_options& options) {
         return constants::UNSET_VALUE;
     } else {
         try {
-            with_linearized(*value, [&] (bytes_view v) {
-                ltype.validate(v, options.get_cql_serialization_format());
-            });
+            ltype.validate(*value, options.get_cql_serialization_format());
             return make_shared<lists::value>(value::from_serialized(*value, ltype, options.get_cql_serialization_format()));
         } catch (marshal_exception& e) {
             throw exceptions::invalid_request_exception(
