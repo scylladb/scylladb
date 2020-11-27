@@ -72,14 +72,12 @@ int64_t attributes::get_timestamp(int64_t now, const query_options& options) {
     if (tval.is_unset_value()) {
         return now;
     }
-  return with_linearized(*tval, [&] (bytes_view val) {
     try {
-        data_type_for<int64_t>()->validate(val, options.get_cql_serialization_format());
+        data_type_for<int64_t>()->validate(*tval, options.get_cql_serialization_format());
     } catch (marshal_exception& e) {
         throw exceptions::invalid_request_exception("Invalid timestamp value");
     }
-    return value_cast<int64_t>(data_type_for<int64_t>()->deserialize(val));
-  });
+    return value_cast<int64_t>(data_type_for<int64_t>()->deserialize(*tval));
 }
 
 int32_t attributes::get_time_to_live(const query_options& options) {
@@ -93,16 +91,15 @@ int32_t attributes::get_time_to_live(const query_options& options) {
     if (tval.is_unset_value()) {
         return 0;
     }
-  auto ttl = with_linearized(*tval, [&] (bytes_view val) {
+
     try {
-        data_type_for<int32_t>()->validate(val, options.get_cql_serialization_format());
+        data_type_for<int32_t>()->validate(*tval, options.get_cql_serialization_format());
     }
     catch (marshal_exception& e) {
         throw exceptions::invalid_request_exception("Invalid TTL value");
     }
+    auto ttl = value_cast<int32_t>(data_type_for<int32_t>()->deserialize(*tval));
 
-    return value_cast<int32_t>(data_type_for<int32_t>()->deserialize(val));
-  });
     if (ttl < 0) {
         throw exceptions::invalid_request_exception("A TTL must be greater or equal to 0");
     }
