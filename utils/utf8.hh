@@ -65,12 +65,13 @@ inline std::optional<size_t> validate_with_error_position(bytes_view string) {
     return validate_with_error_position(data, len);	
 }
 
-std::optional<size_t> validate_with_error_position_fragmented(const FragmentRange auto& fr) {
+std::optional<size_t> validate_with_error_position_fragmented(FragmentedView auto fv) {
     uint8_t partial_codepoint[4];
     size_t partial_filled = 0;
     size_t partial_more_needed = 0;
     size_t bytes_validated = 0;
-    for (auto&& frag : fr) {
+    for (; fv.size_bytes(); fv.remove_current()) {
+        bytes_view frag = fv.current_fragment();
         auto data = reinterpret_cast<const uint8_t*>(frag.data());
         auto len = frag.size();
         if (partial_more_needed) {

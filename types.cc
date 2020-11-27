@@ -1413,14 +1413,14 @@ static void validate_aux(const tuple_type_impl& t, bytes_view v, cql_serializati
 }
 
 namespace {
-template <typename UnderlyingView, typename FragmentRangeView>
+template <FragmentedView View>
 struct validate_visitor {
-    UnderlyingView underlying;
-    FragmentRangeView v;
-
+    const View& v;
     cql_serialization_format sf;
 
-    void operator()(const reversed_type_impl& t) { return t.underlying_type()->validate(underlying, sf); }
+    void operator()(const reversed_type_impl& t) {
+        visit(*t.underlying_type(), validate_visitor<View>{v, sf});
+    }
     void operator()(const abstract_type&) {}
     template <typename T> void operator()(const integer_type_impl<T>& t) {
         if (v.empty()) {
@@ -1447,9 +1447,9 @@ struct validate_visitor {
         }
     }
     void operator()(const ascii_type_impl&) {
-        // ASCII can be validated without linearization
-        for (auto& frag : v) {
-            if (!utils::ascii::validate(frag)) {
+        // ASCII can be validated independently for each fragment
+        for (View fv = v; fv.size_bytes() > 0; fv.remove_current()) {
+            if (!utils::ascii::validate(fv.current_fragment())) {
                 throw marshal_exception("Validation failed - non-ASCII character in an ASCII string");
             }
         }
@@ -1476,9 +1476,9 @@ struct validate_visitor {
         if (v.size_bytes() != 16) {
             throw marshal_exception(format("Validation failed for timeuuid - got {:d} bytes", v.size_bytes()));
         }
-        auto in = utils::linearizing_input_stream(v);
-        auto msb = in.template read_trivial<uint64_t>();
-        auto lsb = in.template read_trivial<uint64_t>();
+        View in = v;
+        auto msb = read_simple<uint64_t>(in);
+        auto lsb = read_simple<uint64_t>(in);
         utils::UUID uuid(msb, lsb);
         if (uuid.version() != 1) {
             throw marshal_exception(format("Unsupported UUID version ({:d})", uuid.version()));
@@ -1587,11 +1587,11 @@ struct validate_visitor {
 }
 
 void abstract_type::validate(const fragmented_temporary_buffer::view& view, cql_serialization_format sf) const {
-    visit(*this, validate_visitor<const fragmented_temporary_buffer::view&, const fragmented_temporary_buffer::view&>{view, view, sf});
+    visit(*this, validate_visitor<fragmented_temporary_buffer::view>{view, sf});
 }
 
 void abstract_type::validate(bytes_view v, cql_serialization_format sf) const {
-    visit(*this, validate_visitor<bytes_view, single_fragment_range<mutable_view::no>>{v, single_fragment_range(v), sf});
+    visit(*this, validate_visitor<single_fragmented_view>{single_fragmented_view(v), sf});
 }
 
 static void serialize_aux(const tuple_type_impl& type, const tuple_type_impl::native_type* val, bytes::iterator& out) {
