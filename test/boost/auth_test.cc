@@ -44,6 +44,7 @@
 
 #include "db/config.hh"
 #include "cql3/query_processor.hh"
+#include "types/map.hh"
 
 SEASTAR_TEST_CASE(test_default_authenticator) {
     return do_with_cql_env([](cql_test_env& env) {
@@ -215,4 +216,60 @@ SEASTAR_TEST_CASE(alter_opts_on_system_auth_tables) {
         cquery_nofail(env, "ALTER TABLE system_auth.role_members WITH gc_grace_seconds = 123");
         cquery_nofail(env, "ALTER TABLE system_auth.role_permissions WITH min_index_interval = 456");
     }, auth_on());
+}
+
+SEASTAR_TEST_CASE(test_alter_with_timeouts) {
+    auto cfg = make_shared<db::config>();
+    cfg->authenticator(sstring(auth::password_authenticator_name));
+
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auth::role_config config {
+            .can_login = true,
+        };
+        auth::authentication_options opts {
+            .password = "pass"
+        };
+        auth::create_role(e.local_auth_service(), "user", config, opts).get();
+        auth::create_role(e.local_auth_service(), "also_user", config, opts).get();
+        authenticate(e, "user", "pass").get();
+
+        cquery_nofail(e, "CREATE TABLE t (id int PRIMARY KEY, v int)");
+        cquery_nofail(e, "ALTER ROLE user WITH options = {'read_timeout': 5ms, 'write_timeout': 1h30m}");
+
+	    auto my_map_type = map_type_impl::get_instance(utf8_type, utf8_type, false);
+
+	    auto msg = cquery_nofail(e, "SELECT options FROM system_auth.roles WHERE role = 'user'");
+        assert_that(msg).is_rows().with_rows({{
+            my_map_type->decompose(make_map_value(my_map_type, map_type_impl::native_type({{"read_timeout", "5ms"}, {"write_timeout", "1h30m"}}))),
+        }});
+
+        cquery_nofail(e, "ALTER ROLE user WITH options = {'write_timeout': 35s}");
+
+	    msg = cquery_nofail(e, "SELECT options FROM system_auth.roles WHERE role = 'user'");
+        assert_that(msg).is_rows().with_rows({{
+            my_map_type->decompose(make_map_value(my_map_type, map_type_impl::native_type({{"write_timeout", "35s"}}))),
+        }});
+
+        // Setting a timeout value of 0 makes little sense, but it's great for testing
+        cquery_nofail(e, "ALTER ROLE user WITH options = {'read_timeout': 0s, 'write_timeout': 0s}");
+        BOOST_REQUIRE_THROW(e.execute_cql("SELECT * FROM t").get(), exceptions::read_timeout_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("INSERT INTO t (id, v) VALUES (1,2)").get(), exceptions::mutation_write_failure_exception);
+
+        cquery_nofail(e, "ALTER ROLE user WITH options = {}");
+        cquery_nofail(e, "SELECT * FROM t");
+        cquery_nofail(e, "INSERT INTO t (id, v) VALUES (1,2)");
+
+        // Only valid timeout values are accepted
+        BOOST_REQUIRE_THROW(e.execute_cql("ALTER ROLE user WITH options = {'read_timeout': 'I am not a valid duration'}").get(), marshal_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("ALTER ROLE user WITH options = {'read_timeout': 5us}").get(), exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("ALTER ROLE user WITH options = {'read_timeout': 48h}").get(), exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("ALTER ROLE user WITH options = {'read_timeout': 2y6mo5d}").get(), exceptions::invalid_request_exception);
+
+        // When multiple per-role timeouts apply, the smallest value is always effective
+        cquery_nofail(e, "ALTER ROLE user WITH options = {'write_timeout': 1s}");
+        cquery_nofail(e, "ALTER ROLE also_user WITH options = {'write_timeout': 0s, 'read_timeout': 0s}");
+        cquery_nofail(e, "GRANT also_user TO user");
+        BOOST_REQUIRE_THROW(e.execute_cql("SELECT * FROM t").get(), exceptions::read_timeout_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("INSERT INTO t (id, v) VALUES (1,2)").get(), exceptions::mutation_write_failure_exception);
+    }, cfg);
 }
