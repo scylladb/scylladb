@@ -1586,9 +1586,13 @@ struct validate_visitor {
 };
 }
 
-void abstract_type::validate(const fragmented_temporary_buffer::view& view, cql_serialization_format sf) const {
-    visit(*this, validate_visitor<fragmented_temporary_buffer::view>{view, sf});
+template <FragmentedView View>
+void abstract_type::validate(const View& view, cql_serialization_format sf) const {
+    visit(*this, validate_visitor<View>{view, sf});
 }
+// Explicit instantiation.
+template void abstract_type::validate<>(const single_fragmented_view&, cql_serialization_format) const;
+template void abstract_type::validate<>(const fragmented_temporary_buffer::view&, cql_serialization_format) const;
 
 void abstract_type::validate(bytes_view v, cql_serialization_format sf) const {
     visit(*this, validate_visitor<single_fragmented_view>{single_fragmented_view(v), sf});
