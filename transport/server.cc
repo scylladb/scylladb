@@ -886,6 +886,9 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_au
                             std::tuple_cat(std::move(cli_key), std::forward_as_tuple(username)));
                 });
             }
+            f = f.then([&client_state] {
+                return client_state.update_per_role_params();
+            });
             return f.then([this, stream, &client_state, challenge = std::move(challenge), trace_state]() mutable {
                 return make_ready_future<std::unique_ptr<cql_server::response>>(make_auth_success(stream, std::move(challenge), trace_state));
             });
