@@ -1221,7 +1221,8 @@ set_type_impl::is_value_compatible_with_frozen(const collection_type_impl& previ
     return is_compatible_with(previous);
 }
 
-static void validate_aux(const set_type_impl& t, bytes_view v, cql_serialization_format sf) {
+template <FragmentedView View>
+static void validate_aux(const set_type_impl& t, View v, cql_serialization_format sf) {
     auto nr = read_collection_size(v, sf);
     for (int i = 0; i != nr; ++i) {
         t.get_elements_type()->validate(read_collection_value(v, sf), sf);
@@ -1568,9 +1569,7 @@ struct validate_visitor {
         validate_aux(t, v, sf);
     }
     void operator()(const set_type_impl& t) {
-        with_linearized(v, [this, &t] (bytes_view bv) {
-            validate_aux(t, bv, sf);
-        });
+        validate_aux(t, v, sf);
     }
     void operator()(const list_type_impl& t) {
         with_linearized(v, [this, &t] (bytes_view bv) {
