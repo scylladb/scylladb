@@ -409,6 +409,7 @@ scylla_tests = set([
     'test/boost/double_decker_test',
     'test/boost/stall_free_test',
     'test/boost/imr_test',
+    'test/boost/raft_sys_table_storage_test',
     'test/manual/ec2_snitch_test',
     'test/manual/enormous_table_scan_test',
     'test/manual/gce_snitch_test',
