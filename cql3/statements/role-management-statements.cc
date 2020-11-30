@@ -68,11 +68,23 @@ using result_message = cql_transport::messages::result_message;
 using result_message_ptr = ::shared_ptr<result_message>;
 
 static auth::authentication_options extract_authentication_options(const cql3::role_options& options) {
+    static std::string_view allowed_role_options[] = {"read_timeout", "write_timeout"};
+
     auth::authentication_options authen_options;
     authen_options.password = options.password;
 
     if (options.options) {
-        authen_options.options = std::unordered_map<sstring, sstring>(options.options->begin(), options.options->end());
+        authen_options.options.emplace();
+        for (auto& entry : *options.options) {
+            if (std::find(std::begin(allowed_role_options), std::end(allowed_role_options), std::string_view(entry.first)) != std::end(allowed_role_options)) {
+                authen_options.role_options.emplace(entry.first, entry.second);
+            } else {
+                authen_options.options->emplace(entry.first, entry.second);
+            }
+        }
+        if (authen_options.options->empty()) {
+            authen_options.options.reset();
+        }
     }
 
     return authen_options;
