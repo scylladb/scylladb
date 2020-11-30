@@ -3658,3 +3658,208 @@ SEASTAR_THREAD_TEST_CASE(test_clustering_order_merger_in_memory) {
                 make_tested(std::move(scenario.readers_data), fwd), scenario.fwd_ranges);
     }
 }
+
+SEASTAR_THREAD_TEST_CASE(clustering_combined_reader_mutation_source_test) {
+    // The clustering combined reader (based on `clustering_order_reader_merger`) supports only
+    // single partition readers, but the mutation source test framework tests the provided source
+    // on multiple partitions. Furthermore, our reader doesn't support static rows or partition tombstones.
+    // We deal with this as follows:
+    // 1. we process all mutations provided by the framework, extracting unsupported fragments
+    //    (partition tombstones and static rows) into separate mutations, called ``bad mutations'' below.
+    //    Each bad mutation is used to create a separate reader.
+    // 2. The remaining mutations (``good mutations'') are sorted w.r.t their partition keys;
+    //    for each partition key, we use the set of mutations with this key to create our clustering combined reader.
+    //    The readers are then fed into a meta-reader `multi_partition_reader` which supports multi-partition queries,
+    //    calling the provided readers appropriately as the query goes through the partition range.
+    // 3. The ``bad mutation'' readers from step 1 and the reader from step 2 are combined together
+    //    using the generic combined reader.
+
+    // Multi partition reader from single partition readers.
+    // precondition: readers must be nonempty (they return a partition_start)
+    struct multi_partition_reader : public flat_mutation_reader::impl {
+        using container_t = std::map<dht::decorated_key, flat_mutation_reader, dht::decorated_key::less_comparator>;
+
+        std::reference_wrapper<const dht::partition_range> _range;
+
+        container_t _readers;
+        container_t::iterator _it;
+
+        // invariants:
+        // 1. _it = end() or _it->first is not before the current partition range (_range)
+        // 2. _it->second did not return partition_end
+
+        // did we fetch a fragment from _it? (due to invariant 2, it wasn't partition end)
+        bool _inside_partition = false;
+
+        multi_partition_reader(schema_ptr s, reader_permit permit,
+                container_t readers, const dht::partition_range& range)
+            : impl(std::move(s), std::move(permit))
+            , _range(range), _readers(std::move(readers))
+            , _it(std::partition_point(_readers.begin(), _readers.end(), [this, cmp = dht::ring_position_comparator(*_schema)]
+                    (auto& r) { return _range.get().before(r.first, cmp); }))
+        {
+            assert(!_readers.empty());
+        }
+
+        virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override {
+            while (!is_buffer_full()) {
+                auto mfo = co_await next_fragment(timeout);
+                if (!mfo) {
+                    _end_of_stream = true;
+                    break;
+                }
+                push_mutation_fragment(std::move(*mfo));
+            }
+        }
+
+        virtual void next_partition() override {
+            clear_buffer_to_next_partition();
+            _end_of_stream = false;
+            if (is_buffer_empty()) {
+                // all fragments that were in the buffer came from the same partition
+                if (_inside_partition) {
+                    // last fetched fragment came from _it, so all fragments previously in the buffer came from _it
+                    // => current partition is _it, we need to move forward
+                    //    _it might be the end of current forwarding range, but that's no problem;
+                    //    in that case we'll go into eos mode until forwarded
+                    assert(_it != _readers.end());
+                    _inside_partition = false;
+                    ++_it;
+                } else {
+                    // either no previously fetched fragment or must have come from before _it. Nothing to do
+                }
+            }
+        }
+
+        virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {
+            // all fragments currently in the buffer come from the current partition range
+            // and pr must be strictly greater, so just clear the buffer
+            clear_buffer();
+            _end_of_stream = false;
+            _inside_partition = false;
+            _range = pr;
+            // restore invariant 2
+            _it = std::partition_point(_it, _readers.end(), [this, cmp = dht::ring_position_comparator(*_schema)]
+                    (auto& r) { return _range.get().before(r.first, cmp); });
+            co_return;
+        }
+
+        virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) override {
+            if (!_inside_partition) {
+                // this should not happen - the specification of fast_forward_to says that it can only be called
+                // while inside partition. But if it happens for whatever reason just do nothing
+                return make_ready_future<>();
+            }
+            assert(_it != _readers.end());
+            // all fragments currently in the buffer come from the current position range
+            // and pr must be strictly greater, so just clear the buffer
+            clear_buffer();
+            _end_of_stream = false;
+            return _it->second.fast_forward_to(std::move(pr), timeout);
+        }
+
+        future<mutation_fragment_opt> next_fragment(db::timeout_clock::time_point timeout) {
+            if (_it == _readers.end() || _range.get().after(_it->first, dht::ring_position_comparator(*_schema))) {
+                co_return mutation_fragment_opt{};
+            }
+
+            auto mfo = co_await _it->second(timeout);
+            if (mfo) {
+                if (mfo->is_end_of_partition()) {
+                    ++_it;
+                    _inside_partition = false;
+                } else {
+                    _inside_partition = true;
+                }
+                co_return mfo;
+            }
+
+            // our readers must be sm::forwarding (invariant 2) and the range was just exhausted,
+            // waiting for ff or next_partition
+            co_return mutation_fragment_opt{};
+        }
+    };
+
+    auto populate = [] (schema_ptr s, const std::vector<mutation>& muts) {
+        std::map<dht::decorated_key, std::vector<mutation_bounds>, dht::decorated_key::less_comparator>
+            good_mutations{dht::decorated_key::less_comparator(s)};
+        std::vector<mutation> bad_mutations;
+        for (auto& m: muts) {
+            auto& dk = m.decorated_key();
+
+            std::optional<std::pair<position_in_partition, position_in_partition>> bounds;
+            mutation good(m.schema(), dk);
+            std::optional<mutation> bad;
+            flat_mutation_reader_from_mutations(tests::make_permit(), {m}).consume_pausable([&] (mutation_fragment&& mf) {
+                if ((mf.is_partition_start() && mf.as_partition_start().partition_tombstone()) || mf.is_static_row()) {
+                    if (!bad) {
+                        bad = mutation{m.schema(), dk};
+                    }
+                    bad->apply(std::move(mf));
+                } else {
+                    if (!mf.is_partition_start() && !mf.is_end_of_partition()) {
+                        if (!bounds) {
+                            bounds = std::pair{mf.position(), mf.position()};
+                        } else {
+                            bounds->second = mf.position();
+                        }
+                    }
+                    good.apply(std::move(mf));
+                }
+                return stop_iteration::no;
+            }, db::no_timeout).get();
+
+            mutation_bounds mb {
+                std::move(good),
+                bounds ? std::move(bounds->first) : position_in_partition::before_all_clustered_rows(),
+                bounds ? std::move(bounds->second) : position_in_partition::after_all_clustered_rows()
+            };
+
+            auto it = good_mutations.find(dk);
+            if (it == good_mutations.end()) {
+                good_mutations.emplace(dk, std::vector<mutation_bounds>{std::move(mb)});
+            } else {
+                it->second.push_back(std::move(mb));
+            }
+
+            if (bad) {
+                bad_mutations.push_back(std::move(*bad));
+            }
+        }
+
+        return mutation_source([good = std::move(good_mutations), bad = std::move(bad_mutations)] (
+                schema_ptr s,
+                reader_permit permit,
+                const dht::partition_range& range,
+                const query::partition_slice& slice,
+                const io_priority_class& pc,
+                tracing::trace_state_ptr trace_state,
+                streamed_mutation::forwarding fwd_sm,
+                mutation_reader::forwarding fwd_mr) {
+            std::map<dht::decorated_key, flat_mutation_reader, dht::decorated_key::less_comparator>
+                good_readers{dht::decorated_key::less_comparator(s)};
+            for (auto& [k, ms]: good) {
+                auto rs = boost::copy_range<std::vector<reader_bounds>>(std::move(ms)
+                        | boost::adaptors::transformed([&] (auto&& mb) {
+                            return reader_bounds{
+                                flat_mutation_reader_from_mutations(permit, {std::move(mb.m)}, slice, fwd_sm),
+                                std::move(mb.lower), std::move(mb.upper)};
+                        }));
+                std::sort(rs.begin(), rs.end(), [less = position_in_partition::less_compare(*s)]
+                        (const reader_bounds& a, const reader_bounds& b) { return less(a.lower, b.lower); });
+                auto q = std::make_unique<simple_position_reader_queue>(*s, std::move(rs));
+                good_readers.emplace(k, make_clustering_combined_reader(s, permit, fwd_sm, std::move(q)));
+            }
+
+            std::vector<flat_mutation_reader> readers;
+            for (auto& m: bad) {
+                readers.push_back(flat_mutation_reader_from_mutations(permit, {m}, range, slice, fwd_sm));
+            }
+            readers.push_back(make_flat_mutation_reader<multi_partition_reader>(s, permit, std::move(good_readers), range));
+
+            return make_combined_reader(std::move(s), std::move(permit), std::move(readers), fwd_sm, fwd_mr);
+        });
+    };
+
+    run_mutation_source_tests(std::move(populate));
+}
