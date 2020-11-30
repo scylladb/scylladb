@@ -1318,6 +1318,31 @@ SEASTAR_THREAD_TEST_CASE(test_update_insert_delete_distinction) {
     }).get();
 }
 
+static std::vector<std::vector<data_value>> get_result(cql_test_env& e,
+        const std::vector<data_type>& col_types, const sstring& query) {
+    auto deser = [] (const data_type& t, const bytes_opt& b) -> data_value {
+        if (!b) {
+            return data_value::make_null(t);
+        }
+        return t->deserialize(*b);
+    };
+
+    auto msg = e.execute_cql(query).get0();
+    auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
+    BOOST_REQUIRE(rows);
+
+    std::vector<std::vector<data_value>> res;
+    for (auto&& r: to_bytes(*rows)) {
+        BOOST_REQUIRE_LE(col_types.size(), r.size());
+        std::vector<data_value> res_r;
+        for (size_t i = 0; i < col_types.size(); ++i) {
+            res_r.push_back(deser(col_types[i], r[i]));
+        }
+        res.push_back(std::move(res_r));
+    }
+    return res;
+}
+
 SEASTAR_THREAD_TEST_CASE(test_change_splitting) {
     do_with_cql_env_thread([](cql_test_env& e) {
         using oper_ut = std::underlying_type_t<cdc::operation>;
@@ -1340,28 +1365,8 @@ SEASTAR_THREAD_TEST_CASE(test_change_splitting) {
             return make_set_value(keys_type, std::move(s));
         };
 
-        auto deser = [] (const data_type& t, const bytes_opt& b) -> data_value {
-            if (!b) {
-                return data_value::make_null(t);
-            }
-            return t->deserialize(*b);
-        };
-
         auto get_result = [&] (const std::vector<data_type>& col_types, const sstring& s) -> std::vector<std::vector<data_value>> {
-            auto msg = e.execute_cql(s).get0();
-            auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
-            BOOST_REQUIRE(rows);
-
-            std::vector<std::vector<data_value>> res;
-            for (auto&& r: to_bytes(*rows)) {
-                BOOST_REQUIRE_LE(col_types.size(), r.size());
-                std::vector<data_value> res_r;
-                for (size_t i = 0; i < col_types.size(); ++i) {
-                    res_r.push_back(deser(col_types[i], r[i]));
-                }
-                res.push_back(std::move(res_r));
-            }
-            return res;
+            return ::get_result(e, col_types, s);
         };
 
         cquery_nofail(e, "create table ks.t (pk int, ck int, s int static, v1 int, v2 int, m map<int, int>, primary key (pk, ck)) with cdc = {'enabled':true}");
@@ -1946,4 +1951,25 @@ SEASTAR_THREAD_TEST_CASE(test_batch_post_image) {
 
 SEASTAR_THREAD_TEST_CASE(test_batch_pre_post_image) {
     test_batch_images(true, true);
+}
+
+// Regression test for #7716
+SEASTAR_THREAD_TEST_CASE(test_postimage_with_no_regular_columns) {
+    do_with_cql_env_thread([] (cql_test_env& e) {
+        using oper_ut = std::underlying_type_t<cdc::operation>;
+
+        cquery_nofail(e, "create table ks.t (pk int, ck int, primary key (pk, ck)) with cdc = {'enabled': true, 'postimage': true}");
+        cquery_nofail(e, "insert into ks.t (pk, ck) values (1, 2)");
+
+        auto result = get_result(e,
+            {data_type_for<oper_ut>(), int32_type, int32_type},
+            "select \"cdc$operation\", pk, ck from ks.t_scylla_cdc_log");
+
+        std::vector<std::vector<data_value>> expected = {
+            { oper_ut(cdc::operation::insert), int32_t(1), int32_t(2) },
+            { oper_ut(cdc::operation::post_image), int32_t(1), int32_t(2) },
+        };
+
+        BOOST_REQUIRE_EQUAL(expected, result);
+    }).get();
 }
