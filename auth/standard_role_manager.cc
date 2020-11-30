@@ -41,6 +41,8 @@
 #include "log.hh"
 #include "utils/class_registrator.hh"
 #include "database.hh"
+#include "schema_builder.hh"
+#include "service/migration_manager.hh"
 
 namespace auth {
 
@@ -132,6 +134,25 @@ const resource_set& standard_role_manager::protected_resources() const {
     return resources;
 }
 
+static future<> add_options_column_if_missing(database& db, ::service::migration_manager& mm) noexcept {
+    try {
+        auto schema = db.find_schema(sstring(meta::AUTH_KS), sstring(meta::roles_table::name));
+        bytes options_name = to_bytes(meta::roles_table::options_col_name.data());
+        if (schema->get_column_definition(options_name)) {
+            return make_ready_future<>();
+        }
+        schema_builder b(schema);
+        b.with_column(options_name,
+                map_type_impl::get_instance(utf8_type, utf8_type, false),
+                column_kind::regular_column);
+        schema_ptr table = b.build();
+        return mm.announce_column_family_update(table, false, {}, false, api::timestamp_type(0)).handle_exception([] (const std::exception_ptr&) {});
+    } catch (...) {
+        log.warn("Failed to update options column in the roles table: {}", std::current_exception());
+        return make_ready_future<>();
+    }
+}
+
 future<> standard_role_manager::create_metadata_tables_if_missing() const {
     static const sstring create_role_members_query = sprint(
             "CREATE TABLE %s ("
@@ -152,7 +173,9 @@ future<> standard_role_manager::create_metadata_tables_if_missing() const {
                     meta::role_members_table::name,
                     _qp,
                     create_role_members_query,
-                    _migration_manager)).discard_result();
+                    _migration_manager)).discard_result().then([this] {
+        return add_options_column_if_missing(_qp.db(), _migration_manager);
+    });
 }
 
 future<> standard_role_manager::create_default_role_if_missing() const {
