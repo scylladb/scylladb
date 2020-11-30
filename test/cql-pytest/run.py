@@ -183,6 +183,8 @@ def run_scylla_cmd(pid, dir):
         '--logger-log-level', 'compaction=warn',
         '--logger-log-level', 'migration_manager=warn',
         '--num-tokens', '16',
+        # Allow testing experimental features
+        '--experimental', '1', '--enable-user-defined-functions', '1',
         ], {})
 
 ## Test that CQL is serving.

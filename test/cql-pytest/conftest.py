@@ -69,5 +69,16 @@ def test_keyspace(cql):
     yield name
     cql.execute("DROP KEYSPACE " + name)
 
+# The "scylla_only" fixture can be used by tests for Scylla-only features,
+# which do not exist on Apache Cassandra. A test using this fixture will be
+# skipped if running with "run-cassandra".
+@pytest.fixture(scope="session")
+def scylla_only(cql):
+    # We recognize Scylla by checking if there is any system table whose name
+    # contains the word "scylla":
+    names = [row.table_name for row in cql.execute("SELECT * FROM system_schema.tables WHERE keyspace_name = 'system'")]
+    if not any('scylla' in name for name in names):
+        pytest.skip('Scylla-only test skipped')
+
 # TODO: use new_test_table and "yield from" to make shared test_table
 # fixtures with some common schemas.
