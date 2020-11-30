@@ -341,8 +341,8 @@ if __name__ == '__main__':
         args.no_ec2_check = not ec2_check
         if ec2_check:
             if interactive:
-                nic = interactive_choose_nic()
-            run('{}/scylla_ec2_check --nic {}'.format(scriptsdir(), nic), shell=True, check=True)
+                args.nic = interactive_choose_nic()
+            run('{}/scylla_ec2_check --nic {}'.format(scriptsdir(), args.nic), shell=True, check=True)
 
     if not is_nonroot():
         kernel_check = interactive_ask_service('Do you want to run check your kernel version?', 'Yes - runs a  script to verify that the kernel for this instance qualifies to run Scylla. No - skips the kernel check.', kernel_check)
@@ -485,12 +485,12 @@ if __name__ == '__main__':
             set_nic_and_disks = interactive_ask_service('Do you want to enable Network Interface Card (NIC) and disk(s) optimization?', 'Yes - optimize the NIC queue and disks settings. Selecting Yes greatly improves performance. No - skip this step.', set_nic_and_disks)
             setup_args = '--setup-nic-and-disks' if set_nic_and_disks else ''
             if interactive:
-                nic = interactive_choose_nic()
+                args.nic = interactive_choose_nic()
 
             set_clocksource = interactive_ask_service('The clocksource is the physical device that Linux uses to take time measurements. In most cases Linux chooses the fastest available clocksource device as long as it is accurate. In some situations, however, Linux errs in the side of caution and does not choose the fastest available clocksource despite it being accurate enough. If you know your hardware''s fast clocksource is stable enough, choose "yes" here. The safest is the choose "no" (the default)', 'Yes - enforce clocksource setting. No - keep current configuration.', set_clocksource)
             setup_args += ' --set-clocksource' if set_clocksource else ''
 
-            run_setup_script('Performance Tuning', 'scylla_sysconfig_setup --nic {nic} {setup_args}'.format(nic=nic, setup_args=setup_args))
+            run_setup_script('Performance Tuning', 'scylla_sysconfig_setup --nic {nic} {setup_args}'.format(nic=args.nic, setup_args=setup_args))
 
     if is_nonroot():
         params = run('systemctl --no-pager show user@1000.service', shell=True, check=True, capture_output=True, encoding='utf-8').stdout.strip()
