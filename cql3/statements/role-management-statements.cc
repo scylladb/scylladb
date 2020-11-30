@@ -205,10 +205,6 @@ future<> alter_role_statement::check_access(service::storage_proxy& proxy, const
             if (_options.password) {
                 check(auth::authentication_option::password);
             }
-
-            if (_options.options) {
-                check(auth::authentication_option::options);
-            }
         }
     });
 }
