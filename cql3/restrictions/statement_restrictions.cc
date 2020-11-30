@@ -230,7 +230,8 @@ statement_restrictions::statement_restrictions(database& db,
     process_clustering_columns_restrictions(select_a_collection, for_view, allow_filtering);
 
     // Covers indexes on the first clustering column (among others).
-    if (_is_key_range && _has_queriable_ck_index) {
+    if (_is_key_range && _has_queriable_ck_index &&
+        !dynamic_pointer_cast<multi_column_restriction>(_clustering_columns_restrictions)) {
         _uses_secondary_indexing = true;
     }
 

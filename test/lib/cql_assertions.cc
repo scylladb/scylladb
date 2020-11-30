@@ -225,6 +225,18 @@ void require_rows(cql_test_env& e,
     }
 }
 
+void eventually_require_rows(cql_test_env& e, sstring_view qstr, const std::vector<std::vector<bytes_opt>>& expected,
+                             const std::experimental::source_location& loc) {
+    try {
+        eventually([&] {
+            assert_that(cquery_nofail(e, qstr, nullptr, loc)).is_rows().with_rows_ignore_order(expected);
+        });
+    } catch (const std::exception& e) {
+        BOOST_FAIL(format("query '{}' failed: {}\n{}:{}: originally from here",
+                          qstr, e.what(), loc.file_name(), loc.line()));
+    }
+}
+
 void require_rows(cql_test_env& e,
                   cql3::prepared_cache_key_type id,
                   const std::vector<cql3::raw_value>& values,

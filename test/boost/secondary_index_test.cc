@@ -1589,3 +1589,29 @@ SEASTAR_TEST_CASE(test_filtering_indexed_column) {
         });
     });
 }
+
+namespace {
+
+auto I(int32_t x) { return int32_type->decompose(x); }
+
+} // anonymous namespace
+
+SEASTAR_TEST_CASE(indexed_multicolumn_where) {
+    return do_with_cql_env_thread([] (auto& e) {
+        cquery_nofail(e, "create table t (p int, c1 int, c2 int, primary key(p, c1, c2))");
+        cquery_nofail(e, "create index i1 on t(c1)");
+        cquery_nofail(e, "insert into t(p, c1, c2) values (1, 11, 21)");
+        cquery_nofail(e, "insert into t(p, c1, c2) values (2, 12, 22)");
+        eventually_require_rows(e, "select c1 from t where (c1,c2)=(11,21)", {{I(11)}});
+        eventually_require_rows(e, "select c1 from t where (c1,c2)=(11,22)", {});
+        eventually_require_rows(e, "select c1 from t where (c1)=(12)", {{I(12)}});
+        cquery_nofail(e, "create index i2 on t(c2)");
+        eventually_require_rows(e, "select c1 from t where (c1,c2)=(11,21)", {{I(11)}});
+        eventually_require_rows(e, "select c1 from t where (c1,c2)=(11,22)", {});
+        eventually_require_rows(e, "select c1 from t where (c1)=(12)", {{I(12)}});
+        cquery_nofail(e, "drop index i1");
+        eventually_require_rows(e, "select c1 from t where (c1,c2)=(11,21)", {{I(11)}});
+        eventually_require_rows(e, "select c1 from t where (c1,c2)=(11,22)", {});
+        eventually_require_rows(e, "select c1 from t where (c1)=(12)", {{I(12)}});
+    });
+}
