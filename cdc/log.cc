@@ -1297,6 +1297,13 @@ struct process_change_visitor {
                 _clustering_row_states, _generate_delta_values);
         visit_row_cells(v);
 
+        if (_enable_updating_state) {
+            // #7716: if there are no regular columns, our visitor would not have visited any cells,
+            // hence it would not have created a row_state for this row. In effect, postimage wouldn't be produced.
+            // Ensure that the row state exists.
+            _clustering_row_states.try_emplace(ckey);
+        }
+
         _builder.set_operation(log_ck, v._cdc_op);
         _builder.set_ttl(log_ck, v._ttl_column);
     }
