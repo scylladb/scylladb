@@ -1299,7 +1299,6 @@ public:
     future<> apply_in_memory(const mutation& m, column_family& cf, db::rp_handle&&, db::timeout_clock::time_point timeout);
 
     void set_local_id(utils::UUID uuid) noexcept { _local_host_id = std::move(uuid); }
-    const utils::UUID get_local_id() const noexcept { return _local_host_id; }
 
 private:
     // Unless you are an earlier boostraper or the database itself, you should

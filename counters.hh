@@ -61,8 +61,6 @@ public:
         return !(*this == other);
     }
 public:
-    static counter_id local();
-
     // For tests.
     static counter_id generate_random() {
         return counter_id(utils::make_random_uuid());
@@ -403,11 +401,6 @@ public:
             return { };
         }
         return *it;
-    }
-
-    std::optional<counter_shard_view> local_shard() const {
-        // TODO: consider caching local shard position
-        return get_shard(counter_id::local());
     }
 
     bool operator==(const basic_counter_cell_view& other) const {

@@ -3209,6 +3209,5 @@ bool storage_service::is_repair_based_node_ops_enabled() {
     return _db.local().get_config().enable_repair_based_node_ops();
 }
 
-utils::UUID storage_service::get_local_id() const { return _db.local().get_local_id(); }
 } // namespace service
 

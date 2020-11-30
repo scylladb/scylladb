@@ -19,15 +19,9 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "service/storage_service.hh"
 #include "counters.hh"
 #include "mutation.hh"
 #include "combine.hh"
-
-counter_id counter_id::local()
-{
-    return counter_id(service::get_local_storage_service().get_local_id());
-}
 
 std::ostream& operator<<(std::ostream& os, const counter_id& id) {
     return os << id.to_uuid();
