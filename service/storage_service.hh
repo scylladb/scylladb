@@ -844,9 +844,8 @@ private:
     void do_isolate_on_error(disk_error type);
     future<> isolate();
 
-    utils::UUID _local_host_id;
 public:
-    utils::UUID get_local_id() const { return _local_host_id; }
+    utils::UUID get_local_id() const;
 
 private:
     void notify_down(inet_address endpoint);
