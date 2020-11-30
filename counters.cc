@@ -197,7 +197,7 @@ std::optional<atomic_cell> counter_cell_view::difference(atomic_cell_view a, ato
 }
 
 
-void transform_counter_updates_to_shards(mutation& m, const mutation* current_state, uint64_t clock_offset) {
+void transform_counter_updates_to_shards(mutation& m, const mutation* current_state, uint64_t clock_offset, utils::UUID local_id) {
     // FIXME: allow current_state to be frozen_mutation
 
     auto transform_new_row_to_shards = [&s = *m.schema(), clock_offset] (column_kind kind, auto& cells) {
