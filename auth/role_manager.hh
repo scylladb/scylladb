@@ -171,6 +171,12 @@ public:
     ///
     /// \returns an exceptional future with \ref nonexistent_role if the role does not exist.
     virtual future<> update_custom_options(std::string_view role_name, const custom_options& options) const = 0;
+
+    ///
+    /// Retrieves current per-role options.
+    ///
+    /// \returns an exceptional future with \ref nonexistent_role if the role does not exist.
+    virtual future<custom_options> query_custom_options(std::string_view role_name) const = 0;
 };
 
 }

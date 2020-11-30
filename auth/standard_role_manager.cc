@@ -342,6 +342,25 @@ future<> standard_role_manager::update_custom_options(std::string_view role_name
             {std::move(map_value), sstring(role_name)}).discard_result();
 }
 
+future<custom_options> standard_role_manager::query_custom_options(std::string_view role_name) const {
+    static const sstring query = format("SELECT {} FROM {} WHERE {} = ?",
+            meta::roles_table::options_col_name,
+            meta::roles_table::qualified_name,
+            meta::roles_table::role_col_name);
+
+    return _qp.execute_internal(
+            query, consistency_for_role(role_name),
+            internal_distributed_query_state(),
+            {sstring(role_name)}).then([](::shared_ptr<cql3::untyped_result_set> rs) {
+        custom_options opts;
+        const auto& row = rs->one();
+        if (row.has(meta::roles_table::options_col_name)) {
+            row.get_map_data<sstring, sstring>(meta::roles_table::options_col_name, std::inserter(opts, opts.end()), utf8_type, utf8_type);
+        }
+        return opts;
+    });
+}
+
 future<> standard_role_manager::drop(std::string_view role_name) const {
     return this->exists(role_name).then([this, role_name](bool role_exists) {
         if (!role_exists) {
