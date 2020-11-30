@@ -47,6 +47,8 @@ extern const std::string_view qualified_name;
 
 constexpr std::string_view role_col_name{"role", 4};
 
+constexpr std::string_view options_col_name{"options"};
+
 }
 
 }

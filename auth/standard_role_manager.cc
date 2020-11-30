@@ -324,6 +324,24 @@ standard_role_manager::alter(std::string_view role_name, const role_config_updat
     });
 }
 
+future<> standard_role_manager::update_custom_options(std::string_view role_name, const custom_options& options) const {
+    static const sstring query = format("UPDATE {} SET {} = ? WHERE {} = ?",
+            meta::roles_table::qualified_name,
+            meta::roles_table::options_col_name,
+            meta::roles_table::role_col_name);
+    std::vector<std::pair<data_value, data_value>> entries;
+    for (const auto& entry : options) {
+        entries.push_back({data_value(entry.first), data_value(entry.second)});
+    }
+    auto map_value = make_map_value(map_type_impl::get_instance(utf8_type, utf8_type, false), entries);
+
+    return _qp.execute_internal(
+            query,
+            consistency_for_role(role_name),
+            internal_distributed_query_state(),
+            {std::move(map_value), sstring(role_name)}).discard_result();
+}
+
 future<> standard_role_manager::drop(std::string_view role_name) const {
     return this->exists(role_name).then([this, role_name](bool role_exists) {
         if (!role_exists) {

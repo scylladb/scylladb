@@ -32,6 +32,7 @@
 #include "auth/allow_all_authorizer.hh"
 #include "auth/common.hh"
 #include "auth/role_or_anonymous.hh"
+#include "auth/roles-metadata.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/untyped_result_set.hh"
 #include "db/consistency_level_type.hh"
@@ -403,7 +404,7 @@ future<> create_role(
         const authentication_options& options) {
     return ser.underlying_role_manager().create(name, config).then([&ser, name, &options] {
         if (!auth::any_authentication_options(options)) {
-            return make_ready_future<>();
+            return ser.underlying_role_manager().update_custom_options(name, options.role_options);
         }
 
         return futurize_invoke(
@@ -411,6 +412,8 @@ future<> create_role(
                 options,
                 ser.underlying_authenticator().supported_options()).then([&ser, name, &options] {
             return ser.underlying_authenticator().create(name, options);
+        }).then([&ser, name, &options] {
+            return ser.underlying_role_manager().update_custom_options(name, options.role_options);
         }).handle_exception([&ser, &name](std::exception_ptr ep) {
             // Roll-back.
             return ser.underlying_role_manager().drop(name).then([ep = std::move(ep)] {
@@ -427,7 +430,7 @@ future<> alter_role(
         const authentication_options& options) {
     return ser.underlying_role_manager().alter(name, config_update).then([&ser, name, &options] {
         if (!any_authentication_options(options)) {
-            return make_ready_future<>();
+            return ser.underlying_role_manager().update_custom_options(name, options.role_options);
         }
 
         return futurize_invoke(
@@ -435,6 +438,8 @@ future<> alter_role(
                 options,
                 ser.underlying_authenticator().supported_options()).then([&ser, name, &options] {
             return ser.underlying_authenticator().alter(name, options);
+        }).then([&ser, name, &options] {
+            return ser.underlying_role_manager().update_custom_options(name, options.role_options);
         });
     });
 }

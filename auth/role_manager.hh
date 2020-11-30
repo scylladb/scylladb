@@ -32,6 +32,7 @@
 #include <seastar/core/sstring.hh>
 
 #include "auth/resource.hh"
+#include "auth/authentication_options.hh"
 #include "seastarx.hh"
 #include "exceptions/exceptions.hh"
 
@@ -164,6 +165,12 @@ public:
     /// \returns an exceptional future with \ref nonexistant_role if the role does not exist.
     ///
     virtual future<bool> can_login(std::string_view role_name) const = 0;
+
+    ///
+    /// Updates current per-role options.
+    ///
+    /// \returns an exceptional future with \ref nonexistent_role if the role does not exist.
+    virtual future<> update_custom_options(std::string_view role_name, const custom_options& options) const = 0;
 };
 
 }

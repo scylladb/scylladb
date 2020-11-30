@@ -83,6 +83,8 @@ public:
 
     virtual future<bool> can_login(std::string_view role_name) const override;
 
+    virtual future<> update_custom_options(std::string_view role_name, const custom_options& options) const override;
+
 private:
     enum class membership_change { add, remove };
 

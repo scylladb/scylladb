@@ -43,7 +43,8 @@ std::string_view creation_query() {
             "  can_login boolean,"
             "  is_superuser boolean,"
             "  member_of set<text>,"
-            "  salted_hash text"
+            "  salted_hash text,"
+            "options frozen<map<text, text>>,"
             ")",
             qualified_name,
             role_col_name);
