@@ -60,7 +60,7 @@ def print_non_interactive_suggestion_message(args):
     base_string = "    scylla_setup"
     outlines = [ base_string ]
     for key,value in vars(args).items():
-        if not value:
+        if not value and type(value) != int:
             continue
         x = ' --{}'.format(key.replace('_','-'))
         if type(value) != bool:
@@ -261,9 +261,9 @@ if __name__ == '__main__':
                         help='skip coredump setup')
     parser.add_argument('--no-sysconfig-setup', action='store_true', default=False,
                         help='skip sysconfig setup')
-    parser.add_argument('--io-setup', default='1', choices=['0', '1'], dest='io_setup',
+    parser.add_argument('--io-setup', default=1, choices=[0, 1], dest='io_setup', type=int,
                         help='Run I/O configuration setup (i.e. iotune). Defaults to 1.')
-    parser.add_argument('--no-io-setup', dest='io_setup', action='store_const', const='0',
+    parser.add_argument('--no-io-setup', dest='io_setup', action='store_const', const=0,
                         help='skip IO configuration setup')
     parser.add_argument('--no-version-check', action='store_true', default=False,
                         help='skip daily version check')
@@ -314,7 +314,7 @@ if __name__ == '__main__':
     raid_setup = not args.no_raid_setup
     coredump_setup = not args.no_coredump_setup
     sysconfig_setup = not args.no_sysconfig_setup
-    io_setup = args.io_setup == "1"
+    io_setup = args.io_setup
     version_check = not args.no_version_check
     node_exporter = not args.no_node_exporter
     cpuscaling_setup = not args.no_cpuscaling_setup
@@ -501,7 +501,7 @@ if __name__ == '__main__':
 
     if not args.developer_mode:
         io_setup = interactive_ask_service('Do you want IOTune to study your disks IO profile and adapt Scylla to it? (*WARNING* Saying NO here means the node will not boot in production mode unless you configure the I/O Subsystem manually!)', 'Yes - let iotune study my disk(s). Note that this action will take a few minutes. No - skip this step.', io_setup)
-        args.io_setup = io_setup
+        args.io_setup = 1 if io_setup else 0
         if io_setup:
             run_setup_script('IO configuration', 'scylla_io_setup')
 
