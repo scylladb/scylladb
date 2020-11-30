@@ -408,14 +408,17 @@ list_roles_statement::execute(service::storage_proxy&, service::query_state& sta
                 return when_all_succeed(
                         rm.can_login(role),
                         rm.is_superuser(role),
-                        a.query_custom_options(role)).then_unpack([&results, &role](
+                        a.query_custom_options(role),
+                        rm.query_custom_options(role)).then_unpack([&results, &role](
                                bool login,
                                bool super,
-                               auth::custom_options os) {
+                               auth::custom_options os,
+                               auth::custom_options role_options) {
                     results->add_column_value(utf8_type->decompose(role));
                     results->add_column_value(boolean_type->decompose(super));
                     results->add_column_value(boolean_type->decompose(login));
 
+                    os.insert(std::make_move_iterator(role_options.begin()), std::make_move_iterator(role_options.end()));
                     results->add_column_value(
                             custom_options_type->decompose(
                                     make_map_value(
