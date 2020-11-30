@@ -1808,7 +1808,7 @@ static void serialize(const abstract_type& t, const void* value, bytes::iterator
 }
 
 template <FragmentedView View>
-data_value collection_type_impl::deserialize(View v, cql_serialization_format sf) const {
+data_value collection_type_impl::deserialize_impl(View v, cql_serialization_format sf) const {
     struct visitor {
         View v;
         cql_serialization_format sf;
@@ -1829,9 +1829,9 @@ data_value collection_type_impl::deserialize(View v, cql_serialization_format sf
 }
 // Explicit instantiation.
 // This should be repeated for every View type passed to collection_type_impl::deserialize.
-template data_value collection_type_impl::deserialize<>(ser::buffer_view<bytes_ostream::fragment_iterator>, cql_serialization_format) const;
-template data_value collection_type_impl::deserialize<>(fragmented_temporary_buffer::view, cql_serialization_format) const;
-template data_value collection_type_impl::deserialize<>(single_fragmented_view, cql_serialization_format) const;
+template data_value collection_type_impl::deserialize_impl<>(ser::buffer_view<bytes_ostream::fragment_iterator>, cql_serialization_format) const;
+template data_value collection_type_impl::deserialize_impl<>(fragmented_temporary_buffer::view, cql_serialization_format) const;
+template data_value collection_type_impl::deserialize_impl<>(single_fragmented_view, cql_serialization_format) const;
 
 template <FragmentedView View>
 data_value deserialize_aux(const tuple_type_impl& t, View v) {
