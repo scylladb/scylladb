@@ -262,6 +262,7 @@ SEASTAR_TEST_CASE(test_alter_with_timeouts) {
         // Only valid timeout values are accepted
         BOOST_REQUIRE_THROW(e.execute_cql("ALTER ROLE user WITH options = {'read_timeout': 'I am not a valid duration'}").get(), marshal_exception);
         BOOST_REQUIRE_THROW(e.execute_cql("ALTER ROLE user WITH options = {'read_timeout': 5us}").get(), exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("ALTER ROLE user WITH options = {'read_timeout': -5s}").get(), exceptions::invalid_request_exception);
         BOOST_REQUIRE_THROW(e.execute_cql("ALTER ROLE user WITH options = {'read_timeout': 48h}").get(), exceptions::invalid_request_exception);
         BOOST_REQUIRE_THROW(e.execute_cql("ALTER ROLE user WITH options = {'read_timeout': 2y6mo5d}").get(), exceptions::invalid_request_exception);
 
@@ -271,5 +272,13 @@ SEASTAR_TEST_CASE(test_alter_with_timeouts) {
         cquery_nofail(e, "GRANT also_user TO user");
         BOOST_REQUIRE_THROW(e.execute_cql("SELECT * FROM t").get(), exceptions::read_timeout_exception);
         BOOST_REQUIRE_THROW(e.execute_cql("INSERT INTO t (id, v) VALUES (1,2)").get(), exceptions::mutation_write_failure_exception);
+
+        // Effective timeouts are also immediately visible in system.clients table
+        cquery_nofail(e, "ALTER ROLE user WITH options = {'write_timeout': 12h}");
+        cquery_nofail(e, "ALTER ROLE also_user WITH options = {'write_timeout': 1h30m, 'read_timeout': 500ms}");
+	    msg = cquery_nofail(e, "SELECT params FROM system.clients");
+        assert_that(msg).is_rows().with_rows({{
+            my_map_type->decompose(make_map_value(my_map_type, map_type_impl::native_type({{"read_timeout", "500ms"}, {"write_timeout", "1h30m"}}))),
+        }});
     }, cfg);
 }
