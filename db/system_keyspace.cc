@@ -80,6 +80,7 @@
 #include "db/schema_tables.hh"
 #include "index/built_indexes_virtual_reader.hh"
 #include "utils/generation-number.hh"
+#include "connection_notifier.hh"
 
 #include "idl/frozen_mutation.dist.hh"
 #include "serializer_impl.hh"
@@ -1706,6 +1707,21 @@ std::vector<schema_ptr> all_tables() {
                     legacy::functions(), legacy::aggregates(), });
 
     return r;
+}
+
+future<> update_per_session_params(service::client_state& state) {
+    const static sstring req = format("UPDATE system.{} SET params = ? WHERE address = ? AND port = ? AND client_type = '{}';",
+            db::system_keyspace::CLIENTS, to_string(client_type::cql));
+    std::vector<std::pair<data_value, data_value>> entries;
+    for (auto&& entry : state.per_session_params_map()) {
+        entries.push_back({data_value(entry.first), data_value(entry.second)});
+    }
+
+    return db::qctx->execute_cql(req,
+            make_map_value(map_type_impl::get_instance(utf8_type, utf8_type, false), entries),
+            state.get_client_address(),
+            state.get_client_port())
+        .discard_result();
 }
 
 static void maybe_add_virtual_reader(schema_ptr s, database& db) {

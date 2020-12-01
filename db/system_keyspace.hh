@@ -60,6 +60,7 @@ namespace service {
 
 class storage_proxy;
 class storage_service;
+class client_state;
 
 }
 
@@ -237,6 +238,10 @@ future<lw_shared_ptr<query::result_set>> query(
  */
 std::unordered_map<gms::inet_address, locator::endpoint_dc_rack>
 load_dc_rack_info();
+
+// Updates system.clients table with per-session params retrieved
+// from client state
+future<> update_per_session_params(service::client_state& state);
 
 #if 0
     public static KSMetaData definition()
