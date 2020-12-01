@@ -36,6 +36,9 @@
 
 #include <seastar/core/simple-stream.hh>
 
+const detail::force_sync detail::force_sync::no;
+const detail::force_sync detail::force_sync::yes(db::timeout_clock::time_point::min());
+
 template<typename Output>
 void commitlog_entry_writer::serialize(Output& out) const {
     [this, wr = ser::writer_of_commitlog_entry<Output>(out)] () mutable {

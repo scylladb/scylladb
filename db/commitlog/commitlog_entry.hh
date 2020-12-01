@@ -37,9 +37,35 @@ public:
     frozen_mutation&& mutation() && { return std::move(_mutation); }
 };
 
+namespace detail {
+class force_sync : public std::optional<db::timeout_clock::time_point> {
+    using opt_type = std::optional<db::timeout_clock::time_point>; 
+public:
+    constexpr force_sync(opt_type t = std::nullopt)
+        : opt_type(t)
+    {}
+    constexpr force_sync(db::timeout_clock::time_point t)
+        : opt_type(t)
+    {}
+    constexpr force_sync(bool b)
+        : opt_type(b ? yes : no)
+    {}
+
+    bool operator==(const force_sync& v) const {
+        return std::equal_to<opt_type>{}(*this, v);
+    }
+    bool operator!=(const force_sync& v) const {
+        return !(*this == v);
+    }
+
+    static const force_sync no;
+    static const force_sync yes;
+};
+}
+
 class commitlog_entry_writer {
 public:
-    using force_sync = bool_class<class force_sync_tag>;
+    using force_sync = detail::force_sync;
 private:
     schema_ptr _schema;
     const frozen_mutation& _mutation;

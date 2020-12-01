@@ -160,6 +160,29 @@ SEASTAR_TEST_CASE(test_commitlog_written_to_disk_periodic){
         });
 }
 
+namespace std::chrono {
+    std::ostream& operator<<(std::ostream& os, const db::timeout_clock::time_point& t) {
+        return os << t.time_since_epoch().count();
+    }
+}
+
+SEASTAR_TEST_CASE(test_commitlog_force_write_periodic){
+    return cl_test([](commitlog& log) {
+            auto state = make_lw_shared<bool>(false);
+            auto uuid = utils::UUID_gen::get_time_UUID();
+            sstring tmp = "hej bubba cow";
+            auto now = db::timeout_clock::now();
+            return log.add_mutation(uuid, tmp.size(), now + 10ms, [tmp](db::commitlog::output& dst) {
+                        dst.write(tmp.data(), tmp.size());
+                    }).then([&log, state, then = now](replay_position rp) {
+                        auto now = db::timeout_clock::now();
+                        BOOST_CHECK_NE(rp, db::replay_position());
+                        BOOST_CHECK_GT(log.get_flush_count(), 0);
+                        BOOST_CHECK_LT(now, then + 100ms); // lowres clock, so...
+                    });
+        });
+}
+
 SEASTAR_TEST_CASE(test_commitlog_new_segment){
     commitlog::config cfg;
     cfg.commitlog_segment_size_in_mb = 1;

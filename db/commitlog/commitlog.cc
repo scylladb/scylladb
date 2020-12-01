@@ -275,6 +275,7 @@ public:
     using timeout_exception_factory = request_controller_timeout_exception_factory;
 
     basic_semaphore<timeout_exception_factory> _flush_semaphore;
+    basic_semaphore<timeout_exception_factory> _sync_semaphore;
 
     seastar::metrics::metric_groups _metrics;
 
@@ -394,6 +395,17 @@ public:
         if (!_shutdown) {
             _timer.arm(std::chrono::milliseconds(cfg.commitlog_sync_period_in_ms + extra));
         }
+    }
+
+    future<> force_sync(time_point latest) {
+        if (_timer.get_timeout() < latest) {
+            return make_ready_future<>();
+        }        
+        
+        _timer.cancel();
+        _timer.arm(latest);
+
+        return _sync_semaphore.wait();
     }
 
     std::vector<sstring> get_active_names() const;
@@ -904,6 +916,12 @@ public:
         });
     }
 
+    future<> force_sync(time_point latest, replay_position waitfor) {
+        return _segment_manager->force_sync(latest).then([this, waitfor] {
+            return _pending_ops.wait_for_pending(waitfor);
+        });
+    }
+
     /**
      * Add a "mutation" to the segment.
      */
@@ -977,6 +995,8 @@ public:
             write<uint32_t>(out, mecrc->checksum());
         }
 
+        replay_position high;
+
         for (size_t entry = 0; entry < writer->num_entries; ++entry) {
             replay_position rp(_desc.id, position());
             auto id = writer->id(entry);
@@ -1007,6 +1027,7 @@ public:
                 mecrc->process(checksum);
             }
 
+            high = rp;
             writer->result(entry, std::move(h));
         }
 
@@ -1018,8 +1039,10 @@ public:
         ++_segment_manager->totals.allocation_count;
         ++_num_allocs;
 
-        if (_segment_manager->cfg.mode == sync_mode::BATCH || writer->sync) {
+        if (_segment_manager->cfg.mode == sync_mode::BATCH || writer->sync == force_sync::yes) {
             return batch_cycle(timeout).discard_result();
+        } else if (writer->sync) {
+            return force_sync(*writer->sync, high);
         } else {
             // If this buffer alone is too big, potentially bigger than the maximum allowed size,
             // then no other request will be allowed in to force the cycle()ing of this buffer. We
@@ -1145,6 +1168,7 @@ db::commitlog::segment_manager::segment_manager(config c)
         ? size_t(std::ceil(*cfg.commitlog_flush_threshold_in_mb / double(smp::count))) * 1024 * 1024 
         : (max_disk_size - (max_disk_size > (max_size/2) ? (max_size/2) : 0)))
     , _flush_semaphore(cfg.max_active_flushes)
+    , _sync_semaphore(0)
     // That is enough concurrency to allow for our largest mutation (max_mutation_size), plus
     // an existing in-flight buffer. Since we'll force the cycling() of any buffer that is bigger
     // than default_size at the end of the allocation, that allows for every valid mutation to
@@ -1868,9 +1892,12 @@ future<> db::commitlog::segment_manager::clear() {
  * Called by timer in periodic mode.
  */
 void db::commitlog::segment_manager::sync() {
-    for (auto s : _segments) {
-        (void)s->sync(); // we do not care about waiting...
-    }
+    // we do not care about waiting...
+    (void)parallel_for_each(_segments, [](sseg_ptr s) {
+        return s->sync().discard_result(); 
+    }).then([this] {
+        _sync_semaphore.signal(_sync_semaphore.waiters());
+    });
 }
 
 void db::commitlog::segment_manager::on_timer() {
@@ -1881,6 +1908,7 @@ void db::commitlog::segment_manager::on_timer() {
         if (cfg.mode != sync_mode::BATCH) {
             sync();
         }
+
         // IFF a new segment was put in use since last we checked, and we're
         // above threshold, request flush.
         if (_new_counter > 0) {
