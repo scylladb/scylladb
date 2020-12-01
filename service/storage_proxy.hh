@@ -603,7 +603,7 @@ public:
             tracing::trace_state_ptr trace_state = nullptr);
 
     future<bool> cas(schema_ptr schema, shared_ptr<cas_request> request, lw_shared_ptr<query::read_command> cmd,
-            dht::partition_range_vector&& partition_ranges, coordinator_query_options query_options,
+            dht::partition_range_vector partition_ranges, coordinator_query_options query_options,
             db::consistency_level cl_for_paxos, db::consistency_level cl_for_learn,
             clock_type::time_point write_timeout, clock_type::time_point cas_timeout, bool write = true);
 

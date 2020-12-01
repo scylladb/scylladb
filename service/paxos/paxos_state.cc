@@ -20,7 +20,7 @@
  * You should have received a copy of the GNU General Public License
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
-
+#include "seastar/core/coroutine.hh"
 #include "service/storage_proxy.hh"
 #include "service/paxos/proposal.hh"
 #include "service/paxos/paxos_state.hh"
@@ -50,6 +50,12 @@ void paxos_state::key_lock_map::release_semaphore_for_key(const dht::token& key)
     if (it != _locks.end() && (*it).second.current() == 1) {
         _locks.erase(it);
     }
+}
+
+future<paxos_state::guard> paxos_state::get_cas_lock(const dht::token& key, clock_type::time_point timeout) {
+    guard m(_coordinator_lock, key, timeout);
+    co_await m.lock();
+    co_return m;
 }
 
 future<prepare_response> paxos_state::prepare(tracing::trace_state_ptr tr_state, schema_ptr schema,
