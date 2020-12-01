@@ -186,6 +186,23 @@ future<> service::client_state::has_schema_access(const schema& s, auth::permiss
     });
 }
 
+std::map<sstring, sstring> service::client_state::per_session_params_map() const {
+    std::map<sstring, sstring> map;
+    auto to_duration_string = [] (int64_t nanos) {
+        if (nanos == 0) {
+            return sstring("0s");
+        }
+        return to_string(cql_duration(months_counter(0), days_counter(0), nanoseconds_counter(nanos)));
+    };
+    int64_t read_nanos = std::chrono::duration_cast<std::chrono::nanoseconds>(_timeout_config.read_timeout).count();
+    map.emplace("read_timeout", to_duration_string(read_nanos));
+
+    int64_t write_nanos = std::chrono::duration_cast<std::chrono::nanoseconds>(_timeout_config.write_timeout).count();
+    map.emplace("write_timeout", to_duration_string(write_nanos));
+
+    return map;
+}
+
 future<> service::client_state::has_access(const sstring& ks, auth::command_desc cmd) const {
     if (ks.empty()) {
         throw exceptions::invalid_request_exception("You have not set a keyspace for this session");

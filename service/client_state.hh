@@ -339,6 +339,11 @@ public:
      * The effective timeouts would be read_timeout = 10ms and write_timeout = 20ms
      */
     future<> update_per_role_params();
+
+    /**
+     * Returns a map of currently used per-session params.
+     */
+    std::map<sstring, sstring> per_session_params_map() const;
 private:
     future<> has_access(const sstring& keyspace, auth::command_desc) const;
 
