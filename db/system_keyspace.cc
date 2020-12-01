@@ -211,6 +211,49 @@ schema_ptr batchlog() {
     return paxos;
 }
 
+schema_ptr raft() {
+    static thread_local auto schema = [] {
+        auto id = generate_legacy_id(NAME, RAFT);
+        return schema_builder(NAME, RAFT, std::optional(id))
+            .with_column("group_id", long_type, column_kind::partition_key)
+            // raft log part
+            .with_column("index", long_type, column_kind::clustering_key)
+            .with_column("term", long_type)
+            .with_column("data", bytes_type) // decltype(raft::log_entry::data) - serialized variant
+            // persisted term and vote
+            .with_column("vote_term", long_type, column_kind::static_column)
+            .with_column("vote", uuid_type, column_kind::static_column)
+            // id of the most recent persisted snapshot
+            .with_column("snapshot_id", uuid_type, column_kind::static_column)
+
+            .set_comment("Persisted RAFT log, votes and snapshot info")
+            .with_version(generate_schema_version(id))
+            .set_wait_for_sync_to_commitlog(true)
+            .build();
+    }();
+    return schema;
+}
+
+// Note that this table does not include actula user snapshot data since it's dependent
+// on user-provided state machine and could be stored anywhere else in any other form.
+schema_ptr raft_snapshots() {
+    static thread_local auto schema = [] {
+        auto id = generate_legacy_id(NAME, RAFT_SNAPSHOTS);
+        return schema_builder(NAME, RAFT_SNAPSHOTS, std::optional(id))
+            .with_column("group_id", long_type, column_kind::partition_key)
+            .with_column("id", uuid_type, column_kind::clustering_key)
+            .with_column("idx", long_type)
+            .with_column("term", long_type)
+            .with_column("config", bytes_type) // serialized
+
+            .set_comment("Persisted RAFT snapshots info")
+            .with_version(generate_schema_version(id))
+            .set_wait_for_sync_to_commitlog(true)
+            .build();
+    }();
+    return schema;
+}
+
 schema_ptr built_indexes() {
     static thread_local auto built_indexes = [] {
         schema_builder builder(make_shared_schema(generate_legacy_id(NAME, BUILT_INDEXES), NAME, BUILT_INDEXES,
@@ -1691,6 +1734,7 @@ std::vector<schema_ptr> all_tables() {
                     compactions_in_progress(), compaction_history(),
                     sstable_activity(), clients(), size_estimates(), large_partitions(), large_rows(), large_cells(),
                     scylla_local(), db::schema_tables::scylla_table_schema_history(),
+                    raft(), raft_snapshots(),
                     v3::views_builds_in_progress(), v3::built_views(),
                     v3::scylla_views_builds_in_progress(),
                     v3::truncated(),
