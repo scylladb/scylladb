@@ -26,6 +26,7 @@ in individual sections
         | features
         | extension_attributes
         | run_identifier
+        | large_data_stats
 
 `sharding_metadata` (tag 1): describes what token sub-ranges are included in this
 sstable. This is used, when loading the sstable, to determine which shard(s)
@@ -37,6 +38,9 @@ it occupies.
 
 `run_identifier` (tag 4): a uuid that is the same for all sstables in the same run
 (and different for sstables in different runs).
+
+`large_data_stats`: a map<large_data_type, large_data_stats_entry> with statistics
+about large data entities in the sstable.
 
 ## sharding_metadata subcomponent
 
@@ -101,3 +105,20 @@ There are currently no defined attributes.
 If the run_identifier subcomponent is present, the sstable is part of a run.
 All sstables with the same run_identifier belong to the same run. They are
 guaranteed to be disjoint (non-overlapping) in their partition keys.
+
+## large_data_stats subcomponent
+
+    large_data_stats = large_data_count large_data_pair*
+    large_data_count = be32
+    large_data_pair = large_data_type large_data_stats_entry
+    large_data_type = be32
+    large_data_stats_entry = max_value threshold above_threshold
+    max_value = be64
+    threshold = be64
+    above_threshold = be32
+
+The large_data_stats component holds statistics about partition,
+row, and cell sizes and about number of rows in partition.
+For each entry, it keeps the largest value for the entry type,
+the respective large_data threshold and the number of entities
+that are above the threshold.
