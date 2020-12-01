@@ -571,6 +571,10 @@ template<typename Output>
 void serialize(Output& out, const bytes_ostream& v) {
     serializer<bytes>::write(out, v);
 }
+template<typename Input>
+bytes_ostream deserialize(Input& in, boost::type<bytes_ostream>) {
+    return serializer<bytes>::read(in);
+}
 template<typename Output, typename FragmentedBuffer>
 requires FragmentRange<FragmentedBuffer>
 void serialize_fragmented(Output& out, FragmentedBuffer&& v) {
