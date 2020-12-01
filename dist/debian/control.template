@@ -17,7 +17,7 @@ Conflicts: %{product}-server (<< 1.1)
 
 Package: %{product}-server
 Architecture: any
-Depends: ${shlibs:Depends}, ${misc:Depends}, %{product}-conf, %{product}-python3
+Depends: ${shlibs:Depends}, ${misc:Depends}, %{product}-conf (= ${binary:Version}), %{product}-python3 (= ${binary:Version})
 Description: Scylla database server binaries 
  Scylla is a highly scalable, eventually consistent, distributed,
  partitioned row DB.
@@ -42,7 +42,11 @@ Description: Scylla kernel tuning configuration
 Package: %{product}
 Section: metapackages
 Architecture: any
-Depends: %{product}-server, %{product}-jmx, %{product}-tools, %{product}-tools-core, %{product}-kernel-conf
+Depends: %{product}-server (= ${binary:Version})
+ , %{product}-jmx (= ${binary:Version})
+ , %{product}-tools (= ${binary:Version})
+ , %{product}-tools-core (= ${binary:Version})
+ , %{product}-kernel-conf (= ${binary:Version})
 Description: Scylla database metapackage
  Scylla is a highly scalable, eventually consistent, distributed,
  partitioned row DB.
