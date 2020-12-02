@@ -61,6 +61,7 @@
 #include "db/system_distributed_keyspace.hh"
 #include "db/sstables-format-selector.hh"
 #include "debug.hh"
+#include "auth/role_change_listener.hh"
 
 using namespace std::chrono_literals;
 
@@ -121,17 +122,37 @@ private:
     sharded<db::view::view_update_generator>& _view_update_generator;
     sharded<service::migration_notifier>& _mnotifier;
 private:
-    struct core_local_state {
+    struct core_local_state : public auth::role_change_listener {
         service::client_state client_state;
 
         core_local_state(auth::service& auth_service)
             : client_state(service::client_state::external_tag{}, auth_service, infinite_timeout_config)
         {
             client_state.set_login(auth::authenticated_user(testing_superuser));
+            auth_service.register_role_change_listener(*this);
         }
 
         future<> stop() {
             return make_ready_future<>();
+        }
+
+        future<> on_alter_role(std::string_view role) {
+            return on_role_change(role);
+        }
+
+        future<> on_grant_role(std::string_view, std::string_view grantee) {
+            return on_role_change(grantee);
+        }
+
+        future<> on_revoke_role(std::string_view, std::string_view revokee) {
+            return on_role_change(revokee);
+        }
+
+        private:
+        future<> on_role_change(std::string_view role) {
+            return client_state.update_per_role_params().then([this] {
+                return db::system_keyspace::update_per_session_params(client_state);
+            });
         }
     };
     distributed<core_local_state> _core_local;
