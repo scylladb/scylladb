@@ -27,6 +27,7 @@
 
 #include "test/lib/simple_schema.hh"
 #include "test/lib/reader_permit.hh"
+#include "test/lib/simple_position_reader_queue.hh"
 
 #include "mutation_reader.hh"
 #include "flat_mutation_reader.hh"
@@ -218,6 +219,84 @@ PERF_TEST_F(combined, overlapping_partitions_disjoint_rows)
             })
         )
     ));
+}
+
+struct mutation_bounds {
+    mutation m;
+    position_in_partition lower;
+    position_in_partition upper;
+};
+
+class clustering_combined {
+    mutable simple_schema _schema;
+    std::vector<mutation_bounds> _almost_disjoint_ranges;
+private:
+    static std::vector<mutation_bounds> create_almost_disjoint_ranges(simple_schema&);
+protected:
+    simple_schema& schema() const { return _schema; }
+    const std::vector<mutation_bounds>& almost_disjoint_clustering_ranges() const {
+        return _almost_disjoint_ranges;
+    }
+    future<size_t> consume_all(flat_mutation_reader mr) const;
+public:
+    clustering_combined()
+        : _almost_disjoint_ranges(create_almost_disjoint_ranges(_schema))
+    { }
+};
+
+std::vector<mutation_bounds> clustering_combined::create_almost_disjoint_ranges(simple_schema& s) {
+    auto pk = s.make_pkey();
+    std::vector<mutation_bounds> mbs;
+    for (int i = 0; i < 150; i += 30) {
+        auto m = mutation(s.schema(), pk);
+        for (int j = 0; j < 32; ++j) {
+            m.apply(s.make_row(s.make_ckey(i + j), "value"));
+        }
+        mbs.push_back(mutation_bounds{std::move(m),
+                position_in_partition::for_key(s.make_ckey(i)),
+                position_in_partition::for_key(s.make_ckey(i + 31))});
+    }
+    return mbs;
+}
+
+future<size_t> clustering_combined::consume_all(flat_mutation_reader mr) const
+{
+    return do_with(std::move(mr), size_t(0), [] (auto& mr, size_t& num_mfs) {
+        perf_tests::start_measuring_time();
+        return mr.consume_pausable([&num_mfs] (mutation_fragment mf) {
+            ++num_mfs;
+            perf_tests::do_not_optimize(mf);
+            return stop_iteration::no;
+        }, db::no_timeout).then([&num_mfs] {
+            perf_tests::stop_measuring_time();
+            return num_mfs;
+        });
+    });
+}
+
+PERF_TEST_F(clustering_combined, ranges_generic)
+{
+    return consume_all(make_combined_reader(schema().schema(), tests::make_permit(),
+        boost::copy_range<std::vector<flat_mutation_reader>>(
+            almost_disjoint_clustering_ranges()
+            | boost::adaptors::transformed([] (auto&& mb) {
+                return flat_mutation_reader_from_mutations(tests::make_permit(), {std::move(mb.m)});
+            })
+        )
+    ));
+}
+
+PERF_TEST_F(clustering_combined, ranges_specialized)
+{
+    auto rbs = boost::copy_range<std::vector<reader_bounds>>(
+        almost_disjoint_clustering_ranges() | boost::adaptors::transformed([] (auto&& mb) {
+            return reader_bounds{
+                flat_mutation_reader_from_mutations(tests::make_permit(), {std::move(mb.m)}),
+                std::move(mb.lower), std::move(mb.upper)};
+        }));
+    auto q = std::make_unique<simple_position_reader_queue>(*schema().schema(), std::move(rbs));
+    return consume_all(make_clustering_combined_reader(
+        schema().schema(), tests::make_permit(), streamed_mutation::forwarding::no, std::move(q)));
 }
 
 class memtable {
