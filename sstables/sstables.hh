@@ -517,6 +517,13 @@ private:
     sstables_stats _stats;
     tracker_link_type _tracker_link;
     manager_link_type _manager_link;
+
+    // The _large_data_stats map stores e.g. largest partitions, rows, cells sizes,
+    // and max number of rows in a partition.
+    //
+    // It can be disengaged normally when loading legacy sstables that do not have this
+    // information in their scylla metadata.
+    std::optional<scylla_metadata::large_data_stats> _large_data_stats;
 public:
     const bool has_component(component_type f) const;
     sstables_manager& manager() { return _manager; }
@@ -553,7 +560,8 @@ private:
     void write_compression(const io_priority_class& pc);
 
     future<> read_scylla_metadata(const io_priority_class& pc) noexcept;
-    void write_scylla_metadata(const io_priority_class& pc, shard_id shard, sstable_enabled_features features, run_identifier identifier);
+    void write_scylla_metadata(const io_priority_class& pc, shard_id shard, sstable_enabled_features features, run_identifier identifier,
+            std::optional<scylla_metadata::large_data_stats> ld_stats);
 
     future<> read_filter(const io_priority_class& pc);
 
@@ -802,6 +810,11 @@ public:
         return !has_correct_min_max_column_names()
             || _position_range.is_all_clustered_rows(*_schema);
     }
+
+    // Return the large_data_stats_entry identified by large_data_type
+    // iff _large_data_stats is available and the requested entry is in
+    // the map.  Otherwise, return a disengaged optional.
+    std::optional<large_data_stats_entry> get_large_data_stat(large_data_type t) const noexcept;
 
     // Allow the test cases from sstable_test.cc to test private methods. We use
     // a placeholder to avoid cluttering this class too much. The sstable_test class
