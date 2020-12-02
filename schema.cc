@@ -827,7 +827,7 @@ std::ostream& schema::describe(std::ostream& os) const {
     os << "}";
     os << "\n    AND comment = '" << comment()<< "'";
     os << "\n    AND compaction = {'class': '" <<  sstables::compaction_strategy::name(compaction_strategy()) << "'";
-    map_as_cql_param(os, compaction_strategy_options()) << "}";
+    map_as_cql_param(os, compaction_strategy_options(), false) << "}";
     os << "\n    AND compression = {";
     map_as_cql_param(os,  get_compressor_params().get_options());
     os << "}";
