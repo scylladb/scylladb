@@ -35,6 +35,7 @@
 #include "auth/permission.hh"
 #include "auth/permissions_cache.hh"
 #include "auth/role_manager.hh"
+#include "auth/role_change_listener.hh"
 #include "seastarx.hh"
 
 namespace cql3 {
@@ -159,6 +160,10 @@ public:
 
     const role_manager& underlying_role_manager() const {
         return *_role_manager;
+    }
+
+    void register_role_change_listener(role_change_listener& listener) {
+        _role_manager->register_role_change_listener(listener);
     }
 
 private:

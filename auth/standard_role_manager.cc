@@ -339,7 +339,11 @@ future<> standard_role_manager::update_custom_options(std::string_view role_name
             query,
             consistency_for_role(role_name),
             internal_distributed_query_state(),
-            {std::move(map_value), sstring(role_name)}).discard_result();
+            {std::move(map_value), sstring(role_name)}).discard_result().then([this, role_name] {
+        return parallel_for_each(_role_change_listeners, [role_name] (role_change_listener& listener) {
+            return listener.on_alter_role(role_name);
+        });
+    });
 }
 
 future<custom_options> standard_role_manager::query_custom_options(std::string_view role_name) const {
@@ -498,6 +502,10 @@ standard_role_manager::grant(std::string_view grantee_name, std::string_view rol
 
    return when_all_succeed(check_redundant(), check_cycle()).then_unpack([this, role_name, grantee_name] {
        return this->modify_membership(grantee_name, role_name, membership_change::add);
+   }).then([this, role_name, grantee_name] {
+        return parallel_for_each(_role_change_listeners, [role_name, grantee_name] (role_change_listener& listener) {
+            return listener.on_grant_role(role_name, grantee_name);
+        });
    });
 }
 
@@ -518,6 +526,10 @@ standard_role_manager::revoke(std::string_view revokee_name, std::string_view ro
             return make_ready_future<>();
         }).then([this, revokee_name, role_name] {
             return this->modify_membership(revokee_name, role_name, membership_change::remove);
+        });
+    }).then([this, role_name, revokee_name] {
+        return parallel_for_each(_role_change_listeners, [role_name, revokee_name] (role_change_listener& listener) {
+            return listener.on_revoke_role(role_name, revokee_name);
         });
     });
 }
@@ -594,6 +606,19 @@ future<bool> standard_role_manager::can_login(std::string_view role_name) const 
     return require_record(_qp, role_name).then([](record r) {
         return r.can_login;
     });
+}
+
+void role_manager::register_role_change_listener(role_change_listener& listener) {
+    _role_change_listeners.push_back(std::ref(listener));
+}
+
+void role_manager::unregister_role_change_listener(role_change_listener& listener) {
+    auto it = std::find_if(_role_change_listeners.begin(), _role_change_listeners.end(), [&listener] (role_change_listener& other) {
+        return &listener == &other;
+    });
+    if (it != _role_change_listeners.end()) {
+        _role_change_listeners.erase(it);
+    }
 }
 
 }

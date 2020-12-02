@@ -35,6 +35,7 @@
 #include "auth/authentication_options.hh"
 #include "seastarx.hh"
 #include "exceptions/exceptions.hh"
+#include "auth/role_change_listener.hh"
 
 namespace auth {
 
@@ -102,6 +103,8 @@ enum class recursive_role_query { yes, no };
 /// access-control should never be enforced in implementations.
 ///
 class role_manager {
+protected:
+    std::vector<std::reference_wrapper<role_change_listener>> _role_change_listeners;
 public:
     virtual ~role_manager() = default;
 
@@ -177,6 +180,14 @@ public:
     ///
     /// \returns an exceptional future with \ref nonexistent_role if the role does not exist.
     virtual future<custom_options> query_custom_options(std::string_view role_name) const = 0;
+
+    ///
+    /// Register a new listener for role changing events.
+    void register_role_change_listener(role_change_listener& listener);
+
+    ///
+    /// Unegister a new listener for role changing events.
+    void unregister_role_change_listener(role_change_listener& listener);
 };
 
 }
