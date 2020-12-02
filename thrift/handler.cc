@@ -974,7 +974,7 @@ public:
                 fail(unimplemented::cause::MIXED_CF);
             }
             return _query_state.get_client_state().has_schema_access(*schema, auth::permission::ALTER).then([this, s = std::move(s)] {
-                return _query_processor.local().get_migration_manager().announce_column_family_update(std::move(s), true, {}).then([this] {
+                return _query_processor.local().get_migration_manager().announce_column_family_update(std::move(s), true, {}, std::nullopt).then([this] {
                     return std::string(_db.local().get_version().to_sstring());
                 });
             });

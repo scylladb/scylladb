@@ -118,7 +118,7 @@ void alter_type_statement::do_announce_migration(database& db, service::migratio
             if (schema->is_view()) {
                 mm.announce_view_update(view_ptr(cfm.build())).get();
             } else {
-                mm.announce_column_family_update(cfm.build(), false, {}).get();
+                mm.announce_column_family_update(cfm.build(), false, {}, std::nullopt).get();
             }
         }
     }

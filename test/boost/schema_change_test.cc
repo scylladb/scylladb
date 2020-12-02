@@ -62,7 +62,7 @@ SEASTAR_TEST_CASE(test_new_schema_with_no_structural_change_is_propagated) {
             auto new_schema = partial.build();
             BOOST_REQUIRE_NE(new_schema->version(), old_schema->version());
 
-            e.migration_manager().local().announce_column_family_update(new_schema, false, { }).get();
+            e.migration_manager().local().announce_column_family_update(new_schema, false, { }, std::nullopt).get();
 
             BOOST_REQUIRE_NE(e.db().local().find_schema(old_schema->id())->version(), old_table_version);
             BOOST_REQUIRE_NE(e.db().local().get_version(), old_node_version);
@@ -91,7 +91,7 @@ SEASTAR_TEST_CASE(test_schema_is_updated_in_keyspace) {
             builder.set_gc_grace_seconds(1);
             auto new_schema = builder.build();
 
-            e.migration_manager().local().announce_column_family_update(new_schema, false, { }).get();
+            e.migration_manager().local().announce_column_family_update(new_schema, false, { }, std::nullopt).get();
 
             s = e.local_db().find_schema(old_schema->id());
             BOOST_REQUIRE_NE(*old_schema, *s);
