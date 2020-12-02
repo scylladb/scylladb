@@ -656,13 +656,13 @@ future<> migration_manager::announce_new_column_family(schema_ptr cfm, api::time
     }
 }
 
-future<> migration_manager::announce_column_family_update(schema_ptr cfm, bool from_thrift, std::vector<view_ptr>&& view_updates, bool announce_locally) {
+future<> migration_manager::announce_column_family_update(schema_ptr cfm, bool from_thrift, std::vector<view_ptr>&& view_updates, bool announce_locally, std::optional<api::timestamp_type> ts_opt) {
     warn(unimplemented::cause::VALIDATION);
 #if 0
     cfm.validate();
 #endif
     try {
-        auto ts = api::new_timestamp();
+        auto ts = ts_opt.value_or(api::new_timestamp());
         auto& db = get_local_storage_proxy().get_db().local();
         auto&& old_schema = db.find_column_family(cfm->ks_name(), cfm->cf_name()).schema(); // FIXME: Should we lookup by id?
 #if 0

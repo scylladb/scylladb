@@ -122,7 +122,7 @@ public:
 
     future<> announce_new_keyspace(lw_shared_ptr<keyspace_metadata> ksm, api::timestamp_type timestamp, bool announce_locally);
 
-    future<> announce_column_family_update(schema_ptr cfm, bool from_thrift, std::vector<view_ptr>&& view_updates, bool announce_locally = false);
+    future<> announce_column_family_update(schema_ptr cfm, bool from_thrift, std::vector<view_ptr>&& view_updates, bool announce_locally = false, std::optional<api::timestamp_type> timestamp = {});
 
     future<> announce_new_column_family(schema_ptr cfm, bool announce_locally = false);
 
