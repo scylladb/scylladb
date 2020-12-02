@@ -648,9 +648,10 @@ SEASTAR_THREAD_TEST_CASE(combined_mutation_reader_test) {
     auto list_reader = make_combined_reader(s.schema(), tests::make_permit(),
             std::move(sstable_mutation_readers));
 
-    auto incremental_reader = sstable_set->make_local_shard_sstable_reader(
+    auto incremental_reader = make_local_shard_sstable_reader(
             s.schema(),
             tests::make_permit(),
+            sstable_set,
             query::full_partition_range,
             s.schema()->full_slice(),
             seastar::default_priority_class(),

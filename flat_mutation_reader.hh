@@ -310,7 +310,7 @@ private:
     friend class optimized_optional<flat_mutation_reader>;
     void do_upgrade_schema(const schema_ptr&);
 public:
-    // Documented in mutation_reader::forwarding.
+    // Documented in mutation_reader::forwarding in mutation_reader.hh.
     class partition_range_forwarding_tag;
     using partition_range_forwarding = bool_class<partition_range_forwarding_tag>;
 
@@ -517,21 +517,6 @@ using flat_mutation_reader_opt = optimized_optional<flat_mutation_reader>;
 template<typename Impl, typename... Args>
 flat_mutation_reader make_flat_mutation_reader(Args &&... args) {
     return flat_mutation_reader(std::make_unique<Impl>(std::forward<Args>(args)...));
-}
-
-namespace mutation_reader {
-    // mutation_reader::forwarding determines whether fast_forward_to() may
-    // be used on the mutation reader to change the partition range being
-    // read. Enabling forwarding also changes read policy: forwarding::no
-    // means we will stop reading from disk at the end of the given range,
-    // but with forwarding::yes we may read ahead, anticipating the user to
-    // make a small skip with fast_forward_to() and continuing to read.
-    //
-    // Note that mutation_reader::forwarding is similarly name but different
-    // from streamed_mutation::forwarding - the former is about skipping to
-    // a different partition range, while the latter is about skipping
-    // inside a large partition.
-    using forwarding = flat_mutation_reader::partition_range_forwarding;
 }
 
 // Consumes mutation fragments until StopCondition is true.

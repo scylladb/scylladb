@@ -60,17 +60,17 @@ public:
         auto ops_label_type = sm::label("ops");
         _metrics.add_group("node_ops", {
             sm::make_gauge("finished_percentage", [this] { return bootstrap_finished_percentage(); },
-                    sm::description("Finished percentage of node operation on this shard"), {ops_label_type("bootstrap")}),
+                    sm::description("Number of finished percentage for bootstrap operation on this shard."), {ops_label_type("bootstrap")}),
             sm::make_gauge("finished_percentage", [this] { return replace_finished_percentage(); },
-                    sm::description("Finished percentage of node operation on this shard"), {ops_label_type("replace")}),
+                    sm::description("Number of finished percentage for replace operation on this shard."), {ops_label_type("replace")}),
             sm::make_gauge("finished_percentage", [this] { return rebuild_finished_percentage(); },
-                    sm::description("Finished percentage of node operation on this shard"), {ops_label_type("rebuild")}),
+                    sm::description("Number of finished percentage for rebuild operation on this shard."), {ops_label_type("rebuild")}),
             sm::make_gauge("finished_percentage", [this] { return decommission_finished_percentage(); },
-                    sm::description("Finished percentage of node operation on this shard"), {ops_label_type("decommission")}),
+                    sm::description("Number of finished percentage for decommission operation on this shard."), {ops_label_type("decommission")}),
             sm::make_gauge("finished_percentage", [this] { return removenode_finished_percentage(); },
-                    sm::description("Finished percentage of node operation on this shard"), {ops_label_type("removenode")}),
+                    sm::description("Number of finished percentage for removenode operation on this shard."), {ops_label_type("removenode")}),
             sm::make_gauge("finished_percentage", [this] { return repair_finished_percentage(); },
-                    sm::description("Finished percentage of node operation on this shard"), {ops_label_type("repair")}),
+                    sm::description("Number of finished percentage for repair operation on this shard."), {ops_label_type("repair")}),
         });
     }
     uint64_t bootstrap_total_ranges{0};

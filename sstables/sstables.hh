@@ -805,12 +805,6 @@ public:
     // Return true if this sstable possibly stores clustering row(s) specified by ranges.
     bool may_contain_rows(const query::clustering_row_ranges& ranges) const;
 
-    // false => there are no partition tombstones, true => we don't know
-    bool may_have_partition_tombstones() const {
-        return !has_correct_min_max_column_names()
-            || _position_range.is_all_clustered_rows(*_schema);
-    }
-
     // Return the large_data_stats_entry identified by large_data_type
     // iff _large_data_stats is available and the requested entry is in
     // the map.  Otherwise, return a disengaged optional.

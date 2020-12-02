@@ -98,11 +98,6 @@ void fsm::become_leader() {
     _log_limiter_semaphore->sem.consume(_log.non_snapshoted_length());
     _tracker->set_configuration(_current_config.servers, _log.next_idx());
     _last_election_time = _clock.now();
-    // a new leader needs to commit at lease one entry to make sure that
-    // all existing entries in its log are commited as well. Also it should
-    // send append entries rpc as soon as possible to establish its leqdership
-    // (3.4).  Do both of those by commiting a dummy entry.
-    add_entry(log_entry::dummy());
     replicate();
 }
 

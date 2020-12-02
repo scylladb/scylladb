@@ -21,16 +21,10 @@
 
 #pragma once
 
-#include "flat_mutation_reader.hh"
-#include "sstables/progress_monitor.hh"
 #include "shared_sstable.hh"
 #include "dht/i_partitioner.hh"
 #include <seastar/core/shared_ptr.hh>
 #include <vector>
-
-namespace utils {
-class estimated_histogram;
-}
 
 namespace sstables {
 
@@ -49,7 +43,7 @@ public:
     const sstable_list& all() const { return _all; }
 };
 
-class sstable_set : public enable_lw_shared_from_this<sstable_set> {
+class sstable_set {
     std::unique_ptr<sstable_set_impl> _impl;
     schema_ptr _schema;
     // used to support column_family::get_sstable(), which wants to return an sstable_list
@@ -105,62 +99,7 @@ public:
         selection select(const dht::ring_position_view& pos) const;
     };
     incremental_selector make_incremental_selector() const;
-
-    flat_mutation_reader create_single_key_sstable_reader(
-        column_family*,
-        schema_ptr,
-        reader_permit,
-        utils::estimated_histogram&,
-        const dht::ring_position&, // must contain a key
-        const query::partition_slice&,
-        const io_priority_class&,
-        tracing::trace_state_ptr,
-        streamed_mutation::forwarding,
-        mutation_reader::forwarding) const;
-
-    /// Read a range from the sstable set.
-    ///
-    /// The reader is unrestricted, but will account its resource usage on the
-    /// semaphore belonging to the passed-in permit.
-    flat_mutation_reader make_range_sstable_reader(
-        schema_ptr,
-        reader_permit,
-        const dht::partition_range&,
-        const query::partition_slice&,
-        const io_priority_class&,
-        tracing::trace_state_ptr,
-        streamed_mutation::forwarding,
-        mutation_reader::forwarding,
-        read_monitor_generator& rmg = default_read_monitor_generator()) const;
-
-    // Filters out mutations that don't belong to the current shard.
-    flat_mutation_reader make_local_shard_sstable_reader(
-        schema_ptr,
-        reader_permit,
-        const dht::partition_range&,
-        const query::partition_slice&,
-        const io_priority_class&,
-        tracing::trace_state_ptr,
-        streamed_mutation::forwarding,
-        mutation_reader::forwarding,
-        read_monitor_generator& rmg = default_read_monitor_generator()) const;
 };
-
-/// Read a range from the passed-in sstables.
-///
-/// The reader is restricted, that is it will wait for admission on the semaphore
-/// belonging to the passed-in permit, before starting to read.
-flat_mutation_reader make_restricted_range_sstable_reader(
-    lw_shared_ptr<sstable_set> sstables,
-    schema_ptr,
-    reader_permit,
-    const dht::partition_range&,
-    const query::partition_slice&,
-    const io_priority_class&,
-    tracing::trace_state_ptr,
-    streamed_mutation::forwarding,
-    mutation_reader::forwarding,
-    read_monitor_generator& rmg = default_read_monitor_generator());
 
 sstable_set make_partitioned_sstable_set(schema_ptr schema, lw_shared_ptr<sstable_list> all, bool use_level_metadata = true);
 
