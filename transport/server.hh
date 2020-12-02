@@ -22,6 +22,7 @@
 #pragma once
 
 #include "auth/service.hh"
+#include "auth/role_change_listener.hh"
 #include <seastar/core/seastar.hh>
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include "service/migration_listener.hh"
@@ -116,7 +117,7 @@ struct cql_server_config {
     smp_service_group bounce_request_smp_service_group = default_smp_service_group();
 };
 
-class cql_server : public seastar::peering_sharded_service<cql_server> {
+class cql_server : public seastar::peering_sharded_service<cql_server>, public auth::role_change_listener {
 private:
     struct transport_stats {
         // server stats
@@ -162,6 +163,12 @@ public:
     future<> listen(socket_address addr, std::shared_ptr<seastar::tls::credentials_builder> = {}, bool is_shard_aware = false, bool keepalive = false);
     future<> do_accepts(int which, bool keepalive, socket_address server_addr);
     future<> stop();
+
+    future<> on_alter_role(std::string_view role);
+    future<> on_grant_role(std::string_view role, std::string_view grantee);
+    future<> on_revoke_role(std::string_view role, std::string_view grantee);
+private:
+    future<> on_role_change(std::string_view role);
 public:
     using response = cql_transport::response;
 private:
@@ -169,7 +176,7 @@ private:
     friend class connection;
     friend std::unique_ptr<cql_server::response> make_result(int16_t stream, messages::result_message& msg,
             const tracing::trace_state_ptr& tr_state, cql_protocol_version_type version, bool skip_metadata);
-    class connection : public boost::intrusive::list_base_hook<> {
+    class connection : public boost::intrusive::list_base_hook<>, public enable_shared_from_this<connection> {
         cql_server& _server;
         socket_address _server_addr;
         connected_socket _fd;
@@ -209,7 +216,8 @@ private:
         future<> shutdown();
         static std::tuple<net::inet_address, int, client_type> make_client_key(const service::client_state& cli_state);
         client_data make_client_data() const;
-        const service::client_state& get_client_state() const { return _client_state; }
+        service::client_state& get_client_state() { return _client_state; }
+
     private:
         const ::timeout_config& timeout_config() const { return _server.timeout_config(); }
         friend class process_request_executor;

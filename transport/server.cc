@@ -66,6 +66,7 @@
 #include "types/user.hh"
 
 #include "transport/cql_protocol_extension.hh"
+#include "db/system_keyspace.hh"
 
 namespace cql_transport {
 
@@ -157,6 +158,8 @@ cql_server::cql_server(distributed<cql3::query_processor>& qp, auth::service& au
     , _notifier(std::make_unique<event_notifier>(mn))
     , _auth_service(auth_service)
 {
+    _auth_service.register_role_change_listener(*this);
+
     namespace sm = seastar::metrics;
 
     auto ls = {
@@ -231,6 +234,34 @@ cql_server::cql_server(distributed<cql3::query_processor>& qp, auth::service& au
     }
 
     _metrics.add_group("transport", std::move(transport_metrics));
+}
+
+future<> cql_server::on_role_change(std::string_view role) {
+    std::vector<::shared_ptr<connection>> connections_holder;
+    connections_holder.reserve(_connections_list.size());
+    // Create a snapshot of all connections to safely iterate over them
+    for (connection& conn : _connections_list) {
+        connections_holder.push_back(conn.shared_from_this());
+    }
+    return do_with(std::move(connections_holder), [] (auto& connections) mutable {
+        return parallel_for_each(connections, [] (::shared_ptr<connection>& conn) {
+            return conn->get_client_state().update_per_role_params().then([conn] {
+                return db::system_keyspace::update_per_session_params(conn->get_client_state());
+            });
+        });
+    });
+}
+
+future<> cql_server::on_alter_role(std::string_view role) {
+    return on_role_change(role);
+}
+
+future<> cql_server::on_grant_role(std::string_view, std::string_view grantee) {
+    return on_role_change(grantee);
+}
+
+future<> cql_server::on_revoke_role(std::string_view, std::string_view revokee) {
+    return on_role_change(revokee);
 }
 
 future<> cql_server::stop() {
