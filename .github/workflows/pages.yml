@@ -1,0 +1,33 @@
+name: "CI Docs"
+
+on:
+  push:
+    branches:
+    - master
+    tags:       
+    - '**'
+jobs:
+  release:
+    name: Build
+    runs-on: ubuntu-latest
+    env:
+      LATEST_VERSION: master
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v2
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+    - name: Set up Python
+      uses: actions/setup-python@v1
+      with:
+        python-version: 3.7
+    - name: Build docs
+      run: |
+        export PATH=$PATH:~/.local/bin
+        cd docs
+        make multiversion
+    - name: Deploy
+      run : ./docs/_utils/deploy.sh
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
