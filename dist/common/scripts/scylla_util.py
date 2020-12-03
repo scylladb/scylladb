@@ -17,6 +17,7 @@
 
 import configparser
 import io
+import logging
 import os
 import re
 import shlex
@@ -300,19 +301,27 @@ class gcp_instance:
         if not self.is_unsupported_instance_class() and self.is_supported_instance_class() and self.is_recommended_instance_size():
             # at least 1:2GB cpu:ram ratio , GCP is at 1:4, so this should be fine
             if self.cpu/self.memoryGB < 0.5:
-              # 30:1 Disk/RAM ratio must be kept at least(AWS), we relax this a little bit
-              # on GCP we are OK with 50:1 , n1-standard-2 can cope with 1 disk, not more
-              diskCount = self.nvmeDiskCount
-              # to reach max performance for > 16 disks we mandate 32 or more vcpus
-              # https://cloud.google.com/compute/docs/disks/local-ssd#performance
-              if diskCount >= 16 and self.cpu < 32:
-                  return False
-              diskSize= self.firstNvmeSize
-              if diskCount < 1:
-                  return False
-              disktoramratio = (diskCount*diskSize)/self.memoryGB
-              if (disktoramratio <= 50) and (disktoramratio > 0):
-                  return True
+                diskCount = self.nvmeDiskCount
+                # to reach max performance for > 16 disks we mandate 32 or more vcpus
+                # https://cloud.google.com/compute/docs/disks/local-ssd#performance
+                if diskCount >= 16 and self.cpu < 32:
+                    logging.warning(
+                        "This machine doesn't have enough CPUs for allocated number of NVMEs (at least 32 cpus for >=16 disks). Performance will suffer.")
+                    return False
+                diskSize = self.firstNvmeSize
+                if diskCount < 1:
+                    return False
+                max_disktoramratio = 105
+                # 30:1 Disk/RAM ratio must be kept at least(AWS), we relax this a little bit
+                # on GCP we are OK with {max_disktoramratio}:1 , n1-standard-2 can cope with 1 disk, not more
+                disktoramratio = (diskCount * diskSize) / self.memoryGB
+                if (disktoramratio > max_disktoramratio):
+                    logging.warning(
+                        f"Instance disk-to-RAM ratio is {disktoramratio}, which is higher than the recommended ratio {max_disktoramratio}. Performance may suffer.")
+                    return False
+                return True
+            else:
+                logging.warning("At least 2G of RAM per CPU is needed. Performance will suffer.")
         return False
 
     def private_ipv4(self):
