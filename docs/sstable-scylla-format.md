@@ -1,4 +1,4 @@
-# File format of the `Scylla.db` sstable component
+# File format of the Scylla.db sstable component
 
 The `Scylla.db` component (present in a file named like `mc-223-big-Scylla.db`
 contains assorted Scylla-only metadata. Its presence indicates the sstable was
@@ -33,7 +33,7 @@ it occupies.
 
 `features` (tag 2): a set of boolean flags that describe the sstable
 
-`extension_attributes` (tag 3): a map<string, string> with additional attributes
+`extension_attributes` (tag 3): a `map<string, string>` with additional attributes
 
 `run_identifier` (tag 4): a uuid that is the same for all sstables in the same run
 (and different for sstables in different runs).

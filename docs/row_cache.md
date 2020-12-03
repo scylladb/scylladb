@@ -1,13 +1,12 @@
+# Row Cache
 
-Introduction
-============
+## Introduction
 
-This document assumes familiarity with the mutation model and [MVCC](../partition_version.hh).
+This document assumes familiarity with the mutation model and [MVCC](https://github.com/scylladb/scylla/blob/master/partition_version.hh).
 
 Cache is always paired with its underlying mutation source which it mirrors. That means that from the outside it appears as containing the same set of writes. Internally, it keeps a subset of data in memory, together with information about which parts are missing. Elements which are fully represented are called "complete". Complete ranges of elements are called "continuous".
 
-Eviction
-========
+## Eviction
 
 Eviction is about removing parts of the data from memory and recording the fact that information about those parts is missing. Eviction doesn't change the set of writes represented by cache as part of its `mutation_source` interface.
 
@@ -24,8 +23,7 @@ Every `partition_version` has a dummy entry after all rows (`position_in_partiti
 
 `rows_entry` objects in memtables are not owned by a `cache_tracker`, they are not evictable. Data referenced by `partition_snapshots` created on non-evictable partition entries is not transferred to cache, so unevictable snapshots are not made evictable.
 
-Maintaining snapshot consistency on eviction
---------------------------------------------
+### Maintaining snapshot consistency on eviction
 
 When removing a `rows_entry` (=r1), we need to record the fact that the range to which this row belongs is now discontinuous. For a single `mutation_partition` that would be done by going to the successor of r1 (=r2) and setting its `continuous` flag to `false`, which would indicate that the range between r1's predecessor and r2 is incomplete. With many partition versions, in order for the snapshot's logical `mutation_partition` to remain correct, special constraints on version contents and merging rules must apply as described below.
 

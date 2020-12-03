@@ -440,8 +440,8 @@ shards we should read-ahead on).
 
 ## Further reading
 
-* [querier.hh](../querier.hh) `querier` and `querier_cache`.
-* [multishard_mutation_query.hh](../multishard_mutation_query.hh)
+* [querier.hh](https://github.com/scylladb/scylla/blob/master/querier.hh) `querier` and `querier_cache`.
+* [multishard_mutation_query.hh](https://github.com/scylladb/scylla/blob/master/multishard_mutation_query.hh)
   `query_mutations_on_all_shards()`.
-* [mutation_reader.hh](../mutation_reader.hh)
+* [mutation_reader.hh](https://github.com/scylladb/scylla/blob/master/mutation_reader.hh)
   `multishard_combining_reader`.

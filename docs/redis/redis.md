@@ -1,4 +1,4 @@
-Redis API in Scylla
+# Redis API in Scylla
 
 ## 1. Overview
 

@@ -302,3 +302,11 @@ one DynamoDB feature which we cannot support safely: we cannot modify
 a non-top-level attribute (e.g., a.b[3].c) directly without RMW. We plan
 to fix this in a future version by rethinking the data model we use for
 attributes, or rethinking our implementation of RMW (as explained above).
+
+```eval_rst
+.. toctree::
+    :maxdepth: 2
+
+    getting-started
+    compatibility
+```

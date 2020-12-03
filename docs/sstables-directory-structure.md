@@ -1,5 +1,7 @@
 
-# Introduction
+# sstables directory structure
+
+## Introduction
 
 SSTables are stored as a set of regular files in the file system
 in a common directory per-table (a.k.a. column family).
@@ -9,7 +11,7 @@ are used for additional features such as snapshots, and atomic deletions recover
 
 This document summarizes the directory structure and file organization of SSTables.
 
-# Directory Hierarchy
+## Directory Hierarchy
 
 Scylla uses the following directory structure to store all its SSTables, for example:
 
@@ -54,7 +56,7 @@ to distinguish between different incarnations of tables that are called with the
 In the table directory there are the SSTable files and additional
 sub-directories as documented below.
 
-# SSTable Files
+## SSTable Files
 
 SSTables are comprised of multiple component files.
 The component file names are self-identifying and denote the component type, as well as per-sstable-format metadata.
@@ -105,7 +107,7 @@ Here are the different component types and their naming convention:
 * Scylla (`Scylla.db`)  
   A file holding scylla-specific metadata about the SSTable, such as sharding information, extended features support, and sstabe-run identifier.
 
-## SSTable Format Version
+### SSTable Format Version
 
 SSTable's on-disk format has changed over time.
 Three versions are currently supported by Scylla: `ka`, `la`, and `mc`.
@@ -131,7 +133,7 @@ where:
   (Only `big` sub-format is supported by Scylla (and Cassandra) at this time.)
 * `<component>` is the file's component type, as described above.
 
-## Table Sub-directories
+### Table Sub-directories
 
 The per-table directory may contain several sub-directories, as listed below:
 
@@ -158,7 +160,7 @@ The per-table directory may contain several sub-directories, as listed below:
 * Pending-delete directory (`pending_delete`)  
   A directory that may hold log files for replaying atomic deletion operations of SSTables.
 
-## Temporary TOC Files
+### Temporary TOC Files
 
 SSTables are immutable. I.e., once written and sealed, they are never re-written.  
 For data consistency reasons, it is important for the database to determine that a SSTable is complete and valid,
@@ -169,14 +171,14 @@ It is renamed to `TOC.txt` when the SSTable is sealed and all components are flu
 
 When a SSTable is removed, `TOC.txt` is first renamed to `TOC.txt.tmp`, and that atomically marks the SSTable as deleted.
 
-# Recovering from crashes
+## Recovering from crashes
 
 On startup, the database scans all table directories and cleans up all SSTables that are in a transitional state: either partially written or partially deleted.
 These SSTables are identified by their TemporaryTOC component, and the loader simply removes them.
 
 In addition, any existing temporary SSTable sub-directories are automatically removed.
 
-## Atomic deletion of SSTables
+### Atomic deletion of SSTables
 
 In certain cases, the database is required to delete a number of SSTable in an atomic manner.
 For example, one of the SSTables may hold a tombstone that deletes data that was inserted to a different SSTable, and both are to be deleted as part of compaction.

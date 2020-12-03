@@ -23,7 +23,7 @@ over many of the following protocols. This includes even Scylla's internal
 inter-node protocol - for instructions and examples check out the blog post:
 https://www.scylladb.com/2020/05/21/dissecting-scylla-packets-with-wireshark/
 
-# Internal communication
+## Internal communication
 
 All inter-node communiction - communication between the Scylla nodes
 themselves - happen over one protocol and one TCP port - by default port 7000
@@ -86,7 +86,7 @@ setup except a one-node test, should be overriden.
 TODO: there is also `listen_interface` option... Which wins? What's the default?
 TODO: mention SSL, how it is configured, and `ssl_storage_port` (default 7001).
 
-# CQL client protocol
+## CQL client protocol
 
 The CQL binary protocol is Cassandra's and Scylla's main client-facing
 protocol. Scylla supports several Scylla-only extensions to this protocol,
@@ -117,7 +117,7 @@ applies to both CQL and Thrift protocols.
 
 TODO: there is also `rpc_interface` option... Which wins? What's the default?
 
-# Thrift client protocol
+## Thrift client protocol
 
 The Apache Thrift protocol was early Cassandra's client protocol, until
 it was superceded in Cassandra 1.2 with the binary CQL protocol. Thrift
@@ -143,7 +143,7 @@ option `rpc_address` applies to both CQL and Thrift protocols.
 TODO: there is also `rpc_interface` option... Which wins? What's the default?
 TODO: is there an SSL version of Thrift?
 
-# DynamoDB client protocol
+## DynamoDB client protocol
 
 Scylla also supports Amazon's DynamoDB API. The DynamoDB API is a JSON over
 HTTP (unencrypted) or HTTPS (encrypted) protocol. Support for this protocol
@@ -167,7 +167,7 @@ can be overridden by specifying in `alternator_encryption_options` the
 `keyfile` and `certificate` options. For example,
 `--alternator-encryption-options keyfile="..."`.
 
-# Redis client protocol
+## Redis client protocol
 
 Scylla also has partial and experimental support for the Redis API.
 Because this support is experimental, it is not turned on by
@@ -180,7 +180,7 @@ support SSL, so there is no traditional choice of port for it.
 See [redis.md](redis/redis.md) for more information about Scylla's
 support for the Redis protocol.
 
-# Metrics protocol
+## Metrics protocol
 
 Scylla provides an HTTP-based protocol to fetch performance and activity
 metrics from Scylla, which is described in detail in [metrics.md](metrics.md).
@@ -194,7 +194,7 @@ There is also a `prometheus_address` configuration option to set the IP
 address (and therefore network interface) on which Scylla should listen
 for the metrics protocol. This address defaults to 0.0.0.0.
 
-# REST API protocol
+## REST API protocol
 
 The CQL client protocol mentioned above is useful mostly for data and table
 requests, but does not offer commands for _administrative_ operations such
@@ -220,7 +220,7 @@ API will be available on the same port. You can explore the little it
 offers now in the aforementioned UI by replacing the URL in the box with
 "http://localhost:10000/v2".
 
-# JMX
+## JMX
 
 The "nodetool" management command connects to Scylla using Java's JMX
 protocol, not the REST API described above. This protocol was kept for
