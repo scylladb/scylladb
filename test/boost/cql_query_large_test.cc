@@ -128,12 +128,14 @@ SEASTAR_THREAD_TEST_CASE(test_large_data) {
             });
         }).get();
 
+        // Since deletion of large data entries has been deleted,
+        // expect the record to be present.
         assert_that(e.execute_cql("select partition_key from system.large_rows where table_name = 'tbl' allow filtering;").get0())
             .is_rows()
-            .is_empty();
+            .with_size(1);
         assert_that(e.execute_cql("select partition_key from system.large_cells where table_name = 'tbl' allow filtering;").get0())
             .is_rows()
-            .is_empty();
+            .with_size(1);
 
         return make_ready_future<>();
     }, cfg).get();
