@@ -24,6 +24,7 @@
 #include <boost/test/unit_test.hpp>
 #include <utility>
 #include "utils/UUID_gen.hh"
+#include "types.hh"
 
 BOOST_AUTO_TEST_CASE(test_generation_of_name_based_UUID) {
     auto uuid = utils::UUID_gen::get_name_UUID("systembatchlog");
@@ -95,6 +96,78 @@ BOOST_AUTO_TEST_CASE(test_get_time_uuid) {
     auto unix_timestamp = utils::UUID_gen::unix_timestamp(uuid);
     BOOST_CHECK(unix_timestamp == millis);
 }
+
+int timeuuid_legacy_tri_compare(bytes_view o1, bytes_view o2) {
+    auto compare_pos = [&] (unsigned pos, int mask, int ifequal) {
+        int d = (o1[pos] & mask) - (o2[pos] & mask);
+        return d ? d : ifequal;
+    };
+    int res = compare_pos(6, 0xf,
+        compare_pos(7, 0xff,
+            compare_pos(4, 0xff,
+                compare_pos(5, 0xff,
+                    compare_pos(0, 0xff,
+                        compare_pos(1, 0xff,
+                            compare_pos(2, 0xff,
+                                compare_pos(3, 0xff, 0))))))));
+    if (res == 0) {
+        res = lexicographical_tri_compare(o1.begin(), o1.end(), o2.begin(), o2.end(),
+            [] (const int8_t& a, const int8_t& b) { return a - b; });
+    }
+    return res < 0 ? -1 : res > 0;
+}
+
+BOOST_AUTO_TEST_CASE(test_timeuuid_msb_is_monotonic) {
+    using utils::UUID, utils::UUID_gen;
+    auto uuid = UUID_gen::get_time_UUID();
+    auto first = uuid.serialize();
+    int64_t scale_list[] = { 1, 10, 10000, 10000000, 0 };
+    auto str = [&scale_list](int64_t *scale) {
+        static std::string name_list[] = { " 100ns", "mc", "ms", "s" };
+        return name_list[scale - scale_list];
+    };
+
+    for (int64_t *scale = scale_list; *scale; scale++) {
+        int step = 1; /* + (random() % 169) ; */
+        auto prev = first;
+        for (int64_t i = 1; i < 3697; i += step) {
+            auto next =  UUID(UUID_gen::create_time(uuid.timestamp() + (i * *scale)), 0).serialize();
+            bool t1 = utils::timeuuid_tri_compare(next, prev) > 0;
+            bool t2 = utils::timeuuid_tri_compare(next, first) > 0;
+            if (!t1 || !t2) {
+                BOOST_CHECK_MESSAGE(t1 && t2, format("a UUID {}{} later is not great than at test start: {} {}", i, str(scale), t1, t2));
+            }
+            prev = next;
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(test_timeuuid_tri_compare_legacy) {
+    using utils::UUID, utils::UUID_gen;
+    auto uuid = UUID_gen::get_time_UUID();
+    auto first = uuid.serialize();
+    int64_t scale_list[] = { 1, 10, 10000, 10000000, 0 };
+    auto str = [&scale_list](int64_t *scale) {
+        static std::string name_list[] = { " 100ns", "mc", "ms", "s" };
+        return name_list[scale - scale_list];
+    };
+
+
+    for (int64_t *scale = scale_list; *scale; scale++) {
+        int step = 1; /* + (random() % 169) ; */
+        auto prev = first;
+        for (int64_t i = 1; i < 3697; i += step) {
+            auto next =  UUID(UUID_gen::create_time(uuid.timestamp() + (i * *scale)), 0).serialize();
+            bool t1 = utils::timeuuid_tri_compare(next, prev) == timeuuid_legacy_tri_compare(next, prev);
+            bool t2 = utils::timeuuid_tri_compare(next, first) == timeuuid_legacy_tri_compare(next, first);
+            if (!t1 || !t2) {
+                BOOST_CHECK_MESSAGE(t1 && t2, format("a UUID {}{} later violates compare order", i, str(scale)));
+            }
+            prev = next;
+        }
+    }
+}
+
 
 BOOST_AUTO_TEST_CASE(test_timeuuid_submicro_is_monotonic) {
     const int64_t PAD6 = 0xFFFF'FFFF'FFFF;

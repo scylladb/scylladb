@@ -455,6 +455,8 @@ private:
         return create_time(duration_cast<decimicroseconds>(d).count());
     }
 
+public:
+
     static int64_t create_time(uint64_t nanos_since)
     {
         uint64_t msb = 0L;
