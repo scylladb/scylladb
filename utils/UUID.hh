@@ -97,6 +97,10 @@ public:
         return !(*this == v);
     }
 
+    // Please note that this comparator does not preserve timeuuid
+    // monotonicity. For this reason you should avoid using it for
+    // UUIDs that could store timeuuids, otherwise bugs like
+    // https://github.com/scylladb/scylla/issues/7729 may happen.
     bool operator<(const UUID& v) const {
          if (most_sig_bits != v.most_sig_bits) {
              return uint64_t(most_sig_bits) < uint64_t(v.most_sig_bits);
