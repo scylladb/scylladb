@@ -166,4 +166,22 @@ inline sstring get_sstring() {
     return get_sstring(get_int<unsigned>(1024));
 }
 
+// Picks a random subset of size `m` from the given vector.
+template <typename T>
+std::vector<T> random_subset(std::vector<T> v, unsigned m, std::mt19937& engine) {
+    assert(m <= v.size());
+    std::shuffle(v.begin(), v.end(), engine);
+    return {v.begin(), v.begin() + m};
+}
+
+// Picks a random subset of size `m` from the set {0, ..., `n` - 1}.
+template<typename T>
+std::vector<T> random_subset(unsigned n, unsigned m, std::mt19937& engine) {
+    assert(m <= n);
+
+    std::vector<T> the_set(n);
+    std::iota(the_set.begin(), the_set.end(), T{});
+    return random_subset(std::move(the_set), m, engine);
+}
+
 }

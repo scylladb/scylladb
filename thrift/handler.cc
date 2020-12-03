@@ -1396,9 +1396,18 @@ private:
             return { };
         }
     }
+    static void validate_key(const schema& s, const clustering_key& ck, bytes_view v) {
+        auto ck_size = ck.size(s);
+        if (ck_size > s.clustering_key_size()) {
+            throw std::runtime_error(format("Cell name of {}.{} has too many components, expected {} but got {} in 0x{}",
+                s.ks_name(), s.cf_name(), s.clustering_key_size(), ck_size, to_hex(v)));
+        }
+    }
     static clustering_key_prefix make_clustering_prefix(const schema& s, bytes_view v) {
         auto composite = composite_view(v, s.thrift().has_compound_comparator());
-        return clustering_key_prefix::from_exploded(composite.values());
+        auto ck = clustering_key_prefix::from_exploded(composite.values());
+        validate_key(s, ck, v);
+        return ck;
     }
     static query::clustering_range::bound make_clustering_bound(const schema& s, bytes_view v, composite::eoc exclusiveness_marker) {
         auto composite = composite_view(v, s.thrift().has_compound_comparator());
@@ -1407,6 +1416,7 @@ private:
             last = c.second;
             return c.first;
         }));
+        validate_key(s, ck, v);
         return query::clustering_range::bound(std::move(ck), last != exclusiveness_marker);
     }
     static range<clustering_key_prefix> make_clustering_range(const schema& s, const std::string& start, const std::string& end) {

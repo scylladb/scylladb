@@ -2294,3 +2294,393 @@ flat_mutation_reader make_compacting_reader(flat_mutation_reader source, gc_cloc
         std::function<api::timestamp_type(const dht::decorated_key&)> get_max_purgeable) {
     return make_flat_mutation_reader<compacting_reader>(std::move(source), compaction_time, get_max_purgeable);
 }
+
+position_reader_queue::~position_reader_queue() {}
+
+// Merges output of readers opened for a single partition query into a non-decreasing stream of mutation fragments.
+//
+// Uses `position_reader_queue` to retrieve new readers lazily as the read progresses through the partition.
+// A reader is popped from the queue only if we find that it may contain fragments for the currently inspected positions.
+//
+// Readers are closed as soon as we find that they were exhausted for the given partition query.
+//
+// Implements the `FragmentProducer` concept. However, `next_partition` and `fast_forward_to(partition_range)`
+// are not implemented and throw an error; the reader is only used for single partition queries.
+//
+// Assumes that:
+// - the queue contains at least one reader,
+// - there are no static rows,
+// - the returned fragments do not contain partition tombstones.
+class clustering_order_reader_merger {
+    const schema_ptr _schema;
+    const reader_permit _permit;
+
+    // Compares positions using *_schema.
+    const position_in_partition::tri_compare _cmp;
+
+    // A queue of readers used to lazily retrieve new readers as we progress through the partition.
+    // Before the merger returns a batch for position `p`, it first ensures that all readers containing positions
+    // <= `p` are popped from the queue so it can take all of their fragments into account.
+    std::unique_ptr<position_reader_queue> _reader_queue;
+
+    // Owning container for the readers popped from _reader_queue.
+    // If we are sure that a reader is exhausted (all rows from the queried partition have been returned),
+    // we destroy and remove it from the container.
+    std::list<reader_and_upper_bound> _all_readers;
+    using reader_iterator = std::list<reader_and_upper_bound>::iterator;
+
+    // A min-heap of readers, sorted by the positions of their next fragments.
+    // The iterators point to _all_readers.
+    // Invariant: every reader in `_peeked_readers` satisfies `!is_buffer_empty()`,
+    // so it is safe to call `pop_mutation_fragment()` and `peek_buffer()` on it.
+    merger_vector<reader_iterator> _peeked_readers;
+
+    // Used to compare peeked_readers stored in the `_peeked_readers` min-heap.
+    struct peeked_reader_cmp {
+        const position_in_partition::less_compare _less;
+
+        explicit peeked_reader_cmp(const schema& s) : _less(s) {}
+
+        bool operator()(const reader_iterator& a, const reader_iterator& b) {
+            // Boost heaps are max-heaps, but we want a min-heap, so invert the comparison.
+            return _less(b->reader.peek_buffer().position(), a->reader.peek_buffer().position());
+        }
+    };
+
+    const peeked_reader_cmp _peeked_cmp;
+
+    // operator() returns a mutation_fragment_batch, which is a range (a pair of iterators);
+    // this is where the actual data is stored, i.e. the range points to _current_batch.
+    merger_vector<mutation_fragment> _current_batch;
+
+    // _unpeeked_readers stores readers for which we don't know the next fragment that they'll return.
+    // Before we return the next batch of fragments, we must peek all readers here (and move them to
+    // the _peeked_readers heap), since they might contain fragments with smaller positions than the
+    // currently peeked readers.
+    merger_vector<reader_iterator> _unpeeked_readers;
+
+    // In forwarding mode, after a reader returns end-of-stream, if we cannot determine that
+    // the reader won't return any more fragments in later position ranges, we save it in
+    // _halted_readers and restore it when we get fast-forwaded to a later range.
+    // See also comment in `peek_reader` when a reader returns end-of-stream.
+    // _halted_readers doesn't serve any purpose when not in forwarding mode, because then
+    // readers always return end-of-partition before end-of-stream, which is a signal that
+    // we can remove the reader immediately.
+    merger_vector<reader_iterator> _halted_readers;
+
+    // In forwarding mode, this is the right-end of the position range being currently queried;
+    // initially it's set to `before_all_clustered_rows` and updated on `fast_forward_to`.
+    // We use it when popping readers from _reader_queue so that we don't prematurely pop
+    // readers that only contain fragments from greater ranges.
+    // In non-forwarding mode _pr_end is always equal to `after_all_clustered_rows`.
+    position_in_partition_view _pr_end;
+    // In forwarding mode, _forwarded_to remembers the last range we were forwarded to.
+    // We need this because we're opening new readers in the middle of the partition query:
+    // after the new reader returns its initial partition-start, we immediately forward it
+    // to this range.
+    std::optional<position_range> _forwarded_to;
+
+    // Since we may open new readers when already inside the partition, i.e. after returning `partition_start`,
+    // we must ignore `partition_start`s returned by these new readers. The approach we take is to return
+    // the `partition_start` fetched from the first reader and ignore all the rest. This flag says whether
+    // or not we've already fetched the first `partition_start`.
+    bool _partition_start_fetched = false;
+
+    // In non-forwarding mode, remember if we've returned the last fragment, which is always partition-end.
+    // We construct the fragment ourselves instead of merging partition-ends returned from the merged readers,
+    // because we may close readers in the middle of the partition query.
+    // In forwarding mode this is always false.
+    bool _should_emit_partition_end;
+
+    // If a single reader wins with other readers (i.e. returns a smaller fragment) multiple times in a row,
+    // the reader becomes a ``galloping reader'' (and is pointed to by _galloping_reader).
+    // In this galloping mode we stop doing heap operations using the _peeked_readers heap;
+    // instead, we keep peeking the _galloping_reader and compare the returned fragment's position directly
+    // with the fragment of the reader stored at the heap front (if any), hoping that the galloping reader
+    // will keep winning. If he wins, we don't put the fragment on the heap, but immediately return it.
+    // If he loses, we go back to normal operation.
+    reader_iterator _galloping_reader;
+
+    // Counts how many times a potential galloping reader candidate has won with other readers.
+    int _gallop_mode_hits = 0;
+
+    // Determines how many times a fragment should be taken from the same
+    // reader in order to enter gallop mode. Must be greater than one.
+    static constexpr int _gallop_mode_entering_threshold = 3;
+
+    bool in_gallop_mode() const {
+        return _gallop_mode_hits >= _gallop_mode_entering_threshold;
+    }
+
+    // Retrieve the next fragment from the reader pointed to by `it`.
+    // The function assumes that we're not in galloping mode, `it` is in `_unpeeked_readers`,
+    // and all fragments previously returned from the reader have already been returned by operator().
+    //
+    // The peeked reader is pushed onto the _peeked_readers heap.
+    future<> peek_reader(reader_iterator it, db::timeout_clock::time_point timeout) {
+        return it->reader.peek(timeout).then([this, timeout, it] (mutation_fragment* mf) {
+            if (!mf) {
+                // The reader returned end-of-stream before returning end-of-partition
+                // (otherwise we would have removed it in a previous peek). This means that
+                // we are in forwarding mode and the reader won't return any more fragments in the current range.
+                // If the reader's upper bound is smaller then the end of the current range then it won't
+                // return any more fragments in later ranges as well (subsequent fast-forward-to ranges
+                // are non-overlapping and strictly increasing), so we can remove it now.
+                // Otherwise it may start returning fragments later, so we save it for the moment
+                // in _halted_readers and will bring it back when we get fast-forwarded.
+                if (_cmp(it->upper_bound, _pr_end) < 0) {
+                    _all_readers.erase(it);
+                } else {
+                    _halted_readers.push_back(it);
+                }
+                return make_ready_future<>();
+            }
+
+            if (mf->is_partition_start()) {
+                // We assume there are no partition tombstones.
+                // This should have been checked before opening the reader.
+                if (mf->as_partition_start().partition_tombstone()) {
+                    on_internal_error(mrlog, format(
+                            "clustering_order_reader_merger: partition tombstone encountered for partition {}."
+                            " This reader merger cannot be used for readers that return partition tombstones"
+                            " or it would give incorrect results.", mf->as_partition_start().key()));
+                }
+                if (!_partition_start_fetched) {
+                    _peeked_readers.emplace_back(it);
+                    boost::range::push_heap(_peeked_readers, _peeked_cmp);
+                    _partition_start_fetched = true;
+                    // there is no _forwarded_to range yet (see `fast_forward_to`)
+                    // so no need to forward this reader
+                    return make_ready_future<>();
+                }
+
+                it->reader.pop_mutation_fragment();
+                auto f = _forwarded_to ? it->reader.fast_forward_to(*_forwarded_to, timeout) : make_ready_future<>();
+                return f.then([this, timeout, it] { return peek_reader(it, timeout); });
+            }
+
+            // We assume that the schema does not have any static columns, so there cannot be any static rows.
+            if (mf->is_static_row()) {
+                on_internal_error(mrlog,
+                        "clustering_order_reader_merger: static row encountered."
+                        " This reader merger cannot be used for readers that return static rows"
+                        " or it would give incorrect results.");
+            }
+
+            if (mf->is_end_of_partition()) {
+                _all_readers.erase(it);
+            } else {
+                _peeked_readers.emplace_back(it);
+                boost::range::push_heap(_peeked_readers, _peeked_cmp);
+            }
+
+            return make_ready_future<>();
+        });
+    }
+
+    future<> peek_readers(db::timeout_clock::time_point timeout) {
+        return parallel_for_each(_unpeeked_readers, [this, timeout] (reader_iterator it) {
+            return peek_reader(it, timeout);
+        }).then([this] {
+            _unpeeked_readers.clear();
+        });
+    }
+
+    // Retrieve the next fragment from the galloping reader.
+    // The function assumes that we're in galloping mode and all fragments previously returned
+    // from the galloping reader have already been returned by operator().
+    //
+    // If the galloping reader wins with other readers again, the fragment is returned as the next batch.
+    // Otherwise, the reader is pushed onto _peeked_readers and we retry in non-galloping mode.
+    future<mutation_fragment_batch> peek_galloping_reader(db::timeout_clock::time_point timeout) {
+        return _galloping_reader->reader.peek(timeout).then([this, timeout] (mutation_fragment* mf) {
+            if (mf) {
+                if (mf->is_partition_start()) {
+                    on_internal_error(mrlog, format(
+                            "clustering_order_reader_merger: double `partition start' encountered"
+                            " in partition {} during read.", mf->as_partition_start().key()));
+                }
+
+                if (mf->is_static_row()) {
+                    on_internal_error(mrlog,
+                            "clustering_order_reader_merger: static row encountered."
+                            " This reader merger cannot be used for tables that have static columns"
+                            " or it would give incorrect results.");
+                }
+
+                if (mf->is_end_of_partition()) {
+                    _all_readers.erase(_galloping_reader);
+                } else {
+                    if (_reader_queue->empty(mf->position())
+                            && (_peeked_readers.empty()
+                                    || _cmp(mf->position(), _peeked_readers.front()->reader.peek_buffer().position()) < 0)) {
+                        _current_batch.push_back(_galloping_reader->reader.pop_mutation_fragment());
+
+                        return make_ready_future<mutation_fragment_batch>(_current_batch);
+                    }
+
+                    // One of the existing readers won with the galloping reader,
+                    // or there is a yet unselected reader which possibly has a smaller position.
+                    // In either case we exit the galloping mode.
+
+                    _peeked_readers.emplace_back(_galloping_reader);
+                    boost::range::push_heap(_peeked_readers, _peeked_cmp);
+                }
+            } else {
+                // See comment in `peek_reader`.
+                if (_cmp(_galloping_reader->upper_bound, _pr_end) < 0) {
+                    _all_readers.erase(_galloping_reader);
+                } else {
+                    _halted_readers.push_back(_galloping_reader);
+                }
+            }
+
+            // The galloping reader has either been removed, halted, or lost with the other readers.
+            // Proceed with the normal path.
+            _galloping_reader = {};
+            _gallop_mode_hits = 0;
+            return (*this)(timeout);
+        });
+    }
+
+public:
+    clustering_order_reader_merger(
+            schema_ptr schema, reader_permit permit,
+            streamed_mutation::forwarding fwd_sm,
+            std::unique_ptr<position_reader_queue> reader_queue)
+        : _schema(std::move(schema)), _permit(std::move(permit))
+        , _cmp(*_schema)
+        , _reader_queue(std::move(reader_queue))
+        , _peeked_cmp(*_schema)
+        , _pr_end(fwd_sm == streamed_mutation::forwarding::yes
+                        ? position_in_partition_view::before_all_clustered_rows()
+                        : position_in_partition_view::after_all_clustered_rows())
+        , _should_emit_partition_end(fwd_sm == streamed_mutation::forwarding::no)
+    {
+        // The first call to `_reader_queue::pop` uses `after_all_clustered_rows`
+        // so we obtain at least one reader; we will return this reader's `partition_start`
+        // as the first fragment.
+        auto rs = _reader_queue->pop(position_in_partition_view::after_all_clustered_rows());
+        for (auto& r: rs) {
+            _all_readers.push_front(std::move(r));
+            _unpeeked_readers.push_back(_all_readers.begin());
+        }
+    }
+
+    // We assume that operator() is called sequentially and that the caller doesn't use the batch
+    // returned by the previous operator() call after calling operator() again
+    // (the data from the previous batch is destroyed).
+    future<mutation_fragment_batch> operator()(db::timeout_clock::time_point timeout) {
+        _current_batch.clear();
+
+        if (in_gallop_mode()) {
+            return peek_galloping_reader(timeout);
+        }
+
+        if (!_unpeeked_readers.empty()) {
+            return peek_readers(timeout).then([this, timeout] { return (*this)(timeout); });
+        }
+
+        auto next_peeked_pos = _peeked_readers.empty() ? _pr_end : _peeked_readers.front()->reader.peek_buffer().position();
+        // There might be queued readers containing fragments with positions <= next_peeked_pos:
+        if (!_reader_queue->empty(next_peeked_pos)) {
+            auto rs = _reader_queue->pop(next_peeked_pos);
+            for (auto& r: rs) {
+                _all_readers.push_front(std::move(r));
+                _unpeeked_readers.push_back(_all_readers.begin());
+            }
+            return peek_readers(timeout).then([this, timeout] { return (*this)(timeout); });
+        }
+
+        if (_peeked_readers.empty()) {
+            // We are either in forwarding mode and waiting for a fast-forward,
+            // or we've exhausted all the readers.
+            if (_should_emit_partition_end) {
+                // Not forwarding, so all readers must be exhausted. Return the last fragment.
+                _current_batch.push_back(mutation_fragment(*_schema, _permit, partition_end()));
+                _should_emit_partition_end = false;
+            }
+            return make_ready_future<mutation_fragment_batch>(_current_batch);
+        }
+
+        // Take all fragments with the next smallest position (there may be multiple such fragments).
+        do {
+            boost::range::pop_heap(_peeked_readers, _peeked_cmp);
+            auto r = _peeked_readers.back();
+            auto mf = r->reader.pop_mutation_fragment();
+            _peeked_readers.pop_back();
+            _unpeeked_readers.push_back(std::move(r));
+            _current_batch.push_back(std::move(mf));
+        } while (!_peeked_readers.empty()
+                    && _cmp(_current_batch.back().position(), _peeked_readers.front()->reader.peek_buffer().position()) == 0);
+
+        if (_unpeeked_readers.size() == 1 && _unpeeked_readers.front() == _galloping_reader) {
+            // The first condition says that only one reader was moved from the heap,
+            // i.e. all other readers had strictly greater positions.
+            // The second condition says that this reader already was a galloping candidate,
+            // so let's increase his score.
+            ++_gallop_mode_hits;
+
+            if (in_gallop_mode()) {
+                // We've entered gallop mode with _galloping_reader.
+                // In the next operator() call we will peek this reader on a separate codepath,
+                // using _galloping_reader instead of _unpeeked_readers.
+                _unpeeked_readers.clear();
+            }
+        } else {
+            // Each reader currently in _unpeeked_readers is a potential galloping candidate
+            // (they won with all other readers in _peeked_readers). Remember one of them.
+            _galloping_reader = _unpeeked_readers.front();
+            _gallop_mode_hits = 1;
+        }
+
+        return make_ready_future<mutation_fragment_batch>(_current_batch);
+    }
+
+    void next_partition() {
+        throw std::runtime_error(
+            "clustering_order_reader_merger::next_partition: this reader works only for single partition queries");
+    }
+
+
+    future<> fast_forward_to(const dht::partition_range&, db::timeout_clock::time_point) {
+        throw std::runtime_error(
+            "clustering_order_reader_merger::fast_forward_to: this reader works only for single partition queries");
+    }
+
+
+    future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) {
+        if (!_partition_start_fetched) {
+            on_internal_error(mrlog, "reader was forwarded before returning partition start");
+        }
+
+        // Every reader in `_all_readers` has been peeked at least once, so it returned a partition_start.
+        // Thus every opened reader is safe to be fast forwarded.
+        _unpeeked_readers.clear();
+        _peeked_readers.clear();
+        _halted_readers.clear();
+        _galloping_reader = {};
+        _gallop_mode_hits = 0;
+
+        _unpeeked_readers.reserve(_all_readers.size());
+        for (auto it = _all_readers.begin(); it != _all_readers.end(); ++it) {
+            _unpeeked_readers.push_back(it);
+        }
+
+        _forwarded_to = pr;
+        _pr_end = _forwarded_to->end();
+
+        return parallel_for_each(_unpeeked_readers, [this, pr = std::move(pr), timeout] (reader_iterator it) {
+            return it->reader.fast_forward_to(pr, timeout);
+        });
+    }
+};
+
+flat_mutation_reader make_clustering_combined_reader(schema_ptr schema,
+        reader_permit permit,
+        streamed_mutation::forwarding fwd_sm,
+        std::unique_ptr<position_reader_queue> rq) {
+    return make_flat_mutation_reader<merging_reader<clustering_order_reader_merger>>(
+            schema, permit, fwd_sm,
+            clustering_order_reader_merger(schema, permit, fwd_sm, std::move(rq)));
+}

@@ -439,8 +439,6 @@ future<int> run_test(test_case test) {
         leader_snap_skipped = test.initial_snapshots[leader].snap.idx;  // Count existing leader entries
     }
 
-    unsigned apply_entries = test.total_values - leader_snap_skipped;
-
     auto sm_value_for = [&] (int max) {
         return test.type == sm_type::HASH ? hasher_int::value_for(max) : sum_sm::value_for(max);
     };
@@ -465,7 +463,7 @@ future<int> run_test(test_case test) {
         }
     }
 
-    auto rafts = co_await create_cluster(states, apply_changes, apply_entries, test.type);
+    auto rafts = co_await create_cluster(states, apply_changes, test.total_values, test.type);
 
     co_await rafts[leader].first->elect_me_leader();
     // Process all updates in order

@@ -195,6 +195,7 @@ def check_cql(ip):
 # we know it did not.
 def wait_for_cql(pid, ip):
     start_time = time.time()
+    cql_ready = False
     while time.time() < start_time + 200:
         time.sleep(0.1)
         # To check if Scylla died already (i.e., failed to boot), we need
@@ -204,12 +205,18 @@ def wait_for_cql(pid, ip):
         os.kill(pid, 0)
         try:
             check_cql(ip)
+            # if check_cql did not raise an exception, we're done:
+            cql_ready = True
             break
         except cassandra.cluster.NoHostAvailable:
             pass
+    duration = str(round(time.time() - start_time, 1)) + ' seconds'
+    if not cql_ready:
+        print(f'Boot did not complete in {duration}.')
+        check_cql(ip) # this will fail, and show why
     os.waitpid(pid, os.P_NOWAIT)
     os.kill(pid, 0)
-    print('Boot successful (' + str(round(time.time() - start_time, 1)) + ' seconds)')
+    print(f'Boot successful ({duration}).')
     sys.stdout.flush()
 
 def run_cql_pytest(ip, additional_parameters):

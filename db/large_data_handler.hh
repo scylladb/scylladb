@@ -24,6 +24,7 @@
 #include <cstdint>
 #include "schema_fwd.hh"
 #include "system_keyspace.hh"
+#include "sstables/shared_sstable.hh"
 
 namespace sstables {
 class sstable;
@@ -69,11 +70,7 @@ private:
     mutable large_data_handler::stats _stats;
 
 public:
-    explicit large_data_handler(uint64_t partition_threshold_bytes, uint64_t row_threshold_bytes, uint64_t cell_threshold_bytes, uint64_t rows_count_threshold)
-        : _partition_threshold_bytes(partition_threshold_bytes)
-        , _row_threshold_bytes(row_threshold_bytes)
-        , _cell_threshold_bytes(cell_threshold_bytes)
-        , _rows_count_threshold(rows_count_threshold) {}
+    explicit large_data_handler(uint64_t partition_threshold_bytes, uint64_t row_threshold_bytes, uint64_t cell_threshold_bytes, uint64_t rows_count_threshold);
     virtual ~large_data_handler() {}
 
     // Once large_data_handler is stopped no further updates will be accepted.
@@ -81,60 +78,58 @@ public:
     void start();
     future<> stop();
 
-    void maybe_log_too_many_rows(const sstables::sstable& sst, const sstables::key& partition_key, uint64_t rows_count) {
+    bool maybe_log_too_many_rows(const sstables::sstable& sst, const sstables::key& partition_key, uint64_t rows_count) {
         if (__builtin_expect(rows_count > _rows_count_threshold, false)) {
             log_too_many_rows(sst, partition_key, rows_count);
+            return true;
         }
+        return false;
     }
 
-    future<> maybe_record_large_rows(const sstables::sstable& sst, const sstables::key& partition_key,
+    future<bool> maybe_record_large_rows(const sstables::sstable& sst, const sstables::key& partition_key,
             const clustering_key_prefix* clustering_key, uint64_t row_size) {
         assert(running());
         if (__builtin_expect(row_size > _row_threshold_bytes, false)) {
             return with_sem([&sst, &partition_key, clustering_key, row_size, this] {
                 return record_large_rows(sst, partition_key, clustering_key, row_size);
+            }).then([] {
+                return true;
             });
         }
-        return make_ready_future<>();
+        return make_ready_future<bool>(false);
     }
 
-    future<> maybe_record_large_partitions(const sstables::sstable& sst, const sstables::key& partition_key, uint64_t partition_size);
+    future<bool> maybe_record_large_partitions(const sstables::sstable& sst, const sstables::key& partition_key, uint64_t partition_size);
 
-    future<> maybe_record_large_cells(const sstables::sstable& sst, const sstables::key& partition_key,
+    future<bool> maybe_record_large_cells(const sstables::sstable& sst, const sstables::key& partition_key,
             const clustering_key_prefix* clustering_key, const column_definition& cdef, uint64_t cell_size) {
         assert(running());
         if (__builtin_expect(cell_size > _cell_threshold_bytes, false)) {
             return with_sem([&sst, &partition_key, clustering_key, &cdef, cell_size, this] {
                 return record_large_cells(sst, partition_key, clustering_key, cdef, cell_size);
+            }).then([] {
+                return true;
             });
         }
-        return make_ready_future<>();
+        return make_ready_future<bool>(false);
     }
 
-    future<> maybe_delete_large_data_entries(const schema& s, sstring filename, uint64_t data_size) {
-        assert(running());
-        future<> large_partitions = make_ready_future<>();
-        if (__builtin_expect(data_size > _partition_threshold_bytes, false)) {
-            large_partitions = with_sem([&s, filename, this] () mutable {
-                return delete_large_data_entries(s, std::move(filename), db::system_keyspace::LARGE_PARTITIONS);
-            });
-        }
-        future<> large_rows = make_ready_future<>();
-        if (__builtin_expect(data_size > _row_threshold_bytes, false)) {
-            large_rows = with_sem([&s, filename, this] () mutable {
-                return delete_large_data_entries(s, std::move(filename), db::system_keyspace::LARGE_ROWS);
-            });
-        }
-        future<> large_cells = make_ready_future<>();
-        if (__builtin_expect(data_size > _cell_threshold_bytes, false)) {
-            large_cells = with_sem([&s, filename, this] () mutable {
-                return delete_large_data_entries(s, std::move(filename), db::system_keyspace::LARGE_CELLS);
-            });
-        }
-        return when_all(std::move(large_partitions), std::move(large_rows), std::move(large_cells)).discard_result();
-    }
+    future<> maybe_delete_large_data_entries(sstables::shared_sstable sst);
 
     const large_data_handler::stats& stats() const { return _stats; }
+
+    uint64_t get_partition_threshold_bytes() const noexcept {
+        return _partition_threshold_bytes;
+    }
+    uint64_t get_row_threshold_bytes() const noexcept {
+        return _row_threshold_bytes;
+    }
+    uint64_t get_cell_threshold_bytes() const noexcept {
+        return _cell_threshold_bytes;
+    }
+    uint64_t get_rows_count_threshold() const noexcept {
+        return _rows_count_threshold;
+    }
 
 protected:
     virtual void log_too_many_rows(const sstables::sstable& sst, const sstables::key& partition_key, uint64_t rows_count) const = 0;

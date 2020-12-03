@@ -210,17 +210,6 @@ std::unique_ptr<random_schema_specification> make_random_schema_specification(
 
 namespace {
 
-// Picks a random subset of size `m` from the set {0, ..., `n` - 1}.
-std::vector<unsigned> random_subset(unsigned n, unsigned m, std::mt19937& engine) {
-    assert(m <= n);
-
-    std::vector<unsigned> the_set(n);
-    std::iota(the_set.begin(), the_set.end(), 0u);
-    std::shuffle(the_set.begin(), the_set.end(), engine);
-
-    return {the_set.begin(), the_set.begin() + m};
-}
-
 utils::multiprecision_int generate_multiprecision_integer_value(std::mt19937& engine, size_t max_size_in_bytes) {
     using utils::multiprecision_int;
 
@@ -280,7 +269,7 @@ data_model::mutation_description::collection generate_user_value(std::mt19937& e
 
     // Non-null fields.
     auto fields_num = std::uniform_int_distribution<size_t>(1, type.size())(engine);
-    auto field_idxs = random_subset(type.size(), fields_num, engine);
+    auto field_idxs = random::random_subset<unsigned>(type.size(), fields_num, engine);
     std::sort(field_idxs.begin(), field_idxs.end());
 
     md::collection collection;

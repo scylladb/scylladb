@@ -1,0 +1,43 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+#
+# Copyright 2020 ScyllaDB
+#
+
+#
+# This file is part of Scylla.
+#
+# Scylla is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# Scylla is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
+
+import os
+import argparse
+from scylla_util import *
+
+def update_rsysconf(rsyslog_server):
+    if ':' not in rsyslog_server:
+        rsyslog_server = rsyslog_server + ':1514'
+
+    with open('/etc/rsyslog.d/scylla.conf', 'w') as f:
+        f.write("if $programname ==  'scylla' then @@{};RSYSLOG_SyslogProtocol23Format\n".format(rsyslog_server))
+    systemd_unit('rsyslog.service').restart()
+
+if __name__ == '__main__':
+    if os.getuid() > 0:
+        print('Requires root permission.')
+        sys.exit(1)
+    parser = argparse.ArgumentParser(description='Updating rsyslog to send logs to a remote server.')
+    parser.add_argument('--remote-server', required=True,
+                        help='specify remote rsyslog server, use ip:port format. If not port is included, Scylla-Monitoring port will be used')
+    args = parser.parse_args()
+    update_rsysconf(args.remote_server)
