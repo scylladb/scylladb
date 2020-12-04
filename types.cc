@@ -3043,16 +3043,18 @@ static bytes_view linearized(const data::value_view& v, std::vector<bytes>& stor
 }
 
 static bytes serialize_for_cql_aux(const map_type_impl&, collection_mutation_view_description mut, cql_serialization_format sf) {
-    std::vector<bytes> linearized_values;
-    std::vector<bytes_view> tmp;
-    tmp.reserve(mut.cells.size() * 2);
+    bytes_ostream out;
+    auto len_slot = out.write_place_holder(collection_size_len(sf));
+    int elements = 0;
     for (auto&& e : mut.cells) {
         if (e.second.is_live(mut.tomb, false)) {
-            tmp.push_back(e.first);
-            tmp.push_back(linearized(e.second.value(), linearized_values));
+            write_collection_value(out, sf, data::value_view(e.first));
+            write_collection_value(out, sf, e.second.value());
+            elements += 1;
         }
     }
-    return collection_type_impl::pack(tmp.begin(), tmp.end(), tmp.size() / 2, sf);
+    write_collection_size(len_slot, elements, sf);
+    return linearized(out);
 }
 
 static bytes serialize_for_cql_aux(const set_type_impl&, collection_mutation_view_description mut, cql_serialization_format sf) {
