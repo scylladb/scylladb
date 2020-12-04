@@ -1,0 +1,214 @@
+CREATE TABLE t (pk INT PRIMARY KEY, l LIST<INT>);
+{
+	"status" : "ok"
+}
+UPDATE t SET l = [-1] + l WHERE pk = 0;
+{
+	"status" : "ok"
+}
+SELECT l FROM t WHERE pk = 0;
+{
+	"rows" : 
+	[
+		{
+			"l" : "[-1]"
+		}
+	]
+}
+UPDATE t SET l = [-3,-2] + l WHERE pk = 0;
+{
+	"status" : "ok"
+}
+SELECT l FROM t WHERE pk = 0;
+{
+	"rows" : 
+	[
+		{
+			"l" : "[-3, -2, -1]"
+		}
+	]
+}
+UPDATE t SET l = [-4] + l WHERE pk = 0 IF EXISTS;
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "true",
+			"l" : "[-3, -2, -1]",
+			"pk" : "0"
+		}
+	]
+}
+SELECT l FROM t WHERE pk = 0;
+{
+	"rows" : 
+	[
+		{
+			"l" : "[-4, -3, -2, -1]"
+		}
+	]
+}
+UPDATE t SET l = [-6, -5] + l WHERE pk = 0 IF EXISTS;
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "true",
+			"l" : "[-4, -3, -2, -1]",
+			"pk" : "0"
+		}
+	]
+}
+SELECT l FROM t WHERE pk = 0;
+{
+	"rows" : 
+	[
+		{
+			"l" : "[-6, -5, -4, -3, -2, -1]"
+		}
+	]
+}
+UPDATE t SET l = l + [1] WHERE pk = 0;
+{
+	"status" : "ok"
+}
+SELECT l FROM t WHERE pk = 0;
+{
+	"rows" : 
+	[
+		{
+			"l" : "[-6, -5, -4, -3, -2, -1, 1]"
+		}
+	]
+}
+UPDATE t SET l = l + [2,3] WHERE pk = 0;
+{
+	"status" : "ok"
+}
+SELECT l FROM t WHERE pk = 0;
+{
+	"rows" : 
+	[
+		{
+			"l" : "[-6, -5, -4, -3, -2, -1, 1, 2, 3]"
+		}
+	]
+}
+UPDATE t SET l = l + [4] WHERE pk = 0 IF EXISTS;
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "true",
+			"l" : "[-6, -5, -4, -3, -2, -1, 1, 2, 3]",
+			"pk" : "0"
+		}
+	]
+}
+SELECT l FROM t WHERE pk = 0;
+{
+	"rows" : 
+	[
+		{
+			"l" : "[-6, -5, -4, -3, -2, -1, 1, 2, 3, 4]"
+		}
+	]
+}
+UPDATE t SET l = l + [5,6] WHERE pk = 0 IF EXISTS;
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "true",
+			"l" : "[-6, -5, -4, -3, -2, -1, 1, 2, 3, 4]",
+			"pk" : "0"
+		}
+	]
+}
+SELECT l FROM t WHERE pk = 0;
+{
+	"rows" : 
+	[
+		{
+			"l" : "[-6, -5, -4, -3, -2, -1, 1, 2, 3, 4, 5, 6]"
+		}
+	]
+}
+BEGIN BATCH
+    UPDATE t SET l = l + [7] WHERE pk = 0
+    UPDATE t SET l = [-7] + l WHERE pk = 0
+    UPDATE t SET l = l + [8, 9] WHERE pk = 0
+    UPDATE t SET l = l + [10] WHERE pk = 0
+    UPDATE t SET l = [-9, -8] + l WHERE pk = 0
+    UPDATE t SET l = [-10] + l WHERE pk = 0
+APPLY BATCH;
+{
+	"status" : "ok"
+}
+SELECT l FROM t WHERE pk = 0;
+{
+	"rows" : 
+	[
+		{
+			"l" : "[-10, -9, -8, -7, -6, -5, -4, -3, -2, -1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]"
+		}
+	]
+}
+-- LWT batch
+BEGIN BATCH
+    UPDATE t SET l = [-11] + l WHERE pk = 0 IF EXISTS
+    UPDATE t SET l = [-13, -12] + l WHERE pk = 0 IF EXISTS
+    UPDATE t SET l = [-14] + l WHERE pk = 0 IF EXISTS
+    UPDATE t SET l = l + [11] WHERE pk = 0 IF EXISTS
+    UPDATE t SET l = l + [12, 13] WHERE pk = 0 IF EXISTS
+    UPDATE t SET l = l + [14] WHERE pk = 0 IF EXISTS
+APPLY BATCH;
+{
+	"rows" : 
+	[
+		{
+			"[applied]" : "true",
+			"l" : "[-10, -9, -8, -7, -6, -5, -4, -3, -2, -1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]",
+			"pk" : "0"
+		},
+		{
+			"[applied]" : "true",
+			"l" : "[-10, -9, -8, -7, -6, -5, -4, -3, -2, -1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]",
+			"pk" : "0"
+		},
+		{
+			"[applied]" : "true",
+			"l" : "[-10, -9, -8, -7, -6, -5, -4, -3, -2, -1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]",
+			"pk" : "0"
+		},
+		{
+			"[applied]" : "true",
+			"l" : "[-10, -9, -8, -7, -6, -5, -4, -3, -2, -1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]",
+			"pk" : "0"
+		},
+		{
+			"[applied]" : "true",
+			"l" : "[-10, -9, -8, -7, -6, -5, -4, -3, -2, -1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]",
+			"pk" : "0"
+		},
+		{
+			"[applied]" : "true",
+			"l" : "[-10, -9, -8, -7, -6, -5, -4, -3, -2, -1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]",
+			"pk" : "0"
+		}
+	]
+}
+SELECT l FROM t WHERE pk = 0;
+{
+	"rows" : 
+	[
+		{
+			"l" : "[-14, -13, -12, -11, -10, -9, -8, -7, -6, -5, -4, -3, -2, -1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]"
+		}
+	]
+}
+
+DROP TABLE t;
+{
+	"status" : "ok"
+}
