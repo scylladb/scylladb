@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2015 ScyllaDB
+ * Copyright (C) 2015-2020 ScyllaDB
  */
 
 /*
@@ -370,6 +370,30 @@ SEASTAR_TEST_CASE(test_list_of_tuples_with_bound_var) {
         BOOST_REQUIRE_THROW(e.prepare("update cf SET c1 = c1 + [(?,9999)] where pk = 999;").get0(), exceptions::invalid_request_exception);
     });
 }
+
+/// The nubmer of distinct values in a list is limited. Test the
+// limit.
+SEASTAR_TEST_CASE(test_list_append_limit) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        e.execute_cql("CREATE TABLE t (pk int PRIMARY KEY, l list<int>);").get();
+        std::string value_list = "0";
+        for (int i = 0; i < utils::UUID_gen::SUBMICRO_LIMIT; i++) {
+            value_list.append(",0");
+        }
+        // Use a local copy of query_options to avoid impact on
+        // adjacent tests: that's where Scylla stores the list
+        // append sequence, which will be exceeded it in this
+        // test.
+        auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE,
+                infinite_timeout_config,
+                std::vector<cql3::raw_value>{},
+                cql3::query_options::specific_options{1, nullptr, {}, api::new_timestamp()});
+        auto cql = fmt::format("UPDATE t SET l = l + [{}] WHERE pk = 0;", value_list);
+        BOOST_REQUIRE_THROW(e.execute_cql(cql, std::move(qo)).get0(), exceptions::invalid_request_exception);
+        e.execute_cql("DROP TABLE t;").get();
+    });
+}
+
 
 SEASTAR_TEST_CASE(test_insert_statement) {
     return do_with_cql_env([] (cql_test_env& e) {
