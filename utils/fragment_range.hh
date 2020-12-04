@@ -154,3 +154,63 @@ decltype(auto) with_linearized(const FragmentedBuffer& buffer, Function&& fn)
     }
     return fn(bv);
 }
+
+template<typename T>
+concept FragmentedView = requires (T view, size_t n) {
+    typename T::fragment_type;
+    requires std::is_same_v<typename T::fragment_type, bytes_view>
+            || std::is_same_v<typename T::fragment_type, bytes_mutable_view>;
+    // No preconditions.
+    { view.current_fragment() } -> std::convertible_to<const typename T::fragment_type&>;
+    // No preconditions.
+    { view.size_bytes() } -> std::convertible_to<size_t>;
+    // Precondition: n <= size_bytes()
+    { view.prefix(n) } -> std::same_as<T>;
+    // Precondition: n <= size_bytes()
+    view.remove_prefix(n);
+    // Precondition: size_bytes() > 0
+    view.remove_current();
+};
+
+template<typename T>
+concept FragmentedMutableView = requires (T view) {
+    requires FragmentedView<T>;
+    requires std::is_same_v<typename T::fragment_type, bytes_mutable_view>;
+};
+
+template<FragmentedView View>
+requires (!FragmentRange<View>)
+bytes linearized(View v)
+{
+    bytes b(bytes::initialized_later(), v.size_bytes());
+    auto out = b.begin();
+    while (v.size_bytes()) {
+        out = std::copy(v.current_fragment().begin(), v.current_fragment().end(), out);
+        v.remove_current();
+    }
+    return b;
+}
+
+template<FragmentedView View, typename Function>
+requires (!FragmentRange<View>) && std::invocable<Function, bytes_view>
+decltype(auto) with_linearized(const View& v, Function&& fn)
+{
+    if (v.size_bytes() == v.current_fragment().size()) [[likely]] {
+        return fn(v.current_fragment());
+    } else {
+        return fn(linearized(v));
+    }
+}
+
+class single_fragmented_view {
+    bytes_view _view;
+public:
+    using fragment_type = bytes_view;
+    explicit single_fragmented_view(bytes_view bv) : _view(bv) {}
+    size_t size_bytes() const { return _view.size(); }
+    void remove_prefix(size_t n) { _view.remove_prefix(n); }
+    void remove_current() { _view = bytes_view(); }
+    bytes_view current_fragment() const { return _view; }
+    single_fragmented_view prefix(size_t n) { return single_fragmented_view(_view.substr(0, n)); }
+};
+static_assert(FragmentedView<single_fragmented_view>);

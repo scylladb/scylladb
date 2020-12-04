@@ -47,7 +47,8 @@ public:
     virtual bool is_compatible_with_frozen(const collection_type_impl& previous) const override;
     virtual bool is_value_compatible_with_frozen(const collection_type_impl& previous) const override;
     using abstract_type::deserialize;
-    virtual data_value deserialize(bytes_view v, cql_serialization_format sf) const override;
+    using collection_type_impl::deserialize;
+    template <FragmentedView View> data_value deserialize(View v, cql_serialization_format sf) const;
 };
 
 data_value make_list_value(data_type type, list_type_impl::native_type value);

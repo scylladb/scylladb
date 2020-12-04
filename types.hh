@@ -504,9 +504,26 @@ public:
     size_t hash(bytes_view v) const;
     bool equal(bytes_view v1, bytes_view v2) const;
     int32_t compare(bytes_view v1, bytes_view v2) const;
-    data_value deserialize(bytes_view v) const;
-    data_value deserialize_value(bytes_view v) const {
+
+private:
+    // Explicitly instantiated in .cc
+    template <FragmentedView View> data_value deserialize_impl(View v) const;
+public:
+    template <FragmentedView View> data_value deserialize(View v) const {
+        if (v.size_bytes() == v.current_fragment().size()) [[likely]] {
+            return deserialize_impl(single_fragmented_view(v.current_fragment()));
+        } else {
+            return deserialize_impl(v);
+        }
+    }
+    data_value deserialize(bytes_view v) const {
+        return deserialize_impl(single_fragmented_view(v));
+    }
+    template <FragmentedView View> data_value deserialize_value(View v) const {
         return deserialize(v);
+    }
+    data_value deserialize_value(bytes_view v) const {
+        return deserialize_impl(single_fragmented_view(v));
     };
     void validate(const fragmented_temporary_buffer::view& view, cql_serialization_format sf) const;
     void validate(bytes_view view, cql_serialization_format sf) const;
@@ -1108,6 +1125,26 @@ typename Type::value_type deserialize_value(Type& t, bytes_view v) {
     return t.deserialize_value(v);
 }
 
+// Does not check bounds. Must be called only after size is already checked.
+template<FragmentedView View>
+void read_fragmented(View& v, size_t n, bytes::value_type* out) {
+    while (n) {
+        if (n <= v.current_fragment().size()) {
+            std::copy_n(v.current_fragment().data(), n, out);
+            v.remove_prefix(n);
+            n = 0;
+        } else {
+            out = std::copy_n(v.current_fragment().data(), v.current_fragment().size(), out);
+            n -= v.current_fragment().size();
+            v.remove_current();
+        }
+    }
+}
+template<> void inline read_fragmented(single_fragmented_view& v, size_t n, bytes::value_type* out) {
+    std::copy_n(v.current_fragment().data(), n, out);
+    v.remove_prefix(n);
+}
+
 template<typename T>
 T read_simple(bytes_view& v) {
     if (v.size() < sizeof(T)) {
@@ -1118,6 +1155,21 @@ T read_simple(bytes_view& v) {
     return net::ntoh(*reinterpret_cast<const net::packed<T>*>(p));
 }
 
+template<typename T, FragmentedView View>
+T read_simple(View& v) {
+    if (v.current_fragment().size() >= sizeof(T)) [[likely]] {
+        auto p = v.current_fragment().data();
+        v.remove_prefix(sizeof(T));
+        return net::ntoh(*reinterpret_cast<const net::packed<T>*>(p));
+    } else if (v.size_bytes() >= sizeof(T)) {
+        T buf;
+        read_fragmented(v, sizeof(T), reinterpret_cast<bytes::value_type*>(&buf));
+        return net::ntoh(buf);
+    } else {
+        throw_with_backtrace<marshal_exception>(format("read_simple - not enough bytes (expected {:d}, got {:d})", sizeof(T), v.size_bytes()));
+    }
+}
+
 template<typename T>
 T read_simple_exactly(bytes_view v) {
     if (v.size() != sizeof(T)) {
@@ -1125,6 +1177,20 @@ T read_simple_exactly(bytes_view v) {
     }
     auto p = v.begin();
     return net::ntoh(*reinterpret_cast<const net::packed<T>*>(p));
+}
+
+template<typename T, FragmentedView View>
+T read_simple_exactly(View v) {
+    if (v.current_fragment().size() == sizeof(T)) [[likely]] {
+        auto p = v.current_fragment().data();
+        return net::ntoh(*reinterpret_cast<const net::packed<T>*>(p));
+    } else if (v.size_bytes() == sizeof(T)) {
+        T buf;
+        read_fragmented(v, sizeof(T), reinterpret_cast<bytes::value_type*>(&buf));
+        return net::ntoh(buf);
+    } else {
+        throw_with_backtrace<marshal_exception>(format("read_simple_exactly - size mismatch (expected {:d}, got {:d})", sizeof(T), v.size_bytes()));
+    }
 }
 
 inline
@@ -1138,17 +1204,14 @@ read_simple_bytes(bytes_view& v, size_t n) {
     return ret;
 }
 
-template<typename T>
-std::optional<T> read_simple_opt(bytes_view& v) {
-    if (v.empty()) {
-        return {};
+template<FragmentedView View>
+View read_simple_bytes(View& v, size_t n) {
+    if (v.size_bytes() < n) {
+        throw_with_backtrace<marshal_exception>(format("read_simple_bytes - not enough bytes (requested {:d}, got {:d})", n, v.size_bytes()));
     }
-    if (v.size() != sizeof(T)) {
-        throw_with_backtrace<marshal_exception>(format("read_simple_opt - size mismatch (expected {:d}, got {:d})", sizeof(T), v.size()));
-    }
-    auto p = v.begin();
-    v.remove_prefix(sizeof(T));
-    return { net::ntoh(*reinterpret_cast<const net::packed<T>*>(p)) };
+    auto prefix = v.prefix(n);
+    v.remove_prefix(n);
+    return prefix;
 }
 
 inline sstring read_simple_short_string(bytes_view& v) {

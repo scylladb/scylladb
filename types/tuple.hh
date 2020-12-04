@@ -93,6 +93,15 @@ private:
     }
 };
 
+template <FragmentedView View>
+std::optional<View> read_tuple_element(View& v) {
+    auto s = read_simple<int32_t>(v);
+    if (s < 0) {
+        return std::nullopt;
+    }
+    return read_simple_bytes(v, s);
+}
+
 class tuple_type_impl : public concrete_type<std::vector<data_value>> {
     using intern = type_interning_helper<tuple_type_impl, std::vector<data_type>>;
 protected:

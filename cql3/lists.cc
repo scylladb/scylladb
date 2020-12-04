@@ -125,18 +125,11 @@ lists::literal::to_string() const {
 
 lists::value
 lists::value::from_serialized(const fragmented_temporary_buffer::view& val, const list_type_impl& type, cql_serialization_format sf) {
-    return with_linearized(val, [&] (bytes_view v) {
-        return from_serialized(v, type, sf);
-    });
-}
-
-lists::value
-lists::value::from_serialized(bytes_view v, const list_type_impl& type, cql_serialization_format sf) {
     try {
         // Collections have this small hack that validate cannot be called on a serialized object,
         // but compose does the validation (so we're fine).
         // FIXME: deserializeForNativeProtocol()?!
-        auto l = value_cast<list_type_impl::native_type>(type.deserialize(v, sf));
+        auto l = value_cast<list_type_impl::native_type>(type.deserialize(val, sf));
         std::vector<bytes_opt> elements;
         elements.reserve(l.size());
         for (auto&& element : l) {
@@ -234,10 +227,10 @@ lists::marker::bind(const query_options& options) {
         return constants::UNSET_VALUE;
     } else {
         try {
-            return with_linearized(*value, [&] (bytes_view v) {
+            with_linearized(*value, [&] (bytes_view v) {
                 ltype.validate(v, options.get_cql_serialization_format());
-                return make_shared<lists::value>(value::from_serialized(v, ltype, options.get_cql_serialization_format()));
             });
+            return make_shared<lists::value>(value::from_serialized(*value, ltype, options.get_cql_serialization_format()));
         } catch (marshal_exception& e) {
             throw exceptions::invalid_request_exception(
                     format("Exception while binding column {:s}: {:s}", _receiver->name->to_cql_string(), e.what()));
@@ -308,9 +301,7 @@ lists::setter_by_index::execute(mutation& m, const clustering_key_prefix& prefix
         return;
     }
 
-    auto idx = with_linearized(*index, [] (bytes_view v) {
-        return value_cast<int32_t>(data_type_for<int32_t>()->deserialize(v));
-    });
+    auto idx = value_cast<int32_t>(data_type_for<int32_t>()->deserialize(*index));
     auto&& existing_list_opt = params.get_prefetched_list(m.key(), prefix, column);
     if (!existing_list_opt) {
         throw exceptions::invalid_request_exception("Attempted to set an element on a list which is null");

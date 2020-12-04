@@ -85,8 +85,7 @@ tuples::in_value::from_serialized(const fragmented_temporary_buffer::view& value
     try {
         // Collections have this small hack that validate cannot be called on a serialized object,
         // but the deserialization does the validation (so we're fine).
-      return with_linearized(value_view, [&] (bytes_view value) {
-        auto l = value_cast<list_type_impl::native_type>(type.deserialize(value, options.get_cql_serialization_format()));
+        auto l = value_cast<list_type_impl::native_type>(type.deserialize(value_view, options.get_cql_serialization_format()));
         auto ttype = dynamic_pointer_cast<const tuple_type_impl>(type.get_elements_type());
         assert(ttype);
 
@@ -96,7 +95,6 @@ tuples::in_value::from_serialized(const fragmented_temporary_buffer::view& value
             elements.emplace_back(to_bytes_opt_vec(ttype->split(ttype->decompose(e))));
         }
         return tuples::in_value(elements);
-      });
     } catch (marshal_exception& e) {
         throw exceptions::invalid_request_exception(e.what());
     }

@@ -54,9 +54,26 @@ public:
     virtual bool is_value_compatible_with_frozen(const collection_type_impl& previous) const = 0;
     template <typename BytesViewIterator>
     static bytes pack(BytesViewIterator start, BytesViewIterator finish, int elements, cql_serialization_format sf);
-    virtual data_value deserialize(bytes_view v, cql_serialization_format sf) const = 0;
-    data_value deserialize_value(bytes_view v, cql_serialization_format sf) const {
+
+private:
+    // Explicitly instantiated in types.cc
+    template <FragmentedView View> data_value deserialize_impl(View v, cql_serialization_format sf) const;
+public:
+    template <FragmentedView View> data_value deserialize(View v, cql_serialization_format sf) const {
+        if (v.size_bytes() == v.current_fragment().size()) [[likely]] {
+            return deserialize_impl(single_fragmented_view(v.current_fragment()), sf);
+        } else {
+            return deserialize_impl(v, sf);
+        }
+    }
+    template <FragmentedView View> data_value deserialize_value(View v, cql_serialization_format sf) const {
         return deserialize(v, sf);
+    }
+    data_value deserialize(bytes_view v, cql_serialization_format sf) const {
+        return deserialize_impl(single_fragmented_view(v), sf);
+    }
+    data_value deserialize_value(bytes_view v, cql_serialization_format sf) const {
+        return deserialize_impl(single_fragmented_view(v), sf);
     }
     bytes_opt reserialize(cql_serialization_format from, cql_serialization_format to, bytes_view_opt v) const;
 };

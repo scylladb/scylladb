@@ -644,6 +644,15 @@ size_t collection_value_len(cql_serialization_format sf) {
 }
 
 
+template <FragmentedView View>
+int read_collection_size(View& in, cql_serialization_format sf) {
+    if (sf.using_32_bits_for_collections()) {
+        return read_simple<int32_t>(in);
+    } else {
+        return read_simple<uint16_t>(in);
+    }
+}
+
 int read_collection_size(bytes_view& in, cql_serialization_format sf) {
     if (sf.using_32_bits_for_collections()) {
         return read_simple<int32_t>(in);
@@ -658,6 +667,12 @@ void write_collection_size(bytes::iterator& out, int size, cql_serialization_for
     } else {
         serialize_int16(out, uint16_t(size));
     }
+}
+
+template <FragmentedView View>
+View read_collection_value(View& in, cql_serialization_format sf) {
+    auto size = sf.using_32_bits_for_collections() ? read_simple<int32_t>(in) : read_simple<uint16_t>(in);
+    return read_simple_bytes(in, size);
 }
 
 bytes_view read_collection_value(bytes_view& in, cql_serialization_format sf) {
@@ -1063,15 +1078,14 @@ serialize_map(const map_type_impl& t, const void* value, bytes::iterator& out, c
     }
 }
 
+template <FragmentedView View>
 data_value
-map_type_impl::deserialize(bytes_view in, cql_serialization_format sf) const {
+map_type_impl::deserialize(View in, cql_serialization_format sf) const {
     native_type m;
     auto size = read_collection_size(in, sf);
     for (int i = 0; i < size; ++i) {
-        auto kb = read_collection_value(in, sf);
-        auto k = _keys->deserialize(kb);
-        auto vb = read_collection_value(in, sf);
-        auto v = _values->deserialize(vb);
+        auto k = _keys->deserialize(read_collection_value(in, sf));
+        auto v = _values->deserialize(read_collection_value(in, sf));
         m.insert(m.end(), std::make_pair(std::move(k), std::move(v)));
     }
     return make_value(std::move(m));
@@ -1231,8 +1245,9 @@ serialize_set(const set_type_impl& t, const void* value, bytes::iterator& out, c
     }
 }
 
+template <FragmentedView View>
 data_value
-set_type_impl::deserialize(bytes_view in, cql_serialization_format sf) const {
+set_type_impl::deserialize(View in, cql_serialization_format sf) const {
     auto nr = read_collection_size(in, sf);
     native_type s;
     s.reserve(nr);
@@ -1332,8 +1347,9 @@ serialize_list(const list_type_impl& t, const void* value, bytes::iterator& out,
     }
 }
 
+template <FragmentedView View>
 data_value
-list_type_impl::deserialize(bytes_view in, cql_serialization_format sf) const {
+list_type_impl::deserialize(View in, cql_serialization_format sf) const {
     auto nr = read_collection_size(in, sf);
     native_type s;
     s.reserve(nr);
@@ -1791,19 +1807,45 @@ static void serialize(const abstract_type& t, const void* value, bytes::iterator
     return ::serialize(t, value, out, cql_serialization_format::internal());
 }
 
-static data_value deserialize_aux(const tuple_type_impl& t, bytes_view v) {
+template <FragmentedView View>
+data_value collection_type_impl::deserialize_impl(View v, cql_serialization_format sf) const {
+    struct visitor {
+        View v;
+        cql_serialization_format sf;
+        data_value operator()(const abstract_type&) {
+            on_internal_error(tlogger, "collection_type_impl::deserialize called on a non-collection type. This should be impossible.");
+        }
+        data_value operator()(const list_type_impl& t) {
+            return t.deserialize(v, sf);
+        }
+        data_value operator()(const map_type_impl& t) {
+            return t.deserialize(v, sf);
+        }
+        data_value operator()(const set_type_impl& t) {
+            return t.deserialize(v, sf);
+        }
+    };
+    return ::visit(*this, visitor{v, sf});
+}
+// Explicit instantiation.
+// This should be repeated for every View type passed to collection_type_impl::deserialize.
+template data_value collection_type_impl::deserialize_impl<>(ser::buffer_view<bytes_ostream::fragment_iterator>, cql_serialization_format) const;
+template data_value collection_type_impl::deserialize_impl<>(fragmented_temporary_buffer::view, cql_serialization_format) const;
+template data_value collection_type_impl::deserialize_impl<>(single_fragmented_view, cql_serialization_format) const;
+
+template <FragmentedView View>
+data_value deserialize_aux(const tuple_type_impl& t, View v) {
     tuple_type_impl::native_type ret;
     ret.reserve(t.all_types().size());
     auto ti = t.all_types().begin();
-    auto vi = tuple_deserializing_iterator::start(v);
-    while (ti != t.all_types().end() && vi != tuple_deserializing_iterator::finish(v)) {
+    while (ti != t.all_types().end() && v.size_bytes()) {
         data_value obj = data_value::make_null(*ti);
-        if (*vi) {
-            obj = (*ti)->deserialize(**vi);
+        std::optional<View> e = read_tuple_element(v);
+        if (e) {
+            obj = (*ti)->deserialize(*e);
         }
         ret.push_back(std::move(obj));
         ++ti;
-        ++vi;
     }
     while (ti != t.all_types().end()) {
         ret.push_back(data_value::make_null(*ti++));
@@ -1811,105 +1853,139 @@ static data_value deserialize_aux(const tuple_type_impl& t, bytes_view v) {
     return data_value::make(t.shared_from_this(), std::make_unique<tuple_type_impl::native_type>(std::move(ret)));
 }
 
-static utils::multiprecision_int deserialize_value(const varint_type_impl&, bytes_view v) {
-    auto negative = v.front() < 0;
+template<FragmentedView View>
+utils::multiprecision_int deserialize_value(const varint_type_impl&, View v) {
+    bool negative = v.current_fragment().front() < 0;
     utils::multiprecision_int num;
-    for (uint8_t b : v) {
+  while (v.size_bytes()) {
+    for (uint8_t b : v.current_fragment()) {
         if (negative) {
             b = ~b;
         }
         num <<= 8;
         num += b;
     }
+    v.remove_current();
+  }
     if (negative) {
         num += 1;
     }
     return negative ? -num : num;
 }
 
-template <typename T> static T deserialize_value(const floating_type_impl<T>&, bytes_view v) {
+template<typename T, FragmentedView View>
+T deserialize_value(const floating_type_impl<T>&, View v) {
     typename int_of_size<T>::itype i = read_simple<typename int_of_size<T>::itype>(v);
-    if (!v.empty()) {
-        throw marshal_exception(format("cannot deserialize floating - {:d} bytes left", v.size()));
+    if (v.size_bytes()) {
+        throw marshal_exception(format("cannot deserialize floating - {:d} bytes left", v.size_bytes()));
     }
     T d;
     memcpy(&d, &i, sizeof(T));
     return d;
 }
 
-static big_decimal deserialize_value(const decimal_type_impl& , bytes_view v) {
+template<FragmentedView View>
+big_decimal deserialize_value(const decimal_type_impl&, View v) {
     auto scale = read_simple<int32_t>(v);
     auto unscaled = deserialize_value(static_cast<const varint_type_impl&>(*varint_type), v);
     return big_decimal(scale, unscaled);
 }
 
-static cql_duration deserialize_value(const duration_type_impl& t, bytes_view v) {
+template<FragmentedView View>
+cql_duration deserialize_value(const duration_type_impl& t, View v) {
     common_counter_type months, days, nanoseconds;
-    std::tie(months, days, nanoseconds) = deserialize_counters(v);
+    std::tie(months, days, nanoseconds) = with_linearized(v, [] (bytes_view bv) {
+        return deserialize_counters(bv);
+    });
     return cql_duration(months_counter(months), days_counter(days), nanoseconds_counter(nanoseconds));
 }
 
-static inet_address deserialize_value(const inet_addr_type_impl&, bytes_view v) {
-    switch (v.size()) {
+template<FragmentedView View>
+inet_address deserialize_value(const inet_addr_type_impl&, View v) {
+    switch (v.size_bytes()) {
     case 4:
         // gah. read_simple_be, please...
         return inet_address(::in_addr{net::hton(read_simple<uint32_t>(v))});
-    case 16:
-        return inet_address(*reinterpret_cast<const ::in6_addr*>(v.data()));
+    case 16:;
+        ::in6_addr buf;
+        read_fragmented(v, sizeof(buf), reinterpret_cast<bytes::value_type*>(&buf));
+        return inet_address(buf);
     default:
-        throw marshal_exception(format("cannot deserialize inet_address, unsupported size {:d} bytes", v.size()));
+        throw marshal_exception(format("cannot deserialize inet_address, unsupported size {:d} bytes", v.size_bytes()));
     }
 }
 
-static utils::UUID deserialize_value(const uuid_type_impl&, bytes_view v) {
+template<FragmentedView View>
+utils::UUID deserialize_value(const uuid_type_impl&, View v) {
     auto msb = read_simple<uint64_t>(v);
     auto lsb = read_simple<uint64_t>(v);
-    if (!v.empty()) {
-        throw marshal_exception(format("cannot deserialize uuid, {:d} bytes left", v.size()));
+    if (v.size_bytes()) {
+        throw marshal_exception(format("cannot deserialize uuid, {:d} bytes left", v.size_bytes()));
     }
     return utils::UUID(msb, lsb);
 }
 
-static utils::UUID deserialize_value(const timeuuid_type_impl&, bytes_view v) {
+template<FragmentedView View>
+utils::UUID deserialize_value(const timeuuid_type_impl&, View v) {
     return deserialize_value(static_cast<const uuid_type_impl&>(*uuid_type), v);
 }
 
-static db_clock::time_point deserialize_value(const timestamp_date_base_class&, bytes_view v) {
+template<FragmentedView View>
+db_clock::time_point deserialize_value(const timestamp_date_base_class&, View v) {
     auto v2 = read_simple_exactly<uint64_t>(v);
     return db_clock::time_point(db_clock::duration(v2));
 }
 
-static uint32_t deserialize_value(const simple_date_type_impl&, bytes_view v) {
+template<FragmentedView View>
+uint32_t deserialize_value(const simple_date_type_impl&, View v) {
     return read_simple_exactly<uint32_t>(v);
 }
 
-static int64_t deserialize_value(const time_type_impl&, bytes_view v) {
+template<FragmentedView View>
+int64_t deserialize_value(const time_type_impl&, View v) {
     return read_simple_exactly<int64_t>(v);
 }
 
-static bool deserialize_value(const boolean_type_impl&, bytes_view v) {
-    if (v.size() != 1) {
-        throw marshal_exception(format("cannot deserialize boolean, size mismatch ({:d})", v.size()));
+template<FragmentedView View>
+bool deserialize_value(const boolean_type_impl&, View v) {
+    if (v.size_bytes() != 1) {
+        throw marshal_exception(format("cannot deserialize boolean, size mismatch ({:d})", v.size_bytes()));
     }
-    return *v.begin() != 0;
+    return v.current_fragment().front() != 0;
 }
 
-template<typename T>
-static T deserialize_value(const integer_type_impl<T>& t, bytes_view v) {
+template<typename T, FragmentedView View>
+T deserialize_value(const integer_type_impl<T>& t, View v) {
     return read_simple_exactly<T>(v);
 }
 
-static sstring deserialize_value(const string_type_impl&, bytes_view v) {
+template<FragmentedView View>
+sstring deserialize_value(const string_type_impl&, View v) {
     // FIXME: validation?
-    return sstring(reinterpret_cast<const char*>(v.begin()), v.size());
+    sstring buf(sstring::initialized_later(), v.size_bytes());
+    auto out = buf.begin();
+    while (v.size_bytes()) {
+        out = std::copy(v.current_fragment().begin(), v.current_fragment().end(), out);
+        v.remove_current();
+    }
+    return buf;
+}
+
+template<typename T>
+requires requires (const T& t, bytes_view v) {
+    deserialize_value(t, single_fragmented_view(v));
+}
+decltype(auto) deserialize_value(const T& t, bytes_view v) {
+    return deserialize_value(t, single_fragmented_view(v));
 }
 
 namespace {
+template <FragmentedView View>
 struct deserialize_visitor {
-    bytes_view v;
+    View v;
     data_value operator()(const reversed_type_impl& t) { return t.underlying_type()->deserialize(v); }
     template <typename T> data_value operator()(const T& t) {
-        if (v.empty()) {
+        if (!v.size_bytes()) {
             return t.make_empty();
         }
         return t.make_value(deserialize_value(t, v));
@@ -1921,7 +1997,7 @@ struct deserialize_visitor {
          return t.make_value(deserialize_value(t, v));
     }
     data_value operator()(const bytes_type_impl& t) {
-        return t.make_value(std::make_unique<bytes_type_impl::native_type>(v.begin(), v.end()));
+        return t.make_value(std::make_unique<bytes_type_impl::native_type>(linearized(v)));
     }
     data_value operator()(const counter_type_impl& t) {
         return static_cast<const long_type_impl&>(*long_type).make_value(read_simple_exactly<int64_t>(v));
@@ -1941,9 +2017,15 @@ struct deserialize_visitor {
 };
 }
 
-data_value abstract_type::deserialize(bytes_view v) const {
-    return visit(*this, deserialize_visitor{v});
+template <FragmentedView View>
+data_value abstract_type::deserialize_impl(View v) const {
+    return visit(*this, deserialize_visitor<View>{v});
 }
+// Explicit instantiation.
+// This should be repeated for every type passed to deserialize().
+template data_value abstract_type::deserialize_impl<>(fragmented_temporary_buffer::view) const;
+template data_value abstract_type::deserialize_impl<>(single_fragmented_view) const;
+template data_value abstract_type::deserialize_impl<>(ser::buffer_view<bytes_ostream::fragment_iterator>) const;
 
 int32_t compare_aux(const tuple_type_impl& t, bytes_view v1, bytes_view v2) {
     // This is a slight modification of lexicographical_tri_compare:

@@ -133,9 +133,7 @@ class prefetch_data_builder {
             auto ctype = static_pointer_cast<const collection_type_impl>(type);
             type = map_type_impl::get_instance(ctype->name_comparator(), ctype->value_comparator(), true);
         }
-        cell->with_linearized([&] (bytes_view cell_view) {
-            cells.cells.emplace(def.ordinal_id, type->deserialize(cell_view));
-        });
+        cells.cells.emplace(def.ordinal_id, type->deserialize(*cell));
     };
 public:
     prefetch_data_builder(schema_ptr s, update_parameters::prefetch_data& data, const query::partition_slice& ps)
