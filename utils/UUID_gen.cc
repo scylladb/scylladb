@@ -168,6 +168,7 @@ UUID UUID_gen::get_name_UUID(const unsigned char *s, size_t len) {
     return get_UUID(digest);
 }
 
+const thread_local int64_t UUID_gen::spoof_node = make_thread_local_node(make_random_node());
 const thread_local int64_t UUID_gen::clock_seq_and_node = make_clock_seq_and_node();
 thread_local const std::unique_ptr<UUID_gen> UUID_gen::instance (new UUID_gen());
 

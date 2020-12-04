@@ -83,6 +83,16 @@ private:
     const specific_options _options;
     cql_serialization_format _cql_serialization_format;
     std::optional<std::vector<query_options>> _batch_options;
+    // We must use the same microsecond-precision timestamp for
+    // all cells created by an LWT statement or when a statement
+    // has a user-provided timestamp. In case the statement or
+    // a BATCH appends many values to a list, each value should
+    // get a unique and monotonic timeuuid. This sequence is
+    // used to make all time-based UUIDs:
+    // 1) share the same microsecond,
+    // 2) monotonic
+    // 3) unique.
+    mutable int _list_append_seq = 0;
 
 private:
     /**
@@ -239,6 +249,12 @@ public:
 
     const cql_config& get_cql_config() const {
         return _cql_config;
+    }
+
+    // Generate a next unique list sequence for list append, e.g.
+    // a = a + [val1, val2, ...]
+    int next_list_append_seq() const {
+        return _list_append_seq++;
     }
 
     void prepare(const std::vector<lw_shared_ptr<column_specification>>& specs);

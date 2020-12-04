@@ -387,10 +387,18 @@ lists::do_append(shared_ptr<term> value,
         collection_mutation_description appended;
         appended.cells.reserve(to_add.size());
         for (auto&& e : to_add) {
-            auto uuid1 = utils::UUID_gen::get_time_UUID_bytes();
-            auto uuid = bytes(reinterpret_cast<const int8_t*>(uuid1.data()), uuid1.size());
-            // FIXME: can e be empty?
-            appended.cells.emplace_back(std::move(uuid), params.make_cell(*ltype->value_comparator(), *e, atomic_cell::collection_member::yes));
+            try {
+                auto uuid1 = utils::UUID_gen::get_time_UUID_bytes_from_micros_and_submicros(
+                    params.timestamp(),
+                    params._options.next_list_append_seq());
+                auto uuid = bytes(reinterpret_cast<const int8_t*>(uuid1.data()), uuid1.size());
+                // FIXME: can e be empty?
+                appended.cells.emplace_back(
+                    std::move(uuid),
+                    params.make_cell(*ltype->value_comparator(), *e, atomic_cell::collection_member::yes));
+            } catch (utils::timeuuid_submicro_out_of_range) {
+                throw exceptions::invalid_request_exception("Too many list values per single CQL statement or batch");
+            }
         }
         m.set_cell(prefix, column, appended.serialize(*ltype));
     } else {
