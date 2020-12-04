@@ -694,6 +694,32 @@ void write_collection_value(bytes::iterator& out, cql_serialization_format sf, b
     out = std::copy_n(val_bytes.begin(), val_bytes.size(), out);
 }
 
+// Passing the wrong integer type to a generic serialization function is a particularly
+// easy mistake to do, so we want to disable template parameter deduction here.
+// Hence std::type_identity.
+template<typename T>
+void write_simple(bytes_ostream& out, std::type_identity_t<T> val) {
+    auto val_be = net::hton(val);
+    auto val_ptr = reinterpret_cast<const bytes::value_type*>(&val_be);
+    out.write(bytes_view(val_ptr, sizeof(T)));
+}
+
+void write_collection_value(bytes_ostream& out, cql_serialization_format sf, data::value_view val) {
+    if (sf.using_32_bits_for_collections()) {
+        write_simple<int32_t>(out, int32_t(val.size_bytes()));
+    } else {
+        if (val.size_bytes() > std::numeric_limits<uint16_t>::max()) {
+            throw marshal_exception(
+                    format("Collection value exceeds the length limit for protocol v{:d}. Collection values are limited to {:d} bytes but {:d} bytes value provided",
+                            sf.protocol_version(), std::numeric_limits<uint16_t>::max(), val.size_bytes()));
+        }
+        write_simple<uint16_t>(out, uint16_t(val.size_bytes()));
+    }
+    for (auto&& frag : val) {
+        out.write(frag);
+    }
+}
+
 shared_ptr<const abstract_type> abstract_type::underlying_type() const {
     struct visitor {
         shared_ptr<const abstract_type> operator()(const abstract_type& t) { return t.shared_from_this(); }
