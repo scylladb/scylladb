@@ -3123,10 +3123,10 @@ static bytes_ostream serialize_for_cql_aux(const user_type_impl& type, collectio
     return out;
 }
 
-bytes serialize_for_cql(const abstract_type& type, collection_mutation_view v, cql_serialization_format sf) {
+bytes_ostream serialize_for_cql(const abstract_type& type, collection_mutation_view v, cql_serialization_format sf) {
     assert(type.is_multi_cell());
 
-    return linearized(v.with_deserialized(type, [&] (collection_mutation_view_description mv) {
+    return v.with_deserialized(type, [&] (collection_mutation_view_description mv) {
         return visit(type, make_visitor(
             [&] (const map_type_impl& ctype) { return serialize_for_cql_aux(ctype, std::move(mv), sf); },
             [&] (const set_type_impl& ctype) { return serialize_for_cql_aux(ctype, std::move(mv), sf); },
@@ -3136,7 +3136,7 @@ bytes serialize_for_cql(const abstract_type& type, collection_mutation_view v, c
                 throw std::runtime_error(format("attempted to serialize a collection of cells with type: {}", o.name()));
             }
         ));
-    }));
+    });
 }
 
 bytes serialize_field_index(size_t idx) {
