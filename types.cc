@@ -3042,7 +3042,7 @@ static bytes_view linearized(const data::value_view& v, std::vector<bytes>& stor
     return v.first_fragment();
 }
 
-static bytes serialize_for_cql_aux(const map_type_impl&, collection_mutation_view_description mut, cql_serialization_format sf) {
+static bytes_ostream serialize_for_cql_aux(const map_type_impl&, collection_mutation_view_description mut, cql_serialization_format sf) {
     bytes_ostream out;
     auto len_slot = out.write_place_holder(collection_size_len(sf));
     int elements = 0;
@@ -3054,10 +3054,10 @@ static bytes serialize_for_cql_aux(const map_type_impl&, collection_mutation_vie
         }
     }
     write_collection_size(len_slot, elements, sf);
-    return linearized(out);
+    return out;
 }
 
-static bytes serialize_for_cql_aux(const set_type_impl&, collection_mutation_view_description mut, cql_serialization_format sf) {
+static bytes_ostream serialize_for_cql_aux(const set_type_impl&, collection_mutation_view_description mut, cql_serialization_format sf) {
     bytes_ostream out;
     auto len_slot = out.write_place_holder(collection_size_len(sf));
     int elements = 0;
@@ -3068,10 +3068,10 @@ static bytes serialize_for_cql_aux(const set_type_impl&, collection_mutation_vie
         }
     }
     write_collection_size(len_slot, elements, sf);
-    return linearized(out);
+    return out;
 }
 
-static bytes serialize_for_cql_aux(const list_type_impl&, collection_mutation_view_description mut, cql_serialization_format sf) {
+static bytes_ostream serialize_for_cql_aux(const list_type_impl&, collection_mutation_view_description mut, cql_serialization_format sf) {
     bytes_ostream out;
     auto len_slot = out.write_place_holder(collection_size_len(sf));
     int elements = 0;
@@ -3082,10 +3082,10 @@ static bytes serialize_for_cql_aux(const list_type_impl&, collection_mutation_vi
         }
     }
     write_collection_size(len_slot, elements, sf);
-    return linearized(out);
+    return out;
 }
 
-static bytes serialize_for_cql_aux(const user_type_impl& type, collection_mutation_view_description mut, cql_serialization_format) {
+static bytes_ostream serialize_for_cql_aux(const user_type_impl& type, collection_mutation_view_description mut, cql_serialization_format) {
     assert(type.is_multi_cell());
     assert(mut.cells.size() <= type.size());
 
@@ -3120,23 +3120,23 @@ static bytes serialize_for_cql_aux(const user_type_impl& type, collection_mutati
         ++curr_field_pos;
     }
 
-    return linearized(out);
+    return out;
 }
 
 bytes serialize_for_cql(const abstract_type& type, collection_mutation_view v, cql_serialization_format sf) {
     assert(type.is_multi_cell());
 
-    return v.with_deserialized(type, [&] (collection_mutation_view_description mv) {
+    return linearized(v.with_deserialized(type, [&] (collection_mutation_view_description mv) {
         return visit(type, make_visitor(
             [&] (const map_type_impl& ctype) { return serialize_for_cql_aux(ctype, std::move(mv), sf); },
             [&] (const set_type_impl& ctype) { return serialize_for_cql_aux(ctype, std::move(mv), sf); },
             [&] (const list_type_impl& ctype) { return serialize_for_cql_aux(ctype, std::move(mv), sf); },
             [&] (const user_type_impl& utype) { return serialize_for_cql_aux(utype, std::move(mv), sf); },
-            [&] (const abstract_type& o) -> bytes {
+            [&] (const abstract_type& o) -> bytes_ostream {
                 throw std::runtime_error(format("attempted to serialize a collection of cells with type: {}", o.name()));
             }
         ));
-    });
+    }));
 }
 
 bytes serialize_field_index(size_t idx) {
