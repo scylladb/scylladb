@@ -3089,9 +3089,7 @@ static bytes serialize_for_cql_aux(const user_type_impl& type, collection_mutati
     assert(type.is_multi_cell());
     assert(mut.cells.size() <= type.size());
 
-    std::vector<bytes> linearized_values;
-    std::vector<bytes_view_opt> tmp;
-    tmp.resize(type.size());
+    bytes_ostream out;
 
     size_t curr_field_pos = 0;
     for (auto&& e : mut.cells) {
@@ -3100,22 +3098,29 @@ static bytes serialize_for_cql_aux(const user_type_impl& type, collection_mutati
 
         // Some fields don't have corresponding cells -- these fields are null.
         while (curr_field_pos < field_pos) {
-            tmp[curr_field_pos++] = std::nullopt;
+            write_simple<int32_t>(out, int32_t(-1));
+            ++curr_field_pos;
         }
 
         if (e.second.is_live(mut.tomb, false)) {
-            tmp[curr_field_pos++] = linearized(e.second.value(), linearized_values);
+            auto value = e.second.value();
+            write_simple<int32_t>(out, int32_t(value.size_bytes()));
+            for (auto&& frag : value) {
+                out.write(frag);
+            }
         } else {
-            tmp[curr_field_pos++] = std::nullopt;
+            write_simple<int32_t>(out, int32_t(-1));
         }
+        ++curr_field_pos;
     }
 
     // Trailing null fields
     while (curr_field_pos < type.size()) {
-        tmp[curr_field_pos++] = std::nullopt;
+        write_simple<int32_t>(out, int32_t(-1));
+        ++curr_field_pos;
     }
 
-    return tuple_type_impl::build_value(std::move(tmp));
+    return linearized(out);
 }
 
 bytes serialize_for_cql(const abstract_type& type, collection_mutation_view v, cql_serialization_format sf) {
