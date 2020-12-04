@@ -538,11 +538,11 @@ if __name__ == '__main__':
                 if interactive:
                     skip_choose_swap_directory = interactive_ask_service('Do you want to create swapfile on root directory?', 'Anser yes to create swapfile on /, no to choose swap directory.', True)
                     if not skip_choose_swap_directory:
-                        swap_directory = interactive_choose_swap_directory()
+                        args.swap_directory = swap_directory = interactive_choose_swap_directory()
 
                     skip_choose_swap_size = interactive_ask_service('Do you want to auto configure swap size?', 'Anser yes to auto configure, no to manually configure swap size.', True)
                     if not skip_choose_swap_size:
-                        swap_size = interactive_choose_swap_size()
+                        args.swap_size = swap_size = interactive_choose_swap_size()
 
                 if swap_directory:
                     options += f' --swap-directory {swap_directory}'
