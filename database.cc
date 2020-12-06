@@ -1592,7 +1592,7 @@ future<mutation> database::do_apply_counter_update(column_family& cf, const froz
                 // ...now, that we got existing state of all affected counter
                 // cells we can look for our shard in each of them, increment
                 // its clock and apply the delta.
-                transform_counter_updates_to_shards(m, mopt ? &*mopt : nullptr, cf.failed_counter_applies_to_memtable());
+                transform_counter_updates_to_shards(m, mopt ? &*mopt : nullptr, cf.failed_counter_applies_to_memtable(), _local_host_id);
                 tracing::trace(trace_state, "Applying counter update");
                 return this->apply_with_commitlog(cf, m, timeout);
             }).then([&m] {

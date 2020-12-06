@@ -1312,6 +1312,7 @@ private:
     std::unique_ptr<compaction_manager> _compaction_manager;
     seastar::metrics::metric_groups _metrics;
     bool _enable_incremental_backups = false;
+    utils::UUID _local_host_id;
 
     query::querier_cache _querier_cache;
 
@@ -1340,6 +1341,9 @@ public:
     const gms::feature_service& features() const { return _feat; }
     future<> apply_in_memory(const frozen_mutation& m, schema_ptr m_schema, db::rp_handle&&, db::timeout_clock::time_point timeout);
     future<> apply_in_memory(const mutation& m, column_family& cf, db::rp_handle&&, db::timeout_clock::time_point timeout);
+
+    void set_local_id(utils::UUID uuid) noexcept { _local_host_id = std::move(uuid); }
+
 private:
     // Unless you are an earlier boostraper or the database itself, you should
     // not be using this directly.  Go for the public create_keyspace instead.

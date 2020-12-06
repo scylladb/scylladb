@@ -43,7 +43,6 @@
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include "locator/token_metadata.hh"
 #include "gms/gossiper.hh"
-#include "utils/UUID_gen.hh"
 #include <seastar/core/distributed.hh>
 #include "dht/i_partitioner.hh"
 #include "dht/token_range_endpoints.hh"
@@ -844,11 +843,6 @@ private:
     void do_isolate_on_error(disk_error type);
     future<> isolate();
 
-    utils::UUID _local_host_id;
-public:
-    utils::UUID get_local_id() const { return _local_host_id; }
-
-private:
     void notify_down(inet_address endpoint);
     void notify_left(inet_address endpoint);
     void notify_up(inet_address endpoint);

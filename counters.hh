@@ -61,8 +61,6 @@ public:
         return !(*this == other);
     }
 public:
-    static counter_id local();
-
     // For tests.
     static counter_id generate_random() {
         return counter_id(utils::make_random_uuid());
@@ -405,11 +403,6 @@ public:
         return *it;
     }
 
-    std::optional<counter_shard_view> local_shard() const {
-        // TODO: consider caching local shard position
-        return get_shard(counter_id::local());
-    }
-
     bool operator==(const basic_counter_cell_view& other) const {
         return timestamp() == other.timestamp() && boost::equal(shards(), other.shards());
     }
@@ -451,7 +444,7 @@ struct counter_cell_mutable_view : basic_counter_cell_view<mutable_view::yes> {
 // Transforms mutation dst from counter updates to counter shards using state
 // stored in current_state.
 // If current_state is present it has to be in the same schema as dst.
-void transform_counter_updates_to_shards(mutation& dst, const mutation* current_state, uint64_t clock_offset);
+void transform_counter_updates_to_shards(mutation& dst, const mutation* current_state, uint64_t clock_offset, utils::UUID local_id);
 
 template<>
 struct appending_hash<counter_shard_view> {

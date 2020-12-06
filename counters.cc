@@ -19,15 +19,9 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "service/storage_service.hh"
 #include "counters.hh"
 #include "mutation.hh"
 #include "combine.hh"
-
-counter_id counter_id::local()
-{
-    return counter_id(service::get_local_storage_service().get_local_id());
-}
 
 std::ostream& operator<<(std::ostream& os, const counter_id& id) {
     return os << id.to_uuid();
@@ -197,10 +191,10 @@ std::optional<atomic_cell> counter_cell_view::difference(atomic_cell_view a, ato
 }
 
 
-void transform_counter_updates_to_shards(mutation& m, const mutation* current_state, uint64_t clock_offset) {
+void transform_counter_updates_to_shards(mutation& m, const mutation* current_state, uint64_t clock_offset, utils::UUID local_id) {
     // FIXME: allow current_state to be frozen_mutation
 
-    auto transform_new_row_to_shards = [&s = *m.schema(), clock_offset] (column_kind kind, auto& cells) {
+    auto transform_new_row_to_shards = [&s = *m.schema(), clock_offset, local_id] (column_kind kind, auto& cells) {
         cells.for_each_cell([&] (column_id id, atomic_cell_or_collection& ac_o_c) {
             auto& cdef = s.column_at(kind, id);
             auto acv = ac_o_c.as_atomic_cell(cdef);
@@ -208,7 +202,7 @@ void transform_counter_updates_to_shards(mutation& m, const mutation* current_st
                 return; // continue -- we are in lambda
             }
             auto delta = acv.counter_update_value();
-            auto cs = counter_shard(counter_id::local(), delta, clock_offset + 1);
+            auto cs = counter_shard(counter_id(local_id), delta, clock_offset + 1);
             ac_o_c = counter_cell_builder::from_single_shard(acv.timestamp(), cs);
         });
     };
@@ -223,7 +217,7 @@ void transform_counter_updates_to_shards(mutation& m, const mutation* current_st
 
     clustering_key::less_compare cmp(*m.schema());
 
-    auto transform_row_to_shards = [&s = *m.schema(), clock_offset] (column_kind kind, auto& transformee, auto& state) {
+    auto transform_row_to_shards = [&s = *m.schema(), clock_offset, local_id] (column_kind kind, auto& transformee, auto& state) {
         std::deque<std::pair<column_id, counter_shard>> shards;
         state.for_each_cell([&] (column_id id, const atomic_cell_or_collection& ac_o_c) {
             auto& cdef = s.column_at(kind, id);
@@ -232,7 +226,7 @@ void transform_counter_updates_to_shards(mutation& m, const mutation* current_st
                 return; // continue -- we are in lambda
             }
           counter_cell_view::with_linearized(acv, [&] (counter_cell_view ccv) {
-            auto cs = ccv.local_shard();
+            auto cs = ccv.get_shard(counter_id(local_id));
             if (!cs) {
                 return; // continue
             }
@@ -253,7 +247,7 @@ void transform_counter_updates_to_shards(mutation& m, const mutation* current_st
             auto delta = acv.counter_update_value();
 
             if (shards.empty() || shards.front().first > id) {
-                auto cs = counter_shard(counter_id::local(), delta, clock_offset + 1);
+                auto cs = counter_shard(counter_id(local_id), delta, clock_offset + 1);
                 ac_o_c = counter_cell_builder::from_single_shard(acv.timestamp(), cs);
             } else {
                 auto& cs = shards.front().second;
