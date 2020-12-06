@@ -85,21 +85,21 @@ future<> large_data_handler::maybe_delete_large_data_entries(sstables::shared_ss
 
     future<> large_partitions = make_ready_future<>();
     auto entry = sst->get_large_data_stat(sstables::large_data_type::partition_size);
-    if (entry ? entry->above_threshold : (data_size > _partition_threshold_bytes)) {
+    if (entry && entry->above_threshold) {
         large_partitions = with_sem([schema, filename, this] () mutable {
             return delete_large_data_entries(*schema, std::move(filename), db::system_keyspace::LARGE_PARTITIONS);
         });
     }
     future<> large_rows = make_ready_future<>();
     entry = sst->get_large_data_stat(sstables::large_data_type::row_size);
-    if (entry ? entry->above_threshold : (data_size > _row_threshold_bytes)) {
+    if (entry && entry->above_threshold) {
         large_rows = with_sem([schema, filename, this] () mutable {
             return delete_large_data_entries(*schema, std::move(filename), db::system_keyspace::LARGE_ROWS);
         });
     }
     future<> large_cells = make_ready_future<>();
     entry = sst->get_large_data_stat(sstables::large_data_type::cell_size);
-    if (entry ? entry->above_threshold : (data_size > _cell_threshold_bytes)) {
+    if (entry && entry->above_threshold) {
         large_cells = with_sem([schema, filename, this] () mutable {
             return delete_large_data_entries(*schema, std::move(filename), db::system_keyspace::LARGE_CELLS);
         });
