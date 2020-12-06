@@ -1,5 +1,4 @@
-Protocol extensions to the Cassandra Native Protocol
-====================================================
+# Protocol extensions to the Cassandra Native Protocol
 
 This document specifies extensions to the protocol defined
 by Cassandra's native_protocol_v4.spec and native_protocol_v5.spec.
@@ -14,7 +13,7 @@ beginning with `SCYLLA` indicating extensions defined in this document, in
 addition to options documented by Cassandra. How to use the extension
 is further explained in this document.
 
-# Extending protocol extensions support
+## Extending protocol extensions support
 
 As mentioned above, in order to use a protocol extension feature by both
 server and client, they need to negotiate the used feature set when establishing
@@ -40,7 +39,7 @@ Both client and server use the same string identifiers for the keys to determine
 negotiated extension set, judging by the presence of a particular key in the
 SUPPORTED/STARTUP messages.
 
-# Intranode sharding
+## Intranode sharding
 
 This extension allows the driver to discover how Scylla internally
 partitions data among logical cores. It can then create at least
@@ -119,7 +118,7 @@ is for Java):
 It is recommended that drivers open connections until they have at
 least one connection per shard, then close excess connections.
 
-# LWT prepared statements metadata mark
+## LWT prepared statements metadata mark
 
 This extension allows the driver to discover whether LWT statements have a
 special bit set in prepared statement metadata flags, which indicates that

@@ -1,3 +1,5 @@
+# Hinted Handoff Design
+
 ## Abstract
 Hinted Handoff is a feature that allows replaying failed writes. The mutation and the destination replica are saved in a log and replayed later according to the feature configuration. 
 

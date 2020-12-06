@@ -55,7 +55,7 @@ That said GDB is an indispensable tool in debugging coredumps and when
 used right can be of great help.
 
 Over the years we have collected a set of tools for helping with debugging
-scylla. These are collected in [scylla-gdb.py](../scylla-gdb.py) and are in
+scylla. These are collected in [``scylla-gdb.py``](https://github.com/scylladb/scylla/blob/master/scylla-gdb.py) and are in
 the form of [commands](https://sourceware.org/gdb/onlinedocs/gdb/Commands.html#Commands),
 [conveninence functions](https://sourceware.org/gdb/onlinedocs/gdb/Convenience-Funs.html#Convenience-Funs)
 and [pretty printers](https://sourceware.org/gdb/onlinedocs/gdb/Pretty-Printing.html#Pretty-Printing).
@@ -272,7 +272,7 @@ be easily identified by looking at its vtable pointer (`x/1a $ptr`).
 
 Up until release 3.0 we used to build and package Scylla separately for each
 supported distribution. Starting with 3.1 we moved to relocatable binaries.
-These are built with a common [frozen toolchain](../tools/toolchain/README.md)
+These are built with a common [frozen toolchain](https://github.com/scylladb/scylla/blob/master/tools/toolchain/README.md)
 and packages are bundled with all dependencies. This means that post 3.1 there
 is just one build across all supported distros and that the exact environment
 the binaries were built with is available in the form of a Docker image. This
@@ -285,7 +285,7 @@ binaries.
 #### Relocatable binaries
 
 Cores produced by relocatable binaries can be simply opened in the
-[dbuild](../tools/toolchain/README.md) container they were built with. To do
+[dbuild](https://github.com/scylladb/scylla/blob/master/tools/toolchain/README.md) container they were built with. To do
 that, two things (apart from the core itself of course) are needed:
 1) The exact frozen toolchain (dbuild container).
 2) The exact relocatable package the binary was part of.

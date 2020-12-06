@@ -1,4 +1,6 @@
-# How to use this document
+# Review Checklist
+
+## How to use this document
 
 This document describes general guidelines for reviewing patches to
 Scylla. The guidelines are not absolute; with good reason they can be
@@ -6,19 +8,19 @@ overridden at the discretion of the maintainers. Nevertheless, patches
 should try to conform to these guidelines instead of finding reasons for
 seeking an exception.
 
-# Code style
+## Code style
 
 Code should conform to the project's coding style, see
 [coding-style.md](./coding-style.md).
 
-# Naming
+## Naming
 
 Names should avoid abbreviations (industry-standard abbreviations
 are acceptable) as they make the code opaque to newcomers. Within
 a restricted scope such as a function or a class, local or private
 variables can be given abbreviated names.
 
-# Micro-performance
+## Micro-performance
 
 The following should be avoided:
  - computational loops without preemption checks and yields
@@ -26,7 +28,7 @@ The following should be avoided:
    code
  - quadratic (or worse) behavior on user-controlled inputs
 
-# Concurrency
+## Concurrency
 
 Code that generates concurrent behavior should include means to control
 the amount of concurrency, placing an upper bound on the amount of memory
@@ -36,7 +38,7 @@ If a component performs work in the background, it would include a mechanism
 (`stop()` or `close()`) to wait for background work to complete. If background
 work is unbounded in time, the code should be able to abort in-progress work.
 
-# Unit testing
+## Unit testing
 
 Patches should be accompanied by unit test when feasible.
  - patches that fix a bug should be accompanied by a test that fails
@@ -45,7 +47,7 @@ Patches should be accompanied by unit test when feasible.
    test all aspects of that code, not just those that are used by
    the patchset.
 
-# Templates
+## Templates
 
 In non performance sensitive code, type erasure should be preferred
 to templates in order to reduce code and compile time bloat. In performance
@@ -58,14 +60,14 @@ Templates should not be used as an ad-hoc method to reduce code duplication;
 rather they should be used when a common concept can be captured in
 template code and reused.
 
-# Singletons
+## Singletons
 
 The singleton pattern should be avoided when it can introduce
 confusion about initialization order or make unit testing difficult. Instead,
 dependencies should be passed via constructor parameters (the "dependency
 injection" pattern).
 
-# Invariant checking in scylla
+## Invariant checking in scylla
 
 Non obvious invariants should be checked. There are three ways of
 doing it, asserts, throwing exceptions and logging failures.

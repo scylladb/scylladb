@@ -25,3 +25,5 @@ tags
 testlog
 test/*/*.reject
 .vscode
+docs/_build
+docs/poetry.lock

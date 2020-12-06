@@ -13,4 +13,4 @@ User documentation can be found on
 [docs.scylladb.com](https://docs.scylladb.com/)
 
 For information on how to build Scylla and how to contribute visit
-[HACKING.md](../HACKING.md) and [CONTRIBUTING.md](../CONTRIBUTING.md).
+[HACKING.md](HACKING.md) and [CONTRIBUTING.md](CONTRIBUTING.md).

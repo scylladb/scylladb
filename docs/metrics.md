@@ -176,7 +176,7 @@ includes a textual description in a comment above each metric.
 
 TODO: mention source files in which a developer should add new metrics.
 
-# Prometheus
+## Prometheus
 So far, we described Scylla's internal metric-retrieval recapability,
 a REST API for retrieving the current values of all metrics from a single
 node. But in production, as well as more advanced debugging sessions, one
@@ -221,7 +221,7 @@ Prometheus supports many more functions and aggregations, which are described
 in its documentation:
 https://prometheus.io/docs/prometheus/latest/querying/basics/
 
-# Grafana
+## Grafana
 While Prometheus already allows analyzing and graphing metric data, Grafana
 is a more advanced user interface which allows displaying many of these graphs
 in professional-looking "dashboards" which are more convenient for end-users
