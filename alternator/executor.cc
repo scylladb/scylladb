@@ -2251,19 +2251,30 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
                     rjson::value v1 = calculate_value(base, calculate_value_caller::UpdateExpression, previous_item.get());
                     rjson::value v2 = calculate_value(addition, calculate_value_caller::UpdateExpression, previous_item.get());
                     rjson::value result;
-                    std::string v1_type = get_item_type_string(v1);
-                    if (v1_type == "N") {
-                        if (get_item_type_string(v2) != "N") {
-                            throw api_error::validation(format("Incorrect operand type for operator or function. Expected {}: {}", v1_type, rjson::print(v2)));
+                    // An ADD can be used to create a new attribute (when
+                    // v1.IsNull()) or to add to a pre-existing attribute:
+                    if (v1.IsNull()) {
+                        std::string v2_type = get_item_type_string(v2);
+                        if (v2_type == "N" || v2_type == "SS" || v2_type == "NS" || v2_type == "BS") {
+                            result = v2;
+                        } else {
+                            throw api_error::validation(format("An operand in the update expression has an incorrect data type: {}", v2));
                         }
-                        result = number_add(v1, v2);
-                    } else if (v1_type == "SS" || v1_type == "NS" || v1_type == "BS") {
-                        if (get_item_type_string(v2) != v1_type) {
-                            throw api_error::validation(format("Incorrect operand type for operator or function. Expected {}: {}", v1_type, rjson::print(v2)));
-                        }
-                        result = set_sum(v1, v2);
                     } else {
-                        throw api_error::validation(format("An operand in the update expression has an incorrect data type: {}", v1));
+                        std::string v1_type = get_item_type_string(v1);
+                        if (v1_type == "N") {
+                            if (get_item_type_string(v2) != "N") {
+                                throw api_error::validation(format("Incorrect operand type for operator or function. Expected {}: {}", v1_type, rjson::print(v2)));
+                            }
+                            result = number_add(v1, v2);
+                        } else if (v1_type == "SS" || v1_type == "NS" || v1_type == "BS") {
+                            if (get_item_type_string(v2) != v1_type) {
+                                throw api_error::validation(format("Incorrect operand type for operator or function. Expected {}: {}", v1_type, rjson::print(v2)));
+                            }
+                            result = set_sum(v1, v2);
+                        } else {
+                            throw api_error::validation(format("An operand in the update expression has an incorrect data type: {}", v1));
+                        }
                     }
                     do_update(to_bytes(column_name), result);
                 },
