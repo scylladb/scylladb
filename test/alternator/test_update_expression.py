@@ -659,6 +659,24 @@ def test_update_expression_add_numbers(test_table_s):
             UpdateExpression='ADD b :val1',
             ExpressionAttributeValues={':val1': 1})
 
+# In test_update_expression_add_numbers() above we tested ADDing a number to
+# an existing number. The following test check that ADD can be used to
+# create a *new* number, as if it was added to zero.
+def test_update_expression_add_numbers_new(test_table_s):
+    # Test that "ADD" can create a new number attribute:
+    p = random_string()
+    test_table_s.put_item(Item={'p': p, 'a': 'hello'})
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='ADD b :val1',
+        ExpressionAttributeValues={':val1': 7})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['b'] == 7
+    # Test that "ADD" can create an entirely new item:
+    p = random_string()
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='ADD b :val1',
+        ExpressionAttributeValues={':val1': 8})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['b'] == 8
+
 # Test "ADD" operation for sets
 def test_update_expression_add_sets(test_table_s):
     p = random_string()
@@ -686,6 +704,24 @@ def test_update_expression_add_sets(test_table_s):
         test_table_s.update_item(Key={'p': p},
             UpdateExpression='ADD a :val1',
             ExpressionAttributeValues={':val1': 'hello'})
+
+# In test_update_expression_add_sets() above we tested ADDing elements to an
+# existing set. The following test checks that ADD can be used to create a
+# *new* set, by adding its first item.
+def test_update_expression_add_sets_new(test_table_s):
+    # Test that "ADD" can create a new set attribute:
+    p = random_string()
+    test_table_s.put_item(Item={'p': p, 'a': 'hello'})
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='ADD b :val1',
+        ExpressionAttributeValues={':val1': set(['dog'])})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['b'] == set(['dog'])
+    # Test that "ADD" can create an entirely new item:
+    p = random_string()
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='ADD b :val1',
+        ExpressionAttributeValues={':val1': set(['cat'])})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['b'] == set(['cat'])
 
 # Test "DELETE" operation for sets
 def test_update_expression_delete_sets(test_table_s):
