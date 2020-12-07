@@ -2925,12 +2925,20 @@
          "id":"toppartitions_query_results",
          "description":"nodetool toppartitions query results",
          "properties":{
+            "read_cardinality":{
+               "type":"long",
+               "description":"Number of the unique operations in the sample set"
+            },
             "read":{
                "type":"array",
                "items":{
                   "type":"toppartitions_record"
                },
                "description":"Read results"
+            },
+            "write_cardinality":{
+               "type":"long",
+               "description":"Number of the unique operations in the sample set"
             },
             "write":{
                "type":"array",

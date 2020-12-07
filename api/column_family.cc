@@ -991,6 +991,9 @@ void set_column_family(http_context& ctx, routes& r) {
                         apilog.debug("toppartitions query: processing results");
                         cf::toppartitions_query_results results;
 
+                        results.read_cardinality = topk_results.read.size();
+                        results.write_cardinality = topk_results.write.size();
+
                         for (auto& d: topk_results.read.top(q.list_size())) {
                             cf::toppartitions_record r;
                             r.partition = sstring(d.item);
