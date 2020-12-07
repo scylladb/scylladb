@@ -1228,6 +1228,7 @@ int main(int ac, char** av) {
 
             if (cfg->alternator_port() || cfg->alternator_https_port()) {
                 alternator::rmw_operation::set_default_write_isolation(cfg->alternator_write_isolation());
+                alternator::executor::set_default_timeout(std::chrono::milliseconds(cfg->alternator_timeout_in_ms()));
                 static sharded<alternator::executor> alternator_executor;
                 static sharded<alternator::server> alternator_server;
 

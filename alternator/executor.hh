@@ -121,6 +121,10 @@ public:
 
     static sstring table_name(const schema&);
     static db::timeout_clock::time_point default_timeout();
+    static void set_default_timeout(db::timeout_clock::duration timeout);
+private:
+    static db::timeout_clock::duration s_default_timeout;
+public:
     static schema_ptr find_table(service::storage_proxy&, const rjson::value& request);
 
 private:

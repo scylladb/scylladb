@@ -85,6 +85,7 @@ ln -s "$SCYLLA" "$SCYLLA_LINK"
         --alternator-enforce-authorization=1 \
         --alternator-write-isolation=always_use_lwt \
         --alternator-streams-time-window-s=0 \
+        --alternator-timeout-in-ms 30000 \
         --developer-mode=1 \
         --experimental-features=alternator-streams \
         --ring-delay-ms 0 --collectd 0 \
