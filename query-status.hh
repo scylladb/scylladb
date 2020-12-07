@@ -57,7 +57,7 @@ public:
         return static_cast<uint8_t>(_value);
     }
     friend struct ser::serializer<status>;
-
+    bool operator==(const status& other) const = default;
 };
 
 }
