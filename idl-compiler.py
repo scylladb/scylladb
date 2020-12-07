@@ -375,7 +375,7 @@ def declare_class(hout, name, ns_open, ns_close):
     fprintln(hout, "\n", clas_def)
 
 
-def declear_methods(hout, name, template_param=""):
+def declare_methods(hout, name, template_param=""):
     if config.ns != '':
         fprintln(hout, "namespace ", config.ns, " {")
     fprintln(hout, f"""
@@ -400,7 +400,7 @@ def handle_enum(enum, hout, cout, namespaces, parent_template_param=[]):
     temp_def = ", ".join(map(lambda a: a.typename + " " + a.name, parent_template_param)) if parent_template_param else ""
     template = "template <" + temp_def + ">" if temp_def else ""
     name = enum.name if ns == "" else ns + "::" + enum.name
-    declear_methods(hout, name, temp_def)
+    declare_methods(hout, name, temp_def)
     fprintln(cout, f"""
 {template}
 template <typename Output>
@@ -516,22 +516,22 @@ def is_stub(cls):
     return cls in stubs
 
 
-def handle_visitors_state(info, hout, clases=[]):
+def handle_visitors_state(info, hout, classes=[]):
     [cls, namespaces, parent_template_param] = info
-    name = "__".join(clases) if clases else cls.name
+    name = "__".join(classes) if classes else cls.name
     frame = "empty_frame" if cls.final else "frame"
     fprintln(hout, f"""
 template<typename Output>
 struct state_of_{name} {{
     {frame}<Output> f;""")
-    if clases:
-        local_state = "state_of_" + "__".join(clases[:-1]) + '<Output>'
+    if classes:
+        local_state = "state_of_" + "__".join(classes[:-1]) + '<Output>'
         fprintln(hout, f"    {local_state} _parent;")
         if cls.final:
             fprintln(hout, f"    state_of_{name}({local_state} parent) : _parent(parent) {{}}")
     fprintln(hout, "};")
     members = get_members(cls)
-    member_class = clases if clases else [cls.name]
+    member_class = classes if classes else [cls.name]
     for m in members:
         if is_local_type(m.type):
             handle_visitors_state(local_types[param_type(m.type)], hout, member_class + [m.name])
@@ -610,7 +610,7 @@ def add_param_writer_basic_type(name, base_state, typ, var_type="", var_index=No
     if isinstance(var_index, Number):
         var_index = "uint32_t(" + str(var_index) + ")"
     create_variant_state = f"auto state = state_of_{base_state}__{name}<Output> {{ start_frame(_out), std::move(_state) }};" if var_index and root_node else ""
-    set_varient_index = f"serialize(_out, {var_index});\n" if var_index is not None else ""
+    set_variant_index = f"serialize(_out, {var_index});\n" if var_index is not None else ""
     set_command = ("_state.f.end(_out);" if not root_node else "state.f.end(_out);") if var_type != "" else ""
     return_command = "{ _out, std::move(_state._parent) }" if var_type != "" and not root_node else "{ _out, std::move(_state) }"
 
@@ -624,7 +624,7 @@ def add_param_writer_basic_type(name, base_state, typ, var_type="", var_index=No
     writer = reindent(4, """
         after_{base_state}__{name}<Output> write_{name}{var_type}({typename} t) && {{
             {create_variant_state}
-            {set_varient_index}
+            {set_variant_index}
             serialize(_out, t);
             {set_command}
             return {return_command};
@@ -634,7 +634,7 @@ def add_param_writer_basic_type(name, base_state, typ, var_type="", var_index=No
         template<typename FragmentedBuffer>
         requires FragmentRange<FragmentedBuffer>
         after_{base_state}__{name}<Output> write_fragmented_{name}{var_type}(FragmentedBuffer&& fragments) && {{
-            {set_varient_index}
+            {set_variant_index}
             serialize_fragmented(_out, std::forward<FragmentedBuffer>(fragments));
             {set_command}
             return {return_command};
@@ -647,12 +647,12 @@ def add_param_writer_object(name, base_state, typ, var_type="", var_index=None, 
     if isinstance(var_index, Number):
         var_index = "uint32_t(" + str(var_index) + ")"
     create_variant_state = f"auto state = state_of_{base_state}__{name}<Output> {{ start_frame(_out), std::move(_state) }};" if var_index and root_node else ""
-    set_varient_index = f"serialize(_out, {var_index});\n" if var_index is not None else ""
+    set_variant_index = f"serialize(_out, {var_index});\n" if var_index is not None else ""
     state = "std::move(_state)" if not var_index or not root_node else "std::move(state)"
     ret = reindent(4, """
         {base_state}__{name}{var_type1}<Output> start_{name}{var_type}() && {{
             {create_variant_state}
-            {set_varient_index}
+            {set_variant_index}
             return {{ _out, {state} }};
         }}
     """).format(**locals())
@@ -665,7 +665,7 @@ def add_param_writer_object(name, base_state, typ, var_type="", var_index=None, 
         ret += reindent(4, """
             template<typename Serializer>
             after_{base_state}__{name}<Output> {name}{var_type}(Serializer&& f) && {{
-                {set_varient_index}
+                {set_variant_index}
                 f(writer_of_{typename}<Output>(_out));
                 {set_command}
                 return {return_command};
@@ -719,15 +719,15 @@ def add_param_write(current, base_state, vector=False, root_node=False):
     return res
 
 
-def get_return_struct(variant_node, clases):
+def get_return_struct(variant_node, classes):
     if not variant_node:
-        return clases
-    if clases[-2] == "variant":
-        return clases[:-2]
-    return clases[:-1]
+        return classes
+    if classes[-2] == "variant":
+        return classes[:-2]
+    return classes[:-1]
 
 
-def add_variant_end_method(base_state, name, clases):
+def add_variant_end_method(base_state, name, classes):
 
     return_struct = "after_" + base_state + '<Output>'
     return f"""
@@ -863,33 +863,33 @@ def add_nodes_when_needed(hout, info, member, base_state_name, parents, member_c
         handle_visitors_nodes(local_types[member.type.name], hout, False, member_classes + [member.name])
 
 
-def handle_visitors_nodes(info, hout, variant_node=False, clases=[]):
+def handle_visitors_nodes(info, hout, variant_node=False, classes=[]):
     global writers
     [cls, namespaces, parent_template_param] = info
     # for root node, only generate once
-    if not clases:
+    if not classes:
         if cls.name in writers:
             return
         writers.add(cls.name)
 
     members = get_members(cls)
-    if clases:
-        base_state_name = "__".join(clases)
+    if classes:
+        base_state_name = "__".join(classes)
         if variant_node:
-            parents = "__".join(clases[:-1])
+            parents = "__".join(classes[:-1])
         else:
-            parents = "__".join(clases[:-1])
-        current_name = clases[-1]
+            parents = "__".join(classes[:-1])
+        current_name = classes[-1]
     else:
         base_state_name = cls.name
         current_name = cls.name
         parents = ""
-    member_classes = clases if clases else [current_name]
-    prefix = "" if clases else "writer_of_"
+    member_classes = classes if classes else [current_name]
+    prefix = "" if classes else "writer_of_"
     if not members:
-        add_node(hout, base_state_name, None, base_state_name, prefix, parents, add_end_method(parents, current_name, variant_node, clases), False, is_final(cls))
+        add_node(hout, base_state_name, None, base_state_name, prefix, parents, add_end_method(parents, current_name, variant_node, classes), False, is_final(cls))
         return
-    add_node(hout, base_state_name + "__" + get_member_name(members[-1].name), members[-1].type, base_state_name, "after_", base_state_name, add_end_method(parents, current_name, variant_node, clases))
+    add_node(hout, base_state_name + "__" + get_member_name(members[-1].name), members[-1].type, base_state_name, "after_", base_state_name, add_end_method(parents, current_name, variant_node, classes))
     # Create writer and reader for include class
     if not variant_node:
         for member in get_dependency(cls):
@@ -901,7 +901,7 @@ def handle_visitors_nodes(info, hout, variant_node=False, clases=[]):
         add_node(hout, base_state_name + "__" + get_member_name(members[ind - 1].name), member.type, variant_state, "after_", base_state_name, add_param_write(member, base_state_name), False)
     member = members[0]
     add_nodes_when_needed(hout, info, member, base_state_name, parents, member_classes)
-    add_node(hout, base_state_name, member.type, base_state_name, prefix, parents, add_param_write(member, base_state_name, False, not clases), False, is_final(cls))
+    add_node(hout, base_state_name, member.type, base_state_name, prefix, parents, add_param_write(member, base_state_name, False, not classes), False, is_final(cls))
 
 
 def add_to_types(cls, namespaces, parent_template_param):
@@ -1103,7 +1103,7 @@ def handle_class(cls, hout, cout, namespaces=[], parent_template_param=[]):
             handle_class(member, hout, cout, namespaces + [cls.name + template_class_param], parent_template_param + template_param_list)
         elif isinstance(member, EnumDef):
             handle_enum(member, hout, cout, namespaces + [cls.name + template_class_param], parent_template_param + template_param_list)
-    declear_methods(hout, name + template_class_param, temp_def)
+    declare_methods(hout, name + template_class_param, temp_def)
     is_final = cls.final
 
     fprintln(cout, f"""
