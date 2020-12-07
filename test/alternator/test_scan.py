@@ -19,7 +19,7 @@
 
 import pytest
 from botocore.exceptions import ClientError
-from util import random_string, full_scan, full_scan_and_count, multiset
+from util import random_string, random_bytes, full_scan, full_scan_and_count, multiset
 from boto3.dynamodb.conditions import Attr
 
 # Test that scanning works fine with/without pagination
@@ -264,3 +264,20 @@ def test_scan_parallel_incorrect(filled_test_table):
     for segment in [7, 9]:
         with pytest.raises(ClientError, match='ValidationException.*Segment'):
             full_scan(test_table, TotalSegments=5, Segment=segment)
+
+# We used to have a bug with formatting of LastEvaluatedKey in the response
+# of Query and Scan with bytes keys (issue #7768). In test_query_paging_byte()
+# (test_query.py) we tested the case of bytes *sort* keys. In the following
+# test we check bytes *partition* keys.
+def test_scan_paging_bytes(test_table_b):
+    # We will not Scan the entire table - we have no idea what it contains.
+    # But we don't need to scan the entire table - we just need the table
+    # to contain at least two items, and then Scan it with Limit=1 and stop
+    # after one page. Before #7768 was fixed, the test failed when the
+    # LastEvaluatedKey in the response could not be parsed.
+    items = [{'p': random_bytes()}, {'p': random_bytes()}]
+    with test_table_b.batch_writer() as batch:
+        for item in items:
+            batch.put_item(item)
+    response = test_table_b.scan(ConsistentRead=True, Limit=1)
+    assert 'LastEvaluatedKey' in response
