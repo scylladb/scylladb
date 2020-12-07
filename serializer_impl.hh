@@ -724,7 +724,7 @@ void serialize(Output& out, const std::variant<T...>& v) {
 template<typename Input, typename T, size_t... I>
 T deserialize_std_variant(Input& in, boost::type<T> t,  size_t idx, std::index_sequence<I...>) {
     T v;
-    ((I == idx ? v = deserialize(in, boost::type<std::variant_alternative_t<I, T>>()), true : false) || ...);
+    (void)((I == idx ? v = deserialize(in, boost::type<std::variant_alternative_t<I, T>>()), true : false) || ...);
     return v;
 }
 
