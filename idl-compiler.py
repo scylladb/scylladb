@@ -21,7 +21,6 @@
 # along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
 
 import argparse
-from string import Template
 import pyparsing as pp
 from functools import reduce
 import textwrap
@@ -379,19 +378,19 @@ def declare_class(hout, name, ns_open, ns_close):
 def declear_methods(hout, name, template_param=""):
     if config.ns != '':
         fprintln(hout, "namespace ", config.ns, " {")
-    fprintln(hout, Template("""
-template <$tmp_param>
-struct serializer<$name> {
+    fprintln(hout, f"""
+template <{template_param}>
+struct serializer<{name}> {{
   template <typename Output>
-  static void write(Output& buf, const $name& v);
+  static void write(Output& buf, const {name}& v);
 
   template <typename Input>
-  static $name read(Input& buf);
+  static {name} read(Input& buf);
 
   template <typename Input>
   static void skip(Input& buf);
-};
-""").substitute({'name': name, 'tmp_param': template_param}))
+}};
+""")
     if config.ns != '':
         fprintln(hout, "}")
 
@@ -402,18 +401,18 @@ def handle_enum(enum, hout, cout, namespaces, parent_template_param=[]):
     template = "template <" + temp_def + ">" if temp_def else ""
     name = enum.name if ns == "" else ns + "::" + enum.name
     declear_methods(hout, name, temp_def)
-    fprintln(cout, Template("""
-$template
+    fprintln(cout, f"""
+{template}
 template <typename Output>
-void serializer<$name>::write(Output& buf, const $name& v) {
-  serialize(buf, static_cast<$type>(v));
-}
+void serializer<{name}>::write(Output& buf, const {name}& v) {{
+  serialize(buf, static_cast<{enum.underlying_type}>(v));
+}}
 
-$template
+{template}
 template<typename Input>
-$name serializer<$name>::read(Input& buf) {
-  return static_cast<$name>(deserialize(buf, boost::type<$type>()));
-}""").substitute({'name': name, 'type': enum.underlying_type, 'template': template}))
+{name} serializer<{name}>::read(Input& buf) {{
+  return static_cast<{name}>(deserialize(buf, boost::type<{enum.underlying_type}>()));
+}}""")
 
 
 def join_template(template_params):
@@ -521,15 +520,15 @@ def handle_visitors_state(info, hout, clases=[]):
     [cls, namespaces, parent_template_param] = info
     name = "__".join(clases) if clases else cls.name
     frame = "empty_frame" if cls.final else "frame"
-    fprintln(hout, Template("""
+    fprintln(hout, f"""
 template<typename Output>
-struct state_of_$name {
-    $frame<Output> f;""").substitute({'name': name, 'frame': frame}))
+struct state_of_{name} {{
+    {frame}<Output> f;""")
     if clases:
         local_state = "state_of_" + "__".join(clases[:-1]) + '<Output>'
-        fprintln(hout, Template("    $name _parent;").substitute({'name': local_state}))
+        fprintln(hout, f"    {local_state} _parent;")
         if cls.final:
-            fprintln(hout, Template("    state_of_$name($state parent) : _parent(parent) {}").substitute({'name': name, 'state': local_state}))
+            fprintln(hout, f"    state_of_{name}({local_state} parent) : _parent(parent) {{}}")
     fprintln(hout, "};")
     members = get_members(cls)
     member_class = clases if clases else [cls.name]
@@ -557,17 +556,17 @@ def optional_add_methods(typ):
     else:
         print("non supported optional type ", typ)
         raise "non supported optional type " + param_type(typ)
-    res = res + Template(reindent(4, """
-    void write(const $type& obj) {
+    res = res + reindent(4, f"""
+    void write(const {added_type}& obj) {{
         serialize(_out, true);
         serialize(_out, obj);
-    }""")).substitute({'type': added_type})
+    }}""")
     if is_local_type(typ):
-        res = res + Template(reindent(4, """
-    writer_of_$type<Output> write() {
+        res = res + reindent(4, f"""
+    writer_of_{param_type(typ)}<Output> write() {{
         serialize(_out, true);
-        return {_out};
-    }""")).substitute({'type': param_type(typ)})
+        return {{_out}};
+    }}""")
     return res
 
 
@@ -575,43 +574,43 @@ def vector_add_method(current, base_state):
     typ = current.type
     res = ""
     if is_basic_type(typ.template_parameters[0]):
-        res = res + Template("""
-  void add_$name($type t)  {
+        res = res + f"""
+  void add_{current.name}({param_type(typ.template_parameters[0])} t)  {{
         serialize(_out, t);
         _count++;
-  }""").substitute({'type': param_type(typ.template_parameters[0]), 'name': current.name})
+  }}"""
     else:
-        res = res + Template("""
-  writer_of_$type<Output> add() {
+        res = res + f"""
+  writer_of_{flat_type(typ.template_parameters[0])}<Output> add() {{
         _count++;
-        return {_out};
-  }""").substitute({'type': flat_type(typ.template_parameters[0]), 'name': current.name})
-        res = res + Template("""
-  void add(${type} v) {
+        return {{_out}};
+  }}"""
+        res = res + f"""
+  void add({param_view_type(typ.template_parameters[0])} v) {{
         serialize(_out, v);
         _count++;
-  }""").substitute({'type': param_view_type(typ.template_parameters[0])})
-    return res + Template("""
-  after_${basestate}__$name<Output> end_$name() && {
+  }}"""
+    return res + f"""
+  after_{base_state}__{current.name}<Output> end_{current.name}() && {{
         _size.set(_out, _count);
-        return { _out, std::move(_state) };
-  }
+        return {{ _out, std::move(_state) }};
+  }}
 
-  vector_position pos() const {
-        return vector_position{_out.pos(), _count};
-  }
+  vector_position pos() const {{
+        return vector_position{{_out.pos(), _count}};
+  }}
 
-  void rollback(const vector_position& vp) {
+  void rollback(const vector_position& vp) {{
         _out.retract(vp.pos);
         _count = vp.count;
-  }""").substitute({'name': current.name, 'basestate': base_state})
+  }}"""
 
 
 def add_param_writer_basic_type(name, base_state, typ, var_type="", var_index=None, root_node=False):
     if isinstance(var_index, Number):
         var_index = "uint32_t(" + str(var_index) + ")"
-    create_variant_state = Template("auto state = state_of_${base_state}__$name<Output> { start_frame(_out), std::move(_state) };").substitute(locals()) if var_index and root_node else ""
-    set_varient_index = "serialize(_out, " + var_index + ");\n" if var_index is not None else ""
+    create_variant_state = f"auto state = state_of_{base_state}__{name}<Output> {{ start_frame(_out), std::move(_state) }};" if var_index and root_node else ""
+    set_varient_index = f"serialize(_out, {var_index});\n" if var_index is not None else ""
     set_command = ("_state.f.end(_out);" if not root_node else "state.f.end(_out);") if var_type != "" else ""
     return_command = "{ _out, std::move(_state._parent) }" if var_type != "" and not root_node else "{ _out, std::move(_state) }"
 
@@ -622,24 +621,24 @@ def add_param_writer_basic_type(name, base_state, typ, var_type="", var_index=No
     else:
         typename = 'const ' + typ.name + '&'
 
-    writer = Template(reindent(4, """
-        after_${base_state}__$name<Output> write_$name$var_type($typename t) && {
-            $create_variant_state
-            $set_varient_index
+    writer = reindent(4, """
+        after_{base_state}__{name}<Output> write_{name}{var_type}({typename} t) && {{
+            {create_variant_state}
+            {set_varient_index}
             serialize(_out, t);
-            $set_command
-            return $return_command;
-        }""")).substitute(locals())
+            {set_command}
+            return {return_command};
+        }}""").format(**locals())
     if allow_fragmented:
-        writer += Template(reindent(4, """
+        writer += reindent(4, """
         template<typename FragmentedBuffer>
         requires FragmentRange<FragmentedBuffer>
-        after_${base_state}__$name<Output> write_fragmented_$name$var_type(FragmentedBuffer&& fragments) && {
-            $set_varient_index
+        after_{base_state}__{name}<Output> write_fragmented_{name}{var_type}(FragmentedBuffer&& fragments) && {{
+            {set_varient_index}
             serialize_fragmented(_out, std::forward<FragmentedBuffer>(fragments));
-            $set_command
-            return $return_command;
-        }""")).substitute(locals())
+            {set_command}
+            return {return_command};
+        }}""").format(**locals())
     return writer
 
 
@@ -647,30 +646,30 @@ def add_param_writer_object(name, base_state, typ, var_type="", var_index=None, 
     var_type1 = "_" + var_type if var_type != "" else ""
     if isinstance(var_index, Number):
         var_index = "uint32_t(" + str(var_index) + ")"
-    create_variant_state = Template("auto state = state_of_${base_state}__$name<Output> { start_frame(_out), std::move(_state) };").substitute(locals()) if var_index and root_node else ""
-    set_varient_index = "serialize(_out, " + var_index + ");\n" if var_index is not None else ""
+    create_variant_state = f"auto state = state_of_{base_state}__{name}<Output> {{ start_frame(_out), std::move(_state) }};" if var_index and root_node else ""
+    set_varient_index = f"serialize(_out, {var_index});\n" if var_index is not None else ""
     state = "std::move(_state)" if not var_index or not root_node else "std::move(state)"
-    ret = Template(reindent(4, """
-        ${base_state}__${name}$var_type1<Output> start_${name}$var_type() && {
-            $create_variant_state
-            $set_varient_index
-            return { _out, $state };
-        }
-    """)).substitute(locals())
+    ret = reindent(4, """
+        {base_state}__{name}{var_type1}<Output> start_{name}{var_type}() && {{
+            {create_variant_state}
+            {set_varient_index}
+            return {{ _out, {state} }};
+        }}
+    """).format(**locals())
     if not is_stub(typ.name) and is_local_type(typ):
         ret += add_param_writer_basic_type(name, base_state, typ, var_type, var_index, root_node)
     if is_stub(typ.name):
         typename = typ.name
         set_command = "_state.f.end(_out);" if var_type != "" else ""
         return_command = "{ _out, std::move(_state._parent) }" if var_type != "" and not root_node else "{ _out, std::move(_state) }"
-        ret += Template(reindent(4, """
+        ret += reindent(4, """
             template<typename Serializer>
-            after_${base_state}__${name}<Output> ${name}$var_type(Serializer&& f) && {
-                $set_varient_index
-                f(writer_of_$typename<Output>(_out));
-                $set_command
-                return $return_command;
-            }""")).substitute(locals())
+            after_{base_state}__{name}<Output> {name}{var_type}(Serializer&& f) && {{
+                {set_varient_index}
+                f(writer_of_{typename}<Output>(_out));
+                {set_command}
+                return {return_command};
+            }}""").format(**locals())
     return ret
 
 
@@ -681,11 +680,11 @@ def add_param_write(current, base_state, vector=False, root_node=False):
     if is_basic_type(typ):
         res = res + add_param_writer_basic_type(name, base_state, typ)
     elif is_optional(typ):
-        res = res + Template(reindent(4, """
-    after_${basestate}__$name<Output> skip_$name() && {
+        res = res + reindent(4, f"""
+    after_{base_state}__{name}<Output> skip_{name}() && {{
         serialize(_out, false);
-        return { _out, std::move(_state) };
-    }""")).substitute({'type': param_type(typ), 'name': name, 'basestate': base_state})
+        return {{ _out, std::move(_state) }};
+    }}""")
         if is_basic_type(typ.template_parameters[0]):
             res = res + add_param_writer_basic_type(name, base_state, typ.template_parameters[0], "", "true")
         elif is_local_type(typ.template_parameters[0]):
@@ -695,16 +694,16 @@ def add_param_write(current, base_state, vector=False, root_node=False):
     elif is_vector(typ):
         set_size = "_size.set(_out, 0);" if vector else "serialize(_out, size_type(0));"
 
-        res = res + Template("""
-    ${basestate}__$name<Output> start_$name() && {
-        return { _out, std::move(_state) };
-    }
+        res = res + f"""
+    {base_state}__{name}<Output> start_{name}() && {{
+        return {{ _out, std::move(_state) }};
+    }}
 
-    after_${basestate}__$name<Output> skip_$name() && {
-        $set
-        return { _out, std::move(_state) };
-    }
-""").substitute({'type': param_type(typ), 'name': name, 'basestate': base_state, 'set': set_size})
+    after_{base_state}__{name}<Output> skip_{name}() && {{
+        {set_size}
+        return {{ _out, std::move(_state) }};
+    }}
+"""
     elif is_local_type(typ):
         res = res + add_param_writer_object(name, base_state, typ)
     elif is_variant(typ):
@@ -731,13 +730,13 @@ def get_return_struct(variant_node, clases):
 def add_variant_end_method(base_state, name, clases):
 
     return_struct = "after_" + base_state + '<Output>'
-    return Template("""
-    $return_struct  end_$name() && {
+    return f"""
+    {return_struct}  end_{name}() && {{
         _state.f.end(_out);
         _state._parent.f.end(_out);
-        return { _out, std::move(_state._parent._parent) };
-    }
-""").substitute({'name': name, 'return_struct': return_struct})
+        return {{ _out, std::move(_state._parent._parent) }};
+    }}
+"""
 
 
 def add_end_method(parents, name, variant_node=False, return_value=True):
@@ -746,17 +745,17 @@ def add_end_method(parents, name, variant_node=False, return_value=True):
     base_state = parents + "__" + name
     if return_value:
         return_struct = "after_" + base_state + '<Output>'
-        return Template("""
-    $return_struct  end_$name() && {
+        return f"""
+    {return_struct}  end_{name}() && {{
         _state.f.end(_out);
-        return { _out, std::move(_state._parent) };
-    }
-""").substitute({'name': name, 'return_struct': return_struct})
-    return Template("""
-    void  end_$name() {
+        return {{ _out, std::move(_state._parent) }};
+    }}
+"""
+    return f"""
+    void  end_{name}() {{
         _state.f.end(_out);
-    }
-""").substitute({'name': name, 'basestate': base_state})
+    }}
+"""
 
 
 def add_vector_placeholder():
@@ -780,26 +779,26 @@ def add_node(hout, name, member, base_state, prefix, parents, fun, is_type_vecto
         else:
             state_init = ""
     if prefix == "writer_of_":
-        constructor = Template("""$name(Output& out)
+        constructor = f"""{struct_name}(Output& out)
             : _out(out)
-            , _state{start_frame(out)}${vector_init}
-            {}""").substitute({'name': struct_name, 'vector_init': vector_init})
+            , _state{{start_frame(out)}}{vector_init}
+            {{}}"""
     elif state_init != "":
-        constructor = Template("""$name(Output& out, state_of_$state<Output> state)
+        constructor = f"""{struct_name}(Output& out, state_of_{parents}<Output> state)
             : _out(out)
-            , $state_init${vector_init}
-            {}""").substitute({'name': struct_name, 'vector_init': vector_init, 'state': parents, 'state_init': state_init})
+            , {state_init}{vector_init}
+            {{}}"""
     else:
         constructor = ""
-    fprintln(hout, Template("""
+    fprintln(hout, f"""
 template<typename Output>
-struct $name {
+struct {struct_name} {{
     Output& _out;
-    state_of_$state<Output> _state;
-    ${vector_placeholder}
-    ${constructor}
-    $fun
-};""").substitute({'name': struct_name, 'state': base_state, 'fun': fun, 'vector_placeholder': vector_placeholder, 'constructor': constructor}))
+    state_of_{base_state}<Output> _state;
+    {vector_placeholder}
+    {constructor}
+    {fun}
+}};""")
 
 
 def add_vector_node(hout, member, base_state, parents):
@@ -817,12 +816,12 @@ def add_optional_node(hout, typ):
     if full_type in optional_nodes:
         return
     optional_nodes.add(full_type)
-    fprintln(hout, Template(reindent(0, """
+    fprintln(hout, reindent(0, f"""
 template<typename Output>
-struct writer_of_$type {
+struct writer_of_{full_type} {{
     Output& _out;
-    $add_method
-};""")).substitute({'type': full_type, 'add_method': optional_add_methods(typ.template_parameters[0])}))
+    {optional_add_methods(typ.template_parameters[0])}
+}};"""))
 
 
 def add_variant_nodes(hout, member, param, base_state, parents, classes):
@@ -836,12 +835,12 @@ def add_variant_nodes(hout, member, param, base_state, parents, classes):
             new_member.type = typ
             new_member.name = "variant"
             return_struct = "after_" + par
-            end_method = Template("""
-    $return_struct<Output>  end_variant() && {
+            end_method = f"""
+    {return_struct}<Output>  end_variant() && {{
         _state.f.end(_out);
-        return { _out, std::move(_state._parent) };
-    }
-""").substitute({'return_struct': return_struct})
+        return {{ _out, std::move(_state._parent) }};
+    }}
+"""
             add_node(hout, name, None, base_state + "__" + member.name, "after_", name, end_method)
             add_variant_nodes(hout, new_member, typ, par, name, classes + [member.name])
             add_node(hout, name, typ, name, "", par, add_param_write(new_member, par))
@@ -967,30 +966,30 @@ def add_variant_read_size(hout, typ):
         if is_variant(p):
             add_variant_read_size(hout, p)
     read_sizes.add(t)
-    fprintln(hout, Template("""
+    fprintln(hout, f"""
 template<typename Input>
-inline void skip(Input& v, boost::type<${type}>) {
-  return seastar::with_serialized_stream(v, [] (auto& v) {
+inline void skip(Input& v, boost::type<{t}>) {{
+  return seastar::with_serialized_stream(v, [] (auto& v) {{
     size_type ln = deserialize(v, boost::type<size_type>());
     v.skip(ln - sizeof(size_type));
-  });
-}""").substitute({'type': t}))
+  }});
+}}""")
 
-    fprintln(hout, Template("""
+    fprintln(hout, f"""
 template<typename Input>
-$type deserialize(Input& v, boost::type<${type}>) {
-  return seastar::with_serialized_stream(v, [] (auto& v) {
+{t} deserialize(Input& v, boost::type<{t}>) {{
+  return seastar::with_serialized_stream(v, [] (auto& v) {{
     auto in = v;
     deserialize(in, boost::type<size_type>());
     size_type o = deserialize(in, boost::type<size_type>());
-    """).substitute({'type': t}))
+    """)
     for index, param in enumerate(typ.template_parameters):
-        fprintln(hout, Template("""
-    if (o == $ind) {
+        fprintln(hout, f"""
+    if (o == {index}) {{
         v.skip(sizeof(size_type)*2);
-        return $full_type(deserialize(v, boost::type<$type>()));
-    }""").substitute({'ind': index, 'type': param_view_type(param), 'full_type': t}))
-    fprintln(hout, '    return ' + t + '(deserialize(v, boost::type<unknown_variant_type>()));\n  });\n}')
+        return {t}(deserialize(v, boost::type<{param_view_type(param)}>()));
+    }}""")
+    fprintln(hout, f'    return {t}(deserialize(v, boost::type<unknown_variant_type>()));\n  }});\n}}')
 
 
 def add_view(hout, info):
@@ -999,17 +998,17 @@ def add_view(hout, info):
     for m in members:
         add_variant_read_size(hout, m.type)
 
-    fprintln(hout, Template("""struct ${name}_view {
+    fprintln(hout, f"""struct {cls.name}_view {{
     utils::input_stream v;
-    """).substitute({'name': cls.name}))
+    """)
 
     if not is_stub(cls.name) and is_local_type(cls.name):
-        fprintln(hout, Template(reindent(4, """
-            operator $type() const {
+        fprintln(hout, reindent(4, f"""
+            operator {cls.name}() const {{
                auto in = v;
-               return deserialize(in, boost::type<$type>());
-            }
-        """)).substitute({'type': cls.name}))
+               return deserialize(in, boost::type<{cls.name}>());
+            }}
+        """))
 
     skip = "" if is_final(cls) else "ser::skip(in, boost::type<size_type>());"
     local_names = {}
@@ -1021,52 +1020,51 @@ def add_view(hout, info):
             deflt = m.default_value if m.default_value else param_type(m.type) + "()"
             if deflt in local_names:
                 deflt = local_names[deflt]
-            deser = Template("(in.size()>0) ? $func(in, boost::type<$typ>()) : $default").substitute(
-                {'func': DESERIALIZER, 'typ': full_type, 'default': deflt})
+            deser = f"(in.size()>0) ? {DESERIALIZER}(in, boost::type<{full_type}>()) : {deflt}"
         else:
-            deser = Template("$func(in, boost::type<$typ>())").substitute({'func': DESERIALIZER, 'typ': full_type})
+            deser = f"{DESERIALIZER}(in, boost::type<{full_type}>())"
 
-        fprintln(hout, Template(reindent(4, """
-            auto $name() const {
-              return seastar::with_serialized_stream(v, [this] (auto& v) -> decltype($func(std::declval<utils::input_stream&>(), boost::type<$type>())) {
+        fprintln(hout, reindent(4, """
+            auto {name}() const {{
+              return seastar::with_serialized_stream(v, [this] (auto& v) -> decltype({f}(std::declval<utils::input_stream&>(), boost::type<{full_type}>())) {{
                auto in = v;
-               $skip
-               return $deser;
-              });
-            }
-        """)).substitute({'name': name, 'type': full_type, 'skip': skip, 'deser': deser, 'func': DESERIALIZER}))
+               {skip}
+               return {deser};
+              }});
+            }}
+        """).format(f=DESERIALIZER, **locals()))
 
-        skip = skip + Template("\n       ser::skip(in, boost::type<${type}>());").substitute({'type': full_type})
+        skip = skip + f"\n       ser::skip(in, boost::type<{full_type}>());"
 
     fprintln(hout, "};")
     skip_impl = "auto& in = v;\n       " + skip if is_final(cls) else "v.skip(read_frame_size(v));"
     if skip == "":
         skip_impl = ""
 
-    fprintln(hout, Template("""
+    fprintln(hout, f"""
 template<>
-struct serializer<${type}_view> {
+struct serializer<{cls.name}_view> {{
     template<typename Input>
-    static ${type}_view read(Input& v) {
-      return seastar::with_serialized_stream(v, [] (auto& v) {
+    static {cls.name}_view read(Input& v) {{
+      return seastar::with_serialized_stream(v, [] (auto& v) {{
         auto v_start = v;
         auto start_size = v.size();
         skip(v);
-        return ${type}_view{v_start.read_substream(start_size - v.size())};
-      });
-    }
+        return {cls.name}_view{{v_start.read_substream(start_size - v.size())}};
+      }});
+    }}
     template<typename Output>
-    static void write(Output& out, ${type}_view v) {
+    static void write(Output& out, {cls.name}_view v) {{
         v.v.copy_to(out);
-    }
+    }}
     template<typename Input>
-    static void skip(Input& v) {
-      return seastar::with_serialized_stream(v, [] (auto& v) {
-        $skip_impl
-      });
-    }
-};
-""").substitute({'type': cls.name, 'skip': skip, 'skip_impl': skip_impl}))
+    static void skip(Input& v) {{
+      return seastar::with_serialized_stream(v, [] (auto& v) {{
+        {skip_impl}
+      }});
+    }}
+}};
+""")
 
 
 def add_views(hout):
@@ -1108,31 +1106,31 @@ def handle_class(cls, hout, cout, namespaces=[], parent_template_param=[]):
     declear_methods(hout, name + template_class_param, temp_def)
     is_final = cls.final
 
-    fprintln(cout, Template("""
-$template
+    fprintln(cout, f"""
+{template}
 template <typename Output>
-void serializer<$name>::write(Output& buf, const $name& obj) {""").substitute({'func': SERIALIZER, 'name': full_name, 'template': template}))
+void serializer<{full_name}>::write(Output& buf, const {full_name}& obj) {{""")
     if not is_final:
-        fprintln(cout, Template("""  $set_size(buf, obj);""").substitute({'func': SERIALIZER, 'set_size': SETSIZE, 'name': name, 'sizetype': SIZETYPE}))
+        fprintln(cout, f"""  {SETSIZE}(buf, obj);""")
     for member in cls.members:
         if isinstance(member, ClassDef) or isinstance(member, EnumDef):
             continue
-        fprintln(cout, Template("""  static_assert(is_equivalent<decltype(obj.$var), $type>::value, "member value has a wrong type");
-    $func(buf, obj.$var);""").substitute({'func': SERIALIZER, 'var': member.name, 'type': param_type(member.type)}))
+        fprintln(cout, f"""  static_assert(is_equivalent<decltype(obj.{member.name}), {param_type(member.type)}>::value, "member value has a wrong type");
+    {SERIALIZER}(buf, obj.{member.name});""")
     fprintln(cout, "}")
 
-    fprintln(cout, Template("""
-$template
+    fprintln(cout, f"""
+{template}
 template <typename Input>
-$name$temp_param serializer<$name$temp_param>::read(Input& buf) {
- return seastar::with_serialized_stream(buf, [] (auto& buf) {""").substitute({'func': DESERIALIZER, 'name': name, 'template': template, 'temp_param': template_class_param}))
+{name}{template_class_param} serializer<{name}{template_class_param}>::read(Input& buf) {{
+ return seastar::with_serialized_stream(buf, [] (auto& buf) {{""")
     if not cls.members:
         if not is_final:
-            fprintln(cout, Template("""  $size_type size = $func(buf, boost::type<$size_type>());
-  buf.skip(size - sizeof($size_type));""").substitute({'func': DESERIALIZER, 'size_type': SIZETYPE}))
+            fprintln(cout, f"""  {SIZETYPE} size = {DESERIALIZER}(buf, boost::type<{SIZETYPE}>());
+  buf.skip(size - sizeof({SIZETYPE}));""")
     elif not is_final:
-        fprintln(cout, Template("""  $size_type size = $func(buf, boost::type<$size_type>());
-  auto in = buf.read_substream(size - sizeof($size_type));""").substitute({'func': DESERIALIZER, 'size_type': SIZETYPE}))
+        fprintln(cout, f"""  {SIZETYPE} size = {DESERIALIZER}(buf, boost::type<{SIZETYPE}>());
+  auto in = buf.read_substream(size - sizeof({SIZETYPE}));""")
     else:
         fprintln(cout, """  auto& in = buf;""")
     params = []
@@ -1148,29 +1146,29 @@ $name$temp_param serializer<$name$temp_param>::read(Input& buf) {
                 deflt = param.default_value
             if deflt in local_names:
                 deflt = local_names[deflt]
-            fprintln(cout, Template("""  auto $local = (in.size()>0) ?
-    $func(in, boost::type<$typ>()) : $default;""").substitute({'func': DESERIALIZER, 'typ': param_type(param.type), 'local': local_param, 'default': deflt}))
+            fprintln(cout, f"""  auto {local_param} = (in.size()>0) ?
+    {DESERIALIZER}(in, boost::type<{param_type(param.type)}>()) : {deflt};""")
         else:
-            fprintln(cout, Template("""  auto $local = $func(in, boost::type<$typ>());""").substitute({'func': DESERIALIZER, 'typ': param_type(param.type), 'local': local_param}))
+            fprintln(cout, f"""  auto {local_param} = {DESERIALIZER}(in, boost::type<{param_type(param.type)}>());""")
         params.append("std::move(" + local_param + ")")
-    fprintln(cout, Template("""
-  $name$temp_param res {$params};
+    fprintln(cout, f"""
+  {name}{template_class_param} res {{{", ".join(params)}}};
   return res;
- });
-}""").substitute({'name': name, 'params': ", ".join(params), 'temp_param': template_class_param}))
+ }});
+}}""")
 
-    fprintln(cout, Template("""
-$template
+    fprintln(cout, f"""
+{template}
 template <typename Input>
-void serializer<$name$temp_param>::skip(Input& buf) {
- seastar::with_serialized_stream(buf, [] (auto& buf) {""").substitute({'name': name, 'template': template, 'temp_param': template_class_param}))
+void serializer<{name}{template_class_param}>::skip(Input& buf) {{
+ seastar::with_serialized_stream(buf, [] (auto& buf) {{""")
     if not is_final:
-        fprintln(cout, Template("""  $size_type size = $func(buf, boost::type<$size_type>());
-  buf.skip(size - sizeof($size_type));""").substitute({'func': DESERIALIZER, 'size_type': SIZETYPE}))
+        fprintln(cout, f"""  {SIZETYPE} size = {DESERIALIZER}(buf, boost::type<{SIZETYPE}>());
+  buf.skip(size - sizeof({SIZETYPE}));""")
     else:
         for m in get_members(cls):
             full_type = param_view_type(m.type)
-            fprintln(cout, "  ser::skip(buf, boost::type<%s>());" % full_type)
+            fprintln(cout, f"  ser::skip(buf, boost::type<{full_type}>());")
     fprintln(cout, """ });\n}""")
 
 
