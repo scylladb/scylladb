@@ -208,10 +208,10 @@ static future<std::vector<token_range>> get_local_ranges(database& db) {
         // All queries will be on that table, where all entries are text and there's no notion of
         // token ranges form the CQL point of view.
         auto left_inf = boost::find_if(ranges, [] (auto&& r) {
-            return !r.start() || r.start()->value() == dht::minimum_token();
+            return r.end() && (!r.start() || r.start()->value() == dht::minimum_token());
         });
         auto right_inf = boost::find_if(ranges, [] (auto&& r) {
-            return !r.end() || r.start()->value() == dht::maximum_token();
+            return r.start() && (!r.end() || r.end()->value() == dht::maximum_token());
         });
         if (left_inf != right_inf && left_inf != ranges.end() && right_inf != ranges.end()) {
             local_ranges.push_back(token_range{to_bytes(right_inf->start()), to_bytes(left_inf->end())});
