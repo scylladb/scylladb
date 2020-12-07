@@ -41,8 +41,10 @@ def test_fetch_from_system_tables(scylla_only, dynamodb):
 
         key_columns = [item['column_name'] for item in col_response['Items'] if item['kind'] == 'clustering' or item['kind'] == 'partition_key']
         qualified_name = "{}{}.{}".format(internal_prefix, ks_name, table_name)
-        response = client.scan(TableName=qualified_name, AttributesToGet=key_columns)
-        print(ks_name, table_name, response)
+        import time
+        start = time.time()
+        response = client.scan(TableName=qualified_name, AttributesToGet=key_columns, Limit=50)
+        print(ks_name, table_name, len(str(response)), time.time()-start)
 
 def test_block_access_to_non_system_tables_with_virtual_interface(scylla_only, test_table_s, dynamodb):
     client = dynamodb.meta.client
