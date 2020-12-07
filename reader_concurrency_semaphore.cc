@@ -443,8 +443,7 @@ future<reader_permit::resource_units> reader_concurrency_semaphore::do_wait_admi
         }
         maybe_dump_reader_permit_diagnostics(*this, *_permit_list, "wait queue overloaded");
         return make_exception_future<reader_permit::resource_units>(
-                std::make_exception_ptr(std::runtime_error(
-                        format("{}: restricted mutation reader queue overload", _name))));
+                exceptions::overloaded_exception(format("{}: restricted mutation reader queue overload", _name)));
     }
     auto r = resources(1, static_cast<ssize_t>(memory));
     auto it = _inactive_reads.begin();
