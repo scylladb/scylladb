@@ -169,31 +169,31 @@ int main(int argc, char** argv) {
     namespace bpo = boost::program_options;
 
     app_template::config app_cfg;
-    app_cfg.name = "scylla_types";
+    app_cfg.name = "scylla-types";
 
     auto description_template =
-R"(scylla_types - a command-line tool to examine values belonging to scylla types.
+R"(scylla-types - a command-line tool to examine values belonging to scylla types.
 
 Allows examining raw values obtained from e.g. sstables, logs or coredumps and
 executing various actions on them. Values should be provided in hex form,
-without a leading 0x prefix, e.g. 00783562. For scylla_types to be able to
+without a leading 0x prefix, e.g. 00783562. For scylla-types to be able to
 examine the values, their type has to be provided. Types should be provided by
 their cassandra class names, e.g. org.apache.cassandra.db.marshal.Int32Type for
 the int32_type. The org.apache.cassandra.db.marshal. prefix can be ommited.
 Compound types specify their subtypes inside () separated by comma, e.g.:
 MapType(Int32Type, BytesType). All provided values have to share the same type.
-scylla_types executes so called actions on the provided values. Each action has
+scylla-types executes so called actions on the provided values. Each action has
 a required number of arguments. The supported actions are:
 {}
 
 Examples:
-$ scylla_types --print -t Int32Type b34b62d4
+$ scylla-types --print -t Int32Type b34b62d4
 -1286905132
 
-$ scylla_types --compare -t 'ReversedType(TimeUUIDType)' b34b62d46a8d11ea0000005000237906 d00819896f6b11ea00000000001c571b
+$ scylla-types --compare -t 'ReversedType(TimeUUIDType)' b34b62d46a8d11ea0000005000237906 d00819896f6b11ea00000000001c571b
 b34b62d4-6a8d-11ea-0000-005000237906 > d0081989-6f6b-11ea-0000-0000001c571b
 
-$ scylla_types --print --prefix-compound -t TimeUUIDType -t Int32Type 0010d00819896f6b11ea00000000001c571b000400000010
+$ scylla-types --print --prefix-compound -t TimeUUIDType -t Int32Type 0010d00819896f6b11ea00000000001c571b000400000010
 (d0081989-6f6b-11ea-0000-0000001c571b, 16)
 )";
     app_cfg.description = format(description_template, boost::algorithm::join(action_handlers | boost::adaptors::transformed(
