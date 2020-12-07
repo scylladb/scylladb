@@ -30,6 +30,7 @@
 #include <seastar/rpc/rpc_types.hh>
 #include <unordered_map>
 #include "query-request.hh"
+#include "query-status.hh"
 #include "mutation_query.hh"
 #include "range.hh"
 #include "repair/repair.hh"
@@ -469,9 +470,9 @@ public:
 
     // Wrapper for READ_DATA
     // Note: WTH is future<foreign_ptr<lw_shared_ptr<query::result>>
-    void register_read_data(std::function<future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>> (const rpc::client_info&, rpc::opt_time_point timeout, query::read_command cmd, ::compat::wrapping_partition_range pr, rpc::optional<query::digest_algorithm> digest)>&& func);
+    void register_read_data(std::function<future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature, query::status>> (const rpc::client_info&, rpc::opt_time_point timeout, query::read_command cmd, ::compat::wrapping_partition_range pr, rpc::optional<query::digest_algorithm> digest)>&& func);
     future<> unregister_read_data();
-    future<rpc::tuple<query::result, rpc::optional<cache_temperature>>> send_read_data(msg_addr id, clock_type::time_point timeout, const query::read_command& cmd, const dht::partition_range& pr, query::digest_algorithm da);
+    future<rpc::tuple<query::result, rpc::optional<cache_temperature>, rpc::optional<query::status>>> send_read_data(msg_addr id, clock_type::time_point timeout, const query::read_command& cmd, const dht::partition_range& pr, query::digest_algorithm da);
 
     // Wrapper for GET_SCHEMA_VERSION
     void register_get_schema_version(std::function<future<frozen_schema>(unsigned, table_schema_version)>&& func);
@@ -484,14 +485,14 @@ public:
     future<utils::UUID> send_schema_check(msg_addr);
 
     // Wrapper for READ_MUTATION_DATA
-    void register_read_mutation_data(std::function<future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>> (const rpc::client_info&, rpc::opt_time_point timeout, query::read_command cmd, ::compat::wrapping_partition_range pr)>&& func);
+    void register_read_mutation_data(std::function<future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature, query::status>> (const rpc::client_info&, rpc::opt_time_point timeout, query::read_command cmd, ::compat::wrapping_partition_range pr)>&& func);
     future<> unregister_read_mutation_data();
-    future<rpc::tuple<reconcilable_result, rpc::optional<cache_temperature>>> send_read_mutation_data(msg_addr id, clock_type::time_point timeout, const query::read_command& cmd, const dht::partition_range& pr);
+    future<rpc::tuple<reconcilable_result, rpc::optional<cache_temperature>, rpc::optional<query::status>>> send_read_mutation_data(msg_addr id, clock_type::time_point timeout, const query::read_command& cmd, const dht::partition_range& pr);
 
     // Wrapper for READ_DIGEST
-    void register_read_digest(std::function<future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature>> (const rpc::client_info&, rpc::opt_time_point timeout, query::read_command cmd, ::compat::wrapping_partition_range pr, rpc::optional<query::digest_algorithm> digest)>&& func);
+    void register_read_digest(std::function<future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature, query::status>> (const rpc::client_info&, rpc::opt_time_point timeout, query::read_command cmd, ::compat::wrapping_partition_range pr, rpc::optional<query::digest_algorithm> digest)>&& func);
     future<> unregister_read_digest();
-    future<rpc::tuple<query::result_digest, rpc::optional<api::timestamp_type>, rpc::optional<cache_temperature>>> send_read_digest(msg_addr id, clock_type::time_point timeout, const query::read_command& cmd, const dht::partition_range& pr, query::digest_algorithm da);
+    future<rpc::tuple<query::result_digest, rpc::optional<api::timestamp_type>, rpc::optional<cache_temperature>, rpc::optional<query::status>>> send_read_digest(msg_addr id, clock_type::time_point timeout, const query::read_command& cmd, const dht::partition_range& pr, query::digest_algorithm da);
 
     // Wrapper for TRUNCATE
     void register_truncate(std::function<future<>(sstring, sstring)>&& func);

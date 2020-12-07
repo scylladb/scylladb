@@ -48,6 +48,7 @@
 #include "frozen_mutation.hh"
 #include "supervisor.hh"
 #include "query_result_merger.hh"
+#include "query-status.hh"
 #include <seastar/core/do_with.hh>
 #include "message/messaging_service.hh"
 #include "gms/failure_detector.hh"
@@ -3417,57 +3418,70 @@ public:
     }
 
 protected:
-    future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>> make_mutation_data_request(lw_shared_ptr<query::read_command> cmd, gms::inet_address ep, clock_type::time_point timeout) {
+    future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature, query::status>> make_mutation_data_request(lw_shared_ptr<query::read_command> cmd, gms::inet_address ep, clock_type::time_point timeout) {
         ++_proxy->get_stats().mutation_data_read_attempts.get_ep_stat(ep);
         if (fbu::is_me(ep)) {
             tracing::trace(_trace_state, "read_mutation_data: querying locally");
-            return _proxy->query_mutations_locally(_schema, cmd, _partition_range, timeout, _trace_state);
+            return _proxy->query_mutations_locally(_schema, cmd, _partition_range, timeout, _trace_state).then([] (auto result_temp) {
+                auto&& [result, temp] = std::move(result_temp);
+                return make_ready_future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature, query::status>>(std::move(result), std::move(temp), query::status::OK);
+            });
         } else {
             tracing::trace(_trace_state, "read_mutation_data: sending a message to /{}", ep);
-            return _proxy->_messaging.send_read_mutation_data(netw::messaging_service::msg_addr{ep, 0}, timeout, *cmd, _partition_range).then([this, ep](rpc::tuple<reconcilable_result, rpc::optional<cache_temperature>> result_and_hit_rate) {
-                auto&& [result, hit_rate] = result_and_hit_rate;
+            return _proxy->_messaging.send_read_mutation_data(netw::messaging_service::msg_addr{ep, 0}, timeout, *cmd, _partition_range).then(
+                    [this, ep](rpc::tuple<reconcilable_result, rpc::optional<cache_temperature>, rpc::optional<query::status>> result_hit_rate_and_status) {
+                auto&& [result, hit_rate, status] = result_hit_rate_and_status;
                 tracing::trace(_trace_state, "read_mutation_data: got response from /{}", ep);
-                return make_ready_future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>>(rpc::tuple(make_foreign(::make_lw_shared<reconcilable_result>(std::move(result))), hit_rate.value_or(cache_temperature::invalid())));
+                return make_ready_future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature, query::status>>(rpc::tuple(make_foreign(::make_lw_shared<reconcilable_result>(std::move(result))),
+                        hit_rate.value_or(cache_temperature::invalid()), status.value_or(query::status::OK)));
             });
         }
     }
-    future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>> make_data_request(gms::inet_address ep, clock_type::time_point timeout, bool want_digest) {
+    future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature, query::status>> make_data_request(gms::inet_address ep, clock_type::time_point timeout, bool want_digest) {
         ++_proxy->get_stats().data_read_attempts.get_ep_stat(ep);
         auto opts = want_digest
                   ? query::result_options{query::result_request::result_and_digest, digest_algorithm(*_proxy)}
                   : query::result_options{query::result_request::only_result, query::digest_algorithm::none};
         if (fbu::is_me(ep)) {
             tracing::trace(_trace_state, "read_data: querying locally");
-            return _proxy->query_result_local(_schema, _cmd, _partition_range, opts, _trace_state, timeout);
+            return _proxy->query_result_local(_schema, _cmd, _partition_range, opts, _trace_state, timeout).then([] (auto result_temp) {
+                auto&& [result, temp] = std::move(result_temp);
+                return make_ready_future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature, query::status>>(std::move(result), std::move(temp), query::status::OK);
+            });
         } else {
             tracing::trace(_trace_state, "read_data: sending a message to /{}", ep);
-            return _proxy->_messaging.send_read_data(netw::messaging_service::msg_addr{ep, 0}, timeout, *_cmd, _partition_range, opts.digest_algo).then([this, ep](rpc::tuple<query::result, rpc::optional<cache_temperature>> result_hit_rate) {
-                auto&& [result, hit_rate] = result_hit_rate;
+            return _proxy->_messaging.send_read_data(netw::messaging_service::msg_addr{ep, 0}, timeout, *_cmd, _partition_range, opts.digest_algo).then(
+                    [this, ep](rpc::tuple<query::result, rpc::optional<cache_temperature>, rpc::optional<query::status>> result_hit_rate_and_status) {
+                auto&& [result, hit_rate, status] = result_hit_rate_and_status;
                 tracing::trace(_trace_state, "read_data: got response from /{}", ep);
-                return make_ready_future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>>(rpc::tuple(make_foreign(::make_lw_shared<query::result>(std::move(result))), hit_rate.value_or(cache_temperature::invalid())));
+                return make_ready_future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature, query::status>>(rpc::tuple(make_foreign(::make_lw_shared<query::result>(std::move(result))),
+                        hit_rate.value_or(cache_temperature::invalid()), status.value_or(query::status::OK)));
             });
         }
     }
-    future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature>> make_digest_request(gms::inet_address ep, clock_type::time_point timeout) {
+    future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature, query::status>> make_digest_request(gms::inet_address ep, clock_type::time_point timeout) {
         ++_proxy->get_stats().digest_read_attempts.get_ep_stat(ep);
         if (fbu::is_me(ep)) {
             tracing::trace(_trace_state, "read_digest: querying locally");
             return _proxy->query_result_local_digest(_schema, _cmd, _partition_range, _trace_state,
-                        timeout, digest_algorithm(*_proxy));
+                        timeout, digest_algorithm(*_proxy)).then([] (auto result_ts_temp) {
+                auto&& [result, ts, temp] = std::move(result_ts_temp);
+                return make_ready_future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature, query::status>>(std::move(result), std::move(ts), std::move(temp), query::status::OK);
+            });
         } else {
             tracing::trace(_trace_state, "read_digest: sending a message to /{}", ep);
             return _proxy->_messaging.send_read_digest(netw::messaging_service::msg_addr{ep, 0}, timeout, *_cmd,
                         _partition_range, digest_algorithm(*_proxy)).then([this, ep] (
-                    rpc::tuple<query::result_digest, rpc::optional<api::timestamp_type>, rpc::optional<cache_temperature>> digest_timestamp_hit_rate) {
-                auto&& [d, t, hit_rate] = digest_timestamp_hit_rate;
+                    rpc::tuple<query::result_digest, rpc::optional<api::timestamp_type>, rpc::optional<cache_temperature>, rpc::optional<query::status>> digest_timestamp_hit_rate_status) {
+                auto&& [d, t, hit_rate, status] = digest_timestamp_hit_rate_status;
                 tracing::trace(_trace_state, "read_digest: got response from /{}", ep);
-                return make_ready_future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature>>(rpc::tuple(d, t ? t.value() : api::missing_timestamp, hit_rate.value_or(cache_temperature::invalid())));
+                return make_ready_future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature, query::status>>(rpc::tuple(d, t ? t.value() : api::missing_timestamp, hit_rate.value_or(cache_temperature::invalid()), status.value_or(query::status::OK)));
             });
         }
     }
     future<> make_mutation_data_requests(lw_shared_ptr<query::read_command> cmd, data_resolver_ptr resolver, targets_iterator begin, targets_iterator end, clock_type::time_point timeout) {
         return parallel_for_each(begin, end, [this, &cmd, resolver = std::move(resolver), timeout] (gms::inet_address ep) {
-            return make_mutation_data_request(cmd, ep, timeout).then_wrapped([this, resolver, ep] (future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>> f) {
+            return make_mutation_data_request(cmd, ep, timeout).then_wrapped([this, resolver, ep] (future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature, query::status>> f) {
                 try {
                     auto v = f.get0();
                     _cf->set_hit_rate(ep, std::get<1>(v));
@@ -3482,7 +3496,7 @@ protected:
     }
     future<> make_data_requests(digest_resolver_ptr resolver, targets_iterator begin, targets_iterator end, clock_type::time_point timeout, bool want_digest) {
         return parallel_for_each(begin, end, [this, resolver = std::move(resolver), timeout, want_digest] (gms::inet_address ep) {
-            return make_data_request(ep, timeout, want_digest).then_wrapped([this, resolver, ep] (future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>> f) {
+            return make_data_request(ep, timeout, want_digest).then_wrapped([this, resolver, ep] (future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature, query::status>> f) {
                 try {
                     auto v = f.get0();
                     _cf->set_hit_rate(ep, std::get<1>(v));
@@ -3498,7 +3512,7 @@ protected:
     }
     future<> make_digest_requests(digest_resolver_ptr resolver, targets_iterator begin, targets_iterator end, clock_type::time_point timeout) {
         return parallel_for_each(begin, end, [this, resolver = std::move(resolver), timeout] (gms::inet_address ep) {
-            return make_digest_request(ep, timeout).then_wrapped([this, resolver, ep] (future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature>> f) {
+            return make_digest_request(ep, timeout).then_wrapped([this, resolver, ep] (future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature, query::status>> f) {
                 try {
                     auto v = f.get0();
                     _cf->set_hit_rate(ep, std::get<2>(v));
@@ -3868,7 +3882,8 @@ db::read_repair_decision storage_proxy::new_read_repair_decision(const schema& s
 
 future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature>>
 storage_proxy::query_result_local_digest(schema_ptr s, lw_shared_ptr<query::read_command> cmd, const dht::partition_range& pr, tracing::trace_state_ptr trace_state, storage_proxy::clock_type::time_point timeout, query::digest_algorithm da) {
-    return query_result_local(std::move(s), std::move(cmd), pr, query::result_options::only_digest(da), std::move(trace_state), timeout).then([] (rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature> result_and_hit_rate) {
+    return query_result_local(std::move(s), std::move(cmd), pr, query::result_options::only_digest(da), std::move(trace_state), timeout).then(
+            [] (rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature> result_and_hit_rate) {
         auto&& [result, hit_rate] = result_and_hit_rate;
         return make_ready_future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature>>(rpc::tuple(*result->digest(), result->last_modified(), hit_rate));
     });
@@ -3893,7 +3908,8 @@ storage_proxy::query_result_local(schema_ptr s, lw_shared_ptr<query::read_comman
     } else {
         // FIXME: adjust multishard_mutation_query to accept an smp_service_group and propagate it there
         tracing::trace(trace_state, "Start querying token range {}", pr);
-        return query_nonsingular_mutations_locally(s, cmd, {pr}, trace_state, timeout).then([s, cmd, opts, trace_state = std::move(trace_state)] (rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>&& r_ht) {
+        return query_nonsingular_mutations_locally(s, cmd, {pr}, trace_state, timeout).then(
+                [s, cmd, opts, trace_state = std::move(trace_state)] (rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>&& r_ht) {
             auto&& [r, ht] = r_ht;
             tracing::trace(trace_state, "Querying is done");
             return make_ready_future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>>(
@@ -4953,7 +4969,10 @@ void storage_proxy::init_messaging_service() {
                 opts.digest_algo = da;
                 opts.request = da == query::digest_algorithm::none ? query::result_request::only_result : query::result_request::result_and_digest;
                 auto timeout = t ? *t : db::no_timeout;
-                return p->query_result_local(std::move(s), cmd, std::move(pr2.first), opts, trace_state_ptr, timeout);
+                return p->query_result_local(std::move(s), cmd, std::move(pr2.first), opts, trace_state_ptr, timeout).then([] (rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature> result_ht) {
+                    auto&& [result, ht] = std::move(result_ht);
+                    return make_ready_future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature, query::status>>(std::move(result), ht, query::status::OK);
+                });
             }).finally([&trace_state_ptr, src_ip] () mutable {
                 tracing::trace(trace_state_ptr, "read_data handling is done, sending a response to /{}", src_ip);
             });
@@ -4984,7 +5003,10 @@ void storage_proxy::init_messaging_service() {
             return get_schema_for_read(cmd->schema_version, std::move(src_addr), p->_messaging).then([cmd, &pr, &p, &trace_state_ptr, &unwrapped, t] (schema_ptr s) mutable {
                 unwrapped = ::compat::unwrap(std::move(pr), *s);
                 auto timeout = t ? *t : db::no_timeout;
-                return p->query_mutations_locally(std::move(s), std::move(cmd), unwrapped, timeout, trace_state_ptr);
+                return p->query_mutations_locally(std::move(s), std::move(cmd), unwrapped, timeout, trace_state_ptr).then([] (rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature> result_ht) {
+                    auto&& [result, ht] = std::move(result_ht);
+                    return make_ready_future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature, query::status>>(std::move(result), std::move(ht), query::status::OK);
+                });
             }).finally([&trace_state_ptr, src_ip] () mutable {
                 tracing::trace(trace_state_ptr, "read_mutation_data handling is done, sending a response to /{}", src_ip);
             });
@@ -5012,7 +5034,10 @@ void storage_proxy::init_messaging_service() {
                     throw std::runtime_error("READ_DIGEST called with wrapping range");
                 }
                 auto timeout = t ? *t : db::no_timeout;
-                return p->query_result_local_digest(std::move(s), cmd, std::move(pr2.first), trace_state_ptr, timeout, da);
+                return p->query_result_local_digest(std::move(s), cmd, std::move(pr2.first), trace_state_ptr, timeout, da).then([] (rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature> result_ts) {
+                    auto&& [result, ts, ht] = std::move(result_ts);
+                    return make_ready_future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature, query::status>>(std::move(result), std::move(ts), std::move(ht), query::status::OK);
+                });
             }).finally([&trace_state_ptr, src_ip] () mutable {
                 tracing::trace(trace_state_ptr, "read_digest handling is done, sending a response to /{}", src_ip);
             });
