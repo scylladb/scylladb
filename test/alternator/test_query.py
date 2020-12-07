@@ -386,3 +386,38 @@ def test_query_missing_key(test_table):
         full_query(test_table, KeyConditions={})
     with pytest.raises(ClientError, match='ValidationException'):
         full_query(test_table)
+
+# The paging tests above used a numeric sort key. Let's now also test paging
+# with a bytes sort key. We already have above a test that bytes sort keys
+# work and are sorted correctly (test_query_sort_order_bytes), but the
+# following test adds a check that *paging* works correctly for such keys.
+# We used to have a bug in this (issue #7768) - the returned LastEvaluatedKey
+# was incorrectly formatted, breaking the boto3's parsing of the response.
+# Note we only check the case of bytes *sort* keys in this test. For bytes
+# *partition* keys, see test_scan_paging_bytes().
+def test_query_paging_bytes(test_table_sb):
+    p = random_string()
+    items = [{'p': p, 'c': random_bytes()} for i in range(10)]
+    with test_table_sb.batch_writer() as batch:
+        for item in items:
+            batch.put_item(item)
+    # Deliberately pass Limit=1 to enforce paging even though we have
+    # just 10 items in the partition.
+    got_items = full_query(test_table_sb, Limit=1,
+        KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}})
+    got_sort_keys = [x['c'] for x in got_items]
+    expected_sort_keys = sorted(x['c'] for x in items)
+    assert got_sort_keys == expected_sort_keys
+
+# Similar for test for string clustering keys
+def test_query_paging_string(test_table_ss):
+    p = random_string()
+    items = [{'p': p, 'c': random_string()} for i in range(10)]
+    with test_table_ss.batch_writer() as batch:
+        for item in items:
+            batch.put_item(item)
+    got_items = full_query(test_table_ss, Limit=1,
+        KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}})
+    got_sort_keys = [x['c'] for x in got_items]
+    expected_sort_keys = sorted(x['c'] for x in items)
+    assert got_sort_keys == expected_sort_keys

@@ -2788,7 +2788,7 @@ static rjson::value encode_paging_state(const schema& schema, const service::pag
     for (const column_definition& cdef : schema.partition_key_columns()) {
         rjson::set_with_string_name(last_evaluated_key, std::string_view(cdef.name_as_text()), rjson::empty_object());
         rjson::value& key_entry = last_evaluated_key[cdef.name_as_text()];
-        rjson::set_with_string_name(key_entry, type_to_string(cdef.type), rjson::parse(to_json_string(*cdef.type, *exploded_pk_it)));
+        rjson::set_with_string_name(key_entry, type_to_string(cdef.type), json_key_column_value(*exploded_pk_it, cdef));
         ++exploded_pk_it;
     }
     auto ck = paging_state.get_clustering_key();
@@ -2798,7 +2798,7 @@ static rjson::value encode_paging_state(const schema& schema, const service::pag
         for (const column_definition& cdef : schema.clustering_key_columns()) {
             rjson::set_with_string_name(last_evaluated_key, std::string_view(cdef.name_as_text()), rjson::empty_object());
             rjson::value& key_entry = last_evaluated_key[cdef.name_as_text()];
-            rjson::set_with_string_name(key_entry, type_to_string(cdef.type), rjson::parse(to_json_string(*cdef.type, *exploded_ck_it)));
+            rjson::set_with_string_name(key_entry, type_to_string(cdef.type), json_key_column_value(*exploded_ck_it, cdef));
             ++exploded_ck_it;
         }
     }
