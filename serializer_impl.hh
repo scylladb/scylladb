@@ -26,6 +26,9 @@
 #include <boost/range/algorithm/for_each.hpp>
 #include "utils/small_vector.hh"
 #include <absl/container/btree_set.h>
+#include <seastar/core/shared_ptr.hh>
+#include <seastar/core/on_internal_error.hh>
+#include "log.hh"
 
 namespace ser {
 
@@ -605,6 +608,28 @@ struct serializer<std::optional<T>> {
         if (present) {
             serializer<T>::skip(in);
         }
+    }
+};
+
+extern logging::logger serlog;
+
+// Warning: assumes that pointer is never null
+template<typename T>
+struct serializer<seastar::lw_shared_ptr<T>> {
+    template<typename Input>
+    static seastar::lw_shared_ptr<T> read(Input& in) {
+        return seastar::make_lw_shared<T>(deserialize(in, boost::type<T>()));
+    }
+    template<typename Output>
+    static void write(Output& out, const seastar::lw_shared_ptr<T>& v) {
+        if (!v) {
+            on_internal_error(serlog, "Unexpected nullptr while serializing a pointer");
+        }
+        serialize(out, *v);
+    }
+    template<typename Input>
+    static void skip(Input& in) {
+        serializer<T>::skip(in);
     }
 };
 
