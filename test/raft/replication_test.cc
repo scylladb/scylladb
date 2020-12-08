@@ -586,7 +586,7 @@ future<int> run_test(test_case test) {
     for (auto& s : persisted_snapshots) {
         auto& [snp, val] = s.second;
         auto digest = val.value.get_value();
-        expected = sm_value_for(snp.idx).get_value();
+        expected = sm_value_for(val.idx).get_value();
         if (digest != expected) {
             tlogger.debug("Persisted snapshot {} doesn't match {} != {}", snp.id, digest, expected);
             fail = -1;
@@ -615,6 +615,8 @@ int main(int argc, char* argv[]) {
         {.name = "non_empty_leader_log", .nodes = 2,
          .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3}}}},
          .updates = {entries{4}}},
+        {.name = "non_empty_leader_log_no_new_entries", .nodes = 2, .total_values = 4,
+         .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3}}}}},
         // 1 nodes, 12 client entries
         {.name = "simple_1_auto_12", .nodes = 1,
          .initial_states = {}, .updates = {entries{12}}},

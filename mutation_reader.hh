@@ -31,21 +31,6 @@
 #include "flat_mutation_reader.hh"
 #include "reader_concurrency_semaphore.hh"
 
-namespace mutation_reader {
-    // mutation_reader::forwarding determines whether fast_forward_to() may
-    // be used on the mutation reader to change the partition range being
-    // read. Enabling forwarding also changes read policy: forwarding::no
-    // means we will stop reading from disk at the end of the given range,
-    // but with forwarding::yes we may read ahead, anticipating the user to
-    // make a small skip with fast_forward_to() and continuing to read.
-    //
-    // Note that mutation_reader::forwarding is similarly name but different
-    // from streamed_mutation::forwarding - the former is about skipping to
-    // a different partition range, while the latter is about skipping
-    // inside a large partition.
-    using forwarding = flat_mutation_reader::partition_range_forwarding;
-}
-
 class reader_selector {
 protected:
     schema_ptr _s;
