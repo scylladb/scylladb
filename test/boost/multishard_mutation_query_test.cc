@@ -963,8 +963,10 @@ SEASTAR_THREAD_TEST_CASE(fuzzy_test) {
 
         auto pop_desc = create_fuzzy_test_table(env, rnd_engine);
 
-#ifdef DEBUG
+#if defined DEBUG
         auto cfg = fuzzy_test_config{seed, std::chrono::seconds{8}, 1, 1};
+#elif defined DEVEL
+        auto cfg = fuzzy_test_config{seed, std::chrono::seconds{2}, 8, 4};
 #else
         auto cfg = fuzzy_test_config{seed, std::chrono::seconds{2}, 16, 256};
 #endif
