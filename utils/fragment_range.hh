@@ -131,10 +131,9 @@ bytes linearized(const FragmentedBuffer& buffer)
 {
     bytes b(bytes::initialized_later(), buffer.size_bytes());
     auto dst = b.begin();
-    using boost::range::for_each;
-    for_each(buffer, [&] (bytes_view fragment) {
+    for (bytes_view fragment : buffer) {
         dst = boost::copy(fragment, dst);
-    });
+    }
     return b;
 }
 
