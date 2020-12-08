@@ -544,6 +544,14 @@ extra_cxxflags = {
     'sanitize': {}
 }
 
+scylla_raft_core = [
+    'raft/raft.cc',
+    'raft/server.cc',
+    'raft/fsm.cc',
+    'raft/progress.cc',
+    'raft/log.cc',
+]
+
 scylla_core = (['database.cc',
                 'absl-flat_hash_map.cc',
                 'table.cc',
@@ -866,7 +874,9 @@ scylla_core = (['database.cc',
                 'service/raft/schema_raft_state_machine.cc',
                 'service/raft/raft_sys_table_storage.cc',
                 'serializer.cc',
-                ] + [Antlr3Grammar('cql3/Cql.g')] + [Thrift('interface/cassandra.thrift', 'Cassandra')]
+                'service/raft/raft_rpc.cc',
+                ] + [Antlr3Grammar('cql3/Cql.g')] + [Thrift('interface/cassandra.thrift', 'Cassandra')] \
+                  + scylla_raft_core
                )
 
 api = ['api/api.cc',
@@ -987,14 +997,7 @@ scylla_tests_dependencies = scylla_core + idls + scylla_tests_generic_dependenci
     'test/lib/random_schema.cc',
 ]
 
-scylla_raft_dependencies = [
-    'raft/raft.cc',
-    'raft/server.cc',
-    'raft/fsm.cc',
-    'raft/progress.cc',
-    'raft/log.cc',
-    'utils/uuid.cc'
-]
+scylla_raft_dependencies = scylla_raft_core + ['utils/uuid.cc']
 
 deps = {
     'scylla': idls + ['main.cc', 'release.cc', 'utils/build_id.cc'] + scylla_core + api + alternator + redis,
