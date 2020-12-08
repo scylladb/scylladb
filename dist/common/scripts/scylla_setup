@@ -60,7 +60,7 @@ def print_non_interactive_suggestion_message(args):
     base_string = "    scylla_setup"
     outlines = [ base_string ]
     for key,value in vars(args).items():
-        if not value:
+        if not value and type(value) != int:
             continue
         x = ' --{}'.format(key.replace('_','-'))
         if type(value) != bool:
@@ -265,9 +265,9 @@ if __name__ == '__main__':
                         help='skip coredump setup')
     parser.add_argument('--no-sysconfig-setup', action='store_true', default=False,
                         help='skip sysconfig setup')
-    parser.add_argument('--io-setup', default='1', choices=['0', '1'], dest='io_setup',
+    parser.add_argument('--io-setup', default=1, choices=[0, 1], dest='io_setup', type=int,
                         help='Run I/O configuration setup (i.e. iotune). Defaults to 1.')
-    parser.add_argument('--no-io-setup', dest='io_setup', action='store_const', const='0',
+    parser.add_argument('--no-io-setup', dest='io_setup', action='store_const', const=0,
                         help='skip IO configuration setup')
     parser.add_argument('--no-version-check', action='store_true', default=False,
                         help='skip daily version check')
@@ -322,7 +322,7 @@ if __name__ == '__main__':
     raid_setup = not args.no_raid_setup
     coredump_setup = not args.no_coredump_setup
     sysconfig_setup = not args.no_sysconfig_setup
-    io_setup = args.io_setup == "1"
+    io_setup = args.io_setup
     version_check = not args.no_version_check
     node_exporter = not args.no_node_exporter
     cpuscaling_setup = not args.no_cpuscaling_setup
@@ -351,8 +351,8 @@ if __name__ == '__main__':
         args.no_ec2_check = not ec2_check
         if ec2_check:
             if interactive:
-                nic = interactive_choose_nic()
-            run('{}/scylla_ec2_check --nic {}'.format(scriptsdir(), nic), shell=True, check=True)
+                args.nic = interactive_choose_nic()
+            run('{}/scylla_ec2_check --nic {}'.format(scriptsdir(), args.nic), shell=True, check=True)
 
     if not is_nonroot():
         kernel_check = interactive_ask_service('Do you want to run check your kernel version?', 'Yes - runs a  script to verify that the kernel for this instance qualifies to run Scylla. No - skips the kernel check.', kernel_check)
@@ -495,12 +495,12 @@ if __name__ == '__main__':
             set_nic_and_disks = interactive_ask_service('Do you want to enable Network Interface Card (NIC) and disk(s) optimization?', 'Yes - optimize the NIC queue and disks settings. Selecting Yes greatly improves performance. No - skip this step.', set_nic_and_disks)
             setup_args = '--setup-nic-and-disks' if set_nic_and_disks else ''
             if interactive:
-                nic = interactive_choose_nic()
+                args.nic = interactive_choose_nic()
 
             set_clocksource = interactive_ask_service('The clocksource is the physical device that Linux uses to take time measurements. In most cases Linux chooses the fastest available clocksource device as long as it is accurate. In some situations, however, Linux errs in the side of caution and does not choose the fastest available clocksource despite it being accurate enough. If you know your hardware''s fast clocksource is stable enough, choose "yes" here. The safest is the choose "no" (the default)', 'Yes - enforce clocksource setting. No - keep current configuration.', set_clocksource)
             setup_args += ' --set-clocksource' if set_clocksource else ''
 
-            run_setup_script('Performance Tuning', 'scylla_sysconfig_setup --nic {nic} {setup_args}'.format(nic=nic, setup_args=setup_args))
+            run_setup_script('Performance Tuning', 'scylla_sysconfig_setup --nic {nic} {setup_args}'.format(nic=args.nic, setup_args=setup_args))
 
     if is_nonroot():
         params = run('systemctl --no-pager show user@1000.service', shell=True, check=True, capture_output=True, encoding='utf-8').stdout.strip()
@@ -511,7 +511,7 @@ if __name__ == '__main__':
 
     if not args.developer_mode:
         io_setup = interactive_ask_service('Do you want IOTune to study your disks IO profile and adapt Scylla to it? (*WARNING* Saying NO here means the node will not boot in production mode unless you configure the I/O Subsystem manually!)', 'Yes - let iotune study my disk(s). Note that this action will take a few minutes. No - skip this step.', io_setup)
-        args.io_setup = io_setup
+        args.io_setup = 1 if io_setup else 0
         if io_setup:
             run_setup_script('IO configuration', 'scylla_io_setup')
 
@@ -548,11 +548,11 @@ if __name__ == '__main__':
                 if interactive:
                     skip_choose_swap_directory = interactive_ask_service('Do you want to create swapfile on root directory?', 'Anser yes to create swapfile on /, no to choose swap directory.', True)
                     if not skip_choose_swap_directory:
-                        swap_directory = interactive_choose_swap_directory()
+                        args.swap_directory = swap_directory = interactive_choose_swap_directory()
 
                     skip_choose_swap_size = interactive_ask_service('Do you want to auto configure swap size?', 'Anser yes to auto configure, no to manually configure swap size.', True)
                     if not skip_choose_swap_size:
-                        swap_size = interactive_choose_swap_size()
+                        args.swap_size = swap_size = interactive_choose_swap_size()
 
                 if swap_directory:
                     options += f' --swap-directory {swap_directory}'
