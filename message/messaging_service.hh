@@ -39,6 +39,7 @@
 #include "streaming/stream_mutation_fragments_cmd.hh"
 #include "cache_temperature.hh"
 #include "service/paxos/prepare_response.hh"
+#include "raft/raft.hh"
 
 #include <list>
 #include <vector>
@@ -144,7 +145,12 @@ enum class messaging_verb : int32_t {
     PAXOS_PRUNE = 43,
     GOSSIP_GET_ENDPOINT_STATES = 44,
     NODE_OPS_CMD = 45,
-    LAST = 46,
+    RAFT_SEND_SNAPSHOT = 46,
+    RAFT_APPEND_ENTRIES = 47,
+    RAFT_APPEND_ENTRIES_REPLY = 48,
+    RAFT_VOTE_REQUEST = 49,
+    RAFT_VOTE_REPLY = 50,
+    LAST = 51,
 };
 
 } // namespace netw
@@ -546,6 +552,27 @@ public:
     future<> unregister_hint_mutation();
     future<> send_hint_mutation(msg_addr id, clock_type::time_point timeout, const frozen_mutation& fm, std::vector<inet_address> forward,
         inet_address reply_to, unsigned shard, response_id_type response_id, std::optional<tracing::trace_info> trace_info = std::nullopt);
+
+    // RAFT verbs
+    void register_raft_send_snapshot(std::function<future<> (const rpc::client_info&, rpc::opt_time_point, raft::server_id from_id, raft::server_id dst_id, raft::install_snapshot)>&& func);
+    future<> unregister_raft_send_snapshot();
+    future<> send_raft_send_snapshot(msg_addr id, clock_type::time_point timeout, raft::server_id from_id, raft::server_id dst_id, const raft::install_snapshot& install_snapshot);
+
+    void register_raft_append_entries(std::function<future<> (const rpc::client_info&, rpc::opt_time_point, raft::server_id from_id, raft::server_id dst_id, raft::append_request)>&& func);
+    future<> unregister_raft_append_entries();
+    future<> send_raft_append_entries(msg_addr id, clock_type::time_point timeout, raft::server_id from_id, raft::server_id dst_id, const raft::append_request& append_request);
+
+    void register_raft_append_entries_reply(std::function<future<> (const rpc::client_info&, rpc::opt_time_point, raft::server_id from_id, raft::server_id dst_id, raft::append_reply)>&& func);
+    future<> unregister_raft_append_entries_reply();
+    future<> send_raft_append_entries_reply(msg_addr id, clock_type::time_point timeout, raft::server_id from_id, raft::server_id dst_id, const raft::append_reply& reply); 
+
+    void register_raft_vote_request(std::function<future<> (const rpc::client_info&, rpc::opt_time_point, raft::server_id from_id, raft::server_id dst_id, raft::vote_request)>&& func);
+    future<> unregister_raft_vote_request();
+    future<> send_raft_vote_request(msg_addr id, clock_type::time_point timeout, raft::server_id from_id, raft::server_id dst_id, const raft::vote_request& vote_request);
+
+    void register_raft_vote_reply(std::function<future<> (const rpc::client_info&, rpc::opt_time_point, raft::server_id from_id, raft::server_id dst_id, raft::vote_reply)>&& func);
+    future<> unregister_raft_vote_reply();
+    future<> send_raft_vote_reply(msg_addr id, clock_type::time_point timeout, raft::server_id from_id, raft::server_id dst_id, const raft::vote_reply& vote_reply);
 
     void foreach_server_connection_stats(std::function<void(const rpc::client_info&, const rpc::stats&)>&& f) const;
 private:
