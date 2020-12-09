@@ -54,6 +54,7 @@
 #include "database.hh"
 #include "cdc/log.hh"
 #include "concrete_types.hh"
+#include <seastar/core/coroutine.hh>
 
 thread_local api::timestamp_type service::client_state::_last_timestamp_micros = 0;
 
@@ -75,40 +76,37 @@ service::client_state::client_state(external_tag, auth::service& auth_service, t
 
 future<> service::client_state::update_per_role_params() {
     if (!_user || auth::is_anonymous(*_user)) {
-        return make_ready_future<>();
+        co_return;
     }
-    //FIXME: replace with a coroutine once they're widely accepted
-    return seastar::async([this] {
-        auth::role_set roles = _auth_service->get_roles(*_user->name).get();
-        db::timeout_clock::duration read_timeout = db::timeout_clock::duration::max();
-        db::timeout_clock::duration write_timeout = db::timeout_clock::duration::max();
+    auth::role_set roles = co_await _auth_service->get_roles(*_user->name);
+    db::timeout_clock::duration read_timeout = db::timeout_clock::duration::max();
+    db::timeout_clock::duration write_timeout = db::timeout_clock::duration::max();
 
-        auto get_duration = [&] (const sstring& repr) {
-            data_value v = duration_type->deserialize(duration_type->from_string(repr));
-            cql_duration duration = static_pointer_cast<const duration_type_impl>(duration_type)->from_value(v);
-            return std::chrono::duration_cast<lowres_clock::duration>(std::chrono::nanoseconds(duration.nanoseconds));
-        };
+    auto get_duration = [&] (const sstring& repr) {
+        data_value v = duration_type->deserialize(duration_type->from_string(repr));
+        cql_duration duration = static_pointer_cast<const duration_type_impl>(duration_type)->from_value(v);
+        return std::chrono::duration_cast<lowres_clock::duration>(std::chrono::nanoseconds(duration.nanoseconds));
+    };
 
-        for (const auto& role : roles) {
-            auto options = _auth_service->underlying_role_manager().query_custom_options(role).get();
-            auto read_timeout_it = options.find("read_timeout");
-            if (read_timeout_it != options.end()) {
-                read_timeout = std::min(read_timeout, get_duration(read_timeout_it->second));
-            }
-            auto write_timeout_it = options.find("write_timeout");
-            if (write_timeout_it != options.end()) {
-                write_timeout = std::min(write_timeout, get_duration(write_timeout_it->second));
-            }
-         }
-        _timeout_config.read_timeout = read_timeout == db::timeout_clock::duration::max() ?
-                _default_timeout_config.read_timeout : read_timeout;
-        _timeout_config.range_read_timeout = read_timeout == db::timeout_clock::duration::max() ?
-                _default_timeout_config.range_read_timeout : read_timeout;
-        _timeout_config.write_timeout = write_timeout == db::timeout_clock::duration::max() ?
-                _default_timeout_config.write_timeout : write_timeout;
-        _timeout_config.counter_write_timeout = write_timeout == db::timeout_clock::duration::max() ?
-                _default_timeout_config.counter_write_timeout : write_timeout;
-    });
+    for (const auto& role : roles) {
+        auto options = co_await _auth_service->underlying_role_manager().query_custom_options(role);
+        auto read_timeout_it = options.find("read_timeout");
+        if (read_timeout_it != options.end()) {
+            read_timeout = std::min(read_timeout, get_duration(read_timeout_it->second));
+        }
+        auto write_timeout_it = options.find("write_timeout");
+        if (write_timeout_it != options.end()) {
+            write_timeout = std::min(write_timeout, get_duration(write_timeout_it->second));
+        }
+    }
+    _timeout_config.read_timeout = read_timeout == db::timeout_clock::duration::max() ?
+            _default_timeout_config.read_timeout : read_timeout;
+    _timeout_config.range_read_timeout = read_timeout == db::timeout_clock::duration::max() ?
+            _default_timeout_config.range_read_timeout : read_timeout;
+    _timeout_config.write_timeout = write_timeout == db::timeout_clock::duration::max() ?
+            _default_timeout_config.write_timeout : write_timeout;
+    _timeout_config.counter_write_timeout = write_timeout == db::timeout_clock::duration::max() ?
+            _default_timeout_config.counter_write_timeout : write_timeout;
 }
 
 future<> service::client_state::check_user_can_login() {
