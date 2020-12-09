@@ -256,6 +256,7 @@ size_tiered_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> i
             bucket.resize(std::min(max_sstables, bucket.size()));
             compaction_descriptor desc(std::move(bucket), std::optional<sstables::sstable_set>(), iop);
             desc.options = compaction_options::make_reshape();
+            return desc;
         }
     }
 
