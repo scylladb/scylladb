@@ -6724,3 +6724,23 @@ SEASTAR_TEST_CASE(test_may_have_partition_tombstones) {
         }
     });
 }
+
+SEASTAR_TEST_CASE(stcs_reshape_test) {
+    return test_env::do_with_async([] (test_env& env) {
+        simple_schema ss;
+        auto s = ss.schema();
+        std::vector<shared_sstable> sstables;
+        sstables.reserve(s->max_compaction_threshold());
+        for (auto gen = 1; gen <= s->max_compaction_threshold(); gen++) {
+            auto sst = env.make_sstable(s, "", gen, la, big);
+            sstables::test(sst).set_data_file_size(1);
+            sstables.push_back(std::move(sst));
+        }
+
+        auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::size_tiered,
+                                                    s->compaction_strategy_options());
+
+        BOOST_REQUIRE(cs.get_reshaping_job(sstables, s, default_priority_class(), reshape_mode::strict).sstables.size());
+        BOOST_REQUIRE(cs.get_reshaping_job(sstables, s, default_priority_class(), reshape_mode::relaxed).sstables.size());
+    });
+}
