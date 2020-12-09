@@ -145,6 +145,27 @@ public:
     }
 };
 
+template <typename T>
+struct const_template_arg_wrapper {
+    T x;
+
+    const_template_arg_wrapper(const T& t)
+        : x(t)
+    {}
+
+    bool operator == (const const_template_arg_wrapper& rhs) const {
+        return x == rhs.x;
+    }
+};
+
+struct const_template_arg_test_object {
+    std::vector<const_template_arg_wrapper<const simple_compound>> first;
+
+    bool operator == (const const_template_arg_test_object& rhs) const {
+        return first == rhs.first;
+    }
+};
+
 #include "serialization_visitors.hh"
 #include "idl/idl_test.dist.hh"
 #include "serializer_impl.hh"
@@ -444,4 +465,22 @@ BOOST_AUTO_TEST_CASE(test_fragmented_write)
         bytes deserialized = ser::deserialize(in, boost::type<bytes>());
         BOOST_CHECK_EQUAL(deserialized, fragment_generator(fragment_count, fragment_size).to_bytes());
     }
+}
+
+BOOST_AUTO_TEST_CASE(test_const_template_arg)
+{
+    const_template_arg_test_object obj {
+        .first = {
+            simple_compound{ 0xdeadbeef, 0xbadc0ffe },
+            simple_compound{ 0xbaaaaaad, 0xdeadc0de }
+        }
+    };
+
+    bytes_ostream buf;
+    ser::serialize(buf, obj);
+    BOOST_REQUIRE_EQUAL(buf.size(), 40);
+
+    auto in = ser::as_input_stream(buf);
+    auto deser_obj = ser::deserialize(in, boost::type<const_template_arg_test_object>());
+    BOOST_REQUIRE(obj == deser_obj);
 }
