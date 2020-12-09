@@ -94,6 +94,7 @@ private:
     gms::feature _digest_for_null_values_feature;
     gms::feature _correct_idx_token_in_secondary_index_feature;
     gms::feature _alternator_streams_feature;
+    gms::feature _query_status_for_reads_feature;
 
 public:
     bool cluster_supports_user_defined_functions() const {
@@ -169,6 +170,10 @@ public:
 
     bool cluster_supports_alternator_streams() const {
         return bool(_alternator_streams_feature);
+    }
+
+    bool cluster_supports_query_status_for_reads() const {
+        return bool(_query_status_for_reads_feature);
     }
 };
 
