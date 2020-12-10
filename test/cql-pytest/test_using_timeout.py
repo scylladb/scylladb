@@ -19,7 +19,8 @@
 
 from util import new_test_keyspace, unique_name
 import pytest
-from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, ConfigurationException, ReadTimeout, WriteTimeout
+from cassandra.protocol import InvalidRequest, ReadTimeout, WriteTimeout
+from cassandra.util import Duration
 
 def r(regex):
     return re.compile(regex, re.IGNORECASE)
@@ -55,6 +56,23 @@ def test_per_query_timeout_large_enough(scylla_only, cql, table1):
     cql.execute(f"UPDATE {table} USING TIMEOUT 48h SET v = 5 WHERE p = 9 AND c = 1")
     res = list(cql.execute(f"SELECT * FROM {table} USING TIMEOUT 24h"))
     assert res == list(cql.execute(f"SELECT * FROM {table}"))
+
+# Preparing a statement with timeout should work - both by explicitly setting
+# the timeout and by using a marker.
+def test_prepared_statements(scylla_only, cql, table1):
+    table, everything = table1
+    prep = cql.prepare(f"INSERT INTO {table} (p,c,v) VALUES (5,6,7) USING TIMEOUT ?")
+    with pytest.raises(WriteTimeout):
+        cql.execute(prep, (Duration(nanoseconds=0),))
+    cql.execute(prep, (Duration(nanoseconds=10**15),))
+    prep = cql.prepare(f"SELECT * FROM {table} USING TIMEOUT ?");
+    with pytest.raises(ReadTimeout):
+        cql.execute(prep, (Duration(nanoseconds=0),))
+    cql.execute(prep, (Duration(nanoseconds=10**15),))
+    prep = cql.prepare(f"UPDATE {table} USING TIMEOUT ? AND TIMESTAMP ? SET v = ? WHERE p = 9 and c = 1")
+    with pytest.raises(WriteTimeout):
+        cql.execute(prep, (Duration(nanoseconds=0), 3, 42))
+    cql.execute(prep, (Duration(nanoseconds=10**15), 3, 42))
 
 # Mixing TIMEOUT parameter with other params from the USING clause is legal
 def test_mix_per_query_timeout_with_other_params(scylla_only, cql, table1):
