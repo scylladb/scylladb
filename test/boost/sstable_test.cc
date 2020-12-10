@@ -173,7 +173,7 @@ SEASTAR_TEST_CASE(missing_summary_first_last_sane) {
 }
 
 static future<sstable_ptr> do_write_sst(test_env& env, schema_ptr schema, sstring load_dir, sstring write_dir, unsigned long generation) {
-    return env.reusable_sst(std::move(schema), load_dir, generation, la).then([write_dir, generation] (sstable_ptr sst) {
+    return env.reusable_sst(std::move(schema), load_dir, generation).then([write_dir, generation] (sstable_ptr sst) {
         sstables::test(sst).change_generation_number(generation + 1);
         sstables::test(sst).change_dir(write_dir);
         auto fut = sstables::test(sst).store();
@@ -245,7 +245,7 @@ future<>
 write_and_validate_sst(schema_ptr s, sstring dir, noncopyable_function<future<> (shared_sstable sst1, shared_sstable sst2)> func) {
     return test_env::do_with(tmpdir(), [s = std::move(s), dir = std::move(dir), func = std::move(func)] (test_env& env, tmpdir& tmp) mutable {
         return do_write_sst(env, s, dir, tmp.path().string(), 1).then([&env, &tmp, s = std::move(s), func = std::move(func)] (auto sst1) {
-            auto sst2 = env.make_sstable(s, tmp.path().string(), 2, la, big);
+            auto sst2 = env.make_sstable(s, tmp.path().string(), 2, sst1->get_version());
             return func(std::move(sst1), std::move(sst2));
         });
     });

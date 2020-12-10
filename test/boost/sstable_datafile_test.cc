@@ -5294,7 +5294,7 @@ SEASTAR_TEST_CASE(sstable_scrub_test) {
 
             auto tmp = tmpdir();
             auto sst_gen = [&env, schema, &tmp, gen = make_lw_shared<unsigned>(1)] () mutable {
-                return env.make_sstable(schema, tmp.path().string(), (*gen)++, sstables::sstable_version_types::mc, big);
+                return env.make_sstable(schema, tmp.path().string(), (*gen)++);
             };
 
             std::vector<mutation_fragment> corrupt_fragments;
@@ -6734,7 +6734,7 @@ SEASTAR_TEST_CASE(stcs_reshape_test) {
         std::vector<shared_sstable> sstables;
         sstables.reserve(s->max_compaction_threshold());
         for (auto gen = 1; gen <= s->max_compaction_threshold(); gen++) {
-            auto sst = env.make_sstable(s, "", gen, la, big);
+            auto sst = env.make_sstable(s, "", gen);
             sstables::test(sst).set_data_file_size(1);
             sstables.push_back(std::move(sst));
         }

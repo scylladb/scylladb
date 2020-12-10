@@ -37,6 +37,10 @@ inline std::array<sstable_version_types, 4> all_sstable_versions = {
     sstable_version_types::md,
 };
 
+inline auto get_highest_sstable_version() {
+    return all_sstable_versions[all_sstable_versions.size() - 1];
+}
+
 inline sstable_version_types from_string(const seastar::sstring& format) {
     if (format == "ka") {
         return sstable_version_types::ka;

@@ -122,7 +122,7 @@ public:
     }
 
     future<> load_sstables(unsigned iterations) {
-        _sst.push_back(_env.make_sstable(s, this->dir(), 0, sstable::version_types::ka, sstable::format_types::big));
+        _sst.push_back(_env.make_sstable(s, this->dir(), 0, sstables::get_highest_sstable_version(), sstable::format_types::big));
         return _sst.back()->load();
     }
 
@@ -138,7 +138,7 @@ public:
             size_t partitions = _mt->partition_count();
 
             test_setup::create_empty_test_dir(dir()).get();
-            auto sst = _env.make_sstable(s, dir(), idx, sstable::version_types::ka, sstable::format_types::big, _cfg.buffer_size);
+            auto sst = _env.make_sstable(s, dir(), idx, sstables::get_highest_sstable_version(), sstable::format_types::big, _cfg.buffer_size);
 
             auto start = perf_sstable_test_env::now();
             write_memtable_to_sstable_for_test(*_mt, sst).get();
@@ -155,7 +155,7 @@ public:
         return test_setup::create_empty_test_dir(dir()).then([this, idx] {
             return sstables::test_env::do_with_async_returning<double>([this, idx] (sstables::test_env& env) {
                 auto sst_gen = [this, gen = make_lw_shared<unsigned>(idx)] () mutable {
-                    return _env.make_sstable(s, dir(), (*gen)++, sstable::version_types::ka, sstable::format_types::big, _cfg.buffer_size);
+                    return _env.make_sstable(s, dir(), (*gen)++, sstables::get_highest_sstable_version(), sstable::format_types::big, _cfg.buffer_size);
                 };
 
                 std::vector<shared_sstable> ssts;

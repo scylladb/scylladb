@@ -164,3 +164,25 @@ future<compaction_info> compact_sstables(sstables::compaction_descriptor descrip
 std::vector<std::pair<sstring, dht::token>> token_generation_for_current_shard(unsigned tokens_to_generate) {
     return token_generation_for_shard(tokens_to_generate, this_shard_id());
 }
+
+future<shared_sstable> test_env::reusable_sst(schema_ptr schema, sstring dir, unsigned long generation) {
+    return seastar::do_with(shared_sstable(), std::exception_ptr(), std::move(dir), all_sstable_versions.rbegin(),
+            [this, schema, generation] (shared_sstable& ret_sst, std::exception_ptr& ret_ep, sstring& dir, auto& v) {
+        return do_until([&] { return ret_sst || v == all_sstable_versions.rend(); }, [this, schema, generation, &ret_sst, &ret_ep, &dir, &v] {
+            return reusable_sst(schema, dir, generation, *v++).then_wrapped([&] (future<shared_sstable> f) {
+                if (f.failed()) {
+                    ret_ep = f.get_exception();
+                } else {
+                    ret_sst = f.get0();
+                }
+            });
+        }).then([&] {
+            if (ret_sst) {
+                return make_ready_future<shared_sstable>(std::move(ret_sst));
+            } else {
+                assert(ret_ep);
+                return make_exception_future<shared_sstable>(std::move(ret_ep));
+            }
+        });
+    });
+}

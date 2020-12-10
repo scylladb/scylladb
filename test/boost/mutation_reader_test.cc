@@ -566,7 +566,7 @@ struct sst_factory {
     {}
 
     sstables::shared_sstable operator()() {
-        auto sst = env.make_sstable(s, path, gen, sstables::sstable::version_types::la, sstables::sstable::format_types::big);
+        auto sst = env.make_sstable(s, path, gen);
         sst->set_sstable_level(level);
 
         return sst;
@@ -891,7 +891,7 @@ sstables::shared_sstable create_sstable(sstables::test_env& env, simple_schema& 
     }
 
     return make_sstable_containing([&] {
-            return env.make_sstable(sschema.schema(), path, 0, sstables::sstable::version_types::la, sstables::sstable::format_types::big);
+            return env.make_sstable(sschema.schema(), path, 0);
         }
         , mutations);
 }
@@ -901,7 +901,7 @@ sstables::shared_sstable create_sstable(sstables::test_env& env, schema_ptr s, s
     static thread_local auto tmp = tmpdir();
     static int gen = 0;
     return make_sstable_containing([&] {
-        return env.make_sstable(s, tmp.path().string(), gen++, sstables::sstable::version_types::la, sstables::sstable::format_types::big);
+        return env.make_sstable(s, tmp.path().string(), gen++);
     }, mutations);
 }
 

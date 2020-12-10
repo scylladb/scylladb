@@ -965,9 +965,7 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic) {
 
         auto sst = env.make_sstable(s,
                                 dir.path().string(),
-                                1 /* generation */,
-                                sstables::sstable::version_types::ka,
-                                sstables::sstable::format_types::big);
+                                1 /* generation */);
         sstable_writer_config cfg = env.manager().configure_writer();
         cfg.promoted_index_block_size = 1;
         sst->write_components(mt->make_flat_reader(s, tests::make_permit()), 1, s, cfg, mt->get_encoding_stats()).get();
