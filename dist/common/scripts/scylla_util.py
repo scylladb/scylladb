@@ -471,7 +471,7 @@ class aws_instance:
 
     def ebs_disks(self):
         """Returns all EBS disks"""
-        return set(self._disks["ephemeral"])
+        return set(self._disks["ebs"])
 
     def public_ipv4(self):
         """Returns the public IPv4 address of this instance"""
