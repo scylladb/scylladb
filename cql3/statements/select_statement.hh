@@ -96,6 +96,7 @@ protected:
     const ks_selector _ks_sel;
     bool _range_scan = false;
     bool _range_scan_no_bypass_cache = false;
+    std::unique_ptr<cql3::attributes> _attrs;
 protected :
     virtual future<::shared_ptr<cql_transport::messages::result_message>> do_execute(service::storage_proxy& proxy,
         service::query_state& state, const query_options& options) const;
@@ -111,7 +112,8 @@ public:
             ordering_comparator_type ordering_comparator,
             ::shared_ptr<term> limit,
             ::shared_ptr<term> per_partition_limit,
-            cql_stats& stats);
+            cql_stats& stats,
+            std::unique_ptr<cql3::attributes> attrs);
 
     virtual ::shared_ptr<const cql3::metadata> get_result_metadata() const override;
     virtual uint32_t get_bound_terms() const override;
@@ -145,6 +147,8 @@ public:
 
     bool has_group_by() const { return _group_by_cell_indices && !_group_by_cell_indices->empty(); }
 
+    db::timeout_clock::duration get_timeout(const query_options& options) const;
+
 protected:
     uint64_t do_get_limit(const query_options& options, ::shared_ptr<term> limit, uint64_t default_limit) const;
     uint64_t get_limit(const query_options& options) const {
@@ -171,7 +175,8 @@ public:
                      ordering_comparator_type ordering_comparator,
                      ::shared_ptr<term> limit,
                      ::shared_ptr<term> per_partition_limit,
-                     cql_stats &stats);
+                     cql_stats &stats,
+                     std::unique_ptr<cql3::attributes> attrs);
 };
 
 class indexed_table_select_statement : public select_statement {
@@ -192,7 +197,8 @@ public:
                                                                     ordering_comparator_type ordering_comparator,
                                                                     ::shared_ptr<term> limit,
                                                                      ::shared_ptr<term> per_partition_limit,
-                                                                    cql_stats &stats);
+                                                                    cql_stats &stats,
+                                                                    std::unique_ptr<cql3::attributes> attrs);
 
     indexed_table_select_statement(schema_ptr schema,
                                    uint32_t bound_terms,
@@ -207,7 +213,8 @@ public:
                                    cql_stats &stats,
                                    const secondary_index::index& index,
                                    ::shared_ptr<restrictions::restrictions> used_index_restrictions,
-                                   schema_ptr view_schema);
+                                   schema_ptr view_schema,
+                                   std::unique_ptr<cql3::attributes> attrs);
 
 private:
     virtual future<::shared_ptr<cql_transport::messages::result_message>> do_execute(service::storage_proxy& proxy,

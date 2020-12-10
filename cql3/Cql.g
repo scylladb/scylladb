@@ -412,7 +412,7 @@ selectStatement returns [std::unique_ptr<raw::select_statement> expr]
           auto params = make_lw_shared<raw::select_statement::parameters>(std::move(orderings), is_distinct, allow_filtering, is_json, bypass_cache);
           $expr = std::make_unique<raw::select_statement>(std::move(cf), std::move(params),
             std::move(sclause), std::move(wclause), std::move(limit), std::move(per_partition_limit),
-            std::move(gbcolumns));
+            std::move(gbcolumns), std::make_unique<cql3::attributes::raw>());
       }
     ;
 
