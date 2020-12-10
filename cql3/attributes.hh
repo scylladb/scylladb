@@ -54,18 +54,23 @@ class attributes final {
 private:
     const ::shared_ptr<term> _timestamp;
     const ::shared_ptr<term> _time_to_live;
+    const ::shared_ptr<term> _timeout;
 public:
     static std::unique_ptr<attributes> none();
 private:
-    attributes(::shared_ptr<term>&& timestamp, ::shared_ptr<term>&& time_to_live);
+    attributes(::shared_ptr<term>&& timestamp, ::shared_ptr<term>&& time_to_live, ::shared_ptr<term>&& timeout);
 public:
     bool is_timestamp_set() const;
 
     bool is_time_to_live_set() const;
 
+    bool is_timeout_set() const;
+
     int64_t get_timestamp(int64_t now, const query_options& options);
 
     int32_t get_time_to_live(const query_options& options);
+
+    db::timeout_clock::duration get_timeout(const query_options& options) const;
 
     void collect_marker_specification(variable_specifications& bound_names) const;
 
@@ -73,12 +78,15 @@ public:
     public:
         ::shared_ptr<term::raw> timestamp;
         ::shared_ptr<term::raw> time_to_live;
+        ::shared_ptr<term::raw> timeout;
 
         std::unique_ptr<attributes> prepare(database& db, const sstring& ks_name, const sstring& cf_name) const;
     private:
         lw_shared_ptr<column_specification> timestamp_receiver(const sstring& ks_name, const sstring& cf_name) const;
 
         lw_shared_ptr<column_specification> time_to_live_receiver(const sstring& ks_name, const sstring& cf_name) const;
+
+        lw_shared_ptr<column_specification> timeout_receiver(const sstring& ks_name, const sstring& cf_name) const;
     };
 };
 
