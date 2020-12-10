@@ -31,6 +31,37 @@
 #include "test/lib/test_services.hh"
 #include "test/lib/log.hh"
 
+constexpr auto la = sstables::sstable::version_types::la;
+constexpr auto big = sstables::sstable::format_types::big;
+
+class column_family_test {
+    lw_shared_ptr<column_family> _cf;
+public:
+    column_family_test(lw_shared_ptr<column_family> cf) : _cf(cf) {}
+
+    void add_sstable(sstables::shared_sstable sstable) {
+        _cf->_sstables->insert(std::move(sstable));
+    }
+
+    // NOTE: must run in a thread
+    void rebuild_sstable_list(const std::vector<sstables::shared_sstable>& new_sstables,
+            const std::vector<sstables::shared_sstable>& sstables_to_remove) {
+        _cf->_sstables = _cf->build_new_sstable_list(new_sstables, sstables_to_remove).get0();
+    }
+
+    static void update_sstables_known_generation(column_family& cf, unsigned generation) {
+        cf.update_sstables_known_generation(generation);
+    }
+
+    static uint64_t calculate_generation_for_new_table(column_family& cf) {
+        return cf.calculate_generation_for_new_table();
+    }
+
+    static int64_t calculate_shard_from_sstable_generation(int64_t generation) {
+        return column_family::calculate_shard_from_sstable_generation(generation);
+    }
+};
+
 namespace sstables {
 
 class test_env {
