@@ -521,6 +521,7 @@ usingClause[std::unique_ptr<cql3::attributes::raw>& attrs]
 usingClauseObjective[std::unique_ptr<cql3::attributes::raw>& attrs]
     : K_TIMESTAMP ts=intValue { attrs->timestamp = ts; }
     | K_TTL t=intValue { attrs->time_to_live = t; }
+    | K_TIMEOUT to=term { attrs->timeout = to; }
     ;
 
 /**
@@ -1761,6 +1762,7 @@ basic_unreserved_keyword returns [sstring str]
         | K_PER
         | K_PARTITION
         | K_GROUP
+        | K_TIMEOUT
         ) { $str = $k.text; }
     ;
 
@@ -1915,6 +1917,8 @@ K_SCYLLA_COUNTER_SHARD_LIST: S C Y L L A '_' C O U N T E R '_' S H A R D '_' L I
 K_GROUP:       G R O U P;
 
 K_LIKE:        L I K E;
+
+K_TIMEOUT:     T I M E O U T;
 
 // Case-insensitive alpha characters
 fragment A: ('a'|'A');
