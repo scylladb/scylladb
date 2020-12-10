@@ -2349,7 +2349,7 @@ void compare_readers(const schema& s, flat_mutation_reader authority, flat_mutat
     auto assertions = assert_that(std::move(tested));
     compare_readers(s, authority, assertions);
     for (auto& r: fwd_ranges) {
-        authority.fast_forward_to(r, db::no_timeout);
+        authority.fast_forward_to(r, db::no_timeout).get();
         assertions.fast_forward_to(r);
         compare_readers(s, authority, assertions);
     }

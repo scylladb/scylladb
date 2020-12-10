@@ -2897,7 +2897,7 @@ void check_clustering_summaries(const schema& schema, const partition_summary& a
 void check_partition_summaries(const schema& schema, const std::vector<partition_summary>& actual, const std::vector<partition_summary>& expected) {
     BOOST_CHECK_EQUAL(actual.size(), expected.size());
 
-    for (auto actual_it = actual.cbegin(), expected_it = expected.cbegin(); actual_it != actual.cend(), expected_it != expected.cend();
+    for (auto actual_it = actual.cbegin(), expected_it = expected.cbegin(); actual_it != actual.cend() || expected_it != expected.cend();
             ++actual_it, ++expected_it) {
         BOOST_REQUIRE(actual_it->key.equal(schema, expected_it->key));
         BOOST_REQUIRE_EQUAL(actual_it->tomb.timestamp, expected_it->tomb.timestamp);
