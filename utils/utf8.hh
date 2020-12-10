@@ -65,6 +65,10 @@ inline std::optional<size_t> validate_with_error_position(bytes_view string) {
     return validate_with_error_position(data, len);	
 }
 
+inline std::optional<size_t> validate_with_error_position_fragmented(single_fragmented_view fv) {
+    return validate_with_error_position(fv.current_fragment());
+}
+
 std::optional<size_t> validate_with_error_position_fragmented(FragmentedView auto fv) {
     uint8_t partial_codepoint[4];
     size_t partial_filled = 0;

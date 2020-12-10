@@ -1458,7 +1458,9 @@ struct validate_visitor {
         }
     }
     void operator()(const utf8_type_impl&) {
-        auto error_pos = utils::utf8::validate_with_error_position_fragmented(v);
+        auto error_pos = with_simplified(v, [] (FragmentedView auto v) {
+            return utils::utf8::validate_with_error_position_fragmented(v);
+        });
         if (error_pos) {
             throw marshal_exception(format("Validation failed - non-UTF8 character in a UTF8 string, at byte offset {}", *error_pos));
         }
@@ -1567,16 +1569,24 @@ struct validate_visitor {
         }
     }
     void operator()(const map_type_impl& t) {
-        validate_aux(t, v, sf);
+        with_simplified(v, [&] (FragmentedView auto v) {
+            validate_aux(t, v, sf);
+        });
     }
     void operator()(const set_type_impl& t) {
-        validate_aux(t, v, sf);
+        with_simplified(v, [&] (FragmentedView auto v) {
+            validate_aux(t, v, sf);
+        });
     }
     void operator()(const list_type_impl& t) {
-        validate_aux(t, v, sf);
+        with_simplified(v, [&] (FragmentedView auto v) {
+            validate_aux(t, v, sf);
+        });
     }
     void operator()(const tuple_type_impl& t) {
-        validate_aux(t, v, sf);
+        with_simplified(v, [&] (FragmentedView auto v) {
+            validate_aux(t, v, sf);
+        });
     }
 };
 }
