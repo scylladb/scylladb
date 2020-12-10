@@ -170,6 +170,8 @@ private:
             service::storage_proxy& storage,
             const query_options& options,
             service::query_state& state) const;
+
+    db::timeout_clock::duration get_timeout(const query_options& options) const;
 public:
     // FIXME: no cql_statement::to_string() yet
 #if 0
