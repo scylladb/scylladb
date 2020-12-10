@@ -217,3 +217,14 @@ public:
     single_fragmented_view prefix(size_t n) { return single_fragmented_view(_view.substr(0, n)); }
 };
 static_assert(FragmentedView<single_fragmented_view>);
+
+template<FragmentedView View, typename Function>
+requires std::invocable<Function, View> && std::invocable<Function, single_fragmented_view>
+decltype(auto) with_simplified(const View& v, Function&& fn)
+{
+    if (v.size_bytes() == v.current_fragment().size()) [[likely]] {
+        return fn(single_fragmented_view(v.current_fragment()));
+    } else {
+        return fn(v);
+    }
+}
