@@ -1327,7 +1327,8 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
                 clogger.trace("Pre-writing {} of {} KB to segment {}", (max_size - existing_size)/1024, max_size/1024, filename);
                 return f.allocate(existing_size, max_size - existing_size).then([this, existing_size, f]() mutable {
                     static constexpr size_t buf_size = 4 * segment::alignment;
-                    return do_with(allocate_single_buffer(buf_size), max_size - existing_size, [this, f](temporary_buffer<char>& buf, uint64_t& rem) mutable {
+                    size_t zerofill_size = max_size - align_down(existing_size, segment::alignment);
+                    return do_with(allocate_single_buffer(buf_size), zerofill_size, [this, f](temporary_buffer<char>& buf, uint64_t& rem) mutable {
                         std::fill(buf.get_write(), buf.get_write() + buf.size(), 0);
                         return repeat([this, f, &rem, &buf]() mutable {
                             if (rem == 0) {
