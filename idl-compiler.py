@@ -443,13 +443,6 @@ def close_namespaces(namespaces):
     return "".join(map(lambda a: "}", namespaces))
 
 
-def set_namespace(namespaces):
-    ns = combine_ns(namespaces)
-    ns_open = open_namespaces(namespaces)
-    ns_close = close_namespaces(namespaces)
-    return [ns, ns_open, ns_close]
-
-
 def declare_methods(hout, name, template_param=""):
     if config.ns != '':
         fprintln(hout, "namespace ", config.ns, " {")
@@ -479,7 +472,7 @@ struct serializer<const {name}> : public serializer<{name}>
 
 
 def handle_enum(enum, hout, cout, namespaces, parent_template_param=[]):
-    [ns, ns_open, ns_close] = set_namespace(namespaces)
+    ns = combine_ns(namespaces)
     temp_def = ", ".join(map(lambda a: a.typename + " " + a.name, parent_template_param)) if parent_template_param else ""
     template = "template <" + temp_def + ">" if temp_def else ""
     name = enum.name if ns == "" else ns + "::" + enum.name
@@ -1171,7 +1164,7 @@ def handle_class(cls, hout, cout, namespaces=[], parent_template_param=[]):
     add_to_types(cls, namespaces, parent_template_param)
     if cls.stub:
         return
-    [ns, ns_open, ns_close] = set_namespace(namespaces)
+    ns = combine_ns(namespaces)
     is_tpl = cls.template_params is not None
     template_param_list = (cls.template_params if is_tpl else [])
     template_param = ", ".join(map(lambda a: a.typename + " " + a.name, template_param_list + parent_template_param)) if (template_param_list + parent_template_param) else ""
