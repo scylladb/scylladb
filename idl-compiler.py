@@ -36,16 +36,6 @@ DESERIALIZER = 'deserialize'
 SETSIZE = 'set_size'
 SIZETYPE = 'size_type'
 
-parser = argparse.ArgumentParser(description="""Generate serializer helper function""")
-
-parser.add_argument('-o', help='Output file', default='')
-parser.add_argument('-f', help='input file', default='')
-parser.add_argument('--ns', help="""namespace, when set function will be created
-under the given namespace""", default='')
-parser.add_argument('file', nargs='*', help="combine one or more file names for the genral include files")
-
-config = parser.parse_args()
-
 
 def reindent(indent, text):
     return textwrap.indent(textwrap.dedent(text), ' ' * indent)
@@ -1337,7 +1327,17 @@ def general_include(files):
     hout.close()
 
 
-if config.file:
-    general_include(config.file)
-elif config.f != '':
-    load_file(config.f)
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="""Generate serializer helper function""")
+
+    parser.add_argument('-o', help='Output file', default='')
+    parser.add_argument('-f', help='input file', default='')
+    parser.add_argument('--ns', help="""namespace, when set function will be created
+    under the given namespace""", default='')
+    parser.add_argument('file', nargs='*', help="combine one or more file names for the genral include files")
+
+    config = parser.parse_args()
+    if config.file:
+        general_include(config.file)
+    elif config.f != '':
+        load_file(config.f)
