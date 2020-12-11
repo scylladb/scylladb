@@ -447,6 +447,12 @@ public:
     distributed<database>& get_db() {
         return _db;
     }
+    const database& local_db() const noexcept {
+        return _db.local();
+    }
+    database& local_db() noexcept {
+        return _db.local();
+    }
 
     void set_cdc_service(cdc::cdc_service* cdc) {
         _cdc = cdc;
