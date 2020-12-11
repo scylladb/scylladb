@@ -32,7 +32,6 @@
 #include "dht/i_partitioner.hh"
 #include "partition_range_compat.hh"
 #include "range.hh"
-#include "service/storage_proxy.hh"
 #include "mutation_fragment.hh"
 #include "sstables/sstables.hh"
 #include "db/timeout_clock.hh"
@@ -242,17 +241,16 @@ size_estimates_mutation_reader::size_estimates_mutation_reader(database& db, sch
     { }
 
 future<> size_estimates_mutation_reader::get_next_partition() {
-    auto& db = service::get_local_storage_proxy().get_db().local();
     if (!_keyspaces) {
-        _keyspaces = get_keyspaces(*_schema, db, *_prange);
+        _keyspaces = get_keyspaces(*_schema, _db, *_prange);
         _current_partition = _keyspaces->begin();
     }
     if (_current_partition == _keyspaces->end()) {
         _end_of_stream = true;
         return make_ready_future<>();
     }
-    return get_local_ranges(db).then([&db, this] (auto&& ranges) {
-        auto estimates = this->estimates_for_current_keyspace(db, std::move(ranges));
+    return get_local_ranges(_db).then([this] (auto&& ranges) {
+        auto estimates = this->estimates_for_current_keyspace(std::move(ranges));
         auto mutations = db::system_keyspace::make_size_estimates_mutation(*_current_partition, std::move(estimates));
         ++_current_partition;
         std::vector<mutation> ms;
@@ -303,10 +301,10 @@ future<> size_estimates_mutation_reader::fast_forward_to(position_range pr, db::
 }
 
 std::vector<db::system_keyspace::range_estimates>
-size_estimates_mutation_reader::estimates_for_current_keyspace(const database& db, std::vector<token_range> local_ranges) const {
+size_estimates_mutation_reader::estimates_for_current_keyspace(std::vector<token_range> local_ranges) const {
     // For each specified range, estimate (crudely) mean partition size and partitions count.
     auto pkey = partition_key::from_single_value(*_schema, utf8_type->decompose(*_current_partition));
-    auto cfs = db.find_keyspace(*_current_partition).metadata()->cf_meta_data();
+    auto cfs = _db.find_keyspace(*_current_partition).metadata()->cf_meta_data();
     auto cf_names = boost::copy_range<std::vector<bytes>>(cfs | boost::adaptors::transformed([] (auto&& cf) {
         return utf8_type->decompose(cf.first);
     }));
@@ -320,7 +318,7 @@ size_estimates_mutation_reader::estimates_for_current_keyspace(const database& d
                 virtual_row_iterator(cf_names, local_ranges, virtual_row_iterator::end_iterator_tag()));
         auto rows_to_estimate = range.slice(rows, virtual_row_comparator(_schema));
         for (auto&& r : rows_to_estimate) {
-            auto& cf = db.find_column_family(*_current_partition, utf8_type->to_string(r.cf_name));
+            auto& cf = _db.find_column_family(*_current_partition, utf8_type->to_string(r.cf_name));
             estimates.push_back(estimate(cf, r.tokens));
             if (estimates.size() >= _slice.partition_row_limit()) {
                 return estimates;
