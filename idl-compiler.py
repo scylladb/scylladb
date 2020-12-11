@@ -431,14 +431,6 @@ def combine_ns(namespaces):
     return "::".join(namespaces)
 
 
-def open_namespaces(namespaces):
-    return "".join(map(lambda a: "namespace " + a + " { ", namespaces))
-
-
-def close_namespaces(namespaces):
-    return "".join(map(lambda a: "}", namespaces))
-
-
 def declare_methods(hout, name, template_param=""):
     if config.ns != '':
         fprintln(hout, "namespace ", config.ns, " {")
@@ -496,10 +488,6 @@ def param_type(t):
         return 'const ' + t.name if t.is_const else t.name
     elif isinstance(t, TemplateType):
         return t.name + join_template(t.template_parameters)
-
-
-def flat_template(lst):
-    return ", ".join([param_type(l) for l in lst])
 
 
 def flat_type(t):
