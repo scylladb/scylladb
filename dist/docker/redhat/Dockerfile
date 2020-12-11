@@ -33,17 +33,20 @@ ADD scyllasetup.py /scyllasetup.py
 ADD commandlineparser.py /commandlineparser.py
 ADD docker-entrypoint.py /docker-entrypoint.py
 ADD node_exporter_install /node_exporter_install
-# Install Scylla:
-RUN curl $SCYLLA_REPO_URL -o /etc/yum.repos.d/scylla.repo && \
-    yum -y install epel-release && \
+
+RUN yum -y install epel-release && \
     yum -y clean expire-cache && \
     yum -y update && \
-    yum -y install scylla-$VERSION hostname supervisor openssh-server openssh-clients rsyslog && \
+    yum -y install hostname supervisor openssh-server openssh-clients rsyslog && \
     yum clean all && \
     cat /scylla_bashrc >> /etc/bashrc && \
     mkdir -p /etc/supervisor.conf.d && \
     mkdir -p /var/log/scylla && \
-    /node_exporter_install && \
+    /node_exporter_install
+    
+# Install Scylla:
+RUN curl $SCYLLA_REPO_URL -o /etc/yum.repos.d/scylla.repo && \
+    yum -y install scylla-$VERSION && \
     chown -R scylla.scylla /var/lib/scylla
 
 ENV PATH /opt/scylladb/python3/bin:$PATH
