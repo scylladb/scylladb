@@ -42,7 +42,6 @@
 #include "validation.hh"
 #include "database.hh"
 #include "exceptions/exceptions.hh"
-#include "service/storage_proxy.hh"
 
 namespace validation {
 
@@ -94,13 +93,6 @@ validate_column_family(const database& db, const sstring& keyspace_name, const s
     } catch (...) {
         throw exceptions::invalid_request_exception(format("unconfigured table {}", cf_name));
     }
-}
-
-schema_ptr validate_column_family(const sstring& keyspace_name,
-                const sstring& cf_name) {
-    return validate_column_family(
-                    service::get_local_storage_proxy().get_db().local(),
-                    keyspace_name, cf_name);
 }
 
 void validate_keyspace(const database& db, const sstring& keyspace_name) {
