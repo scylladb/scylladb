@@ -309,8 +309,6 @@ def enum_value_parse_action(tokens):
     initializer = None
     if len(tokens) == 2:
         initializer = tokens[1]
-    elif len(tokens) == 3:
-        initializer = '-' + tokens[2]
     return EnumValue(name=tokens[0], initializer=initializer)
 
 
@@ -349,74 +347,74 @@ def namespace_parse_action(tokens):
 
 def parse_file(file_name):
 
-    number = pp.Word(pp.nums)
-    identifier = pp.Word(pp.alphas + "_", pp.alphanums + "_")
+    number = pp.pyparsing_common.signed_integer
+    identifier = pp.pyparsing_common.identifier
 
     lbrace = pp.Literal('{').suppress()
     rbrace = pp.Literal('}').suppress()
     cls = pp.Keyword('class')
-    colon = pp.Literal(":")
+    colon = pp.Literal(":").suppress()
     semi = pp.Literal(";").suppress()
     langle = pp.Literal("<").suppress()
     rangle = pp.Literal(">").suppress()
     equals = pp.Literal("=").suppress()
-    comma = pp.Literal(",")
+    comma = pp.Literal(",").suppress()
     lparen = pp.Literal("(")
     rparen = pp.Literal(")")
     lbrack = pp.Literal("[").suppress()
     rbrack = pp.Literal("]").suppress()
-    mins = pp.Literal("-")
     struct = pp.Keyword('struct')
     template = pp.Keyword('template')
     final = pp.Keyword('final')
     stub = pp.Keyword('stub')
     const = pp.Keyword('const')
+    ns_qualified_ident = pp.delimitedList(identifier, "::", combine=True)
     with_colon = pp.Word(pp.alphanums + "_" + ":")
+    enum_lit = pp.Keyword('enum')
+    ns = pp.Keyword("namespace")
 
     btype = with_colon.copy()
     btype.setParseAction(basic_type_parse_action)
 
     type = pp.Forward()
 
-    tmpl = with_colon("template_name") + langle.suppress() + pp.Group(pp.delimitedList(type))("template_parameters") + rangle.suppress()
+    tmpl = ns_qualified_ident("template_name") + langle + pp.Group(pp.delimitedList(type))("template_parameters") + rangle
     tmpl.setParseAction(template_type_parse_action)
 
     type <<= tmpl | (pp.Optional(const) + btype)
     type.setParseAction(type_parse_action)
 
-    enum_lit = pp.Keyword('enum')
-    enum_class = pp.Group(enum_lit + cls)
-    ns = pp.Keyword("namespace")
+    enum_class = enum_lit - cls
 
-    enum_init = equals + pp.Optional(mins) + number
-    enum_value = identifier + pp.Optional(enum_init)
+    enum_init = equals - number
+    enum_value = identifier - pp.Optional(enum_init)
     enum_value.setParseAction(enum_value_parse_action)
 
-    enum_values = lbrace + pp.delimitedList(enum_value) + pp.Optional(comma).suppress() + rbrace
-    enum = enum_class.suppress() + identifier("name") + colon.suppress() + identifier("underlying_type") + enum_values("enum_values") + pp.Optional(semi)
+    enum_values = lbrace - pp.delimitedList(enum_value) - pp.Optional(comma) - rbrace
+    enum = enum_class.suppress() - identifier("name") - colon - identifier("underlying_type") - enum_values("enum_values") + pp.Optional(semi)
     enum.setParseAction(enum_def_parse_action)
 
     content = pp.Forward()
 
-    attrib = lbrack + lbrack + pp.SkipTo(']') + rbrack + rbrack
+    attrib = lbrack - lbrack - pp.SkipTo(']') - rbrack - rbrack
     attrib.setParseAction(attribute_parse_action)
     opt_attribute = pp.Optional(attrib)("attribute")
 
-    default_value = equals + pp.SkipTo(';')
-    member_name = pp.Combine(identifier + pp.Optional(lparen + rparen)("function_marker"))
-    class_member = type("type") + member_name("name") + opt_attribute + pp.Optional(default_value)("default") + semi
+    default_value = equals - pp.SkipTo(';')
+    member_name = pp.Combine(identifier - pp.Optional(lparen - rparen)("function_marker"))
+    class_member = type("type") - member_name("name") - opt_attribute - pp.Optional(default_value)("default") - semi
     class_member.setParseAction(class_member_parse_action)
 
-    template_param = pp.Group(identifier("type") + identifier("name"))
-    template_def = template.suppress() + langle + pp.delimitedList(template_param)("params") + rangle
+    template_param = pp.Group(identifier("type") - identifier("name"))
+    template_def = template.suppress() - langle - pp.delimitedList(template_param)("params") - rangle
     class_content = pp.Forward()
-    class_def = pp.Optional(template_def)("template") + (cls | struct).suppress() + with_colon("name") + \
-        pp.Optional(final)("final") + pp.Optional(stub)("stub") + opt_attribute + \
-        lbrace + pp.ZeroOrMore(class_content)("members") + rbrace + pp.Optional(semi)
+    class_def = pp.Optional(template_def)("template") + (cls | struct).suppress() - ns_qualified_ident("name") - \
+        pp.Optional(final)("final") - pp.Optional(stub)("stub") - opt_attribute - \
+        lbrace - pp.ZeroOrMore(class_content)("members") - rbrace - pp.Optional(semi)
     class_content <<= enum | class_def | class_member
     class_def.setParseAction(class_def_parse_action)
 
-    namespace = ns.suppress() + identifier("name") + lbrace + pp.OneOrMore(content)("ns_members") + rbrace
+    namespace = ns.suppress() - identifier("name") - lbrace - pp.OneOrMore(content)("ns_members") - rbrace
     namespace.setParseAction(namespace_parse_action)
 
     content <<= enum | class_def | namespace
@@ -425,9 +423,7 @@ def parse_file(file_name):
         locals()[varname].setName(varname)
 
     rt = pp.OneOrMore(content)
-    singleLineComment = "//" + pp.restOfLine
-    rt.ignore(singleLineComment)
-    rt.ignore(pp.cStyleComment)
+    rt.ignore(pp.cppStyleComment)
     return rt.parseFile(file_name, parseAll=True)
 
 
