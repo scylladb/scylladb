@@ -578,27 +578,27 @@ def is_stub(cls):
     return cls in stubs
 
 
-def handle_visitors_state(info, hout, classes=[]):
+def handle_visitors_state(info, cout, classes=[]):
     [cls, namespaces, parent_template_param] = info
     name = "__".join(classes) if classes else cls.name
     frame = "empty_frame" if cls.final else "frame"
-    fprintln(hout, f"""
+    fprintln(cout, f"""
 template<typename Output>
 struct state_of_{name} {{
     {frame}<Output> f;""")
     if classes:
         local_state = "state_of_" + "__".join(classes[:-1]) + '<Output>'
-        fprintln(hout, f"    {local_state} _parent;")
+        fprintln(cout, f"    {local_state} _parent;")
         if cls.final:
-            fprintln(hout, f"    state_of_{name}({local_state} parent) : _parent(parent) {{}}")
-    fprintln(hout, "};")
+            fprintln(cout, f"    state_of_{name}({local_state} parent) : _parent(parent) {{}}")
+    fprintln(cout, "};")
     members = get_members(cls)
     member_class = classes if classes else [cls.name]
     for m in members:
         if is_local_type(m.type):
-            handle_visitors_state(local_types[param_type(m.type)], hout, member_class + [m.name])
+            handle_visitors_state(local_types[param_type(m.type)], cout, member_class + [m.name])
         if is_variant(m.type):
-            handle_visitors_state(variant_info(info, m.type.template_parameters), hout, member_class + [m.name])
+            handle_visitors_state(variant_info(info, m.type.template_parameters), cout, member_class + [m.name])
 
 
 def get_dependency(cls):
@@ -825,7 +825,7 @@ def add_vector_placeholder():
     size_type _count = 0;"""
 
 
-def add_node(hout, name, member, base_state, prefix, parents, fun, is_type_vector=False, is_type_final=False):
+def add_node(cout, name, member, base_state, prefix, parents, fun, is_type_vector=False, is_type_final=False):
     struct_name = prefix + name
     if member and is_type_vector:
         vector_placeholder = add_vector_placeholder()
@@ -852,7 +852,7 @@ def add_node(hout, name, member, base_state, prefix, parents, fun, is_type_vecto
             {{}}"""
     else:
         constructor = ""
-    fprintln(hout, f"""
+    fprintln(cout, f"""
 template<typename Output>
 struct {struct_name} {{
     Output& _out;
@@ -863,10 +863,10 @@ struct {struct_name} {{
 }};""")
 
 
-def add_vector_node(hout, member, base_state, parents):
+def add_vector_node(cout, member, base_state, parents):
     if member.type.template_parameters[0].name:
-        add_template_writer_node(hout, member.type.template_parameters[0])
-    add_node(hout, base_state + "__" + member.name, member.type, base_state, "", parents, vector_add_method(member, base_state), True)
+        add_template_writer_node(cout, member.type.template_parameters[0])
+    add_node(cout, base_state + "__" + member.name, member.type, base_state, "", parents, vector_add_method(member, base_state), True)
 
 
 optional_nodes = set()
@@ -886,11 +886,11 @@ struct writer_of_{full_type} {{
 }};"""))
 
 
-def add_variant_nodes(hout, member, param, base_state, parents, classes):
+def add_variant_nodes(cout, member, param, base_state, parents, classes):
     par = base_state + "__" + member.name
     for typ in param.template_parameters:
         if is_local_type(typ):
-            handle_visitors_nodes(local_types[param_type(typ)], hout, True, classes + [member.name, local_types[param_type(typ)][0].name])
+            handle_visitors_nodes(local_types[param_type(typ)], cout, True, classes + [member.name, local_types[param_type(typ)][0].name])
         if is_variant(typ):
             name = base_state + "__" + member.name + "__variant"
             new_member = copy(member) # shallow copy
@@ -903,29 +903,29 @@ def add_variant_nodes(hout, member, param, base_state, parents, classes):
         return {{ _out, std::move(_state._parent) }};
     }}
 """
-            add_node(hout, name, None, base_state + "__" + member.name, "after_", name, end_method)
-            add_variant_nodes(hout, new_member, typ, par, name, classes + [member.name])
-            add_node(hout, name, typ, name, "", par, add_param_write(new_member, par))
+            add_node(cout, name, None, base_state + "__" + member.name, "after_", name, end_method)
+            add_variant_nodes(cout, new_member, typ, par, name, classes + [member.name])
+            add_node(cout, name, typ, name, "", par, add_param_write(new_member, par))
 
 
 writers = set()
 
 
-def add_template_writer_node(hout, typ):
+def add_template_writer_node(cout, typ):
     if is_optional(typ):
-        add_optional_node(hout, typ)
+        add_optional_node(cout, typ)
 
 
-def add_nodes_when_needed(hout, info, member, base_state_name, parents, member_classes):
+def add_nodes_when_needed(cout, info, member, base_state_name, parents, member_classes):
     if is_vector(member.type):
-        add_vector_node(hout, member, base_state_name, base_state_name)
+        add_vector_node(cout, member, base_state_name, base_state_name)
     elif is_variant(member.type):
-        add_variant_nodes(hout, member, member.type, base_state_name, parents, member_classes)
+        add_variant_nodes(cout, member, member.type, base_state_name, parents, member_classes)
     elif is_local_type(member.type):
-        handle_visitors_nodes(local_types[member.type.name], hout, False, member_classes + [member.name])
+        handle_visitors_nodes(local_types[member.type.name], cout, False, member_classes + [member.name])
 
 
-def handle_visitors_nodes(info, hout, variant_node=False, classes=[]):
+def handle_visitors_nodes(info, cout, variant_node=False, classes=[]):
     global writers
     [cls, namespaces, parent_template_param] = info
     # for root node, only generate once
@@ -949,21 +949,21 @@ def handle_visitors_nodes(info, hout, variant_node=False, classes=[]):
     member_classes = classes if classes else [current_name]
     prefix = "" if classes else "writer_of_"
     if not members:
-        add_node(hout, base_state_name, None, base_state_name, prefix, parents, add_end_method(parents, current_name, variant_node, classes), False, is_final(cls))
+        add_node(cout, base_state_name, None, base_state_name, prefix, parents, add_end_method(parents, current_name, variant_node, classes), False, is_final(cls))
         return
-    add_node(hout, base_state_name + "__" + get_member_name(members[-1].name), members[-1].type, base_state_name, "after_", base_state_name, add_end_method(parents, current_name, variant_node, classes))
+    add_node(cout, base_state_name + "__" + get_member_name(members[-1].name), members[-1].type, base_state_name, "after_", base_state_name, add_end_method(parents, current_name, variant_node, classes))
     # Create writer and reader for include class
     if not variant_node:
         for member in get_dependency(cls):
-            handle_visitors_nodes(local_types[member], hout)
+            handle_visitors_nodes(local_types[member], cout)
     for ind in reversed(range(1, len(members))):
         member = members[ind]
-        add_nodes_when_needed(hout, info, member, base_state_name, parents, member_classes)
+        add_nodes_when_needed(cout, info, member, base_state_name, parents, member_classes)
         variant_state = base_state_name + "__" + get_member_name(member.name) if is_variant(member.type) else base_state_name
-        add_node(hout, base_state_name + "__" + get_member_name(members[ind - 1].name), member.type, variant_state, "after_", base_state_name, add_param_write(member, base_state_name), False)
+        add_node(cout, base_state_name + "__" + get_member_name(members[ind - 1].name), member.type, variant_state, "after_", base_state_name, add_param_write(member, base_state_name), False)
     member = members[0]
-    add_nodes_when_needed(hout, info, member, base_state_name, parents, member_classes)
-    add_node(hout, base_state_name, member.type, base_state_name, prefix, parents, add_param_write(member, base_state_name, False, not classes), False, is_final(cls))
+    add_nodes_when_needed(cout, info, member, base_state_name, parents, member_classes)
+    add_node(cout, base_state_name, member.type, base_state_name, prefix, parents, add_param_write(member, base_state_name, False, not classes), False, is_final(cls))
 
 
 def add_to_types(cls, namespaces, parent_template_param):
@@ -1054,18 +1054,18 @@ template<typename Input>
     fprintln(hout, f'    return {t}(deserialize(v, boost::type<unknown_variant_type>()));\n  }});\n}}')
 
 
-def add_view(hout, info):
+def add_view(cout, info):
     [cls, namespaces, parent_template_param] = info
     members = get_members(cls)
     for m in members:
-        add_variant_read_size(hout, m.type)
+        add_variant_read_size(cout, m.type)
 
-    fprintln(hout, f"""struct {cls.name}_view {{
+    fprintln(cout, f"""struct {cls.name}_view {{
     utils::input_stream v;
     """)
 
     if not is_stub(cls.name) and is_local_type(cls.name):
-        fprintln(hout, reindent(4, f"""
+        fprintln(cout, reindent(4, f"""
             operator {cls.name}() const {{
                auto in = v;
                return deserialize(in, boost::type<{cls.name}>());
@@ -1086,7 +1086,7 @@ def add_view(hout, info):
         else:
             deser = f"{DESERIALIZER}(in, boost::type<{full_type}>())"
 
-        fprintln(hout, reindent(4, """
+        fprintln(cout, reindent(4, """
             auto {name}() const {{
               return seastar::with_serialized_stream(v, [this] (auto& v) -> decltype({f}(std::declval<utils::input_stream&>(), boost::type<{full_type}>())) {{
                auto in = v;
@@ -1098,12 +1098,12 @@ def add_view(hout, info):
 
         skip = skip + f"\n       ser::skip(in, boost::type<{full_type}>());"
 
-    fprintln(hout, "};")
+    fprintln(cout, "};")
     skip_impl = "auto& in = v;\n       " + skip if is_final(cls) else "v.skip(read_frame_size(v));"
     if skip == "":
         skip_impl = ""
 
-    fprintln(hout, f"""
+    fprintln(cout, f"""
 template<>
 struct serializer<{cls.name}_view> {{
     template<typename Input>
@@ -1129,21 +1129,21 @@ struct serializer<{cls.name}_view> {{
 """)
 
 
-def add_views(hout):
+def add_views(cout):
     for k in sort_dependencies():
-        add_view(hout, local_types[k])
+        add_view(cout, local_types[k])
 
 
-def add_visitors(hout):
+def add_visitors(cout):
     if not local_types:
         return
-    add_views(hout)
-    fprintln(hout, "\n////// State holders")
+    add_views(cout)
+    fprintln(cout, "\n////// State holders")
     for k in local_types:
-        handle_visitors_state(local_types[k], hout)
-    fprintln(hout, "\n////// Nodes")
+        handle_visitors_state(local_types[k], cout)
+    fprintln(cout, "\n////// Nodes")
     for k in sort_dependencies():
-        handle_visitors_nodes(local_types[k], hout)
+        handle_visitors_nodes(local_types[k], cout)
 
 
 def handle_class(cls, hout, cout, namespaces=[], parent_template_param=[]):
@@ -1289,7 +1289,9 @@ def load_file(name):
 
 def general_include(files):
     name = config.o if config.o else "serializer.dist.hh"
+    # Header file containing implementation of serializers and other supporting classes 
     cout = open(name.replace('.hh', '.impl.hh'), "w+")
+    # Header file with serializer declarations
     hout = open(name, "w+")
     print_cw(cout)
     print_cw(hout)
