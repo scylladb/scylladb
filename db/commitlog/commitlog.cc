@@ -1317,7 +1317,7 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
             // instead of this, but for now we must do explicit buffer writes.
             fut = fsiz.then([f, this, filename](uint64_t existing_size) mutable {
                 // if recycled (or from last run), we might have either truncated smaller or written it 
-                // (slighty) larger due to final zeroing of file
+                // (slightly) larger due to final zeroing of file
                 if (existing_size >= max_size) {
                     return f.truncate(max_size);
                 }
