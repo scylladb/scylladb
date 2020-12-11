@@ -24,6 +24,8 @@
 #include "mutation_reader.hh"
 #include "db/system_keyspace.hh"
 
+class database;
+
 namespace db {
 
 namespace size_estimates {
@@ -56,6 +58,8 @@ private:
 };
 
 struct virtual_reader {
+    database& db;
+
     flat_mutation_reader operator()(schema_ptr schema,
             reader_permit permit,
             const dht::partition_range& range,
@@ -66,6 +70,8 @@ struct virtual_reader {
             mutation_reader::forwarding fwd_mr) {
         return make_flat_mutation_reader<size_estimates_mutation_reader>(std::move(schema), std::move(permit), range, slice, fwd);
     }
+
+    virtual_reader(database& db_) noexcept : db(db_) {}
 };
 
 future<std::vector<token_range>> test_get_local_ranges(database& db);
