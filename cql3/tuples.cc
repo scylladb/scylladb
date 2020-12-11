@@ -140,14 +140,12 @@ shared_ptr<terminal> tuples::in_marker::bind(const query_options& options) {
         auto& type = static_cast<const list_type_impl&>(*_receiver->type);
         auto& elem_type = static_cast<const tuple_type_impl&>(*type.get_elements_type());
         try {
-            with_linearized(*value, [&] (bytes_view v) {
-                type.validate(v, options.get_cql_serialization_format());
-                auto l = value_cast<list_type_impl::native_type>(type.deserialize(v, options.get_cql_serialization_format()));
+            type.validate(*value, options.get_cql_serialization_format());
+            auto l = value_cast<list_type_impl::native_type>(type.deserialize(*value, options.get_cql_serialization_format()));
 
-                for (auto&& element : l) {
-                    elem_type.validate(elem_type.decompose(element), options.get_cql_serialization_format());
-                }
-            });
+            for (auto&& element : l) {
+                elem_type.validate(elem_type.decompose(element), options.get_cql_serialization_format());
+            }
         } catch (marshal_exception& e) {
             throw exceptions::invalid_request_exception(e.what());
         }

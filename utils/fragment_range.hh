@@ -162,6 +162,8 @@ concept FragmentedView = requires (T view, size_t n) {
     // No preconditions.
     { view.current_fragment() } -> std::convertible_to<const typename T::fragment_type&>;
     // No preconditions.
+    { view.empty() } -> std::same_as<bool>;
+    // No preconditions.
     { view.size_bytes() } -> std::convertible_to<size_t>;
     // Precondition: n <= size_bytes()
     { view.prefix(n) } -> std::same_as<T>;
@@ -207,9 +209,21 @@ public:
     using fragment_type = bytes_view;
     explicit single_fragmented_view(bytes_view bv) : _view(bv) {}
     size_t size_bytes() const { return _view.size(); }
+    bool empty() const { return _view.empty(); }
     void remove_prefix(size_t n) { _view.remove_prefix(n); }
     void remove_current() { _view = bytes_view(); }
     bytes_view current_fragment() const { return _view; }
     single_fragmented_view prefix(size_t n) { return single_fragmented_view(_view.substr(0, n)); }
 };
 static_assert(FragmentedView<single_fragmented_view>);
+
+template<FragmentedView View, typename Function>
+requires std::invocable<Function, View> && std::invocable<Function, single_fragmented_view>
+decltype(auto) with_simplified(const View& v, Function&& fn)
+{
+    if (v.size_bytes() == v.current_fragment().size()) [[likely]] {
+        return fn(single_fragmented_view(v.current_fragment()));
+    } else {
+        return fn(v);
+    }
+}

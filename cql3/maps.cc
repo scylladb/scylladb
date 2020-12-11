@@ -261,9 +261,7 @@ maps::marker::bind(const query_options& options) {
         return constants::UNSET_VALUE;
     }
     try {
-        with_linearized(*val, [&] (bytes_view value) {
-            _receiver->type->validate(value, options.get_cql_serialization_format());
-        });
+        _receiver->type->validate(*val, options.get_cql_serialization_format());
     } catch (marshal_exception& e) {
         throw exceptions::invalid_request_exception(
                 format("Exception while binding column {:s}: {:s}", _receiver->name->to_cql_string(), e.what()));
