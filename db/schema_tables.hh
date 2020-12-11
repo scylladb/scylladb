@@ -211,6 +211,7 @@ void add_type_to_schema_mutation(user_type type, api::timestamp_type timestamp, 
 std::vector<mutation> make_create_table_mutations(lw_shared_ptr<keyspace_metadata> keyspace, schema_ptr table, api::timestamp_type timestamp);
 
 std::vector<mutation> make_update_table_mutations(
+    database& db,
     lw_shared_ptr<keyspace_metadata> keyspace,
     schema_ptr old_table,
     schema_ptr new_table,

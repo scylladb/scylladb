@@ -671,14 +671,14 @@ future<> migration_manager::announce_column_family_update(schema_ptr cfm, bool f
         mlogger.info("Update table '{}.{}' From {} To {}", cfm->ks_name(), cfm->cf_name(), *old_schema, *cfm);
         auto&& keyspace = db.find_keyspace(cfm->ks_name()).metadata();
 
-        return seastar::async([this, cfm, old_schema, ts, keyspace, from_thrift, view_updates] {
+        return seastar::async([this, cfm, old_schema, ts, keyspace, from_thrift, view_updates, &db] {
             auto mutations = map_reduce(view_updates,
                 [keyspace, ts] (auto&& view) {
                     auto& old_view = keyspace->cf_meta_data().at(view->cf_name());
                     mlogger.info("Update view '{}.{}' From {} To {}", view->ks_name(), view->cf_name(), *old_view, *view);
                     auto mutations = db::schema_tables::make_update_view_mutations(keyspace, view_ptr(old_view), std::move(view), ts, false);
                     return make_ready_future<std::vector<mutation>>(std::move(mutations));
-                }, db::schema_tables::make_update_table_mutations(keyspace, old_schema, cfm, ts, from_thrift),
+                }, db::schema_tables::make_update_table_mutations(db, keyspace, old_schema, cfm, ts, from_thrift),
                 [] (auto&& result, auto&& view_mutations) {
                     std::move(view_mutations.begin(), view_mutations.end(), std::back_inserter(result));
                     return std::move(result);
@@ -799,7 +799,7 @@ future<> migration_manager::announce_column_family_drop(const sstring& ks_name,
         }
         auto keyspace = db.find_keyspace(ks_name).metadata();
 
-        return seastar::async([this, keyspace, schema, &old_cfm, drop_views] {
+        return seastar::async([this, keyspace, schema, &old_cfm, drop_views, &db] {
             // If drop_views is false (the default), we don't allow to delete a
             // table which has views which aren't part of an index. If drop_views
             // is true, we delete those views as well.
@@ -816,7 +816,7 @@ future<> migration_manager::announce_column_family_drop(const sstring& ks_name,
             std::vector<mutation> drop_si_mutations;
             if (!schema->all_indices().empty()) {
                 auto builder = schema_builder(schema).without_indexes();
-                drop_si_mutations = db::schema_tables::make_update_table_mutations(keyspace, schema, builder.build(), api::new_timestamp(), false);
+                drop_si_mutations = db::schema_tables::make_update_table_mutations(db, keyspace, schema, builder.build(), api::new_timestamp(), false);
             }
             auto ts = api::new_timestamp();
             auto mutations = db::schema_tables::make_drop_table_mutations(keyspace, schema, ts);

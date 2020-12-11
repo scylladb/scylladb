@@ -165,7 +165,7 @@ SEASTAR_TEST_CASE(test_concurrent_column_addition) {
             // Apply s0 -> s2 change.
             {
                 auto&& keyspace = e.db().local().find_keyspace(s0->ks_name()).metadata();
-                auto muts = db::schema_tables::make_update_table_mutations(keyspace, s0, s2,
+                auto muts = db::schema_tables::make_update_table_mutations(e.db().local(), keyspace, s0, s2,
                     api::new_timestamp(), false);
                 mm.announce(std::move(muts), true).get();
             }
@@ -313,7 +313,7 @@ SEASTAR_TEST_CASE(test_combined_column_add_and_drop) {
 
             // Drop v1
             {
-                auto muts = db::schema_tables::make_update_table_mutations(keyspace, s1, s2,
+                auto muts = db::schema_tables::make_update_table_mutations(e.db().local(), keyspace, s1, s2,
                     api::new_timestamp(), false);
                 mm.announce(std::move(muts), true).get();
             }
@@ -330,7 +330,7 @@ SEASTAR_TEST_CASE(test_combined_column_add_and_drop) {
                         .without_column("v1", list_type_impl::get_instance(int32_type, true), api::new_timestamp())
                         .build();
 
-                auto muts = db::schema_tables::make_update_table_mutations(keyspace, s3, s4,
+                auto muts = db::schema_tables::make_update_table_mutations(e.db().local(), keyspace, s3, s4,
                     api::new_timestamp(), false);
                 mm.announce(std::move(muts), true).get();
             }
