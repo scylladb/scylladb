@@ -2054,12 +2054,12 @@ static schema_mutations make_view_mutations(view_ptr view, api::timestamp_type t
 static void make_drop_table_or_view_mutations(schema_ptr schema_table, schema_ptr table_or_view, api::timestamp_type timestamp, std::vector<mutation>& mutations);
 
 static void make_update_indices_mutations(
+        database& db,
         schema_ptr old_table,
         schema_ptr new_table,
         api::timestamp_type timestamp,
         std::vector<mutation>& mutations)
 {
-    database& db = service::get_local_storage_proxy().get_db().local();
     mutation indices_mutation(indexes(), partition_key::from_singular(*indexes(), old_table->ks_name()));
 
     auto diff = difference(old_table->all_indices(), new_table->all_indices());
@@ -2161,7 +2161,7 @@ std::vector<mutation> make_update_table_mutations(database& db,
 {
     std::vector<mutation> mutations;
     add_table_or_view_to_schema_mutation(new_table, timestamp, false, mutations);
-    make_update_indices_mutations(old_table, new_table, timestamp, mutations);
+    make_update_indices_mutations(db, old_table, new_table, timestamp, mutations);
     make_update_columns_mutations(std::move(old_table), std::move(new_table), timestamp, from_thrift, mutations);
 
     warn(unimplemented::cause::TRIGGERS);
