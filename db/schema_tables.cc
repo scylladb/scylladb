@@ -99,8 +99,6 @@
 #include "db/system_keyspace.hh"
 #include "cql3/untyped_result_set.hh"
 
-#include "service/storage_service.hh" // temporarily
-
 using namespace db::system_keyspace;
 using namespace std::chrono_literals;
 
@@ -2061,16 +2059,17 @@ static void make_update_indices_mutations(
         api::timestamp_type timestamp,
         std::vector<mutation>& mutations)
 {
+    database& db = service::get_local_storage_proxy().get_db().local();
     mutation indices_mutation(indexes(), partition_key::from_singular(*indexes(), old_table->ks_name()));
 
     auto diff = difference(old_table->all_indices(), new_table->all_indices());
-    bool new_token_column_computation = service::get_local_storage_service().db().local().features().cluster_supports_correct_idx_token_in_secondary_index();
+    bool new_token_column_computation = db.features().cluster_supports_correct_idx_token_in_secondary_index();
 
     // indices that are no longer needed
     for (auto&& name : diff.entries_only_on_left) {
         const index_metadata& index = old_table->all_indices().at(name);
         drop_index_from_schema_mutation(old_table, index, timestamp, mutations);
-        auto& cf = service::get_storage_proxy().local().get_db().local().find_column_family(old_table);
+        auto& cf = db.find_column_family(old_table);
         auto view = cf.get_index_manager().create_view_for_index(index, new_token_column_computation);
         make_drop_table_or_view_mutations(views(), view, timestamp, mutations);
     }
@@ -2079,7 +2078,7 @@ static void make_update_indices_mutations(
     for (auto&& name : boost::range::join(diff.entries_differing, diff.entries_only_on_right)) {
         const index_metadata& index = new_table->all_indices().at(name);
         add_index_to_schema_mutation(new_table, index, timestamp, indices_mutation);
-        auto& cf = service::get_storage_proxy().local().get_db().local().find_column_family(new_table);
+        auto& cf = db.find_column_family(new_table);
         auto view = cf.get_index_manager().create_view_for_index(index, new_token_column_computation);
         auto view_mutations = make_view_mutations(view, timestamp, true);
         view_mutations.copy_to(mutations);
