@@ -117,7 +117,10 @@ class TemplateType:
     Such types can either be defined inside or outside the IDL.'''
     def __init__(self, name, template_parameters):
         self.name = name
-        self.template_parameters = template_parameters
+        # FIXME: dirty hack to translate non-type template parameters (numbers) to BasicType objects
+        self.template_parameters = [
+            t if isinstance(t, BasicType) or isinstance(t, TemplateType) else BasicType(name=str(t)) \
+                for t in template_parameters]
 
     def __str__(self):
         return f"<TemplateType(name={self.name}, args={pformat(self.template_parameters)}>"
@@ -352,7 +355,7 @@ def parse_file(file_name):
 
     lbrace = pp.Literal('{').suppress()
     rbrace = pp.Literal('}').suppress()
-    cls = pp.Keyword('class')
+    cls = pp.Keyword('class').suppress()
     colon = pp.Literal(":").suppress()
     semi = pp.Literal(";").suppress()
     langle = pp.Literal("<").suppress()
@@ -363,22 +366,21 @@ def parse_file(file_name):
     rparen = pp.Literal(")")
     lbrack = pp.Literal("[").suppress()
     rbrack = pp.Literal("]").suppress()
-    struct = pp.Keyword('struct')
-    template = pp.Keyword('template')
+    struct = pp.Keyword('struct').suppress()
+    template = pp.Keyword('template').suppress()
     final = pp.Keyword('final')
     stub = pp.Keyword('stub')
     const = pp.Keyword('const')
     ns_qualified_ident = pp.delimitedList(identifier, "::", combine=True)
-    with_colon = pp.Word(pp.alphanums + "_" + ":")
-    enum_lit = pp.Keyword('enum')
-    ns = pp.Keyword("namespace")
+    enum_lit = pp.Keyword('enum').suppress()
+    ns = pp.Keyword("namespace").suppress()
 
-    btype = with_colon.copy()
+    btype = ns_qualified_ident.copy()
     btype.setParseAction(basic_type_parse_action)
 
     type = pp.Forward()
 
-    tmpl = ns_qualified_ident("template_name") + langle + pp.Group(pp.delimitedList(type))("template_parameters") + rangle
+    tmpl = ns_qualified_ident("template_name") + langle + pp.Group(pp.delimitedList(type | number))("template_parameters") + rangle
     tmpl.setParseAction(template_type_parse_action)
 
     type <<= tmpl | (pp.Optional(const) + btype)
@@ -391,7 +393,7 @@ def parse_file(file_name):
     enum_value.setParseAction(enum_value_parse_action)
 
     enum_values = lbrace - pp.delimitedList(enum_value) - pp.Optional(comma) - rbrace
-    enum = enum_class.suppress() - identifier("name") - colon - identifier("underlying_type") - enum_values("enum_values") + pp.Optional(semi)
+    enum = enum_class - identifier("name") - colon - identifier("underlying_type") - enum_values("enum_values") + pp.Optional(semi)
     enum.setParseAction(enum_def_parse_action)
 
     content = pp.Forward()
@@ -406,15 +408,15 @@ def parse_file(file_name):
     class_member.setParseAction(class_member_parse_action)
 
     template_param = pp.Group(identifier("type") - identifier("name"))
-    template_def = template.suppress() - langle - pp.delimitedList(template_param)("params") - rangle
+    template_def = template - langle - pp.delimitedList(template_param)("params") - rangle
     class_content = pp.Forward()
-    class_def = pp.Optional(template_def)("template") + (cls | struct).suppress() - ns_qualified_ident("name") - \
+    class_def = pp.Optional(template_def)("template") + (cls | struct) - ns_qualified_ident("name") - \
         pp.Optional(final)("final") - pp.Optional(stub)("stub") - opt_attribute - \
         lbrace - pp.ZeroOrMore(class_content)("members") - rbrace - pp.Optional(semi)
     class_content <<= enum | class_def | class_member
     class_def.setParseAction(class_def_parse_action)
 
-    namespace = ns.suppress() - identifier("name") - lbrace - pp.OneOrMore(content)("ns_members") - rbrace
+    namespace = ns - identifier("name") - lbrace - pp.OneOrMore(content)("ns_members") - rbrace
     namespace.setParseAction(namespace_parse_action)
 
     content <<= enum | class_def | namespace
