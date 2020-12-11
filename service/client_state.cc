@@ -117,7 +117,7 @@ future<> service::client_state::has_keyspace_access(const sstring& ks,
     });
 }
 
-future<> service::client_state::has_column_family_access(const sstring& ks,
+future<> service::client_state::has_column_family_access(const database& db, const sstring& ks,
                 const sstring& cf, auth::permission p, auth::command_desc::type t) const {
     validation::validate_column_family(ks, cf);
 

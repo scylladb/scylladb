@@ -58,7 +58,7 @@ future<> drop_table_statement::check_access(service::storage_proxy& proxy, const
 {
     // invalid_request_exception is only thrown synchronously.
     try {
-        return state.has_column_family_access(keyspace(), column_family(), auth::permission::DROP);
+        return state.has_column_family_access(proxy.local_db(), keyspace(), column_family(), auth::permission::DROP);
     } catch (exceptions::invalid_request_exception&) {
         if (!_if_exists) {
             throw;

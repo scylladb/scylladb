@@ -73,7 +73,7 @@ create_index_statement::create_index_statement(::shared_ptr<cf_name> name,
 
 future<>
 create_index_statement::check_access(service::storage_proxy& proxy, const service::client_state& state) const {
-    return state.has_column_family_access(keyspace(), column_family(), auth::permission::ALTER);
+    return state.has_column_family_access(proxy.local_db(), keyspace(), column_family(), auth::permission::ALTER);
 }
 
 void
