@@ -450,11 +450,6 @@ def set_namespace(namespaces):
     return [ns, ns_open, ns_close]
 
 
-def declare_class(hout, name, ns_open, ns_close):
-    clas_def = ns_open + name + ";" + ns_close
-    fprintln(hout, "\n", clas_def)
-
-
 def declare_methods(hout, name, template_param=""):
     if config.ns != '':
         fprintln(hout, "namespace ", config.ns, " {")
