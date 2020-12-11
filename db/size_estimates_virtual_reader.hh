@@ -36,6 +36,7 @@ struct token_range {
 };
 
 class size_estimates_mutation_reader final : public flat_mutation_reader::impl {
+    database& _db;
     const dht::partition_range* _prange;
     const query::partition_slice& _slice;
     using ks_range = std::vector<sstring>;
@@ -44,7 +45,7 @@ class size_estimates_mutation_reader final : public flat_mutation_reader::impl {
     streamed_mutation::forwarding _fwd;
     flat_mutation_reader_opt _partition_reader;
 public:
-    size_estimates_mutation_reader(schema_ptr, reader_permit, const dht::partition_range&, const query::partition_slice&, streamed_mutation::forwarding);
+    size_estimates_mutation_reader(database& db, schema_ptr, reader_permit, const dht::partition_range&, const query::partition_slice&, streamed_mutation::forwarding);
 
     virtual future<> fill_buffer(db::timeout_clock::time_point) override;
     virtual void next_partition() override;
@@ -68,7 +69,7 @@ struct virtual_reader {
             tracing::trace_state_ptr trace_state,
             streamed_mutation::forwarding fwd,
             mutation_reader::forwarding fwd_mr) {
-        return make_flat_mutation_reader<size_estimates_mutation_reader>(std::move(schema), std::move(permit), range, slice, fwd);
+        return make_flat_mutation_reader<size_estimates_mutation_reader>(db, std::move(schema), std::move(permit), range, slice, fwd);
     }
 
     virtual_reader(database& db_) noexcept : db(db_) {}
