@@ -579,11 +579,6 @@ db_context::builder& db_context::builder::with_migration_notifier(service::migra
     return *this;
 }
 
-db_context::builder& db_context::builder::with_token_metadata(const locator::token_metadata& token_metadata) {
-    _token_metadata = token_metadata;
-    return *this;
-}
-
 db_context::builder& db_context::builder::with_cdc_metadata(cdc::metadata& cdc_metadata) {
     _cdc_metadata = cdc_metadata;
     return *this;
@@ -593,7 +588,6 @@ db_context db_context::builder::build() {
     return db_context{
         _proxy,
         _migration_notifier ? _migration_notifier->get() : service::get_local_storage_service().get_migration_notifier(),
-        _token_metadata ? _token_metadata->get() : service::get_local_storage_service().get_token_metadata(),
         _cdc_metadata ? _cdc_metadata->get() : service::get_local_storage_service().get_cdc_metadata(),
     };
 }
