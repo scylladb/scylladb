@@ -2500,6 +2500,11 @@ std::unordered_multimap<dht::token_range, inet_address> storage_service::get_cha
 
     auto temp = tmptr->clone_after_all_left().get0();
 
+    // release the token_metadata_ptr
+    // as it's not needed from this point on
+    // after we got clone_after_all_left()
+    tmptr = nullptr;
+
     // endpoint might or might not be 'leaving'. If it was not leaving (that is, removenode
     // command was used), it is still present in temp and must be removed.
     if (temp.is_member(endpoint)) {
