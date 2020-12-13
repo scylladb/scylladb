@@ -2602,7 +2602,8 @@ future<> storage_service::restore_replica_count(inet_address endpoint, inet_addr
         });
     }
   return seastar::async([this, endpoint, notify_endpoint] {
-    auto streamer = make_lw_shared<dht::range_streamer>(_db, get_token_metadata_ptr(), _abort_source, get_broadcast_address(), "Restore_replica_count", streaming::stream_reason::removenode);
+    auto tmptr = get_token_metadata_ptr();
+    auto streamer = make_lw_shared<dht::range_streamer>(_db, tmptr, _abort_source, get_broadcast_address(), "Restore_replica_count", streaming::stream_reason::removenode);
     auto my_address = get_broadcast_address();
     auto non_system_keyspaces = _db.local().get_non_system_keyspaces();
     for (const auto& keyspace_name : non_system_keyspaces) {
@@ -2613,7 +2614,7 @@ future<> storage_service::restore_replica_count(inet_address endpoint, inet_addr
                 my_new_ranges.emplace_back(x.first);
             }
         }
-        std::unordered_multimap<inet_address, dht::token_range> source_ranges = get_new_source_ranges(keyspace_name, my_new_ranges);
+        std::unordered_multimap<inet_address, dht::token_range> source_ranges = get_new_source_ranges(keyspace_name, my_new_ranges, *tmptr);
         std::unordered_map<inet_address, dht::token_range_vector> ranges_per_endpoint;
         for (auto& x : source_ranges) {
             ranges_per_endpoint[x.first].emplace_back(x.second);
@@ -2819,11 +2820,10 @@ storage_service::set_tables_autocompaction(const sstring &keyspace, std::vector<
 
 // Must be called from a seastar thread
 std::unordered_multimap<inet_address, dht::token_range>
-storage_service::get_new_source_ranges(const sstring& keyspace_name, const dht::token_range_vector& ranges) {
+storage_service::get_new_source_ranges(const sstring& keyspace_name, const dht::token_range_vector& ranges, const token_metadata& tm) {
     auto my_address = get_broadcast_address();
     auto& ks = _db.local().find_keyspace(keyspace_name);
     auto& strat = ks.get_replication_strategy();
-    auto tm = get_token_metadata().clone_only_token_map().get0();
     std::unordered_map<dht::token_range, std::vector<inet_address>> range_addresses = strat.get_range_addresses(tm, utils::can_yield::yes);
     std::unordered_multimap<inet_address, dht::token_range> source_ranges;
 
