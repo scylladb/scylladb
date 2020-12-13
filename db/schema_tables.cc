@@ -2054,6 +2054,7 @@ static schema_mutations make_view_mutations(view_ptr view, api::timestamp_type t
 static void make_drop_table_or_view_mutations(schema_ptr schema_table, schema_ptr table_or_view, api::timestamp_type timestamp, std::vector<mutation>& mutations);
 
 static void make_update_indices_mutations(
+        database& db,
         schema_ptr old_table,
         schema_ptr new_table,
         api::timestamp_type timestamp,
@@ -2062,13 +2063,14 @@ static void make_update_indices_mutations(
     mutation indices_mutation(indexes(), partition_key::from_singular(*indexes(), old_table->ks_name()));
 
     auto diff = difference(old_table->all_indices(), new_table->all_indices());
+    bool new_token_column_computation = db.features().cluster_supports_correct_idx_token_in_secondary_index();
 
     // indices that are no longer needed
     for (auto&& name : diff.entries_only_on_left) {
         const index_metadata& index = old_table->all_indices().at(name);
         drop_index_from_schema_mutation(old_table, index, timestamp, mutations);
-        auto& cf = service::get_storage_proxy().local().get_db().local().find_column_family(old_table);
-        auto view = cf.get_index_manager().create_view_for_index(index);
+        auto& cf = db.find_column_family(old_table);
+        auto view = cf.get_index_manager().create_view_for_index(index, new_token_column_computation);
         make_drop_table_or_view_mutations(views(), view, timestamp, mutations);
     }
 
@@ -2076,8 +2078,8 @@ static void make_update_indices_mutations(
     for (auto&& name : boost::range::join(diff.entries_differing, diff.entries_only_on_right)) {
         const index_metadata& index = new_table->all_indices().at(name);
         add_index_to_schema_mutation(new_table, index, timestamp, indices_mutation);
-        auto& cf = service::get_storage_proxy().local().get_db().local().find_column_family(new_table);
-        auto view = cf.get_index_manager().create_view_for_index(index);
+        auto& cf = db.find_column_family(new_table);
+        auto view = cf.get_index_manager().create_view_for_index(index, new_token_column_computation);
         auto view_mutations = make_view_mutations(view, timestamp, true);
         view_mutations.copy_to(mutations);
     }
@@ -2150,7 +2152,8 @@ static void make_update_columns_mutations(schema_ptr old_table,
     }
 }
 
-std::vector<mutation> make_update_table_mutations(lw_shared_ptr<keyspace_metadata> keyspace,
+std::vector<mutation> make_update_table_mutations(database& db,
+    lw_shared_ptr<keyspace_metadata> keyspace,
     schema_ptr old_table,
     schema_ptr new_table,
     api::timestamp_type timestamp,
@@ -2158,7 +2161,7 @@ std::vector<mutation> make_update_table_mutations(lw_shared_ptr<keyspace_metadat
 {
     std::vector<mutation> mutations;
     add_table_or_view_to_schema_mutation(new_table, timestamp, false, mutations);
-    make_update_indices_mutations(old_table, new_table, timestamp, mutations);
+    make_update_indices_mutations(db, old_table, new_table, timestamp, mutations);
     make_update_columns_mutations(std::move(old_table), std::move(new_table), timestamp, from_thrift, mutations);
 
     warn(unimplemented::cause::TRIGGERS);

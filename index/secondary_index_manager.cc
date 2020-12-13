@@ -48,7 +48,6 @@
 #include "schema_builder.hh"
 #include "database.hh"
 #include "db/view/view.hh"
-#include "service/storage_service.hh"
 
 #include <boost/range/adaptor/map.hpp>
 #include <boost/algorithm/cxx11/any_of.hpp>
@@ -120,7 +119,7 @@ static bytes get_available_token_column_name(const schema& schema) {
     return accepted_name;
 }
 
-view_ptr secondary_index_manager::create_view_for_index(const index_metadata& im) const {
+view_ptr secondary_index_manager::create_view_for_index(const index_metadata& im, bool new_token_column_computation) const {
     auto schema = _cf.schema();
     sstring index_target_name = im.options().at(cql3::statements::index_target::target_option_name);
     schema_builder builder{schema->ks_name(), index_table_name(im.name())};
@@ -145,7 +144,7 @@ view_ptr secondary_index_manager::create_view_for_index(const index_metadata& im
         builder.with_column(index_target->name(), index_target->type, column_kind::partition_key);
         // Additional token column is added to ensure token order on secondary index queries
         bytes token_column_name = get_available_token_column_name(*schema);
-        if (service::get_local_storage_service().db().local().features().cluster_supports_correct_idx_token_in_secondary_index()) {
+        if (new_token_column_computation) {
             builder.with_computed_column(token_column_name, long_type, column_kind::clustering_key, std::make_unique<token_column_computation>());
         } else {
             // FIXME(pgrabowski): this legacy code is here for backward compatibility and should be removed
