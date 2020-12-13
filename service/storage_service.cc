@@ -2491,7 +2491,6 @@ std::unordered_multimap<dht::token_range, inet_address> storage_service::get_cha
     // Find (for each range) all nodes that store replicas for these ranges as well
     auto tmptr = get_token_metadata_ptr();
     for (auto& r : ranges) {
-        seastar::thread::maybe_yield();
         auto& ks = _db.local().find_keyspace(keyspace_name);
         auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
         auto eps = ks.get_replication_strategy().calculate_natural_endpoints(end_token, *tmptr, utils::can_yield::yes);
@@ -2519,7 +2518,6 @@ std::unordered_multimap<dht::token_range, inet_address> storage_service::get_cha
     // not in the currentReplicaEndpoints list, will be needing the
     // range.
     for (auto& r : ranges) {
-        seastar::thread::maybe_yield();
         auto& ks = _db.local().find_keyspace(keyspace_name);
         auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
         auto new_replica_endpoints = ks.get_replication_strategy().calculate_natural_endpoints(end_token, temp, utils::can_yield::yes);
