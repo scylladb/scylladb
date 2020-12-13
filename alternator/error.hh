@@ -59,6 +59,9 @@ public:
     static api_error invalid_signature(std::string msg) {
         return api_error("InvalidSignatureException", std::move(msg));
     }
+    static api_error missing_authentication_token(std::string msg) {
+        return api_error("MissingAuthenticationTokenException", std::move(msg));
+    }
     static api_error unrecognized_client(std::string msg) {
         return api_error("UnrecognizedClientException", std::move(msg));
     }

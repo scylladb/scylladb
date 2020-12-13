@@ -59,7 +59,8 @@ def test_expired_signature(dynamodb, test_table):
     assert not response.ok
     assert "InvalidSignatureException" in response.text and "Signature expired" in response.text
 
-# A test verifying that missing Authorization header is handled properly
+# A test verifying that missing Authorization header results in an
+# MissingAuthenticationTokenException error.
 def test_no_authorization_header(dynamodb, test_table):
     url = dynamodb.meta.client._endpoint.host
     print(url)
@@ -69,7 +70,7 @@ def test_no_authorization_header(dynamodb, test_table):
     }
     response = requests.post(url, headers=headers, verify=False)
     assert not response.ok
-    assert "InvalidSignatureException" in response.text and "Authorization header" in response.text
+    assert "MissingAuthenticationTokenException" in response.text
 
 # A test ensuring that signatures that exceed current time too much are not accepted.
 # Watch out - this test is valid only for around next 1000 years, it needs to be updated later.

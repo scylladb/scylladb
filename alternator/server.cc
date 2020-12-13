@@ -189,7 +189,7 @@ future<> server::verify_signature(const request& req) {
     }
     auto authorization_it = req._headers.find("Authorization");
     if (authorization_it == req._headers.end()) {
-        throw api_error::invalid_signature("Authorization header is mandatory for signature verification");
+        throw api_error::missing_authentication_token("Authorization header is mandatory for signature verification");
     }
     std::string host = host_it->second;
     std::vector<std::string_view> credentials_raw = split(authorization_it->second, ' ');
