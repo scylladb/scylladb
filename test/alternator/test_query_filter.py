@@ -529,11 +529,15 @@ def test_query_filter_paging(test_table_sn_with_data):
             Limit=1)
     expected_items = [item for item in items if item['bool'] == True]
     assert(got_items == expected_items)
-    # We expect the number of pages to be len(items)+1. The "+1" is because
-    # the 20th page found one last item to consider (it may or may not have
-    # passed the filter), but doesn't know it is really the last item - it
-    # takes one more query to discover there are no more.
-    assert(pages == len(items) + 1)
+    # The total number of pages may be len(items) or len(items)+1, depending
+    # on the implementation: The "+1" can happen if the 20th page found one
+    # last item to consider (it may or may not have passed the filter), but
+    # doesn't know it is really the last item - it may take one more query to
+    # discover there are no more. Currently, Alternator returns len(items)+1
+    # while DynamoDB returns len(items), but neither is more correct than the
+    # other - nor should any user case about this difference, as empty pages
+    # are a documented possibility.
+    assert(pages == len(items) or pages == len(items) + 1)
 
 # Test that a QueryFilter and AttributesToGet may be given together.
 # In particular, test that QueryFilter may inspect attributes which will
