@@ -71,7 +71,7 @@ alter_table_statement::alter_table_statement(shared_ptr<cf_name> name,
 
 future<> alter_table_statement::check_access(service::storage_proxy& proxy, const service::client_state& state) const {
     using cdt = auth::command_desc::type;
-    return state.has_column_family_access(keyspace(), column_family(), auth::permission::ALTER,
+    return state.has_column_family_access(proxy.local_db(), keyspace(), column_family(), auth::permission::ALTER,
                                           _type == type::opts ? cdt::ALTER_WITH_OPTS : cdt::OTHER);
 }
 

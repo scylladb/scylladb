@@ -610,7 +610,7 @@ public:
                 throw make_exception<InvalidRequestException>("keyspace not set");
             }
 
-            return _query_state.get_client_state().has_column_family_access(current_keyspace(), cfname, auth::permission::MODIFY).then([this, cfname] {
+            return _query_state.get_client_state().has_column_family_access(_db.local(), current_keyspace(), cfname, auth::permission::MODIFY).then([this, cfname] {
                 if (_db.local().find_schema(current_keyspace(), cfname)->is_view()) {
                     throw make_exception<InvalidRequestException>("Cannot truncate Materialized Views");
                 }
@@ -845,7 +845,7 @@ public:
     }
     void system_drop_column_family(thrift_fn::function<void(std::string const& _return)> cob, thrift_fn::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& column_family) {
         with_cob(std::move(cob), std::move(exn_cob), [&] {
-            return _query_state.get_client_state().has_column_family_access(current_keyspace(), column_family, auth::permission::DROP).then([this, column_family] {
+            return _query_state.get_client_state().has_column_family_access(_db.local(), current_keyspace(), column_family, auth::permission::DROP).then([this, column_family] {
                 auto& cf = _db.local().find_column_family(current_keyspace(), column_family);
                 if (cf.schema()->is_view()) {
                     throw make_exception<InvalidRequestException>("Cannot drop Materialized Views from Thrift");

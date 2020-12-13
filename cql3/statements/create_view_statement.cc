@@ -89,7 +89,7 @@ create_view_statement::create_view_statement(
 }
 
 future<> create_view_statement::check_access(service::storage_proxy& proxy, const service::client_state& state) const {
-    return state.has_column_family_access(keyspace(), _base_name->get_column_family(), auth::permission::ALTER);
+    return state.has_column_family_access(proxy.local_db(), keyspace(), _base_name->get_column_family(), auth::permission::ALTER);
 }
 
 void create_view_statement::validate(service::storage_proxy& proxy, const service::client_state& state) const {

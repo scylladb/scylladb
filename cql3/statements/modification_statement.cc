@@ -120,10 +120,11 @@ gc_clock::duration modification_statement::get_time_to_live(const query_options&
 }
 
 future<> modification_statement::check_access(service::storage_proxy& proxy, const service::client_state& state) const {
-    auto f = state.has_column_family_access(keyspace(), column_family(), auth::permission::MODIFY);
+    const database& db = proxy.local_db();
+    auto f = state.has_column_family_access(db, keyspace(), column_family(), auth::permission::MODIFY);
     if (has_conditions()) {
-        f = f.then([this, &state] {
-           return state.has_column_family_access(keyspace(), column_family(), auth::permission::SELECT);
+        f = f.then([this, &state, &db] {
+           return state.has_column_family_access(db, keyspace(), column_family(), auth::permission::SELECT);
         });
     }
     return f;

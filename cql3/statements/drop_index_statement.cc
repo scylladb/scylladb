@@ -70,7 +70,7 @@ future<> drop_index_statement::check_access(service::storage_proxy& proxy, const
     if (!cfm) {
         return make_ready_future<>();
     }
-    return state.has_column_family_access(cfm->ks_name(), cfm->cf_name(), auth::permission::ALTER);
+    return state.has_column_family_access(proxy.local_db(), cfm->ks_name(), cfm->cf_name(), auth::permission::ALTER);
 }
 
 void drop_index_statement::validate(service::storage_proxy& proxy, const service::client_state& state) const
