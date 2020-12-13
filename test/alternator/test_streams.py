@@ -1246,6 +1246,18 @@ def test_table_stream_with_result(dynamodb, dynamodbstreams):
                 continue;
             raise
 
+# Wait for a table to return to "ACTIVE" status. We need to call this after
+# doing an UpdateTable to a table - because before this wait finishes we are
+# not allowed to update the same table again or delete it.
+def wait_for_status_active(table):
+    start_time = time.time()
+    for i in range(60):
+        desc = table.meta.client.describe_table(TableName=table.name)
+        if desc['Table']['TableStatus'] == 'ACTIVE':
+            return
+        time.sleep(1)
+    pytest.fail("wait_for_status_active() timed out")
+
 # Test that in a table with Streams enabled, LatestStreamArn is returned
 # by CreateTable, DescribeTable and UpdateTable, and is the same ARN as
 # returned by ListStreams. Reproduces issue #7157.
@@ -1266,6 +1278,7 @@ def test_latest_stream_arn(test_table_stream_with_result, dynamodbstreams):
     desc = table.meta.client.update_table(TableName=table.name,
             BillingMode='PAY_PER_REQUEST')['TableDescription']
     assert desc['LatestStreamArn'] == arn_in_create_table
+    wait_for_status_active(table)
 
 # Test that in a table with Streams enabled, LatestStreamLabel is returned
 # by CreateTable, DescribeTable and UpdateTable, and is the same "label" as
@@ -1287,6 +1300,7 @@ def test_latest_stream_label(test_table_stream_with_result, dynamodbstreams):
     desc = table.meta.client.update_table(TableName=table.name,
             BillingMode='PAY_PER_REQUEST')['TableDescription']
     assert desc['LatestStreamLabel'] == label_in_create_table
+    wait_for_status_active(table)
 
 # Test that in a table with Streams enabled, StreamSpecification is returned
 # by CreateTable, DescribeTable and UpdateTable. Reproduces issue #7163.
@@ -1305,6 +1319,7 @@ def test_stream_specification(test_table_stream_with_result, dynamodbstreams):
     desc = table.meta.client.update_table(TableName=table.name,
             BillingMode='PAY_PER_REQUEST')['TableDescription']
     assert stream_specification == desc['StreamSpecification']
+    wait_for_status_active(table)
 
 # The following test checks the behavior of *closed* shards.
 # We achieve a closed shard by disabling the stream - the DynamoDB
