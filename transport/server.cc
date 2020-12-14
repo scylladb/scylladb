@@ -327,7 +327,7 @@ cql_server::do_accepts(int which, bool keepalive, socket_address server_addr) {
                                 serr.code().value() == EPIPE) {  // expected if another side closes a connection
                             return;
                         }
-                    } catch(...) {};
+                    } catch(...) {}
                     clogger.info("exception while processing connection: {}", ep);
                 });
             });
@@ -414,30 +414,30 @@ cql_server::connection::read_frame() {
                 throw exceptions::protocol_exception(format("Invalid or unsupported protocol version: {:d}", client_version));
             }
 
-          auto client_state_notification_f = std::apply(notify_client_change<changed_column::protocol_version>{},
+            auto client_state_notification_f = std::apply(notify_client_change<changed_column::protocol_version>{},
                   std::tuple_cat(make_client_key(_client_state), std::make_tuple(_version)));
 
-          return client_state_notification_f.then_wrapped([this] (future<> f) {
-            try {
-                f.get();
-            } catch (...) {
-                clogger.info("exception while setting protocol_version in `system.clients`: {}", std::current_exception());
-            }
-            return _read_buf.read_exactly(frame_size() - 1).then([this] (temporary_buffer<char> tail) {
-                temporary_buffer<char> full(frame_size());
-                full.get_write()[0] = _version;
-                std::copy(tail.get(), tail.get() + tail.size(), full.get_write() + 1);
-                auto frame = parse_frame(std::move(full));
-                // This is the very first frame, so reject obviously incorrect frames, to
-                // avoid allocating large amounts of memory for the message body
-                if (frame.length > 100'000) {
-                    // The STARTUP message body is a [string map] containing just a few options,
-                    // so it should be smaller that 100kB. See #4366.
-                    throw exceptions::protocol_exception(format("Initial message size too large ({:d}), rejecting as invalid", frame.length));
+            return client_state_notification_f.then_wrapped([this] (future<> f) {
+                try {
+                    f.get();
+                } catch (...) {
+                    clogger.info("exception while setting protocol_version in `system.clients`: {}", std::current_exception());
                 }
-                return make_ready_future<ret_type>(frame);
+                return _read_buf.read_exactly(frame_size() - 1).then([this] (temporary_buffer<char> tail) {
+                    temporary_buffer<char> full(frame_size());
+                    full.get_write()[0] = _version;
+                    std::copy(tail.get(), tail.get() + tail.size(), full.get_write() + 1);
+                    auto frame = parse_frame(std::move(full));
+                    // This is the very first frame, so reject obviously incorrect frames, to
+                    // avoid allocating large amounts of memory for the message body
+                    if (frame.length > 100'000) {
+                        // The STARTUP message body is a [string map] containing just a few options,
+                        // so it should be smaller that 100kB. See #4366.
+                        throw exceptions::protocol_exception(format("Initial message size too large ({:d}), rejecting as invalid", frame.length));
+                    }
+                    return make_ready_future<ret_type>(frame);
+                });
             });
-          });
         });
     } else {
         // Not the first frame, so we know the size.
@@ -552,34 +552,34 @@ future<foreign_ptr<std::unique_ptr<cql_server::response>>>
             tracing::set_response_size(trace_state, response->size());
             return response;
         } catch (const exceptions::unavailable_exception& ex) {
-            try { ++_server._stats.errors[ex.code()]; } catch(...) {};
+            try { ++_server._stats.errors[ex.code()]; } catch(...) {}
             return make_unavailable_error(stream, ex.code(), ex.what(), ex.consistency, ex.required, ex.alive, trace_state);
         } catch (const exceptions::read_timeout_exception& ex) {
-            try { ++_server._stats.errors[ex.code()]; } catch(...) {};
+            try { ++_server._stats.errors[ex.code()]; } catch(...) {}
             return make_read_timeout_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.block_for, ex.data_present, trace_state);
         } catch (const exceptions::read_failure_exception& ex) {
-            try { ++_server._stats.errors[ex.code()]; } catch(...) {};
+            try { ++_server._stats.errors[ex.code()]; } catch(...) {}
             return make_read_failure_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.failures, ex.block_for, ex.data_present, trace_state);
         } catch (const exceptions::mutation_write_timeout_exception& ex) {
-            try { ++_server._stats.errors[ex.code()]; } catch(...) {};
+            try { ++_server._stats.errors[ex.code()]; } catch(...) {}
             return make_mutation_write_timeout_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.block_for, ex.type, trace_state);
         } catch (const exceptions::mutation_write_failure_exception& ex) {
-            try { ++_server._stats.errors[ex.code()]; } catch(...) {};
+            try { ++_server._stats.errors[ex.code()]; } catch(...) {}
             return make_mutation_write_failure_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.failures, ex.block_for, ex.type, trace_state);
         } catch (const exceptions::already_exists_exception& ex) {
-            try { ++_server._stats.errors[ex.code()]; } catch(...) {};
+            try { ++_server._stats.errors[ex.code()]; } catch(...) {}
             return make_already_exists_error(stream, ex.code(), ex.what(), ex.ks_name, ex.cf_name, trace_state);
         } catch (const exceptions::prepared_query_not_found_exception& ex) {
-            try { ++_server._stats.errors[ex.code()]; } catch(...) {};
+            try { ++_server._stats.errors[ex.code()]; } catch(...) {}
             return make_unprepared_error(stream, ex.code(), ex.what(), ex.id, trace_state);
         } catch (const exceptions::cassandra_exception& ex) {
-            try { ++_server._stats.errors[ex.code()]; } catch(...) {};
+            try { ++_server._stats.errors[ex.code()]; } catch(...) {}
             return make_error(stream, ex.code(), ex.what(), trace_state);
         } catch (std::exception& ex) {
-            try { ++_server._stats.errors[exceptions::exception_code::SERVER_ERROR]; } catch(...) {};
+            try { ++_server._stats.errors[exceptions::exception_code::SERVER_ERROR]; } catch(...) {}
             return make_error(stream, exceptions::exception_code::SERVER_ERROR, ex.what(), trace_state);
         } catch (...) {
-            try { ++_server._stats.errors[exceptions::exception_code::SERVER_ERROR]; } catch(...) {};
+            try { ++_server._stats.errors[exceptions::exception_code::SERVER_ERROR]; } catch(...) {}
             return make_error(stream, exceptions::exception_code::SERVER_ERROR, "unknown error", trace_state);
         }
     });
@@ -615,13 +615,13 @@ future<> cql_server::connection::process()
             try {
                 f.get();
             } catch (const exceptions::cassandra_exception& ex) {
-                try { ++_server._stats.errors[ex.code()]; } catch(...) {};
+                try { ++_server._stats.errors[ex.code()]; } catch(...) {}
                 write_response(make_error(0, ex.code(), ex.what(), tracing::trace_state_ptr()));
             } catch (std::exception& ex) {
-                try { ++_server._stats.errors[exceptions::exception_code::SERVER_ERROR]; } catch(...) {};
+                try { ++_server._stats.errors[exceptions::exception_code::SERVER_ERROR]; } catch(...) {}
                 write_response(make_error(0, exceptions::exception_code::SERVER_ERROR, ex.what(), tracing::trace_state_ptr()));
             } catch (...) {
-                try { ++_server._stats.errors[exceptions::exception_code::SERVER_ERROR]; } catch(...) {};
+                try { ++_server._stats.errors[exceptions::exception_code::SERVER_ERROR]; } catch(...) {}
                 write_response(make_error(0, exceptions::exception_code::SERVER_ERROR, "unknown error", tracing::trace_state_ptr()));
             }
         });
@@ -773,14 +773,14 @@ future<fragmented_temporary_buffer> cql_server::connection::read_and_decompress_
                 }
                 buf.remove_prefix(4);
                 auto in = input_buffer.get_linearized_view(fragmented_temporary_buffer::view(buf));
-              auto uncomp = output_buffer.make_fragmented_temporary_buffer(uncomp_len, fragmented_temporary_buffer::default_fragment_size, [&] (bytes_mutable_view out) {
-                auto ret = LZ4_decompress_safe(reinterpret_cast<const char*>(in.data()), reinterpret_cast<char*>(out.data()),
-                                               in.size(), out.size());
-                if (ret < 0) {
-                    throw std::runtime_error("CQL frame LZ4 uncompression failure");
-                }
-                return out.size();
-              });
+                auto uncomp = output_buffer.make_fragmented_temporary_buffer(uncomp_len, fragmented_temporary_buffer::default_fragment_size, [&] (bytes_mutable_view out) {
+                    auto ret = LZ4_decompress_safe(reinterpret_cast<const char*>(in.data()), reinterpret_cast<char*>(out.data()),
+                                                   in.size(), out.size());
+                    if (ret < 0) {
+                        throw std::runtime_error("CQL frame LZ4 uncompression failure");
+                    }
+                    return out.size();
+                });
                 on_compression_buffer_use();
                 return uncomp;
             });
@@ -791,13 +791,13 @@ future<fragmented_temporary_buffer> cql_server::connection::read_and_decompress_
                 if (snappy_uncompressed_length(reinterpret_cast<const char*>(in.data()), in.size(), &uncomp_len) != SNAPPY_OK) {
                     throw std::runtime_error("CQL frame Snappy uncompressed size is unknown");
                 }
-              auto uncomp = output_buffer.make_fragmented_temporary_buffer(uncomp_len, fragmented_temporary_buffer::default_fragment_size, [&] (bytes_mutable_view out) {
-                size_t output_len = out.size();
-                if (snappy_uncompress(reinterpret_cast<const char*>(in.data()), in.size(), reinterpret_cast<char*>(out.data()), &output_len) != SNAPPY_OK) {
-                    throw std::runtime_error("CQL frame Snappy uncompression failure");
-                }
-                return output_len;
-              });
+                auto uncomp = output_buffer.make_fragmented_temporary_buffer(uncomp_len, fragmented_temporary_buffer::default_fragment_size, [&] (bytes_mutable_view out) {
+                    size_t output_len = out.size();
+                    if (snappy_uncompress(reinterpret_cast<const char*>(in.data()), in.size(), reinterpret_cast<char*>(out.data()), &output_len) != SNAPPY_OK) {
+                        throw std::runtime_error("CQL frame Snappy uncompression failure");
+                    }
+                    return output_len;
+                });
                 on_compression_buffer_use();
                 return uncomp;
             });
@@ -1556,22 +1556,22 @@ void cql_server::response::compress_lz4()
     size_t input_len = view.size();
 
     size_t output_len = LZ4_COMPRESSBOUND(input_len) + 4;
-  _body = output_buffer.make_buffer(output_len, [&] (bytes_mutable_view output_view) {
-    char* output = reinterpret_cast<char*>(output_view.data());
-    output[0] = (input_len >> 24) & 0xFF;
-    output[1] = (input_len >> 16) & 0xFF;
-    output[2] = (input_len >> 8) & 0xFF;
-    output[3] = input_len & 0xFF;
+    _body = output_buffer.make_buffer(output_len, [&] (bytes_mutable_view output_view) {
+        char* output = reinterpret_cast<char*>(output_view.data());
+        output[0] = (input_len >> 24) & 0xFF;
+        output[1] = (input_len >> 16) & 0xFF;
+        output[2] = (input_len >> 8) & 0xFF;
+        output[3] = input_len & 0xFF;
 #ifdef HAVE_LZ4_COMPRESS_DEFAULT
-    auto ret = LZ4_compress_default(input, output + 4, input_len, LZ4_compressBound(input_len));
+        auto ret = LZ4_compress_default(input, output + 4, input_len, LZ4_compressBound(input_len));
 #else
-    auto ret = LZ4_compress(input, output + 4, input_len);
+        auto ret = LZ4_compress(input, output + 4, input_len);
 #endif
-    if (ret == 0) {
-        throw std::runtime_error("CQL frame LZ4 compression failure");
-    }
-    return ret + 4;
-  });
+        if (ret == 0) {
+            throw std::runtime_error("CQL frame LZ4 compression failure");
+        }
+        return ret + 4;
+    });
     on_compression_buffer_use();
 }
 
@@ -1583,13 +1583,13 @@ void cql_server::response::compress_snappy()
     size_t input_len = view.size();
 
     size_t output_len = snappy_max_compressed_length(input_len);
-  _body = output_buffer.make_buffer(output_len, [&] (bytes_mutable_view output_view) {
-    char* output = reinterpret_cast<char*>(output_view.data());
-    if (snappy_compress(input, input_len, output, &output_len) != SNAPPY_OK) {
-        throw std::runtime_error("CQL frame Snappy compression failure");
-    }
-    return output_len;
-  });
+    _body = output_buffer.make_buffer(output_len, [&] (bytes_mutable_view output_view) {
+        char* output = reinterpret_cast<char*>(output_view.data());
+        if (snappy_compress(input, input_len, output, &output_len) != SNAPPY_OK) {
+            throw std::runtime_error("CQL frame Snappy compression failure");
+        }
+        return output_len;
+    });
     on_compression_buffer_use();
 }
 
@@ -1939,7 +1939,7 @@ void cql_server::response::write(const cql3::metadata& m, bool no_metadata) {
         }
         write_string(name->name->text());
         type_codec::encode(*this, name->type);
-    };
+    }
 }
 
 void cql_server::response::write(const cql3::prepared_metadata& m, uint8_t version)
