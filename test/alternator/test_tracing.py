@@ -32,7 +32,7 @@ import requests
 import re
 import time
 from botocore.exceptions import ClientError
-from util import random_string, full_scan, full_query
+from util import random_string, full_scan, full_query, create_test_table
 
 # The "with_tracing" fixture ensures that tracing is enabled throughout
 # the run of a test function, and disabled when it ends. If tracing cannot be
@@ -150,6 +150,16 @@ def expect_tracing_events(dynamodb, str, expected_events):
     for event in expected_events:
         assert event in events
 
+# A test table based on test_table_s, but with isolation level defined to 'always'
+@pytest.fixture(scope="session")
+def test_table_s_isolation_always(dynamodb):
+    table = create_test_table(dynamodb,
+        KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, ],
+        AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' } ],
+        Tags=[{'Key': 'system:write_isolation', 'Value': 'always'}])
+    yield table
+    table.delete()
+
 # Because tracing is asynchronous and sometimes appears as much as one
 # second after the request, it is inefficient to have separate tests
 # for separate request types - each of these tests will have a latency
@@ -157,39 +167,38 @@ def expect_tracing_events(dynamodb, str, expected_events):
 # different request types. This test enables tracing, runs a bunch of
 # different requests - and only then looks for all of them in the trace
 # table.
-def test_tracing_all(with_tracing, test_table_s, dynamodb):
+def test_tracing_all(with_tracing, test_table_s_isolation_always, dynamodb):
     # Run the different requests, each one containing a long random string
     # that we can later use to find with find_tracing_session():
 
+    table = test_table_s_isolation_always
     # PutItem:
     p_putitem = random_string(20)
-    test_table_s.put_item(Item={'p': p_putitem})
+    table.put_item(Item={'p': p_putitem})
     # GetItem:
     p_getitem = random_string(20)
-    test_table_s.get_item(Key={'p': p_getitem})
+    table.get_item(Key={'p': p_getitem})
     # DeleteItem:
     p_deleteitem = random_string(20)
-    test_table_s.delete_item(Key={'p': p_deleteitem})
+    table.delete_item(Key={'p': p_deleteitem})
     # UpdateItem:
     p_updateitem = random_string(20)
-    test_table_s.update_item(Key={'p': p_updateitem}, AttributeUpdates={})
+    table.update_item(Key={'p': p_updateitem}, AttributeUpdates={})
     # BatchGetItem:
     p_batchgetitem = random_string(20)
-    test_table_s.meta.client.batch_get_item(RequestItems = {test_table_s.name: {'Keys': [{'p': p_batchgetitem}]}})
+    table.meta.client.batch_get_item(RequestItems = {table.name: {'Keys': [{'p': p_batchgetitem}]}})
     # BatchWriteItem:
     p_batchwriteitem = random_string(20)
-    test_table_s.meta.client.batch_write_item(RequestItems = {test_table_s.name: [{'PutRequest':  {'Item': {'p': p_batchwriteitem}}}]})
+    table.meta.client.batch_write_item(RequestItems = {table.name: [{'PutRequest':  {'Item': {'p': p_batchwriteitem}}}]})
     # Query:
     p_query = random_string(20)
-    full_query(test_table_s, KeyConditionExpression='p = :p', ExpressionAttributeValues={':p': p_query})
+    full_query(table, KeyConditionExpression='p = :p', ExpressionAttributeValues={':p': p_query})
     # Scan:
     p_scan = random_string(20)
-    full_scan(test_table_s, FilterExpression='p = :p', ExpressionAttributeValues={':p': p_scan})
+    full_scan(table, FilterExpression='p = :p', ExpressionAttributeValues={':p': p_scan})
 
     # Check the traces. NOTE: the following checks are fairly arbitrary, and
     # may break in the future if we change the tracing messages...
-    print("If you see CAS failures here, please check if your alternator cluster is configured"
-            " to have write isolation level 'always'. Otherwise, CAS operations will not be present in the traces.")
     expect_tracing_events(dynamodb, p_putitem, ['PutItem', 'CAS successful'])
     expect_tracing_events(dynamodb, p_getitem, ['GetItem', 'Querying is done'])
     expect_tracing_events(dynamodb, p_deleteitem, ['DeleteItem', 'CAS successful'])
