@@ -239,18 +239,52 @@ if ! $nonroot; then
         installconfig 644 "$file" "$rusr"/lib/sysctl.d
     done
 fi
+# scylla-node-exporter
+install -d -m755 "$rprefix"/node_exporter
+install -d -m755 "$rprefix"/node_exporter/licenses
+install -m755 node_exporter/node_exporter "$rprefix"/node_exporter
+install -m644 node_exporter/LICENSE "$rprefix"/node_exporter/licenses
+install -m644 node_exporter/NOTICE "$rprefix"/node_exporter/licenses
+install -m644 dist/common/systemd/scylla-node-exporter.service -Dt "$rsystemd"
+installconfig 644 dist/common/sysconfig/scylla-node-exporter "$rsysconfdir"
+if ! $nonroot; then
+    install -d -m755 "$retc"/systemd/system/scylla-node-exporter.service.d
+    install -m644 dist/common/systemd/scylla-node-exporter.service.d/dependencies.conf -Dt "$retc"/systemd/system/scylla-node-exporter.service.d
+    if [ "$sysconfdir" != "/etc/sysconfig" ]; then
+        cat << EOS > "$retc"/systemd/system/scylla-node-exporter.service.d/sysconfdir.conf
+[Service]
+EnvironmentFile=
+EnvironmentFile=$sysconfdir/scylla-node-exporter
+EOS
+    fi
+else
+    install -d -m755 "$rsystemd"/scylla-node-exporter.service.d
+    cat << EOS > "$rsystemd"/scylla-node-exporter.service.d/nonroot.conf
+[Service]
+EnvironmentFile=
+EnvironmentFile=$rsysconfdir/scylla-node-exporter
+ExecStart=
+ExecStart=$rprefix/node_exporter/node_exporter $SCYLLA_NODE_EXPORTER_ARGS
+User=
+Group=
+EOS
+
+fi
+
 # scylla-server
 install -m755 -d "$rsysconfdir"
 install -m755 -d "$retc/scylla.d"
-for file in dist/common/sysconfig/*; do
-    installconfig 644 "$file" "$rsysconfdir"
-done
+installconfig 644 dist/common/sysconfig/scylla-housekeeping "$rsysconfdir"
+installconfig 644 dist/common/sysconfig/scylla-server "$rsysconfdir"
 for file in dist/common/scylla.d/*.conf; do
     installconfig 644 "$file" "$retc"/scylla.d
 done
 
 install -d -m755 "$retc"/scylla "$rsystemd" "$rprefix/bin" "$rprefix/libexec" "$rprefix/libreloc" "$rprefix/scripts" "$rprefix/bin"
-install -m644 dist/common/systemd/*.service -Dt "$rsystemd"
+install -m644 dist/common/systemd/scylla-fstrim.service -Dt "$rsystemd"
+install -m644 dist/common/systemd/scylla-housekeeping-daily.service -Dt "$rsystemd"
+install -m644 dist/common/systemd/scylla-housekeeping-restart.service -Dt "$rsystemd"
+install -m644 dist/common/systemd/scylla-server.service -Dt "$rsystemd"
 install -m644 dist/common/systemd/*.slice -Dt "$rsystemd"
 install -m644 dist/common/systemd/*.timer -Dt "$rsystemd"
 install -m755 seastar/scripts/seastar-cpu-map.sh -Dt "$rprefix"/scripts
@@ -286,7 +320,7 @@ install -d -m755 -d "$rprefix"/scripts
 cp -r dist/common/scripts/* "$rprefix"/scripts
 ln -srf "$rprefix/scyllatop/scyllatop.py" "$rprefix/bin/scyllatop"
 
-SBINFILES=$(cd dist/common/scripts/; ls scylla_*setup node_exporter_install node_health_check scylla_ec2_check scylla_kernel_check)
+SBINFILES=$(cd dist/common/scripts/; ls scylla_*setup node_health_check scylla_ec2_check scylla_kernel_check)
 SBINFILES+=" $(cd seastar/scripts; ls seastar-cpu-map.sh)"
 if ! $nonroot; then
     install -d -m755 "$retc"/systemd/system/scylla-server.service.d
@@ -366,14 +400,6 @@ StandardError=inherit
 EOS
     fi
 
-    install -d -m755 "$rsystemd"/node-exporter.service.d
-    cat << EOS > "$rsystemd"/node-exporter.service.d/nonroot.conf
-[Service]
-ExecStart=
-ExecStart=$rprefix/bin/node_exporter  --collector.interrupts
-User=
-Group=
-EOS
     install -d "$rprefix"/sbin
     for i in $SBINFILES; do
         ln -srf "$rprefix/scripts/$i" "$rprefix/sbin/$i"

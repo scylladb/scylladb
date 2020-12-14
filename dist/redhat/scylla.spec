@@ -7,7 +7,7 @@ Group:          Applications/Databases
 License:        AGPLv3
 URL:            http://www.scylladb.com/
 Source0:        %{reloc_pkg}
-Requires:       %{product}-server = %{version} %{product}-conf = %{version} %{product}-kernel-conf = %{version} %{product}-jmx = %{version} %{product}-tools = %{version} %{product}-tools-core = %{version}
+Requires:       %{product}-server = %{version} %{product}-conf = %{version} %{product}-kernel-conf = %{version} %{product}-jmx = %{version} %{product}-tools = %{version} %{product}-tools-core = %{version} %{product}-node-exporter = %{version}
 Obsoletes:	scylla-server < 1.1
 
 %global _debugsource_template %{nil}
@@ -21,11 +21,14 @@ Obsoletes:	scylla-server < 1.1
 %undefine _unique_build_ids
 %global _no_recompute_build_ids 1
 
+# rpm causes missing build-id error on node_exporter, so ignore it
+%undefine _missing_build_ids_terminate_build
+
 %description
 Scylla is a highly scalable, eventually consistent, distributed,
 partitioned row DB.
 This package installs all required packages for ScyllaDB,  including
-%{product}-server, %{product}-jmx, %{product}-tools, %{product}-tools-core.
+%{product}-server, %{product}-jmx, %{product}-tools, %{product}-tools-core %{product}-node-exporter.
 
 # this is needed to prevent python compilation error on CentOS (#2235)
 %if 0%{?rhel}
@@ -102,14 +105,16 @@ rm -rf $RPM_BUILD_ROOT
 %attr(0755,root,root) %dir %{_sysconfdir}/scylla.d
 %config(noreplace) %{_sysconfdir}/scylla.d/*.conf
 /opt/scylladb/share/doc/scylla/*
-%{_unitdir}/*.service
+%{_unitdir}/scylla-fstrim.service
+%{_unitdir}/scylla-housekeeping-daily.service
+%{_unitdir}/scylla-housekeeping-restart.service
+%{_unitdir}/scylla-server.service
 %{_unitdir}/*.timer
 %{_unitdir}/*.slice
 %{_bindir}/scylla
 %{_bindir}/iotune
 %{_bindir}/scyllatop
 %{_sbindir}/scylla*
-%{_sbindir}/node_exporter_install
 %{_sbindir}/node_health_check
 %{_sbindir}/seastar-cpu-map.sh
 /opt/scylladb/scripts/*
@@ -207,6 +212,31 @@ if Scylla is the main application on your server and you wish to optimize its la
 %files kernel-conf
 %defattr(-,root,root)
 %{_sysctldir}/*.conf
+
+
+%package node-exporter
+Group:          Applications/Databases
+Summary:        Prometheus exporter for machine metrics
+License:        ASL 2.0
+URL:            https://github.com/prometheus/node_exporter
+
+%description node-exporter
+Prometheus exporter for machine metrics, written in Go with pluggable metric collectors.
+
+%post node-exporter
+%systemd_post node-exporter.service
+
+%preun node-exporter
+%systemd_preun node-exporter.service
+
+%files node-exporter
+%defattr(-,root,root)
+%config(noreplace) %{_sysconfdir}/sysconfig/scylla-node-exporter
+%{_unitdir}/scylla-node-exporter.service
+/opt/scylladb/node_exporter/node_exporter
+/opt/scylladb/node_exporter/licenses/LICENSE
+/opt/scylladb/node_exporter/licenses/NOTICE
+/etc/systemd/system/scylla-node-exporter.service.d/dependencies.conf
 
 %changelog
 * Tue Jul 21 2015 Takuya ASADA <syuu@cloudius-systems.com>

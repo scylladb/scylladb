@@ -273,7 +273,7 @@ if __name__ == '__main__':
                         help='skip daily version check')
     parser.add_argument('--no-node-exporter', action='store_true',
                         default=default_no_node_exporter,
-                        help='do not install the node exporter')
+                        help='do not enable the node exporter')
     parser.add_argument('--no-cpuscaling-setup', action='store_true',
                         default=default_no_cpuscaling_setup,
                         help='skip cpu scaling setup')
@@ -515,10 +515,12 @@ if __name__ == '__main__':
         if io_setup:
             run_setup_script('IO configuration', 'scylla_io_setup')
 
-    node_exporter = interactive_ask_service('Do you want to install node exporter to export Prometheus data from the node? Note that the Scylla monitoring stack uses this data', 'Yes - install node exporter. No - skip this  step.', node_exporter)
+    node_exporter = interactive_ask_service('Do you want to enable node exporter to export Prometheus data from the node? Note that the Scylla monitoring stack uses this data', 'Yes - enable node exporter. No - skip this  step.', node_exporter)
     args.no_node_exporter = not node_exporter
     if node_exporter:
-        run_setup_script('node exporter', 'node_exporter_install')
+        node_exporter_unit = systemd_unit('scylla-node-exporter')
+        node_exporter_unit.enable()
+        node_exporter_unit.start()
 
     if args.developer_mode:
         run_setup_script('developer mode', 'scylla_dev_mode_setup --developer-mode 1')
