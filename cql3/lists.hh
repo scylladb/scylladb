@@ -121,28 +121,6 @@ public:
         virtual ::shared_ptr<terminal> bind(const query_options& options) override;
     };
 
-    /*
-     * For prepend, we need to be able to generate unique but decreasing time
-     * UUID, which is a bit challenging. To do that, given a time in milliseconds,
-     * we adds a number representing the 100-nanoseconds precision and make sure
-     * that within the same millisecond, that number is always decreasing. We
-     * do rely on the fact that the user will only provide decreasing
-     * milliseconds timestamp for that purpose.
-     */
-private:
-    class precision_time {
-    public:
-        // Our reference time (1 jan 2010, 00:00:00) in milliseconds.
-        static constexpr db_clock::time_point REFERENCE_TIME{std::chrono::milliseconds(1262304000000)};
-    private:
-        static thread_local precision_time _last;
-    public:
-        db_clock::time_point millis;
-        int32_t nanos;
-
-        static precision_time get_next(db_clock::time_point millis);
-    };
-
 public:
     class setter : public operation {
     public:
