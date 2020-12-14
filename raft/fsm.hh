@@ -275,6 +275,12 @@ public:
     bool is_candidate() const {
         return std::holds_alternative<candidate>(_state);
     }
+    index_t log_last_idx() const {
+        return _log.last_idx();
+    }
+    term_t log_last_term() const {
+        return _log.last_term();
+    }
 
     // call this function to wait for number of log entries to go below
     // max_log_length

@@ -63,6 +63,8 @@ public:
     term_t get_current_term() const override;
     future<> read_barrier() override;
     future<> elect_me_leader() override;
+    future<> wait_log_idx(index_t) override;
+    index_t log_last_idx();
     void elapse_election() override;
     bool is_leader() override;
     void tick() override;
@@ -494,6 +496,16 @@ future<> server_impl::elect_me_leader() {
     do {
         co_await seastar::sleep(50us);
     } while (!_fsm->is_leader());
+}
+
+future<> server_impl::wait_log_idx(index_t idx) {
+    while (_fsm->log_last_idx() < idx) {
+        co_await seastar::sleep(5us);
+    }
+}
+
+index_t server_impl::log_last_idx() {
+    return _fsm->log_last_idx();
 }
 
 bool server_impl::is_leader() {

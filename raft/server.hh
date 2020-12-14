@@ -122,6 +122,8 @@ public:
 
     // Ad hoc functions for testing
     virtual future<> elect_me_leader() = 0;
+    virtual future<> wait_log_idx(index_t) = 0;
+    virtual index_t log_last_idx() = 0;
     virtual void elapse_election() = 0;
     virtual bool is_leader() = 0;
     virtual void tick() = 0;
