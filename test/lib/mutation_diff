@@ -4,6 +4,7 @@
 #
 
 cmd="colordiff -u"
+sed_cmd="sed -E"
 
 while getopts ":d:" opt; do
     case $opt in
@@ -24,11 +25,15 @@ if [ -z "$file" -o "$file" = "-" ]; then
 fi
 
 function filter {
-    sed 's/@0x[0-9a-f]*//g'
+    $sed_cmd 's/@0x[0-9a-f]*//g'
 }
 
-$cmd <(sed -n '/expected/,/got:/p' "$file" | head -n-1 | sed 's/.*expected /&\n/' | filter) \
-     <(sed -n '/got:/,/^$/p' "$file" | sed 's/.*got: /&\n/' | filter) | less -R
+begin="(expected |critical check .+ == .+ has failed \[)"
+middle="(got:|\!=)"
+end="^$|\}\]|Leaving test case"
+
+$cmd <($sed_cmd -n "/$begin/,/$middle/p" "$file" | head -n-1 | $sed_cmd "s/.*$begin/&\n/" | filter) \
+     <($sed_cmd -n "/$middle/,/$end/p" "$file" | $sed_cmd "s/.*$middle /&\n/" | filter) | less -R
 
 if [ -n "$tmpfile" ]; then
     rm -f "$tmpfile"
