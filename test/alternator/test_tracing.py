@@ -188,6 +188,8 @@ def test_tracing_all(with_tracing, test_table_s, dynamodb):
 
     # Check the traces. NOTE: the following checks are fairly arbitrary, and
     # may break in the future if we change the tracing messages...
+    print("If you see CAS failures here, please check if your alternator cluster is configured"
+            " to have write isolation level 'always'. Otherwise, CAS operations will not be present in the traces.")
     expect_tracing_events(dynamodb, p_putitem, ['PutItem', 'CAS successful'])
     expect_tracing_events(dynamodb, p_getitem, ['GetItem', 'Querying is done'])
     expect_tracing_events(dynamodb, p_deleteitem, ['DeleteItem', 'CAS successful'])
