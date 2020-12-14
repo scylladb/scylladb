@@ -48,6 +48,7 @@
 #include "cql3/selection/raw_selector.hh"
 #include "cql3/restrictions/statement_restrictions.hh"
 #include "cql3/result_set.hh"
+#include "cql3/attributes.hh"
 #include "exceptions/unrecognized_entity_exception.hh"
 #include "service/client_state.hh"
 #include <seastar/core/shared_ptr.hh>
@@ -105,6 +106,7 @@ private:
     ::shared_ptr<term::raw> _limit;
     ::shared_ptr<term::raw> _per_partition_limit;
     std::vector<::shared_ptr<cql3::column_identifier::raw>> _group_by_columns;
+    std::unique_ptr<cql3::attributes::raw> _attrs;
 public:
     select_statement(::shared_ptr<cf_name> cf_name,
             lw_shared_ptr<const parameters> parameters,
@@ -112,7 +114,8 @@ public:
             std::vector<::shared_ptr<relation>> where_clause,
             ::shared_ptr<term::raw> limit,
             ::shared_ptr<term::raw> per_partition_limit,
-            std::vector<::shared_ptr<cql3::column_identifier::raw>> group_by_columns);
+            std::vector<::shared_ptr<cql3::column_identifier::raw>> group_by_columns,
+            std::unique_ptr<cql3::attributes::raw> attrs);
 
     virtual std::unique_ptr<prepared_statement> prepare(database& db, cql_stats& stats) override {
         return prepare(db, stats, false);

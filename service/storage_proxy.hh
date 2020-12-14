@@ -153,6 +153,11 @@ public:
 
 class storage_proxy : public seastar::async_sharded_service<storage_proxy>, public peering_sharded_service<storage_proxy>, public service::endpoint_lifecycle_subscriber  {
 public:
+    enum class error : uint8_t {
+        NONE,
+        TIMEOUT,
+        FAILURE,
+    };
     using clock_type = lowres_clock;
     struct config {
         db::config::hinted_handoff_enabled_type hinted_handoff_enabled = {};
@@ -321,7 +326,7 @@ private:
     void remove_response_handler(response_id_type id);
     void remove_response_handler_entry(response_handlers_map::iterator entry);
     void got_response(response_id_type id, gms::inet_address from, std::optional<db::view::update_backlog> backlog);
-    void got_failure_response(response_id_type id, gms::inet_address from, size_t count, std::optional<db::view::update_backlog> backlog);
+    void got_failure_response(response_id_type id, gms::inet_address from, size_t count, std::optional<db::view::update_backlog> backlog, error err);
     future<> response_wait(response_id_type id, clock_type::time_point timeout);
     ::shared_ptr<abstract_write_response_handler>& get_write_response_handler(storage_proxy::response_id_type id);
     response_id_type create_write_response_handler_helper(schema_ptr s, const dht::token& token,

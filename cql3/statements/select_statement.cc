@@ -138,7 +138,8 @@ select_statement::select_statement(schema_ptr schema,
                                    ordering_comparator_type ordering_comparator,
                                    ::shared_ptr<term> limit,
                                    ::shared_ptr<term> per_partition_limit,
-                                   cql_stats& stats)
+                                   cql_stats& stats,
+                                   std::unique_ptr<attributes> attrs)
     : cql_statement(select_timeout(*restrictions))
     , _schema(schema)
     , _bound_terms(bound_terms)
@@ -152,11 +153,16 @@ select_statement::select_statement(schema_ptr schema,
     , _ordering_comparator(std::move(ordering_comparator))
     , _stats(stats)
     , _ks_sel(::is_system_keyspace(schema->ks_name()) ? ks_selector::SYSTEM : ks_selector::NONSYSTEM)
+    , _attrs(std::move(attrs))
 {
     _opts = _selection->get_query_options();
     _opts.set_if<query::partition_slice::option::bypass_cache>(_parameters->bypass_cache());
     _opts.set_if<query::partition_slice::option::distinct>(_parameters->is_distinct());
     _opts.set_if<query::partition_slice::option::reversed>(_is_reversed);
+}
+
+db::timeout_clock::duration select_statement::get_timeout(const query_options& options) const {
+    return _attrs->is_timeout_set() ? _attrs->get_timeout(options) : options.get_timeout_config().*get_timeout_config_selector();
 }
 
 ::shared_ptr<const cql3::metadata> select_statement::get_result_metadata() const {
@@ -365,7 +371,7 @@ select_statement::do_execute(service::storage_proxy& proxy,
     }
 
     command->slice.options.set<query::partition_slice::option::allow_short_read>();
-    auto timeout_duration = options.get_timeout_config().*get_timeout_config_selector();
+    auto timeout_duration = get_timeout(options);
     auto timeout = db::timeout_clock::now() + timeout_duration;
     auto p = service::pager::query_pagers::pager(_schema, _selection,
             state, options, command, std::move(key_ranges), restrictions_need_filtering ? _restrictions : nullptr);
@@ -512,7 +518,7 @@ indexed_table_select_statement::do_execute_base_query(
         lw_shared_ptr<const service::pager::paging_state> paging_state) const {
     using value_type = std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, lw_shared_ptr<query::read_command>>;
     auto cmd = prepare_command_for_base_query(proxy, options, state, now, bool(paging_state));
-    auto timeout = db::timeout_clock::now() + options.get_timeout_config().*get_timeout_config_selector();
+    auto timeout = db::timeout_clock::now() + get_timeout(options);
     uint32_t queried_ranges_count = partition_ranges.size();
     service::query_ranges_to_vnodes_generator ranges_to_vnodes(proxy.get_token_metadata_ptr(), _schema, std::move(partition_ranges));
 
@@ -606,7 +612,7 @@ indexed_table_select_statement::do_execute_base_query(
         lw_shared_ptr<const service::pager::paging_state> paging_state) const {
     using value_type = std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, lw_shared_ptr<query::read_command>>;
     auto cmd = prepare_command_for_base_query(proxy, options, state, now, bool(paging_state));
-    auto timeout = db::timeout_clock::now() + options.get_timeout_config().*get_timeout_config_selector();
+    auto timeout = db::timeout_clock::now() + get_timeout(options);
 
     struct base_query_state {
         query::result_merger merger;
@@ -688,7 +694,7 @@ select_statement::execute(service::storage_proxy& proxy,
     // is specified we need to get "limit" rows from each partition since there
     // is no way to tell which of these rows belong to the query result before
     // doing post-query ordering.
-    auto timeout = db::timeout_clock::now() + options.get_timeout_config().*get_timeout_config_selector();
+    auto timeout = db::timeout_clock::now() + get_timeout(options);
     if (needs_post_query_ordering() && _limit) {
         return do_with(std::forward<dht::partition_range_vector>(partition_ranges), [this, &proxy, &state, &options, cmd, timeout](auto& prs) {
             assert(cmd->partition_limit == query::max_partitions);
@@ -791,8 +797,9 @@ primary_key_select_statement::primary_key_select_statement(schema_ptr schema, ui
                                                            ordering_comparator_type ordering_comparator,
                                                            ::shared_ptr<term> limit,
                                                            ::shared_ptr<term> per_partition_limit,
-                                                           cql_stats &stats)
-    : select_statement{schema, bound_terms, parameters, selection, restrictions, group_by_cell_indices, is_reversed, ordering_comparator, limit, per_partition_limit, stats}
+                                                           cql_stats &stats,
+                                                           std::unique_ptr<attributes> attrs)
+    : select_statement{schema, bound_terms, parameters, selection, restrictions, group_by_cell_indices, is_reversed, ordering_comparator, limit, per_partition_limit, stats, std::move(attrs)}
 {
     if (_ks_sel == ks_selector::NONSYSTEM) {
         if (_restrictions->need_filtering() ||
@@ -818,7 +825,8 @@ indexed_table_select_statement::prepare(database& db,
                                         ordering_comparator_type ordering_comparator,
                                         ::shared_ptr<term> limit,
                                          ::shared_ptr<term> per_partition_limit,
-                                         cql_stats &stats)
+                                         cql_stats &stats,
+                                         std::unique_ptr<attributes> attrs)
 {
     auto& sim = db.find_column_family(schema).get_index_manager();
     auto [index_opt, used_index_restrictions] = restrictions->find_idx(sim);
@@ -844,7 +852,8 @@ indexed_table_select_statement::prepare(database& db,
             stats,
             *index_opt,
             std::move(used_index_restrictions),
-            view_schema);
+            view_schema,
+            std::move(attrs));
 
 }
 
@@ -860,8 +869,9 @@ indexed_table_select_statement::indexed_table_select_statement(schema_ptr schema
                                                            cql_stats &stats,
                                                            const secondary_index::index& index,
                                                            ::shared_ptr<restrictions::restrictions> used_index_restrictions,
-                                                           schema_ptr view_schema)
-    : select_statement{schema, bound_terms, parameters, selection, restrictions, group_by_cell_indices, is_reversed, ordering_comparator, limit, per_partition_limit, stats}
+                                                           schema_ptr view_schema,
+                                                           std::unique_ptr<attributes> attrs)
+    : select_statement{schema, bound_terms, parameters, selection, restrictions, group_by_cell_indices, is_reversed, ordering_comparator, limit, per_partition_limit, stats, std::move(attrs)}
     , _index{index}
     , _used_index_restrictions(used_index_restrictions)
     , _view_schema(view_schema)
@@ -1249,7 +1259,7 @@ indexed_table_select_statement::find_index_partition_ranges(service::storage_pro
 {
     using value_type = std::tuple<dht::partition_range_vector, lw_shared_ptr<const service::pager::paging_state>>;
     auto now = gc_clock::now();
-    auto timeout = db::timeout_clock::now() + options.get_timeout_config().*get_timeout_config_selector();
+    auto timeout = db::timeout_clock::now() + get_timeout(options);
     return read_posting_list(proxy, options, get_limit(options), state, now, timeout, false).then(
             [this, now, &options] (::shared_ptr<cql_transport::messages::result_message::rows> rows) {
         auto rs = cql3::untyped_result_set(rows);
@@ -1290,7 +1300,7 @@ indexed_table_select_statement::find_index_clustering_rows(service::storage_prox
 {
     using value_type = std::tuple<std::vector<indexed_table_select_statement::primary_key>, lw_shared_ptr<const service::pager::paging_state>>;
     auto now = gc_clock::now();
-    auto timeout = db::timeout_clock::now() + options.get_timeout_config().*get_timeout_config_selector();
+    auto timeout = db::timeout_clock::now() + get_timeout(options);
     return read_posting_list(proxy, options, get_limit(options), state, now, timeout, true).then(
             [this, now, &options] (::shared_ptr<cql_transport::messages::result_message::rows> rows) {
 
@@ -1317,13 +1327,23 @@ indexed_table_select_statement::find_index_clustering_rows(service::storage_prox
 
 namespace raw {
 
+static void validate_attrs(const cql3::attributes::raw& attrs) {
+    if (attrs.timestamp) {
+        throw exceptions::invalid_request_exception("Specifying TIMESTAMP is not legal for SELECT statement");
+    }
+    if (attrs.time_to_live) {
+        throw exceptions::invalid_request_exception("Specifying TTL is not legal for SELECT statement");
+    }
+}
+
 select_statement::select_statement(::shared_ptr<cf_name> cf_name,
                                    lw_shared_ptr<const parameters> parameters,
                                    std::vector<::shared_ptr<selection::raw_selector>> select_clause,
                                    std::vector<::shared_ptr<relation>> where_clause,
                                    ::shared_ptr<term::raw> limit,
                                    ::shared_ptr<term::raw> per_partition_limit,
-                                   std::vector<::shared_ptr<cql3::column_identifier::raw>> group_by_columns)
+                                   std::vector<::shared_ptr<cql3::column_identifier::raw>> group_by_columns,
+                                   std::unique_ptr<attributes::raw> attrs)
     : cf_statement(std::move(cf_name))
     , _parameters(std::move(parameters))
     , _select_clause(std::move(select_clause))
@@ -1331,7 +1351,10 @@ select_statement::select_statement(::shared_ptr<cf_name> cf_name,
     , _limit(std::move(limit))
     , _per_partition_limit(std::move(per_partition_limit))
     , _group_by_columns(std::move(group_by_columns))
-{ }
+    , _attrs(std::move(attrs))
+{
+    validate_attrs(*_attrs);
+}
 
 void select_statement::maybe_jsonize_select_clause(database& db, schema_ptr schema) {
     // Fill wildcard clause with explicit column identifiers for as_json function
@@ -1402,6 +1425,8 @@ std::unique_ptr<prepared_statement> select_statement::prepare(database& db, cql_
     auto group_by_cell_indices = ::make_shared<std::vector<size_t>>(prepare_group_by(*schema, *selection));
 
     ::shared_ptr<cql3::statements::select_statement> stmt;
+    auto prepared_attrs = _attrs->prepare(db, keyspace(), column_family());
+    prepared_attrs->collect_marker_specification(bound_names);
     if (restrictions->uses_secondary_indexing()) {
         stmt = indexed_table_select_statement::prepare(
                 db,
@@ -1415,7 +1440,8 @@ std::unique_ptr<prepared_statement> select_statement::prepare(database& db, cql_
                 std::move(ordering_comparator),
                 prepare_limit(db, bound_names, _limit),
                 prepare_limit(db, bound_names, _per_partition_limit),
-                stats);
+                stats,
+                std::move(prepared_attrs));
     } else {
         stmt = ::make_shared<cql3::statements::primary_key_select_statement>(
                 schema,
@@ -1428,7 +1454,8 @@ std::unique_ptr<prepared_statement> select_statement::prepare(database& db, cql_
                 std::move(ordering_comparator),
                 prepare_limit(db, bound_names, _limit),
                 prepare_limit(db, bound_names, _per_partition_limit),
-                stats);
+                stats,
+                std::move(prepared_attrs));
     }
 
     auto partition_key_bind_indices = bound_names.get_partition_key_bind_indexes(*schema);

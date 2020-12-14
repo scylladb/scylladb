@@ -352,6 +352,7 @@ public:
 
 class abstract_write_response_handler : public seastar::enable_shared_from_this<abstract_write_response_handler> {
 protected:
+    using error = storage_proxy::error;
     storage_proxy::response_id_type _id;
     promise<> _ready; // available when cl is achieved
     shared_ptr<storage_proxy> _proxy;
@@ -368,11 +369,6 @@ protected:
     size_t _cl_acks = 0;
     bool _cl_achieved = false;
     bool _throttled = false;
-    enum class error : uint8_t {
-        NONE,
-        TIMEOUT,
-        FAILURE,
-    };
     error _error = error::NONE;
     size_t _failed = 0; // only failures that may impact consistency
     size_t _all_failures = 0; // total amount of failures
@@ -454,11 +450,11 @@ public:
             });
         }
     }
-    virtual bool failure(gms::inet_address from, size_t count) {
+    virtual bool failure(gms::inet_address from, size_t count, error err) {
         if (waited_for(from)) {
             _failed += count;
             if (_total_block_for + _failed > _total_endpoints) {
-                _error = error::FAILURE;
+                _error = err;
                 delay(get_trace_state(), [] (abstract_write_response_handler*) { });
                 return true;
             }
@@ -485,7 +481,7 @@ public:
     }
     // return true if handler is no longer needed because
     // CL cannot be reached
-    bool failure_response(gms::inet_address from, size_t count) {
+    bool failure_response(gms::inet_address from, size_t count, error err) {
         if (!_targets.contains(from)) {
             // There is a little change we can get outdated reply
             // if the coordinator was restarted after sending a request and
@@ -497,7 +493,7 @@ public:
         _all_failures += count;
         // we should not fail CL=ANY requests since they may succeed after
         // writing hints
-        return _cl != db::consistency_level::ANY && failure(from, count);
+        return _cl != db::consistency_level::ANY && failure(from, count, err);
     }
     void check_for_early_completion() {
         if (_all_failures == _targets.size()) {
@@ -757,7 +753,7 @@ public:
             }
         }
     }
-    bool failure(gms::inet_address from, size_t count) override {
+    bool failure(gms::inet_address from, size_t count, error err) override {
         auto& snitch_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
         const sstring& dc = snitch_ptr->get_datacenter(from);
         auto dc_resp = _dc_responses.find(dc);
@@ -765,7 +761,7 @@ public:
         dc_resp->second.failures += count;
         _failed += count;
         if (dc_resp->second.total_block_for + dc_resp->second.failures > dc_resp->second.total_endpoints) {
-            _error = error::FAILURE;
+            _error = err;
             return true;
         }
         return false;
@@ -1371,11 +1367,11 @@ void storage_proxy::got_response(storage_proxy::response_id_type id, gms::inet_a
     maybe_update_view_backlog_of(std::move(from), std::move(backlog));
 }
 
-void storage_proxy::got_failure_response(storage_proxy::response_id_type id, gms::inet_address from, size_t count, std::optional<db::view::update_backlog> backlog) {
+void storage_proxy::got_failure_response(storage_proxy::response_id_type id, gms::inet_address from, size_t count, std::optional<db::view::update_backlog> backlog, error err) {
     auto it = _response_handlers.find(id);
     if (it != _response_handlers.end()) {
         tracing::trace(it->second->get_trace_state(), "Got {} failures from /{}", count, from);
-        if (it->second->failure_response(from, count)) {
+        if (it->second->failure_response(from, count, err)) {
             remove_response_handler_entry(std::move(it));
         } else {
             it->second->check_for_early_completion();
@@ -2693,7 +2689,7 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
         // Waited on indirectly.
         (void)f.handle_exception([response_id, forward_size, coordinator, handler_ptr, p = shared_from_this(), &stats] (std::exception_ptr eptr) {
             ++stats.writes_errors.get_ep_stat(coordinator);
-            p->got_failure_response(response_id, coordinator, forward_size + 1, std::nullopt);
+            error err = error::FAILURE;
             try {
                 std::rethrow_exception(eptr);
             } catch(rpc::closed_error&) {
@@ -2703,9 +2699,12 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
             } catch(timed_out_error&) {
                 // from lmutate(). Ignore so that logs are not flooded
                 // database total_writes_timedout counter was incremented.
+                // It needs to be recorded that the timeout occurred locally though.
+                err = error::TIMEOUT;
             } catch(...) {
                 slogger.error("exception during mutation write to {}: {}", coordinator, std::current_exception());
             }
+            p->got_failure_response(response_id, coordinator, forward_size + 1, std::nullopt, err);
         });
     }
 }
@@ -4925,7 +4924,7 @@ void storage_proxy::init_messaging_service() {
         auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         get_stats().replica_cross_shard_ops += shard != this_shard_id();
         return container().invoke_on(shard, _write_ack_smp_service_group, [from, response_id, num_failed, backlog = std::move(backlog)] (storage_proxy& sp) mutable {
-            sp.got_failure_response(response_id, from, num_failed, std::move(backlog));
+            sp.got_failure_response(response_id, from, num_failed, std::move(backlog), error::FAILURE);
             return netw::messaging_service::no_wait();
         });
     });

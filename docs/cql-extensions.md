@@ -42,3 +42,31 @@ way as other options by using `WITH` clause:
 
     CREATE TABLE tbl ...
     WITH paxos_grace_seconds=1234
+
+## USING TIMEOUT
+
+TIMEOUT extension allows specifying per-query timeouts. This parameter accepts a single
+duration and applies it as a timeout specific to a single particular query.
+The parameter is supported for prepared statements as well.
+The parameter acts as part of the USING clause, and thus can be combined with other
+parameters - like timestamps and time-to-live.
+In order for this parameter to be effective for read operations as well, it's possible
+to attach USING clause to SELECT statements.
+
+Examples:
+```cql
+	SELECT * FROM t USING TIMEOUT 200ms;
+```
+```cql
+	INSERT INTO t(a,b,c) VALUES (1,2,3) USING TIMESTAMP 42 AND TIMEOUT 50ms;
+```
+
+Working with prepared statements works as usual - the timeout parameter can be
+explicitly defined or provided as a marker:
+
+```cql
+	SELECT * FROM t USING TIMEOUT ?;
+```
+```cql
+	INSERT INTO t(a,b,c) VALUES (?,?,?) USING TIMESTAMP 42 AND TIMEOUT 50ms;
+```

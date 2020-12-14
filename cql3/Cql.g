@@ -394,6 +394,7 @@ selectStatement returns [std::unique_ptr<raw::select_statement> expr]
         bool allow_filtering = false;
         bool is_json = false;
         bool bypass_cache = false;
+        auto attrs = std::make_unique<cql3::attributes::raw>();
     }
     : K_SELECT (
                 ( K_JSON { is_json = true; } )?
@@ -408,11 +409,12 @@ selectStatement returns [std::unique_ptr<raw::select_statement> expr]
       ( K_LIMIT rows=intValue { limit = rows; } )?
       ( K_ALLOW K_FILTERING  { allow_filtering = true; } )?
       ( K_BYPASS K_CACHE { bypass_cache = true; })?
+      ( usingClause[attrs] )?
       {
           auto params = make_lw_shared<raw::select_statement::parameters>(std::move(orderings), is_distinct, allow_filtering, is_json, bypass_cache);
           $expr = std::make_unique<raw::select_statement>(std::move(cf), std::move(params),
             std::move(sclause), std::move(wclause), std::move(limit), std::move(per_partition_limit),
-            std::move(gbcolumns));
+            std::move(gbcolumns), std::move(attrs));
       }
     ;
 
@@ -521,6 +523,7 @@ usingClause[std::unique_ptr<cql3::attributes::raw>& attrs]
 usingClauseObjective[std::unique_ptr<cql3::attributes::raw>& attrs]
     : K_TIMESTAMP ts=intValue { attrs->timestamp = ts; }
     | K_TTL t=intValue { attrs->time_to_live = t; }
+    | K_TIMEOUT to=term { attrs->timeout = to; }
     ;
 
 /**
@@ -1761,6 +1764,7 @@ basic_unreserved_keyword returns [sstring str]
         | K_PER
         | K_PARTITION
         | K_GROUP
+        | K_TIMEOUT
         ) { $str = $k.text; }
     ;
 
@@ -1915,6 +1919,8 @@ K_SCYLLA_COUNTER_SHARD_LIST: S C Y L L A '_' C O U N T E R '_' S H A R D '_' L I
 K_GROUP:       G R O U P;
 
 K_LIKE:        L I K E;
+
+K_TIMEOUT:     T I M E O U T;
 
 // Case-insensitive alpha characters
 fragment A: ('a'|'A');
