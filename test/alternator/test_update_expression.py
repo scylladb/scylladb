@@ -803,6 +803,17 @@ def test_update_expression_nested_attribute_index(test_table_s):
         ExpressionAttributeValues={':val1': 'hello'})
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': ['one', 'hello', 'three']}
 
+# An index into a list must be an actual integer - DynamoDB does not support
+# a value reference (:xyz) to be used as a index. This is the same test as the
+# above test_update_expression_nested_attribute_index() - we just try to use
+# the a reference :xyz for the index 1. And it's considered a syntax error
+def test_update_expression_nested_attribute_index_reference(test_table_s):
+    p = random_string()
+    test_table_s.put_item(Item={'p': p, 'a': ['one', 'two', 'three']})
+    with pytest.raises(ClientError, match='ValidationException.*yntax'):
+        test_table_s.update_item(Key={'p': p}, UpdateExpression='SET a[:xyz] = :val1',
+            ExpressionAttributeValues={':val1': 'hello', ':xyz': 1})
+
 # Test that just like happens in top-level attributes, also in nested
 # attributes, setting them replaces the old value - potentially an entire
 # nested document, by the whole value (which may have a different type)
