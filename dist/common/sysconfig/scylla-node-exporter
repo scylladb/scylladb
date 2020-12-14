@@ -1,0 +1,1 @@
+SCYLLA_NODE_EXPORTER_ARGS="--collector.interrupts"

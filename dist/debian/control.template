@@ -39,6 +39,12 @@ Description: Scylla kernel tuning configuration
  Scylla is a highly scalable, eventually consistent, distributed,
  partitioned row DB.
 
+Package: %{product}-node-exporter
+Architecture: any
+Conflicts: prometheus-node-exporter
+Description: Prometheus exporter for machine metrics
+ Prometheus exporter for machine metrics, written in Go with pluggable metric collectors.
+
 Package: %{product}
 Section: metapackages
 Architecture: any
@@ -47,6 +53,7 @@ Depends: %{product}-server (= ${binary:Version})
  , %{product}-tools (= ${binary:Version})
  , %{product}-tools-core (= ${binary:Version})
  , %{product}-kernel-conf (= ${binary:Version})
+ , %{product}-node-exporter (= ${binary:Version})
 Description: Scylla database metapackage
  Scylla is a highly scalable, eventually consistent, distributed,
  partitioned row DB.
