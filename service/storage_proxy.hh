@@ -157,6 +157,8 @@ public:
         NONE,
         TIMEOUT,
         FAILURE,
+        DISCONNECTED,
+        OVERLOADED,
     };
     using clock_type = lowres_clock;
     struct config {
