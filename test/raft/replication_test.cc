@@ -732,6 +732,13 @@ int main(int argc, char* argv[]) {
         {.name = "take_snapshot_and_stream", .nodes = 3,
          .config = {{.snapshot_threshold = 10, .snapshot_trailing = 5}},
          .updates = {entries{5}, partition{0,1}, entries{10}, partition{0, 2}, entries{20}}},
+
+        // verifies that each node in a cluster can campaign
+        // and be elected in turn. This ensures that elections work when not
+        // starting from a clean slate (as they do in TestLeaderElection)
+        // TODO: add pre-vote case
+        {.name = "etcd_test_leader_cycle", .nodes = 3,
+         .updates = {new_leader{1},new_leader{2},new_leader{0}}},
     };
 
     return app.run(argc, argv, [&replication_tests, &app] () -> future<int> {
