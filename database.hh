@@ -926,6 +926,10 @@ public:
         return _pending_flushes_phaser.advance_and_await();
     }
 
+    future<> await_pending_ops() {
+        return when_all(await_pending_reads(), await_pending_writes(), await_pending_streams()).discard_result();
+    }
+
     void add_or_update_view(view_ptr v);
     void remove_view(view_ptr v);
     void clear_views();
