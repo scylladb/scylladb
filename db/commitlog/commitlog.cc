@@ -1318,8 +1318,10 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
             fut = fsiz.then([f, this, filename](uint64_t existing_size) mutable {
                 // if recycled (or from last run), we might have either truncated smaller or written it 
                 // (slightly) larger due to final zeroing of file
-                if (existing_size >= max_size) {
+                if (existing_size > max_size) {
                     return f.truncate(max_size);
+                } else if (existing_size == max_size) {
+                    return make_ready_future<>();
                 }
                 
                 totals.total_size_on_disk += (max_size - existing_size);
