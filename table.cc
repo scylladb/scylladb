@@ -1048,7 +1048,7 @@ table::stop() {
         return make_ready_future<>();
     }
     return _async_gate.close().then([this] {
-        return when_all(await_pending_writes(), await_pending_reads(), await_pending_streams()).discard_result().finally([this] {
+        return await_pending_ops().finally([this] {
             return when_all(_memtables->request_flush(), _streaming_memtables->request_flush()).discard_result().finally([this] {
                 return _compaction_manager.remove(this).then([this] {
                     // Nest, instead of using when_all, so we don't lose any exceptions.
@@ -1825,7 +1825,8 @@ future<std::unordered_map<sstring, table::snapshot_details>> table::get_snapshot
 }
 
 future<> table::flush() {
-    return _memtables->request_flush();
+    auto op = _pending_flushes_phaser.start();
+    return _memtables->request_flush().then([op = std::move(op)] {});
 }
 
 // FIXME: We can do much better than this in terms of cache management. Right
