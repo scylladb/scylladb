@@ -36,3 +36,54 @@ APPLY BATCH;
 SELECT l FROM t WHERE pk = 0;
 
 DROP TABLE t;
+-- test custom timestamps
+-- Scylla, unlike Cassandra, takes custom timestamps into account
+-- in list append/prepend operations
+CREATE TABLE t (pk INT PRIMARY KEY, l LIST<INT>);
+
+-- Even though it's an append, since the timestamp is in the past,
+-- the result is going to be a prepend
+UPDATE t USING TIMESTAMP 1607100000000000 SET l = l + [-4] WHERE pk = 0;
+SELECT l FROM t WHERE pk = 0;
+-- using the same timestamp will reset the value to a new one, but only if
+-- it is larger lexicographically
+UPDATE t USING TIMESTAMP 1607100000000000 SET l = l + [-5] WHERE pk = 0;
+SELECT l FROM t WHERE pk = 0;
+UPDATE t USING TIMESTAMP 1607100000000000 SET l = l + [-3] WHERE pk = 0;
+SELECT l FROM t WHERE pk = 0;
+-- and what if we try two values at once?
+UPDATE t USING TIMESTAMP 1607100000000000 SET l = l + [-5, -2] WHERE pk = 0;
+SELECT l FROM t WHERE pk = 0;
+-- if a timestamp grows, the new value is after the previous one in the list
+UPDATE t USING TIMESTAMP 1607100000000001 SET l = l + [-1] WHERE pk = 0;
+SELECT l FROM t WHERE pk = 0;
+-- And if it goes back, it's prepended
+UPDATE t USING TIMESTAMP 1607099999999999 SET l = l + [-4] WHERE pk = 0;
+SELECT l FROM t WHERE pk = 0;
+-- The batch has both list append and prepend.
+-- The relative order of appends and prepends in the batch
+-- is correct, but since batch timestamp is lower
+-- than anything that is already in the list cell
+-- all appends and prepends of the batch end up
+-- preceding all previous values of the list.
+BEGIN BATCH USING TIMESTAMP 1607099999999998
+    UPDATE t SET l = [-5] + l WHERE pk = 0
+    UPDATE t SET l = [-7, -6] + l WHERE pk = 0
+    UPDATE t SET l = [-8] + l WHERE pk = 0
+    UPDATE t SET l = l + [0] WHERE pk = 0
+    UPDATE t SET l = l + [1, 2] WHERE pk = 0
+    UPDATE t SET l = l + [3] WHERE pk = 0
+APPLY BATCH;
+SELECT l FROM t WHERE pk = 0;
+-- try a very low timestamp
+BEGIN BATCH USING TIMESTAMP 1000
+    UPDATE t SET l = [-8] + l WHERE pk = 0
+    UPDATE t SET l = [-10, -9] + l WHERE pk = 0
+    UPDATE t SET l = [-11] + l WHERE pk = 0
+    UPDATE t SET l = l + [4] WHERE pk = 0
+    UPDATE t SET l = l + [5, 6] WHERE pk = 0
+    UPDATE t SET l = l + [7] WHERE pk = 0
+APPLY BATCH;
+SELECT l FROM t WHERE pk = 0;
+
+DROP TABLE t;
