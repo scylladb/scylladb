@@ -434,8 +434,6 @@ def combine_ns(namespaces):
 
 
 def declare_methods(hout, name, template_param=""):
-    if config.ns != '':
-        fprintln(hout, "namespace ", config.ns, " {")
     fprintln(hout, f"""
 template <{template_param}>
 struct serializer<{name}> {{
@@ -457,15 +455,21 @@ struct serializer<const {name}> : public serializer<{name}>
 {{}};
 """)
 
-    if config.ns != '':
-        fprintln(hout, "}")
+
+def ns_qualified_name(name, namespaces):
+    return name if not namespaces else combine_ns(namespaces) + "::" + name
+
+
+def template_params_str(template_params):
+    if not template_params:
+        return ""
+    return ", ".join(map(lambda param: param.typename + " " + param.name, template_params))
 
 
 def handle_enum(enum, hout, cout, namespaces, parent_template_param=[]):
-    ns = combine_ns(namespaces)
-    temp_def = ", ".join(map(lambda a: a.typename + " " + a.name, parent_template_param)) if parent_template_param else ""
+    temp_def = template_params_str(parent_template_param)
     template = "template <" + temp_def + ">" if temp_def else ""
-    name = enum.name if ns == "" else ns + "::" + enum.name
+    name = ns_qualified_name(enum.name, namespaces)
     declare_methods(hout, name, temp_def)
     fprintln(cout, f"""
 {template}
@@ -872,13 +876,13 @@ def add_vector_node(cout, member, base_state, parents):
 optional_nodes = set()
 
 
-def add_optional_node(hout, typ):
+def add_optional_node(cout, typ):
     global optional_nodes
     full_type = flat_type(typ)
     if full_type in optional_nodes:
         return
     optional_nodes.add(full_type)
-    fprintln(hout, reindent(0, f"""
+    fprintln(cout, reindent(0, f"""
 template<typename Output>
 struct writer_of_{full_type} {{
     Output& _out;
@@ -1150,26 +1154,24 @@ def handle_class(cls, hout, cout, namespaces=[], parent_template_param=[]):
     add_to_types(cls, namespaces, parent_template_param)
     if cls.stub:
         return
-    ns = combine_ns(namespaces)
     is_tpl = cls.template_params is not None
-    template_param_list = (cls.template_params if is_tpl else [])
-    template_param = ", ".join(map(lambda a: a.typename + " " + a.name, template_param_list + parent_template_param)) if (template_param_list + parent_template_param) else ""
-    template = "template <" + template_param + ">" if is_tpl else ""
+    template_param_list = cls.template_params if is_tpl else []
+    template_params = template_params_str(template_param_list + parent_template_param)
+    template_decl = "template <" + template_params + ">" if is_tpl else ""
     template_class_param = "<" + ",".join(map(lambda a: a.name, template_param_list)) + ">" if is_tpl else ""
-    temp_def = template_param if template_param != "" else ""
 
-    name = cls.name if ns == "" else ns + "::" + cls.name
+    name = ns_qualified_name(cls.name, namespaces)
     full_name = name + template_class_param
     for member in cls.members:
         if isinstance(member, ClassDef):
             handle_class(member, hout, cout, namespaces + [cls.name + template_class_param], parent_template_param + template_param_list)
         elif isinstance(member, EnumDef):
             handle_enum(member, hout, cout, namespaces + [cls.name + template_class_param], parent_template_param + template_param_list)
-    declare_methods(hout, name + template_class_param, temp_def)
+    declare_methods(hout, full_name, template_params)
     is_final = cls.final
 
     fprintln(cout, f"""
-{template}
+{template_decl}
 template <typename Output>
 void serializer<{full_name}>::write(Output& buf, const {full_name}& obj) {{""")
     if not is_final:
@@ -1182,7 +1184,7 @@ void serializer<{full_name}>::write(Output& buf, const {full_name}& obj) {{""")
     fprintln(cout, "}")
 
     fprintln(cout, f"""
-{template}
+{template_decl}
 template <typename Input>
 {name}{template_class_param} serializer<{name}{template_class_param}>::read(Input& buf) {{
  return seastar::with_serialized_stream(buf, [] (auto& buf) {{""")
@@ -1220,7 +1222,7 @@ template <typename Input>
 }}""")
 
     fprintln(cout, f"""
-{template}
+{template_decl}
 template <typename Input>
 void serializer<{name}{template_class_param}>::skip(Input& buf) {{
  seastar::with_serialized_stream(buf, [] (auto& buf) {{""")
@@ -1275,14 +1277,16 @@ def load_file(name):
     print_cw(cout)
     fprintln(hout, "#include \"serializer.hh\"\n")
     if config.ns != '':
-        fprintln(cout, "namespace ", config.ns, " {")
+        fprintln(hout, f"namespace {config.ns} {{")
+        fprintln(cout, f"namespace {config.ns} {{")
     data = parse_file(name)
     if data:
         handle_types(data)
         handle_objects(data, hout, cout)
     add_visitors(cout)
     if config.ns != '':
-        fprintln(cout, "}")
+        fprintln(hout, f"}} // {config.ns}")
+        fprintln(cout, f"}} // {config.ns}")
     cout.close()
     hout.close()
 
