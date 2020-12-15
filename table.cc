@@ -1246,7 +1246,8 @@ future<std::unordered_map<sstring, table::snapshot_details>> table::get_snapshot
 }
 
 future<> table::flush() {
-    return _memtables->request_flush();
+    auto op = _pending_flushes_phaser.start();
+    return _memtables->request_flush().then([op = std::move(op)] {});
 }
 
 future<> table::clear() {
