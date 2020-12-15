@@ -224,6 +224,10 @@ public:
         return bool(_seal_immediate_fn);
     }
 
+    bool can_flush() const {
+        return may_flush() && !empty();
+    }
+
     bool empty() const {
         for (auto& m : _memtables) {
            if (!m->empty()) {
@@ -749,6 +753,8 @@ public:
     future<> flush();
     future<> clear(); // discards memtable(s) without flushing them to disk.
     future<db::replay_position> discard_sstables(db_clock::time_point);
+
+    bool can_flush() const;
 
     // FIXME: this is just an example, should be changed to something more
     // general. compact_all_sstables() starts a compaction of all sstables.

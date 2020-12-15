@@ -1250,6 +1250,10 @@ future<> table::flush() {
     return _memtables->request_flush().then([op = std::move(op)] {});
 }
 
+bool table::can_flush() const {
+    return _memtables->can_flush();
+}
+
 future<> table::clear() {
     if (_commitlog) {
         _commitlog->discard_completed_segments(_schema->id());
