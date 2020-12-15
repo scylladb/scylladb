@@ -927,7 +927,7 @@ public:
     }
 
     future<> await_pending_ops() {
-        return when_all(await_pending_reads(), await_pending_writes(), await_pending_streams()).discard_result();
+        return when_all(await_pending_reads(), await_pending_writes(), await_pending_streams(), await_pending_flushes()).discard_result();
     }
 
     void add_or_update_view(view_ptr v);
