@@ -1551,6 +1551,10 @@ future<> table::flush_streaming_mutations(utils::UUID plan_id, dht::partition_ra
     });
 }
 
+bool table::can_flush() const {
+    return _memtables->can_flush();
+}
+
 future<> table::clear() {
     if (_commitlog) {
         _commitlog->discard_completed_segments(_schema->id());

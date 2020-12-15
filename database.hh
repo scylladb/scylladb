@@ -224,6 +224,10 @@ public:
         return bool(_seal_immediate_fn);
     }
 
+    bool can_flush() const {
+        return may_flush() && !empty();
+    }
+
     bool empty() const {
         for (auto& m : _memtables) {
            if (!m->empty()) {
@@ -781,6 +785,8 @@ public:
     // An example usage would query all shards asking what is the highest SSTable number known
     // to them, and then pass that + 1 as "start".
     future<std::vector<sstables::entry_descriptor>> reshuffle_sstables(std::set<int64_t> all_generations, int64_t start);
+
+    bool can_flush() const;
 
     // FIXME: this is just an example, should be changed to something more
     // general. compact_all_sstables() starts a compaction of all sstables.
