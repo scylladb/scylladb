@@ -86,3 +86,12 @@ struct empty_final_struct final { };
 struct just_a_variant stub [[writable]] {
     std::variant<writable_simple_compound, simple_compound> variant;
 };
+
+template <typename T>
+struct const_template_arg_wrapper {
+    T x;
+}
+
+struct const_template_arg_test_object {
+    std::vector<const_template_arg_wrapper<const simple_compound>> first;
+};
