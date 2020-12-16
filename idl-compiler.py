@@ -93,7 +93,20 @@ def print_cw(f):
  """)
 
 
+###
+### AST Nodes
+###
 class BasicType:
+    '''AST node that represents terminal grammar nodes for the non-template
+    types, defined either inside or outside the IDL.
+
+    These can appear either in the definition of the class fields or as a part of
+    template types (template arguments).
+
+    Basic type nodes can also be marked as `const` when used inside a template type,
+    e.g. `lw_shared_ptr<const T>`. When an IDL-defined type `T` appears somewhere
+    with a `const` specifier, an additional `serializer<const T>` specialization
+    is generated for it.'''
     def __init__(self, name, is_const=False):
         self.name = name
         self.is_const = is_const
@@ -106,6 +119,12 @@ class BasicType:
 
 
 class TemplateType:
+    '''AST node representing template types, for example: `std::vector<T>`.
+
+    These can appear either in the definition of the class fields or as a part of
+    template types (template arguments).
+
+    Such types can either be defined inside or outside the IDL.'''
     def __init__(self, name, template_parameters):
         self.name = name
         self.template_parameters = template_parameters
@@ -118,6 +137,9 @@ class TemplateType:
 
 
 class EnumValue:
+    '''AST node representing a single `name=value` enumerator in the enum.
+
+    Initializer part is optional, the same as in C++ enums.'''
     def __init__(self, name, initializer=None):
         self.name = name
         self.initializer = initializer
@@ -130,6 +152,10 @@ class EnumValue:
 
 
 class EnumDef:
+    '''AST node representing C++ `enum class` construct.
+
+    Consists of individual initializers in form of `EnumValue` objects.
+    Should have an underlying type explicitly specified.'''
     def __init__(self, name, underlying_type, members):
         self.name = name
         self.underlying_type = underlying_type
@@ -143,6 +169,13 @@ class EnumDef:
 
 
 class Attribute:
+    ''' AST node for representing class and field attributes.
+
+    The following attributes are supported:
+     - `[[writable]]` class attribute, triggers generation of writers and views
+       for a class.
+     - `[[version id]] field attribute, marks that a field is available starting
+       from a specific version.'''
     def __init__(self, name):
         self.name = name
 
@@ -154,6 +187,9 @@ class Attribute:
 
 
 class DataClassMember:
+    '''AST node representing a data field in a class.
+
+    Can optionally have a version attribute and a default value specified.'''
     def __init__(self, type, name, attribute=None, default_value=None):
         self.type = type
         self.name = name
@@ -168,6 +204,12 @@ class DataClassMember:
 
 
 class FunctionClassMember:
+    '''AST node representing getter function in a class definition.
+
+    Can optionally have a version attribute and a default value specified.
+
+    Getter functions should be used whenever it's needed to access private
+    members of a class.'''
     def __init__(self, type, name, attribute=None, default_value=None):
         self.type = type
         self.name = name
@@ -182,6 +224,8 @@ class FunctionClassMember:
 
 
 class ClassTemplateParam:
+    '''AST node representing a single template argument of a class template
+    definition, such as `typename T`.'''
     def __init__(self, typename, name):
         self.typename = typename
         self.name = name
@@ -194,6 +238,20 @@ class ClassTemplateParam:
 
 
 class ClassDef:
+    '''AST node representing a class definition. Can use either `class` or `struct`
+    keyword to define a class.
+
+    The following specifiers are allowed in a class declaration:
+     - `final` -- if a class is marked with this keyword it will not contain a
+       size argument. Final classes cannot be extended by a future version, so
+       it should be used with care.
+     - `stub` -- no code will be generated for the class, it's only there for
+       documentation.
+    Also it's possible to specify a `[[writable]]` attribute for a class, which
+    means that writers and views will be generated for the class.
+
+    Classes are also can be declared as template classes, much the same as in C++.
+    In this case the template declaration syntax mimics C++ templates.'''
     def __init__(self, name, members, final, stub, attribute, template_params):
         self.name = name
         self.members = members
@@ -210,6 +268,14 @@ class ClassDef:
 
 
 class NamespaceDef:
+    '''AST node representing a namespace scope.
+
+    It has the same meaning as in C++ or other languages with similar facilities.
+
+    A namespace can contain one of the following top-level constructs:
+     - namespaces
+     - class definitions
+     - enum definitions'''
     def __init__(self, name, members):
         self.name = name
         self.members = members
@@ -221,6 +287,9 @@ class NamespaceDef:
         return self.__str__()
 
 
+###
+### Parse actions, which transform raw tokens into structured representation: specialized AST nodes
+###
 def basic_type_parse_action(tokens):
     return BasicType(name=tokens[0])
 
