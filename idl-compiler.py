@@ -466,23 +466,36 @@ def template_params_str(template_params):
     return ", ".join(map(lambda param: param.typename + " " + param.name, template_params))
 
 
-def handle_enum(enum, hout, cout, namespaces, parent_template_param=[]):
-    temp_def = template_params_str(parent_template_param)
-    template = "template <" + temp_def + ">" if temp_def else ""
+def enum_serializer_write_impl(cout, enum, template_decl, namespaces):
     name = ns_qualified_name(enum.name, namespaces)
-    declare_methods(hout, name, temp_def)
+
     fprintln(cout, f"""
-{template}
+{template_decl}
 template <typename Output>
 void serializer<{name}>::write(Output& buf, const {name}& v) {{
   serialize(buf, static_cast<{enum.underlying_type}>(v));
-}}
+}}""")
 
-{template}
+
+def enum_serializer_read_impl(cout, enum, template_decl, namespaces):
+    name = ns_qualified_name(enum.name, namespaces)
+
+    fprintln(cout, f"""
+{template_decl}
 template<typename Input>
 {name} serializer<{name}>::read(Input& buf) {{
   return static_cast<{name}>(deserialize(buf, boost::type<{enum.underlying_type}>()));
 }}""")
+
+
+def handle_enum(enum, hout, cout, namespaces, parent_template_param=[]):
+    temp_def = template_params_str(parent_template_param)
+    template_decl = "template <" + temp_def + ">" if temp_def else ""
+    name = ns_qualified_name(enum.name, namespaces)
+    declare_methods(hout, name, temp_def)
+
+    enum_serializer_write_impl(cout, enum, template_decl, namespaces)
+    enum_serializer_read_impl(cout, enum, template_decl, namespaces)
 
 
 def join_template(template_params):
@@ -1150,31 +1163,15 @@ def add_visitors(cout):
         handle_visitors_nodes(local_types[k], cout)
 
 
-def handle_class(cls, hout, cout, namespaces=[], parent_template_param=[]):
-    add_to_types(cls, namespaces, parent_template_param)
-    if cls.stub:
-        return
-    is_tpl = cls.template_params is not None
-    template_param_list = cls.template_params if is_tpl else []
-    template_params = template_params_str(template_param_list + parent_template_param)
-    template_decl = "template <" + template_params + ">" if is_tpl else ""
-    template_class_param = "<" + ",".join(map(lambda a: a.name, template_param_list)) + ">" if is_tpl else ""
-
+def class_serializer_write_impl(cout, cls, template_decl, template_class_param, namespaces):
     name = ns_qualified_name(cls.name, namespaces)
     full_name = name + template_class_param
-    for member in cls.members:
-        if isinstance(member, ClassDef):
-            handle_class(member, hout, cout, namespaces + [cls.name + template_class_param], parent_template_param + template_param_list)
-        elif isinstance(member, EnumDef):
-            handle_enum(member, hout, cout, namespaces + [cls.name + template_class_param], parent_template_param + template_param_list)
-    declare_methods(hout, full_name, template_params)
-    is_final = cls.final
 
     fprintln(cout, f"""
 {template_decl}
 template <typename Output>
 void serializer<{full_name}>::write(Output& buf, const {full_name}& obj) {{""")
-    if not is_final:
+    if not cls.final:
         fprintln(cout, f"""  {SETSIZE}(buf, obj);""")
     for member in cls.members:
         if isinstance(member, ClassDef) or isinstance(member, EnumDef):
@@ -1182,6 +1179,11 @@ void serializer<{full_name}>::write(Output& buf, const {full_name}& obj) {{""")
         fprintln(cout, f"""  static_assert(is_equivalent<decltype(obj.{member.name}), {param_type(member.type)}>::value, "member value has a wrong type");
     {SERIALIZER}(buf, obj.{member.name});""")
     fprintln(cout, "}")
+
+
+def class_serializer_read_impl(cout, cls, template_decl, template_class_param, namespaces):
+    is_final = cls.final
+    name = ns_qualified_name(cls.name, namespaces)
 
     fprintln(cout, f"""
 {template_decl}
@@ -1221,6 +1223,11 @@ template <typename Input>
  }});
 }}""")
 
+
+def class_serializer_skip_impl(cout, cls, template_decl, template_class_param, namespaces):
+    is_final = cls.final
+    name = ns_qualified_name(cls.name, namespaces)
+
     fprintln(cout, f"""
 {template_decl}
 template <typename Input>
@@ -1234,6 +1241,31 @@ void serializer<{name}{template_class_param}>::skip(Input& buf) {{
             full_type = param_view_type(m.type)
             fprintln(cout, f"  ser::skip(buf, boost::type<{full_type}>());")
     fprintln(cout, """ });\n}""")
+
+
+def handle_class(cls, hout, cout, namespaces=[], parent_template_param=[]):
+    add_to_types(cls, namespaces, parent_template_param)
+    if cls.stub:
+        return
+    is_tpl = cls.template_params is not None
+    template_param_list = cls.template_params if is_tpl else []
+    template_params = template_params_str(template_param_list + parent_template_param)
+    template_decl = "template <" + template_params + ">" if is_tpl else ""
+    template_class_param = "<" + ",".join(map(lambda a: a.name, template_param_list)) + ">" if is_tpl else ""
+
+    name = ns_qualified_name(cls.name, namespaces)
+    full_name = name + template_class_param
+    # Handle sub-types: can be either enum or class
+    for member in cls.members:
+        if isinstance(member, ClassDef):
+            handle_class(member, hout, cout, namespaces + [cls.name + template_class_param], parent_template_param + template_param_list)
+        elif isinstance(member, EnumDef):
+            handle_enum(member, hout, cout, namespaces + [cls.name + template_class_param], parent_template_param + template_param_list)
+    declare_methods(hout, full_name, template_params)
+
+    class_serializer_write_impl(cout, cls, template_decl, template_class_param, namespaces)
+    class_serializer_read_impl(cout, cls, template_decl, template_class_param, namespaces)
+    class_serializer_skip_impl(cout, cls, template_decl, template_class_param, namespaces)
 
 
 def handle_objects(tree, hout, cout, namespaces=[]):
