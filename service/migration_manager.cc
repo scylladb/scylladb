@@ -925,17 +925,6 @@ public static void announceAggregateDrop(UDAggregate udf, boolean announceLocall
 }
 #endif
 
-/**
- * actively announce a new version to active hosts via rpc
- * @param schema The schema mutation to be applied
- */
-future<> migration_manager::announce(mutation schema, bool announce_locally)
-{
-    std::vector<mutation> mutations;
-    mutations.emplace_back(std::move(schema));
-    return announce(std::move(mutations), announce_locally);
-}
-
 future<> migration_manager::announce(std::vector<mutation> mutations, bool announce_locally)
 {
     if (announce_locally) {

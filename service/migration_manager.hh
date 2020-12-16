@@ -154,8 +154,6 @@ public:
      * actively announce a new version to active hosts via rpc
      * @param schema The schema mutation to be applied
      */
-    static future<> announce(mutation schema, bool announce_locally);
-
     static future<> announce(std::vector<mutation> mutations, bool announce_locally);
 
     // Returns a future on the local application of the schema
