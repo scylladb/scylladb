@@ -144,6 +144,9 @@ class timestamp_based_splitting_mutation_writer {
             }
             return std::move(_consume_fut);
         }
+        void abort(std::exception_ptr ep) {
+            _handle.abort(ep);
+        }
     };
 
 private:
@@ -185,6 +188,11 @@ public:
         return parallel_for_each(_buckets, [] (std::pair<const bucket_id, bucket_writer>& bucket) {
             return bucket.second.consume_end_of_stream();
         });
+    }
+    void abort(std::exception_ptr ep) {
+        for (auto&& b : _buckets) {
+            b.second.abort(ep);
+        }
     }
 };
 
