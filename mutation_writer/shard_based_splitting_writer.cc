@@ -57,6 +57,9 @@ class shard_based_splitting_mutation_writer {
             }
             return std::move(_consume_fut);
         }
+        void abort(std::exception_ptr ep) {
+            _handle.abort(ep);
+        }
     };
 
 private:
@@ -109,6 +112,13 @@ public:
             }
             return shard->consume_end_of_stream();
         });
+    }
+    void abort(std::exception_ptr ep) {
+        for (auto&& shard : _shards) {
+            if (shard) {
+                shard->abort(ep);
+            }
+        }
     }
 };
 
