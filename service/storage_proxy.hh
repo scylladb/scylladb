@@ -154,11 +154,11 @@ public:
 class storage_proxy : public seastar::async_sharded_service<storage_proxy>, public peering_sharded_service<storage_proxy>, public service::endpoint_lifecycle_subscriber  {
 public:
     enum class error : uint8_t {
-        NONE,
-        TIMEOUT,
-        FAILURE,
-        DISCONNECTED,
-        OVERLOADED,
+        NONE,         // no error
+        TIMEOUT,      // operation timed out (locally, or no response arrived from a replica before the deadline)
+        FAILURE,      // operation failed (locally or on a remote replica)
+        DISCONNECTED, // RPC session was disconnected
+        OVERLOADED,   // a replica (possibly local) was overloaded and thus unable to perform a request
     };
     using clock_type = lowres_clock;
     struct config {
