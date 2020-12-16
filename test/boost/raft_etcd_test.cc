@@ -44,7 +44,7 @@
 
 #include "raft/fsm.hh"
 
-using raft::term_t, raft::index_t, raft::server_id;
+using raft::term_t, raft::index_t, raft::server_id, raft::log_entry;
 
 void election_threshold(raft::fsm& fsm) {
     for (int i = 0; i <= raft::ELECTION_TIMEOUT.count(); i++) {
@@ -265,3 +265,143 @@ BOOST_AUTO_TEST_CASE(test_progress_flow_control) {
 // TBD once we have this configuration feature implemented
 // TestLearnerElectionTimeout
 // TBD once we have learner state implemented (and add_server)
+
+// TestLeaderElectionOverwriteNewerLogs tests a scenario in which a
+// newly-elected leader does *not* have the newest (i.e. highest term)
+// log entries, and must overwrite higher-term log entries with
+// lower-term ones.
+// TODO: add pre-vote case
+BOOST_AUTO_TEST_CASE(test_leader_election_overwrite_newer_logs) {
+
+    failure_detector fd;
+    // 5 nodes
+    server_id id1{utils::UUID(0, 1)}, id2{utils::UUID(0, 2)}, id3{utils::UUID(0, 3)},
+            id4{utils::UUID(0, 4)}, id5{utils::UUID(0, 5)};
+    raft::configuration cfg({id1, id2, id3, id4, id5});
+    //                        idx  term
+    // node 1:    log entries  1:   1                 won first got logs
+    // node 2:    log entries  1:   1                 got logs from node 1
+    // node 3:    log entries  1:   2                 wond second election
+    // node 4:    log entries  (at term 2 voted for 3)
+    // node 5:    log entries  (at term 2 voted for 3)
+    raft::log_entry_ptr lep1 = seastar::make_lw_shared<log_entry>(log_entry{term_t{1}, index_t{1}, raft::log_entry::dummy{}});
+    raft::log log1{raft::snapshot{.config = cfg}, raft::log_entries{lep1}};
+    raft::fsm fsm1(id1, term_t{1}, server_id{}, std::move(log1), fd, fsm_cfg);
+
+    // Here node 1 is disconnected and 3 campaigns, becomes leader, adds dummy entry
+    raft::log log3{raft::snapshot{.config = cfg}};
+    raft::fsm fsm3(id3, term_t{1}, server_id{}, std::move(log3), fd, fsm_cfg);
+    BOOST_CHECK(fsm3.is_follower());
+    election_timeout(fsm3);
+    BOOST_CHECK(fsm3.is_candidate());
+    auto output3 = fsm3.get_output();
+    BOOST_CHECK(output3.term == term_t{2});
+    fsm3.step(id4, raft::vote_reply{term_t{output3.term}, true});
+    fsm3.step(id5, raft::vote_reply{term_t{output3.term}, true});
+    BOOST_CHECK(fsm3.is_leader());
+    output3 = fsm3.get_output();
+    // Node 3 [gets] a different entry on idx 1 (term 2)
+    // (We'll later check this entry is properly replaced)
+    BOOST_CHECK(output3.log_entries.size() == 1);
+    BOOST_CHECK(std::holds_alternative<raft::log_entry::dummy>(output3.log_entries[0]->data));
+    output3 = fsm3.get_output();
+    BOOST_CHECK(output3.messages.size() == 4);   // Sends 4 dummy entries
+
+    // Node 1 is reconnected and campaigns. The election fails because a quorum of nodes
+    // know about the election that already happened at term 2. Node 1's term is pushed ahead to 2.
+    election_timeout(fsm1);
+    BOOST_CHECK(fsm1.is_candidate());
+    auto output1 = fsm1.get_output();
+    BOOST_CHECK(output1.term == term_t{2});
+    BOOST_CHECK(output1.messages.size() == 4);  // Request votes to all 4 other nodes
+    raft::vote_request vreq;
+    BOOST_REQUIRE_NO_THROW(vreq = std::get<raft::vote_request>(output1.messages.back().second));
+
+    // Node 3 rejects this election
+    fsm3.step(id1, raft::vote_request{vreq});
+    output3 = fsm3.get_output();
+    BOOST_CHECK(output3.messages.size() == 1);
+    raft::vote_reply vrepl;
+    BOOST_REQUIRE_NO_THROW(vrepl = std::get<raft::vote_reply>(output3.messages.back().second));
+    BOOST_CHECK(!vrepl.vote_granted);
+    BOOST_CHECK(vrepl.current_term = term_t{2});
+
+    fsm1.step(id2, raft::vote_reply{term_t{1}, true});   // Doesn't know about new term, accepts
+    fsm1.step(id3, raft::vote_reply{term_t{2}, false});  // Knows about new term, rejects
+    fsm1.step(id4, raft::vote_reply{term_t{2}, false});  // Knows about new term, rejects
+    fsm1.step(id5, raft::vote_reply{term_t{2}, false});  // Knows about new term, rejects
+    BOOST_CHECK(!fsm1.is_leader());
+
+    // Node 1 campaigns again with a higher term. This time it succeeds.
+    election_timeout(fsm1);
+    BOOST_CHECK(fsm1.is_candidate());
+    output1 = fsm1.get_output();
+    // NOTE: election timeout might trigger 2 elections so term might be 3 or 4
+    //       and there could be 4 or 8 vote request ouputs, so use last one
+    BOOST_CHECK(output1.term > term_t{2});      // After learning about term 2, move to 3+
+    auto current_term = output1.term;
+    BOOST_CHECK(output1.messages.size() >= 4);  // Request votes to all 4 other nodes
+    BOOST_REQUIRE_NO_THROW(vreq = std::get<raft::vote_request>(output1.messages.back().second));
+
+    fsm1.step(id2, raft::vote_reply{output1.term, true});
+    fsm1.step(id4, raft::vote_reply{output1.term, true});  // Now term is fine
+
+    BOOST_CHECK(fsm1.is_leader());
+
+    // Node 1 stores dummy entry and sends it to other nodes
+    output1 = fsm1.get_output();
+    BOOST_CHECK(output1.log_entries.size() == 1);
+    BOOST_CHECK(output1.log_entries[0]->idx == 2);
+    BOOST_CHECK(output1.log_entries[0]->term == current_term);
+    BOOST_CHECK(std::holds_alternative<raft::log_entry::dummy>(output1.log_entries[0]->data));
+    output1 = fsm1.get_output();
+    BOOST_CHECK(output1.messages.size() >= 1);  // Request votes to all 4 other nodes
+    raft::append_request areq;
+    index_t dummy_idx{2};     // Log index of dummy entry of this term, after term 1's entry
+    for (auto& [id, msg] : output1.messages) {
+        // BOOST_CHECK(std::holds_alternative<raft::append_request>(msg));
+        BOOST_REQUIRE_NO_THROW(areq = std::get<raft::append_request>(msg));
+        BOOST_CHECK(areq.prev_log_idx == 1);
+        BOOST_CHECK(areq.prev_log_term == 1);
+        BOOST_CHECK(areq.entries.size() == 1);
+        auto lep =  areq.entries.back();
+        BOOST_CHECK(lep->idx == dummy_idx);
+        BOOST_CHECK(lep->term == current_term);
+        BOOST_CHECK(std::holds_alternative<raft::log_entry::dummy>(lep->data));
+    }
+
+    // Node 3 steps down and accepts the new leader when it gets entries
+    fsm3.step(id1, raft::append_request{areq});
+    BOOST_CHECK(fsm3.is_follower());
+    output3 = fsm3.get_output();
+    BOOST_CHECK(output3.term == current_term);
+    BOOST_CHECK(output3.messages.size() == 1);  // Node 3 tells Node 1 there is no match at idx 1
+    raft::append_reply arepl;
+    BOOST_REQUIRE_NO_THROW(arepl = std::get<raft::append_reply>(output3.messages.back().second));
+    // Node 1 needs to discover where Node 3 matches, then make it truncate,
+    // and then send replaced entries (idx=1,term=1)(idx=2,term=current_term)
+
+    fsm1.step(id3, raft::append_reply{arepl});
+    output1 = fsm1.get_output();
+    BOOST_CHECK(output1.messages.size() == 1);
+    BOOST_REQUIRE_NO_THROW(areq = std::get<raft::append_request>(output1.messages.back().second));
+    fsm3.step(id1, raft::append_request{areq});
+    output3 = fsm3.get_output();
+    BOOST_CHECK(output3.log_entries.size() == 1);
+    BOOST_CHECK(output3.log_entries[0]->idx == 1);
+    BOOST_CHECK(output3.log_entries[0]->term == term_t{1});
+    BOOST_CHECK(std::holds_alternative<raft::log_entry::dummy>(output3.log_entries[0]->data));
+    BOOST_REQUIRE_NO_THROW(arepl = std::get<raft::append_reply>(output3.messages.back().second));
+
+    fsm1.step(id3, raft::append_reply{arepl});
+    output1 = fsm1.get_output();
+    BOOST_CHECK(output1.messages.size() == 1);
+    BOOST_REQUIRE_NO_THROW(areq = std::get<raft::append_request>(output1.messages.back().second));
+    fsm3.step(id1, raft::append_request{areq});
+    output3 = fsm3.get_output();
+    BOOST_CHECK(output3.log_entries.size() == 1);
+    BOOST_CHECK(output3.log_entries[0]->idx == 2);
+    BOOST_CHECK(output3.log_entries[0]->term == current_term);
+    BOOST_CHECK(std::holds_alternative<raft::log_entry::dummy>(output3.log_entries[0]->data));
+    BOOST_REQUIRE_NO_THROW(arepl = std::get<raft::append_reply>(output3.messages.back().second));
+}
