@@ -76,6 +76,14 @@ SEASTAR_TEST_CASE(test_secondary_index_clustering_key_query) {
                 { utf8_type->decompose(sstring("dcurrorw@techcrunch.com")) },
                 { utf8_type->decompose(sstring("beassebyv@house.gov")) },
             });
+        }).then([&e] {
+            return e.execute_cql("select country from users where country='France' and country='Denmark'"); // #7772
+        }).then([&e] (shared_ptr<cql_transport::messages::result_message> msg) {
+            assert_that(msg).is_rows().is_empty();
+        }).then([&e] {
+            return e.execute_cql("select country from users where country='Denmark' and country='Denmark'");
+        }).then([&e] (shared_ptr<cql_transport::messages::result_message> msg) {
+            assert_that(msg).is_rows().with_rows({{utf8_type->decompose(sstring("Denmark"))}});
         });
     });
 }
