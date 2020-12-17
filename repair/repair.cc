@@ -48,6 +48,7 @@
 #include <seastar/core/gate.hh>
 #include <seastar/util/defer.hh>
 #include <seastar/core/metrics_registration.hh>
+#include <seastar/core/coroutine.hh>
 
 logging::logger rlogger("repair");
 
@@ -2234,7 +2235,7 @@ future<> rebuild_with_repair(seastar::sharded<database>& db, seastar::sharded<ne
 }
 
 future<> replace_with_repair(seastar::sharded<database>& db, seastar::sharded<netw::messaging_service>& ms, locator::token_metadata_ptr tmptr, std::unordered_set<dht::token> replacing_tokens) {
-  return tmptr->clone_async().then([&db, &ms, replacing_tokens = std::move(replacing_tokens)] (locator::token_metadata cloned_tm) mutable {
+    auto cloned_tm = co_await tmptr->clone_async();
     auto op = sstring("replace_with_repair");
     auto source_dc = get_local_dc();
     auto reason = streaming::stream_reason::replace;
@@ -2242,8 +2243,7 @@ future<> replace_with_repair(seastar::sharded<database>& db, seastar::sharded<ne
     // no need to set the original version
     auto cloned_tmptr = make_token_metadata_ptr(std::move(cloned_tm));
     cloned_tmptr->update_normal_tokens(replacing_tokens, utils::fb_utilities::get_broadcast_address());
-    return do_rebuild_replace_with_repair(db, ms, std::move(cloned_tmptr), std::move(op), std::move(source_dc), reason);
-  });
+    co_return co_await do_rebuild_replace_with_repair(db, ms, std::move(cloned_tmptr), std::move(op), std::move(source_dc), reason);
 }
 
 static future<> init_messaging_service_handler(sharded<database>& db, sharded<netw::messaging_service>& messaging) {
