@@ -307,13 +307,12 @@ SEASTAR_THREAD_TEST_CASE(null_rhs) {
         using ire = exceptions::invalid_request_exception;
         using exception_predicate::message_contains;
         const char* expect = "Invalid null";
-        // TODO: investigate why null comparison isn't allowed here.
-        BOOST_REQUIRE_EXCEPTION(q("select * from t where pk1=0 and pk2=null"), ire, message_contains(expect));
+        cquery_nofail(e, "insert into t (pk1, pk2, ck1, ck2) values (11, 12, 21, 22)");
+        require_rows(e, "select * from t where pk1=0 and pk2=null", {});
         BOOST_REQUIRE_EXCEPTION(q("select * from t where pk1=0 and pk2=0 and (ck1,ck2)>=(0,null)"),
                                 ire, message_contains(expect));
-        BOOST_REQUIRE_EXCEPTION(q("select * from t where ck1=null"), ire, message_contains(expect));
-        BOOST_REQUIRE_EXCEPTION(q("select * from t where r=null and ck1=null allow filtering"),
-                                ire, message_contains(expect));
+        require_rows(e, "select * from t where ck1=null", {});
+        require_rows(e, "select * from t where r=null and ck1=null allow filtering", {});
         require_rows(e, "select * from t where pk1=0 and pk2=0 and ck1<null", {});
         require_rows(e, "select * from t where r>null and ck1<null allow filtering", {});
         cquery_nofail(e, "insert into t(pk1,pk2,ck1,ck2) values(11,21,101,201)");
@@ -324,7 +323,8 @@ SEASTAR_THREAD_TEST_CASE(null_rhs) {
         require_rows(e, "select * from t where pk1=null allow filtering", {});
 
         cquery_nofail(e, "create table tb (p int primary key)");
-        BOOST_REQUIRE_EXCEPTION(q("select * from tb where p=null"), ire, message_contains(expect));
+        cquery_nofail(e, "insert into tb (p) values (1)");
+        require_rows(e, "select * from tb where p=null", {});
     }).get();
 }
 
@@ -840,6 +840,29 @@ SEASTAR_THREAD_TEST_CASE(bounds_reversed) {
         cquery_nofail(e, "insert into t (pk,ck1,ck2) values (2,12,23);");
         require_rows(e, "select ck1 from t where pk in (1,2,3) and ck1=12 and ck2<23", {{I(12)}});
         require_rows(e, "select ck1 from t where pk in (1,2,3) and ck1=12 and ck2<24", {{I(12)}, {I(12)}});
+    }).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(multi_eq_on_primary) {
+    do_with_cql_env_thread([](cql_test_env& e) {
+        cquery_nofail(e, "create table t (p int, c int, primary key (p, c))");
+        cquery_nofail(e, "insert into t (p, c) values (1, 11);");
+        cquery_nofail(e, "insert into t (p, c) values (2, 12);");
+        cquery_nofail(e, "insert into t (p, c) values (3, 13);");
+        require_rows(e, "select p from t where p=1 and p=1", {{I(1)}});
+        require_rows(e, "select p from t where p=1 and p=2", {});
+        require_rows(e, "select c from t where c=11 and c=11", {{I(11)}});
+        require_rows(e, "select c from t where c=11 and c=999", {});
+
+        cquery_nofail(e, "create table t2 (pk1 int, pk2 int, ck1 int, ck2 int, primary key ((pk1, pk2), ck1, ck2))");
+        cquery_nofail(e, "insert into t2 (pk1, pk2, ck1, ck2) values (1, 12, 21, 22);");
+        cquery_nofail(e, "insert into t2 (pk1, pk2, ck1, ck2) values (1, 12, 210, 220);");
+        require_rows(e, "select pk1 from t2 where pk1=1 and pk1=1 and pk2=12", {{I(1)}, {I(1)}});
+        require_rows(e, "select pk1 from t2 where pk1=0 and pk1=1 and pk2=12", {});
+        require_rows(e, "select pk1 from t2 where pk1=1 and pk2=12 and ck1=21 and ck1=21", {{I(1)}});
+        require_rows(e, "select pk1 from t2 where pk1=1 and pk2=12 and ck1=21 and ck1=21 and ck1=21", {{I(1)}});
+        require_rows(e, "select pk1 from t2 where pk1=1 and pk2=12 and ck1=21 and ck1=210", {});
+        require_rows(e, "select pk1 from t2 where pk1=1 and pk2=12 and ck1=21 and ck1=210 and ck1=210", {});
     }).get();
 }
 

@@ -108,6 +108,9 @@ public:
             return bytes_opt{};
         } else {
             const auto values = std::get<expr::value_list>(possible_lhs_values(&cdef, it->second->expression, options));
+            if (values.empty()) {
+                return bytes_opt{};
+            }
             assert(values.size() == 1);
             return values.front();
         }

@@ -212,30 +212,22 @@ private:
     std::vector<range_type> compute_bounds(const query_options& options) const {
         std::vector<range_type> ranges;
 
-        static constexpr auto invalid_null_msg = std::is_same<ValueType, partition_key>::value
-            ? "Invalid null value for partition key part %s" : "Invalid null value for clustering key part %s";
-
         // TODO: rewrite this to simply invoke possible_lhs_values on each clustering column, find the first
         // non-list, and take Cartesian product of that prefix.  No need for to_range() and std::get() here.
         if (_restrictions->is_all_eq()) {
-            if (_restrictions->size() == 1) {
-                auto&& e = *restrictions().begin();
-                const auto b = std::get<expr::binary_operator>(e.second->expression).rhs->bind_and_get(options);
-                if (!b) {
-                    throw exceptions::invalid_request_exception(sprint(invalid_null_msg, e.first->name_as_text()));
-                }
-                return {range_type::make_singular(ValueType::from_single_value(*_schema, to_bytes(b)))};
-            }
             std::vector<bytes> components;
             components.reserve(_restrictions->size());
             for (auto&& e : restrictions()) {
                 const column_definition* def = e.first;
                 assert(components.size() == _schema->position(*def));
-                const auto b = std::get<expr::binary_operator>(e.second->expression).rhs->bind_and_get(options);
-                if (!b) {
-                    throw exceptions::invalid_request_exception(sprint(invalid_null_msg, e.first->name_as_text()));
+                // Because _restrictions is all EQ, possible_lhs_values must return a list, not a range.
+                const auto b = std::get<expr::value_list>(possible_lhs_values(e.first, e.second->expression, options));
+                // Furthermore, this list is either a single element (when all RHSs are the same) or empty (when at
+                // least two are different, so the restrictions cannot hold simultaneously -- ie, c=1 AND c=2).
+                if (b.empty()) {
+                    return {};
                 }
-                components.emplace_back(to_bytes(b));
+                components.emplace_back(b.front());
             }
             return {range_type::make_singular(ValueType::from_exploded(*_schema, std::move(components)))};
         }
