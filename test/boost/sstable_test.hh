@@ -51,7 +51,7 @@ public:
 
     void rebuild_sstable_list(const std::vector<sstables::shared_sstable>& new_sstables,
             const std::vector<sstables::shared_sstable>& sstables_to_remove) {
-        _cf->rebuild_sstable_list(new_sstables, sstables_to_remove);
+        _cf->_sstables = _cf->build_new_sstable_list(new_sstables, sstables_to_remove);
     }
 
     static void update_sstables_known_generation(column_family& cf, unsigned generation) {

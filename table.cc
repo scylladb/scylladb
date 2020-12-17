@@ -660,9 +660,9 @@ void table::rebuild_statistics() {
     }
 }
 
-void
-table::rebuild_sstable_list(const std::vector<sstables::shared_sstable>& new_sstables,
-                                    const std::vector<sstables::shared_sstable>& old_sstables) {
+lw_shared_ptr<sstables::sstable_set>
+table::build_new_sstable_list(const std::vector<sstables::shared_sstable>& new_sstables,
+                              const std::vector<sstables::shared_sstable>& old_sstables) {
     auto current_sstables = _sstables;
     auto new_sstable_list = _compaction_strategy.make_sstable_set(_schema);
 
@@ -676,7 +676,7 @@ table::rebuild_sstable_list(const std::vector<sstables::shared_sstable>& new_sst
             new_sstable_list.insert(tab);
         }
     }
-    _sstables = make_lw_shared<sstables::sstable_set>(std::move(new_sstable_list));
+    return make_lw_shared<sstables::sstable_set>(std::move(new_sstable_list));
 }
 
 // Note: must run in a seastar thread
@@ -723,7 +723,7 @@ table::on_compaction_completion(sstables::compaction_completion_desc& desc) {
 
     _cache.invalidate(row_cache::external_updater([this, &desc] () noexcept {
         // FIXME: this is not really noexcept, but we need to provide strong exception guarantees.
-        rebuild_sstable_list(desc.new_sstables, desc.old_sstables);
+        _sstables = build_new_sstable_list(desc.new_sstables, desc.old_sstables);
     }), std::move(desc.ranges_for_cache_invalidation)).get();
 
     // refresh underlying data source in row cache to prevent it from holding reference
