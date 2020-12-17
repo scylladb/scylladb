@@ -157,8 +157,8 @@ leveled_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> input
 
     for (auto& sst : input) {
         auto sst_level = sst->get_sstable_level();
-        if (sst_level > leveled_manifest::MAX_LEVELS) {
-            leveled_manifest::logger.warn("Found SSTable with level {}, higher than the maximum {}. This is unexpected, but will fix", sst_level, leveled_manifest::MAX_LEVELS);
+        if (sst_level > leveled_manifest::MAX_LEVELS - 1) {
+            leveled_manifest::logger.warn("Found SSTable with level {}, higher than the maximum {}. This is unexpected, but will fix", sst_level, leveled_manifest::MAX_LEVELS - 1);
 
             // This is really unexpected, so we'll just compact it all to fix it
             compaction_descriptor desc(std::move(input), std::optional<sstables::sstable_set>(), iop, leveled_manifest::MAX_LEVELS - 1, _max_sstable_size_in_mb * 1024 * 1024);
