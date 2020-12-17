@@ -405,3 +405,60 @@ BOOST_AUTO_TEST_CASE(test_leader_election_overwrite_newer_logs) {
     BOOST_CHECK(std::holds_alternative<raft::log_entry::dummy>(output3.log_entries[0]->data));
     BOOST_REQUIRE_NO_THROW(arepl = std::get<raft::append_reply>(output3.messages.back().second));
 }
+
+// TestVoteFromAnyState
+BOOST_AUTO_TEST_CASE(test_vote_from_any_state) {
+
+    failure_detector fd;
+    server_id id1{utils::UUID(0, 1)}, id2{utils::UUID(0, 2)}, id3{utils::UUID(0, 3)};
+    raft::configuration cfg({id1, id2, id3});
+    raft::log log{raft::snapshot{.config = cfg}};
+    raft::fsm fsm(id1, term_t{}, server_id{}, std::move(log), fd, fsm_cfg);
+
+    // Follower
+    BOOST_CHECK(fsm.is_follower());
+    fsm.step(id2, raft::vote_request{term_t{1}, index_t{1}, term_t{1}});
+    auto output = fsm.get_output();
+    BOOST_CHECK(output.messages.size() == 1);
+    raft::vote_reply vrepl;
+    BOOST_REQUIRE_NO_THROW(vrepl = std::get<raft::vote_reply>(output.messages.back().second));
+    BOOST_CHECK(vrepl.vote_granted);
+    BOOST_CHECK(vrepl.current_term = term_t{1});
+
+    // TODO: pre candidate when (if) implemented
+
+    // Candidate
+    BOOST_CHECK(!fsm.is_candidate());
+    election_timeout(fsm);
+    BOOST_CHECK(fsm.is_candidate());
+    output = fsm.get_output();
+    // Node 2 requests vote for a later term
+    fsm.step(id2, raft::vote_request{output.term + term_t{1}, index_t{1}, term_t{1}});
+    output = fsm.get_output();
+    BOOST_CHECK(output.messages.size() == 1);
+    BOOST_REQUIRE_NO_THROW(vrepl = std::get<raft::vote_reply>(output.messages.back().second));
+    BOOST_CHECK(vrepl.vote_granted);
+    BOOST_CHECK(vrepl.current_term = term_t{1});
+
+    // Leader
+    election_timeout(fsm);
+    BOOST_CHECK(fsm.is_candidate());
+    output = fsm.get_output();
+    term_t current_term = output.term;
+    fsm.step(id2, raft::vote_reply{current_term, true});
+    BOOST_CHECK(fsm.is_leader());
+    output = fsm.get_output();
+    // Node 2 requests vote for a later term
+    fd.alive = false;
+    election_threshold(fsm);
+    output = fsm.get_output();
+    fsm.step(id2, raft::vote_request{current_term + term_t{2}, index_t{42}, current_term + term_t{1}});
+    output = fsm.get_output();
+    BOOST_CHECK(fsm.is_follower());
+    BOOST_CHECK(output.messages.size() == 1);
+    BOOST_CHECK(vrepl.vote_granted);
+    BOOST_CHECK(vrepl.current_term = term_t{1});
+}
+
+// TODO: TestPreVoteFromAnyState
+
