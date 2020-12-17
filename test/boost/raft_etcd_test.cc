@@ -462,3 +462,141 @@ BOOST_AUTO_TEST_CASE(test_vote_from_any_state) {
 
 // TODO: TestPreVoteFromAnyState
 
+// TestLogReplication
+BOOST_AUTO_TEST_CASE(test_log_replication_1) {
+    raft::fsm_output output;
+    raft::append_request areq;
+    raft::log_entry_ptr lep;
+    raft::term_t current_term;
+    raft::index_t idx;
+
+    failure_detector fd;
+    server_id id1{utils::UUID(0, 1)}, id2{utils::UUID(0, 2)}, id3{utils::UUID(0, 3)};
+    raft::configuration cfg({id1, id2, id3});
+    raft::log log{raft::snapshot{.config = cfg}};
+    raft::fsm fsm(id1, term_t{}, server_id{}, std::move(log), fd, fsm_cfg);
+
+    election_timeout(fsm);
+    BOOST_CHECK(fsm.is_candidate());
+    output = fsm.get_output();
+    BOOST_CHECK(output.term != term_t{0});
+    current_term = output.term;
+    fsm.step(id2, raft::vote_reply{output.term, true});
+    BOOST_CHECK(fsm.is_leader());
+    output = fsm.get_output();
+    BOOST_CHECK(output.log_entries.size() == 1);
+    BOOST_CHECK(std::holds_alternative<raft::log_entry::dummy>(output.log_entries[0]->data));
+    BOOST_CHECK(output.committed.size() == 0);
+    output = fsm.get_output();
+    BOOST_CHECK(output.messages.size() == 2);
+    index_t dummy_idx{1};     // Nothing before it
+    for (auto& [id, msg] : output.messages) {
+        BOOST_REQUIRE_NO_THROW(areq = std::get<raft::append_request>(msg));
+        BOOST_CHECK(areq.prev_log_idx == 0);
+        BOOST_CHECK(areq.prev_log_term == current_term);
+        BOOST_CHECK(areq.entries.size() == 1);
+        lep =  areq.entries.back();
+        BOOST_CHECK(lep->idx == dummy_idx);
+        BOOST_CHECK(lep->term == current_term);
+        BOOST_CHECK(std::holds_alternative<raft::log_entry::dummy>(lep->data));
+        // Reply
+        fsm.step(id, raft::append_reply{areq.current_term, dummy_idx, raft::append_reply::accepted{dummy_idx}});
+    }
+    output = fsm.get_output();
+    BOOST_CHECK(output.committed.size() == 1);  // Dummy was committed
+
+    // Add data entry
+    raft::command cmd = create_command(1);
+    fsm.add_entry(std::move(cmd));
+    output = fsm.get_output();
+    BOOST_CHECK(output.log_entries.size() == 1); // Entry added to local log
+    output = fsm.get_output();
+    BOOST_CHECK(output.messages.size() == 2);
+    index_t entry_idx{2};     // Nothing before it
+    for (auto& [id, msg] : output.messages) {
+        BOOST_REQUIRE_NO_THROW(areq = std::get<raft::append_request>(msg));
+        BOOST_CHECK(areq.prev_log_idx == 1);
+        BOOST_CHECK(areq.prev_log_term == current_term);
+        BOOST_CHECK(areq.entries.size() == 1);
+        lep =  areq.entries.back();
+        BOOST_CHECK(lep->idx == entry_idx);
+        BOOST_CHECK(lep->term == current_term);
+        BOOST_CHECK(std::holds_alternative<raft::command>(lep->data));
+        idx = lep->idx;
+        // Reply
+        fsm.step(id, raft::append_reply{areq.current_term, lep->idx, raft::append_reply::accepted{idx}});
+    }
+    output = fsm.get_output();
+    BOOST_CHECK(output.committed.size() == 1);  // Entry was committed
+}
+
+BOOST_AUTO_TEST_CASE(test_log_replication_2) {
+    raft::fsm_output output;
+    raft::append_request areq;
+    raft::log_entry_ptr lep;
+    raft::term_t current_term;
+    raft::index_t idx;
+
+    failure_detector fd;
+    server_id id1{utils::UUID(0, 1)}, id2{utils::UUID(0, 2)}, id3{utils::UUID(0, 3)};
+    raft::configuration cfg({id1, id2, id3});
+    raft::log log{raft::snapshot{.config = cfg}};
+    raft::fsm fsm(id1, term_t{}, server_id{}, std::move(log), fd, fsm_cfg);
+
+    election_timeout(fsm);
+    output = fsm.get_output();
+    current_term = output.term;
+    fsm.step(id2, raft::vote_reply{output.term, true});
+    BOOST_CHECK(fsm.is_leader());
+    output = fsm.get_output();
+    output = fsm.get_output();
+    BOOST_CHECK(output.messages.size() == 2);
+    index_t dummy_idx{1};     // Nothing before it
+    for (auto& [id, msg] : output.messages) {
+        BOOST_REQUIRE_NO_THROW(areq = std::get<raft::append_request>(msg));
+        fsm.step(id, raft::append_reply{areq.current_term, dummy_idx, raft::append_reply::accepted{dummy_idx}});
+    }
+    output = fsm.get_output();
+    BOOST_CHECK(output.committed.size() == 1);  // Dummy was committed
+
+    // Add 1st data entry
+    raft::command cmd = create_command(1);
+    fsm.add_entry(std::move(cmd));
+    output = fsm.get_output();
+    BOOST_CHECK(output.log_entries.size() == 1); // Entry added to local log
+    output = fsm.get_output();
+    BOOST_CHECK(output.messages.size() == 2);
+    // ACK 1st entry
+    fsm.step(id2, raft::append_reply{current_term, index_t{2}, raft::append_reply::accepted{index_t{2}}});
+    output = fsm.get_output();
+    BOOST_CHECK(output.committed.size() == 1);  // Entry 1 was committed
+
+    // Now node 2 does election but fails, term stays 1
+    fsm.step(id2, raft::vote_request{current_term + term_t{1}, index_t{2}, current_term});
+    output = fsm.get_output();
+    output = fsm.get_output();
+
+    // Add 2nd data entry
+    cmd = create_command(2);
+    fsm.add_entry(std::move(cmd));
+    output = fsm.get_output();
+    BOOST_CHECK(output.log_entries.size() == 1); // Entry added to local log
+    output = fsm.get_output();
+    BOOST_CHECK(output.messages.size() == 2);
+    // ACK 2nd entry
+    index_t second_idx{3};
+    for (auto& [id, msg] : output.messages) {
+        BOOST_REQUIRE_NO_THROW(areq = std::get<raft::append_request>(msg));
+        BOOST_CHECK(areq.prev_log_idx == 2);
+        BOOST_CHECK(areq.prev_log_term == current_term);
+        BOOST_CHECK(areq.entries.size() == 1);
+        lep =  areq.entries.back();
+        BOOST_CHECK(lep->idx == second_idx);
+        BOOST_CHECK(lep->term == current_term);
+        // Reply
+        fsm.step(id, raft::append_reply{areq.current_term, second_idx, raft::append_reply::accepted{second_idx}});
+    }
+    output = fsm.get_output();
+    BOOST_CHECK(output.committed.size() == 1);  // Entry 2 was committed
+} 
+
