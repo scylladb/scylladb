@@ -227,6 +227,8 @@ future<> gossiping_property_file_snitch::reload_configuration() {
                     return local_snitch_ptr->reload_gossiper_state();
                 }).get();
 
+                _reconfigured();
+
                 if (service::get_storage_service().local_is_initialized()) {
                     service::storage_service::update_topology(utils::fb_utilities::get_broadcast_address()).get();
                 }

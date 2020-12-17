@@ -79,6 +79,13 @@ public:
         const sstring& fname = "",
         unsigned io_cpuid = 0);
 
+    virtual snitch_signal_connection_t when_reconfigured(snitch_signal_slot_t& slot) override {
+        return _reconfigured.connect([slot = std::move(slot)] () mutable {
+            // the signal is fired inside thread context
+            slot().get();
+        });
+    }
+
     /**
      * This function register a Gossiper subscriber to reconnect according to
      * the new "prefer_local" value, namely use either an internal or extenal IP
@@ -139,5 +146,6 @@ private:
     bool _file_reader_runs = false;
     unsigned _file_reader_cpu_id;
     shared_ptr<reconnectable_snitch_helper> _reconnectable_helper;
+    snitch_signal_t _reconfigured;
 };
 } // namespace locator

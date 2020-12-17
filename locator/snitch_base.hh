@@ -40,6 +40,8 @@
 
 #include <unordered_set>
 #include <vector>
+#include <boost/signals2.hpp>
+#include <boost/signals2/dummy_mutex.hpp>
 
 #include "gms/inet_address.hh"
 #include "gms/versioned_value.hh"
@@ -56,6 +58,10 @@ enum class application_state;
 }
 
 namespace locator {
+
+using snitch_signal_t = boost::signals2::signal_type<void (), boost::signals2::keywords::mutex_type<boost::signals2::dummy_mutex>>::type;
+using snitch_signal_slot_t = std::function<future<>()>;
+using snitch_signal_connection_t = boost::signals2::scoped_connection;
 
 struct snitch_ptr;
 
@@ -188,6 +194,11 @@ public:
     }
 
     virtual future<> gossip_snitch_info(std::list<std::pair<gms::application_state, gms::versioned_value>> info) = 0;
+
+    virtual snitch_signal_connection_t when_reconfigured(snitch_signal_slot_t& slot) {
+        // no updates by default
+        return snitch_signal_connection_t();
+    }
 
 protected:
     static logging::logger& logger() {
