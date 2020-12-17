@@ -89,7 +89,7 @@ void run_test(const sstring& name, schema_ptr s, MutationGenerator&& gen) {
         scheduling_latency_measurer slm;
         slm.start();
         auto d = duration_in_seconds([&] {
-            cache.update([] {}, *mt).get();
+            cache.update(row_cache::external_updater([] {}), *mt).get();
         });
 
         rd->set_max_buffer_size(1024*1024);
@@ -119,7 +119,7 @@ void run_test(const sstring& name, schema_ptr s, MutationGenerator&& gen) {
     scheduling_latency_measurer invalidate_slm;
     invalidate_slm.start();
     auto d = duration_in_seconds([&] {
-        cache.invalidate([] {}).get();
+        cache.invalidate(row_cache::external_updater([] {})).get();
     });
     invalidate_slm.stop();
 

@@ -103,9 +103,9 @@ struct table {
         flushed->apply(*prev_mt, tests::make_permit()).get();
         prev_mt->mark_flushed(flushed->as_data_source());
         testlog.trace("updating cache");
-        cache.update([&] {
+        cache.update(row_cache::external_updater([&] {
             underlying.apply(flushed);
-        }, *prev_mt).get();
+        }), *prev_mt).get();
         testlog.trace("flush done");
         prev_mt = {};
     }
