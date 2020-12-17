@@ -721,10 +721,27 @@ table::on_compaction_completion(sstables::compaction_completion_desc& desc) {
         rebuild_statistics();
     });
 
-    _cache.invalidate(row_cache::external_updater([this, &desc] () noexcept {
-        // FIXME: this is not really noexcept, but we need to provide strong exception guarantees.
-        _sstables = build_new_sstable_list(desc.new_sstables, desc.old_sstables);
-    }), std::move(desc.ranges_for_cache_invalidation)).get();
+    class sstable_list_updater : public row_cache::external_updater_impl {
+        table& _t;
+        const sstables::compaction_completion_desc& _desc;
+        lw_shared_ptr<sstables::sstable_set> _new_sstables;
+    public:
+        explicit sstable_list_updater(table& t, sstables::compaction_completion_desc& d) : _t(t), _desc(d) {}
+        virtual future<> prepare() override {
+            // TODO: futurize build_new_sstable_list().
+            _new_sstables = _t.build_new_sstable_list(_desc.new_sstables, _desc.old_sstables);
+            return make_ready_future<>();
+        }
+        virtual void execute() override {
+            _t._sstables = std::move(_new_sstables);
+        }
+        static std::unique_ptr<row_cache::external_updater_impl> make(table& t, sstables::compaction_completion_desc& d) {
+            return std::make_unique<sstable_list_updater>(t, d);
+        }
+    };
+    auto updater = row_cache::external_updater(sstable_list_updater::make(*this, desc));
+
+    _cache.invalidate(std::move(updater), std::move(desc.ranges_for_cache_invalidation)).get();
 
     // refresh underlying data source in row cache to prevent it from holding reference
     // to sstables files that are about to be deleted.
