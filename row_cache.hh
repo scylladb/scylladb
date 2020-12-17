@@ -298,7 +298,33 @@ public:
     // All invocations of external_updater on given cache instance are serialized internally.
     // Must have strong exception guarantees. If throws, the underlying mutation source
     // must be left in the state in which it was before the call.
-    using external_updater = seastar::noncopyable_function<void()>;
+    class external_updater_impl {
+    public:
+        virtual ~external_updater_impl() {}
+        virtual future<> prepare() { return make_ready_future<>(); }
+        // FIXME: make execute() noexcept, that will require every updater to make execution exception safe,
+        // also change function signature.
+        virtual void execute() = 0;
+    };
+
+    class external_updater {
+        class non_prepared : public external_updater_impl {
+            using Func = seastar::noncopyable_function<void()>;
+            Func _func;
+        public:
+            explicit non_prepared(Func func) : _func(std::move(func)) {}
+            virtual void execute() override {
+                _func();
+            }
+        };
+        std::unique_ptr<external_updater_impl> _impl;
+    public:
+        external_updater(seastar::noncopyable_function<void()> f) : _impl(std::make_unique<non_prepared>(std::move(f))) {}
+        external_updater(std::unique_ptr<external_updater_impl> impl) : _impl(std::move(impl)) {}
+
+        future<> prepare() { return _impl->prepare(); }
+        void execute() { _impl->execute(); }
+    };
 public:
     struct stats {
         utils::timed_rate_moving_average hits;

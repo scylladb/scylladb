@@ -1295,11 +1295,14 @@ std::ostream& operator<<(std::ostream& out, row_cache& rc) {
 }
 
 future<> row_cache::do_update(row_cache::external_updater eu, row_cache::internal_updater iu) noexcept {
+  // FIXME: indentation
+  return do_with(std::move(eu), std::move(iu), [this] (auto& eu, auto& iu) {
     return futurize_invoke([this] {
         return get_units(_update_sem, 1);
-    }).then([this, eu = std::move(eu), iu = std::move(iu)] (auto permit) mutable {
+    }).then([this, &eu, &iu] (auto permit) mutable {
+      return eu.prepare().then([this, &eu, &iu, permit = std::move(permit)] () mutable {
         auto pos = dht::ring_position::min();
-        eu();
+        eu.execute();
         [&] () noexcept {
             _prev_snapshot_pos = std::move(pos);
             _prev_snapshot = std::exchange(_underlying, _snapshot_source());
@@ -1314,7 +1317,9 @@ future<> row_cache::do_update(row_cache::external_updater eu, row_cache::interna
                 clogger.warn("Failure during cache update: {}", f.get_exception());
             }
         });
+      });
     });
+  });
 }
 
 std::ostream& operator<<(std::ostream& out, cache_entry& e) {

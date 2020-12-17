@@ -351,7 +351,7 @@ distributed_loader::make_sstables_available(sstables::sstable_directory& dir, sh
                 return make_ready_future<>();
             }
 
-            return table.get_row_cache().invalidate([&table] () noexcept {
+            return table.get_row_cache().invalidate(row_cache::external_updater([&table] () noexcept {
                 for (auto& sst : table._sstables_opened_but_not_loaded) {
                     try {
                         table.load_sstable(sst, true);
@@ -360,7 +360,7 @@ distributed_loader::make_sstables_available(sstables::sstable_directory& dir, sh
                         abort();
                     }
                 }
-            }, dht::partition_range::make({min, true}, {max, true}));
+            }), dht::partition_range::make({min, true}, {max, true}));
         }).then([&view_update_generator, &table] {
             return parallel_for_each(table._sstables_opened_but_not_loaded, [&view_update_generator, &table] (sstables::shared_sstable& sst) {
                 if (sst->requires_view_building()) {

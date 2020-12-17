@@ -179,7 +179,7 @@ int main(int argc, char** argv) {
 
             fragment_free_space();
 
-            cache.update([] {}, *mt).get();
+            cache.update(row_cache::external_updater([] {}), *mt).get();
 
             stuffing.clear();
             cache_stuffing.clear();
