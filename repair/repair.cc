@@ -1812,6 +1812,7 @@ future<> bootstrap_with_repair(seastar::sharded<database>& db, seastar::sharded<
             //Pending ranges
             metadata_clone.update_normal_tokens(tokens, myip).get();
             auto pending_range_addresses = strat.get_range_addresses(metadata_clone, utils::can_yield::yes);
+            metadata_clone.clear_gently().get();
 
             //Collects the source that will have its range moved to the new node
             std::unordered_map<dht::token_range, repair_neighbors> range_sources;
@@ -2110,6 +2111,7 @@ static future<> do_decommission_removenode_with_repair(seastar::sharded<database
                     }
                 }
             }
+            temp.clear_gently().get();
             if (reason == streaming::stream_reason::decommission) {
                 db.invoke_on_all([nr_ranges_skipped] (database&) {
                     _node_ops_metrics.decommission_finished_ranges += nr_ranges_skipped;

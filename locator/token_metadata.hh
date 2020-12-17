@@ -73,7 +73,7 @@ public:
     topology() {}
     topology(const topology& other);
 
-    void clear();
+    future<> clear_gently() noexcept;
 
     /**
      * Stores current DC/rack assignment for ep
@@ -285,6 +285,12 @@ public:
      * @return a future holding a new token metadata
      */
     future<token_metadata> clone_after_all_left() const noexcept;
+
+    /**
+     * Gently clear the token_metadata members.
+     * Yield if needed to prevent reactor stalls.
+     */
+    future<> clear_gently() noexcept;
 
     dht::token_range_vector get_primary_ranges_for(std::unordered_set<token> tokens) const;
 

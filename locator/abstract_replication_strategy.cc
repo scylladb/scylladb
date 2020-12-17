@@ -304,6 +304,9 @@ abstract_replication_strategy::get_pending_address_ranges(const token_metadata_p
     for (auto& x : get_address_ranges(temp, pending_address, can_yield)) {
             ret.push_back(x.second);
     }
+    if (can_yield) {
+        temp.clear_gently().get();
+    }
     return ret;
 }
 
