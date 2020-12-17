@@ -212,7 +212,7 @@ void simple_test() {
     for (unsigned i = 0; i < ring_points.size(); i++) {
         tmptr->update_normal_token(
             {dht::token::kind::key, d2t(ring_points[i].point / ring_points.size())},
-            ring_points[i].host);
+            ring_points[i].host).get();
     }
     stm.set(tmptr);
 
@@ -316,7 +316,7 @@ void heavy_origin_test() {
         }
     }
 
-    tmptr->update_normal_tokens(tokens);
+    tmptr->update_normal_tokens(tokens).get();
     stm.set(std::move(tmptr));
 
     auto ars_uptr = abstract_replication_strategy::create_replication_strategy(
@@ -614,7 +614,7 @@ SEASTAR_THREAD_TEST_CASE(testCalculateEndpoints) {
 
         for (auto& node : nodes) {
             for (size_t i = 0; i < VNODES; ++i) {
-                tmptr->update_normal_token(dht::token::get_random_token(), node);
+                tmptr->update_normal_token(dht::token::get_random_token(), node).get();
             }
         }
         stm.set(std::move(tmptr));

@@ -161,7 +161,7 @@ range_streamer::get_all_ranges_with_strict_sources_for(const sstring& keyspace_n
     auto range_addresses = strat.get_range_addresses(metadata_clone, utils::can_yield::yes);
 
     //Pending ranges
-    metadata_clone.update_normal_tokens(_tokens, _address);
+    metadata_clone.update_normal_tokens(_tokens, _address).get();
     auto pending_range_addresses  = strat.get_range_addresses(metadata_clone, utils::can_yield::yes);
 
     //Collects the source that will have its range moved to the new node

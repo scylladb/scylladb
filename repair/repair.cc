@@ -1810,7 +1810,7 @@ future<> bootstrap_with_repair(seastar::sharded<database>& db, seastar::sharded<
             auto range_addresses = strat.get_range_addresses(metadata_clone, utils::can_yield::yes);
 
             //Pending ranges
-            metadata_clone.update_normal_tokens(tokens, myip);
+            metadata_clone.update_normal_tokens(tokens, myip).get();
             auto pending_range_addresses = strat.get_range_addresses(metadata_clone, utils::can_yield::yes);
 
             //Collects the source that will have its range moved to the new node
@@ -2242,7 +2242,7 @@ future<> replace_with_repair(seastar::sharded<database>& db, seastar::sharded<ne
     // update a cloned version of tmptr
     // no need to set the original version
     auto cloned_tmptr = make_token_metadata_ptr(std::move(cloned_tm));
-    cloned_tmptr->update_normal_tokens(replacing_tokens, utils::fb_utilities::get_broadcast_address());
+    co_await cloned_tmptr->update_normal_tokens(replacing_tokens, utils::fb_utilities::get_broadcast_address());
     co_return co_await do_rebuild_replace_with_repair(db, ms, std::move(cloned_tmptr), std::move(op), std::move(source_dc), reason);
 }
 

@@ -30,6 +30,7 @@
 #include <algorithm>
 #include <boost/icl/interval.hpp>
 #include <boost/icl/interval_map.hpp>
+#include <seastar/core/coroutine.hh>
 
 namespace locator {
 
@@ -88,9 +89,11 @@ public:
     token_metadata_impl(const token_metadata_impl&) = default;
     token_metadata_impl(token_metadata_impl&&) noexcept = default;
     const std::vector<token>& sorted_tokens() const;
-    void update_normal_token(token token, inet_address endpoint);
-    void update_normal_tokens(std::unordered_set<token> tokens, inet_address endpoint);
-    void update_normal_tokens(const std::unordered_map<inet_address, std::unordered_set<token>>& endpoint_tokens);
+    future<> update_normal_token(token token, inet_address endpoint);
+    future<> update_normal_tokens(std::unordered_set<token> tokens, inet_address endpoint);
+    future<> update_normal_tokens(const std::unordered_map<inet_address, std::unordered_set<token>>& endpoint_tokens);
+    void update_normal_tokens_sync(std::unordered_set<token> tokens, inet_address endpoint);
+    void update_normal_tokens_sync(const std::unordered_map<inet_address, std::unordered_set<token>>& endpoint_tokens);
     const token& first_token(const token& start) const;
     size_t first_token_index(const token& start) const;
     std::optional<inet_address> get_endpoint(const token& token) const;
@@ -1036,17 +1039,74 @@ std::vector<token> token_metadata_impl::get_tokens(const inet_address& addr) con
 /**
  * Update token map with a single token/endpoint pair in normal state.
  */
-void token_metadata_impl::update_normal_token(token t, inet_address endpoint)
+future<> token_metadata_impl::update_normal_token(token t, inet_address endpoint)
 {
-    update_normal_tokens(std::unordered_set<token>({t}), endpoint);
+    return update_normal_tokens(std::unordered_set<token>({t}), endpoint);
 }
 
-void token_metadata_impl::update_normal_tokens(std::unordered_set<token> tokens, inet_address endpoint) {
+future<> token_metadata_impl::update_normal_tokens(std::unordered_set<token> tokens, inet_address endpoint) {
+    if (tokens.empty()) {
+        co_return;
+    }
+    std::unordered_map<inet_address, std::unordered_set<token>> endpoint_tokens ({{endpoint, std::move(tokens)}});
+    co_return co_await update_normal_tokens(endpoint_tokens);
+}
+
+void token_metadata_impl::update_normal_tokens_sync(std::unordered_set<token> tokens, inet_address endpoint) {
     if (tokens.empty()) {
         return;
     }
-    std::unordered_map<inet_address, std::unordered_set<token>> endpoint_tokens ({{endpoint, tokens}});
-    update_normal_tokens(endpoint_tokens);
+    std::unordered_map<inet_address, std::unordered_set<token>> endpoint_tokens ({{endpoint, std::move(tokens)}});
+    update_normal_tokens_sync(endpoint_tokens);
+}
+
+// Note: The sync version of this function `update_normal_tokens_sync`
+// must be kept in sync with this function if any change is made.
+future<> token_metadata_impl::update_normal_tokens(const std::unordered_map<inet_address, std::unordered_set<token>>& endpoint_tokens) {
+    if (endpoint_tokens.empty()) {
+        co_return;
+    }
+
+    bool should_sort_tokens = false;
+    for (auto&& i : endpoint_tokens) {
+        inet_address endpoint = i.first;
+        const auto& tokens = i.second;
+
+        if (tokens.empty()) {
+            auto msg = format("tokens is empty in update_normal_tokens");
+            tlogger.error("{}", msg);
+            throw std::runtime_error(msg);
+        }
+
+        for(auto it = _token_to_endpoint_map.begin(), ite = _token_to_endpoint_map.end(); it != ite;) {
+            co_await make_ready_future<>(); // maybe yield
+            if(it->second == endpoint) {
+                it = _token_to_endpoint_map.erase(it);
+            } else {
+                ++it;
+            }
+        }
+
+        _topology.add_endpoint(endpoint);
+        remove_by_value(_bootstrap_tokens, endpoint);
+        _leaving_endpoints.erase(endpoint);
+        invalidate_cached_rings();
+        for (const token& t : tokens)
+        {
+            co_await make_ready_future<>(); // maybe yield
+            auto prev = _token_to_endpoint_map.insert(std::pair<token, inet_address>(t, endpoint));
+            should_sort_tokens |= prev.second; // new token inserted -> sort
+            if (prev.first->second != endpoint) {
+                tlogger.debug("Token {} changing ownership from {} to {}", t, prev.first->second, endpoint);
+                prev.first->second = endpoint;
+            }
+        }
+    }
+
+    if (should_sort_tokens) {
+        sort_tokens();
+    }
+    co_return;
 }
 
 /**
@@ -1056,8 +1116,14 @@ void token_metadata_impl::update_normal_tokens(std::unordered_set<token> tokens,
  * is expensive (CASSANDRA-3831).
  *
  * @param endpointTokens
+ *
+ * Note: The futurized version of this function `update_normal_tokens`
+ * must be kept in sync with this function if any change is made.
+ *
+ * This version is meant to be deprecated when the whole interface
+ * will be futurized.
  */
-void token_metadata_impl::update_normal_tokens(const std::unordered_map<inet_address, std::unordered_set<token>>& endpoint_tokens) {
+void token_metadata_impl::update_normal_tokens_sync(const std::unordered_map<inet_address, std::unordered_set<token>>& endpoint_tokens) {
     if (endpoint_tokens.empty()) {
         return;
     }
@@ -1068,7 +1134,7 @@ void token_metadata_impl::update_normal_tokens(const std::unordered_map<inet_add
         const auto& tokens = i.second;
 
         if (tokens.empty()) {
-            auto msg = format("tokens is empty in update_normal_tokens");
+            auto msg = format("tokens is empty in update_normal_tokens_sync");
             tlogger.error("{}", msg);
             throw std::runtime_error(msg);
         }
@@ -1499,7 +1565,7 @@ void token_metadata_impl::calculate_pending_ranges_for_bootstrap(
     for (auto& x : tmp) {
         auto& endpoint = x.first;
         auto& tokens = x.second;
-        all_left_metadata->update_normal_tokens(tokens, endpoint);
+        all_left_metadata->update_normal_tokens(tokens, endpoint).get();
         for (auto& x : strategy.get_address_ranges(*all_left_metadata, endpoint, can_yield::yes)) {
             new_pending_ranges.emplace(x.second, endpoint);
         }
@@ -1674,19 +1740,29 @@ token_metadata::sorted_tokens() const {
     return _impl->sorted_tokens();
 }
 
-void
+future<>
 token_metadata::update_normal_token(token token, inet_address endpoint) {
-    _impl->update_normal_token(token, endpoint);
+    return _impl->update_normal_token(token, endpoint);
 }
 
-void
+future<>
 token_metadata::update_normal_tokens(std::unordered_set<token> tokens, inet_address endpoint) {
-    _impl->update_normal_tokens(std::move(tokens), endpoint);
+    return _impl->update_normal_tokens(std::move(tokens), endpoint);
+}
+
+future<>
+token_metadata::update_normal_tokens(const std::unordered_map<inet_address, std::unordered_set<token>>& endpoint_tokens) {
+    return _impl->update_normal_tokens(endpoint_tokens);
 }
 
 void
-token_metadata::update_normal_tokens(const std::unordered_map<inet_address, std::unordered_set<token>>& endpoint_tokens) {
-    _impl->update_normal_tokens(endpoint_tokens);
+token_metadata::update_normal_tokens_sync(std::unordered_set<token> tokens, inet_address endpoint) {
+    _impl->update_normal_tokens_sync(std::move(tokens), endpoint);
+}
+
+void
+token_metadata::update_normal_tokens_sync(const std::unordered_map<inet_address, std::unordered_set<token>>& endpoint_tokens) {
+    _impl->update_normal_tokens_sync(endpoint_tokens);
 }
 
 const token&

@@ -279,7 +279,7 @@ void storage_service::prepare_to_join(
         slogger.info("Replacing a node with {} IP address, my address={}, node being replaced={}",
             get_broadcast_address() == *replace_address ? "the same" : "a different",
             get_broadcast_address(), *replace_address);
-        tmptr->update_normal_tokens(_bootstrap_tokens, *replace_address);
+        tmptr->update_normal_tokens(_bootstrap_tokens, *replace_address).get();
     } else if (should_bootstrap()) {
         check_for_endpoint_collision(initial_contact_nodes, loaded_peer_features, do_bind).get();
     } else {
@@ -302,7 +302,7 @@ void storage_service::prepare_to_join(
         // This node must know about its chosen tokens before other nodes do
         // since they may start sending writes to this node after it gossips status = NORMAL.
         // Therefore we update _token_metadata now, before gossip starts.
-        tmptr->update_normal_tokens(my_tokens, get_broadcast_address());
+        tmptr->update_normal_tokens(my_tokens, get_broadcast_address()).get();
 
         _cdc_streams_ts = db::system_keyspace::get_saved_cdc_streams_timestamp().get0();
         if (!_cdc_streams_ts) {
@@ -543,8 +543,7 @@ void storage_service::join_token_ring(int delay) {
         // This node must know about its chosen tokens before other nodes do
         // since they may start sending writes to this node after it gossips status = NORMAL.
         // Therefore, in case we haven't updated _token_metadata with our tokens yet, do it now.
-        tmptr->update_normal_tokens(_bootstrap_tokens, get_broadcast_address());
-        return make_ready_future<>();
+        return tmptr->update_normal_tokens(_bootstrap_tokens, get_broadcast_address());
     }).get();
 
     if (!db::system_keyspace::bootstrap_complete()) {
@@ -1194,7 +1193,7 @@ void storage_service::handle_state_normal(inet_address endpoint) {
     // Update pending ranges after update of normal tokens immediately to avoid
     // a race where natural endpoint was updated to contain node A, but A was
     // not yet removed from pending endpoints
-    tmptr->update_normal_tokens(owned_tokens, endpoint);
+    tmptr->update_normal_tokens(owned_tokens, endpoint).get();
     update_pending_ranges(tmptr, format("handle_state_normal {}", endpoint)).get();
     replicate_to_all_cores(std::move(tmptr)).get();
     tmlock.reset();
@@ -1247,7 +1246,7 @@ void storage_service::handle_state_leaving(inet_address endpoint) {
         slogger.info("Node {} state jump to leaving", endpoint);
 
         handle_cdc_generation(cdc_streams_ts);
-        tmptr->update_normal_tokens(tokens, endpoint);
+        tmptr->update_normal_tokens(tokens, endpoint).get();
     } else {
         auto tokens_ = tmptr->get_tokens(endpoint);
         std::set<token> tmp(tokens.begin(), tokens.end());
@@ -1256,7 +1255,7 @@ void storage_service::handle_state_leaving(inet_address endpoint) {
             slogger.debug("tokens_={}, tokens={}", tokens_, tmp);
 
             handle_cdc_generation(cdc_streams_ts);
-            tmptr->update_normal_tokens(tokens, endpoint);
+            tmptr->update_normal_tokens(tokens, endpoint).get();
         }
     }
 
@@ -1659,7 +1658,7 @@ future<> storage_service::init_server(bind_messaging_port do_bind) {
                     // entry has been mistakenly added, delete it
                     db::system_keyspace::remove_endpoint(ep).get();
                 } else {
-                    tmptr->update_normal_tokens(tokens, ep);
+                    tmptr->update_normal_tokens(tokens, ep).get();
                     if (loaded_host_ids.contains(ep)) {
                         tmptr->update_host_id(loaded_host_ids.at(ep), ep);
                     }

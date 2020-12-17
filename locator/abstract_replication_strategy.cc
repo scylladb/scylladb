@@ -23,6 +23,7 @@
 #include "utils/class_registrator.hh"
 #include "exceptions/exceptions.hh"
 #include <boost/range/algorithm/remove_if.hpp>
+#include <seastar/core/coroutine.hh>
 
 namespace locator {
 
@@ -295,10 +296,11 @@ abstract_replication_strategy::get_pending_address_ranges(const token_metadata_p
     token_metadata temp;
     if (can_yield) {
         temp = tmptr->clone_only_token_map().get0();
+        temp.update_normal_tokens(pending_tokens, pending_address).get();
     } else {
         temp = tmptr->clone_only_token_map_sync();
+        temp.update_normal_tokens_sync(pending_tokens, pending_address);
     }
-    temp.update_normal_tokens(pending_tokens, pending_address);
     for (auto& x : get_address_ranges(temp, pending_address, can_yield)) {
             ret.push_back(x.second);
     }

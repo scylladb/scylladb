@@ -180,9 +180,11 @@ public:
     token_metadata& operator=(token_metadata&&) noexcept;
     ~token_metadata();
     const std::vector<token>& sorted_tokens() const;
-    void update_normal_token(token token, inet_address endpoint);
-    void update_normal_tokens(std::unordered_set<token> tokens, inet_address endpoint);
-    void update_normal_tokens(const std::unordered_map<inet_address, std::unordered_set<token>>& endpoint_tokens);
+    future<> update_normal_token(token token, inet_address endpoint);
+    future<> update_normal_tokens(std::unordered_set<token> tokens, inet_address endpoint);
+    future<> update_normal_tokens(const std::unordered_map<inet_address, std::unordered_set<token>>& endpoint_tokens);
+    void update_normal_tokens_sync(std::unordered_set<token> tokens, inet_address endpoint);
+    void update_normal_tokens_sync(const std::unordered_map<inet_address, std::unordered_set<token>>& endpoint_tokens);
     const token& first_token(const token& start) const;
     size_t first_token_index(const token& start) const;
     std::optional<inet_address> get_endpoint(const token& token) const;
