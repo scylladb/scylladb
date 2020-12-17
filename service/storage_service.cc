@@ -111,12 +111,18 @@ storage_service::storage_service(abort_source& abort_source, distributed<databas
         , _shared_token_metadata(stm)
         , _sys_dist_ks(sys_dist_ks)
         , _view_update_generator(view_update_generator)
+        , _snitch_reconfigure([this] { return snitch_reconfigured(); })
         , _schema_version_publisher([this] { return publish_schema_version(); }) {
     register_metrics();
     sstable_read_error.connect([this] { do_isolate_on_error(disk_error::regular); });
     sstable_write_error.connect([this] { do_isolate_on_error(disk_error::regular); });
     general_disk_error.connect([this] { do_isolate_on_error(disk_error::regular); });
     commit_error.connect([this] { do_isolate_on_error(disk_error::commit); });
+
+    auto& snitch = locator::i_endpoint_snitch::snitch_instance();
+    if (snitch.local_is_initialized()) {
+        _listeners.emplace_back(make_lw_shared(snitch.local()->when_reconfigured(_snitch_reconfigure)));
+    }
 }
 
 void storage_service::enable_all_features() {
@@ -240,6 +246,10 @@ void storage_service::install_schema_version_change_listener() {
 
 future<> storage_service::publish_schema_version() {
     return get_local_migration_manager().passive_announce(_db.local().get_version());
+}
+
+future<> storage_service::snitch_reconfigured() {
+    return update_topology(utils::fb_utilities::get_broadcast_address());
 }
 
 // Runs inside seastar::async context

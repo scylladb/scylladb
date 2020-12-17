@@ -40,6 +40,7 @@
 #include "gms/versioned_value.hh"
 #include "message/msg_addr.hh"
 #include "message/messaging_service.hh"
+#include "gms/gossiper.hh"
 
 namespace locator {
 future<bool> gossiping_property_file_snitch::property_file_was_modified() {
@@ -228,10 +229,6 @@ future<> gossiping_property_file_snitch::reload_configuration() {
                 }).get();
 
                 _reconfigured();
-
-                if (service::get_storage_service().local_is_initialized()) {
-                    service::storage_service::update_topology(utils::fb_utilities::get_broadcast_address()).get();
-                }
 
                 // spread the word...
                 smp::submit_to(0, [] {
