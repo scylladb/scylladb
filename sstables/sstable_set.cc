@@ -772,8 +772,15 @@ time_series_sstable_set::create_single_key_sstable_reader(
         return make_empty_flat_reader(std::move(schema), std::move(permit));
     }
 
+    auto& stats = *cf->cf_stats();
+    stats.clustering_filter_count++;
+
     auto ck_filter = [ranges = slice.get_all_ranges()] (const sstable& sst) { return sst.may_contain_rows(ranges); };
-    it = std::find_if(it, _sstables->end(), [&] (const sst_entry& e) { return ck_filter(*e.second); });
+    {
+        auto next = std::find_if(it, _sstables->end(), [&] (const sst_entry& e) { return ck_filter(*e.second); });
+        stats.sstables_checked_by_clustering_filter += std::distance(it, next);
+        it = next;
+    }
     if (it == _sstables->end()) {
         // Some sstables passed the partition key filter, but none passed the clustering key filter.
         // However, we still have to emit a partition (even though it will be empty) so we don't fool the cache
@@ -781,11 +788,26 @@ time_series_sstable_set::create_single_key_sstable_reader(
         return flat_mutation_reader_from_mutations(std::move(permit), {mutation(schema, *pos.key())}, slice, fwd_sm);
     }
 
-    auto filter = [pk_filter = std::move(pk_filter), ck_filter = std::move(ck_filter)]
-        (const sstable& sst) { return pk_filter(sst) && ck_filter(sst); };
-
     auto create_reader = [schema, permit, &pos, &slice, &pc, trace_state, fwd_sm] (sstable& sst) {
         return sst.read_row_flat(schema, permit, pos, slice, pc, trace_state, fwd_sm);
+    };
+
+    // We're going to pass this filter into min_position_reader_queue. The queue guarantees that
+    // the filter is going to be called at most once for each sstable and exactly once after
+    // the queue is exhausted. We use that fact to gather statistics.
+    auto filter = [pk_filter = std::move(pk_filter), ck_filter = std::move(ck_filter), &stats]
+        (const sstable& sst) {
+            if (pk_filter(sst)) {
+                return true;
+            }
+
+            ++stats.sstables_checked_by_clustering_filter;
+            if (ck_filter(sst)) {
+                ++stats.surviving_sstables_after_clustering_filter;
+                return true;
+            }
+
+            return false;
     };
 
     return make_clustering_combined_reader(
