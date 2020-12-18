@@ -23,6 +23,7 @@
 #include <seastar/core/future-util.hh>
 #include <seastar/core/align.hh>
 #include <seastar/core/aligned_buffer.hh>
+#include <seastar/core/reactor.hh>
 #include "sstables/sstables.hh"
 #include "sstables/key.hh"
 #include "sstables/compress.hh"
@@ -6743,4 +6744,105 @@ SEASTAR_TEST_CASE(stcs_reshape_test) {
         BOOST_REQUIRE(cs.get_reshaping_job(sstables, s, default_priority_class(), reshape_mode::strict).sstables.size());
         BOOST_REQUIRE(cs.get_reshaping_job(sstables, s, default_priority_class(), reshape_mode::relaxed).sstables.size());
     });
+}
+
+// TODO: move it to test/lib
+template<typename Func>
+future<> assert_no_stall_longer_than(std::chrono::duration<double> duration, Func&& func) {
+    return seastar::async([duration, func = std::forward<Func>(func)] {
+        std::atomic<unsigned> stall_reports{0};
+        auto defer = [old_threshold = engine().get_blocked_reactor_notify_ms(),
+                    old_report = engine().get_stall_detector_report_function()] {
+            engine().update_blocked_reactor_notify_ms(old_threshold);
+            engine().set_stall_detector_report_function(std::move(old_report));
+        };
+        engine().update_blocked_reactor_notify_ms(std::chrono::duration_cast<std::chrono::milliseconds>(duration));
+        engine().set_stall_detector_report_function([&] { ++stall_reports; });
+        futurize_invoke(func).get();
+        testlog.info("{}: stalls detected: {}", __FUNCTION__, stall_reports);
+        BOOST_REQUIRE(stall_reports == 0);
+    });
+}
+
+SEASTAR_TEST_CASE(no_stall_in_rebuild_sstable_list) {
+  return test_env::do_with_async([] (test_env& env) {
+    using namespace std::chrono;
+    using namespace std::chrono_literals;
+
+    auto stress_rebuild = [&env] (int nr_sstables) mutable {
+        simple_schema ss;
+        auto s = ss.schema();
+        auto cm = make_lw_shared<compaction_manager>();
+        column_family::config cfg;
+        auto cl_stats = make_lw_shared<cell_locker_stats>();
+        auto tracker = make_lw_shared<cache_tracker>();
+        auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), *cm, *cl_stats, *tracker);
+        cf->set_compaction_strategy(sstables::compaction_strategy_type::leveled);
+
+        constexpr auto ssts_in_level_0 = 10;
+        auto idx_to_level = [] (auto i) {
+            if (i < ssts_in_level_0) {
+                return unsigned(0);
+            }
+            return unsigned(std::max(0.0, log10(i - ssts_in_level_0)) + 1.0f);
+        };
+        auto level_to_size = [] (unsigned level) {
+            if (level == 0) {
+                return unsigned(ssts_in_level_0);
+            }
+            return unsigned(pow(10, level));
+        };
+
+        auto kt_pair = token_generation_for_current_shard(nr_sstables);
+        auto min_max_keys = [&kt_pair, &level_to_size] (auto level, auto pos_in_level) -> std::pair<sstring, sstring> {
+            auto last_key_idx = kt_pair.size() - 1;
+            if (level == 0) {
+                return { kt_pair[0].first, kt_pair[last_key_idx].first };
+            }
+            auto total_ranges = kt_pair.size();
+            auto level_size_in_ssts = level_to_size(level);
+            unsigned ranges_per_sst = std::max(1U, unsigned(floor(float(total_ranges) / level_size_in_ssts)));
+            sstring min_key = kt_pair.at(pos_in_level).first;
+            sstring max_key = kt_pair.at(std::min(pos_in_level + ranges_per_sst - 1, unsigned(last_key_idx))).first;
+            return {min_key, max_key};
+        };
+
+        std::vector<shared_sstable> input, output;
+        input.reserve(nr_sstables);
+        output.reserve(nr_sstables);
+
+        std::array<unsigned, 9> pos_in_levels{0};
+        pos_in_levels.fill(0);
+        for (auto i = 0; i < nr_sstables; i++) {
+            auto level = idx_to_level(i);
+            auto [min, max] = min_max_keys(level, pos_in_levels[level]++);
+            auto sst = sstable_for_overlapping_test(env, s, i, min, max, uint32_t(level));
+            column_family_test(cf).add_sstable(sst);
+            input.push_back(sst);
+            seastar::thread::maybe_yield();
+        }
+        testlog.info("{}: {} ssts -> {}", __FUNCTION__, nr_sstables, pos_in_levels);
+
+        unsigned pos_in_output_level{0};
+        unsigned output_level = idx_to_level(nr_sstables);
+        for (auto i = 0; i < nr_sstables; i++) {
+            auto [min, max] = min_max_keys(output_level, pos_in_output_level++);
+            auto sst = sstable_for_overlapping_test(env, s, i, min, max, uint32_t(output_level));
+            output.push_back(sst);
+            seastar::thread::maybe_yield();
+        }
+
+        auto t1 = high_resolution_clock::now();
+        assert_no_stall_longer_than(50ms, [&] {
+            column_family_test(cf).rebuild_sstable_list(output, input);
+        }).get();
+        auto t2 = high_resolution_clock::now();
+
+        testlog.info("{}: it took {}ms to complete", __FUNCTION__,
+                     std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count());
+    };
+    stress_rebuild(100);
+    stress_rebuild(1000);
+    stress_rebuild(2000);
+  });
 }
