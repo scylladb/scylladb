@@ -12,6 +12,7 @@ usr/bin/scyllatop
 usr/sbin/scylla*
 usr/sbin/node_exporter_install
 usr/sbin/node_health_check
+usr/sbin/seastar-cpu-map.sh
 opt/scylladb/scripts/*
 opt/scylladb/swagger-ui/dist/*
 opt/scylladb/api/api-doc/*
