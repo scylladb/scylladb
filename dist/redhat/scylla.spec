@@ -111,6 +111,7 @@ rm -rf $RPM_BUILD_ROOT
 %{_sbindir}/scylla*
 %{_sbindir}/node_exporter_install
 %{_sbindir}/node_health_check
+%{_sbindir}/seastar-cpu-map.sh
 /opt/scylladb/scripts/*
 /opt/scylladb/swagger-ui/dist/*
 /opt/scylladb/api/api-doc/*
