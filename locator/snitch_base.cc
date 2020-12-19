@@ -148,6 +148,8 @@ bool snitch_base::has_remote_node(std::vector<inet_address>& l) {
 
 future<> snitch_base::gossip_snitch_info(std::list<std::pair<gms::application_state, gms::versioned_value>> info) {
     auto& gossiper = gms::get_local_gossiper();
+    info.emplace_back(gms::application_state::DC, gms::versioned_value::datacenter(_my_dc));
+    info.emplace_back(gms::application_state::RACK, gms::versioned_value::rack(_my_rack));
     return gossiper.add_local_application_state(std::move(info));
 }
 

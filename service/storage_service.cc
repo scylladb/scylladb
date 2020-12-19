@@ -372,9 +372,6 @@ void storage_service::prepare_to_join(
 
     install_schema_version_change_listener();
 
-    // gossip snitch infos (local DC and rack)
-    gossip_snitch_info().get();
-
     // gossip local partitioner information (shard count and ignore_msb_bits)
     gossip_sharder().get();
 
