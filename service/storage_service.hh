@@ -253,7 +253,6 @@ public:
         return _mnotifier.local();
     }
 
-    future<> gossip_snitch_info();
     future<> gossip_sharder();
 
     distributed<database>& db() {

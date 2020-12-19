@@ -1727,17 +1727,6 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
     });
 }
 
-future<> storage_service::gossip_snitch_info() {
-    auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
-    auto addr = get_broadcast_address();
-    auto dc = snitch->get_datacenter(addr);
-    auto rack = snitch->get_rack(addr);
-    return _gossiper.add_local_application_state({
-        { gms::application_state::DC, versioned_value::datacenter(dc) },
-        { gms::application_state::RACK, versioned_value::rack(rack) },
-    });
-}
-
 future<> storage_service::gossip_sharder() {
     return _gossiper.add_local_application_state({
         { gms::application_state::SHARD_COUNT, versioned_value::shard_count(smp::count) },
