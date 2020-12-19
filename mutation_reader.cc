@@ -2565,6 +2565,11 @@ public:
             _all_readers.push_front(std::move(r));
             _unpeeked_readers.push_back(_all_readers.begin());
         }
+
+        if (rs.empty()) {
+            // No readers, no partition.
+            _should_emit_partition_end = false;
+        }
     }
 
     // We assume that operator() is called sequentially and that the caller doesn't use the batch

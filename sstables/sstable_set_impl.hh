@@ -42,6 +42,18 @@ public:
     virtual void insert(shared_sstable sst) = 0;
     virtual void erase(shared_sstable sst) = 0;
     virtual std::unique_ptr<incremental_selector_impl> make_incremental_selector() const = 0;
+
+    virtual flat_mutation_reader create_single_key_sstable_reader(
+        column_family*,
+        schema_ptr,
+        reader_permit,
+        utils::estimated_histogram&,
+        const dht::ring_position&,
+        const query::partition_slice&,
+        const io_priority_class&,
+        tracing::trace_state_ptr,
+        streamed_mutation::forwarding,
+        mutation_reader::forwarding) const;
 };
 
 // default sstable_set, not specialized for anything
@@ -93,6 +105,42 @@ public:
     virtual void erase(shared_sstable sst) override;
     virtual std::unique_ptr<incremental_selector_impl> make_incremental_selector() const override;
     class incremental_selector;
+};
+
+class time_series_sstable_set : public sstable_set_impl {
+public:
+    // s.min_position() -> s
+    using container_t = std::multimap<position_in_partition, shared_sstable, position_in_partition::less_compare>;
+
+private:
+    schema_ptr _schema;
+    lw_shared_ptr<container_t> _sstables;
+
+public:
+    time_series_sstable_set(schema_ptr schema);
+    time_series_sstable_set(const time_series_sstable_set& s);
+
+    virtual std::unique_ptr<sstable_set_impl> clone() const override;
+    virtual std::vector<shared_sstable> select(const dht::partition_range& range = query::full_partition_range) const override;
+    virtual void insert(shared_sstable sst) override;
+    virtual void erase(shared_sstable sst) override;
+    virtual std::unique_ptr<incremental_selector_impl> make_incremental_selector() const override;
+
+    std::unique_ptr<position_reader_queue> make_min_position_reader_queue(
+        std::function<flat_mutation_reader(sstable&)> create_reader,
+        std::function<bool(const sstable&)> filter) const;
+
+    virtual flat_mutation_reader create_single_key_sstable_reader(
+        column_family*,
+        schema_ptr,
+        reader_permit,
+        utils::estimated_histogram&,
+        const dht::ring_position&,
+        const query::partition_slice&,
+        const io_priority_class&,
+        tracing::trace_state_ptr,
+        streamed_mutation::forwarding,
+        mutation_reader::forwarding) const override;
 };
 
 } // namespace sstables
