@@ -130,8 +130,9 @@ future<> ec2_multi_region_snitch::gossiper_starting() {
     using namespace gms;
     auto& g = get_local_gossiper();
 
-    return g.add_local_application_state(application_state::INTERNAL_IP,
-        versioned_value::internal_ip(_local_private_address)).then([this] {
+    return gossip_snitch_info({
+        { application_state::INTERNAL_IP, versioned_value::internal_ip(_local_private_address) }
+    }).then([this] {
         if (!_gossip_started) {
             gms::get_local_gossiper().register_(::make_shared<reconnectable_snitch_helper>(_my_dc));
             _gossip_started = true;

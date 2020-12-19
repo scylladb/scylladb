@@ -143,8 +143,9 @@ future<> gossiping_property_file_snitch::gossiper_starting() {
 
     ostrm<<local_internal_addr<<std::flush;
 
-    return g.add_local_application_state(application_state::INTERNAL_IP,
-        versioned_value::internal_ip(ostrm.str())).then([this] {
+    return gossip_snitch_info({
+        { application_state::INTERNAL_IP, versioned_value::internal_ip(ostrm.str()) },
+    }).then([this] {
         _gossip_started = true;
         return reload_gossiper_state();
     });

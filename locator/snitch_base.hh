@@ -42,6 +42,7 @@
 #include <vector>
 
 #include "gms/inet_address.hh"
+#include "gms/versioned_value.hh"
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/thread.hh>
 #include <seastar/core/distributed.hh>
@@ -111,7 +112,7 @@ public:
      */
     virtual future<> gossiper_starting() {
         _gossip_started = true;
-        return make_ready_future<>();
+        return gossip_snitch_info({});
     }
 
     /**
@@ -185,6 +186,8 @@ public:
         // noop by default
         return make_ready_future<>();
     }
+
+    virtual future<> gossip_snitch_info(std::list<std::pair<gms::application_state, gms::versioned_value>> info) = 0;
 
 protected:
     static logging::logger& logger() {
@@ -426,6 +429,8 @@ public:
         std::vector<inet_address>& merged,
         std::vector<inet_address>& l1,
         std::vector<inet_address>& l2) override;
+
+    virtual future<> gossip_snitch_info(std::list<std::pair<gms::application_state, gms::versioned_value>> info) override;
 
 private:
     bool has_remote_node(std::vector<inet_address>& l);
