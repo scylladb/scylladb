@@ -520,6 +520,11 @@ public:
         v._current_fragment = v._current_fragment.substr(0, len);
         return v;
     }
+    const value_type& operator[](size_t index) const {
+        auto v = *this;
+        v.remove_prefix(index);
+        return v.current_fragment().front();
+    }
 };
 static_assert(FragmentedView<managed_bytes_view>);
 static_assert(FragmentedMutableView<managed_bytes_mutable_view>);
