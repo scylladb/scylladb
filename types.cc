@@ -2250,12 +2250,30 @@ int32_t abstract_type::compare(bytes_view v1, bytes_view v2) const {
     }
 }
 
+int32_t abstract_type::compare(managed_bytes_view v1, managed_bytes_view v2) const {
+    // FIXME: don't linearize
+    return with_linearized(v1, [&] (bytes_view v1) {
+        return with_linearized(v2, [&] (bytes_view v2) {
+            return compare(v1, v2);
+        });
+    });
+}
+
 bool abstract_type::equal(bytes_view v1, bytes_view v2) const {
     return ::visit(*this, [&](const auto& t) {
         if (is_byte_order_equal_visitor{}(t)) {
             return compare_unsigned(v1, v2) == 0;
         }
         return compare_visitor{v1, v2}(t) == 0;
+    });
+}
+
+bool abstract_type::equal(managed_bytes_view v1, managed_bytes_view v2) const {
+    // FIXME: don't linearize
+    return with_linearized(v1, [&] (bytes_view v1) {
+        return with_linearized(v2, [&] (bytes_view v2) {
+            return equal(v1, v2);
+        });
     });
 }
 
@@ -2353,6 +2371,14 @@ size_t abstract_type::hash(bytes_view v) const {
     };
     return visit(*this, visitor{v});
 }
+
+size_t abstract_type::hash(managed_bytes_view v) const {
+    // FIXME: hash without linearization
+    return with_linearized(v, [&] (bytes_view v) {
+        return hash(v);
+    });
+}
+
 
 static size_t concrete_serialized_size(const byte_type_impl::native_type&) { return sizeof(int8_t); }
 static size_t concrete_serialized_size(const short_type_impl::native_type&) { return sizeof(int16_t); }
