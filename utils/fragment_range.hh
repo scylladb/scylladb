@@ -227,3 +227,16 @@ decltype(auto) with_simplified(const View& v, Function&& fn)
         return fn(v);
     }
 }
+
+template<FragmentedView V1, FragmentedView V2>
+int compare_unsigned(V1 v1, V2 v2) {
+    while (!v1.empty() && !v2.empty()) {
+        size_t n = std::min(v1.current_fragment().size(), v2.current_fragment().size());
+        if (int d = memcmp(v1.current_fragment().data(), v2.current_fragment().data(), n)) {
+            return d;
+        }
+        v1.remove_prefix(n);
+        v2.remove_prefix(n);
+    }
+    return v1.size_bytes() - v2.size_bytes();
+}
