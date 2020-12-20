@@ -135,7 +135,7 @@ struct clustering_block {
     constexpr static size_t max_block_size = 32;
     uint64_t header = 0;
     struct described_value {
-        bytes_view value;
+        managed_bytes_view value;
         std::reference_wrapper<const abstract_type> type;
     };
     boost::container::static_vector<described_value, clustering_block::max_block_size> values;
@@ -173,7 +173,7 @@ public:
         while (_offset < limit) {
             auto shift = _offset % clustering_block::max_block_size;
             if (_offset < _prefix.size(_schema)) {
-                bytes_view value = _prefix.get_component(_schema, _offset);
+                managed_bytes_view value = _prefix.get_component(_schema, _offset);
                 if (value.empty()) {
                     _current_block.header |= (uint64_t(1) << (shift * 2));
                 } else {
@@ -214,8 +214,8 @@ template <typename W>
 requires Writer<W>
 static void write(sstable_version_types v, W& out, const clustering_block& block) {
     write_vint(out, block.header);
-    for (const auto& [value, type]: block.values) {
-        write_cell_value(v, out, type, value);
+    for (const auto& block_value: block.values) {
+        write_cell_value(v, out, block_value.type, block_value.value);
     }
 }
 

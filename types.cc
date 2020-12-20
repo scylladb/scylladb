@@ -1624,6 +1624,7 @@ void abstract_type::validate(const View& view, cql_serialization_format sf) cons
 // Explicit instantiation.
 template void abstract_type::validate<>(const single_fragmented_view&, cql_serialization_format) const;
 template void abstract_type::validate<>(const fragmented_temporary_buffer::view&, cql_serialization_format) const;
+template void abstract_type::validate<>(const managed_bytes_view&, cql_serialization_format) const;
 
 void abstract_type::validate(bytes_view v, cql_serialization_format sf) const {
     visit(*this, validate_visitor<single_fragmented_view>{single_fragmented_view(v), sf});
@@ -1867,6 +1868,7 @@ data_value collection_type_impl::deserialize_impl(View v, cql_serialization_form
 template data_value collection_type_impl::deserialize_impl<>(ser::buffer_view<bytes_ostream::fragment_iterator>, cql_serialization_format) const;
 template data_value collection_type_impl::deserialize_impl<>(fragmented_temporary_buffer::view, cql_serialization_format) const;
 template data_value collection_type_impl::deserialize_impl<>(single_fragmented_view, cql_serialization_format) const;
+template data_value collection_type_impl::deserialize_impl<>(managed_bytes_view, cql_serialization_format) const;
 
 template <FragmentedView View>
 data_value deserialize_aux(const tuple_type_impl& t, View v) {
@@ -2061,6 +2063,7 @@ data_value abstract_type::deserialize_impl(View v) const {
 template data_value abstract_type::deserialize_impl<>(fragmented_temporary_buffer::view) const;
 template data_value abstract_type::deserialize_impl<>(single_fragmented_view) const;
 template data_value abstract_type::deserialize_impl<>(ser::buffer_view<bytes_ostream::fragment_iterator>) const;
+template data_value abstract_type::deserialize_impl<>(managed_bytes_view) const;
 
 int32_t compare_aux(const tuple_type_impl& t, bytes_view v1, bytes_view v2) {
     // This is a slight modification of lexicographical_tri_compare:
