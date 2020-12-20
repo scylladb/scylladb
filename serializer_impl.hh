@@ -499,9 +499,11 @@ public:
 
     [[gnu::always_inline]]
     operator managed_bytes() && {
-        managed_bytes v(managed_bytes::initialized_later(), _stream.size());
-        _stream.read(reinterpret_cast<char*>(v.begin()), _stream.size());
-        return v;
+        managed_bytes mb(managed_bytes::initialized_later(), _stream.size());
+        for (managed_bytes_mutable_view v = mb; !v.empty(); v.remove_current()) {
+            _stream.read(reinterpret_cast<char*>(v.current_fragment().data()), v.current_fragment().size());
+        }
+        return mb;
     }
 
     [[gnu::always_inline]]
@@ -529,8 +531,11 @@ struct serializer<bytes> {
         write(out, static_cast<bytes_view>(v));
     }
     template<typename Output>
-    static void write(Output& out, const managed_bytes& v) {
-        write(out, static_cast<bytes_view>(v));
+    static void write(Output& out, const managed_bytes& mb) {
+        safe_serialize_as_uint32(out, uint32_t(mb.size()));
+        for (managed_bytes_view v = mb; !v.empty(); v.remove_current()) {
+            out.write(reinterpret_cast<const char*>(v.current_fragment().data()), v.current_fragment().size());
+        }
     }
     template<typename Output>
     static void write(Output& out, const bytes_ostream& v) {
