@@ -177,7 +177,7 @@ future<bool> paxos_state::accept(tracing::trace_state_ptr tr_state, schema_ptr s
 future<> paxos_state::learn(schema_ptr schema, proposal decision, clock_type::time_point timeout,
         tracing::trace_state_ptr tr_state) {
     if (utils::get_local_injector().enter("paxos_error_before_learn")) {
-        return make_exception_future<>(utils::injected_error("injected_error_before_save_promise"));
+        return make_exception_future<>(utils::injected_error("injected_error_before_learn"));
     }
 
     utils::latency_counter lc;
