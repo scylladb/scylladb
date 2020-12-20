@@ -26,10 +26,16 @@
 #include <memory>
 #include "bytes.hh"
 #include "utils/allocation_strategy.hh"
+#include "utils/fragment_range.hh"
 #include <seastar/core/unaligned.hh>
 #include <seastar/util/alloc_failure_injector.hh>
 #include <unordered_map>
 #include <type_traits>
+
+template <mutable_view is_mutable_view>
+class managed_bytes_basic_view;
+using managed_bytes_view = managed_bytes_basic_view<mutable_view::no>;
+using managed_bytes_mutable_view = managed_bytes_basic_view<mutable_view::yes>;
 
 struct blob_storage {
     struct [[gnu::packed]] ref_type {
@@ -172,6 +178,8 @@ public:
         : managed_bytes(bytes_view(ptr, size)) {}
 
     explicit managed_bytes(const bytes& b) : managed_bytes(static_cast<bytes_view>(b)) {}
+
+    explicit managed_bytes(managed_bytes_view v);
 
     managed_bytes(initialized_later, size_type size) {
         memory::on_alloc_point();
@@ -435,6 +443,9 @@ public:
 
     template <std::invocable<> Func>
     friend std::result_of_t<Func()> with_linearized_managed_bytes(Func&& func);
+
+    template <mutable_view is_mutable_view>
+    friend class managed_bytes_basic_view;
 };
 
 // Run func() while ensuring that reads of managed_bytes objects are
@@ -447,20 +458,124 @@ with_linearized_managed_bytes(Func&& func) {
     return func();
 }
 
-namespace std {
-
-template <>
-struct hash<managed_bytes> {
-    size_t operator()(const managed_bytes& v) const {
-        return hash<bytes_view>()(v);
-    }
-};
-
-}
-
 // blob_storage is a variable-size type
 inline
 size_t
 size_for_allocation_strategy(const blob_storage& bs) {
     return sizeof(bs) + bs.frag_size;
+}
+
+template <mutable_view is_mutable>
+class managed_bytes_basic_view {
+public:
+    using fragment_type = std::conditional_t<is_mutable == mutable_view::yes, bytes_mutable_view, bytes_view>;
+    using owning_type = std::conditional_t<is_mutable == mutable_view::yes, managed_bytes, const managed_bytes>;
+    using value_type = typename fragment_type::value_type;
+private:
+    fragment_type _current_fragment = {};
+    blob_storage* _next_fragments = nullptr;
+    size_t _size = 0;
+public:
+    managed_bytes_basic_view() = default;
+    managed_bytes_basic_view(owning_type& mb) {
+        if (mb._u.small.size != -1) {
+            _current_fragment = fragment_type(mb._u.small.data, mb._u.small.size);
+            _size = mb._u.small.size;
+        } else {
+            auto p = mb._u.ptr;
+            _current_fragment = fragment_type(p->data, p->frag_size);
+            _next_fragments = p->next;
+            _size = p->size;
+        }
+    }
+    managed_bytes_basic_view(fragment_type bv)
+        : _current_fragment(bv)
+        , _size(bv.size()) {
+    }
+    size_t size() const { return _size; }
+    size_t size_bytes() const { return _size; }
+    bool empty() const { return _size == 0; }
+    fragment_type current_fragment() const { return _current_fragment; }
+    void remove_prefix(size_t n) {
+        while (n >= _current_fragment.size() && n > 0) {
+            n -= _current_fragment.size();
+            remove_current();
+        }
+        _size -= n;
+        _current_fragment.remove_prefix(n);
+    }
+    void remove_current() {
+        _size -= _current_fragment.size();
+        if (_size) {
+            _current_fragment = fragment_type(_next_fragments->data, _next_fragments->frag_size);
+            _next_fragments = _next_fragments->next;
+            _current_fragment = _current_fragment.substr(0, _size);
+        } else {
+            _current_fragment = fragment_type();
+        }
+    }
+    managed_bytes_basic_view prefix(size_t len) const {
+        managed_bytes_basic_view v = *this;
+        v._size = len;
+        v._current_fragment = v._current_fragment.substr(0, len);
+        return v;
+    }
+};
+static_assert(FragmentedView<managed_bytes_view>);
+static_assert(FragmentedMutableView<managed_bytes_mutable_view>);
+
+inline bytes to_bytes(const managed_bytes& v) {
+    return linearized(managed_bytes_view(v));
+}
+inline bytes to_bytes(managed_bytes_view v) {
+    return linearized(v);
+}
+
+inline managed_bytes::managed_bytes(managed_bytes_view v) : managed_bytes(initialized_later(), v.size_bytes()) {
+    managed_bytes_mutable_view self(*this);
+    write_fragmented(self, v);
+}
+
+template<>
+struct appending_hash<managed_bytes_view> {
+    template<Hasher Hasher>
+    void operator()(Hasher& h, managed_bytes_view v) const {
+        feed_hash(h, v.size_bytes());
+        for (; !v.empty(); v.remove_current()) {
+            h.update(reinterpret_cast<const char*>(v.current_fragment().data()), v.current_fragment().size());
+        }
+    }
+};
+
+namespace std {
+template <>
+struct hash<managed_bytes_view> {
+    size_t operator()(managed_bytes_view v) const {
+        bytes_view_hasher h;
+        appending_hash<managed_bytes_view>{}(h, v);
+        return h.finalize();
+    }
+};
+template <>
+struct hash<managed_bytes> {
+    size_t operator()(const managed_bytes& v) const {
+        return hash<managed_bytes_view>{}(v);
+    }
+};
+} // namespace std
+
+// The operators below are used only by tests.
+
+inline bool operator==(const managed_bytes_view& a, const managed_bytes_view& b) {
+    return a.size_bytes() == b.size_bytes() && compare_unsigned(a, b) == 0;
+}
+
+inline std::ostream& operator<<(std::ostream& os, const managed_bytes_view& v) {
+    for (managed_bytes_view mbv; !mbv.empty(); mbv.remove_current()) {
+        os << to_hex(mbv.current_fragment());
+    }
+    return os;
+}
+inline std::ostream& operator<<(std::ostream& os, const managed_bytes& b) {
+    return (os << managed_bytes_view(b));
 }
