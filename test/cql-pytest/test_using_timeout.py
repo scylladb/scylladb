@@ -73,6 +73,11 @@ def test_prepared_statements(scylla_only, cql, table1):
     with pytest.raises(WriteTimeout):
         cql.execute(prep, (Duration(nanoseconds=0), 3, 42))
     cql.execute(prep, (Duration(nanoseconds=10**15), 3, 42))
+    prep_named = cql.prepare(f"UPDATE {table} USING TIMEOUT :timeout AND TIMESTAMP :ts SET v = :v WHERE p = 9 and c = 1")
+    # Timeout cannot be left unbound
+    with pytest.raises(InvalidRequest):
+        cql.execute(prep_named, {'timestamp': 42, 'v': 3})
+    cql.execute(prep_named, {'timestamp': 42, 'v': 3, 'timeout': Duration(nanoseconds=10**15)})
 
 # Mixing TIMEOUT parameter with other params from the USING clause is legal
 def test_mix_per_query_timeout_with_other_params(scylla_only, cql, table1):
