@@ -1,3 +1,5 @@
+# CQL3 Type Mapping
+
 | CQL3 type | Scylla type class      | Scylla `data_type` instance | Cassandra type class                               |
 |-----------|------------------------|-----------------------------|----------------------------------------------------|
 | ascii     | ascii_type_impl        | ascii_type                  | org.apache.cassandra.db.marshal.AsciiType          |

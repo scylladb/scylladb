@@ -1,16 +1,15 @@
-# Scylla developer documentation
+# Scylla Developer Documentation
 
-This folder (and its subfolders) contain developer-oriented documentation
-concerning the Scylla codebase.
-We also have a [wiki](https://github.com/scylladb/scylla/wiki), which contains
-additional developer-oriented documentation. There is currently no clear
-definition of what goes where, so when looking for something be sure to check
-both.
+This documentation targets developers who are interested in contributing to Scylla codebase.
 
-Seastar documentation can be found [here](http://docs.seastar.io/master/index.html).
+## Contents
 
-User documentation can be found on
-[docs.scylladb.com](https://docs.scylladb.com/)
+* [Alternator](alternator/alternator.md) - The open source DynamoDB-compatible API reference.
+* [Design notes](design-notes/index.md) - Explanations describing how new features work for other contributors and exploratory research.
+* [Guides](guides/index.md) - Instructions on how to build and test the Scylla codebase.
+* [Contribute](contribute/index.md) - Guidelines on how to contribute and maintain the project.
 
-For information on how to build Scylla and how to contribute visit
-[HACKING.md](HACKING.md) and [CONTRIBUTING.md](CONTRIBUTING.md).
+## Other Useful Documents and Links
+
+* [User documentation](https://docs.scylladb.com/)
+* [Seastar documentation](http://docs.seastar.io/master/index.html)

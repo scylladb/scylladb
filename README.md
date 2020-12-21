@@ -78,11 +78,8 @@ and the current compatibility of this feature as well as Scylla-specific extensi
 
 ## Documentation
 
-Documentation can be found in [./docs](./docs) and on the
-[wiki](https://github.com/scylladb/scylla/wiki). There is currently no clear
-definition of what goes where, so when looking for something be sure to check
-both.
-Seastar documentation can be found [here](http://docs.seastar.io/master/index.html).
+Documentation can be found [here](http://scylladb.github.io/scylla).
+Seastar documentation can be found [here](http://docs.seastar.io/master/index.html.
 User documentation can be found [here](https://docs.scylladb.com/).
 
 ## Training 

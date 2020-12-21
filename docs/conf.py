@@ -82,6 +82,14 @@ def setup(sphinx):
     }, True)
     sphinx.add_transform(AutoStructify)
 
+# Custom lexer
+from pygments.lexers.shell import BashLexer
+from sphinx.highlighting import lexers
+
+class CqlLexer(BashLexer):
+    pass
+lexers['cql'] = CqlLexer(startinline=True)
+
 # Inline substitutions
 rst_prolog = """
 .. |mon_version| replace:: 3.1
