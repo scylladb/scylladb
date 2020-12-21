@@ -777,11 +777,11 @@ class clustering_key_prefix : public prefix_compound_wrapper<clustering_key_pref
 public:
     template<typename RangeOfSerializedComponents>
     static clustering_key_prefix from_range(RangeOfSerializedComponents&& v) {
-        return clustering_key_prefix(compound::element_type::serialize_value(std::forward<RangeOfSerializedComponents>(v)));
+        return clustering_key_prefix(managed_bytes(compound::element_type::serialize_value(std::forward<RangeOfSerializedComponents>(v))));
     }
 
     clustering_key_prefix(std::vector<bytes> v)
-        : prefix_compound_wrapper(compound::element_type::serialize_value(std::move(v)))
+        : prefix_compound_wrapper(managed_bytes(compound::element_type::serialize_value(std::move(v))))
     { }
 
     clustering_key_prefix(clustering_key_prefix&& v) = default;

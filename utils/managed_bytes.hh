@@ -171,7 +171,7 @@ public:
     managed_bytes(const blob_storage::char_type* ptr, size_type size)
         : managed_bytes(bytes_view(ptr, size)) {}
 
-    managed_bytes(const bytes& b) : managed_bytes(static_cast<bytes_view>(b)) {}
+    explicit managed_bytes(const bytes& b) : managed_bytes(static_cast<bytes_view>(b)) {}
 
     managed_bytes(initialized_later, size_type size) {
         memory::on_alloc_point();
@@ -202,7 +202,7 @@ public:
         }
     }
 
-    managed_bytes(bytes_view v) : managed_bytes(initialized_later(), v.size()) {
+    explicit managed_bytes(bytes_view v) : managed_bytes(initialized_later(), v.size()) {
         if (!external()) {
             // Workaround for https://github.com/scylladb/scylla/issues/4086
             #pragma GCC diagnostic push
