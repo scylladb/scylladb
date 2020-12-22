@@ -117,6 +117,7 @@ range_streamer::get_all_ranges_with_sources_for(const sstring& keyspace_name, dh
 
     auto tm = get_token_metadata().clone_only_token_map().get0();
     auto range_addresses = strat.get_range_addresses(tm, utils::can_yield::yes);
+    tm.clear_gently().get();
 
     logger.debug("keyspace={}, desired_ranges.size={}, range_addresses.size={}", keyspace_name, desired_ranges.size(), range_addresses.size());
 
@@ -161,8 +162,9 @@ range_streamer::get_all_ranges_with_strict_sources_for(const sstring& keyspace_n
     auto range_addresses = strat.get_range_addresses(metadata_clone, utils::can_yield::yes);
 
     //Pending ranges
-    metadata_clone.update_normal_tokens(_tokens, _address);
+    metadata_clone.update_normal_tokens(_tokens, _address).get();
     auto pending_range_addresses  = strat.get_range_addresses(metadata_clone, utils::can_yield::yes);
+    metadata_clone.clear_gently().get();
 
     //Collects the source that will have its range moved to the new node
     std::unordered_map<dht::token_range, std::vector<inet_address>> range_sources;

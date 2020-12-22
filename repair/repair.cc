@@ -48,6 +48,7 @@
 #include <seastar/core/gate.hh>
 #include <seastar/util/defer.hh>
 #include <seastar/core/metrics_registration.hh>
+#include <seastar/core/coroutine.hh>
 
 logging::logger rlogger("repair");
 
@@ -1809,8 +1810,9 @@ future<> bootstrap_with_repair(seastar::sharded<database>& db, seastar::sharded<
             auto range_addresses = strat.get_range_addresses(metadata_clone, utils::can_yield::yes);
 
             //Pending ranges
-            metadata_clone.update_normal_tokens(tokens, myip);
+            metadata_clone.update_normal_tokens(tokens, myip).get();
             auto pending_range_addresses = strat.get_range_addresses(metadata_clone, utils::can_yield::yes);
+            metadata_clone.clear_gently().get();
 
             //Collects the source that will have its range moved to the new node
             std::unordered_map<dht::token_range, repair_neighbors> range_sources;
@@ -2109,6 +2111,7 @@ static future<> do_decommission_removenode_with_repair(seastar::sharded<database
                     }
                 }
             }
+            temp.clear_gently().get();
             if (reason == streaming::stream_reason::decommission) {
                 db.invoke_on_all([nr_ranges_skipped] (database&) {
                     _node_ops_metrics.decommission_finished_ranges += nr_ranges_skipped;
@@ -2234,16 +2237,15 @@ future<> rebuild_with_repair(seastar::sharded<database>& db, seastar::sharded<ne
 }
 
 future<> replace_with_repair(seastar::sharded<database>& db, seastar::sharded<netw::messaging_service>& ms, locator::token_metadata_ptr tmptr, std::unordered_set<dht::token> replacing_tokens) {
-  return tmptr->clone_async().then([&db, &ms, replacing_tokens = std::move(replacing_tokens)] (locator::token_metadata cloned_tm) mutable {
+    auto cloned_tm = co_await tmptr->clone_async();
     auto op = sstring("replace_with_repair");
     auto source_dc = get_local_dc();
     auto reason = streaming::stream_reason::replace;
     // update a cloned version of tmptr
     // no need to set the original version
     auto cloned_tmptr = make_token_metadata_ptr(std::move(cloned_tm));
-    cloned_tmptr->update_normal_tokens(replacing_tokens, utils::fb_utilities::get_broadcast_address());
-    return do_rebuild_replace_with_repair(db, ms, std::move(cloned_tmptr), std::move(op), std::move(source_dc), reason);
-  });
+    co_await cloned_tmptr->update_normal_tokens(replacing_tokens, utils::fb_utilities::get_broadcast_address());
+    co_return co_await do_rebuild_replace_with_repair(db, ms, std::move(cloned_tmptr), std::move(op), std::move(source_dc), reason);
 }
 
 static future<> init_messaging_service_handler(sharded<database>& db, sharded<netw::messaging_service>& messaging) {

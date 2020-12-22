@@ -73,7 +73,7 @@ public:
     topology() {}
     topology(const topology& other);
 
-    void clear();
+    future<> clear_gently() noexcept;
 
     /**
      * Stores current DC/rack assignment for ep
@@ -180,9 +180,11 @@ public:
     token_metadata& operator=(token_metadata&&) noexcept;
     ~token_metadata();
     const std::vector<token>& sorted_tokens() const;
-    void update_normal_token(token token, inet_address endpoint);
-    void update_normal_tokens(std::unordered_set<token> tokens, inet_address endpoint);
-    void update_normal_tokens(const std::unordered_map<inet_address, std::unordered_set<token>>& endpoint_tokens);
+    future<> update_normal_token(token token, inet_address endpoint);
+    future<> update_normal_tokens(std::unordered_set<token> tokens, inet_address endpoint);
+    future<> update_normal_tokens(const std::unordered_map<inet_address, std::unordered_set<token>>& endpoint_tokens);
+    void update_normal_tokens_sync(std::unordered_set<token> tokens, inet_address endpoint);
+    void update_normal_tokens_sync(const std::unordered_map<inet_address, std::unordered_set<token>>& endpoint_tokens);
     const token& first_token(const token& start) const;
     size_t first_token_index(const token& start) const;
     std::optional<inet_address> get_endpoint(const token& token) const;
@@ -284,6 +286,12 @@ public:
      */
     future<token_metadata> clone_after_all_left() const noexcept;
 
+    /**
+     * Gently clear the token_metadata members.
+     * Yield if needed to prevent reactor stalls.
+     */
+    future<> clear_gently() noexcept;
+
     dht::token_range_vector get_primary_ranges_for(std::unordered_set<token> tokens) const;
 
     dht::token_range_vector get_primary_ranges_for(token right) const;
@@ -367,15 +375,21 @@ public:
         return _shared;
     }
 
-    mutable_token_metadata_ptr clone() const {
-        return make_token_metadata_ptr(*_shared);
-    }
-
     void set(mutable_token_metadata_ptr tmptr) noexcept {
         _shared = std::move(tmptr);
     }
 
     future<token_metadata_lock> get_lock() noexcept;
+
+    // mutate_token_metadata acquires the shared_token_metadata lock,
+    // clones the token_metadata (using clone_async)
+    // and calls an asynchronous functor on
+    // the cloned copy of the token_metadata to mutate it.
+    //
+    // If the functor is successful, the mutated clone
+    // is set back to to the shared_token_metadata,
+    // otherwise, the clone is destroyed.
+    future<> mutate_token_metadata(seastar::noncopyable_function<future<> (token_metadata&)> func);
 };
 
 }
