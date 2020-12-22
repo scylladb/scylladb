@@ -160,6 +160,27 @@ class EnumDef:
     def __repr__(self):
         return self.__str__()
 
+    def serializer_write_impl(self, cout, template_decl, namespaces):
+        name = ns_qualified_name(self.name, namespaces)
+
+        fprintln(cout, f"""
+{template_decl}
+template <typename Output>
+void serializer<{name}>::write(Output& buf, const {name}& v) {{
+  serialize(buf, static_cast<{self.underlying_type}>(v));
+}}""")
+
+
+    def serializer_read_impl(self, cout, template_decl, namespaces):
+        name = ns_qualified_name(self.name, namespaces)
+
+        fprintln(cout, f"""
+{template_decl}
+template<typename Input>
+{name} serializer<{name}>::read(Input& buf) {{
+  return static_cast<{name}>(deserialize(buf, boost::type<{self.underlying_type}>()));
+}}""")
+
 
 class Attribute:
     ''' AST node for representing class and field attributes.
@@ -258,6 +279,85 @@ class ClassDef:
 
     def __repr__(self):
         return self.__str__()
+
+    def serializer_write_impl(self, cout, template_decl, template_class_param, namespaces):
+        name = ns_qualified_name(self.name, namespaces)
+        full_name = name + template_class_param
+
+        fprintln(cout, f"""
+{template_decl}
+template <typename Output>
+void serializer<{full_name}>::write(Output& buf, const {full_name}& obj) {{""")
+        if not self.final:
+            fprintln(cout, f"""  {SETSIZE}(buf, obj);""")
+        for member in self.members:
+            if isinstance(member, ClassDef) or isinstance(member, EnumDef):
+                continue
+            fprintln(cout, f"""  static_assert(is_equivalent<decltype(obj.{member.name}), {param_type(member.type)}>::value, "member value has a wrong type");
+  {SERIALIZER}(buf, obj.{member.name});""")
+        fprintln(cout, "}")
+
+
+    def serializer_read_impl(self, cout, template_decl, template_class_param, namespaces):
+        is_final = self.final
+        name = ns_qualified_name(self.name, namespaces)
+
+        fprintln(cout, f"""
+{template_decl}
+template <typename Input>
+{name}{template_class_param} serializer<{name}{template_class_param}>::read(Input& buf) {{
+ return seastar::with_serialized_stream(buf, [] (auto& buf) {{""")
+        if not self.members:
+            if not is_final:
+                fprintln(cout, f"""  {SIZETYPE} size = {DESERIALIZER}(buf, boost::type<{SIZETYPE}>());
+  buf.skip(size - sizeof({SIZETYPE}));""")
+        elif not is_final:
+            fprintln(cout, f"""  {SIZETYPE} size = {DESERIALIZER}(buf, boost::type<{SIZETYPE}>());
+  auto in = buf.read_substream(size - sizeof({SIZETYPE}));""")
+        else:
+            fprintln(cout, """  auto& in = buf;""")
+        params = []
+        local_names = {}
+        for index, param in enumerate(self.members):
+            if isinstance(param, ClassDef) or isinstance(param, EnumDef):
+                continue
+            local_param = "__local_" + str(index)
+            local_names[param.name] = local_param
+            if param.attribute:
+                deflt = param_type(param.type) + "()"
+                if param.default_value:
+                    deflt = param.default_value
+                if deflt in local_names:
+                    deflt = local_names[deflt]
+                fprintln(cout, f"""  auto {local_param} = (in.size()>0) ?
+    {DESERIALIZER}(in, boost::type<{param_type(param.type)}>()) : {deflt};""")
+            else:
+                fprintln(cout, f"""  auto {local_param} = {DESERIALIZER}(in, boost::type<{param_type(param.type)}>());""")
+            params.append("std::move(" + local_param + ")")
+        fprintln(cout, f"""
+  {name}{template_class_param} res {{{", ".join(params)}}};
+  return res;
+ }});
+}}""")
+
+
+    def serializer_skip_impl(self, cout, template_decl, template_class_param, namespaces):
+        is_final = self.final
+        name = ns_qualified_name(self.name, namespaces)
+
+        fprintln(cout, f"""
+{template_decl}
+template <typename Input>
+void serializer<{name}{template_class_param}>::skip(Input& buf) {{
+ seastar::with_serialized_stream(buf, [] (auto& buf) {{""")
+        if not is_final:
+            fprintln(cout, f"""  {SIZETYPE} size = {DESERIALIZER}(buf, boost::type<{SIZETYPE}>());
+  buf.skip(size - sizeof({SIZETYPE}));""")
+        else:
+            for m in get_members(self):
+                full_type = param_view_type(m.type)
+                fprintln(cout, f"  ser::skip(buf, boost::type<{full_type}>());")
+        fprintln(cout, """ });\n}""")
 
 
 class NamespaceDef:
@@ -466,36 +566,14 @@ def template_params_str(template_params):
     return ", ".join(map(lambda param: param.typename + " " + param.name, template_params))
 
 
-def enum_serializer_write_impl(cout, enum, template_decl, namespaces):
-    name = ns_qualified_name(enum.name, namespaces)
-
-    fprintln(cout, f"""
-{template_decl}
-template <typename Output>
-void serializer<{name}>::write(Output& buf, const {name}& v) {{
-  serialize(buf, static_cast<{enum.underlying_type}>(v));
-}}""")
-
-
-def enum_serializer_read_impl(cout, enum, template_decl, namespaces):
-    name = ns_qualified_name(enum.name, namespaces)
-
-    fprintln(cout, f"""
-{template_decl}
-template<typename Input>
-{name} serializer<{name}>::read(Input& buf) {{
-  return static_cast<{name}>(deserialize(buf, boost::type<{enum.underlying_type}>()));
-}}""")
-
-
 def handle_enum(enum, hout, cout, namespaces, parent_template_param=[]):
     temp_def = template_params_str(parent_template_param)
     template_decl = "template <" + temp_def + ">" if temp_def else ""
     name = ns_qualified_name(enum.name, namespaces)
     declare_methods(hout, name, temp_def)
 
-    enum_serializer_write_impl(cout, enum, template_decl, namespaces)
-    enum_serializer_read_impl(cout, enum, template_decl, namespaces)
+    enum.serializer_write_impl(cout, template_decl, namespaces)
+    enum.serializer_read_impl(cout, template_decl, namespaces)
 
 
 def join_template(template_params):
@@ -1163,86 +1241,6 @@ def add_visitors(cout):
         handle_visitors_nodes(local_types[k], cout)
 
 
-def class_serializer_write_impl(cout, cls, template_decl, template_class_param, namespaces):
-    name = ns_qualified_name(cls.name, namespaces)
-    full_name = name + template_class_param
-
-    fprintln(cout, f"""
-{template_decl}
-template <typename Output>
-void serializer<{full_name}>::write(Output& buf, const {full_name}& obj) {{""")
-    if not cls.final:
-        fprintln(cout, f"""  {SETSIZE}(buf, obj);""")
-    for member in cls.members:
-        if isinstance(member, ClassDef) or isinstance(member, EnumDef):
-            continue
-        fprintln(cout, f"""  static_assert(is_equivalent<decltype(obj.{member.name}), {param_type(member.type)}>::value, "member value has a wrong type");
-    {SERIALIZER}(buf, obj.{member.name});""")
-    fprintln(cout, "}")
-
-
-def class_serializer_read_impl(cout, cls, template_decl, template_class_param, namespaces):
-    is_final = cls.final
-    name = ns_qualified_name(cls.name, namespaces)
-
-    fprintln(cout, f"""
-{template_decl}
-template <typename Input>
-{name}{template_class_param} serializer<{name}{template_class_param}>::read(Input& buf) {{
- return seastar::with_serialized_stream(buf, [] (auto& buf) {{""")
-    if not cls.members:
-        if not is_final:
-            fprintln(cout, f"""  {SIZETYPE} size = {DESERIALIZER}(buf, boost::type<{SIZETYPE}>());
-  buf.skip(size - sizeof({SIZETYPE}));""")
-    elif not is_final:
-        fprintln(cout, f"""  {SIZETYPE} size = {DESERIALIZER}(buf, boost::type<{SIZETYPE}>());
-  auto in = buf.read_substream(size - sizeof({SIZETYPE}));""")
-    else:
-        fprintln(cout, """  auto& in = buf;""")
-    params = []
-    local_names = {}
-    for index, param in enumerate(cls.members):
-        if isinstance(param, ClassDef) or isinstance(param, EnumDef):
-            continue
-        local_param = "__local_" + str(index)
-        local_names[param.name] = local_param
-        if param.attribute:
-            deflt = param_type(param.type) + "()"
-            if param.default_value:
-                deflt = param.default_value
-            if deflt in local_names:
-                deflt = local_names[deflt]
-            fprintln(cout, f"""  auto {local_param} = (in.size()>0) ?
-    {DESERIALIZER}(in, boost::type<{param_type(param.type)}>()) : {deflt};""")
-        else:
-            fprintln(cout, f"""  auto {local_param} = {DESERIALIZER}(in, boost::type<{param_type(param.type)}>());""")
-        params.append("std::move(" + local_param + ")")
-    fprintln(cout, f"""
-  {name}{template_class_param} res {{{", ".join(params)}}};
-  return res;
- }});
-}}""")
-
-
-def class_serializer_skip_impl(cout, cls, template_decl, template_class_param, namespaces):
-    is_final = cls.final
-    name = ns_qualified_name(cls.name, namespaces)
-
-    fprintln(cout, f"""
-{template_decl}
-template <typename Input>
-void serializer<{name}{template_class_param}>::skip(Input& buf) {{
- seastar::with_serialized_stream(buf, [] (auto& buf) {{""")
-    if not is_final:
-        fprintln(cout, f"""  {SIZETYPE} size = {DESERIALIZER}(buf, boost::type<{SIZETYPE}>());
-  buf.skip(size - sizeof({SIZETYPE}));""")
-    else:
-        for m in get_members(cls):
-            full_type = param_view_type(m.type)
-            fprintln(cout, f"  ser::skip(buf, boost::type<{full_type}>());")
-    fprintln(cout, """ });\n}""")
-
-
 def handle_class(cls, hout, cout, namespaces=[], parent_template_param=[]):
     add_to_types(cls, namespaces, parent_template_param)
     if cls.stub:
@@ -1263,9 +1261,9 @@ def handle_class(cls, hout, cout, namespaces=[], parent_template_param=[]):
             handle_enum(member, hout, cout, namespaces + [cls.name + template_class_param], parent_template_param + template_param_list)
     declare_methods(hout, full_name, template_params)
 
-    class_serializer_write_impl(cout, cls, template_decl, template_class_param, namespaces)
-    class_serializer_read_impl(cout, cls, template_decl, template_class_param, namespaces)
-    class_serializer_skip_impl(cout, cls, template_decl, template_class_param, namespaces)
+    cls.serializer_write_impl(cout, template_decl, template_class_param, namespaces)
+    cls.serializer_read_impl(cout, template_decl, template_class_param, namespaces)
+    cls.serializer_skip_impl(cout, template_decl, template_class_param, namespaces)
 
 
 def handle_objects(tree, hout, cout, namespaces=[]):
