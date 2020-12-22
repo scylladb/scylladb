@@ -37,6 +37,7 @@
 #include "query-result-writer.hh"
 #include "db/view/view.hh"
 #include <seastar/core/seastar.hh>
+#include <seastar/core/coroutine.hh>
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/adaptor/map.hpp>
 #include "utils/error_injection.hh"
@@ -660,7 +661,7 @@ void table::rebuild_statistics() {
     }
 }
 
-lw_shared_ptr<sstables::sstable_set>
+future<lw_shared_ptr<sstables::sstable_set>>
 table::build_new_sstable_list(const std::vector<sstables::shared_sstable>& new_sstables,
                               const std::vector<sstables::shared_sstable>& old_sstables) {
     auto current_sstables = _sstables;
@@ -675,8 +676,9 @@ table::build_new_sstable_list(const std::vector<sstables::shared_sstable>& new_s
         if (!s.contains(tab)) {
             new_sstable_list.insert(tab);
         }
+        co_await make_ready_future<>(); // yield if needed.
     }
-    return make_lw_shared<sstables::sstable_set>(std::move(new_sstable_list));
+    co_return make_lw_shared<sstables::sstable_set>(std::move(new_sstable_list));
 }
 
 // Note: must run in a seastar thread
@@ -728,9 +730,7 @@ table::on_compaction_completion(sstables::compaction_completion_desc& desc) {
     public:
         explicit sstable_list_updater(table& t, sstables::compaction_completion_desc& d) : _t(t), _desc(d) {}
         virtual future<> prepare() override {
-            // TODO: futurize build_new_sstable_list().
-            _new_sstables = _t.build_new_sstable_list(_desc.new_sstables, _desc.old_sstables);
-            return make_ready_future<>();
+            _new_sstables = co_await _t.build_new_sstable_list(_desc.new_sstables, _desc.old_sstables);
         }
         virtual void execute() override {
             _t._sstables = std::move(_new_sstables);

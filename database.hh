@@ -571,7 +571,7 @@ private:
     }
 
     // Builds new sstable set from existing one, with new sstables added to it and old sstables removed from it.
-    lw_shared_ptr<sstables::sstable_set>
+    future<lw_shared_ptr<sstables::sstable_set>>
     build_new_sstable_list(const std::vector<sstables::shared_sstable>& new_sstables,
                            const std::vector<sstables::shared_sstable>& old_sstables);
 
