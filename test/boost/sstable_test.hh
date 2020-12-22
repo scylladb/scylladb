@@ -49,9 +49,10 @@ public:
         _cf->_sstables->insert(std::move(sstable));
     }
 
+    // NOTE: must run in a thread
     void rebuild_sstable_list(const std::vector<sstables::shared_sstable>& new_sstables,
             const std::vector<sstables::shared_sstable>& sstables_to_remove) {
-        _cf->_sstables = _cf->build_new_sstable_list(new_sstables, sstables_to_remove);
+        _cf->_sstables = _cf->build_new_sstable_list(new_sstables, sstables_to_remove).get0();
     }
 
     static void update_sstables_known_generation(column_family& cf, unsigned generation) {
