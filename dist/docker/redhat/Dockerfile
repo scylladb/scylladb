@@ -35,7 +35,6 @@ ADD docker-entrypoint.py /docker-entrypoint.py
 ADD node_exporter_install /node_exporter_install
 # Install Scylla:
 RUN curl $SCYLLA_REPO_URL -o /etc/yum.repos.d/scylla.repo && \
-    yum -y install epel-release && \
     yum -y clean expire-cache && \
     yum -y update && \
     yum -y install scylla-$VERSION hostname supervisor openssh-server openssh-clients rsyslog && \
