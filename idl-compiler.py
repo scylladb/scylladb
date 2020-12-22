@@ -674,7 +674,7 @@ def is_stub(cls):
 
 
 def handle_visitors_state(info, cout, classes=[]):
-    [cls, namespaces, parent_template_param] = info
+    cls = info[0]
     name = "__".join(classes) if classes else cls.name
     frame = "empty_frame" if cls.final else "frame"
     fprintln(cout, f"""
@@ -1022,7 +1022,7 @@ def add_nodes_when_needed(cout, info, member, base_state_name, parents, member_c
 
 def handle_visitors_nodes(info, cout, variant_node=False, classes=[]):
     global writers
-    [cls, namespaces, parent_template_param] = info
+    cls = info[0]
     # for root node, only generate once
     if not classes:
         if cls.name in writers:
@@ -1075,7 +1075,7 @@ def sort_dependencies():
     dep_tree = {}
     res = []
     for k in local_types:
-        [cls, namespaces, parent_template_param] = local_types[k]
+        cls = local_types[k][0]
         dep_tree[k] = get_dependency(cls)
     while (len(dep_tree) > 0):
         found = sorted(k for k in dep_tree if not dep_tree[k])
@@ -1150,7 +1150,7 @@ template<typename Input>
 
 
 def add_view(cout, info):
-    [cls, namespaces, parent_template_param] = info
+    cls = info[0]
     members = get_members(cls)
     for m in members:
         add_variant_read_size(cout, m.type)
