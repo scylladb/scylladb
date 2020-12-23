@@ -380,6 +380,14 @@ public:
     data_value(const std::string&);
     data_value(const sstring&);
 
+    // Do not allow construction of a data_value from nullptr. The reason is
+    // that this is error prone, for example: it conflicts with `const char*` overload
+    // which tries to allocate a value from it and will cause UB.
+    //
+    // We want the null value semantics here instead. So the user will be forced
+    // to explicitly call `make_null()` instead.
+    data_value(std::nullptr_t) = delete;
+
     data_value(ascii_native_type);
     data_value(bool);
     data_value(int8_t);
