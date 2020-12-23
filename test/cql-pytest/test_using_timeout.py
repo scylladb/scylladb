@@ -19,6 +19,7 @@
 
 from util import new_test_keyspace, unique_name
 import pytest
+import random
 from cassandra.protocol import InvalidRequest, ReadTimeout, WriteTimeout
 from cassandra.util import Duration
 
@@ -29,7 +30,7 @@ def r(regex):
 def table1(cql, test_keyspace):
     table = test_keyspace + "." + unique_name()
     cql.execute("CREATE TABLE " + table +
-        "(p int, c int, v int, PRIMARY KEY (p,c))")
+        "(p bigint, c int, v int, PRIMARY KEY (p,c))")
     for i in range(0, 3):
         for j in range(0, 3):
             cql.execute(f'INSERT INTO {table} (p, c, v) VALUES ({i}, {j}, {j})')
@@ -40,28 +41,31 @@ def table1(cql, test_keyspace):
 # Performing operations with a small enough timeout is guaranteed to fail
 def test_per_query_timeout_effective(scylla_only, cql, table1):
     table, everything = table1
+    key = random.randint(3, 2**60)
     with pytest.raises(ReadTimeout):
         cql.execute(f"SELECT * FROM {table} USING TIMEOUT 0ms")
     with pytest.raises(WriteTimeout):
-        cql.execute(f"INSERT INTO {table} (p,c,v) VALUES (9,1,1) USING TIMEOUT 0ms")
+        cql.execute(f"INSERT INTO {table} (p,c,v) VALUES ({key},1,1) USING TIMEOUT 0ms")
     with pytest.raises(WriteTimeout):
-        cql.execute(f"UPDATE {table} USING TIMEOUT 0ms SET v = 5 WHERE p = 9 AND c = 1")
+        cql.execute(f"UPDATE {table} USING TIMEOUT 0ms SET v = 5 WHERE p = {key} AND c = 1")
 
 # Performing operations with large enough timeout should succeed
 def test_per_query_timeout_large_enough(scylla_only, cql, table1):
     table, everything = table1
+    key = random.randint(3, 2**60)
     res = list(cql.execute(f"SELECT * FROM {table} USING TIMEOUT 24h"))
     assert res == everything
-    cql.execute(f"INSERT INTO {table} (p,c,v) VALUES (9,1,1) USING TIMEOUT 60m")
-    cql.execute(f"UPDATE {table} USING TIMEOUT 48h SET v = 5 WHERE p = 9 AND c = 1")
-    res = list(cql.execute(f"SELECT * FROM {table} USING TIMEOUT 24h"))
-    assert res == list(cql.execute(f"SELECT * FROM {table}"))
+    cql.execute(f"INSERT INTO {table} (p,c,v) VALUES ({key},1,1) USING TIMEOUT 60m")
+    cql.execute(f"UPDATE {table} USING TIMEOUT 48h SET v = 5 WHERE p = {key} AND c = 1")
+    res = list(cql.execute(f"SELECT * FROM {table} WHERE p IN (0,1,2,{key}) USING TIMEOUT 24h"))
+    assert set(res) == set(cql.execute(f"SELECT * FROM {table} WHERE p IN (0,1,2,{key})"))
 
 # Preparing a statement with timeout should work - both by explicitly setting
 # the timeout and by using a marker.
 def test_prepared_statements(scylla_only, cql, table1):
     table, everything = table1
-    prep = cql.prepare(f"INSERT INTO {table} (p,c,v) VALUES (5,6,7) USING TIMEOUT ?")
+    key = random.randint(3, 2**60)
+    prep = cql.prepare(f"INSERT INTO {table} (p,c,v) VALUES ({key},6,7) USING TIMEOUT ?")
     with pytest.raises(WriteTimeout):
         cql.execute(prep, (Duration(nanoseconds=0),))
     cql.execute(prep, (Duration(nanoseconds=10**15),))
@@ -69,11 +73,11 @@ def test_prepared_statements(scylla_only, cql, table1):
     with pytest.raises(ReadTimeout):
         cql.execute(prep, (Duration(nanoseconds=0),))
     cql.execute(prep, (Duration(nanoseconds=10**15),))
-    prep = cql.prepare(f"UPDATE {table} USING TIMEOUT ? AND TIMESTAMP ? SET v = ? WHERE p = 9 and c = 1")
+    prep = cql.prepare(f"UPDATE {table} USING TIMEOUT ? AND TIMESTAMP ? SET v = ? WHERE p = {key} and c = 1")
     with pytest.raises(WriteTimeout):
         cql.execute(prep, (Duration(nanoseconds=0), 3, 42))
     cql.execute(prep, (Duration(nanoseconds=10**15), 3, 42))
-    prep_named = cql.prepare(f"UPDATE {table} USING TIMEOUT :timeout AND TIMESTAMP :ts SET v = :v WHERE p = 9 and c = 1")
+    prep_named = cql.prepare(f"UPDATE {table} USING TIMEOUT :timeout AND TIMESTAMP :ts SET v = :v WHERE p = {key} and c = 1")
     # Timeout cannot be left unbound
     with pytest.raises(InvalidRequest):
         cql.execute(prep_named, {'timestamp': 42, 'v': 3})
@@ -82,11 +86,12 @@ def test_prepared_statements(scylla_only, cql, table1):
 # Mixing TIMEOUT parameter with other params from the USING clause is legal
 def test_mix_per_query_timeout_with_other_params(scylla_only, cql, table1):
     table, everything = table1
-    cql.execute(f"INSERT INTO {table} (p,c,v) VALUES (42,1,1) USING TIMEOUT 60m AND TTL 1000000 AND TIMESTAMP 321")
-    cql.execute(f"INSERT INTO {table} (p,c,v) VALUES (42,2,1) USING TIMESTAMP 42 AND TIMEOUT 30m")
-    res = list(cql.execute(f"SELECT ttl(v), writetime(v) FROM {table} WHERE p = 42 and c = 1"))
+    key = random.randint(3, 2**60)
+    cql.execute(f"INSERT INTO {table} (p,c,v) VALUES ({key},1,1) USING TIMEOUT 60m AND TTL 1000000 AND TIMESTAMP 321")
+    cql.execute(f"INSERT INTO {table} (p,c,v) VALUES ({key},2,1) USING TIMESTAMP 42 AND TIMEOUT 30m")
+    res = list(cql.execute(f"SELECT ttl(v), writetime(v) FROM {table} WHERE p = {key} and c = 1"))
     assert len(res) == 1 and res[0].ttl_v == 1000000 and res[0].writetime_v == 321
-    res = list(cql.execute(f"SELECT ttl(v), writetime(v) FROM {table} WHERE p = 42 and c = 2"))
+    res = list(cql.execute(f"SELECT ttl(v), writetime(v) FROM {table} WHERE p = {key} and c = 2"))
     assert len(res) == 1 and not res[0].ttl_v and res[0].writetime_v == 42
 
 # Only valid timeout durations are allowed to be specified
