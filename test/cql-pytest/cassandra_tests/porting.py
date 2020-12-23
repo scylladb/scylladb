@@ -23,6 +23,7 @@
 
 import pytest
 import re
+import collections
 from util import unique_name
 from contextlib import contextmanager
 from cassandra.protocol import SyntaxException, InvalidRequest
@@ -61,12 +62,19 @@ def create_function(cql, keyspace, arg):
     yield function_name
     cql.execute("DROP FUNCTION " + function_name)
 
+# utility function to substitute table name in command.
+# For easy conversion of Java code, support %s as used in Java. Also support
+# it *multiple* times (always interpolating the same table name). In Java,
+# a %1$s is needed for this.
+def subs_table(cmd, table):
+    return cmd.replace('%s', table)
+
 def execute(cql, table, cmd, *args):
     if args:
-        prepared = cql.prepare(cmd % table)
+        prepared = cql.prepare(subs_table(cmd, table))
         return cql.execute(prepared, args)
     else:
-        return cql.execute(cmd % table)
+        return cql.execute(subs_table(cmd, table))
 
 def assert_invalid_throw(cql, table, type, cmd, *args):
     with pytest.raises(type):
@@ -87,6 +95,10 @@ def assert_invalid_message(cql, table, message, cmd, *args):
     with pytest.raises(InvalidRequest, match=re.escape(message)):
         execute(cql, table, cmd, *args)
 
+def assert_invalid_throw_message(cql, table, message, typ, cmd, *args):
+    with pytest.raises(typ, match=re.escape(message)):
+        execute(cql, table, cmd, *args)
+
 # Cassandra's CQLTester.java has a much more elaborate implementation
 # of these functions, which carefully prints out the differences when
 # the assertion fails. We can also do this in the future, but pytest's
@@ -103,6 +115,24 @@ def assert_rows(result, *expected):
     assert len(allresults) == len(expected)
     for r,e in zip(allresults, expected):
         assert list(r) == e
+
+# To compare two lists of items (each is a dict) without regard for order,
+# The following function, multiset() converts the list into a multiset
+# (set with duplicates) where order doesn't matter, so the multisets can
+# be compared.
+def freeze(item):
+    if isinstance(item, dict):
+        return frozenset((key, freeze(value)) for key, value in item.items())
+    elif isinstance(item, list):
+        return tuple(freeze(value) for value in item)
+    return item
+def multiset(items):
+    return collections.Counter([freeze(item) for item in items])
+
+def assert_rows_ignoring_order(result, *expected):
+    allresults = list(result)
+    assert len(allresults) == len(expected)
+    assert multiset(allresults) == multiset(expected)
 
 # Note that the Python driver has a function _clean_column_name() which
 # "cleans" column names in result sets by dropping any non-alphanumeric
