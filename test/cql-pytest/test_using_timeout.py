@@ -69,6 +69,8 @@ def test_prepared_statements(scylla_only, cql, table1):
     with pytest.raises(WriteTimeout):
         cql.execute(prep, (Duration(nanoseconds=0),))
     cql.execute(prep, (Duration(nanoseconds=10**15),))
+    result = list(cql.execute(f"SELECT * FROM {table} WHERE p = {key}"))
+    assert len(result) == 1 and (result[0].c, result[0].v) == (6, 7)
     prep = cql.prepare(f"SELECT * FROM {table} USING TIMEOUT ?");
     with pytest.raises(ReadTimeout):
         cql.execute(prep, (Duration(nanoseconds=0),))
@@ -82,6 +84,8 @@ def test_prepared_statements(scylla_only, cql, table1):
     with pytest.raises(InvalidRequest):
         cql.execute(prep_named, {'timestamp': 42, 'v': 3})
     cql.execute(prep_named, {'timestamp': 42, 'v': 3, 'timeout': Duration(nanoseconds=10**15)})
+    result = list(cql.execute(f"SELECT * FROM {table} WHERE p = {key} AND c = 1"))
+    assert len(result) == 1 and (result[0].c, result[0].v) == (1, 3)
 
 def test_batch(scylla_only, cql, table1):
     table, _ = table1
