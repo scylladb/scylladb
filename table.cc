@@ -369,11 +369,18 @@ table::add_sstable_and_update_cache(sstables::shared_sstable sst) {
 }
 
 future<>
-table::update_cache(lw_shared_ptr<memtable> m, sstables::shared_sstable sst) {
-    auto adder = row_cache::external_updater([this, m, sst] {
-        auto newtab_ms = sst->as_mutation_source();
-        add_sstable(sst);
-        m->mark_flushed(std::move(newtab_ms));
+table::update_cache(lw_shared_ptr<memtable> m, std::vector<sstables::shared_sstable> ssts) {
+    std::vector<mutation_source> sources;
+    sources.reserve(ssts.size());
+    for (auto& sst : ssts) {
+        sources.push_back(sst->as_mutation_source());
+    }
+    auto new_ssts_ms = make_combined_mutation_source(std::move(sources));
+    auto adder = row_cache::external_updater([this, m, ssts = std::move(ssts), new_ssts_ms = std::move(new_ssts_ms)] () mutable {
+        for (auto& sst : ssts) {
+            add_sstable(sst);
+        }
+        m->mark_flushed(std::move(new_ssts_ms));
         try_trigger_compaction();
     });
     if (cache_enabled()) {
@@ -543,7 +550,7 @@ table::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old, sstable_write_
                 return newtab->open_data().then([this, old, newtab] () {
                     tlogger.debug("Flushing to {} done", newtab->get_filename());
                     return with_scheduling_group(_config.memtable_to_cache_scheduling_group, [this, old, newtab] {
-                        return update_cache(old, newtab);
+                        return update_cache(old, { newtab });
                     });
                 }).then([this, old, newtab] () noexcept {
                     _memtables->erase(old);
