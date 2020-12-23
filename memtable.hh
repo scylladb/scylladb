@@ -138,7 +138,7 @@ private:
 
     class memtable_encoding_stats_collector : public encoding_stats_collector {
     private:
-        max_tracker<api::timestamp_type> max_timestamp;
+        min_max_tracker<api::timestamp_type> min_max_timestamp;
 
         void update_timestamp(api::timestamp_type ts);
 
@@ -154,8 +154,12 @@ private:
         void update(const ::schema& s, const deletable_row& dr);
         void update(const ::schema& s, const mutation_partition& mp);
 
+        api::timestamp_type get_min_timestamp() const {
+            return min_max_timestamp.min();
+        }
+
         api::timestamp_type get_max_timestamp() const {
-            return max_timestamp.get();
+            return min_max_timestamp.max();
         }
     } _stats_collector;
 
@@ -210,6 +214,10 @@ public:
 
     encoding_stats get_encoding_stats() const {
         return _stats_collector.get();
+    }
+
+    api::timestamp_type get_min_timestamp() const {
+        return _stats_collector.get_min_timestamp();
     }
 
     api::timestamp_type get_max_timestamp() const {
