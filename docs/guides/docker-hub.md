@@ -429,6 +429,58 @@ Example value:
 
 * [Best practices for running Scylla on docker](http://docs.scylladb.com/procedures/best_practices_scylla_on_docker/)
 
+## Scylla Monitoring
+
+Scylla Monitoring is present in the [scylla-monitoring](https://github.com/scylladb/scylla-monitoring)
+repository. However, it does not support Docker image.
+
+Monitoring consists of the standard Prometheus and Grafana tuple.
+To run Prometheus with the Scylla docker image do the following:
+
+- download https://github.com/scylladb/care-pet/tree/master/quick-start/monitoring
+
+- update list of targets at `monitoring/scylla_servers.yml`. For example,
+  state name of the Scylla docker container.
+
+- execute:
+
+```console
+$ docker run -p 9090 \
+  -v $(pwd)/monitoring/scylla_servers.yml:/etc/scylla.d/prometheus/scylla_servers.yml \
+  -v $(pwd)/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml \
+  -v $(pwd)/monitoring/prometheus.rules.yml:/etc/prometheus/prometheus.rules.yml \
+  --name scylla-prometheus \
+  -it prom/prometheus:v2.18.1 \
+  --config.file=/etc/prometheus/prometheus.yml --storage.tsdb.path="/prometheus"
+```
+
+To run Grafana with Prometheus:
+
+- download https://github.com/scylladb/care-pet/tree/master/quick-start/monitoring
+
+- update list of targets at `grafana/provisioning/datasources/datasource.yml`. For example,
+  state name of the Scylla docker container.
+
+- execute:
+
+```console
+$ docker run -p 3000 \
+  -v $(pwd)/grafana/build:/var/lib/grafana/dashboards \
+  -v $(pwd)/grafana/provisioning:/var/lib/grafana/provisioning \
+  -e GF_AUTH_BASIC_ENABLED=false \
+  -e GF_AUTH_ANONYMOUS_ENABLED=true \
+  -e GF_AUTH_ANONYMOUS_ORG_ROLE=Admin \
+  -e GF_PANELS_DISABLE_SANITIZE_HTML=true \
+  -e GF_PATHS_PROVISIONING=/var/lib/grafana/provisioning \
+  -e GF_SECURITY_ADMIN_PASSWORD=admin \
+  -e GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS=scylladb-scylla-datasource \
+  --name scylla-grafana \
+  -it grafana/grafana:7.3.5
+```
+
+If you are willing to use docker-compose take a look at this
+[example](https://github.com/scylladb/care-pet/blob/master/quick-start/docker-compose.yaml).
+
 ## User Feedback
 
 ### Issues
