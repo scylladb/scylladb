@@ -83,6 +83,54 @@ def test_prepared_statements(scylla_only, cql, table1):
         cql.execute(prep_named, {'timestamp': 42, 'v': 3})
     cql.execute(prep_named, {'timestamp': 42, 'v': 3, 'timeout': Duration(nanoseconds=10**15)})
 
+def test_batch(scylla_only, cql, table1):
+    table, _ = table1
+    key = random.randint(3, 2**60)
+    cql.execute(f"""BEGIN BATCH USING TIMEOUT 48h
+        INSERT INTO {table} (p,c,v) VALUES ({key},7,8);
+        INSERT INTO {table} (p,c,v) VALUES ({key+1},8,9);
+        APPLY BATCH
+    """)
+    result = list(cql.execute(f"SELECT * FROM {table} WHERE p  = {key} and c = 7"))
+    assert len(result) == 1 and (result[0].c, result[0].v) == (7, 8)
+    result = list(cql.execute(f"SELECT * FROM {table} WHERE p  = {key+1} and c = 8"))
+    assert len(result) == 1 and (result[0].c, result[0].v) == (8, 9)
+    prep1 = cql.prepare(f"""BEGIN BATCH USING TIMEOUT ?
+        INSERT INTO {table} (p,c,v) VALUES ({key},7,10);
+        INSERT INTO {table} (p,c,v) VALUES ({key+1},8,11);
+        APPLY BATCH
+    """)
+    prep2 = cql.prepare(f"""BEGIN BATCH USING TIMEOUT 48h
+        INSERT INTO {table} (p,c,v) VALUES (?,7,2);
+        INSERT INTO {table} (p,c,v) VALUES (?,?,14);
+        APPLY BATCH
+    """)
+    prep_named = cql.prepare(f"""BEGIN BATCH USING TIMEOUT :timeout
+        INSERT INTO {table} (p,c,v) VALUES (:key,7,8);
+        INSERT INTO {table} (p,c,v) VALUES ({key+1},8,:nine);
+        APPLY BATCH
+    """)
+    cql.execute(prep1, (Duration(nanoseconds=10**15),))
+    result = list(cql.execute(f"SELECT * FROM {table} WHERE p = {key} and c = 7"))
+    assert len(result) == 1 and (result[0].c, result[0].v) == (7, 10)
+    result = list(cql.execute(f"SELECT * FROM {table} WHERE p = {key+1} and c = 8"))
+    assert len(result) == 1 and (result[0].c, result[0].v) == (8, 11)
+    cql.execute(prep2, (key, key+1, 8))
+    result = list(cql.execute(f"SELECT * FROM {table} WHERE p = {key} and c = 7"))
+    assert len(result) == 1 and (result[0].c, result[0].v) == (7, 2)
+    result = list(cql.execute(f"SELECT * FROM {table} WHERE p = {key+1} and c = 8"))
+    assert len(result) == 1 and (result[0].c, result[0].v) == (8, 14)
+    cql.execute(prep_named, {'timeout': Duration(nanoseconds=10**15), 'key': key, 'nine': 9})
+    result = list(cql.execute(f"SELECT * FROM {table} WHERE p = {key} and c = 7"))
+    assert len(result) == 1 and (result[0].c, result[0].v) == (7,8)
+    result = list(cql.execute(f"SELECT * FROM {table} WHERE p = {key+1} and c = 8"))
+    assert len(result) == 1 and (result[0].c, result[0].v) == (8, 9)
+    with pytest.raises(WriteTimeout):
+        cql.execute(prep1, (Duration(nanoseconds=0),))
+    with pytest.raises(WriteTimeout):
+        cql.execute(prep_named, {'timeout': Duration(nanoseconds=0), 'key': key, 'nine': 9})
+
+
 # Mixing TIMEOUT parameter with other params from the USING clause is legal
 def test_mix_per_query_timeout_with_other_params(scylla_only, cql, table1):
     table, everything = table1
