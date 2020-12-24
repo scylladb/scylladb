@@ -960,9 +960,6 @@ public:
         , _marker(other._marker)
         , _cells(s, column_kind::regular_column, other._cells)
     { }
-    deletable_row(const schema& s, row_tombstone tomb, const row_marker& marker, const row& cells)
-        : _deleted_at(tomb), _marker(marker), _cells(s, column_kind::regular_column, cells)
-    {}
     deletable_row(row_tombstone&& tomb, row_marker&& marker, row&& cells)
         : _deleted_at(std::move(tomb)), _marker(std::move(marker)), _cells(std::move(cells))
     {}
@@ -1072,9 +1069,6 @@ public:
     { }
     rows_entry(const schema& s, const clustering_key& key, const deletable_row& row)
         : _key(key), _row(s, row)
-    { }
-    rows_entry(const schema& s, const clustering_key& key, row_tombstone tomb, const row_marker& marker, const row& row)
-        : _key(key), _row(s, tomb, marker, row)
     { }
     rows_entry(rows_entry&& o) noexcept;
     rows_entry(const schema& s, const rows_entry& e)

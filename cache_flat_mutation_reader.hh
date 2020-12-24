@@ -461,7 +461,7 @@ void cache_flat_mutation_reader::maybe_add_to_cache(const clustering_row& cr) {
             cr.cells().prepare_hash(*_schema, column_kind::regular_column);
         }
         auto new_entry = alloc_strategy_unique_ptr<rows_entry>(
-            current_allocator().construct<rows_entry>(*_schema, cr.key(), cr.tomb(), cr.marker(), cr.cells()));
+            current_allocator().construct<rows_entry>(*_schema, cr.key(), cr.as_deletable_row()));
         new_entry->set_continuous(false);
         auto it = _next_row.iterators_valid() ? _next_row.get_iterator_in_latest_version()
                                               : mp.clustered_rows().lower_bound(cr.key(), less);
