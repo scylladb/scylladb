@@ -330,16 +330,22 @@ stop_iteration mutation_partition::apply_monotonically(const schema& s, mutation
         }
         if (i == _rows.end() || less(src_e, *i)) {
             p_i = p._rows.erase(p_i);
-            auto src_i = _rows.insert_before(i, src_e);
-            // When falling into a continuous range, preserve continuity.
+
+            bool insert = true;
             if (i != _rows.end() && i->continuous()) {
+                // When falling into a continuous range, preserve continuity.
                 src_e.set_continuous(true);
+
                 if (src_e.dummy()) {
                     if (tracker) {
                         tracker->on_remove(src_e);
                     }
-                    _rows.erase_and_dispose(src_i, del);
+                    del(&src_e);
+                    insert = false;
                 }
+            }
+            if (insert) {
+                _rows.insert_before(i, src_e);
             }
         } else {
             auto continuous = i->continuous() || src_e.continuous();
