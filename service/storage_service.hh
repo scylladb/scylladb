@@ -62,6 +62,7 @@
 #include <seastar/core/metrics_registration.hh>
 #include <seastar/core/rwlock.hh>
 #include "sstables/version.hh"
+#include "sstables/shared_sstable.hh"
 #include "cdc/metadata.hh"
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/lowres_clock.hh>
@@ -859,7 +860,11 @@ public:
      * @param cf_name the column family in which to search for new SSTables.
      * @return a future<> when the operation finishes.
      */
-    future<> load_new_sstables(sstring ks_name, sstring cf_name);
+    future<> load_new_sstables(sstring ks_name, sstring cf_name,
+            bool load_and_stream, bool primary_replica_only);
+    future<> load_and_stream(sstring ks_name, sstring cf_name,
+            utils::UUID table_id, std::vector<sstables::shared_sstable> sstables,
+            bool primary_replica_only);
 
     future<> set_tables_autocompaction(const sstring &keyspace, std::vector<sstring> tables, bool enabled);
 

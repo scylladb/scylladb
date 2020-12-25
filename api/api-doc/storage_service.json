@@ -1764,6 +1764,22 @@
                      "allowMultiple":false,
                      "type":"string",
                      "paramType":"query"
+                  },
+                  {
+                     "name":"load_and_stream",
+                     "description":"Load the sstables and stream to all replica nodes that owns the data",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"primary_replica_only",
+                     "description":"Load the sstables and stream to primary replica node that owns the data. Repair is needed after the load and stream process",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
                   }
                ]
             }
