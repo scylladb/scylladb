@@ -194,9 +194,6 @@ if __name__ == '__main__':
     default_no_cpuscaling_setup = False
 
     if is_offline():
-        default_no_node_exporter = True
-        warn_offline('node exporter setup')
-
         if not is_nonroot():
             default_no_ntp_setup = True
             warn_offline('ntp setup')
