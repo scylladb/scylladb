@@ -659,11 +659,10 @@ def variant_to_member(template_parameters):
     return [DataClassMember(name=get_variant_type(x), type=x) for x in template_parameters if is_local_type(x) or is_variant(x)]
 
 
-def variant_info(info, template_parameters):
-    [cls, parent_template_param] = info
+def variant_info(cls, template_parameters):
     variant_info_cls = copy(cls) # shallow copy of cls
     variant_info_cls.members = variant_to_member(template_parameters)
-    return [variant_info_cls, parent_template_param]
+    return variant_info_cls
 
 
 stubs = set()
@@ -673,8 +672,7 @@ def is_stub(cls):
     return cls in stubs
 
 
-def handle_visitors_state(info, cout, classes=[]):
-    cls = info[0]
+def handle_visitors_state(cls, cout, classes=[]):
     name = "__".join(classes) if classes else cls.name
     frame = "empty_frame" if cls.final else "frame"
     fprintln(cout, f"""
@@ -693,7 +691,7 @@ struct state_of_{name} {{
         if is_local_type(m.type):
             handle_visitors_state(local_types[param_type(m.type)], cout, member_class + [m.name])
         if is_variant(m.type):
-            handle_visitors_state(variant_info(info, m.type.template_parameters), cout, member_class + [m.name])
+            handle_visitors_state(variant_info(cls, m.type.template_parameters), cout, member_class + [m.name])
 
 
 def get_dependency(cls):
@@ -985,7 +983,7 @@ def add_variant_nodes(cout, member, param, base_state, parents, classes):
     par = base_state + "__" + member.name
     for typ in param.template_parameters:
         if is_local_type(typ):
-            handle_visitors_nodes(local_types[param_type(typ)], cout, True, classes + [member.name, local_types[param_type(typ)][0].name])
+            handle_visitors_nodes(local_types[param_type(typ)], cout, True, classes + [member.name, local_types[param_type(typ)].name])
         if is_variant(typ):
             name = base_state + "__" + member.name + "__variant"
             new_member = copy(member) # shallow copy
@@ -1011,7 +1009,7 @@ def add_template_writer_node(cout, typ):
         add_optional_node(cout, typ)
 
 
-def add_nodes_when_needed(cout, info, member, base_state_name, parents, member_classes):
+def add_nodes_when_needed(cout, member, base_state_name, parents, member_classes):
     if is_vector(member.type):
         add_vector_node(cout, member, base_state_name, base_state_name)
     elif is_variant(member.type):
@@ -1020,9 +1018,8 @@ def add_nodes_when_needed(cout, info, member, base_state_name, parents, member_c
         handle_visitors_nodes(local_types[member.type.name], cout, False, member_classes + [member.name])
 
 
-def handle_visitors_nodes(info, cout, variant_node=False, classes=[]):
+def handle_visitors_nodes(cls, cout, variant_node=False, classes=[]):
     global writers
-    cls = info[0]
     # for root node, only generate once
     if not classes:
         if cls.name in writers:
@@ -1053,20 +1050,20 @@ def handle_visitors_nodes(info, cout, variant_node=False, classes=[]):
             handle_visitors_nodes(local_types[member], cout)
     for ind in reversed(range(1, len(members))):
         member = members[ind]
-        add_nodes_when_needed(cout, info, member, base_state_name, parents, member_classes)
+        add_nodes_when_needed(cout, member, base_state_name, parents, member_classes)
         variant_state = base_state_name + "__" + get_member_name(member.name) if is_variant(member.type) else base_state_name
         add_node(cout, base_state_name + "__" + get_member_name(members[ind - 1].name), member.type, variant_state, "after_", base_state_name, add_param_write(member, base_state_name), False)
     member = members[0]
-    add_nodes_when_needed(cout, info, member, base_state_name, parents, member_classes)
+    add_nodes_when_needed(cout, member, base_state_name, parents, member_classes)
     add_node(cout, base_state_name, member.type, base_state_name, prefix, parents, add_param_write(member, base_state_name, False, not classes), False, is_final(cls))
 
 
-def add_to_types(cls, parent_template_param):
+def add_to_types(cls):
     global local_types
     global stubs
     if not cls.attribute or cls.attribute.name != 'writable':
         return
-    local_types[cls.name] = [cls, parent_template_param]
+    local_types[cls.name] = cls
     if cls.stub:
         stubs.add(cls.name)
 
@@ -1075,7 +1072,7 @@ def sort_dependencies():
     dep_tree = {}
     res = []
     for k in local_types:
-        cls = local_types[k][0]
+        cls = local_types[k]
         dep_tree[k] = get_dependency(cls)
     while (len(dep_tree) > 0):
         found = sorted(k for k in dep_tree if not dep_tree[k])
@@ -1149,8 +1146,7 @@ template<typename Input>
     fprintln(hout, f'    return {t}(deserialize(v, boost::type<unknown_variant_type>()));\n  }});\n}}')
 
 
-def add_view(cout, info):
-    cls = info[0]
+def add_view(cout, cls):
     members = get_members(cls)
     for m in members:
         add_variant_read_size(cout, m.type)
@@ -1242,7 +1238,7 @@ def add_visitors(cout):
 
 
 def handle_class(cls, hout, cout, namespaces=[], parent_template_param=[]):
-    add_to_types(cls, parent_template_param)
+    add_to_types(cls)
     if cls.stub:
         return
     is_tpl = cls.template_params is not None
@@ -1281,7 +1277,7 @@ def handle_objects(tree, hout, cout, namespaces=[]):
 def handle_types(tree):
     for obj in tree:
         if isinstance(obj, ClassDef):
-            add_to_types(obj, [])
+            add_to_types(obj)
         elif isinstance(obj, EnumDef):
             pass
         elif isinstance(obj, NamespaceDef):
