@@ -299,7 +299,6 @@ void serializer<{full_name}>::write(Output& buf, const {full_name}& obj) {{""")
 
 
     def serializer_read_impl(self, cout, template_decl, template_class_param):
-        is_final = self.final
         name = ns_qualified_name(self.name, self.ns_context)
 
         fprintln(cout, f"""
@@ -308,10 +307,10 @@ template <typename Input>
 {name}{template_class_param} serializer<{name}{template_class_param}>::read(Input& buf) {{
  return seastar::with_serialized_stream(buf, [] (auto& buf) {{""")
         if not self.members:
-            if not is_final:
+            if not self.final:
                 fprintln(cout, f"""  {SIZETYPE} size = {DESERIALIZER}(buf, boost::type<{SIZETYPE}>());
   buf.skip(size - sizeof({SIZETYPE}));""")
-        elif not is_final:
+        elif not self.final:
             fprintln(cout, f"""  {SIZETYPE} size = {DESERIALIZER}(buf, boost::type<{SIZETYPE}>());
   auto in = buf.read_substream(size - sizeof({SIZETYPE}));""")
         else:
@@ -342,7 +341,6 @@ template <typename Input>
 
 
     def serializer_skip_impl(self, cout, template_decl, template_class_param):
-        is_final = self.final
         name = ns_qualified_name(self.name, self.ns_context)
 
         fprintln(cout, f"""
@@ -350,7 +348,7 @@ template <typename Input>
 template <typename Input>
 void serializer<{name}{template_class_param}>::skip(Input& buf) {{
  seastar::with_serialized_stream(buf, [] (auto& buf) {{""")
-        if not is_final:
+        if not self.final:
             fprintln(cout, f"""  {SIZETYPE} size = {DESERIALIZER}(buf, boost::type<{SIZETYPE}>());
   buf.skip(size - sizeof({SIZETYPE}));""")
         else:
@@ -643,10 +641,6 @@ def get_member_name(name):
 
 def get_members(cls):
     return [p for p in cls.members if not isinstance(p, ClassDef) and not isinstance(p, EnumDef)]
-
-
-def is_final(cls):
-    return cls.final
 
 
 def get_variant_type(t):
@@ -1041,7 +1035,7 @@ def handle_visitors_nodes(cls, cout, variant_node=False, classes=[]):
     member_classes = classes if classes else [current_name]
     prefix = "" if classes else "writer_of_"
     if not members:
-        add_node(cout, base_state_name, None, base_state_name, prefix, parents, add_end_method(parents, current_name, variant_node, classes), False, is_final(cls))
+        add_node(cout, base_state_name, None, base_state_name, prefix, parents, add_end_method(parents, current_name, variant_node, classes), False, cls.final)
         return
     add_node(cout, base_state_name + "__" + get_member_name(members[-1].name), members[-1].type, base_state_name, "after_", base_state_name, add_end_method(parents, current_name, variant_node, classes))
     # Create writer and reader for include class
@@ -1055,7 +1049,7 @@ def handle_visitors_nodes(cls, cout, variant_node=False, classes=[]):
         add_node(cout, base_state_name + "__" + get_member_name(members[ind - 1].name), member.type, variant_state, "after_", base_state_name, add_param_write(member, base_state_name), False)
     member = members[0]
     add_nodes_when_needed(cout, member, base_state_name, parents, member_classes)
-    add_node(cout, base_state_name, member.type, base_state_name, prefix, parents, add_param_write(member, base_state_name, False, not classes), False, is_final(cls))
+    add_node(cout, base_state_name, member.type, base_state_name, prefix, parents, add_param_write(member, base_state_name, False, not classes), False, cls.final)
 
 
 def add_to_types(cls):
@@ -1163,7 +1157,7 @@ def add_view(cout, cls):
             }}
         """))
 
-    skip = "" if is_final(cls) else "ser::skip(in, boost::type<size_type>());"
+    skip = "" if cls.final else "ser::skip(in, boost::type<size_type>());"
     local_names = {}
     for m in members:
         name = get_member_name(m.name)
@@ -1190,7 +1184,7 @@ def add_view(cout, cls):
         skip = skip + f"\n       ser::skip(in, boost::type<{full_type}>());"
 
     fprintln(cout, "};")
-    skip_impl = "auto& in = v;\n       " + skip if is_final(cls) else "v.skip(read_frame_size(v));"
+    skip_impl = "auto& in = v;\n       " + skip if cls.final else "v.skip(read_frame_size(v));"
     if skip == "":
         skip_impl = ""
 
