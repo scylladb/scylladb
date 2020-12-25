@@ -160,8 +160,8 @@ class EnumDef:
     def __repr__(self):
         return self.__str__()
 
-    def serializer_write_impl(self, cout, template_decl, namespaces):
-        name = ns_qualified_name(self.name, namespaces)
+    def serializer_write_impl(self, cout, template_decl):
+        name = ns_qualified_name(self.name, self.ns_context)
 
         fprintln(cout, f"""
 {template_decl}
@@ -171,8 +171,8 @@ void serializer<{name}>::write(Output& buf, const {name}& v) {{
 }}""")
 
 
-    def serializer_read_impl(self, cout, template_decl, namespaces):
-        name = ns_qualified_name(self.name, namespaces)
+    def serializer_read_impl(self, cout, template_decl):
+        name = ns_qualified_name(self.name, self.ns_context)
 
         fprintln(cout, f"""
 {template_decl}
@@ -280,8 +280,8 @@ class ClassDef:
     def __repr__(self):
         return self.__str__()
 
-    def serializer_write_impl(self, cout, template_decl, template_class_param, namespaces):
-        name = ns_qualified_name(self.name, namespaces)
+    def serializer_write_impl(self, cout, template_decl, template_class_param):
+        name = ns_qualified_name(self.name, self.ns_context)
         full_name = name + template_class_param
 
         fprintln(cout, f"""
@@ -298,9 +298,9 @@ void serializer<{full_name}>::write(Output& buf, const {full_name}& obj) {{""")
         fprintln(cout, "}")
 
 
-    def serializer_read_impl(self, cout, template_decl, template_class_param, namespaces):
+    def serializer_read_impl(self, cout, template_decl, template_class_param):
         is_final = self.final
-        name = ns_qualified_name(self.name, namespaces)
+        name = ns_qualified_name(self.name, self.ns_context)
 
         fprintln(cout, f"""
 {template_decl}
@@ -341,9 +341,9 @@ template <typename Input>
 }}""")
 
 
-    def serializer_skip_impl(self, cout, template_decl, template_class_param, namespaces):
+    def serializer_skip_impl(self, cout, template_decl, template_class_param):
         is_final = self.final
-        name = ns_qualified_name(self.name, namespaces)
+        name = ns_qualified_name(self.name, self.ns_context)
 
         fprintln(cout, f"""
 {template_decl}
@@ -566,14 +566,14 @@ def template_params_str(template_params):
     return ", ".join(map(lambda param: param.typename + " " + param.name, template_params))
 
 
-def handle_enum(enum, hout, cout, namespaces, parent_template_param=[]):
+def handle_enum(enum, hout, cout, parent_template_param=[]):
     temp_def = template_params_str(parent_template_param)
     template_decl = "template <" + temp_def + ">" if temp_def else ""
-    name = ns_qualified_name(enum.name, namespaces)
+    name = ns_qualified_name(enum.name, enum.ns_context)
     declare_methods(hout, name, temp_def)
 
-    enum.serializer_write_impl(cout, template_decl, namespaces)
-    enum.serializer_read_impl(cout, template_decl, namespaces)
+    enum.serializer_write_impl(cout, template_decl)
+    enum.serializer_read_impl(cout, template_decl)
 
 
 def join_template(template_params):
@@ -660,10 +660,10 @@ def variant_to_member(template_parameters):
 
 
 def variant_info(info, template_parameters):
-    [cls, namespaces, parent_template_param] = info
+    [cls, parent_template_param] = info
     variant_info_cls = copy(cls) # shallow copy of cls
     variant_info_cls.members = variant_to_member(template_parameters)
-    return [variant_info_cls, namespaces, parent_template_param]
+    return [variant_info_cls, parent_template_param]
 
 
 stubs = set()
@@ -1061,12 +1061,12 @@ def handle_visitors_nodes(info, cout, variant_node=False, classes=[]):
     add_node(cout, base_state_name, member.type, base_state_name, prefix, parents, add_param_write(member, base_state_name, False, not classes), False, is_final(cls))
 
 
-def add_to_types(cls, namespaces, parent_template_param):
+def add_to_types(cls, parent_template_param):
     global local_types
     global stubs
     if not cls.attribute or cls.attribute.name != 'writable':
         return
-    local_types[cls.name] = [cls, namespaces, parent_template_param]
+    local_types[cls.name] = [cls, parent_template_param]
     if cls.stub:
         stubs.add(cls.name)
 
@@ -1242,7 +1242,7 @@ def add_visitors(cout):
 
 
 def handle_class(cls, hout, cout, namespaces=[], parent_template_param=[]):
-    add_to_types(cls, namespaces, parent_template_param)
+    add_to_types(cls, parent_template_param)
     if cls.stub:
         return
     is_tpl = cls.template_params is not None
@@ -1251,19 +1251,19 @@ def handle_class(cls, hout, cout, namespaces=[], parent_template_param=[]):
     template_decl = "template <" + template_params + ">" if is_tpl else ""
     template_class_param = "<" + ",".join(map(lambda a: a.name, template_param_list)) + ">" if is_tpl else ""
 
-    name = ns_qualified_name(cls.name, namespaces)
+    name = ns_qualified_name(cls.name, cls.ns_context)
     full_name = name + template_class_param
     # Handle sub-types: can be either enum or class
     for member in cls.members:
         if isinstance(member, ClassDef):
             handle_class(member, hout, cout, namespaces + [cls.name + template_class_param], parent_template_param + template_param_list)
         elif isinstance(member, EnumDef):
-            handle_enum(member, hout, cout, namespaces + [cls.name + template_class_param], parent_template_param + template_param_list)
+            handle_enum(member, hout, cout, parent_template_param + template_param_list)
     declare_methods(hout, full_name, template_params)
 
-    cls.serializer_write_impl(cout, template_decl, template_class_param, namespaces)
-    cls.serializer_read_impl(cout, template_decl, template_class_param, namespaces)
-    cls.serializer_skip_impl(cout, template_decl, template_class_param, namespaces)
+    cls.serializer_write_impl(cout, template_decl, template_class_param)
+    cls.serializer_read_impl(cout, template_decl, template_class_param)
+    cls.serializer_skip_impl(cout, template_decl, template_class_param)
 
 
 def handle_objects(tree, hout, cout, namespaces=[]):
@@ -1271,23 +1271,43 @@ def handle_objects(tree, hout, cout, namespaces=[]):
         if isinstance(obj, ClassDef):
             handle_class(obj, hout, cout, namespaces)
         elif isinstance(obj, EnumDef):
-            handle_enum(obj, hout, cout, namespaces)
+            handle_enum(obj, hout, cout)
         elif isinstance(obj, NamespaceDef):
             handle_objects(obj.members, hout, cout, namespaces + [obj.name])
         else:
             print(f"Unknown type: {obj}")
 
 
-def handle_types(tree, namespaces=[]):
+def handle_types(tree):
     for obj in tree:
         if isinstance(obj, ClassDef):
-            add_to_types(obj, namespaces, [])
+            add_to_types(obj, [])
         elif isinstance(obj, EnumDef):
             pass
         elif isinstance(obj, NamespaceDef):
-            handle_types(obj.members, namespaces + [obj.name])
+            handle_types(obj.members)
         else:
             print(f"Unknown object type: {obj}")
+
+
+def setup_namespace_bindings(tree, ns_context = []):
+    '''Cache namespace information for each type declaration directly in the AST node'''
+    for obj in tree:
+        if isinstance(obj, NamespaceDef):
+            setup_namespace_bindings(obj.members, ns_context + [obj.name])
+        elif isinstance(obj, EnumDef):
+            obj.ns_context = ns_context
+        elif isinstance(obj, ClassDef):
+            obj.ns_context = ns_context
+            # need to account for nested types
+            current_scope = obj.name
+            if obj.template_params:
+                # current scope name should consider template classes as well
+                current_scope += "<" + ",".join(tp.name for tp in obj.template_params) + ">"
+            setup_namespace_bindings(obj.members, ns_context + [current_scope])
+        else:
+            continue
+
 
 
 def load_file(name):
@@ -1311,6 +1331,7 @@ def load_file(name):
         fprintln(cout, f"namespace {config.ns} {{")
     data = parse_file(name)
     if data:
+        setup_namespace_bindings(data)
         handle_types(data)
         handle_objects(data, hout, cout)
     add_visitors(cout)
