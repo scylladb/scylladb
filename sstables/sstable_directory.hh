@@ -118,7 +118,7 @@ private:
     // the amount of data resharded per shard, so a coordinator may redistribute this.
     sstable_info_vector _shared_sstable_info;
 
-    future<> process_descriptor(sstables::entry_descriptor desc, const ::io_priority_class& iop);
+    future<> process_descriptor(sstables::entry_descriptor desc, const ::io_priority_class& iop, bool sort_sstables_according_to_owner = true);
     void validate(sstables::shared_sstable sst) const;
     void handle_component(scan_state& state, sstables::entry_descriptor desc, std::filesystem::path filename);
     future<> remove_input_sstables_from_resharding(std::vector<sstables::shared_sstable> sstlist);
@@ -130,6 +130,8 @@ private:
     template <typename Container, typename Func>
     future<> parallel_for_each_restricted(Container&& C, Func&& func);
     future<> load_foreign_sstables(sstable_info_vector info_vec);
+
+    std::vector<sstables::shared_sstable> _unsorted_sstables;
 public:
     sstable_directory(std::filesystem::path sstable_dir,
             unsigned load_parallelism,
@@ -139,6 +141,10 @@ public:
             enable_dangerous_direct_import_of_cassandra_counters eddiocc,
             allow_loading_materialized_view,
             sstable_object_from_existing_fn sstable_from_existing);
+
+    std::vector<sstables::shared_sstable>& get_unsorted_sstables() {
+        return _unsorted_sstables;
+    }
 
     // moves unshared SSTables that don't belong to this shard to the right shards.
     future<> move_foreign_sstables(sharded<sstable_directory>& source_directory);
@@ -161,7 +167,10 @@ public:
     // This function doesn't change on-storage state. If files are to be removed, a separate call
     // (commit_file_removals()) has to be issued. This is to make sure that all instances of this
     // class in a sharded service have the opportunity to validate its files.
-    future<> process_sstable_dir(const ::io_priority_class& iop);
+    future<> process_sstable_dir(const ::io_priority_class& iop, bool sort_sstables_according_to_owner = true);
+
+    // Sort the sstable according to owner
+    future<> sort_sstable(sstables::shared_sstable sst);
 
     // If files were scheduled to be removed, they will be removed after this call.
     future<> commit_directory_changes();

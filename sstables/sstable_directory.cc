@@ -107,7 +107,7 @@ void sstable_directory::validate(sstables::shared_sstable sst) const {
 }
 
 future<>
-sstable_directory::process_descriptor(sstables::entry_descriptor desc, const ::io_priority_class& iop) {
+sstable_directory::process_descriptor(sstables::entry_descriptor desc, const ::io_priority_class& iop, bool sort_sstables_according_to_owner) {
     if (desc.version > _max_version_seen) {
         _max_version_seen = desc.version;
     }
@@ -121,23 +121,34 @@ sstable_directory::process_descriptor(sstables::entry_descriptor desc, const ::i
         } else {
             return make_ready_future<>();
         }
-    }).then([sst, this] {
-        return sst->get_open_info().then([sst, this] (sstables::foreign_sstable_open_info info) {
-            auto shards = sst->get_shards_for_this_sstable();
-            if (shards.size() == 1) {
-                if (shards[0] == this_shard_id()) {
-                    dirlog.trace("{} identified as a local unshared SSTable", sst->get_filename());
-                    _unshared_local_sstables.push_back(sst);
-                } else {
-                    dirlog.trace("{} identified as a remote unshared SSTable", sst->get_filename());
-                    _unshared_remote_sstables[shards[0]].push_back(std::move(info));
-                }
-            } else {
-                dirlog.trace("{} identified as a shared SSTable", sst->get_filename());
-                _shared_sstable_info.push_back(std::move(info));
-            }
+    }).then([sst, sort_sstables_according_to_owner, this] {
+        if (sort_sstables_according_to_owner) {
+            return sort_sstable(sst);
+        } else {
+            dirlog.debug("Added {} to unsorted sstables list", sst->get_filename());
+            _unsorted_sstables.push_back(sst);
             return make_ready_future<>();
-        });
+        }
+    });
+}
+
+future<>
+sstable_directory::sort_sstable(sstables::shared_sstable sst) {
+    return sst->get_open_info().then([sst, this] (sstables::foreign_sstable_open_info info) {
+        auto shards = sst->get_shards_for_this_sstable();
+        if (shards.size() == 1) {
+            if (shards[0] == this_shard_id()) {
+                dirlog.trace("{} identified as a local unshared SSTable", sst->get_filename());
+                _unshared_local_sstables.push_back(sst);
+            } else {
+                dirlog.trace("{} identified as a remote unshared SSTable", sst->get_filename());
+                _unshared_remote_sstables[shards[0]].push_back(std::move(info));
+            }
+        } else {
+            dirlog.trace("{} identified as a shared SSTable", sst->get_filename());
+            _shared_sstable_info.push_back(std::move(info));
+        }
+        return make_ready_future<>();
     });
 }
 
@@ -152,7 +163,7 @@ sstable_directory::highest_version_seen() const {
 }
 
 future<>
-sstable_directory::process_sstable_dir(const ::io_priority_class& iop) {
+sstable_directory::process_sstable_dir(const ::io_priority_class& iop, bool sort_sstables_according_to_owner) {
     dirlog.debug("Start processing directory {} for SSTables", _sstable_dir);
 
     // It seems wasteful that each shard is repeating this scan, and to some extent it is.
@@ -166,13 +177,13 @@ sstable_directory::process_sstable_dir(const ::io_priority_class& iop) {
     //   to make sure they all update their own version of scan_state and then merge it.
     // - If all shards scan in parallel, they can start loading sooner. That is faster than having
     //   a separate step to fetch all files, followed by another step to distribute and process.
-    return do_with(scan_state{}, [this, &iop] (scan_state& state) {
+    return do_with(scan_state{}, [this, sort_sstables_according_to_owner, &iop] (scan_state& state) {
         return lister::scan_dir(_sstable_dir, { directory_entry_type::regular },
-                [this, &state] (fs::path parent_dir, directory_entry de) {
+                [this, sort_sstables_according_to_owner, &state] (fs::path parent_dir, directory_entry de) {
             auto comps = sstables::entry_descriptor::make_descriptor(_sstable_dir.native(), de.name);
             handle_component(state, std::move(comps), parent_dir / fs::path(de.name));
             return make_ready_future<>();
-        }, &manifest_json_filter).then([this, &state, &iop] {
+        }, &manifest_json_filter).then([this, sort_sstables_according_to_owner, &state, &iop] {
             // Always okay to delete files with a temporary TOC. We want to do it before we process
             // the generations seen: it's okay to reuse those generations since the files will have
             // been deleted anyway.
@@ -196,11 +207,11 @@ sstable_directory::process_sstable_dir(const ::io_priority_class& iop) {
 
             // _descriptors is everything with a TOC. So after we remove this, what's left is
             // SSTables for which a TOC was not found.
-            return parallel_for_each_restricted(state.descriptors, [this, &state, &iop] (std::tuple<int64_t, sstables::entry_descriptor>&& t) {
+            return parallel_for_each_restricted(state.descriptors, [this, sort_sstables_according_to_owner, &state, &iop] (std::tuple<int64_t, sstables::entry_descriptor>&& t) {
                 auto& desc = std::get<1>(t);
                 state.generations_found.erase(desc.generation);
                 // This will try to pre-load this file and throw an exception if it is invalid
-                return process_descriptor(std::move(desc), iop);
+                return process_descriptor(std::move(desc), iop, sort_sstables_according_to_owner);
             }).then([this, &state] {
                 // For files missing TOC, it depends on where this is coming from.
                 // If scylla was supposed to have generated this SSTable, this is not okay and
