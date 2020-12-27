@@ -145,8 +145,8 @@ static std::vector<shared_sstable> get_uncompacting_sstables(column_family& cf, 
 class compaction;
 
 struct compaction_writer {
-    sstable_writer writer;
     shared_sstable sst;
+    sstable_writer writer;
 };
 
 class compacting_sstable_writer {
@@ -777,7 +777,8 @@ public:
         cfg.max_sstable_size = _max_sstable_size;
         cfg.monitor = &default_write_monitor();
         cfg.run_identifier = _run_identifier;
-        return compaction_writer{sst->get_writer(*_schema, partitions_per_sstable(), cfg, get_encoding_stats(), _io_priority), sst};
+        auto writer = sst->get_writer(*_schema, partitions_per_sstable(), cfg, get_encoding_stats(), _io_priority);
+        return compaction_writer{std::move(sst), std::move(writer)};
     }
 
     virtual void stop_sstable_writer(compaction_writer* writer) override {
@@ -841,7 +842,8 @@ public:
         cfg.max_sstable_size = _max_sstable_size;
         cfg.monitor = &_active_write_monitors.back();
         cfg.run_identifier = _run_identifier;
-        return compaction_writer{sst->get_writer(*_schema, partitions_per_sstable(), cfg, get_encoding_stats(), _io_priority), sst};
+        auto writer = sst->get_writer(*_schema, partitions_per_sstable(), cfg, get_encoding_stats(), _io_priority);
+        return compaction_writer{std::move(sst), std::move(writer)};
     }
 
     virtual void stop_sstable_writer(compaction_writer* writer) override {
@@ -1307,7 +1309,8 @@ public:
         cfg.monitor = &default_write_monitor();
         // sstables generated for a given shard will share the same run identifier.
         cfg.run_identifier = _run_identifiers.at(shard);
-        return compaction_writer{sst->get_writer(*_schema, partitions_per_sstable(shard), cfg, get_encoding_stats(), _io_priority, shard), sst};
+        auto writer = sst->get_writer(*_schema, partitions_per_sstable(shard), cfg, get_encoding_stats(), _io_priority, shard);
+        return compaction_writer{std::move(sst), std::move(writer)};
     }
 
     void on_new_partition() override {}
