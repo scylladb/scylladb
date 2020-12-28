@@ -94,7 +94,7 @@ future<> service_level_controller::stop() {
         _global_controller_db->dist_data_update_aborter.request_abort();
         _global_controller_db->notifications_serializer.broken();
     }
-    return make_ready_future();
+    return std::exchange(_distributed_data_updater, make_ready_future<>());
 }
 
 future<> service_level_controller::update_service_levels_from_distributed_data() {
@@ -225,7 +225,7 @@ future<> service_level_controller::notify_service_level_removed(sstring name) {
 }
 
 void service_level_controller::update_from_distributed_data(std::chrono::duration<float> interval) {
-    (void)container().invoke_on(global_controller, [interval] (service_level_controller& global_sl) {
+    _distributed_data_updater = container().invoke_on(global_controller, [interval] (service_level_controller& global_sl) {
         if (global_sl._global_controller_db->distributed_data_update.available()) {
             global_sl._global_controller_db->distributed_data_update = repeat([interval, &global_sl] {
                 return sleep_abortable<steady_clock_type>(std::chrono::duration_cast<steady_clock_type::duration>(interval),

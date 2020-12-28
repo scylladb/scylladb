@@ -90,6 +90,7 @@ private:
     service_level _default_service_level;
     service_level_distributed_data_accessor_ptr _sl_data_accessor;
     sharded<auth::service>& _auth_service;
+    future<> _distributed_data_updater = make_ready_future<>();
 public:
     service_level_controller(sharded<auth::service>& auth_service, service_level_options default_service_level_config);
 
