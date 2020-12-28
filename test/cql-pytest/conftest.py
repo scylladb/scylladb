@@ -47,7 +47,13 @@ def cql(request):
     profile = ExecutionProfile(
         load_balancing_policy=RoundRobinPolicy(),
         consistency_level=ConsistencyLevel.LOCAL_QUORUM,
-        serial_consistency_level=ConsistencyLevel.LOCAL_SERIAL)
+        serial_consistency_level=ConsistencyLevel.LOCAL_SERIAL,
+        # The default timeout (in seconds) for execute() commands is 10, which
+        # should have been more than enough, but in some extreme cases with a
+        # very slow debug build running on a very busy machine and a very slow
+        # request (e.g., a DROP KEYSPACE needing to drop multiple tables)
+        # 10 seconds may not be enough, so let's increase it. See issue #7838.
+        request_timeout = 120)
     cluster = Cluster(execution_profiles={EXEC_PROFILE_DEFAULT: profile},
         contact_points=[request.config.getoption('host')],
         port=request.config.getoption('port'),
