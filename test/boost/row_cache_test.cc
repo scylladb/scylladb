@@ -541,7 +541,7 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_multiple_mutation
             test(ds, query::full_partition_range, partitions.size() + 1);
             test(ds, query::full_partition_range, partitions.size() + 1);
 
-            cache->invalidate([] {}, key_after_all).get();
+            cache->invalidate(row_cache::external_updater([] {}), key_after_all).get();
 
             assert_that(ds.make_reader(s, tests::make_permit(), query::full_partition_range))
                 .produces(slice(partitions, query::full_partition_range))
@@ -670,7 +670,7 @@ SEASTAR_TEST_CASE(test_partition_range_population_with_concurrent_memtable_flush
             }
             return later().then([&] {
                 auto mt = make_lw_shared<memtable>(s);
-                return cache.update([]{}, *mt).then([mt] {
+                return cache.update(row_cache::external_updater([]{}), *mt).then([mt] {
                     return stop_iteration::no;
                 });
             });
@@ -693,7 +693,7 @@ SEASTAR_TEST_CASE(test_partition_range_population_with_concurrent_memtable_flush
                 .produces_end_of_stream();
         }
 
-        cache.invalidate([]{}).get();
+        cache.invalidate(row_cache::external_updater([]{})).get();
 
         {
             assert_that(cache.make_reader(s, tests::make_permit(), query::full_partition_range))
@@ -767,7 +767,7 @@ SEASTAR_TEST_CASE(test_reading_from_random_partial_partition) {
         // Merge m2 into cache
         auto mt = make_lw_shared<memtable>(gen.schema());
         mt->apply(m2);
-        cache.update([&] { underlying.apply(m2); }, *mt).get();
+        cache.update(row_cache::external_updater([&] { underlying.apply(m2); }), *mt).get();
 
         auto rd2 = cache.make_reader(gen.schema(), tests::make_permit());
         rd2.fill_buffer(db::no_timeout).get();
@@ -813,7 +813,7 @@ SEASTAR_TEST_CASE(test_presence_checker_runs_under_right_allocator) {
 
         auto mt = make_lw_shared<memtable>(gen.schema());
         mt->apply(m1);
-        cache.update([&] { underlying.apply(m1); }, *mt).get();
+        cache.update(row_cache::external_updater([&] { underlying.apply(m1); }), *mt).get();
     });
 }
 
@@ -834,9 +834,9 @@ SEASTAR_TEST_CASE(test_random_partition_population) {
             .produces(m1)
             .produces_end_of_stream();
 
-        cache.invalidate([&] {
+        cache.invalidate(row_cache::external_updater([&] {
             underlying.apply(m2);
-        }).get();
+        })).get();
 
         auto pr = dht::partition_range::make_singular(m2.decorated_key());
         assert_that(cache.make_reader(gen.schema(), tests::make_permit(), pr))
@@ -906,7 +906,7 @@ SEASTAR_TEST_CASE(test_eviction_from_invalidated) {
             cache.make_reader(s, tests::make_permit(), dht::partition_range::make_singular(key));
         }
 
-        cache.invalidate([] {}).get();
+        cache.invalidate(row_cache::external_updater([] {})).get();
 
         std::vector<sstring> tmp;
         auto alloc_size = logalloc::segment_size * 10;
@@ -1013,12 +1013,12 @@ SEASTAR_TEST_CASE(test_single_partition_update) {
         }
 
         auto mt = make_lw_shared<memtable>(s);
-        cache.update([&] {
+        cache.update(row_cache::external_updater([&] {
             mutation m(s, pk);
             m.set_clustered_cell(ck3, "v", data_value(101), 1);
             mt->apply(m);
             cache_mt.apply(m);
-        }, *mt).get();
+        }), *mt).get();
 
         {
             auto reader = cache.make_reader(s, tests::make_permit(), range);
@@ -1057,7 +1057,7 @@ SEASTAR_TEST_CASE(test_update) {
             mt->apply(m);
         }
 
-        cache.update([] {}, *mt).get();
+        cache.update(row_cache::external_updater([] {}), *mt).get();
 
         for (auto&& key : keys_not_in_cache) {
             verify_has(cache, key);
@@ -1079,10 +1079,10 @@ SEASTAR_TEST_CASE(test_update) {
             auto m = make_new_mutation(s);
             keys_not_in_cache.push_back(m.decorated_key());
             mt2->apply(m);
-            cache.invalidate([] {}, m.decorated_key()).get();
+            cache.invalidate(row_cache::external_updater([] {}), m.decorated_key()).get();
         }
 
-        cache.update([] {}, *mt2).get();
+        cache.update(row_cache::external_updater([] {}), *mt2).get();
 
         for (auto&& key : keys_not_in_cache) {
             verify_does_not_have(cache, key);
@@ -1099,7 +1099,7 @@ SEASTAR_TEST_CASE(test_update) {
             mt3->apply(m);
         }
 
-        cache.update([] {}, *mt3).get();
+        cache.update(row_cache::external_updater([] {}), *mt3).get();
 
         for (auto&& m : new_mutations) {
             verify_has(cache, m);
@@ -1161,7 +1161,7 @@ SEASTAR_TEST_CASE(test_update_failure) {
 
         bool failed = false;
         try {
-            cache.update([] { }, *mt).get();
+            cache.update(row_cache::external_updater([] { }), *mt).get();
         } catch (const std::bad_alloc&) {
             failed = true;
         }
@@ -1306,7 +1306,7 @@ SEASTAR_TEST_CASE(test_continuity_flag_and_invalidate_race) {
         rd.produces(ring[0]);
 
         // Invalidate ring[2] and ring[3]
-        cache.invalidate([] {}, dht::partition_range::make_starting_with({ ring[2].ring_position(), true })).get();
+        cache.invalidate(row_cache::external_updater([] {}), dht::partition_range::make_starting_with({ ring[2].ring_position(), true })).get();
 
         // Continue previous reader.
         rd.produces(ring[1])
@@ -1321,7 +1321,7 @@ SEASTAR_TEST_CASE(test_continuity_flag_and_invalidate_race) {
           .produces(ring[2]);
 
         // Invalidate whole cache.
-        cache.invalidate([] {}).get();
+        cache.invalidate(row_cache::external_updater([] {})).get();
 
         rd.produces(ring[3])
           .produces_end_of_stream();
@@ -1377,7 +1377,7 @@ SEASTAR_TEST_CASE(test_cache_population_and_update_race) {
         // This update should miss on all partitions
         auto mt2_copy = make_lw_shared<memtable>(s);
         mt2_copy->apply(*mt2, tests::make_permit()).get();
-        auto update_future = cache.update([&] { memtables.apply(mt2_copy); }, *mt2);
+        auto update_future = cache.update(row_cache::external_updater([&] { memtables.apply(mt2_copy); }), *mt2);
 
         auto rd3 = cache.make_reader(s, tests::make_permit());
 
@@ -1440,7 +1440,7 @@ SEASTAR_TEST_CASE(test_invalidate) {
         auto some_element = keys_in_cache.begin() + 547;
         std::vector<dht::decorated_key> keys_not_in_cache;
         keys_not_in_cache.push_back(*some_element);
-        cache.invalidate([] {}, *some_element).get();
+        cache.invalidate(row_cache::external_updater([] {}), *some_element).get();
         keys_in_cache.erase(some_element);
 
         for (auto&& key : keys_in_cache) {
@@ -1460,7 +1460,7 @@ SEASTAR_TEST_CASE(test_invalidate) {
             { *some_range_begin, true }, { *some_range_end, false }
         );
         keys_not_in_cache.insert(keys_not_in_cache.end(), some_range_begin, some_range_end);
-        cache.invalidate([] {}, range).get();
+        cache.invalidate(row_cache::external_updater([] {}), range).get();
         keys_in_cache.erase(some_range_begin, some_range_end);
 
         for (auto&& key : keys_in_cache) {
@@ -1506,9 +1506,9 @@ SEASTAR_TEST_CASE(test_cache_population_and_clear_race) {
         sleep(10ms).get();
 
         // This update should miss on all partitions
-        auto cache_cleared = cache.invalidate([&] {
+        auto cache_cleared = cache.invalidate(row_cache::external_updater([&] {
             memtables.apply(mt2);
-        });
+        }));
 
         auto rd2 = cache.make_reader(s, tests::make_permit());
 
@@ -1580,7 +1580,7 @@ SEASTAR_TEST_CASE(test_mvcc) {
 
             auto mt1_copy = make_lw_shared<memtable>(s);
             mt1_copy->apply(*mt1, tests::make_permit()).get();
-            cache.update([&] { underlying.apply(mt1_copy); }, *mt1).get();
+            cache.update(row_cache::external_updater([&] { underlying.apply(mt1_copy); }), *mt1).get();
 
             auto rd3 = cache.make_reader(s, tests::make_permit());
             rd3.fill_buffer(db::no_timeout).get();
@@ -1603,7 +1603,7 @@ SEASTAR_TEST_CASE(test_mvcc) {
             assert_that(std::move(rd4)).produces(m12);
             assert_that(std::move(rd1)).produces(m1);
 
-            cache.invalidate([] {}).get0();
+            cache.invalidate(row_cache::external_updater([] {})).get0();
 
             assert_that(std::move(rd2)).produces(m1);
             assert_that(std::move(rd5)).produces(m12);
@@ -1655,7 +1655,7 @@ SEASTAR_TEST_CASE(test_slicing_mutation_reader) {
         row_cache cache(s, snapshot_source_from_snapshot(mt->as_data_source()), tracker);
 
         auto run_tests = [&] (auto& ps, std::deque<int> expected) {
-            cache.invalidate([] {}).get0();
+            cache.invalidate(row_cache::external_updater([] {})).get0();
 
             auto reader = cache.make_reader(s, tests::make_permit(), query::full_partition_range, ps);
             test_sliced_read_row_presence(std::move(reader), s, expected);
@@ -1669,7 +1669,7 @@ SEASTAR_TEST_CASE(test_slicing_mutation_reader) {
             reader = cache.make_reader(s, tests::make_permit(), singular_range, ps);
             test_sliced_read_row_presence(std::move(reader), s, expected);
 
-            cache.invalidate([] {}).get0();
+            cache.invalidate(row_cache::external_updater([] {})).get0();
 
             reader = cache.make_reader(s, tests::make_permit(), singular_range, ps);
             test_sliced_read_row_presence(std::move(reader), s, expected);
@@ -1834,7 +1834,7 @@ SEASTAR_TEST_CASE(test_update_invalidating) {
 
         auto mt_copy = make_lw_shared<memtable>(s.schema());
         mt_copy->apply(*mt, tests::make_permit()).get();
-        cache.update_invalidating([&] { underlying.apply(mt_copy); }, *mt).get();
+        cache.update_invalidating(row_cache::external_updater([&] { underlying.apply(mt_copy); }), *mt).get();
 
         assert_that(cache.make_reader(s.schema(), tests::make_permit()))
             .produces(m5)
@@ -2030,13 +2030,13 @@ static void populate_range(row_cache& cache,
 static void apply(row_cache& cache, memtable_snapshot_source& underlying, const mutation& m) {
     auto mt = make_lw_shared<memtable>(m.schema());
     mt->apply(m);
-    cache.update([&] { underlying.apply(m); }, *mt).get();
+    cache.update(row_cache::external_updater([&] { underlying.apply(m); }), *mt).get();
 }
 
 static void apply(row_cache& cache, memtable_snapshot_source& underlying, memtable& m) {
     auto mt1 = make_lw_shared<memtable>(m.schema());
     mt1->apply(m, tests::make_permit()).get();
-    cache.update([&] { underlying.apply(std::move(mt1)); }, m).get();
+    cache.update(row_cache::external_updater([&] { underlying.apply(std::move(mt1)); }), m).get();
 }
 
 SEASTAR_TEST_CASE(test_readers_get_all_data_after_eviction) {
@@ -2236,9 +2236,9 @@ SEASTAR_TEST_CASE(test_tombstones_are_not_missed_when_range_is_invalidated) {
             mutation m2(s.schema(), pk);
             s.add_row(m2, s.make_ckey(7), "v7");
 
-            cache.invalidate([&] {
+            cache.invalidate(row_cache::external_updater([&] {
                 underlying.apply(m2);
-            }).get();
+            })).get();
 
             populate_range(cache, pr, query::clustering_range::make_starting_with(s.make_ckey(5)));
 
@@ -2325,13 +2325,13 @@ SEASTAR_TEST_CASE(test_exception_safety_of_update_from_memtable) {
             snap->set_max_buffer_size(1);
             snap->fill_buffer(db::no_timeout).get();
 
-            cache.update([&] {
+            cache.update(row_cache::external_updater([&] {
                 auto mt2 = make_lw_shared<memtable>(cache.schema());
                 for (auto&& m : muts2) {
                     mt2->apply(m);
                 }
                 underlying.apply(std::move(mt2));
-            }, *mt).get();
+            }), *mt).get();
 
             d.cancel();
 
@@ -2768,7 +2768,7 @@ SEASTAR_TEST_CASE(test_continuity_is_populated_when_read_overlaps_with_older_ver
         auto apply = [&] (mutation m) {
             auto mt = make_lw_shared<memtable>(m.schema());
             mt->apply(m);
-            cache.update([&] { underlying.apply(m); }, *mt).get();
+            cache.update(row_cache::external_updater([&] { underlying.apply(m); }), *mt).get();
         };
 
         auto make_reader = [&] {
@@ -2896,7 +2896,7 @@ SEASTAR_TEST_CASE(test_continuity_population_with_multicolumn_clustering_key) {
         auto apply = [&] (mutation m) {
             auto mt = make_lw_shared<memtable>(m.schema());
             mt->apply(m);
-            cache.update([&] { underlying.apply(m); }, *mt).get();
+            cache.update(row_cache::external_updater([&] { underlying.apply(m); }), *mt).get();
         };
 
         auto make_reader = [&] (const query::partition_slice* slice = nullptr) {
@@ -3170,13 +3170,13 @@ SEASTAR_TEST_CASE(test_concurrent_reads_and_eviction) {
 
             auto mt = make_lw_shared<memtable>(m2.schema());
             mt->apply(m2);
-            cache.update([&] () noexcept {
+            cache.update(row_cache::external_updater([&] () noexcept {
                 auto snap = underlying();
                 underlying.apply(m2);
                 auto new_version = versions.back() + m2;
                 versions.emplace_back(std::move(new_version));
                 ++last_generation;
-            }, *mt).get();
+            }), *mt).get();
             cache_generation = last_generation;
 
             later().get();
@@ -3232,9 +3232,9 @@ SEASTAR_TEST_CASE(test_alter_then_preempted_update_then_memtable_read) {
         cache.set_schema(s2);
         mt2->set_schema(s2);
 
-        auto update_f = cache.update([&] () noexcept {
+        auto update_f = cache.update(row_cache::external_updater([&] () noexcept {
             underlying.apply(m2);
-        }, *mt2);
+        }), *mt2);
         auto wait_for_update = defer([&] { update_f.get(); });
 
         // Wait for cache update to enter the partition
@@ -3348,7 +3348,7 @@ SEASTAR_TEST_CASE(test_hash_is_cached) {
 
         auto mt = make_lw_shared<memtable>(s);
         mt->apply(make_new_mutation(s, mut.key()));
-        cache.update([&] { }, *mt).get();
+        cache.update(row_cache::external_updater([&] { }), *mt).get();
 
         {
             auto rd = cache.make_reader(s, tests::make_permit());

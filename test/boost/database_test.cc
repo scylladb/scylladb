@@ -144,7 +144,7 @@ SEASTAR_THREAD_TEST_CASE(test_database_with_data_in_sstables_is_a_mutation_sourc
                 e.local_db().apply(cf.schema(), freeze(m), tracing::trace_state_ptr(), db::commitlog::force_sync::no, db::no_timeout).get();
             }
             cf.flush().get();
-            cf.get_row_cache().invalidate([] {}).get();
+            cf.get_row_cache().invalidate(row_cache::external_updater([] {})).get();
             return mutation_source([&] (schema_ptr s,
                     reader_permit,
                     const dht::partition_range& range,

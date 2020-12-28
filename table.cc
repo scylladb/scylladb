@@ -37,6 +37,7 @@
 #include "query-result-writer.hh"
 #include "db/view/view.hh"
 #include <seastar/core/seastar.hh>
+#include <seastar/core/coroutine.hh>
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/adaptor/map.hpp>
 #include "utils/error_injection.hh"
@@ -359,26 +360,26 @@ void table::add_sstable(sstables::shared_sstable sstable) {
 
 future<>
 table::add_sstable_and_update_cache(sstables::shared_sstable sst) {
-    return get_row_cache().invalidate([this, sst] () noexcept {
+    return get_row_cache().invalidate(row_cache::external_updater([this, sst] () noexcept {
         // FIXME: this is not really noexcept, but we need to provide strong exception guarantees.
         // atomically load all opened sstables into column family.
         add_sstable(sst);
         trigger_compaction();
-    }, dht::partition_range::make({sst->get_first_decorated_key(), true}, {sst->get_last_decorated_key(), true}));
+    }), dht::partition_range::make({sst->get_first_decorated_key(), true}, {sst->get_last_decorated_key(), true}));
 }
 
 future<>
 table::update_cache(lw_shared_ptr<memtable> m, sstables::shared_sstable sst) {
-    auto adder = [this, m, sst] {
+    auto adder = row_cache::external_updater([this, m, sst] {
         auto newtab_ms = sst->as_mutation_source();
         add_sstable(sst);
         m->mark_flushed(std::move(newtab_ms));
         try_trigger_compaction();
-    };
+    });
     if (cache_enabled()) {
-        return _cache.update(adder, *m);
+        return _cache.update(std::move(adder), *m);
     } else {
-        return _cache.invalidate(adder).then([m] { return m->clear_gently(); });
+        return _cache.invalidate(std::move(adder)).then([m] { return m->clear_gently(); });
     }
 }
 
@@ -579,10 +580,10 @@ table::stop() {
             return _memtables->request_flush().finally([this] {
                 return _compaction_manager.remove(this).then([this] {
                     return _sstable_deletion_gate.close().then([this] {
-                        return get_row_cache().invalidate([this] {
+                        return get_row_cache().invalidate(row_cache::external_updater([this] {
                             _sstables = _compaction_strategy.make_sstable_set(_schema);
                             _sstables_staging.clear();
-                        }).then([this] {
+                        })).then([this] {
                             _cache.refresh_snapshot();
                         });
                     });
@@ -660,9 +661,9 @@ void table::rebuild_statistics() {
     }
 }
 
-void
-table::rebuild_sstable_list(const std::vector<sstables::shared_sstable>& new_sstables,
-                                    const std::vector<sstables::shared_sstable>& old_sstables) {
+future<lw_shared_ptr<sstables::sstable_set>>
+table::build_new_sstable_list(const std::vector<sstables::shared_sstable>& new_sstables,
+                              const std::vector<sstables::shared_sstable>& old_sstables) {
     auto current_sstables = _sstables;
     auto new_sstable_list = _compaction_strategy.make_sstable_set(_schema);
 
@@ -675,8 +676,9 @@ table::rebuild_sstable_list(const std::vector<sstables::shared_sstable>& new_sst
         if (!s.contains(tab)) {
             new_sstable_list.insert(tab);
         }
+        co_await make_ready_future<>(); // yield if needed.
     }
-    _sstables = make_lw_shared<sstables::sstable_set>(std::move(new_sstable_list));
+    co_return make_lw_shared<sstables::sstable_set>(std::move(new_sstable_list));
 }
 
 // Note: must run in a seastar thread
@@ -721,10 +723,25 @@ table::on_compaction_completion(sstables::compaction_completion_desc& desc) {
         rebuild_statistics();
     });
 
-    _cache.invalidate([this, &desc] () noexcept {
-        // FIXME: this is not really noexcept, but we need to provide strong exception guarantees.
-        rebuild_sstable_list(desc.new_sstables, desc.old_sstables);
-    }, std::move(desc.ranges_for_cache_invalidation)).get();
+    class sstable_list_updater : public row_cache::external_updater_impl {
+        table& _t;
+        const sstables::compaction_completion_desc& _desc;
+        lw_shared_ptr<sstables::sstable_set> _new_sstables;
+    public:
+        explicit sstable_list_updater(table& t, sstables::compaction_completion_desc& d) : _t(t), _desc(d) {}
+        virtual future<> prepare() override {
+            _new_sstables = co_await _t.build_new_sstable_list(_desc.new_sstables, _desc.old_sstables);
+        }
+        virtual void execute() override {
+            _t._sstables = std::move(_new_sstables);
+        }
+        static std::unique_ptr<row_cache::external_updater_impl> make(table& t, sstables::compaction_completion_desc& d) {
+            return std::make_unique<sstable_list_updater>(t, d);
+        }
+    };
+    auto updater = row_cache::external_updater(sstable_list_updater::make(*this, desc));
+
+    _cache.invalidate(std::move(updater), std::move(desc.ranges_for_cache_invalidation)).get();
 
     // refresh underlying data source in row cache to prevent it from holding reference
     // to sstables files that are about to be deleted.
@@ -1260,7 +1277,7 @@ future<> table::clear() {
     }
     _memtables->clear();
     _memtables->add_memtable();
-    return _cache.invalidate([] { /* There is no underlying mutation source */ });
+    return _cache.invalidate(row_cache::external_updater([] { /* There is no underlying mutation source */ }));
 }
 
 // NOTE: does not need to be futurized, but might eventually, depending on
@@ -1294,10 +1311,10 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
         }
     };
     auto p = make_lw_shared<pruner>(*this);
-    return _cache.invalidate([p, truncated_at] {
+    return _cache.invalidate(row_cache::external_updater([p, truncated_at] {
         p->prune(truncated_at);
         tlogger.debug("cleaning out row cache");
-    }).then([this, p]() mutable {
+    })).then([this, p]() mutable {
         rebuild_statistics();
 
         return parallel_for_each(p->remove, [this](sstables::shared_sstable s) {
