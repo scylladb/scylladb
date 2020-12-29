@@ -31,16 +31,12 @@ def table1(cql, test_keyspace):
     table = test_keyspace + "." + unique_name()
     cql.execute("CREATE TABLE " + table +
         "(p bigint, c int, v int, PRIMARY KEY (p,c))")
-    for i in range(0, 3):
-        for j in range(0, 3):
-            cql.execute(f'INSERT INTO {table} (p, c, v) VALUES ({i}, {j}, {j})')
-    everything = list(cql.execute('SELECT * FROM ' + table))
-    yield (table, everything)
+    yield table
     cql.execute("DROP TABLE " + table)
 
 # Performing operations with a small enough timeout is guaranteed to fail
 def test_per_query_timeout_effective(scylla_only, cql, table1):
-    table, everything = table1
+    table = table1
     key = random.randint(3, 2**60)
     with pytest.raises(ReadTimeout):
         cql.execute(f"SELECT * FROM {table} USING TIMEOUT 0ms")
@@ -51,10 +47,8 @@ def test_per_query_timeout_effective(scylla_only, cql, table1):
 
 # Performing operations with large enough timeout should succeed
 def test_per_query_timeout_large_enough(scylla_only, cql, table1):
-    table, everything = table1
+    table = table1
     key = random.randint(3, 2**60)
-    res = list(cql.execute(f"SELECT * FROM {table} USING TIMEOUT 24h"))
-    assert res == everything
     cql.execute(f"INSERT INTO {table} (p,c,v) VALUES ({key},1,1) USING TIMEOUT 60m")
     cql.execute(f"UPDATE {table} USING TIMEOUT 48h SET v = 5 WHERE p = {key} AND c = 1")
     res = list(cql.execute(f"SELECT * FROM {table} WHERE p IN (0,1,2,{key}) USING TIMEOUT 24h"))
@@ -63,7 +57,7 @@ def test_per_query_timeout_large_enough(scylla_only, cql, table1):
 # Preparing a statement with timeout should work - both by explicitly setting
 # the timeout and by using a marker.
 def test_prepared_statements(scylla_only, cql, table1):
-    table, everything = table1
+    table = table1
     key = random.randint(3, 2**60)
     prep = cql.prepare(f"INSERT INTO {table} (p,c,v) VALUES ({key},6,7) USING TIMEOUT ?")
     with pytest.raises(WriteTimeout):
@@ -88,7 +82,7 @@ def test_prepared_statements(scylla_only, cql, table1):
     assert len(result) == 1 and (result[0].c, result[0].v) == (1, 3)
 
 def test_batch(scylla_only, cql, table1):
-    table, _ = table1
+    table = table1
     key = random.randint(3, 2**60)
     cql.execute(f"""BEGIN BATCH USING TIMEOUT 48h
         INSERT INTO {table} (p,c,v) VALUES ({key},7,8);
@@ -137,7 +131,7 @@ def test_batch(scylla_only, cql, table1):
 
 # Mixing TIMEOUT parameter with other params from the USING clause is legal
 def test_mix_per_query_timeout_with_other_params(scylla_only, cql, table1):
-    table, everything = table1
+    table = table1
     key = random.randint(3, 2**60)
     cql.execute(f"INSERT INTO {table} (p,c,v) VALUES ({key},1,1) USING TIMEOUT 60m AND TTL 1000000 AND TIMESTAMP 321")
     cql.execute(f"INSERT INTO {table} (p,c,v) VALUES ({key},2,1) USING TIMESTAMP 42 AND TIMEOUT 30m")
@@ -148,7 +142,7 @@ def test_mix_per_query_timeout_with_other_params(scylla_only, cql, table1):
 
 # Only valid timeout durations are allowed to be specified
 def test_invalid_timeout(scylla_only, cql, table1):
-    table, everything = table1
+    table = table1
     def invalid(stmt):
         with pytest.raises(InvalidRequest):
             cql.execute(stmt)
