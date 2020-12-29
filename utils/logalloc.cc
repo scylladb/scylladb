@@ -45,6 +45,7 @@
 #include "utils/dynamic_bitset.hh"
 #include "utils/log_heap.hh"
 #include "utils/preempt.hh"
+#include "utils/vle.hh"
 
 #include <random>
 #include <chrono>
@@ -1150,77 +1151,25 @@ class region_impl final : public basic_region_impl {
         }
 
         segment::size_type encoded_size() const {
-            return log2floor(_n) / 6 + 1; // 0 is illegal
+            return utils::uleb64_encoded_size(_n); // 0 is illegal
         }
 
         void encode(char*& pos) const {
-            uint64_t b = 64;
-            auto n = _n;
-            auto start = pos;
-            do {
-                b |= n & 63;
-                n >>= 6;
-                if (!n) {
-                    b |= 128;
-                }
-                unpoison(pos, 1);
-                *pos++ = b;
-                b = 0;
-            } while (n);
-            poison(start, pos - start);
+            utils::uleb64_encode(pos, _n, poison<char>, unpoison);
         }
 
         // non-canonical encoding to allow padding (for alignment); encoded_size must be
         // sufficient (greater than this->encoded_size())
         void encode(char*& pos, size_t encoded_size) const {
-            uint64_t b = 64;
-            auto start = pos;
-            unpoison(start, encoded_size);
-            auto n = _n;
-            do {
-                b |= n & 63;
-                n >>= 6;
-                if (!--encoded_size) {
-                    b |= 128;
-                }
-                *pos++ = b;
-                b = 0;
-            } while (encoded_size);
-            poison(start, pos - start);
+            utils::uleb64_encode(pos, _n, encoded_size, poison<char>, unpoison);
         }
 
         static object_descriptor decode_forwards(const char*& pos) {
-            unsigned n = 0;
-            unsigned shift = 0;
-            auto p = pos; // avoid aliasing; p++ doesn't touch memory
-            uint8_t b;
-            do {
-                unpoison(p, 1);
-                b = *p++;
-                if (shift < 32) {
-                    // non-canonical encoding can cause large shift; undefined in C++
-                    n |= uint32_t(b & 63) << shift;
-                }
-                shift += 6;
-            } while ((b & 128) == 0);
-            poison(pos, p - pos);
-            pos = p;
-            return object_descriptor(n);
+            return object_descriptor(utils::uleb64_decode_forwards(pos, poison<char>, unpoison));
         }
 
         static object_descriptor decode_backwards(const char*& pos) {
-            unsigned n = 0;
-            uint8_t b;
-            auto p = pos; // avoid aliasing; --p doesn't touch memory
-            do {
-                --p;
-                unpoison(p, 1);
-                b = *p;
-                n = (n << 6) | (b & 63);
-            } while ((b & 64) == 0);
-            poison(p, pos - p);
-            pos = p;
-            return object_descriptor(n);
+            return object_descriptor(utils::uleb64_decode_bacwards(pos, poison<char>, unpoison));
         }
 
         friend std::ostream& operator<<(std::ostream& out, const object_descriptor& desc) {
