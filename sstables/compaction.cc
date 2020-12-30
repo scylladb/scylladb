@@ -614,9 +614,7 @@ private:
                 reader.consume_in_thread(std::move(cfc), db::no_timeout);
             });
         });
-        // producer will filter out a partition before it reaches the consumer(s)
-        auto producer = make_filtering_reader(make_sstable_reader(), make_partition_filter());
-        return consumer(std::move(producer));
+        return consumer(make_sstable_reader());
     }
 
     virtual reader_consumer make_interposer_consumer(reader_consumer end_consumer) {
@@ -670,12 +668,6 @@ private:
         }
         return [this] (const dht::decorated_key& dk) {
             return get_max_purgeable_timestamp(_cf, *_selector, _compacting_for_max_purgeable_func, dk);
-        };
-    }
-
-    virtual flat_mutation_reader::filter make_partition_filter() const {
-        return [] (const dht::decorated_key&) {
-            return true;
         };
     }
 
@@ -1070,6 +1062,10 @@ public:
     cleanup_compaction(column_family& cf, compaction_descriptor descriptor, compaction_options::upgrade opts)
         : cleanup_compaction(opts.db, cf, std::move(descriptor)) {}
 
+    flat_mutation_reader make_sstable_reader() const override {
+        return make_filtering_reader(regular_compaction::make_sstable_reader(), make_partition_filter());
+    }
+
     std::string_view report_start_desc() const override {
         return "Cleaning";
     }
@@ -1078,7 +1074,7 @@ public:
         return "Cleaned";
     }
 
-    flat_mutation_reader::filter make_partition_filter() const override {
+    flat_mutation_reader::filter make_partition_filter() const {
         return [this] (const dht::decorated_key& dk) {
             if (dht::shard_of(*_schema, dk.token()) != this_shard_id()) {
                 log_trace("Token {} does not belong to CPU {}, skipping", dk.token(), this_shard_id());
