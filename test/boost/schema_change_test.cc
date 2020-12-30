@@ -637,7 +637,13 @@ future<> test_schema_digest_does_not_change_with_disabled_features(sstring data_
         }
 
         auto expect_digest = [&] (schema_features sf, utils::UUID expected) {
-            auto actual = calculate_schema_digest(service::get_storage_proxy(), sf).get0();
+            // Changes in the system_distributed keyspace was a common source of regenerating this test case.
+            // It was not the original idea of this test to regenerate after each change in the distributed
+            // system keyspace, since these changes are propagated naturally on their own anyway - the schema
+            // with highest timestamp will win and be sent to other nodes.
+            // Thus, system_distributed.* tables are officially not taken into account,
+            // which makes it less likely that this test case would need to be needlessly regenerated.
+            auto actual = calculate_schema_digest(service::get_storage_proxy(), sf, std::not_fn(&is_internal_keyspace)).get0();
             if (regenerate) {
                 std::cout << "Digest is " << actual << "\n";
             } else {
@@ -684,45 +690,45 @@ future<> test_schema_digest_does_not_change_with_disabled_features(sstring data_
 
 SEASTAR_TEST_CASE(test_schema_digest_does_not_change) {
     std::vector<utils::UUID> expected_digests{
-        utils::UUID("f32d47ff-e417-3caf-84e5-af6fc756835d"),
-        utils::UUID("e4eacd58-7d49-3cf6-8d04-f7d67c3c268b"),
-        utils::UUID("e4eacd58-7d49-3cf6-8d04-f7d67c3c268b"),
-        utils::UUID("dd04f3d9-88bd-346a-af7f-24a4415613a0"),
-        utils::UUID("dd04f3d9-88bd-346a-af7f-24a4415613a0"),
-        utils::UUID("3c0390a5-c9d3-315b-b5e2-99012fd1b2b6"),
-        utils::UUID("2770f4be-8074-30ec-a04e-938e9cd166cc"),
-        utils::UUID("e46b10ed-488b-30c0-a178-d020cd04687b"),
-        utils::UUID("da3e37d2-54b6-3410-bbaf-66cb6644159c"),
+        utils::UUID("264f79fc-61bd-3670-8d6e-2794f9787b0a"),
+        utils::UUID("d2035515-b299-3265-b920-7dbe5306e72a"),
+        utils::UUID("d2035515-b299-3265-b920-7dbe5306e72a"),
+        utils::UUID("de49e92f-a00d-3f24-8779-d07de26708cb"),
+        utils::UUID("de49e92f-a00d-3f24-8779-d07de26708cb"),
+        utils::UUID("bbf064ed-0a98-3c19-8c4a-5c929cabd936"),
+        utils::UUID("0db2a3f8-6779-388f-951d-de6a537789a7"),
+        utils::UUID("21a89984-ffc6-325d-b818-66fc29da51e7"),
+        utils::UUID("e69a05e8-80a6-3e8f-bd34-1b5837374c79"),
     };
     return test_schema_digest_does_not_change_with_disabled_features("./test/resource/sstables/schema_digest_test", std::set<sstring>{"COMPUTED_COLUMNS", "CDC"}, std::move(expected_digests), [] (cql_test_env& e) {});
 }
 
 SEASTAR_TEST_CASE(test_schema_digest_does_not_change_after_computed_columns) {
     std::vector<utils::UUID> expected_digests{
-        utils::UUID("b367addc-749e-3a44-b252-ef791a6a8ad0"),
-        utils::UUID("2a2ecd73-4abf-385c-a485-1b3522160ac1"),
-        utils::UUID("2a2ecd73-4abf-385c-a485-1b3522160ac1"),
-        utils::UUID("e6cd543a-7752-3e56-a808-78d8dc9079b7"),
-        utils::UUID("e6cd543a-7752-3e56-a808-78d8dc9079b7"),
-        utils::UUID("c2fe59c7-54b1-31ae-879d-4797d6980272"),
-        utils::UUID("75028458-dc53-3a03-a446-bf7a0425e91e"),
-        utils::UUID("de9fbe48-8ad8-3c10-a98a-1e0d36592ecc"),
-        utils::UUID("e375f56a-b268-3df0-ab49-3acb3b40d6e3"),
+        utils::UUID("036153ec-4565-34fb-a878-ce347b94f247"),
+        utils::UUID("fa2e7735-7604-3202-8ce9-399996305aca"),
+        utils::UUID("fa2e7735-7604-3202-8ce9-399996305aca"),
+        utils::UUID("94606636-ae43-3e0a-b238-e7f0e33ef600"),
+        utils::UUID("94606636-ae43-3e0a-b238-e7f0e33ef600"),
+        utils::UUID("13d418e8-968e-3bd8-801a-6df5e5327d44"),
+        utils::UUID("75808956-93e2-331a-96cc-8dc9cdea79ca"),
+        utils::UUID("7eccb793-c6f4-3e84-ae35-788d03188baf"),
+        utils::UUID("467deb84-d7de-36cb-a1fa-f3672cb66340"),
     };
     return test_schema_digest_does_not_change_with_disabled_features("./test/resource/sstables/schema_digest_test_computed_columns", std::set<sstring>{"CDC"}, std::move(expected_digests), [] (cql_test_env& e) {});
 }
 
 SEASTAR_TEST_CASE(test_schema_digest_does_not_change_with_functions) {
     std::vector<utils::UUID> expected_digests{
-        utils::UUID("607dbbc6-e575-3aeb-afbb-135a7f731ebd"),
-        utils::UUID("128082f8-ff08-3730-b30e-3451127e9e8b"),
-        utils::UUID("128082f8-ff08-3730-b30e-3451127e9e8b"),
-        utils::UUID("7e4d2c05-e7cf-32a6-a423-7a0fe63f1341"),
-        utils::UUID("7e4d2c05-e7cf-32a6-a423-7a0fe63f1341"),
-        utils::UUID("70ddb79f-cc18-340b-9f1e-1411718354c8"),
-        utils::UUID("45f8821c-93e6-3a6e-ba48-fefcc0144c6f"),
-        utils::UUID("9b46b4ce-16db-3de7-a77f-8c2f65c40b63"),
-        utils::UUID("498e989a-3acf-3fe1-9f7b-dfca8540d449"),
+        utils::UUID("6fa38d16-bbc4-3da5-bda5-680329789d8f"),
+        utils::UUID("649bf7ec-fd64-3ccb-adde-3887fc1432be"),
+        utils::UUID("649bf7ec-fd64-3ccb-adde-3887fc1432be"),
+        utils::UUID("48fd0c1b-9777-34be-8c16-187c6ab55cfc"),
+        utils::UUID("48fd0c1b-9777-34be-8c16-187c6ab55cfc"),
+        utils::UUID("6c7bef38-05b7-3bf3-a52c-352333da7214"),
+        utils::UUID("cb23910d-ced8-35e5-99f3-57f362860f3c"),
+        utils::UUID("b0ecf791-0637-34a5-a940-bc217517f1aa"),
+        utils::UUID("47b87dfc-3c18-324b-b280-58300ac5d3ca"),
     };
     return test_schema_digest_does_not_change_with_disabled_features(
         "./test/resource/sstables/schema_digest_with_functions_test",
@@ -738,15 +744,15 @@ SEASTAR_TEST_CASE(test_schema_digest_does_not_change_with_cdc_options) {
     auto ext = std::make_shared<db::extensions>();
     ext->add_schema_extension<cdc::cdc_extension>(cdc::cdc_extension::NAME);
     std::vector<utils::UUID> expected_digests{
-        utils::UUID("9d5233be-e193-31d7-b608-c8cad269a49f"),
-        utils::UUID("862e5a24-7bf7-334a-91bc-0d4cdc33d475"),
-        utils::UUID("862e5a24-7bf7-334a-91bc-0d4cdc33d475"),
-        utils::UUID("098d2bdf-db36-3807-8a48-8623a4b6ab1f"),
-        utils::UUID("098d2bdf-db36-3807-8a48-8623a4b6ab1f"),
-        utils::UUID("c3b98746-7899-37fb-9195-c379ee4f6b70"),
-        utils::UUID("d0596a48-4efb-3e36-9b2d-e69a6e363658"),
-        utils::UUID("638aff24-1222-34e4-b7d0-7c53ba68eeaa"),
-        utils::UUID("d16823ae-0f68-3dac-98ce-e7b7534950a6"),
+        utils::UUID("ff69e387-64ca-3335-b488-b7a615908148"),
+        utils::UUID("7f1ac621-fc68-3420-bc9b-54520da40418"),
+        utils::UUID("7f1ac621-fc68-3420-bc9b-54520da40418"),
+        utils::UUID("09899769-4e7f-3119-9769-e3db3d99455b"),
+        utils::UUID("09899769-4e7f-3119-9769-e3db3d99455b"),
+        utils::UUID("265be25f-b268-3f43-a54d-9c6e379a901d"),
+        utils::UUID("c604f5c9-988e-393f-b9d8-2ed55b9a540c"),
+        utils::UUID("45d9f25d-58a1-3f1e-85a1-f09d82c52588"),
+        utils::UUID("7ef45dd2-aab9-38f1-bcc6-ba9c94666e36"),
     };
     return test_schema_digest_does_not_change_with_disabled_features(
         "./test/resource/sstables/schema_digest_test_cdc_options",
