@@ -1161,7 +1161,7 @@ public:
 
 class no_such_keyspace : public std::runtime_error {
 public:
-    no_such_keyspace(const sstring& ks_name);
+    no_such_keyspace(std::string_view ks_name);
 };
 
 class no_such_column_family : public std::runtime_error {
@@ -1394,8 +1394,8 @@ public:
      */
     future<> create_keyspace(const lw_shared_ptr<keyspace_metadata>&);
     /* below, find_keyspace throws no_such_<type> on fail */
-    keyspace& find_keyspace(const sstring& name);
-    const keyspace& find_keyspace(const sstring& name) const;
+    keyspace& find_keyspace(std::string_view name);
+    const keyspace& find_keyspace(std::string_view name) const;
     bool has_keyspace(std::string_view name) const;
     void validate_keyspace_update(keyspace_metadata& ksm);
     void validate_new_keyspace(keyspace_metadata& ksm);
