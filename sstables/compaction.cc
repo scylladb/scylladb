@@ -898,12 +898,6 @@ public:
         _unused_sstables.clear();
     }
 
-    virtual flat_mutation_reader::filter make_partition_filter() const override {
-        return [&s = *_schema] (const dht::decorated_key& dk){
-            return dht::shard_of(s, dk.token()) == this_shard_id();
-        };
-    }
-
     virtual compaction_writer create_compaction_writer(const dht::decorated_key& dk) override {
         auto sst = _sstable_creator(this_shard_id());
         setup_new_sstable(sst);
