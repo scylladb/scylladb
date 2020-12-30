@@ -1581,6 +1581,6 @@ future<> stop_database(sharded<database>& db);
 flat_mutation_reader make_multishard_streaming_reader(distributed<database>& db, schema_ptr schema,
         std::function<std::optional<dht::partition_range>()> range_generator);
 
-bool is_internal_keyspace(const sstring& name);
+bool is_internal_keyspace(std::string_view name);
 
 #endif /* DATABASE_HH_ */

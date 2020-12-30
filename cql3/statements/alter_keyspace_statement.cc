@@ -45,7 +45,7 @@
 #include "db/system_keyspace.hh"
 #include "database.hh"
 
-bool is_system_keyspace(const sstring& keyspace);
+bool is_system_keyspace(std::string_view keyspace);
 
 cql3::statements::alter_keyspace_statement::alter_keyspace_statement(sstring name, ::shared_ptr<ks_prop_defs> attrs)
     : _name(name)

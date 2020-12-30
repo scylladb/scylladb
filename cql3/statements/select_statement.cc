@@ -62,7 +62,7 @@
 #include "test/lib/select_statement_utils.hh"
 #include <boost/algorithm/cxx11/any_of.hpp>
 
-bool is_system_keyspace(const sstring& name);
+bool is_system_keyspace(std::string_view name);
 
 namespace cql3 {
 
