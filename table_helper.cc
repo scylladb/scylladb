@@ -54,7 +54,7 @@ future<> table_helper::setup_table(cql3::query_processor& qp) const {
     // "CREATE TABLE" invocation on different Nodes.
     // The important thing is that it will converge eventually (some traces may
     // be lost in a process but that's ok).
-    return service::get_local_migration_manager().announce_new_column_family(b.build(), false).discard_result().handle_exception([this] (auto ep) {});;
+    return service::get_local_migration_manager().announce_new_column_family(b.build()).discard_result().handle_exception([this] (auto ep) {});;
 }
 
 future<> table_helper::cache_table_info(cql3::query_processor& qp, service::query_state& qs) {
@@ -131,7 +131,7 @@ future<> table_helper::setup_keyspace(cql3::query_processor& qp, const sstring& 
                 opts["replication_factor"] = replication_factor;
                 auto ksm = keyspace_metadata::new_keyspace(keyspace_name, "org.apache.cassandra.locator.SimpleStrategy", std::move(opts), true);
                 // We use min_timestamp so that default keyspace metadata will loose with any manual adjustments. See issue #2129.
-                service::get_local_migration_manager().announce_new_keyspace(ksm, api::min_timestamp, false).get();
+                service::get_local_migration_manager().announce_new_keyspace(ksm, api::min_timestamp).get();
             }
 
             qs.get_client_state().set_keyspace(db, keyspace_name);

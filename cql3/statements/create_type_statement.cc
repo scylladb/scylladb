@@ -138,7 +138,7 @@ inline user_type create_type_statement::create_type(database& db) const
         std::move(field_names), std::move(field_types), true /* multi cell */);
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> create_type_statement::announce_migration(service::storage_proxy& proxy, bool is_local_only) const
+future<shared_ptr<cql_transport::event::schema_change>> create_type_statement::announce_migration(service::storage_proxy& proxy) const
 {
     auto&& db = proxy.get_db().local();
 
@@ -152,7 +152,7 @@ future<shared_ptr<cql_transport::event::schema_change>> create_type_statement::a
 
     auto type = create_type(db);
     check_for_duplicate_names(type);
-    return service::get_local_migration_manager().announce_new_type(type, is_local_only).then([this] {
+    return service::get_local_migration_manager().announce_new_type(type).then([this] {
         using namespace cql_transport;
 
         return ::make_shared<event::schema_change>(

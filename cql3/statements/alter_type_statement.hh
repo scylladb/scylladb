@@ -63,14 +63,14 @@ public:
 
     virtual const sstring& keyspace() const override;
 
-    virtual future<shared_ptr<cql_transport::event::schema_change>> announce_migration(service::storage_proxy& proxy, bool is_local_only) const override;
+    virtual future<shared_ptr<cql_transport::event::schema_change>> announce_migration(service::storage_proxy& proxy) const override;
 
     class add_or_alter;
     class renames;
 protected:
     virtual user_type make_updated_type(database& db, user_type to_update) const = 0;
 private:
-    void do_announce_migration(database& db, ::keyspace& ks, bool is_local_only) const;
+    void do_announce_migration(database& db, ::keyspace& ks) const;
 };
 
 class alter_type_statement::add_or_alter : public alter_type_statement {

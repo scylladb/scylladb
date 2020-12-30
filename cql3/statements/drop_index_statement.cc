@@ -86,7 +86,7 @@ void drop_index_statement::validate(service::storage_proxy& proxy, const service
     }
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> drop_index_statement::announce_migration(service::storage_proxy& proxy, bool is_local_only) const
+future<shared_ptr<cql_transport::event::schema_change>> drop_index_statement::announce_migration(service::storage_proxy& proxy) const
 {
     auto cfm = lookup_indexed_table(proxy);
     if (!cfm) {
@@ -95,7 +95,7 @@ future<shared_ptr<cql_transport::event::schema_change>> drop_index_statement::an
     ++_cql_stats->secondary_index_drops;
     auto builder = schema_builder(cfm);
     builder.without_index(_index_name);
-    return service::get_local_migration_manager().announce_column_family_update(builder.build(), false, {}, is_local_only).then([cfm] {
+    return service::get_local_migration_manager().announce_column_family_update(builder.build(), false, {}).then([cfm] {
         // Dropping an index is akin to updating the CF
         // Note that we shouldn't call columnFamily() at this point because the index has been dropped and the call to lookupIndexedTable()
         // in that method would now throw.

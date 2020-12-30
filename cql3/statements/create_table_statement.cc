@@ -97,10 +97,10 @@ std::vector<column_definition> create_table_statement::get_columns() const
     return column_defs;
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> create_table_statement::announce_migration(service::storage_proxy& proxy, bool is_local_only) const {
+future<shared_ptr<cql_transport::event::schema_change>> create_table_statement::announce_migration(service::storage_proxy& proxy) const {
     auto schema = get_cf_meta_data(proxy.get_db().local());
-    return make_ready_future<>().then([this, is_local_only, schema = std::move(schema)] {
-        return service::get_local_migration_manager().announce_new_column_family(std::move(schema), is_local_only);
+    return make_ready_future<>().then([this, schema = std::move(schema)] {
+        return service::get_local_migration_manager().announce_new_column_family(std::move(schema));
     }).then_wrapped([this] (auto&& f) {
         try {
             f.get();

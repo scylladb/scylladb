@@ -33,7 +33,7 @@ std::unique_ptr<prepared_statement> drop_function_statement::prepare(database& d
 }
 
 future<shared_ptr<cql_transport::event::schema_change>> drop_function_statement::announce_migration(
-        service::storage_proxy& proxy, bool is_local_only) const {
+        service::storage_proxy& proxy) const {
     if (!_func) {
         return make_ready_future<shared_ptr<cql_transport::event::schema_change>>();
     }
@@ -41,7 +41,7 @@ future<shared_ptr<cql_transport::event::schema_change>> drop_function_statement:
     if (!user_func) {
         throw exceptions::invalid_request_exception(format("'{}' is not a user defined function", _func));
     }
-    return service::get_local_migration_manager().announce_function_drop(user_func, is_local_only).then([this] {
+    return service::get_local_migration_manager().announce_function_drop(user_func).then([this] {
         return create_schema_change(*_func, false);
     });
 }

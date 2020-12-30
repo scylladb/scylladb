@@ -140,7 +140,7 @@ static bool validate_primary_key(
     return new_non_pk_column;
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> create_view_statement::announce_migration(service::storage_proxy& proxy, bool is_local_only) const {
+future<shared_ptr<cql_transport::event::schema_change>> create_view_statement::announce_migration(service::storage_proxy& proxy) const {
     // We need to make sure that:
     //  - primary key includes all columns in base table's primary key
     //  - make sure that the select statement does not have anything other than columns
@@ -350,8 +350,8 @@ future<shared_ptr<cql_transport::event::schema_change>> create_view_statement::a
     auto where_clause_text = util::relations_to_where_clause(_where_clause);
     builder.with_view_info(schema->id(), schema->cf_name(), included.empty(), std::move(where_clause_text));
 
-    return make_ready_future<>().then([definition = view_ptr(builder.build()), is_local_only]() mutable {
-        return service::get_local_migration_manager().announce_new_view(definition, is_local_only);
+    return make_ready_future<>().then([definition = view_ptr(builder.build())]() mutable {
+        return service::get_local_migration_manager().announce_new_view(definition);
     }).then_wrapped([this] (auto&& f) {
         try {
             f.get();

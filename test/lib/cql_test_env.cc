@@ -237,7 +237,7 @@ public:
         schema_builder builder(make_lw_shared<schema>(schema_maker(ks_name)));
         builder.set_uuid(id);
         auto s = builder.build(schema_builder::compact_storage::no);
-        return service::get_local_migration_manager().announce_new_column_family(s, true);
+        return service::get_local_migration_manager().announce_new_column_family(s);
     }
 
     virtual future<> require_keyspace_exists(const sstring& ks_name) override {

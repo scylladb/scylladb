@@ -53,7 +53,7 @@ SEASTAR_TEST_CASE(test_new_schema_with_no_structural_change_is_propagated) {
 
             auto old_schema = partial.build();
 
-            service::get_local_migration_manager().announce_new_column_family(old_schema, false).get();
+            service::get_local_migration_manager().announce_new_column_family(old_schema).get();
 
             auto old_table_version = e.db().local().find_schema(old_schema->id())->version();
             auto old_node_version = e.db().local().get_version();
@@ -80,7 +80,7 @@ SEASTAR_TEST_CASE(test_schema_is_updated_in_keyspace) {
 
             auto old_schema = builder.build();
 
-            service::get_local_migration_manager().announce_new_column_family(old_schema, false).get();
+            service::get_local_migration_manager().announce_new_column_family(old_schema).get();
 
             auto s = e.local_db().find_schema(old_schema->id());
             BOOST_REQUIRE_EQUAL(*old_schema, *s);
@@ -111,7 +111,7 @@ SEASTAR_TEST_CASE(test_tombstones_are_ignored_in_version_calculation) {
                     .with_column("v1", bytes_type)
                     .build();
 
-            service::get_local_migration_manager().announce_new_column_family(table_schema, false).get();
+            service::get_local_migration_manager().announce_new_column_family(table_schema).get();
 
             auto old_table_version = e.db().local().find_schema(table_schema->id())->version();
             auto old_node_version = e.db().local().get_version();
@@ -123,7 +123,7 @@ SEASTAR_TEST_CASE(test_tombstones_are_ignored_in_version_calculation) {
                 mutation m(s, pkey);
                 auto ckey = clustering_key::from_exploded(*s, {utf8_type->decompose(table_schema->cf_name()), "v1"});
                 m.partition().apply_delete(*s, ckey, tombstone(api::min_timestamp, gc_clock::now()));
-                service::get_local_migration_manager().announce(std::vector<mutation>({m}), true).get();
+                service::get_local_migration_manager().announce(std::vector<mutation>({m})).get();
             }
 
             auto new_table_version = e.db().local().find_schema(table_schema->id())->version();
@@ -159,7 +159,7 @@ SEASTAR_TEST_CASE(test_concurrent_column_addition) {
                     .with_column("v2", bytes_type)
                     .build();
 
-            mm.announce_new_column_family(s1, false).get();
+            mm.announce_new_column_family(s1).get();
             auto old_version = e.db().local().find_schema(s1->id())->version();
 
             // Apply s0 -> s2 change.
@@ -167,7 +167,7 @@ SEASTAR_TEST_CASE(test_concurrent_column_addition) {
                 auto&& keyspace = e.db().local().find_keyspace(s0->ks_name()).metadata();
                 auto muts = db::schema_tables::make_update_table_mutations(e.db().local(), keyspace, s0, s2,
                     api::new_timestamp(), false);
-                mm.announce(std::move(muts), true).get();
+                mm.announce(std::move(muts)).get();
             }
 
             auto new_schema = e.db().local().find_schema(s1->id());
@@ -200,7 +200,7 @@ SEASTAR_TEST_CASE(test_sort_type_in_update) {
         auto muts = muts2;
         muts.insert(muts.end(), muts1.begin(), muts1.end());
         muts.insert(muts.end(), muts3.begin(), muts3.end());
-        mm.announce(std::move(muts), false).get();
+        mm.announce(std::move(muts)).get();
     });
 }
 
@@ -302,7 +302,7 @@ SEASTAR_TEST_CASE(test_combined_column_add_and_drop) {
                     .with_column("v1", bytes_type)
                     .build();
 
-            mm.announce_new_column_family(s1, false).get();
+            mm.announce_new_column_family(s1).get();
 
             auto&& keyspace = e.db().local().find_keyspace(s1->ks_name()).metadata();
 
@@ -315,7 +315,7 @@ SEASTAR_TEST_CASE(test_combined_column_add_and_drop) {
             {
                 auto muts = db::schema_tables::make_update_table_mutations(e.db().local(), keyspace, s1, s2,
                     api::new_timestamp(), false);
-                mm.announce(std::move(muts), true).get();
+                mm.announce(std::move(muts)).get();
             }
 
             // Add a new v1 and drop it
@@ -332,7 +332,7 @@ SEASTAR_TEST_CASE(test_combined_column_add_and_drop) {
 
                 auto muts = db::schema_tables::make_update_table_mutations(e.db().local(), keyspace, s3, s4,
                     api::new_timestamp(), false);
-                mm.announce(std::move(muts), true).get();
+                mm.announce(std::move(muts)).get();
             }
 
             auto new_schema = e.db().local().find_schema(s1->id());
@@ -460,7 +460,7 @@ SEASTAR_TEST_CASE(test_nested_type_mutation_in_update) {
 
         auto muts = muts1;
         muts.insert(muts.end(), muts2.begin(), muts2.end());
-        mm.announce(std::move(muts), false).get();
+        mm.announce(std::move(muts)).get();
 
         BOOST_REQUIRE_EQUAL(listener.create_user_type_count, 2);
         BOOST_REQUIRE_EQUAL(listener.update_user_type_count, 2);

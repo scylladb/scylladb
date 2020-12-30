@@ -106,11 +106,11 @@ void create_keyspace_statement::validate(service::storage_proxy&, const service:
 #endif
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> create_keyspace_statement::announce_migration(service::storage_proxy& proxy, bool is_local_only) const
+future<shared_ptr<cql_transport::event::schema_change>> create_keyspace_statement::announce_migration(service::storage_proxy& proxy) const
 {
-    return make_ready_future<>().then([this, p = proxy.shared_from_this(), is_local_only] {
+    return make_ready_future<>().then([this, p = proxy.shared_from_this()] {
         const auto& tm = *p->get_token_metadata_ptr();
-        return service::get_local_migration_manager().announce_new_keyspace(_attrs->as_ks_metadata(_name, tm), is_local_only);
+        return service::get_local_migration_manager().announce_new_keyspace(_attrs->as_ks_metadata(_name, tm));
     }).then_wrapped([this] (auto&& f) {
         try {
             f.get();

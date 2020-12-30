@@ -3060,7 +3060,7 @@ future<> maybe_update_legacy_secondary_index_mv_schema(service::migration_manage
     if (!base_schema->columns_by_name().contains(first_view_ck.name())) {
         schema_builder builder{schema_ptr(v)};
         builder.mark_column_computed(first_view_ck.name(), std::make_unique<legacy_token_column_computation>());
-        return mm.announce_view_update(view_ptr(builder.build()), false);
+        return mm.announce_view_update(view_ptr(builder.build()));
     }
     return make_ready_future<>();
 }

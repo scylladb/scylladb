@@ -59,11 +59,11 @@ std::unique_ptr<prepared_statement> create_function_statement::prepare(database&
 }
 
 future<shared_ptr<cql_transport::event::schema_change>> create_function_statement::announce_migration(
-        service::storage_proxy& proxy, bool is_local_only) const {
+        service::storage_proxy& proxy) const {
     if (!_func) {
         return make_ready_future<::shared_ptr<cql_transport::event::schema_change>>();
     }
-    return service::get_local_migration_manager().announce_new_function(_func, is_local_only).then([this] {
+    return service::get_local_migration_manager().announce_new_function(_func).then([this] {
         return create_schema_change(*_func, true);
     });
 }

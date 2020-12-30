@@ -154,7 +154,7 @@ future<> service::create_keyspace_if_missing(::service::migration_manager& mm) c
 
         // We use min_timestamp so that default keyspace metadata will loose with any manual adjustments.
         // See issue #2129.
-        return mm.announce_new_keyspace(ksm, api::min_timestamp, false);
+        return mm.announce_new_keyspace(ksm, api::min_timestamp);
     }
 
     return make_ready_future<>();

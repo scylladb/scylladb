@@ -476,8 +476,8 @@ future<executor::request_return_type> executor::delete_table(client_state& clien
         return make_ready_future<request_return_type>(api_error::resource_not_found(
                 format("Requested resource not found: Table: {} not found", table_name)));
     }
-    return _mm.announce_column_family_drop(keyspace_name, table_name, false, service::migration_manager::drop_views::yes).then([this, keyspace_name] {
-        return _mm.announce_keyspace_drop(keyspace_name, false);
+    return _mm.announce_column_family_drop(keyspace_name, table_name, service::migration_manager::drop_views::yes).then([this, keyspace_name] {
+        return _mm.announce_keyspace_drop(keyspace_name);
     }).then([table_name = std::move(table_name)] {
         // FIXME: need more attributes?
         rjson::value table_description = rjson::empty_object();
@@ -704,7 +704,7 @@ static void update_tags_map(const rjson::value& tags, std::map<sstring, sstring>
 static future<> update_tags(service::migration_manager& mm, schema_ptr schema, std::map<sstring, sstring>&& tags_map) {
     schema_builder builder(schema);
     builder.add_extension(tags_extension::NAME, ::make_shared<tags_extension>(std::move(tags_map)));
-    return mm.announce_column_family_update(builder.build(), false, std::vector<view_ptr>(), false);
+    return mm.announce_column_family_update(builder.build(), false, std::vector<view_ptr>());
 }
 
 future<executor::request_return_type> executor::tag_resource(client_state& client_state, service_permit permit, rjson::value request) {
@@ -981,7 +981,7 @@ future<executor::request_return_type> executor::create_table(client_state& clien
     return create_keyspace(keyspace_name).handle_exception_type([] (exceptions::already_exists_exception&) {
             // Ignore the fact that the keyspace may already exist. See discussion in #6340
         }).then([this, table_name, request = std::move(request), schema, view_builders = std::move(view_builders), tags_map = std::move(tags_map)] () mutable {
-        return futurize_invoke([&] { return _mm.announce_new_column_family(schema, false); }).then([this, table_info = std::move(request), schema, view_builders = std::move(view_builders), tags_map = std::move(tags_map)] () mutable {
+        return futurize_invoke([&] { return _mm.announce_new_column_family(schema); }).then([this, table_info = std::move(request), schema, view_builders = std::move(view_builders), tags_map = std::move(tags_map)] () mutable {
             return parallel_for_each(std::move(view_builders), [this, schema] (schema_builder builder) {
                 return _mm.announce_new_view(view_ptr(builder.build()));
             }).then([this, table_info = std::move(table_info), schema, tags_map = std::move(tags_map)] () mutable {
@@ -3549,7 +3549,7 @@ future<> executor::create_keyspace(std::string_view keyspace_name) {
         }
         auto opts = get_network_topology_options(rf);
         auto ksm = keyspace_metadata::new_keyspace(keyspace_name_str, "org.apache.cassandra.locator.NetworkTopologyStrategy", std::move(opts), true);
-        return _mm.announce_new_keyspace(ksm, api::new_timestamp(), false);
+        return _mm.announce_new_keyspace(ksm, api::new_timestamp());
     });
 }
 

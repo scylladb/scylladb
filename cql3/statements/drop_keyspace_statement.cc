@@ -74,10 +74,10 @@ const sstring& drop_keyspace_statement::keyspace() const
     return _keyspace;
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> drop_keyspace_statement::announce_migration(service::storage_proxy& proxy, bool is_local_only) const
+future<shared_ptr<cql_transport::event::schema_change>> drop_keyspace_statement::announce_migration(service::storage_proxy& proxy) const
 {
-    return make_ready_future<>().then([this, is_local_only] {
-        return service::get_local_migration_manager().announce_keyspace_drop(_keyspace, is_local_only);
+    return make_ready_future<>().then([this] {
+        return service::get_local_migration_manager().announce_keyspace_drop(_keyspace);
     }).then_wrapped([this] (auto&& f) {
         try {
             f.get();

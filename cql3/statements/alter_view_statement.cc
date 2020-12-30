@@ -76,7 +76,7 @@ void alter_view_statement::validate(service::storage_proxy&, const service::clie
     // validated in announce_migration()
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> alter_view_statement::announce_migration(service::storage_proxy& proxy, bool is_local_only) const
+future<shared_ptr<cql_transport::event::schema_change>> alter_view_statement::announce_migration(service::storage_proxy& proxy) const
 {
     auto&& db = proxy.get_db().local();
     schema_ptr schema = validation::validate_column_family(db, keyspace(), column_family());
@@ -108,7 +108,7 @@ future<shared_ptr<cql_transport::event::schema_change>> alter_view_statement::an
                 "the corresponding data in the parent table.");
     }
 
-    return service::get_local_migration_manager().announce_view_update(view_ptr(builder.build()), is_local_only).then([this] {
+    return service::get_local_migration_manager().announce_view_update(view_ptr(builder.build())).then([this] {
         using namespace cql_transport;
 
         return ::make_shared<event::schema_change>(

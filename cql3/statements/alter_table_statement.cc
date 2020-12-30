@@ -288,7 +288,7 @@ void alter_table_statement::drop_column(const schema& schema, const table& cf, s
     }
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> alter_table_statement::announce_migration(service::storage_proxy& proxy, bool is_local_only) const
+future<shared_ptr<cql_transport::event::schema_change>> alter_table_statement::announce_migration(service::storage_proxy& proxy) const
 {
     auto& db = proxy.get_db().local();
     auto s = validation::validate_column_family(db, keyspace(), column_family());
@@ -396,7 +396,7 @@ future<shared_ptr<cql_transport::event::schema_change>> alter_table_statement::a
         break;
     }
 
-    return service::get_local_migration_manager().announce_column_family_update(cfm.build(), false, std::move(view_updates), is_local_only)
+    return service::get_local_migration_manager().announce_column_family_update(cfm.build(), false, std::move(view_updates))
         .then([this] {
             using namespace cql_transport;
             return ::make_shared<event::schema_change>(

@@ -114,48 +114,44 @@ public:
     bool should_pull_schema_from(const gms::inet_address& endpoint);
     bool has_compatible_schema_tables_version(const gms::inet_address& endpoint);
 
-    future<> announce_keyspace_update(lw_shared_ptr<keyspace_metadata> ksm, bool announce_locally = false);
+    future<> announce_keyspace_update(lw_shared_ptr<keyspace_metadata> ksm);
 
-    future<> announce_keyspace_update(lw_shared_ptr<keyspace_metadata> ksm, api::timestamp_type timestamp, bool announce_locally);
+    future<> announce_new_keyspace(lw_shared_ptr<keyspace_metadata> ksm);
 
-    future<> announce_new_keyspace(lw_shared_ptr<keyspace_metadata> ksm, bool announce_locally = false);
+    future<> announce_new_keyspace(lw_shared_ptr<keyspace_metadata> ksm, api::timestamp_type timestamp);
 
-    future<> announce_new_keyspace(lw_shared_ptr<keyspace_metadata> ksm, api::timestamp_type timestamp, bool announce_locally);
+    future<> announce_column_family_update(schema_ptr cfm, bool from_thrift, std::vector<view_ptr>&& view_updates);
 
-    future<> announce_column_family_update(schema_ptr cfm, bool from_thrift, std::vector<view_ptr>&& view_updates, bool announce_locally = false);
+    future<> announce_new_column_family(schema_ptr cfm);
 
-    future<> announce_new_column_family(schema_ptr cfm, bool announce_locally = false);
+    future<> announce_new_column_family(schema_ptr cfm, api::timestamp_type timestamp);
 
-    future<> announce_new_column_family(schema_ptr cfm, api::timestamp_type timestamp, bool announce_locally = false);
+    future<> announce_new_type(user_type new_type);
 
-    future<> announce_new_type(user_type new_type, bool announce_locally = false);
+    future<> announce_new_function(shared_ptr<cql3::functions::user_function> func);
 
-    future<> announce_new_function(shared_ptr<cql3::functions::user_function> func, bool announce_locally);
+    future<> announce_function_drop(shared_ptr<cql3::functions::user_function> func);
 
-    future<> announce_function_drop(shared_ptr<cql3::functions::user_function> func, bool announce_locally);
+    future<> announce_type_update(user_type updated_type);
 
-    future<> announce_type_update(user_type updated_type, bool announce_locally = false);
-
-    future<> announce_keyspace_drop(const sstring& ks_name, bool announce_locally = false);
+    future<> announce_keyspace_drop(const sstring& ks_name);
 
     class drop_views_tag;
     using drop_views = bool_class<drop_views_tag>;
-    future<> announce_column_family_drop(const sstring& ks_name, const sstring& cf_name, bool announce_locally = false, drop_views drop_views = drop_views::no);
+    future<> announce_column_family_drop(const sstring& ks_name, const sstring& cf_name, drop_views drop_views = drop_views::no);
 
-    future<> announce_type_drop(user_type dropped_type, bool announce_locally = false);
+    future<> announce_type_drop(user_type dropped_type);
 
-    future<> announce_new_view(view_ptr view, bool announce_locally = false);
+    future<> announce_new_view(view_ptr view);
 
-    future<> announce_view_update(view_ptr view, bool announce_locally = false);
+    future<> announce_view_update(view_ptr view);
 
-    future<> announce_view_drop(const sstring& ks_name, const sstring& cf_name, bool announce_locally = false);
+    future<> announce_view_drop(const sstring& ks_name, const sstring& cf_name);
 
     /**
      * actively announce a new version to active hosts via rpc
      * @param schema The schema mutation to be applied
      */
-    static future<> announce(std::vector<mutation> mutations, bool announce_locally);
-
     // Returns a future on the local application of the schema
     static future<> announce(std::vector<mutation> schema);
 
@@ -173,9 +169,9 @@ private:
     future<> uninit_messaging_service();
 
     static future<> include_keyspace_and_announce(
-            const keyspace_metadata& keyspace, std::vector<mutation> mutations, bool announce_locally);
+            const keyspace_metadata& keyspace, std::vector<mutation> mutations);
 
-    static future<> do_announce_new_type(user_type new_type, bool announce_locally);
+    static future<> do_announce_new_type(user_type new_type);
 
     future<> push_schema_mutation(const gms::inet_address& endpoint, const std::vector<mutation>& schema);
 };

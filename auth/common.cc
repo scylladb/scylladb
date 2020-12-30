@@ -82,7 +82,7 @@ static future<> create_metadata_table_if_missing_impl(
     b.set_uuid(uuid);
     schema_ptr table = b.build();
     return ignore_existing([&mm, table = std::move(table)] () {
-        return mm.announce_new_column_family(table, false);
+        return mm.announce_new_column_family(table);
     });
 }
 
