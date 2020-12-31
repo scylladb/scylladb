@@ -1231,7 +1231,7 @@ def add_visitors(cout):
         handle_visitors_nodes(local_types[k], cout)
 
 
-def handle_class(cls, hout, cout, namespaces=[], parent_template_param=[]):
+def handle_class(cls, hout, cout, parent_template_param=[]):
     add_to_types(cls)
     if cls.stub:
         return
@@ -1246,7 +1246,7 @@ def handle_class(cls, hout, cout, namespaces=[], parent_template_param=[]):
     # Handle sub-types: can be either enum or class
     for member in cls.members:
         if isinstance(member, ClassDef):
-            handle_class(member, hout, cout, namespaces + [cls.name + template_class_param], parent_template_param + template_param_list)
+            handle_class(member, hout, cout, parent_template_param + template_param_list)
         elif isinstance(member, EnumDef):
             handle_enum(member, hout, cout, parent_template_param + template_param_list)
     declare_methods(hout, full_name, template_params)
@@ -1256,14 +1256,14 @@ def handle_class(cls, hout, cout, namespaces=[], parent_template_param=[]):
     cls.serializer_skip_impl(cout, template_decl, template_class_param)
 
 
-def handle_objects(tree, hout, cout, namespaces=[]):
+def handle_objects(tree, hout, cout):
     for obj in tree:
         if isinstance(obj, ClassDef):
-            handle_class(obj, hout, cout, namespaces)
+            handle_class(obj, hout, cout)
         elif isinstance(obj, EnumDef):
             handle_enum(obj, hout, cout)
         elif isinstance(obj, NamespaceDef):
-            handle_objects(obj.members, hout, cout, namespaces + [obj.name])
+            handle_objects(obj.members, hout, cout)
         else:
             print(f"Unknown type: {obj}")
 
