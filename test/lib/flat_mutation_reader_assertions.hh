@@ -52,6 +52,23 @@ public:
         , _tombstones(*_reader.schema())
     { }
 
+    ~flat_reader_assertions() {
+        _reader.close().get();
+    }
+
+    flat_reader_assertions(const flat_reader_assertions&) = delete;
+    flat_reader_assertions(flat_reader_assertions&&) = default;
+
+    flat_reader_assertions& operator=(flat_reader_assertions&& o) {
+        if (this != &o) {
+            _reader.close().get();
+            _reader = std::move(o._reader);
+            _pr = std::move(o._pr);
+            _tombstones = std::move(o._tombstones);
+        }
+        return *this;
+    }
+
     flat_reader_assertions& produces_partition_start(const dht::decorated_key& dk,
                                                      std::optional<tombstone> tomb = std::nullopt) {
         testlog.trace("Expecting partition start with key {}", dk);
