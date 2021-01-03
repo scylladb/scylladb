@@ -272,6 +272,7 @@ EOS
 fi
 
 # scylla-server
+install -m755 -d "$rprefix"
 install -m755 -d "$rsysconfdir"
 install -m755 -d "$retc/scylla.d"
 installconfig 644 dist/common/sysconfig/scylla-housekeeping "$rsysconfdir"
@@ -340,6 +341,9 @@ EnvironmentFile=
 EnvironmentFile=$sysconfdir/scylla-housekeeping
 EOS
     done
+        cat << EOS > "$rprefix"/scripts/scylla_sysconfdir.py
+SYSCONFDIR="$sysconfdir"
+EOS
     fi
     install -m755 -d "$retc/security/limits.d"
     install -m755 -d "$rusr/bin"
@@ -397,6 +401,9 @@ StandardOutput=
 StandardOutput=file:$rprefix/scylla-server.log
 StandardError=
 StandardError=inherit
+EOS
+        cat << EOS > "$rprefix"/scripts/scylla_sysconfdir.py
+SYSCONFDIR="$sysconfdir"
 EOS
     fi
 

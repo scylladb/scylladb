@@ -104,10 +104,7 @@ if __name__ == '__main__':
     if os.getuid() > 0:
         print('Requires root permission.')
         sys.exit(1)
-    if is_redhat_variant():
-        cfg = sysconfig_parser('/etc/sysconfig/scylla-server')
-    else:
-        cfg = sysconfig_parser('/etc/default/scylla-server')
+    cfg = sysconfig_parser(sysconfdir_p() / 'scylla-server')
     ami = cfg.get('AMI')
     mode = cfg.get('NETWORK_MODE')
 
