@@ -58,9 +58,9 @@ if __name__ == '__main__':
         run('ntpdate ntp.ubuntu.com', shell=True)
         ntp.start()
 
-    if is_gentoo_variant():
+    if is_gentoo_variant() or is_arch():
         if not shutil.which('ntpd'):
-            emerge_install('net-misc/ntp')
+            pkg_install('ntp')
         with open('/etc/ntp.conf') as f:
             conf = f.read()
         match = re.search(r'^server\s+(\S*)(\s+\S+)?', conf, flags=re.MULTILINE)

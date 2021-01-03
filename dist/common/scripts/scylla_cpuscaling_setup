@@ -56,6 +56,15 @@ if __name__ == '__main__':
         cpufreq = systemd_unit('cpupower-frequency-set.service')
         cpufreq.enable()
         cpufreq.restart()
+    if is_arch():
+        if not shutil.which('cpupower'):
+            pkg_install('cpupower')
+        cfg = sysconfig_parser('/etc/default/cpupower')
+        cfg.set('governor', 'performance')
+        cfg.commit()
+        cpupwr = systemd_unit('cpupower.service')
+        cpupwr.enable()
+        cpupwr.restart()
     if is_amzn2():
         if not shutil.which('cpupower'):
             yum_install('cpupowerutils')

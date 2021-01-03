@@ -522,6 +522,8 @@ def is_redhat_variant():
 def is_gentoo_variant():
     return ('gentoo' in distro.id())
 
+def is_arch():
+    return ('arch' in distro.id())
 
 def get_text_from_path(fpath):
     board_vendor_path = Path(fpath)

@@ -104,8 +104,10 @@ if __name__ == '__main__':
         print('mount unit {} already exists'.format(mntunit))
         sys.exit(1)
 
-    if not shutil.which('mkfs.xfs') or not shutil.which('mdadm'):
-        pkg_install('xfsprogs mdadm')
+    if not shutil.which('mkfs.xfs'):
+        pkg_install('xfsprogs')
+    if not shutil.which('mdadm'):
+        pkg_install('mdadm')
     try:
         md_service = systemd_unit('mdmonitor.service')
     except SystemdException:
