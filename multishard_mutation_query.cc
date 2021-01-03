@@ -639,9 +639,19 @@ future<page_consume_result<ResultBuilder>> read_page(
     auto reader = make_flat_multi_range_reader(s, ctx->permit(), std::move(ms), ranges,
             cmd.slice, service::get_local_sstable_query_read_priority(), trace_state, mutation_reader::forwarding::no);
 
-    auto [ckey, result] = co_await query::consume_page(reader, compaction_state, cmd.slice, std::move(result_builder), cmd.get_row_limit(),
-            cmd.partition_limit, cmd.timestamp, timeout, *cmd.max_result_size);
-    co_return page_consume_result<ResultBuilder>(std::move(ckey), std::move(result), reader.detach_buffer(), std::move(compaction_state));
+    std::exception_ptr ex;
+    try {
+        auto [ckey, result] = co_await query::consume_page(reader, compaction_state, cmd.slice, std::move(result_builder), cmd.get_row_limit(),
+                cmd.partition_limit, cmd.timestamp, timeout, *cmd.max_result_size);
+        auto buffer = reader.detach_buffer();
+        co_await reader.close();
+        // page_consume_result cannot fail so there's no risk of double-closing reader.
+        co_return page_consume_result<ResultBuilder>(std::move(ckey), std::move(result), std::move(buffer), std::move(compaction_state));
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    co_await reader.close();
+    std::rethrow_exception(std::move(ex));
 }
 
 template <typename ResultBuilder>
