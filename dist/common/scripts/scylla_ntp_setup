@@ -102,6 +102,13 @@ if __name__ == '__main__':
             run('ntpdate {}'.format(server), shell=True)
             ntpd.enable()
             ntpd.start()
+    elif is_suse_variant() and int(distro.major_version()) >= 15:
+        if not shutil.which('chronyd'):
+            pkg_install('chrony')
+        chronyd = systemd_unit('chronyd.service')
+        chronyd.enable()
+        chronyd.restart()
+        run('chronyc makestep', shell=True, check=True)
     else:
         print("Unsupported distribution, skipping setup..")
         sys.exit(0)

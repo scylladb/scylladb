@@ -528,6 +528,10 @@ def is_arch():
 def is_amzn2():
     return ('amzn' in distro.id()) and ('2' in distro.version())
 
+def is_suse_variant():
+    d = get_id_like() if get_id_like() else distro.id()
+    return ('suse' in d)
+
 def get_text_from_path(fpath):
     board_vendor_path = Path(fpath)
     if board_vendor_path.exists():
