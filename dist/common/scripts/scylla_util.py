@@ -519,7 +519,7 @@ def is_redhat_variant():
     d = get_id_like() if get_id_like() else distro.id()
     return ('rhel' in d) or ('fedora' in d) or ('oracle') in d
 
-def is_gentoo_variant():
+def is_gentoo():
     return ('gentoo' in distro.id())
 
 def is_arch():
@@ -708,7 +708,7 @@ def pkg_install(pkg):
         return yum_install(pkg)
     elif is_debian_variant():
         return apt_install(pkg)
-    elif is_gentoo_variant():
+    elif is_gentoo():
         return emerge_install(pkg)
     else:
         pkg_error_exit(pkg)
@@ -729,7 +729,7 @@ def pkg_uninstall(pkg):
         return yum_uninstall(pkg)
     elif is_debian_variant():
         return apt_uninstall(pkg)
-    elif is_gentoo_variant():
+    elif is_gentoo():
         return emerge_uninstall(pkg)
     else:
         print(f'WARNING: Package "{pkg}" should be removed.')

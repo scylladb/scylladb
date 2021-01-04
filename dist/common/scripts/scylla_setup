@@ -123,7 +123,7 @@ def do_verify_package(pkg):
         res = run('dpkg -s {}'.format(pkg), shell=True, stdout=DEVNULL, stderr=DEVNULL).returncode
     elif is_redhat_variant():
         res = run('rpm -q {}'.format(pkg), shell=True, stdout=DEVNULL, stderr=DEVNULL).returncode
-    elif is_gentoo_variant():
+    elif is_gentoo():
         res = 0 if len(glob.glob('/var/db/pkg/*/{}-*'.format(pkg))) else 1
     else:
         print("OS variant not recognized")

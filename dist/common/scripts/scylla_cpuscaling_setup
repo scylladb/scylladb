@@ -45,7 +45,7 @@ if __name__ == '__main__':
         cpufreq = systemd_unit('cpufrequtils.service')
         cpufreq.enable()
         cpufreq.restart()
-    if is_gentoo_variant():
+    if is_gentoo():
         if not shutil.which('cpupower'):
             emerge_install('sys-power/cpupower')
         with open('/etc/conf.d/cpupower') as f:

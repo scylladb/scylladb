@@ -58,7 +58,7 @@ if __name__ == '__main__':
         run('ntpdate ntp.ubuntu.com', shell=True)
         ntp.start()
 
-    if is_gentoo_variant() or is_arch():
+    if is_gentoo() or is_arch():
         if not shutil.which('ntpd'):
             pkg_install('ntp')
         with open('/etc/ntp.conf') as f:
