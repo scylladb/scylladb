@@ -459,7 +459,8 @@ elif ! $packaging; then
 
     for file in dist/common/sysctl.d/*.conf; do
         bn=$(basename "$file")
-        sysctl -p "$rusr"/lib/sysctl.d/"$bn"
+        # ignore error since some kernel may not have specified parameter
+        sysctl -p "$rusr"/lib/sysctl.d/"$bn" || :
     done
     $rprefix/scripts/scylla_post_install.sh
     echo "Scylla offline install completed."
