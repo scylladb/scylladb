@@ -695,16 +695,16 @@ redact_columns_for_missing_features(mutation m, schema_features features) {
  * Read schema from system keyspace and calculate MD5 digest of every row, resulting digest
  * will be converted into UUID which would act as content-based version of the schema.
  */
-future<utils::UUID> calculate_schema_digest(distributed<service::storage_proxy>& proxy, schema_features features)
+future<utils::UUID> calculate_schema_digest(distributed<service::storage_proxy>& proxy, schema_features features, noncopyable_function<bool(std::string_view)> accept_predicate)
 {
-    auto map = [&proxy, features] (sstring table) {
-        return db::system_keyspace::query_mutations(proxy, NAME, table).then([&proxy, table, features] (auto rs) {
+    auto map = [&proxy, features, accept_predicate = std::move(accept_predicate)] (sstring table) mutable {
+        return db::system_keyspace::query_mutations(proxy, NAME, table).then([&proxy, table, features, &accept_predicate] (auto rs) {
             auto s = proxy.local().get_db().local().find_schema(NAME, table);
             std::vector<mutation> mutations;
             for (auto&& p : rs->partitions()) {
                 auto mut = p.mut().unfreeze(s);
                 auto partition_key = value_cast<sstring>(utf8_type->deserialize(mut.key().get_component(*s, 0)));
-                if (is_system_keyspace(partition_key)) {
+                if (!accept_predicate(partition_key)) {
                     continue;
                 }
                 mut = redact_columns_for_missing_features(std::move(mut), features);
@@ -718,8 +718,8 @@ future<utils::UUID> calculate_schema_digest(distributed<service::storage_proxy>&
             feed_hash_for_schema_digest(hash, m, features);
         }
     };
-    return do_with(md5_hasher(), all_table_names(features), [features, map, reduce] (auto& hash, auto& tables) {
-        return do_for_each(tables, [&hash, map, reduce, features] (auto& table) {
+    return do_with(md5_hasher(), all_table_names(features), std::move(map), [features, reduce] (auto& hash, auto& tables, auto& map) mutable {
+        return do_for_each(tables, [&hash, &map, reduce, features] (auto& table) mutable {
             return map(table).then([&hash, reduce, features] (auto&& mutations) {
                 if (diff_logger.is_enabled(logging::log_level::trace)) {
                     for (const mutation& m : mutations) {
@@ -734,6 +734,11 @@ future<utils::UUID> calculate_schema_digest(distributed<service::storage_proxy>&
             return make_ready_future<utils::UUID>(utils::UUID_gen::get_name_UUID(hash.finalize()));
         });
     });
+}
+
+future<utils::UUID> calculate_schema_digest(distributed<service::storage_proxy>& proxy, schema_features features)
+{
+    return calculate_schema_digest(proxy, features, std::not_fn(&is_system_keyspace));
 }
 
 future<std::vector<canonical_mutation>> convert_schema_to_mutations(distributed<service::storage_proxy>& proxy, schema_features features)

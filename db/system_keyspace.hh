@@ -76,7 +76,7 @@ namespace gms {
     class feature_service;
 }
 
-bool is_system_keyspace(const sstring& ks_name);
+bool is_system_keyspace(std::string_view ks_name);
 
 namespace db {
 

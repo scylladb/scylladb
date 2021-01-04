@@ -220,7 +220,7 @@ static std::tuple<bool, std::string_view, std::string_view> try_get_internal_tab
     std::string_view ks_name = table_name.substr(0, delim);
     table_name.remove_prefix(ks_name.size() + 1);
     // Only internal keyspaces can be accessed to avoid leakage
-    if (!is_internal_keyspace(sstring(ks_name))) {
+    if (!is_internal_keyspace(ks_name)) {
         return {false, "", ""};
     }
     return {true, ks_name, table_name};

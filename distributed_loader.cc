@@ -43,7 +43,7 @@ extern logging::logger dblog;
 
 static future<> execute_futures(std::vector<future<>>& futures);
 
-static const std::unordered_set<sstring> system_keyspaces = {
+static const std::unordered_set<std::string_view> system_keyspaces = {
                 db::system_keyspace::NAME, db::schema_tables::NAME
 };
 
@@ -56,19 +56,19 @@ void distributed_loader::mark_keyspace_as_load_prio(const sstring& ks) {
     load_prio_keyspaces.insert(ks);
 }
 
-bool is_system_keyspace(const sstring& name) {
+bool is_system_keyspace(std::string_view name) {
     return system_keyspaces.contains(name);
 }
 
-static const std::unordered_set<sstring> internal_keyspaces = {
+static const std::unordered_set<std::string_view> internal_keyspaces = {
         db::system_distributed_keyspace::NAME,
         db::system_keyspace::NAME,
         db::schema_tables::NAME,
-        sstring(auth::meta::AUTH_KS),
+        auth::meta::AUTH_KS,
         tracing::trace_keyspace_helper::KEYSPACE_NAME
 };
 
-bool is_internal_keyspace(const sstring& name) {
+bool is_internal_keyspace(std::string_view name) {
     return internal_keyspaces.contains(name);
 }
 
@@ -646,7 +646,8 @@ future<> distributed_loader::init_system_keyspace(distributed<database>& db) {
 
         const auto& cfg = db.local().get_config();
         for (auto& data_dir : cfg.data_file_directories()) {
-            for (auto ksname : system_keyspaces) {
+            for (auto ksname_view : system_keyspaces) {
+                sstring ksname(ksname_view);
                 io_check([name = data_dir + "/" + ksname] { return touch_directory(name); }).get();
                 distributed_loader::populate_keyspace(db, data_dir, ksname).get();
             }
@@ -672,7 +673,7 @@ future<> distributed_loader::init_system_keyspace(distributed<database>& db) {
 }
 
 future<> distributed_loader::ensure_system_table_directories(distributed<database>& db) {
-    return parallel_for_each(system_keyspaces, [&db](sstring ksname) {
+    return parallel_for_each(system_keyspaces, [&db](std::string_view ksname) {
         auto& ks = db.local().find_keyspace(ksname);
         return parallel_for_each(ks.metadata()->cf_meta_data(), [&ks] (auto& pair) {
             auto cfm = pair.second;

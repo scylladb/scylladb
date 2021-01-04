@@ -59,7 +59,7 @@
 #include "partition_slice_builder.hh"
 #include "cas_request.hh"
 
-bool is_system_keyspace(const sstring& name);
+bool is_system_keyspace(std::string_view name);
 
 namespace cql3 {
 
