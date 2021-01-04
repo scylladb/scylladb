@@ -525,6 +525,9 @@ def is_gentoo():
 def is_arch():
     return ('arch' in distro.id())
 
+def is_amzn2():
+    return ('amzn' in distro.id()) and ('2' in distro.version())
+
 def get_text_from_path(fpath):
     board_vendor_path = Path(fpath)
     if board_vendor_path.exists():
