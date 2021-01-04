@@ -262,7 +262,7 @@ else
     cat << EOS > "$rsystemd"/scylla-node-exporter.service.d/nonroot.conf
 [Service]
 EnvironmentFile=
-EnvironmentFile=$rsysconfdir/scylla-node-exporter
+EnvironmentFile=$(realpath -m "$rsysconfdir/scylla-node-exporter")
 ExecStart=
 ExecStart=$rprefix/node_exporter/node_exporter $SCYLLA_NODE_EXPORTER_ARGS
 User=
@@ -373,7 +373,7 @@ else
         cat << EOS > "$rsystemd"/scylla-server.service.d/nonroot.conf
 [Service]
 EnvironmentFile=
-EnvironmentFile=$rsysconfdir/scylla-server
+EnvironmentFile=$(realpath -m "$rsysconfdir/scylla-server")
 EnvironmentFile=$retc/scylla.d/*.conf
 ExecStartPre=
 ExecStart=
@@ -385,7 +385,7 @@ EOS
         cat << EOS > "$rsystemd"/scylla-server.service.d/nonroot.conf
 [Service]
 EnvironmentFile=
-EnvironmentFile=$rsysconfdir/scylla-server
+EnvironmentFile=$(realpath -m "$rsysconfdir/scylla-server")
 EnvironmentFile=$retc/scylla.d/*.conf
 ExecStartPre=
 ExecStartPre=$rprefix/scripts/scylla_logrotate
