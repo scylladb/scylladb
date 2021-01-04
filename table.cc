@@ -393,9 +393,9 @@ table::update_cache(lw_shared_ptr<memtable> m, std::vector<sstables::shared_ssta
 // Handles permit management only, used for situations where we don't want to inform
 // the compaction manager about backlogs (i.e., tests)
 class permit_monitor : public sstables::write_monitor {
-    sstable_write_permit _permit;
+    lw_shared_ptr<sstable_write_permit> _permit;
 public:
-    permit_monitor(sstable_write_permit&& permit)
+    permit_monitor(lw_shared_ptr<sstable_write_permit> permit)
             : _permit(std::move(permit)) {
     }
 
@@ -405,7 +405,7 @@ public:
         // we'll have a period without significant disk activity when the current
         // SSTable is being sealed, the caches are being updated, etc. To do that,
         // we ensure the permit doesn't outlive this continuation.
-        _permit = sstable_write_permit::unconditional();
+        *_permit = sstable_write_permit::unconditional();
     }
 };
 
@@ -418,8 +418,8 @@ class database_sstable_write_monitor : public permit_monitor, public backlog_wri
     uint64_t _progress_seen = 0;
     api::timestamp_type _maximum_timestamp;
 public:
-    database_sstable_write_monitor(sstable_write_permit&& permit, sstables::shared_sstable sst, compaction_manager& manager,
-                                   sstables::compaction_strategy& strategy, api::timestamp_type max_timestamp)
+    database_sstable_write_monitor(lw_shared_ptr<sstable_write_permit> permit, sstables::shared_sstable sst,
+        compaction_manager& manager, sstables::compaction_strategy& strategy, api::timestamp_type max_timestamp)
             : permit_monitor(std::move(permit))
             , _sst(std::move(sst))
             , _compaction_manager(manager)
@@ -536,7 +536,7 @@ table::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old, sstable_write_
     //
     // The code as is guarantees that we'll never partially backup a
     // single sstable, so that is enough of a guarantee.
-    database_sstable_write_monitor monitor(std::move(permit), newtab, _compaction_manager, _compaction_strategy, old->get_max_timestamp());
+    database_sstable_write_monitor monitor(make_lw_shared<sstable_write_permit>(std::move(permit)), newtab, _compaction_manager, _compaction_strategy, old->get_max_timestamp());
     return do_with(std::move(monitor), [this, old, newtab] (auto& monitor) {
         auto&& priority = service::get_local_memtable_flush_priority();
         sstables::sstable_writer_config cfg = get_sstables_manager().configure_writer();
@@ -1650,7 +1650,7 @@ write_memtable_to_sstable(memtable& mt, sstables::shared_sstable sst,
 
 future<>
 write_memtable_to_sstable(memtable& mt, sstables::shared_sstable sst, sstables::sstable_writer_config cfg) {
-    return do_with(permit_monitor(sstable_write_permit::unconditional()), cfg, [&mt, sst] (auto& monitor, auto& cfg) {
+    return do_with(permit_monitor(make_lw_shared(sstable_write_permit::unconditional())), cfg, [&mt, sst] (auto& monitor, auto& cfg) {
         return write_memtable_to_sstable(mt, std::move(sst), monitor, cfg);
     });
 }
