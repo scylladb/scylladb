@@ -26,6 +26,7 @@
 #include <seastar/core/distributed.hh>
 #include <seastar/core/weak_ptr.hh>
 
+#include "utils/hash.hh"
 #include "schema_fwd.hh"
 #include "flat_mutation_reader.hh"
 #include "mutation_reader.hh"
@@ -128,8 +129,8 @@ class toppartitions_data_listener : public data_listener, public weakly_referenc
     friend class toppartitions_query;
 
     database& _db;
-    sstring _ks;
-    sstring _cf;
+    std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash> _table_filters;
+    std::unordered_set<sstring> _keyspace_filters;
 
 public:
     using top_k = utils::space_saving_top_k<toppartitions_item_key, toppartitions_item_key::hash, toppartitions_item_key::comp>;
@@ -142,7 +143,7 @@ private:
     top_k _top_k_write;
 
 public:
-    toppartitions_data_listener(database& db, sstring ks, sstring cf);
+    toppartitions_data_listener(database& db, std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash> table_filters, std::unordered_set<sstring> keyspace_filters);
     ~toppartitions_data_listener();
 
     virtual flat_mutation_reader on_read(const schema_ptr& s, const dht::partition_range& range,
@@ -155,16 +156,16 @@ public:
 
 class toppartitions_query {
     distributed<database>& _xdb;
-    sstring _ks;
-    sstring _cf;
+    std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash> _table_filters;
+    std::unordered_set<sstring> _keyspace_filters;
     std::chrono::milliseconds _duration;
     size_t _list_size;
     size_t _capacity;
     std::unique_ptr<sharded<toppartitions_data_listener>> _query;
 
 public:
-    toppartitions_query(seastar::distributed<database>& xdb, sstring ks, sstring cf,
-        std::chrono::milliseconds duration, size_t list_size, size_t capacity);
+    toppartitions_query(seastar::distributed<database>& xdb, std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash>&& table_filters,
+        std::unordered_set<sstring>&& keyspace_filters, std::chrono::milliseconds duration, size_t list_size, size_t capacity);
 
     struct results {
         toppartitions_data_listener::top_k read;

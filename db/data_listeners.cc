@@ -63,7 +63,8 @@ toppartitions_item_key::operator sstring() const {
     return oss.str();
 }
 
-toppartitions_data_listener::toppartitions_data_listener(database& db, sstring ks, sstring cf) : _db(db), _ks(ks), _cf(cf) {
+toppartitions_data_listener::toppartitions_data_listener(database& db, std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash> table_filters,
+        std::unordered_set<sstring> keyspace_filters) : _db(db), _table_filters(std::move(table_filters)), _keyspace_filters(std::move(keyspace_filters)) {
     dblog.debug("toppartitions_data_listener: installing {}", fmt::ptr(this));
     _db.data_listeners().install(this);
 }
@@ -80,25 +81,29 @@ future<> toppartitions_data_listener::stop() {
 
 flat_mutation_reader toppartitions_data_listener::on_read(const schema_ptr& s, const dht::partition_range& range,
         const query::partition_slice& slice, flat_mutation_reader&& rd) {
-    if (s->ks_name() != _ks || s->cf_name() != _cf) {
-        return std::move(rd);
+    bool include_all = _table_filters.empty() && _keyspace_filters.empty();
+
+    if (include_all || _keyspace_filters.contains(s->ks_name()) || _table_filters.contains({s->ks_name(), s->cf_name()})) {
+        dblog.trace("toppartitions_data_listener::on_read: {}.{}", s->ks_name(), s->cf_name());
+        return make_filtering_reader(std::move(rd), [zis = this->weak_from_this(), &range, &slice, s = std::move(s)] (const dht::decorated_key& dk) {
+            // The data query may be executing after the toppartitions_data_listener object has been removed, so check
+            if (zis) {
+                zis->_top_k_read.append(toppartitions_item_key{s, dk});
+            }
+            return true;
+        });
     }
-    dblog.trace("toppartitions_data_listener::on_read: {}.{}", s->ks_name(), s->cf_name());
-    return make_filtering_reader(std::move(rd), [zis = this->weak_from_this(), &range, &slice, s = std::move(s)] (const dht::decorated_key& dk) {
-        // The data query may be executing after the toppartitions_data_listener object has been removed, so check
-        if (zis) {
-            zis->_top_k_read.append(toppartitions_item_key{s, dk});
-        }
-        return true;
-    });
+
+    return std::move(rd);
 }
 
 void toppartitions_data_listener::on_write(const schema_ptr& s, const frozen_mutation& m) {
-    if (s->ks_name() != _ks || s->cf_name() != _cf) {
-        return;
+    bool include_all = _table_filters.empty() && _keyspace_filters.empty();
+    
+    if (include_all || _keyspace_filters.contains(s->ks_name()) || _table_filters.contains({s->ks_name(), s->cf_name()})) {
+        dblog.trace("toppartitions_data_listener::on_write: {}.{}", s->ks_name(), s->cf_name());
+        _top_k_write.append(toppartitions_item_key{s, m.decorated_key(*s)});
     }
-    dblog.trace("toppartitions_data_listener::on_write: {}.{}", _ks, _cf);
-    _top_k_write.append(toppartitions_item_key{s, m.decorated_key(*s)});
 }
 
 toppartitions_data_listener::global_top_k::results
@@ -121,15 +126,16 @@ toppartitions_data_listener::localize(const global_top_k::results& r) {
     return n;
 }
 
-toppartitions_query::toppartitions_query(distributed<database>& xdb, sstring ks, sstring cf,
-        std::chrono::milliseconds duration, size_t list_size, size_t capacity)
-        : _xdb(xdb), _ks(ks), _cf(cf), _duration(duration), _list_size(list_size), _capacity(capacity),
+toppartitions_query::toppartitions_query(distributed<database>& xdb, std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash>&& table_filters,
+        std::unordered_set<sstring>&& keyspace_filters, std::chrono::milliseconds duration, size_t list_size, size_t capacity)
+        : _xdb(xdb), _table_filters(std::move(table_filters)), _keyspace_filters(std::move(keyspace_filters)), _duration(duration), _list_size(list_size), _capacity(capacity),
           _query(std::make_unique<sharded<toppartitions_data_listener>>()) {
-    dblog.debug("toppartitions_query on {}.{}", _ks, _cf);
+    dblog.debug("toppartitions_query on {} column families and {} keyspaces", !_table_filters.empty() ? std::to_string(_table_filters.size()) : "all",
+                !_keyspace_filters.empty() ? std::to_string(_keyspace_filters.size()) : "all");
 }
 
 future<> toppartitions_query::scatter() {
-    return _query->start(std::ref(_xdb), _ks, _cf);
+    return _query->start(std::ref(_xdb), _table_filters, _keyspace_filters);
 }
 
 using top_t = toppartitions_data_listener::global_top_k::results;
