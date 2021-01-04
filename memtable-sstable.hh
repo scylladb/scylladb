@@ -39,6 +39,13 @@ class sstable_writer_config;
 }
 
 future<>
+write_memtable_to_sstable(flat_mutation_reader reader,
+        memtable& mt, sstables::shared_sstable sst,
+        sstables::write_monitor& monitor,
+        sstables::sstable_writer_config& cfg,
+        const io_priority_class& pc);
+
+future<>
 write_memtable_to_sstable(memtable& mt,
         sstables::shared_sstable sst,
         sstables::write_monitor& mon,

@@ -1638,14 +1638,22 @@ table::apply(const frozen_mutation& m, const schema_ptr& m_schema, db::rp_handle
 }
 
 future<>
-write_memtable_to_sstable(memtable& mt, sstables::shared_sstable sst,
+write_memtable_to_sstable(flat_mutation_reader reader,
+                          memtable& mt, sstables::shared_sstable sst,
                           sstables::write_monitor& monitor,
                           sstables::sstable_writer_config& cfg,
                           const io_priority_class& pc) {
     cfg.replay_position = mt.replay_position();
     cfg.monitor = &monitor;
-    return sst->write_components(mt.make_flush_reader(mt.schema(), pc), mt.partition_count(),
-        mt.schema(), cfg, mt.get_encoding_stats(), pc);
+    return sst->write_components(std::move(reader), mt.partition_count(), mt.schema(), cfg, mt.get_encoding_stats(), pc);
+}
+
+future<>
+write_memtable_to_sstable(memtable& mt, sstables::shared_sstable sst,
+                          sstables::write_monitor& monitor,
+                          sstables::sstable_writer_config& cfg,
+                          const io_priority_class& pc) {
+    return write_memtable_to_sstable(mt.make_flush_reader(mt.schema(), pc), mt, std::move(sst), monitor, cfg, pc);
 }
 
 future<>
