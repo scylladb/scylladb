@@ -433,6 +433,7 @@ int main(int ac, char** av) {
 
     init("version", bpo::bool_switch(), "print version number and exit");
     init("build-id", bpo::bool_switch(), "print build-id and exit");
+    init("build-mode", bpo::bool_switch(), "print build mode and exit");
 
     bpo::options_description deprecated("Deprecated options - ignored");
     deprecated.add_options()
@@ -455,9 +456,12 @@ int main(int ac, char** av) {
         fmt::print("{}\n", scylla_version());
         return 0;
     }
-
     if (vm["build-id"].as<bool>()) {
         fmt::print("{}\n", get_build_id());
+        return 0;
+    }
+    if (vm["build-mode"].as<bool>()) {
+        fmt::print("{}\n", scylla_build_mode());
         return 0;
     }
 

@@ -24,3 +24,5 @@
 #include <string>
 
 std::string scylla_version();
+
+std::string scylla_build_mode();
