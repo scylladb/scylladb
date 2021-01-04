@@ -174,6 +174,11 @@ check_usermode_support() {
     [ -n "$user" ]
 }
 
+if ! $packaging && [ ! -d /run/systemd/system/ ]; then
+    echo "systemd is not detected, unsupported distribution."
+    exit 1
+fi
+
 # change directory to the package's root directory
 cd "$(dirname "$0")"
 

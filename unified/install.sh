@@ -83,6 +83,11 @@ while [ $# -gt 0 ]; do
     esac
 done
 
+if [ ! -d /run/systemd/system/ ]; then
+    echo "systemd is not detected, unsupported distribution."
+    exit 1
+fi
+
 has_java=false
 if [ -x /usr/bin/java ]; then
     javaver=$(/usr/bin/java -version 2>&1|head -n1|cut -f 3 -d " ")
