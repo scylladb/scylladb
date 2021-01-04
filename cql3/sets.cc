@@ -311,7 +311,7 @@ sets::discarder::execute(mutation& m, const clustering_key_prefix& row_key, cons
     assert(column.type->is_multi_cell()); // "Attempted to remove items from a frozen set";
 
     auto&& value = _t->bind(params._options);
-    if (!value) {
+    if (!value || value == constants::UNSET_VALUE) {
         return;
     }
 

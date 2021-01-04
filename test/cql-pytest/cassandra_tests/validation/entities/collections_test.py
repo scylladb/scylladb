@@ -326,10 +326,6 @@ def testListWithUnsetValues(cql, test_keyspace):
         # captures this case before sending it to the server.
         #assert_invalid_message(cql, table, "Invalid unset value for column k", "SELECT * FROM %s WHERE k IN (?)", UNSET_VALUE)
 
-# Note: I have to use skip instead of xfail here because this test, not only
-# fails, it crashes: the last command UPDATE %s SET s = s - ? WHERE k = 10",
-# bound with UNSET_VALUE, crashes with an assertion failure. See #7740.
-@pytest.mark.skip(reason="Cassandra 2.2.0's 'unset' values not yet supported. Issue #7740")
 def testSetWithUnsetValues(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int PRIMARY KEY, s set<text>)") as table:
         s = {"bar", "baz", "foo"}
