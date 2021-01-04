@@ -472,7 +472,6 @@ def testFunctionsOnCollections(cql, test_keyspace):
         assert_invalid(cql, table, "SELECT ttl(l) FROM %s WHERE k = 0")
         assert_invalid(cql, table, "SELECT writetime(l) FROM %s WHERE k = 0")
 
-@pytest.mark.xfail(reason="Cassandra 4.0's support for IN on table with collection not yet supported. Issue #7743")
 def testInRestrictionWithCollection(cql, test_keyspace):
     for frozen in [True, False]:
         with create_table(cql, test_keyspace,

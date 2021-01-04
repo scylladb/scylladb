@@ -147,7 +147,6 @@ statement_restrictions::statement_restrictions(database& db,
         const std::vector<::shared_ptr<relation>>& where_clause,
         variable_specifications& bound_names,
         bool selects_only_static_columns,
-        bool select_a_collection,
         bool for_view,
         bool allow_filtering)
     : statement_restrictions(schema, allow_filtering)
@@ -227,7 +226,7 @@ statement_restrictions::statement_restrictions(database& db,
         }
     }
 
-    process_clustering_columns_restrictions(select_a_collection, for_view, allow_filtering);
+    process_clustering_columns_restrictions(for_view, allow_filtering);
 
     // Covers indexes on the first clustering column (among others).
     if (_is_key_range && _has_queriable_ck_index &&
@@ -455,15 +454,11 @@ bool statement_restrictions::has_unrestricted_clustering_columns() const {
     return _clustering_columns_restrictions->has_unrestricted_components(*_schema);
 }
 
-void statement_restrictions::process_clustering_columns_restrictions(bool select_a_collection, bool for_view, bool allow_filtering) {
+void statement_restrictions::process_clustering_columns_restrictions(bool for_view, bool allow_filtering) {
     if (!has_clustering_columns_restriction()) {
         return;
     }
 
-    if (clustering_key_restrictions_has_IN() && select_a_collection) {
-        throw exceptions::invalid_request_exception(
-            "Cannot restrict clustering columns by IN relations when a collection is selected by the query");
-    }
     if (find_atom(_clustering_columns_restrictions->expression, expr::is_on_collection)
         && !_has_queriable_ck_index && !allow_filtering) {
         throw exceptions::invalid_request_exception(

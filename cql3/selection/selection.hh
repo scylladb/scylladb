@@ -141,21 +141,6 @@ public:
     }
 
     /**
-     * Checks if this selection contains a collection.
-     *
-     * @return <code>true</code> if this selection contains a collection, <code>false</code> otherwise.
-     */
-    bool contains_a_collection() const {
-        if (!_schema->has_multi_cell_collections()) {
-            return false;
-        }
-
-        return std::any_of(_columns.begin(), _columns.end(), [] (auto&& def) {
-           return def->type->is_collection() && def->type->is_multi_cell();
-        });
-    }
-
-    /**
      * Returns the index of the specified column.
      *
      * @param def the column definition
