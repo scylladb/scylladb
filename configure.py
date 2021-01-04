@@ -533,7 +533,12 @@ defines = ['XXH_PRIVATE_API',
            'SEASTAR_TESTING_MAIN',
 ]
 
-extra_cxxflags = {}
+extra_cxxflags = {
+    'debug': {},
+    'dev': {},
+    'release': {},
+    'sanitize': {}
+}
 
 scylla_core = (['database.cc',
                 'absl-flat_hash_map.cc',
@@ -1289,7 +1294,9 @@ scylla_release = file.read().strip()
 file = open(f'{outdir}/SCYLLA-PRODUCT-FILE', 'r')
 scylla_product = file.read().strip()
 
-extra_cxxflags["release.cc"] = "-DSCYLLA_VERSION=\"\\\"" + scylla_version + "\\\"\" -DSCYLLA_RELEASE=\"\\\"" + scylla_release + "\\\"\""
+for m in ['debug', 'release', 'sanitize', 'dev']:
+    cxxflags = "-DSCYLLA_VERSION=\"\\\"" + scylla_version + "\\\"\" -DSCYLLA_RELEASE=\"\\\"" + scylla_release + "\\\"\" -DSCYLLA_BUILD_MODE=\"\\\"" + m + "\\\"\""
+    extra_cxxflags[m]["release.cc"] = cxxflags
 
 for m in ['debug', 'release', 'sanitize']:
     modes[m]['cxxflags'] += ' ' + dbgflag
@@ -1746,8 +1753,8 @@ with open(buildfile_tmp, 'w') as f:
         for obj in compiles:
             src = compiles[obj]
             f.write('build {}: cxx.{} {} || {} {}\n'.format(obj, mode, src, seastar_dep, gen_headers_dep))
-            if src in extra_cxxflags:
-                f.write('    cxxflags = {seastar_cflags} $cxxflags $cxxflags_{mode} {extra_cxxflags}\n'.format(mode=mode, extra_cxxflags=extra_cxxflags[src], **modeval))
+            if src in extra_cxxflags[mode]:
+                f.write('    cxxflags = {seastar_cflags} $cxxflags $cxxflags_{mode} {extra_cxxflags}\n'.format(mode=mode, extra_cxxflags=extra_cxxflags[mode][src], **modeval))
         for swagger in swaggers:
             hh = swagger.headers(gen_dir)[0]
             cc = swagger.sources(gen_dir)[0]
