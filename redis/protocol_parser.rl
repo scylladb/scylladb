@@ -134,6 +134,10 @@ public:
         return _req._state == request_state::eof;
     }
     
+    bool failed() const {
+        return _req._state == request_state::error;
+    }
+
     redis::request& get_request() { 
         std::transform(_req._command.begin(), _req._command.end(), _req._command.begin(), ::tolower);
         return _req;

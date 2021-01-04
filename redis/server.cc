@@ -242,7 +242,13 @@ future<> redis_server::connection::process_request() {
         return process_request_internal().then([this, leave = std::move(leave), lc = std::move(lc)] (auto&& result) mutable {
             --_server._stats._requests_serving;
             try {
-                write_reply(std::move(result));
+                if (_parser.failed()) {
+                    logging.error("request parse failed");
+                    const auto e = redis_exception("unknown command ''");
+                    write_reply(std::move(e));
+                }else{
+                    write_reply(std::move(result));
+                }
                 ++_server._stats._requests_served;
                 _server._stats._requests.mark(lc.stop().latency());
                 if (lc.is_start()) {
