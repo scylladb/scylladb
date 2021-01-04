@@ -66,6 +66,10 @@ public:
     static int64_t calculate_shard_from_sstable_generation(int64_t generation) {
         return column_family::calculate_shard_from_sstable_generation(generation);
     }
+
+    future<stop_iteration> try_flush_memtable_to_sstable(lw_shared_ptr<memtable> mt) {
+        return _cf->try_flush_memtable_to_sstable(mt, sstable_write_permit::unconditional());
+    }
 };
 
 namespace sstables {
