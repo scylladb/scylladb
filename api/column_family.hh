@@ -116,4 +116,7 @@ future<json::json_return_type>  get_cf_stats(http_context& ctx, const sstring& n
 future<json::json_return_type>  get_cf_stats(http_context& ctx,
         int64_t column_family_stats::*f);
 
+
+std::tuple<sstring, sstring> parse_fully_qualified_cf_name(sstring name);
+
 }

@@ -23,11 +23,13 @@
 #include "api/api-doc/storage_service.json.hh"
 #include "db/config.hh"
 #include "db/schema_tables.hh"
-#include <optional>
+#include "utils/hash.hh"
+#include <sstream>
 #include <time.h>
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/adaptor/filtered.hpp>
 #include <boost/algorithm/string/trim_all.hpp>
+#include <boost/functional/hash.hpp>
 #include "service/storage_service.hh"
 #include "service/load_meter.hh"
 #include "db/commitlog/commitlog.hh"
@@ -47,6 +49,8 @@
 #include "transport/controller.hh"
 #include "thrift/controller.hh"
 #include "locator/token_metadata.hh"
+
+extern logging::logger apilog;
 
 namespace api {
 
@@ -93,6 +97,37 @@ static auto wrap_ks_cf(http_context &ctx, ks_cf_func f) {
         }
         return f(ctx, std::move(req), std::move(keyspace), std::move(column_families));
     };
+}
+
+seastar::future<json::json_return_type> run_toppartitions_query(db::toppartitions_query& q, http_context &ctx, bool legacy_request) {
+    namespace cf = httpd::column_family_json;
+    return q.scatter().then([&q, legacy_request] {
+        return sleep(q.duration()).then([&q, legacy_request] {
+            return q.gather(q.capacity()).then([&q, legacy_request] (auto topk_results) {
+                apilog.debug("toppartitions query: processing results");
+                cf::toppartitions_query_results results;
+
+                results.read_cardinality = topk_results.read.size();
+                results.write_cardinality = topk_results.write.size();
+
+                for (auto& d: topk_results.read.top(q.list_size())) {
+                    cf::toppartitions_record r;
+                    r.partition = (legacy_request ? "" : "(" + d.item.schema->ks_name() + ":" + d.item.schema->cf_name() + ") ") + sstring(d.item);
+                    r.count = d.count;
+                    r.error = d.error;
+                    results.read.push(r);
+                }
+                for (auto& d: topk_results.write.top(q.list_size())) {
+                    cf::toppartitions_record r;
+                    r.partition = (legacy_request ? "" : "(" + d.item.schema->ks_name() + ":" + d.item.schema->cf_name() + ") ") + sstring(d.item);
+                    r.count = d.count;
+                    r.error = d.error;
+                    results.write.push(r);
+                }
+                return make_ready_future<json::json_return_type>(results);
+            });
+        });
+    });
 }
 
 future<json::json_return_type> set_tables_autocompaction(http_context& ctx, const sstring &keyspace, std::vector<sstring> tables, bool enabled) {
@@ -286,6 +321,56 @@ void set_storage_service(http_context& ctx, routes& r) {
             val.value = boost::lexical_cast<std::string>(i.second);
             return val;
         }));
+    });
+
+    ss::toppartitions_generic.set(r, [&ctx] (std::unique_ptr<request> req) {
+        bool filters_provided = false;
+
+        std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash> table_filters {};
+        if (req->query_parameters.contains("table_filters")) {
+            filters_provided = true;
+            auto filters = req->get_query_param("table_filters");
+            std::stringstream ss { filters };
+            std::string filter;
+            while (!filters.empty() && ss.good()) {
+                std::getline(ss, filter, ',');
+                table_filters.emplace(parse_fully_qualified_cf_name(filter));
+            }
+        }
+
+        std::unordered_set<sstring> keyspace_filters {};
+        if (req->query_parameters.contains("keyspace_filters")) {
+            filters_provided = true;
+            auto filters = req->get_query_param("keyspace_filters");
+            std::stringstream ss { filters };
+            std::string filter;
+            while (!filters.empty() && ss.good()) {
+                std::getline(ss, filter, ',');
+                keyspace_filters.emplace(std::move(filter));
+            }
+        }
+
+        // when the query is empty return immediately
+        if (filters_provided && table_filters.empty() && keyspace_filters.empty()) {
+            apilog.debug("toppartitions query: processing results");
+            httpd::column_family_json::toppartitions_query_results results;
+
+            results.read_cardinality = 0;
+            results.write_cardinality = 0;
+
+            return make_ready_future<json::json_return_type>(results);
+        }
+
+        api::req_param<std::chrono::milliseconds, unsigned> duration{*req, "duration", 1000ms};
+        api::req_param<unsigned> capacity(*req, "capacity", 256);
+        api::req_param<unsigned> list_size(*req, "list_size", 10);
+
+        apilog.info("toppartitions query: #table_filters={} #keyspace_filters={} duration={} list_size={} capacity={}",
+            !table_filters.empty() ? std::to_string(table_filters.size()) : "all", !keyspace_filters.empty() ? std::to_string(keyspace_filters.size()) : "all", duration.param, list_size.param, capacity.param);
+
+        return seastar::do_with(db::toppartitions_query(ctx.db, std::move(table_filters), std::move(keyspace_filters), duration.value, list_size, capacity), [&ctx] (db::toppartitions_query& q) {
+            return run_toppartitions_query(q, ctx);
+        });
     });
 
     ss::get_leaving_nodes.set(r, [&ctx](const_req req) {

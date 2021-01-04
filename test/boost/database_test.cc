@@ -458,7 +458,7 @@ SEASTAR_TEST_CASE(clear_nonexistent_snapshot) {
 SEASTAR_TEST_CASE(toppartitions_cross_shard_schema_ptr) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("CREATE TABLE ks.tab (id int PRIMARY KEY)").get();
-        db::toppartitions_query tq(e.db(), "ks", "tab", 1s, 100, 100);
+        db::toppartitions_query tq(e.db(), {{"ks", "tab"}}, {}, 1s, 100, 100);
         tq.scatter().get();
         auto q = e.prepare("INSERT INTO ks.tab(id) VALUES(?)").get0();
         // Generate many values to ensure crossing shards

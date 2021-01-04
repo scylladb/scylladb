@@ -105,6 +105,68 @@
          ]
       },
       {
+         "path":"/storage_service/toppartitions/",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Toppartitions query",
+               "type":"toppartitions_query_results",
+               "nickname":"toppartitions_generic",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"table_filters",
+                     "description":"Optional list of table name filters in keyspace:name format",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"array",
+                     "items":{
+                        "type":"string"
+                     },
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"keyspace_filters",
+                     "description":"Optional list of keyspace filters",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"array",
+                     "items":{
+                        "type":"string"
+                     },
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"duration",
+                     "description":"Duration (in milliseconds) of monitoring operation",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type": "long",
+                     "paramType":"query"
+                  },
+                  {
+                    "name":"list_size",
+                    "description":"number of the top partitions to list",
+                    "required":false,
+                    "allowMultiple":false,
+                    "type": "long",
+                    "paramType":"query"
+                 },
+                 {
+                    "name":"capacity",
+                    "description":"capacity of stream summary: determines amount of resources used in query processing",
+                    "required":false,
+                    "allowMultiple":false,
+                    "type": "long",
+                    "paramType":"query"
+                 }
+              ]
+            }
+         ]
+      },
+      {
          "path":"/storage_service/nodes/leaving",
          "operations":[
             {
