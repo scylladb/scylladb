@@ -42,7 +42,7 @@ if __name__ == '__main__':
         cpufreq = systemd_unit('cpufrequtils.service')
         cpufreq.enable()
         cpufreq.restart()
-    if is_gentoo():
+    elif is_gentoo():
         if not shutil.which('cpupower'):
             emerge_install('sys-power/cpupower')
         with open('/etc/conf.d/cpupower') as f:
@@ -53,7 +53,7 @@ if __name__ == '__main__':
         cpufreq = systemd_unit('cpupower-frequency-set.service')
         cpufreq.enable()
         cpufreq.restart()
-    if is_arch():
+    elif is_arch():
         if not shutil.which('cpupower'):
             pkg_install('cpupower')
         cfg = sysconfig_parser('/etc/default/cpupower')
@@ -62,7 +62,7 @@ if __name__ == '__main__':
         cpupwr = systemd_unit('cpupower.service')
         cpupwr.enable()
         cpupwr.restart()
-    if is_amzn2():
+    elif is_amzn2():
         if not shutil.which('cpupower'):
             yum_install('cpupowerutils')
         cfg = sysconfig_parser('/etc/sysconfig/scylla-cpupower')
@@ -100,3 +100,6 @@ WantedBy=multi-user.target
         cpupwr = systemd_unit('cpupower.service')
         cpupwr.enable()
         cpupwr.restart()
+    else:
+        print("Unsupported distribution, skipping setup..")
+        sys.exit(0)
