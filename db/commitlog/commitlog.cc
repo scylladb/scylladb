@@ -362,7 +362,7 @@ public:
         _flush_handlers.erase(id);
     }
 
-    void flush_segments(bool = false);
+    void flush_segments(uint64_t size_to_remove);
 
 private:
     future<> clear_reserve_segments();
@@ -1246,7 +1246,7 @@ void db::commitlog::segment_manager::create_counters(const sstring& metrics_cate
     });
 }
 
-void db::commitlog::segment_manager::flush_segments(bool force) {
+void db::commitlog::segment_manager::flush_segments(uint64_t size_to_remove) {
     if (_segments.empty()) {
         return;
     }
@@ -1259,8 +1259,20 @@ void db::commitlog::segment_manager::flush_segments(bool force) {
 
     // But if all segments are closed or we force-flush,
     // include all.
-    if (force || !active->is_still_allocating()) {
+    if (!active->is_still_allocating()) {
         high = replay_position(high.id + 1, 0);
+    }
+
+    auto n = size_to_remove;
+
+    if (size_to_remove != 0) {
+        for (auto& s : _segments) {
+            if (n <= s->_size_on_disk) {
+                high = replay_position(s->_desc.id, db::position_type(s->_size_on_disk));
+                break;
+            }
+            n -= s->_size_on_disk;
+        }
     }
 
     // Now get a set of used CF ids:
@@ -1271,7 +1283,7 @@ void db::commitlog::segment_manager::flush_segments(bool force) {
         }
     });
 
-    clogger.debug("Flushing ({}) to {}", force, high);
+    clogger.debug("Flushing ({} MB) to {}", size_to_remove/(1024*1024), high);
 
     // For each CF id: for each callback c: call c(id, high)
     for (auto& f : callbacks) {
@@ -1695,8 +1707,8 @@ void db::commitlog::segment_manager::on_timer() {
             auto cur = totals.active_size_on_disk;
             if (max != 0 && cur >= max) {
                 _new_counter = 0;
-                clogger.debug("Used size on disk {} MB exceeds local maximum {} MB", cur / (1024 * 1024), max / (1024 * 1024));
-                flush_segments();
+                clogger.debug("Used size on disk {} MB exceeds local threshold {} MB", cur / (1024 * 1024), max / (1024 * 1024));
+                flush_segments(cur - max);
             }
         }
         return do_pending_deletes();
