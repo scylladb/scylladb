@@ -72,7 +72,7 @@ abstract_marker::raw::raw(int32_t bind_index)
     if (receiver->type->is_collection()) {
         if (receiver->type->get_kind() == abstract_type::kind::list) {
             return ::make_shared<lists::marker>(_bind_index, receiver);
-        } else if (receiver->type->get_kind() == abstract_type::kind::set) {
+        } else if (receiver->type->self_or_reversed(&abstract_type::is_set)) {
             return ::make_shared<sets::marker>(_bind_index, receiver);
         } else if (receiver->type->get_kind() == abstract_type::kind::map) {
             return ::make_shared<maps::marker>(_bind_index, receiver);

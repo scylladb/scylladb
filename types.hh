@@ -610,6 +610,21 @@ public:
     cql3::cql3_type as_cql3_type() const;
     const sstring& cql3_type_name() const;
     virtual shared_ptr<const abstract_type> freeze() const { return shared_from_this(); }
+
+    bool self_or_reversed(bool (abstract_type::*method)() const) const{
+        return (this->*method)() || (is_reversed() && (*underlying_type().*method)());
+    }
+
+    /// Casts *this (or underlying type, if this is reversed) to T.  Throws bad_cast if it cannot.
+    template<typename T> const T& as() const {
+        if (auto cast = dynamic_cast<const T*>(this)) {
+            return *cast;
+        }
+        if (is_reversed()) {
+            return underlying_type()->as<T>();
+        }
+        throw std::bad_cast();
+    }
     friend class list_type_impl;
 private:
     mutable sstring _cql3_type_name;
