@@ -70,7 +70,7 @@ abstract_marker::raw::raw(int32_t bind_index)
 ::shared_ptr<term> abstract_marker::raw::prepare(database& db, const sstring& keyspace, lw_shared_ptr<column_specification> receiver) const
 {
     if (receiver->type->is_collection()) {
-        if (receiver->type->get_kind() == abstract_type::kind::list) {
+        if (receiver->type->self_or_reversed(&abstract_type::is_list)) {
             return ::make_shared<lists::marker>(_bind_index, receiver);
         } else if (receiver->type->self_or_reversed(&abstract_type::is_set)) {
             return ::make_shared<sets::marker>(_bind_index, receiver);

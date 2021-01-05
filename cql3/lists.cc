@@ -40,7 +40,7 @@ lw_shared_ptr<column_specification>
 lists::value_spec_of(const column_specification& column) {
     return make_lw_shared<column_specification>(column.ks_name, column.cf_name,
             ::make_shared<column_identifier>(format("value({})", *column.name), true),
-                dynamic_pointer_cast<const list_type_impl>(column.type)->get_elements_type());
+                column.type->as<list_type_impl>().get_elements_type());
 }
 
 lw_shared_ptr<column_specification>
@@ -87,7 +87,7 @@ lists::literal::prepare(database& db, const sstring& keyspace, lw_shared_ptr<col
 
 void
 lists::literal::validate_assignable_to(database& db, const sstring keyspace, const column_specification& receiver) const {
-    if (!dynamic_pointer_cast<const list_type_impl>(receiver.type)) {
+    if (!receiver.type->self_or_reversed(&abstract_type::is_list)) {
         throw exceptions::invalid_request_exception(format("Invalid list literal for {} of type {}",
                 *receiver.name, receiver.type->as_cql3_type()));
     }
@@ -220,7 +220,7 @@ lists::delayed_value::bind(const query_options& options) {
 ::shared_ptr<terminal>
 lists::marker::bind(const query_options& options) {
     const auto& value = options.get_value_at(_bind_index);
-    auto& ltype = static_cast<const list_type_impl&>(*_receiver->type);
+    auto& ltype = _receiver->type->as<list_type_impl>();
     if (value.is_null()) {
         return nullptr;
     } else if (value.is_unset_value()) {
