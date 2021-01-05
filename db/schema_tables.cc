@@ -895,15 +895,6 @@ future<> recalculate_schema_version(distributed<service::storage_proxy>& proxy, 
     });
 }
 
-future<> merge_schema(distributed<service::storage_proxy>& proxy, std::vector<mutation> mutations, bool do_flush)
-{
-    return merge_lock().then([&proxy, mutations = std::move(mutations), do_flush] () mutable {
-        return do_merge_schema(proxy, std::move(mutations), do_flush);
-    }).finally([] {
-        return merge_unlock();
-    });
-}
-
 // Returns names of live table definitions of given keyspace
 future<std::vector<sstring>>
 static read_table_names_of_keyspace(distributed<service::storage_proxy>& proxy, const sstring& keyspace_name, schema_ptr schema_table) {

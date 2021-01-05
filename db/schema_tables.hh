@@ -179,8 +179,6 @@ future<mutation> read_keyspace_mutation(distributed<service::storage_proxy>&, co
 
 future<> merge_schema(distributed<service::storage_proxy>& proxy, gms::feature_service& feat, std::vector<mutation> mutations);
 
-future<> merge_schema(distributed<service::storage_proxy>& proxy, std::vector<mutation> mutations, bool do_flush);
-
 // Recalculates the local schema version.
 //
 // It is safe to call concurrently with recalculate_schema_version() and merge_schema() in which case it
