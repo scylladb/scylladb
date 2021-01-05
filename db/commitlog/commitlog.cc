@@ -1427,11 +1427,19 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
 
     ++_new_counter;
 
-    // don't increase reserve count if we are at max, or we would go over disk limit. 
-    if (_reserve_segments.empty() && (_reserve_segments.max_size() < cfg.max_reserve_segments) && (totals.total_size_on_disk + max_size) <= max_disk_size) {
-        _reserve_segments.set_max_size(_reserve_segments.max_size() + 1);
-        clogger.debug("Increased segment reserve count to {}", _reserve_segments.max_size());
+    if (_reserve_segments.empty()) {        
+        // don't increase reserve count if we are at max, or we would go over disk limit. 
+        if (_reserve_segments.max_size() < cfg.max_reserve_segments && (totals.total_size_on_disk + max_size) <= max_disk_size) {
+            _reserve_segments.set_max_size(_reserve_segments.max_size() + 1);
+            clogger.debug("Increased segment reserve count to {}", _reserve_segments.max_size());
+        }
+        // if we have no reserve and we're above/at limits, make background task a little more eager.
+        if (!_shutdown && totals.total_size_on_disk >= disk_usage_threshold) {
+            _timer.cancel();
+            _timer.arm(std::chrono::milliseconds(0));
+        }
     }
+
     return _reserve_segments.pop_eventually().then([this] (auto s) {
         _segments.push_back(std::move(s));
         _segments.back()->reset_sync_time();
