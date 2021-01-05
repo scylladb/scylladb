@@ -24,6 +24,8 @@
 #include "mutation_reader.hh"
 #include "db/system_keyspace.hh"
 
+class database;
+
 namespace db {
 
 namespace size_estimates {
@@ -34,6 +36,7 @@ struct token_range {
 };
 
 class size_estimates_mutation_reader final : public flat_mutation_reader::impl {
+    database& _db;
     const dht::partition_range* _prange;
     const query::partition_slice& _slice;
     using ks_range = std::vector<sstring>;
@@ -42,7 +45,7 @@ class size_estimates_mutation_reader final : public flat_mutation_reader::impl {
     streamed_mutation::forwarding _fwd;
     flat_mutation_reader_opt _partition_reader;
 public:
-    size_estimates_mutation_reader(schema_ptr, reader_permit, const dht::partition_range&, const query::partition_slice&, streamed_mutation::forwarding);
+    size_estimates_mutation_reader(database& db, schema_ptr, reader_permit, const dht::partition_range&, const query::partition_slice&, streamed_mutation::forwarding);
 
     virtual future<> fill_buffer(db::timeout_clock::time_point) override;
     virtual void next_partition() override;
@@ -52,10 +55,12 @@ private:
     future<> get_next_partition();
 
     std::vector<db::system_keyspace::range_estimates>
-    estimates_for_current_keyspace(const database&, std::vector<token_range> local_ranges) const;
+    estimates_for_current_keyspace(std::vector<token_range> local_ranges) const;
 };
 
 struct virtual_reader {
+    database& db;
+
     flat_mutation_reader operator()(schema_ptr schema,
             reader_permit permit,
             const dht::partition_range& range,
@@ -64,8 +69,10 @@ struct virtual_reader {
             tracing::trace_state_ptr trace_state,
             streamed_mutation::forwarding fwd,
             mutation_reader::forwarding fwd_mr) {
-        return make_flat_mutation_reader<size_estimates_mutation_reader>(std::move(schema), std::move(permit), range, slice, fwd);
+        return make_flat_mutation_reader<size_estimates_mutation_reader>(db, std::move(schema), std::move(permit), range, slice, fwd);
     }
+
+    virtual_reader(database& db_) noexcept : db(db_) {}
 };
 
 future<std::vector<token_range>> test_get_local_ranges(database& db);
