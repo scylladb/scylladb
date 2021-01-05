@@ -74,7 +74,7 @@ abstract_marker::raw::raw(int32_t bind_index)
             return ::make_shared<lists::marker>(_bind_index, receiver);
         } else if (receiver->type->self_or_reversed(&abstract_type::is_set)) {
             return ::make_shared<sets::marker>(_bind_index, receiver);
-        } else if (receiver->type->get_kind() == abstract_type::kind::map) {
+        } else if (receiver->type->self_or_reversed(&abstract_type::is_map)) {
             return ::make_shared<maps::marker>(_bind_index, receiver);
         }
         assert(0);
