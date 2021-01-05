@@ -593,6 +593,13 @@ def flat_type(t):
 
 
 local_types = {}
+local_writable_types = {}
+
+
+def resolve_basic_type_ref(type: BasicType):
+    if type.name not in local_types:
+        raise KeyError(f"Failed to resolve type reference for '{type.name}'")
+    return local_types[type.name]
 
 
 def list_types(t):
@@ -602,18 +609,18 @@ def list_types(t):
         return reduce(lambda a, b: a + b, [list_types(p) for p in t.template_parameters])
 
 
-def list_local_types(t):
-    return {l for l in list_types(t) if l in local_types}
+def list_local_writable_types(t):
+    return {l for l in list_types(t) if l in local_writable_types}
 
 
 def is_basic_type(t):
-    return isinstance(t, BasicType) and t.name not in local_types
+    return isinstance(t, BasicType) and t.name not in local_writable_types
 
 
-def is_local_type(t):
+def is_local_writable_type(t):
     if isinstance(t, str): # e.g. `t` is a local class name
-        return t in local_types
-    return t.name in local_types
+        return t in local_writable_types
+    return t.name in local_writable_types
 
 
 def get_template_name(lst):
@@ -650,7 +657,7 @@ def get_variant_type(t):
 
 
 def variant_to_member(template_parameters):
-    return [DataClassMember(name=get_variant_type(x), type=x) for x in template_parameters if is_local_type(x) or is_variant(x)]
+    return [DataClassMember(name=get_variant_type(x), type=x) for x in template_parameters if is_local_writable_type(x) or is_variant(x)]
 
 
 def variant_info(cls, template_parameters):
@@ -682,15 +689,15 @@ struct state_of_{name} {{
     members = get_members(cls)
     member_class = classes if classes else [cls.name]
     for m in members:
-        if is_local_type(m.type):
-            handle_visitors_state(local_types[param_type(m.type)], cout, member_class + [m.name])
+        if is_local_writable_type(m.type):
+            handle_visitors_state(local_writable_types[param_type(m.type)], cout, member_class + [m.name])
         if is_variant(m.type):
             handle_visitors_state(variant_info(cls, m.type.template_parameters), cout, member_class + [m.name])
 
 
 def get_dependency(cls):
     members = get_members(cls)
-    return reduce(lambda a, b: a | b, [list_local_types(m.type) for m in members], set())
+    return reduce(lambda a, b: a | b, [list_local_writable_types(m.type) for m in members], set())
 
 
 def optional_add_methods(typ):
@@ -700,7 +707,7 @@ def optional_add_methods(typ):
     }""")
     if is_basic_type(typ):
         added_type = typ
-    elif is_local_type(typ):
+    elif is_local_writable_type(typ):
         added_type = param_type(typ) + "_view"
     else:
         print("non supported optional type ", typ)
@@ -710,7 +717,7 @@ def optional_add_methods(typ):
         serialize(_out, true);
         serialize(_out, obj);
     }}""")
-    if is_local_type(typ):
+    if is_local_writable_type(typ):
         res = res + reindent(4, f"""
     writer_of_{param_type(typ)}<Output> write() {{
         serialize(_out, true);
@@ -805,7 +812,7 @@ def add_param_writer_object(name, base_state, typ, var_type="", var_index=None, 
             return {{ _out, {state} }};
         }}
     """).format(**locals())
-    if not is_stub(typ.name) and is_local_type(typ):
+    if not is_stub(typ.name) and is_local_writable_type(typ):
         ret += add_param_writer_basic_type(name, base_state, typ, var_type, var_index, root_node)
     if is_stub(typ.name):
         typename = typ.name
@@ -836,7 +843,7 @@ def add_param_write(current, base_state, vector=False, root_node=False):
     }}""")
         if is_basic_type(typ.template_parameters[0]):
             res = res + add_param_writer_basic_type(name, base_state, typ.template_parameters[0], "", "true")
-        elif is_local_type(typ.template_parameters[0]):
+        elif is_local_writable_type(typ.template_parameters[0]):
             res = res + add_param_writer_object(name, base_state[0][1], typ, "", "true")
         else:
             print("non supported optional type ", typ.template_parameters[0])
@@ -853,7 +860,7 @@ def add_param_write(current, base_state, vector=False, root_node=False):
         return {{ _out, std::move(_state) }};
     }}
 """
-    elif is_local_type(typ):
+    elif is_local_writable_type(typ):
         res = res + add_param_writer_object(name, base_state, typ)
     elif is_variant(typ):
         for idx, p in enumerate(typ.template_parameters):
@@ -861,7 +868,7 @@ def add_param_write(current, base_state, vector=False, root_node=False):
                 res = res + add_param_writer_basic_type(name, base_state, p, "_" + param_type(p), idx, root_node)
             elif is_variant(p):
                 res = res + add_param_writer_object(name, base_state, p, '_' + "variant", idx, root_node)
-            elif is_local_type(p):
+            elif is_local_writable_type(p):
                 res = res + add_param_writer_object(name, base_state, p, '_' + param_type(p), idx, root_node)
     else:
         print("something is wrong with type", typ)
@@ -976,8 +983,8 @@ struct writer_of_{full_type} {{
 def add_variant_nodes(cout, member, param, base_state, parents, classes):
     par = base_state + "__" + member.name
     for typ in param.template_parameters:
-        if is_local_type(typ):
-            handle_visitors_nodes(local_types[param_type(typ)], cout, True, classes + [member.name, local_types[param_type(typ)].name])
+        if is_local_writable_type(typ):
+            handle_visitors_nodes(local_writable_types[param_type(typ)], cout, True, classes + [member.name, local_writable_types[param_type(typ)].name])
         if is_variant(typ):
             name = base_state + "__" + member.name + "__variant"
             new_member = copy(member) # shallow copy
@@ -1008,8 +1015,8 @@ def add_nodes_when_needed(cout, member, base_state_name, parents, member_classes
         add_vector_node(cout, member, base_state_name, base_state_name)
     elif is_variant(member.type):
         add_variant_nodes(cout, member, member.type, base_state_name, parents, member_classes)
-    elif is_local_type(member.type):
-        handle_visitors_nodes(local_types[member.type.name], cout, False, member_classes + [member.name])
+    elif is_local_writable_type(member.type):
+        handle_visitors_nodes(local_writable_types[member.type.name], cout, False, member_classes + [member.name])
 
 
 def handle_visitors_nodes(cls, cout, variant_node=False, classes=[]):
@@ -1041,7 +1048,7 @@ def handle_visitors_nodes(cls, cout, variant_node=False, classes=[]):
     # Create writer and reader for include class
     if not variant_node:
         for member in get_dependency(cls):
-            handle_visitors_nodes(local_types[member], cout)
+            handle_visitors_nodes(local_writable_types[member], cout)
     for ind in reversed(range(1, len(members))):
         member = members[ind]
         add_nodes_when_needed(cout, member, base_state_name, parents, member_classes)
@@ -1052,12 +1059,17 @@ def handle_visitors_nodes(cls, cout, variant_node=False, classes=[]):
     add_node(cout, base_state_name, member.type, base_state_name, prefix, parents, add_param_write(member, base_state_name, False, not classes), False, cls.final)
 
 
-def add_to_types(cls):
+def register_local_type(cls):
     global local_types
+    local_types[cls.name] = cls
+
+
+def register_writable_local_type(cls):
+    global local_writable_types
     global stubs
     if not cls.attribute or cls.attribute.name != 'writable':
         return
-    local_types[cls.name] = cls
+    local_writable_types[cls.name] = cls
     if cls.stub:
         stubs.add(cls.name)
 
@@ -1065,8 +1077,8 @@ def add_to_types(cls):
 def sort_dependencies():
     dep_tree = {}
     res = []
-    for k in local_types:
-        cls = local_types[k]
+    for k in local_writable_types:
+        cls = local_writable_types[k]
         dep_tree[k] = get_dependency(cls)
     while (len(dep_tree) > 0):
         found = sorted(k for k in dep_tree if not dep_tree[k])
@@ -1085,7 +1097,7 @@ def join_template_view(lst, more_types=[]):
 
 
 def to_view(val):
-    if val in local_types:
+    if val in local_writable_types:
         return val + "_view"
     return val
 
@@ -1149,7 +1161,7 @@ def add_view(cout, cls):
     utils::input_stream v;
     """)
 
-    if not is_stub(cls.name) and is_local_type(cls.name):
+    if not is_stub(cls.name) and is_local_writable_type(cls.name):
         fprintln(cout, reindent(4, f"""
             operator {cls.name}() const {{
                auto in = v;
@@ -1216,23 +1228,22 @@ struct serializer<{cls.name}_view> {{
 
 def add_views(cout):
     for k in sort_dependencies():
-        add_view(cout, local_types[k])
+        add_view(cout, local_writable_types[k])
 
 
 def add_visitors(cout):
-    if not local_types:
+    if not local_writable_types:
         return
     add_views(cout)
     fprintln(cout, "\n////// State holders")
-    for k in local_types:
-        handle_visitors_state(local_types[k], cout)
+    for k in local_writable_types:
+        handle_visitors_state(local_writable_types[k], cout)
     fprintln(cout, "\n////// Nodes")
     for k in sort_dependencies():
-        handle_visitors_nodes(local_types[k], cout)
+        handle_visitors_nodes(local_writable_types[k], cout)
 
 
 def handle_class(cls, hout, cout, parent_template_param=[]):
-    add_to_types(cls)
     if cls.stub:
         return
     is_tpl = cls.template_params is not None
@@ -1271,7 +1282,8 @@ def handle_objects(tree, hout, cout):
 def handle_types(tree):
     for obj in tree:
         if isinstance(obj, ClassDef):
-            add_to_types(obj)
+            register_local_type(obj)
+            register_writable_local_type(obj)
         elif isinstance(obj, EnumDef):
             pass
         elif isinstance(obj, NamespaceDef):
