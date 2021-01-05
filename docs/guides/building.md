@@ -111,7 +111,7 @@ To build packages, run:
 ./tools/toolchain/dbuild ninja dist
 ```
 
-Alternatively, to run unit tests for a specific build mode, run:
+Alternatively, to build packages for a specific build mode, run:
 
 ```console
 ./tools/toolchain/dbuild ninja dist-<mode>
