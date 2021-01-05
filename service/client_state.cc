@@ -49,7 +49,6 @@
 #include "db/system_keyspace.hh"
 #include "db/schema_tables.hh"
 #include "tracing/trace_keyspace_helper.hh"
-#include "storage_service.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "database.hh"
 #include "cdc/log.hh"
@@ -194,8 +193,7 @@ future<> service::client_state::has_access(const sstring& ks, auth::command_desc
         }
     }
 
-    if (service::get_local_storage_service().db().local().features().cluster_supports_cdc()
-        && cmd.resource.kind() == auth::resource_kind::data) {
+    if (cmd.resource.kind() == auth::resource_kind::data) {
         const auto resource_view = auth::data_resource_view(cmd.resource);
         if (resource_view.table()) {
             if (cmd.permission == auth::permission::DROP) {
