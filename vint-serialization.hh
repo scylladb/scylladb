@@ -20,7 +20,27 @@
  */
 
 //
-// For reference, see https://developers.google.com/protocol-buffers/docs/encoding#varints
+// For reference, see https://github.com/apache/cassandra/blob/trunk/doc/native_protocol_v5.spec.
+//
+// Relevant excerpt:
+//
+//     [unsigned vint]   An unsigned variable length integer. A vint is encoded with the most significant byte (MSB) first.
+//                       The most significant byte will contains the information about how many extra bytes need to be read
+//                       as well as the most significant bits of the integer.
+//                       The number of extra bytes to read is encoded as 1 bits on the left side.
+//                       For example, if we need to read 2 more bytes the first byte will start with 110
+//                       (e.g. 256 000 will be encoded on 3 bytes as [110]00011 11101000 00000000)
+//                       If the encoded integer is 8 bytes long the vint will be encoded on 9 bytes and the first
+//                       byte will be: 11111111
+//
+//    [vint]             A signed variable length integer. This is encoded using zig-zag encoding and then sent
+//                       like an [unsigned vint]. Zig-zag encoding converts numbers as follows:
+//                       0 = 0, -1 = 1, 1 = 2, -2 = 3, 2 = 4, -3 = 5, 3 = 6 and so forth.
+//                       The purpose is to send small negative values as small unsigned values, so that we save bytes on the wire.
+//                       To encode a value n use "(n >> 31) ^ (n << 1)" for 32 bit values, and "(n >> 63) ^ (n << 1)"
+//                       for 64 bit values where "^" is the xor operation, "<<" is the left shift operation and ">>" is
+//                       the arithemtic right shift operation (highest-order bit is replicated).
+//                       Decode with "(n >> 1) ^ -(n & 1)".
 //
 
 #pragma once
