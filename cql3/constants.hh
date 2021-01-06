@@ -192,8 +192,11 @@ public:
 
         virtual ::shared_ptr<terminal> bind(const query_options& options) override {
             auto bytes = bind_and_get(options);
-            if (!bytes) {
+            if (bytes.is_null()) {
                 return ::shared_ptr<terminal>{};
+            }
+            if (bytes.is_unset_value()) {
+                return UNSET_VALUE;
             }
             return ::make_shared<constants::value>(std::move(cql3::raw_value::make_value(to_bytes(*bytes))));
         }
