@@ -27,6 +27,7 @@
 #include <fmt/ostream.h>
 #include <unordered_map>
 
+#include "cql3/constants.hh"
 #include "cql3/lists.hh"
 #include "cql3/tuples.hh"
 #include "index/secondary_index_manager.hh"
@@ -568,7 +569,8 @@ const auto deref = boost::adaptors::transformed([] (const bytes_opt& b) { return
 
 /// Returns possible values from t, which must be RHS of IN.
 value_list get_IN_values(
-        const ::shared_ptr<term>& t, const query_options& options, const serialized_compare& comparator) {
+        const ::shared_ptr<term>& t, const query_options& options, const serialized_compare& comparator,
+        sstring_view column_name) {
     // RHS is prepared differently for different CQL cases.  Cast it dynamically to discern which case this is.
     if (auto dv = dynamic_pointer_cast<lists::delayed_value>(t)) {
         // Case `a IN (1,2,3)`.
@@ -578,8 +580,11 @@ value_list get_IN_values(
         return to_sorted_vector(std::move(result_range), comparator);
     } else if (auto mkr = dynamic_pointer_cast<lists::marker>(t)) {
         // Case `a IN ?`.  Collect all list-element values.
-        const auto val = static_pointer_cast<lists::value>(mkr->bind(options));
-        return to_sorted_vector(val->get_elements() | non_null | deref, comparator);
+        const auto val = mkr->bind(options);
+        if (val == constants::UNSET_VALUE) {
+            throw exceptions::invalid_request_exception(format("Invalid unset value for column {}", column_name));
+        }
+        return to_sorted_vector(static_pointer_cast<lists::value>(val)->get_elements() | non_null | deref, comparator);
     }
     throw std::logic_error(format("get_IN_values(single column) on invalid term {}", *t));
 }
@@ -686,7 +691,7 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
                                 return oper.op == oper_t::EQ ? value_set(value_list{*val})
                                         : to_range(oper.op, *val);
                             } else if (oper.op == oper_t::IN) {
-                                return get_IN_values(oper.rhs, options, type->as_less_comparator());
+                                return get_IN_values(oper.rhs, options, type->as_less_comparator(), cdef->name_as_text());
                             }
                             throw std::logic_error(format("possible_lhs_values: unhandled operator {}", oper));
                         },
