@@ -179,7 +179,6 @@ public:
                 }
                 if (is_buffer_empty()) {
                     if (is_end_of_stream()) {
-                        filter.on_end_of_stream();
                         return;
                     }
                     fill_buffer(timeout).get();
@@ -271,6 +270,7 @@ public:
         auto consume_in_thread(Consumer consumer, Filter filter, db::timeout_clock::time_point timeout) {
             auto adapter = consumer_adapter<Consumer>(*this, std::move(consumer));
             consume_pausable_in_thread(std::ref(adapter), std::move(filter), timeout);
+            filter.on_end_of_stream();
             return adapter._consumer.consume_end_of_stream();
         };
 
