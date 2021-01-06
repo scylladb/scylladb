@@ -959,17 +959,17 @@ bool mutation_fragment_stream_validator::operator()(const dht::decorated_key& dk
     return false;
 }
 
-bool mutation_fragment_stream_validator::operator()(const mutation_fragment& mf) {
+bool mutation_fragment_stream_validator::operator()(mutation_fragment::kind kind, position_in_partition_view pos) {
     if (_prev_kind == mutation_fragment::kind::partition_end) {
-        const bool valid = mf.is_partition_start();
+        const bool valid = (kind == mutation_fragment::kind::partition_start);
         if (valid) {
             _prev_kind = mutation_fragment::kind::partition_start;
-            _prev_pos = mf.position();
+            _prev_pos = pos;
         }
         return valid;
     }
     auto cmp = position_in_partition::tri_compare(_schema);
-    auto res = cmp(_prev_pos, mf.position());
+    auto res = cmp(_prev_pos, pos);
     bool valid = true;
     if (_prev_kind == mutation_fragment::kind::range_tombstone) {
         valid = res <= 0;
@@ -977,10 +977,14 @@ bool mutation_fragment_stream_validator::operator()(const mutation_fragment& mf)
         valid = res < 0;
     }
     if (valid) {
-        _prev_kind = mf.mutation_fragment_kind();
-        _prev_pos = mf.position();
+        _prev_kind = kind;
+        _prev_pos = pos;
     }
     return valid;
+}
+
+bool mutation_fragment_stream_validator::operator()(const mutation_fragment& mf) {
+    return (*this)(mf.mutation_fragment_kind(), mf.position());
 }
 
 bool mutation_fragment_stream_validator::operator()(mutation_fragment::kind kind) {
@@ -1040,15 +1044,13 @@ mutation_fragment_stream_validating_filter::mutation_fragment_stream_validating_
             compare_keys ? "keys" : "only partition regions");
 }
 
-bool mutation_fragment_stream_validating_filter::operator()(const mutation_fragment& mv) {
-    auto kind = mv.mutation_fragment_kind();
-    auto pos = mv.position();
+bool mutation_fragment_stream_validating_filter::operator()(mutation_fragment::kind kind, position_in_partition_view pos) {
     bool valid = false;
 
     fmr_logger.debug("[validator {}] {}:{}", static_cast<void*>(this), kind, pos);
 
     if (_compare_keys) {
-        valid = _validator(mv);
+        valid = _validator(kind, pos);
     } else {
         valid = _validator(kind);
     }
@@ -1064,6 +1066,14 @@ bool mutation_fragment_stream_validating_filter::operator()(const mutation_fragm
     }
 
     return true;
+}
+
+bool mutation_fragment_stream_validating_filter::operator()(const mutation_fragment& mv) {
+    return (*this)(mv.mutation_fragment_kind(), mv.position());
+}
+
+bool mutation_fragment_stream_validating_filter::on_end_of_partition() {
+    return (*this)(mutation_fragment::kind::partition_end, position_in_partition_view(position_in_partition_view::end_of_partition_tag_t()));
 }
 
 void mutation_fragment_stream_validating_filter::on_end_of_stream() {

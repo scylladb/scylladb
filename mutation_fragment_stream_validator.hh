@@ -47,7 +47,7 @@ public:
     /// \returns true if the fragment kind is valid.
     bool operator()(mutation_fragment::kind kind);
 
-    /// Validates the monotonicity of the mutation fragment.
+    /// Validates the monotonicity of the mutation fragment kind and position.
     ///
     /// Validates the mutation fragment kind monotonicity and
     /// position-in-partition.
@@ -55,6 +55,14 @@ public:
     /// Using both overloads for the same stream is not supported.
     /// Advances the previous fragment kind and position-in-partition, but only
     /// if the validation passes.
+    ///
+    /// \returns true if the mutation fragment kind is valid.
+    bool operator()(mutation_fragment::kind kind, position_in_partition_view pos);
+
+    /// Validates the monotonicity of the mutation fragment.
+    ///
+    /// Equivalent to calling `operator()(mf.kind(), mf.position())`.
+    /// See said overload for more details.
     ///
     /// \returns true if the mutation fragment kind is valid.
     bool operator()(const mutation_fragment& mf);
@@ -113,6 +121,10 @@ public:
     mutation_fragment_stream_validating_filter(sstring_view name, const schema& s, bool compare_keys = false);
 
     bool operator()(const dht::decorated_key& dk);
+    bool operator()(mutation_fragment::kind kind, position_in_partition_view pos);
+    /// Equivalent to `operator()(mf.kind(), mf.position())`
     bool operator()(const mutation_fragment& mv);
+    /// Equivalent to `operator()(partition_end{})`
+    bool on_end_of_partition();
     void on_end_of_stream();
 };
