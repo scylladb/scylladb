@@ -293,7 +293,6 @@ def testMapWithUnsetValues(cql, test_keyspace):
         # test unset value for map key
         assert_invalid_message(cql, table, "Invalid unset map key", "DELETE m[?] FROM %s WHERE k = 10", UNSET_VALUE)
 
-@pytest.mark.xfail(reason="Cassandra 2.2.0's 'unset' values not yet supported. Issue #7740")
 def testListWithUnsetValues(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int PRIMARY KEY, l list<text>)") as table:
         # set up
