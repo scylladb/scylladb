@@ -46,6 +46,8 @@ public:
     virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override;
 
     virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) override;
+
+    virtual future<> close() noexcept override;
 };
 
 // Creates a mutation_reader wrapper which creates a new stream of mutations

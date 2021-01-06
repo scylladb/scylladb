@@ -109,7 +109,7 @@ SEASTAR_TEST_CASE(test_memtable_with_many_versions_conforms_to_mutation_source) 
                 flat_mutation_reader rd = mt->make_flat_reader(s, tests::make_permit(), ranges_storage.emplace_back(dht::partition_range::make_singular(m.decorated_key())));
                 rd.set_max_buffer_size(1);
                 rd.fill_buffer(db::no_timeout).get();
-                readers.push_back(std::move(rd));
+                readers.emplace_back(std::move(rd));
             }
 
             return mt->as_data_source();

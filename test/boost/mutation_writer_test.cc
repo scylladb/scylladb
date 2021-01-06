@@ -73,9 +73,12 @@ SEASTAR_TEST_CASE(test_multishard_writer) {
                     std::move(source_reader),
                     [&sharder, &shards_after, error] (flat_mutation_reader reader) mutable {
                         if (error) {
+                          return reader.close().then([] {
                             return make_exception_future<>(std::runtime_error("Failed to write"));
+                          });
                         }
-                        return repeat([&sharder, &shards_after, reader = std::move(reader), error] () mutable {
+                        return with_closeable(std::move(reader), [&sharder, &shards_after, error] (flat_mutation_reader& reader) {
+                          return repeat([&sharder, &shards_after, &reader, error] () mutable {
                             return reader(db::no_timeout).then([&sharder, &shards_after, error] (mutation_fragment_opt mf_opt) mutable {
                                 if (mf_opt) {
                                     if (mf_opt->is_partition_start()) {
@@ -88,6 +91,7 @@ SEASTAR_TEST_CASE(test_multishard_writer) {
                                     return make_ready_future<stop_iteration>(stop_iteration::yes);
                                 }
                             });
+                          });
                         });
                     }
                 ).get0();
@@ -140,9 +144,12 @@ SEASTAR_TEST_CASE(test_multishard_writer_producer_aborts) {
                     make_generating_reader(s, tests::make_permit(), std::move(get_next_mutation_fragment)),
                     [&sharder, error] (flat_mutation_reader reader) mutable {
                         if (error) {
+                          return reader.close().then([] {
                             return make_exception_future<>(std::runtime_error("Failed to write"));
+                          });
                         }
-                        return repeat([&sharder, reader = std::move(reader), error] () mutable {
+                        return with_closeable(std::move(reader), [&sharder, error] (flat_mutation_reader& reader) {
+                          return repeat([&sharder, &reader, error] () mutable {
                             return reader(db::no_timeout).then([&sharder,  error] (mutation_fragment_opt mf_opt) mutable {
                                 if (mf_opt) {
                                     if (mf_opt->is_partition_start()) {
@@ -154,6 +161,7 @@ SEASTAR_TEST_CASE(test_multishard_writer_producer_aborts) {
                                     return make_ready_future<stop_iteration>(stop_iteration::yes);
                                 }
                             });
+                          });
                         });
                     }
                 ).get0();
@@ -368,7 +376,6 @@ SEASTAR_THREAD_TEST_CASE(test_timestamp_based_splitting_mutation_writer) {
         testlog.debug("Comparing mutation #{}", i);
         assert_that(combined_mutations[i]).is_equal_to(muts[i]);
     }
-
 }
 
 SEASTAR_THREAD_TEST_CASE(test_timestamp_based_splitting_mutation_writer_abort) {

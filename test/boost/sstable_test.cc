@@ -25,6 +25,8 @@
 #include <seastar/core/aligned_buffer.hh>
 #include <seastar/core/do_with.hh>
 #include <seastar/core/sleep.hh>
+#include <seastar/util/closeable.hh>
+
 #include "sstables/sstables.hh"
 #include "sstables/compaction_manager.hh"
 #include "sstables/key.hh"
@@ -842,9 +844,10 @@ SEASTAR_TEST_CASE(wrong_range) {
     return test_using_reusable_sst(uncompressed_schema(), "test/resource/sstables/wrongrange", 114, [] (auto sstp) {
         return do_with(dht::partition_range::make_singular(make_dkey(uncompressed_schema(), "todata")), [sstp] (auto& range) {
             auto s = columns_schema();
-            auto rd = make_lw_shared<flat_mutation_reader>(sstp->make_reader(s, tests::make_permit(), range, s->full_slice()));
-            return read_mutation_from_flat_mutation_reader(*rd, db::no_timeout).then([sstp, s, rd] (auto mutation) {
+            return with_closeable(sstp->make_reader(s, tests::make_permit(), range, s->full_slice()), [sstp, s] (flat_mutation_reader& rd) {
+              return read_mutation_from_flat_mutation_reader(rd, db::no_timeout).then([sstp, s] (auto mutation) {
                 return make_ready_future<>();
+              });
             });
         });
     });
@@ -979,6 +982,7 @@ static future<int> count_rows(sstable_ptr sstp, schema_ptr s, sstring key, sstri
         auto ps = make_partition_slice(*s, ck1, ck2);
         auto pr = dht::partition_range::make_singular(make_dkey(s, key.c_str()));
         auto rd = sstp->make_reader(s, tests::make_permit(), pr, ps);
+        auto close_rd = deferred_close(rd);
         auto mfopt = rd(db::no_timeout).get0();
         if (!mfopt) {
             return 0;
@@ -1000,6 +1004,7 @@ static future<int> count_rows(sstable_ptr sstp, schema_ptr s, sstring key) {
     return seastar::async([sstp, s, key] () mutable {
         auto pr = dht::partition_range::make_singular(make_dkey(s, key.c_str()));
         auto rd = sstp->make_reader(s, tests::make_permit(), pr, s->full_slice());
+        auto close_rd = deferred_close(rd);
         auto mfopt = rd(db::no_timeout).get0();
         if (!mfopt) {
             return 0;
@@ -1022,6 +1027,7 @@ static future<int> count_rows(sstable_ptr sstp, schema_ptr s, sstring ck1, sstri
     return seastar::async([sstp, s, ck1, ck2] () mutable {
         auto ps = make_partition_slice(*s, ck1, ck2);
         auto reader = sstp->make_reader(s, tests::make_permit(), query::full_partition_range, ps);
+        auto close_reader = deferred_close(reader);
         int nrows = 0;
         auto mfopt = reader(db::no_timeout).get0();
         while (mfopt) {
