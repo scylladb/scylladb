@@ -24,7 +24,7 @@
 #include <concepts>
 #include <boost/range/algorithm/copy.hpp>
 #include <boost/range/algorithm/for_each.hpp>
-
+#include <seastar/core/print.hh>
 
 #include "bytes.hh"
 
@@ -239,4 +239,17 @@ int compare_unsigned(V1 v1, V2 v2) {
         v2.remove_prefix(n);
     }
     return v1.size_bytes() - v2.size_bytes();
+}
+
+template<FragmentedMutableView Dest, FragmentedView Src>
+void write_fragmented(Dest& dest, Src src) {
+    if (dest.size_bytes() < src.size_bytes()) [[unlikely]] {
+        throw std::out_of_range(format("tried to copy a buffer of size {} to a buffer of smaller size {}", src.size_bytes(), dest.size_bytes()));
+    }
+    while (!src.empty()) {
+        size_t n = std::min(dest.current_fragment().size(), src.current_fragment().size());
+        memcpy(dest.current_fragment().data(), src.current_fragment().data(), n);
+        dest.remove_prefix(n);
+        src.remove_prefix(n);
+    }
 }
