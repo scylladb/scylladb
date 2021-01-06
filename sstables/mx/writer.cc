@@ -1480,10 +1480,6 @@ stop_iteration writer::consume_end_of_partition() {
 }
 
 void writer::consume_end_of_stream() {
-    if (_partition_key) {
-        on_internal_error(sstlog, "Mutation stream ends with unclosed partition during write");
-    }
-
     _cfg.monitor->on_data_write_completed();
 
     seal_summary(_sst._components->summary, std::move(_first_key), std::move(_last_key), _index_sampling_state).get();

@@ -25,6 +25,7 @@
 #include "schema_fwd.hh"
 #include "mutation_fragment.hh"
 #include "metadata_collector.hh"
+#include "mutation_fragment_stream_validator.hh"
 
 namespace sstables {
 
@@ -37,6 +38,7 @@ struct sstable_writer::writer_impl {
     // when writing a new sstable.
     metadata_collector _collector;
     column_stats _c_stats;
+    mutation_fragment_stream_validating_filter _validator;
 
     writer_impl(sstable& sst, const schema& schema, const io_priority_class& pc, const sstable_writer_config& cfg)
         : _sst(sst)
@@ -44,6 +46,7 @@ struct sstable_writer::writer_impl {
         , _pc(pc)
         , _cfg(cfg)
         , _collector(_schema, sst.get_filename())
+        , _validator(format("sstable writer {}", _sst.get_filename()), _schema, _cfg.validate_keys)
     {}
 
     virtual void consume_new_partition(const dht::decorated_key& dk) = 0;
