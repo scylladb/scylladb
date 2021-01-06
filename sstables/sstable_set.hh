@@ -111,7 +111,7 @@ public:
         schema_ptr,
         reader_permit,
         utils::estimated_histogram&,
-        const dht::ring_position&, // must contain a key
+        const dht::partition_range&, // must be singular and contain a key
         const query::partition_slice&,
         const io_priority_class&,
         tracing::trace_state_ptr,
@@ -144,6 +144,17 @@ public:
         streamed_mutation::forwarding,
         mutation_reader::forwarding,
         read_monitor_generator& rmg = default_read_monitor_generator()) const;
+
+    flat_mutation_reader make_reader(
+            schema_ptr,
+            reader_permit,
+            const dht::partition_range&,
+            const query::partition_slice&,
+            const io_priority_class&,
+            tracing::trace_state_ptr,
+            streamed_mutation::forwarding,
+            mutation_reader::forwarding,
+            read_monitor_generator& rmg = default_read_monitor_generator()) const;
 };
 
 /// Read a range from the passed-in sstables.
