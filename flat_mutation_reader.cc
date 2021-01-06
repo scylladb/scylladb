@@ -20,6 +20,7 @@
  */
 
 #include "flat_mutation_reader.hh"
+#include "mutation_fragment_stream_validator.hh"
 #include "mutation_reader.hh"
 #include "seastar/util/reference_wrapper.hh"
 #include "clustering_ranges_walker.hh"
