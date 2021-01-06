@@ -274,7 +274,6 @@ def testLists(cql, test_keyspace):
         execute(cql, table, "UPDATE %s SET l = l - ? WHERE k=0", ["v1", "v2"])
         assert_rows(execute(cql, table, "SELECT l FROM %s WHERE k = 0"), [None]);
 
-@pytest.mark.xfail(reason="Cassandra 2.2.0's 'unset' values not yet supported. Issue #7740")
 def testMapWithUnsetValues(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int PRIMARY KEY, m map<text, text>)") as table:
         # set up
@@ -285,7 +284,7 @@ def testMapWithUnsetValues(cql, test_keyspace):
         # test putting an unset map, should not delete the contents
         execute(cql, table, "INSERT INTO %s (k, m) VALUES (10, ?)", UNSET_VALUE)
         assert_rows(execute(cql, table, "SELECT m FROM %s WHERE k = 10"), [m])
-        # test unset variables in a map update operaiotn, should not delete the contents
+        # test unset variables in a map update operation, should not delete the contents
         execute(cql, table, "UPDATE %s SET m['k'] = ? WHERE k = 10", UNSET_VALUE)
         assert_rows(execute(cql, table, "SELECT m FROM %s WHERE k = 10"), [m])
         assert_invalid_message(cql, table, "Invalid unset map key", "UPDATE %s SET m[?] = 'foo' WHERE k = 10", UNSET_VALUE)
