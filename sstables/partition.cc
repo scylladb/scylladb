@@ -22,6 +22,7 @@
 #include "sstables.hh"
 #include "types.hh"
 #include <seastar/core/future-util.hh>
+#include <seastar/core/coroutine.hh>
 #include "key.hh"
 #include "keys.hh"
 #include <seastar/core/do_with.hh>
@@ -132,8 +133,11 @@ class sstable_mutation_reader : public mp_row_consumer_reader {
     std::unique_ptr<index_reader> _index_reader;
     // We avoid unnecessary lookup for single partition reads thanks to this flag
     bool _single_partition_read = false;
-    std::function<future<> ()> _initialize;
+    const dht::partition_range& _pr;
+    const query::partition_slice& _slice;
+    const io_priority_class& _pc;
     streamed_mutation::forwarding _fwd;
+    mutation_reader::forwarding _fwd_mr;
     read_monitor& _monitor;
 public:
     sstable_mutation_reader(shared_sstable sst,
@@ -148,58 +152,15 @@ public:
          read_monitor& mon)
         : mp_row_consumer_reader(std::move(schema), permit, std::move(sst))
         , _consumer(this, _schema, std::move(permit), slice, pc, std::move(trace_state), fwd, _sst)
-        , _initialize([this, pr, &pc, &slice, fwd_mr] () mutable {
-            auto f = get_index_reader().advance_to(pr);
-            return f.then([this, &pc, &slice, fwd_mr] () mutable {
-                auto [begin, end] = _index_reader->data_file_positions();
-                assert(end);
-                sstable::disk_read_range drr{begin, *end};
-                auto last_end = fwd_mr ? _sst->data_size() : drr.end;
-                _read_enabled = bool(drr);
-                _context = data_consume_rows<DataConsumeRowsContext>(*_schema, _sst, _consumer, std::move(drr), last_end);
-                _monitor.on_read_started(_context->reader_position());
-                _index_in_current_partition = true;
-                _will_likely_slice = will_likely_slice(slice);
-            });
-        })
+        // FIXME: I want to add `&& fwd_mr == mutation_reader::forwarding::no` below
+        // but can't because many call sites use the default value for
+        // `mutation_reader::forwarding` which is `yes`.
+        , _single_partition_read(pr.is_singular())
+        , _pr(pr)
+        , _slice(slice)
+        , _pc(pc)
         , _fwd(fwd)
-        , _monitor(mon) { }
-    sstable_mutation_reader(shared_sstable sst,
-                            schema_ptr schema,
-                            reader_permit permit,
-                            dht::ring_position_view key,
-                            const query::partition_slice& slice,
-                            const io_priority_class& pc,
-                            tracing::trace_state_ptr trace_state,
-                            streamed_mutation::forwarding fwd,
-                            mutation_reader::forwarding fwd_mr,
-                            read_monitor& mon)
-        : mp_row_consumer_reader(std::move(schema), permit, std::move(sst))
-        , _consumer(this, _schema, std::move(permit), slice, pc, std::move(trace_state), fwd, _sst)
-        , _single_partition_read(true)
-        , _initialize([this, key = std::move(key), &pc, &slice, fwd_mr] () mutable {
-            position_in_partition_view pos = get_slice_upper_bound(*_schema, slice, key);
-            auto f = get_index_reader().advance_lower_and_check_if_present(key, pos);
-            return f.then([this, &slice, &pc, key] (bool present) mutable {
-                if (!present) {
-                    _sst->get_filter_tracker().add_false_positive();
-                    return make_ready_future<>();
-                }
-
-                _sst->get_filter_tracker().add_true_positive();
-
-                auto [start, end] = _index_reader->data_file_positions();
-                assert(end);
-                _read_enabled = (start != *end);
-                _context = data_consume_single_partition<DataConsumeRowsContext>(*_schema, _sst, _consumer,
-                        { start, *end });
-                _monitor.on_read_started(_context->reader_position());
-                _will_likely_slice = will_likely_slice(slice);
-                _index_in_current_partition = true;
-                return make_ready_future<>();
-            });
-        })
-        , _fwd(fwd)
+        , _fwd_mr(fwd_mr)
         , _monitor(mon) { }
 
     // Reference to _consumer is passed to data_consume_rows() in the constructor so we must not allow move/copy
@@ -349,11 +310,46 @@ private:
     bool is_initialized() const {
         return bool(_context);
     }
+    future<> initialize() {
+        if (_single_partition_read) {
+            _sst->get_stats().on_single_partition_read();
+            const auto& key = dht::ring_position_view(_pr.start()->value());
+            position_in_partition_view pos = get_slice_upper_bound(*_schema, _slice, key);
+            const auto present = co_await get_index_reader().advance_lower_and_check_if_present(key, pos);
+
+            if (!present) {
+                _sst->get_filter_tracker().add_false_positive();
+                co_return;
+            }
+
+            _sst->get_filter_tracker().add_true_positive();
+        } else {
+            _sst->get_stats().on_range_partition_read();
+            co_await get_index_reader().advance_to(_pr);
+        }
+
+        auto [begin, end] = _index_reader->data_file_positions();
+        assert(end);
+
+        if (_single_partition_read) {
+            _read_enabled = (begin != *end);
+            _context = data_consume_single_partition<DataConsumeRowsContext>(*_schema, _sst, _consumer, { begin, *end });
+        } else {
+            sstable::disk_read_range drr{begin, *end};
+            auto last_end = _fwd_mr ? _sst->data_size() : drr.end;
+            _read_enabled = bool(drr);
+            _context = data_consume_rows<DataConsumeRowsContext>(*_schema, _sst, _consumer, std::move(drr), last_end);
+        }
+
+        _monitor.on_read_started(_context->reader_position());
+        _index_in_current_partition = true;
+        _will_likely_slice = will_likely_slice(_slice);
+    }
     future<> ensure_initialized() {
         if (is_initialized()) {
             return make_ready_future<>();
         }
-        return _initialize();
+        return initialize();
     }
 public:
     void on_out_of_clustering_range() override {
@@ -396,7 +392,7 @@ public:
             return make_ready_future<>();
         }
         if (!is_initialized()) {
-            return _initialize().then([this, timeout] {
+            return initialize().then([this, timeout] {
                 if (!is_initialized()) {
                     _end_of_stream = true;
                     return make_ready_future<>();
@@ -474,28 +470,12 @@ sstable::make_reader(
         streamed_mutation::forwarding fwd,
         mutation_reader::forwarding fwd_mr,
         read_monitor& mon) {
-    // FIXME: I want to add `&& fwd_mr == mutation_reader::forwarding::no` below
-    // but can't because many call sites use the default value for
-    // `mutation_reader::forwarding` which is `yes`.
-    if (range.is_singular() && range.start()->value().has_key()) {
-        get_stats().on_single_partition_read();
-        if (_version >= version_types::mc) {
-            return make_flat_mutation_reader<sstable_mutation_reader<data_consume_rows_context_m, mp_row_consumer_m>>(
-                shared_from_this(), std::move(schema), std::move(permit), dht::ring_position_view::for_range_start(range), slice, pc,
-                std::move(trace_state), fwd, mutation_reader::forwarding::no, mon);
-        }
-        return make_flat_mutation_reader<sstable_mutation_reader<data_consume_rows_context, mp_row_consumer_k_l>>(
-                shared_from_this(), std::move(schema), std::move(permit), dht::ring_position_view::for_range_start(range), slice, pc,
-                std::move(trace_state), fwd, mutation_reader::forwarding::no, mon);
-    } else {
-        get_stats().on_range_partition_read();
-        if (_version >= version_types::mc) {
-            return make_flat_mutation_reader<sstable_mutation_reader<data_consume_rows_context_m, mp_row_consumer_m>>(
-                shared_from_this(), std::move(schema), std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr, mon);
-        }
-        return make_flat_mutation_reader<sstable_mutation_reader<data_consume_rows_context, mp_row_consumer_k_l>>(
+    if (_version >= version_types::mc) {
+        return make_flat_mutation_reader<sstable_mutation_reader<data_consume_rows_context_m, mp_row_consumer_m>>(
             shared_from_this(), std::move(schema), std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr, mon);
     }
+    return make_flat_mutation_reader<sstable_mutation_reader<data_consume_rows_context, mp_row_consumer_k_l>>(
+        shared_from_this(), std::move(schema), std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr, mon);
 }
 
 }
