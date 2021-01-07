@@ -31,7 +31,7 @@ lw_shared_ptr<column_specification>
 sets::value_spec_of(const column_specification& column) {
     return make_lw_shared<column_specification>(column.ks_name, column.cf_name,
             ::make_shared<column_identifier>(format("value({})", *column.name), true),
-            column.type->as<set_type_impl>().get_elements_type());
+            dynamic_cast<const set_type_impl&>(column.type->without_reversed()).get_elements_type());
 }
 
 shared_ptr<term>
@@ -74,7 +74,8 @@ sets::literal::prepare(database& db, const sstring& keyspace, lw_shared_ptr<colu
 
         values.push_back(std::move(t));
     }
-    auto compare = receiver->type->as<set_type_impl>().get_elements_type()->as_less_comparator();
+    auto compare = dynamic_cast<const set_type_impl&>(receiver->type->without_reversed())
+            .get_elements_type()->as_less_comparator();
 
     auto value = ::make_shared<delayed_value>(compare, std::move(values));
     if (all_terminal) {
@@ -86,7 +87,7 @@ sets::literal::prepare(database& db, const sstring& keyspace, lw_shared_ptr<colu
 
 void
 sets::literal::validate_assignable_to(database& db, const sstring& keyspace, const column_specification& receiver) const {
-    if (!receiver.type->self_or_reversed(&abstract_type::is_set)) {
+    if (!receiver.type->without_reversed().is_set()) {
         // We've parsed empty maps as a set literal to break the ambiguity so
         // handle that case now
         if (dynamic_pointer_cast<const map_type_impl>(receiver.type) && _elements.empty()) {
@@ -106,7 +107,7 @@ sets::literal::validate_assignable_to(database& db, const sstring& keyspace, con
 
 assignment_testable::test_result
 sets::literal::test_assignment(database& db, const sstring& keyspace, const column_specification& receiver) const {
-    if (!receiver.type->self_or_reversed(&abstract_type::is_set)) {
+    if (!receiver.type->without_reversed().is_set()) {
         // We've parsed empty maps as a set literal to break the ambiguity so handle that case now
         if (dynamic_pointer_cast<const map_type_impl>(receiver.type) && _elements.empty()) {
             return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
@@ -224,8 +225,11 @@ sets::delayed_value::bind(const query_options& options) {
 
 sets::marker::marker(int32_t bind_index, lw_shared_ptr<column_specification> receiver)
     : abstract_marker{bind_index, std::move(receiver)} {
-        assert(_receiver->type->self_or_reversed(&abstract_type::is_set));
+    if (!_receiver->type->without_reversed().is_set()) {
+        throw std::runtime_error(format("Receiver {} for set marker has wrong type: {}",
+                                        _receiver->cf_name, _receiver->type->name()));
     }
+}
 
 ::shared_ptr<terminal>
 sets::marker::bind(const query_options& options) {
@@ -235,7 +239,7 @@ sets::marker::bind(const query_options& options) {
     } else if (value.is_unset_value()) {
         return constants::UNSET_VALUE;
     } else {
-        auto& type = _receiver->type->as<set_type_impl>();
+        auto& type = dynamic_cast<const set_type_impl&>(_receiver->type->without_reversed());
         try {
             type.validate(*value, options.get_cql_serialization_format());
         } catch (marshal_exception& e) {
@@ -280,7 +284,7 @@ void
 sets::adder::do_add(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params,
         shared_ptr<term> value, const column_definition& column) {
     auto set_value = dynamic_pointer_cast<sets::value>(std::move(value));
-    auto& set_type = column.type->as<set_type_impl>();
+    auto& set_type = dynamic_cast<const set_type_impl&>(column.type->without_reversed());
     if (column.type->is_multi_cell()) {
         if (!set_value || set_value->_elements.empty()) {
             return;
