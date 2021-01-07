@@ -596,8 +596,17 @@ future<qos::service_levels_info> system_distributed_keyspace::get_service_level(
 }
 
 future<> system_distributed_keyspace::set_service_level(sstring service_level_name, qos::service_level_options slo) const {
-    static sstring prepared_puery = format("INSERT INTO {}.{} (service_level) VALUES (?);", NAME, SERVICE_LEVELS);
-    return _qp.execute_internal(prepared_puery, db::consistency_level::ONE, internal_distributed_query_state(), {service_level_name}).discard_result();
+    static sstring prepared_query = format("INSERT INTO {}.{} (service_level) VALUES (?);", NAME, SERVICE_LEVELS);
+    co_await _qp.execute_internal(prepared_query, db::consistency_level::ONE, internal_distributed_query_state(), {service_level_name});
+    auto to_data_value = [&] (const std::optional<lowres_clock::duration>& d) {
+        return d
+                ? data_value(cql_duration(months_counter{0}, days_counter{0}, nanoseconds_counter{std::chrono::duration_cast<std::chrono::nanoseconds>(*d).count()}))
+                : data_value::make_null(duration_type);
+    };
+    co_await _qp.execute_internal(format("UPDATE {}.{} SET timeout = ? WHERE service_level = ?;", NAME, SERVICE_LEVELS),
+                db::consistency_level::ONE,
+                internal_distributed_query_state(),
+                {to_data_value(slo.timeout), service_level_name});
 }
 
 future<> system_distributed_keyspace::drop_service_level(sstring service_level_name) const {
