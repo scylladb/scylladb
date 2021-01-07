@@ -45,7 +45,8 @@ struct service_level_options {
         bool operator!=(const delete_marker&) const { return false; };
     };
 
-    std::variant<unset_marker, delete_marker, lowres_clock::duration> timeout = unset_marker{};
+    using timeout_type = std::variant<unset_marker, delete_marker, lowres_clock::duration>;
+    timeout_type timeout = unset_marker{};
 
     bool operator==(const service_level_options& other) const = default;
     bool operator!=(const service_level_options& other) const = default;
