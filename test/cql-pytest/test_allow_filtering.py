@@ -43,7 +43,7 @@ import time
 
 from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, ConfigurationException, ReadFailure
 
-from util import unique_name
+from util import unique_name, new_test_table
 
 # check_af_optional() and check_af_mandatory() are utility functions for
 # checking that ALLOW FILTERING is optional or mandatory on a SELECT on a
@@ -274,3 +274,21 @@ def test_allow_filtering_pk_in(cql, table1):
 @pytest.mark.xfail(reason="issue #5545: Scylla supports IN on indexed column, but only with ALLOW FILTERING")
 def test_allow_filtering_index_in(cql, table2):
     check_af_optional(cql, table2, 'a IN (1,2)', lambda row: row.a in {1,2})
+
+# The following test Reproduces bug #7888 in CONTAINS/CONTAINS KEY relations
+# on frozen collection clustering columns when the query is restricted to a
+# single partition. Analogous to CASSANDRA-8302, and also reproduced by
+# Cassandra's more elaborate test for this issue,
+# cassandra_tests/validation/entities/frozen_collections_test.py::testClusteringColumnFiltering
+@pytest.mark.xfail(reason="issue #7888")
+def test_contains_frozen_collection_ck(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "a int, b frozen<map<int, int>>, c int, PRIMARY KEY (a,b,c)") as table:
+        # The CREATE INDEX for c is necessary to reproduce this bug.
+        # Everything works without it.
+        cql.execute(f"CREATE INDEX ON {table} (c)")
+        cql.execute("INSERT INTO " + table + " (a, b, c) VALUES (0, {0: 0, 1: 1}, 0)")
+        # The "a=0" below is necessary to reproduce this bug.
+        assert 1 == len(list(cql.execute(
+            "SELECT * FROM " + table + " WHERE a=0 AND c=0 AND b CONTAINS 0 ALLOW FILTERING")))
+        assert 1 == len(list(cql.execute(
+            "SELECT * FROM " + table + " WHERE a=0 AND c=0 AND b CONTAINS KEY 0 ALLOW FILTERING")))
