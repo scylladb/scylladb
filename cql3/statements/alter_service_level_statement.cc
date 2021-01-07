@@ -31,6 +31,7 @@ namespace statements {
 alter_service_level_statement::alter_service_level_statement(sstring service_level, shared_ptr<sl_prop_defs> attrs)
         : _service_level(service_level) {
     attrs->validate();
+    _slo = attrs->get_service_level_options();
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>

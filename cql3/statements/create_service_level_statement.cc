@@ -31,6 +31,7 @@ namespace statements {
 create_service_level_statement::create_service_level_statement(sstring service_level, shared_ptr<sl_prop_defs> attrs, bool if_not_exists)
         : _service_level(service_level), _if_not_exists(if_not_exists) {
     attrs->validate();
+    _slo = attrs->get_service_level_options();
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>
