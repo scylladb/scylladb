@@ -55,14 +55,14 @@ lw_shared_ptr<column_specification>
 maps::key_spec_of(const column_specification& column) {
     return make_lw_shared<column_specification>(column.ks_name, column.cf_name,
                 ::make_shared<column_identifier>(format("key({})", *column.name), true),
-                 column.type->as<map_type_impl>().get_keys_type());
+                dynamic_cast<const map_type_impl&>(column.type->without_reversed()).get_keys_type());
 }
 
 lw_shared_ptr<column_specification>
 maps::value_spec_of(const column_specification& column) {
     return make_lw_shared<column_specification>(column.ks_name, column.cf_name,
                 ::make_shared<column_identifier>(format("value({})", *column.name), true),
-                 column.type->as<map_type_impl>().get_values_type());
+                 dynamic_cast<const map_type_impl&>(column.type->without_reversed()).get_values_type());
 }
 
 ::shared_ptr<term>
@@ -88,7 +88,9 @@ maps::literal::prepare(database& db, const sstring& keyspace, lw_shared_ptr<colu
 
         values.emplace(k, v);
     }
-    delayed_value value(receiver->type->as<map_type_impl>().get_keys_type()->as_less_comparator(), values);
+    delayed_value value(
+            dynamic_cast<const map_type_impl&>(receiver->type->without_reversed()).get_keys_type()->as_less_comparator(),
+            values);
     if (all_terminal) {
         return value.bind(query_options::DEFAULT);
     } else {
@@ -98,7 +100,7 @@ maps::literal::prepare(database& db, const sstring& keyspace, lw_shared_ptr<colu
 
 void
 maps::literal::validate_assignable_to(database& db, const sstring& keyspace, const column_specification& receiver) const {
-    if (!receiver.type->self_or_reversed(&abstract_type::is_map)) {
+    if (!receiver.type->without_reversed().is_map()) {
         throw exceptions::invalid_request_exception(format("Invalid map literal for {} of type {}", *receiver.name, receiver.type->as_cql3_type()));
     }
     auto&& key_spec = maps::key_spec_of(receiver);
@@ -267,7 +269,10 @@ maps::marker::bind(const query_options& options) {
                 format("Exception while binding column {:s}: {:s}", _receiver->name->to_cql_string(), e.what()));
     }
     return ::make_shared<maps::value>(
-            maps::value::from_serialized(*val, _receiver->type->as<map_type_impl>(), options.get_cql_serialization_format()));
+            maps::value::from_serialized(
+                    *val,
+                    dynamic_cast<const map_type_impl&>(_receiver->type->without_reversed()),
+                    options.get_cql_serialization_format()));
 }
 
 void

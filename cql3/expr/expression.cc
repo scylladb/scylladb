@@ -155,7 +155,7 @@ bytes_opt get_value(const column_value& col, const column_value_eval_bag& bag) {
 
 /// Type for comparing results of get_value().
 const abstract_type* get_value_comparator(const column_definition* cdef) {
-    return cdef->type->is_reversed() ? cdef->type->underlying_type().get() : cdef->type.get();
+    return &cdef->type->without_reversed();
 }
 
 /// Type for comparing results of get_value().
