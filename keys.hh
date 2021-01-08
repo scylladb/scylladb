@@ -109,7 +109,7 @@ public:
         return get_compound_type(s)->equal(representation(), other.representation());
     }
 
-    // begin() and end() return iterators over components of this compound. The iterator yields a bytes_view to the component.
+    // begin() and end() return iterators over components of this compound. The iterator yields a managed_bytes_view to the component.
     // The iterators satisfy InputIterator concept.
     auto begin() const {
         return TopLevelView::compound::element_type::begin(representation());
@@ -120,7 +120,7 @@ public:
         return TopLevelView::compound::element_type::end(representation());
     }
 
-    // begin() and end() return iterators over components of this compound. The iterator yields a bytes_view to the component.
+    // begin() and end() return iterators over components of this compound. The iterator yields a managed_bytes_view to the component.
     // The iterators satisfy InputIterator concept.
     auto begin(const schema& s) const {
         return begin();
@@ -131,18 +131,12 @@ public:
         return end();
     }
 
-    bytes_view get_component(const schema& s, size_t idx) const {
-        auto it = begin(s);
-        std::advance(it, idx);
-        return *it;
-    }
-
-    // Returns a range of bytes_view
+    // Returns a range of managed_bytes_view
     auto components() const {
         return TopLevelView::compound::element_type::components(representation());
     }
 
-    // Returns a range of bytes_view
+    // Returns a range of managed_bytes_view
     auto components(const schema& s) const {
         return components();
     }
@@ -317,7 +311,7 @@ public:
         return _bytes;
     }
 
-    // begin() and end() return iterators over components of this compound. The iterator yields a bytes_view to the component.
+    // begin() and end() return iterators over components of this compound. The iterator yields a managed_bytes_view to the component.
     // The iterators satisfy InputIterator concept.
     auto begin(const schema& s) const {
         return get_compound_type(s)->begin(_bytes);
@@ -341,12 +335,12 @@ public:
         return is_empty();
     }
 
-    // Returns a range of bytes_view
+    // Returns a range of managed_bytes_view
     auto components() const {
         return TopLevelView::compound::element_type::components(representation());
     }
 
-    // Returns a range of bytes_view
+    // Returns a range of managed_bytes_view
     auto components(const schema& s) const {
         return components();
     }
