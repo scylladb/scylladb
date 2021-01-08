@@ -1257,6 +1257,14 @@ roleOption[cql3::role_options& opts]
     | K_LOGIN '=' b=BOOLEAN { opts.can_login = convert_boolean_literal($b.text); }
     ;
 
+// Introduce a more natural syntax (SERVICE LEVEL), but still allow
+// the original one (SERVICE_LEVEL)
+serviceLevel
+    : K_SERVICE_LEVEL | ( K_SERVICE K_LEVEL )
+    ;
+serviceLevels
+    : K_SERVICE_LEVELS | ( K_SERVICE K_LEVELS )
+    ;
 /**
  * CREATE SERVICE_LEVEL [IF NOT EXISTS] <service_level_name> [WITH <param> = <value>]
  */
@@ -1265,7 +1273,7 @@ createServiceLevelStatement returns [std::unique_ptr<create_service_level_statem
         auto attrs = make_shared<cql3::statements::sl_prop_defs>();
         bool if_not_exists = false;
     }
-    : K_CREATE K_SERVICE_LEVEL (K_IF K_NOT K_EXISTS { if_not_exists = true; })? name=serviceLevelOrRoleName (K_WITH properties[*attrs])?
+    : K_CREATE serviceLevel (K_IF K_NOT K_EXISTS { if_not_exists = true; })? name=serviceLevelOrRoleName (K_WITH properties[*attrs])?
       { $stmt = std::make_unique<create_service_level_statement>(name, attrs, if_not_exists); }
     ;
 
@@ -1276,7 +1284,7 @@ alterServiceLevelStatement returns [std::unique_ptr<alter_service_level_statemen
     @init {
         auto attrs = make_shared<cql3::statements::sl_prop_defs>();
     }
-    : K_ALTER K_SERVICE_LEVEL name=serviceLevelOrRoleName K_WITH properties[*attrs]
+    : K_ALTER serviceLevel name=serviceLevelOrRoleName K_WITH properties[*attrs]
       { $stmt = std::make_unique<alter_service_level_statement>(name, attrs); }
     ;
 
@@ -1287,7 +1295,7 @@ dropServiceLevelStatement returns [std::unique_ptr<drop_service_level_statement>
     @init {
         bool if_exists = false;
     }
-    : K_DROP K_SERVICE_LEVEL (K_IF K_EXISTS { if_exists = true; })? name=serviceLevelOrRoleName
+    : K_DROP serviceLevel (K_IF K_EXISTS { if_exists = true; })? name=serviceLevelOrRoleName
       { $stmt = std::make_unique<drop_service_level_statement>(name, if_exists); }
     ;
 
@@ -1297,7 +1305,7 @@ dropServiceLevelStatement returns [std::unique_ptr<drop_service_level_statement>
 attachServiceLevelStatement returns [std::unique_ptr<attach_service_level_statement> stmt]
     @init {
     }
-    : K_ATTACH K_SERVICE_LEVEL service_level_name=serviceLevelOrRoleName K_TO role_name=serviceLevelOrRoleName
+    : K_ATTACH serviceLevel service_level_name=serviceLevelOrRoleName K_TO role_name=serviceLevelOrRoleName
       { $stmt = std::make_unique<attach_service_level_statement>(service_level_name, role_name); }
     ;
 
@@ -1307,7 +1315,7 @@ attachServiceLevelStatement returns [std::unique_ptr<attach_service_level_statem
 detachServiceLevelStatement returns [std::unique_ptr<detach_service_level_statement> stmt]
     @init {
     }
-    : K_DETACH K_SERVICE_LEVEL K_FROM role_name=serviceLevelOrRoleName
+    : K_DETACH serviceLevel K_FROM role_name=serviceLevelOrRoleName
       { $stmt = std::make_unique<detach_service_level_statement>(role_name); }
     ;
 
@@ -1319,9 +1327,9 @@ detachServiceLevelStatement returns [std::unique_ptr<detach_service_level_statem
 listServiceLevelStatement returns [std::unique_ptr<list_service_level_statement> stmt]
     @init {
     }
-    : K_LIST K_SERVICE_LEVEL service_level_name=serviceLevelOrRoleName
+    : K_LIST serviceLevel service_level_name=serviceLevelOrRoleName
       { $stmt = std::make_unique<list_service_level_statement>(service_level_name, false); } |
-      K_LIST K_ALL K_SERVICE_LEVELS
+      K_LIST K_ALL serviceLevels
       { $stmt = std::make_unique<list_service_level_statement>("", true); }
     ;
 
@@ -1333,9 +1341,9 @@ listServiceLevelAttachStatement returns [std::unique_ptr<list_service_level_atta
     @init {
         bool allow_nonexisting_roles = false;
     }
-    : K_LIST K_ATTACHED K_SERVICE_LEVEL K_OF role_name=serviceLevelOrRoleName
+    : K_LIST K_ATTACHED serviceLevel K_OF role_name=serviceLevelOrRoleName
       { $stmt = std::make_unique<list_service_level_attachments_statement>(role_name); } |
-      K_LIST K_ALL K_ATTACHED K_SERVICE_LEVELS
+      K_LIST K_ALL K_ATTACHED serviceLevels
       { $stmt = std::make_unique<list_service_level_attachments_statement>(); }
     ;
 
@@ -1883,6 +1891,9 @@ basic_unreserved_keyword returns [sstring str]
                 | K_FOR
         | K_GROUP
         | K_TIMEOUT
+        | K_SERVICE
+        | K_LEVEL
+        | K_LEVELS
         ) { $str = $k.text; }
     ;
 
@@ -2037,6 +2048,9 @@ K_DETACH: D E T A C H;
 K_SERVICE_LEVELS: S E R V I C E '_' L E V E L S;
 K_ATTACHED: A T T A C H E D;
 K_FOR: F O R;
+K_SERVICE: S E R V I C E;
+K_LEVEL: L E V E L;
+K_LEVELS: L E V E L S;
 
 K_SCYLLA_TIMEUUID_LIST_INDEX: S C Y L L A '_' T I M E U U I D '_' L I S T '_' I N D E X;
 K_SCYLLA_COUNTER_SHARD_LIST: S C Y L L A '_' C O U N T E R '_' S H A R D '_' L I S T; 
