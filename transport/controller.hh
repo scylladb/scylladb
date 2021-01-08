@@ -24,6 +24,7 @@
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/distributed.hh>
 #include <seastar/core/future.hh>
+#include "service/qos/service_level_controller.hh"
 
 using namespace seastar;
 
@@ -50,13 +51,14 @@ class controller {
     gms::gossiper& _gossiper;
     sharded<cql3::query_processor>& _qp;
     sharded<service::memory_limiter>& _mem_limiter;
+    sharded<qos::service_level_controller>& _sl_controller;
 
     future<> set_cql_ready(bool ready);
     future<> do_start_server();
     future<> do_stop_server();
 
 public:
-    controller(distributed<database>&, sharded<auth::service>&, sharded<service::migration_notifier>&, gms::gossiper&, sharded<cql3::query_processor>&, sharded<service::memory_limiter>&);
+    controller(distributed<database>&, sharded<auth::service>&, sharded<service::migration_notifier>&, gms::gossiper&, sharded<cql3::query_processor>&, sharded<service::memory_limiter>&, sharded<qos::service_level_controller>&);
     future<> start_server();
     future<> stop_server();
     future<> stop();
