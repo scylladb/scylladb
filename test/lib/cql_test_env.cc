@@ -147,7 +147,7 @@ private:
         if (_db.local().has_keyspace(ks_name)) {
             _core_local.local().client_state.set_keyspace(_db.local(), ks_name);
         }
-        return ::make_shared<service::query_state>(_core_local.local().client_state, empty_service_permit(), _sl_controller.local());
+        return ::make_shared<service::query_state>(_core_local.local().client_state, empty_service_permit());
     }
 public:
     single_node_cql_env(

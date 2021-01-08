@@ -201,6 +201,10 @@ public:
         return _timeout_config;
     }
 
+    qos::service_level_controller& get_service_level_controller() const {
+        return *_sl_controller;
+    }
+
     client_state(internal_tag) : client_state(internal_tag{}, infinite_timeout_config)
     {}
 
