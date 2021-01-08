@@ -38,6 +38,12 @@ void sl_prop_defs::validate() {
         }
         data_value v = duration_type->deserialize(duration_type->from_string(*repr));
         cql_duration duration = static_pointer_cast<const duration_type_impl>(duration_type)->from_value(v);
+        if (duration.months || duration.days) {
+            throw exceptions::invalid_request_exception("Timeout values cannot be longer than 24h");
+        }
+        if (duration.nanoseconds % 1'000'000 != 0) {
+            throw exceptions::invalid_request_exception("Timeout values must be expressed in millisecond granularity");
+        }
         return std::chrono::duration_cast<lowres_clock::duration>(std::chrono::nanoseconds(duration.nanoseconds));
     };
 
