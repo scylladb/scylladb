@@ -56,6 +56,7 @@
 
 #include "enum_set.hh"
 #include "transport/cql_protocol_extension.hh"
+#include "service/qos/service_level_controller.hh"
 
 namespace auth {
 class resource;
@@ -143,6 +144,7 @@ private:
 
     // Only populated for external client state.
     auth::service* _auth_service{nullptr};
+    qos::service_level_controller* _sl_controller{nullptr};
 
     // For restoring default values in the timeout config
     timeout_config _default_timeout_config;
@@ -174,11 +176,12 @@ public:
         _driver_version = std::move(driver_version);
     }
 
-    client_state(external_tag, auth::service& auth_service, timeout_config timeout_config, const socket_address& remote_address = socket_address(), bool thrift = false)
+    client_state(external_tag, auth::service& auth_service, qos::service_level_controller* sl_controller, timeout_config timeout_config, const socket_address& remote_address = socket_address(), bool thrift = false)
             : _is_internal(false)
             , _is_thrift(thrift)
             , _remote_address(remote_address)
             , _auth_service(&auth_service)
+            , _sl_controller(sl_controller)
             , _default_timeout_config(timeout_config)
             , _timeout_config(timeout_config) {
         if (!auth_service.underlying_authenticator().require_authentication()) {

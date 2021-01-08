@@ -131,8 +131,8 @@ private:
     struct core_local_state {
         service::client_state client_state;
 
-        core_local_state(auth::service& auth_service)
-            : client_state(service::client_state::external_tag{}, auth_service, infinite_timeout_config)
+        core_local_state(auth::service& auth_service, qos::service_level_controller& sl_controller)
+            : client_state(service::client_state::external_tag{}, auth_service, &sl_controller, infinite_timeout_config)
         {
             client_state.set_login(auth::authenticated_user(testing_superuser));
         }
@@ -358,7 +358,7 @@ public:
     }
 
     future<> start() {
-        return _core_local.start(std::ref(_auth_service));
+        return _core_local.start(std::ref(_auth_service), std::ref(_sl_controller));
     }
 
     future<> stop() {

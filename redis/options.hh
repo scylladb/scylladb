@@ -54,7 +54,7 @@ public:
         ,_read_consistency(rcl)
         ,_write_consistency(wcl)
         ,_timeout_config(tc)
-        ,_client_state(service::client_state::external_tag{}, auth, tc, addr)
+        ,_client_state(service::client_state::external_tag{}, auth, nullptr, tc, addr)
         ,_total_redis_db_count(total_redis_db_count)
     {
     }
@@ -69,7 +69,7 @@ public:
         ,_read_consistency(rcl)
         ,_write_consistency(wcl)
         ,_timeout_config(tc)
-        ,_client_state(service::client_state::external_tag{}, auth, tc, addr)
+        ,_client_state(service::client_state::external_tag{}, auth, nullptr, tc, addr)
         ,_total_redis_db_count(total_redis_db_count)
     {
     }

@@ -223,7 +223,7 @@ public:
         : _db(db)
         , _query_processor(qp)
         , _timeout_config(timeout_config)
-        , _client_state(service::client_state::external_tag{}, auth_service, _timeout_config, socket_address(), true)
+        , _client_state(service::client_state::external_tag{}, auth_service, nullptr, _timeout_config, socket_address(), true)
         // FIXME: Handlers are not created per query, but rather per connection, so it makes little sense to store
         // service permits in here. The query state should be reinstantiated per query - AFAIK it's only used
         // for CQL queries which piggy-back on Thrift protocol.
