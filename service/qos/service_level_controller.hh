@@ -178,6 +178,14 @@ public:
     future<service_levels_info> get_distributed_service_levels();
     future<service_levels_info> get_distributed_service_level(sstring service_level_name);
 
+    /**
+     * Returns the service level **in effect** for a user having the given
+     * collection of roles.
+     * @param roles - the collection of roles to consider
+     * @return the name of the service level in effect.
+     */
+    future<sstring> find_service_level(auth::role_set roles);
+
 private:
     /**
      *  Adds a service level configuration if it doesn't exists, and updates
@@ -197,16 +205,6 @@ private:
      * or not.
      */
     future<> do_remove_service_level(sstring name, bool remove_static);
-
-
-
-    /**
-     * Returns the service level **in effect** for a user having the given
-     * collection of roles.
-     * @param roles - the collection of roles to consider
-     * @return the name of the service level in effect.
-     */
-    future<sstring> find_service_level(auth::role_set roles);
 
     /**
      * The notify functions are used by the global service level controller
