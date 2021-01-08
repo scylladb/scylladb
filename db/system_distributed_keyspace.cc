@@ -567,6 +567,14 @@ system_distributed_keyspace::get_cdc_desc_v1_timestamps(context ctx) {
     co_return res;
 }
 
+static qos::service_level_options::timeout_type get_duration(const cql3::untyped_result_set_row&row, std::string_view col_name) {
+    auto dur_opt = row.get_opt<cql_duration>(col_name);
+    if (!dur_opt) {
+        return qos::service_level_options::unset_marker{};
+    }
+    return std::chrono::duration_cast<lowres_clock::duration>(std::chrono::nanoseconds(dur_opt->nanoseconds));
+};
+
 future<qos::service_levels_info> system_distributed_keyspace::get_service_levels() const {
     static sstring prepared_query = format("SELECT * FROM {}.{};", NAME, SERVICE_LEVELS);
 
@@ -574,7 +582,9 @@ future<qos::service_levels_info> system_distributed_keyspace::get_service_levels
         qos::service_levels_info service_levels;
         for (auto &&row : *result_set) {
             auto service_level_name = row.get_as<sstring>("service_level");
-            qos::service_level_options slo{};
+            qos::service_level_options slo{
+                .timeout = get_duration(row, "timeout"),
+            };
             service_levels.emplace(service_level_name, slo);
         }
         return service_levels;
@@ -588,7 +598,9 @@ future<qos::service_levels_info> system_distributed_keyspace::get_service_level(
         if (!result_set->empty()) {
             auto &&row = result_set->one();
             auto service_level_name = row.get_as<sstring>("service_level");
-            qos::service_level_options slo{};
+            qos::service_level_options slo{
+                .timeout = get_duration(row, "timeout"),
+            };
             service_levels.emplace(service_level_name, slo);
         }
         return service_levels;
