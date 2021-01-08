@@ -186,6 +186,20 @@ public:
      */
     future<sstring> find_service_level(auth::role_set roles);
 
+    /**
+     * Gets the service level data by name.
+     * @param service_level_name - the name of the requested service level
+     * @return the service level data if it exists (in the local controller) or
+     * get_service_level("default") otherwise.
+     */
+    service_level& get_service_level(sstring service_level_name) {
+        auto sl_it = _service_levels_db.find(service_level_name);
+        if (sl_it == _service_levels_db.end() || sl_it->second.marked_for_deletion) {
+            sl_it = _service_levels_db.find(default_service_level_name);
+        }
+        return sl_it->second;
+    }
+
 private:
     /**
      *  Adds a service level configuration if it doesn't exists, and updates
@@ -216,20 +230,6 @@ private:
     future<> notify_service_level_added(sstring name, service_level sl_data);
     future<> notify_service_level_updated(sstring name, service_level_options slo);
     future<> notify_service_level_removed(sstring name);
-
-    /**
-     * Gets the service level data by name.
-     * @param service_level_name - the name of the requested service level
-     * @return the service level data if it exists (in the local controller) or
-     * get_service_level("default") otherwise.
-     */
-    service_level& get_service_level(sstring service_level_name) {
-        auto sl_it = _service_levels_db.find(service_level_name);
-        if (sl_it == _service_levels_db.end() || sl_it->second.marked_for_deletion) {
-            sl_it = _service_levels_db.find(default_service_level_name);
-        }
-        return sl_it->second;
-    }
 
     enum class  set_service_level_op_type {
         add_if_not_exists,
