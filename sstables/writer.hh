@@ -303,6 +303,14 @@ inline void write(sstable_version_types v, W& out, bytes_view s) {
     out.write(reinterpret_cast<const char*>(s.data()), s.size());
 }
 
+template <typename W>
+requires Writer<W>
+inline void write(sstable_version_types v, W& out, managed_bytes_view s) {
+    for (; !s.empty(); s.remove_current()) {
+        out.write(reinterpret_cast<const char*>(s.current_fragment().data()), s.current_fragment().size());
+    }
+}
+
 inline void write(sstable_version_types v, file_writer& out, bytes_ostream s) {
     for (bytes_view fragment : s) {
         write(v, out, fragment);
@@ -539,6 +547,19 @@ void write_column_name(sstable_version_types v, Writer& out, const schema& s, co
         write_compound_non_dense_column_name(v, out, clustering_element, column_names, marker);
     } else {
         write_column_name(v, out, column_names[0]);
+    }
+}
+
+template <typename W>
+requires Writer<W>
+void write_cell_value(sstable_version_types v, W& out, const abstract_type& type, managed_bytes_view value) {
+    if (!value.empty()) {
+        if (type.value_length_if_fixed()) {
+            write(v, out, value);
+        } else {
+            write_vint(out, value.size());
+            write(v, out, value);
+        }
     }
 }
 
