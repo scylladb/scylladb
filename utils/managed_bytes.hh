@@ -451,8 +451,8 @@ struct appending_hash<managed_bytes_view> {
     template<Hasher Hasher>
     void operator()(Hasher& h, managed_bytes_view v) const {
         feed_hash(h, v.size_bytes());
-        for (; !v.empty(); v.remove_current()) {
-            h.update(reinterpret_cast<const char*>(v.current_fragment().data()), v.current_fragment().size());
+        for (bytes_view frag : fragment_range(v)) {
+            h.update(reinterpret_cast<const char*>(frag.data()), frag.size());
         }
     }
 };
@@ -481,8 +481,8 @@ inline bool operator==(const managed_bytes_view& a, const managed_bytes_view& b)
 }
 
 inline std::ostream& operator<<(std::ostream& os, const managed_bytes_view& v) {
-    for (managed_bytes_view mbv; !mbv.empty(); mbv.remove_current()) {
-        os << to_hex(mbv.current_fragment());
+    for (bytes_view frag : fragment_range(v)) {
+        os << to_hex(frag);
     }
     return os;
 }

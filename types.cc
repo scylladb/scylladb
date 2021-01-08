@@ -1477,8 +1477,8 @@ struct validate_visitor {
     }
     void operator()(const ascii_type_impl&) {
         // ASCII can be validated independently for each fragment
-        for (View fv = v; fv.size_bytes() > 0; fv.remove_current()) {
-            if (!utils::ascii::validate(fv.current_fragment())) {
+        for (bytes_view frag : fragment_range(v)) {
+            if (!utils::ascii::validate(frag)) {
                 throw marshal_exception("Validation failed - non-ASCII character in an ASCII string");
             }
         }

@@ -306,8 +306,8 @@ inline void write(sstable_version_types v, W& out, bytes_view s) {
 template <typename W>
 requires Writer<W>
 inline void write(sstable_version_types v, W& out, managed_bytes_view s) {
-    for (; !s.empty(); s.remove_current()) {
-        out.write(reinterpret_cast<const char*>(s.current_fragment().data()), s.current_fragment().size());
+    for (bytes_view fragment : fragment_range(s)) {
+        write(v, out, fragment);
     }
 }
 

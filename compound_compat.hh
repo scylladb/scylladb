@@ -266,8 +266,8 @@ private:
     }
     template<typename CharOutputIterator>
     static void write_value(managed_bytes_view val, CharOutputIterator& out) {
-        for (; !val.empty(); val.remove_current()) {
-            out = std::copy(val.current_fragment().begin(), val.current_fragment().end(), out);
+        for (bytes_view frag : fragment_range(val)) {
+            out = std::copy(frag.begin(), frag.end(), out);
         }
     }
     template <typename CharOutputIterator>

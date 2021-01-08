@@ -500,8 +500,8 @@ public:
     [[gnu::always_inline]]
     operator managed_bytes() && {
         managed_bytes mb(managed_bytes::initialized_later(), _stream.size());
-        for (managed_bytes_mutable_view v = mb; !v.empty(); v.remove_current()) {
-            _stream.read(reinterpret_cast<char*>(v.current_fragment().data()), v.current_fragment().size());
+        for (bytes_mutable_view frag : fragment_range(managed_bytes_mutable_view(mb))) {
+            _stream.read(reinterpret_cast<char*>(frag.data()), frag.size());
         }
         return mb;
     }
@@ -533,8 +533,8 @@ struct serializer<bytes> {
     template<typename Output>
     static void write(Output& out, const managed_bytes& mb) {
         safe_serialize_as_uint32(out, uint32_t(mb.size()));
-        for (managed_bytes_view v = mb; !v.empty(); v.remove_current()) {
-            out.write(reinterpret_cast<const char*>(v.current_fragment().data()), v.current_fragment().size());
+        for (bytes_view frag : fragment_range(managed_bytes_view(mb))) {
+            out.write(reinterpret_cast<const char*>(frag.data()), frag.size());
         }
     }
     template<typename Output>
