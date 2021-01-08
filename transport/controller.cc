@@ -33,14 +33,15 @@ namespace cql_transport {
 
 static logging::logger logger("cql_server_controller");
 
-controller::controller(distributed<database>& db, sharded<auth::service>& auth, sharded<service::migration_notifier>& mn, gms::gossiper& gossiper, sharded<cql3::query_processor>& qp)
+controller::controller(distributed<database>& db, sharded<auth::service>& auth, sharded<service::migration_notifier>& mn, gms::gossiper& gossiper, sharded<cql3::query_processor>& qp, sharded<qos::service_level_controller>& sl_controller)
     : _ops_sem(1)
     , _db(db)
     , _auth_service(auth)
     , _mnotifier(mn)
     , _gossiper(gossiper)
-    , _qp(qp) {
-}
+    , _qp(qp)
+    , _sl_controller(sl_controller)
+    { }
 
 future<> controller::start_server() {
     return smp::submit_to(0, [this] {
@@ -147,7 +148,7 @@ future<> controller::do_start_server() {
             }
         }
 
-        cserver->start(std::ref(_qp), std::ref(_auth_service), std::ref(_mnotifier), std::ref(_db), cql_server_config).get();
+        cserver->start(std::ref(_qp), std::ref(_auth_service), std::ref(_mnotifier), std::ref(_db), cql_server_config, std::ref(_sl_controller)).get();
 
         try {
             parallel_for_each(configs, [cserver, keepalive](const listen_cfg & cfg) {

@@ -40,6 +40,7 @@
 #include "service_permit.hh"
 #include <seastar/core/sharded.hh>
 #include "utils/updateable_value.hh"
+#include "service/qos/service_level_controller.hh"
 
 namespace scollectd {
 
@@ -98,8 +99,8 @@ struct cql_query_state {
     service::query_state query_state;
     std::unique_ptr<cql3::query_options> options;
 
-    cql_query_state(service::client_state& client_state, tracing::trace_state_ptr trace_state_ptr, service_permit permit)
-        : query_state(client_state, std::move(trace_state_ptr), std::move(permit))
+    cql_query_state(service::client_state& client_state, tracing::trace_state_ptr trace_state_ptr, service_permit permit,  qos::service_level_controller& sl_controller)
+        : query_state(client_state, std::move(trace_state_ptr), std::move(permit), sl_controller)
     { }
 };
 
@@ -154,10 +155,12 @@ private:
 private:
     transport_stats _stats = {};
     auth::service& _auth_service;
+    qos::service_level_controller& _sl_controller;
 public:
     cql_server(distributed<cql3::query_processor>& qp, auth::service&,
             service::migration_notifier& mn, database& db,
-            cql_server_config config);
+            cql_server_config config,
+            qos::service_level_controller& sl_controller);
     future<> listen(socket_address addr, std::shared_ptr<seastar::tls::credentials_builder> = {}, bool is_shard_aware = false, bool keepalive = false);
     future<> do_accepts(int which, bool keepalive, socket_address server_addr);
     future<> stop();
