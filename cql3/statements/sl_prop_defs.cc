@@ -23,6 +23,7 @@
 #include "database.hh"
 #include "duration.hh"
 #include "concrete_types.hh"
+#include <boost/algorithm/string/predicate.hpp>
 
 namespace cql3 {
 
@@ -33,7 +34,7 @@ void sl_prop_defs::validate() {
         "timeout"
     };
     auto get_duration = [&] (const std::optional<sstring>& repr) -> qos::service_level_options::timeout_type {
-        if (!repr) {
+        if (!repr || boost::algorithm::iequals(*repr, "null")) {
             return qos::service_level_options::unset_marker{};
         }
         data_value v = duration_type->deserialize(duration_type->from_string(*repr));
