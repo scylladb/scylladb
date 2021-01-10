@@ -218,38 +218,40 @@ public:
                     : _reader(reader)
                       , _consumer(std::move(c))
             { }
-            stop_iteration operator()(mutation_fragment&& mf) {
+            future<stop_iteration> operator()(mutation_fragment&& mf) {
                 return std::move(mf).consume(*this);
             }
-            stop_iteration consume(static_row&& sr) {
+            future<stop_iteration> consume(static_row&& sr) {
                 return handle_result(_consumer.consume(std::move(sr)));
             }
-            stop_iteration consume(clustering_row&& cr) {
+            future<stop_iteration> consume(clustering_row&& cr) {
                 return handle_result(_consumer.consume(std::move(cr)));
             }
-            stop_iteration consume(range_tombstone&& rt) {
+            future<stop_iteration> consume(range_tombstone&& rt) {
                 return handle_result(_consumer.consume(std::move(rt)));
             }
-            stop_iteration consume(partition_start&& ps) {
+            future<stop_iteration> consume(partition_start&& ps) {
                 _decorated_key.emplace(std::move(ps.key()));
                 _consumer.consume_new_partition(*_decorated_key);
                 if (ps.partition_tombstone()) {
                     _consumer.consume(ps.partition_tombstone());
                 }
-                return stop_iteration::no;
+                return make_ready_future<stop_iteration>(stop_iteration::no);
             }
-            stop_iteration consume(partition_end&& pe) {
+            future<stop_iteration> consume(partition_end&& pe) {
+              return futurize_invoke([this] {
                 return _consumer.consume_end_of_partition();
+              });
             }
         private:
-            stop_iteration handle_result(stop_iteration si) {
+            future<stop_iteration> handle_result(stop_iteration si) {
                 if (si) {
                     if (_consumer.consume_end_of_partition()) {
-                        return stop_iteration::yes;
+                        return make_ready_future<stop_iteration>(stop_iteration::yes);
                     }
                     _reader.next_partition();
                 }
-                return stop_iteration::no;
+                return make_ready_future<stop_iteration>(stop_iteration::no);
             }
         };
     public:
