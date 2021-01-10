@@ -87,18 +87,20 @@ public:
     virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override {
         return do_until([this] { return is_buffer_full() || is_end_of_stream(); }, [this, timeout] {
             return _rd.fill_buffer(timeout).then([this] {
-                while (!_rd.is_buffer_empty()) {
+                return do_until([this] { return _rd.is_buffer_empty(); }, [this] {
                     auto mf = _rd.pop_mutation_fragment();
                     if (mf.is_partition_start()) {
                         auto& dk = mf.as_partition_start().key();
                         if (!_filter(dk)) {
                             _rd.next_partition();
-                            continue;
+                            return make_ready_future<>();
                         }
                     }
                     push_mutation_fragment(std::move(mf));
-                }
-                _end_of_stream = _rd.is_end_of_stream();
+                    return make_ready_future<>();
+                }).then([this] {
+                    _end_of_stream = _rd.is_end_of_stream();
+                });
             });
         });
     }
