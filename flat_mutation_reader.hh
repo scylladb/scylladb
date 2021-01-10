@@ -166,7 +166,9 @@ public:
                         });
                     }
 
-                    return make_ready_future<stop_iteration>(consumer(pop_mutation_fragment()));
+                    return futurize_invoke([&consumer, mf = pop_mutation_fragment()] () mutable {
+                        return consumer(std::move(mf));
+                    });
                 });
             });
         }
@@ -194,7 +196,13 @@ public:
                     next_partition();
                     continue;
                 }
-                if (filter(mf) && (consumer(std::move(mf)) == stop_iteration::yes)) {
+                if (!filter(mf)) {
+                    continue;
+                }
+                auto do_stop = futurize_invoke([&consumer, mf = std::move(mf)] () mutable {
+                    return consumer(std::move(mf));
+                });
+                if (do_stop.get0()) {
                     return;
                 }
             }
