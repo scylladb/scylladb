@@ -27,6 +27,7 @@ import collections
 from util import unique_name
 from contextlib import contextmanager
 from cassandra.protocol import SyntaxException, InvalidRequest
+from cassandra.util import SortedSet, OrderedMapSerializedKey
 
 # A utility function for creating a new temporary table with a given schema.
 # Because Scylla becomes slower when a huge number of uniquely-named tables
@@ -110,11 +111,25 @@ def assert_row_count(result, expected):
 def assert_empty(result):
     assert len(list(result)) == 0
 
+# Result objects contain some strange types specific to the CQL driver, which
+# normally compare well against normal Python types, but in some cases of nested
+# types they do not, and require some cleanup:
+def result_cleanup(item):
+    if isinstance(item, OrderedMapSerializedKey):
+        # Because of issue #7856, we can't use item.items() if the test
+        # used prepared statement with wrongly ordered nested item, so
+        # we can use _items instead.
+        return { freeze(item[0]): item[1] for item in item._items }
+    if isinstance(item, SortedSet):
+        return { freeze(x) for x in item }
+    return item
+
 def assert_rows(result, *expected):
     allresults = list(result)
     assert len(allresults) == len(expected)
     for r,e in zip(allresults, expected):
-        assert list(r) == e
+        r = [result_cleanup(col) for col in r]
+        assert r == e
 
 # To compare two lists of items (each is a dict) without regard for order,
 # The following function, multiset() converts the list into a multiset
@@ -122,9 +137,24 @@ def assert_rows(result, *expected):
 # be compared.
 def freeze(item):
     if isinstance(item, dict):
-        return frozenset((key, freeze(value)) for key, value in item.items())
+        return frozenset((freeze(key), freeze(value)) for key, value in item.items())
+    if isinstance(item, OrderedMapSerializedKey):
+        # Because of issue #7856, we can't use item.items() if the test
+        # used prepared statement with wrongly ordered nested item, so
+        # we can use _items instead.
+        return frozenset((freeze(item[0]), freeze(item[1])) for item in item._items)
+    elif hasattr(item, '_asdict'):
+        # Probably a namedtuple, e.g., a Row. It is not hashable so we need
+        # to convert it to something else. For simplicity, let's drop the
+        # names and convert it to a regular tuple. Note that _asdict()
+        # returns an *ordered* dict, so the result is a tuple, not frozenset.
+        return tuple(freeze(value) for key, value in item._asdict().items())
     elif isinstance(item, list):
         return tuple(freeze(value) for value in item)
+    elif isinstance(item, SortedSet):
+        return frozenset(freeze(val) for val in item)
+    elif isinstance(item, set):
+        return frozenset(val for val in item)
     return item
 def multiset(items):
     return collections.Counter([freeze(item) for item in items])
