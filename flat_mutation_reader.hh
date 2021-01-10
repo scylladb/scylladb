@@ -46,6 +46,8 @@ template<typename Consumer>
 concept FlatMutationReaderConsumer =
     requires(Consumer c, mutation_fragment mf) {
         { c(std::move(mf)) } -> std::same_as<stop_iteration>;
+    } || requires(Consumer c, mutation_fragment mf) {
+        { c(std::move(mf)) } -> std::same_as<future<stop_iteration>>;
     };
 
 
