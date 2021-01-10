@@ -2504,7 +2504,8 @@ SEASTAR_TEST_CASE(sstable_rewrite) {
                     BOOST_REQUIRE(m->is_partition_start());
                     auto pkey = partition_key::from_exploded(*s, {to_bytes(key)});
                     BOOST_REQUIRE(m->as_partition_start().key().key().equal(*s, pkey));
-                    reader->next_partition();
+                    return reader->next_partition();
+                }).then([reader] {
                     return (*reader)(db::no_timeout);
                 }).then([reader] (mutation_fragment_opt m) {
                     BOOST_REQUIRE(!m);

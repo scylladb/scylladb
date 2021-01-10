@@ -464,15 +464,16 @@ public:
             return is_end_of_stream() ? make_ready_future<>() : fill_buffer_from_delegate(timeout);
         });
     }
-    virtual void next_partition() override {
+    virtual future<> next_partition() override {
         clear_buffer_to_next_partition();
         if (is_buffer_empty()) {
             if (!_delegate_range) {
                 _delegate = {};
             } else {
-                _delegate->next_partition();
+                return _delegate->next_partition();
             }
         }
+        return make_ready_future<>();
     }
     virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {
         _end_of_stream = false;
@@ -627,11 +628,12 @@ public:
             });
         });
     }
-    virtual void next_partition() override {
+    virtual future<> next_partition() override {
         clear_buffer_to_next_partition();
         if (is_buffer_empty()) {
             _partition_reader = std::nullopt;
         }
+        return make_ready_future<>();
     }
     virtual future<> fast_forward_to(const dht::partition_range&, db::timeout_clock::time_point timeout) override {
         return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());

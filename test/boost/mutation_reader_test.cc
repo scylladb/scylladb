@@ -933,12 +933,13 @@ public:
         });
     }
 
-    virtual void next_partition() override {
+    virtual future<> next_partition() override {
         _end_of_stream = false;
         clear_buffer_to_next_partition();
         if (is_buffer_empty()) {
-            _reader.next_partition();
+            return _reader.next_partition();
         }
+        return make_ready_future<>();
     }
 
     virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {
@@ -2084,7 +2085,7 @@ public:
         }
         abort();
     }
-    virtual void next_partition() override { }
+    virtual future<> next_partition() override { return make_ready_future<>(); }
     virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point) override {
         ++_ctrl.fast_forward_to;
         clear_buffer();
@@ -2983,13 +2984,13 @@ SEASTAR_THREAD_TEST_CASE(test_manual_paused_evictable_reader_is_mutation_source)
                 maybe_pause();
             });
         }
-        virtual void next_partition() override {
+        virtual future<> next_partition() override {
             clear_buffer_to_next_partition();
             if (!is_buffer_empty()) {
-                return;
+                return make_ready_future<>();
             }
             _end_of_stream = false;
-            _reader.next_partition();
+            return _reader.next_partition();
         }
         virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {
             clear_buffer();
@@ -3786,7 +3787,7 @@ SEASTAR_THREAD_TEST_CASE(clustering_combined_reader_mutation_source_test) {
             }
         }
 
-        virtual void next_partition() override {
+        virtual future<> next_partition() override {
             clear_buffer_to_next_partition();
             _end_of_stream = false;
             if (is_buffer_empty()) {
@@ -3803,6 +3804,7 @@ SEASTAR_THREAD_TEST_CASE(clustering_combined_reader_mutation_source_test) {
                     // either no previously fetched fragment or must have come from before _it. Nothing to do
                 }
             }
+            return make_ready_future<>();
         }
 
         virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {

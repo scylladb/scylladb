@@ -162,12 +162,13 @@ class build_progress_virtual_reader {
             });
         }
 
-        virtual void next_partition() override {
+        virtual future<> next_partition() override {
             _end_of_stream = false;
             clear_buffer_to_next_partition();
             if (is_buffer_empty()) {
-                _underlying.next_partition();
+                return _underlying.next_partition();
             }
+            return make_ready_future<>();
         }
 
         virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {

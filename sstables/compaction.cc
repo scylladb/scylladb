@@ -1247,8 +1247,8 @@ class scrub_compaction final : public regular_compaction {
                 }
             });
         }
-        virtual void next_partition() override {
-            throw_with_backtrace<std::bad_function_call>();
+        virtual future<> next_partition() override {
+            return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
         }
         virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {
             return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());

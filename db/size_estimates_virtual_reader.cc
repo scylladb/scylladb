@@ -275,11 +275,12 @@ future<> size_estimates_mutation_reader::fill_buffer(db::timeout_clock::time_poi
     });
 }
 
-void size_estimates_mutation_reader::next_partition() {
+future<> size_estimates_mutation_reader::next_partition() {
     clear_buffer_to_next_partition();
     if (is_buffer_empty()) {
         _partition_reader = std::nullopt;
     }
+    return make_ready_future<>();
 }
 
 future<> size_estimates_mutation_reader::fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) {

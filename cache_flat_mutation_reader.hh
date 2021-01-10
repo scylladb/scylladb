@@ -163,11 +163,12 @@ public:
     cache_flat_mutation_reader(const cache_flat_mutation_reader&) = delete;
     cache_flat_mutation_reader(cache_flat_mutation_reader&&) = delete;
     virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override;
-    virtual void next_partition() override {
+    virtual future<> next_partition() override {
         clear_buffer_to_next_partition();
         if (is_buffer_empty()) {
             _end_of_stream = true;
         }
+        return make_ready_future<>();
     }
     virtual future<> fast_forward_to(const dht::partition_range&, db::timeout_clock::time_point timeout) override {
         clear_buffer();

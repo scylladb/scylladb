@@ -92,8 +92,7 @@ public:
                     if (mf.is_partition_start()) {
                         auto& dk = mf.as_partition_start().key();
                         if (!_filter(dk)) {
-                            _rd.next_partition();
-                            return make_ready_future<>();
+                            return _rd.next_partition();
                         }
                     }
                     push_mutation_fragment(std::move(mf));
@@ -104,12 +103,13 @@ public:
             });
         });
     }
-    virtual void next_partition() override {
+    virtual future<> next_partition() override {
         clear_buffer_to_next_partition();
         if (is_buffer_empty()) {
             _end_of_stream = false;
-            _rd.next_partition();
+            return _rd.next_partition();
         }
+        return make_ready_future<>();
     }
     virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {
         clear_buffer();

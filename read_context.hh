@@ -70,8 +70,8 @@ public:
             _reader = _cache.create_underlying_reader(_read_context, snap, _range);
             _reader_creation_phase = phase;
         }
-        _reader->next_partition();
 
+      return _reader->next_partition().then([this, timeout] {
         if (_reader->is_end_of_stream() && _reader->is_buffer_empty()) {
             return make_ready_future<mutation_fragment_opt>();
         }
@@ -82,6 +82,7 @@ public:
             }
             return std::move(mfopt);
         });
+      });
     }
     future<> fast_forward_to(dht::partition_range&& range, db::timeout_clock::time_point timeout) {
         auto snapshot_and_phase = _cache.snapshot_of(dht::ring_position_view::for_range_start(_range));

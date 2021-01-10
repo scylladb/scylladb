@@ -464,13 +464,15 @@ future<> read_context::save_reader(shard_id shard, const dht::decorated_key& las
             flat_mutation_reader_opt reader = try_resume(rm.rparts->permit.semaphore(), std::move(*rm.handle));
 
             if (!reader) {
-                return;
+                return make_ready_future<>();
             }
 
+            auto maybe_next_partition = make_ready_future<>();
             if (rm.has_pending_next_partition) {
-                reader->next_partition();
+                maybe_next_partition = reader->next_partition();
             }
 
+          return maybe_next_partition.then([this, query_uuid, query_ranges, &rm, &last_pkey, &last_ckey, gts = std::move(gts), &db, reader = std::move(reader)] () mutable {
             auto& buffer = *rm.buffer;
             const auto fragments = buffer.size();
             const auto size_before = reader->buffer_size();
@@ -498,11 +500,13 @@ future<> read_context::save_reader(shard_id shard, const dht::decorated_key& las
 
             db.get_stats().multishard_query_unpopped_fragments += fragments;
             db.get_stats().multishard_query_unpopped_bytes += (size_after - size_before);
+          });
         } catch (...) {
             // We don't want to fail a read just because of a failure to
             // save any of the readers.
             mmq_log.debug("Failed to save reader: {}", std::current_exception());
             ++db.get_stats().multishard_query_failed_reader_saves;
+            return make_ready_future<>();
         }
     }).handle_exception([this, shard] (std::exception_ptr e) {
         // We don't want to fail a read just because of a failure to

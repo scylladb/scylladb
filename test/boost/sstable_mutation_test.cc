@@ -358,9 +358,10 @@ future<> test_range_reads(sstables::test_env& env, const dht::token& min, const 
                             BOOST_REQUIRE(std::vector<bytes>({expected.back()}) == mfopt->as_partition_start().key().key().explode());
                             expected.pop_back();
                             (*count)++;
-                            mutations->next_partition();
+                            return mutations->next_partition();
                         } else {
                             *stop = true;
+                            return make_ready_future<>();
                         }
                     });
             }).then([count, expected_size] {
