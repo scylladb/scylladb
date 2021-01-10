@@ -19,13 +19,14 @@
 # Various tests for the handling of frozen collections. Note that Cassandra
 # also had extensive tests for frozen collections, which we ported in 
 # cassandra_tests/validation/entities/frozen_collections_test.py. The tests
-# here are either additional ones, focusing on more esoteric issues.
+# here are either additional ones, or focusing on more esoteric issues or
+# small tests aiming to reproduce bugs discovered by bigger Cassandra tests.
 #############################################################################
 
 import pytest
 import random
 from cassandra.util import SortedSet, OrderedMapSerializedKey
-from util import unique_name
+from util import unique_name, new_test_table
 
 
 # A test table with a (frozen) nested collection as its primary key.
@@ -126,3 +127,70 @@ def test_wrong_set_order(cql, table_fsi):
     cql.execute(insert, [tuple([i+1, i, i+2])])
     assert len(list(cql.execute(lookup, [tuple([i, i+1, i+2])]))) == 1
     assert len(list(cql.execute(lookup, [tuple([i+1, i, i+2])]))) == 1
+
+# This test shows we can use a frozen collection as a clustering key, and
+# insert such items (with unprepared and prepared statements). The next
+# test, test_clustering_key_reverse_frozen_collection, does exactly the same
+# thing but with reversed sort order, and there we start having problems.
+def test_clustering_key_frozen_collection(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace,
+            "a int, b frozen<set<int>>, PRIMARY KEY (a,b)") as table:
+        # Insert with unprepared statement:
+        cql.execute("INSERT INTO " + table + " (a, b) VALUES (0, {1, 2, 3})")
+        assert list(cql.execute("SELECT * FROM " + table)) == [(0, {1, 2, 3})]
+        # Insert with prepared statement:
+        stmt = cql.prepare(f"INSERT INTO {table} (a, b) VALUES (?, ?)")
+        cql.execute(stmt, [0, {2, 3, 4}])
+        assert list(cql.execute("SELECT * FROM " + table)) == [
+            (0, {1, 2, 3}), (0, {2, 3, 4})]
+
+# This is the same test as above (test_clustering_key_frozen_collection),
+# just the clustering key is sorted in reverse order. Somehow, this broke
+# things, both for unprepared and for prepared statements.
+# We have the same test for frozen sets, and then lists and maps.
+# Reproduces issues #7868 and #7875.
+def test_clustering_key_reverse_frozen_set(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace,
+            "a int, b frozen<set<int>>, PRIMARY KEY (a,b)",
+            "WITH CLUSTERING ORDER BY (b DESC)") as table:
+        # Insert with unprepared statement:
+        # Issue #7875: Scylla produces an error "Invalid set literal for b
+        # of type frozen<set<int>>", while this should be valid (and we saw
+        # above it is allowed for increasing order!)
+        cql.execute("INSERT INTO " + table + " (a, b) VALUES (0, {1, 2, 3})")
+        assert list(cql.execute("SELECT * FROM " + table)) == [(0, {1, 2, 3})]
+        # Insert with prepared statement:
+        # Issue #7868: The prepare() of the following statement crashes
+        # Scylla with an assertion failure.
+        stmt = cql.prepare(f"INSERT INTO {table} (a, b) VALUES (?, ?)")
+        cql.execute(stmt, [0, {2, 3, 4}])
+        assert list(cql.execute("SELECT * FROM " + table)) == [
+            (0, {2, 3, 4}), (0, {1, 2, 3})]
+
+# Reproduces issues #7868 and #7875.
+def test_clustering_key_reverse_frozen_list(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace,
+            "a int, b frozen<list<int>>, PRIMARY KEY (a,b)",
+            "WITH CLUSTERING ORDER BY (b DESC)") as table:
+        # Insert with unprepared statement. Issue #7875.
+        cql.execute("INSERT INTO " + table + " (a, b) VALUES (0, [1, 2, 3])")
+        assert list(cql.execute("SELECT * FROM " + table)) == [(0, [1, 2, 3])]
+        # Insert with prepared statement. Issue #7868.
+        stmt = cql.prepare(f"INSERT INTO {table} (a, b) VALUES (?, ?)")
+        cql.execute(stmt, [0, [2, 3, 4]])
+        assert list(cql.execute("SELECT * FROM " + table)) == [
+            (0, [2, 3, 4]), (0, [1, 2, 3])]
+
+# Reproduces issues #7868 and #7875.
+def test_clustering_key_reverse_frozen_map(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace,
+            "a int, b frozen<map<int, int>>, PRIMARY KEY (a,b)",
+            "WITH CLUSTERING ORDER BY (b DESC)") as table:
+        # Insert with unprepared statement. Issue #7875.
+        cql.execute("INSERT INTO " + table + " (a, b) VALUES (0, {1: 2, 3: 4})")
+        assert list(cql.execute("SELECT * FROM " + table)) == [(0, {1: 2, 3: 4})]
+        # Insert with prepared statement. Issue #7868.
+        stmt = cql.prepare(f"INSERT INTO {table} (a, b) VALUES (?, ?)")
+        cql.execute(stmt, [0, {2: 3, 4: 5}])
+        assert list(cql.execute("SELECT * FROM " + table)) == [
+            (0, {2: 3, 4: 5}), (0, {1: 2, 3: 4})]
