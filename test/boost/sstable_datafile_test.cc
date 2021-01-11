@@ -5308,6 +5308,7 @@ SEASTAR_TEST_CASE(sstable_scrub_test) {
                 auto local_keys = make_local_keys(3, schema);
 
                 auto config = env.manager().configure_writer();
+                config.validate_keys = false; // this test violates key order on purpose
                 auto writer = sst->get_writer(*schema, local_keys.size(), config, encoding_stats{});
 
                 auto make_static_row = [&, schema, ts] {
