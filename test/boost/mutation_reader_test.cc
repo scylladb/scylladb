@@ -1366,6 +1366,7 @@ SEASTAR_TEST_CASE(test_fast_forwarding_combined_reader_is_consistent_with_slicin
         const int n_readers = 10;
         auto keys = gen.make_partition_keys(3);
         std::vector<mutation> combined;
+        std::list<dht::partition_range> reader_ranges;
         std::vector<flat_mutation_reader> readers;
         for (int i = 0; i < n_readers; ++i) {
             std::vector<mutation> muts;
@@ -1382,9 +1383,10 @@ SEASTAR_TEST_CASE(test_fast_forwarding_combined_reader_is_consistent_with_slicin
                 }
             }
             mutation_source ds = create_sstable(env, s, muts)->as_mutation_source();
+            reader_ranges.push_back(dht::partition_range::make({keys[0]}, {keys[0]}));
             readers.push_back(ds.make_reader(s,
                 tests::make_permit(),
-                dht::partition_range::make({keys[0]}, {keys[0]}),
+                reader_ranges.back(),
                 s->full_slice(), default_priority_class(), nullptr,
                 streamed_mutation::forwarding::yes,
                 mutation_reader::forwarding::yes));
