@@ -48,6 +48,8 @@ struct service_level_options {
     using timeout_type = std::variant<unset_marker, delete_marker, lowres_clock::duration>;
     timeout_type timeout = unset_marker{};
 
+    service_level_options replace_defaults(const service_level_options& other) const;
+
     bool operator==(const service_level_options& other) const = default;
     bool operator!=(const service_level_options& other) const = default;
 };

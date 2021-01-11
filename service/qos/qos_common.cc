@@ -20,5 +20,25 @@
  */
 
 #include "qos_common.hh"
+#include "utils/overloaded_functor.hh"
 namespace qos {
+
+service_level_options service_level_options::replace_defaults(const service_level_options& default_values) const {
+    service_level_options ret = *this;
+    std::visit(overloaded_functor {
+        [&] (const unset_marker& um) {
+            // reset the value to the default one
+            ret.timeout = default_values.timeout;
+        },
+        [&] (const delete_marker& dm) {
+            // remove the value
+            ret.timeout = unset_marker{};
+        },
+        [&] (const lowres_clock::duration&) {
+            // leave the value as is
+        },
+    }, ret.timeout);
+    return ret;
+}
+
 }
