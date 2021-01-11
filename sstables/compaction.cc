@@ -68,6 +68,7 @@
 #include "dht/token.hh"
 #include "mutation_writer/shard_based_splitting_writer.hh"
 #include "mutation_source_metadata.hh"
+#include "mutation_fragment_stream_validator.hh"
 
 namespace sstables {
 

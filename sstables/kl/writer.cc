@@ -635,9 +635,6 @@ void sstable_writer_k_l::consume_end_of_stream()
 {
     _monitor->on_data_write_completed();
 
-    if (_partition_key) {
-        on_internal_error(sstlog, "Mutation stream ends with unclosed partition during write");
-    }
     // what if there is only one partition? what if it is empty?
     seal_summary(_sst._components->summary, std::move(_first_key), std::move(_last_key), _index_sampling_state).get();
 
