@@ -344,6 +344,7 @@ scylla_tests = set([
     'test/boost/estimated_histogram_test',
     'test/boost/logalloc_test',
     'test/boost/managed_vector_test',
+    'test/boost/managed_bytes_test',
     'test/boost/intrusive_array_test',
     'test/boost/map_difference_test',
     'test/boost/memtable_test',
