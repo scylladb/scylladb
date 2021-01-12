@@ -1023,6 +1023,7 @@ pure_boost_tests = set([
     'test/boost/top_k_test',
     'test/boost/vint_serialization_test',
     'test/boost/bptree_test',
+    'test/boost/utf8_test',
     'test/manual/streaming_histogram_test',
 ])
 
