@@ -87,6 +87,26 @@ def test_fromjson_bad_ascii_prepared(cql, table1):
     with pytest.raises(FunctionFailure):
         cql.execute(stmt, [0, '"שלום"'])
 
+# The JSON standard does not define or limit the range or precision of
+# numbers. However, if a number is assigned to a Scylla number type, the
+# assignment can overflow and should result in an error - not be silently
+# wrapped around.
+# Reproduces issue #7914
+@pytest.mark.xfail(reason="issue #7914")
+def test_fromjson_int_overflow_unprepared(cql, table1):
+    p = random.randint(1,1000000000)
+    # The highest legal int is 2147483647 (2^31-1).2147483648 is not a legal
+    # int, so trying to insert it should result in an error - not silent
+    # wraparound to -2147483648 as happened in Scylla.
+    with pytest.raises(FunctionFailure):
+        cql.execute(f"INSERT INTO {table1} (p, v) VALUES ({p}, fromJson('2147483648'))")
+@pytest.mark.xfail(reason="issue #7914")
+def test_fromjson_int_overflow_prepared(cql, table1):
+    p = random.randint(1,1000000000)
+    stmt = cql.prepare(f"INSERT INTO {table1} (p, v) VALUES (?, fromJson(?))")
+    with pytest.raises(FunctionFailure):
+        cql.execute(stmt, [0, '2147483648'])
+
 # Test that null argument is allowed for fromJson(), with unprepared statement
 # Reproduces issue #7912.
 @pytest.mark.xfail(reason="issue #7912")
