@@ -222,7 +222,7 @@ private:
      */
     service_level& get_service_level(sstring service_level_name) {
         auto sl_it = _service_levels_db.find(service_level_name);
-        if (sl_it == _service_levels_db.end() && sl_it->second.marked_for_deletion) {
+        if (sl_it == _service_levels_db.end() || sl_it->second.marked_for_deletion) {
             sl_it = _service_levels_db.find(default_service_level_name);
         }
         return sl_it->second;
