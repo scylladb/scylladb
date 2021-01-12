@@ -22,6 +22,7 @@
 #include "transport/controller.hh"
 #include "transport/server.hh"
 #include "service/storage_service.hh"
+#include "service/memory_limiter.hh"
 #include "database.hh"
 #include "db/config.hh"
 #include "gms/gossiper.hh"
@@ -33,13 +34,14 @@ namespace cql_transport {
 
 static logging::logger logger("cql_server_controller");
 
-controller::controller(distributed<database>& db, sharded<auth::service>& auth, sharded<service::migration_notifier>& mn, gms::gossiper& gossiper, sharded<cql3::query_processor>& qp)
+controller::controller(distributed<database>& db, sharded<auth::service>& auth, sharded<service::migration_notifier>& mn, gms::gossiper& gossiper, sharded<cql3::query_processor>& qp, sharded<service::memory_limiter>& ml)
     : _ops_sem(1)
     , _db(db)
     , _auth_service(auth)
     , _mnotifier(mn)
     , _gossiper(gossiper)
-    , _qp(qp) {
+    , _qp(qp)
+    , _mem_limiter(ml) {
 }
 
 future<> controller::start_server() {
