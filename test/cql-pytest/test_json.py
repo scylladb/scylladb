@@ -43,3 +43,20 @@ def test_failed_json_parsing(cql, table1):
     p = random.randint(1,1000000000)
     with pytest.raises(FunctionFailure):
         cql.execute(f"INSERT INTO {table1} (p, v) VALUES ({p}, fromJson('dog'))")
+
+# Test that null argument is allowed for fromJson(), with unprepared statement
+# Reproduces issue #7912.
+@pytest.mark.xfail(reason="issue #7912")
+def test_fromjson_null_unprepared(cql, table1):
+    p = random.randint(1,1000000000)
+    cql.execute(f"INSERT INTO {table1} (p, v) VALUES ({p}, fromJson(null))")
+    assert list(cql.execute(f"SELECT * from {table1} where p = {p}")) == [(p, None)]
+
+# Test that null argument is allowed for fromJson(), with prepared statement
+# Reproduces issue #7912.
+@pytest.mark.xfail(reason="issue #7912")
+def test_fromjson_null_prepared(cql, table1):
+    p = random.randint(1,1000000000)
+    stmt = cql.prepare(f"INSERT INTO {table1} (p, v) VALUES (?, fromJson(?))")
+    cql.execute(stmt, [p, None])
+    assert list(cql.execute(f"SELECT * from {table1} where p = {p}")) == [(p, None)]
