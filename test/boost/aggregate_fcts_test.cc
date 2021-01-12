@@ -148,7 +148,7 @@ SEASTAR_TEST_CASE(test_aggregate_max) {
                                                           {utf8_type->from_string("b")},
                                                           {simple_date_type->from_string("2017-12-02")},
                                                           {timestamp_type->from_string("2017-12-02t03:00:00")},
-                                                          {timeuuid_type->from_string("D2177dD0-EAa2-11de-a572-001B779C76e3")},
+                                                          {timeuuid_type->from_string("b650cbe0-f914-11e7-8892-000000000004")},
                                                           {bytes_type->from_string("0101")},
                                                           {boolean_type->from_string("true")},
         });
@@ -187,7 +187,7 @@ SEASTAR_TEST_CASE(test_aggregate_min) {
                                                           {utf8_type->from_string("a")},
                                                           {simple_date_type->from_string("2016-12-02")},
                                                           {timestamp_type->from_string("2016-12-02t06:00:00")},
-                                                          {timeuuid_type->from_string("b650cbe0-f914-11e7-8892-000000000004")},
+                                                          {timeuuid_type->from_string("D2177dD0-EAa2-11de-a572-001B779C76e3")},
                                                           {bytes_type->from_string("01")},
                                                           {boolean_type->from_string("false")},
         });

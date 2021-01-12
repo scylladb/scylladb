@@ -219,7 +219,7 @@ struct aggregate_type_for<simple_date_native_type> {
 
 template<>
 struct aggregate_type_for<timeuuid_native_type> {
-    using type = timeuuid_native_type::primary_type;
+    using type = timeuuid_native_type;
 };
 
 template<>
@@ -227,6 +227,7 @@ struct aggregate_type_for<time_native_type> {
     using type = time_native_type::primary_type;
 };
 
+// WARNING: never invoke this on temporary values; it will return a dangling reference.
 template <typename Type>
 const Type& max_wrapper(const Type& t1, const Type& t2) {
     using std::max;
@@ -239,6 +240,10 @@ inline const net::inet_address& max_wrapper(const net::inet_address& t1, const n
             (t1.in_family() == family::INET || t2.in_family() == family::INET)
             ? sizeof(::in_addr) : sizeof(::in6_addr);
     return std::memcmp(t1.data(), t2.data(), len) >= 0 ? t1 : t2;
+}
+
+inline const timeuuid_native_type& max_wrapper(const timeuuid_native_type& t1, const timeuuid_native_type& t2) {
+    return t1.uuid.timestamp() > t2.uuid.timestamp() ? t1 : t2;
 }
 
 template <typename Type>
@@ -323,6 +328,7 @@ make_max_function() {
     return make_shared<max_function_for<Type>>();
 }
 
+// WARNING: never invoke this on temporary values; it will return a dangling reference.
 template <typename Type>
 const Type& min_wrapper(const Type& t1, const Type& t2) {
     using std::min;
@@ -335,6 +341,10 @@ inline const net::inet_address& min_wrapper(const net::inet_address& t1, const n
             (t1.in_family() == family::INET || t2.in_family() == family::INET)
             ? sizeof(::in_addr) : sizeof(::in6_addr);
     return std::memcmp(t1.data(), t2.data(), len) <= 0 ? t1 : t2;
+}
+
+inline timeuuid_native_type min_wrapper(timeuuid_native_type t1, timeuuid_native_type t2) {
+    return t1.uuid.timestamp() < t2.uuid.timestamp() ? t1 : t2;
 }
 
 template <typename Type>

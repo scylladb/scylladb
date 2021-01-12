@@ -67,3 +67,7 @@ def new_test_table(cql, keyspace, schema, extra=""):
     cql.execute("CREATE TABLE " + table + "(" + schema + ")" + extra)
     yield table
     cql.execute("DROP TABLE " + table)
+
+def project(column_name_string, rows):
+    """Returns a list of column values from each of the rows."""
+    return [getattr(r, column_name_string) for r in rows]

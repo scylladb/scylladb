@@ -665,6 +665,14 @@ T&& value_cast(data_value&& value) {
     return std::move(*reinterpret_cast<maybe_empty<T>*>(value._value));
 }
 
+/// Special case: sometimes we cast uuid to timeuuid so we can correctly compare timestamps.  See #7729.
+template <>
+inline timeuuid_native_type&& value_cast<timeuuid_native_type>(data_value&& value) {
+    static thread_local timeuuid_native_type value_holder; // Static so it survives return from this function.
+    value_holder.uuid = value_cast<utils::UUID>(value);
+    return std::move(value_holder);
+}
+
 // CRTP: implements translation between a native_type (C++ type) to abstract_type
 // AbstractType is parametrized because we want a
 //    abstract_type -> collection_type_impl -> map_type
