@@ -34,12 +34,12 @@ thread_local reader_concurrency_semaphore _flush_semaphore(reader_concurrency_se
 void memtable::memtable_encoding_stats_collector::update_timestamp(api::timestamp_type ts) {
     if (ts != api::missing_timestamp) {
         encoding_stats_collector::update_timestamp(ts);
-        max_timestamp.update(ts);
+        min_max_timestamp.update(ts);
     }
 }
 
 memtable::memtable_encoding_stats_collector::memtable_encoding_stats_collector()
-    : max_timestamp(0)
+    : min_max_timestamp(0, 0)
 {}
 
 void memtable::memtable_encoding_stats_collector::update(atomic_cell_view cell) {

@@ -6745,3 +6745,72 @@ SEASTAR_TEST_CASE(stcs_reshape_test) {
         BOOST_REQUIRE(cs.get_reshaping_job(sstables, s, default_priority_class(), reshape_mode::relaxed).sstables.size());
     });
 }
+
+SEASTAR_TEST_CASE(test_twcs_interposer_on_memtable_flush) {
+    return test_env::do_with_async([] (test_env& env) {
+      storage_service_for_tests ssft;
+
+      auto test_interposer_on_flush = [&] (bool split_during_flush) {
+        auto builder = schema_builder("tests", "test_twcs_interposer_on_flush")
+                .with_column("id", utf8_type, column_kind::partition_key)
+                .with_column("cl", int32_type, column_kind::clustering_key)
+                .with_column("value", int32_type);
+        builder.set_compaction_strategy(sstables::compaction_strategy_type::time_window);
+        std::map<sstring, sstring> opts = {
+            { time_window_compaction_strategy_options::COMPACTION_WINDOW_UNIT_KEY, "HOURS" },
+            { time_window_compaction_strategy_options::COMPACTION_WINDOW_SIZE_KEY, "1" },
+        };
+        builder.set_compaction_strategy_options(std::move(opts));
+        auto s = builder.build();
+
+        auto next_timestamp = [] (auto step) {
+            using namespace std::chrono;
+            return (gc_clock::now().time_since_epoch() - duration_cast<microseconds>(step)).count();
+        };
+        auto tokens = token_generation_for_shard(1, this_shard_id(), test_db_config.murmur3_partitioner_ignore_msb_bits(), smp::count);
+
+        auto make_row = [&] (std::chrono::hours step) {
+            static thread_local int32_t value = 1;
+            auto key_str = tokens[0].first;
+            auto key = partition_key::from_exploded(*s, {to_bytes(key_str)});
+
+            mutation m(s, key);
+            auto c_key = clustering_key::from_exploded(*s, {int32_type->decompose(value++)});
+            m.set_clustered_cell(c_key, bytes("value"), data_value(int32_t(value)), next_timestamp(step));
+            return m;
+        };
+
+        auto tmp = tmpdir();
+        auto cm = make_lw_shared<compaction_manager>();
+        column_family::config cfg = column_family_test_config(env.manager());
+        cfg.datadir = tmp.path().string();
+        cfg.enable_disk_writes = true;
+        cfg.enable_cache = false;
+        auto tracker = make_lw_shared<cache_tracker>();
+        cell_locker_stats cl_stats;
+        auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), *cm, cl_stats, *tracker);
+        cf->mark_ready_for_writes();
+        cf->start();
+
+        size_t target_windows_span = (split_during_flush) ? 10 : 1;
+        constexpr size_t rows_per_window = 10;
+
+        auto mt = make_lw_shared<memtable>(s);
+        for (auto i = 1; i <= target_windows_span; i++) {
+            for (auto j = 0; j < rows_per_window; j++) {
+                mt->apply(make_row(std::chrono::hours(i)));
+            }
+        }
+
+        auto ret = column_family_test(cf).try_flush_memtable_to_sstable(mt).get0();
+        BOOST_REQUIRE(ret == stop_iteration::yes);
+
+        auto expected_ssts = (split_during_flush) ? target_windows_span : 1;
+        testlog.info("split_during_flush={}, actual={}, expected={}", split_during_flush, cf->get_sstables()->size(), expected_ssts);
+        BOOST_REQUIRE(cf->get_sstables()->size() == expected_ssts);
+      };
+
+      test_interposer_on_flush(true);
+      test_interposer_on_flush(false);
+    });
+}
