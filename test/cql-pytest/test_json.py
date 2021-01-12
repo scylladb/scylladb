@@ -1,3 +1,6 @@
+# -*- coding: utf-8 -*-
+# Copyright 2020 ScyllaDB
+#
 # This file is part of Scylla.
 #
 # Scylla is free software: you can redistribute it and/or modify
@@ -31,7 +34,7 @@ import random
 @pytest.fixture(scope="session")
 def table1(cql, test_keyspace):
     table = test_keyspace + "." + unique_name()
-    cql.execute(f"CREATE TABLE {table} (p int PRIMARY KEY, v int)")
+    cql.execute(f"CREATE TABLE {table} (p int PRIMARY KEY, v int, a ascii)")
     yield table
     cql.execute("DROP TABLE " + table)
 
@@ -39,10 +42,50 @@ def table1(cql, test_keyspace):
 # error - FunctionFailure - and not some weird internal error.
 # Reproduces issue #7911.
 @pytest.mark.xfail(reason="issue #7911")
-def test_failed_json_parsing(cql, table1):
+def test_failed_json_parsing_unprepared(cql, table1):
     p = random.randint(1,1000000000)
     with pytest.raises(FunctionFailure):
         cql.execute(f"INSERT INTO {table1} (p, v) VALUES ({p}, fromJson('dog'))")
+@pytest.mark.xfail(reason="issue #7911")
+def test_failed_json_parsing_prepared(cql, table1):
+    p = random.randint(1,1000000000)
+    stmt = cql.prepare(f"INSERT INTO {table1} (p, v) VALUES (?, fromJson(?))")
+    with pytest.raises(FunctionFailure):
+        cql.execute(stmt, [0, 'dog'])
+
+# Similarly, if the JSON parsing did not fail, but yielded a type which is
+# incompatible with the type we want it to yield, we should get a clean
+# FunctionFailure, not some internal server error.
+# We have here examples of returning a string where a number was expected,
+# and returning a unicode string where ASCII was expected.
+# Reproduces issue #7911.
+@pytest.mark.xfail(reason="issue #7911")
+def test_fromjson_wrong_type_unprepared(cql, table1):
+    p = random.randint(1,1000000000)
+    with pytest.raises(FunctionFailure):
+        cql.execute(f"INSERT INTO {table1} (p, v) VALUES ({p}, fromJson('\"dog\"'))")
+    with pytest.raises(FunctionFailure):
+        cql.execute(f"INSERT INTO {table1} (p, a) VALUES ({p}, fromJson('3'))")
+@pytest.mark.xfail(reason="issue #7911")
+def test_fromjson_wrong_type_prepared(cql, table1):
+    p = random.randint(1,1000000000)
+    stmt = cql.prepare(f"INSERT INTO {table1} (p, v) VALUES (?, fromJson(?))")
+    with pytest.raises(FunctionFailure):
+        cql.execute(stmt, [0, '"dog"'])
+    stmt = cql.prepare(f"INSERT INTO {table1} (p, a) VALUES (?, fromJson(?))")
+    with pytest.raises(FunctionFailure):
+        cql.execute(stmt, [0, '3'])
+@pytest.mark.xfail(reason="issue #7911")
+def test_fromjson_bad_ascii_unprepared(cql, table1):
+    p = random.randint(1,1000000000)
+    with pytest.raises(FunctionFailure):
+        cql.execute(f"INSERT INTO {table1} (p, a) VALUES ({p}, fromJson('\"שלום\"'))")
+@pytest.mark.xfail(reason="issue #7911")
+def test_fromjson_bad_ascii_prepared(cql, table1):
+    p = random.randint(1,1000000000)
+    stmt = cql.prepare(f"INSERT INTO {table1} (p, a) VALUES (?, fromJson(?))")
+    with pytest.raises(FunctionFailure):
+        cql.execute(stmt, [0, '"שלום"'])
 
 # Test that null argument is allowed for fromJson(), with unprepared statement
 # Reproduces issue #7912.
@@ -50,7 +93,7 @@ def test_failed_json_parsing(cql, table1):
 def test_fromjson_null_unprepared(cql, table1):
     p = random.randint(1,1000000000)
     cql.execute(f"INSERT INTO {table1} (p, v) VALUES ({p}, fromJson(null))")
-    assert list(cql.execute(f"SELECT * from {table1} where p = {p}")) == [(p, None)]
+    assert list(cql.execute(f"SELECT p, v from {table1} where p = {p}")) == [(p, None)]
 
 # Test that null argument is allowed for fromJson(), with prepared statement
 # Reproduces issue #7912.
@@ -59,4 +102,4 @@ def test_fromjson_null_prepared(cql, table1):
     p = random.randint(1,1000000000)
     stmt = cql.prepare(f"INSERT INTO {table1} (p, v) VALUES (?, fromJson(?))")
     cql.execute(stmt, [p, None])
-    assert list(cql.execute(f"SELECT * from {table1} where p = {p}")) == [(p, None)]
+    assert list(cql.execute(f"SELECT p, v from {table1} where p = {p}")) == [(p, None)]
