@@ -21,7 +21,6 @@
 
 #include "transport/controller.hh"
 #include "transport/server.hh"
-#include "service/storage_service.hh"
 #include "service/memory_limiter.hh"
 #include "database.hh"
 #include "db/config.hh"

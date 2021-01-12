@@ -66,7 +66,6 @@
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/lowres_clock.hh>
 #include "locator/snitch_base.hh"
-#include "service/memory_limiter.hh"
 
 class node_ops_cmd_request;
 class node_ops_cmd_response;
@@ -177,7 +176,6 @@ private:
     bool _ms_stopped = false;
     bool _stream_manager_stopped = false;
     seastar::metrics::metric_groups _metrics;
-    memory_limiter _service_memory_limiter;
     using client_shutdown_hook = noncopyable_function<void()>;
     std::vector<std::pair<std::string, client_shutdown_hook>> _client_shutdown_hooks;
     std::vector<std::any> _listeners;
@@ -262,14 +260,6 @@ public:
 
     gms::feature_service& features() { return _feature_service; }
     const gms::feature_service& features() const { return _feature_service; }
-
-    size_t service_memory_total() const {
-        return _service_memory_limiter._mem_total;
-    }
-
-    semaphore& service_memory_limiter() {
-        return _service_memory_limiter._sem;
-    }
 
     cdc::generation_service& get_cdc_generation_service() {
         if (!_cdc_gen_service.local_is_initialized()) {

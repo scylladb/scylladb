@@ -25,10 +25,7 @@
 
 namespace service {
 
-class storage_service;
-
 class memory_limiter final {
-    friend class storage_service; // temporary
     size_t _mem_total;
     semaphore _sem;
 
