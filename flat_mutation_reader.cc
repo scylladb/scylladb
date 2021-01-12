@@ -35,6 +35,22 @@
 
 logging::logger fmr_logger("flat_mutation_reader");
 
+flat_mutation_reader& flat_mutation_reader::operator=(flat_mutation_reader&& o) noexcept {
+    if (_impl) {
+        impl* ip = _impl.get();
+        fmr_logger.warn("{} [{}]: permit {}: was not closed before overwritten by move-assign. Backtrace: {}", typeid(*ip).name(), fmt::ptr(ip), ip->_permit.description(), current_backtrace());
+    }
+    _impl = std::move(o._impl);
+    return *this;
+}
+
+flat_mutation_reader::~flat_mutation_reader() {
+    if (_impl) {
+        impl* ip = _impl.get();
+        fmr_logger.warn("{} [{}]: permit {}: was not closed before destruction. Backtrace: {}", typeid(*ip).name(), fmt::ptr(ip), ip->_permit.description(), current_backtrace());
+    }
+}
+
 static size_t compute_buffer_size(const schema& s, const flat_mutation_reader::tracked_buffer& buffer)
 {
     return boost::accumulate(
@@ -954,7 +970,7 @@ void flat_mutation_reader::do_upgrade_schema(const schema_ptr& s) {
 void flat_mutation_reader::on_close_error(std::unique_ptr<impl> i, std::exception_ptr ep) noexcept {
     impl* ip = i.get();
     on_internal_error_noexcept(fmr_logger,
-            format("Failed to close {} [{}]: {}", typeid(*ip).name(), fmt::ptr(ip), ep));
+            format("Failed to close {} [{}]: permit {}: {}", typeid(*ip).name(), fmt::ptr(ip), ip->_permit.description(), ep));
 }
 
 invalid_mutation_fragment_stream::invalid_mutation_fragment_stream(std::runtime_error e) : std::runtime_error(std::move(e)) {
