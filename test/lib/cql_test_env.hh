@@ -134,6 +134,8 @@ public:
     virtual service::migration_notifier& local_mnotifier() = 0;
 
     virtual sharded<service::migration_manager>& migration_manager() = 0;
+
+    virtual future<> refresh_client_state() = 0;
 };
 
 future<> do_with_cql_env(std::function<future<>(cql_test_env&)> func, cql_test_config = {});

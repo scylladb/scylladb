@@ -357,6 +357,12 @@ public:
         return _mm;
     }
 
+    virtual future<> refresh_client_state() override {
+        return _core_local.invoke_on_all([] (core_local_state& state) {
+            return state.client_state.maybe_update_per_service_level_params();
+        });
+    }
+
     future<> start() {
         return _core_local.start(std::ref(_auth_service), std::ref(_sl_controller));
     }
