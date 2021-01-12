@@ -216,3 +216,105 @@ SEASTAR_TEST_CASE(alter_opts_on_system_auth_tables) {
         cquery_nofail(env, "ALTER TABLE system_auth.role_permissions WITH min_index_interval = 456");
     }, auth_on());
 }
+
+SEASTAR_TEST_CASE(test_alter_with_timeouts) {
+    auto cfg = make_shared<db::config>();
+    cfg->authenticator(sstring(auth::password_authenticator_name));
+
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auth::role_config config {
+            .can_login = true,
+        };
+        auth::authentication_options opts {
+            .password = "pass"
+        };
+        auth::create_role(e.local_auth_service(), "user1", config, opts).get();
+        auth::create_role(e.local_auth_service(), "user2", config, opts).get();
+        auth::create_role(e.local_auth_service(), "user3", config, opts).get();
+        auth::create_role(e.local_auth_service(), "user4", config, opts).get();
+        authenticate(e, "user1", "pass").get();
+
+        cquery_nofail(e, "CREATE SERVICE LEVEL sl WITH timeout = 5ms");
+        cquery_nofail(e, "ATTACH SERVICE LEVEL sl TO user1");
+
+        cquery_nofail(e, "CREATE TABLE t (id int, v int, PRIMARY KEY(id, v))");
+        cquery_nofail(e, "INSERT INTO t (id, v) VALUES (1, 2)");
+        cquery_nofail(e, "INSERT INTO t (id, v) VALUES (2, 3)");
+        cquery_nofail(e, "INSERT INTO t (id, v) VALUES (3, 4)");
+        // Avoid reading from memtables, which does not check timeouts due to being too fast
+        e.db().invoke_on_all([] (database& db) { return db.flush_all_memtables(); }).get();
+
+	    auto msg = cquery_nofail(e, "SELECT timeout FROM system_distributed.service_levels");
+        assert_that(msg).is_rows().with_rows({{
+            duration_type->from_string("5ms")
+        }});
+
+        cquery_nofail(e, "ALTER SERVICE LEVEL sl WITH timeout = 35s");
+
+	    msg = cquery_nofail(e, "SELECT timeout FROM system_distributed.service_levels WHERE service_level = 'sl'");
+        assert_that(msg).is_rows().with_rows({{
+            duration_type->from_string("35s")
+        }});
+
+        // Setting a timeout value of 0 makes little sense, but it's great for testing
+        cquery_nofail(e, "ALTER SERVICE LEVEL sl WITH timeout = 0s");
+        e.refresh_client_state().get();
+        BOOST_REQUIRE_THROW(e.execute_cql("SELECT * FROM t BYPASS CACHE").get(), exceptions::read_timeout_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("INSERT INTO t (id, v) VALUES (1,2)").get(), exceptions::mutation_write_timeout_exception);
+
+        cquery_nofail(e, "ALTER SERVICE LEVEL sl WITH timeout = null");
+        e.refresh_client_state().get();
+        cquery_nofail(e, "SELECT * FROM t BYPASS CACHE");
+        cquery_nofail(e, "INSERT INTO t (id, v) VALUES (1,2)");
+
+        // Only valid timeout values are accepted
+        BOOST_REQUIRE_THROW(e.execute_cql("ALTER SERVICE LEVEL sl WITH timeout = 'I am not a valid duration'").get(), exceptions::syntax_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("ALTER SERVICE LEVEL sl WITH timeout = 5us").get(), exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("ALTER SERVICE LEVEL sl WITH timeout = 2y6mo5d").get(), exceptions::invalid_request_exception);
+
+        // When multiple per-role timeouts apply, the smallest value is always effective
+        cquery_nofail(e, "CREATE SERVICE LEVEL sl2 WITH timeout = 2s");
+        cquery_nofail(e, "CREATE SERVICE LEVEL sl3 WITH timeout = 0s");
+        cquery_nofail(e, "CREATE SERVICE LEVEL sl4 WITH timeout = 3s");
+        cquery_nofail(e, "ATTACH SERVICE LEVEL sl2 TO user2");
+        cquery_nofail(e, "ATTACH SERVICE LEVEL sl3 TO user3");
+        cquery_nofail(e, "ATTACH SERVICE LEVEL sl4 TO user4");
+        cquery_nofail(e, "ALTER SERVICE LEVEL sl WITH timeout = 5s");
+        // The roles are granted as follows:
+         //  user4  user3
+        //      \ /
+        //      user2
+        //      /
+        //    user1
+        //
+        // which means that user1 should inherit timeouts from all other users
+        cquery_nofail(e, "GRANT user2 TO user1");
+        cquery_nofail(e, "GRANT user3 TO user2");
+        cquery_nofail(e, "GRANT user4 TO user2");
+        e.refresh_client_state().get();
+        // Avoid reading from memtables, which does not check timeouts due to being too fast
+        e.db().invoke_on_all([] (database& db) { return db.flush_all_memtables(); }).get();
+        // For user1, operations should time out
+        BOOST_REQUIRE_THROW(e.execute_cql("SELECT * FROM t where id = 1 BYPASS CACHE").get(), exceptions::read_timeout_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("SELECT * FROM t BYPASS CACHE").get(), exceptions::read_timeout_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("INSERT INTO t (id, v) VALUES (1,2)").get(), exceptions::mutation_write_timeout_exception);
+        // after switching to user2, same thing should be observed
+        authenticate(e, "user2", "pass").get();
+        e.refresh_client_state().get();
+        BOOST_REQUIRE_THROW(e.execute_cql("SELECT * FROM t where id = 1 BYPASS CACHE").get(), exceptions::read_timeout_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("SELECT * FROM t BYPASS CACHE").get(), exceptions::read_timeout_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("INSERT INTO t (id, v) VALUES (1,2)").get(), exceptions::mutation_write_timeout_exception);
+        // after switching to user3, same thing should be observed
+        authenticate(e, "user3", "pass").get();
+        e.refresh_client_state().get();
+        BOOST_REQUIRE_THROW(e.execute_cql("SELECT * FROM t where id = 1 BYPASS CACHE").get(), exceptions::read_timeout_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("SELECT * FROM t BYPASS CACHE").get(), exceptions::read_timeout_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("INSERT INTO t (id, v) VALUES (1,2)").get(), exceptions::mutation_write_timeout_exception);
+        // after switching to user4, everything should work fine
+        authenticate(e, "user4", "pass").get();
+        e.refresh_client_state().get();
+        cquery_nofail(e, "SELECT * FROM t where id = 1 BYPASS CACHE");
+        cquery_nofail(e, "SELECT * FROM t BYPASS CACHE");
+        cquery_nofail(e, "INSERT INTO t (id, v) VALUES (1,2)");
+    }, cfg);
+}
