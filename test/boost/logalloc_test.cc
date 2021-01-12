@@ -41,6 +41,7 @@
 #include "utils/managed_bytes.hh"
 #include "test/lib/log.hh"
 #include "log.hh"
+#include "test/lib/random_utils.hh"
 
 [[gnu::unused]]
 static auto x = [] {
@@ -77,8 +78,7 @@ SEASTAR_TEST_CASE(test_compaction) {
 
             // Free 1/3 randomly
 
-            std::random_device random_device;
-            std::default_random_engine random(random_device());
+            auto& random = seastar::testing::local_random_engine;
             std::shuffle(_allocated.begin(), _allocated.end(), random);
 
             auto it = _allocated.begin();
@@ -168,7 +168,7 @@ SEASTAR_TEST_CASE(test_compaction_with_multiple_regions) {
 
         // Shuffle, so that we don't free whole segments back to the pool
         // and there's nothing to reclaim.
-        std::default_random_engine random{std::random_device{}()};
+        auto& random = seastar::testing::local_random_engine;
         std::shuffle(allocated2.begin(), allocated2.end(), random);
 
         with_allocator(reg2.allocator(), [&] {
@@ -360,8 +360,7 @@ SEASTAR_TEST_CASE(test_region_lock) {
 
             // Evict 30% so that region is compactible, but do it randomly so that
             // segments are not released into the standard allocator without compaction.
-            std::random_device random_device;
-            std::default_random_engine random(random_device());
+            auto& random = seastar::testing::local_random_engine;
             std::shuffle(refs.begin(), refs.end(), random);
             for (size_t i = 0; i < refs.size() * 0.3; ++i) {
                 refs.pop_back();
@@ -433,8 +432,8 @@ SEASTAR_TEST_CASE(test_large_allocation) {
             // expected
         }
 
-        std::random_device random;
-        std::shuffle(evictable.begin(), evictable.end(), std::default_random_engine(random()));
+        auto& random = seastar::testing::local_random_engine;
+        std::shuffle(evictable.begin(), evictable.end(), random);
         r_evictable.make_evictable([&] {
             return with_allocator(r_evictable.allocator(), [&] {
                 if (evictable.empty()) {
@@ -1306,8 +1305,7 @@ SEASTAR_THREAD_TEST_CASE(test_can_reclaim_contiguous_memory_with_mixed_allocatio
     std::vector<managed_bytes> non_evictable_allocs;
     std::vector<std::unique_ptr<char[]>> std_allocs;
 
-    std::random_device rnd_dev;
-    std::default_random_engine rnd(rnd_dev());
+    auto& rnd = seastar::testing::local_random_engine;
 
     auto clean_up = defer([&] {
         with_allocator(evictable.allocator(), [&] {

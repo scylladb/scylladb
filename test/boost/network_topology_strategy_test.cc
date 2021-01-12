@@ -38,6 +38,7 @@
 #include <boost/algorithm/cxx11/iota.hpp>
 #include "test/lib/log.hh"
 #include "test/lib/cql_test_env.hh"
+#include "test/lib/random_utils.hh"
 #include <seastar/core/coroutine.hh>
 
 using namespace locator;
@@ -289,7 +290,7 @@ void heavy_origin_test() {
     }
 
     int total_rf = 0;
-    std::default_random_engine random_engine{};
+    auto& random_engine = seastar::testing::local_random_engine;
     std::vector<double> token_points(total_eps, 0.0);
     boost::algorithm::iota(token_points, 1.0);
     std::shuffle(token_points.begin(), token_points.end(), random_engine);
@@ -525,8 +526,7 @@ static void test_equivalence(const shared_token_metadata& stm, snitch_ptr& snitc
 
 
 std::unique_ptr<i_endpoint_snitch> generate_snitch(const std::unordered_map<sstring, size_t> datacenters, const std::vector<inet_address>& nodes) {
-    static std::random_device rd;
-    static std::default_random_engine e1(rd());
+    auto& e1 = seastar::testing::local_random_engine;
 
     using addr_to_string_type = std::unordered_map<inet_address, sstring>;
 

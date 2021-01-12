@@ -26,6 +26,7 @@
 
 #include <random>
 #include <boost/test/unit_test.hpp>
+#include "test/lib/random_utils.hh"
 
 BOOST_AUTO_TEST_CASE(test_empty_fragmented_stream) {
     bytes_ostream b;
@@ -50,14 +51,7 @@ BOOST_AUTO_TEST_CASE(test_empty_fragmented_stream) {
 }
 
 BOOST_AUTO_TEST_CASE(test_fragmented_stream) {
-    bytes big_buffer(bytes::initialized_later(), 128 * 1024);
-
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::uniform_int_distribution<uint8_t> dist;
-
-    std::generate(big_buffer.begin(), big_buffer.end(), [&] { return dist(gen); });
-
+    bytes big_buffer = tests::random::get_bytes(128 * 1024);
     bytes_ostream b;
     b.write(big_buffer);
 

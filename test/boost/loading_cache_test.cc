@@ -37,19 +37,17 @@
 #include <seastar/testing/thread_test_case.hh>
 #include "test/lib/tmpdir.hh"
 #include "test/lib/log.hh"
+#include "test/lib/random_utils.hh"
 
 #include <vector>
 #include <numeric>
 #include <random>
 
 /// Get a random integer in the [0, max) range.
-/// \param upper bound of the random value range
+/// \param max bound of the random value range
 /// \return The uniformly distributed random integer from the [0, \ref max) range.
 static int rand_int(int max) {
-    static thread_local std::random_device rd;     // only used once to initialise (seed) engine
-    static thread_local std::mt19937 rng(rd());    // random-number engine used (Mersenne-Twister in this case)
-    std::uniform_int_distribution<int> uni(0, max - 1); // guaranteed unbiased
-    return uni(rng);
+    return tests::random::get_int(max - 1);
 }
 
 static const sstring test_file_name = "loading_cache_test.txt";

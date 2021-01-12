@@ -23,6 +23,7 @@
 #include "service/priority_manager.hh"
 #include "test/lib/simple_schema.hh"
 #include "test/lib/cql_test_env.hh"
+#include "test/lib/random_utils.hh"
 #include "db/config.hh"
 
 #include <seastar/core/sleep.hh>
@@ -575,8 +576,7 @@ SEASTAR_THREAD_TEST_CASE(test_time_based_cache_eviction) {
 
 sstring make_string_blob(size_t size) {
     const char* const letters = "abcdefghijklmnoqprsuvwxyz";
-    static thread_local std::random_device rd;
-    static thread_local std::default_random_engine re(rd());
+    auto& re = seastar::testing::local_random_engine;
     std::uniform_int_distribution<size_t> dist(0, 25);
 
     sstring s;

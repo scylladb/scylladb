@@ -562,7 +562,7 @@ static void test_streamed_mutation_forwarding_guarantees(populate_fn_ex populate
     }
 
     // Few random ranges
-    std::default_random_engine rnd;
+    auto& rnd = seastar::testing::local_random_engine;
     std::uniform_int_distribution<int> key_dist{0, n_keys - 1};
     for (int i = 0; i < 10; ++i) {
         std::vector<int> indices;
@@ -1670,12 +1670,7 @@ void for_each_mutation(std::function<void(const mutation&)> callback) {
 }
 
 bytes make_blob(size_t blob_size) {
-    static thread_local std::independent_bits_engine<std::default_random_engine, 8, uint8_t> random_bytes;
-    bytes big_blob(bytes::initialized_later(), blob_size);
-    for (auto&& b : big_blob) {
-        b = random_bytes();
-    }
-    return big_blob;
+    return tests::random::get_bytes(blob_size);
 };
 
 class random_mutation_generator::impl {

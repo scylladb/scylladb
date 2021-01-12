@@ -31,6 +31,7 @@
 #include "test/lib/test_table.hh"
 #include "test/lib/log.hh"
 #include "test/lib/test_utils.hh"
+#include "test/lib/random_utils.hh"
 
 #include <seastar/testing/thread_test_case.hh>
 
@@ -956,7 +957,7 @@ SEASTAR_THREAD_TEST_CASE(fuzzy_test) {
 
     do_with_cql_env([] (cql_test_env& env) -> future<> {
         // REPLACE RANDOM SEED HERE.
-        const auto seed = std::random_device{}();
+        const auto seed = tests::random::get_int<uint32_t>();
         testlog.info("fuzzy test seed: {}", seed);
 
         auto rnd_engine = std::mt19937(seed);

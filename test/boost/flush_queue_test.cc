@@ -33,9 +33,7 @@
 #include <seastar/core/print.hh>
 #include "utils/flush_queue.hh"
 #include "log.hh"
-
-std::random_device rd;
-std::default_random_engine e1(rd());
+#include "test/lib/random_utils.hh"
 
 SEASTAR_TEST_CASE(test_queue_ordering_random_ops) {
     struct env {
@@ -72,6 +70,7 @@ SEASTAR_TEST_CASE(test_queue_ordering_random_ops) {
         std::bitset<num_ops> set;
 
         while (!set.all()) {
+            auto& e1 = seastar::testing::local_random_engine;
             size_t i = dist(e1);
             if (!set.test(i)) {
                 set[i] = true;
@@ -108,6 +107,7 @@ SEASTAR_TEST_CASE(test_queue_ordering_multi_ops) {
         std::uniform_int_distribution<size_t> dist(0, num_ops - 1);
 
         for (size_t k = 0; k < num_ops*10; ++k) {
+            auto& e1 = seastar::testing::local_random_engine;
             int i = dist(e1);
 
             if (e->queue.has_operation(i) || (!e->queue.empty() && e->queue.highest_key() < i)) {

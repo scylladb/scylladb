@@ -29,6 +29,7 @@
 
 #include <seastar/testing/test_case.hh>
 #include "test/lib/test_services.hh"
+#include "test/lib/random_utils.hh"
 #include "schema_builder.hh"
 #include "keys.hh"
 #include "mutation.hh"
@@ -473,8 +474,7 @@ SEASTAR_TEST_CASE(test_transfer_updates_to_shards) {
 
 SEASTAR_TEST_CASE(test_sanitize_corrupted_cells) {
     return seastar::async([] {
-        std::random_device rd;
-        std::default_random_engine gen(rd());
+        auto& gen = seastar::testing::local_random_engine;
 
         std::uniform_int_distribution<unsigned> shard_count_dist(2, 64);
         std::uniform_int_distribution<int64_t> logical_clock_dist(1, 1024 * 1024);

@@ -25,6 +25,7 @@
 #include "bytes.hh"
 #include "utils/buffer_input_stream.hh"
 #include "test/lib/reader_permit.hh"
+#include "test/lib/random_utils.hh"
 
 #include <boost/test/unit_test.hpp>
 #include <seastar/core/iostream.hh>
@@ -97,8 +98,6 @@ public:
 }
 
 SEASTAR_THREAD_TEST_CASE(test_read_unsigned_vint) {
-    static std::random_device rd;
-    static std::mt19937 rng(rd());
     auto nr_tests =
 #ifdef SEASTAR_DEBUG
             10
@@ -110,7 +109,7 @@ SEASTAR_THREAD_TEST_CASE(test_read_unsigned_vint) {
     for (int highest_bit = 0; highest_bit < 64; ++highest_bit) {
         uint64_t tested_value = uint64_t{1} << highest_bit;
         for (int i = 0; i < nr_tests; ++i) {
-            test_consumer(tested_value + (rng() % tested_value)).run();
+            test_consumer(tested_value + tests::random::get_int<uint64_t>(tested_value - 1)).run();
         }
     }
 }

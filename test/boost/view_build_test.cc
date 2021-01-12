@@ -37,6 +37,7 @@
 #include "test/lib/test_services.hh"
 #include "test/lib/data_model.hh"
 #include "test/lib/log.hh"
+#include "test/lib/random_utils.hh"
 #include "utils/ranges.hh"
 
 using namespace std::literals::chrono_literals;
@@ -208,9 +209,8 @@ SEASTAR_TEST_CASE(test_builder_view_added_during_ongoing_build) {
 }
 
 std::mt19937 random_generator() {
-    std::random_device rd;
     // In case of errors, replace the seed with a fixed value to get a deterministic run.
-    auto seed = rd();
+    auto seed = tests::random::get_int<uint32_t>();
     std::cout << "Random seed: " << seed << "\n";
     return std::mt19937(seed);
 }
