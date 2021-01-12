@@ -47,6 +47,10 @@ class registrations;
 
 }
 
+namespace service {
+class memory_limiter;
+}
+
 class database;
 enum class client_type;
 struct client_data;
@@ -155,7 +159,7 @@ private:
     auth::service& _auth_service;
 public:
     cql_server(distributed<cql3::query_processor>& qp, auth::service&,
-            service::migration_notifier& mn, database& db, service::storage_service& ss,
+            service::migration_notifier& mn, database& db, service::memory_limiter& ml,
             cql_server_config config);
     future<> listen(socket_address addr, std::shared_ptr<seastar::tls::credentials_builder> = {}, bool is_shard_aware = false, bool keepalive = false);
     future<> do_accepts(int which, bool keepalive, socket_address server_addr);
