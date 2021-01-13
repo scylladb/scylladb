@@ -125,7 +125,7 @@ class mutation_partition stub [[writable]] {
     tombstone tomb;
     row static_row;
     std::vector<range_tombstone> range_tombstones; // sorted by key
-    std::vector<deletable_row> rows; // sorted by key
+    utils::chunked_vector<deletable_row> rows; // sorted by key
 
 };
 
