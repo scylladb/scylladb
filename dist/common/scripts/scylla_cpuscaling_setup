@@ -63,11 +63,10 @@ if __name__ == '__main__':
         cpufreq.enable()
         cpufreq.restart()
     elif is_gentoo():
-        with open('/etc/conf.d/cpupower') as f:
-            cur = f.read()
-        new = re.sub(r'--governor ondemand', '--governor performance', cur, flags=re.MULTILINE)
-        with open('/etc/conf.d/cpupower', 'w') as f:
-            f.write(new)
+        cfg = sysconfig_parser('/etc/conf.d/cpupower')
+        cfg.set('START_OPTS', '-g performance')
+        cfg.set('STOP_OPTS', '-g ondemand')
+        cfg.commit()
         cpufreq = systemd_unit('cpupower-frequency-set.service')
         cpufreq.enable()
         cpufreq.restart()
