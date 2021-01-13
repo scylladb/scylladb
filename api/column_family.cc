@@ -311,7 +311,7 @@ void set_column_family(http_context& ctx, routes& r) {
     });
 
     cf::get_column_family.set(r, [&ctx] (std::unique_ptr<request> req){
-            vector<cf::column_family_info> res;
+            std::list<cf::column_family_info> res;
             for (auto i: ctx.db.local().get_column_families_mapping()) {
                 cf::column_family_info info;
                 info.ks = i.first.first;
@@ -319,7 +319,7 @@ void set_column_family(http_context& ctx, routes& r) {
                 info.type = "ColumnFamilies";
                 res.push_back(info);
             }
-            return make_ready_future<json::json_return_type>(json::stream_object(std::move(res)));
+            return make_ready_future<json::json_return_type>(json::stream_range_as_array(std::move(res), std::identity()));
         });
 
     cf::get_column_family_name_keyspace.set(r, [&ctx] (const_req req){
