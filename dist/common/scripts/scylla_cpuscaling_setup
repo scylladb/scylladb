@@ -49,9 +49,13 @@ if __name__ == '__main__':
     if not os.path.exists('/sys/devices/system/cpu/cpufreq/policy0/scaling_governor'):
         print('This computer doesn\'t supported CPU scaling configuration.')
         sys.exit(0)
-    if is_debian_variant():
+    if not is_debian_variant():
+        if not shutil.which('cpupower'):
+            pkg_install('cpupowerutils')
+    else:
         if not shutil.which('cpufreq-set'):
-            apt_install('cpufrequtils')
+            pkg_install('cpufrequtils')
+    if is_debian_variant():
         cfg = sysconfig_parser('/etc/default/cpufrequtils')
         cfg.set('GOVERNOR', 'performance')
         cfg.commit()
@@ -59,8 +63,6 @@ if __name__ == '__main__':
         cpufreq.enable()
         cpufreq.restart()
     elif is_gentoo():
-        if not shutil.which('cpupower'):
-            emerge_install('sys-power/cpupower')
         with open('/etc/conf.d/cpupower') as f:
             cur = f.read()
         new = re.sub(r'--governor ondemand', '--governor performance', cur, flags=re.MULTILINE)
@@ -70,17 +72,13 @@ if __name__ == '__main__':
         cpufreq.enable()
         cpufreq.restart()
     elif is_arch():
-        if not shutil.which('cpupower'):
-            pkg_install('cpupower')
         cfg = sysconfig_parser('/etc/default/cpupower')
         cfg.set('governor', 'performance')
         cfg.commit()
         cpupwr = systemd_unit('cpupower.service')
         cpupwr.enable()
         cpupwr.restart()
-    elif is_amzn2():
-        if not shutil.which('cpupower'):
-            yum_install('cpupowerutils')
+    elif is_amzn2() or is_suse_variant():
         cfg = sysconfig_parser('/etc/sysconfig/scylla-cpupower')
         cfg.set('CPUPOWER_START_OPTS', 'frequency-set -g performance')
         cfg.set('CPUPOWER_STOP_OPTS', 'frequency-set -g ondemand')
@@ -92,26 +90,11 @@ if __name__ == '__main__':
         cpupwr.enable()
         cpupwr.restart()
     elif is_redhat_variant():
-        if not shutil.which('cpupower'):
-            yum_install('cpupowerutils')
         cfg = sysconfig_parser('/etc/sysconfig/cpupower')
         cfg.set('CPUPOWER_START_OPTS', 'frequency-set -g performance')
         cfg.set('CPUPOWER_STOP_OPTS', 'frequency-set -g ondemand')
         cfg.commit()
         cpupwr = systemd_unit('cpupower.service')
-        cpupwr.enable()
-        cpupwr.restart()
-    elif is_suse_variant():
-        if not shutil.which('cpupower'):
-            pkg_install('cpupower')
-        cfg = sysconfig_parser('/etc/sysconfig/scylla-cpupower')
-        cfg.set('CPUPOWER_START_OPTS', 'frequency-set -g performance')
-        cfg.set('CPUPOWER_STOP_OPTS', 'frequency-set -g ondemand')
-        cfg.commit()
-        with open('/etc/systemd/system/scylla-cpupower.service', 'w') as f:
-            f.write(UNIT_DATA)
-        systemd_unit.reload()
-        cpupwr = systemd_unit('scylla-cpupower.service')
         cpupwr.enable()
         cpupwr.restart()
     else:

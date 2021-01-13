@@ -710,7 +710,20 @@ def emerge_install(pkg):
         pkg_error_exit(pkg)
     return run(f'emerge -uq {pkg}', shell=True, check=True)
 
+def pkg_distro():
+    if is_debian_variant():
+        return 'debian'
+    if is_suse_variant():
+        return 'suse'
+    elif is_amzn2():
+        return 'amzn2'
+    else:
+        return distro.id()
+
+pkg_xlat = {'cpupowerutils': {'debian': 'linux-cpupower', 'gentoo':'sys-power/cpupower', 'arch':'cpupower', 'suse': 'cpupower'}}
 def pkg_install(pkg):
+    if pkg in pkg_xlat and pkg_distro() in pkg_xlat[pkg]:
+        pkg = pkg_xlat[pkg][pkg_distro()]
     if is_redhat_variant():
         return yum_install(pkg)
     elif is_debian_variant():
