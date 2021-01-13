@@ -1,13 +1,17 @@
 # Building a CentOS-based Docker image
+
 Running
-```
-docker build -t <image-name> .
-```
+
+    $ docker build -t <image-name> .
+
+    or
+
+    $ docker build --build-arg VERSION=4.4.dev -t <image-name> .
+
 in this directory will build a Docker image of Scylla. You can then run
 it with, for example,
-```
-docker run --name scylla -d -p 9042:9042 -t <image name>
-```
+
+    $ docker run --name scylla -d -p 9042:9042 -t <image name>
 
 However, it is important to note that while the resulting image will contain
 some scripts taken from this directory, the actual Scylla executable will

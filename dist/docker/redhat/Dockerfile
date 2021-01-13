@@ -4,10 +4,6 @@ MAINTAINER Avi Kivity <avi@cloudius-systems.com>
 
 ENV container docker
 
-# The SCYLLA_REPO_URL argument specifies the URL to the RPM repository this Docker image uses to install Scylla. The default value is the Scylla's unstable RPM repository, which contains the daily build.
-ARG SCYLLA_REPO_URL=http://downloads.scylladb.com/rpm/unstable/centos/master/latest/scylla.repo
-ARG VERSION=4.6.dev
-
 ADD scylla_bashrc /scylla_bashrc
 
 # Scylla configuration:
@@ -33,12 +29,22 @@ ADD scyllasetup.py /scyllasetup.py
 ADD commandlineparser.py /commandlineparser.py
 ADD docker-entrypoint.py /docker-entrypoint.py
 ADD node_exporter_install /node_exporter_install
-# Install Scylla:
-RUN curl $SCYLLA_REPO_URL -o /etc/yum.repos.d/scylla.repo && \
-    yum -y install epel-release && \
+
+# Prepare layer for actual software install
+RUN sed -i -e 's/enabled=1/enabled=0/' /etc/yum/pluginconf.d/fastestmirror.conf && \
+    yum -y install epel-release hostname supervisor openssh-server openssh-clients rsyslog && \
     yum -y clean expire-cache && \
     yum -y update && \
-    yum -y install scylla-$VERSION hostname supervisor openssh-server openssh-clients rsyslog && \
+    yum clean all
+
+# The SCYLLA_REPO_URL argument specifies the URL to the RPM repository this Docker image uses to install Scylla. The default value is the Scylla's unstable RPM repository, which contains the daily build.
+ARG SCYLLA_REPO_URL=http://downloads.scylladb.com/rpm/unstable/centos/master/latest/scylla.repo
+ARG VERSION
+
+# Install Scylla
+RUN if [[ -z "$VERSION" ]]; then SCYLLA_PACKAGE="scylla"; else SCYLLA_PACKAGE="scylla-$VERSION"; fi && \
+    curl $SCYLLA_REPO_URL -o /etc/yum.repos.d/scylla.repo && \
+    yum -y install $SCYLLA_PACKAGE && \
     yum clean all && \
     cat /scylla_bashrc >> /etc/bashrc && \
     mkdir -p /etc/supervisor.conf.d && \
