@@ -457,7 +457,8 @@ read_context::dismantle_buffer_stats read_context::dismantle_compaction_state(de
 }
 
 future<> read_context::save_reader(shard_id shard, const dht::decorated_key& last_pkey, const std::optional<clustering_key_prefix>& last_ckey) {
-    return _db.invoke_on(shard, [this, shard, query_uuid = _cmd.query_uuid, query_ranges = _ranges, rm = std::exchange(_readers[shard], {}),
+  return do_with(std::exchange(_readers[shard], {}), [this, shard, &last_pkey, &last_ckey] (reader_meta& rm) mutable {
+    return _db.invoke_on(shard, [this, query_uuid = _cmd.query_uuid, query_ranges = _ranges, &rm,
             &last_pkey, &last_ckey, gts = tracing::global_trace_state_ptr(_trace_state)] (database& db) mutable {
         try {
             flat_mutation_reader_opt reader = try_resume(rm.rparts->permit.semaphore(), std::move(*rm.handle));
@@ -511,6 +512,7 @@ future<> read_context::save_reader(shard_id shard, const dht::decorated_key& las
         // know where exactly the failure happened anyway.
         ++_db.local().get_stats().multishard_query_failed_reader_saves;
     });
+  });
 }
 
 future<> read_context::lookup_readers() {
