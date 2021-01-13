@@ -623,7 +623,7 @@ def get_template_name(lst):
 
 
 def is_vector(t):
-    return isinstance(t, TemplateType) and t.name == "std::vector"
+    return isinstance(t, TemplateType) and (t.name == "std::vector" or t.name == "utils::chunked_vector")
 
 
 def is_variant(t):
