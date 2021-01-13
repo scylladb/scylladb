@@ -17,7 +17,6 @@ ADD etc/sysconfig/scylla-server /etc/sysconfig/scylla-server
 ADD etc/supervisord.conf /etc/supervisord.conf
 ADD etc/supervisord.conf.d/scylla-server.conf /etc/supervisord.conf.d/scylla-server.conf
 ADD etc/supervisord.conf.d/scylla-housekeeping.conf /etc/supervisord.conf.d/scylla-housekeeping.conf
-ADD etc/supervisord.conf.d/sshd-server.conf /etc/supervisord.conf.d/sshd-server.conf
 ADD etc/supervisord.conf.d/scylla-jmx.conf /etc/supervisord.conf.d/scylla-jmx.conf
 ADD etc/supervisord.conf.d/node-exporter.conf /etc/supervisord.conf.d/node-exporter.conf
 ADD etc/supervisord.conf.d/rsyslog.conf /etc/supervisord.conf.d/rsyslog.conf
@@ -26,7 +25,6 @@ ADD scylla-service.sh /scylla-service.sh
 ADD node-exporter-service.sh /node-exporter-service.sh
 ADD scylla-housekeeping-service.sh /scylla-housekeeping-service.sh
 ADD scylla-jmx-service.sh /scylla-jmx-service.sh
-ADD sshd-service.sh /sshd-service.sh
 
 # Docker image startup scripts:
 ADD scyllasetup.py /scyllasetup.py
@@ -38,7 +36,7 @@ RUN curl $SCYLLA_REPO_URL -o /etc/yum.repos.d/scylla.repo && \
     yum -y install epel-release && \
     yum -y clean expire-cache && \
     yum -y update && \
-    yum -y install scylla-$VERSION hostname supervisor openssh-server openssh-clients rsyslog && \
+    yum -y install scylla-$VERSION hostname supervisor rsyslog && \
     yum clean all && \
     cat /scylla_bashrc >> /etc/bashrc && \
     mkdir -p /etc/supervisor.conf.d && \
@@ -49,5 +47,5 @@ RUN curl $SCYLLA_REPO_URL -o /etc/yum.repos.d/scylla.repo && \
 ENV PATH /opt/scylladb/python3/bin:$PATH
 ENTRYPOINT ["/docker-entrypoint.py"]
 
-EXPOSE 10000 9042 9160 9180 7000 7001 22
+EXPOSE 10000 9042 9160 9180 7000 7001
 VOLUME [ "/var/lib/scylla" ]
