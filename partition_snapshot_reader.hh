@@ -267,6 +267,9 @@ private:
                 _current_ck_range = std::next(_current_ck_range);
                 on_new_range();
             }
+            if (need_preempt()) {
+                break;
+            }
         }
     }
 public:
@@ -290,6 +293,8 @@ public:
     }
 
     virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override {
+      // FIXME: indentation
+      return do_until([this] { return is_end_of_stream() || is_buffer_full(); }, [this, timeout] {
         _reader.with_reserve([&] {
             if (!_static_row_done) {
                 push_static_row();
@@ -299,6 +304,7 @@ public:
             do_fill_buffer(timeout);
         });
         return make_ready_future<>();
+      });
     }
     virtual void next_partition() override {
         clear_buffer_to_next_partition();
