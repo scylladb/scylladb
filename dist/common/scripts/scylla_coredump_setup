@@ -41,7 +41,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
 # Gentoo may uses OpenRC
-    if is_gentoo_variant():
+    if is_gentoo():
         run('sysctl -p /etc/sysctl.d/99-scylla-coredump.conf', shell=True, check=True)
 # Other distributions can use systemd-coredump, so setup it
     else:

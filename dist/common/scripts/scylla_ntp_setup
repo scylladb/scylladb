@@ -57,10 +57,9 @@ if __name__ == '__main__':
         # ignore error, ntpd may able to adjust clock later
         run('ntpdate ntp.ubuntu.com', shell=True)
         ntp.start()
-
-    if is_gentoo_variant():
+    elif is_gentoo() or is_arch():
         if not shutil.which('ntpd'):
-            emerge_install('net-misc/ntp')
+            pkg_install('ntp')
         with open('/etc/ntp.conf') as f:
             conf = f.read()
         match = re.search(r'^server\s+(\S*)(\s+\S+)?', conf, flags=re.MULTILINE)
@@ -70,8 +69,7 @@ if __name__ == '__main__':
         run('ntpdate {}'.format(server), shell=True, check=True)
         ntpd.enable()
         ntpd.start()
-
-    if is_redhat_variant():
+    elif is_redhat_variant():
         if int(distro.major_version()) >= 8:
             if not shutil.which('chronyd'):
                 yum_install('chrony')
@@ -104,3 +102,13 @@ if __name__ == '__main__':
             run('ntpdate {}'.format(server), shell=True)
             ntpd.enable()
             ntpd.start()
+    elif is_suse_variant() and int(distro.major_version()) >= 15:
+        if not shutil.which('chronyd'):
+            pkg_install('chrony')
+        chronyd = systemd_unit('chronyd.service')
+        chronyd.enable()
+        chronyd.restart()
+        run('chronyc makestep', shell=True, check=True)
+    else:
+        print("Unsupported distribution, skipping setup..")
+        sys.exit(0)

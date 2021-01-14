@@ -104,38 +104,33 @@ if __name__ == '__main__':
         print('mount unit {} already exists'.format(mntunit))
         sys.exit(1)
 
-    if not shutil.which('mkfs.xfs') or not shutil.which('mdadm'):
-        pkg_install('xfsprogs mdadm')
+    if not shutil.which('mkfs.xfs'):
+        pkg_install('xfsprogs')
+    if not shutil.which('mdadm'):
+        pkg_install('mdadm')
     try:
         md_service = systemd_unit('mdmonitor.service')
     except SystemdException:
         md_service = systemd_unit('mdadm.service')
 
     print('Creating {type} for scylla using {nr_disk} disk(s): {disks}'.format(type='RAID0' if raid else 'XFS volume', nr_disk=len(disks), disks=args.disks))
-    if distro.name() == 'Ubuntu' and distro.version() == '14.04':
-        if raid:
-            run('udevadm settle', shell=True, check=True)
-            run('mdadm --create --verbose --force --run {raid} --level=0 -c1024 --raid-devices={nr_disk} {disks}'.format(raid=fsdev, nr_disk=len(disks), disks=args.disks.replace(',', ' ')), shell=True, check=True)
-            run('udevadm settle', shell=True, check=True)
-        run('mkfs.xfs {} -f'.format(fsdev), shell=True, check=True)
-    else:
-        procs=[]
-        for disk in disks:
-            d = disk.replace('/dev/', '')
-            discard_path = '/sys/block/{}/queue/discard_granularity'.format(d)
-            if os.path.exists(discard_path):
-                with open(discard_path) as f:
-                    discard = f.read().strip()
-                if discard != '0':
-                    proc = subprocess.Popen(['blkdiscard', disk])
-                    procs.append(proc)
-        for proc in procs:
-            proc.wait()
-        if raid:
-            run('udevadm settle', shell=True, check=True)
-            run('mdadm --create --verbose --force --run {raid} --level=0 -c1024 --raid-devices={nr_disk} {disks}'.format(raid=fsdev, nr_disk=len(disks), disks=args.disks.replace(',', ' ')), shell=True, check=True)
-            run('udevadm settle', shell=True, check=True)
-        run('mkfs.xfs {} -f -K'.format(fsdev), shell=True, check=True)
+    procs=[]
+    for disk in disks:
+        d = disk.replace('/dev/', '')
+        discard_path = '/sys/block/{}/queue/discard_granularity'.format(d)
+        if os.path.exists(discard_path):
+            with open(discard_path) as f:
+                discard = f.read().strip()
+            if discard != '0':
+                proc = subprocess.Popen(['blkdiscard', disk])
+                procs.append(proc)
+    for proc in procs:
+        proc.wait()
+    if raid:
+        run('udevadm settle', shell=True, check=True)
+        run('mdadm --create --verbose --force --run {raid} --level=0 -c1024 --raid-devices={nr_disk} {disks}'.format(raid=fsdev, nr_disk=len(disks), disks=args.disks.replace(',', ' ')), shell=True, check=True)
+        run('udevadm settle', shell=True, check=True)
+    run('mkfs.xfs {} -f -K'.format(fsdev), shell=True, check=True)
 
     if is_debian_variant():
         confpath = '/etc/mdadm/mdadm.conf'

@@ -38,10 +38,7 @@ if __name__ == '__main__':
     if os.getuid() > 0:
         print('Requires root permission.')
         sys.exit(1)
-    if is_redhat_variant():
-        cfg = sysconfig_parser('/etc/sysconfig/scylla-server')
-    else:
-        cfg = sysconfig_parser('/etc/default/scylla-server')
+    cfg = sysconfig_parser(sysconfdir_p() / 'scylla-server')
     set_nic_and_disks = str2bool(get_set_nic_and_disks_config_value(cfg))
     if cfg.has_option('SET_CLOCKSOURCE'):
         set_clocksource = str2bool(cfg.get('SET_CLOCKSOURCE'))

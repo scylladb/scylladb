@@ -26,44 +26,7 @@ import shlex
 import distro
 from scylla_util import *
 
-def is_amzn2():
-    return ('amzn' in distro.id()) and ('2' in distro.version())
-
-if __name__ == '__main__':
-    if os.getuid() > 0:
-        print('Requires root permission.')
-        sys.exit(1)
-    if not os.path.exists('/sys/devices/system/cpu/cpufreq/policy0/scaling_governor'):
-        print('This computer doesn\'t supported CPU scaling configuration.')
-        sys.exit(0)
-    if is_debian_variant():
-        if not shutil.which('cpufreq-set'):
-            apt_install('cpufrequtils')
-        cfg = sysconfig_parser('/etc/default/cpufrequtils')
-        cfg.set('GOVERNOR', 'performance')
-        cfg.commit()
-        cpufreq = systemd_unit('cpufrequtils.service')
-        cpufreq.enable()
-        cpufreq.restart()
-    if is_gentoo_variant():
-        if not shutil.which('cpupower'):
-            emerge_install('sys-power/cpupower')
-        with open('/etc/conf.d/cpupower') as f:
-            cur = f.read()
-        new = re.sub(r'--governor ondemand', '--governor performance', cur, flags=re.MULTILINE)
-        with open('/etc/conf.d/cpupower', 'w') as f:
-            f.write(new)
-        cpufreq = systemd_unit('cpupower-frequency-set.service')
-        cpufreq.enable()
-        cpufreq.restart()
-    if is_amzn2():
-        if not shutil.which('cpupower'):
-            yum_install('cpupowerutils')
-        cfg = sysconfig_parser('/etc/sysconfig/scylla-cpupower')
-        cfg.set('CPUPOWER_START_OPTS', 'frequency-set -g performance')
-        cfg.set('CPUPOWER_STOP_OPTS', 'frequency-set -g ondemand')
-        cfg.commit()
-        unit_data = '''
+UNIT_DATA= '''
 [Unit]
 Description=Scylla cpupower service
 After=syslog.target
@@ -78,15 +41,54 @@ ExecStop=/usr/bin/cpupower $CPUPOWER_STOP_OPTS
 [Install]
 WantedBy=multi-user.target
 '''[1:-1]
+
+if __name__ == '__main__':
+    if os.getuid() > 0:
+        print('Requires root permission.')
+        sys.exit(1)
+    if not os.path.exists('/sys/devices/system/cpu/cpufreq/policy0/scaling_governor'):
+        print('This computer doesn\'t supported CPU scaling configuration.')
+        sys.exit(0)
+    if not is_debian_variant():
+        if not shutil.which('cpupower'):
+            pkg_install('cpupowerutils')
+    else:
+        if not shutil.which('cpufreq-set'):
+            pkg_install('cpufrequtils')
+    if is_debian_variant():
+        cfg = sysconfig_parser('/etc/default/cpufrequtils')
+        cfg.set('GOVERNOR', 'performance')
+        cfg.commit()
+        cpufreq = systemd_unit('cpufrequtils.service')
+        cpufreq.enable()
+        cpufreq.restart()
+    elif is_gentoo():
+        cfg = sysconfig_parser('/etc/conf.d/cpupower')
+        cfg.set('START_OPTS', '-g performance')
+        cfg.set('STOP_OPTS', '-g ondemand')
+        cfg.commit()
+        cpufreq = systemd_unit('cpupower-frequency-set.service')
+        cpufreq.enable()
+        cpufreq.restart()
+    elif is_arch():
+        cfg = sysconfig_parser('/etc/default/cpupower')
+        cfg.set('governor', 'performance')
+        cfg.commit()
+        cpupwr = systemd_unit('cpupower.service')
+        cpupwr.enable()
+        cpupwr.restart()
+    elif is_amzn2() or is_suse_variant():
+        cfg = sysconfig_parser('/etc/sysconfig/scylla-cpupower')
+        cfg.set('CPUPOWER_START_OPTS', 'frequency-set -g performance')
+        cfg.set('CPUPOWER_STOP_OPTS', 'frequency-set -g ondemand')
+        cfg.commit()
         with open('/etc/systemd/system/scylla-cpupower.service', 'w') as f:
-            f.write(unit_data)
+            f.write(UNIT_DATA)
         systemd_unit.reload()
         cpupwr = systemd_unit('scylla-cpupower.service')
         cpupwr.enable()
         cpupwr.restart()
     elif is_redhat_variant():
-        if not shutil.which('cpupower'):
-            yum_install('cpupowerutils')
         cfg = sysconfig_parser('/etc/sysconfig/cpupower')
         cfg.set('CPUPOWER_START_OPTS', 'frequency-set -g performance')
         cfg.set('CPUPOWER_STOP_OPTS', 'frequency-set -g ondemand')
@@ -94,3 +96,6 @@ WantedBy=multi-user.target
         cpupwr = systemd_unit('cpupower.service')
         cpupwr.enable()
         cpupwr.restart()
+    else:
+        print("Unsupported distribution, skipping setup..")
+        sys.exit(0)

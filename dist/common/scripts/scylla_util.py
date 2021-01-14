@@ -30,10 +30,11 @@ import urllib.request
 import yaml
 import psutil
 import sys
-from pathlib import Path
+from pathlib import Path, PurePath
 from subprocess import run, DEVNULL
 
 import distro
+from scylla_sysconfdir import SYSCONFDIR
 
 
 def scriptsdir_p():
@@ -73,6 +74,9 @@ def datadir_p():
 def scyllabindir_p():
     return scylladir_p() / 'bin'
 
+def sysconfdir_p():
+    return Path(SYSCONFDIR)
+
 def scriptsdir():
     return str(scriptsdir_p())
 
@@ -91,6 +95,8 @@ def datadir():
 def scyllabindir():
     return str(scyllabindir_p())
 
+def sysconfdir():
+    return str(sysconfdir_p())
 
 # @param headers dict of k:v
 def curl(url, headers=None, byte=False, timeout=3, max_retries=5, retry_interval=5):
@@ -513,9 +519,18 @@ def is_redhat_variant():
     d = get_id_like() if get_id_like() else distro.id()
     return ('rhel' in d) or ('fedora' in d) or ('oracle') in d
 
-def is_gentoo_variant():
+def is_gentoo():
     return ('gentoo' in distro.id())
 
+def is_arch():
+    return ('arch' in distro.id())
+
+def is_amzn2():
+    return ('amzn' in distro.id()) and ('2' in distro.version())
+
+def is_suse_variant():
+    d = get_id_like() if get_id_like() else distro.id()
+    return ('suse' in d)
 
 def get_text_from_path(fpath):
     board_vendor_path = Path(fpath)
@@ -695,12 +710,25 @@ def emerge_install(pkg):
         pkg_error_exit(pkg)
     return run(f'emerge -uq {pkg}', shell=True, check=True)
 
+def pkg_distro():
+    if is_debian_variant():
+        return 'debian'
+    if is_suse_variant():
+        return 'suse'
+    elif is_amzn2():
+        return 'amzn2'
+    else:
+        return distro.id()
+
+pkg_xlat = {'cpupowerutils': {'debian': 'linux-cpupower', 'gentoo':'sys-power/cpupower', 'arch':'cpupower', 'suse': 'cpupower'}}
 def pkg_install(pkg):
+    if pkg in pkg_xlat and pkg_distro() in pkg_xlat[pkg]:
+        pkg = pkg_xlat[pkg][pkg_distro()]
     if is_redhat_variant():
         return yum_install(pkg)
     elif is_debian_variant():
         return apt_install(pkg)
-    elif is_gentoo_variant():
+    elif is_gentoo():
         return emerge_install(pkg)
     else:
         pkg_error_exit(pkg)
@@ -721,7 +749,7 @@ def pkg_uninstall(pkg):
         return yum_uninstall(pkg)
     elif is_debian_variant():
         return apt_uninstall(pkg)
-    elif is_gentoo_variant():
+    elif is_gentoo():
         return emerge_uninstall(pkg)
     else:
         print(f'WARNING: Package "{pkg}" should be removed.')
@@ -788,7 +816,10 @@ class sysconfig_parser:
         self.__load()
 
     def __init__(self, filename):
-        self._filename = filename
+        if isinstance(filename, PurePath):
+            self._filename = str(filename)
+        else:
+            self._filename = filename
         if not os.path.exists(filename):
             open(filename, 'a').close()
         with open(filename) as f:

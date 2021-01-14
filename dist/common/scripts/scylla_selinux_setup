@@ -31,7 +31,7 @@ if __name__ == '__main__':
         print('Requires root permission.')
         sys.exit(1)
 
-    if is_debian_variant() or is_gentoo_variant():
+    if not is_redhat_variant():
         print("scylla_selinux_setup only supports Red Hat variants")
         sys.exit(0)
 
