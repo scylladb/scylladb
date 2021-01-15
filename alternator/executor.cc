@@ -2863,7 +2863,7 @@ static future<executor::request_return_type> do_query(service::storage_proxy& pr
     auto p = service::pager::query_pagers::pager(schema, selection, *query_state_ptr, *query_options, command, std::move(partition_ranges), nullptr);
 
     return p->fetch_page(limit, gc_clock::now(), executor::default_timeout()).then(
-            [p, schema, cql_stats, partition_slice = std::move(partition_slice),
+            [p = std::move(p), schema, cql_stats, partition_slice = std::move(partition_slice),
              selection = std::move(selection), query_state_ptr = std::move(query_state_ptr),
              attrs_to_get = std::move(attrs_to_get),
              query_options = std::move(query_options),

@@ -412,7 +412,7 @@ bool service::pager::query_pagers::may_need_paging(const schema& s, uint32_t pag
     return need_paging;
 }
 
-::shared_ptr<service::pager::query_pager> service::pager::query_pagers::pager(
+std::unique_ptr<service::pager::query_pager> service::pager::query_pagers::pager(
         schema_ptr s, shared_ptr<const cql3::selection::selection> selection,
         service::query_state& state, const cql3::query_options& options,
         lw_shared_ptr<query::read_command> cmd,
@@ -424,9 +424,9 @@ bool service::pager::query_pagers::may_need_paging(const schema& s, uint32_t pag
         filtering_restrictions = ::make_shared<cql3::restrictions::statement_restrictions>(s, true);
     }
     if (filtering_restrictions) {
-        return ::make_shared<filtering_query_pager>(std::move(s), std::move(selection), state,
+        return std::make_unique<filtering_query_pager>(std::move(s), std::move(selection), state,
                     options, std::move(cmd), std::move(ranges), std::move(filtering_restrictions));
     }
-    return ::make_shared<query_pager>(std::move(s), std::move(selection), state,
+    return std::make_unique<query_pager>(std::move(s), std::move(selection), state,
             options, std::move(cmd), std::move(ranges));
 }
