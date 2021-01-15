@@ -729,7 +729,9 @@ row_cache::make_reader(schema_ptr s,
                        streamed_mutation::forwarding fwd,
                        mutation_reader::forwarding fwd_mr)
 {
-    auto ctx = make_lw_shared<read_context>(*this, s, std::move(permit), range, slice, pc, trace_state, fwd_mr);
+    auto make_context = [&] {
+        return make_lw_shared<read_context>(*this, s, std::move(permit), range, slice, pc, trace_state, fwd_mr);
+    };
 
     if (query::is_single_partition(range) && !fwd_mr) {
         tracing::trace(trace_state, "Querying cache for range {} and slice {}",
@@ -743,13 +745,14 @@ row_cache::make_reader(schema_ptr s,
                 cache_entry& e = *i;
                 upgrade_entry(e);
                 on_partition_hit();
+                auto ctx = make_context();
                 return e.read(*this, *ctx);
             } else if (i->continuous()) {
-                return make_empty_flat_reader(std::move(s), ctx->permit());
+                return make_empty_flat_reader(std::move(s), std::move(permit));
             } else {
                 tracing::trace(trace_state, "Range {} not found in cache", range);
                 on_partition_miss();
-                return make_flat_mutation_reader<single_partition_populating_reader>(*this, std::move(ctx));
+                return make_flat_mutation_reader<single_partition_populating_reader>(*this, make_context());
             }
         });
 
@@ -762,7 +765,7 @@ row_cache::make_reader(schema_ptr s,
 
     tracing::trace(trace_state, "Scanning cache for range {} and slice {}",
             range, seastar::value_of([&slice] { return slice.get_all_ranges(); }));
-    auto mr = make_scanning_reader(range, std::move(ctx));
+    auto mr = make_scanning_reader(range, make_context());
     if (fwd == streamed_mutation::forwarding::yes) {
         return make_forwardable(std::move(mr));
     } else {
