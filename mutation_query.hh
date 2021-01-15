@@ -174,6 +174,16 @@ query::result to_data_query_result(
         uint32_t partition_limit,
         query::result_options opts = query::result_options::only_result());
 
+// Query the content of the mutation.
+//
+// The mutation is destroyed in the process, see `mutation::consume()`.
+query::result query_mutation(
+        mutation&& m,
+        const query::partition_slice& slice,
+        uint64_t row_limit = query::max_rows,
+        gc_clock::time_point now = gc_clock::now(),
+        query::result_options opts = query::result_options::only_result());
+
 // Performs a query on given data source returning data in reconcilable form.
 //
 // Reads at most row_limit rows. If less rows are returned, the data source

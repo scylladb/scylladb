@@ -2379,6 +2379,15 @@ to_data_query_result(const reconcilable_result& r, schema_ptr s, const query::pa
     return builder.build();
 }
 
+query::result
+query_mutation(mutation&& m, const query::partition_slice& slice, uint64_t row_limit, gc_clock::time_point now, query::result_options opts) {
+    query::result::builder builder(slice, opts, query::result_memory_accounter{ query::result_memory_limiter::unlimited_result_size });
+    auto consumer = compact_for_query<emit_only_live_rows::yes, query_result_builder>(*m.schema(), now, slice, row_limit,
+            query::max_partitions, query_result_builder(*m.schema(), builder));
+    std::move(m).consume(consumer);
+    return builder.build();
+}
+
 future<reconcilable_result>
 static do_mutation_query(schema_ptr s,
                mutation_source source,
