@@ -4,6 +4,7 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/loop.hh>
 #include <seastar/util/log.hh>
+#include <seastar/util/later.hh>
 #include "raft/server.hh"
 #include "serializer.hh"
 #include "serializer_impl.hh"
@@ -548,7 +549,7 @@ future<int> run_test(test_case test) {
                     for (auto s: partition_servers) {
                         rafts[s].first->tick();
                     }
-                    co_await seastar::sleep(1us);        // yield
+                    co_await later();                 // yield
                     for (auto s: partition_servers) {
                         if (rafts[s].first->is_leader()) {
                             have_leader = true;
