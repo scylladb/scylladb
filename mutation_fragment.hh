@@ -104,6 +104,10 @@ public:
         return _ck.external_memory_usage() + _row.cells().external_memory_usage(s, column_kind::regular_column);
     }
 
+    size_t minimal_external_memory_usage(const schema& s) const {
+        return _ck.minimal_external_memory_usage() + _row.cells().external_memory_usage(s, column_kind::regular_column);
+    }
+
     size_t memory_usage(const schema& s) const {
         return sizeof(clustering_row) + external_memory_usage(s);
     }

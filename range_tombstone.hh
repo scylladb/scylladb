@@ -170,8 +170,16 @@ public:
         return start.external_memory_usage() + end.external_memory_usage();
     }
 
+    size_t minimal_external_memory_usage(const schema&) const {
+        return start.minimal_external_memory_usage() + end.minimal_external_memory_usage();
+    }
+
     size_t memory_usage(const schema& s) const {
         return sizeof(range_tombstone) + external_memory_usage(s);
+    }
+
+    size_t minimal_memory_usage(const schema& s) const {
+        return sizeof(range_tombstone) + minimal_external_memory_usage(s);
     }
 private:
     void move_assign(range_tombstone&& rt) {

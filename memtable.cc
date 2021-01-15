@@ -537,7 +537,7 @@ public:
     // allocation. As long as our size read here is lesser or equal to the size in the memtables, we
     // are safe, and worst case we will allow a bit fewer requests in.
     void operator()(const range_tombstone& rt) {
-        _accounter.update_bytes_read(rt.memory_usage(_schema));
+        _accounter.update_bytes_read(rt.minimal_memory_usage(_schema));
     }
 
     void operator()(const static_row& sr) {
@@ -555,7 +555,7 @@ public:
         // and we don't know which one(s) contributed to the generation of this mutation fragment.
         //
         // We will add the size of the struct here, and that should be good enough.
-        _accounter.update_bytes_read(sizeof(rows_entry) + cr.external_memory_usage(_schema));
+        _accounter.update_bytes_read(sizeof(rows_entry) + cr.minimal_external_memory_usage(_schema));
     }
 };
 

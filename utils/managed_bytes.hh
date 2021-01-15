@@ -340,6 +340,18 @@ public:
         return 0;
     }
 
+    // Returns the minimum possible amount of external memory used by a managed_bytes
+    // of the same size as us.
+    // In other words, it returns the amount of external memory that would used by this
+    // managed_bytes if all data was allocated in one big fragment.
+    size_t minimal_external_memory_usage() const {
+        if (external()) {
+            return sizeof(blob_storage) + _u.ptr->size;
+        } else {
+            return 0;
+        }
+    }
+
     template <std::invocable<bytes_view> Func>
     std::invoke_result_t<Func, bytes_view> with_linearized(Func&& func) const {
         const bytes_view::value_type* start = nullptr;
