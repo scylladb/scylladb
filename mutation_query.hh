@@ -166,7 +166,13 @@ public:
     reconcilable_result consume_end_of_stream();
 };
 
-query::result to_data_query_result(const reconcilable_result&, schema_ptr, const query::partition_slice&, uint64_t row_limit, uint32_t partition_limit, query::result_options opts = query::result_options::only_result());
+query::result to_data_query_result(
+        const reconcilable_result&,
+        schema_ptr,
+        const query::partition_slice&,
+        uint64_t row_limit,
+        uint32_t partition_limit,
+        query::result_options opts = query::result_options::only_result());
 
 // Performs a query on given data source returning data in reconcilable form.
 //
