@@ -731,12 +731,12 @@ row_cache::make_reader(schema_ptr s,
 {
     auto ctx = make_lw_shared<read_context>(*this, s, std::move(permit), range, slice, pc, trace_state, fwd_mr);
 
-    if (!ctx->is_range_query() && !fwd_mr) {
+    if (query::is_single_partition(range) && !fwd_mr) {
         tracing::trace(trace_state, "Querying cache for range {} and slice {}",
                 range, seastar::value_of([&slice] { return slice.get_all_ranges(); }));
         auto mr = _read_section(_tracker.region(), [&] {
             dht::ring_position_comparator cmp(*_schema);
-            auto&& pos = ctx->range().start()->value();
+            auto&& pos = range.start()->value();
             partitions_type::bound_hint hint;
             auto i = _partitions.lower_bound(pos, cmp, hint);
             if (hint.match) {
