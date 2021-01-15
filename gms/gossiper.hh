@@ -87,6 +87,8 @@ class feature_service;
 struct bind_messaging_port_tag {};
 using bind_messaging_port = bool_class<bind_messaging_port_tag>;
 
+using advertise_myself = bool_class<class advertise_myself_tag>;
+
 struct syn_msg_pending {
     bool pending = false;
     std::optional<gossip_digest_syn> syn_msg;
@@ -143,7 +145,9 @@ private:
     semaphore _apply_state_locally_semaphore{100};
     std::unordered_map<gms::inet_address, syn_msg_pending> _syn_handlers;
     std::unordered_map<gms::inet_address, ack_msg_pending> _ack_handlers;
+    bool _advertise_myself = true;
 public:
+    future<> advertise_myself();
     const sstring& get_cluster_name() const noexcept;
     const sstring& get_partitioner_name() const noexcept;
     inet_address get_broadcast_address() const noexcept {
@@ -474,9 +478,43 @@ public:
 
     /**
      * Start the gossiper with the generation number, preloading the map of application states before starting
+     *
+     * If advertise is set to false, gossip will not respond to gossip echo
+     * message, so that other nodes will not mark this node as alive.
+     *
+     * Note 1: In practice, advertise is set to false only when the local node is
+     * replacing a dead node using the same ip address of the dead node, i.e.,
+     * replacing_a_node_with_same_ip is set to true, because the issue (#7312)
+     * that the advertise flag fixes is limited to replacing a node with the
+     * same ip address only.
+     *
+     * Note 2: When a node with a new ip address joins the cluster, e.g.,
+     * replacing a dead node using the different ip address, with advertise =
+     * false, existing nodes will not mark the node as up. So existing nodes
+     * will not send gossip syn messages to the new node because the new node
+     * is not in either live node list or unreachable node list.
+     *
+     * The new node will only include itself in the gossip syn messages, so the
+     * syn message from new node to existing node will not exchange gossip
+     * application states of existing nodes. Gossip exchanges node information
+     * for node listed in SYN messages only.
+     *
+     * As a result, the new node will not learn other existing nodes in gossip
+     * and existing nodes will learn the new node.
+     *
+     * Note 3: When a node replaces a dead node using the same ip address of
+     * the dead node, with advertise = false, existing nodes will send syn
+     * messages to the replacing node, because the replacing node is listed
+     * in the unreachable node list.
+     *
+     * As a result, the replacing node will learn other existing nodes in
+     * gossip and existing nodes will learn the new replacing node. Yes,
+     * unreachable node is contacted with some probability, but all of the
+     * existing nodes can talk to the replacing node. So the probability of
+     * replacing node being talked to is pretty high.
      */
     future<> start_gossiping(int generation_nbr, std::map<application_state, versioned_value> preload_local_states,
-            bind_messaging_port do_bind = bind_messaging_port::yes);
+            bind_messaging_port do_bind = bind_messaging_port::yes, gms::advertise_myself advertise = gms::advertise_myself::yes);
 
 public:
     /**
