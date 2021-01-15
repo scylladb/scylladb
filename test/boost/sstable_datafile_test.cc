@@ -6814,6 +6814,45 @@ SEASTAR_TEST_CASE(test_twcs_interposer_on_memtable_flush) {
 
       test_interposer_on_flush(true);
       test_interposer_on_flush(false);
+  });
+}
+
+SEASTAR_TEST_CASE(test_missing_partition_end_fragment) {
+    return test_setup::do_with_tmp_directory([] (test_env& env, sstring tmpdir_path) {
+        simple_schema ss;
+        auto s = ss.schema();
+
+        auto pkeys = ss.make_pkeys(2);
+
+        set_abort_on_internal_error(false);
+        auto enable_aborts = defer([] { set_abort_on_internal_error(true); }); // FIXME: restore to previous value
+
+        for (const auto version : all_sstable_versions) {
+            testlog.info("version={}", sstables::to_string(version));
+
+            std::deque<mutation_fragment> frags;
+            frags.push_back(mutation_fragment(*s, tests::make_permit(), partition_start(pkeys[0], tombstone())));
+            frags.push_back(mutation_fragment(*s, tests::make_permit(), clustering_row(ss.make_ckey(0))));
+            // partition_end is missing
+            frags.push_back(mutation_fragment(*s, tests::make_permit(), partition_start(pkeys[1], tombstone())));
+            frags.push_back(mutation_fragment(*s, tests::make_permit(), clustering_row(ss.make_ckey(0))));
+            frags.push_back(mutation_fragment(*s, tests::make_permit(), partition_end()));
+
+            auto mr = make_flat_mutation_reader_from_fragments(s, tests::make_permit(), std::move(frags));
+
+            auto sst = env.make_sstable(s, tmpdir_path, 0, version, big);
+            sstable_writer_config cfg = env.manager().configure_writer();
+
+            try {
+                auto wr = sst->get_writer(*s, 1, cfg, encoding_stats{}, default_priority_class());
+                mr.consume_in_thread(std::move(wr), db::no_timeout);
+                BOOST_FAIL("write_components() should have failed");
+            } catch (const std::runtime_error&) {
+                testlog.info("failed as expected: {}", std::current_exception());
+            }
+        }
+
+        return make_ready_future<>();
     });
 }
 
