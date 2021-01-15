@@ -73,7 +73,8 @@ class cache_entry {
     } _flags{};
     friend class size_calculator;
 
-    flat_mutation_reader do_read(row_cache&, cache::read_context& reader);
+    flat_mutation_reader do_read(row_cache&, cache::read_context& ctx);
+    flat_mutation_reader do_read(row_cache&, std::unique_ptr<cache::read_context> unique_ctx);
 public:
     friend class row_cache;
     friend class cache_tracker;
@@ -142,7 +143,9 @@ public:
     const schema_ptr& schema() const noexcept { return _schema; }
     schema_ptr& schema() noexcept { return _schema; }
     flat_mutation_reader read(row_cache&, cache::read_context&);
+    flat_mutation_reader read(row_cache&, std::unique_ptr<cache::read_context>);
     flat_mutation_reader read(row_cache&, cache::read_context&, utils::phased_barrier::phase_type);
+    flat_mutation_reader read(row_cache&, std::unique_ptr<cache::read_context>, utils::phased_barrier::phase_type);
     bool continuous() const noexcept { return _flags._continuous; }
     void set_continuous(bool value) noexcept { _flags._continuous = value; }
 
@@ -379,7 +382,7 @@ private:
     logalloc::allocating_section _populate_section;
     logalloc::allocating_section _read_section;
     flat_mutation_reader create_underlying_reader(cache::read_context&, mutation_source&, const dht::partition_range&);
-    flat_mutation_reader make_scanning_reader(const dht::partition_range&, lw_shared_ptr<cache::read_context>);
+    flat_mutation_reader make_scanning_reader(const dht::partition_range&, std::unique_ptr<cache::read_context>);
     void on_partition_hit();
     void on_partition_miss();
     void on_row_hit();
