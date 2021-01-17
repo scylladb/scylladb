@@ -529,7 +529,15 @@ void fsm::replicate_to(follower_progress& progress, bool allow_empty) {
 
         allow_empty = false; // allow only one empty message
 
-        if (progress.next_idx < _log.start_idx()) {
+        // With snapshot prefix enaled the log may look like this:
+        // E - log entry
+        // S - snapshot
+        // Ei1 Ei2 Ei3 Si4 Ei5 Ei6
+        // If the next_idx is before i2 we need to enter snaphot transfer mode
+        // even though we still have i1 since it is not possibel to get prev
+        // term for it.
+        auto& s = _log.get_snapshot();
+        if (progress.next_idx <= s.idx && progress.next_idx < (_log.start_idx() + 1)) {
             // The next index to be sent points to a snapshot so
             // we need to transfer the snasphot before we can
             // continue syncing the log.
@@ -543,9 +551,8 @@ void fsm::replicate_to(follower_progress& progress, bool allow_empty) {
         index_t prev_idx = index_t(0);
         term_t prev_term = _current_term;
         if (progress.next_idx != 1) {
-            auto& s =  _log.get_snapshot();
             prev_idx = index_t(progress.next_idx - 1);
-            assert (prev_idx >= s.idx);
+            assert (prev_idx >= _log.start_idx() || s.idx == prev_idx);
             prev_term = s.idx == prev_idx ? s.term : _log[prev_idx]->term;
         }
 
