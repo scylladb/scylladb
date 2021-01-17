@@ -483,7 +483,7 @@ future<int> run_test(test_case test) {
             std::vector<int> values(n);
             std::iota(values.begin(), values.end(), next_val);
             std::vector<raft::command> commands = create_commands<int>(values);
-            co_await seastar::parallel_for_each(commands, [&] (raft::command cmd) {
+            co_await seastar::do_for_each(commands, [&] (raft::command cmd) {
                 tlogger.debug("Adding command entry on leader {}", leader);
                 return rafts[leader].first->add_entry(std::move(cmd), raft::wait_type::committed);
             });
@@ -564,7 +564,7 @@ future<int> run_test(test_case test) {
         std::iota(values.begin(), values.end(), next_val);
         std::vector<raft::command> commands = create_commands<int>(values);
         tlogger.debug("Adding remaining {} entries on leader {}", values.size(), leader);
-        co_await seastar::parallel_for_each(commands, [&] (raft::command cmd) {
+        co_await seastar::do_for_each(commands, [&] (raft::command cmd) {
             return rafts[leader].first->add_entry(std::move(cmd), raft::wait_type::committed);
         });
     }
