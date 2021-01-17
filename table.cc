@@ -327,6 +327,14 @@ void table::load_sstable(sstables::shared_sstable& sst, bool reset_level) {
     add_sstable(sst);
 }
 
+void table::notify_bootstrap_or_replace_start() {
+    _is_bootstrap_or_replace = true;
+}
+
+void table::notify_bootstrap_or_replace_end() {
+    _is_bootstrap_or_replace = false;
+}
+
 void table::update_stats_for_new_sstable(uint64_t disk_space_used_by_sstable) noexcept {
     _stats.live_disk_space_used += disk_space_used_by_sstable;
     _stats.total_disk_space_used += disk_space_used_by_sstable;

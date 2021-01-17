@@ -521,13 +521,9 @@ public:
         return _truncated_at;
     }
 
-    void notify_bootstrap_or_replace_start() {
-        _is_bootstrap_or_replace = true;
-    }
+    void notify_bootstrap_or_replace_start();
 
-    void notify_bootstrap_or_replace_end() {
-        _is_bootstrap_or_replace = false;
-    }
+    void notify_bootstrap_or_replace_end();
 private:
     bool cache_enabled() const {
         return _config.enable_cache && _schema->caching_options().enabled();
