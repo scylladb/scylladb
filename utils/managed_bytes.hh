@@ -26,10 +26,16 @@
 #include <memory>
 #include "bytes.hh"
 #include "utils/allocation_strategy.hh"
+#include "utils/fragment_range.hh"
 #include <seastar/core/unaligned.hh>
 #include <seastar/util/alloc_failure_injector.hh>
 #include <unordered_map>
 #include <type_traits>
+
+template <mutable_view is_mutable_view>
+class managed_bytes_basic_view;
+using managed_bytes_view = managed_bytes_basic_view<mutable_view::no>;
+using managed_bytes_mutable_view = managed_bytes_basic_view<mutable_view::yes>;
 
 struct blob_storage {
     struct [[gnu::packed]] ref_type {
@@ -76,37 +82,6 @@ struct blob_storage {
 
 // A managed version of "bytes" (can be used with LSA).
 class managed_bytes {
-    static thread_local std::unordered_map<const blob_storage*, std::unique_ptr<bytes_view::value_type[]>> _lc_state;
-    struct linearization_context {
-        unsigned _nesting = 0;
-        // Map from first blob_storage address to linearized version
-        // We use the blob_storage address to be insentive to moving
-        // a managed_bytes object.
-        // linearization_context is entered often in the fast path, but it is
-        // actually used only in rare (slow) cases.
-        std::unordered_map<const blob_storage*, std::unique_ptr<bytes_view::value_type[]>>* _state_ptr = nullptr;
-        void enter() {
-            ++_nesting;
-        }
-        void leave() {
-            if (!--_nesting && _state_ptr) {
-                _state_ptr->clear();
-                _state_ptr = nullptr;
-            }
-        }
-        void forget(const blob_storage* p) noexcept;
-    };
-    static thread_local linearization_context _linearization_context;
-public:
-    struct linearization_context_guard {
-        linearization_context_guard() {
-            _linearization_context.enter();
-        }
-        ~linearization_context_guard() {
-            _linearization_context.leave();
-        }
-    };
-private:
     static constexpr size_t max_inline_size = 15;
     struct small_blob {
         bytes_view::value_type data[max_inline_size];
@@ -127,24 +102,11 @@ private:
         return alctr.preferred_max_contiguous_allocation() - sizeof(blob_storage);
     }
     void free_chain(blob_storage* p) noexcept {
-        if (p->next && _linearization_context._nesting) {
-            _linearization_context.forget(p);
-        }
         auto& alctr = current_allocator();
         while (p) {
             auto n = p->next;
             alctr.destroy(p);
             p = n;
-        }
-    }
-    const bytes_view::value_type* read_linearize() const {
-        seastar::memory::on_alloc_point();
-        if (!external()) {
-            return _u.small.data;
-        } else  if (!_u.ptr->next) {
-            return _u.ptr->data;
-        } else {
-            return do_linearize();
         }
     }
     bytes_view::value_type& value_at_index(blob_storage::size_type index) {
@@ -158,7 +120,8 @@ private:
         }
         return a->data[index];
     }
-    const bytes_view::value_type* do_linearize() const;
+    std::unique_ptr<bytes_view::value_type[]> do_linearize_pure() const;
+
 public:
     using size_type = blob_storage::size_type;
     struct initialized_later {};
@@ -170,7 +133,9 @@ public:
     managed_bytes(const blob_storage::char_type* ptr, size_type size)
         : managed_bytes(bytes_view(ptr, size)) {}
 
-    managed_bytes(const bytes& b) : managed_bytes(static_cast<bytes_view>(b)) {}
+    explicit managed_bytes(const bytes& b) : managed_bytes(static_cast<bytes_view>(b)) {}
+
+    explicit managed_bytes(managed_bytes_view v);
 
     managed_bytes(initialized_later, size_type size) {
         memory::on_alloc_point();
@@ -201,7 +166,7 @@ public:
         }
     }
 
-    managed_bytes(bytes_view v) : managed_bytes(initialized_later(), v.size()) {
+    explicit managed_bytes(bytes_view v) : managed_bytes(initialized_later(), v.size()) {
         if (!external()) {
             // Workaround for https://github.com/scylladb/scylla/issues/4086
             #pragma GCC diagnostic push
@@ -231,8 +196,8 @@ public:
     }
 
     managed_bytes(const managed_bytes& o) : managed_bytes(initialized_later(), o.size()) {
-        if (!external()) {
-            memcpy(data(), o.data(), size());
+        if (!o.external()) {
+            _u.small = o._u.small;
             return;
         }
         auto s = size();
@@ -298,7 +263,7 @@ public:
             return false;
         }
         if (!external()) {
-            return bytes_view(*this) == bytes_view(o);
+            return std::equal(_u.small.data, _u.small.data + _u.small.size, o._u.small.data);
         } else {
             auto a = _u.ptr;
             auto a_data = a->data;
@@ -336,18 +301,9 @@ public:
         return !(*this == o);
     }
 
-    operator bytes_view() const {
-        return { data(), size() };
-    }
-
     bool is_fragmented() const {
         return external() && _u.ptr->next;
     }
-
-    operator bytes_mutable_view() {
-        assert(!is_fragmented());
-        return { data(), size() };
-    };
 
     bytes_view::value_type& operator[](size_type index) {
         return value_at_index(index);
@@ -366,37 +322,8 @@ public:
         }
     }
 
-    const blob_storage::char_type* begin() const {
-        return data();
-    }
-
-    const blob_storage::char_type* end() const {
-        return data() + size();
-    }
-
-    blob_storage::char_type* begin() {
-        return data();
-    }
-
-    blob_storage::char_type* end() {
-        return data() + size();
-    }
-
     bool empty() const {
         return _u.small.size == 0;
-    }
-
-    blob_storage::char_type* data() {
-        if (external()) {
-            assert(!_u.ptr->next);  // must be linearized
-            return _u.ptr->data;
-        } else {
-            return _u.small.data;
-        }
-    }
-
-    const blob_storage::char_type* data() const {
-        return read_linearize();
     }
 
     // Returns the amount of external memory used.
@@ -413,34 +340,164 @@ public:
         return 0;
     }
 
-    template <typename Func>
-    friend std::result_of_t<Func()> with_linearized_managed_bytes(Func&& func);
-};
-
-// Run func() while ensuring that reads of managed_bytes objects are
-// temporarlily linearized
-template <typename Func>
-inline
-std::result_of_t<Func()>
-with_linearized_managed_bytes(Func&& func) {
-    managed_bytes::linearization_context_guard g;
-    return func();
-}
-
-namespace std {
-
-template <>
-struct hash<managed_bytes> {
-    size_t operator()(const managed_bytes& v) const {
-        return hash<bytes_view>()(v);
+    // Returns the minimum possible amount of external memory used by a managed_bytes
+    // of the same size as us.
+    // In other words, it returns the amount of external memory that would used by this
+    // managed_bytes if all data was allocated in one big fragment.
+    size_t minimal_external_memory_usage() const {
+        if (external()) {
+            return sizeof(blob_storage) + _u.ptr->size;
+        } else {
+            return 0;
+        }
     }
-};
 
-}
+    template <std::invocable<bytes_view> Func>
+    std::invoke_result_t<Func, bytes_view> with_linearized(Func&& func) const {
+        const bytes_view::value_type* start = nullptr;
+        size_t size = 0;
+        if (!external()) {
+            start = _u.small.data;
+            size = _u.small.size;
+        } else if (!_u.ptr->next) {
+            start = _u.ptr->data;
+            size = _u.ptr->size;
+        }
+        if (start) {
+            return func(bytes_view(start, size));
+        } else {
+            auto data = do_linearize_pure();
+            return func(bytes_view(data.get(), _u.ptr->size));
+        }
+    }
+
+    template <mutable_view is_mutable_view>
+    friend class managed_bytes_basic_view;
+};
 
 // blob_storage is a variable-size type
 inline
 size_t
 size_for_allocation_strategy(const blob_storage& bs) {
     return sizeof(bs) + bs.frag_size;
+}
+
+template <mutable_view is_mutable>
+class managed_bytes_basic_view {
+public:
+    using fragment_type = std::conditional_t<is_mutable == mutable_view::yes, bytes_mutable_view, bytes_view>;
+    using owning_type = std::conditional_t<is_mutable == mutable_view::yes, managed_bytes, const managed_bytes>;
+    using value_type = typename fragment_type::value_type;
+private:
+    fragment_type _current_fragment = {};
+    blob_storage* _next_fragments = nullptr;
+    size_t _size = 0;
+public:
+    managed_bytes_basic_view() = default;
+    managed_bytes_basic_view(owning_type& mb) {
+        if (mb._u.small.size != -1) {
+            _current_fragment = fragment_type(mb._u.small.data, mb._u.small.size);
+            _size = mb._u.small.size;
+        } else {
+            auto p = mb._u.ptr;
+            _current_fragment = fragment_type(p->data, p->frag_size);
+            _next_fragments = p->next;
+            _size = p->size;
+        }
+    }
+    managed_bytes_basic_view(fragment_type bv)
+        : _current_fragment(bv)
+        , _size(bv.size()) {
+    }
+    size_t size() const { return _size; }
+    size_t size_bytes() const { return _size; }
+    bool empty() const { return _size == 0; }
+    fragment_type current_fragment() const { return _current_fragment; }
+    void remove_prefix(size_t n) {
+        while (n >= _current_fragment.size() && n > 0) {
+            n -= _current_fragment.size();
+            remove_current();
+        }
+        _size -= n;
+        _current_fragment.remove_prefix(n);
+    }
+    void remove_current() {
+        _size -= _current_fragment.size();
+        if (_size) {
+            _current_fragment = fragment_type(_next_fragments->data, _next_fragments->frag_size);
+            _next_fragments = _next_fragments->next;
+            _current_fragment = _current_fragment.substr(0, _size);
+        } else {
+            _current_fragment = fragment_type();
+        }
+    }
+    managed_bytes_basic_view prefix(size_t len) const {
+        managed_bytes_basic_view v = *this;
+        v._size = len;
+        v._current_fragment = v._current_fragment.substr(0, len);
+        return v;
+    }
+    const value_type& operator[](size_t index) const {
+        auto v = *this;
+        v.remove_prefix(index);
+        return v.current_fragment().front();
+    }
+};
+static_assert(FragmentedView<managed_bytes_view>);
+static_assert(FragmentedMutableView<managed_bytes_mutable_view>);
+
+inline bytes to_bytes(const managed_bytes& v) {
+    return linearized(managed_bytes_view(v));
+}
+inline bytes to_bytes(managed_bytes_view v) {
+    return linearized(v);
+}
+
+inline managed_bytes::managed_bytes(managed_bytes_view v) : managed_bytes(initialized_later(), v.size_bytes()) {
+    managed_bytes_mutable_view self(*this);
+    write_fragmented(self, v);
+}
+
+template<>
+struct appending_hash<managed_bytes_view> {
+    template<Hasher Hasher>
+    void operator()(Hasher& h, managed_bytes_view v) const {
+        feed_hash(h, v.size_bytes());
+        for (bytes_view frag : fragment_range(v)) {
+            h.update(reinterpret_cast<const char*>(frag.data()), frag.size());
+        }
+    }
+};
+
+namespace std {
+template <>
+struct hash<managed_bytes_view> {
+    size_t operator()(managed_bytes_view v) const {
+        bytes_view_hasher h;
+        appending_hash<managed_bytes_view>{}(h, v);
+        return h.finalize();
+    }
+};
+template <>
+struct hash<managed_bytes> {
+    size_t operator()(const managed_bytes& v) const {
+        return hash<managed_bytes_view>{}(v);
+    }
+};
+} // namespace std
+
+// The operators below are used only by tests.
+
+inline bool operator==(const managed_bytes_view& a, const managed_bytes_view& b) {
+    return a.size_bytes() == b.size_bytes() && compare_unsigned(a, b) == 0;
+}
+
+inline std::ostream& operator<<(std::ostream& os, const managed_bytes_view& v) {
+    for (bytes_view frag : fragment_range(v)) {
+        os << to_hex(frag);
+    }
+    return os;
+}
+inline std::ostream& operator<<(std::ostream& os, const managed_bytes& b) {
+    return (os << managed_bytes_view(b));
 }

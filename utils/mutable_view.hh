@@ -68,4 +68,9 @@ public:
     void remove_suffix(size_t n) {
         _end -= n;
     }
+
+    basic_mutable_view substr(size_t pos, size_t count) {
+        size_t n = std::min(count, (_end - _begin) - pos);
+        return basic_mutable_view{_begin + pos, n};
+    }
 };

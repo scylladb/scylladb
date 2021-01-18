@@ -3978,7 +3978,7 @@ drop table lwt;
 -- non-frozen nested sets are not supported
 create table lwt (a int, b set<map<int,int>>, c list<set<int>>, primary key (a));
 {
-	"message" : "exceptions::invalid_request_exception (Non-frozen user types or collections are not allowed inside collections: list<set<int>>)",
+	"message" : "exceptions::invalid_request_exception (Non-frozen user types or collections are not allowed inside collections: set<map<int, int>>)",
 	"status" : "error"
 }
 -- frozen collection elements are however ok

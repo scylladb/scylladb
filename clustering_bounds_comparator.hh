@@ -67,8 +67,8 @@ public:
         int operator()(const clustering_key_prefix& p1, int32_t w1, const clustering_key_prefix& p2, int32_t w2) const {
             auto type = _s.get().clustering_key_prefix_type();
             auto res = prefix_equality_tri_compare(type->types().begin(),
-                type->begin(p1), type->end(p1),
-                type->begin(p2), type->end(p2),
+                type->begin(p1.representation()), type->end(p1.representation()),
+                type->begin(p2.representation()), type->end(p2.representation()),
                 ::tri_compare);
             if (res) {
                 return res;

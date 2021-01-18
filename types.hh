@@ -514,8 +514,11 @@ public:
     serialized_tri_compare as_tri_comparator() const ;
     static data_type parse_type(const sstring& name);
     size_t hash(bytes_view v) const;
+    size_t hash(managed_bytes_view v) const;
     bool equal(bytes_view v1, bytes_view v2) const;
+    bool equal(managed_bytes_view v1, managed_bytes_view v2) const;
     int32_t compare(bytes_view v1, bytes_view v2) const;
+    int32_t compare(managed_bytes_view v1, managed_bytes_view v2) const;
 
 private:
     // Explicitly instantiated in .cc
@@ -742,7 +745,7 @@ bool less_compare(data_type t, bytes_view e1, bytes_view e2) {
 }
 
 static inline
-int tri_compare(data_type t, bytes_view e1, bytes_view e2) {
+int tri_compare(data_type t, managed_bytes_view e1, managed_bytes_view e2) {
     return t->compare(e1, e2);
 }
 
@@ -757,7 +760,7 @@ tri_compare_opt(data_type t, bytes_view_opt v1, bytes_view_opt v2) {
 }
 
 static inline
-bool equal(data_type t, bytes_view e1, bytes_view e2) {
+bool equal(data_type t, managed_bytes_view e1, managed_bytes_view e2) {
     return t->equal(e1, e2);
 }
 
@@ -1089,6 +1092,13 @@ inline
 bytes
 to_bytes(const sstring& x) {
     return bytes(reinterpret_cast<const int8_t*>(x.c_str()), x.size());
+}
+
+// FIXME: make more explicit
+inline
+managed_bytes
+to_managed_bytes(const sstring& x) {
+    return managed_bytes(reinterpret_cast<const int8_t*>(x.c_str()), x.size());
 }
 
 inline

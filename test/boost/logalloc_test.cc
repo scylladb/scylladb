@@ -303,11 +303,11 @@ SEASTAR_TEST_CASE(test_blob) {
             auto src = bytes("123456");
             managed_bytes b(src);
 
-            BOOST_REQUIRE(bytes_view(b) == src);
+            BOOST_REQUIRE(managed_bytes_view(b) == bytes_view(src));
 
             reg.full_compaction();
 
-            BOOST_REQUIRE(bytes_view(b) == src);
+            BOOST_REQUIRE(managed_bytes_view(b) == bytes_view(src));
         });
     });
 }
@@ -422,10 +422,10 @@ SEASTAR_TEST_CASE(test_large_allocation) {
         try {
             while (true) {
                 with_allocator(r_evictable.allocator(), [&] {
-                    evictable.push_back(bytes(bytes::initialized_later(),element_size));
+                    evictable.push_back(managed_bytes(bytes(bytes::initialized_later(),element_size)));
                 });
                 with_allocator(r_non_evictable.allocator(), [&] {
-                    non_evictable.push_back(bytes(bytes::initialized_later(),element_size));
+                    non_evictable.push_back(managed_bytes(bytes(bytes::initialized_later(),element_size)));
                 });
             }
         } catch (const std::bad_alloc&) {
@@ -618,7 +618,7 @@ struct test_region: public logalloc::region  {
     }
     void alloc(size_t size = logalloc::segment_size) {
         with_allocator(allocator(), [this, size] {
-            _alloc.push_back(bytes(bytes::initialized_later(), size));
+            _alloc.push_back(managed_bytes(bytes(bytes::initialized_later(), size)));
         });
     }
 
@@ -790,7 +790,7 @@ SEASTAR_TEST_CASE(test_region_groups_linear_hierarchy_throttling_moving_restrict
         // fill the inner node. Try allocating at child level. Should not be allowed.
         circular_buffer<managed_bytes> big_alloc;
         with_allocator(inner_region->allocator(), [&big_alloc] {
-            big_alloc.push_back(bytes(bytes::initialized_later(), logalloc::segment_size));
+            big_alloc.push_back(managed_bytes(bytes(bytes::initialized_later(), logalloc::segment_size)));
         });
         BOOST_REQUIRE_GE(inner.memory_used(), logalloc::segment_size);
 
@@ -799,7 +799,7 @@ SEASTAR_TEST_CASE(test_region_groups_linear_hierarchy_throttling_moving_restrict
 
         // Now fill the root...
         with_allocator(root_region->allocator(), [&big_alloc] {
-            big_alloc.push_back(bytes(bytes::initialized_later(), logalloc::segment_size));
+            big_alloc.push_back(managed_bytes(bytes(bytes::initialized_later(), logalloc::segment_size)));
         });
         BOOST_REQUIRE_GE(root.memory_used(), logalloc::segment_size);
 
@@ -901,7 +901,7 @@ public:
             , _rg(rg)
     {
         with_allocator(_region.allocator(), [this] {
-            _alloc.push_back(bytes(bytes::initialized_later(), this->_alloc_size));
+            _alloc.push_back(managed_bytes(bytes(bytes::initialized_later(), this->_alloc_size)));
         });
 
     }

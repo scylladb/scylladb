@@ -406,7 +406,7 @@ row_marker view_updates::compute_row_marker(const clustering_row& base_row) cons
 
 deletable_row& view_updates::get_view_row(const partition_key& base_key, const clustering_row& update) {
     std::vector<bytes> linearized_values;
-    auto get_value = boost::adaptors::transformed([&, this] (const column_definition& cdef) -> bytes_view {
+    auto get_value = boost::adaptors::transformed([&, this] (const column_definition& cdef) -> managed_bytes_view {
         auto* base_col = _base->get_column_definition(cdef.name());
         if (!base_col) {
             bytes_opt computed_value;
@@ -423,7 +423,7 @@ deletable_row& view_updates::get_view_row(const partition_key& base_key, const c
             if (!computed_value) {
                 throw std::logic_error(format("No value computed for primary key column {}", cdef.name()));
             }
-            return linearized_values.emplace_back(*computed_value);
+            return managed_bytes_view(linearized_values.emplace_back(*computed_value));
         }
         switch (base_col->kind) {
         case column_kind::partition_key:
@@ -433,8 +433,13 @@ deletable_row& view_updates::get_view_row(const partition_key& base_key, const c
         default:
             auto& c = update.cells().cell_at(base_col->id);
             auto value_view = base_col->is_atomic() ? c.as_atomic_cell(cdef).value() : c.as_collection_mutation().data;
+            // FIXME: don't linearize.
+            // This is hard right now, because we are dealing with two different types:
+            // managed_bytes_view and data::basic_value_view, and we can't put both types in one
+            // container.
+            // If IMR transitions to managed_bytes_view, this should be revisited.
             if (value_view.is_fragmented()) {
-                return linearized_values.emplace_back(value_view.linearize());
+                return managed_bytes_view(linearized_values.emplace_back(value_view.linearize()));
             }
             return value_view.first_fragment();
         }

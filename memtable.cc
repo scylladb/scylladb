@@ -209,9 +209,7 @@ memtable::find_or_create_partition_slow(partition_key_view key) {
     return with_allocator(standard_allocator(), [&, this] () -> partition_entry& {
         auto dk = dht::decorate_key(*_schema, key);
         return with_allocator(outer, [&dk, this] () -> partition_entry& {
-          return with_linearized_managed_bytes([&] () -> partition_entry& {
             return find_or_create_partition(dk);
-          });
         });
     });
 }
@@ -430,21 +428,19 @@ public:
                 if (_delegate_range) {
                     _delegate = delegate_reader(_permit, *_delegate_range, _slice, _pc, streamed_mutation::forwarding::no, _fwd_mr);
                 } else {
-                    auto key_and_snp = read_section()(region(), [&] {
-                        return with_linearized_managed_bytes([&] () -> std::optional<std::pair<dht::decorated_key, partition_snapshot_ptr>> {
-                            memtable_entry *e = fetch_entry();
-                            if (!e) {
-                                return { };
-                            } else {
-                                // FIXME: Introduce a memtable specific reader that will be returned from
-                                // memtable_entry::read and will allow filling the buffer without the overhead of
-                                // virtual calls, intermediate buffers and futures.
-                                auto key = e->key();
-                                auto snp = e->snapshot(*mtbl());
-                                advance_iterator();
-                                return std::pair(std::move(key), std::move(snp));
-                            }
-                        });
+                    auto key_and_snp = read_section()(region(), [&] () -> std::optional<std::pair<dht::decorated_key, partition_snapshot_ptr>> {
+                        memtable_entry *e = fetch_entry();
+                        if (!e) {
+                            return { };
+                        } else {
+                            // FIXME: Introduce a memtable specific reader that will be returned from
+                            // memtable_entry::read and will allow filling the buffer without the overhead of
+                            // virtual calls, intermediate buffers and futures.
+                            auto key = e->key();
+                            auto snp = e->snapshot(*mtbl());
+                            advance_iterator();
+                            return std::pair(std::move(key), std::move(snp));
+                        }
                     });
                     if (key_and_snp) {
                         update_last(key_and_snp->first);
@@ -541,7 +537,7 @@ public:
     // allocation. As long as our size read here is lesser or equal to the size in the memtables, we
     // are safe, and worst case we will allow a bit fewer requests in.
     void operator()(const range_tombstone& rt) {
-        _accounter.update_bytes_read(rt.memory_usage(_schema));
+        _accounter.update_bytes_read(rt.minimal_memory_usage(_schema));
     }
 
     void operator()(const static_row& sr) {
@@ -559,7 +555,7 @@ public:
         // and we don't know which one(s) contributed to the generation of this mutation fragment.
         //
         // We will add the size of the struct here, and that should be good enough.
-        _accounter.update_bytes_read(sizeof(rows_entry) + cr.external_memory_usage(_schema));
+        _accounter.update_bytes_read(sizeof(rows_entry) + cr.minimal_external_memory_usage(_schema));
     }
 };
 
@@ -583,18 +579,16 @@ public:
 private:
     void get_next_partition() {
         uint64_t component_size = 0;
-        auto key_and_snp = read_section()(region(), [&] {
-            return with_linearized_managed_bytes([&] () -> std::optional<std::pair<dht::decorated_key, partition_snapshot_ptr>> {
-                memtable_entry* e = fetch_entry();
-                if (e) {
-                    auto dk = e->key();
-                    auto snp = e->snapshot(*mtbl());
-                    component_size = _flushed_memory.compute_size(*e, *snp);
-                    advance_iterator();
-                    return std::pair(std::move(dk), std::move(snp));
-                }
-                return { };
-            });
+        auto key_and_snp = read_section()(region(), [&] () -> std::optional<std::pair<dht::decorated_key, partition_snapshot_ptr>> {
+            memtable_entry* e = fetch_entry();
+            if (e) {
+                auto dk = e->key();
+                auto snp = e->snapshot(*mtbl());
+                component_size = _flushed_memory.compute_size(*e, *snp);
+                advance_iterator();
+                return std::pair(std::move(dk), std::move(snp));
+            }
+            return { };
         });
         if (key_and_snp) {
             _flushed_memory.update_bytes_read(component_size);
@@ -657,7 +651,6 @@ memtable::make_flat_reader(schema_ptr s,
     if (query::is_single_partition(range) && !fwd_mr) {
         const query::ring_position& pos = range.start()->value();
         auto snp = _read_section(*this, [&] () -> partition_snapshot_ptr {
-            managed_bytes::linearization_context_guard lcg;
             auto i = partitions.find(pos, dht::ring_position_comparator(*_schema));
             if (i != partitions.end()) {
                 upgrade_entry(*i);
@@ -722,11 +715,9 @@ void
 memtable::apply(const mutation& m, db::rp_handle&& h) {
     with_allocator(allocator(), [this, &m] {
         _allocating_section(*this, [&, this] {
-          with_linearized_managed_bytes([&] {
             auto& p = find_or_create_partition(m.decorated_key());
             _stats_collector.update(*m.schema(), m.partition());
             p.apply(*_schema, m.partition(), *m.schema(), _table_stats.memtable_app_stats);
-          });
         });
     });
     update(std::move(h));
@@ -736,14 +727,12 @@ void
 memtable::apply(const frozen_mutation& m, const schema_ptr& m_schema, db::rp_handle&& h) {
     with_allocator(allocator(), [this, &m, &m_schema] {
         _allocating_section(*this, [&, this] {
-          with_linearized_managed_bytes([&] {
             auto& p = find_or_create_partition_slow(m.key());
             mutation_partition mp(m_schema);
             partition_builder pb(*m_schema, mp);
             m.partition().accept(*m_schema, pb);
             _stats_collector.update(*m_schema, mp);
             p.apply(*_schema, std::move(mp), *m_schema, _table_stats.memtable_app_stats);
-          });
         });
     });
     update(std::move(h));
@@ -796,9 +785,7 @@ void memtable::upgrade_entry(memtable_entry& e) {
     if (e._schema != _schema) {
         assert(!reclaiming_enabled());
         with_allocator(allocator(), [this, &e] {
-          with_linearized_managed_bytes([&] {
             e.upgrade_schema(_schema, cleaner());
-          });
         });
     }
 }

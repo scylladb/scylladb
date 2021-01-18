@@ -384,7 +384,7 @@ public:
                 return 0;
             }
             auto&& types = _s.clustering_key_type()->types();
-            auto cmp = [&] (const data_type& t, bytes_view c1, bytes_view c2) { return t->compare(c1, c2); };
+            auto cmp = [&] (const data_type& t, managed_bytes_view c1, managed_bytes_view c2) { return t->compare(c1, c2); };
             return lexicographical_tri_compare(types.begin(), types.end(),
                 a._ck->begin(_s), a._ck->end(_s),
                 b._ck->begin(_s), b._ck->end(_s),
@@ -404,7 +404,7 @@ public:
             }
             auto&& types = _s.clustering_key_type()->types();
             auto b_values = b.values();
-            auto cmp = [&] (const data_type& t, bytes_view c1, bytes_view c2) { return t->compare(c1, c2); };
+            auto cmp = [&] (const data_type& t, managed_bytes_view c1, managed_bytes_view c2) { return t->compare(c1, c2); };
             return lexicographical_tri_compare(types.begin(), types.end(),
                 a._ck->begin(_s), a._ck->end(_s),
                 b_values.begin(), b_values.end(),

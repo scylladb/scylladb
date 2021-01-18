@@ -24,7 +24,7 @@
 #include <concepts>
 #include <boost/range/algorithm/copy.hpp>
 #include <boost/range/algorithm/for_each.hpp>
-
+#include <seastar/core/print.hh>
 
 #include "bytes.hh"
 
@@ -180,6 +180,41 @@ concept FragmentedMutableView = requires (T view) {
 };
 
 template<FragmentedView View>
+struct fragment_range {
+    View view;
+    class fragment_iterator {
+        using iterator_category = std::input_iterator_tag;
+        using value_type = typename View::fragment_type;
+        using difference_type = std::ptrdiff_t;
+        using pointer = const value_type*;
+        using reference = const value_type&;
+        View _view;
+        value_type _current;
+    public:
+        fragment_iterator() : _view(value_type()) {}
+        fragment_iterator(const View& v) : _view(v) {
+            _current = _view.current_fragment();
+        }
+        fragment_iterator& operator++() {
+            _view.remove_current();
+            _current = _view.current_fragment(); 
+            return *this;
+        }
+        fragment_iterator operator++(int) {
+            fragment_iterator i(*this);
+            ++(*this);
+            return i;
+        }
+        reference operator*() const { return _current; }
+        pointer operator->() const { return &_current; }
+        bool operator==(const fragment_iterator& i) const { return _view.size_bytes() == i._view.size_bytes(); }
+    };
+    fragment_range(const View& v) : view(v) {}
+    fragment_iterator begin() const { return fragment_iterator(view); }
+    fragment_iterator end() const { return fragment_iterator(); }
+};
+
+template<FragmentedView View>
 requires (!FragmentRange<View>)
 bytes linearized(View v)
 {
@@ -225,5 +260,31 @@ decltype(auto) with_simplified(const View& v, Function&& fn)
         return fn(single_fragmented_view(v.current_fragment()));
     } else {
         return fn(v);
+    }
+}
+
+template<FragmentedView V1, FragmentedView V2>
+int compare_unsigned(V1 v1, V2 v2) {
+    while (!v1.empty() && !v2.empty()) {
+        size_t n = std::min(v1.current_fragment().size(), v2.current_fragment().size());
+        if (int d = memcmp(v1.current_fragment().data(), v2.current_fragment().data(), n)) {
+            return d;
+        }
+        v1.remove_prefix(n);
+        v2.remove_prefix(n);
+    }
+    return v1.size_bytes() - v2.size_bytes();
+}
+
+template<FragmentedMutableView Dest, FragmentedView Src>
+void write_fragmented(Dest& dest, Src src) {
+    if (dest.size_bytes() < src.size_bytes()) [[unlikely]] {
+        throw std::out_of_range(format("tried to copy a buffer of size {} to a buffer of smaller size {}", src.size_bytes(), dest.size_bytes()));
+    }
+    while (!src.empty()) {
+        size_t n = std::min(dest.current_fragment().size(), src.current_fragment().size());
+        memcpy(dest.current_fragment().data(), src.current_fragment().data(), n);
+        dest.remove_prefix(n);
+        src.remove_prefix(n);
     }
 }

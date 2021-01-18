@@ -74,8 +74,7 @@ std::optional<size_t> validate_with_error_position_fragmented(FragmentedView aut
     size_t partial_filled = 0;
     size_t partial_more_needed = 0;
     size_t bytes_validated = 0;
-    for (; fv.size_bytes(); fv.remove_current()) {
-        bytes_view frag = fv.current_fragment();
+    for (bytes_view frag : fragment_range(fv)) {
         auto data = reinterpret_cast<const uint8_t*>(frag.data());
         auto len = frag.size();
         if (partial_more_needed) {
