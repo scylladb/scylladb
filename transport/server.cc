@@ -134,6 +134,16 @@ sstring to_string(const event::schema_change::target_type t) {
     assert(false && "unreachable");
 }
 
+static bool is_broken_pipe_or_connection_reset(std::exception_ptr ep) {
+    try {
+        std::rethrow_exception(ep);
+    } catch (const std::system_error& e) {
+        return e.code().category() == std::system_category()
+            && (e.code().value() == EPIPE || e.code().value() == ECONNRESET);
+    } catch (...) {}
+    return false;
+}
+
 event::event_type parse_event_type(const sstring& value)
 {
     if (value == "TOPOLOGY_CHANGE") {
@@ -320,14 +330,10 @@ cql_server::do_accepts(int which, bool keepalive, socket_address server_addr) {
                     --_stats.connections;
                     return unadvertise_connection(conn);
                 }).handle_exception([] (std::exception_ptr ep) {
-                    try {
-                        std::rethrow_exception(ep);
-                    } catch(std::system_error& serr) {
-                        if (serr.code().category() ==  std::system_category() &&
-                                serr.code().value() == EPIPE) {  // expected if another side closes a connection
-                            return;
-                        }
-                    } catch(...) {}
+                    if (is_broken_pipe_or_connection_reset(ep)) {
+                        // expected if another side closes a connection or we're shutting down
+                        return;
+                    }
                     clogger.info("exception while processing connection: {}", ep);
                 });
             });
@@ -628,8 +634,14 @@ future<> cql_server::connection::process()
     }).finally([this] {
         return _pending_requests_gate.close().then([this] {
             _server._notifier->unregister_connection(this);
-            return _ready_to_respond.finally([this] {
-                return _write_buf.close();
+            return _ready_to_respond.handle_exception([] (std::exception_ptr ep) {
+                if (is_broken_pipe_or_connection_reset(ep)) {
+                    // expected if another side closes a connection or we're shutting down
+                    return;
+                }
+                std::rethrow_exception(ep);
+            }).finally([this] {
+                 return _write_buf.close();
             });
         });
     });
