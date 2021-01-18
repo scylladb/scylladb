@@ -22,9 +22,28 @@
 #pragma once
 
 #include "flat_mutation_reader.hh"
+#include "mutation_reader.hh"
 
 namespace mutation_writer {
 using reader_consumer = noncopyable_function<future<> (flat_mutation_reader)>;
+
+class bucket_writer {
+    schema_ptr _schema;
+    queue_reader_handle _handle;
+    future<> _consume_fut;
+
+private:
+    bucket_writer(schema_ptr schema, std::pair<flat_mutation_reader, queue_reader_handle> queue_reader, reader_consumer& consumer);
+
+public:
+    bucket_writer(schema_ptr schema, reader_permit permit, reader_consumer& consumer);
+
+    future<> consume(mutation_fragment mf);
+
+    future<> consume_end_of_stream();
+
+    void abort(std::exception_ptr ep) noexcept;
+};
 
 template <typename Writer>
 requires MutationFragmentConsumer<Writer, future<>>

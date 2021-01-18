@@ -109,22 +109,12 @@ small_flat_map<Key, Value, Size>::find(const key_type& k) {
 class timestamp_based_splitting_mutation_writer {
     using bucket_id = int64_t;
 
-    class bucket_writer {
-        schema_ptr _schema;
-        queue_reader_handle _handle;
-        future<> _consume_fut;
+    class timestamp_bucket_writer : public bucket_writer {
         bool _has_current_partition = false;
 
-    private:
-        bucket_writer(schema_ptr schema, std::pair<flat_mutation_reader, queue_reader_handle> queue_reader, reader_consumer& consumer)
-            : _schema(std::move(schema))
-            , _handle(std::move(queue_reader.second))
-            , _consume_fut(consumer(std::move(queue_reader.first))) {
-        }
-
     public:
-        bucket_writer(schema_ptr schema, reader_permit permit, reader_consumer& consumer)
-            : bucket_writer(schema, make_queue_reader(schema, std::move(permit)), consumer) {
+        timestamp_bucket_writer(schema_ptr schema, reader_permit permit, reader_consumer& consumer)
+            : bucket_writer(schema, std::move(permit), consumer) {
         }
         void set_has_current_partition() {
             _has_current_partition = true;
@@ -135,16 +125,6 @@ class timestamp_based_splitting_mutation_writer {
         bool has_current_partition() const {
             return _has_current_partition;
         }
-        future<> consume(mutation_fragment mf) {
-            return _handle.push(std::move(mf));
-        }
-        future<> consume_end_of_stream() {
-            _handle.push_end_of_stream();
-            return std::move(_consume_fut);
-        }
-        void abort(std::exception_ptr ep) {
-            _handle.abort(ep);
-        }
     };
 
 private:
@@ -153,7 +133,7 @@ private:
     classify_by_timestamp _classifier;
     reader_consumer _consumer;
     partition_start _current_partition_start;
-    std::unordered_map<bucket_id, bucket_writer> _buckets;
+    std::unordered_map<bucket_id, timestamp_bucket_writer> _buckets;
     std::vector<bucket_id> _buckets_used_for_current_partition;
 
 private:
@@ -185,7 +165,7 @@ public:
     future<> consume(partition_end&& pe);
 
     future<> consume_end_of_stream() {
-        return parallel_for_each(_buckets, [] (std::pair<const bucket_id, bucket_writer>& bucket) {
+        return parallel_for_each(_buckets, [] (std::pair<const bucket_id, timestamp_bucket_writer>& bucket) {
             return bucket.second.consume_end_of_stream();
         });
     }

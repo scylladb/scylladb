@@ -166,7 +166,7 @@ SEASTAR_TEST_CASE(test_multishard_writer_producer_aborts) {
 
 namespace {
 
-class bucket_writer {
+class test_bucket_writer {
     schema_ptr _schema;
     classify_by_timestamp _classify;
     std::unordered_map<int64_t, std::vector<mutation>>& _buckets;
@@ -224,7 +224,7 @@ private:
     }
 
 public:
-    bucket_writer(schema_ptr schema, classify_by_timestamp classify, std::unordered_map<int64_t, std::vector<mutation>>& buckets)
+    test_bucket_writer(schema_ptr schema, classify_by_timestamp classify, std::unordered_map<int64_t, std::vector<mutation>>& buckets)
         : _schema(std::move(schema))
         , _classify(std::move(classify))
         , _buckets(buckets) {
@@ -311,7 +311,7 @@ SEASTAR_THREAD_TEST_CASE(test_timestamp_based_splitting_mutation_writer) {
 
     auto consumer = [&] (flat_mutation_reader bucket_reader) {
         return do_with(std::move(bucket_reader), [&] (flat_mutation_reader& rd) {
-            return rd.consume(bucket_writer(random_schema.schema(), classify_fn, buckets), db::no_timeout);
+            return rd.consume(test_bucket_writer(random_schema.schema(), classify_fn, buckets), db::no_timeout);
         });
     };
 

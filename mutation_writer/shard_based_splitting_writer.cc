@@ -31,30 +31,7 @@
 namespace mutation_writer {
 
 class shard_based_splitting_mutation_writer {
-    class shard_writer {
-        queue_reader_handle _handle;
-        future<> _consume_fut;
-    private:
-        shard_writer(schema_ptr schema, std::pair<flat_mutation_reader, queue_reader_handle> queue_reader, reader_consumer& consumer)
-            : _handle(std::move(queue_reader.second))
-            , _consume_fut(consumer(std::move(queue_reader.first))) {
-        }
-
-    public:
-        shard_writer(schema_ptr schema, reader_permit permit, reader_consumer& consumer)
-            : shard_writer(schema, make_queue_reader(schema, std::move(permit)), consumer) {
-        }
-        future<> consume(mutation_fragment mf) {
-            return _handle.push(std::move(mf));
-        }
-        future<> consume_end_of_stream() {
-            _handle.push_end_of_stream();
-            return std::move(_consume_fut);
-        }
-        void abort(std::exception_ptr ep) {
-            _handle.abort(ep);
-        }
-    };
+    using shard_writer = bucket_writer;
 
 private:
     schema_ptr _schema;
