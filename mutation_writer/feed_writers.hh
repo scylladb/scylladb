@@ -40,9 +40,11 @@ public:
 
     future<> consume(mutation_fragment mf);
 
-    future<> consume_end_of_stream();
+    void consume_end_of_stream();
 
     void abort(std::exception_ptr ep) noexcept;
+
+    future<> close() noexcept;
 };
 
 template <typename Writer>
@@ -59,9 +61,17 @@ future<> feed_writer(flat_mutation_reader&& rd, Writer&& wr) {
             if (f.failed()) {
                 auto ex = f.get_exception();
                 wr.abort(ex);
-                return make_exception_future<>(ex);
+                return wr.close().then_wrapped([ex = std::move(ex)] (future<> f) mutable {
+                    if (f.failed()) {
+                        // The consumer is expected to fail when aborted,
+                        // so just ignore any exception.
+                        (void)f.get_exception();
+                    }
+                    return make_exception_future<>(std::move(ex));
+                });
             } else {
-                return wr.consume_end_of_stream();
+                wr.consume_end_of_stream();
+                return wr.close();
             }
         });
     });

@@ -37,13 +37,16 @@ future<> bucket_writer::consume(mutation_fragment mf) {
     return _handle.push(std::move(mf));
 }
 
-future<> bucket_writer::consume_end_of_stream() {
+void bucket_writer::consume_end_of_stream() {
     _handle.push_end_of_stream();
-    return std::move(_consume_fut);
 }
 
 void bucket_writer::abort(std::exception_ptr ep) noexcept {
     _handle.abort(std::move(ep));
+}
+
+future<> bucket_writer::close() noexcept {
+    return std::move(_consume_fut);
 }
 
 } // mutation_writer

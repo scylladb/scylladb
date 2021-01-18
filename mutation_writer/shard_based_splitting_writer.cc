@@ -76,13 +76,12 @@ public:
         return write_to_shard(mutation_fragment(*_schema, _permit, std::move(pe)));
     }
 
-    future<> consume_end_of_stream() {
-        return parallel_for_each(_shards, [] (std::optional<shard_writer>& shard) {
-            if (!shard) {
-                return make_ready_future<>();
+    void consume_end_of_stream() {
+        for (auto& shard : _shards) {
+            if (shard) {
+                shard->consume_end_of_stream();
             }
-            return shard->consume_end_of_stream();
-        });
+        }
     }
     void abort(std::exception_ptr ep) {
         for (auto&& shard : _shards) {
@@ -90,6 +89,11 @@ public:
                 shard->abort(ep);
             }
         }
+    }
+    future<> close() noexcept {
+        return parallel_for_each(_shards, [] (std::optional<shard_writer>& shard) {
+            return shard ? shard->close() : make_ready_future<>();
+        });
     }
 };
 
