@@ -1236,12 +1236,26 @@ SEASTAR_TEST_CASE(test_query_digest) {
         auto check_digests_equal = [] (const mutation& m1, const mutation& m2) {
             auto ps1 = partition_slice_builder(*m1.schema()).build();
             auto ps2 = partition_slice_builder(*m2.schema()).build();
-            auto digest1 = *m1.query(ps1, query::result_memory_accounter{ query::result_memory_limiter::unlimited_result_size },
+            auto digest1_old = *m1.query(ps1, query::result_memory_accounter{ query::result_memory_limiter::unlimited_result_size },
                     query::result_options::only_digest(query::digest_algorithm::xxHash)).digest();
-            auto digest2 = *m2.query(ps2, query::result_memory_accounter{ query::result_memory_limiter::unlimited_result_size },
+            auto digest1_new = *query_mutation(mutation(m1), ps1, query::max_rows, gc_clock::now(),
                     query::result_options::only_digest(query::digest_algorithm::xxHash)).digest();
-            if (digest1 != digest2) {
-                BOOST_FAIL(format("Digest should be the same for {} and {}", m1, m2));
+            auto digest2_old = *m2.query(ps2, query::result_memory_accounter{ query::result_memory_limiter::unlimited_result_size },
+                    query::result_options::only_digest(query::digest_algorithm::xxHash)).digest();
+            auto digest2_new = *query_mutation(mutation(m2), ps2, query::max_rows, gc_clock::now(),
+                    query::result_options::only_digest(query::digest_algorithm::xxHash)).digest();
+
+            if (digest1_old != digest1_new) {
+                BOOST_FAIL(format("Digest should be the same with old and new method for {}", m1));
+            }
+            if (digest2_old != digest2_new) {
+                BOOST_FAIL(format("Digest should be the same with old and new method for {}", m2));
+            }
+            if (digest1_old != digest2_old) {
+                BOOST_FAIL(format("Digest (old) should be the same for {} and {}", m1, m2));
+            }
+            if (digest1_new != digest2_new) {
+                BOOST_FAIL(format("Digest (new) should be the same for {} and {}", m1, m2));
             }
         };
 
