@@ -578,7 +578,17 @@ future<foreign_ptr<std::unique_ptr<cql_server::response>>>
         } catch (const exceptions::prepared_query_not_found_exception& ex) {
             try { ++_server._stats.errors[ex.code()]; } catch(...) {}
             return make_unprepared_error(stream, ex.code(), ex.what(), ex.id, trace_state);
+        } catch (const exceptions::function_execution_exception& ex) {
+            try { ++_server._stats.errors[ex.code()]; } catch(...) {}
+            return make_function_failure_error(stream, ex.code(), ex.what(), ex.ks_name, ex.func_name, ex.args, trace_state);
         } catch (const exceptions::cassandra_exception& ex) {
+            // Note: the CQL protocol specifies that many types of errors have
+            // mandatory parameters. These cassandra_exception subclasses MUST
+            // be handled above. This default "cassandra_exception" case is
+            // only appropriate for the specific types of errors which do not have
+            // additional information, such as invalid_request_exception.
+            // TODO: consider listing those types explicitly, instead of the
+            // catch-all type cassandra_exception.
             try { ++_server._stats.errors[ex.code()]; } catch(...) {}
             return make_error(stream, ex.code(), ex.what(), trace_state);
         } catch (std::exception& ex) {
@@ -1336,6 +1346,17 @@ std::unique_ptr<cql_server::response> cql_server::connection::make_unprepared_er
     response->write_int(static_cast<int32_t>(err));
     response->write_string(msg);
     response->write_short_bytes(id);
+    return response;
+}
+
+std::unique_ptr<cql_server::response> cql_server::connection::make_function_failure_error(int16_t stream, exceptions::exception_code err, sstring msg, sstring ks_name, sstring func_name, std::vector<sstring> args, const tracing::trace_state_ptr& tr_state) const
+{
+    auto response = std::make_unique<cql_server::response>(stream, cql_binary_opcode::ERROR, tr_state);
+    response->write_int(static_cast<int32_t>(err));
+    response->write_string(msg);
+    response->write_string(ks_name);
+    response->write_string(func_name);
+    response->write_string_list(args);
     return response;
 }
 

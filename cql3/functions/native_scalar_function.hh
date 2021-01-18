@@ -78,7 +78,22 @@ public:
         return Pure;
     }
     virtual bytes_opt execute(cql_serialization_format sf, const std::vector<bytes_opt>& parameters) override {
-        return _func(sf, parameters);
+        try {
+            return _func(sf, parameters);
+        } catch(exceptions::cassandra_exception&) {
+            // If the function's code took the time to produce an official
+            // cassandra_exception, pass it through. Otherwise, below we will
+            // wrap the unknown exception in a function_execution_exception.
+            throw;
+        } catch(...) {
+            std::vector<sstring> args;
+            args.reserve(arg_types().size());
+            for (const data_type& a : arg_types()) {
+                args.push_back(a->name());
+            }
+            throw exceptions::function_execution_exception(name().name,
+                format("Failed execution of function {}: {}", name(), std::current_exception()), name().keyspace, std::move(args));
+        }
     }
 };
 

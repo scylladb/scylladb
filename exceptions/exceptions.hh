@@ -340,4 +340,18 @@ public:
     unsupported_operation_exception(const sstring& msg) : std::runtime_error("unsupported operation: " + msg) {}
 };
 
+class function_execution_exception : public cassandra_exception {
+public:
+    const sstring ks_name;
+    const sstring func_name;
+    const std::vector<sstring> args;
+    function_execution_exception(sstring func_name_, sstring detail, sstring ks_name_, std::vector<sstring> args_) noexcept
+        : cassandra_exception{exception_code::FUNCTION_FAILURE,
+            format("execution of {} failed: {}", func_name_, detail)}
+        , ks_name(std::move(ks_name_))
+        , func_name(std::move(func_name_))
+        , args(std::move(args_))
+    { }
+};
+
 }

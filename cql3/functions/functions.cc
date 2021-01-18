@@ -181,13 +181,18 @@ inline
 shared_ptr<function>
 make_from_json_function(database& db, const sstring& keyspace, data_type t) {
     return make_native_scalar_function<true>("fromjson", t, {utf8_type},
-            [&db, &keyspace, t](cql_serialization_format sf, const std::vector<bytes_opt>& parameters) -> bytes_opt {
-        rjson::value json_value = rjson::parse(utf8_type->to_string(parameters[0].value()));
-        bytes_opt parsed_json_value;
-        if (!json_value.IsNull()) {
-            parsed_json_value.emplace(from_json_object(*t, json_value, sf));
+            [&db, keyspace, t](cql_serialization_format sf, const std::vector<bytes_opt>& parameters) -> bytes_opt {
+        try {
+            rjson::value json_value = rjson::parse(utf8_type->to_string(parameters[0].value()));
+            bytes_opt parsed_json_value;
+            if (!json_value.IsNull()) {
+                parsed_json_value.emplace(from_json_object(*t, json_value, sf));
+            }
+            return parsed_json_value;
+        } catch(rjson::error& e) {
+            throw exceptions::function_execution_exception("fromJson",
+                format("Failed parsing fromJson parameter: {}", e.what()), keyspace, {t->name()});
         }
-        return parsed_json_value;
     });
 }
 
