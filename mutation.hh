@@ -119,27 +119,6 @@ public:
     bool operator==(const mutation&) const;
     bool operator!=(const mutation&) const;
 public:
-    // The supplied partition_slice must be governed by this mutation's schema
-    query::result query(const query::partition_slice&,
-        query::result_memory_accounter&& accounter,
-        query::result_options opts = query::result_options::only_result(),
-        gc_clock::time_point now = gc_clock::now(),
-        uint64_t row_limit = query::max_rows) &&;
-
-    // The supplied partition_slice must be governed by this mutation's schema
-    // FIXME: Slower than the r-value version
-    query::result query(const query::partition_slice&,
-        query::result_memory_accounter&& accounter,
-        query::result_options opts = query::result_options::only_result(),
-        gc_clock::time_point now = gc_clock::now(),
-        uint64_t row_limit = query::max_rows) const&;
-
-    // The supplied partition_slice must be governed by this mutation's schema
-    void query(query::result::builder& builder,
-        const query::partition_slice& slice,
-        gc_clock::time_point now = gc_clock::now(),
-        uint64_t row_limit = query::max_rows) &&;
-
     // Consumes the mutation's content.
     //
     // The mutation is in a moved-from alike state after consumption.

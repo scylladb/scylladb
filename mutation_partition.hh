@@ -1479,11 +1479,6 @@ public:
         return boost::make_iterator_range(_rows.begin(), _rows.end())
             | boost::adaptors::filtered([] (const rows_entry& e) { return bool(!e.dummy()); });
     }
-    // Writes this partition using supplied query result writer.
-    // The partition should be first compacted with compact_for_query(), otherwise
-    // results may include data which is deleted/expired.
-    // At most row_limit CQL rows will be written and digested.
-    void query_compacted(query::result::partition_writer& pw, const schema& s, uint64_t row_limit) const;
     void accept(const schema&, mutation_partition_visitor&) const;
 
     // Returns the number of live CQL rows in this partition.
