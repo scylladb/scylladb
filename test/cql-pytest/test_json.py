@@ -26,7 +26,7 @@
 
 from util import unique_name, new_test_table
 
-from cassandra.protocol import FunctionFailure
+from cassandra.protocol import FunctionFailure, InvalidRequest
 
 import pytest
 import random
@@ -34,58 +34,62 @@ import random
 @pytest.fixture(scope="session")
 def table1(cql, test_keyspace):
     table = test_keyspace + "." + unique_name()
-    cql.execute(f"CREATE TABLE {table} (p int PRIMARY KEY, v int, a ascii)")
+    cql.execute(f"CREATE TABLE {table} (p int PRIMARY KEY, v int, a ascii, b boolean)")
     yield table
     cql.execute("DROP TABLE " + table)
 
 # Test that failed fromJson() parsing an invalid JSON results in the expected
 # error - FunctionFailure - and not some weird internal error.
 # Reproduces issue #7911.
-@pytest.mark.xfail(reason="issue #7911")
 def test_failed_json_parsing_unprepared(cql, table1):
     p = random.randint(1,1000000000)
     with pytest.raises(FunctionFailure):
         cql.execute(f"INSERT INTO {table1} (p, v) VALUES ({p}, fromJson('dog'))")
-@pytest.mark.xfail(reason="issue #7911")
 def test_failed_json_parsing_prepared(cql, table1):
     p = random.randint(1,1000000000)
     stmt = cql.prepare(f"INSERT INTO {table1} (p, v) VALUES (?, fromJson(?))")
     with pytest.raises(FunctionFailure):
-        cql.execute(stmt, [0, 'dog'])
+        cql.execute(stmt, [p, 'dog'])
 
 # Similarly, if the JSON parsing did not fail, but yielded a type which is
 # incompatible with the type we want it to yield, we should get a clean
 # FunctionFailure, not some internal server error.
 # We have here examples of returning a string where a number was expected,
-# and returning a unicode string where ASCII was expected.
+# and returning a unicode string where ASCII was expected, and returning
+# a number of the wrong type
 # Reproduces issue #7911.
-@pytest.mark.xfail(reason="issue #7911")
 def test_fromjson_wrong_type_unprepared(cql, table1):
     p = random.randint(1,1000000000)
     with pytest.raises(FunctionFailure):
         cql.execute(f"INSERT INTO {table1} (p, v) VALUES ({p}, fromJson('\"dog\"'))")
     with pytest.raises(FunctionFailure):
         cql.execute(f"INSERT INTO {table1} (p, a) VALUES ({p}, fromJson('3'))")
-@pytest.mark.xfail(reason="issue #7911")
 def test_fromjson_wrong_type_prepared(cql, table1):
     p = random.randint(1,1000000000)
     stmt = cql.prepare(f"INSERT INTO {table1} (p, v) VALUES (?, fromJson(?))")
     with pytest.raises(FunctionFailure):
-        cql.execute(stmt, [0, '"dog"'])
+        cql.execute(stmt, [p, '"dog"'])
     stmt = cql.prepare(f"INSERT INTO {table1} (p, a) VALUES (?, fromJson(?))")
     with pytest.raises(FunctionFailure):
-        cql.execute(stmt, [0, '3'])
-@pytest.mark.xfail(reason="issue #7911")
+        cql.execute(stmt, [p, '3'])
 def test_fromjson_bad_ascii_unprepared(cql, table1):
     p = random.randint(1,1000000000)
     with pytest.raises(FunctionFailure):
         cql.execute(f"INSERT INTO {table1} (p, a) VALUES ({p}, fromJson('\"שלום\"'))")
-@pytest.mark.xfail(reason="issue #7911")
 def test_fromjson_bad_ascii_prepared(cql, table1):
     p = random.randint(1,1000000000)
     stmt = cql.prepare(f"INSERT INTO {table1} (p, a) VALUES (?, fromJson(?))")
     with pytest.raises(FunctionFailure):
-        cql.execute(stmt, [0, '"שלום"'])
+        cql.execute(stmt, [p, '"שלום"'])
+def test_fromjson_nonint_unprepared(cql, table1):
+    p = random.randint(1,1000000000)
+    with pytest.raises(FunctionFailure):
+        cql.execute(f"INSERT INTO {table1} (p, v) VALUES ({p}, fromJson('1.2'))")
+def test_fromjson_nonint_prepared(cql, table1):
+    p = random.randint(1,1000000000)
+    stmt = cql.prepare(f"INSERT INTO {table1} (p, v) VALUES (?, fromJson(?))")
+    with pytest.raises(FunctionFailure):
+        cql.execute(stmt, [p, '1.2'])
 
 # The JSON standard does not define or limit the range or precision of
 # numbers. However, if a number is assigned to a Scylla number type, the
@@ -105,7 +109,27 @@ def test_fromjson_int_overflow_prepared(cql, table1):
     p = random.randint(1,1000000000)
     stmt = cql.prepare(f"INSERT INTO {table1} (p, v) VALUES (?, fromJson(?))")
     with pytest.raises(FunctionFailure):
-        cql.execute(stmt, [0, '2147483648'])
+        cql.execute(stmt, [p, '2147483648'])
+
+# Cassandra allows the strings "true" and "false", not just the JSON constants
+# true and false, to be assigned to a boolean column. However, very strangely,
+# it only allows this for prepared statements, and *not* for unprepared
+# statements - which result in an InvalidRequest!
+# Reproduces #7915.
+def test_fromjson_boolean_string_unprepared(cql, table1):
+    p = random.randint(1,1000000000)
+    with pytest.raises(InvalidRequest):
+        cql.execute(f"INSERT INTO {table1} (p, b) VALUES ({p}, '\"true\"')")
+    with pytest.raises(InvalidRequest):
+        cql.execute(f"INSERT INTO {table1} (p, b) VALUES ({p}, '\"false\"')")
+@pytest.mark.xfail(reason="issue #7915")
+def test_fromjson_boolean_string_prepared(cql, table1):
+    p = random.randint(1,1000000000)
+    stmt = cql.prepare(f"INSERT INTO {table1} (p, b) VALUES (?, fromJson(?))")
+    cql.execute(stmt, [p, '"true"'])
+    assert list(cql.execute(f"SELECT p, b from {table1} where p = {p}")) == [(p, True)]
+    cql.execute(stmt, [p, '"false"'])
+    assert list(cql.execute(f"SELECT p, b from {table1} where p = {p}")) == [(p, False)]
 
 # Test that null argument is allowed for fromJson(), with unprepared statement
 # Reproduces issue #7912.
