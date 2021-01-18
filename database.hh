@@ -684,6 +684,10 @@ public:
         return make_streaming_reader(schema, range, schema->full_slice());
     }
 
+    // Stream reader from the given sstables
+    flat_mutation_reader make_streaming_reader(schema_ptr schema, const dht::partition_range& range,
+            lw_shared_ptr<sstables::sstable_set> sstables) const;
+
     sstables::shared_sstable make_streaming_sstable_for_write(std::optional<sstring> subdir = {});
     sstables::shared_sstable make_streaming_staging_sstable() {
         return make_streaming_sstable_for_write("staging");

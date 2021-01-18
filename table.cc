@@ -251,6 +251,17 @@ flat_mutation_reader table::make_streaming_reader(schema_ptr schema, const dht::
     return make_combined_reader(std::move(schema), std::move(permit), std::move(readers), fwd, fwd_mr);
 }
 
+flat_mutation_reader table::make_streaming_reader(schema_ptr schema, const dht::partition_range& range,
+        lw_shared_ptr<sstables::sstable_set> sstables) const {
+    auto permit = _config.streaming_read_concurrency_semaphore->make_permit(schema.get(), "load-and-stream");
+    auto& slice = schema->full_slice();
+    const auto& pc = service::get_local_streaming_priority();
+    auto trace_state = tracing::trace_state_ptr();
+    const auto fwd = streamed_mutation::forwarding::no;
+    const auto fwd_mr = mutation_reader::forwarding::no;
+    return make_sstable_reader(schema, permit, sstables, range, slice, pc, std::move(trace_state), fwd, fwd_mr);
+}
+
 future<std::vector<locked_cell>> table::lock_counter_cells(const mutation& m, db::timeout_clock::time_point timeout) {
     assert(m.schema() == _counter_cell_locks->schema());
     return _counter_cell_locks->lock_cells(m.decorated_key(), partition_cells_range(m.partition()), timeout);

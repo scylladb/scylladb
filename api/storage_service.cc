@@ -732,11 +732,19 @@ void set_storage_service(http_context& ctx, routes& r) {
     ss::load_new_ss_tables.set(r, [&ctx](std::unique_ptr<request> req) {
         auto ks = validate_keyspace(ctx, req->param);
         auto cf = req->get_query_param("cf");
+        auto stream = req->get_query_param("load_and_stream");
+        auto primary_replica = req->get_query_param("primary_replica_only");
+        boost::algorithm::to_lower(stream);
+        boost::algorithm::to_lower(primary_replica);
+        bool load_and_stream = stream == "true" || stream == "1";
+        bool primary_replica_only = primary_replica == "true" || primary_replica == "1";
         // No need to add the keyspace, since all we want is to avoid always sending this to the same
         // CPU. Even then I am being overzealous here. This is not something that happens all the time.
         auto coordinator = std::hash<sstring>()(cf) % smp::count;
-        return service::get_storage_service().invoke_on(coordinator, [ks = std::move(ks), cf = std::move(cf)] (service::storage_service& s) {
-            return s.load_new_sstables(ks, cf);
+        return service::get_storage_service().invoke_on(coordinator,
+                [ks = std::move(ks), cf = std::move(cf),
+                load_and_stream, primary_replica_only] (service::storage_service& s) {
+            return s.load_new_sstables(ks, cf, load_and_stream, primary_replica_only);
         }).then_wrapped([] (auto&& f) {
             if (f.failed()) {
                 auto msg = fmt::format("Failed to load new sstables: {}", f.get_exception());
