@@ -70,13 +70,14 @@ future<> normalizing_reader::fill_buffer(db::timeout_clock::time_point timeout) 
     });
 }
 
-void normalizing_reader::next_partition() {
+future<> normalizing_reader::next_partition() {
     _range_tombstones.reset();
     clear_buffer_to_next_partition();
     if (is_buffer_empty()) {
         _end_of_stream = false;
-        _rd.next_partition();
+        return _rd.next_partition();
     }
+    return make_ready_future<>();
 }
 future<> normalizing_reader::fast_forward_to(
         const dht::partition_range& pr, db::timeout_clock::time_point timeout) {

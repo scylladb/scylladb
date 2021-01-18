@@ -440,7 +440,7 @@ public:
             }
         });
     }
-    virtual void next_partition() override {
+    virtual future<> next_partition() override {
         if (is_initialized()) {
             if (_fwd == streamed_mutation::forwarding::yes) {
                 clear_buffer();
@@ -453,6 +453,7 @@ public:
                 }
             }
         }
+        return make_ready_future<>();
         // If _ds is not created then next_partition() has no effect because there was no partition_start emitted yet.
     }
     virtual future<> fast_forward_to(position_range cr, db::timeout_clock::time_point timeout) override {

@@ -46,6 +46,8 @@ template<typename Consumer>
 concept FlatMutationReaderConsumer =
     requires(Consumer c, mutation_fragment mf) {
         { c(std::move(mf)) } -> std::same_as<stop_iteration>;
+    } || requires(Consumer c, mutation_fragment mf) {
+        { c(std::move(mf)) } -> std::same_as<future<stop_iteration>>;
     };
 
 
@@ -84,7 +86,6 @@ public:
     private:
         tracked_buffer _buffer;
         size_t _buffer_size = 0;
-        bool _consume_done = false;
     protected:
         size_t max_buffer_size_in_bytes = 8 * 1024;
         bool _end_of_stream = false;
@@ -119,7 +120,7 @@ public:
         impl(schema_ptr s, reader_permit permit) : _buffer(permit), _schema(std::move(s)), _permit(std::move(permit)) { }
         virtual ~impl() {}
         virtual future<> fill_buffer(db::timeout_clock::time_point) = 0;
-        virtual void next_partition() = 0;
+        virtual future<> next_partition() = 0;
 
         bool is_end_of_stream() const { return _end_of_stream; }
         bool is_buffer_empty() const { return _buffer.empty(); }
@@ -153,16 +154,22 @@ public:
         // Stops when consumer returns stop_iteration::yes or end of stream is reached.
         // Next call will start from the next mutation_fragment in the stream.
         future<> consume_pausable(Consumer consumer, db::timeout_clock::time_point timeout) {
-            _consume_done = false;
-            return do_until([this] { return (is_end_of_stream() && is_buffer_empty()) || _consume_done; },
-                            [this, consumer = std::move(consumer), timeout] () mutable {
-                if (is_buffer_empty()) {
-                    return fill_buffer(timeout);
-                }
+            return do_with(std::move(consumer), [this, timeout] (Consumer& consumer) {
+                return repeat([this, &consumer, timeout] {
+                    if (is_end_of_stream() && is_buffer_empty()) {
+                        return make_ready_future<stop_iteration>(stop_iteration::yes);
+                    }
 
-                _consume_done = consumer(pop_mutation_fragment()) == stop_iteration::yes;
+                    if (is_buffer_empty()) {
+                        return fill_buffer(timeout).then([] {
+                            return make_ready_future<stop_iteration>(stop_iteration::no);
+                        });
+                    }
 
-                return make_ready_future<>();
+                    return futurize_invoke([&consumer, mf = pop_mutation_fragment()] () mutable {
+                        return consumer(std::move(mf));
+                    });
+                });
             });
         }
 
@@ -186,10 +193,16 @@ public:
                 }
                 auto mf = pop_mutation_fragment();
                 if (mf.is_partition_start() && !filter(mf.as_partition_start().key())) {
-                    next_partition();
+                    next_partition().get();
                     continue;
                 }
-                if (filter(mf) && (consumer(std::move(mf)) == stop_iteration::yes)) {
+                if (!filter(mf)) {
+                    continue;
+                }
+                auto do_stop = futurize_invoke([&consumer, mf = std::move(mf)] () mutable {
+                    return consumer(std::move(mf));
+                });
+                if (do_stop.get0()) {
                     return;
                 }
             }
@@ -205,38 +218,42 @@ public:
                     : _reader(reader)
                       , _consumer(std::move(c))
             { }
-            stop_iteration operator()(mutation_fragment&& mf) {
+            future<stop_iteration> operator()(mutation_fragment&& mf) {
                 return std::move(mf).consume(*this);
             }
-            stop_iteration consume(static_row&& sr) {
+            future<stop_iteration> consume(static_row&& sr) {
                 return handle_result(_consumer.consume(std::move(sr)));
             }
-            stop_iteration consume(clustering_row&& cr) {
+            future<stop_iteration> consume(clustering_row&& cr) {
                 return handle_result(_consumer.consume(std::move(cr)));
             }
-            stop_iteration consume(range_tombstone&& rt) {
+            future<stop_iteration> consume(range_tombstone&& rt) {
                 return handle_result(_consumer.consume(std::move(rt)));
             }
-            stop_iteration consume(partition_start&& ps) {
+            future<stop_iteration> consume(partition_start&& ps) {
                 _decorated_key.emplace(std::move(ps.key()));
                 _consumer.consume_new_partition(*_decorated_key);
                 if (ps.partition_tombstone()) {
                     _consumer.consume(ps.partition_tombstone());
                 }
-                return stop_iteration::no;
+                return make_ready_future<stop_iteration>(stop_iteration::no);
             }
-            stop_iteration consume(partition_end&& pe) {
+            future<stop_iteration> consume(partition_end&& pe) {
+              return futurize_invoke([this] {
                 return _consumer.consume_end_of_partition();
+              });
             }
         private:
-            stop_iteration handle_result(stop_iteration si) {
+            future<stop_iteration> handle_result(stop_iteration si) {
                 if (si) {
                     if (_consumer.consume_end_of_partition()) {
-                        return stop_iteration::yes;
+                        return make_ready_future<stop_iteration>(stop_iteration::yes);
                     }
-                    _reader.next_partition();
+                    return _reader.next_partition().then([] {
+                        return make_ready_future<stop_iteration>(stop_iteration::no);
+                    });
                 }
-                return stop_iteration::no;
+                return make_ready_future<stop_iteration>(stop_iteration::no);
             }
         };
     public:
@@ -405,7 +422,7 @@ public:
     //
     // Can be used to skip over entire partitions if interleaved with
     // `operator()()` calls.
-    void next_partition() { _impl->next_partition(); }
+    future<> next_partition() { return _impl->next_partition(); }
 
     future<> fill_buffer(db::timeout_clock::time_point timeout) { return _impl->fill_buffer(timeout); }
 
@@ -593,11 +610,12 @@ flat_mutation_reader transform(flat_mutation_reader r, T t) {
                 }
             });
         }
-        virtual void next_partition() override {
+        virtual future<> next_partition() override {
             clear_buffer_to_next_partition();
             if (is_buffer_empty()) {
-                _reader.next_partition();
+                return _reader.next_partition();
             }
+            return make_ready_future<>();
         }
         virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {
             clear_buffer();
@@ -635,12 +653,15 @@ public:
         forward_buffer_to(pr.start());
         return to_reference(_underlying).fast_forward_to(std::move(pr), timeout);
     }
-    virtual void next_partition() override {
+    virtual future<> next_partition() override {
         clear_buffer_to_next_partition();
+        auto maybe_next_partition = make_ready_future<>();
         if (is_buffer_empty()) {
-            to_reference(_underlying).next_partition();
+            maybe_next_partition = to_reference(_underlying).next_partition();
         }
+      return maybe_next_partition.then([this] {
         _end_of_stream = to_reference(_underlying).is_end_of_stream() && to_reference(_underlying).is_buffer_empty();
+      });
     }
     virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {
         _end_of_stream = false;

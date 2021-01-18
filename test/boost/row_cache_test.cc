@@ -195,10 +195,10 @@ public:
         }
         return delegating_reader<flat_mutation_reader>::fill_buffer(timeout);
     }
-    virtual void next_partition() override {
+    virtual future<> next_partition() override {
         _count_fill_buffer = false;
         ++_counter;
-        delegating_reader<flat_mutation_reader>::next_partition();
+        return delegating_reader<flat_mutation_reader>::next_partition();
     }
 };
 

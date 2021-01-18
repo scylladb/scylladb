@@ -304,11 +304,12 @@ public:
         return make_ready_future<>();
       });
     }
-    virtual void next_partition() override {
+    virtual future<> next_partition() override {
         clear_buffer_to_next_partition();
         if (is_buffer_empty()) {
             _end_of_stream = true;
         }
+        return make_ready_future<>();
     }
     virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {
         throw std::runtime_error("This reader can't be fast forwarded to another partition.");

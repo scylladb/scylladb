@@ -733,7 +733,7 @@ uint64_t consume_all_with_next_partition(flat_mutation_reader& rd) {
     uint64_t fragments = 0;
     do {
         fragments += consume_all(rd);
-        rd.next_partition();
+        rd.next_partition().get();
         rd.fill_buffer(db::no_timeout).get();
     } while(!rd.is_end_of_stream() || !rd.is_buffer_empty());
     return fragments;

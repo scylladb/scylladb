@@ -421,7 +421,7 @@ public:
 
     flat_reader_assertions& next_partition() {
         testlog.trace("Skip to next partition");
-        _reader.next_partition();
+        _reader.next_partition().get();
         return *this;
     }
 
