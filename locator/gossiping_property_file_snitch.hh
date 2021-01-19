@@ -45,7 +45,6 @@
 #include <optional>
 #include "production_snitch_base.hh"
 #include "exceptions/exceptions.hh"
-#include "service/storage_service.hh"
 #include <seastar/core/file.hh>
 #include "log.hh"
 #include "locator/reconnectable_snitch_helper.hh"
@@ -78,6 +77,13 @@ public:
     gossiping_property_file_snitch(
         const sstring& fname = "",
         unsigned io_cpuid = 0);
+
+    virtual snitch_signal_connection_t when_reconfigured(snitch_signal_slot_t& slot) override {
+        return _reconfigured.connect([slot = std::move(slot)] () mutable {
+            // the signal is fired inside thread context
+            slot().get();
+        });
+    }
 
     /**
      * This function register a Gossiper subscriber to reconnect according to
@@ -139,5 +145,6 @@ private:
     bool _file_reader_runs = false;
     unsigned _file_reader_cpu_id;
     shared_ptr<reconnectable_snitch_helper> _reconnectable_helper;
+    snitch_signal_t _reconfigured;
 };
 } // namespace locator

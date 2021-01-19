@@ -40,8 +40,11 @@
 
 #include <unordered_set>
 #include <vector>
+#include <boost/signals2.hpp>
+#include <boost/signals2/dummy_mutex.hpp>
 
 #include "gms/inet_address.hh"
+#include "gms/versioned_value.hh"
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/thread.hh>
 #include <seastar/core/distributed.hh>
@@ -55,6 +58,10 @@ enum class application_state;
 }
 
 namespace locator {
+
+using snitch_signal_t = boost::signals2::signal_type<void (), boost::signals2::keywords::mutex_type<boost::signals2::dummy_mutex>>::type;
+using snitch_signal_slot_t = std::function<future<>()>;
+using snitch_signal_connection_t = boost::signals2::scoped_connection;
 
 struct snitch_ptr;
 
@@ -111,7 +118,7 @@ public:
      */
     virtual future<> gossiper_starting() {
         _gossip_started = true;
-        return make_ready_future<>();
+        return gossip_snitch_info({});
     }
 
     /**
@@ -184,6 +191,13 @@ public:
     virtual future<> reload_gossiper_state() {
         // noop by default
         return make_ready_future<>();
+    }
+
+    virtual future<> gossip_snitch_info(std::list<std::pair<gms::application_state, gms::versioned_value>> info) = 0;
+
+    virtual snitch_signal_connection_t when_reconfigured(snitch_signal_slot_t& slot) {
+        // no updates by default
+        return snitch_signal_connection_t();
     }
 
 protected:
@@ -426,6 +440,8 @@ public:
         std::vector<inet_address>& merged,
         std::vector<inet_address>& l1,
         std::vector<inet_address>& l2) override;
+
+    virtual future<> gossip_snitch_info(std::list<std::pair<gms::application_state, gms::versioned_value>> info) override;
 
 private:
     bool has_remote_node(std::vector<inet_address>& l);

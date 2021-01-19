@@ -112,12 +112,18 @@ storage_service::storage_service(abort_source& abort_source, distributed<databas
         , _shared_token_metadata(stm)
         , _sys_dist_ks(sys_dist_ks)
         , _view_update_generator(view_update_generator)
+        , _snitch_reconfigure([this] { return snitch_reconfigured(); })
         , _schema_version_publisher([this] { return publish_schema_version(); }) {
     register_metrics();
     sstable_read_error.connect([this] { do_isolate_on_error(disk_error::regular); });
     sstable_write_error.connect([this] { do_isolate_on_error(disk_error::regular); });
     general_disk_error.connect([this] { do_isolate_on_error(disk_error::regular); });
     commit_error.connect([this] { do_isolate_on_error(disk_error::commit); });
+
+    auto& snitch = locator::i_endpoint_snitch::snitch_instance();
+    if (snitch.local_is_initialized()) {
+        _listeners.emplace_back(make_lw_shared(snitch.local()->when_reconfigured(_snitch_reconfigure)));
+    }
 }
 
 void storage_service::enable_all_features() {
@@ -241,6 +247,10 @@ void storage_service::install_schema_version_change_listener() {
 
 future<> storage_service::publish_schema_version() {
     return get_local_migration_manager().passive_announce(_db.local().get_version());
+}
+
+future<> storage_service::snitch_reconfigured() {
+    return update_topology(utils::fb_utilities::get_broadcast_address());
 }
 
 // Runs inside seastar::async context
@@ -372,9 +382,6 @@ void storage_service::prepare_to_join(
     _gossiper.start_gossiping(generation_number, app_states, gms::bind_messaging_port(bool(do_bind))).get();
 
     install_schema_version_change_listener();
-
-    // gossip snitch infos (local DC and rack)
-    gossip_snitch_info().get();
 
     // gossip local partitioner information (shard count and ignore_msb_bits)
     gossip_sharder().get();
@@ -1728,17 +1735,6 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
             slogger.error("Failed to replicate token_metadata: {}. Aborting.", e);
             abort();
         });
-    });
-}
-
-future<> storage_service::gossip_snitch_info() {
-    auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
-    auto addr = get_broadcast_address();
-    auto dc = snitch->get_datacenter(addr);
-    auto rack = snitch->get_rack(addr);
-    return _gossiper.add_local_application_state({
-        { gms::application_state::DC, versioned_value::datacenter(dc) },
-        { gms::application_state::RACK, versioned_value::rack(rack) },
     });
 }
 

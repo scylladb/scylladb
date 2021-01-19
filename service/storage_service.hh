@@ -66,6 +66,7 @@
 #include "cdc/metadata.hh"
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/lowres_clock.hh>
+#include "locator/snitch_base.hh"
 
 class node_ops_cmd_request;
 class node_ops_cmd_response;
@@ -223,6 +224,8 @@ private:
     future<> update_pending_ranges(sstring reason);
     future<> keyspace_changed(const sstring& ks_name);
     void register_metrics();
+    future<> snitch_reconfigured();
+    static future<> update_topology(inet_address endpoint);
     future<> publish_schema_version();
     void install_schema_version_change_listener();
 
@@ -232,7 +235,6 @@ private:
         });
     }
 public:
-    static future<> update_topology(inet_address endpoint);
 
     token_metadata_ptr get_token_metadata_ptr() const noexcept {
         return _shared_token_metadata.get();
@@ -254,7 +256,6 @@ public:
         return _mnotifier.local();
     }
 
-    future<> gossip_snitch_info();
     future<> gossip_sharder();
 
     distributed<database>& db() {
@@ -600,6 +601,7 @@ private:
     future<> replicate_to_all_cores(mutable_token_metadata_ptr tmptr) noexcept;
     sharded<db::system_distributed_keyspace>& _sys_dist_ks;
     sharded<db::view::view_update_generator>& _view_update_generator;
+    locator::snitch_signal_slot_t _snitch_reconfigure;
     serialized_action _schema_version_publisher;
 private:
     /**

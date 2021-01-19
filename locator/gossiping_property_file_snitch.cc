@@ -40,6 +40,7 @@
 #include "gms/versioned_value.hh"
 #include "message/msg_addr.hh"
 #include "message/messaging_service.hh"
+#include "gms/gossiper.hh"
 
 namespace locator {
 future<bool> gossiping_property_file_snitch::property_file_was_modified() {
@@ -143,8 +144,9 @@ future<> gossiping_property_file_snitch::gossiper_starting() {
 
     ostrm<<local_internal_addr<<std::flush;
 
-    return g.add_local_application_state(application_state::INTERNAL_IP,
-        versioned_value::internal_ip(ostrm.str())).then([this] {
+    return gossip_snitch_info({
+        { application_state::INTERNAL_IP, versioned_value::internal_ip(ostrm.str()) },
+    }).then([this] {
         _gossip_started = true;
         return reload_gossiper_state();
     });
@@ -226,15 +228,13 @@ future<> gossiping_property_file_snitch::reload_configuration() {
                     return local_snitch_ptr->reload_gossiper_state();
                 }).get();
 
-                if (service::get_storage_service().local_is_initialized()) {
-                    service::storage_service::update_topology(utils::fb_utilities::get_broadcast_address()).get();
-                }
+                _reconfigured();
 
                 // spread the word...
                 smp::submit_to(0, [] {
                     auto& local_snitch_ptr = get_local_snitch_ptr();
-                    if (local_snitch_ptr->local_gossiper_started() && service::get_storage_service().local_is_initialized()) {
-                        return service::get_local_storage_service().gossip_snitch_info();
+                    if (local_snitch_ptr->local_gossiper_started()) {
+                        return local_snitch_ptr->gossip_snitch_info({});
                     }
 
                     return make_ready_future<>();
