@@ -139,9 +139,7 @@ class timestamp_based_splitting_mutation_writer {
             return _handle.push(std::move(mf));
         }
         future<> consume_end_of_stream() {
-            if (!_handle.is_terminated()) {
-                _handle.push_end_of_stream();
-            }
+            _handle.push_end_of_stream();
             return std::move(_consume_fut);
         }
         void abort(std::exception_ptr ep) {
