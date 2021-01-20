@@ -7,6 +7,7 @@ Wants=scylla-housekeeping-daily.timer
 [Service]
 PermissionsStartOnly=true
 Type=notify
+LimitCORE=infinity
 LimitMEMLOCK=infinity
 LimitNOFILE=800000
 LimitAS=infinity

@@ -1,6 +1,5 @@
 etc/default/scylla-server
 etc/default/scylla-housekeeping
-etc/security/limits.d/scylla.conf
 etc/scylla.d/*.conf
 opt/scylladb/share/doc/scylla/*
 opt/scylladb/share/doc/scylla/licenses/
