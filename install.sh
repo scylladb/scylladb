@@ -350,10 +350,8 @@ EOS
 SYSCONFDIR="$sysconfdir"
 EOS
     fi
-    install -m755 -d "$retc/security/limits.d"
     install -m755 -d "$rusr/bin"
     install -m755 -d "$rhkdata"
-    install -m644 dist/common/limits.d/scylla.conf -Dt "$retc"/security/limits.d
     ln -srf "$rprefix/bin/scylla" "$rusr/bin/scylla"
     ln -srf "$rprefix/bin/iotune" "$rusr/bin/iotune"
     ln -srf "$rprefix/bin/scyllatop" "$rusr/bin/scyllatop"
