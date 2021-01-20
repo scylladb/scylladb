@@ -166,7 +166,7 @@ SEASTAR_TEST_CASE(test_multishard_writer_producer_aborts) {
 
 namespace {
 
-class bucket_writer {
+class test_bucket_writer {
     schema_ptr _schema;
     classify_by_timestamp _classify;
     std::unordered_map<int64_t, std::vector<mutation>>& _buckets;
@@ -174,6 +174,17 @@ class bucket_writer {
     std::optional<int64_t> _bucket_id;
     mutation_opt _current_mutation;
     bool _is_first_mutation = true;
+
+    size_t _throw_after;
+    size_t _mutation_consumed = 0;
+
+public:
+    class expected_exception : public std::exception {
+    public:
+        virtual const char* what() const noexcept override {
+            return "expected_exception";
+        }
+    };
 
 private:
     void check_timestamp(api::timestamp_type ts) {
@@ -223,40 +234,53 @@ private:
         check_timestamp(rt.tomb.timestamp);
     }
 
+    void maybe_throw() {
+        if (_mutation_consumed++ >= _throw_after) {
+            throw(expected_exception());
+        }
+    }
+
 public:
-    bucket_writer(schema_ptr schema, classify_by_timestamp classify, std::unordered_map<int64_t, std::vector<mutation>>& buckets)
+    test_bucket_writer(schema_ptr schema, classify_by_timestamp classify, std::unordered_map<int64_t, std::vector<mutation>>& buckets, size_t throw_after = std::numeric_limits<size_t>::max())
         : _schema(std::move(schema))
         , _classify(std::move(classify))
-        , _buckets(buckets) {
-    }
+        , _buckets(buckets)
+        , _throw_after(throw_after)
+    { }
     void consume_new_partition(const dht::decorated_key& dk) {
+        maybe_throw();
         BOOST_REQUIRE(!_current_mutation);
         _current_mutation = mutation(_schema, dk);
     }
     void consume(tombstone partition_tombstone) {
+        maybe_throw();
         BOOST_REQUIRE(_current_mutation);
         verify_partition_tombstone(partition_tombstone);
         _current_mutation->partition().apply(partition_tombstone);
     }
     stop_iteration consume(static_row&& sr) {
+        maybe_throw();
         BOOST_REQUIRE(_current_mutation);
         verify_static_row(sr);
         _current_mutation->apply(mutation_fragment(*_schema, tests::make_permit(), std::move(sr)));
         return stop_iteration::no;
     }
     stop_iteration consume(clustering_row&& cr) {
+        maybe_throw();
         BOOST_REQUIRE(_current_mutation);
         verify_clustering_row(cr);
         _current_mutation->apply(mutation_fragment(*_schema, tests::make_permit(), std::move(cr)));
         return stop_iteration::no;
     }
     stop_iteration consume(range_tombstone&& rt) {
+        maybe_throw();
         BOOST_REQUIRE(_current_mutation);
         verify_range_tombstone(rt);
         _current_mutation->apply(mutation_fragment(*_schema, tests::make_permit(), std::move(rt)));
         return stop_iteration::no;
     }
     stop_iteration consume_end_of_partition() {
+        maybe_throw();
         BOOST_REQUIRE(_current_mutation);
         BOOST_REQUIRE(_bucket_id);
         auto& bucket = _buckets[*_bucket_id];
@@ -311,7 +335,7 @@ SEASTAR_THREAD_TEST_CASE(test_timestamp_based_splitting_mutation_writer) {
 
     auto consumer = [&] (flat_mutation_reader bucket_reader) {
         return do_with(std::move(bucket_reader), [&] (flat_mutation_reader& rd) {
-            return rd.consume(bucket_writer(random_schema.schema(), classify_fn, buckets), db::no_timeout);
+            return rd.consume(test_bucket_writer(random_schema.schema(), classify_fn, buckets), db::no_timeout);
         });
     };
 
@@ -341,4 +365,54 @@ SEASTAR_THREAD_TEST_CASE(test_timestamp_based_splitting_mutation_writer) {
         assert_that(combined_mutations[i]).is_equal_to(muts[i]);
     }
 
+}
+
+SEASTAR_THREAD_TEST_CASE(test_timestamp_based_splitting_mutation_writer_abort) {
+    auto random_spec = tests::make_random_schema_specification(
+            get_name(),
+            std::uniform_int_distribution<size_t>(1, 4),
+            std::uniform_int_distribution<size_t>(2, 4),
+            std::uniform_int_distribution<size_t>(2, 8),
+            std::uniform_int_distribution<size_t>(2, 8));
+    auto random_schema = tests::random_schema{tests::random::get_int<uint32_t>(), *random_spec};
+
+    testlog.info("Random schema:\n{}", random_schema.cql());
+
+    auto ts_gen = [&, underlying = tests::default_timestamp_generator()] (std::mt19937& engine,
+            tests::timestamp_destination ts_dest, api::timestamp_type min_timestamp) -> api::timestamp_type {
+        if (ts_dest == tests::timestamp_destination::partition_tombstone ||
+                ts_dest == tests::timestamp_destination::row_marker ||
+                ts_dest == tests::timestamp_destination::row_tombstone ||
+                ts_dest == tests::timestamp_destination::collection_tombstone) {
+            if (tests::random::get_int<int>(0, 10, engine)) {
+                return api::missing_timestamp;
+            }
+        }
+        return underlying(engine, ts_dest, min_timestamp);
+    };
+
+    auto muts = tests::generate_random_mutations(random_schema, ts_gen).get0();
+
+    auto classify_fn = [] (api::timestamp_type ts) {
+        return int64_t(ts % 2);
+    };
+
+    std::unordered_map<int64_t, std::vector<mutation>> buckets;
+
+    int throw_after = tests::random::get_int(muts.size() - 1);
+    testlog.info("Will raise exception after {}/{} mutations", throw_after, muts.size());
+    auto consumer = [&] (flat_mutation_reader bucket_reader) {
+        return do_with(std::move(bucket_reader), [&] (flat_mutation_reader& rd) {
+            return rd.consume(test_bucket_writer(random_schema.schema(), classify_fn, buckets, throw_after), db::no_timeout);
+        });
+    };
+
+    try {
+        segregate_by_timestamp(flat_mutation_reader_from_mutations(tests::make_permit(), muts), classify_fn, std::move(consumer)).get();
+    } catch (const test_bucket_writer::expected_exception&) {
+        BOOST_TEST_PASSPOINT();
+    } catch (const seastar::broken_promise&) {
+        // Tolerated until we properly abort readers
+        BOOST_TEST_PASSPOINT();
+    }
 }

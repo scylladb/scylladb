@@ -31,36 +31,7 @@
 namespace mutation_writer {
 
 class shard_based_splitting_mutation_writer {
-    class shard_writer {
-        queue_reader_handle _handle;
-        future<> _consume_fut;
-    private:
-        shard_writer(schema_ptr schema, std::pair<flat_mutation_reader, queue_reader_handle> queue_reader, reader_consumer& consumer)
-            : _handle(std::move(queue_reader.second))
-            , _consume_fut(consumer(std::move(queue_reader.first))) {
-        }
-
-    public:
-        shard_writer(schema_ptr schema, reader_permit permit, reader_consumer& consumer)
-            : shard_writer(schema, make_queue_reader(schema, std::move(permit)), consumer) {
-        }
-        future<> consume(mutation_fragment mf) {
-            return _handle.push(std::move(mf));
-        }
-        future<> consume_end_of_stream() {
-            // consume_end_of_stream is always called from a finally block,
-            // and that's because we wait for _consume_fut to return. We
-            // don't want to generate another exception here if the read was
-            // aborted.
-            if (!_handle.is_terminated()) {
-                _handle.push_end_of_stream();
-            }
-            return std::move(_consume_fut);
-        }
-        void abort(std::exception_ptr ep) {
-            _handle.abort(ep);
-        }
-    };
+    using shard_writer = bucket_writer;
 
 private:
     schema_ptr _schema;
@@ -105,13 +76,12 @@ public:
         return write_to_shard(mutation_fragment(*_schema, _permit, std::move(pe)));
     }
 
-    future<> consume_end_of_stream() {
-        return parallel_for_each(_shards, [] (std::optional<shard_writer>& shard) {
-            if (!shard) {
-                return make_ready_future<>();
+    void consume_end_of_stream() {
+        for (auto& shard : _shards) {
+            if (shard) {
+                shard->consume_end_of_stream();
             }
-            return shard->consume_end_of_stream();
-        });
+        }
     }
     void abort(std::exception_ptr ep) {
         for (auto&& shard : _shards) {
@@ -119,6 +89,11 @@ public:
                 shard->abort(ep);
             }
         }
+    }
+    future<> close() noexcept {
+        return parallel_for_each(_shards, [] (std::optional<shard_writer>& shard) {
+            return shard ? shard->close() : make_ready_future<>();
+        });
     }
 };
 

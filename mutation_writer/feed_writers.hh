@@ -22,9 +22,30 @@
 #pragma once
 
 #include "flat_mutation_reader.hh"
+#include "mutation_reader.hh"
 
 namespace mutation_writer {
 using reader_consumer = noncopyable_function<future<> (flat_mutation_reader)>;
+
+class bucket_writer {
+    schema_ptr _schema;
+    queue_reader_handle _handle;
+    future<> _consume_fut;
+
+private:
+    bucket_writer(schema_ptr schema, std::pair<flat_mutation_reader, queue_reader_handle> queue_reader, reader_consumer& consumer);
+
+public:
+    bucket_writer(schema_ptr schema, reader_permit permit, reader_consumer& consumer);
+
+    future<> consume(mutation_fragment mf);
+
+    void consume_end_of_stream();
+
+    void abort(std::exception_ptr ep) noexcept;
+
+    future<> close() noexcept;
+};
 
 template <typename Writer>
 requires MutationFragmentConsumer<Writer, future<>>
@@ -40,9 +61,17 @@ future<> feed_writer(flat_mutation_reader&& rd, Writer&& wr) {
             if (f.failed()) {
                 auto ex = f.get_exception();
                 wr.abort(ex);
-                return make_exception_future<>(ex);
+                return wr.close().then_wrapped([ex = std::move(ex)] (future<> f) mutable {
+                    if (f.failed()) {
+                        // The consumer is expected to fail when aborted,
+                        // so just ignore any exception.
+                        (void)f.get_exception();
+                    }
+                    return make_exception_future<>(std::move(ex));
+                });
             } else {
-                return wr.consume_end_of_stream();
+                wr.consume_end_of_stream();
+                return wr.close();
             }
         });
     });
