@@ -31,8 +31,8 @@ log_entry_ptr& log::operator[](size_t i) {
     return get_entry(index_t(i));
 }
 
-void log::emplace_back(log_entry&& e) {
-    _log.emplace_back(seastar::make_lw_shared(std::move(e)));
+void log::emplace_back(log_entry_ptr&& e) {
+    _log.emplace_back(std::move(e));
 }
 
 bool log::empty() const {
@@ -122,34 +122,34 @@ std::pair<bool, term_t> log::match_term(index_t idx, term_t term) const {
     return my_term == term ? std::make_pair(true, term_t(0)) : std::make_pair(false, my_term);
 }
 
-index_t log::maybe_append(std::vector<log_entry>&& entries) {
+index_t log::maybe_append(std::vector<log_entry_ptr>&& entries) {
     assert(!entries.empty());
 
-    index_t last_new_idx = entries.back().idx;
+    index_t last_new_idx = entries.back()->idx;
 
     // We must scan through all entries if the log already
     // contains them to ensure the terms match.
     for (auto& e : entries) {
-        if (e.idx <= last_idx()) {
-            if (e.idx < start_idx()) {
+        if (e->idx <= last_idx()) {
+            if (e->idx < start_idx()) {
                 logger.trace("append_entries: skipping entry with idx {} less than log start {}",
-                    e.idx, start_idx());
+                    e->idx, start_idx());
                 continue;
             }
-            if (e.term == get_entry(e.idx)->term) {
-                logger.trace("append_entries: entries with index {} has matching terms {}", e.idx, e.term);
+            if (e->term == get_entry(e->idx)->term) {
+                logger.trace("append_entries: entries with index {} has matching terms {}", e->idx, e->term);
                 continue;
             }
             logger.trace("append_entries: entries with index {} has non matching terms e.term={}, _log[i].term = {}",
-                e.idx, e.term, get_entry(e.idx)->term);
+                e->idx, e->term, get_entry(e->idx)->term);
             // If an existing entry conflicts with a new one (same
             // index but different terms), delete the existing
             // entry and all that follow it (§5.3).
-            truncate_head(e.idx);
+            truncate_head(e->idx);
         }
         // Assert log monotonicity
-        assert(e.idx == next_idx());
-        _log.emplace_back(seastar::make_lw_shared(std::move(e)));
+        assert(e->idx == next_idx());
+        emplace_back(std::move(e));
     }
 
     return last_new_idx;

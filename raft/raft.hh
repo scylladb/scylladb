@@ -129,7 +129,7 @@ struct snapshot {
     snapshot_id id;
 };
 
-struct append_request_base {
+struct append_request {
     // The leader's term.
     term_t current_term;
     // So that follower can redirect clients
@@ -141,17 +141,9 @@ struct append_request_base {
     term_t prev_log_term;
     // The leader's commit_idx.
     index_t leader_commit_idx;
-};
-
-struct append_request_send : public append_request_base {
     // Log entries to store (empty vector for heartbeat; may send more
     // than one entry for efficiency).
     std::vector<log_entry_ptr> entries;
-};
-struct append_request_recv : public append_request_base {
-    // Same as for append_request_send but unlike it here the
-    // message owns the entries.
-    std::vector<log_entry> entries;
 };
 
 struct append_reply {
@@ -206,7 +198,7 @@ struct snapshot_reply {
     bool success;
 };
 
-using rpc_message = std::variant<append_request_send, append_reply, vote_request, vote_reply, install_snapshot, snapshot_reply>;
+using rpc_message = std::variant<append_request, append_reply, vote_request, vote_reply, install_snapshot, snapshot_reply>;
 
 // we need something that can be truncated form both sides.
 // std::deque move constructor is not nothrow hence cannot be used
@@ -282,7 +274,7 @@ public:
     // Send provided append_request to the supplied server, does
     // not wait for reply. The returned future resolves when
     // message is sent. It does not mean it was received.
-    virtual future<> send_append_entries(server_id id, const append_request_send& append_request) = 0;
+    virtual future<> send_append_entries(server_id id, const append_request& append_request) = 0;
 
     // Send a reply to an append_request. The returned future
     // resolves when message is sent. It does not mean it was
@@ -323,7 +315,7 @@ public:
     virtual ~rpc_server() {};
 
     // This function is called by append_entries RPC
-    virtual void append_entries(server_id from, append_request_recv append_request) = 0;
+    virtual void append_entries(server_id from, append_request append_request) = 0;
 
     // This function is called by append_entries_reply RPC
     virtual void append_entries_reply(server_id from, append_reply reply) = 0;

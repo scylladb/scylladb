@@ -47,7 +47,7 @@ const log_entry& fsm::add_entry(T command) {
     // It's only possible to add entries on a leader.
     check_is_leader();
 
-    _log.emplace_back(log_entry{_current_term, _log.next_idx(), std::move(command)});
+    _log.emplace_back(seastar::make_lw_shared<log_entry>(log_entry{_current_term, _log.next_idx(), std::move(command)}));
     _sm_events.signal();
 
     return *_log[_log.last_idx()];
@@ -326,10 +326,10 @@ void fsm::tick() {
     }
 }
 
-void fsm::append_entries(server_id from, append_request_recv&& request) {
+void fsm::append_entries(server_id from, append_request&& request) {
     logger.trace("append_entries[{}] received ct={}, prev idx={} prev term={} commit idx={}, idx={} num entries={}",
             _my_id, request.current_term, request.prev_log_idx, request.prev_log_term,
-            request.leader_commit_idx, request.entries.size() ? request.entries[0].idx : index_t(0), request.entries.size());
+            request.leader_commit_idx, request.entries.size() ? request.entries[0]->idx : index_t(0), request.entries.size());
 
     assert(is_follower());
     // 3.4. Leader election
@@ -556,14 +556,13 @@ void fsm::replicate_to(follower_progress& progress, bool allow_empty) {
             prev_term = s.idx == prev_idx ? s.term : _log[prev_idx]->term;
         }
 
-        append_request_send req = {{
-                .current_term = _current_term,
-                .leader_id = _my_id,
-                .prev_log_idx = prev_idx,
-                .prev_log_term = prev_term,
-                .leader_commit_idx = _commit_idx
-            },
-            std::vector<log_entry_ptr>()
+        append_request req = {
+            .current_term = _current_term,
+            .leader_id = _my_id,
+            .prev_log_idx = prev_idx,
+            .prev_log_term = prev_term,
+            .leader_commit_idx = _commit_idx,
+            .entries = std::vector<log_entry_ptr>()
         };
 
         if (next_idx) {

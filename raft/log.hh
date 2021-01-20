@@ -55,7 +55,7 @@ public:
     // the function will abort()
     log_entry_ptr& operator[](size_t i);
     // Add an entry to the log.
-    void emplace_back(log_entry&& e);
+    void emplace_back(log_entry_ptr&& e);
     // Mark all entries up to this index as stable.
     void stable_to(index_t idx);
     // Return true if in memory log is empty.
@@ -112,7 +112,7 @@ public:
 
     // Called on a follower to append entries from a leader.
     // @retval return an index of last appended entry
-    index_t maybe_append(std::vector<log_entry>&& entries);
+    index_t maybe_append(std::vector<log_entry_ptr>&& entries);
 
     friend std::ostream& operator<<(std::ostream& os, const log& l);
 };
