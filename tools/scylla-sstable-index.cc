@@ -109,7 +109,7 @@ The tool has to be invoked with:
 Note that for types, the Cassandra type class name has to be used. The
 type class name can be used in the short form, i.e. without the
 `org.apache.cassandra.db.marshal.` prefix.
-See https://github.com/scylladb/scylla/blob/master/docs/cql3-type-mapping.md
+See https://github.com/scylladb/scylla/blob/master/docs/design-notes/cql3-type-mapping.md
 for a mapping of cql3 types to Cassandra type class names.
 
 Types that takes other types as parameters, like collections can be written as:
