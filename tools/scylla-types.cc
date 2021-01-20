@@ -180,6 +180,8 @@ without a leading 0x prefix, e.g. 00783562. For scylla-types to be able to
 examine the values, their type has to be provided. Types should be provided by
 their cassandra class names, e.g. org.apache.cassandra.db.marshal.Int32Type for
 the int32_type. The org.apache.cassandra.db.marshal. prefix can be ommited.
+See https://github.com/scylladb/scylla/blob/master/docs/design-notes/cql3-type-mapping.md
+for a mapping of cql3 types to Cassandra type class names.
 Compound types specify their subtypes inside () separated by comma, e.g.:
 MapType(Int32Type, BytesType). All provided values have to share the same type.
 scylla-types executes so called actions on the provided values. Each action has
