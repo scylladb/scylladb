@@ -498,6 +498,7 @@ set(scylla_sources
     mutation_writer/multishard_writer.cc
     mutation_writer/shard_based_splitting_writer.cc
     mutation_writer/timestamp_based_splitting_writer.cc
+    mutation_writer/feed_writers.cc
     partition_slice_builder.cc
     partition_version.cc
     querier.cc
