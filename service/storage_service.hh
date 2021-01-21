@@ -900,4 +900,6 @@ future<> init_storage_service(sharded<abort_source>& abort_sources, distributed<
         sharded<netw::messaging_service>& ms, sharded<cdc::generation_service>&);
 future<> deinit_storage_service();
 
+future<> generate_data_for_table(sstring ks_name, sstring cf_name, uint64_t start_key, uint64_t end_key, size_t column_size);
+
 }

@@ -1101,6 +1101,62 @@
          ]
       },
       {
+         "path":"/storage_service/generate_data",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Generate data for keyspace.table",
+               "type":"void",
+               "nickname":"generate_data_for_table",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"keyspace",
+                     "description":"The keyspace to generate data",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"table",
+                     "description":"The table to generate data",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"start_key",
+                     "description":"The first key",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"end_key",
+                     "description":"The last key",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"column_size",
+                     "description":"The column size",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
          "path":"/storage_service/force_terminate_repair",
          "operations":[
             {

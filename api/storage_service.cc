@@ -992,6 +992,17 @@ void set_storage_service(http_context& ctx, routes& r) {
         return make_ready_future<json::json_return_type>(json_void());
     });
 
+    ss::generate_data_for_table.set(r, [&ctx](std::unique_ptr<request> req) {
+        auto keyspace = req->get_query_param("keyspace");
+        auto table = req->get_query_param("table");
+        auto start_key= boost::lexical_cast<uint64_t>(req->get_query_param("start_key"));
+        auto end_key = boost::lexical_cast<uint64_t>(req->get_query_param("end_key"));
+        auto column_size = boost::lexical_cast<size_t>(req->get_query_param("column_size"));
+        return service::generate_data_for_table(keyspace, table, start_key, end_key, column_size).then([] () {
+            return make_ready_future<json::json_return_type>(json_void());
+        });
+    });
+
     ss::get_metrics_load.set(r, [&ctx](std::unique_ptr<request> req) {
         return get_cf_stats(ctx, &column_family_stats::live_disk_space_used);
     });

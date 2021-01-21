@@ -85,6 +85,9 @@
 #include "service/priority_manager.hh"
 #include "utils/generation-number.hh"
 #include <seastar/core/coroutine.hh>
+#include "mutation_source_metadata.hh"
+#include "sstables/sstables_manager.hh"
+#include "mutation_writer/multishard_writer.hh"
 
 using token = dht::token;
 using UUID = utils::UUID;
@@ -3572,6 +3575,252 @@ future<> storage_service::node_ops_abort_thread() {
     });
 }
 
+class random_mutation_generator {
+    sharded<database>& _db;
+    table& _table;
+    schema_ptr _s;
+    locator::abstract_replication_strategy& _rs;
+    gms::inet_address _ip;
+    bool _has_cluster_key = false;
+    size_t _column_size;
+    reader_permit _permit;
+    dht::ring_position_comparator _cmp;
+    std::vector<std::string> _columns;
+    std::vector<const column_definition*> _cds;
+    api::timestamp_type _timestamp = api::min_timestamp;
+    uint64_t _total_keys_found = 0;
+    using clk = std::chrono::high_resolution_clock;
+    tombstone new_tombstone() {
+        return {new_timestamp(), gc_clock::now()};
+    }
+public:
+    explicit random_mutation_generator(sharded<database>& db, table& t, schema_ptr s, size_t column_size)
+        : _db(db)
+        , _table(t)
+        , _s(std::move(s))
+        , _rs(_db.local().find_keyspace(_s->ks_name()).get_replication_strategy())
+        , _ip(utils::fb_utilities::get_broadcast_address())
+        , _has_cluster_key(_s->clustering_key_size() != 0)
+        , _column_size(column_size)
+        , _permit(_table.streaming_read_concurrency_semaphore().make_permit(_s.get(), "generate_data"))
+        , _cmp(*_s) {
+        for (auto& [col_name, col_def] : _s->columns_by_name()) {
+            _cds.push_back(col_def);
+        }
+    }
+
+    uint64_t keys_found() {
+        return _total_keys_found;
+    }
+
+    bool belongs_to_me(const dht::decorated_key& dk) const {
+        auto current_targets = _rs.get_natural_endpoints(dk.token());
+        auto it = std::find(current_targets.begin(), current_targets.end(), _ip);
+        return it != current_targets.end();
+    }
+
+    // If local_shard_only is set to true, gen_pkeys_all will only generate partitions for local shard.
+    // If local_shard_only is set to false, gen_pkeys_all will generate partitions for all shards.
+    future<> gen_pkeys_all(uint64_t start_key, uint64_t end_key, uint32_t cluster_keys_per_partition = 10, bool local_shard_only = true) {
+        return seastar::async([this, start_key, end_key, cluster_keys_per_partition, local_shard_only] {
+            uint64_t keys_found = 0;
+            using clk = std::chrono::high_resolution_clock;
+            auto start_time = clk::now();
+            std::list<dht::decorated_key> keys;
+            try {
+                if (local_shard_only) {
+                    for (uint64_t keys_idx = start_key; keys_idx < end_key; keys_idx++) {
+                        auto dk = make_local_pkey(keys_idx);
+                        if (dk && belongs_to_me(*dk)) {
+                            keys_found++;
+                            keys.push_back(std::move(*dk));
+                        }
+                        if (keys_idx % 500 == 0) {
+                            thread::maybe_yield();
+                        }
+                    }
+                } else {
+                    for (uint64_t keys_idx = start_key; keys_idx < end_key; keys_idx++) {
+                        auto dk = make_pkey(keys_idx);
+                        if (belongs_to_me(dk)) {
+                            keys_found++;
+                            keys.push_back(std::move(dk));
+                        }
+                        if (keys_idx % 500 == 0) {
+                            thread::maybe_yield();
+                        }
+                    }
+                }
+
+            } catch (std::exception& ep) {
+                slogger.info("  gen_keys: Got exception={}", ep);
+                throw;
+            }
+            _total_keys_found += keys_found;
+            auto t = std::chrono::duration_cast<std::chrono::duration<float>>(clk::now() - start_time).count();
+            slogger.info("  gen_keys: start_key={}, end_key={}, keys_found={}, time={}, speed={}", start_key, end_key, keys_found, t, float(keys_found) / t);
+
+            start_time = clk::now();
+            int sort_idx;
+            keys.sort([this, &sort_idx] (auto& x, auto& y) {
+                if (sort_idx++ % 500 == 0) {
+                    thread::maybe_yield();
+                }
+                return _cmp(x, y) < 0;
+            });
+            t = std::chrono::duration_cast<std::chrono::duration<float>>(clk::now() - start_time).count();
+            slogger.info(" sort_keys: start_key={}, end_key={}, keys_found={}, time={}, speed={}", start_key, end_key, keys_found, t, float(keys_found) / t);
+
+            start_time = clk::now();
+            auto val = to_bytes(sstring(_column_size, 'v'));
+
+            auto [queue_reader, handle] = make_queue_reader(_s, _permit);
+            auto queue_handle = std::move(handle);
+            auto writer_done = mutation_writer::distribute_reader_and_consume_on_shards(_s, std::move(queue_reader),
+                    [&db = _db, estimated_partitions = keys.size()] (flat_mutation_reader reader) {
+                auto t = db.local().find_column_family(reader.schema()).shared_from_this();
+                auto metadata = mutation_source_metadata{};
+                auto& cs = t->get_compaction_strategy();
+                const auto adjusted_estimated_partitions = cs.adjust_partition_estimate(metadata, estimated_partitions);
+                auto consumer = cs.make_interposer_consumer(metadata,
+                        [t = std::move(t), adjusted_estimated_partitions] (flat_mutation_reader reader) {
+                    sstables::shared_sstable sst = t->make_streaming_sstable_for_write();
+                    schema_ptr s = reader.schema();
+                    auto& pc = service::get_local_streaming_priority();
+                    return sst->write_components(std::move(reader), adjusted_estimated_partitions, s,
+                                                 t->get_sstables_manager().configure_writer("generate_data"),
+                                                 encoding_stats{}, pc).then([sst] {
+                        return sst->open_data();
+                    }).then([t, sst] {
+                        return t->add_sstable_and_update_cache(sst);
+                    });
+                });
+                return consumer(std::move(reader));
+            },
+            _table.stream_in_progress()).then([] (uint64_t partitions) {
+            }).handle_exception([&queue_handle] (std::exception_ptr ep) {
+                queue_handle.abort(ep);
+                return make_exception_future<>(std::move(ep));
+            });
+
+            for (auto& dk : keys) {
+                auto mf_start = mutation_fragment(*_s, _permit, partition_start(dk, tombstone()));
+                queue_handle.push(std::move(mf_start)).get();
+                if (_has_cluster_key) {
+                    for (auto i : boost::irange(0u, cluster_keys_per_partition)) {
+                        mutation_fragment mf = make_row(make_ckey(i), val);
+                        queue_handle.push(std::move(mf)).get();
+                    }
+                } else {
+                    mutation_fragment mf = make_row(make_empty_ckey(), val);
+                    queue_handle.push(std::move(mf)).get();
+                }
+                queue_handle.push(mutation_fragment(*_s, _permit, partition_end())).get();
+            }
+            queue_handle.push_end_of_stream();
+
+            writer_done.get0();
+            t = std::chrono::duration_cast<std::chrono::duration<float>>(clk::now() - start_time).count();
+            slogger.info("write_keys: start_key={}, end_key={}, keys_found={}, time={}, speed={}", start_key, end_key, keys_found, t, float(keys_found) / t);
+        });
+    }
+private:
+    api::timestamp_type current_timestamp() {
+        return _timestamp;
+    }
+    api::timestamp_type new_timestamp() {
+        return _timestamp++;
+    }
+
+    clustering_key_prefix make_empty_ckey() {
+        return clustering_key_prefix_view::make_empty();
+    }
+
+    clustering_key_prefix make_ckey(sstring ck) {
+        return clustering_key_prefix::from_single_value(*_s, to_bytes(ck));
+    }
+
+    clustering_key_prefix make_ckey(uint32_t n) {
+        return make_ckey(sprint("ck%010d", n));
+    }
+
+    dht::decorated_key make_pkey(uint64_t n) {
+        std::string bytes(10, '\0');
+        auto addr = reinterpret_cast<const char*>(&n);
+        std::copy(addr, addr + sizeof(n), bytes.data());
+        auto key = partition_key::from_single_value(*_s, to_bytes(bytes));
+        return dht::decorate_key(*_s, std::move(key));
+    }
+
+    dht::decorated_key make_pkey(sstring pk) {
+        auto key = partition_key::from_single_value(*_s, to_bytes(pk));
+        return dht::decorate_key(*_s, std::move(key));
+    }
+
+    std::optional<dht::decorated_key> make_local_pkey(uint64_t n) {
+        auto key = make_pkey(n);
+        if (this_shard_id() != _s->get_sharder().shard_of(key.token())) {
+            return std::nullopt;
+        }
+        return key;
+    }
+
+    mutation_fragment make_row(const clustering_key_prefix& key, const bytes& v) {
+        auto row = clustering_row(key);
+        auto ts = new_timestamp();
+        for (const auto& column_definition : _cds) {
+            row.cells().apply(*column_definition, atomic_cell::make_live(*(column_definition->type), ts, v));
+        }
+        return mutation_fragment(*_s, _permit, std::move(row));
+    }
+};
+
+future<> generate_data_for_table(sstring ks_name, sstring cf_name, uint64_t start_key, uint64_t end_key, size_t column_size) {
+    auto start_time = lowres_clock::now();
+    return service::get_local_storage_service().db().map_reduce0([ks_name, cf_name, start_key, end_key, column_size, start_time] (database& db) {
+        return seastar::async([&db, ks_name, cf_name, start_key, end_key, column_size] {
+            if (start_key > end_key) {
+                throw std::runtime_error(sprint("start_key should be less than end_key"));
+            }
+            auto& t = db.find_column_family(ks_name, cf_name);
+            auto s = t.schema();
+            auto clustering_key_size = s->clustering_key_size();
+            auto column_nr = s->columns_by_name().size();
+            slogger.info("Generating data for ks={}, talbe={}, start_key={}, end_key={}, column_nr={}, column_size={}, clustering_key_nr={}",
+                    ks_name, cf_name, start_key, end_key, column_nr, column_size, clustering_key_size);
+            if (clustering_key_size > 1) {
+                throw std::runtime_error(format("Only zero or one clustering key per table is supported"));
+            }
+            random_mutation_generator gen(service::get_local_storage_service().db(), t, s, column_size);
+            uint64_t working_partitions = 0;
+            uint64_t partitions_per_round = 5'000'000;
+            uint64_t total_partitions = end_key - start_key;
+
+            seastar::semaphore _gen_sstable_sem(1);
+            bool local_shard_only = smp::count <= 8;
+            parallel_for_each(boost::irange(start_key, end_key, partitions_per_round), [&] (uint64_t idx) {
+                return with_semaphore(_gen_sstable_sem, 1, [&, idx] {
+                    auto end = std::min(idx + partitions_per_round, end_key);
+                    working_partitions += end - idx;
+                    if (!local_shard_only && ((idx / partitions_per_round) % smp::count != this_shard_id())) {
+                        return make_ready_future<>();
+                    } else {
+                        slogger.info("Handling partitions from {} to {}, total_partitions={}, percentage={}", idx, end, total_partitions, float(working_partitions) / float(total_partitions));
+                        uint32_t cluster_keys_per_partition = 1;
+                        return gen.gen_pkeys_all(idx, end, cluster_keys_per_partition, local_shard_only);
+                    }
+                });
+            }).get();
+            return gen.keys_found();
+        });},
+        uint64_t(0),
+        std::plus<uint64_t>()
+    ).then([ks_name, cf_name, start_key, end_key, start_time] (uint64_t found_keys) {
+        auto total_partitions = found_keys;
+        auto t = std::chrono::duration_cast<std::chrono::duration<float>>(lowres_clock::now() - start_time).count();
+        slogger.info("Took {} seconds to generate {} partitions, start_key={}, end_key={}, ks={}, cf={}, speed={} (partitions per second)", t, total_partitions, start_key, end_key, ks_name, cf_name, float(total_partitions) / float(t));
+    });
+}
 
 } // namespace service
 
