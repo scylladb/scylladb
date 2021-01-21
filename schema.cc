@@ -934,6 +934,11 @@ schema_builder& schema_builder::with_sharder(unsigned shard_count, unsigned shar
     return *this;
 }
 
+schema_builder& schema_builder::with_null_sharder() {
+    _raw._sharder = get_sharder(1, 0);
+    return *this;
+}
+
 schema_builder::schema_builder(std::string_view ks_name, std::string_view cf_name,
         std::optional<utils::UUID> id, data_type rct)
         : _raw(id ? *id : utils::UUID_gen::get_time_UUID())

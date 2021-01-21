@@ -763,3 +763,37 @@ SEASTAR_TEST_CASE(test_schema_digest_does_not_change_with_cdc_options) {
         },
         std::move(ext));
 }
+
+// Regression test, ensuring people don't forget to set the null sharder
+// for newly added schema tables.
+SEASTAR_TEST_CASE(test_schema_tables_use_null_sharder) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.db().invoke_on_all([] (database& db) {
+            {
+                auto ks_metadata = db.find_keyspace("system_schema").metadata();
+                auto& cf_metadata = ks_metadata->cf_meta_data();
+                for (auto [_, s]: cf_metadata) {
+                    std::cout << "checking " << s->cf_name() << std::endl;
+                    BOOST_REQUIRE_EQUAL(s->get_sharder().shard_count(), 1);
+                }
+            }
+
+            // There is another schema table, 'scylla_table_schema_history',
+            // which is in the "system" keyspace for whatever reason.
+            auto ks_metadata = db.find_keyspace("system").metadata();
+            auto& cf_metadata = ks_metadata->cf_meta_data();
+            auto it = cf_metadata.find("scylla_table_schema_history");
+            BOOST_REQUIRE(it != cf_metadata.end());
+            BOOST_REQUIRE_EQUAL(it->second->get_sharder().shard_count(), 1);
+
+            // The schemas returned by all_tables() may be different than those stored in the `db` object:
+            // the schemas stored inside `db` come from deserializing mutations. The schemas in all_tables()
+            // are hardcoded. If there is some information in the schema object that is not serialized into
+            // mutations (say... the sharder - for now, at least), the two schema objects may differ, if
+            // one is not careful.
+            for (auto s: db::schema_tables::all_tables(db::schema_features::full())) {
+                BOOST_REQUIRE_EQUAL(s->get_sharder().shard_count(), 1);
+            }
+        }).get();
+    });
+}
