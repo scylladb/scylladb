@@ -34,7 +34,7 @@ import random
 @pytest.fixture(scope="session")
 def table1(cql, test_keyspace):
     table = test_keyspace + "." + unique_name()
-    cql.execute(f"CREATE TABLE {table} (p int PRIMARY KEY, v int, a ascii, b boolean)")
+    cql.execute(f"CREATE TABLE {table} (p int PRIMARY KEY, v int, a ascii, b boolean, vi varint)")
     yield table
     cql.execute("DROP TABLE " + table)
 
@@ -110,6 +110,35 @@ def test_fromjson_int_overflow_prepared(cql, table1):
     stmt = cql.prepare(f"INSERT INTO {table1} (p, v) VALUES (?, fromJson(?))")
     with pytest.raises(FunctionFailure):
         cql.execute(stmt, [p, '2147483648'])
+
+# When writing to an integer column, Cassandra's fromJson() function allows
+# not just JSON number constants, it also allows a string containing a number.
+# Strings which do not hold a number fail with a FunctionFailure. In
+# particular, the empty string "" is not a valid number, and should report an
+# error, but both Scylla and Cassandra have bugs that allow it for some types
+# and not for others. The following tests reproduce #7944. Where Cassandra
+# has (what we consider to be) a bug, it is marked with "cassandra_bug"
+# which causes it to xfail when testing against Cassandra.
+def test_fromjson_int_empty_string_unprepared(cql, table1, cassandra_bug):
+    p = random.randint(1,1000000000)
+    with pytest.raises(FunctionFailure):
+        cql.execute(f"INSERT INTO {table1} (p, v) VALUES ({p}, fromJson('\"\"'))")
+def test_fromjson_int_empty_string_prepared(cql, table1, cassandra_bug):
+    p = random.randint(1,1000000000)
+    stmt = cql.prepare(f"INSERT INTO {table1} (p, v) VALUES (?, fromJson(?))")
+    with pytest.raises(FunctionFailure):
+        cql.execute(stmt, [p, '""'])
+@pytest.mark.xfail(reason="issue #7944")
+def test_fromjson_varint_empty_string_unprepared(cql, table1):
+    p = random.randint(1,1000000000)
+    with pytest.raises(FunctionFailure):
+        cql.execute(f"INSERT INTO {table1} (p, vi) VALUES ({p}, fromJson('\"\"'))")
+@pytest.mark.xfail(reason="issue #7944")
+def test_fromjson_varint_empty_string_prepared(cql, table1):
+    p = random.randint(1,1000000000)
+    stmt = cql.prepare(f"INSERT INTO {table1} (p, vi) VALUES (?, fromJson(?))")
+    with pytest.raises(FunctionFailure):
+        cql.execute(stmt, [p, '""'])
 
 # Cassandra allows the strings "true" and "false", not just the JSON constants
 # true and false, to be assigned to a boolean column. However, very strangely,

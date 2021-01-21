@@ -86,5 +86,17 @@ def scylla_only(cql):
     if not any('scylla' in name for name in names):
         pytest.skip('Scylla-only test skipped')
 
+# "cassandra_bug" is similar to "scylla_only", except instead of skipping
+# the test, it is expected to fail (xfail) on Cassandra. It should be used
+# in rare cases where we consider Scylla's behavior to be the correct one,
+# and Cassandra's to be the bug.
+@pytest.fixture(scope="session")
+def cassandra_bug(cql):
+    # We recognize Scylla by checking if there is any system table whose name
+    # contains the word "scylla":
+    names = [row.table_name for row in cql.execute("SELECT * FROM system_schema.tables WHERE keyspace_name = 'system'")]
+    if not any('scylla' in name for name in names):
+        pytest.xfail('A known Cassandra bug')
+
 # TODO: use new_test_table and "yield from" to make shared test_table
 # fixtures with some common schemas.
