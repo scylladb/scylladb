@@ -2238,6 +2238,49 @@ multishard_reader_for_read_ahead prepare_multishard_reader_for_read_ahead_test(s
     return {std::move(reader), std::move(sharder), std::move(remote_controls), std::move(pr)};
 }
 
+// Regression test for #7945
+SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_custom_shard_number) {
+    if (smp::count < 2) {
+        std::cerr << "Cannot run test " << get_name() << " with smp::count < 2" << std::endl;
+        return;
+    }
+
+    auto no_shards = smp::count - 1;
+    test_reader_lifecycle_policy::operations_gate operations_gate;
+
+    do_with_cql_env([&] (cql_test_env& env) -> future<> {
+        std::vector<std::atomic<bool>> shards_touched(smp::count);
+        simple_schema s;
+        auto sharder = std::make_unique<dht::sharder>(no_shards, 0);
+        auto factory = [&shards_touched] (
+                schema_ptr s,
+                const dht::partition_range& range,
+                const query::partition_slice& slice,
+                const io_priority_class& pc,
+                tracing::trace_state_ptr trace_state,
+                mutation_reader::forwarding fwd_mr) {
+            shards_touched[this_shard_id()] = true;
+            return make_empty_flat_reader(s, tests::make_permit());
+        };
+
+        assert_that(make_multishard_combining_reader_for_tests(
+                *sharder,
+                seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory), operations_gate),
+                s.schema(),
+                tests::make_permit(),
+                query::full_partition_range,
+                s.schema()->full_slice(),
+                service::get_local_sstable_query_read_priority()))
+            .produces_end_of_stream();
+
+        for (unsigned i = 0; i < no_shards; ++i) {
+            BOOST_REQUIRE(shards_touched[i]);
+        }
+        BOOST_REQUIRE(!shards_touched[no_shards]);
+
+        return operations_gate.close();
+    }).get();
+}
 
 // Test a background pending read-ahead outliving the reader.
 //
