@@ -1841,7 +1841,7 @@ void multishard_combining_reader::on_partition_range_change(const dht::partition
         boost::push_heap(_shard_selection_min_heap);
     };
 
-    for (auto shard = _current_shard + 1; shard < smp::count; ++shard) {
+    for (auto shard = _current_shard + 1; shard < _sharder.shard_count(); ++shard) {
         update_and_push_token_for_shard(shard);
     }
     for (auto shard = 0u; shard < _current_shard; ++shard) {
