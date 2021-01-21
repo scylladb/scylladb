@@ -438,7 +438,6 @@ public:
     struct stopped_reader {
         foreign_ptr<std::unique_ptr<reader_concurrency_semaphore::inactive_read_handle>> handle;
         flat_mutation_reader::tracked_buffer unconsumed_fragments;
-        bool has_pending_next_partition;
     };
 
 protected:

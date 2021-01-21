@@ -118,7 +118,6 @@ class read_context : public reader_lifecycle_policy {
         reader_state state = reader_state::inexistent;
         foreign_unique_ptr<remote_parts> rparts;
         foreign_unique_ptr<reader_concurrency_semaphore::inactive_read_handle> handle;
-        bool has_pending_next_partition = false;
         std::optional<flat_mutation_reader::tracked_buffer> buffer;
 
         reader_meta() = default;
@@ -338,7 +337,6 @@ void read_context::destroy_reader(shard_id shard, future<stopped_reader> reader_
             if (rm.state == reader_state::used) {
                 rm.state = reader_state::saving;
                 rm.handle = std::move(reader.handle);
-                rm.has_pending_next_partition = reader.has_pending_next_partition;
                 rm.buffer = std::move(reader.unconsumed_fragments);
             } else {
                 mmq_log.warn(
@@ -467,12 +465,6 @@ future<> read_context::save_reader(shard_id shard, const dht::decorated_key& las
                 return make_ready_future<>();
             }
 
-            auto maybe_next_partition = make_ready_future<>();
-            if (rm.has_pending_next_partition) {
-                maybe_next_partition = reader->next_partition();
-            }
-
-          return maybe_next_partition.then([this, query_uuid, query_ranges, &rm, &last_pkey, &last_ckey, gts = std::move(gts), &db, reader = std::move(reader)] () mutable {
             auto& buffer = *rm.buffer;
             const auto fragments = buffer.size();
             const auto size_before = reader->buffer_size();
@@ -500,7 +492,7 @@ future<> read_context::save_reader(shard_id shard, const dht::decorated_key& las
 
             db.get_stats().multishard_query_unpopped_fragments += fragments;
             db.get_stats().multishard_query_unpopped_bytes += (size_after - size_before);
-          });
+            return make_ready_future<>();
         } catch (...) {
             // We don't want to fail a read just because of a failure to
             // save any of the readers.

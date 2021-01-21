@@ -1641,7 +1641,7 @@ void shard_reader::stop() noexcept {
             for (const auto& mf : *remote_buffer) {
                 buffer.emplace_back(*_schema, _permit, mf); // we are copying from the remote shard.
             }
-            return reader_lifecycle_policy::stopped_reader{std::move(irh), std::move(buffer), false};
+            return reader_lifecycle_policy::stopped_reader{std::move(irh), std::move(buffer)};
         });
     }).finally([zis = shared_from_this()] {}));
 }
