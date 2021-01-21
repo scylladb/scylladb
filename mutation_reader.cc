@@ -1052,7 +1052,6 @@ private:
     // differs from the original ones.
     std::optional<dht::partition_range> _range_override;
     std::optional<query::partition_slice> _slice_override;
-    bool _pending_next_partition = false;
 
     flat_mutation_reader_opt _reader;
 
@@ -1466,35 +1465,26 @@ evictable_reader::~evictable_reader() {
 }
 
 future<> evictable_reader::fill_buffer(db::timeout_clock::time_point timeout) {
-    const auto pending_next_partition = std::exchange(_pending_next_partition, false);
-    if (pending_next_partition) {
-        _next_position_in_partition = position_in_partition::for_partition_start();
-    }
     if (is_end_of_stream()) {
         return make_ready_future<>();
     }
-    return do_with(resume_or_create_reader(),
-            [this, pending_next_partition, timeout] (flat_mutation_reader& reader) mutable {
-        auto maybe_next_partition = make_ready_future<>();
-        if (pending_next_partition) {
-            maybe_next_partition = reader.next_partition();
-        }
-      return maybe_next_partition.then([this, timeout, &reader] {
+    return do_with(resume_or_create_reader(), [this, timeout] (flat_mutation_reader& reader) mutable {
         return fill_buffer(reader, timeout).then([this, &reader] {
             _end_of_stream = reader.is_end_of_stream() && reader.is_buffer_empty();
             maybe_pause(std::move(reader));
         });
-      });
     });
 }
 
 future<> evictable_reader::next_partition() {
+    _next_position_in_partition = position_in_partition::for_partition_start();
     clear_buffer_to_next_partition();
-    if (is_buffer_empty()) {
-        _pending_next_partition = true;
-        _next_position_in_partition = position_in_partition::for_partition_start();
+    if (!is_buffer_empty()) {
+        co_return;
     }
-    return make_ready_future<>();
+    auto reader = resume_or_create_reader();
+    co_await reader.next_partition();
+    maybe_pause(std::move(reader));
 }
 
 future<> evictable_reader::fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) {
