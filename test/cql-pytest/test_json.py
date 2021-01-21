@@ -34,7 +34,7 @@ import random
 @pytest.fixture(scope="session")
 def table1(cql, test_keyspace):
     table = test_keyspace + "." + unique_name()
-    cql.execute(f"CREATE TABLE {table} (p int PRIMARY KEY, v int, a ascii, b boolean, vi varint)")
+    cql.execute(f"CREATE TABLE {table} (p int PRIMARY KEY, v int, a ascii, b boolean, vi varint, mai map<ascii, int>)")
     yield table
     cql.execute("DROP TABLE " + table)
 
@@ -176,3 +176,18 @@ def test_fromjson_null_prepared(cql, table1):
     stmt = cql.prepare(f"INSERT INTO {table1} (p, v) VALUES (?, fromJson(?))")
     cql.execute(stmt, [p, None])
     assert list(cql.execute(f"SELECT p, v from {table1} where p = {p}")) == [(p, None)]
+
+# Test that fromJson can parse a map<ascii,int>. Strangely Scylla had a bug
+# setting a map<ascii,int> with fromJson(), while map<text,int> worked well.
+# Reproduces #7949.
+@pytest.mark.xfail(reason="issue #7949")
+def test_fromjson_map_ascii_unprepared(cql, table1):
+    p = random.randint(1,1000000000)
+    cql.execute("INSERT INTO " + table1 + " (p, mai) VALUES (" + str(p) + ", fromJson('{\"a\": 1, \"b\": 2}'))")
+    assert list(cql.execute(f"SELECT p, mai from {table1} where p = {p}")) == [(p, {'a': 1, 'b': 2})]
+@pytest.mark.xfail(reason="issue #7949")
+def test_fromjson_map_ascii_prepared(cql, table1):
+    p = random.randint(1,1000000000)
+    stmt = cql.prepare(f"INSERT INTO {table1} (p, mai) VALUES (?, fromJson(?))")
+    cql.execute(stmt, [p, '{"a": 1, "b": 2}'])
+    assert list(cql.execute(f"SELECT p, mai from {table1} where p = {p}")) == [(p, {'a': 1, 'b': 2})]
