@@ -857,10 +857,6 @@ class foreign_reader : public flat_mutation_reader::impl {
 
     foreign_unique_ptr<flat_mutation_reader> _reader;
     foreign_unique_ptr<future<>> _read_ahead_future;
-    // Set this flag when next_partition() is called.
-    // This pending call will be executed the next time we go to the remote
-    // reader (a fill_buffer() or a fast_forward_to() call).
-    bool _pending_next_partition = false;
     streamed_mutation::forwarding _fwd_sm;
 
     // Forward an operation to the reader on the remote shard.
@@ -874,22 +870,15 @@ class foreign_reader : public flat_mutation_reader::impl {
     Result forward_operation(db::timeout_clock::time_point timeout, Operation op) {
         return smp::submit_to(_reader.get_owner_shard(), [reader = _reader.get(),
                 read_ahead_future = std::exchange(_read_ahead_future, nullptr),
-                pending_next_partition = std::exchange(_pending_next_partition, false),
                 timeout,
                 op = std::move(op)] () mutable {
             auto exec_op_and_read_ahead = [=] () mutable {
-                auto maybe_next_partition = make_ready_future<>();
-                if (pending_next_partition) {
-                    maybe_next_partition = reader->next_partition();
-                }
-              return maybe_next_partition.then([=] () mutable {
                 // Not really variadic, we expect 0 (void) or 1 parameter.
                 return op().then([=] (auto... result) {
                     auto f = reader->is_end_of_stream() ? nullptr : std::make_unique<future<>>(reader->fill_buffer(timeout));
                     return make_ready_future<std::tuple<foreign_unique_ptr<future<>>, decltype(result)...>>(
                                 std::tuple(make_foreign(std::move(f)), std::move(result)...));
                 });
-              });
             };
             if (read_ahead_future) {
                 return read_ahead_future->then(std::move(exec_op_and_read_ahead));
@@ -973,15 +962,16 @@ future<> foreign_reader::next_partition() {
     if (_fwd_sm == streamed_mutation::forwarding::yes) {
         clear_buffer();
         _end_of_stream = false;
-        _pending_next_partition = true;
     } else {
         clear_buffer_to_next_partition();
-        if (is_buffer_empty()) {
-            _end_of_stream = false;
-            _pending_next_partition = true;
+        if (!is_buffer_empty()) {
+            co_return;
         }
+        _end_of_stream = false;
     }
-    return make_ready_future<>();
+    co_await forward_operation(db::no_timeout, [reader = _reader.get()] () {
+        return reader->next_partition();
+    });
 }
 
 future<> foreign_reader::fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) {
