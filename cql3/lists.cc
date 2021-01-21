@@ -25,7 +25,6 @@
 #include "cql3_type.hh"
 #include "constants.hh"
 #include <boost/iterator/transform_iterator.hpp>
-#include <boost/range/adaptor/reversed.hpp>
 #include "types/list.hh"
 
 namespace cql3 {
@@ -236,20 +235,6 @@ lists::marker::bind(const query_options& options) {
     }
 }
 
-constexpr db_clock::time_point lists::precision_time::REFERENCE_TIME;
-thread_local lists::precision_time lists::precision_time::_last = {db_clock::time_point::max(), 0};
-
-lists::precision_time
-lists::precision_time::get_next(db_clock::time_point millis) {
-    // FIXME: and if time goes backwards?
-    assert(millis <= _last.millis);
-    auto next =  millis < _last.millis
-            ? precision_time{millis, 9999}
-            : precision_time{millis, std::max(0, _last.nanos - 1)};
-    _last = next;
-    return next;
-}
-
 void
 lists::setter::execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) {
     auto value = _t->bind(params._options);
@@ -387,10 +372,18 @@ lists::do_append(shared_ptr<term> value,
         collection_mutation_description appended;
         appended.cells.reserve(to_add.size());
         for (auto&& e : to_add) {
-            auto uuid1 = utils::UUID_gen::get_time_UUID_bytes();
-            auto uuid = bytes(reinterpret_cast<const int8_t*>(uuid1.data()), uuid1.size());
-            // FIXME: can e be empty?
-            appended.cells.emplace_back(std::move(uuid), params.make_cell(*ltype->value_comparator(), *e, atomic_cell::collection_member::yes));
+            try {
+                auto uuid1 = utils::UUID_gen::get_time_UUID_bytes_from_micros_and_submicros(
+                    params.timestamp(),
+                    params._options.next_list_append_seq());
+                auto uuid = bytes(reinterpret_cast<const int8_t*>(uuid1.data()), uuid1.size());
+                // FIXME: can e be empty?
+                appended.cells.emplace_back(
+                    std::move(uuid),
+                    params.make_cell(*ltype->value_comparator(), *e, atomic_cell::collection_member::yes));
+            } catch (utils::timeuuid_submicro_out_of_range) {
+                throw exceptions::invalid_request_exception("Too many list values per single CQL statement or batch");
+            }
         }
         m.set_cell(prefix, column, appended.serialize(*ltype));
     } else {
@@ -414,20 +407,42 @@ lists::prepender::execute(mutation& m, const clustering_key_prefix& prefix, cons
 
     auto&& lvalue = dynamic_pointer_cast<lists::value>(std::move(value));
     assert(lvalue);
-    auto time = precision_time::REFERENCE_TIME - (db_clock::now() - precision_time::REFERENCE_TIME);
+
+    // For prepend we need to be able to generate a unique but decreasing
+    // timeuuid. We achieve that by by using a time in the past which
+    // is 2x the distance between the original timestamp (it
+    // would be the current timestamp, user supplied timestamp, or
+    // unique monotonic LWT timestsamp, whatever is in query
+    // options) and a reference time of Jan 1 2010 00:00:00.
+    // E.g. if query timestamp is Jan 1 2020 00:00:00, the prepend
+    // timestamp will be Jan 1, 2000, 00:00:00.
+
+    // 2010-01-01T00:00:00+00:00 in api::timestamp_time format (microseconds)
+    static constexpr int64_t REFERENCE_TIME_MICROS = 1262304000L * 1000 * 1000;
+
+    int64_t micros = params.timestamp();
+    if (micros > REFERENCE_TIME_MICROS) {
+        micros = REFERENCE_TIME_MICROS - (micros - REFERENCE_TIME_MICROS);
+    } else {
+        // Scylla, unlike Cassandra, respects user-supplied timestamps
+        // in prepend, but there is nothing useful it can do with
+        // a timestamp less than Jan 1, 2010, 00:00:00.
+        throw exceptions::invalid_request_exception("List prepend custom timestamp must be greater than Jan 1 2010 00:00:00");
+    }
 
     collection_mutation_description mut;
     mut.cells.reserve(lvalue->get_elements().size());
-    // We reverse the order of insertion, so that the last element gets the lastest time
-    // (lists are sorted by time)
+
     auto ltype = static_cast<const list_type_impl*>(column.type.get());
-    for (auto&& v : lvalue->_elements | boost::adaptors::reversed) {
-        auto&& pt = precision_time::get_next(time);
-        auto uuid = utils::UUID_gen::get_time_UUID_bytes(pt.millis.time_since_epoch().count(), pt.nanos);
-        mut.cells.emplace_back(bytes(uuid.data(), uuid.size()), params.make_cell(*ltype->value_comparator(), *v, atomic_cell::collection_member::yes));
+    int clockseq = params._options.next_list_prepend_seq(lvalue->_elements.size(), utils::UUID_gen::SUBMICRO_LIMIT);
+    for (auto&& v : lvalue->_elements) {
+        try {
+            auto uuid = utils::UUID_gen::get_time_UUID_bytes_from_micros_and_submicros(micros, clockseq++);
+            mut.cells.emplace_back(bytes(uuid.data(), uuid.size()), params.make_cell(*ltype->value_comparator(), *v, atomic_cell::collection_member::yes));
+        } catch (utils::timeuuid_submicro_out_of_range) {
+            throw exceptions::invalid_request_exception("Too many list values per single CQL statement or batch");
+        }
     }
-    // now reverse again, to get the original order back
-    std::reverse(mut.cells.begin(), mut.cells.end());
     m.set_cell(prefix, column, mut.serialize(*ltype));
 }
 

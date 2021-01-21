@@ -83,7 +83,16 @@ private:
     const specific_options _options;
     cql_serialization_format _cql_serialization_format;
     std::optional<std::vector<query_options>> _batch_options;
-
+    // We must use the same microsecond-precision timestamp for
+    // all cells created by an LWT statement or when a statement
+    // has a user-provided timestamp. In case the statement or
+    // a BATCH appends many values to a list, each value should
+    // get a unique and monotonic timeuuid. This sequence is
+    // used to make all time-based UUIDs:
+    // 1) share the same microsecond,
+    // 2) monotonic
+    // 3) unique.
+    mutable int _list_append_seq = 0;
 private:
     /**
      * @brief Batch query_options constructor.
@@ -239,6 +248,39 @@ public:
 
     const cql_config& get_cql_config() const {
         return _cql_config;
+    }
+
+    // Generate a next unique list sequence for list append, e.g.
+    // a = a + [val1, val2, ...]
+    int next_list_append_seq() const {
+        return _list_append_seq++;
+    }
+
+    // To preserve prepend monotonicity within a batch, each next
+    // value must get a timestamp that's smaller than the previous one:
+    // BEGIN BATCH
+    //      UPDATE t SET l = [1, 2] + l WHERE pk = 0;
+    //      UPDATE t SET l = [3] + l WHERE pk = 0;
+    //      UPDATE t SET l = [4] + l WHERE pk = 0;
+    // APPLY BATCH
+    // SELECT l FROM t WHERE pk = 0;
+    //  l
+    // ------------
+    // [4, 3, 1, 2]
+    //
+    // This function reserves the given number of prepend entries
+    // and returns an id for the first prepended entry (it
+    // got to be the smallest one, to preserve the order of
+    // a multi-value append).
+    //
+    // @retval sequence number of the first entry of a multi-value
+    // append. To get the next value, add 1.
+    int next_list_prepend_seq(int num_entries, int max_entries) const {
+        if (_list_append_seq + num_entries < max_entries) {
+            _list_append_seq += num_entries;
+            return max_entries - _list_append_seq;
+        }
+        return max_entries;
     }
 
     void prepare(const std::vector<lw_shared_ptr<column_specification>>& specs);

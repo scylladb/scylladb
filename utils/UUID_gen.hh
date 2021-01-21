@@ -50,6 +50,15 @@
 
 namespace utils {
 
+// Scylla uses specialized timeuuids for list keys. They use
+// limited space of timeuuid clockseq component to store
+// sub-microsecond time. This exception is thrown when an attempt
+// is made to construct such a UUID with a sub-microsecond argument
+// which is outside the available bit range.
+struct timeuuid_submicro_out_of_range: public std::out_of_range {
+    using out_of_range::out_of_range;
+};
+
 /**
  * The goods are here: www.ietf.org/rfc/rfc4122.txt.
  */
@@ -58,6 +67,14 @@ class UUID_gen
 private:
     // A grand day! millis at 00:00:00.000 15 Oct 1582.
     static constexpr int64_t START_EPOCH = -12219292800000L;
+    // A random mac address for use in timeuuids
+    // where we can not use clockseq to randomize the physical
+    // node, and prefer using a random address to a physical one
+    // to avoid duplicate timeuuids when system time goes back
+    // while scylla is restarting. Using a spoof node also helps
+    // avoid timeuuid duplicates when multiple nodes run on the
+    // same host and share the physical MAC address.
+    static thread_local const int64_t spoof_node;
     static thread_local const int64_t clock_seq_and_node;
 
     /*
@@ -86,6 +103,12 @@ private:
     }
 
 public:
+    // We have only 17 timeuuid bits available to store this
+    // value.
+    static constexpr int SUBMICRO_LIMIT = (1<<17);
+    // UUID timestamp time component is represented in intervals
+    // of 1/10 of a microsecond since the beginning of GMT epoch.
+    using decimicroseconds = std::chrono::duration<int64_t, std::ratio<1, 10'000'000>>;
     /**
      * Creates a type 1 UUID (time-based UUID).
      *
@@ -161,6 +184,56 @@ public:
         auto uuid = UUID(create_time(from_unix_timestamp(when_in_millis) + nanos), rand_dist(rand_gen));
         assert(uuid.is_timestamp());
         return uuid;
+    }
+    // Generate a time-based (Version 1) UUID using
+    // a microsecond-precision Unix time and a unique number in
+    // range [0, 131072).
+    // Used to generate many unique, monotonic UUIDs
+    // sharing the same microsecond part. In lightweight
+    // transactions we must ensure monotonicity between all UUIDs
+    // which belong to one lightweight transaction and UUIDs of
+    // another transaction, but still need multiple distinct and
+    // monotonic UUIDs within the same transaction.
+    // \throws timeuuid_submicro_out_of_range
+    //
+    static std::array<int8_t, 16>
+    get_time_UUID_bytes_from_micros_and_submicros(int64_t when_in_micros, int submicros) {
+        std::array<int8_t, 16> uuid_bytes;
+
+        if (submicros < 0 || submicros >= SUBMICRO_LIMIT) {
+            throw timeuuid_submicro_out_of_range("timeuuid submicro component does not fit into available bits");
+        }
+
+        auto dmc = from_unix_timestamp(std::chrono::microseconds(when_in_micros));
+        // We have roughly 3 extra bits we will use to increase
+        // sub-microsecond component range from clockseq's 2^14 to 2^17.
+        int64_t msb = create_time(dmc + decimicroseconds((submicros >> 14) & 0b111));
+        // See RFC 4122 for details.
+        msb = net::hton(msb);
+
+        std::copy_n(reinterpret_cast<char*>(&msb), sizeof(msb), uuid_bytes.data());
+
+        // Use 14-bit clockseq to store the rest of sub-microsecond component.
+        int64_t clockseq = submicros & 0b11'1111'1111'1111;
+        // Scylla, like Cassandra, uses signed int8 compare to
+        // compare lower bits of timeuuid. It means 0xA0 > 0xFF.
+        // Bit-xor the sign bit to "fix" the order. See also
+        // https://issues.apache.org/jira/browse/CASSANDRA-8730
+        // and Cassandra commit 6d266253a5bdaf3a25eef14e54deb56aba9b2944
+        //
+        // Turn 0 into -127, 1 into -126, ... and 128 into 0, ...
+        clockseq ^=  0b0000'0000'1000'0000;
+        // Least significant bits: UUID variant (1), clockseq and node.
+        // To protect against the system clock back-adjustment,
+        // use a random (spoof) node identifier. Normally this
+        // protection is provided by clockseq component, but we've
+        // just stored sub-microsecond time in it.
+        int64_t lsb = ((clockseq | 0b1000'0000'0000'0000) << 48) | UUID_gen::spoof_node;
+        lsb = net::hton(lsb);
+
+        std::copy_n(reinterpret_cast<char*>(&lsb), sizeof(lsb), uuid_bytes.data() + sizeof(msb));
+
+        return uuid_bytes;
     }
 
     /** validates uuid from raw bytes. */
@@ -273,6 +346,10 @@ public:
     }
 
 private:
+    template <std::intmax_t N, std::intmax_t D>
+    static decimicroseconds from_unix_timestamp(std::chrono::duration<int64_t, std::ratio<N, D>> d) {
+        return d - std::chrono::milliseconds(START_EPOCH);
+    }
     /**
      * @param timestamp milliseconds since Unix epoch
      * @return
@@ -369,6 +446,16 @@ private:
         uint64_t nanos_since = make_nanos_since(when) + static_cast<uint64_t>(static_cast<int64_t>(nanos));
         return create_time(nanos_since);
     }
+
+    // std::chrono typeaware wrapper around create_time().
+    // Creates a timeuuid compatible time (decimicroseconds since
+    // the start of GMT epoch).
+    template <std::intmax_t N, std::intmax_t D>
+    static int64_t create_time(std::chrono::duration<int64_t, std::ratio<N, D>> d) {
+        return create_time(duration_cast<decimicroseconds>(d).count());
+    }
+
+public:
 
     static int64_t create_time(uint64_t nanos_since)
     {
