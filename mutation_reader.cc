@@ -1574,7 +1574,6 @@ private:
     const io_priority_class& _pc;
     tracing::global_trace_state_ptr _trace_state;
     const mutation_reader::forwarding _fwd_mr;
-    bool _pending_next_partition = false;
     bool _stopped = false;
     std::optional<future<>> _read_ahead;
     foreign_ptr<std::unique_ptr<evictable_reader>> _reader;
@@ -1652,14 +1651,13 @@ void shard_reader::stop() noexcept {
             for (const auto& mf : *remote_buffer) {
                 buffer.emplace_back(*_schema, _permit, mf); // we are copying from the remote shard.
             }
-            return reader_lifecycle_policy::stopped_reader{std::move(irh), std::move(buffer), _pending_next_partition};
+            return reader_lifecycle_policy::stopped_reader{std::move(irh), std::move(buffer), false};
         });
     }).finally([zis = shared_from_this()] {}));
 }
 
 future<> shard_reader::do_fill_buffer(db::timeout_clock::time_point timeout) {
     auto fill_buf_fut = make_ready_future<remote_fill_buffer_result>();
-    const auto pending_next_partition = std::exchange(_pending_next_partition, false);
 
     struct reader_and_buffer_fill_result {
         foreign_ptr<std::unique_ptr<evictable_reader>> reader;
@@ -1693,16 +1691,10 @@ future<> shard_reader::do_fill_buffer(db::timeout_clock::time_point timeout) {
             return std::move(res.result);
         });
     } else {
-        fill_buf_fut = smp::submit_to(_shard, [this, pending_next_partition, timeout] () mutable {
-            auto maybe_next_partition = make_ready_future<>();
-            if (pending_next_partition) {
-                maybe_next_partition = _reader->next_partition();
-            }
-          return maybe_next_partition.then([this, timeout] {
+        fill_buf_fut = smp::submit_to(_shard, [this, timeout] () mutable {
             return _reader->fill_buffer(timeout).then([this] {
                 return remote_fill_buffer_result(_reader->detach_buffer(), _reader->is_end_of_stream());
             });
-          });
         });
     }
 
@@ -1725,11 +1717,19 @@ future<> shard_reader::fill_buffer(db::timeout_clock::time_point timeout) {
 }
 
 future<> shard_reader::next_partition() {
-  if (_reader) {
+    if (!_reader) {
+        co_return;
+    }
+    if (_read_ahead) {
+        co_await *std::exchange(_read_ahead, std::nullopt);
+    }
     clear_buffer_to_next_partition();
-    _pending_next_partition = is_buffer_empty();
-  }
-  return make_ready_future<>();
+    if (!is_buffer_empty()) {
+        co_return;
+    }
+    co_return co_await smp::submit_to(_shard, [this] {
+        return _reader->next_partition();
+    });
 }
 
 future<> shard_reader::fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) {
