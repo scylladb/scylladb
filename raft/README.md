@@ -12,6 +12,7 @@ For more details about Raft see https://raft.github.io/
 - log replication, including throttling for unresponsive
   servers
 - leader election
+- configuration changes using joint consensus
 
 ## Usage
 -----
@@ -40,7 +41,7 @@ of the Raft consistency protocol on its environment:
   servers. While `apply_entry()` is called in the order
   entries are serialized in the distributed log, there is
   no guarantee that `apply_entry()` is called exactly once.
-  E.g. when a protocol instance restart from persistent state,
+  E.g. when a protocol instance restarts from the persistent state,
   it may re-apply some already applied log entries.
 
 Seastar's execution model is that every object is safe to use
@@ -69,3 +70,48 @@ Similar to the first usage, but `persistence::load_term_and_vote()`
 return valid protocol state as persisted by the previous incarnation
 of an instance of class server.
 
+## Architecture bits
+
+### Joint consensus based configuration changes
+
+Seastar Raft implementation provides arbitrary configuration
+changes: it is possible to add and remove one or multiple
+nodes in a single transition, or even move Raft group to an
+entirely different set of servers. The implementation adopts
+the two-step algorithm described in the original Raft paper:
+- first, an entry in the Raft log with joint configuration is
+committed. The joint configuration contains both old and
+new sets of servers. Once a server learns about a new
+configuration, it immediately adopts it.
+- once a majority of servers persists the joint
+entry, a final entry with new configuration is appended
+to the log.
+
+If a leader is deposed during a configuration change,
+the new leader carries out the transition from joint
+to final configuration for it.
+it carries out the transition for the prevoius leader.
+
+No two configuration changes could happen concurrently. The leader
+refuses a new change if the previous one is still in progress.
+
+### Multi-Raft
+
+One of the design goals of Seastar Raft was to support multiple Raft
+protocol instances. The library takes the following steps to address
+this:
+- `class server_address`, used to identify a Raft server instance (one
+  participant of a Raft cluster) uses globally unique identifiers, while
+  provides an extra `server_info` field which can then store a network
+  address or connection credentials.
+  This makes it possible to share the same transport (RPC) layer
+  among multiple instances of Raft. But it is then the responsibility
+  of this shared RPC layer to correctly route messages received from
+  a shared network channel to a correct Raft server using server
+  UUID.
+- Raft group failure detection, instead of sending Raft RPC every 0.1 second
+  to each follower, relies on external input. It is assumed
+  that a single physical server may be a container of multiple Raft
+  groups, hence failure detection RPC could run once on network peer level,
+  not sepately for each Raft instance. The library expects an accurate
+  `failure_detector` instance from a complying implementation.
