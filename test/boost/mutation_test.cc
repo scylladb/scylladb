@@ -1980,9 +1980,19 @@ SEASTAR_THREAD_TEST_CASE(test_cell_equals) {
     BOOST_REQUIRE(!c4.equals(*bytes_type, c1));
 }
 
+// Global to avoid elimination by the compiler; see below for use
+thread_local data_type force_type_thread_local_init_evaluation [[gnu::used]];
+
 SEASTAR_THREAD_TEST_CASE(test_cell_external_memory_usage) {
     measuring_allocator alloc;
 
+    // Force evaluation of int32_type and all the other types. This is so
+    // the compiler doesn't reorder it into the with_allocator section, below,
+    // and any managed_bytes instances creates during that operation interfere
+    // with the measurements.
+    force_type_thread_local_init_evaluation = int32_type;
+    // optimization barrier
+    std::atomic_signal_fence(std::memory_order_seq_cst);
 
     auto test_live_atomic_cell = [&] (data_type dt, bytes_view bv) {
         with_allocator(alloc, [&] {
