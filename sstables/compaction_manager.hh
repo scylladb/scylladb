@@ -185,9 +185,6 @@ public:
     // unless it is moved back to enabled state.
     future<> drain();
 
-    // FIXME: should not be public. It's not anyone's business if we are enabled.
-    // distributed_loader.cc uses for resharding, remove this when the new resharding series lands.
-    bool enabled() const { return _state == state::enabled; }
     // Stop all fibers, without waiting. Safe to be called multiple times.
     void do_stop() noexcept;
     void really_do_stop();
