@@ -10,8 +10,6 @@ jobs:
   release:
     name: Build
     runs-on: ubuntu-latest
-    env:
-      LATEST_VERSION: master
     steps:
     - name: Checkout
       uses: actions/checkout@v2
