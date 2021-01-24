@@ -196,7 +196,6 @@ struct initial_state {
     raft::term_t term = raft::term_t(1);
     raft::server_id vote;
     std::vector<raft::log_entry> log;
-    size_t total_entries = 100;       // Total entries including initial snapshot
     raft::snapshot snapshot;
     snapshot_value snp_value;
     raft::configuration config;    // TODO: custom initial configs
