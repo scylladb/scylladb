@@ -13,9 +13,8 @@ sphinx-scylladb-theme = "~0.1.11"
 sphinx-sitemap = "2.1.0"
 sphinx-autobuild = "0.7.1"
 Sphinx = "2.4.4"
-sphinx-multiversion-scylla = "0.2.4"
+sphinx-multiversion-scylla = "~0.2.6"
 sphinx-markdown-tables = "0.0.15"
-
 [tool.poetry.dev-dependencies]
 pytest = "5.2"
 
