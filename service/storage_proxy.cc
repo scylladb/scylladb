@@ -3771,14 +3771,6 @@ public:
     }
 };
 
-class range_slice_read_executor : public never_speculating_read_executor {
-public:
-    using never_speculating_read_executor::never_speculating_read_executor;
-    virtual future<foreign_ptr<lw_shared_ptr<query::result>>> execute(storage_proxy::clock_type::time_point timeout) override {
-        return never_speculating_read_executor::execute(timeout);
-    }
-};
-
 db::read_repair_decision storage_proxy::new_read_repair_decision(const schema& s) {
     double chance = _read_repair_chance(_urandom);
     if (s.read_repair_chance() > chance) {
@@ -4109,7 +4101,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
             throw;
         }
 
-        exec.push_back(::make_shared<range_slice_read_executor>(schema, cf.shared_from_this(), p, cmd, std::move(range), cl, std::move(filtered_endpoints), trace_state, permit));
+        exec.push_back(::make_shared<never_speculating_read_executor>(schema, cf.shared_from_this(), p, cmd, std::move(range), cl, std::move(filtered_endpoints), trace_state, permit));
         ranges_per_exec.emplace(exec.back().get(), std::move(merged_ranges));
     }
 
