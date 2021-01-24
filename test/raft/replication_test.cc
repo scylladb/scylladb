@@ -490,7 +490,9 @@ future<int> run_test(test_case test) {
                 return rafts[leader].first->add_entry(std::move(cmd), raft::wait_type::committed);
             });
             next_val += n;
+            co_await wait_log(rafts, test.nodes, leader);
         } else if (std::holds_alternative<new_leader>(update)) {
+            co_await wait_log(rafts, test.nodes, leader);
             unsigned next_leader = std::get<new_leader>(update);
             if (next_leader != leader) {
                 assert(next_leader < rafts.size());
