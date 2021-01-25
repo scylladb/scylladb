@@ -494,7 +494,7 @@ future<> server_impl::elect_me_leader() {
         _fsm->tick();
     }
     do {
-        co_await seastar::sleep(50us);
+        co_await later();
     } while (!_fsm->is_leader());
 }
 
