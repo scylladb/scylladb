@@ -150,6 +150,16 @@ def test_exists_multiple_existent_key(redis_host, redis_port):
     assert r.get(key4) == None
     assert r.exists(key1, key2, key3, key4) == 3
 
+def test_exists_lots_of_keys(redis_host, redis_port):
+    r = connect(redis_host, redis_port)
+    keys = []
+    for i in range(0, 30):
+        k = random_string(11)
+        v = random_string(10)
+        r.set(k, v)
+        keys.append(k)
+    assert r.exists(*keys) == len(keys)
+
 def test_setex_ttl(redis_host, redis_port):
     r = connect(redis_host, redis_port)
     key = random_string(10)
