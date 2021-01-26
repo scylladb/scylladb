@@ -613,6 +613,9 @@ private:
             _partition_reader = std::move(mpsr);
         }
     }
+    future<> close_partition_reader() noexcept {
+        return _partition_reader ? _partition_reader->close() : make_ready_future<>();
+    }
 public:
     virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override {
         return do_until([this] { return is_end_of_stream() || is_buffer_full(); }, [this, timeout] {
@@ -628,15 +631,16 @@ public:
                 return stop_iteration(is_buffer_full());
             }, timeout).then([this] {
                 if (_partition_reader->is_end_of_stream() && _partition_reader->is_buffer_empty()) {
-                    _partition_reader = std::nullopt;
+                    return _partition_reader->close();
                 }
+                return make_ready_future<>();
             });
         });
     }
     virtual future<> next_partition() override {
         clear_buffer_to_next_partition();
         if (is_buffer_empty()) {
-            _partition_reader = std::nullopt;
+            return close_partition_reader();
         }
         return make_ready_future<>();
     }
@@ -645,6 +649,9 @@ public:
     }
     virtual future<> fast_forward_to(position_range, db::timeout_clock::time_point timeout) override {
         return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
+    }
+    virtual future<> close() noexcept override {
+        return close_partition_reader();
     }
 };
 

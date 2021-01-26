@@ -395,6 +395,7 @@ SEASTAR_TEST_CASE(test_segment_migration_during_flush) {
         virtual_dirty_values.push_back(mgr.virtual_dirty_memory());
 
         auto rd = mt->make_flush_reader(s, service::get_local_priority_manager().memtable_flush_priority());
+        auto close_rd = deferred_close(rd);
 
         for (int i = 0; i < partitions; ++i) {
             auto mfopt = rd(db::no_timeout).get0();
