@@ -42,6 +42,10 @@ class autoupdating_underlying_reader final {
     dht::partition_range _range = { };
     std::optional<dht::decorated_key> _last_key;
     std::optional<dht::decorated_key> _new_last_key;
+
+    future<> close_reader() noexcept {
+        return _reader ? _reader->close() : make_ready_future<>();
+    }
 public:
     autoupdating_underlying_reader(row_cache& cache, read_context& context)
         : _cache(cache)
@@ -51,13 +55,15 @@ public:
         _last_key = std::move(_new_last_key);
         auto start = population_range_start();
         auto phase = _cache.phase_of(start);
+        auto refresh_reader = make_ready_future<>();
         if (!_reader || _reader_creation_phase != phase) {
             if (_last_key) {
                 auto cmp = dht::ring_position_comparator(*_cache._schema);
                 auto&& new_range = _range.split_after(*_last_key, cmp);
                 if (!new_range) {
-                    _reader = {};
+                  return close_reader().then([] {
                     return make_ready_future<mutation_fragment_opt>();
+                  });
                 }
                 _range = std::move(*new_range);
                 _last_key = {};
@@ -65,12 +71,12 @@ public:
             if (_reader) {
                 ++_cache._tracker._stats.underlying_recreations;
             }
-            auto& snap = _cache.snapshot_for_phase(phase);
-            _reader = {}; // See issue #2644
-            _reader = _cache.create_underlying_reader(_read_context, snap, _range);
+          refresh_reader = close_reader().then([this, phase] {
+            _reader = _cache.create_underlying_reader(_read_context, _cache.snapshot_for_phase(phase), _range);
             _reader_creation_phase = phase;
+          });
         }
-
+     return refresh_reader.then([this, timeout] {
       return _reader->next_partition().then([this, timeout] {
         if (_reader->is_end_of_stream() && _reader->is_buffer_empty()) {
             return make_ready_future<mutation_fragment_opt>();
@@ -83,6 +89,7 @@ public:
             return std::move(mfopt);
         });
       });
+     });
     }
     future<> fast_forward_to(dht::partition_range&& range, db::timeout_clock::time_point timeout) {
         auto snapshot_and_phase = _cache.snapshot_of(dht::ring_position_view::for_range_start(_range));
@@ -98,12 +105,12 @@ public:
                 return _reader->fast_forward_to(_range, timeout);
             } else {
                 ++_cache._tracker._stats.underlying_recreations;
-                _reader = {}; // See issue #2644
             }
         }
+      return close_reader().then([this, &snapshot, phase] {
         _reader = _cache.create_underlying_reader(_read_context, snapshot, _range);
         _reader_creation_phase = phase;
-        return make_ready_future<>();
+      });
     }
     utils::phased_barrier::phase_type creation_phase() const {
         return _reader_creation_phase;
