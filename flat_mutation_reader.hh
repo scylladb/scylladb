@@ -275,6 +275,18 @@ public:
         virtual future<> fast_forward_to(const dht::partition_range&, db::timeout_clock::time_point timeout) = 0;
         virtual future<> fast_forward_to(position_range, db::timeout_clock::time_point timeout) = 0;
 
+        // close should cancel any outstanding background operations,
+        // if possible, and wait on them to complete.
+        // It should also transitively close underlying resources
+        // and wait on them too.
+        //
+        // Once closed, the reader should be unusable.
+        //
+        // Similar to destructors, close must never fail.
+        virtual future<> close() noexcept {
+            return make_ready_future<>();
+        }
+
         size_t buffer_size() const {
             return _buffer_size;
         }
@@ -304,6 +316,7 @@ private:
     explicit operator bool() const noexcept { return bool(_impl); }
     friend class optimized_optional<flat_mutation_reader>;
     void do_upgrade_schema(const schema_ptr&);
+    static void on_close_error(std::unique_ptr<impl>, std::exception_ptr ep) noexcept;
 public:
     // Documented in mutation_reader::forwarding.
     class partition_range_forwarding_tag;
@@ -441,6 +454,26 @@ public:
     // fragment before calling `fast_forward_to`.
     future<> fast_forward_to(position_range cr, db::timeout_clock::time_point timeout) {
         return _impl->fast_forward_to(std::move(cr), timeout);
+    }
+    // Closes the reader.
+    //
+    // Note: The reader object can can be safely destroyed after close returns.
+    // since close makes sure to keep the underlying impl object alive until
+    // the latter's close call is resolved.
+    future<> close() noexcept {
+        if (auto i = std::move(_impl)) {
+            auto f = i->close();
+            // most close implementations are expexcted to return a ready future
+            // so expedite prcessing it.
+            if (f.available() && !f.failed()) {
+                return std::move(f);
+            }
+            // close must not fail
+            return f.handle_exception([i = std::move(i)] (std::exception_ptr ep) mutable {
+                on_close_error(std::move(i), std::move(ep));
+            });
+        }
+        return make_ready_future<>();
     }
     bool is_end_of_stream() const { return _impl->is_end_of_stream(); }
     bool is_buffer_empty() const { return _impl->is_buffer_empty(); }

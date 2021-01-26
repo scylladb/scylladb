@@ -31,6 +31,7 @@
 #include <boost/range/adaptor/transformed.hpp>
 #include <seastar/util/defer.hh>
 #include "utils/exceptions.hh"
+#include <seastar/core/on_internal_error.hh>
 
 logging::logger fmr_logger("flat_mutation_reader");
 
@@ -948,6 +949,12 @@ flat_mutation_reader make_generating_reader(schema_ptr s, reader_permit permit, 
 
 void flat_mutation_reader::do_upgrade_schema(const schema_ptr& s) {
     *this = transform(std::move(*this), schema_upgrader(s));
+}
+
+void flat_mutation_reader::on_close_error(std::unique_ptr<impl> i, std::exception_ptr ep) noexcept {
+    impl* ip = i.get();
+    on_internal_error_noexcept(fmr_logger,
+            format("Failed to close {} [{}]: {}", typeid(*ip).name(), fmt::ptr(ip), ep));
 }
 
 invalid_mutation_fragment_stream::invalid_mutation_fragment_stream(std::runtime_error e) : std::runtime_error(std::move(e)) {
