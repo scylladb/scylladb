@@ -220,7 +220,7 @@ public:
         return make_ready_future<std::optional<entry_info>>(std::move(ei));
     }
 
-    future<> close() override {
+    future<> close() noexcept override {
         if (!_reader_closed) {
             _reader_closed = true;
             return _reader.close();
