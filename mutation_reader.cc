@@ -277,6 +277,7 @@ public:
     virtual future<> next_partition() override;
     virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override;
     virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) override;
+    virtual future<> close() noexcept override;
 };
 
 // Dumb selector implementation for mutation_reader_merger that simply
@@ -663,6 +664,11 @@ future<> merging_reader<P>::fast_forward_to(position_range pr, db::timeout_clock
     forward_buffer_to(pr.start());
     _end_of_stream = false;
     return _merger.fast_forward_to(std::move(pr), timeout);
+}
+
+template <FragmentProducer P>
+future<> merging_reader<P>::close() noexcept {
+    return _merger.close();
 }
 
 flat_mutation_reader make_combined_reader(schema_ptr schema,
