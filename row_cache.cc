@@ -425,6 +425,11 @@ public:
     virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) override {
         return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
     }
+    virtual future<> close() noexcept override {
+        auto close_reader = _reader ? _reader->close() : make_ready_future<>();
+        auto close_read_context = _read_context->close();
+        return when_all_succeed(std::move(close_reader), std::move(close_read_context)).discard_result();
+    }
 };
 
 void cache_tracker::clear_continuity(cache_entry& ce) noexcept {
