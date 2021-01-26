@@ -27,6 +27,7 @@
 #include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include "schema_builder.hh"
+#include <seastar/util/closeable.hh>
 
 #include <seastar/core/thread.hh>
 #include "memtable.hh"
@@ -89,9 +90,17 @@ SEASTAR_TEST_CASE(test_memtable_with_many_versions_conforms_to_mutation_source) 
     return seastar::async([] {
         lw_shared_ptr<memtable> mt;
         std::vector<flat_mutation_reader> readers;
+        auto clear_readers = [&readers] {
+            parallel_for_each(readers, [] (flat_mutation_reader& rd) {
+                return rd.close();
+            }).finally([&readers] {
+                readers.clear();
+            }).get();
+        };
+        auto cleanup_readers = defer([&] { clear_readers(); });
         std::deque<dht::partition_range> ranges_storage;
         run_mutation_source_tests([&] (schema_ptr s, const std::vector<mutation>& muts) {
-            readers.clear();
+            clear_readers();
             mt = make_lw_shared<memtable>(s);
 
             for (auto&& m : muts) {
@@ -251,6 +260,7 @@ SEASTAR_TEST_CASE(test_virtual_dirty_accounting_on_flush) {
 
         // Create a reader which will cause many partition versions to be created
         flat_mutation_reader_opt rd1 = mt->make_flat_reader(s, tests::make_permit());
+        auto close_rd1 = deferred_close(*rd1);
         rd1->set_max_buffer_size(1);
         rd1->fill_buffer(db::no_timeout).get();
 
@@ -273,7 +283,7 @@ SEASTAR_TEST_CASE(test_virtual_dirty_accounting_on_flush) {
         virtual_dirty_values.push_back(mgr.virtual_dirty_memory());
 
         while ((*rd1)(db::no_timeout).get0()) ;
-        rd1 = {};
+        close_rd1.close_now();
 
         logalloc::shard_tracker().full_compaction();
 
@@ -504,6 +514,7 @@ SEASTAR_TEST_CASE(test_hash_is_cached) {
 
         {
             auto rd = mt->make_flat_reader(s, tests::make_permit());
+            auto close_rd = deferred_close(rd);
             rd(db::no_timeout).get0()->as_partition_start();
             clustering_row row = std::move(*rd(db::no_timeout).get0()).as_clustering_row();
             BOOST_REQUIRE(!row.cells().cell_hash_for(0));
@@ -513,6 +524,7 @@ SEASTAR_TEST_CASE(test_hash_is_cached) {
             auto slice = s->full_slice();
             slice.options.set<query::partition_slice::option::with_digest>();
             auto rd = mt->make_flat_reader(s, tests::make_permit(), query::full_partition_range, slice);
+            auto close_rd = deferred_close(rd);
             rd(db::no_timeout).get0()->as_partition_start();
             clustering_row row = std::move(*rd(db::no_timeout).get0()).as_clustering_row();
             BOOST_REQUIRE(row.cells().cell_hash_for(0));
@@ -520,6 +532,7 @@ SEASTAR_TEST_CASE(test_hash_is_cached) {
 
         {
             auto rd = mt->make_flat_reader(s, tests::make_permit());
+            auto close_rd = deferred_close(rd);
             rd(db::no_timeout).get0()->as_partition_start();
             clustering_row row = std::move(*rd(db::no_timeout).get0()).as_clustering_row();
             BOOST_REQUIRE(row.cells().cell_hash_for(0));
@@ -530,6 +543,7 @@ SEASTAR_TEST_CASE(test_hash_is_cached) {
 
         {
             auto rd = mt->make_flat_reader(s, tests::make_permit());
+            auto close_rd = deferred_close(rd);
             rd(db::no_timeout).get0()->as_partition_start();
             clustering_row row = std::move(*rd(db::no_timeout).get0()).as_clustering_row();
             BOOST_REQUIRE(!row.cells().cell_hash_for(0));
@@ -539,6 +553,7 @@ SEASTAR_TEST_CASE(test_hash_is_cached) {
             auto slice = s->full_slice();
             slice.options.set<query::partition_slice::option::with_digest>();
             auto rd = mt->make_flat_reader(s, tests::make_permit(), query::full_partition_range, slice);
+            auto close_rd = deferred_close(rd);
             rd(db::no_timeout).get0()->as_partition_start();
             clustering_row row = std::move(*rd(db::no_timeout).get0()).as_clustering_row();
             BOOST_REQUIRE(row.cells().cell_hash_for(0));
@@ -546,6 +561,7 @@ SEASTAR_TEST_CASE(test_hash_is_cached) {
 
         {
             auto rd = mt->make_flat_reader(s, tests::make_permit());
+            auto close_rd = deferred_close(rd);
             rd(db::no_timeout).get0()->as_partition_start();
             clustering_row row = std::move(*rd(db::no_timeout).get0()).as_clustering_row();
             BOOST_REQUIRE(row.cells().cell_hash_for(0));

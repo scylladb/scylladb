@@ -19,6 +19,8 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <seastar/util/closeable.hh>
+
 #include "memtable.hh"
 #include "database.hh"
 #include "frozen_mutation.hh"
@@ -400,11 +402,16 @@ class scanning_reader final : public flat_mutation_reader::impl, private iterato
                 if (_delegate_range) {
                     _end_of_stream = true;
                 } else {
-                    _delegate = { };
+                    return close_delegate();
                 }
             }
+            return make_ready_future<>();
         });
     }
+
+    future<> close_delegate() noexcept {
+        return _delegate ? _delegate->close() : make_ready_future<>();
+    };
 
 public:
      scanning_reader(schema_ptr s,
@@ -464,7 +471,7 @@ public:
         clear_buffer_to_next_partition();
         if (is_buffer_empty()) {
             if (!_delegate_range) {
-                _delegate = {};
+                return close_delegate();
             } else {
                 return _delegate->next_partition();
             }
@@ -477,12 +484,16 @@ public:
         if (_delegate_range) {
             return _delegate->fast_forward_to(pr, timeout);
         } else {
-            _delegate = {};
+          return close_delegate().then([this, &pr, timeout] {
             return iterator_reader::fast_forward_to(pr, timeout);
+          });
         }
     }
     virtual future<> fast_forward_to(position_range cr, db::timeout_clock::time_point timeout) override {
         throw std::runtime_error("This reader can't be fast forwarded to another partition.");
+    };
+    virtual future<> close() noexcept override {
+        return close_delegate();
     };
 };
 
@@ -705,7 +716,7 @@ memtable::update(db::rp_handle&& h) {
 
 future<>
 memtable::apply(memtable& mt, reader_permit permit) {
-    return do_with(mt.make_flat_reader(_schema, std::move(permit)), [this] (auto&& rd) mutable {
+    return with_closeable(mt.make_flat_reader(_schema, std::move(permit)), [this] (auto&& rd) mutable {
         return consume_partitions(rd, [self = this->shared_from_this(), &rd] (mutation&& m) {
             self->apply(m);
             return stop_iteration::no;
