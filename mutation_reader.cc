@@ -144,6 +144,10 @@ public:
     future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) {
         return _producer.fast_forward_to(std::move(pr), timeout);
     }
+
+    future<> close() noexcept {
+        return _producer.close();
+    }
 };
 
 // Merges the output of the sub-readers into a single non-decreasing
