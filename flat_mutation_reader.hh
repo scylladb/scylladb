@@ -645,6 +645,9 @@ flat_mutation_reader transform(flat_mutation_reader r, T t) {
             _end_of_stream = false;
             return _reader.fast_forward_to(std::move(pr), timeout);
         }
+        virtual future<> close() noexcept override {
+            return _reader.close();
+        }
     };
     return make_flat_mutation_reader<transforming_reader>(std::move(r), std::move(t));
 }

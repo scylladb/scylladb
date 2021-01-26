@@ -22,6 +22,7 @@
 
 #include <seastar/core/thread.hh>
 #include <seastar/testing/test_case.hh>
+#include <seastar/util/closeable.hh>
 
 #include "test/lib/mutation_source_test.hh"
 #include "mutation_fragment.hh"
@@ -398,6 +399,7 @@ SEASTAR_TEST_CASE(test_schema_upgrader_is_equivalent_with_mutation_upgrade) {
                 // upgrade m1 to m2's schema
 
                 auto reader = transform(flat_mutation_reader_from_mutations(tests::make_permit(), {m1}), schema_upgrader(m2.schema()));
+                auto close_reader = deferred_close(reader);
                 auto from_upgrader = read_mutation_from_flat_mutation_reader(reader, db::no_timeout).get0();
 
                 auto regular = m1;
