@@ -21,6 +21,8 @@
 
 #pragma once
 
+#include <seastar/util/closeable.hh>
+
 #include "mutation_compactor.hh"
 #include "mutation_reader.hh"
 
@@ -96,7 +98,7 @@ auto consume_page(flat_mutation_reader& reader,
 
         auto consume = [&reader, &slice, reader_consumer = std::move(reader_consumer), timeout, max_size] () mutable {
             if (slice.options.contains(query::partition_slice::option::reversed)) {
-                return do_with(make_reversing_reader(reader, max_size),
+                return with_closeable(make_reversing_reader(reader, max_size),
                         [reader_consumer = std::move(reader_consumer), timeout] (flat_mutation_reader& reversing_reader) mutable {
                     return reversing_reader.consume(std::move(reader_consumer), timeout);
                 });

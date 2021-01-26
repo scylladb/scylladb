@@ -23,6 +23,7 @@
 #include <seastar/core/thread.hh>
 #include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
+#include <seastar/util/closeable.hh>
 
 #include "mutation.hh"
 #include "mutation_fragment.hh"
@@ -542,8 +543,9 @@ void test_flat_stream(schema_ptr s, std::vector<mutation> muts, reversed_partiti
             return fmr.consume_in_thread(std::move(fsc), db::no_timeout);
         } else {
             if (reversed) {
-                auto reverse_reader = make_reversing_reader(fmr, query::max_result_size(size_t(1) << 20));
-                return reverse_reader.consume(std::move(fsc), db::no_timeout).get0();
+                return with_closeable(make_reversing_reader(fmr, query::max_result_size(size_t(1) << 20)), [fsc = std::move(fsc)] (flat_mutation_reader& reverse_reader) mutable {
+                    return reverse_reader.consume(std::move(fsc), db::no_timeout);
+                }).get0();
             }
             return fmr.consume(std::move(fsc), db::no_timeout).get0();
         }
@@ -770,7 +772,11 @@ SEASTAR_THREAD_TEST_CASE(test_reverse_reader_memory_limit) {
 
         const uint64_t hard_limit = size_t(1) << 18;
         auto reader = flat_mutation_reader_from_mutations(tests::make_permit(), {mut});
+        // need to close both readers since the reverse_reader
+        // doesn't own the reader passed to it by ref.
+        auto close_reader = deferred_close(reader);
         auto reverse_reader = make_reversing_reader(reader, query::max_result_size(size_t(1) << 10, hard_limit));
+        auto close_reverse_reader = deferred_close(reverse_reader);
 
         try {
             reverse_reader.consume(phony_consumer{}, db::no_timeout).get();

@@ -206,6 +206,11 @@ flat_mutation_reader make_reversing_reader(flat_mutation_reader& original, query
         virtual future<> fast_forward_to(position_range, db::timeout_clock::time_point) override {
             return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
         }
+
+        virtual future<> close() noexcept override {
+            // we don't own _source therefore do not close it
+            return make_ready_future<>();
+        }
     };
 
     return make_flat_mutation_reader<partition_reversing_mutation_reader>(original, max_size);
