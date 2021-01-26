@@ -245,6 +245,7 @@ public:
     future<> next_partition();
     future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout);
     future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout);
+    future<> close() noexcept;
 };
 
 /* Merge a non-decreasing stream of mutation fragment batches
@@ -376,6 +377,7 @@ future<> mutation_reader_merger::prepare_next(db::timeout_clock::time_point time
 future<mutation_reader_merger::needs_merge> mutation_reader_merger::prepare_one(db::timeout_clock::time_point timeout,
         reader_and_last_fragment_kind rk, reader_galloping reader_galloping) {
     return (*rk.reader)(timeout).then([this, rk, reader_galloping] (mutation_fragment_opt mfo) {
+        auto to_close = make_ready_future<>();
         if (mfo) {
             if (mfo->is_partition_start()) {
                 _reader_heap.emplace_back(rk.reader, std::move(*mfo));
@@ -388,7 +390,7 @@ future<mutation_reader_merger::needs_merge> mutation_reader_merger::prepare_one(
                         _current.clear();
                         _current.push_back(std::move(*mfo));
                         _galloping_reader.last_kind = _current.back().mutation_fragment_kind();
-                        return needs_merge::no;
+                        return make_ready_future<needs_merge>(needs_merge::no);
                     }
 
                     _gallop_mode_hits = 0;
@@ -409,10 +411,14 @@ future<mutation_reader_merger::needs_merge> mutation_reader_merger::prepare_one(
         } else if (_fwd_mr == mutation_reader::forwarding::no) {
             _to_remove.splice(_to_remove.end(), _all_readers, rk.reader);
             if (_to_remove.size() >= 4) {
-                _to_remove.clear();
+                auto to_remove = std::move(_to_remove);
+                to_close = parallel_for_each(to_remove, [] (flat_mutation_reader& r) {
+                    return r.close();
+                });
                 if (reader_galloping) {
                     // Galloping reader iterator may have become invalid at this point, so - to be safe - clear it
-                    _galloping_reader.reader = { };
+                    auto fut = _galloping_reader.reader->close();
+                    to_close = when_all_succeed(std::move(to_close), std::move(fut)).discard_result();
                 }
             }
         }
@@ -420,7 +426,11 @@ future<mutation_reader_merger::needs_merge> mutation_reader_merger::prepare_one(
         if (reader_galloping) {
             _gallop_mode_hits = 0;
         }
+      // to_close is a chain of flat_mutation_reader close futures,
+      // therefore it can not fail.
+      return to_close.then([] {
         return needs_merge::yes;
+      });
     });
 }
 
@@ -586,6 +596,16 @@ future<> mutation_reader_merger::fast_forward_to(position_range pr, db::timeout_
     prepare_forwardable_readers();
     return parallel_for_each(_next, [this, pr = std::move(pr), timeout] (reader_and_last_fragment_kind rk) {
         return rk.reader->fast_forward_to(pr, timeout);
+    });
+}
+
+future<> mutation_reader_merger::close() noexcept {
+    return parallel_for_each(std::move(_to_remove), [] (flat_mutation_reader& mr) {
+        return mr.close();
+    }).then([this] {
+        return parallel_for_each(std::move(_all_readers), [] (flat_mutation_reader& mr) {
+            return mr.close();
+        });
     });
 }
 
@@ -2382,6 +2402,12 @@ class clustering_order_reader_merger {
         return _gallop_mode_hits >= _gallop_mode_entering_threshold;
     }
 
+    future<> erase_reader(reader_iterator it) noexcept {
+        return std::move(it->reader).close().then([this, it = std::move(it)] {
+            _all_readers.erase(it);
+        });
+    }
+
     // Retrieve the next fragment from the reader pointed to by `it`.
     // The function assumes that we're not in galloping mode, `it` is in `_unpeeked_readers`,
     // and all fragments previously returned from the reader have already been returned by operator().
@@ -2404,7 +2430,7 @@ class clustering_order_reader_merger {
                 // it makes the code simpler (to check for this here we would need additional state); it is a bit wasteful
                 // but completely empty readers should be rare.
                 if (_cmp(it->upper_bound, _pr_end) < 0) {
-                    _all_readers.erase(it);
+                    return erase_reader(std::move(it));
                 } else {
                     _halted_readers.push_back(it);
                 }
@@ -2443,7 +2469,7 @@ class clustering_order_reader_merger {
             }
 
             if (mf->is_end_of_partition()) {
-                _all_readers.erase(it);
+                return erase_reader(std::move(it));
             } else {
                 _peeked_readers.emplace_back(it);
                 boost::range::push_heap(_peeked_readers, _peeked_cmp);
@@ -2469,6 +2495,7 @@ class clustering_order_reader_merger {
     // Otherwise, the reader is pushed onto _peeked_readers and we retry in non-galloping mode.
     future<mutation_fragment_batch> peek_galloping_reader(db::timeout_clock::time_point timeout) {
         return _galloping_reader->reader.peek(timeout).then([this, timeout] (mutation_fragment* mf) {
+            bool erase = false;
             if (mf) {
                 if (mf->is_partition_start()) {
                     on_internal_error(mrlog, format(
@@ -2484,7 +2511,7 @@ class clustering_order_reader_merger {
                 }
 
                 if (mf->is_end_of_partition()) {
-                    _all_readers.erase(_galloping_reader);
+                    erase = true;
                 } else {
                     if (_reader_queue->empty(mf->position())
                             && (_peeked_readers.empty()
@@ -2498,23 +2525,27 @@ class clustering_order_reader_merger {
                     // or there is a yet unselected reader which possibly has a smaller position.
                     // In either case we exit the galloping mode.
 
-                    _peeked_readers.emplace_back(_galloping_reader);
+                    _peeked_readers.emplace_back(std::move(_galloping_reader));
                     boost::range::push_heap(_peeked_readers, _peeked_cmp);
                 }
             } else {
                 // See comment in `peek_reader`.
                 if (_cmp(_galloping_reader->upper_bound, _pr_end) < 0) {
-                    _all_readers.erase(_galloping_reader);
+                    erase = true;
                 } else {
-                    _halted_readers.push_back(_galloping_reader);
+                    _halted_readers.push_back(std::move(_galloping_reader));
                 }
             }
 
+            auto maybe_erase = erase ? erase_reader(std::move(_galloping_reader)) : make_ready_future<>();
+
             // The galloping reader has either been removed, halted, or lost with the other readers.
             // Proceed with the normal path.
+          return maybe_erase.then([this, timeout] {
             _galloping_reader = {};
             _gallop_mode_hits = 0;
             return (*this)(timeout);
+          });
         });
     }
 
@@ -2656,6 +2687,14 @@ public:
 
         return parallel_for_each(_unpeeked_readers, [this, pr = std::move(pr), timeout] (reader_iterator it) {
             return it->reader.fast_forward_to(pr, timeout);
+        });
+    }
+
+    future<> close() noexcept {
+        return parallel_for_each(std::move(_all_readers), [] (reader_and_upper_bound& r) {
+            return r.reader.close();
+        }).finally([this] {
+            return _reader_queue->close();
         });
     }
 };
