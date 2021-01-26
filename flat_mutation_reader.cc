@@ -230,12 +230,8 @@ future<bool> flat_mutation_reader::impl::fill_buffer_from(Source& source, db::ti
 
 template future<bool> flat_mutation_reader::impl::fill_buffer_from<flat_mutation_reader>(flat_mutation_reader&, db::timeout_clock::time_point);
 
-flat_mutation_reader& to_reference(reference_wrapper<flat_mutation_reader>& wrapper) {
-    return wrapper.get();
-}
-
 flat_mutation_reader make_delegating_reader(flat_mutation_reader& r) {
-    return make_flat_mutation_reader<delegating_reader<reference_wrapper<flat_mutation_reader>>>(ref(r));
+    return make_flat_mutation_reader<delegating_reader>(r);
 }
 
 flat_mutation_reader make_forwardable(flat_mutation_reader m) {

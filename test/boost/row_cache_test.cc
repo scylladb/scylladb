@@ -182,23 +182,23 @@ SEASTAR_TEST_CASE(test_cache_works_after_clearing) {
     });
 }
 
-class partition_counting_reader final : public delegating_reader<flat_mutation_reader> {
+class partition_counting_reader final : public delegating_reader {
     int& _counter;
     bool _count_fill_buffer = true;
 public:
     partition_counting_reader(flat_mutation_reader mr, int& counter)
-        : delegating_reader<flat_mutation_reader>(std::move(mr)), _counter(counter) { }
+        : delegating_reader(std::move(mr)), _counter(counter) { }
     virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override {
         if (_count_fill_buffer) {
             ++_counter;
             _count_fill_buffer = false;
         }
-        return delegating_reader<flat_mutation_reader>::fill_buffer(timeout);
+        return delegating_reader::fill_buffer(timeout);
     }
     virtual future<> next_partition() override {
         _count_fill_buffer = false;
         ++_counter;
-        return delegating_reader<flat_mutation_reader>::next_partition();
+        return delegating_reader::next_partition();
     }
 };
 
@@ -1248,15 +1248,15 @@ private:
         mutation_source _underlying;
         ::throttle& _throttle;
     private:
-        class reader : public delegating_reader<flat_mutation_reader> {
+        class reader : public delegating_reader {
             throttle& _throttle;
         public:
             reader(throttle& t, flat_mutation_reader r)
-                    : delegating_reader<flat_mutation_reader>(std::move(r))
+                    : delegating_reader(std::move(r))
                     , _throttle(t)
             {}
             virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override {
-                return delegating_reader<flat_mutation_reader>::fill_buffer(timeout).finally([this] () {
+                return delegating_reader::fill_buffer(timeout).finally([this] () {
                     return _throttle.enter();
                 });
             }

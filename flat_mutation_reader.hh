@@ -652,42 +652,57 @@ flat_mutation_reader transform(flat_mutation_reader r, T t) {
     return make_flat_mutation_reader<transforming_reader>(std::move(r), std::move(t));
 }
 
-inline flat_mutation_reader& to_reference(flat_mutation_reader& r) { return r; }
-inline const flat_mutation_reader& to_reference(const flat_mutation_reader& r) { return r; }
-
-template <typename Underlying>
 class delegating_reader : public flat_mutation_reader::impl {
-    Underlying _underlying;
+    flat_mutation_reader_opt _underlying_holder;
+    flat_mutation_reader* _underlying;
 public:
-    delegating_reader(Underlying&& r) : impl(to_reference(r).schema(), to_reference(r).permit()), _underlying(std::forward<Underlying>(r)) { }
+    // when passed a lvalue reference to the reader
+    // we don't own it and the caller is responsible
+    // for evenetually closing the reader.
+    delegating_reader(flat_mutation_reader& r)
+        : impl(r.schema(), r.permit())
+        , _underlying_holder()
+        , _underlying(&r)
+    { }
+    // when passed a rvalue reference to the reader
+    // we assume ownership of it and will close it
+    // in close().
+    delegating_reader(flat_mutation_reader&& r)
+        : impl(r.schema(), r.permit())
+        , _underlying_holder(std::move(r))
+        , _underlying(&*_underlying_holder)
+    { }
     virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override {
         if (is_buffer_full()) {
             return make_ready_future<>();
         }
-        return to_reference(_underlying).fill_buffer(timeout).then([this] {
-            _end_of_stream = to_reference(_underlying).is_end_of_stream();
-            to_reference(_underlying).move_buffer_content_to(*this);
+        return _underlying->fill_buffer(timeout).then([this] {
+            _end_of_stream = _underlying->is_end_of_stream();
+            _underlying->move_buffer_content_to(*this);
         });
     }
     virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) override {
         _end_of_stream = false;
         forward_buffer_to(pr.start());
-        return to_reference(_underlying).fast_forward_to(std::move(pr), timeout);
+        return _underlying->fast_forward_to(std::move(pr), timeout);
     }
     virtual future<> next_partition() override {
         clear_buffer_to_next_partition();
         auto maybe_next_partition = make_ready_future<>();
         if (is_buffer_empty()) {
-            maybe_next_partition = to_reference(_underlying).next_partition();
+            maybe_next_partition = _underlying->next_partition();
         }
       return maybe_next_partition.then([this] {
-        _end_of_stream = to_reference(_underlying).is_end_of_stream() && to_reference(_underlying).is_buffer_empty();
+        _end_of_stream = _underlying->is_end_of_stream() && _underlying->is_buffer_empty();
       });
     }
     virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {
         _end_of_stream = false;
         clear_buffer();
-        return to_reference(_underlying).fast_forward_to(pr, timeout);
+        return _underlying->fast_forward_to(pr, timeout);
+    }
+    virtual future<> close() noexcept override {
+        return _underlying_holder ? _underlying_holder->close() : make_ready_future<>();
     }
 };
 flat_mutation_reader make_delegating_reader(flat_mutation_reader&);
