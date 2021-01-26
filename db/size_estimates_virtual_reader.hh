@@ -51,8 +51,10 @@ public:
     virtual future<> next_partition() override;
     virtual future<> fast_forward_to(const dht::partition_range&, db::timeout_clock::time_point) override;
     virtual future<> fast_forward_to(position_range, db::timeout_clock::time_point) override;
+    virtual future<> close() noexcept override;
 private:
     future<> get_next_partition();
+    future<> close_partition_reader() noexcept;
 
     std::vector<db::system_keyspace::range_estimates>
     estimates_for_current_keyspace(std::vector<token_range> local_ranges) const;
