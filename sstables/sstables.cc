@@ -34,6 +34,7 @@
 #include <seastar/core/shared_future.hh>
 #include <seastar/core/byteorder.hh>
 #include <seastar/core/aligned_buffer.hh>
+#include <seastar/util/closeable.hh>
 #include <iterator>
 #include <seastar/core/coroutine.hh>
 
@@ -1697,6 +1698,7 @@ future<> sstable::write_components(
         const io_priority_class& pc) {
     assert_large_data_handler_is_running();
     return seastar::async([this, mr = std::move(mr), estimated_partitions, schema = std::move(schema), cfg, stats, &pc] () mutable {
+        auto close_mr = deferred_close(mr);
         auto wr = get_writer(*schema, estimated_partitions, cfg, stats, pc);
         mr.consume_in_thread(std::move(wr), db::no_timeout);
     }).finally([this] {
