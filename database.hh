@@ -29,7 +29,6 @@
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/execution_stage.hh>
 #include <seastar/net/byteorder.hh>
-#include "utils/UUID_gen.hh"
 #include "utils/UUID.hh"
 #include "utils/hash.hh"
 #include "db_clock.hh"

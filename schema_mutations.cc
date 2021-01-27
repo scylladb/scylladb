@@ -23,6 +23,7 @@
 #include "canonical_mutation.hh"
 #include "db/schema_tables.hh"
 #include "hashers.hh"
+#include "utils/UUID_gen.hh"
 
 schema_mutations::schema_mutations(canonical_mutation columnfamilies,
                                    canonical_mutation columns,

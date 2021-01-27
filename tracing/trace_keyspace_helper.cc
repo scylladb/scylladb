@@ -48,6 +48,7 @@
 #include "cql3/cql_config.hh"
 #include "types/set.hh"
 #include "types/map.hh"
+#include "utils/UUID_gen.hh"
 
 namespace tracing {
 

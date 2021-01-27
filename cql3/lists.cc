@@ -26,6 +26,7 @@
 #include "constants.hh"
 #include <boost/iterator/transform_iterator.hpp>
 #include "types/list.hh"
+#include "utils/UUID_gen.hh"
 
 namespace cql3 {
 

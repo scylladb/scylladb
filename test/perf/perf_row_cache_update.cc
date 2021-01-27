@@ -27,6 +27,7 @@
 
 #include "utils/managed_bytes.hh"
 #include "utils/logalloc.hh"
+#include "utils/UUID_gen.hh"
 #include "row_cache.hh"
 #include "log.hh"
 #include "schema_builder.hh"

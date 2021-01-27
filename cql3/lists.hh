@@ -43,7 +43,6 @@
 
 #include "cql3/abstract_marker.hh"
 #include "to_string.hh"
-#include "utils/UUID_gen.hh"
 #include "operation.hh"
 
 namespace cql3 {

@@ -45,7 +45,6 @@
 #include <seastar/util/lazy.hh>
 #include <seastar/core/weak_ptr.hh>
 #include <seastar/core/checked_ptr.hh>
-#include "utils/UUID_gen.hh"
 #include "tracing/tracing.hh"
 #include "gms/inet_address.hh"
 #include "auth/authenticated_user.hh"
@@ -235,25 +234,9 @@ private:
         return log_slow_query() && e > _slow_query_threshold;
     }
 
-    void init_session_records(trace_type type, std::chrono::seconds slow_query_ttl, std::optional<utils::UUID> session_id = std::nullopt, span_id parent_id = span_id::illegal_id) {
-        _records = make_lw_shared<one_session_records>();
-        _records->session_id = session_id ? *session_id : utils::UUID_gen::get_time_UUID();
-
-        if (full_tracing()) {
-            if (!log_slow_query()) {
-                _records->ttl = ttl_by_type(type);
-            } else {
-                _records->ttl = std::max(ttl_by_type(type), slow_query_ttl);
-            }
-        } else {
-            _records->ttl = slow_query_ttl;
-        }
-
-        _records->session_rec.command = type;
-        _records->session_rec.slow_query_record_ttl = slow_query_ttl;
-        _records->my_span_id = span_id::make_span_id();
-        _records->parent_id = parent_id;
-    }
+    void init_session_records(trace_type type, std::chrono::seconds slow_query_ttl,
+        std::optional<utils::UUID> session_id = std::nullopt,
+        span_id parent_id = span_id::illegal_id);
 
     bool should_write_records() const {
         return full_tracing() || _records->do_log_slow_query;

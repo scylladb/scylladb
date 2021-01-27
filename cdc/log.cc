@@ -48,6 +48,7 @@
 #include "cql3/untyped_result_set.hh"
 #include "log.hh"
 #include "utils/rjson.hh"
+#include "utils/UUID_gen.hh"
 #include "types.hh"
 #include "concrete_types.hh"
 #include "types/listlike_partial_deserializing_iterator.hh"
