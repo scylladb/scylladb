@@ -41,6 +41,7 @@
 #include "types/map.hh"
 #include "types/list.hh"
 #include "types/set.hh"
+#include <seastar/util/closeable.hh>
 
 // partitions must be sorted by decorated key
 static void require_no_token_duplicates(const std::vector<mutation>& partitions) {
@@ -387,9 +388,11 @@ static void test_streamed_mutation_forwarding_is_consistent_with_slicing(populat
 
         flat_mutation_reader sliced_reader =
             ms.make_reader(m.schema(), tests::make_permit(), prange, slice_with_ranges);
+        auto close_sliced_reader = deferred_close(sliced_reader);
 
         flat_mutation_reader fwd_reader =
             ms.make_reader(m.schema(), tests::make_permit(), prange, full_slice, default_priority_class(), nullptr, streamed_mutation::forwarding::yes);
+        auto close_fwd_reader = deferred_close(fwd_reader);
 
         std::optional<mutation_rebuilder> builder{};
         struct consumer {
@@ -1336,6 +1339,7 @@ void test_slicing_with_overlapping_range_tombstones(populate_fn_ex populate) {
     {
         auto slice = partition_slice_builder(*s).with_range(range).build();
         auto rd = ds.make_reader(s, tests::make_permit(), query::full_partition_range, slice);
+        auto close_rd = deferred_close(rd);
 
         auto prange = position_range(range);
         mutation result(m1.schema(), m1.decorated_key());
@@ -1355,6 +1359,7 @@ void test_slicing_with_overlapping_range_tombstones(populate_fn_ex populate) {
     {
         auto rd = ds.make_reader(s, tests::make_permit(), query::full_partition_range, s->full_slice(), default_priority_class(),
             nullptr, streamed_mutation::forwarding::yes);
+        auto close_rd = deferred_close(rd);
 
         auto prange = position_range(range);
         mutation result(m1.schema(), m1.decorated_key());
@@ -2339,12 +2344,14 @@ static bool compare_readers(const schema& s, flat_mutation_reader& authority, fl
 }
 
 void compare_readers(const schema& s, flat_mutation_reader authority, flat_mutation_reader tested) {
+    auto close_authority = deferred_close(authority);
     auto assertions = assert_that(std::move(tested));
     compare_readers(s, authority, assertions);
 }
 
 // Assumes that the readers return fragments from (at most) a single (and the same) partition.
 void compare_readers(const schema& s, flat_mutation_reader authority, flat_mutation_reader tested, const std::vector<position_range>& fwd_ranges) {
+    auto close_authority = deferred_close(authority);
     auto assertions = assert_that(std::move(tested));
     if (compare_readers(s, authority, assertions)) {
         for (auto& r: fwd_ranges) {
