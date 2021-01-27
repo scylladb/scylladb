@@ -1097,6 +1097,10 @@ public:
     bool created() const {
         return bool(_tracker);
     }
+
+    future<> close() noexcept {
+        return _reader.close();
+    }
 };
 
 class dummy_file_impl : public file_impl {
@@ -1246,6 +1250,7 @@ SEASTAR_TEST_CASE(restricted_reader_reading) {
             BOOST_REQUIRE_EQUAL(semaphore.waiters(), 2);
 
             // Move reader1 to the heap, so that we can safely destroy it.
+            reader1.close().get();
             auto reader1_ptr = std::make_unique<reader_wrapper>(std::move(reader1));
             reader1_ptr.reset();
 
@@ -1259,6 +1264,7 @@ SEASTAR_TEST_CASE(restricted_reader_reading) {
             BOOST_REQUIRE_EQUAL(semaphore.waiters(), 1);
 
             // Move reader2 to the heap, so that we can safely destroy it.
+            reader2.close().get();
             auto reader2_ptr = std::make_unique<reader_wrapper>(std::move(reader2));
             reader2_ptr.reset();
 
@@ -1277,6 +1283,7 @@ SEASTAR_TEST_CASE(restricted_reader_reading) {
                 BOOST_REQUIRE_EQUAL(reader3.call_count(), 2);
                 read3_fut.get();
             }
+            reader3.close().get();
         }
 
         // All units should have been deposited back.
@@ -1316,10 +1323,15 @@ SEASTAR_TEST_CASE(restricted_reader_timeout) {
             } else {
                 // We need special cleanup when the test failed to avoid invalid
                 // memory access.
+                reader1->close().get();
                 reader1.reset();
                 BOOST_CHECK(eventually_true([&] { return read2_fut.available(); }));
+
+                reader2->close().get();
                 reader2.reset();
                 BOOST_CHECK(eventually_true([&] { return read3_fut.available(); }));
+
+                reader3->close().get();
                 reader3.reset();
             }
        }
@@ -1355,11 +1367,15 @@ SEASTAR_TEST_CASE(restricted_reader_max_queue_length) {
 
             // The queue should now be full.
             BOOST_REQUIRE_THROW(reader4().get(), std::runtime_error);
+            reader4.close().get();
 
+            reader1_ptr->close().get();
             reader1_ptr.reset();
             read2_fut.get();
+            reader2_ptr->close().get();
             reader2_ptr.reset();
             read3_fut.get();
+            reader3_ptr->close().get();
         }
 
         REQUIRE_EVENTUALLY_EQUAL(new_reader_base_cost, semaphore.available_resources().memory);
@@ -1378,6 +1394,7 @@ SEASTAR_TEST_CASE(restricted_reader_create_reader) {
 
             {
                 auto reader = reader_wrapper(semaphore, s.schema(), sst);
+                auto close_reader = deferred_close(reader);
                 // This fast-forward is stupid, I know but the
                 // underlying dummy reader won't care, so it's fine.
                 reader.fast_forward_to(query::full_partition_range).get();
@@ -1389,6 +1406,7 @@ SEASTAR_TEST_CASE(restricted_reader_create_reader) {
 
             {
                 auto reader = reader_wrapper(semaphore, s.schema(), sst);
+                auto close_reader = deferred_close(reader);
                 reader().get();
 
                 BOOST_REQUIRE(reader.created());

@@ -807,6 +807,12 @@ public:
             return reader.fast_forward_to(std::move(pr), timeout);
         }, timeout);
     }
+    virtual future<> close() noexcept override {
+        if (auto* state = std::get_if<admitted_state>(&_state)) {
+            return state->reader.close();
+        }
+        return make_ready_future<>();
+    }
 };
 
 flat_mutation_reader
