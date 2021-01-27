@@ -34,7 +34,7 @@ import random
 @pytest.fixture(scope="session")
 def table1(cql, test_keyspace):
     table = test_keyspace + "." + unique_name()
-    cql.execute(f"CREATE TABLE {table} (p int PRIMARY KEY, v int, a ascii, b boolean, vi varint, mai map<ascii, int>, tup frozen<tuple<text, int>>, l list<text>)")
+    cql.execute(f"CREATE TABLE {table} (p int PRIMARY KEY, v int, a ascii, b boolean, vi varint, mai map<ascii, int>, tup frozen<tuple<text, int>>, l list<text>, d double)")
     yield table
     cql.execute("DROP TABLE " + table)
 
@@ -222,3 +222,18 @@ def test_fromjson_null_constant(cql, table1):
     stmt = cql.prepare(f"INSERT INTO {table1} (p, l) VALUES (?, fromJson(?))")
     with pytest.raises(FunctionFailure):
         cql.execute(stmt, [p, '["a", null]'])
+
+# Check that toJson() correctly formats double values. Strangely, we had a bug`
+# (issue #7972) where the double value 123.456 was correctly formatted, but
+# the value 123123.123123 was truncated to an integer. This test reproduces
+# this.
+@pytest.mark.xfail(reason="issue #7972")
+def test_tojson_double(cql, table1):
+    p = random.randint(1,1000000000)
+    stmt = cql.prepare(f"INSERT INTO {table1} (p, d) VALUES (?, ?)")
+    cql.execute(stmt, [p, 123.456])
+    assert list(cql.execute(f"SELECT d, toJson(d) from {table1} where p = {p}")) == [(123.456, "123.456")]
+    # While 123.456 above worked, in issue #7972 we note that 123123.123123
+    # does not work.
+    cql.execute(stmt, [p, 123123.123123])
+    assert list(cql.execute(f"SELECT d, toJson(d) from {table1} where p = {p}")) == [(123123.123123, "123123.123123")]
