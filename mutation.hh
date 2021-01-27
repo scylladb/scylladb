@@ -29,8 +29,21 @@
 #include "dht/i_partitioner.hh"
 #include "hashing.hh"
 #include "mutation_fragment.hh"
+#include "mutation_consumer_concepts.hh"
 
 #include <seastar/util/optimized_optional.hh>
+
+
+template<typename Result>
+struct mutation_consume_result {
+    stop_iteration stop;
+    Result result;
+};
+
+template<>
+struct mutation_consume_result<void> {
+    stop_iteration stop;
+};
 
 class mutation final {
 private:
@@ -106,26 +119,11 @@ public:
     bool operator==(const mutation&) const;
     bool operator!=(const mutation&) const;
 public:
-    // The supplied partition_slice must be governed by this mutation's schema
-    query::result query(const query::partition_slice&,
-        query::result_memory_accounter&& accounter,
-        query::result_options opts = query::result_options::only_result(),
-        gc_clock::time_point now = gc_clock::now(),
-        uint64_t row_limit = query::max_rows) &&;
-
-    // The supplied partition_slice must be governed by this mutation's schema
-    // FIXME: Slower than the r-value version
-    query::result query(const query::partition_slice&,
-        query::result_memory_accounter&& accounter,
-        query::result_options opts = query::result_options::only_result(),
-        gc_clock::time_point now = gc_clock::now(),
-        uint64_t row_limit = query::max_rows) const&;
-
-    // The supplied partition_slice must be governed by this mutation's schema
-    void query(query::result::builder& builder,
-        const query::partition_slice& slice,
-        gc_clock::time_point now = gc_clock::now(),
-        uint64_t row_limit = query::max_rows) &&;
+    // Consumes the mutation's content.
+    //
+    // The mutation is in a moved-from alike state after consumption.
+    template<FlattenedConsumer Consumer>
+    auto consume(Consumer& consumer) && -> mutation_consume_result<decltype(consumer.consume_end_of_stream())>;
 
     // See mutation_partition::live_row_count()
     uint64_t live_row_count(gc_clock::time_point query_time = gc_clock::time_point::min()) const;
@@ -144,6 +142,58 @@ public:
 private:
     friend std::ostream& operator<<(std::ostream& os, const mutation& m);
 };
+
+template<FlattenedConsumer Consumer>
+auto mutation::consume(Consumer& consumer) && -> mutation_consume_result<decltype(consumer.consume_end_of_stream())> {
+    consumer.consume_new_partition(_ptr->_dk);
+
+    auto& partition = _ptr->_p;
+
+    if (partition.partition_tombstone()) {
+        consumer.consume(partition.partition_tombstone());
+    }
+
+    stop_iteration stop = stop_iteration::no;
+    if (!partition.static_row().empty()) {
+        stop = consumer.consume(static_row(std::move(partition.static_row().get_existing())));
+    }
+
+    std::unique_ptr<rows_entry, alloc_strategy_deleter<rows_entry>> cr(partition.clustered_rows().unlink_leftmost_without_rebalance());
+    std::unique_ptr<range_tombstone, alloc_strategy_deleter<range_tombstone>> rt(partition.row_tombstones().pop_front_and_lock());
+
+    position_in_partition::less_compare cmp_less(*_ptr->_schema);
+
+    while (!stop && (cr || rt)) {
+        bool emit_rt;
+        if (rt && cr) {
+            emit_rt = cmp_less(rt->position(), cr->position());
+        } else {
+            emit_rt = bool(rt);
+        }
+        if (emit_rt) {
+            stop = consumer.consume(std::move(*rt));
+            rt.reset(partition.row_tombstones().pop_front_and_lock());
+        } else {
+            stop = consumer.consume(clustering_row(std::move(*cr)));
+            cr.reset(partition.clustered_rows().unlink_leftmost_without_rebalance());
+        }
+    }
+    while (cr) {
+        cr.reset(partition.clustered_rows().unlink_leftmost_without_rebalance());
+    }
+    while (rt) {
+        rt.reset(partition.row_tombstones().pop_front_and_lock());
+    }
+
+    const auto stop_consuming = consumer.consume_end_of_partition();
+    using consume_res_type = decltype(consumer.consume_end_of_stream());
+    if constexpr (std::is_same_v<consume_res_type, void>) {
+        consumer.consume_end_of_stream();
+        return mutation_consume_result<void>{stop_consuming};
+    } else {
+        return mutation_consume_result<consume_res_type>{stop_consuming, consumer.consume_end_of_stream()};
+    }
+}
 
 struct mutation_equals_by_key {
     bool operator()(const mutation& m1, const mutation& m2) const {

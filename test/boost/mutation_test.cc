@@ -770,8 +770,7 @@ SEASTAR_TEST_CASE(test_querying_of_mutation) {
 
         auto resultify = [s] (const mutation& m) -> query::result_set {
             auto slice = make_full_slice(*s);
-            return query::result_set::from_raw_result(s, slice,
-                    m.query(slice, query::result_memory_accounter{ query::result_memory_limiter::unlimited_result_size }));
+            return query::result_set::from_raw_result(s, slice, query_mutation(mutation(m), slice));
         };
 
         mutation m(s, partition_key::from_single_value(*s, "key1"));
@@ -806,8 +805,7 @@ SEASTAR_TEST_CASE(test_partition_with_no_live_data_is_absent_in_data_query_resul
 
         auto slice = make_full_slice(*s);
 
-        assert_that(query::result_set::from_raw_result(s, slice,
-                    m.query(slice, query::result_memory_accounter{ query::result_memory_limiter::unlimited_result_size })))
+        assert_that(query::result_set::from_raw_result(s, slice, query_mutation(mutation(m), slice)))
             .is_empty();
     });
 }
@@ -831,7 +829,7 @@ SEASTAR_TEST_CASE(test_partition_with_live_data_in_static_row_is_present_in_the_
             .build();
 
         assert_that(query::result_set::from_raw_result(s, slice,
-                    m.query(slice, query::result_memory_accounter{ query::result_memory_limiter::unlimited_result_size })))
+                query_mutation(mutation(m), slice)))
             .has_only(a_row()
                 .with_column("pk", data_value(bytes("key1")))
                 .with_column("v", data_value::make_null(bytes_type)));
@@ -855,7 +853,7 @@ SEASTAR_TEST_CASE(test_query_result_with_one_regular_column_missing) {
         auto slice = partition_slice_builder(*s).build();
 
         assert_that(query::result_set::from_raw_result(s, slice,
-                    m.query(slice, query::result_memory_accounter{ query::result_memory_limiter::unlimited_result_size })))
+                query_mutation(mutation(m), slice)))
             .has_only(a_row()
                 .with_column("pk", data_value(bytes("key1")))
                 .with_column("ck", data_value(bytes("ck:A")))
@@ -1236,10 +1234,11 @@ SEASTAR_TEST_CASE(test_query_digest) {
         auto check_digests_equal = [] (const mutation& m1, const mutation& m2) {
             auto ps1 = partition_slice_builder(*m1.schema()).build();
             auto ps2 = partition_slice_builder(*m2.schema()).build();
-            auto digest1 = *m1.query(ps1, query::result_memory_accounter{ query::result_memory_limiter::unlimited_result_size },
+            auto digest1 = *query_mutation(mutation(m1), ps1, query::max_rows, gc_clock::now(),
                     query::result_options::only_digest(query::digest_algorithm::xxHash)).digest();
-            auto digest2 = *m2.query(ps2, query::result_memory_accounter{ query::result_memory_limiter::unlimited_result_size },
+            auto digest2 = *query_mutation( mutation(m2), ps2, query::max_rows, gc_clock::now(),
                     query::result_options::only_digest(query::digest_algorithm::xxHash)).digest();
+
             if (digest1 != digest2) {
                 BOOST_FAIL(format("Digest should be the same for {} and {}", m1, m2));
             }
@@ -1488,8 +1487,7 @@ SEASTAR_THREAD_TEST_CASE(test_querying_expired_rows) {
                 .without_partition_key_columns()
                 .build();
         auto opts = query::result_options{query::result_request::result_and_digest, query::digest_algorithm::xxHash};
-        return query::result_set::from_raw_result(s, slice,
-                m.query(slice, query::result_memory_accounter{ query::result_memory_limiter::unlimited_result_size }, opts, t));
+        return query::result_set::from_raw_result(s, slice, query_mutation(mutation(m), slice, query::max_rows, t, opts));
     };
 
     mutation m(s, pk);
@@ -1553,8 +1551,7 @@ SEASTAR_TEST_CASE(test_querying_expired_cells) {
                     .without_partition_key_columns()
                     .build();
             auto opts = query::result_options{query::result_request::result_and_digest, query::digest_algorithm::xxHash};
-            return query::result_set::from_raw_result(s, slice,
-                    m.query(slice, query::result_memory_accounter{ query::result_memory_limiter::unlimited_result_size }, opts, t));
+            return query::result_set::from_raw_result(s, slice, query_mutation(mutation(m), slice, query::max_rows, t, opts));
         };
 
         {

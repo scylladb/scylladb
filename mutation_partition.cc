@@ -908,94 +908,6 @@ bool has_any_live_data(const schema& s, column_kind kind, const row& cells, tomb
     return any_live;
 }
 
-void
-mutation_partition::query_compacted(query::result::partition_writer& pw, const schema& s, uint64_t limit) const {
-    check_schema(s);
-    const query::partition_slice& slice = pw.slice();
-    max_timestamp max_ts{pw.last_modified()};
-
-    if (limit == 0) {
-        pw.retract();
-        return;
-    }
-
-    auto static_cells_wr = pw.start().start_static_row().start_cells();
-
-    if (!slice.static_columns.empty()) {
-        if (pw.requested_result()) {
-            get_compacted_row_slice(s, slice, column_kind::static_column, static_row().get(), slice.static_columns, static_cells_wr);
-        }
-        if (pw.requested_digest()) {
-            auto pt = partition_tombstone();
-            pw.digest().feed_hash(pt);
-            max_ts.update(pt.timestamp);
-            pw.digest().feed_hash(static_row().get(), s, column_kind::static_column, slice.static_columns, max_ts);
-        }
-    }
-
-    auto rows_wr = std::move(static_cells_wr).end_cells()
-            .end_static_row()
-            .start_rows();
-
-    uint64_t row_count = 0;
-
-    auto is_reversed = slice.options.contains(query::partition_slice::option::reversed);
-    auto send_ck = slice.options.contains(query::partition_slice::option::send_clustering_key);
-    for_each_row(s, query::clustering_range::make_open_ended_both_sides(), is_reversed, [&] (const rows_entry& e) {
-        if (e.dummy()) {
-            return stop_iteration::no;
-        }
-        auto& row = e.row();
-        auto row_tombstone = tombstone_for_row(s, e);
-
-        if (pw.requested_digest()) {
-            pw.digest().feed_hash(e.key(), s);
-            pw.digest().feed_hash(row_tombstone);
-            max_ts.update(row_tombstone.tomb().timestamp);
-            pw.digest().feed_hash(row.cells(), s, column_kind::regular_column, slice.regular_columns, max_ts);
-        }
-
-        if (row.is_live(s)) {
-            if (pw.requested_result()) {
-                auto cells_wr = [&] {
-                    if (send_ck) {
-                        return rows_wr.add().write_key(e.key()).start_cells().start_cells();
-                    } else {
-                        return rows_wr.add().skip_key().start_cells().start_cells();
-                    }
-                }();
-                get_compacted_row_slice(s, slice, column_kind::regular_column, row.cells(), slice.regular_columns, cells_wr);
-                std::move(cells_wr).end_cells().end_cells().end_qr_clustered_row();
-            }
-            ++row_count;
-            if (--limit == 0) {
-                return stop_iteration::yes;
-            }
-        }
-        return stop_iteration::no;
-    });
-
-    pw.last_modified() = max_ts.max;
-
-    // If we got no rows, but have live static columns, we should only
-    // give them back IFF we did not have any CK restrictions.
-    // #589
-    // If ck:s exist, and we do a restriction on them, we either have maching
-    // rows, or return nothing, since cql does not allow "is null".
-    bool return_static_content_on_partition_with_no_rows =
-        pw.slice().options.contains(query::partition_slice::option::always_return_static_content) ||
-        !has_ck_selector(pw.ranges());
-    if (row_count == 0
-            && (!return_static_content_on_partition_with_no_rows
-                    || !has_any_live_data(s, column_kind::static_column, static_row().get()))) {
-        pw.retract();
-    } else {
-        pw.row_count() += row_count ? : 1;
-        pw.partition_count() += 1;
-        std::move(rows_wr).end_rows().end_qr_partition();
-    }
-}
-
 std::ostream&
 operator<<(std::ostream& os, const std::pair<column_id, const atomic_cell_or_collection::printer&>& c) {
     return fmt_print(os, "{{column: {} {}}}", c.first, c.second);
@@ -2357,6 +2269,35 @@ reconcilable_result reconcilable_result_builder::consume_end_of_stream() {
     return reconcilable_result(_total_live_rows, std::move(_result),
                                query::short_read(bool(_stop)),
                                std::move(_memory_accounter).done());
+}
+
+query::result
+to_data_query_result(const reconcilable_result& r, schema_ptr s, const query::partition_slice& slice, uint64_t max_rows, uint32_t max_partitions,
+        query::result_options opts) {
+    // This result was already built with a limit, don't apply another one.
+    query::result::builder builder(slice, opts, query::result_memory_accounter{ query::result_memory_limiter::unlimited_result_size });
+    auto consumer = compact_for_query<emit_only_live_rows::yes, query_result_builder>(*s, gc_clock::time_point::min(), slice, max_rows,
+            max_partitions, query_result_builder(*s, builder));
+
+    for (const partition& p : r.partitions()) {
+        const auto res = p.mut().unfreeze(s).consume(consumer);
+        if (res.stop == stop_iteration::yes) {
+            break;
+        }
+    }
+    if (r.is_short_read()) {
+        builder.mark_as_short_read();
+    }
+    return builder.build();
+}
+
+query::result
+query_mutation(mutation&& m, const query::partition_slice& slice, uint64_t row_limit, gc_clock::time_point now, query::result_options opts) {
+    query::result::builder builder(slice, opts, query::result_memory_accounter{ query::result_memory_limiter::unlimited_result_size });
+    auto consumer = compact_for_query<emit_only_live_rows::yes, query_result_builder>(*m.schema(), now, slice, row_limit,
+            query::max_partitions, query_result_builder(*m.schema(), builder));
+    std::move(m).consume(consumer);
+    return builder.build();
 }
 
 future<reconcilable_result>

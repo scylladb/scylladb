@@ -196,8 +196,7 @@ static sizes calculate_sizes(cache_tracker& tracker, const mutation_settings& se
     result.cache = tracker.region().occupancy().used_space() - cache_initial_occupancy;
     result.frozen = freeze(m).representation().size();
     result.canonical = canonical_mutation(m).representation().size();
-    result.query_result = m.query(partition_slice_builder(*s).build(),
-            query::result_memory_accounter{ query::result_memory_limiter::unlimited_result_size }, query::result_options::only_result()).buf().size();
+    result.query_result = query_mutation(mutation(m), partition_slice_builder(*s).build()).buf().size();
 
     tmpdir sstable_dir;
     sstables::test_env::do_with_async([&] (sstables::test_env& env) {

@@ -25,6 +25,7 @@
 #include "mutation.hh"
 #include "types/map.hh"
 #include "utils/exceptions.hh"
+#include "mutation_query.hh"
 
 #include <fmt/format.h>
 
@@ -221,7 +222,7 @@ result_set::from_raw_result(schema_ptr s, const partition_slice& slice, const re
 
 result_set::result_set(const mutation& m) : result_set([&m] {
     auto slice = partition_slice_builder(*m.schema()).build();
-    auto qr = mutation(m).query(slice, query::result_memory_accounter{ query::result_memory_limiter::unlimited_result_size }, result_options::only_result());
+    auto qr = query_mutation(mutation(m), slice);
     return result_set::from_raw_result(m.schema(), slice, qr);
 }())
 { }
