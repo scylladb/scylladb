@@ -2193,25 +2193,25 @@ public:
     }
 };
 
-// Test a background pending read-ahead outliving the reader.
+// Test a background pending read-ahead.
 //
 // Foreign reader launches a new background read-ahead (fill_buffer()) after
 // each remote operation (fill_buffer() and fast_forward_to()) is completed.
 // This read-ahead executes on the background and is only synchronized with
 // when a next remote operation is executed. If the reader is destroyed before
 // this synchronization can happen then the remote read-ahead will outlive its
-// owner. Check that when this happens the orphan read-ahead will terminate
-// gracefully and will not cause any memory errors.
+// owner. Check that when the reader is closed, it waits on any background
+// readhead to complete gracefully and will not cause any memory errors.
 //
 // Theory of operation:
 // 1) Call foreign_reader::fill_buffer() -> will start read-ahead in the
 //    background;
 // 2) [shard 1] puppet_reader blocks the read-ahead;
-// 3) Destroy foreign_reader;
+// 3) Start closing the foreign_reader;
 // 4) Unblock read-ahead -> the now orphan read-ahead fiber executes;
 //
 // Best run with smp >= 2
-SEASTAR_THREAD_TEST_CASE(test_foreign_reader_destroyed_with_pending_read_ahead) {
+SEASTAR_THREAD_TEST_CASE(test_stopping_reader_with_pending_read_ahead) {
     if (smp::count < 2) {
         std::cerr << "Cannot run test " << get_name() << " with smp::count < 2" << std::endl;
         return;
@@ -2236,27 +2236,33 @@ SEASTAR_THREAD_TEST_CASE(test_foreign_reader_destroyed_with_pending_read_ahead) 
         auto& remote_control = std::get<0>(remote_control_remote_reader);
         auto& remote_reader = std::get<1>(remote_control_remote_reader);
 
-        {
             auto reader = make_foreign_reader(s.schema(), tests::make_permit(), std::move(remote_reader));
 
             reader.fill_buffer(db::no_timeout).get();
 
             BOOST_REQUIRE(!reader.is_buffer_empty());
-        }
 
         BOOST_REQUIRE(!smp::submit_to(shard_of_interest, [remote_control = remote_control.get()] {
             return remote_control->destroyed;
         }).get0());
 
-        smp::submit_to(shard_of_interest, [remote_control = remote_control.get()] {
+        bool buffer_filled = false;
+        auto destroyed_after_close = reader.close().then([&] {
+            // close shuold wait on readahead and complete
+            // only after `remote_control->buffer_filled.set_value()`
+            // is executed below.
+            BOOST_REQUIRE(buffer_filled);
+            return smp::submit_to(shard_of_interest, [remote_control = remote_control.get()] {
+                return remote_control->destroyed;
+            });
+        });
+
+        smp::submit_to(shard_of_interest, [remote_control = remote_control.get(), &buffer_filled] {
+            buffer_filled = true;
             remote_control->buffer_filled.set_value();
         }).get0();
 
-        BOOST_REQUIRE(eventually_true([&] {
-            return smp::submit_to(shard_of_interest, [remote_control = remote_control.get()] {
-                return remote_control->destroyed;
-            }).get0();
-        }));
+        BOOST_REQUIRE(destroyed_after_close.get0());
 
         return make_ready_future<>();
     }).get();

@@ -951,6 +951,7 @@ public:
     virtual future<> next_partition() override;
     virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override;
     virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) override;
+    virtual future<> close() noexcept override;
 };
 
 foreign_reader::foreign_reader(schema_ptr schema,
@@ -963,17 +964,15 @@ foreign_reader::foreign_reader(schema_ptr schema,
 }
 
 foreign_reader::~foreign_reader() {
-    if (!_read_ahead_future && !_reader) {
+    if (!_reader) {
         return;
     }
     // Can't wait on this future directly. Right now we don't wait on it at all.
     // If this proves problematic we can collect these somewhere and wait on them.
-    (void)smp::submit_to(_reader.get_owner_shard(), [reader = std::move(_reader), read_ahead_future = std::move(_read_ahead_future)] () mutable {
-        if (read_ahead_future) {
-            return read_ahead_future->finally([r = std::move(reader)] {});
-        }
-        return make_ready_future<>();
-    });
+    // FIXME: get rid of background close once we guarantee that
+    // readers are always closed when destroyed.
+    mrlog.warn("foreign_reader was not closed. Closing in background");
+    (void)close();
 }
 
 future<> foreign_reader::fill_buffer(db::timeout_clock::time_point timeout) {
@@ -1024,6 +1023,26 @@ future<> foreign_reader::fast_forward_to(position_range pr, db::timeout_clock::t
     _end_of_stream = false;
     return forward_operation(timeout, [reader = _reader.get(), pr = std::move(pr), timeout] () {
         return reader->fast_forward_to(std::move(pr), timeout);
+    });
+}
+
+future<> foreign_reader::close() noexcept {
+    if (!_reader) {
+        if (_read_ahead_future) {
+            on_internal_error(mrlog, "foreign_reader::close can't wait on read_ahead future with disengaged reader");
+        }
+        return make_ready_future<>();
+    }
+    return smp::submit_to(_reader.get_owner_shard(),
+            [reader = std::move(_reader), read_ahead_future = std::exchange(_read_ahead_future, nullptr)] () mutable {
+        auto read_ahead = read_ahead_future ? std::move(*read_ahead_future.get()) : make_ready_future<>();
+        return read_ahead.then_wrapped([reader = std::move(reader)] (future<> f) mutable {
+            if (f.failed()) {
+                auto ex = f.get_exception();
+                mrlog.warn("foreign_reader: benign read_ahead failure during close: {}. Ignoring.", ex);
+            }
+            return reader->close();
+        });
     });
 }
 
