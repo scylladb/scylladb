@@ -65,6 +65,11 @@ private:
                 _current_start = position_in_partition_view::for_range_start(_current_range.front());
                 _current_end = position_in_partition_view::for_range_end(_current_range.front());
             }
+        } else {
+             // If the first range is contiguous with the static row, then advance _current_end as much as we can
+             if (_current_range && !_current_range.front().start()) {
+                 _current_end = position_in_partition_view::for_range_end(_current_range.front());
+             }
         }
     }
 
