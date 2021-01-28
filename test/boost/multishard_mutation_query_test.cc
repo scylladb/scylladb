@@ -295,7 +295,7 @@ SEASTAR_THREAD_TEST_CASE(test_evict_a_shard_reader_on_each_page) {
             check_cache_population(env.db(), 1);
 
             env.db().invoke_on(page % smp::count, [&] (database& db) {
-                db.get_querier_cache().evict_one();
+                return db.get_querier_cache().evict_one();
             }).get();
 
             tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::drops), 0u);

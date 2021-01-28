@@ -431,12 +431,12 @@ public:
     ///
     /// Return true if a querier was evicted and false otherwise (if the cache
     /// is empty).
-    bool evict_one();
+    future<bool> evict_one() noexcept;
 
     /// Evict all queriers that belong to a table.
     ///
     /// Should be used when dropping a table.
-    void evict_all_for_table(const utils::UUID& schema_id);
+    future<> evict_all_for_table(const utils::UUID& schema_id) noexcept;
 
     const stats& get_stats() const {
         return _stats;

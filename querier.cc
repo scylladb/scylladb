@@ -19,6 +19,8 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <seastar/core/coroutine.hh>
+
 #include "querier.hh"
 
 #include "schema.hh"
@@ -376,24 +378,26 @@ void querier_cache::set_entry_ttl(std::chrono::seconds entry_ttl) {
     _entry_ttl = entry_ttl;
 }
 
-bool querier_cache::evict_one() {
-    auto maybe_evict_from_index = [this] (index& idx) -> bool {
+future<bool> querier_cache::evict_one() noexcept {
+    auto maybe_evict_from_index = [this] (index& idx) -> future<bool> {
         if (idx.empty()) {
-            return false;
+            co_return false;
         }
         auto it = idx.begin();
         it->second->permit().semaphore().unregister_inactive_read(querier_utils::get_inactive_read_handle(*it->second));
         idx.erase(it);
         ++_stats.resource_based_evictions;
         --_stats.population;
-        return true;
+        co_return true;
     };
 
-    return maybe_evict_from_index(_data_querier_index) || maybe_evict_from_index(_mutation_querier_index) || maybe_evict_from_index(_shard_mutation_querier_index);
+    co_return co_await maybe_evict_from_index(_data_querier_index) ||
+              co_await maybe_evict_from_index(_mutation_querier_index) ||
+              co_await maybe_evict_from_index(_shard_mutation_querier_index);
 }
 
-void querier_cache::evict_all_for_table(const utils::UUID& schema_id) {
-    auto evict_from_index = [this, schema_id] (index& idx) {
+future<> querier_cache::evict_all_for_table(const utils::UUID& schema_id) noexcept {
+    auto evict_from_index = [this, schema_id] (index& idx) -> future<> {
         for (auto it = idx.begin(); it != idx.end();) {
             if (it->second->schema().id() == schema_id) {
                 it->second->permit().semaphore().unregister_inactive_read(querier_utils::get_inactive_read_handle(*it->second));
@@ -403,11 +407,12 @@ void querier_cache::evict_all_for_table(const utils::UUID& schema_id) {
                 ++it;
             }
         }
+        return make_ready_future<>();
     };
 
-    evict_from_index(_data_querier_index);
-    evict_from_index(_mutation_querier_index);
-    evict_from_index(_shard_mutation_querier_index);
+    return when_all_succeed(evict_from_index(_data_querier_index),
+            evict_from_index(_mutation_querier_index),
+            evict_from_index(_shard_mutation_querier_index)).discard_result();
 }
 
 querier_cache_context::querier_cache_context(querier_cache& cache, utils::UUID key, query::is_first_page is_first_page)
