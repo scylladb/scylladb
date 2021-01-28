@@ -4791,3 +4791,32 @@ SEASTAR_THREAD_TEST_CASE(test_invalid_using_timestamps) {
         BOOST_REQUIRE_THROW(e.execute_cql(format("BEGIN BATCH USING TIMESTAMP {} INSERT INTO TBL (a, b) VALUES (2, 2); APPLY BATCH", now_nano)).get(), exceptions::invalid_request_exception);
     }).get();
 }
+
+SEASTAR_THREAD_TEST_CASE(test_twcs_non_optimal_query_path) {
+    do_with_cql_env_thread([] (cql_test_env& e) {
+        auto now_nano = std::chrono::duration_cast<std::chrono::nanoseconds>(db_clock::now().time_since_epoch()).count();
+        e.execute_cql(
+                "CREATE TABLE tbl (pk int, ck int, v int, s int static, PRIMARY KEY (pk, ck))"
+                " WITH compaction = {"
+                "   'compaction_window_size': '1',"
+                "   'compaction_window_unit': 'MINUTES',"
+                "   'class': 'org.apache.cassandra.db.compaction.TimeWindowCompactionStrategy'"
+                "}").get();
+
+        e.execute_cql("INSERT INTO tbl (pk, ck, v) VALUES (0, 0, 0)").get();
+        e.execute_cql("INSERT INTO tbl (pk, ck, v) VALUES (1, 0, 0)").get();
+        e.execute_cql("INSERT INTO tbl (pk, ck, v) VALUES (0, 1, 0)").get();
+        e.execute_cql("INSERT INTO tbl (pk, ck, v) VALUES (1, 1, 0)").get();
+
+        e.db().invoke_on_all([] (database& db) {
+            return db.flush_all_memtables();
+        }).get();
+
+        // Not really testing anything, just ensure that we execute the non-optimal
+        // sstable read path of TWCS tables too, allowing ASAN to shake out any memory
+        // related bugs.
+        // The non-optimal read path is triggered by having a static column, see
+        // `sstables::time_series_sstable_set::create_single_key_sstable_reader()`.
+        e.execute_cql("SELECT * FROM tbl WHERE pk = 0 BYPASS CACHE").get();
+    }).get();
+}
