@@ -808,7 +808,7 @@ bool has_supporting_index(
 }
 
 std::ostream& operator<<(std::ostream& os, const column_value& cv) {
-    os << *cv.col;
+    os << cv.col->name_as_text();
     if (cv.sub) {
         os << '[' << *cv.sub << ']';
     }
@@ -823,10 +823,10 @@ std::ostream& operator<<(std::ostream& os, const expression& expr) {
                 std::visit(overloaded_functor{
                         [&] (const token& t) { os << "TOKEN"; },
                         [&] (const column_value& col) {
-                            fmt::print(os, "({})", col);
+                            fmt::print(os, "{}", col);
                         },
                         [&] (const std::vector<column_value>& cvs) {
-                            fmt::print(os, "(({}))", fmt::join(cvs, ","));
+                            fmt::print(os, "({})", fmt::join(cvs, ","));
                         },
                     }, opr.lhs);
                 os << ' ' << opr.op << ' ' << *opr.rhs;
