@@ -409,6 +409,7 @@ scylla_tests = set([
     'test/boost/double_decker_test',
     'test/boost/stall_free_test',
     'test/boost/imr_test',
+    'test/boost/raft_sys_table_storage_test',
     'test/manual/ec2_snitch_test',
     'test/manual/enormous_table_scan_test',
     'test/manual/gce_snitch_test',
@@ -863,6 +864,7 @@ scylla_core = (['database.cc',
                 'mutation_writer/feed_writers.cc',
                 'lua.cc',
                 'service/raft/schema_raft_state_machine.cc',
+                'service/raft/raft_sys_table_storage.cc',
                 ] + [Antlr3Grammar('cql3/Cql.g')] + [Thrift('interface/cassandra.thrift', 'Cassandra')]
                )
 
@@ -959,6 +961,7 @@ idls = ['idl/gossip_digest.idl.hh',
         'idl/view.idl.hh',
         'idl/messaging_service.idl.hh',
         'idl/paxos.idl.hh',
+        'idl/raft.idl.hh',
         ]
 
 headers = find_headers('.', excluded_dirs=['idl', 'build', 'seastar', '.git'])

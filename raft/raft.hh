@@ -40,7 +40,7 @@ using command_cref = std::reference_wrapper<const command>;
 extern seastar::logger logger;
 
 // This is user provided id for a snapshot
-using snapshot_id = internal::tagged_id<struct shapshot_id_tag>;
+using snapshot_id = internal::tagged_id<struct snapshot_id_tag>;
 // Unique identifier of a server in a Raft group
 using server_id = internal::tagged_id<struct server_id_tag>;
 
@@ -76,6 +76,10 @@ struct configuration {
         }
     }
     configuration() = default;
+
+    configuration(std::vector<server_address> servers)
+        : servers(std::move(servers))
+    {}
 };
 
 struct log_entry {
