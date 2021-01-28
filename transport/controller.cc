@@ -97,12 +97,15 @@ future<> controller::do_start_server() {
         };
 
         std::vector<listen_cfg> configs;
+        int native_port_idx = -1, native_shard_aware_port_idx = -1;
 
-        if (cfg.native_transport_port() != 0) {
-            configs.push_back(listen_cfg{ socket_address{ip, cfg.native_transport_port()}, false });
+        if (cfg.native_transport_port.is_set()) {
+            configs.emplace_back(listen_cfg{ socket_address{ip, cfg.native_transport_port()}, false });
+            native_port_idx = 0;
         }
         if (cfg.native_shard_aware_transport_port.is_set()) {
-            configs.push_back(listen_cfg{ socket_address{ip, cfg.native_shard_aware_transport_port()}, true });
+            configs.emplace_back(listen_cfg{ socket_address{ip, cfg.native_shard_aware_transport_port()}, true });
+            native_shard_aware_port_idx = native_port_idx + 1;
         }
 
         // main should have made sure values are clean and neatish
@@ -129,13 +132,13 @@ future<> controller::do_start_server() {
 
             if (cfg.native_transport_port_ssl.is_set() && cfg.native_transport_port_ssl() != cfg.native_transport_port()) {
                 configs.emplace_back(listen_cfg{{ip, cfg.native_transport_port_ssl()}, false, cred});
-            } else {
-                configs[0].cred = cred;
+            } else if (native_port_idx >= 0) {
+                configs[native_port_idx].cred = cred;
             }
             if (cfg.native_shard_aware_transport_port_ssl.is_set() && cfg.native_shard_aware_transport_port_ssl() != cfg.native_shard_aware_transport_port()) {
                 configs.emplace_back(listen_cfg{{ip, cfg.native_shard_aware_transport_port_ssl()}, true, std::move(cred)});
-            } else if (cfg.native_shard_aware_transport_port.is_set()) {
-                configs[1].cred = std::move(cred);
+            } else if (native_shard_aware_port_idx >= 0) {
+                configs[native_shard_aware_port_idx].cred = std::move(cred);
             }
         }
 
