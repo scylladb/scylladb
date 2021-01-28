@@ -43,7 +43,7 @@ static void broken_sst(sstring dir, unsigned long generation, schema_ptr s, sstr
   sstables::test_env::do_with_async([&] (sstables::test_env& env) {
     try {
         sstable_ptr sstp = env.reusable_sst(s, dir, generation, version).get0();
-        auto r = sstp->read_rows_flat(s, tests::make_permit());
+        auto r = sstp->make_reader(s, tests::make_permit(), query::full_partition_range, s->full_slice());
         r.consume(my_consumer{}, db::no_timeout).get();
         BOOST_FAIL("expecting exception");
     } catch (malformed_sstable_exception& e) {

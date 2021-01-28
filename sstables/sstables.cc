@@ -2840,8 +2840,6 @@ future<> init_metrics() {
             sm::description("Number of single partition flat mutation reads")),
         sm::make_derive("range_partition_reads", [] { return sstables_stats::get_shard_stats().range_partition_reads; },
             sm::description("Number of partition range flat mutation reads")),
-        sm::make_derive("sstable_partition_reads", [] { return sstables_stats::get_shard_stats().sstable_partition_reads; },
-            sm::description("Number of whole sstable flat mutation reads")),
         sm::make_derive("partition_reads", [] { return sstables_stats::get_shard_stats().partition_reads; },
             sm::description("Number of partitions read")),
         sm::make_derive("partition_seeks", [] { return sstables_stats::get_shard_stats().partition_seeks; },
@@ -2866,15 +2864,7 @@ mutation_source sstable::as_mutation_source() {
             tracing::trace_state_ptr trace_state,
             streamed_mutation::forwarding fwd,
             mutation_reader::forwarding fwd_mr) mutable {
-        // CAVEAT: if as_mutation_source() is called on a single partition
-        // we want to optimize and read exactly this partition. As a
-        // consequence, fast_forward_to() will *NOT* work on the result,
-        // regardless of what the fwd_mr parameter says.
-        if (range.is_singular() && range.start()->value().has_key()) {
-            return sst->read_row_flat(s, std::move(permit), range.start()->value(), slice, pc, std::move(trace_state), fwd);
-        } else {
-            return sst->read_range_rows_flat(s, std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr);
-        }
+        return sst->make_reader(std::move(s), std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr);
     });
 }
 
