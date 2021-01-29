@@ -865,6 +865,7 @@ scylla_core = (['database.cc',
                 'lua.cc',
                 'service/raft/schema_raft_state_machine.cc',
                 'service/raft/raft_sys_table_storage.cc',
+                'serializer.cc',
                 ] + [Antlr3Grammar('cql3/Cql.g')] + [Thrift('interface/cassandra.thrift', 'Cassandra')]
                )
 
