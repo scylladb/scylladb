@@ -83,13 +83,27 @@ fi
 
 if [ ! -f /usr/bin/makeself ]; then
     if $NO_DOCKER; then
-        sudo yum -y install epel-release || sudo yum -y install https://dl.fedoraproject.org/pub/epel/epel-release-latest-"$releasever".noarch.rpm
+        # makeself on EPEL7 is too old, borrow it from EPEL8
+        # since there is no dependency on the package, it just work
+        if [ $release_major = '7' ]; then
+            sudo rpm --import https://dl.fedoraproject.org/pub/epel/RPM-GPG-KEY-EPEL-8
+            sudo cp "$here"/lib/epel8.repo /etc/yum.repos.d/
+            YUM_OPTS="--enablerepo=epel8"
+        elif [ $release_major = '8' ]; then
+            yum -y install epel-release || yum -y install https://dl.fedoraproject.org/pub/epel/epel-release-latest-8.noarch.rpm
+        fi
     fi
-    sudo yum -y install makeself
+    sudo yum -y install "$YUM_OPTS" makeself
 fi
 
 if [ ! -f /usr/bin/createrepo ]; then
     sudo yum -y install createrepo
+fi
+
+makeself_ver=$(makeself --version|cut -d ' ' -f 3|sed -e 's/\.//g')
+if [ $makeself_ver -lt 240 ]; then
+    echo "$(makeself --version) is too old, please install 2.4.0 or later"
+    exit 1
 fi
 
 sudo rm -rf build/installroot build/offline_docker build/offline_installer build/scylla_offline_installer.sh
@@ -119,4 +133,4 @@ else
     ./tools/toolchain/dbuild --image "$image_id" -- "$here"/lib/construct_offline_repo.sh
 fi
 (cd build/offline_installer; createrepo -v .)
-(cd build; makeself offline_installer scylla_offline_installer.sh "Scylla offline package" ./header)
+(cd build; makeself --keep-umask offline_installer scylla_offline_installer.sh "Scylla offline package" ./header)
