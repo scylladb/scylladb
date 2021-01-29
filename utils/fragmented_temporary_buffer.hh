@@ -107,7 +107,9 @@ public:
         for (size_t i = 0; i < full_fragment_count; ++i) {
             fragments.emplace_back(seastar::temporary_buffer<char>(max_fragment_size));
         }
-        fragments.emplace_back(seastar::temporary_buffer<char>(last_fragment_size));
+        if (last_fragment_size) {
+            fragments.emplace_back(seastar::temporary_buffer<char>(last_fragment_size));
+        }
         return fragmented_temporary_buffer(std::move(fragments), data_size);
     }
 };
