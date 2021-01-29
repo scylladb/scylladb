@@ -33,10 +33,18 @@
 
 namespace sstables {
 
-class test_env {
-    std::unique_ptr<sstables_manager> _mgr;
+class test_env_sstables_manager : public sstables_manager {
+    using sstables_manager::sstables_manager;
 public:
-    explicit test_env() : _mgr(std::make_unique<sstables_manager>(nop_lp_handler, test_db_config, test_feature_service)) { }
+    sstable_writer_config configure_writer(sstring origin = "test") const {
+        return sstables_manager::configure_writer(std::move(origin));
+    }
+};
+
+class test_env {
+    std::unique_ptr<test_env_sstables_manager> _mgr;
+public:
+    explicit test_env() : _mgr(std::make_unique<test_env_sstables_manager>(nop_lp_handler, test_db_config, test_feature_service)) { }
 
     future<> stop() {
         return _mgr->close();
@@ -59,7 +67,7 @@ public:
     // looks up the sstable in the given dir
     future<shared_sstable> reusable_sst(schema_ptr schema, sstring dir, unsigned long generation);
 
-    sstables_manager& manager() { return *_mgr; }
+    test_env_sstables_manager& manager() { return *_mgr; }
 
     future<> working_sst(schema_ptr schema, sstring dir, unsigned long generation) {
         return reusable_sst(std::move(schema), dir, generation).then([] (auto ptr) { return make_ready_future<>(); });

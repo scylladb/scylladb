@@ -501,8 +501,12 @@ protected:
         _info->end_size += writer->sst->bytes_on_disk();
     }
 
-    sstable_writer_config make_sstable_writer_config() {
-        sstable_writer_config cfg = _cf.get_sstables_manager().configure_writer();
+    sstable_writer_config make_sstable_writer_config(compaction_type type) {
+        auto s = compaction_name(type);
+        std::transform(s.begin(), s.end(), s.begin(), [] (char c) {
+            return std::tolower(c);
+        });
+        sstable_writer_config cfg = _cf.get_sstables_manager().configure_writer(std::move(s));
         cfg.max_sstable_size = _max_sstable_size;
         cfg.monitor = &default_write_monitor();
         cfg.run_identifier = _run_identifier;
@@ -792,7 +796,7 @@ void garbage_collected_sstable_writer::data::maybe_create_new_sstable_writer() {
 
         auto&& priority = _c->_io_priority;
         auto monitor = std::make_unique<compaction_write_monitor>(sst, _c->_cf, _c->maximum_timestamp(), _c->_sstable_level);
-        sstable_writer_config cfg = _c->_cf.get_sstables_manager().configure_writer();
+        sstable_writer_config cfg = _c->_cf.get_sstables_manager().configure_writer("garbage_collection");
         cfg.run_identifier = _run_identifier;
         cfg.monitor = monitor.get();
         auto writer = sst->get_writer(*_c->schema(), _c->partitions_per_sstable(), cfg, _c->get_encoding_stats(), priority);
@@ -840,7 +844,7 @@ public:
         auto sst = _sstable_creator(this_shard_id());
         setup_new_sstable(sst);
 
-        sstable_writer_config cfg = make_sstable_writer_config();
+        sstable_writer_config cfg = make_sstable_writer_config(compaction_type::Reshape);
         return compaction_writer{sst->get_writer(*_schema, partitions_per_sstable(), cfg, get_encoding_stats(), _io_priority), sst};
     }
 
@@ -897,7 +901,7 @@ public:
         _unused_sstables.push_back(sst);
 
         auto monitor = std::make_unique<compaction_write_monitor>(sst, _cf, maximum_timestamp(), _sstable_level);
-        sstable_writer_config cfg = make_sstable_writer_config();
+        sstable_writer_config cfg = make_sstable_writer_config(_info->type);
         cfg.monitor = monitor.get();
         return compaction_writer{std::move(monitor), sst->get_writer(*_schema, partitions_per_sstable(), cfg, get_encoding_stats(), _io_priority), sst};
     }
@@ -1371,7 +1375,7 @@ public:
         auto sst = _sstable_creator(shard);
         setup_new_sstable(sst);
 
-        auto cfg = make_sstable_writer_config();
+        auto cfg = make_sstable_writer_config(compaction_type::Reshard);
         // sstables generated for a given shard will share the same run identifier.
         cfg.run_identifier = _run_identifiers.at(shard);
         return compaction_writer{sst->get_writer(*_schema, partitions_per_sstable(shard), cfg, get_encoding_stats(), _io_priority, shard), sst};

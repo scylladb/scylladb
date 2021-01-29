@@ -86,7 +86,7 @@ public:
             io_error_handler_gen error_handler_gen = default_io_error_handler_gen(),
             size_t buffer_size = default_sstable_buffer_size);
 
-    sstable_writer_config configure_writer() const;
+    sstable_writer_config configure_writer(sstring origin) const;
     const db::config& config() const { return _db_config; }
 
     void set_format(sstable_version_types format) { _format = format; }

@@ -194,7 +194,7 @@ void stream_session::init_messaging_service_handler(netw::messaging_service& ms)
                             auto& pc = service::get_local_streaming_priority();
 
                             return sst->write_components(std::move(reader), adjusted_estimated_partitions, s,
-                                                         cf->get_sstables_manager().configure_writer(),
+                                                         cf->get_sstables_manager().configure_writer("streaming"),
                                                          encoding_stats{}, pc).then([sst] {
                                 return sst->open_data();
                             }).then([cf, sst] {

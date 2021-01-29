@@ -6043,7 +6043,7 @@ SEASTAR_TEST_CASE(purged_tombstone_consumer_sstable_test) {
         public:
             explicit compacting_sstable_writer_test(const schema_ptr& s, shared_sstable& sst, sstables_manager& manager)
                 : _sst(sst),
-                  _writer(sst->get_writer(*s, 1, manager.configure_writer(),
+                  _writer(sst->get_writer(*s, 1, manager.configure_writer("test"),
                         encoding_stats{}, service::get_local_compaction_priority())) {}
 
             void consume_new_partition(const dht::decorated_key& dk) { _writer.consume_new_partition(dk); }

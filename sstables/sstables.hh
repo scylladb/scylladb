@@ -120,6 +120,7 @@ struct sstable_writer_config {
     bool correctly_serialize_static_compact_in_mc;
     utils::UUID run_identifier = utils::make_random_uuid();
     size_t summary_byte_cost;
+    sstring origin;
 
 private:
     explicit sstable_writer_config() {}
