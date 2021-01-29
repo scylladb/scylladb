@@ -1332,6 +1332,10 @@ future<> sstable::open_data() noexcept {
         if (ld_stats) {
             _large_data_stats.emplace(*ld_stats);
         }
+        auto* origin = _components->scylla_metadata->data.get<scylla_metadata_type::SSTableOrigin, scylla_metadata::sstable_origin>();
+        if (origin) {
+            _origin = sstring(to_sstring_view(bytes_view(origin->value)));
+        }
     });
 }
 
@@ -1606,7 +1610,7 @@ sstable::read_scylla_metadata(const io_priority_class& pc) noexcept {
 
 void
 sstable::write_scylla_metadata(const io_priority_class& pc, shard_id shard, sstable_enabled_features features, struct run_identifier identifier,
-        std::optional<scylla_metadata::large_data_stats> ld_stats) {
+        std::optional<scylla_metadata::large_data_stats> ld_stats, sstring origin) {
     auto&& first_key = get_first_decorated_key();
     auto&& last_key = get_last_decorated_key();
     auto sm = create_sharding_metadata(_schema, first_key, last_key, shard);
@@ -1626,6 +1630,11 @@ sstable::write_scylla_metadata(const io_priority_class& pc, shard_id shard, ssta
     _components->scylla_metadata->data.set<scylla_metadata_type::RunIdentifier>(std::move(identifier));
     if (ld_stats) {
         _components->scylla_metadata->data.set<scylla_metadata_type::LargeDataStats>(std::move(*ld_stats));
+    }
+    if (!origin.empty()) {
+        scylla_metadata::sstable_origin o;
+        o.value = bytes(to_bytes_view(sstring_view(origin)));
+        _components->scylla_metadata->data.set<scylla_metadata_type::SSTableOrigin>(std::move(o));
     }
 
     write_simple<component_type::Scylla>(*_components->scylla_metadata, pc);

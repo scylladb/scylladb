@@ -510,6 +510,7 @@ private:
     // It can be disengaged normally when loading legacy sstables that do not have this
     // information in their scylla metadata.
     std::optional<scylla_metadata::large_data_stats> _large_data_stats;
+    sstring _origin;
 public:
     const bool has_component(component_type f) const;
     sstables_manager& manager() { return _manager; }
@@ -547,7 +548,7 @@ private:
 
     future<> read_scylla_metadata(const io_priority_class& pc) noexcept;
     void write_scylla_metadata(const io_priority_class& pc, shard_id shard, sstable_enabled_features features, run_identifier identifier,
-            std::optional<scylla_metadata::large_data_stats> ld_stats);
+            std::optional<scylla_metadata::large_data_stats> ld_stats, sstring origin);
 
     future<> read_filter(const io_priority_class& pc);
 
@@ -801,6 +802,10 @@ public:
     // iff _large_data_stats is available and the requested entry is in
     // the map.  Otherwise, return a disengaged optional.
     std::optional<large_data_stats_entry> get_large_data_stat(large_data_type t) const noexcept;
+
+    const sstring& get_origin() const noexcept {
+        return _origin;
+    }
 
     // Allow the test cases from sstable_test.cc to test private methods. We use
     // a placeholder to avoid cluttering this class too much. The sstable_test class
