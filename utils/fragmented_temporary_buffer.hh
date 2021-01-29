@@ -103,6 +103,7 @@ public:
         const size_t last_fragment_size = data_size % max_fragment_size;
 
         std::vector<seastar::temporary_buffer<char>> fragments;
+        fragments.reserve(full_fragment_count + !!last_fragment_size);
         for (size_t i = 0; i < full_fragment_count; ++i) {
             fragments.emplace_back(seastar::temporary_buffer<char>(max_fragment_size));
         }
