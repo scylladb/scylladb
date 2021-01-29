@@ -569,7 +569,7 @@ private:
             _ancestors.push_back(sst->generation());
             _info->start_size += sst->bytes_on_disk();
             _info->total_partitions += sst->get_estimated_key_count();
-            formatted_msg += format("{}:level={:d}, ", sst->get_filename(), sst->get_sstable_level());
+            formatted_msg += format("{}:level={:d}:origin={}, ", sst->get_filename(), sst->get_sstable_level(), sst->get_origin());
 
             // Do not actually compact a sstable that is fully expired and can be safely
             // dropped without ressurrecting old data.
