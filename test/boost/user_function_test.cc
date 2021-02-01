@@ -1078,3 +1078,33 @@ SEASTAR_TEST_CASE(test_user_function_invalid_type) {
              });
    });
 }
+
+SEASTAR_TEST_CASE(test_user_function_filtering) {
+    return with_udf_enabled([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val int, t timestamp);").get();
+        e.execute_cql("INSERT INTO my_table (key, val, t) VALUES ('foo', 7, toTimestamp(now()) );").get();
+        e.execute_cql("INSERT INTO my_table (key, val, t) VALUES ('bar', 10, toTimestamp(now()) );").get();
+        e.execute_cql("CREATE FUNCTION my_func(val int) \
+                RETURNS NULL ON NULL INPUT \
+                RETURNS int \
+                LANGUAGE Lua \
+                AS 'return 2 * val';").get0();
+        // Expect error until UDFs can be used for filtering.
+        // See #5607
+        BOOST_REQUIRE_EXCEPTION(e.execute_cql("SELECT val FROM my_table WHERE my_func(val) > 10;").get(),
+                                exceptions::syntax_exception, message_equals("line 1:31 no viable alternative at input 'my_func'"));
+
+        // Reproduce #7977 and verify the internal error exception
+        e.execute_cql("CREATE FUNCTION minutesAgo(ago int, now bigint) \
+                RETURNS NULL ON NULL INPUT \
+                RETURNS bigint \
+                LANGUAGE Lua \
+                AS 'return now - 60000 * ago';").get0();
+        set_abort_on_internal_error(false);
+        auto reset_on_internal_abort = defer([] {
+            set_abort_on_internal_error(true);
+        });
+        BOOST_REQUIRE_EXCEPTION(e.execute_cql("SELECT val FROM my_table WHERE key = 'foo' AND t < toTimestamp(now()) AND t >= minutesAgo(1, toTimestamp(now())) ALLOW FILTERING;").get(),
+                                std::runtime_error, message_contains("User function cannot be executed in this context"));
+    });
+}

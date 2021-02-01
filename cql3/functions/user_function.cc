@@ -21,9 +21,13 @@
 
 #include "user_function.hh"
 #include "lua.hh"
+#include "log.hh"
 
 namespace cql3 {
 namespace functions {
+
+extern logging::logger log;
+
 user_function::user_function(function_name name, std::vector<data_type> arg_types, std::vector<sstring> arg_names,
         sstring body, sstring language, data_type return_type, bool called_on_null_input, sstring bitcode,
         lua::runtime_config cfg)
@@ -56,7 +60,9 @@ bytes_opt user_function::execute(cql_serialization_format sf, const std::vector<
         }
         values.push_back(bytes ? type->deserialize(*bytes) : data_value::make_null(type));
     }
-
+    if (!seastar::thread::running_in_thread()) {
+        on_internal_error(log, "User function cannot be executed in this context");
+    }
     return lua::run_script(lua::bitcode_view{_bitcode}, values, return_type(), _cfg).get0();
 }
 }

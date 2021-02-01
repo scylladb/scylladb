@@ -54,7 +54,7 @@ std::ostream& operator<<(std::ostream& os, const std::vector<data_type>& arg_typ
 namespace cql3 {
 namespace functions {
 
-static logging::logger log("cql3_fuctions");
+logging::logger log("cql3_fuctions");
 
 bool abstract_function::requires_thread() const { return false; }
 
