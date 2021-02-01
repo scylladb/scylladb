@@ -778,11 +778,20 @@ SEASTAR_TEST_CASE(test_schema_tables_use_null_sharder) {
                 }
             }
 
-            // There is another schema table, 'scylla_table_schema_history',
-            // which is in the "system" keyspace for whatever reason.
+            // There are some other tables which reside in the "system" keyspace
+            // but need to use shard 0, too.
             auto ks_metadata = db.find_keyspace("system").metadata();
             auto& cf_metadata = ks_metadata->cf_meta_data();
+
             auto it = cf_metadata.find("scylla_table_schema_history");
+            BOOST_REQUIRE(it != cf_metadata.end());
+            BOOST_REQUIRE_EQUAL(it->second->get_sharder().shard_count(), 1);
+
+            it = cf_metadata.find("raft");
+            BOOST_REQUIRE(it != cf_metadata.end());
+            BOOST_REQUIRE_EQUAL(it->second->get_sharder().shard_count(), 1);
+
+            it = cf_metadata.find("raft_snapshots");
             BOOST_REQUIRE(it != cf_metadata.end());
             BOOST_REQUIRE_EQUAL(it->second->get_sharder().shard_count(), 1);
 

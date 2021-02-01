@@ -2435,6 +2435,16 @@ static void prepare_builder_from_table_row(const schema_ctxt& ctxt, schema_build
     }
 }
 
+// tables in the "system" keyspace which need to use null sharder
+static const std::unordered_set<sstring>& system_ks_null_shard_tables() {
+    static const std::unordered_set<sstring> tables = {
+        SCYLLA_TABLE_SCHEMA_HISTORY,
+        db::system_keyspace::RAFT,
+        db::system_keyspace::RAFT_SNAPSHOTS
+    };
+    return tables;
+}
+
 schema_ptr create_table_from_mutations(const schema_ctxt& ctxt, schema_mutations sm, std::optional<table_schema_version> version)
 {
     slogger.trace("create_table_from_mutations: version={}, {}", version, sm);
@@ -2518,7 +2528,8 @@ schema_ptr create_table_from_mutations(const schema_ctxt& ctxt, schema_mutations
     }
 
     if (ks_name == NAME
-            || (ks_name == db::system_keyspace::NAME && cf_name == SCYLLA_TABLE_SCHEMA_HISTORY)) {
+            || (ks_name == db::system_keyspace::NAME
+                && system_ks_null_shard_tables().contains(cf_name))) {
         // Put every schema table on shard 0.
         builder.with_null_sharder();
     }

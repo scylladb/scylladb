@@ -229,6 +229,7 @@ schema_ptr raft() {
             .set_comment("Persisted RAFT log, votes and snapshot info")
             .with_version(generate_schema_version(id))
             .set_wait_for_sync_to_commitlog(true)
+            .with_null_sharder()
             .build();
     }();
     return schema;
@@ -249,6 +250,7 @@ schema_ptr raft_snapshots() {
             .set_comment("Persisted RAFT snapshots info")
             .with_version(generate_schema_version(id))
             .set_wait_for_sync_to_commitlog(true)
+            .with_null_sharder()
             .build();
     }();
     return schema;
