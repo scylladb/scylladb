@@ -193,6 +193,7 @@ public:
 };
 
 struct initial_state {
+    raft::server_address address;
     raft::term_t term = raft::term_t(1);
     raft::server_id vote;
     std::vector<raft::log_entry> log;
@@ -324,11 +325,12 @@ future<std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>> cr
 
     for (size_t i = 0; i < states.size(); i++) {
         auto uuid = utils::UUID(0, i + 1);   // Custom sequential debug id; 0 is invalid
-        config.servers.push_back(raft::server_address{uuid});
+        states[i].address = raft::server_address{uuid};
+        config.current.emplace(states[i].address);
     }
 
     for (size_t i = 0; i < states.size(); i++) {
-        auto& s = config.servers[i];
+        auto& s = states[i].address;
         states[i].snapshot.config = config;
         snapshots[s.id] = states[i].snp_value;
         auto& raft = *rafts.emplace_back(create_raft_server(s.id, apply, states[i], apply_entries, type)).first;
@@ -716,6 +718,7 @@ int main(int argc, char* argv[]) {
                                          .term = raft::term_t(1),
                                          .id = utils::UUID(0, 1)}}},   // must be 1+
          .updates = {entries{12}}},
+        // 2 nodes both taking snapshot while simple replication
         {.name = "take_snapshot", .nodes = 2,
          .config = {{.snapshot_threshold = 10, .snapshot_trailing = 5}, {.snapshot_threshold = 20, .snapshot_trailing = 10}},
          .updates = {entries{100}}},

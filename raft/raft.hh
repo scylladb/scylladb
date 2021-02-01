@@ -21,6 +21,7 @@
 #pragma once
 
 #include <vector>
+#include <unordered_set>
 #include <functional>
 #include <boost/container/deque.hpp>
 #include <seastar/core/lowres_clock.hh>
@@ -64,22 +65,92 @@ using server_info = bytes;
 struct server_address {
     server_id id;
     server_info info;
+    bool operator==(const server_address& rhs) const {
+        return id == rhs.id;
+    }
+};
+
+} // end of namespace raft
+
+namespace std {
+
+template <> struct hash<raft::server_address> {
+    size_t operator()(const raft::server_address& address) const {
+        return std::hash<raft::server_id>{}(address.id);
+    }
+};
+
+} // end of namespace std
+
+namespace raft {
+
+using server_address_set = std::unordered_set<server_address>;
+
+// A configuration change decomposed to joining and leaving
+// servers. Helps validate the configuration and update RPC.
+struct configuration_diff {
+    server_address_set joining, leaving;
 };
 
 struct configuration {
-    std::vector<server_address> servers;
+    // Contains the current configuration. When configuration
+    // change is in progress, contains the new configuration.
+    server_address_set current;
+    // Used during the transitioning period of configuration
+    // changes.
+    server_address_set previous;
 
     configuration(std::initializer_list<server_id> ids) {
-        servers.reserve(ids.size());
+        current.reserve(ids.size());
         for (auto&& id : ids) {
-            servers.emplace_back(server_address{std::move(id)});
+            current.emplace(server_address{std::move(id)});
         }
     }
-    configuration() = default;
+    configuration(server_address_set current_arg = {}, server_address_set previous_arg = {})
+        : current(std::move(current_arg)), previous(std::move(previous_arg)) {}
 
-    configuration(std::vector<server_address> servers)
-        : servers(std::move(servers))
-    {}
+    // Return true if the previous configuration is still
+    // in use
+    bool is_joint() const {
+        return !previous.empty();
+    }
+
+    // Check the proposed configuration and compute a diff
+    // between it and the current one.
+    configuration_diff diff(const server_address_set& c_new) const {
+
+        if (c_new.empty()) {
+            throw std::invalid_argument("Attempt to transition to an empty Raft configuration");
+        }
+        configuration_diff diff;
+        // joining
+        for (const auto& s : c_new) {
+            if (current.count(s) == 0) {
+                diff.joining.insert(s);
+            }
+        }
+        // leaving
+        for (const auto& s : current) {
+            if (c_new.count(s) == 0) {
+                diff.leaving.insert(s);
+            }
+        }
+        return diff;
+    }
+
+    // Enter a joint configuration given a new set of servers.
+    void enter_joint(server_address_set c_new) {
+        // @todo: validate that c_old & c_new are compatible.
+        assert(c_new.size());
+        previous = std::move(current);
+        current = std::move(c_new);
+    }
+
+    // Transition from C_old + C_new to C_new.
+    void leave_joint() {
+        assert(is_joint());
+        previous.clear();
+    }
 };
 
 struct log_entry {

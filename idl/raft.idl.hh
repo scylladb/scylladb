@@ -46,7 +46,8 @@ struct server_address {
 };
 
 struct configuration {
-    std::vector<raft::server_address> servers;
+    std::unordered_set<raft::server_address> current;
+    std::unordered_set<raft::server_address> previous;
 };
 
 struct snapshot {

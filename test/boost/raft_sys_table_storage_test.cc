@@ -32,12 +32,9 @@
 namespace raft{
 
 // these operators provided exclusively for testing purposes
-static bool operator==(const server_address& lhs, const server_address& rhs) {
-    return lhs.id == rhs.id;
-}
 
 static bool operator==(const configuration& lhs, const configuration& rhs) {
-    return lhs.servers == rhs.servers;
+    return lhs.current == rhs.current && lhs.previous == rhs.previous;
 }
 
 static bool operator==(const snapshot& lhs, const snapshot& rhs) {

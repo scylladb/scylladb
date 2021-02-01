@@ -269,3 +269,236 @@ BOOST_AUTO_TEST_CASE(test_log_matching_rule) {
     // is granted
     BOOST_CHECK(request_vote(term_t{15}, index_t{1001}, term_t{11}).vote_granted);
 }
+
+BOOST_AUTO_TEST_CASE(test_confchange_add_node) {
+
+    failure_detector fd;
+
+    server_id id1{utils::make_random_uuid()},
+              id2{utils::make_random_uuid()},
+              id3{utils::make_random_uuid()};
+
+    raft::configuration cfg({id1, id2});
+    raft::log log(raft::snapshot{.idx = index_t{100}, .config = cfg});
+
+    raft::fsm fsm(id1, term_t{1}, /* voted for */ server_id{}, std::move(log), fd, fsm_cfg);
+
+    // Initial state is follower
+    BOOST_CHECK(fsm.is_follower());
+
+    // Turn to a leader
+    election_timeout(fsm);
+    BOOST_CHECK(fsm.is_candidate());
+    auto output = fsm.get_output();
+    fsm.step(id2, raft::vote_reply{output.term, true});
+    BOOST_CHECK(fsm.is_leader());
+
+    output = fsm.get_output();
+    // A new leader applies one dummy entry
+    BOOST_CHECK(output.log_entries.size() == 1 && std::holds_alternative<raft::log_entry::dummy>(output.log_entries[0]->data));
+    BOOST_CHECK(output.committed.empty());
+
+    raft::configuration newcfg({id1, id2, id3});
+    // Suggest a confchange.
+    fsm.add_entry(newcfg);
+    // Can't have two confchanges in progress.
+    BOOST_CHECK_THROW(fsm.add_entry(newcfg), raft::conf_change_in_progress);
+    // Entered joint configuration immediately.
+    BOOST_CHECK(fsm.get_configuration().is_joint());
+    BOOST_CHECK(fsm.get_configuration().previous.size() == 2);
+    BOOST_CHECK(fsm.get_configuration().current.size() == 3);
+    output = fsm.get_output();
+    // The output contains a log entry to be committed.
+    // Once it's committed, it will be replicated.
+    // The output must contain messages both for id2 and id3
+    BOOST_CHECK(output.log_entries.size() == 1);
+    // Calling get_output() again indicates the previous output
+    // is handled, i.e. the log entry is committed, so now
+    // the leader will replicate the confchange
+    output = fsm.get_output();
+    // Append entry for id2
+    BOOST_CHECK(output.messages.size() == 1);
+    auto msg = std::get<raft::append_request>(output.messages.back().second);
+    auto idx = msg.entries.back().get()->idx;
+    // In order to accept a configuration change
+    // we need one ACK, since there is a quorum overlap.
+    // Strictly speaking the new node needs to install a snapshot,
+    // first, for simplicity let's assume it's happened already.
+
+    fsm.step(id2, raft::append_reply{msg.current_term, idx, raft::append_reply::accepted{idx}});
+    // One reply is enough to commit the joint configuration,
+    // since there is a quorum overlap between the two
+    // configurations.
+    BOOST_CHECK(! fsm.get_configuration().is_joint());
+    // Still can't have two confchanges in progress, even though
+    // we left joint already, the final configuration is not
+    // committed yet.
+    BOOST_CHECK_THROW(fsm.add_entry(newcfg), raft::conf_change_in_progress);
+    output = fsm.get_output();
+    // A log entry for the final configuration
+    BOOST_CHECK(output.log_entries.size() == 1);
+    output = fsm.get_output();
+    // AppendEntries messages for the final configuration
+    BOOST_CHECK(output.messages.size() >= 1);
+    msg = std::get<raft::append_request>(output.messages.back().second);
+    idx = msg.entries.back().get()->idx;
+    // Ack AppendEntries for the final configuration
+    fsm.step(id2, raft::append_reply{msg.current_term, idx, raft::append_reply::accepted{idx}});
+    BOOST_CHECK(fsm.get_configuration().current.size() == 3);
+    fsm.step(id3, raft::append_reply{msg.current_term, idx, raft::append_reply::accepted{idx}});
+    // Check that we can start a new confchange
+    raft::configuration newcfg2({id1, id2});
+    fsm.add_entry(newcfg);
+}
+
+BOOST_AUTO_TEST_CASE(test_confchange_remove_node) {
+
+    failure_detector fd;
+
+    server_id id1{utils::make_random_uuid()},
+              id2{utils::make_random_uuid()},
+              id3{utils::make_random_uuid()};
+
+    raft::configuration cfg({id1, id2, id3});
+    raft::log log(raft::snapshot{.idx = index_t{100}, .config = cfg});
+
+    raft::fsm fsm(id1, term_t{1}, /* voted for */ server_id{}, std::move(log), fd, fsm_cfg);
+
+    // Initial state is follower
+    BOOST_CHECK(fsm.is_follower());
+
+    // Turn to a leader
+    election_timeout(fsm);
+    BOOST_CHECK(fsm.is_candidate());
+    auto output = fsm.get_output();
+    // Vote requests to id2 and id3
+    BOOST_CHECK(output.messages.size() == 2);
+    BOOST_CHECK(std::holds_alternative<raft::vote_request>(output.messages[0].second));
+    BOOST_CHECK(std::holds_alternative<raft::vote_request>(output.messages[1].second));
+
+    fsm.step(id2, raft::vote_reply{output.term, true});
+    BOOST_CHECK(fsm.is_leader());
+    output = fsm.get_output();
+    BOOST_CHECK(output.log_entries.size() == 1);
+    BOOST_CHECK(std::holds_alternative<raft::log_entry::dummy>(output.log_entries[0]->data));
+
+    raft::configuration newcfg({id1, id2});
+    // Suggest a confchange.
+    fsm.add_entry(newcfg);
+    // Entered joint configuration immediately.
+    BOOST_CHECK(fsm.get_configuration().is_joint());
+    BOOST_CHECK(fsm.get_configuration().current.size() == 2);
+    BOOST_CHECK(fsm.get_configuration().previous.size() == 3);
+    output = fsm.get_output();
+    // The output contains a log entry to be committed.
+    // Once it's committed, it will be replicated.
+    BOOST_CHECK(output.log_entries.size() == 1);
+    BOOST_CHECK(std::holds_alternative<raft::configuration>(output.log_entries[0]->data));
+    BOOST_CHECK(output.messages.size() == 2); // Configuration change sent to id2 and id3
+    raft::append_request msg;
+    BOOST_REQUIRE_NO_THROW(msg = std::get<raft::append_request>(output.messages[0].second));
+    BOOST_CHECK(msg.entries.size() == 1);
+    auto idx = msg.entries.back().get()->idx;
+    // In order to accept a configuration change
+    // we need one ACK, since there is a quorum overlap.
+    fsm.step(id2, raft::append_reply{msg.current_term, idx, raft::append_reply::accepted{idx}});
+
+    output = fsm.get_output();
+    // AppendEntries messages for the final configuration
+    BOOST_CHECK(output.messages.size() >= 1);
+
+    BOOST_REQUIRE_NO_THROW(msg = std::get<raft::append_request>(output.messages[0].second));
+    BOOST_CHECK(msg.entries.size() == 1);
+    BOOST_CHECK(std::holds_alternative<raft::configuration>(msg.entries[0]->data));
+    idx = msg.entries.back().get()->idx;
+    BOOST_CHECK(idx == 102);
+    // Ack AppendEntries for the joint configuration
+    fsm.step(id2, raft::append_reply{msg.current_term, idx, raft::append_reply::accepted{idx}});
+
+    output = fsm.get_output();
+    // A log entry for the final configuration
+    BOOST_CHECK(output.log_entries.size() == 1);
+    BOOST_CHECK(std::holds_alternative<raft::configuration>(output.log_entries[0]->data));
+
+    BOOST_CHECK(fsm.get_configuration().current.size() == 2);
+    BOOST_CHECK(!fsm.get_configuration().is_joint());
+
+    output = fsm.get_output();
+    BOOST_CHECK(output.messages.size() == 1);
+    BOOST_REQUIRE_NO_THROW(msg = std::get<raft::append_request>(output.messages[0].second));
+    BOOST_CHECK(msg.entries.size() == 1);
+    BOOST_CHECK(std::holds_alternative<raft::configuration>(msg.entries[0]->data));
+    idx = msg.entries.back().get()->idx;
+    BOOST_CHECK(idx == 103);
+    // Ack AppendEntries for the final configuration
+    fsm.step(id2, raft::append_reply{msg.current_term, idx, raft::append_reply::accepted{idx}});
+
+    // Check that we can start a new confchange
+    raft::configuration newcfg2({id1, id2, id3});
+    fsm.add_entry(newcfg);
+    BOOST_CHECK(fsm.get_configuration().current.size() == 2);
+}
+
+BOOST_AUTO_TEST_CASE(test_confchange_replace_node) {
+
+    failure_detector fd;
+
+    server_id id1{utils::make_random_uuid()},
+              id2{utils::make_random_uuid()},
+              id3{utils::make_random_uuid()},
+              id4{utils::make_random_uuid()};
+
+    raft::configuration cfg({id1, id2, id3});
+    raft::log log(raft::snapshot{.idx = index_t{100}, .config = cfg});
+
+    raft::fsm fsm(id1, term_t{1}, /* voted for */ server_id{}, std::move(log), fd, fsm_cfg);
+
+    // Initial state is follower
+    BOOST_CHECK(fsm.is_follower());
+
+    // Turn to a leader
+    election_timeout(fsm);
+    BOOST_CHECK(fsm.is_candidate());
+    auto output = fsm.get_output();
+    fsm.step(id2, raft::vote_reply{output.term, true});
+    BOOST_CHECK(fsm.is_leader());
+    output = fsm.get_output();
+    BOOST_CHECK(output.log_entries.size() == 1 && std::holds_alternative<raft::log_entry::dummy>(output.log_entries[0]->data));
+    BOOST_CHECK(output.committed.empty());
+
+    raft::configuration newcfg({id1, id2, id4});
+    // Suggest a confchange.
+    fsm.add_entry(newcfg);
+    // Entered joint configuration immediately.
+    BOOST_CHECK(fsm.get_configuration().is_joint());
+    BOOST_CHECK(fsm.get_configuration().current.size() == 3);
+    BOOST_CHECK(fsm.get_configuration().previous.size() == 3);
+    output = fsm.get_output();
+    BOOST_CHECK(output.messages.size() == 2);
+    raft::append_request msg;
+    BOOST_REQUIRE_NO_THROW(msg = std::get<raft::append_request>(output.messages[0].second));
+    BOOST_CHECK(std::holds_alternative<raft::log_entry::dummy>(msg.entries[0]->data));
+    BOOST_REQUIRE_NO_THROW(msg = std::get<raft::append_request>(output.messages[1].second));
+    BOOST_CHECK(std::holds_alternative<raft::log_entry::dummy>(msg.entries[0]->data));
+
+    output = fsm.get_output();
+    BOOST_REQUIRE_NO_THROW(msg = std::get<raft::append_request>(output.messages[0].second));
+    auto idx = msg.entries.back().get()->idx;
+    // In order to accept a configuration change
+    // we need two ACK, since there is a quorum overlap.
+    fsm.step(id2, raft::append_reply{msg.current_term, idx, raft::append_reply::accepted{idx}});
+    BOOST_CHECK(!fsm.get_configuration().is_joint());
+    // Joint config to log
+    output = fsm.get_output();
+    BOOST_CHECK(output.log_entries.size() == 1);
+    BOOST_CHECK(std::holds_alternative<raft::configuration>(output.log_entries[0]->data));
+    output = fsm.get_output();
+    // AppendEntries messages for the final configuration
+    BOOST_CHECK(output.messages.size() >= 1);
+    msg = std::get<raft::append_request>(output.messages.back().second);
+    idx = msg.entries.back().get()->idx;
+    // Ack AppendEntries for the final configuration
+    fsm.step(id2, raft::append_reply{msg.current_term, idx, raft::append_reply::accepted{idx}});
+    BOOST_CHECK(fsm.get_configuration().current.size() == 3);
+    BOOST_CHECK(!fsm.get_configuration().is_joint());
+}

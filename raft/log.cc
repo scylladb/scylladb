@@ -33,6 +33,10 @@ log_entry_ptr& log::operator[](size_t i) {
 
 void log::emplace_back(log_entry_ptr&& e) {
     _log.emplace_back(std::move(e));
+    if (std::holds_alternative<configuration>(_log.back()->data)) {
+        _prev_conf_idx = _last_conf_idx;
+        _last_conf_idx = last_idx();
+    }
 }
 
 bool log::empty() const {
@@ -62,6 +66,14 @@ void log::truncate_head(index_t idx) {
     auto it = _log.begin() + (idx - start_idx());
     _log.erase(it, _log.end());
     stable_to(std::min(_stable_idx, last_idx()));
+    if (_last_conf_idx > last_idx() ) {
+        // If _prev_conf_idx is 0, this log does not contain any
+        // other configuration changes, since no two uncommitted
+        // configuration changes can be in progress.
+        assert(_prev_conf_idx < _last_conf_idx);
+        _last_conf_idx = _prev_conf_idx;
+        _prev_conf_idx = index_t{0};
+    }
 }
 
 void log::truncate_tail(index_t idx) {
@@ -74,6 +86,26 @@ void log::truncate_tail(index_t idx) {
     }
 
     _stable_idx = std::max(idx, _stable_idx);
+
+    if (start_idx() > _prev_conf_idx) {
+        _prev_conf_idx = index_t{0};
+        if (start_idx() > _last_conf_idx) {
+            _last_conf_idx = index_t{0};
+        }
+    }
+}
+
+void log::init_last_conf_idx() {
+    for (auto it = _log.rbegin(); it != _log.rend(); ++it) {
+        if (std::holds_alternative<configuration>((**it).data)) {
+            if (_last_conf_idx == index_t{0}) {
+                _last_conf_idx = (**it).idx;
+            } else {
+                _prev_conf_idx = (**it).idx;
+                break;
+            }
+        }
+   }
 }
 
 index_t log::start_idx() const {

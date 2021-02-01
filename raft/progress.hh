@@ -75,6 +75,15 @@ using progress = std::unordered_map<server_id, follower_progress>;
 class tracker: private progress {
     // Copy of this server's id
     server_id _my_id;
+    configuration _configuration;
+    // Not NULL if the leader is part of the current configuration.
+    //
+    // 4.2.2 Removing the current leader
+    // There will be a period of time (while it is committing
+    // C_new) when a leader can manage a cluster that does not
+    // include itself; it replicates log entries but does not
+    // count itself in majorities.
+    follower_progress *_leader_progress = nullptr;
 public:
     using progress::begin, progress::end, progress::cbegin, progress::cend, progress::size;
 
@@ -86,7 +95,13 @@ public:
     follower_progress& find(server_id dst) {
         return this->progress::find(dst)->second;
     }
-    void set_configuration(const std::vector<server_address>& servers, index_t next_idx);
+    void set_configuration(configuration configuration, index_t next_idx);
+    // Return progress object for the current leader if it's
+    // part of the current configuration.
+    follower_progress* leader_progress() {
+        return _leader_progress;
+    }
+    const configuration& get_configuration() const { return _configuration; }
 
     // Calculate the current commit index based on the current
     // simple or joint quorum.
@@ -104,35 +119,46 @@ enum class vote_result {
     LOST,
 };
 
-// Candidate's state specific to election
-class votes {
-    size_t _cluster_size = 1;
-    // Number of responses to RequestVote RPC.
-    // The candidate always votes for self.
-    size_t _responded = 1;
-    // Number of granted votes.
-    // The candidate always votes for self.
-    size_t _granted = 1;
+// State of election in a single quorum
+class election_tracker {
+    size_t _responded = 0;
+    size_t _granted = 0;
 public:
-    void set_configuration(const std::vector<server_address>& servers) {
-        _cluster_size = servers.size();
-    }
-
-    void register_vote(server_id from, bool granted) {
+    void register_vote(bool granted) {
         _responded++;
         if (granted) {
             _granted++;
         }
     }
-
-    vote_result tally_votes() const {
-        auto quorum = _cluster_size / 2 + 1;
+    vote_result tally_votes(size_t cluster_size) const {
+        auto quorum = cluster_size / 2 + 1;
         if (_granted >= quorum) {
             return vote_result::WON;
         }
-        assert(_responded <= _cluster_size);
-        auto unknown = _cluster_size - _responded;
+        assert(_responded <= cluster_size);
+        auto unknown = cluster_size - _responded;
         return _granted + unknown >= quorum ? vote_result::UNKNOWN : vote_result::LOST;
+    }
+    friend std::ostream& operator<<(std::ostream& os, const election_tracker& v);
+};
+
+// Candidate's state specific to election
+class votes {
+    configuration _configuration;
+    server_address_set _voters;
+    election_tracker _current;
+    election_tracker _previous;
+public:
+    const server_address_set& voters() const {
+        return _voters;
+    }
+    void set_configuration(configuration configuration);
+
+    void register_vote(server_id from, bool granted);
+    vote_result tally_votes() const;
+
+    const configuration& get_configuration() const {
+        return _configuration;
     }
 
     friend std::ostream& operator<<(std::ostream& os, const votes& v);

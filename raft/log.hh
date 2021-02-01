@@ -40,16 +40,42 @@ class log {
     log_entries _log;
     // Index of the last stable (persisted) entry in the log.
     index_t _stable_idx = index_t(0);
-
+    // Log index of the last configuration change.
+    //
+    // Is used to:
+    // - prevent accepting a new configuration change while
+    // there is a change in progress.
+    // - revert the state machine to the previous configuration if
+    // the log is truncated while there is an uncommitted change
+    //
+    // Seastar Raft uses a joint consensus approach to
+    // configuration changes, when each change is represented as
+    // two log entries: one for C_old + C_new and another for
+    // C_new. This index is therefore updated twice per change.
+    // It's used to track when the log entry for C_old + C_new is
+    // committed (_commit_idx >= _last_conf_idx &&
+    // _configuration.is_joint()) and automatically append a new
+    // log entry for C_new.
+    //
+    // While the index is used only in leader and candidate
+    // states, it is maintained in all states to avoid scanning
+    // the log backwards during election.
+    index_t _last_conf_idx = index_t{0};
+    // The previous value of _last_conf_idx, to avoid scanning
+    // the log backwards after truncate().
+    index_t _prev_conf_idx = index_t{0};
 private:
     void truncate_head(index_t i);
     void truncate_tail(index_t i);
+    // A helper used to find the last configuration entry in the
+    // log after it's been loaded from disk.
+    void init_last_conf_idx();
     log_entry_ptr& get_entry(index_t);
 public:
-    log() = default ;
-    explicit log(log_entries log) : _log(std::move(log)) { stable_to(index_t(_log.size())); };
-    log(snapshot snp, log_entries log) : _snapshot(std::move(snp)), _log(std::move(log)) { stable_to(last_idx()); }
-    explicit log(snapshot snp) : _snapshot(std::move(snp)) {}
+    explicit log(snapshot snp, log_entries log = {}) : _snapshot(std::move(snp)), _log(std::move(log)) {
+        stable_to(last_idx());
+        init_last_conf_idx();
+    }
     // The index here the global raft log index, not related to a snapshot.
     // It is a programming error to call the function with an index that points into the snapshot,
     // the function will abort()
@@ -67,6 +93,9 @@ public:
     index_t start_idx() const;
     index_t next_idx() const;
     index_t last_idx() const;
+    index_t last_conf_idx() const {
+        return _last_conf_idx;
+    }
     index_t stable_idx() const {
         return _stable_idx;
     }

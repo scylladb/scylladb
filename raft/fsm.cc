@@ -30,7 +30,6 @@ fsm::fsm(server_id id, term_t current_term, server_id voted_for, log log,
         _log(std::move(log)), _failure_detector(failure_detector), _config(config) {
 
     _observed.advance(*this);
-    set_configuration(_log.get_snapshot().config);
     logger.trace("{}: starting log length {}", _my_id, _log.last_idx());
 
     assert(!bool(_current_leader));
@@ -42,18 +41,60 @@ future<> fsm::wait() {
    return _log_limiter_semaphore->sem.wait();
 }
 
+const configuration& fsm::get_configuration() const {
+    check_is_leader();
+    return _tracker->get_configuration();
+}
+
 template<typename T>
 const log_entry& fsm::add_entry(T command) {
     // It's only possible to add entries on a leader.
     check_is_leader();
 
-    _log.emplace_back(seastar::make_lw_shared<log_entry>(log_entry{_current_term, _log.next_idx(), std::move(command)}));
+    if constexpr (std::is_same_v<T, configuration>) {
+        if (_log.last_conf_idx() > _commit_idx ||
+            _tracker->get_configuration().is_joint()) {
+            // 4.1. Cluster membership changes/Safety.
+            //
+            // Leaders avoid overlapping configuration changes by
+            // not beginning a new change until the previous
+            // change’s entry has committed. It is only safe to
+            // start another membership change once a majority of
+            // the old cluster has moved to operating under the
+            // rules of C_new.
+            throw conf_change_in_progress();
+        }
+        // 4.3. Arbitrary configuration changes using joint consensus
+        //
+        // When the leader receives a request to change the
+        // configuration from C_old to C_new , it stores the
+        // configuration for joint consensus (C_old,new) as a log
+        // entry and replicates that entry using the normal Raft
+        // mechanism.
+        configuration tmp(_tracker->get_configuration());
+        tmp.enter_joint(command.current);
+        command = std::move(tmp);
+    }
+
+    _log.emplace_back(seastar::make_lw_shared<log_entry>({_current_term, _log.next_idx(), std::move(command)}));
     _sm_events.signal();
+
+    if constexpr (std::is_same_v<T, configuration>) {
+        // 4.1. Cluster membership changes/Safety.
+        //
+        // The new configuration takes effect on each server as
+        // soon as it is added to that server’s log: the C_new
+        // entry is replicated to the C_new servers, and
+        // a majority of the new configuration is used to
+        // determine the C_new entry’s commitment.
+        set_configuration();
+    }
 
     return *_log[_log.last_idx()];
 }
 
 template const log_entry& fsm::add_entry(command command);
+template const log_entry& fsm::add_entry(configuration command);
 template const log_entry& fsm::add_entry(log_entry::dummy dummy);
 
 void fsm::advance_commit_idx(index_t leader_commit_idx) {
@@ -87,6 +128,20 @@ void fsm::update_current_term(term_t current_term)
     _randomized_election_timeout = ELECTION_TIMEOUT + logical_clock::duration{dist(re)};
 }
 
+void fsm::set_configuration() {
+
+    configuration configuration = _log.last_conf_idx() ?
+        std::get<raft::configuration>(_log[_log.last_conf_idx()]->data) : _log.get_snapshot().config;
+    // We unconditionally access configuration.current[0]
+    // to identify which entries are committed.
+    assert(configuration.current.size() > 0);
+    if (is_leader()) {
+        _tracker->set_configuration(std::move(configuration), _log.last_idx());
+    } else if (is_candidate()) {
+        _votes->set_configuration(std::move(configuration));
+    }
+}
+
 void fsm::become_leader() {
     assert(!std::holds_alternative<leader>(_state));
     assert(!_tracker);
@@ -96,13 +151,15 @@ void fsm::become_leader() {
     _tracker.emplace(_my_id);
     _log_limiter_semaphore.emplace(this);
     _log_limiter_semaphore->sem.consume(_log.non_snapshoted_length());
-    _tracker->set_configuration(_current_config.servers, _log.next_idx());
     _last_election_time = _clock.now();
     // a new leader needs to commit at lease one entry to make sure that
     // all existing entries in its log are commited as well. Also it should
     // send append entries rpc as soon as possible to establish its leqdership
     // (3.4).  Do both of those by commiting a dummy entry.
     add_entry(log_entry::dummy());
+    // set_configuration() begins replicating from the last entry
+    // in the log.
+    set_configuration();
     replicate();
 }
 
@@ -121,8 +178,8 @@ void fsm::become_candidate() {
     _state = candidate{};
     _tracker = std::nullopt;
     _log_limiter_semaphore = std::nullopt;
-    update_current_term(term_t{_current_term + 1});
     // 3.4 Leader election
+    //
     // A possible outcome is that a candidate neither wins nor
     // loses the election: if many followers become candidates at
     // the same time, votes could be split so that no candidate
@@ -130,24 +187,36 @@ void fsm::become_candidate() {
     // time out and start a new election by incrementing its term
     // and initiating another round of RequestVote RPCs.
     _last_election_time = _clock.now();
-    _votes.emplace();
-    _votes->set_configuration(_current_config.servers);
-    _voted_for = _my_id;
 
-    if (_votes->tally_votes() == vote_result::WON) {
-        // A single node cluster.
-        become_leader();
+    _votes.emplace();
+    set_configuration();
+
+    const auto& voters = _votes->voters();
+    if (voters.find(server_address{_my_id}) == voters.end()) {
+        // If the server is not part of the current configuration,
+        // revert to the follower state without increasing
+        // the current term.
+        become_follower(server_id{});
         return;
     }
-
-    for (const auto& server : _current_config.servers) {
+    update_current_term(term_t{_current_term + 1});
+    // Replicate RequestVote
+    for (const auto& server : voters) {
         if (server.id == _my_id) {
+            // Vote for self.
+            _votes->register_vote(server.id, true);
+            _voted_for = _my_id;
+            // Already signaled _sm_events in update_current_term()
             continue;
         }
         logger.trace("{} [term: {}, index: {}, last log term: {}] sent vote request to {}",
             _my_id, _current_term, _log.last_idx(), _log.last_term(), server.id);
 
         send_to(server.id, vote_request{_current_term, _log.last_idx(), _log.last_term()});
+    }
+    if (_votes->tally_votes() == vote_result::WON) {
+        // A single node cluster.
+        become_leader();
     }
 }
 
@@ -195,7 +264,7 @@ fsm_output fsm::get_output() {
 
     // Return committed entries.
     // Observer commit index may be smaller than snapshot index
-    // in which case we should not attemp commiting entries belonging
+    // in which case we should not attempt committing entries belonging
     // to a snapshot.
     auto observed_ci =  std::max(_observed._commit_idx, _log.get_snapshot().idx);
     if (observed_ci < _commit_idx) {
@@ -210,7 +279,7 @@ fsm_output fsm::get_output() {
     }
 
     // Get a snapshot of all unsent messages.
-    // Do it after populting log_entries and committed arrays
+    // Do it after populating log_entries and committed arrays
     // to not lose messages in case arrays population throws
     std::swap(output.messages, _messages);
 
@@ -233,22 +302,27 @@ fsm_output fsm::get_output() {
 
 void fsm::advance_stable_idx(index_t idx) {
     _log.stable_to(idx);
-    if (is_leader()) {
-        auto& progress = _tracker->find(_my_id);
+    // If this server is leader and is part of the current
+    // configuration, update it's progress and optionally
+    // commit new entries.
+    if (is_leader() && _tracker->leader_progress()) {
+        auto& progress = *_tracker->leader_progress();
         progress.match_idx = idx;
         progress.next_idx = index_t{idx + 1};
         replicate();
-        check_committed();
+        maybe_commit();
     }
 }
 
-void fsm::check_committed() {
+void fsm::maybe_commit() {
 
     index_t new_commit_idx = _tracker->committed(_commit_idx);
 
     if (new_commit_idx <= _commit_idx) {
         return;
     }
+    bool committed_conf_change = _commit_idx < _log.last_conf_idx() &&
+        new_commit_idx >= _log.last_conf_idx();
 
     if (_log[new_commit_idx]->term != _current_term) {
 
@@ -259,15 +333,38 @@ void fsm::check_committed() {
         // an entry from the current term has been committed in
         // this way, then all prior entries are committed
         // indirectly because of the Log Matching Property.
-        logger.trace("check_committed[{}]: cannot commit because of term {} != {}",
+        logger.trace("maybe_commit[{}]: cannot commit because of term {} != {}",
             _my_id, _log[new_commit_idx]->term, _current_term);
         return;
     }
-    logger.trace("check_committed[{}]: commit {}", _my_id, new_commit_idx);
+    logger.trace("maybe_commit[{}]: commit {}", _my_id, new_commit_idx);
+
     _commit_idx = new_commit_idx;
     // We have a quorum of servers with match_idx greater than the
     // current commit index. Commit && apply more entries.
     _sm_events.signal();
+
+    if (committed_conf_change) {
+        if (_tracker->get_configuration().is_joint()) {
+            // 4.3. Arbitrary configuration changes using joint consensus
+            //
+            // Once the joint consensus has been committed, the
+            // system then transitions to the new configuration.
+            configuration cfg(_tracker->get_configuration());
+            cfg.leave_joint();
+            _log.emplace_back(seastar::make_lw_shared<log_entry>({_current_term, _log.next_idx(), std::move(cfg)}));
+            set_configuration();
+        } else if (_tracker->leader_progress() == nullptr) {
+            // 4.2.2 Removing the current leader
+            //
+            // A leader that is removed from the configuration
+            // steps down once the C_new entry is committed.
+            //
+            // @todo: when leadership transfer extension is
+            // implemented, send TimeoutNow to a member of C_new
+            become_follower(server_id{});
+        }
+    }
 }
 
 void fsm::tick_leader() {
@@ -400,7 +497,13 @@ void fsm::append_entries_reply(server_id from, append_reply&& reply) {
         progress.become_pipeline();
 
         // check if any new entry can be committed
-        check_committed();
+        maybe_commit();
+
+        // We may have resigned leadership if committed a new
+        // configuration.
+        if (!is_leader()) {
+            return;
+        }
     } else {
         // rejected
         append_reply::rejected rejected = std::get<append_reply::rejected>(reply.result);
@@ -439,7 +542,7 @@ void fsm::request_vote(server_id from, vote_request&& request) {
     assert(_current_term == request.current_term);
 
     bool can_vote =
-	    // We can vote if this is a repeat of a vote we've already cast...
+        // We can vote if this is a repeat of a vote we've already cast...
         _voted_for == from ||
         // ...we haven't voted and we don't think there's a leader yet in this term...
         (_voted_for == server_id{} && _current_leader == server_id{});
@@ -497,7 +600,7 @@ static size_t entry_size(const log_entry& e) {
         }
         size_t operator()(const configuration& c) {
             size_t size = 0;
-            for (auto& s : c.servers) {
+            for (auto& s : c.current) {
                 size += sizeof(s.id);
                 size += s.info.size();
             }
@@ -539,7 +642,7 @@ void fsm::replicate_to(follower_progress& progress, bool allow_empty) {
         auto& s = _log.get_snapshot();
         if (progress.next_idx <= s.idx && progress.next_idx < (_log.start_idx() + 1)) {
             // The next index to be sent points to a snapshot so
-            // we need to transfer the snasphot before we can
+            // we need to transfer the snapshot before we can
             // continue syncing the log.
             progress.become_snapshot();
             send_to(progress.id, install_snapshot{_current_term, _log.get_snapshot()});
@@ -619,7 +722,7 @@ bool fsm::can_read() {
     // but in the future we may return true here if we can guaranty leadership
     // by means of a "stable leader" optimization. "Stable leader" ensures that
     // a follower does not vote for other leader if it recently (during a couple
-    // of last ticks) heard from existing one, so if the leader is already committed 
+    // of last ticks) heard from existing one, so if the leader is already committed
     // entries during this tick it guaranties that it communicated with
     // majority of nodes and no other leader could have been elected.
 
@@ -639,7 +742,7 @@ void fsm::snapshot_status(server_id id, std::optional<index_t> idx) {
 
     if (idx) {
         progress.next_idx = *idx + index_t(1);
-        // If snapshot was successfully transfered start replication immediately
+        // If snapshot was successfully transferred start replication immediately
         replicate_to(progress, false);
     }
     // Otherwise wait for a heartbeat. Next attempt will move us to snapshotting state
@@ -682,11 +785,6 @@ std::ostream& operator<<(std::ostream& os, const fsm& f) {
         os << "votes (" << *f._votes << "), ";
     }
     os << "messages: " << f._messages.size() << ", ";
-    os << "current_config (";
-    for (auto& server: f._current_config.servers) {
-        os << server.id << ", ";
-    }
-    os << "), ";
 
     if (std::holds_alternative<leader>(f._state)) {
         os << "leader, ";

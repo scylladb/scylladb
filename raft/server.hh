@@ -57,21 +57,17 @@ public:
     // by another leader. In the later case dropped_entry exception will be returned.
     virtual future<> add_entry(command command, wait_type type) = 0;
 
-    // Add new server to a cluster. If a node is already a member
-    // of the cluster does nothing. Provided node_info is passed to
-    // rpc::new_node() on each node in a cluster as it learns
-    // about joining node. Connection info can be passed there.
+    // Set a new cluster configuration. If the configuration is
+    // identical to the previous one does nothing.
+    // Provided node_info is passed to rpc::add_server() for each
+    // new server and rpc::remove_server() is called for each
+    // departing server.
+    // struct node_info is expected to contain connection
+    // information/credentials which is then used by RPC.
     // Can be called on a leader only, otherwise throws not_a_leader.
-    // Cannot be called until previous add/remove server completes
-    // otherwise conf_change_in_progress exception is thrown.
-    virtual future<> add_server(server_id id, server_info node_info, clock_type::duration timeout) = 0;
-
-    // Remove a server from the cluster. If the server is not a member
-    // of the cluster does nothing. Can be called on a leader only
-    // otherwise throws not_a_leader.
-    // Cannot be called until previous add/remove server completes
-    // otherwise conf_change_in_progress exception is thrown.
-    virtual future<> remove_server(server_id id, clock_type::duration timeout) = 0;
+    // Cannot be called until previous set_configuration() completes
+    // otherwise throws conf_change_in_progress exception.
+    virtual future<> set_configuration(server_address_set c_new) = 0;
 
     // Load persisted state and start background work that needs
     // to run for this Raft server to function; The object cannot

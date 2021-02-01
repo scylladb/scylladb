@@ -176,10 +176,6 @@ private:
     // TLA+ line 328
     std::vector<std::pair<server_id, rpc_message>> _messages;
 
-    // Currently used configuration, may be different from
-    // the committed during a configuration change.
-    configuration _current_config;
-
     // Signaled when there is a IO event to process.
     seastar::condition_variable _sm_events;
 
@@ -197,8 +193,9 @@ private:
 
     // Called when one of the replicas advances its match index
     // so it may be the case that some entries are committed now.
-    // Signals _sm_events.
-    void check_committed();
+    // Signals _sm_events. May resign leadership if we committed
+    // a configuration change.
+    void maybe_commit();
     // Check if the randomized election timeout has expired.
     bool is_past_election_timeout() const {
         return _clock.now() - _last_election_time >= _randomized_election_timeout;
@@ -250,18 +247,11 @@ private:
     // Tick implementation on a leader
     void tick_leader();
 
-    // Set cluster configuration
-    void set_configuration(const configuration& config) {
-        _current_config = config;
-        // We unconditionally access _current_config
-        // to identify which entries are committed.
-        assert(_current_config.servers.size() > 0);
-        if (is_leader()) {
-            _tracker->set_configuration(_current_config.servers, _log.next_idx());
-        } else if (is_candidate()) {
-            _votes->set_configuration(_current_config.servers);
-        }
-    }
+    // Reconfigure this instance to use the provided configuration.
+    // Called on start, state change to candidate or leader, or when
+    // a new configuration entry is added.
+    void set_configuration();
+
 public:
     explicit fsm(server_id id, term_t current_term, server_id voted_for, log log,
             failure_detector& failure_detector, fsm_config conf);
@@ -285,6 +275,9 @@ public:
     // call this function to wait for number of log entries to go below
     // max_log_length
     future<> wait();
+
+    // Return current configuration. Throws if not a leader.
+    const configuration& get_configuration() const;
 
     // Add an entry to in-memory log. The entry has to be
     // committed to the persistent Raft log afterwards.
