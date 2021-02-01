@@ -76,13 +76,18 @@ getent passwd scylla || /usr/sbin/useradd -g scylla -s /sbin/nologin -r -d %{_sh
 %post server
 /opt/scylladb/scripts/scylla_post_install.sh
 
-%systemd_post scylla-server.service
+if [ $1 -eq 1 ] ; then
+    /usr/bin/systemctl preset scylla-server.service ||:
+fi
 
 %preun server
-%systemd_preun scylla-server.service
+if [ $1 -eq 0 ] ; then
+    /usr/bin/systemctl --no-reload disable scylla-server.service ||:
+    /usr/bin/systemctl stop scylla-server.service ||:
+fi
 
 %postun server
-%systemd_postun scylla-server.service
+/usr/bin/systemctl daemon-reload ||:
 
 %posttrans server
 if  [ -d /tmp/%{name}-%{version}-%{release} ]; then
