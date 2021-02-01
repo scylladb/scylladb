@@ -650,7 +650,7 @@ void set_column_family(http_context& ctx, routes& r) {
     cf::get_bloom_filter_disk_space_used.set(r, [&ctx] (std::unique_ptr<request> req) {
         return map_reduce_cf(ctx, req->param["name"], uint64_t(0), [] (column_family& cf) {
             return std::accumulate(cf.get_sstables()->begin(), cf.get_sstables()->end(), uint64_t(0), [](uint64_t s, auto& sst) {
-                return sst->filter_size();
+                return s + sst->filter_size();
             });
         }, std::plus<uint64_t>());
     });
@@ -658,7 +658,7 @@ void set_column_family(http_context& ctx, routes& r) {
     cf::get_all_bloom_filter_disk_space_used.set(r, [&ctx] (std::unique_ptr<request> req) {
         return map_reduce_cf(ctx, uint64_t(0), [] (column_family& cf) {
             return std::accumulate(cf.get_sstables()->begin(), cf.get_sstables()->end(), uint64_t(0), [](uint64_t s, auto& sst) {
-                return sst->filter_size();
+                return s + sst->filter_size();
             });
         }, std::plus<uint64_t>());
     });
@@ -666,7 +666,7 @@ void set_column_family(http_context& ctx, routes& r) {
     cf::get_bloom_filter_off_heap_memory_used.set(r, [&ctx] (std::unique_ptr<request> req) {
         return map_reduce_cf(ctx, req->param["name"], uint64_t(0), [] (column_family& cf) {
             return std::accumulate(cf.get_sstables()->begin(), cf.get_sstables()->end(), uint64_t(0), [](uint64_t s, auto& sst) {
-                return sst->filter_memory_size();
+                return s + sst->filter_memory_size();
             });
         }, std::plus<uint64_t>());
     });
@@ -674,7 +674,7 @@ void set_column_family(http_context& ctx, routes& r) {
     cf::get_all_bloom_filter_off_heap_memory_used.set(r, [&ctx] (std::unique_ptr<request> req) {
         return map_reduce_cf(ctx, uint64_t(0), [] (column_family& cf) {
             return std::accumulate(cf.get_sstables()->begin(), cf.get_sstables()->end(), uint64_t(0), [](uint64_t s, auto& sst) {
-                return sst->filter_memory_size();
+                return s + sst->filter_memory_size();
             });
         }, std::plus<uint64_t>());
     });
@@ -682,7 +682,7 @@ void set_column_family(http_context& ctx, routes& r) {
     cf::get_index_summary_off_heap_memory_used.set(r, [&ctx] (std::unique_ptr<request> req) {
         return map_reduce_cf(ctx, req->param["name"], uint64_t(0), [] (column_family& cf) {
             return std::accumulate(cf.get_sstables()->begin(), cf.get_sstables()->end(), uint64_t(0), [](uint64_t s, auto& sst) {
-                return sst->get_summary().memory_footprint();
+                return s + sst->get_summary().memory_footprint();
             });
         }, std::plus<uint64_t>());
     });
@@ -690,7 +690,7 @@ void set_column_family(http_context& ctx, routes& r) {
     cf::get_all_index_summary_off_heap_memory_used.set(r, [&ctx] (std::unique_ptr<request> req) {
         return map_reduce_cf(ctx, uint64_t(0), [] (column_family& cf) {
             return std::accumulate(cf.get_sstables()->begin(), cf.get_sstables()->end(), uint64_t(0), [](uint64_t s, auto& sst) {
-                return sst->get_summary().memory_footprint();
+                return s + sst->get_summary().memory_footprint();
             });
         }, std::plus<uint64_t>());
     });
