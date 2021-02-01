@@ -41,6 +41,10 @@ namespace cdc {
     class streams_version;
 } // namespace cdc
 
+namespace service {
+    class storage_proxy;
+}
+
 namespace db {
 
 class system_distributed_keyspace {
@@ -62,6 +66,7 @@ public:
 private:
     cql3::query_processor& _qp;
     service::migration_manager& _mm;
+    service::storage_proxy& _sp;
 
     bool _started = false;
 
@@ -70,7 +75,7 @@ public:
      * before being acknowledged? */
     static bool is_extra_durable(const sstring& cf_name);
 
-    system_distributed_keyspace(cql3::query_processor&, service::migration_manager&);
+    system_distributed_keyspace(cql3::query_processor&, service::migration_manager&, service::storage_proxy&);
 
     future<> start();
     future<> stop();
