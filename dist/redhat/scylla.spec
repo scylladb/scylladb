@@ -78,13 +78,18 @@ getent passwd scylla || /usr/sbin/useradd -g scylla -s /sbin/nologin -r -d %{_sh
 %post server
 /opt/scylladb/scripts/scylla_post_install.sh
 
-%systemd_post scylla-server.service
+if [ $1 -eq 1 ] ; then
+    /usr/bin/systemctl preset scylla-server.service ||:
+fi
 
 %preun server
-%systemd_preun scylla-server.service
+if [ $1 -eq 0 ] ; then
+    /usr/bin/systemctl --no-reload disable scylla-server.service ||:
+    /usr/bin/systemctl stop scylla-server.service ||:
+fi
 
 %postun server
-%systemd_postun scylla-server.service
+/usr/bin/systemctl daemon-reload ||:
 
 %posttrans server
 if  [ -d /tmp/%{name}-%{version}-%{release} ]; then
@@ -223,10 +228,18 @@ URL:            https://github.com/prometheus/node_exporter
 Prometheus exporter for machine metrics, written in Go with pluggable metric collectors.
 
 %post node-exporter
-%systemd_post node-exporter.service
+if [ $1 -eq 1 ] ; then
+    /usr/bin/systemctl preset node-exporter.service ||:
+fi
 
 %preun node-exporter
-%systemd_preun node-exporter.service
+if [ $1 -eq 0 ] ; then
+    /usr/bin/systemctl --no-reload disable node-exporter.service ||:
+    /usr/bin/systemctl stop node-exporter.service ||:
+fi
+
+%postun node-exporter
+/usr/bin/systemctl daemon-reload ||:
 
 %files node-exporter
 %defattr(-,root,root)
