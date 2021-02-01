@@ -704,7 +704,7 @@ public:
         with_cob(std::move(cob), std::move(exn_cob), [&] {
             validate_login();
             std::vector<KsDef>  ret;
-            for (auto&& ks : _db.local().keyspaces()) {
+            for (auto&& ks : _db.local().get_keyspaces()) {
                 ret.emplace_back(get_keyspace_definition(ks.second));
             }
             return ret;
