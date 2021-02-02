@@ -72,6 +72,7 @@
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/reader_permit.hh"
 #include "test/lib/sstable_utils.hh"
+#include "test/lib/random_utils.hh"
 
 namespace fs = std::filesystem;
 
@@ -6043,7 +6044,7 @@ SEASTAR_TEST_CASE(purged_tombstone_consumer_sstable_test) {
         public:
             explicit compacting_sstable_writer_test(const schema_ptr& s, shared_sstable& sst, sstables_manager& manager)
                 : _sst(sst),
-                  _writer(sst->get_writer(*s, 1, manager.configure_writer(),
+                  _writer(sst->get_writer(*s, 1, manager.configure_writer("test"),
                         encoding_stats{}, service::get_local_compaction_priority())) {}
 
             void consume_new_partition(const dht::decorated_key& dk) { _writer.consume_new_partition(dk); }
@@ -6813,5 +6814,43 @@ SEASTAR_TEST_CASE(test_twcs_interposer_on_memtable_flush) {
 
       test_interposer_on_flush(true);
       test_interposer_on_flush(false);
+    });
+}
+
+SEASTAR_TEST_CASE(test_sstable_origin) {
+    return test_setup::do_with_tmp_directory([] (test_env& env, sstring tmpdir_path) {
+        simple_schema ss;
+        auto s = ss.schema();
+
+        auto pk = ss.make_pkey(make_local_key(s));
+        auto mut = mutation(s, pk);
+        ss.add_row(mut, ss.make_ckey(0), "val");
+        int gen = 1;
+
+        for (const auto version : all_sstable_versions) {
+            if (version < sstable_version_types::mc) {
+                continue;
+            }
+
+            // Test empty sstable_origin.
+            auto mr = flat_mutation_reader_from_mutations(tests::make_permit(), {mut});
+            auto sst = env.make_sstable(s, tmpdir_path, gen++, version, big);
+            sstable_writer_config cfg = env.manager().configure_writer("");
+            sst->write_components(std::move(mr), 0, s, std::move(cfg), encoding_stats{}).get();
+            sst->load().get();
+            BOOST_REQUIRE_EQUAL(sst->get_origin(), "");
+
+            // Test that a random sstable_origin is stored and retrieved properly.
+            mr = flat_mutation_reader_from_mutations(tests::make_permit(), {mut});
+            sst = env.make_sstable(s, tmpdir_path, gen++, version, big);
+            sstring origin = fmt::format("test-{}", tests::random::get_sstring());
+            cfg = env.manager().configure_writer(origin);
+            sst->write_components(std::move(mr), 0, s, std::move(cfg), encoding_stats{}).get();
+            sst->load().get();
+
+            BOOST_REQUIRE_EQUAL(sst->get_origin(), origin);
+        }
+
+        return make_ready_future<>();
     });
 }

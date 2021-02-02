@@ -87,7 +87,7 @@ make_sstable_for_all_shards(database& db, table& table, fs::path sstdir, int64_t
     }
     auto sst = table.make_sstable(sstdir.native(), generation++,
             sstables::get_highest_sstable_version(), sstables::sstable::format_types::big);
-    write_memtable_to_sstable(*mt, sst, table.get_sstables_manager().configure_writer()).get();
+    write_memtable_to_sstable(*mt, sst, table.get_sstables_manager().configure_writer("test")).get();
     mt->clear_gently().get();
     // We can't write an SSTable with bad sharding, so pretend
     // it came from Cassandra

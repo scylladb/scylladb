@@ -560,7 +560,7 @@ table::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old, sstable_write_
 
         auto consumer = _compaction_strategy.make_interposer_consumer(metadata, [this, old, permit, &newtabs] (flat_mutation_reader reader) mutable {
             auto&& priority = service::get_local_memtable_flush_priority();
-            sstables::sstable_writer_config cfg = get_sstables_manager().configure_writer();
+            sstables::sstable_writer_config cfg = get_sstables_manager().configure_writer("memtable");
             cfg.backup = incremental_backups_enabled();
 
             auto newtab = make_sstable();
@@ -1687,6 +1687,7 @@ write_memtable_to_sstable(flat_mutation_reader reader,
                           const io_priority_class& pc) {
     cfg.replay_position = mt.replay_position();
     cfg.monitor = &monitor;
+    cfg.origin = "memtable";
     return sst->write_components(std::move(reader), mt.partition_count(), mt.schema(), cfg, mt.get_encoding_stats(), pc);
 }
 

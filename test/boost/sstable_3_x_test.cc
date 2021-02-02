@@ -5297,7 +5297,7 @@ static void test_sstable_write_large_row_f(schema_ptr s, memtable& mt, const par
     // trigger depends on the size of rows after they are written in the MC format and that size
     // depends on the encoding statistics (because of variable-length encoding). The original values
     // were chosen with the default-constructed encoding_stats, so let's keep it that way.
-    sst->write_components(mt.make_flat_reader(s, tests::make_permit()), 1, s, manager.configure_writer(), encoding_stats{}).get();
+    sst->write_components(mt.make_flat_reader(s, tests::make_permit()), 1, s, manager.configure_writer("test"), encoding_stats{}).get();
     BOOST_REQUIRE_EQUAL(i, expected.size());
 }
 
@@ -5348,7 +5348,7 @@ static void test_sstable_log_too_many_rows_f(int rows, uint64_t threshold, bool 
     auto close_manager = defer([&] { manager.close().get(); });
     tmpdir dir;
     auto sst = manager.make_sstable(sc, dir.path().string(), 1, version, sstables::sstable::format_types::big);
-    sst->write_components(mt->make_flat_reader(sc, tests::make_permit()), 1, sc, manager.configure_writer(), encoding_stats{}).get();
+    sst->write_components(mt->make_flat_reader(sc, tests::make_permit()), 1, sc, manager.configure_writer("test"), encoding_stats{}).get();
 
     BOOST_REQUIRE_EQUAL(logged, expected);
 }
