@@ -1,0 +1,44 @@
+#!/bin/bash -e
+
+bv=$(buildah --version)
+if (( $? != 0 )); then
+    echo install buildah 1.19.3 or later
+    exit 1
+fi
+
+# translate to array of version components
+bv="${bv#buildah version }"
+bv="${bv% (*}"
+bv=(${bv//./ })
+
+maj=${bv[0]}
+min=${bv[1]}
+patch=${bv[2]}
+
+ok=$(( maj > 1 || ( maj == 1 && min > 19 ) || ( maj == 1 && min == 19 && patch >= 3 ) ))
+
+if (( ! ok )); then 
+    echo install buildah 1.19.3 or later
+    exit 1
+fi
+
+archs=(amd64 arm64 s390x)
+
+if [[ ! -f  /proc/sys/fs/binfmt_misc/qemu-aarch64 || ! -f /proc/sys/fs/binfmt_misc/qemu-s390x ]]; then
+    echo install qemu-user-static
+    exit 1
+fi
+
+podman manifest create "$(<tools/toolchain/image)"
+
+
+for arch in "${archs[@]}"; do
+    image_id_file="$(mktemp)"
+    buildah bud --arch="$arch" --no-cache --pull -f tools/toolchain/Dockerfile --iidfile "$image_id_file"
+    podman manifest add --all "$(<tools/toolchain/image)" "containers-storage:$(<$image_id_file)"
+    rm "$image_id_file"
+done
+
+echo "Done building $(<tools/toolchain/image). You can now test it, and push with"
+echo ""
+echo "    podman manifest push --all $(<tools/toolchain/image) docker://$(<tools/toolchain/image)"
