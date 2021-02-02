@@ -68,7 +68,22 @@ For master toolchains, the branch designation is omitted. In a branch, if
 there is a need to update a toolchain, the branch designation is added to
 the tag to avoid ambiguity.
 
-To publish a new image, follow this procedure:
+Publishing an image is complicated since multiple architectures are supported.
+There are two procedures, one using emulation (can run on any x86 machine) and
+another using native systems, which requires access to aarch64 and s390x machines.
+
+## Emulated publishing procedure (slow)
+
+1. Pick a new name for the image (in `tools/toolchain/image`) and
+   commit it. The commit updating install-dependencies.sh should
+   include the toolchain change, for atomicity. Do not push the commit
+   to `next` yet.
+2. Run `tools/toolchain/prepare` and wait. It requires `buildah` and
+   `qemu-user-static` to be installed (and will complain if they are not).
+3. Publish the image using the instructions printed by the previous step.
+4. Push the `next` branch that refers to the new toolchain.
+
+## Native publishing procedure (complicated)
 
 1. Pick a new name for the image (in `tools/toolchain/image`) and
    commit it. The commit updating install-dependencies.sh should
