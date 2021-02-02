@@ -96,6 +96,10 @@ void set_messaging_service(http_context& ctx, routes& r, sharded<netw::messaging
         return c.get_stats().sent_messages;
     }));
 
+    get_replied_messages.set(r, get_client_getter(ms, [](const shard_info& c) {
+        return c.get_stats().replied;
+    }));
+
     get_dropped_messages.set(r, get_client_getter(ms, [](const shard_info& c) {
         // We don't have the same drop message mechanism
         // as origin has.
@@ -155,6 +159,7 @@ void set_messaging_service(http_context& ctx, routes& r, sharded<netw::messaging
 void unset_messaging_service(http_context& ctx, routes& r) {
     get_timeout_messages.unset(r);
     get_sent_messages.unset(r);
+    get_replied_messages.unset(r);
     get_dropped_messages.unset(r);
     get_exception_messages.unset(r);
     get_pending_messages.unset(r);

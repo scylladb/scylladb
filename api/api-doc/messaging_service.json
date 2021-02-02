@@ -76,7 +76,7 @@
                "items":{
                   "type":"message_counter"
                },
-               "nickname":"get_completed_messages",
+               "nickname":"get_replied_messages",
                "produces":[
                   "application/json"
                ],
