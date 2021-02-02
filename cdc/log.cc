@@ -813,13 +813,13 @@ static bytes_opt get_preimage_col_value(const column_definition& cdef, const cql
                 auto v = pirow->get_view(cdef.name_as_text());
                 auto f = cql_serialization_format::internal();
                 auto n = read_collection_size(v, f);
-                std::vector<bytes_view> tmp;
+                std::vector<bytes> tmp;
                 tmp.reserve(n);
                 while (n--) {
-                    tmp.emplace_back(read_collection_value(v, f)); // key
+                    tmp.emplace_back(read_collection_value(v, f).linearize()); // key
                     read_collection_value(v, f); // value. ignore.
                 }
-                return set_type_impl::serialize_partially_deserialized_form(tmp, f);
+                return set_type_impl::serialize_partially_deserialized_form({tmp.begin(), tmp.end()}, f);
             },
             [&] (const abstract_type& o) -> bytes {
                 return pirow->get_blob(cdef.name_as_text());
@@ -1646,13 +1646,7 @@ public:
       try {
         return _ctx._proxy.query(_schema, std::move(command), std::move(partition_ranges), select_cl, service::storage_proxy::coordinator_query_options(default_timeout(), empty_service_permit(), client_state)).then(
                 [s = _schema, partition_slice = std::move(partition_slice), selection = std::move(selection)] (service::storage_proxy::coordinator_query_result qr) -> lw_shared_ptr<cql3::untyped_result_set> {
-                    cql3::selection::result_set_builder builder(*selection, gc_clock::now(), cql_serialization_format::latest());
-                    query::result_view::consume(*qr.query_result, partition_slice, cql3::selection::result_set_builder::visitor(builder, *s, *selection));
-                    auto result_set = builder.build();
-                    if (!result_set || result_set->empty()) {
-                        return {};
-                    }
-                    return make_lw_shared<cql3::untyped_result_set>(*result_set);
+            return make_lw_shared<cql3::untyped_result_set>(*s, std::move(qr.query_result), *selection, partition_slice);
         });
       } catch (exceptions::unavailable_exception& e) {
         // `query` can throw `unavailable_exception`, which is seen by clients as ~ "NoHostAvailable". 
@@ -1696,7 +1690,7 @@ public:
                     // as there will be no clustering row data to load into the state.
                     return;
                 }
-                ck_parts.emplace_back(*v);
+                ck_parts.emplace_back(v->linearize());
             }
             auto ck = clustering_key::from_exploded(std::move(ck_parts));
 

@@ -25,6 +25,7 @@
 #include "stats.hh"
 
 namespace cql3 {
+class untyped_result_set;
 
 class result_generator {
     schema_ptr _schema;
@@ -33,6 +34,7 @@ class result_generator {
     shared_ptr<const selection::selection> _selection;
     cql_stats* _stats;
 private:
+    friend class untyped_result_set;
     template<typename Visitor>
     class query_result_visitor {
         const schema& _schema;
