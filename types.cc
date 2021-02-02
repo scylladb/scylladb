@@ -1854,6 +1854,9 @@ template data_value collection_type_impl::deserialize_impl<>(fragmented_temporar
 template data_value collection_type_impl::deserialize_impl<>(single_fragmented_view, cql_serialization_format) const;
 template data_value collection_type_impl::deserialize_impl<>(managed_bytes_view, cql_serialization_format) const;
 
+template int read_collection_size(ser::buffer_view<bytes_ostream::fragment_iterator>& in, cql_serialization_format);
+template ser::buffer_view<bytes_ostream::fragment_iterator> read_collection_value(ser::buffer_view<bytes_ostream::fragment_iterator>& in, cql_serialization_format);
+
 template <FragmentedView View>
 data_value deserialize_aux(const tuple_type_impl& t, View v) {
     tuple_type_impl::native_type ret;
