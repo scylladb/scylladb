@@ -157,17 +157,19 @@ Due to the need of maintaining colocation we don't allow the client to send writ
 Suppose that a write is requested and the write coordinator's local clock has time `C` and the generation operating at time `C` has timestamp `T` (`T <= C`). Then we only allow the write if its timestamp is in the interval [`T`, `C + generation_leeway`), where `generation_leeway` is a small time-inteval constant (e.g. 5 seconds).
 Reason: we cannot allow writes before `T`, because they belong to the old generation whose token ranges might no longer refine the current vnodes, so the corresponding log write would not necessarily be colocated with the base write. We also cannot allow writes too far "into the future" because we don't know what generation will be operating at that time (the node which will introduce this generation might not have joined yet). But, as mentioned before, we assume that we'll learn about the next generation in time. Again --- the need for this assumption will be gone in a future patch.
 
-### Streams description table
+### Streams description tables
 
-The `cdc_streams_descriptions` table in the `system_distributed` keyspace allows CDC clients to learn about available sets of streams and the time intervals they are operating at. It's definition is as follows (db/system_distributed_keyspace.cc):
+The `cdc_streams_descriptions_v2` table in the `system_distributed` keyspace allows CDC clients to learn about available sets of streams and the time intervals they are operating at. It's definition is as follows (db/system_distributed_keyspace.cc):
 ```
-        return schema_builder(system_distributed_keyspace::NAME, system_distributed_keyspace::CDC_DESC, {id})
+        return schema_builder(system_distributed_keyspace::NAME, system_distributed_keyspace::CDC_DESC_V2, {id})
                 /* The timestamp of this CDC generation. */
                 .with_column("time", timestamp_type, column_kind::partition_key)
-                /* The set of stream identifiers used in this CDC generation. */
+                /* For convenience, the list of stream IDs in this generation is split into token ranges
+                 * which the stream IDs were mapped to (by the partitioner) when the generation was created.  */
+                .with_column("range_end", long_type, column_kind::clustering_key)
+                /* The set of stream identifiers used in this CDC generation for the token range
+                 * ending on `range_end`. */
                 .with_column("streams", cdc_streams_set_type)
-                /* Expiration time of this CDC generation (or null if not expired). */
-                .with_column("expired", timestamp_type)
                 .with_version(system_keyspace::generate_schema_version(id))
                 .build();
 ```
@@ -176,9 +178,29 @@ where
 thread_local data_type cdc_stream_tuple_type = tuple_type_impl::get_instance({long_type, long_type});
 thread_local data_type cdc_streams_set_type = set_type_impl::get_instance(cdc_stream_tuple_type, false);
 ```
-This table simply contains each generation's timestamp (as partition key) and the set of stream IDs used by this generation. It is meant to be user-facing, in contrast to `cdc_generation_descriptions` which is used internally.
+This table contains each generation's timestamp (as partition key) and the set of stream IDs used by this generation grouped by token ranges that the stream IDs are mapped to. It is meant to be user-facing, in contrast to `cdc_generation_descriptions` which is used internally.
 
-When nodes learn about a CDC generation through gossip, they race to update the description table by inserting a proper row (see `cdc::update_streams_description`). This operation is idempotent so it doesn't matter if multiple nodes do it at the same time.
+There is a second table that contains just the generations' timestamps, `cdc_generation_timestamps`:
+```
+        return schema_builder(system_distributed_keyspace::NAME, system_distributed_keyspace::CDC_TIMESTAMPS, {id})
+                /* This is a single-partition table. The partition key is always "timestamps". */
+                .with_column("key", utf8_type, column_kind::partition_key)
+                /* The timestamp of this CDC generation. */
+                .with_column("time", timestamp_type, column_kind::clustering_key)
+                /* Expiration time of this CDC generation (or null if not expired). */
+                .with_column("expired", timestamp_type)
+                .with_version(system_keyspace::generate_schema_version(id))
+                .build();
+```
+It is a single-partition table, containing the timestamps of generations found in `cdc_streams_descriptions_v2` in separate clustered rows. It allows clients to efficiently query if there are any new generations, e.g.:
+```
+SELECT time FROM system_distributed.cdc_generation_timestamps` WHERE time > X
+```
+where `X` is the last timestamp known by that particular client.
+
+When nodes learn about a CDC generation through gossip, they race to update these description tables by first inserting the set of rows containing this generation's stream IDs into `cdc_streams_descriptions_v2` and then, if the node succeeds, by inserting its timestamp into `cdc_generation_timestamps` (see `cdc::update_streams_description`). This operation is idempotent so it doesn't matter if multiple nodes do it at the same time.
+
+Note that the first phase of inserting stream IDs may fail in the middle; in that case, the partition for that generation may contain partial information. Thus a client can only safely read a partition from `cdc_streams_descriptions_v2` (i.e. without the risk of observing only a part of the stream IDs) if they first observe its timestamp in `cdc_generation_timestamps`.
 
 #### TODO: expired generations
-The `expired` column in `cdc_streams_descriptions` and `cdc_generation_descriptions` means that this generation was superseded by some new generation and will soon be removed (its table entry will be gone). This functionality is yet to be implemented.
+The `expired` column in `cdc_generation_timestamps` and `cdc_generation_descriptions` means that this generation was superseded by some new generation and will soon be removed (its table entry will be gone). This functionality is yet to be implemented.
