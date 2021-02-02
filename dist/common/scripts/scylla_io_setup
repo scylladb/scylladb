@@ -244,12 +244,12 @@ if __name__ == "__main__":
                 # and https://cloud.google.com/compute/docs/disks/local-ssd#nvme
                 # note that scylla iotune might measure more, this is GCP recommended
                 mbs=1024*1024
-                if nr_disks >= 1 & nr_disks < 4:
+                if nr_disks >= 1 and nr_disks < 4:
                     disk_properties["read_iops"] = 170000 * nr_disks
                     disk_properties["read_bandwidth"] = 660 * mbs * nr_disks
                     disk_properties["write_iops"] = 90000 * nr_disks
                     disk_properties["write_bandwidth"] = 350 * mbs * nr_disks
-                elif nr_disks >= 4 & nr_disks <= 8:
+                elif nr_disks >= 4 and nr_disks <= 8:
                     disk_properties["read_iops"] = 680000
                     disk_properties["read_bandwidth"] = 2650 * mbs
                     disk_properties["write_iops"] = 360000
