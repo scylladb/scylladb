@@ -143,11 +143,21 @@ def test_projection_expression_path(test_table_s):
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression='a.x')['Item'] == {}
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression='a.x.y')['Item'] == {}
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression='a.b[3].x')['Item'] == {}
+    # Similarly, indexing a dictionary as an array, or array as dictionary, or
+    # integer as either, yields an empty item.
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression='a.b.x')['Item'] == {}
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression='a[0]')['Item'] == {}
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression='a.b[0].x')['Item'] == {}
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression='a.b[0][0]')['Item'] == {}
     # We can read multiple paths - the result are merged into one object
     # structured the same was as in the original item:
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression='a.b[0],a.b[1]')['Item'] == {'a': {'b': [2, 4]}}
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression='a.b[0],a.c')['Item'] == {'a': {'b': [2], 'c': 5}}
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression='a.c,b')['Item'] == {'a': {'c': 5}, 'b': 'hello'}
+    # If some of the paths are not available, they are silently ignored (just
+    # like they returned an empty item when used alone earlier)
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression='a.x, a.b[0], x, a.b[3].x')['Item'] == {'a': {'b': [2]}}
+
     # It is not allowed to read the same path multiple times. The error from
     # DynamoDB looks like: "Invalid ProjectionExpression: Two document paths
     # overlap with each other; must remove or rewrite one of these paths;
@@ -225,6 +235,33 @@ def test_projection_expression_path_overlap(test_table_s):
                  'a.b, a.c[2]',
                 ]:
         print(expr)
+        test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression=expr)
+
+# In addition to not allowing "overlapping" paths, DynamoDB also does not
+# allow "conflicting" paths: It does not allow giving both a.b and a[1] in a
+# single ProjectionExpression. It gives the error:
+#  "Invalid ProjectionExpression: Two document paths conflict with each other;
+#   must remove or rewrite one of these paths; path one: [a, b], path two:
+#   [a, [1]]".
+# The reasoning is that asking for both in one request makes no sense because
+# no item will ever be able to fulfill both.
+@pytest.mark.xfail(reason="ProjectionExpression does not yet support attribute paths")
+def test_projection_expression_path_conflict(test_table_s):
+    # The conflict is tested symbolically, on the given paths, without any
+    # relation to what the item contains, or whether it even exists. So we
+    # don't even need to create an item for this test. We still need a
+    # key for the GetItem call :-)
+    p = random_string()
+    for expr in ['a.b, a[1]',
+                ]:
+        with pytest.raises(ClientError, match='ValidationException.* conflict'):
+            test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression=expr)
+    # The checks above can be easily passed by an over-zealos "conflict" check
+    # which declares everything a conflict :-) Let's also check some non-
+    # conflict cases - which shouldn't be declared a conflict.
+    for expr in ['a.b, a.c',
+                 'a.b, a.c[1]',
+                ]:
         test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression=expr)
 
 # Above we nested paths in ProjectionExpression, but just for the GetItem
