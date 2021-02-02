@@ -184,7 +184,7 @@ def test_projection_expression_path_references(test_table_s):
 @pytest.mark.xfail(reason="ProjectionExpression does not yet support attribute paths")
 def test_projection_expression_path_dot(test_table_s):
     p = random_string()
-    test_table_s.put_item(Item={'p': p, 'a.b': 'hi', 'a': {'b': 'yo'}})
+    test_table_s.put_item(Item={'p': p, 'a.b': 'hi', 'a': {'b': 'yo', 'c': 'jo'}})
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression='a.b')['Item'] == {'a': {'b': 'yo'}}
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression='#name', ExpressionAttributeNames={'#name': 'a.b'})['Item'] == {'a.b': 'hi'}
 
@@ -207,9 +207,25 @@ def test_projection_expression_path_overlap(test_table_s):
                  'a.b, a.b[2]',
                  'a.b, a.b.c',
                  'a, a.b[2].c',
+                 'a.b.d, a.b',
+                 'a.b.d.e, a.b',
+                 'a.b, a.b.d',
+                 'a.b, a.b.d.e',
                 ]:
         with pytest.raises(ClientError, match='ValidationException.* overlap'):
+            print(expr)
             test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression=expr)
+    # The checks above can be easily passed by an over-zealos "overlap" check
+    # which declares everything an overlap :-) Let's also check some non-
+    # overlap cases - which shouldn't be declared an overlap.
+    for expr in ['a, b',
+                 'a.b, a.c',
+                 'a.b.d, a.b.e',
+                 'a[1], a[2]',
+                 'a.b, a.c[2]',
+                ]:
+        print(expr)
+        test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression=expr)
 
 # Above we nested paths in ProjectionExpression, but just for the GetItem
 # request. Let's verify they also work in Query and Scan requests:
@@ -243,7 +259,7 @@ def test_scan_projection_expression_path(test_table):
 # applies to all items, and that it correctly suports document paths as well.
 @pytest.mark.xfail(reason="ProjectionExpression does not yet support attribute paths")
 def test_batch_get_item_projection_expression_path(test_table_s):
-    items = [{'p': random_string(), 'a': {'b': random_string()}, 'c': random_string()} for i in range(3)]
+    items = [{'p': random_string(), 'a': {'b': random_string(), 'x': 'hi'}, 'c': random_string()} for i in range(3)]
     with test_table_s.batch_writer() as batch:
         for item in items:
             batch.put_item(item)
