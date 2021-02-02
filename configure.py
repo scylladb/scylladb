@@ -258,21 +258,25 @@ modes = {
         'cxxflags': '-DDEBUG -DSANITIZE -DDEBUG_LSA_SANITIZER -DSCYLLA_ENABLE_ERROR_INJECTION',
         'cxx_ld_flags': '',
         'stack-usage-threshold': 1024*40,
+        'optimization-level': '0',
     },
     'release': {
-        'cxxflags': '-O3 -ffunction-sections -fdata-sections ',
+        'cxxflags': '-ffunction-sections -fdata-sections ',
         'cxx_ld_flags': '-Wl,--gc-sections',
         'stack-usage-threshold': 1024*13,
+        'optimization-level': '3',
     },
     'dev': {
-        'cxxflags': '-O1 -DDEVEL -DSEASTAR_ENABLE_ALLOC_FAILURE_INJECTION -DSCYLLA_ENABLE_ERROR_INJECTION',
+        'cxxflags': '-DDEVEL -DSEASTAR_ENABLE_ALLOC_FAILURE_INJECTION -DSCYLLA_ENABLE_ERROR_INJECTION',
         'cxx_ld_flags': '',
         'stack-usage-threshold': 1024*21,
+        'optimization-level': '1',
     },
     'sanitize': {
-        'cxxflags': '-Os -DDEBUG -DSANITIZE -DDEBUG_LSA_SANITIZER -DSCYLLA_ENABLE_ERROR_INJECTION',
+        'cxxflags': '-DDEBUG -DSANITIZE -DDEBUG_LSA_SANITIZER -DSCYLLA_ENABLE_ERROR_INJECTION',
         'cxx_ld_flags': '',
         'stack-usage-threshold': 1024*50,
+        'optimization-level': 's',
     }
 }
 
@@ -500,6 +504,8 @@ arg_parser.add_argument('--dpdk-target', action='store', dest='dpdk_target', def
                         help='Path to DPDK SDK target location (e.g. <DPDK SDK dir>/x86_64-native-linuxapp-gcc)')
 arg_parser.add_argument('--debuginfo', action='store', dest='debuginfo', type=int, default=1,
                         help='Enable(1)/disable(0)compiler debug information generation')
+arg_parser.add_argument('--optimization-level', action='append', dest='mode_o_levels', metavar='MODE=LEVEL', default=[],
+                        help=f'Override default compiler optimization level for mode (defaults: {" ".join([x+"="+modes[x]["optimization-level"] for x in modes])})')
 arg_parser.add_argument('--static-stdc++', dest='staticcxx', action='store_true',
                         help='Link libgcc and libstdc++ statically')
 arg_parser.add_argument('--static-thrift', dest='staticthrift', action='store_true',
@@ -1200,6 +1206,15 @@ modes['release']['cxxflags'] += ' ' + ' '.join(optimization_flags)
 if flag_supported(flag='-Wstack-usage=4096', compiler=args.cxx):
     for mode in modes:
         modes[mode]['cxxflags'] += f' -Wstack-usage={modes[mode]["stack-usage-threshold"]} -Wno-error=stack-usage='
+
+for mode_level in args.mode_o_levels:
+    ( mode, level ) = mode_level.split('=', 2)
+    if mode not in modes:
+        raise Exception(f'Mode {mode} is missing, cannot configure optimization level for it')
+    modes[mode]['optimization-level'] = level
+
+for mode in modes:
+    modes[mode]['cxxflags'] += f' -O{modes[mode]["optimization-level"]}'
 
 linker_flags = linker_flags(compiler=args.cxx)
 
