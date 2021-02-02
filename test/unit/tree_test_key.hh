@@ -32,6 +32,8 @@ class tree_test_key_base {
     int* _p_cookie;
 
 public:
+    int cookie() const noexcept { return *_cookie; }
+
     bool is_alive() const {
         if (_val == -1) {
             fmt::print("key value is reset\n");
@@ -53,6 +55,20 @@ public:
 
     bool less(const tree_test_key_base& o) const noexcept {
         return _val < o._val;
+    }
+
+    int compare(const int o) const noexcept {
+        if (_val > o) {
+            return 1;
+        } else if (_val < o) {
+            return -1;
+        } else {
+            return 0;
+        }
+    }
+
+    int compare(const tree_test_key_base& o) const noexcept {
+        return compare(o._val);
     }
 
     explicit tree_test_key_base(int nr, int cookie = 0) : _val(nr) {
@@ -78,6 +94,9 @@ private:
     friend tree_test_key_base copy_key(const tree_test_key_base&);
 
 public:
+    struct force_copy_tag {};
+    tree_test_key_base(const tree_test_key_base& other, force_copy_tag) : tree_test_key_base(other) {}
+
     tree_test_key_base(tree_test_key_base&& other) noexcept : _val(other._val) {
         other._val = -1;
         _cookie = other._cookie;
@@ -98,4 +117,9 @@ tree_test_key_base copy_key(const tree_test_key_base& other) { return tree_test_
 
 struct test_key_compare {
     bool operator()(const tree_test_key_base& a, const tree_test_key_base& b) const noexcept { return a.less(b); }
+};
+
+struct test_key_tri_compare {
+    int operator()(const tree_test_key_base& a, const tree_test_key_base& b) const noexcept { return a.compare(b); }
+    int operator()(const int a, const tree_test_key_base& b) const noexcept { return -b.compare(a); }
 };

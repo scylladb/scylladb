@@ -1198,7 +1198,8 @@ void cache_entry::on_evicted(cache_tracker& tracker) noexcept {
 }
 
 void rows_entry::on_evicted(cache_tracker& tracker) noexcept {
-    auto it = mutation_partition::rows_type::iterator_to(*this);
+    mutation_partition::rows_type::iterator it(this);
+
     if (is_last_dummy()) {
         // Every evictable partition entry must have a dummy entry at the end,
         // so don't remove it, just unlink from the LRU.
@@ -1206,16 +1207,15 @@ void rows_entry::on_evicted(cache_tracker& tracker) noexcept {
         // with no regular rows, and we need to track them.
         unlink_from_lru();
     } else {
-        ++it;
+        it = it.erase_and_dispose(current_deleter<rows_entry>());
         it->set_continuous(false);
-        current_deleter<rows_entry>()(this);
         tracker.on_row_eviction();
     }
 
-    if (mutation_partition::rows_type::is_only_member(*it)) {
+    mutation_partition::rows_type* rows = it.tree_if_singular();
+    if (rows != nullptr) {
         assert(it->is_last_dummy());
-        partition_version& pv = partition_version::container_of(mutation_partition::container_of(
-            mutation_partition::rows_type::container_of_only_member(*it)));
+        partition_version& pv = partition_version::container_of(mutation_partition::container_of(*rows));
         if (pv.is_referenced_from_entry()) {
             partition_entry& pe = partition_entry::container_of(pv);
             if (!pe.is_locked()) {

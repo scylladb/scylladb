@@ -342,14 +342,14 @@ future<> cache_flat_mutation_reader::read_from_underlying(db::timeout_clock::tim
                     if (no_clustering_row_between(*_schema, _upper_bound, _next_row.position())) {
                         this->maybe_update_continuity();
                     } else if (can_populate()) {
-                        rows_entry::compare less(*_schema);
+                        rows_entry::tri_compare cmp(*_schema);
                         auto& rows = _snp->version()->partition().clustered_rows();
                         if (query::is_single_row(*_schema, *_ck_ranges_curr)) {
                             with_allocator(_snp->region().allocator(), [&] {
                                 auto e = alloc_strategy_unique_ptr<rows_entry>(
                                     current_allocator().construct<rows_entry>(_ck_ranges_curr->start()->value()));
                                 // Use _next_row iterator only as a hint, because there could be insertions after _upper_bound.
-                                auto insert_result = rows.insert_check(_next_row.get_iterator_in_latest_version(), *e, less);
+                                auto insert_result = rows.insert_before_hint(_next_row.get_iterator_in_latest_version(), *e, cmp);
                                 auto inserted = insert_result.second;
                                 auto it = insert_result.first;
                                 if (inserted) {
@@ -365,7 +365,7 @@ future<> cache_flat_mutation_reader::read_from_underlying(db::timeout_clock::tim
                                 auto e = alloc_strategy_unique_ptr<rows_entry>(
                                     current_allocator().construct<rows_entry>(*_schema, _upper_bound, is_dummy::yes, is_continuous::yes));
                                 // Use _next_row iterator only as a hint, because there could be insertions after _upper_bound.
-                                auto insert_result = rows.insert_check(_next_row.get_iterator_in_latest_version(), *e, less);
+                                auto insert_result = rows.insert_before_hint(_next_row.get_iterator_in_latest_version(), *e, cmp);
                                 auto inserted = insert_result.second;
                                 if (inserted) {
                                     clogger.trace("csm {}: inserted dummy at {}", fmt::ptr(this), _upper_bound);
@@ -405,12 +405,12 @@ bool cache_flat_mutation_reader::ensure_population_lower_bound() {
     if (!_last_row.is_in_latest_version()) {
         with_allocator(_snp->region().allocator(), [&] {
             auto& rows = _snp->version()->partition().clustered_rows();
-            rows_entry::compare less(*_schema);
+            rows_entry::tri_compare cmp(*_schema);
             // FIXME: Avoid the copy by inserting an incomplete clustering row
             auto e = alloc_strategy_unique_ptr<rows_entry>(
                 current_allocator().construct<rows_entry>(*_schema, *_last_row));
             e->set_continuous(false);
-            auto insert_result = rows.insert_check(rows.end(), *e, less);
+            auto insert_result = rows.insert_before_hint(rows.end(), *e, cmp);
             auto inserted = insert_result.second;
             if (inserted) {
                 clogger.trace("csm {}: inserted lower bound dummy at {}", fmt::ptr(this), e->position());
@@ -456,7 +456,7 @@ void cache_flat_mutation_reader::maybe_add_to_cache(const clustering_row& cr) {
     clogger.trace("csm {}: populate({})", fmt::ptr(this), clustering_row::printer(*_schema, cr));
     _lsa_manager.run_in_update_section_with_allocator([this, &cr] {
         mutation_partition& mp = _snp->version()->partition();
-        rows_entry::compare less(*_schema);
+        rows_entry::tri_compare cmp(*_schema);
 
         if (_read_context->digest_requested()) {
             cr.cells().prepare_hash(*_schema, column_kind::regular_column);
@@ -465,8 +465,8 @@ void cache_flat_mutation_reader::maybe_add_to_cache(const clustering_row& cr) {
             current_allocator().construct<rows_entry>(*_schema, cr.key(), cr.as_deletable_row()));
         new_entry->set_continuous(false);
         auto it = _next_row.iterators_valid() ? _next_row.get_iterator_in_latest_version()
-                                              : mp.clustered_rows().lower_bound(cr.key(), less);
-        auto insert_result = mp.clustered_rows().insert_check(it, *new_entry, less);
+                                              : mp.clustered_rows().lower_bound(cr.key(), cmp);
+        auto insert_result = mp.clustered_rows().insert_before_hint(it, *new_entry, cmp);
         if (insert_result.second) {
             _snp->tracker()->insert(*new_entry);
             new_entry.release();

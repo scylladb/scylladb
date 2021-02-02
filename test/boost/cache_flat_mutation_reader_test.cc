@@ -77,7 +77,7 @@ static void add_tombstone(mutation& m, range_tombstone rt) {
 }
 
 static void set_row_continuous(mutation_partition& mp, int ck, is_continuous value) {
-    auto it = mp.clustered_rows().find(make_ck(ck), rows_entry::compare(*SCHEMA));
+    auto it = mp.clustered_rows().find(make_ck(ck), rows_entry::tri_compare(*SCHEMA));
     assert(it != mp.clustered_rows().end());
     it->set_continuous(value);
 }

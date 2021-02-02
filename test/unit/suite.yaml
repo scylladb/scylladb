@@ -18,3 +18,9 @@ custom_args:
         - '-c1 -m2G'
     row_cache_stress_test:
         - '-c1 -m1G --seconds 10'
+    btree_stress_test:
+        - '-c1 -m1G --count=4132 --iter=9'
+        - '-c1 -m1G --count=27 --iter=312'
+    btree_compaction_test:
+        - '-c1 -m1G --count=10000 --iter=13'
+        - '-c1 -m1G --count=17 --iter=3'

@@ -44,7 +44,7 @@
 #include "hashing_partition_visitor.hh"
 #include "range_tombstone_list.hh"
 #include "clustering_key_filter.hh"
-#include "intrusive_set_external_comparator.hh"
+#include "utils/intrusive_btree.hh"
 #include "utils/preempt.hh"
 #include "utils/managed_ref.hh"
 
@@ -1023,7 +1023,7 @@ class cache_tracker;
 class rows_entry {
     using lru_link_type = bi::list_member_hook<bi::link_mode<bi::auto_unlink>>;
     friend class size_calculator;
-    intrusive_set_external_comparator_member_hook _link;
+    intrusive_b::member_hook _link;
     clustering_key _key;
     deletable_row _row;
     lru_link_type _lru_link;
@@ -1039,7 +1039,6 @@ class rows_entry {
         flags() : _before_ck(0), _after_ck(0), _continuous(true), _dummy(false), _last_dummy(false) { }
     } _flags{};
 public:
-    using container_type = intrusive_set_external_comparator<rows_entry, &rows_entry::_link>;
     using lru_type = bi::list<rows_entry,
         bi::member_hook<rows_entry, rows_entry::lru_link_type, &rows_entry::_lru_link>,
         bi::constant_time_size<false>>; // we need this to have bi::auto_unlink on hooks.
@@ -1137,30 +1136,9 @@ public:
     struct compare {
         tri_compare _c;
         explicit compare(const schema& s) : _c(s) {}
-        bool operator()(const rows_entry& e1, const rows_entry& e2) const {
-            return _c(e1, e2) < 0;
-        }
-        bool operator()(const clustering_key& key, const rows_entry& e) const {
-            return _c(key, e) < 0;
-        }
-        bool operator()(const rows_entry& e, const clustering_key& key) const {
-            return _c(e, key) < 0;
-        }
-        bool operator()(const clustering_key_view& key, const rows_entry& e) const {
-            return _c(key, e) < 0;
-        }
-        bool operator()(const rows_entry& e, const clustering_key_view& key) const {
-            return _c(e, key) < 0;
-        }
-        bool operator()(const rows_entry& e, position_in_partition_view p) const {
-            return _c(e.position(), p) < 0;
-        }
-        bool operator()(position_in_partition_view p, const rows_entry& e) const {
-            return _c(p, e.position()) < 0;
-        }
-        bool operator()(position_in_partition_view p1, position_in_partition_view p2) const {
-            return _c(p1, p2) < 0;
-        }
+
+        template <typename K1, typename K2>
+        bool operator()(const K1& k1, const K2& k2) const { return _c(k1, k2) < 0; }
     };
     bool equal(const schema& s, const rows_entry& other) const;
     bool equal(const schema& s, const rows_entry& other, const schema& other_schema) const;
@@ -1179,6 +1157,8 @@ public:
         friend std::ostream& operator<<(std::ostream& os, const printer& p);
     };
     friend std::ostream& operator<<(std::ostream& os, const printer& p);
+
+    using container_type = intrusive_b::tree<rows_entry, &rows_entry::_link, rows_entry::tri_compare, 12, 20, intrusive_b::key_search::linear>;
 };
 
 struct mutation_application_stats {

@@ -74,6 +74,9 @@ public:
         std::cout << prefix() << "sizeof(deletable_row) = " << sizeof(deletable_row) << "\n";
         std::cout << prefix() << "sizeof(row) = " << sizeof(row) << "\n";
         std::cout << prefix() << "sizeof(atomic_cell_or_collection) = " << sizeof(atomic_cell_or_collection) << "\n";
+        std::cout << prefix() << "btree::linear_node_size(1) = " << mutation_partition::rows_type::node::linear_node_size(1) << "\n";
+        std::cout << prefix() << "btree::inner_node_size = " << mutation_partition::rows_type::node::inner_node_size << "\n";
+        std::cout << prefix() << "btree::leaf_node_size = " << mutation_partition::rows_type::node::leaf_node_size << "\n";
     }
 
     static void print_mutation_partition_size() {

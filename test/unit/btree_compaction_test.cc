@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020 ScyllaDB
+ * Copyright (C) 2021 ScyllaDB
  */
 
 /*
@@ -22,33 +22,31 @@
 #include <seastar/core/app-template.hh>
 #include <seastar/core/thread.hh>
 #include <map>
-#include <string>
 #include <iostream>
 #include <fmt/core.h>
+#include "utils/logalloc.hh"
 
 constexpr int TEST_NODE_SIZE = 7;
+constexpr int TEST_LINEAR_THRESHOLD = 19;
 
 #include "tree_test_key.hh"
-#include "utils/bptree.hh"
-#include "bptree_validation.hh"
+#include "utils/intrusive_btree.hh"
+#include "btree_validation.hh"
 #include "collection_stress.hh"
 
-using namespace bplus;
+using namespace intrusive_b;
 using namespace seastar;
 
-using test_key = tree_test_key_base;
-
-class test_data {
-    int _value;
+class test_key : public tree_test_key_base {
 public:
-    test_data() : _value(0) {}
-    test_data(test_key& k) : _value((int)k + 10) {}
-
-    operator unsigned long() const { return _value; }
-    bool match_key(const test_key& k) const { return _value == (int)k + 10; }
+    member_hook _hook;
+    test_key(int nr) noexcept : tree_test_key_base(nr) {}
+    test_key(const test_key&) = delete;
+    test_key(test_key&& o) noexcept : tree_test_key_base(std::move(o)), _hook(std::move(o._hook)) {}
 };
-using test_tree = tree<test_key, test_data, test_key_compare, TEST_NODE_SIZE, key_search::both, with_debug::yes>;
-using test_validator = validator<test_key, test_data, test_key_compare, TEST_NODE_SIZE>;
+
+using test_tree = tree<test_key, &test_key::_hook, test_key_tri_compare, TEST_NODE_SIZE, TEST_LINEAR_THRESHOLD, key_search::both, with_debug::yes>;
+using test_validator = validator<test_key, &test_key::_hook, test_key_tri_compare, TEST_NODE_SIZE, TEST_LINEAR_THRESHOLD>;
 
 int main(int argc, char **argv) {
     namespace bpo = boost::program_options;
@@ -60,26 +58,27 @@ int main(int argc, char **argv) {
 
     return app.run(argc, argv, [&app] {
         auto count = app.configuration()["count"].as<int>();
-        auto iter = app.configuration()["iters"].as<int>();
+        auto rep = app.configuration()["iters"].as<int>();
         auto verb = app.configuration()["verb"].as<bool>();
 
-        return seastar::async([count, iter, verb] {
+        return seastar::async([count, rep, verb] {
             stress_config cfg;
             cfg.count = count;
-            cfg.iters = iter;
+            cfg.iters = rep;
             cfg.verb = verb;
 
-            tree_pointer<test_tree> t(test_key_compare{});
+            tree_pointer<test_tree> t;
             test_validator tv;
 
             stress_compact_collection(cfg,
                 /* insert */ [&] (int key) {
-                    test_key k(key);
-                    auto ti = t->emplace(std::move(copy_key(k)), k);
+                    test_key *k = current_allocator().construct<test_key>(key);
+                    auto ti = t->insert(*k, test_key_tri_compare{});
                     assert(ti.second);
                 },
                 /* erase */ [&] (int key) {
-                    t->erase(test_key(key));
+                    auto deleter = current_deleter<test_key>();
+                    t->erase_and_dispose(test_key(key), test_key_tri_compare{}, deleter);
                 },
                 /* validate */ [&] {
                     if (verb) {
@@ -89,7 +88,7 @@ int main(int argc, char **argv) {
                     tv.validate(*t);
                 },
                 /* clear */ [&] {
-                    t->clear();
+                    t->clear_and_dispose(current_deleter<test_key>());
                 }
             );
         });

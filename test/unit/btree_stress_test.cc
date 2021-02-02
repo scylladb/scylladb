@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020 ScyllaDB
+ * Copyright (C) 2021 ScyllaDB
  */
 
 /*
@@ -26,37 +26,28 @@
 #include <fmt/core.h>
 #include <fmt/ostream.h>
 
-constexpr int TEST_NODE_SIZE = 16;
+constexpr int TEST_NODE_SIZE = 8;
+constexpr int TEST_LINEAR_THRESH = 21;
 
-#include "tree_test_key.hh"
-#include "utils/bptree.hh"
-#include "bptree_validation.hh"
+#include "utils/intrusive_btree.hh"
+#include "btree_validation.hh"
+#include "test/unit/tree_test_key.hh"
 #include "collection_stress.hh"
 
-using namespace bplus;
+using namespace intrusive_b;
 using namespace seastar;
 
-using test_key = tree_test_key_base;
-
-class test_data {
-    int _value;
+class test_key : public tree_test_key_base {
 public:
-    test_data() : _value(0) {}
-    test_data(test_key& k) : _value((int)k + 10) {}
-
-    operator unsigned long() const { return _value; }
-    bool match_key(const test_key& k) const { return _value == (int)k + 10; }
+    member_hook _hook;
+    test_key(int nr) noexcept : tree_test_key_base(nr) {}
+    test_key(const test_key&) = delete;
+    test_key(test_key&&) = delete;
 };
 
-std::ostream& operator<<(std::ostream& os, test_data d) {
-    os << (unsigned long)d;
-    return os;
-}
-
-using test_tree = tree<test_key, test_data, test_key_compare, TEST_NODE_SIZE, key_search::both, with_debug::yes>;
-using test_node = typename test_tree::node;
-using test_validator = validator<test_key, test_data, test_key_compare, TEST_NODE_SIZE>;
-using test_iterator_checker = iterator_checker<test_key, test_data, test_key_compare, TEST_NODE_SIZE>;
+using test_tree = tree<test_key, &test_key::_hook, test_key_tri_compare, TEST_NODE_SIZE, TEST_LINEAR_THRESH, key_search::both, with_debug::yes>;
+using test_validator = validator<test_key, &test_key::_hook, test_key_tri_compare, TEST_NODE_SIZE, TEST_LINEAR_THRESH>;
+using test_iterator_checker = iterator_checker<test_key, &test_key::_hook, test_key_tri_compare, TEST_NODE_SIZE, TEST_LINEAR_THRESH>;
 
 int main(int argc, char **argv) {
     namespace bpo = boost::program_options;
@@ -74,7 +65,8 @@ int main(int argc, char **argv) {
         auto verb = app.configuration()["verb"].as<bool>();
 
         return seastar::async([count, iters, ks, verb] {
-            auto t = std::make_unique<test_tree>(test_key_compare{});
+            test_key_tri_compare cmp;
+            auto t = std::make_unique<test_tree>();
             std::map<int, unsigned long> oracle;
             test_validator tv;
             auto* itc = new test_iterator_checker(tv, *t);
@@ -84,20 +76,13 @@ int main(int argc, char **argv) {
             cfg.iters = iters;
             cfg.keys = ks;
             cfg.verb = verb;
-            auto rep = 0, itv = 0;
+            auto itv = 0;
 
             stress_collection(cfg,
                 /* insert */ [&] (int key) {
-                    test_key k(key);
-
-                    if (rep % 2 != 1) {
-                        auto ir = t->emplace(std::move(copy_key(k)), k);
-                        assert(ir.second);
-                    } else {
-                        auto ir = t->lower_bound(k);
-                        ir.emplace_before(std::move(copy_key(k)), test_key_compare{}, k);
-                    }
-                    oracle[key] = key + 10;
+                    auto ir = t->insert(std::make_unique<test_key>(key), cmp);
+                    assert(ir.second);
+                    oracle[key] = key;
 
                     if (itv++ % 7 == 0) {
                         if (!itc->step()) {
@@ -108,21 +93,14 @@ int main(int argc, char **argv) {
                 },
                 /* erase */ [&] (int key) {
                     test_key k(key);
+                    auto deleter = [] (test_key* k) noexcept { delete k; };
 
                     if (itc->here(k)) {
                         delete itc;
                         itc = nullptr;
                     }
 
-                    if (rep % 3 != 2) {
-                        t->erase(k);
-                    } else {
-                        auto ri = t->find(k);
-                        auto ni = ri;
-                        ni++;
-                        auto eni = ri.erase(test_key_compare{});
-                        assert(ni == eni);
-                    }
+                    t->erase_and_dispose(key, cmp, deleter);
                     oracle.erase(key);
 
                     if (itc == nullptr) {
@@ -144,12 +122,8 @@ int main(int argc, char **argv) {
                     tv.validate(*t);
                 },
                 /* step */ [&] (stress_step step) {
-                    if (step == stress_step::iteration_finished) {
-                        rep++;
-                    }
-
                     if (step == stress_step::before_erase) {
-                        auto sz = t->size_slow();
+                        auto sz = t->calculate_size();
                         if (sz != (size_t)count) {
                             fmt::print("Size {} != count {}\n", sz, count);
                             throw "size";

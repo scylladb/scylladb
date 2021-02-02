@@ -72,11 +72,11 @@ public:
             return false;
         }
         _change_mark = snp_cm;
-        rows_entry::compare less(*snp.schema());
+        rows_entry::tri_compare cmp(*snp.schema());
         _in_latest = true;
         for (auto&& v : snp.versions()) {
             auto& rows = v.partition().clustered_rows();
-            _it = rows.find(_pos, less);
+            _it = rows.find(_pos, cmp);
             if (_it != rows.end()) {
                 return true;
             }
@@ -111,7 +111,6 @@ class partition_snapshot_row_cursor final {
     struct position_in_version {
         mutation_partition::rows_type::iterator it;
         mutation_partition::rows_type::iterator end;
-        mutation_partition::rows_type* rows;
         int version_no;
         bool unique_owner;
 
@@ -163,7 +162,7 @@ class partition_snapshot_row_cursor final {
 
     void prepare_heap(position_in_partition_view lower_bound) {
         memory::on_alloc_point();
-        rows_entry::compare less(_schema);
+        rows_entry::tri_compare cmp(_schema);
         position_in_version::less_compare heap_less(_schema);
         _heap.clear();
         _current_row.clear();
@@ -174,11 +173,11 @@ class partition_snapshot_row_cursor final {
         for (auto&& v : _snp.versions()) {
             unique_owner = unique_owner && (first || !v.is_referenced());
             auto& rows = v.partition().clustered_rows();
-            auto pos = rows.lower_bound(lower_bound, less);
+            auto pos = rows.lower_bound(lower_bound, cmp);
             auto end = rows.end();
             _iterators.push_back(pos);
             if (pos != end) {
-                _heap.push_back({pos, end, &rows, version_no, unique_owner});
+                _heap.push_back({pos, end, version_no, unique_owner});
             }
             ++version_no;
             first = false;
@@ -233,11 +232,11 @@ public:
         // before it and after cursor's position. There cannot be any
         // insertions for non-latest versions, so we don't have to update them.
         if (_current_row[0].version_no != 0) {
-            rows_entry::compare less(_schema);
+            rows_entry::tri_compare cmp(_schema);
             position_in_partition::equal_compare eq(_schema);
             position_in_version::less_compare heap_less(_schema);
             auto& rows = _snp.version()->partition().clustered_rows();
-            auto it = _iterators[0] = rows.lower_bound(_position, less);
+            auto it = _iterators[0] = rows.lower_bound(_position, cmp);
             auto heap_i = boost::find_if(_heap, [](auto&& v) { return v.version_no == 0; });
             if (it == rows.end()) {
                 if (heap_i != _heap.end()) {
@@ -327,7 +326,7 @@ public:
         position_in_version::less_compare heap_less(_schema);
         for (auto&& curr : _current_row) {
             if (curr.unique_owner) {
-                curr.it = curr.rows->erase_and_dispose(curr.it, current_deleter<rows_entry>());
+                curr.it = curr.it.erase_and_dispose(current_deleter<rows_entry>());
             } else {
                 ++curr.it;
             }
