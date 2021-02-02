@@ -289,3 +289,29 @@ SEASTAR_TEST_CASE(test_range_overlap) {
 
     return make_ready_future<>();
 }
+
+SEASTAR_TEST_CASE(verify_static_row_can_be_contiguous_with_a_clustering_range_that_is_open_in_front) {
+    simple_schema s;
+    auto keys = s.make_ckeys(10);
+    auto range1 = query::clustering_range::make_ending_with({keys[2], false});
+    auto ranges = query::clustering_row_ranges({range1});
+    auto walker = clustering_ranges_walker(*s.schema(), ranges);
+    auto cc = walker.lower_bound_change_counter();
+    walker.advance_to(position_in_partition::for_key(keys[1]));
+    BOOST_REQUIRE_EQUAL(cc, walker.lower_bound_change_counter());
+    walker.advance_to(position_in_partition::for_key(keys[3]));
+    BOOST_REQUIRE_NE(cc, walker.lower_bound_change_counter());
+    return make_ready_future<>();
+}
+
+SEASTAR_TEST_CASE(verify_static_row_can_be_contiguous_with_a_clustering_range_negative_tests) {
+    simple_schema s;
+    auto keys = s.make_ckeys(10);
+    auto range1 = query::clustering_range::make({keys[2], false}, {keys[4], false});
+    auto ranges = query::clustering_row_ranges({range1});
+    auto walker = clustering_ranges_walker(*s.schema(), ranges);
+    auto cc = walker.lower_bound_change_counter();
+    walker.advance_to(position_in_partition::for_key(keys[3]));
+    BOOST_REQUIRE_NE(cc, walker.lower_bound_change_counter());
+    return make_ready_future<>();
+}

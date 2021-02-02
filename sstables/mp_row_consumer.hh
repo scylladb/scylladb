@@ -983,7 +983,7 @@ class mp_row_consumer_m : public consumer_m {
             return proceed::no;
         }
 
-        return proceed(!_reader->is_buffer_full());
+        return proceed(!_reader->is_buffer_full() && !need_preempt());
     }
 
     inline void reset_for_new_partition() {
@@ -1145,7 +1145,7 @@ public:
         setup_for_partition(pk);
         auto dk = dht::decorate_key(*_schema, pk);
         _reader->on_next_partition(std::move(dk), tombstone(deltime));
-        return proceed::yes;
+        return proceed(!_reader->is_buffer_full() && !need_preempt());
     }
 
     virtual consumer_m::row_processing_result consume_row_start(const std::vector<temporary_buffer<char>>& ecp) override {
@@ -1337,7 +1337,7 @@ public:
             [] (const temporary_buffer<char>& b) { return to_bytes_view(b); }));
         if (kind == bound_kind::incl_start || kind == bound_kind::excl_start) {
             consume_range_tombstone_start(std::move(ck), kind, std::move(tomb));
-            return proceed(!_reader->is_buffer_full());
+            return proceed(!_reader->is_buffer_full() && !need_preempt());
         } else { // *_end kind
             return consume_range_tombstone_end(std::move(ck), kind, std::move(tomb));
         }
@@ -1402,7 +1402,7 @@ public:
             _reader->push_mutation_fragment(mutation_fragment(*_schema, permit(), *std::exchange(_in_progress_row, {})));
         }
 
-        return proceed(!_reader->is_buffer_full());
+        return proceed(!_reader->is_buffer_full() && !need_preempt());
     }
 
     virtual void on_end_of_stream() override {
@@ -1448,7 +1448,7 @@ public:
         _reader->_partition_finished = true;
         _reader->_before_partition = true;
         _reader->push_mutation_fragment(mutation_fragment(*_schema, permit(), partition_end()));
-        return proceed::yes;
+        return proceed(!_reader->is_buffer_full() && !need_preempt());
     }
 
     virtual void reset(sstables::indexable_element el) override {
