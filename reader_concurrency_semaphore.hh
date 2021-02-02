@@ -27,6 +27,8 @@
 
 using namespace seastar;
 
+class flat_mutation_reader;
+
 /// Specific semaphore for controlling reader concurrency
 ///
 /// Use `make_permit()` to create a permit to track the resource consumption
@@ -53,11 +55,13 @@ public:
 
     friend class reader_permit;
 
-    class inactive_read {
-    public:
-        virtual void evict() = 0;
-        virtual ~inactive_read() = default;
+    enum class evict_reason {
+        permit, // evicted due to permit shortage
+        time, // evicted due to expiring ttl
+        manual, // evicted manually via `try_evict_one_inactive_read()`
     };
+
+    using eviction_notify_handler = noncopyable_function<void(evict_reason)>;
 
     class inactive_read_handle {
         reader_concurrency_semaphore* _sem = nullptr;
@@ -85,6 +89,8 @@ public:
     struct stats {
         // The number of inactive reads evicted to free up permits.
         uint64_t permit_based_evictions = 0;
+        // The number of inactive reads evicted due to expiring.
+        uint64_t time_based_evictions = 0;
         // The number of inactive reads currently registered.
         uint64_t inactive_reads = 0;
         // Total number of successful reads executed through this semaphore.
@@ -114,6 +120,18 @@ private:
         void operator()(entry& e) noexcept;
     };
 
+    struct inactive_read {
+        std::unique_ptr<flat_mutation_reader> reader;
+        eviction_notify_handler notify_handler;
+        std::optional<timer<lowres_clock>> ttl_timer;
+
+        explicit inactive_read(flat_mutation_reader);
+        inactive_read(inactive_read&&) = default;
+        ~inactive_read();
+    };
+
+    using inactive_reads_type = std::map<uint64_t, inactive_read>;
+
 private:
     const resources _initial_resources;
     resources _resources;
@@ -124,11 +142,13 @@ private:
     size_t _max_queue_length = std::numeric_limits<size_t>::max();
     std::function<void()> _prethrow_action;
     uint64_t _next_id = 1;
-    std::map<uint64_t, std::unique_ptr<inactive_read>> _inactive_reads;
+    inactive_reads_type _inactive_reads;
     stats _stats;
     std::unique_ptr<permit_list> _permit_list;
 
 private:
+    inactive_reads_type::iterator evict(inactive_reads_type::iterator it, evict_reason reason);
+
     bool has_available_units(const resources& r) const;
 
     bool may_proceed(const resources& r) const;
@@ -175,13 +195,14 @@ public:
     /// interface.
     /// The semaphore takes ownership of the created object and destroys it if
     /// it is evicted.
-    inactive_read_handle register_inactive_read(std::unique_ptr<inactive_read> ir);
+    inactive_read_handle register_inactive_read(flat_mutation_reader ir, eviction_notify_handler handler = {});
+    inactive_read_handle register_inactive_read(flat_mutation_reader ir, std::chrono::seconds ttl, eviction_notify_handler handler = {});
 
     /// Unregister the previously registered inactive read.
     ///
     /// If the read was not evicted, the inactive read object, passed in to the
     /// register call, will be returned. Otherwise a nullptr is returned.
-    std::unique_ptr<inactive_read> unregister_inactive_read(inactive_read_handle irh);
+    std::unique_ptr<flat_mutation_reader> unregister_inactive_read(inactive_read_handle irh);
 
     /// Try to evict an inactive read.
     ///

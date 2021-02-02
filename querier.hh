@@ -117,12 +117,14 @@ struct position_view {
 };
 
 class querier_base {
+    friend class querier_utils;
+
 protected:
     schema_ptr _schema;
     reader_permit _permit;
     std::unique_ptr<const dht::partition_range> _range;
     std::unique_ptr<const query::partition_slice> _slice;
-    flat_mutation_reader _reader;
+    std::variant<flat_mutation_reader, reader_concurrency_semaphore::inactive_read_handle> _reader;
     dht::partition_ranges_view _query_ranges;
 
 public:
@@ -224,8 +226,8 @@ public:
             gc_clock::time_point query_time,
             db::timeout_clock::time_point timeout,
             query::max_result_size max_size) {
-        return ::query::consume_page(_reader, _compaction_state, *_slice, std::move(consumer), row_limit, partition_limit, query_time,
-                timeout, max_size).then([this] (auto&& results) {
+        return ::query::consume_page(std::get<flat_mutation_reader>(_reader), _compaction_state, *_slice, std::move(consumer), row_limit,
+                partition_limit, query_time, timeout, max_size).then([this] (auto&& results) {
             _last_ckey = std::get<std::optional<clustering_key>>(std::move(results));
             constexpr auto size = std::tuple_size<std::decay_t<decltype(results)>>::value;
             static_assert(size <= 2);
@@ -304,7 +306,7 @@ public:
     }
 
     flat_mutation_reader reader() && {
-        return std::move(_reader);
+        return std::move(std::get<flat_mutation_reader>(_reader));
     }
 };
 
@@ -352,85 +354,21 @@ public:
         // The number of queriers evicted to free up resources to be able to
         // create new readers.
         uint64_t resource_based_evictions = 0;
-        // The number of queriers evicted to because the maximum memory usage
-        // was reached.
-        uint64_t memory_based_evictions = 0;
         // The number of queriers currently in the cache.
         uint64_t population = 0;
     };
 
-    class entry : public boost::intrusive::set_base_hook<boost::intrusive::link_mode<boost::intrusive::auto_unlink>> {
-        // Self reference so that we can remove the entry given an `entry&`.
-        std::list<entry>::iterator _pos;
-        const utils::UUID _key;
-        const lowres_clock::time_point _expires;
-        std::unique_ptr<querier_base> _value;
-        reader_concurrency_semaphore::inactive_read_handle _handle;
-
-    public:
-        template <typename Querier>
-        entry(utils::UUID key, Querier q, lowres_clock::time_point expires)
-            : _key(key)
-            , _expires(expires)
-            , _value(std::make_unique<Querier>(std::move(q))) {
-        }
-
-        std::list<entry>::iterator pos() const {
-            return _pos;
-        }
-
-        void set_pos(std::list<entry>::iterator pos) {
-            _pos = pos;
-        }
-
-        void set_inactive_handle(reader_concurrency_semaphore::inactive_read_handle handle) {
-            _handle = std::move(handle);
-        }
-
-        reader_concurrency_semaphore::inactive_read_handle get_inactive_handle() && {
-            return std::move(_handle);
-        }
-
-        const utils::UUID& key() const {
-            return _key;
-        }
-
-        bool is_expired(const lowres_clock::time_point& now) const {
-            return _expires <= now;
-        }
-
-        const querier_base& value() const {
-            return *_value;
-        }
-
-        querier_base& value() {
-            return *_value;
-        }
-    };
-
-    struct key_of_entry {
-        using type = utils::UUID;
-        const type& operator()(const entry& e) { return e.key(); }
-    };
-
-    using entries = std::list<entry>;
-    using index = boost::intrusive::multiset<entry, boost::intrusive::key_of_value<key_of_entry>,
-          boost::intrusive::constant_time_size<false>>;
+    using index = std::unordered_multimap<utils::UUID, std::unique_ptr<querier_base>>;
 
 private:
-    entries _entries;
     index _data_querier_index;
     index _mutation_querier_index;
     index _shard_mutation_querier_index;
-    timer<lowres_clock> _expiry_timer;
     std::chrono::seconds _entry_ttl;
     stats _stats;
-    size_t _max_queriers_memory_usage;
-
-    void scan_cache_entries();
 
 public:
-    explicit querier_cache(size_t max_cache_size = 1'000'000, std::chrono::seconds entry_ttl = default_entry_ttl);
+    explicit querier_cache(std::chrono::seconds entry_ttl = default_entry_ttl);
 
     querier_cache(const querier_cache&) = delete;
     querier_cache& operator=(const querier_cache&) = delete;
@@ -482,6 +420,9 @@ public:
             const query::partition_slice& slice,
             tracing::trace_state_ptr trace_state);
 
+    /// Change the ttl of cache entries
+    ///
+    /// Applies only to entries inserted after the change.
     void set_entry_ttl(std::chrono::seconds entry_ttl);
 
     /// Evict a querier.

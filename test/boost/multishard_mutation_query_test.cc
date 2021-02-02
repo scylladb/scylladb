@@ -262,7 +262,6 @@ SEASTAR_THREAD_TEST_CASE(test_read_all) {
         tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::misses), 0u);
         tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::time_based_evictions), 0u);
         tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::resource_based_evictions), 0u);
-        tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::memory_based_evictions), 0u);
 
         require_eventually_empty_caches(env.db());
 
@@ -308,7 +307,6 @@ SEASTAR_THREAD_TEST_CASE(test_evict_a_shard_reader_on_each_page) {
         tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::drops), 0u);
         tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::time_based_evictions), 0u);
         tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::resource_based_evictions), npages);
-        tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::memory_based_evictions), 0u);
 
         require_eventually_empty_caches(env.db());
 

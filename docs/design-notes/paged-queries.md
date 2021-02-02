@@ -259,15 +259,6 @@ queriers are evicted from the cache until enough permits are recovered
 to admit all new readers, or until the cache is empty. Queriers are
 evicted in LRU order.
 
-###### Memory based
-
-To avoid excessive memory usage the size of the querier cache is
-limited. To avoid crossing this limit, the cumulative size of all the
-cached queriers is calculated before inserting a new one. If, together
-with the to-be-added querier, the limit would be crossed, queriers
-are evicted such that the memory consumption stays below the limit.
-Queriers are evicted in LRU order.
-
 #### Diagnostics
 
 To observe the effectiveness of the caching, as well as aid in finding
@@ -290,10 +281,7 @@ any problems a number of counters are added:
 5. `querier_cache_resource_based_evictions` counts the cached entries
   that were evicted due to reader-resource (those limited by
   reader-concurrency limits) shortage.
-6. `querier_cache_memory_based_evictions` counts the cached entries
-  that were evicted due to reaching the cache's memory limits (currently
-  set to 4% of the shards' memory).
-7. `querier_cache_querier_population` is the current number of querier
+6. `querier_cache_querier_population` is the current number of querier
   entries in the cache.
 
 Note:

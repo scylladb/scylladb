@@ -154,15 +154,14 @@ public:
         dht::partition_range original_range;
         query::partition_slice original_slice;
         uint64_t row_limit;
-        size_t memory_usage;
 
         dht::partition_range expected_range;
         query::partition_slice expected_slice;
     };
 
-    test_querier_cache(const noncopyable_function<sstring(size_t)>& external_make_value, std::chrono::seconds entry_ttl = 24h, size_t cache_size = 100000)
+    test_querier_cache(const noncopyable_function<sstring(size_t)>& external_make_value, std::chrono::seconds entry_ttl = 24h)
         : _sem(reader_concurrency_semaphore::no_limits{})
-        , _cache(cache_size, entry_ttl)
+        , _cache(entry_ttl)
         , _mutations(make_mutations(_s, external_make_value))
         , _mutation_source([this] (schema_ptr, reader_permit permit, const dht::partition_range& range) {
             auto rd = flat_mutation_reader_from_mutations(std::move(permit), _mutations, range);
@@ -218,7 +217,6 @@ public:
                 gc_clock::now(), db::no_timeout, query::max_result_size(std::numeric_limits<uint64_t>::max())).get0();
         auto&& dk = dk_ck.first;
         auto&& ck = dk_ck.second;
-        const auto memory_usage = querier.memory_usage();
         _cache.insert(cache_key, std::move(querier), nullptr);
 
         // Either no keys at all (nothing read) or at least partition key.
@@ -254,7 +252,7 @@ public:
             return expected_slice;
         }();
 
-        return {key, std::move(range), std::move(slice), row_limit, memory_usage, std::move(expected_range), std::move(expected_slice)};
+        return {key, std::move(range), std::move(slice), row_limit, std::move(expected_range), std::move(expected_slice)};
     }
 
     entry_info produce_first_page_and_save_data_querier(unsigned key, const dht::partition_range& range,
@@ -353,28 +351,18 @@ public:
     test_querier_cache& no_evictions() {
         BOOST_REQUIRE_EQUAL(_cache.get_stats().time_based_evictions, _expected_stats.time_based_evictions);
         BOOST_REQUIRE_EQUAL(_cache.get_stats().resource_based_evictions, _expected_stats.resource_based_evictions);
-        BOOST_REQUIRE_EQUAL(_cache.get_stats().memory_based_evictions, _expected_stats.memory_based_evictions);
         return *this;
     }
 
     test_querier_cache& time_based_evictions() {
         BOOST_REQUIRE_EQUAL(_cache.get_stats().time_based_evictions, ++_expected_stats.time_based_evictions);
         BOOST_REQUIRE_EQUAL(_cache.get_stats().resource_based_evictions, _expected_stats.resource_based_evictions);
-        BOOST_REQUIRE_EQUAL(_cache.get_stats().memory_based_evictions, _expected_stats.memory_based_evictions);
         return *this;
     }
 
     test_querier_cache& resource_based_evictions() {
         BOOST_REQUIRE_EQUAL(_cache.get_stats().time_based_evictions, _expected_stats.time_based_evictions);
         BOOST_REQUIRE_EQUAL(_cache.get_stats().resource_based_evictions, ++_expected_stats.resource_based_evictions);
-        BOOST_REQUIRE_EQUAL(_cache.get_stats().memory_based_evictions, _expected_stats.memory_based_evictions);
-        return *this;
-    }
-
-    test_querier_cache& memory_based_evictions() {
-        BOOST_REQUIRE_EQUAL(_cache.get_stats().time_based_evictions, _expected_stats.time_based_evictions);
-        BOOST_REQUIRE_EQUAL(_cache.get_stats().resource_based_evictions, _expected_stats.resource_based_evictions);
-        BOOST_REQUIRE_EQUAL(_cache.get_stats().memory_based_evictions, ++_expected_stats.memory_based_evictions);
         return *this;
     }
 };
@@ -589,38 +577,6 @@ sstring make_string_blob(size_t size) {
     return s;
 }
 
-SEASTAR_THREAD_TEST_CASE(test_memory_based_cache_eviction) {
-    auto cache_size = memory::stats().total_memory() * 0.04;
-    test_querier_cache t([] (size_t) {
-        const size_t blob_size = 1 << 1; // 1K
-        return make_string_blob(blob_size);
-    }, 24h, cache_size);
-
-    size_t i = 0;
-    const auto entry = t.produce_first_page_and_save_data_querier(i++);
-
-    const size_t queriers_needed_to_fill_cache = floor(cache_size / entry.memory_usage);
-
-    // Fill the cache but don't overflow.
-    for (; i < queriers_needed_to_fill_cache; ++i) {
-        t.produce_first_page_and_save_data_querier(i);
-    }
-
-    const auto pop_before = t.get_semaphore().get_stats().inactive_reads;
-
-    // Should overflow the limit and trigger the eviction of the oldest entry.
-    t.produce_first_page_and_save_data_querier(queriers_needed_to_fill_cache);
-
-    t.assert_cache_lookup_data_querier(entry.key, *t.get_schema(), entry.expected_range, entry.expected_slice)
-        .misses()
-        .no_drops()
-        .memory_based_evictions();
-
-    // Since the last insert should have evicted an existing entry, we should
-    // have the same number of registered inactive reads.
-    BOOST_REQUIRE_EQUAL(t.get_semaphore().get_stats().inactive_reads, pop_before);
-}
-
 SEASTAR_THREAD_TEST_CASE(test_resources_based_cache_eviction) {
     auto db_cfg_ptr = make_shared<db::config>();
     auto& db_cfg = *db_cfg_ptr;
@@ -775,22 +731,17 @@ SEASTAR_THREAD_TEST_CASE(test_immediate_evict_on_insert) {
     fut.get();
 }
 
-namespace {
-
-class inactive_read : public reader_concurrency_semaphore::inactive_read {
-public:
-    virtual void evict() override {
-    }
-};
-
-}
-
 SEASTAR_THREAD_TEST_CASE(test_unique_inactive_read_handle) {
     reader_concurrency_semaphore sem1(reader_concurrency_semaphore::no_limits{}, "sem1");
     reader_concurrency_semaphore sem2(reader_concurrency_semaphore::no_limits{}, ""); // to see the message for an unnamed semaphore
 
-    auto sem1_h1 = sem1.register_inactive_read(std::make_unique<inactive_read>());
-    auto sem2_h1 = sem2.register_inactive_read(std::make_unique<inactive_read>());
+    auto schema = schema_builder("ks", "cf")
+        .with_column("pk", int32_type, column_kind::partition_key)
+        .with_column("v", int32_type)
+        .build();
+
+    auto sem1_h1 = sem1.register_inactive_read(make_empty_flat_reader(schema, sem1.make_permit(schema.get(), get_name())));
+    auto sem2_h1 = sem2.register_inactive_read(make_empty_flat_reader(schema, sem2.make_permit(schema.get(), get_name())));
 
     // Sanity check that lookup still works with empty handle.
     BOOST_REQUIRE(!sem1.unregister_inactive_read(reader_concurrency_semaphore::inactive_read_handle{}));

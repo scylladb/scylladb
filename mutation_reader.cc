@@ -1000,24 +1000,6 @@ flat_mutation_reader make_foreign_reader(schema_ptr schema,
     return make_flat_mutation_reader<foreign_reader>(std::move(schema), std::move(permit), std::move(reader), fwd_sm);
 }
 
-namespace {
-
-class inactive_evictable_reader : public reader_concurrency_semaphore::inactive_read {
-    flat_mutation_reader_opt _reader;
-public:
-    inactive_evictable_reader(flat_mutation_reader reader)
-        : _reader(std::move(reader)) {
-    }
-    flat_mutation_reader reader() && {
-        return std::move(*_reader);
-    }
-    virtual void evict() override {
-        _reader = {};
-    }
-};
-
-}
-
 // Encapsulates all data and logic that is local to the remote shard the
 // reader lives on.
 class evictable_reader : public flat_mutation_reader::impl {
@@ -1100,7 +1082,7 @@ public:
 
 void evictable_reader::do_pause(flat_mutation_reader reader) {
     assert(!_irh);
-    _irh = _permit.semaphore().register_inactive_read(std::make_unique<inactive_evictable_reader>(std::move(reader)));
+    _irh = _permit.semaphore().register_inactive_read(std::move(reader));
 }
 
 void evictable_reader::maybe_pause(flat_mutation_reader reader) {
@@ -1116,8 +1098,7 @@ flat_mutation_reader_opt evictable_reader::try_resume() {
     if (!ir_ptr) {
         return {};
     }
-    auto& ir = static_cast<inactive_evictable_reader&>(*ir_ptr);
-    return std::move(ir).reader();
+    return std::move(*ir_ptr);
 }
 
 void evictable_reader::update_next_position(flat_mutation_reader& reader) {
@@ -1946,7 +1927,7 @@ future<> multishard_combining_reader::fast_forward_to(position_range pr, db::tim
 
 reader_concurrency_semaphore::inactive_read_handle
 reader_lifecycle_policy::pause(reader_concurrency_semaphore& sem, flat_mutation_reader reader) {
-    return sem.register_inactive_read(std::make_unique<inactive_evictable_reader>(std::move(reader)));
+    return sem.register_inactive_read(std::move(reader));
 }
 
 flat_mutation_reader_opt
@@ -1955,8 +1936,7 @@ reader_lifecycle_policy::try_resume(reader_concurrency_semaphore& sem, reader_co
     if (!ir_ptr) {
         return {};
     }
-    auto& ir = static_cast<inactive_evictable_reader&>(*ir_ptr);
-    return std::move(ir).reader();
+    return std::move(*ir_ptr);
 }
 
 reader_concurrency_semaphore::inactive_read_handle
