@@ -208,8 +208,9 @@ future<> service::client_state::has_access(const sstring& ks, auth::command_desc
 
             if (cdc_topology_description_forbidden_permissions.contains(cmd.permission)) {
                 if (ks == db::system_distributed_keyspace::NAME
-                        && (resource_view.table() == db::system_distributed_keyspace::CDC_DESC
-                        || resource_view.table() == db::system_distributed_keyspace::CDC_TOPOLOGY_DESCRIPTION)) {
+                        && (resource_view.table() == db::system_distributed_keyspace::CDC_DESC_V2
+                        || resource_view.table() == db::system_distributed_keyspace::CDC_TOPOLOGY_DESCRIPTION
+                        || resource_view.table() == db::system_distributed_keyspace::CDC_TIMESTAMPS)) {
                     throw exceptions::unauthorized_exception(
                             format("Cannot {} {}", auth::permissions::to_string(cmd.permission), cmd.resource));
                 }

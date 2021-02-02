@@ -382,7 +382,7 @@ static void do_update_streams_description(
         db::system_distributed_keyspace& sys_dist_ks,
         db::system_distributed_keyspace::context ctx) {
     if (sys_dist_ks.cdc_desc_exists(streams_ts, ctx).get0()) {
-        cdc_log.debug("update_streams_description: description of generation {} already inserted", streams_ts);
+        cdc_log.info("Generation {}: streams description table already updated.", streams_ts);
         return;
     }
 
@@ -393,14 +393,7 @@ static void do_update_streams_description(
         throw std::runtime_error(format("could not find streams data for timestamp {}", streams_ts));
     }
 
-    std::set<cdc::stream_id> streams_set;
-    for (auto& entry: topo->entries()) {
-        streams_set.insert(entry.streams.begin(), entry.streams.end());
-    }
-
-    std::vector<cdc::stream_id> streams_vec(streams_set.begin(), streams_set.end());
-
-    sys_dist_ks.create_cdc_desc(streams_ts, streams_vec, ctx).get();
+    sys_dist_ks.create_cdc_desc(streams_ts, *topo, ctx).get();
     cdc_log.info("CDC description table successfully updated with generation {}.", streams_ts);
 }
 

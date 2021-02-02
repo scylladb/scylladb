@@ -55,8 +55,11 @@ public:
     /* Nodes use this table to communicate new CDC stream generations to other nodes. */
     static constexpr auto CDC_TOPOLOGY_DESCRIPTION = "cdc_generation_descriptions";
 
-    /* This table is used by CDC clients to learn about avaliable CDC streams. */
-    static constexpr auto CDC_DESC = "cdc_streams_descriptions";
+    /* This table is used by CDC clients to learn about available CDC streams. */
+    static constexpr auto CDC_DESC_V2 = "cdc_streams_descriptions_v2";
+
+    /* Used by CDC clients to learn CDC generation timestamps. */
+    static constexpr auto CDC_TIMESTAMPS = "cdc_generation_timestamps";
 
     /* Information required to modify/query some system_distributed tables, passed from the caller. */
     struct context {
@@ -69,6 +72,7 @@ private:
     service::storage_proxy& _sp;
 
     bool _started = false;
+    bool _forced_cdc_timestamps_schema_sync = false;
 
 public:
     /* Should writes to the given table always be synchronized by commitlog (flushed to disk)
@@ -91,11 +95,11 @@ public:
     future<std::optional<cdc::topology_description>> read_cdc_topology_description(db_clock::time_point streams_ts, context);
     future<> expire_cdc_topology_description(db_clock::time_point streams_ts, db_clock::time_point expiration_time, context);
 
-    future<> create_cdc_desc(db_clock::time_point streams_ts, const std::vector<cdc::stream_id>&, context);
+    future<> create_cdc_desc(db_clock::time_point streams_ts, const cdc::topology_description&, context);
     future<> expire_cdc_desc(db_clock::time_point streams_ts, db_clock::time_point expiration_time, context);
     future<bool> cdc_desc_exists(db_clock::time_point streams_ts, context);
 
-    future<std::map<db_clock::time_point, cdc::streams_version>> cdc_get_versioned_streams(context);
+    future<std::map<db_clock::time_point, cdc::streams_version>> cdc_get_versioned_streams(db_clock::time_point not_older_than, context);
 };
 
 }
