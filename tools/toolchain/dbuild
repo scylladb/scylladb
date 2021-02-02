@@ -157,7 +157,10 @@ else
     # detection code from
     #   https://unix.stackexchange.com/questions/617764/how-do-i-check-if-system-is-using-cgroupv1
     if grep -q 'cgroup2.*/sys/fs/cgroup' /proc/mounts; then
-        docker_common_args+=(--pids-limit -1)
+        docker_common_args+=(
+            --pids-limit -1
+            --annotation run.oci.keep_original_groups=1
+        )
     fi
     # if --pids-limit is not supported, add
     #    [containers]
