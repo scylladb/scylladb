@@ -258,7 +258,7 @@ modes = {
         'cxxflags': '-DDEBUG -DSANITIZE -DDEBUG_LSA_SANITIZER -DSCYLLA_ENABLE_ERROR_INJECTION',
         'cxx_ld_flags': '',
         'stack-usage-threshold': 1024*40,
-        'optimization-level': '0',
+        'optimization-level': 'g',
     },
     'release': {
         'cxxflags': '-ffunction-sections -fdata-sections ',
