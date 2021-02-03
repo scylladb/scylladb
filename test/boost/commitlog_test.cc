@@ -579,11 +579,14 @@ SEASTAR_TEST_CASE(test_allocation_failure){
 
             // Use us loads of memory so we can OOM at the appropriate place
             try {
+                assert(fragmented_temporary_buffer::default_fragment_size < size);
                 for (;;) {
-                    junk->emplace_back(new char[size]);
+                    junk->emplace_back(new char[fragmented_temporary_buffer::default_fragment_size]);
                 }
             } catch (std::bad_alloc&) {
             }
+            auto last = junk->end();
+            junk->erase(--last);
             return log.add_mutation(utils::UUID_gen::get_time_UUID(), size, db::commitlog::force_sync::no, [size](db::commitlog::output& dst) {
                         dst.fill(char(1), size);
                     }).then_wrapped([junk, size](future<db::rp_handle> f) {
