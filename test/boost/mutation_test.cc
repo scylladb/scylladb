@@ -32,6 +32,7 @@
 #include <seastar/core/do_with.hh>
 #include <seastar/core/thread.hh>
 #include <seastar/util/alloc_failure_injector.hh>
+#include <seastar/util/closeable.hh>
 
 #include "database.hh"
 #include "utils/UUID_gen.hh"
@@ -2951,6 +2952,7 @@ void run_compaction_data_stream_split_test(const schema& schema, gc_clock::time_
     testlog.info("Original data: {}", create_stats(expected_mutations_summary));
 
     auto reader = flat_mutation_reader_from_mutations(tests::make_permit(), std::move(mutations));
+    auto close_reader = deferred_close(reader);
     auto get_max_purgeable = [] (const dht::decorated_key&) {
         return api::max_timestamp;
     };

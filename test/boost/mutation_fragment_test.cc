@@ -113,6 +113,7 @@ SEASTAR_TEST_CASE(test_mutation_merger_conforms_to_mutation_source) {
                     muts.push_back(mutation(m.schema(), m.decorated_key()));
                 }
                 auto rd = flat_mutation_reader_from_mutations(tests::make_permit(), {m});
+                auto close_rd = deferred_close(rd);
                 rd.consume(fragment_scatterer{muts}, db::no_timeout).get();
                 for (int i = 0; i < n; ++i) {
                     memtables[i]->apply(std::move(muts[i]));

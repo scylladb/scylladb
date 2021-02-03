@@ -25,6 +25,7 @@
 #include "test/lib/test_services.hh"
 #include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
+#include <seastar/util/closeable.hh>
 
 #include "frozen_mutation.hh"
 #include "schema_builder.hh"
@@ -108,6 +109,7 @@ SEASTAR_THREAD_TEST_CASE(test_frozen_mutation_fragment) {
         auto& s = *m.schema();
         std::vector<mutation_fragment> mfs;
         auto rd = flat_mutation_reader_from_mutations(tests::make_permit(), { m });
+        auto close_rd = deferred_close(rd);
         rd.consume_pausable([&] (mutation_fragment mf) {
             mfs.emplace_back(std::move(mf));
             return stop_iteration::no;
