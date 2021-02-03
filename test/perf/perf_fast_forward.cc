@@ -52,7 +52,7 @@ static bool errors_found = false;
 cql_test_env* cql_env;
 
 static void print_error(const sstring& msg) {
-    std::cerr << "^^^ ERROR: " << msg << "\n";
+    std::cout << "^^^ ERROR: " << msg << "\n";
     errors_found = true;
 }
 
