@@ -3228,6 +3228,9 @@ SEASTAR_THREAD_TEST_CASE(test_manual_paused_evictable_reader_is_mutation_source)
         virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) override {
             throw_with_backtrace<std::bad_function_call>();
         }
+        virtual future<> close() noexcept override {
+            return _reader.close();
+        }
     };
 
     auto make_populate = [] (schema_ptr s, const std::vector<mutation>& mutations, gc_clock::time_point query_time) {

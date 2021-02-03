@@ -29,6 +29,8 @@
 
 #include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
+#include <seastar/util/closeable.hh>
+
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/sstable_utils.hh"
@@ -848,7 +850,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering) {
                     mutation_reader::forwarding fwd_mr) {
             return make_restricted_flat_reader(mt->as_data_source(), s, std::move(permit), pr, ps, pc, std::move(ts), fwd_ms, fwd_mr);
         });
-        auto [staging_reader, staging_reader_handle] = make_manually_paused_evictable_reader(
+        auto p = make_manually_paused_evictable_reader(
                 std::move(ms),
                 schema,
                 permit,
@@ -857,6 +859,9 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering) {
                 service::get_local_streaming_priority(),
                 nullptr,
                 ::mutation_reader::forwarding::no);
+        auto& staging_reader = std::get<0>(p);
+        auto& staging_reader_handle = std::get<1>(p);
+        auto close_staging_reader = deferred_close(staging_reader);
 
         std::vector<mutation> collected_muts;
         bool ok = true;

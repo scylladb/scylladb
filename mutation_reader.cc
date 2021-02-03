@@ -1126,6 +1126,15 @@ public:
     virtual future<> fast_forward_to(position_range, db::timeout_clock::time_point timeout) override {
         throw_with_backtrace<std::bad_function_call>();
     }
+    virtual future<> close() noexcept override {
+        if (_reader) {
+            return _reader->close();
+        }
+        if (auto reader_opt = try_resume()) {
+            return reader_opt->close();
+        }
+        return make_ready_future<>();
+    }
     reader_concurrency_semaphore::inactive_read_handle inactive_read_handle() && {
         return std::move(_irh);
     }
