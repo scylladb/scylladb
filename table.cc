@@ -19,6 +19,10 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <seastar/core/seastar.hh>
+#include <seastar/core/coroutine.hh>
+#include <seastar/util/closeable.hh>
+
 #include "database.hh"
 #include "sstables/sstables.hh"
 #include "sstables/sstables_manager.hh"
@@ -36,8 +40,6 @@
 #include "db/query_context.hh"
 #include "query-result-writer.hh"
 #include "db/view/view.hh"
-#include <seastar/core/seastar.hh>
-#include <seastar/core/coroutine.hh>
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/adaptor/map.hpp>
 #include "utils/error_injection.hh"
@@ -134,7 +136,7 @@ void table::refresh_compound_sstable_set() {
 future<table::const_mutation_partition_ptr>
 table::find_partition(schema_ptr s, reader_permit permit, const dht::decorated_key& key) const {
     return do_with(dht::partition_range::make_singular(key), [s = std::move(s), permit = std::move(permit), this] (auto& range) mutable {
-        return do_with(this->make_reader(std::move(s), std::move(permit), range), [] (flat_mutation_reader& reader) {
+        return with_closeable(this->make_reader(std::move(s), std::move(permit), range), [] (flat_mutation_reader& reader) {
             return read_mutation_from_flat_mutation_reader(reader, db::no_timeout).then([] (mutation_opt&& mo) -> std::unique_ptr<const mutation_partition> {
                 if (!mo) {
                     return {};

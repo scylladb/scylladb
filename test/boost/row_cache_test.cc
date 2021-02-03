@@ -25,6 +25,7 @@
 #include <seastar/util/backtrace.hh>
 #include <seastar/util/alloc_failure_injector.hh>
 #include <boost/algorithm/cxx11/any_of.hpp>
+#include <seastar/util/closeable.hh>
 
 #include <seastar/testing/test_case.hh>
 #include "test/lib/mutation_assertions.hh"
@@ -127,6 +128,7 @@ snapshot_source snapshot_source_from_snapshot(mutation_source src) {
 bool has_key(row_cache& cache, const dht::decorated_key& key) {
     auto range = dht::partition_range::make_singular(key);
     auto reader = cache.make_reader(cache.schema(), tests::make_permit(), range);
+    auto close_reader = deferred_close(reader);
     auto mo = read_mutation_from_flat_mutation_reader(reader, db::no_timeout).get0();
     if (!bool(mo)) {
         return false;
@@ -1184,6 +1186,7 @@ SEASTAR_TEST_CASE(test_update_failure) {
 
         auto has_only = [&] (const partitions_type& partitions) {
             auto reader = cache.make_reader(s, tests::make_permit(), query::full_partition_range);
+            auto close_reader = deferred_close(reader);
             for (int i = 0; i < partition_count; i++) {
                 auto mopt = read_mutation_from_flat_mutation_reader(reader, db::no_timeout).get0();
                 if (!mopt) {
@@ -1585,6 +1588,7 @@ SEASTAR_TEST_CASE(test_mvcc) {
             auto m12 = m1 + m2;
 
             flat_mutation_reader_opt mt1_reader_opt;
+            auto close_mt1_reader = defer([&mt1_reader_opt] { mt1_reader_opt->close().get(); });
             if (with_active_memtable_reader) {
                 mt1_reader_opt = mt1->make_flat_reader(s, tests::make_permit());
                 mt1_reader_opt->set_max_buffer_size(1);
@@ -2382,6 +2386,7 @@ SEASTAR_TEST_CASE(test_exception_safety_of_reads) {
 
             memory::with_allocation_failures([&] {
                 auto rd = cache.make_reader(s, tests::make_permit(), query::full_partition_range, slice);
+                auto close_rd = deferred_close(rd);
                 auto got_opt = read_mutation_from_flat_mutation_reader(rd, db::no_timeout).get0();
                 BOOST_REQUIRE(got_opt);
                 BOOST_REQUIRE(!read_mutation_from_flat_mutation_reader(rd, db::no_timeout).get0());
@@ -2448,6 +2453,7 @@ SEASTAR_TEST_CASE(test_exception_safety_of_transitioning_from_underlying_read_to
             }
 
             auto rd = cache.make_reader(s.schema(), tests::make_permit(), pr, slice);
+            auto close_rd = deferred_close(rd);
             auto got_opt = read_mutation_from_flat_mutation_reader(rd, db::no_timeout).get0();
             BOOST_REQUIRE(got_opt);
             auto mfopt = rd(db::no_timeout).get0();
@@ -3150,6 +3156,7 @@ SEASTAR_TEST_CASE(test_concurrent_reads_and_eviction) {
                         .build();
 
                     auto rd = make_reader(slice);
+                    auto close_rd = deferred_close(rd);
                     auto actual_opt = read_mutation_from_flat_mutation_reader(rd, db::no_timeout).get0();
                     BOOST_REQUIRE(actual_opt);
                     auto actual = *actual_opt;

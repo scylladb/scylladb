@@ -2779,6 +2779,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_non_strictly_monotonic
 
         auto fragments = make_fragments_with_non_monotonic_positions(s, s.make_pkey(pk), max_buffer_size, tombstone_deletion_time);
         auto rd = make_flat_mutation_reader_from_fragments(s.schema(), tests::make_permit(), std::move(fragments));
+        auto close_rd = deferred_close(rd);
         auto mut_opt = read_mutation_from_flat_mutation_reader(rd, db::no_timeout).get0();
         BOOST_REQUIRE(mut_opt);
 
@@ -2837,6 +2838,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_streaming_reader) {
             }
             return std::nullopt;
         });
+        auto close_tested_reader = deferred_close(tested_reader);
 
         auto reader_factory = [db = &env.db()] (
                 schema_ptr s,
@@ -2855,6 +2857,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_streaming_reader) {
                 [&remote_partitioner] (const dht::decorated_key& pkey) {
                     return remote_partitioner.shard_of(pkey.token()) == 0;
                 });
+        auto close_reference_reader = deferred_close(reference_reader);
 
         std::vector<mutation> reference_muts;
         while (auto mut_opt = read_mutation_from_flat_mutation_reader(reference_reader, db::no_timeout).get0()) {
@@ -2887,6 +2890,7 @@ SEASTAR_THREAD_TEST_CASE(test_queue_reader) {
     {
         auto read_all = [] (flat_mutation_reader& reader, std::vector<mutation>& muts) {
             return async([&reader, &muts] {
+                auto close_reader = deferred_close(reader);
                 while (auto mut_opt = read_mutation_from_flat_mutation_reader(reader, db::no_timeout).get0()) {
                     muts.emplace_back(std::move(*mut_opt));
                 }

@@ -125,6 +125,7 @@ SEASTAR_TEST_CASE(test_multishard_writer_producer_aborts) {
             auto muts = gen(partition_nr);
             schema_ptr s = gen.schema();
             auto source_reader = partition_nr > 0 ? flat_mutation_reader_from_mutations(tests::make_permit(), muts) : make_empty_flat_reader(s, tests::make_permit());
+            auto close_source_reader = deferred_close(source_reader);
             int mf_produced = 0;
             auto get_next_mutation_fragment = [&source_reader, &mf_produced] () mutable {
                 if (mf_produced++ > 800) {
@@ -349,6 +350,7 @@ SEASTAR_THREAD_TEST_CASE(test_timestamp_based_splitting_mutation_writer) {
             boost::adaptors::transformed([] (std::vector<mutation> muts) { return flat_mutation_reader_from_mutations(tests::make_permit(), std::move(muts)); }));
     auto reader = make_combined_reader(random_schema.schema(), tests::make_permit(), std::move(bucket_readers), streamed_mutation::forwarding::no,
             mutation_reader::forwarding::no);
+    auto close_reader = deferred_close(reader);
 
     const auto now = gc_clock::now();
     for (auto& m : muts) {
