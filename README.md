@@ -42,7 +42,7 @@ For further information, please see:
 * [Docker image build documentation] for information on how to build Docker images.
 
 [developer documentation]: HACKING.md
-[build documentation]: docs/building.md
+[build documentation]: docs/guides/building.md
 [docker image build documentation]: dist/docker/redhat/README.md
 
 ## Running Scylla
