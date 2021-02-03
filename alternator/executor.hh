@@ -70,6 +70,35 @@ public:
     std::string to_json() const override;
 };
 
+namespace parsed {
+class path;
+};
+
+// A hierarchy_filter is used to specify only a part of the hierarchy that we
+// wish to extract from a JSON object. For example when a ProjectionExpression
+// requires that we only return certain pieces of a top-level attribute.
+struct hierarchy_filter {
+    // Either "members" or "indexes" may be non-empty, but not both. This is
+    // because DynamoDB does not allow both a.b and a[1] to be requested at
+    // the same time. Those are considered to be "conflicting" document paths.
+    // We could allow both, if we wanted to diverge from DynamoDB.
+    // We need the extra unique_ptr<> here because libstdc++ unordered_map
+    // doesn't work with incomplete types :-(
+    std::unordered_map<std::string, std::unique_ptr<hierarchy_filter>> members;
+    std::unordered_map<unsigned, std::unique_ptr<hierarchy_filter>> indexes;
+    // Add a path to the filter. Throws a validation error if the path
+    // "overlaps" with one already in the filter (one is a sub-path
+    // of the other) or "conflicts" with it (both a member and index is
+    // requested).
+    void add(const parsed::path& p);
+};
+
+// We use lw_shared_ptr<hierarchy_filter>  allows us to efficiently represent
+// with a nullptr the common case where there is no hierarchy filter, i.e.,
+// a top-level attribute is requested. We use lw_shared_ptr and not unique_ptr
+// to allow copying attrs_to_get.
+using attrs_to_get = std::unordered_map<std::string, lw_shared_ptr<hierarchy_filter>>;
+
 class executor : public peering_sharded_service<executor> {
     service::storage_proxy& _proxy;
     service::migration_manager& _mm;
@@ -140,15 +169,13 @@ public:
         const query::partition_slice&,
         const cql3::selection::selection&,
         const query::result&,
-        const std::unordered_set<std::string>&);
+        const attrs_to_get&);
 
     static void describe_single_item(const cql3::selection::selection&,
         const std::vector<bytes_opt>&,
-        const std::unordered_set<std::string>&,
+        const attrs_to_get&,
         rjson::value&,
         bool = false);
-
-
 
     void add_stream_options(const rjson::value& stream_spec, schema_builder&) const;
     void supplement_table_info(rjson::value& descr, const schema& schema) const;

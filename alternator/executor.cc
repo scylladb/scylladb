@@ -1882,18 +1882,85 @@ static std::string get_item_type_string(const rjson::value& v) {
     return it->name.GetString();
 }
 
+void hierarchy_filter::add(const parsed::path& p) {
+    hierarchy_filter* h = this;
+    // new_level is false if the previous iteration of the loop below found
+    // its level in the hierarchy already existed, and true means that we
+    // just created this level now. We start with true because we assume
+    // the caller (calculate_attrs_to_get()) takes cares of not allowing
+    // the same top-level attribute twice.
+    bool new_level = true;
+    for (const auto& op : p.operators()) {
+        std::visit(overloaded_functor {
+            [&] (const std::string& member) {
+                if (!h->indexes.empty()) {
+                    throw api_error::validation(
+                        // TODO: print the conflicting paths
+                        "Invalid ProjectionExpression: two document paths conflict with each other");
+                }
+                // If a.b itself (not its children) was already in the filter
+                // and now we add a.b.c, this is an overlap - and considered
+                // an error.
+                if (!new_level && h->members.empty()) {
+                    throw api_error::validation(
+                        // TODO: print the overlapping paths
+                        "Invalid ProjectionExpression: two document paths overlap with each other");
+                }
+                auto it = h->members.find(member);
+                if (it == h->members.end()) {
+                    it = h->members.insert({member, std::make_unique<hierarchy_filter>()}).first;
+                    new_level = true;
+                } else {
+                    new_level = false;
+                }
+                h = it->second.get();
+            },
+            [&] (unsigned index) {
+                if (!h->members.empty()) {
+                    throw api_error::validation(
+                        // TODO: print the conflicting paths
+                        "Invalid ProjectionExpression: two document paths conflict with each other");
+                }
+                if (!new_level && h->indexes.empty()) {
+                    throw api_error::validation(
+                        // TODO: print the overlapping paths
+                        "Invalid ProjectionExpression: two document paths overlap with each other");
+                }
+                auto it = h->indexes.find(index);
+                if (it == h->indexes.end()) {
+                    it = h->indexes.insert({index, std::make_unique<hierarchy_filter>()}).first;
+                    new_level = true;
+                } else {
+                    new_level = false;
+                }
+                h = it->second.get();
+            }
+        }, op);
+    }
+    // If a.b.c was already in the filter, and now we tried to add
+    // a.b, this is considered an overlap - and an error. We can
+    // recognize this when new_level ends as false: It means the leaf
+    // of the path was not a new node.
+    if (!new_level) {
+        throw api_error::validation(
+        // TODO: print the overlapping paths
+            "Invalid ProjectionExpression: two document paths overlap with each other");
+    }
+}
+
 // calculate_attrs_to_get() takes either AttributesToGet or
 // ProjectionExpression parameters (having both is *not* allowed),
 // and returns the list of cells we need to read, or an empty set when
 // *all* attributes are to be returned.
-// In our current implementation, only top-level attributes are stored
-// as cells, and nested documents are stored serialized as JSON.
-// So this function currently returns only the the top-level attributes
-// but we also need to add, after the query, filtering to keep only
-// the parts of the JSON attributes that were chosen in the paths'
-// operators. Because we don't have such filtering yet (FIXME), we fail here
-// if the requested paths are anything but top-level attributes.
-std::unordered_set<std::string> calculate_attrs_to_get(const rjson::value& req, std::unordered_set<std::string>& used_attribute_names) {
+// However, in our current implementation, only top-level attributes are
+// stored as separate cells - a nested document is stored serialized together
+// (as JSON) in the same cell. So this function return a map - each key is the
+// top-level attribute we will need need to read, and the value for each
+// top-level attribute is the partial hierarchy (struct hierarchy_filter)
+// that we will need to extract from that serialized JSON.
+// For example, if ProjectionExpression lists a.b and a.c[2], we
+// return one top-level attribute name, "a", with the value "{b, c[2]}".
+static attrs_to_get calculate_attrs_to_get(const rjson::value& req, std::unordered_set<std::string>& used_attribute_names) {
     const bool has_attributes_to_get = req.HasMember("AttributesToGet");
     const bool has_projection_expression = req.HasMember("ProjectionExpression");
     if (has_attributes_to_get && has_projection_expression) {
@@ -1902,9 +1969,13 @@ std::unordered_set<std::string> calculate_attrs_to_get(const rjson::value& req, 
     }
     if (has_attributes_to_get) {
         const rjson::value& attributes_to_get = req["AttributesToGet"];
-        std::unordered_set<std::string> ret;
+        attrs_to_get ret;
         for (auto it = attributes_to_get.Begin(); it != attributes_to_get.End(); ++it) {
-            ret.insert(it->GetString());
+            if (ret.contains(it->GetString())) {
+                throw api_error::validation(format(
+                    "Invalid AttributesToGet: Duplicate attribute: {}", it->GetString()));
+            }
+            ret.emplace(it->GetString(), nullptr);
         }
         return ret;
     } else if (has_projection_expression) {
@@ -1917,24 +1988,35 @@ std::unordered_set<std::string> calculate_attrs_to_get(const rjson::value& req, 
             throw api_error::validation(e.what());
         }
         resolve_projection_expression(paths_to_get, expression_attribute_names, used_attribute_names);
-        std::unordered_set<std::string> seen_column_names;
-        auto ret = boost::copy_range<std::unordered_set<std::string>>(paths_to_get |
-            boost::adaptors::transformed([&] (const parsed::path& p) {
-                if (p.has_operators()) {
-                    // FIXME: this check will need to change when we support non-toplevel attributes
-                    throw api_error::validation("Non-toplevel attributes in ProjectionExpression not yet implemented");
+        attrs_to_get ret;
+        for (const parsed::path& p : paths_to_get) {
+            auto it = ret.find(p.root());
+            if (it == ret.end()) {
+                // As an optimization, if p is top-level, don't bother to
+                // add a hierarchy.
+                it = ret.emplace(p.root(), p.has_operators() ? make_lw_shared<hierarchy_filter>() : nullptr).first;
+            } else if(!p.has_operators()) {
+                // If p is top-level and we already have it or a part of it
+                // in ret, it's a forbidden overlapping path.
+                throw api_error::validation(format(
+                    "Invalid ProjectionExpression: two document paths overlap with each other: {}",
+                    p.root()));
+            }
+            if (p.has_operators()) {
+                if (!it->second) {
+                    // This (a nullptr value) can only mean that a previous
+                    // path was !has_operators (a top-level attribute) and now
+                    // we found the same one again.
+                    throw api_error::validation(format(
+                        "Invalid ProjectionExpression: two document paths overlap with each other: {}",
+                        p.root()));
                 }
-                if (!seen_column_names.insert(p.root()).second) {
-                    // FIXME: this check will need to change when we support non-toplevel attributes
-                    throw api_error::validation(
-                            format("Invalid ProjectionExpression: two document paths overlap with each other: {} and {}.",
-                                    p.root(), p.root()));
-                }
-                return p.root();
-            }));
+                it->second->add(p);
+            }
+        }
         return ret;
     }
-    // An empty set asks to read everything
+    // An empty map asks to read everything
     return {};
 }
 
@@ -1955,7 +2037,7 @@ std::unordered_set<std::string> calculate_attrs_to_get(const rjson::value& req, 
  */ 
 void executor::describe_single_item(const cql3::selection::selection& selection,
     const std::vector<bytes_opt>& result_row,
-    const std::unordered_set<std::string>& attrs_to_get,
+    const attrs_to_get& attrs_to_get,
     rjson::value& item,
     bool include_all_embedded_attributes) 
 {
@@ -1988,7 +2070,7 @@ std::optional<rjson::value> executor::describe_single_item(schema_ptr schema,
         const query::partition_slice& slice,
         const cql3::selection::selection& selection,
         const query::result& query_result,
-        const std::unordered_set<std::string>& attrs_to_get) {
+        const attrs_to_get& attrs_to_get) {
     rjson::value item = rjson::empty_object();
 
     cql3::selection::result_set_builder builder(selection, gc_clock::now(), cql_serialization_format::latest());
@@ -2408,7 +2490,7 @@ static rjson::value describe_item(schema_ptr schema,
         const query::partition_slice& slice,
         const cql3::selection::selection& selection,
         const query::result& query_result,
-        const std::unordered_set<std::string>& attrs_to_get) {
+        const attrs_to_get& attrs_to_get) {
     std::optional<rjson::value> opt_item = executor::describe_single_item(std::move(schema), slice, selection, std::move(query_result), attrs_to_get);
     if (!opt_item) {
         // If there is no matching item, we're supposed to return an empty
@@ -2480,7 +2562,7 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
     struct table_requests {
         schema_ptr schema;
         db::consistency_level cl;
-        std::unordered_set<std::string> attrs_to_get;
+        attrs_to_get attrs_to_get;
         struct single_request {
             partition_key pk;
             clustering_key ck;
@@ -2694,7 +2776,7 @@ void filter::for_filters_on(const noncopyable_function<void(std::string_view)>& 
 class describe_items_visitor {
     typedef std::vector<const column_definition*> columns_t;
     const columns_t& _columns;
-    const std::unordered_set<std::string>& _attrs_to_get;
+    const attrs_to_get& _attrs_to_get;
     std::unordered_set<std::string> _extra_filter_attrs;
     const filter& _filter;
     typename columns_t::const_iterator _column_it;
@@ -2703,7 +2785,7 @@ class describe_items_visitor {
     size_t _scanned_count;
 
 public:
-    describe_items_visitor(const columns_t& columns, const std::unordered_set<std::string>& attrs_to_get, filter& filter)
+    describe_items_visitor(const columns_t& columns, const attrs_to_get& attrs_to_get, filter& filter)
             : _columns(columns)
             , _attrs_to_get(attrs_to_get)
             , _filter(filter)
@@ -2782,7 +2864,7 @@ public:
     }
 };
 
-static rjson::value describe_items(schema_ptr schema, const query::partition_slice& slice, const cql3::selection::selection& selection, std::unique_ptr<cql3::result_set> result_set, std::unordered_set<std::string>&& attrs_to_get, filter&& filter) {
+static rjson::value describe_items(schema_ptr schema, const query::partition_slice& slice, const cql3::selection::selection& selection, std::unique_ptr<cql3::result_set> result_set, attrs_to_get&& attrs_to_get, filter&& filter) {
     describe_items_visitor visitor(selection.get_columns(), attrs_to_get, filter);
     result_set->visit(visitor);
     auto scanned_count = visitor.get_scanned_count();
@@ -2823,7 +2905,7 @@ static future<executor::request_return_type> do_query(service::storage_proxy& pr
         const rjson::value* exclusive_start_key,
         dht::partition_range_vector&& partition_ranges,
         std::vector<query::clustering_range>&& ck_bounds,
-        std::unordered_set<std::string>&& attrs_to_get,
+        attrs_to_get&& attrs_to_get,
         uint32_t limit,
         db::consistency_level cl,
         filter&& filter,

@@ -202,7 +202,6 @@ def test_projection_expression_path_dot(test_table_s):
 # ProjectionExpression. This includes both identical paths, and paths where
 # one is a sub-path of the other - e.g. "a.b" and "a.b.c". As we already saw
 # above, paths with just a common *prefix* - e.g., "a.b, a.c" - are fine.
-@pytest.mark.xfail(reason="ProjectionExpression does not yet support attribute paths")
 def test_projection_expression_path_overlap(test_table_s):
     # The overlap is tested symbolically, on the given paths, without any
     # relation to what the item contains, or whether it even exists. So we
@@ -245,7 +244,6 @@ def test_projection_expression_path_overlap(test_table_s):
 #   [a, [1]]".
 # The reasoning is that asking for both in one request makes no sense because
 # no item will ever be able to fulfill both.
-@pytest.mark.xfail(reason="ProjectionExpression does not yet support attribute paths")
 def test_projection_expression_path_conflict(test_table_s):
     # The conflict is tested symbolically, on the given paths, without any
     # relation to what the item contains, or whether it even exists. So we

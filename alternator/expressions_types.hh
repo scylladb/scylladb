@@ -65,6 +65,9 @@ public:
     bool has_operators() const {
         return !_operators.empty();
     }
+    const std::vector<std::variant<std::string, unsigned>>& operators() const {
+        return _operators;
+    }
 };
 
 // When an expression is first parsed, all constants are references, like

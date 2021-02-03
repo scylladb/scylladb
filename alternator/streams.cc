@@ -855,16 +855,18 @@ future<executor::request_return_type> executor::get_records(client_state& client
     static const bytes op_column_name = cdc::log_meta_column_name_bytes("operation");
     static const bytes eor_column_name = cdc::log_meta_column_name_bytes("end_of_batch");
 
-    auto key_names = boost::copy_range<std::unordered_set<std::string>>(
+    auto key_names = boost::copy_range<attrs_to_get>(
         boost::range::join(std::move(base->partition_key_columns()), std::move(base->clustering_key_columns()))
-        | boost::adaptors::transformed([&] (const column_definition& cdef) { return cdef.name_as_text(); })
+        | boost::adaptors::transformed([&] (const column_definition& cdef) {
+            return std::make_pair<std::string, lw_shared_ptr<hierarchy_filter>>(cdef.name_as_text(), nullptr); })
     );
     // Include all base table columns as values (in case pre or post is enabled).
     // This will include attributes not stored in the frozen map column
-    auto attr_names = boost::copy_range<std::unordered_set<std::string>>(base->regular_columns()
+    auto attr_names = boost::copy_range<attrs_to_get>(base->regular_columns()
         // this will include the :attrs column, which we will also force evaluating. 
         // But not having this set empty forces out any cdc columns from actual result 
-        | boost::adaptors::transformed([] (const column_definition& cdef) { return cdef.name_as_text(); })
+        | boost::adaptors::transformed([] (const column_definition& cdef) {
+            return std::make_pair<std::string, lw_shared_ptr<hierarchy_filter>>(cdef.name_as_text(), nullptr); })
     );
 
     std::vector<const column_definition*> columns;
