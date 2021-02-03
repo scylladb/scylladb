@@ -1840,6 +1840,7 @@ int main(int argc, char** argv) {
         }
 
         std::cout << "Data directory: " << db_cfg.data_file_directories() << "\n";
+        std::cout << "Output directory: " << output_dir << "\n";
 
         auto init = [] {
             auto conf_seed = app.configuration()["random-seed"];
