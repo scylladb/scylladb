@@ -45,6 +45,11 @@ struct mutation_consume_result<void> {
     stop_iteration stop;
 };
 
+enum class consume_in_reverse {
+    no = 0,
+    yes,
+};
+
 class mutation final {
 private:
     struct data {
@@ -123,7 +128,7 @@ public:
     //
     // The mutation is in a moved-from alike state after consumption.
     template<FlattenedConsumer Consumer>
-    auto consume(Consumer& consumer) && -> mutation_consume_result<decltype(consumer.consume_end_of_stream())>;
+    auto consume(Consumer& consumer, consume_in_reverse reverse) && -> mutation_consume_result<decltype(consumer.consume_end_of_stream())>;
 
     // See mutation_partition::live_row_count()
     uint64_t live_row_count(gc_clock::time_point query_time = gc_clock::time_point::min()) const;
@@ -143,8 +148,61 @@ private:
     friend std::ostream& operator<<(std::ostream& os, const mutation& m);
 };
 
+namespace {
+
+template<consume_in_reverse reverse, FlattenedConsumer Consumer>
+stop_iteration consume_clustering_fragments(const schema& s, mutation_partition& partition, Consumer& consumer) {
+    using crs_type = mutation_partition::rows_type;
+    using crs_iterator_type = std::conditional_t<reverse == consume_in_reverse::yes, crs_type::reverse_iterator, crs_type::iterator>;
+    using rts_type = range_tombstone::container_type;
+    using rts_iterator_type = std::conditional_t<reverse == consume_in_reverse::yes, rts_type::reverse_iterator, rts_type::iterator>;
+
+    crs_iterator_type crs_it, crs_end;
+    rts_iterator_type rts_it, rts_end;
+    if constexpr (reverse == consume_in_reverse::yes) {
+        crs_it = partition.clustered_rows().rbegin();
+        crs_end = partition.clustered_rows().rend();
+        rts_it = partition.row_tombstones().rbegin();
+        rts_end = partition.row_tombstones().rend();
+    } else {
+        crs_it = partition.clustered_rows().begin();
+        crs_end = partition.clustered_rows().end();
+        rts_it = partition.row_tombstones().begin();
+        rts_end = partition.row_tombstones().end();
+    }
+
+    stop_iteration stop = stop_iteration::no;
+
+    position_in_partition::tri_compare cmp(s);
+
+    while (!stop && (crs_it != crs_end || rts_it != rts_end)) {
+        bool emit_rt;
+        if (crs_it != crs_end && rts_it != rts_end) {
+            const auto cmp_res = cmp(rts_it->position(), crs_it->position());
+            if constexpr (reverse == consume_in_reverse::yes) {
+                emit_rt = cmp_res > 0;
+            } else {
+                emit_rt = cmp_res < 0;
+            }
+        } else {
+            emit_rt = rts_it != rts_end;
+        }
+        if (emit_rt) {
+            stop = consumer.consume(std::move(*rts_it));
+            ++rts_it;
+        } else {
+            stop = consumer.consume(clustering_row(std::move(*crs_it)));
+            ++crs_it;
+        }
+    }
+
+    return stop;
+}
+
+} // anonymous namespace
+
 template<FlattenedConsumer Consumer>
-auto mutation::consume(Consumer& consumer) && -> mutation_consume_result<decltype(consumer.consume_end_of_stream())> {
+auto mutation::consume(Consumer& consumer, consume_in_reverse reverse) && -> mutation_consume_result<decltype(consumer.consume_end_of_stream())> {
     consumer.consume_new_partition(_ptr->_dk);
 
     auto& partition = _ptr->_p;
@@ -158,31 +216,10 @@ auto mutation::consume(Consumer& consumer) && -> mutation_consume_result<decltyp
         stop = consumer.consume(static_row(std::move(partition.static_row().get_existing())));
     }
 
-    std::unique_ptr<rows_entry, alloc_strategy_deleter<rows_entry>> cr(partition.clustered_rows().unlink_leftmost_without_rebalance());
-    std::unique_ptr<range_tombstone, alloc_strategy_deleter<range_tombstone>> rt(partition.row_tombstones().pop_front_and_lock());
-
-    position_in_partition::less_compare cmp_less(*_ptr->_schema);
-
-    while (!stop && (cr || rt)) {
-        bool emit_rt;
-        if (rt && cr) {
-            emit_rt = cmp_less(rt->position(), cr->position());
-        } else {
-            emit_rt = bool(rt);
-        }
-        if (emit_rt) {
-            stop = consumer.consume(std::move(*rt));
-            rt.reset(partition.row_tombstones().pop_front_and_lock());
-        } else {
-            stop = consumer.consume(clustering_row(std::move(*cr)));
-            cr.reset(partition.clustered_rows().unlink_leftmost_without_rebalance());
-        }
-    }
-    while (cr) {
-        cr.reset(partition.clustered_rows().unlink_leftmost_without_rebalance());
-    }
-    while (rt) {
-        rt.reset(partition.row_tombstones().pop_front_and_lock());
+    if (reverse == consume_in_reverse::yes) {
+        stop = consume_clustering_fragments<consume_in_reverse::yes>(*_ptr->_schema, partition, consumer);
+    } else {
+        stop = consume_clustering_fragments<consume_in_reverse::no>(*_ptr->_schema, partition, consumer);
     }
 
     const auto stop_consuming = consumer.consume_end_of_partition();

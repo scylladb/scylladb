@@ -2283,9 +2283,10 @@ to_data_query_result(const reconcilable_result& r, schema_ptr s, const query::pa
     query::result::builder builder(slice, opts, query::result_memory_accounter{ query::result_memory_limiter::unlimited_result_size });
     auto consumer = compact_for_query<emit_only_live_rows::yes, query_result_builder>(*s, gc_clock::time_point::min(), slice, max_rows,
             max_partitions, query_result_builder(*s, builder));
+    const auto reverse = slice.options.contains(query::partition_slice::option::reversed) ? consume_in_reverse::yes : consume_in_reverse::no;
 
     for (const partition& p : r.partitions()) {
-        const auto res = p.mut().unfreeze(s).consume(consumer);
+        const auto res = p.mut().unfreeze(s).consume(consumer, reverse);
         if (res.stop == stop_iteration::yes) {
             break;
         }
@@ -2301,7 +2302,8 @@ query_mutation(mutation&& m, const query::partition_slice& slice, uint64_t row_l
     query::result::builder builder(slice, opts, query::result_memory_accounter{ query::result_memory_limiter::unlimited_result_size });
     auto consumer = compact_for_query<emit_only_live_rows::yes, query_result_builder>(*m.schema(), now, slice, row_limit,
             query::max_partitions, query_result_builder(*m.schema(), builder));
-    std::move(m).consume(consumer);
+    const auto reverse = slice.options.contains(query::partition_slice::option::reversed) ? consume_in_reverse::yes : consume_in_reverse::no;
+    std::move(m).consume(consumer, reverse);
     return builder.build();
 }
 

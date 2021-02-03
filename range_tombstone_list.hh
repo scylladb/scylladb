@@ -130,6 +130,12 @@ public:
     auto end() const {
         return _tombstones.end();
     }
+    auto rend() {
+        return _tombstones.rend();
+    }
+    auto rend() const {
+        return _tombstones.rend();
+    }
     void apply(const schema& s, const bound_view& start_bound, const bound_view& end_bound, tombstone tomb) {
         apply(s, start_bound.prefix(), start_bound.kind(), end_bound.prefix(), end_bound.kind(), std::move(tomb));
     }
