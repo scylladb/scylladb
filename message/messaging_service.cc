@@ -43,6 +43,7 @@
 #include "repair/repair.hh"
 #include "digest_algorithm.hh"
 #include "service/paxos/proposal.hh"
+#include "serializer.hh"
 #include "idl/consistency_level.dist.hh"
 #include "idl/tracing.dist.hh"
 #include "idl/result.dist.hh"
@@ -64,6 +65,7 @@
 #include "idl/mutation.dist.hh"
 #include "idl/messaging_service.dist.hh"
 #include "idl/paxos.dist.hh"
+#include "idl/raft.dist.hh"
 #include "serializer_impl.hh"
 #include "serialization_visitors.hh"
 #include "idl/consistency_level.dist.impl.hh"
@@ -86,6 +88,7 @@
 #include "idl/mutation.dist.impl.hh"
 #include "idl/messaging_service.dist.impl.hh"
 #include "idl/paxos.dist.impl.hh"
+#include "idl/raft.dist.impl.hh"
 #include <seastar/rpc/lz4_compressor.hh>
 #include <seastar/rpc/lz4_fragmented_compressor.hh>
 #include <seastar/rpc/multi_algo_compressor_factory.hh>
@@ -524,6 +527,11 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::PAXOS_ACCEPT:
     case messaging_verb::PAXOS_LEARN:
     case messaging_verb::PAXOS_PRUNE:
+    case messaging_verb::RAFT_SEND_SNAPSHOT:
+    case messaging_verb::RAFT_APPEND_ENTRIES:
+    case messaging_verb::RAFT_APPEND_ENTRIES_REPLY:
+    case messaging_verb::RAFT_VOTE_REQUEST:
+    case messaging_verb::RAFT_VOTE_REPLY:
         return 2;
     case messaging_verb::MUTATION_DONE:
     case messaging_verb::MUTATION_FAILED:
@@ -1433,6 +1441,56 @@ future<> messaging_service::send_hint_mutation(msg_addr id, clock_type::time_poi
         inet_address reply_to, unsigned shard, response_id_type response_id, std::optional<tracing::trace_info> trace_info) {
     return send_message_oneway_timeout(this, timeout, messaging_verb::HINT_MUTATION, std::move(id), fm, std::move(forward),
         std::move(reply_to), shard, std::move(response_id), std::move(trace_info));
+}
+
+void messaging_service::register_raft_send_snapshot(std::function<future<> (const rpc::client_info&, rpc::opt_time_point, raft::server_id from_id, raft::server_id dst_id, raft::install_snapshot)>&& func) {
+   register_handler(this, netw::messaging_verb::RAFT_SEND_SNAPSHOT, std::move(func));
+}
+future<> messaging_service::unregister_raft_send_snapshot() {
+   return unregister_handler(netw::messaging_verb::RAFT_SEND_SNAPSHOT);
+}
+future<> messaging_service::send_raft_send_snapshot(msg_addr id, clock_type::time_point timeout, raft::server_id from_id, raft::server_id dst_id, const raft::install_snapshot& install_snapshot) {
+   return send_message_timeout<void>(this, messaging_verb::RAFT_SEND_SNAPSHOT, std::move(id), timeout, std::move(from_id), std::move(dst_id), install_snapshot);
+}
+
+void messaging_service::register_raft_append_entries(std::function<future<> (const rpc::client_info&, rpc::opt_time_point, raft::server_id from_id, raft::server_id dst_id, raft::append_request)>&& func) {
+   register_handler(this, netw::messaging_verb::RAFT_APPEND_ENTRIES, std::move(func));
+}
+future<> messaging_service::unregister_raft_append_entries() {
+   return unregister_handler(netw::messaging_verb::RAFT_APPEND_ENTRIES);
+}
+future<> messaging_service::send_raft_append_entries(msg_addr id, clock_type::time_point timeout, raft::server_id from_id, raft::server_id dst_id, const raft::append_request& append_request) {
+   return send_message_oneway_timeout(this, timeout, messaging_verb::RAFT_APPEND_ENTRIES, std::move(id), std::move(from_id), std::move(dst_id), append_request);
+}
+
+void messaging_service::register_raft_append_entries_reply(std::function<future<> (const rpc::client_info&, rpc::opt_time_point, raft::server_id from_id, raft::server_id dst_id, raft::append_reply)>&& func) {
+   register_handler(this, netw::messaging_verb::RAFT_APPEND_ENTRIES_REPLY, std::move(func));
+}
+future<> messaging_service::unregister_raft_append_entries_reply() {
+   return unregister_handler(netw::messaging_verb::RAFT_APPEND_ENTRIES_REPLY);
+}
+future<> messaging_service::send_raft_append_entries_reply(msg_addr id, clock_type::time_point timeout, raft::server_id from_id, raft::server_id dst_id, const raft::append_reply& reply) {
+   return send_message_oneway_timeout(this, timeout, messaging_verb::RAFT_APPEND_ENTRIES_REPLY, std::move(id), std::move(from_id), std::move(dst_id), reply);
+}
+
+void messaging_service::register_raft_vote_request(std::function<future<> (const rpc::client_info&, rpc::opt_time_point, raft::server_id from_id, raft::server_id dst_id, raft::vote_request)>&& func) {
+   register_handler(this, netw::messaging_verb::RAFT_VOTE_REQUEST, std::move(func));
+}
+future<> messaging_service::unregister_raft_vote_request() {
+   return unregister_handler(netw::messaging_verb::RAFT_VOTE_REQUEST);
+}
+future<> messaging_service::send_raft_vote_request(msg_addr id, clock_type::time_point timeout, raft::server_id from_id, raft::server_id dst_id, const raft::vote_request& vote_request) {
+   return send_message_oneway_timeout(this, timeout, messaging_verb::RAFT_VOTE_REQUEST, std::move(id), std::move(from_id), std::move(dst_id), vote_request);
+}
+
+void messaging_service::register_raft_vote_reply(std::function<future<> (const rpc::client_info&, rpc::opt_time_point, raft::server_id from_id, raft::server_id dst_id, raft::vote_reply)>&& func) {
+   register_handler(this, netw::messaging_verb::RAFT_VOTE_REPLY, std::move(func));
+}
+future<> messaging_service::unregister_raft_vote_reply() {
+   return unregister_handler(netw::messaging_verb::RAFT_VOTE_REPLY);
+}
+future<> messaging_service::send_raft_vote_reply(msg_addr id, clock_type::time_point timeout, raft::server_id from_id, raft::server_id dst_id, const raft::vote_reply& vote_reply) {
+   return send_message_oneway_timeout(this, timeout, messaging_verb::RAFT_VOTE_REPLY, std::move(id), std::move(from_id), std::move(dst_id), vote_reply);
 }
 
 void init_messaging_service(sharded<messaging_service>& ms,
