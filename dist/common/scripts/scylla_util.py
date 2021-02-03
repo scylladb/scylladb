@@ -308,9 +308,10 @@ class gcp_instance:
                     logging.warning(
                         "This machine doesn't have enough CPUs for allocated number of NVMEs (at least 32 cpus for >=16 disks). Performance will suffer.")
                     return False
-                diskSize = self.firstNvmeSize
                 if diskCount < 1:
+                    logging.warning("No ephemeral disks were found.")
                     return False
+                diskSize = self.firstNvmeSize
                 max_disktoramratio = 105
                 # 30:1 Disk/RAM ratio must be kept at least(AWS), we relax this a little bit
                 # on GCP we are OK with {max_disktoramratio}:1 , n1-standard-2 can cope with 1 disk, not more
