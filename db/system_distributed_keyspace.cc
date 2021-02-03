@@ -406,10 +406,9 @@ system_distributed_keyspace::cdc_get_versioned_streams(context ctx) {
 
         for (auto& row : *cql_result) {
             auto ts = row.get_as<db_clock::time_point>("time");
-            auto exp = row.get_opt<db_clock::time_point>("expired");
             std::vector<cdc::stream_id> ids;
             row.get_list_data<bytes>("streams", std::back_inserter(ids)); 
-            result.emplace(ts, cdc::streams_version(std::move(ids), ts, exp));
+            result.emplace(ts, cdc::streams_version(std::move(ids), ts));
         }
 
         return result;

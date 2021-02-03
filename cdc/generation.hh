@@ -123,12 +123,10 @@ class streams_version {
 public:
     std::vector<stream_id> streams;
     db_clock::time_point timestamp;
-    std::optional<db_clock::time_point> expired;
 
-    streams_version(std::vector<stream_id> s, db_clock::time_point ts, std::optional<db_clock::time_point> exp)
+    streams_version(std::vector<stream_id> s, db_clock::time_point ts)
         : streams(std::move(s))
         , timestamp(ts)
-        , expired(std::move(exp))
     {}
 };
 
