@@ -22,10 +22,13 @@
 #include "querier.hh"
 
 #include "schema.hh"
+#include "log.hh"
 
 #include <boost/range/adaptor/map.hpp>
 
 namespace query {
+
+logging::logger qlogger("querier_cache");
 
 enum class can_use {
     yes,
@@ -251,6 +254,7 @@ static void insert_querier(
     if (!irh) {
         return;
     }
+  try {
     auto cleanup_irh = defer([&] {
         sem.unregister_inactive_read(std::move(irh));
     });
@@ -282,6 +286,13 @@ static void insert_querier(
     querier_utils::set_inactive_read_handle(*it->second, std::move(irh));
     cleanup_index.cancel();
     cleanup_irh.cancel();
+  } catch (...) {
+    // It is okay to swallow the exception since
+    // we're allowed to drop the reader upon registration
+    // due to lack of resources - in which case we already
+    // drop the querier.
+    qlogger.warn("Failed to insert querier into index: {}. Ignored as if it was evicted upon registration", std::current_exception());
+  }
 }
 
 void querier_cache::insert(utils::UUID key, data_querier&& q, tracing::trace_state_ptr trace_state) {
