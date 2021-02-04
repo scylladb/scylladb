@@ -1620,6 +1620,21 @@ future<> update_cdc_streams_timestamp(db_clock::time_point tp) {
             .discard_result().then([] { return force_blocking_flush(v3::CDC_LOCAL); });
 }
 
+static const sstring CDC_REWRITTEN_KEY = "rewritten";
+
+future<> cdc_set_rewritten(std::optional<db_clock::time_point> tp) {
+    if (tp) {
+        return qctx->execute_cql(
+                format("INSERT INTO system.{} (key, streams_timestamp) VALUES (?, ?)", v3::CDC_LOCAL),
+                CDC_REWRITTEN_KEY, *tp).discard_result();
+    } else {
+        // Insert just the row marker.
+        return qctx->execute_cql(
+                format("INSERT INTO system.{} (key) VALUES (?)", v3::CDC_LOCAL),
+                CDC_REWRITTEN_KEY).discard_result();
+    }
+}
+
 future<> force_blocking_flush(sstring cfname) {
     assert(qctx);
     return qctx->_qp.invoke_on_all([cfname = std::move(cfname)] (cql3::query_processor& qp) {
@@ -1689,6 +1704,14 @@ future<std::optional<db_clock::time_point>> get_saved_cdc_streams_timestamp() {
         }
 
         return msg->one().get_as<db_clock::time_point>("streams_timestamp");
+    });
+}
+
+future<bool> cdc_is_rewritten() {
+    // We don't care about the actual timestamp; it's additional information for debugging purposes.
+    return qctx->execute_cql(format("SELECT key FROM system.{} WHERE key = ?", v3::CDC_LOCAL), CDC_REWRITTEN_KEY)
+            .then([] (::shared_ptr<cql3::untyped_result_set> msg) {
+        return !msg->empty();
     });
 }
 

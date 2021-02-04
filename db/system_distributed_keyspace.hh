@@ -61,6 +61,11 @@ public:
     /* Used by CDC clients to learn CDC generation timestamps. */
     static constexpr auto CDC_TIMESTAMPS = "cdc_generation_timestamps";
 
+    /* Previous version of the "cdc_streams_descriptions_v2" table.
+     * We use it in the upgrade procedure to ensure that CDC generations appearing
+     * in the old table also appear in the new table, if necessary. */
+    static constexpr auto CDC_DESC_V1 = "cdc_streams_descriptions";
+
     /* Information required to modify/query some system_distributed tables, passed from the caller. */
     struct context {
         /* How many different token owners (endpoints) are there in the token ring? */
@@ -98,6 +103,10 @@ public:
     future<> create_cdc_desc(db_clock::time_point streams_ts, const cdc::topology_description&, context);
     future<> expire_cdc_desc(db_clock::time_point streams_ts, db_clock::time_point expiration_time, context);
     future<bool> cdc_desc_exists(db_clock::time_point streams_ts, context);
+
+    /* Get all generation timestamps appearing in the "cdc_streams_descriptions" table
+     * (the old CDC stream description table). */
+    future<std::vector<db_clock::time_point>> get_cdc_desc_v1_timestamps(context);
 
     future<std::map<db_clock::time_point, cdc::streams_version>> cdc_get_versioned_streams(db_clock::time_point not_older_than, context);
 };
