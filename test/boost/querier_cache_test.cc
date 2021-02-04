@@ -724,7 +724,7 @@ SEASTAR_THREAD_TEST_CASE(test_immediate_evict_on_insert) {
     t.assert_cache_lookup_mutation_querier(entry.key, *t.get_schema(), entry.expected_range, entry.expected_slice)
         .misses()
         .no_drops()
-        .resource_based_evictions();
+        .no_evictions();
 
     resources.reset();
 

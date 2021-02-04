@@ -194,14 +194,28 @@ public:
     /// The semaphore will evict this read when there is a shortage of
     /// permits. This might be immediate, during this register call.
     /// Clients can use the returned handle to unregister the read, when it
-    /// stops being inactive and hence evictable.
+    /// stops being inactive and hence evictable, or to set the optional
+    /// notify_handler and ttl.
     ///
     /// An inactive read is an object implementing the `inactive_read`
     /// interface.
     /// The semaphore takes ownership of the created object and destroys it if
     /// it is evicted.
-    inactive_read_handle register_inactive_read(flat_mutation_reader ir, eviction_notify_handler handler = {});
-    inactive_read_handle register_inactive_read(flat_mutation_reader ir, std::chrono::seconds ttl, eviction_notify_handler handler = {});
+    inactive_read_handle register_inactive_read(flat_mutation_reader ir);
+
+    /// Set the inactive read eviction notification handler and optionally eviction ttl.
+    ///
+    /// The semaphore may evict this read when there is a shortage of
+    /// permits or after the given ttl expired.
+    ///
+    /// The notification handler will be called when the inactive_read is evicted
+    /// passing with the reason it was evicted to the handler.
+    ///
+    /// Note that the inactive_read might have already been evicted if
+    /// the caller may yield after the register_inactive_read returned the handle
+    /// and before calling set_notify_handler. In this case, the caller must revalidate
+    /// the inactive_read_handle before calling this function.
+    void set_notify_handler(inactive_read_handle& irh, eviction_notify_handler&& handler, std::optional<std::chrono::seconds> ttl);
 
     /// Unregister the previously registered inactive read.
     ///

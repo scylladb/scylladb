@@ -247,6 +247,11 @@ static void insert_querier(
 
     auto& sem = q.permit().semaphore();
 
+    auto irh = sem.register_inactive_read(querier_utils::get_reader(q));
+    if (!irh) {
+        return;
+    }
+
     auto it = index.emplace(key, std::make_unique<Querier>(std::move(q)));
 
     ++stats.population;
@@ -266,9 +271,8 @@ static void insert_querier(
         --stats.population;
     };
 
-    if (auto irh = sem.register_inactive_read(querier_utils::get_reader(*it->second), ttl, std::move(notify_handler))) {
-        querier_utils::set_inactive_read_handle(*it->second, std::move(irh));
-    }
+    sem.set_notify_handler(irh, std::move(notify_handler), ttl);
+    querier_utils::set_inactive_read_handle(*it->second, std::move(irh));
 }
 
 void querier_cache::insert(utils::UUID key, data_querier&& q, tracing::trace_state_ptr trace_state) {
