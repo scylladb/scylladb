@@ -29,7 +29,6 @@
 #include <seastar/core/temporary_buffer.hh>
 #include "consumer.hh"
 #include "sstables/types.hh"
-#include "reader_concurrency_semaphore.hh"
 #include "tracing/trace_state.hh"
 #include "liveness_info.hh"
 #include <seastar/core/temporary_buffer.hh>
