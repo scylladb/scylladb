@@ -116,7 +116,6 @@ def test_projection_expression_query(test_table):
 # but the previous test checked that the alternative syntax works correctly.
 # The following test checks fetching more elaborate attribute paths from
 # nested documents.
-@pytest.mark.xfail(reason="ProjectionExpression does not yet support attribute paths")
 def test_projection_expression_path(test_table_s):
     p = random_string()
     test_table_s.put_item(Item={
@@ -177,7 +176,6 @@ def test_projection_expression_path(test_table_s):
 # 2. Conversely, a single reference, e.g., "#a", is always a single path
 #    component. Even if "#a" is "a.b", this refers to the literal attribute
 #    "a.b" - with a dot in its name - and not to the b element in a.
-@pytest.mark.xfail(reason="ProjectionExpression does not yet support attribute paths")
 def test_projection_expression_path_references(test_table_s):
     p = random_string()
     test_table_s.put_item(Item={'p': p, 'a': {'b': 1, 'c': 2}, 'b': 'hi'})
@@ -191,7 +189,6 @@ def test_projection_expression_path_references(test_table_s):
     with pytest.raises(ClientError, match='ValidationException'):
         test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression='a.#n2', ExpressionAttributeNames={'#n2': 'b', '#unused': 'x'})
 
-@pytest.mark.xfail(reason="ProjectionExpression does not yet support attribute paths")
 def test_projection_expression_path_dot(test_table_s):
     p = random_string()
     test_table_s.put_item(Item={'p': p, 'a.b': 'hi', 'a': {'b': 'yo', 'c': 'jo'}})
@@ -264,7 +261,6 @@ def test_projection_expression_path_conflict(test_table_s):
 
 # Above we nested paths in ProjectionExpression, but just for the GetItem
 # request. Let's verify they also work in Query and Scan requests:
-@pytest.mark.xfail(reason="ProjectionExpression does not yet support attribute paths")
 def test_query_projection_expression_path(test_table):
     p = random_string()
     items = [{'p': p, 'c': str(i), 'a': {'x': str(i*10), 'y': 'hi'}, 'b': 'hello' } for i in range(10)]
@@ -275,7 +271,6 @@ def test_query_projection_expression_path(test_table):
     expected_items = [{'a': {'x': x['a']['x']}} for x in items]
     assert multiset(expected_items) == multiset(got_items)
 
-@pytest.mark.xfail(reason="ProjectionExpression does not yet support attribute paths")
 def test_scan_projection_expression_path(test_table):
     # This test is similar to test_query_projection_expression_path above,
     # but uses a scan instead of a query. The scan will generate unrelated
@@ -292,7 +287,6 @@ def test_scan_projection_expression_path(test_table):
 
 # BatchGetItem also supports ProjectionExpression, let's test that it
 # applies to all items, and that it correctly suports document paths as well.
-@pytest.mark.xfail(reason="ProjectionExpression does not yet support attribute paths")
 def test_batch_get_item_projection_expression_path(test_table_s):
     items = [{'p': random_string(), 'a': {'b': random_string(), 'x': 'hi'}, 'c': random_string()} for i in range(3)]
     with test_table_s.batch_writer() as batch:

@@ -151,10 +151,9 @@ void condition_expression::append(condition_expression&& a, char op) {
 // we need to resolve the expression just once but then use it many times
 // (once for each item to be filtered).
 
-static void resolve_path(parsed::path& p,
+static std::optional<std::string> resolve_path_component(const std::string& column_name,
         const rjson::value* expression_attribute_names,
         std::unordered_set<std::string>& used_attribute_names) {
-    const std::string& column_name = p.root();
     if (column_name.size() > 0 && column_name.front() == '#') {
         if (!expression_attribute_names) {
             throw api_error::validation(
@@ -166,7 +165,30 @@ static void resolve_path(parsed::path& p,
                     format("ExpressionAttributeNames missing entry '{}' required by expression", column_name));
         }
         used_attribute_names.emplace(column_name);
-        p.set_root(std::string(rjson::to_string_view(*value)));
+        return std::string(rjson::to_string_view(*value));
+    }
+    return std::nullopt;
+}
+
+static void resolve_path(parsed::path& p,
+        const rjson::value* expression_attribute_names,
+        std::unordered_set<std::string>& used_attribute_names) {
+    std::optional<std::string> r = resolve_path_component(p.root(), expression_attribute_names, used_attribute_names);
+    if (r) {
+        p.set_root(std::move(*r));
+    }
+    for (auto& op : p.operators()) {
+        std::visit(overloaded_functor {
+            [&] (std::string& s) {
+                r = resolve_path_component(s, expression_attribute_names, used_attribute_names);
+                if (r) {
+                    s = std::move(*r);
+                }
+            },
+            [&] (unsigned index) {
+                // nothing to resolve
+            }
+        }, op);
     }
 }
 

@@ -90,7 +90,14 @@ struct hierarchy_filter {
     // "overlaps" with one already in the filter (one is a sub-path
     // of the other) or "conflicts" with it (both a member and index is
     // requested).
-    void add(const parsed::path& p);
+    void add(const parsed::path&);
+    // Run the filter on a given JSON object, dropping its parts which
+    // weren't asked to be kept. Modifies the given JSON object, or
+    // returns false to signify the entire object should be dropped.
+    // Important note: The JSON object is assumed to be using the DynamoDB
+    // conventions, i.e., it is really a map whose key has a type string,
+    // and the value is the real object.
+    bool filter(rjson::value&);
 };
 
 // We use lw_shared_ptr<hierarchy_filter>  allows us to efficiently represent

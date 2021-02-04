@@ -68,6 +68,9 @@ public:
     const std::vector<std::variant<std::string, unsigned>>& operators() const {
         return _operators;
     }
+    std::vector<std::variant<std::string, unsigned>>& operators() {
+        return _operators;
+    }
 };
 
 // When an expression is first parsed, all constants are references, like

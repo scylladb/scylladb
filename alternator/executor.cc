@@ -1882,6 +1882,70 @@ static std::string get_item_type_string(const rjson::value& v) {
     return it->name.GetString();
 }
 
+bool hierarchy_filter::filter(rjson::value& val) {
+    // Importantly, val is a DynamoDB-encoded JSON object - it's a map whose
+    // key is the type, and the value is the actual object.
+    if (!val.IsObject() || val.MemberCount() != 1) {
+        // This shouldn't happen. We shouldn't have stored malformed objects.
+        // But today Alternator does not validate the structure of nested
+        // documents before storing them, so this can happen on read.
+        throw api_error::validation(format("Malformed value object for filtering: {}", val));
+    }
+    const char* type = val.MemberBegin()->name.GetString();
+    rjson::value& v = val.MemberBegin()->value;
+    if (!members.empty()) {
+        if (type[0] != 'M' || !v.IsObject()) {
+            // If v is not an object (dictionary, map), none of the members
+            // can match. We return immediately because we assume that either
+            // members or indexes are set, but not both.
+            return false;
+        }
+        rjson::value newv = rjson::empty_object();
+        for (auto it = v.MemberBegin(); it != v.MemberEnd(); ++it) {
+            std::string attr = it->name.GetString();
+            auto h = members.find(attr);
+            if (h != members.end()) {
+                if (h->second) {
+                    // Only a part of this attribute is to be filtered, do it.
+                    if (h->second->filter(it->value)) {
+                        rjson::set_with_string_name(newv, attr, std::move(it->value));
+                    }
+                } else {
+                    // The entire attribute is to be kept
+                    rjson::set_with_string_name(newv, attr, std::move(it->value));
+                }
+            }
+        }
+        if (newv.MemberCount() == 0) {
+            return false;
+        }
+        v = newv;
+    } else if (!indexes.empty()) {
+        if (type[0] != 'L' || !v.IsArray()) {
+            return false;
+        }
+        rjson::value newv = rjson::empty_array();
+        const auto& a = v.GetArray();
+        for (unsigned i = 0; i < v.Size(); i++) {
+            auto h = indexes.find(i);
+            if (h != indexes.end()) {
+                if (h->second) {
+                    if (h->second->filter(a[i])) {
+                        rjson::push_back(newv, std::move(a[i]));
+                    }
+                } else {
+                    // The entire attribute is to be kept
+                    rjson::push_back(newv, std::move(a[i]));
+                }
+            }
+        }
+        if (newv.Size() == 0) {
+            return false;
+        }
+        v = newv;
+    }
+    return true;
+}
 void hierarchy_filter::add(const parsed::path& p) {
     hierarchy_filter* h = this;
     // new_level is false if the previous iteration of the loop below found
@@ -2058,7 +2122,16 @@ void executor::describe_single_item(const cql3::selection::selection& selection,
                 std::string attr_name = value_cast<sstring>(entry.first);
                 if (include_all_embedded_attributes || attrs_to_get.empty() || attrs_to_get.contains(attr_name)) {
                     bytes value = value_cast<bytes>(entry.second);
-                    rjson::set_with_string_name(item, attr_name, deserialize_item(value));
+                    rjson::value v = deserialize_item(value);
+                    auto it = attrs_to_get.find(attr_name);
+                    if (it != attrs_to_get.end() && it->second) {
+                        // attrs_to_get asked for only part of this attribute:
+                        if (it->second->filter(v)) {
+                            rjson::set_with_string_name(item, attr_name, std::move(v));
+                        }
+                    } else {
+                        rjson::set_with_string_name(item, attr_name, std::move(v));
+                    }
                 }
             }
         }
@@ -2834,6 +2907,12 @@ public:
                     std::string attr_name = value_cast<sstring>(entry.first);
                     if (_attrs_to_get.empty() || _attrs_to_get.contains(attr_name) || _extra_filter_attrs.contains(attr_name)) {
                         bytes value = value_cast<bytes>(entry.second);
+                        // Even if _attrs_to_get asked to keep only a part of a
+                        // top-level attribute, we keep the entire attribute
+                        // at this stage, because the item filter might still
+                        // need the other parts (it was easier for us to keep
+                        // extra_filter_attrs at top-level granularity). We'll
+                        // filter the unneeded parts after item filtering.
                         rjson::set_with_string_name(_item, attr_name, deserialize_item(value));
                     }
                 }
@@ -2844,11 +2923,24 @@ public:
 
     void end_row() {
         if (_filter.check(_item)) {
+            // As noted above, we kept entire top-level attributes listed in
+            // _attrs_to_get. We may need to only keep parts of them.
+            for (const auto& attr: _attrs_to_get) {
+                if (attr.second) {
+                    rjson::value* toplevel= rjson::find(_item, attr.first);
+                    // filter() either modifies toplevel_attr directly, or
+                    // asks us to delete it:
+                    if (toplevel && !attr.second->filter(*toplevel)) {
+                        rjson::remove_member(_item, attr.first);
+                    }
+                }
+            }
             // Remove the extra attributes _extra_filter_attrs which we had
             // to add just for the filter, and not requested to be returned:
             for (const auto& attr : _extra_filter_attrs) {
                 rjson::remove_member(_item, attr);
             }
+
             rjson::push_back(_items, std::move(_item));
         }
         _item = rjson::empty_object();
