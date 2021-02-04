@@ -28,6 +28,7 @@
 #include "db/system_keyspace.hh"
 #include "db/commitlog/commitlog.hh"
 #include "db/config.hh"
+#include "db/background.hh"
 #include "to_string.hh"
 #include "query-result-writer.hh"
 #include "cql3/column_identifier.hh"
@@ -98,6 +99,12 @@
 
 using namespace std::chrono_literals;
 using namespace db;
+
+namespace db {
+
+thread_local utils::phased_barrier background_jobs;
+
+}
 
 logging::logger dblog("database");
 

@@ -20,6 +20,7 @@
  */
 #include "mutation.hh"
 #include "sstables.hh"
+#include "db/background.hh"
 #include "types.hh"
 #include <seastar/core/future-util.hh>
 #include <seastar/core/coroutine.hh>
@@ -171,8 +172,7 @@ public:
         auto close = [this] (std::unique_ptr<index_reader>& ptr) {
             if (ptr) {
                 auto f = ptr->close();
-                // FIXME: discarded future.
-                (void)f.handle_exception([index = std::move(ptr)] (auto&&) { });
+                (void)f.handle_exception([index = std::move(ptr), op = db::start_background_job()] (auto&&) { });
             }
         };
         close(_index_reader);
