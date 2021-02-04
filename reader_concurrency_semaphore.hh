@@ -24,10 +24,9 @@
 #include <map>
 #include <seastar/core/future.hh>
 #include "reader_permit.hh"
+#include "flat_mutation_reader.hh"
 
 using namespace seastar;
-
-class flat_mutation_reader;
 
 /// Specific semaphore for controlling reader concurrency
 ///
@@ -122,11 +121,13 @@ private:
     };
 
     struct inactive_read {
-        std::unique_ptr<flat_mutation_reader> reader;
+        flat_mutation_reader reader;
         eviction_notify_handler notify_handler;
         std::optional<timer<lowres_clock>> ttl_timer;
 
-        explicit inactive_read(flat_mutation_reader);
+        explicit inactive_read(flat_mutation_reader reader_) noexcept
+            : reader(std::move(reader_))
+        { }
         inactive_read(inactive_read&&) = default;
         ~inactive_read();
     };
@@ -203,7 +204,7 @@ public:
     ///
     /// If the read was not evicted, the inactive read object, passed in to the
     /// register call, will be returned. Otherwise a nullptr is returned.
-    std::unique_ptr<flat_mutation_reader> unregister_inactive_read(inactive_read_handle irh);
+    flat_mutation_reader_opt unregister_inactive_read(inactive_read_handle irh);
 
     /// Try to evict an inactive read.
     ///

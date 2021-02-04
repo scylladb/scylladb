@@ -339,10 +339,6 @@ void reader_concurrency_semaphore::expiry_handler::operator()(entry& e) noexcept
     maybe_dump_reader_permit_diagnostics(_semaphore, *_semaphore._permit_list, "timed out");
 }
 
-reader_concurrency_semaphore::inactive_read::inactive_read(flat_mutation_reader reader)
-    : reader(std::make_unique<flat_mutation_reader>(std::move(reader))) {
-}
-
 reader_concurrency_semaphore::inactive_read::~inactive_read() {
 }
 
@@ -413,7 +409,7 @@ reader_concurrency_semaphore::inactive_read_handle reader_concurrency_semaphore:
     return inactive_read_handle();
 }
 
-std::unique_ptr<flat_mutation_reader> reader_concurrency_semaphore::unregister_inactive_read(inactive_read_handle irh) {
+flat_mutation_reader_opt reader_concurrency_semaphore::unregister_inactive_read(inactive_read_handle irh) {
     if (irh && irh._sem != this) {
         throw std::runtime_error(fmt::format(
                     "reader_concurrency_semaphore::unregister_inactive_read(): "

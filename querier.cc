@@ -304,11 +304,11 @@ static std::optional<Querier> lookup_querier(
         throw std::runtime_error("lookup_querier(): found querier is not of the expected type");
     }
     auto& q = *q_ptr;
-    auto read_ptr = q.permit().semaphore().unregister_inactive_read(querier_utils::get_inactive_read_handle(q));
-    if (!read_ptr) {
+    auto reader_opt = q.permit().semaphore().unregister_inactive_read(querier_utils::get_inactive_read_handle(q));
+    if (!reader_opt) {
         throw std::runtime_error("lookup_querier(): found querier that is evicted");
     }
-    querier_utils::set_reader(q, std::move(*read_ptr.get()));
+    querier_utils::set_reader(q, std::move(*reader_opt));
     --stats.population;
 
     const auto can_be_used = can_be_used_for_page(q, s, ranges.front(), slice);
