@@ -341,6 +341,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , phi_convict_threshold(this, "phi_convict_threshold", value_status::Used, 8,
         "Adjusts the sensitivity of the failure detector on an exponential scale. Generally this setting never needs adjusting.\n"
         "Related information: Failure detection and recovery")
+    , failure_detector_timeout_in_ms(this, "failure_detector_timeout_in_ms", liveness::LiveUpdate, value_status::Used, 20 * 1000, "Maximum time between two successful echo message before gossip mark a node down in milliseconds.\n")
     /* Performance tuning properties */
     /* Tuning performance and system reso   urce utilization, including commit log, compaction, memory, disk I/O, CPU, reads, and writes. */
     /* Commit log settings */

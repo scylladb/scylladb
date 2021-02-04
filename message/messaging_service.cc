@@ -1101,8 +1101,8 @@ void messaging_service::register_gossip_echo(std::function<future<> (const rpc::
 future<> messaging_service::unregister_gossip_echo() {
     return unregister_handler(netw::messaging_verb::GOSSIP_ECHO);
 }
-future<> messaging_service::send_gossip_echo(msg_addr id, int64_t generation_number) {
-    return send_message_timeout<void>(this, messaging_verb::GOSSIP_ECHO, std::move(id), 15000ms, generation_number);
+future<> messaging_service::send_gossip_echo(msg_addr id, int64_t generation_number, std::chrono::milliseconds timeout) {
+    return send_message_timeout<void>(this, messaging_verb::GOSSIP_ECHO, std::move(id), timeout, generation_number);
 }
 
 void messaging_service::register_gossip_shutdown(std::function<rpc::no_wait_type (inet_address from)>&& func) {
