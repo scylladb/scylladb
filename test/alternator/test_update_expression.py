@@ -268,13 +268,64 @@ def test_update_expression_multi_overlap(test_table_s):
 @pytest.mark.xfail(reason="nested updates not yet implemented")
 def test_update_expression_multi_overlap_nested(test_table_s):
     p = random_string()
-    with pytest.raises(ClientError, match='ValidationException.*overlap'):
-        test_table_s.update_item(Key={'p': p}, UpdateExpression='SET a = :val1, a.b = :val2',
-            ExpressionAttributeValues={':val1': {'b': 7}, ':val2': 'there'})
-    test_table_s.put_item(Item={'p': p, 'a': {'b': {'c': 2}}})
-    with pytest.raises(ClientError, match='ValidationException.*overlap'):
-        test_table_s.update_item(Key={'p': p}, UpdateExpression='SET a.b = :val1, a.b.c = :val2',
-            ExpressionAttributeValues={':val1': 'hi', ':val2': 'there'})
+    # Note that the overlap checks happen before checking the actual content
+    # of the item, so it doesn't matter that the item we want to modify
+    # doesn't even exist or have the structure referenced by the paths below.
+    for expr in ['SET a = :val1, a.b = :val2',
+                 'SET a.b = :val1, a = :val2',
+                 'SET a.b = :val1, a.b = :val2',
+                 'SET a.b = :val1, a.b.c = :val2',
+                 'SET a.b.c = :val1, a.b = :val2',
+                 'SET a.b.c = :val1, a.b.c = :val2',
+                 'SET a.b = :val1, a.b.c.d.e = :val2',
+                 'SET a.b.c.d.e = :val1, a.b = :val2',
+                 'SET a = :val1, a[1] = :val2',
+                 'SET a[1] = :val1, a = :val2',
+                 'SET a[1] = :val1, a[1] = :val2',
+                 'SET a[1][1] = :val1, a[1] = :val2',
+                 'SET a[1] = :val1, a[1][1] = :val2',
+                 'SET a[1][1] = :val1, a[1][1] = :val2',
+                 'SET a[1][1][1][1] = :val1, a[1][1] = :val2',
+                 'SET a[1][1] = :val1, a[1][1][1][1] = :val2',
+                 'SET a[1][1][1][1] = :val1, a[1][1][1][1] = :val2',
+                ]:
+        print(expr)
+        with pytest.raises(ClientError, match='ValidationException.*overlap'):
+            test_table_s.update_item(Key={'p': p}, UpdateExpression=expr,
+                ExpressionAttributeValues={':val1': 2, ':val2': 'there'})
+    # Obviously this test can trivially pass if overlap checks wrongly labels
+    # everything as an overlap. So the test test_update_expression_multi_nested
+    # below is important - it confirms that we can do multiple modifications
+    # to the same item when they do not overlap.
+
+# Besides the concept of "overlapping" paths tested above, DynamoDB also has
+# the concept of "conflicting" paths - e.g., attempting to set both a.b and
+# a[1] together doesn't make sense.
+@pytest.mark.xfail(reason="nested updates not yet implemented")
+def test_update_expression_multi_conflict_nested(test_table_s):
+    p = random_string()
+    for expr in ['SET a.b = :val1, a[1] = :val2',
+                 'SET a.b.c = :val1, a.b[2] = :val2',
+                ]:
+        print(expr)
+        with pytest.raises(ClientError, match='ValidationException.*conflict'):
+            test_table_s.update_item(Key={'p': p}, UpdateExpression=expr,
+                ExpressionAttributeValues={':val1': 2, ':val2': 'there'})
+
+# We can do several non-overlapping modifications to the same top-level
+# attribute and to different top-level attributes in the same update
+# expression.
+@pytest.mark.xfail(reason="nested updates not yet implemented")
+def test_update_expression_multi_nested(test_table_s):
+    p = random_string()
+    test_table_s.put_item(Item={'p': p, 'a': {'x': 3, 'y': 4, 'c': {'y': 3}}, 'b': {'x': 1, 'y': 2}})
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET a.b = :val1, a.c.d = :val2, b.x = :val3 REMOVE a.x, b.y',
+        ExpressionAttributeValues={':val1': 10, ':val2': 'dog', ':val3': 17})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] ==  {
+        'p': p,
+        'a': {'y': 4, 'b': 10, 'c': {'y': 3, 'd': 'dog'}},
+        'b': {'x': 17}}
 
 # In the previous test we saw that *modifying* the same item twice in the same
 # update is forbidden; But it is allowed to *read* an item in the same update
@@ -776,6 +827,17 @@ def test_update_expression_dot_in_name(test_table_s):
         ExpressionAttributeNames={'#a': 'a.b'})
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a.b': 3}
 
+
+# Below we have several tests of what happens when a nested attribute is
+# on the left-hand side of an assignment, but an every simpler case of
+# nested attributes is having one on the right hand side of an assignment:
+@pytest.mark.xfail(reason="nested updates not yet implemented")
+def test_update_expression_nested_attribute_rhs(test_table_s):
+    p = random_string()
+    test_table_s.put_item(Item={'p': p, 'a': {'b': 3, 'c': {'x': 7, 'y': 8}}, 'd': 5})
+    test_table_s.update_item(Key={'p': p}, UpdateExpression='SET z = a.c.x')
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 7
+
 # A basic test for direct update of a nested attribute: One of the top-level
 # attributes is itself a document, and we update only one of that document's
 # nested attributes.
@@ -864,9 +926,9 @@ def test_nested_attribute_update_array_out_of_bounds(test_table_s):
     # The DynamoDB documentation also says: "If you add multiple elements
     # in a single SET operation, the elements are sorted in order by element
     # number.
-    test_table_s.update_item(Key={'p': p}, UpdateExpression='SET a[84] = :val1, a[37] = :val2',
-        ExpressionAttributeValues={':val1': 'a1', ':val2': 'a2'})
-    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': ['one', 'two', 'three', 'hello', 'a2', 'a1']}
+    test_table_s.update_item(Key={'p': p}, UpdateExpression='SET a[84] = :val1, a[37] = :val2, a[17] = :val3, a[50] = :val4',
+        ExpressionAttributeValues={':val1': 'a1', ':val2': 'a2', ':val3': 'a3', ':val4': 'a4'})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': ['one', 'two', 'three', 'hello', 'a3', 'a2', 'a4', 'a1']}
 
 # Test what happens if we try to write to a.b, which would only make sense if
 # a were a nested document, but a doesn't exist, or exists and is NOT a nested
@@ -875,8 +937,6 @@ def test_nested_attribute_update_array_out_of_bounds(test_table_s):
 #   ClientError: An error occurred (ValidationException) when calling the
 #   UpdateItem operation: The document path provided in the update expression
 #   is invalid for update
-# Because Scylla doesn't read before write, it cannot detect this as an error,
-# so we'll probably want to allow for that possibility as well.
 @pytest.mark.xfail(reason="nested updates not yet implemented")
 def test_nested_attribute_update_bad_path_dot(test_table_s):
     p = random_string()
@@ -890,16 +950,28 @@ def test_nested_attribute_update_bad_path_dot(test_table_s):
     with pytest.raises(ClientError, match='ValidationException.*path'):
         test_table_s.update_item(Key={'p': p}, UpdateExpression='SET c.c = :val1',
             ExpressionAttributeValues={':val1': 7})
-
+    # Same error when the item doesn't exist at all:
+    p = random_string()
+    with pytest.raises(ClientError, match='ValidationException.*path'):
+        test_table_s.update_item(Key={'p': p}, UpdateExpression='SET c.c = :val1',
+            ExpressionAttributeValues={':val1': 7})
 
 # Similarly for other types of bad paths - using [0] on something which
-# isn't an array,
+# doesn't exist or isn't an array.
 @pytest.mark.xfail(reason="nested updates not yet implemented")
 def test_nested_attribute_update_bad_path_array(test_table_s):
     p = random_string()
     test_table_s.put_item(Item={'p': p, 'a': 'hello'})
     with pytest.raises(ClientError, match='ValidationException.*path'):
         test_table_s.update_item(Key={'p': p}, UpdateExpression='SET a[0] = :val1',
+            ExpressionAttributeValues={':val1': 7})
+    with pytest.raises(ClientError, match='ValidationException.*path'):
+        test_table_s.update_item(Key={'p': p}, UpdateExpression='SET b[0] = :val1',
+            ExpressionAttributeValues={':val1': 7})
+    # Same error when the item doesn't exist at all:
+    p = random_string()
+    with pytest.raises(ClientError, match='ValidationException.*path'):
+        test_table_s.update_item(Key={'p': p}, UpdateExpression='SET b[0] = :val1',
             ExpressionAttributeValues={':val1': 7})
 
 # DynamoDB Does not allow empty sets.
