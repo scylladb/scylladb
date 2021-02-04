@@ -467,7 +467,13 @@ void fsm::append_entries(server_id from, append_request&& request) {
 void fsm::append_entries_reply(server_id from, append_reply&& reply) {
     assert(is_leader());
 
-    follower_progress& progress = _tracker->find(from);
+    follower_progress* opt_progress = _tracker->find(from);
+    if (opt_progress == nullptr) {
+        // A message from a follower removed from the
+        // configuration.
+        return;
+    }
+    follower_progress& progress = *opt_progress;
 
     if (progress.state == follower_progress::state::PIPELINE) {
         if (progress.in_flight) {
@@ -531,7 +537,12 @@ void fsm::append_entries_reply(server_id from, append_reply&& reply) {
     logger.trace("append_entries_reply[{}->{}]: next_idx={}, match_idx={}",
         _my_id, from, progress.next_idx, progress.match_idx);
 
-    replicate_to(progress, false);
+    // We may have just applied a configuration that removes this
+    // followre, so re-track it.
+    opt_progress = _tracker->find(from);
+    if (opt_progress != nullptr) {
+        replicate_to(*opt_progress, false);
+    }
 }
 
 void fsm::request_vote(server_id from, vote_request&& request) {
@@ -730,7 +741,7 @@ bool fsm::can_read() {
 }
 
 void fsm::snapshot_status(server_id id, std::optional<index_t> idx) {
-    auto& progress = _tracker->find(id);
+    follower_progress& progress = *_tracker->find(id);
 
     if (progress.state != follower_progress::state::SNAPSHOT) {
         logger.trace("snasphot_status[{}]: called not in snapshot state", _my_id);

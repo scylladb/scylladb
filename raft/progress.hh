@@ -92,8 +92,12 @@ public:
     {}
 
     // Return progress for a follower
-    follower_progress& find(server_id dst) {
-        return this->progress::find(dst)->second;
+    // May return nullptr if the follower is not part of the current
+    // configuration any more. This may happen when handling
+    // messages from removed followers.
+    follower_progress* find(server_id dst) {
+        auto it = this->progress::find(dst);
+        return  it == this->progress::end() ? nullptr : &it->second;
     }
     void set_configuration(configuration configuration, index_t next_idx);
     // Return progress object for the current leader if it's
