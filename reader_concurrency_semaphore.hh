@@ -69,19 +69,20 @@ public:
 
         friend class reader_concurrency_semaphore;
 
-        explicit inactive_read_handle(reader_concurrency_semaphore& sem, uint64_t id)
+        explicit inactive_read_handle(reader_concurrency_semaphore& sem, uint64_t id) noexcept
             : _sem(&sem), _id(id) {
         }
     public:
         inactive_read_handle() = default;
-        inactive_read_handle(inactive_read_handle&& o) : _sem(std::exchange(o._sem, nullptr)), _id(std::exchange(o._id, 0)) {
+        inactive_read_handle(inactive_read_handle&& o) noexcept
+            : _sem(std::exchange(o._sem, nullptr)), _id(std::exchange(o._id, 0)) {
         }
-        inactive_read_handle& operator=(inactive_read_handle&& o) {
+        inactive_read_handle& operator=(inactive_read_handle&& o) noexcept {
             _sem = std::exchange(o._sem, nullptr);
             _id = std::exchange(o._id, 0);
             return *this;
         }
-        explicit operator bool() const {
+        explicit operator bool() const noexcept {
             return bool(_id);
         }
     };
