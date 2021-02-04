@@ -380,6 +380,8 @@ class aws_instance:
             raise Exception("found more than one disk mounted at root'".format(root_dev_candidates))
 
         root_dev = root_dev_candidates[0].device
+        if root_dev == '/dev/root':
+            root_dev = run('findmnt -n -o SOURCE /', shell=True, check=True, capture_output=True, encoding='utf-8').stdout.strip()
         nvmes_present = list(filter(nvme_re.match, os.listdir("/dev")))
         return {"root": [ root_dev ], "ephemeral": [ x for x in nvmes_present if not root_dev.startswith(os.path.join("/dev/", x)) ] }
 
