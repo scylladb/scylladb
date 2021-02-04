@@ -24,6 +24,7 @@
 
 #include "version.hh"
 #include "shared_sstable.hh"
+#include "shared_index_lists.hh"
 #include <seastar/core/file.hh>
 #include <seastar/core/fstream.hh>
 #include <seastar/core/future.hh>
@@ -484,6 +485,7 @@ private:
     format_types _format;
 
     filter_tracker _filter_tracker;
+    shared_index_lists _index_lists;
 
     enum class mark_for_deletion {
         implicit = -1,

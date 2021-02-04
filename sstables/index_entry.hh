@@ -30,6 +30,8 @@
 #include "utils/overloaded_functor.hh"
 #include "sstables/mx/parsers.hh"
 
+#include <seastar/core/fstream.hh>
+
 namespace sstables {
 
 using promoted_index_block_position_view = std::variant<composite_view, position_in_partition_view>;
@@ -398,21 +400,37 @@ public:
 
 class promoted_index {
     deletion_time _del_time;
+    file _index_file;
+    uint64_t _promoted_index_start;
     uint32_t _promoted_index_size;
-    std::unique_ptr<clustered_index_cursor> _cursor;
-    bool _reader_closed = false;
+    uint32_t _num_blocks;
+    temporary_buffer<char> _front; // pre-read front of the promoted index.
+    bool _use_binary_search;
 public:
-    promoted_index(const schema& s, deletion_time del_time, uint32_t promoted_index_size, std::unique_ptr<clustered_index_cursor> index)
+    promoted_index(const schema& s,
+        deletion_time del_time,
+        file index_file,
+        uint64_t promoted_index_start,
+        uint32_t promoted_index_size,
+        uint32_t num_blocks,
+        temporary_buffer<char> front,
+        bool use_binary_search)
             : _del_time{del_time}
+            , _index_file(std::move(index_file))
+            , _promoted_index_start(promoted_index_start)
             , _promoted_index_size(promoted_index_size)
-            , _cursor(std::move(index))
+            , _num_blocks(num_blocks)
+            , _front(std::move(front))
+            , _use_binary_search(use_binary_search)
     { }
 
     [[nodiscard]] deletion_time get_deletion_time() const { return _del_time; }
     [[nodiscard]] uint32_t get_promoted_index_size() const { return _promoted_index_size; }
-    [[nodiscard]] clustered_index_cursor& cursor() { return *_cursor; };
-    [[nodiscard]] const clustered_index_cursor& cursor() const { return *_cursor; };
-    future<> close_reader() { return _cursor->close(); }
+
+    std::unique_ptr<clustered_index_cursor> make_cursor(shared_sstable,
+        reader_permit,
+        tracing::trace_state_ptr,
+        file_input_stream_options);
 };
 
 class index_entry {
@@ -464,14 +482,6 @@ public:
     const std::unique_ptr<promoted_index>& get_promoted_index() const { return _index; }
     std::unique_ptr<promoted_index>& get_promoted_index() { return _index; }
     uint32_t get_promoted_index_size() const { return _index ? _index->get_promoted_index_size() : 0; }
-
-    future<> close_pi_stream() {
-        if (_index) {
-            return _index->close_reader();
-        }
-
-        return make_ready_future<>();
-    }
 };
 
 }
