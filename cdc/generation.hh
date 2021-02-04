@@ -199,4 +199,15 @@ void update_streams_description(
         noncopyable_function<unsigned()> get_num_token_owners,
         abort_source&);
 
+/* Part of the upgrade procedure. Useful in case where the version of Scylla that we're upgrading from
+ * used the "cdc_streams_descriptions" table. This procedure ensures that the new "cdc_streams_descriptions_v2"
+ * table contains streams of all generations that were present in the old table and may still contain data
+ * (i.e. there exist CDC log tables that may contain rows with partition keys being the stream IDs from
+ * these generations). */
+future<> maybe_rewrite_streams_descriptions(
+        const database&,
+        shared_ptr<db::system_distributed_keyspace>,
+        noncopyable_function<unsigned()> get_num_token_owners,
+        abort_source&);
+
 } // namespace cdc
