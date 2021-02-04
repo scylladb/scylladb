@@ -211,16 +211,16 @@ querier_cache::querier_cache(std::chrono::seconds entry_ttl)
 }
 
 struct querier_utils {
-    static flat_mutation_reader get_reader(querier_base& q) {
+    static flat_mutation_reader get_reader(querier_base& q) noexcept {
         return std::move(std::get<flat_mutation_reader>(q._reader));
     }
-    static reader_concurrency_semaphore::inactive_read_handle get_inactive_read_handle(querier_base& q) {
+    static reader_concurrency_semaphore::inactive_read_handle get_inactive_read_handle(querier_base& q) noexcept {
         return std::move(std::get<reader_concurrency_semaphore::inactive_read_handle>(q._reader));
     }
-    static void set_reader(querier_base& q, flat_mutation_reader r) {
+    static void set_reader(querier_base& q, flat_mutation_reader r) noexcept {
         q._reader = std::move(r);
     }
-    static void set_inactive_read_handle(querier_base& q, reader_concurrency_semaphore::inactive_read_handle h) {
+    static void set_inactive_read_handle(querier_base& q, reader_concurrency_semaphore::inactive_read_handle h) noexcept {
         q._reader = std::move(h);
     }
 };
