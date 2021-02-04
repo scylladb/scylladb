@@ -1926,11 +1926,6 @@ reader_lifecycle_policy::pause(reader_concurrency_semaphore& sem, flat_mutation_
     return sem.register_inactive_read(std::move(reader));
 }
 
-flat_mutation_reader_opt
-reader_lifecycle_policy::try_resume(reader_concurrency_semaphore& sem, reader_concurrency_semaphore::inactive_read_handle irh) {
-    return sem.unregister_inactive_read(std::move(irh));
-}
-
 reader_concurrency_semaphore::inactive_read_handle
 reader_lifecycle_policy::pause(flat_mutation_reader reader) {
     return pause(semaphore(), std::move(reader));
@@ -1938,7 +1933,7 @@ reader_lifecycle_policy::pause(flat_mutation_reader reader) {
 
 flat_mutation_reader_opt
 reader_lifecycle_policy::try_resume(reader_concurrency_semaphore::inactive_read_handle irh) {
-    return try_resume(semaphore(), std::move(irh));
+    return semaphore().unregister_inactive_read(std::move(irh));
 }
 
 flat_mutation_reader make_multishard_combining_reader(
