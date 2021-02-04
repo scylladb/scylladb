@@ -776,6 +776,17 @@ def test_update_expression_dot_in_name(test_table_s):
         ExpressionAttributeNames={'#a': 'a.b'})
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a.b': 3}
 
+
+# Below we have several tests of what happens when a nested attribute is
+# on the left-hand side of an assignment, but an every simpler case of
+# nested attributes is having one on the right hand side of an assignment:
+@pytest.mark.xfail(reason="nested updates not yet implemented")
+def test_update_expression_nested_attribute_rhs(test_table_s):
+    p = random_string()
+    test_table_s.put_item(Item={'p': p, 'a': {'b': 3, 'c': {'x': 7, 'y': 8}}, 'd': 5})
+    test_table_s.update_item(Key={'p': p}, UpdateExpression='SET z = a.c.x')
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 7
+
 # A basic test for direct update of a nested attribute: One of the top-level
 # attributes is itself a document, and we update only one of that document's
 # nested attributes.
