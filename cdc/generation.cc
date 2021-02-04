@@ -22,8 +22,9 @@
 #include <boost/type.hpp>
 #include <random>
 #include <unordered_set>
-#include <seastar/core/sleep.hh>
 #include <algorithm>
+#include <seastar/core/sleep.hh>
+#include <seastar/core/coroutine.hh>
 
 #include "keys.hh"
 #include "schema_builder.hh"
@@ -376,24 +377,23 @@ std::optional<db_clock::time_point> get_streams_timestamp_for(const gms::inet_ad
     return gms::versioned_value::cdc_streams_timestamp_from_string(streams_ts_string);
 }
 
-// Run inside seastar::async context.
-static void do_update_streams_description(
+static future<> do_update_streams_description(
         db_clock::time_point streams_ts,
         db::system_distributed_keyspace& sys_dist_ks,
         db::system_distributed_keyspace::context ctx) {
-    if (sys_dist_ks.cdc_desc_exists(streams_ts, ctx).get0()) {
+    if (co_await sys_dist_ks.cdc_desc_exists(streams_ts, ctx)) {
         cdc_log.info("Generation {}: streams description table already updated.", streams_ts);
-        return;
+        co_return;
     }
 
     // We might race with another node also inserting the description, but that's ok. It's an idempotent operation.
 
-    auto topo = sys_dist_ks.read_cdc_topology_description(streams_ts, ctx).get0();
+    auto topo = co_await sys_dist_ks.read_cdc_topology_description(streams_ts, ctx);
     if (!topo) {
         throw std::runtime_error(format("could not find streams data for timestamp {}", streams_ts));
     }
 
-    sys_dist_ks.create_cdc_desc(streams_ts, *topo, ctx).get();
+    co_await sys_dist_ks.create_cdc_desc(streams_ts, *topo, ctx);
     cdc_log.info("CDC description table successfully updated with generation {}.", streams_ts);
 }
 
@@ -403,7 +403,7 @@ void update_streams_description(
         noncopyable_function<unsigned()> get_num_token_owners,
         abort_source& abort_src) {
     try {
-        do_update_streams_description(streams_ts, *sys_dist_ks, { get_num_token_owners() });
+        do_update_streams_description(streams_ts, *sys_dist_ks, { get_num_token_owners() }).get();
     } catch(...) {
         cdc_log.warn(
             "Could not update CDC description table with generation {}: {}. Will retry in the background.",
@@ -416,7 +416,7 @@ void update_streams_description(
             while (true) {
                 sleep_abortable(std::chrono::seconds(60), abort_src).get();
                 try {
-                    do_update_streams_description(streams_ts, *sys_dist_ks, { get_num_token_owners() });
+                    do_update_streams_description(streams_ts, *sys_dist_ks, { get_num_token_owners() }).get();
                     return;
                 } catch (...) {
                     cdc_log.warn(
