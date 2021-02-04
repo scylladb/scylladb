@@ -482,10 +482,6 @@ public:
     const std::unique_ptr<promoted_index>& get_promoted_index() const { return _index; }
     std::unique_ptr<promoted_index>& get_promoted_index() { return _index; }
     uint32_t get_promoted_index_size() const { return _index ? _index->get_promoted_index_size() : 0; }
-
-    future<> close_pi_stream() {
-        return make_ready_future<>();
-    }
 };
 
 }

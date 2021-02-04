@@ -345,18 +345,6 @@ public:
     }
 };
 
-inline static
-future<> close_index_list(shared_index_lists::list_ptr& list) {
-    if (list) {
-        return parallel_for_each(*list, [](index_entry &ie) {
-            return ie.close_pi_stream();
-        }).finally([&list] {
-            list = {};
-        });
-    }
-    return make_ready_future<>();
-}
-
 // Stores information about open end RT marker
 // of the lower index bound
 struct open_rt_marker {
@@ -506,14 +494,7 @@ private:
                     auto indexes = std::move(entries_reader->_consumer.indexes);
                     return entries_reader->_context.close().then([indexes = std::move(indexes), ex = std::move(ex)] () mutable {
                         if (ex) {
-                            return do_with(std::move(indexes), [ex = std::move(ex)] (index_list& indexes) mutable {
-                                return parallel_for_each(indexes, [] (index_entry& ie) mutable {
-                                    return ie.close_pi_stream();
-                                }).then_wrapped([ex = std::move(ex)] (future<>&& fut) mutable {
-                                    fut.ignore_ready_future();
-                                    return make_exception_future<index_list>(std::move(ex));
-                                });
-                            });
+                            return make_exception_future<index_list>(std::move(ex));
                         }
                         return make_ready_future<index_list>(std::move(indexes));
                     });
@@ -719,10 +700,8 @@ private:
         return _sstable->data_size();
     }
 
-    future<> close(index_bound& b) {
-        return reset_clustered_cursor(b).then([this, &b] {
-            return close_index_list(b.current_list);
-        });
+    static future<> close(index_bound& b) {
+        return reset_clustered_cursor(b);
     }
 public:
     index_reader(shared_sstable sst, reader_permit permit, const io_priority_class& pc, tracing::trace_state_ptr trace_state)
@@ -918,7 +897,6 @@ public:
     const shared_sstable& sstable() const { return _sstable; }
 
     future<> close() {
-        // Need to close consequently as we expect to not have close_current_list_ptr to run in parallel
         return close(_lower_bound).then([this] {
             if (_upper_bound) {
                 return close(*_upper_bound);
