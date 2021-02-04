@@ -45,7 +45,6 @@
 #include "utils/atomic_vector.hh"
 #include "utils/UUID.hh"
 #include "utils/fb_utilities.hh"
-#include "gms/i_failure_detection_event_listener.hh"
 #include "gms/failure_detector.hh"
 #include "gms/versioned_value.hh"
 #include "gms/application_state.hh"
@@ -115,7 +114,7 @@ struct gossip_config {
  * Upon hearing a GossipShutdownMessage, this module will instantly mark the remote node as down in
  * the Failure Detector.
  */
-class gossiper : public i_failure_detection_event_listener, public seastar::async_sharded_service<gossiper>, public seastar::peering_sharded_service<gossiper> {
+class gossiper : public seastar::async_sharded_service<gossiper>, public seastar::peering_sharded_service<gossiper> {
 public:
     using clk = seastar::lowres_system_clock;
     using ignore_features_of_local_node = bool_class<class ignore_features_of_local_node_tag>;
@@ -148,6 +147,7 @@ private:
     bool _advertise_myself = true;
     // Map ip address and generation number
     std::unordered_map<gms::inet_address, int32_t> _advertise_to_nodes;
+    future<> _failure_detector_loop_done{make_ready_future<>()} ;
 public:
     future<> advertise_myself();
     // Get current generation number for the given nodes
@@ -215,6 +215,7 @@ private:
 
     /* live member set */
     utils::chunked_vector<inet_address> _live_endpoints;
+    uint64_t _live_endpoints_version = 0;
 
     /* nodes are being marked as alive */
     std::unordered_set<inet_address> _pending_mark_alive_endpoints;
@@ -284,12 +285,9 @@ public:
     int64_t get_endpoint_downtime(inet_address ep) const noexcept;
 
     /**
-     * This method is part of IFailureDetectionEventListener interface. This is invoked
-     * by the Failure Detector when it convicts an end point.
-     *
      * @param endpoint end point that is convicted.
      */
-    virtual void convict(inet_address endpoint, double phi) override;
+    void convict(inet_address endpoint);
 
     /**
      * Return either: the greatest heartbeat or application state
@@ -425,12 +423,6 @@ public:
      * determine which endpoint started up earlier
      */
     int compare_endpoint_startup(inet_address addr1, inet_address addr2);
-
-    void notify_failure_detector(const std::map<inet_address, endpoint_state>& remoteEpStateMap);
-
-
-    void notify_failure_detector(inet_address endpoint, const endpoint_state& remote_endpoint_state);
-
 private:
     void mark_alive(inet_address addr, endpoint_state& local_state);
 
@@ -612,7 +604,6 @@ private:
     netw::messaging_service& _messaging;
     db::config& _cfg;
     gossip_config _gcfg;
-    failure_detector _fd;
     friend class feature;
     // Get features supported by a particular node
     std::set<sstring> get_supported_features(inet_address endpoint) const;
@@ -634,7 +625,10 @@ public:
     int get_up_endpoint_count() const noexcept;
     int get_all_endpoint_count() const noexcept;
     sstring get_endpoint_state(sstring address);
-    failure_detector& fd() { return _fd; }
+private:
+    future<> failure_detector_loop();
+    future<> failure_detector_loop_for_node(gms::inet_address node, int64_t gossip_generation, uint64_t live_endpoints_version);
+    future<> update_live_endpoints_version();
 };
 
 extern distributed<gossiper> _the_gossiper;
@@ -687,19 +681,19 @@ inline future<int> get_all_endpoint_count() {
 
 inline future<> set_phi_convict_threshold(double phi) {
     return smp::submit_to(0, [phi] {
-        get_local_gossiper().fd().set_phi_convict_threshold(phi);
+        return make_ready_future<>();
     });
 }
 
 inline future<double> get_phi_convict_threshold() {
     return smp::submit_to(0, [] {
-        return get_local_gossiper().fd().get_phi_convict_threshold();
+        return make_ready_future<double>(8);
     });
 }
 
 inline future<std::map<inet_address, arrival_window>> get_arrival_samples() {
     return smp::submit_to(0, [] {
-        return get_local_gossiper().fd().arrival_samples();
+        return make_ready_future<std::map<inet_address, arrival_window>>();
     });
 }
 
