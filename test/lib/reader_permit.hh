@@ -21,8 +21,10 @@
 
 #pragma once
 
-#include "reader_concurrency_semaphore.hh"
+#include "../../reader_permit.hh"
 #include "query_class_config.hh"
+
+class reader_concurrency_semaphore;
 
 namespace tests {
 
