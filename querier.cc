@@ -251,10 +251,17 @@ static void insert_querier(
     if (!irh) {
         return;
     }
+    auto cleanup_irh = defer([&] {
+        sem.unregister_inactive_read(std::move(irh));
+    });
 
     auto it = index.emplace(key, std::make_unique<Querier>(std::move(q)));
 
     ++stats.population;
+    auto cleanup_index = defer([&] {
+        index.erase(it);
+        --stats.population;
+    });
 
     auto notify_handler = [&stats, &index, it] (reader_concurrency_semaphore::evict_reason reason) {
         index.erase(it);
@@ -273,6 +280,8 @@ static void insert_querier(
 
     sem.set_notify_handler(irh, std::move(notify_handler), ttl);
     querier_utils::set_inactive_read_handle(*it->second, std::move(irh));
+    cleanup_index.cancel();
+    cleanup_irh.cancel();
 }
 
 void querier_cache::insert(utils::UUID key, data_querier&& q, tracing::trace_state_ptr trace_state) {
