@@ -429,6 +429,18 @@ future<> wait_log(std::vector<std::pair<std::unique_ptr<raft::server>, state_mac
     }
 }
 
+void pause_tickers(std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>& rafts) {
+    for (auto& r: rafts) {
+        r.first->pause_ticker();
+    }
+}
+
+void restart_tickers(std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>& rafts) {
+    for (auto& r: rafts) {
+        r.first->restart_ticker();
+    }
+}
+
 // Run test case (name, nodes, leader, initial logs, updates)
 future<int> run_test(test_case test) {
     std::vector<initial_state> states(test.nodes);       // Server initial states
@@ -495,6 +507,7 @@ future<int> run_test(test_case test) {
             co_await wait_log(rafts, leader);
         } else if (std::holds_alternative<new_leader>(update)) {
             co_await wait_log(rafts, leader);
+            pause_tickers(rafts);
             unsigned next_leader = std::get<new_leader>(update);
             if (next_leader != leader) {
                 assert(next_leader < rafts.size());
@@ -516,8 +529,10 @@ future<int> run_test(test_case test) {
                 tlogger.debug("confirmed leader on {}", next_leader);
                 leader = next_leader;
             }
+            restart_tickers(rafts);
         } else if (std::holds_alternative<partition>(update)) {
             co_await wait_log(rafts, leader);
+            pause_tickers(rafts);
             auto p = std::get<partition>(update);
             server_disconnected.clear();
             std::unordered_set<size_t> partition_servers;
@@ -568,6 +583,7 @@ future<int> run_test(test_case test) {
                 }
                 tlogger.debug("confirmed new leader on {}", leader);
             }
+            restart_tickers(rafts);
         }
     }
 
