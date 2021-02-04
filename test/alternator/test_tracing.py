@@ -131,7 +131,7 @@ def get_tracing_events(dynamodb, session_id):
 # even immediately).
 def expect_tracing_events(dynamodb, str, expected_events):
     delay = 0.1
-    while delay < 10:
+    while delay < 60:
         events = get_tracing_events(dynamodb, find_tracing_session(dynamodb, str))
         for event in expected_events:
             if not event in events:
