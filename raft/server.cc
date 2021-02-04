@@ -29,6 +29,7 @@
 #include <seastar/core/future-util.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/pipe.hh>
+#include <seastar/core/metrics.hh>
 
 #include "fsm.hh"
 #include "log.hh"
@@ -36,6 +37,10 @@
 using namespace std::chrono_literals;
 
 namespace raft {
+
+static const seastar::metrics::label server_id_label("id");
+static const seastar::metrics::label log_entry_type("log_entry_type");
+static const seastar::metrics::label message_type("message_type");
 
 class server_impl : public rpc_server, public server {
 public:
@@ -80,6 +85,33 @@ private:
     server::configuration _config;
 
     seastar::pipe<std::vector<log_entry_ptr>> _apply_entries = seastar::pipe<std::vector<log_entry_ptr>>(10);
+
+    struct stats {
+        uint64_t add_command = 0;
+        uint64_t add_dummy = 0;
+        uint64_t add_config = 0;
+        uint64_t append_entries_received = 0;
+        uint64_t append_entries_reply_received = 0;
+        uint64_t request_vote_received = 0;
+        uint64_t request_vote_reply_received = 0;
+        uint64_t waiters_awaiken = 0;
+        uint64_t waiters_dropped = 0;
+        uint64_t append_entries_reply_sent = 0;
+        uint64_t append_entries_sent = 0;
+        uint64_t vote_request_sent = 0;
+        uint64_t vote_request_reply_sent = 0;
+        uint64_t install_snapshot_sent = 0;
+        uint64_t snapshot_reply_sent = 0;
+        uint64_t polls = 0;
+        uint64_t store_term_and_vote = 0;
+        uint64_t store_snapshot = 0;
+        uint64_t sm_load_snapshot = 0;
+        uint64_t truncate_persisted_log = 0;
+        uint64_t persisted_log_entries = 0;
+        uint64_t queue_entries_for_apply = 0;
+        uint64_t applied_entries = 0;
+        uint64_t snapshots_taken = 0;
+    } _stats;
 
     struct op_status {
         term_t term; // term the entry was added with
@@ -138,6 +170,9 @@ private:
     future<> _applier_status = make_ready_future<>();
     future<> _io_status = make_ready_future<>();
 
+    void register_metrics();
+    seastar::metrics::metric_groups _metrics;
+
     friend std::ostream& operator<<(std::ostream& os, const server_impl& s);
 };
 
@@ -154,6 +189,7 @@ server_impl::server_impl(server_id uuid, std::unique_ptr<rpc> rpc,
 }
 
 future<> server_impl::start() {
+    register_metrics();
     auto [term, vote] = co_await _persistence->load_term_and_vote();
     auto snapshot  = co_await _persistence->load_snapshot();
     auto snp_id = snapshot.id;
@@ -205,25 +241,31 @@ future<> server_impl::add_entry_internal(T command, wait_type type) {
 }
 
 future<> server_impl::add_entry(command command, wait_type type) {
+    _stats.add_command++;
     return add_entry_internal(std::move(command), type);
 }
 
 future<> server_impl::apply_dummy_entry() {
+    _stats.add_dummy++;
     return add_entry_internal(log_entry::dummy(), wait_type::applied);
 }
 void server_impl::append_entries(server_id from, append_request append_request) {
+    _stats.append_entries_received++;
     _fsm->step(from, std::move(append_request));
 }
 
 void server_impl::append_entries_reply(server_id from, append_reply reply) {
+    _stats.append_entries_reply_received++;
     _fsm->step(from, std::move(reply));
 }
 
 void server_impl::request_vote(server_id from, vote_request vote_request) {
+    _stats.request_vote_received++;
     _fsm->step(from, std::move(vote_request));
 }
 
 void server_impl::request_vote_reply(server_id from, vote_reply vote_reply) {
+    _stats.request_vote_reply_received++;
     _fsm->step(from, std::move(vote_reply));
 }
 
@@ -252,6 +294,7 @@ void server_impl::notify_waiters(std::map<index_t, op_status>& waiters,
             // was a leadership change and the entry was replaced.
             status.done.set_exception(dropped_entry());
         }
+        _stats.waiters_awaiken++;
     }
 }
 
@@ -264,6 +307,7 @@ void server_impl::drop_waiters(std::map<index_t, op_status>& waiters, index_t id
         auto [entry_idx, status] = std::move(*it);
         waiters.erase(it);
         status.done.set_exception(commit_status_unknown());
+        _stats.waiters_dropped++;
     }
 }
 
@@ -272,18 +316,24 @@ future<> server_impl::send_message(server_id id, Message m) {
     return std::visit([this, id] (auto&& m) {
         using T = std::decay_t<decltype(m)>;
         if constexpr (std::is_same_v<T, append_reply>) {
+            _stats.append_entries_reply_sent++;
             return _rpc->send_append_entries_reply(id, m);
         } else if constexpr (std::is_same_v<T, append_request>) {
+            _stats.append_entries_sent++;
             return _rpc->send_append_entries(id, m);
         } else if constexpr (std::is_same_v<T, vote_request>) {
+            _stats.vote_request_sent++;
             return _rpc->send_vote_request(id, m);
         } else if constexpr (std::is_same_v<T, vote_reply>) {
+            _stats.vote_request_reply_sent++;
             return _rpc->send_vote_reply(id, m);
         } else if constexpr (std::is_same_v<T, install_snapshot>) {
+            _stats.install_snapshot_sent++;
             // Send in the background.
             send_snapshot(id, std::move(m));
             return make_ready_future<>();
         } else if constexpr (std::is_same_v<T, snapshot_reply>) {
+            _stats.snapshot_reply_sent++;
             assert(_snapshot_application_done);
             // send reply to install_snapshot here
             _snapshot_application_done->set_value(std::move(m));
@@ -301,6 +351,7 @@ future<> server_impl::io_fiber(index_t last_stable) {
     try {
         while (true) {
             auto batch = co_await _fsm->poll_output();
+            _stats.polls++;
 
             if (batch.term != term_t{}) {
                 // Current term and vote are always persisted
@@ -308,12 +359,14 @@ future<> server_impl::io_fiber(index_t last_stable) {
                 // term, but it's safe to update both in this
                 // case.
                 co_await _persistence->store_term_and_vote(batch.term, batch.vote);
+                _stats.store_term_and_vote++;
             }
 
             if (batch.snp) {
                 logger.trace("[{}] io_fiber storing snapshot {}", _id, batch.snp->id);
                 // Persist the snapshot
                 co_await _persistence->store_snapshot(*batch.snp, _config.snapshot_trailing);
+                _stats.store_snapshot++;
                 // If this is locally generated snapshot there is no need to
                 // load it.
                 if (_last_loaded_snapshot_id != batch.snp->id) {
@@ -323,6 +376,7 @@ future<> server_impl::io_fiber(index_t last_stable) {
                     _state_machine->drop_snapshot(_last_loaded_snapshot_id);
                     drop_waiters(_awaited_commits, batch.snp->idx);
                     _last_loaded_snapshot_id = batch.snp->id;
+                    _stats.sm_load_snapshot++;
                 }
             }
 
@@ -331,6 +385,7 @@ future<> server_impl::io_fiber(index_t last_stable) {
 
                 if (last_stable >= entries[0]->idx) {
                     co_await _persistence->truncate_log(entries[0]->idx);
+                    _stats.truncate_persisted_log++;
                 }
 
                 // Combine saving and truncating into one call?
@@ -338,6 +393,7 @@ future<> server_impl::io_fiber(index_t last_stable) {
                 co_await _persistence->store_log_entries(entries);
 
                 last_stable = (*entries.crbegin())->idx;
+                _stats.persisted_log_entries += entries.size();
             }
 
             if (batch.messages.size()) {
@@ -350,6 +406,7 @@ future<> server_impl::io_fiber(index_t last_stable) {
             // Process committed entries.
             if (batch.committed.size()) {
                 notify_waiters(_awaited_commits, batch.committed);
+                _stats.queue_entries_for_apply += batch.committed.size();
                 co_await _apply_entries.writer.write(std::move(batch.committed));
             }
         }
@@ -415,7 +472,9 @@ future<> server_impl::applier_fiber() {
                     boost::adaptors::transformed([] (log_entry_ptr& entry) { return std::cref(std::get<command>(entry->data)); }),
                     std::back_inserter(commands));
 
+            auto size = commands.size();
             co_await _state_machine->apply(std::move(commands));
+            _stats.applied_entries += size;
             notify_waiters(_awaited_applies, *opt_batch);
 
             if (applied_since_snapshot >= _config.snapshot_threshold) {
@@ -427,6 +486,7 @@ future<> server_impl::applier_fiber() {
                 _last_loaded_snapshot_id = snp.id;
                 _fsm->apply_snapshot(snp, _config.snapshot_trailing);
                 applied_since_snapshot = 0;
+                _stats.snapshots_taken++;
             }
         }
     } catch (...) {
@@ -486,7 +546,68 @@ future<> server_impl::set_configuration(server_address_set c_new) {
     if (joining.size() == 0 && leaving.size() == 0) {
         co_return;
     }
+    _stats.add_config++;
     co_return co_await add_entry_internal(raft::configuration{std::move(c_new)}, wait_type::committed);
+}
+
+void server_impl::register_metrics() {
+    namespace sm = seastar::metrics;
+    _metrics.add_group("raft", {
+        sm::make_total_operations("add_entries", _stats.add_command,
+             sm::description("how many entries were added on this node"), {server_id_label(_id), log_entry_type("command")}),
+        sm::make_total_operations("add_entries", _stats.add_dummy,
+             sm::description("how many entries were added on this node"), {server_id_label(_id), log_entry_type("dummy")}),
+        sm::make_total_operations("add_entries", _stats.add_config,
+             sm::description("how many entries were added on this node"), {server_id_label(_id), log_entry_type("config")}),
+
+        sm::make_total_operations("messages_received", _stats.append_entries_received,
+             sm::description("how many messages were received"), {server_id_label(_id), message_type("append_entries")}),
+        sm::make_total_operations("messages_received", _stats.append_entries_reply_received,
+             sm::description("how many messages were received"), {server_id_label(_id), message_type("append_entries_reply")}),
+        sm::make_total_operations("messages_received", _stats.request_vote_received,
+             sm::description("how many messages were received"), {server_id_label(_id), message_type("request_vote")}),
+        sm::make_total_operations("messages_received", _stats.request_vote_reply_received,
+             sm::description("how many messages were received"), {server_id_label(_id), message_type("request_vote_reply")}),
+
+        sm::make_total_operations("messages_sent", _stats.append_entries_sent,
+             sm::description("how many messages were send"), {server_id_label(_id), message_type("append_entries")}),
+        sm::make_total_operations("messages_sent", _stats.append_entries_reply_sent,
+             sm::description("how many messages were sent"), {server_id_label(_id), message_type("append_entries_reply")}),
+        sm::make_total_operations("messages_sent", _stats.vote_request_sent,
+             sm::description("how many messages were sent"), {server_id_label(_id), message_type("request_vote")}),
+        sm::make_total_operations("messages_sent", _stats.vote_request_reply_sent,
+             sm::description("how many messages were sent"), {server_id_label(_id), message_type("request_vote_reply")}),
+        sm::make_total_operations("messages_sent", _stats.install_snapshot_sent,
+             sm::description("how many messages were sent"), {server_id_label(_id), message_type("install_snapshot")}),
+        sm::make_total_operations("messages_sent", _stats.snapshot_reply_sent,
+             sm::description("how many messages were sent"), {server_id_label(_id), message_type("snapshot_reply")}),
+
+        sm::make_total_operations("waiter_awaiken", _stats.waiters_awaiken,
+             sm::description("how many waiters got result back"), {server_id_label(_id)}),
+        sm::make_total_operations("waiter_dropped", _stats.waiters_dropped,
+             sm::description("how many waiters did not get result back"), {server_id_label(_id)}),
+        sm::make_total_operations("polls", _stats.polls,
+             sm::description("how many time raft state machine was polled"), {server_id_label(_id)}),
+        sm::make_total_operations("store_term_and_vote", _stats.store_term_and_vote,
+             sm::description("how many times term and vote were persisted"), {server_id_label(_id)}),
+        sm::make_total_operations("store_snapshot", _stats.store_snapshot,
+             sm::description("how many snapshot were persisted"), {server_id_label(_id)}),
+        sm::make_total_operations("sm_load_snapshot", _stats.sm_load_snapshot,
+             sm::description("how many times user state machine was reloaded with a snapshot"), {server_id_label(_id)}),
+        sm::make_total_operations("truncate_persisted_log", _stats.truncate_persisted_log,
+             sm::description("how many times log was truncated on storage"), {server_id_label(_id)}),
+        sm::make_total_operations("persisted_log_entries", _stats.persisted_log_entries,
+             sm::description("how many log entries were persisted"), {server_id_label(_id)}),
+        sm::make_total_operations("queue_entries_for_apply", _stats.queue_entries_for_apply,
+             sm::description("how many log entries were queued to be applied"), {server_id_label(_id)}),
+        sm::make_total_operations("applied_entries", _stats.applied_entries,
+             sm::description("how many log entries were applied"), {server_id_label(_id)}),
+        sm::make_total_operations("snapshots_taken", _stats.snapshots_taken,
+             sm::description("how many time the user's state machine was snapshotted"), {server_id_label(_id)}),
+
+        sm::make_gauge("in_memory_log_size", [this] { return _fsm->in_memory_log_size(); },
+             sm::description("size of in-memory part of the log"), {server_id_label(_id)}),
+    });
 }
 
 future<> server_impl::elect_me_leader() {
