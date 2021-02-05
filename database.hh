@@ -1398,7 +1398,7 @@ public:
     bool has_keyspace(std::string_view name) const;
     void validate_keyspace_update(keyspace_metadata& ksm);
     void validate_new_keyspace(keyspace_metadata& ksm);
-    future<> update_keyspace(const sstring& name);
+    future<> update_keyspace(sharded<service::storage_proxy>& proxy, const sstring& name);
     void drop_keyspace(const sstring& name);
     std::vector<sstring> get_non_system_keyspaces() const;
     column_family& find_column_family(std::string_view ks, std::string_view name);

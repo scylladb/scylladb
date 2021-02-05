@@ -892,8 +892,7 @@ void database::add_keyspace(sstring name, keyspace k) {
     }
 }
 
-future<> database::update_keyspace(const sstring& name) {
-    auto& proxy = service::get_storage_proxy();
+future<> database::update_keyspace(sharded<service::storage_proxy>& proxy, const sstring& name) {
     return db::schema_tables::read_schema_partition_for_keyspace(proxy, db::schema_tables::KEYSPACES, name).then([this, name](db::schema_tables::schema_result_value_type&& v) {
         auto& ks = find_keyspace(name);
 
