@@ -359,22 +359,28 @@ inline void table::remove_sstable_from_backlog_tracker(compaction_backlog_tracke
     tracker.remove_sstable(std::move(sstable));
 }
 
-void table::add_sstable(sstables::shared_sstable sstable) {
+lw_shared_ptr<sstables::sstable_set>
+table::do_add_sstable(lw_shared_ptr<sstables::sstable_set> sstables, sstables::shared_sstable sstable,
+        enable_backlog_tracker backlog_tracker) {
     if (belongs_to_other_shard(sstable->get_shards_for_this_sstable())) {
         on_internal_error(tlogger, format("Attempted to load the shared SSTable {} at table", sstable->get_filename()));
     }
     // allow in-progress reads to continue using old list
-    auto new_sstables = make_lw_shared<sstables::sstable_set>(*_sstables);
+    auto new_sstables = make_lw_shared<sstables::sstable_set>(*sstables);
     new_sstables->insert(sstable);
     if (sstable->requires_view_building()) {
         _sstables_staging.emplace(sstable->generation(), sstable);
-    } else {
+    } else if (backlog_tracker) {
         add_sstable_to_backlog_tracker(_compaction_strategy.get_backlog_tracker(), sstable);
     }
-    // update _stables last in case either updating
+    // update sstable set last in case either updating
     // staging sstables or backlog tracker throws
-    _sstables = std::move(new_sstables);
     update_stats_for_new_sstable(sstable->bytes_on_disk());
+    return new_sstables;
+}
+
+void table::add_sstable(sstables::shared_sstable sstable) {
+    _sstables = do_add_sstable(_sstables, std::move(sstable), enable_backlog_tracker::yes);
 }
 
 future<>

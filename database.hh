@@ -339,6 +339,8 @@ using column_family_stats = table_stats;
 
 class database_sstable_write_monitor;
 
+using enable_backlog_tracker = bool_class<class enable_backlog_tracker_tag>;
+
 struct table_stats {
     /** Number of times flush has resulted in the memtable being switched out. */
     int64_t memtable_switch_count = 0;
@@ -535,6 +537,9 @@ private:
     // Cache must be synchronized atomically with this, otherwise write atomicity may not be respected.
     // Doesn't trigger compaction.
     // Strong exception guarantees.
+    lw_shared_ptr<sstables::sstable_set>
+    do_add_sstable(lw_shared_ptr<sstables::sstable_set> sstables, sstables::shared_sstable sstable,
+        enable_backlog_tracker backlog_tracker);
     void add_sstable(sstables::shared_sstable sstable);
     static void add_sstable_to_backlog_tracker(compaction_backlog_tracker& tracker, sstables::shared_sstable sstable);
     static void remove_sstable_from_backlog_tracker(compaction_backlog_tracker& tracker, sstables::shared_sstable sstable);
