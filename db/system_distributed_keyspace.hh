@@ -63,6 +63,8 @@ private:
     cql3::query_processor& _qp;
     service::migration_manager& _mm;
 
+    bool _started = false;
+
 public:
     /* Should writes to the given table always be synchronized by commitlog (flushed to disk)
      * before being acknowledged? */
@@ -72,6 +74,8 @@ public:
 
     future<> start();
     future<> stop();
+
+    bool started() const { return _started; }
 
     future<std::unordered_map<utils::UUID, sstring>> view_status(sstring ks_name, sstring view_name) const;
     future<> start_view_build(sstring ks_name, sstring view_name) const;

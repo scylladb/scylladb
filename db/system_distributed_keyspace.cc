@@ -124,6 +124,7 @@ system_distributed_keyspace::system_distributed_keyspace(cql3::query_processor& 
 
 future<> system_distributed_keyspace::start() {
     if (this_shard_id() != 0) {
+        _started = true;
         return make_ready_future<>();
     }
 
@@ -148,7 +149,7 @@ future<> system_distributed_keyspace::start() {
                 });
             });
         });
-    });
+    }).then([this] { _started = true; });
 }
 
 future<> system_distributed_keyspace::stop() {

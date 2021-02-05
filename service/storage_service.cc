@@ -750,7 +750,8 @@ void storage_service::handle_cdc_generation(std::optional<db_clock::time_point> 
         return;
     }
 
-    if (!db::system_keyspace::bootstrap_complete() || !_sys_dist_ks.local_is_initialized()) {
+    if (!db::system_keyspace::bootstrap_complete() || !_sys_dist_ks.local_is_initialized()
+            || !_sys_dist_ks.local().started()) {
         // We still haven't finished the startup process.
         // We will handle this generation in `scan_cdc_generations` (unless there's a newer one).
         return;
