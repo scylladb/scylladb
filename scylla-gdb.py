@@ -492,6 +492,10 @@ class std_list:
                 self._node = self._node['_M_next']
                 return val
 
+            # python2 compatibility
+            def next(self):
+                return self.__next__()
+
         return std_list_iterator(self)
 
     @staticmethod
