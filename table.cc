@@ -389,13 +389,18 @@ table::add_sstable_and_update_cache(sstables::shared_sstable sst) {
 
 future<>
 table::update_cache(lw_shared_ptr<memtable> m, std::vector<sstables::shared_sstable> ssts) {
-    std::vector<mutation_source> sources;
-    sources.reserve(ssts.size());
-    for (auto& sst : ssts) {
-        sources.push_back(sst->as_mutation_source());
+    mutation_source_opt ms_opt;
+    if (ssts.size() == 1) {
+        ms_opt = ssts.front()->as_mutation_source();
+    } else {
+        std::vector<mutation_source> sources;
+        sources.reserve(ssts.size());
+        for (auto& sst : ssts) {
+            sources.push_back(sst->as_mutation_source());
+        }
+        ms_opt = make_combined_mutation_source(std::move(sources));
     }
-    auto new_ssts_ms = make_combined_mutation_source(std::move(sources));
-    auto adder = row_cache::external_updater([this, m, ssts = std::move(ssts), new_ssts_ms = std::move(new_ssts_ms)] () mutable {
+    auto adder = row_cache::external_updater([this, m, ssts = std::move(ssts), new_ssts_ms = std::move(*ms_opt)] () mutable {
         for (auto& sst : ssts) {
             add_sstable(sst);
         }
