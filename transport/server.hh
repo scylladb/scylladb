@@ -106,7 +106,6 @@ struct cql_query_state {
 struct cql_server_config {
     ::timeout_config timeout_config;
     size_t max_request_size;
-    std::function<utils::updateable_value<uint32_t> ()> get_max_concurrent_requests_updateable_value;
     std::function<semaphore& ()> get_service_memory_limiter_semaphore;
     sstring partitioner_name;
     unsigned sharding_ignore_msb;
@@ -157,7 +156,7 @@ private:
     auth::service& _auth_service;
 public:
     cql_server(distributed<cql3::query_processor>& qp, auth::service&,
-            service::migration_notifier& mn,
+            service::migration_notifier& mn, database& db,
             cql_server_config config);
     future<> listen(socket_address addr, std::shared_ptr<seastar::tls::credentials_builder> = {}, bool is_shard_aware = false, bool keepalive = false);
     future<> do_accepts(int which, bool keepalive, socket_address server_addr);
