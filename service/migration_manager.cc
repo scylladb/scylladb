@@ -1092,7 +1092,7 @@ future<schema_ptr> get_schema_definition(table_schema_version v, netw::messaging
 }
 
 future<schema_ptr> get_schema_for_read(table_schema_version v, netw::messaging_service::msg_addr dst, netw::messaging_service& ms) {
-    return get_schema_definition(v, dst, ms);
+    return get_schema_for_write(v, dst, ms);
 }
 
 future<schema_ptr> get_schema_for_write(table_schema_version v, netw::messaging_service::msg_addr dst, netw::messaging_service& ms) {
