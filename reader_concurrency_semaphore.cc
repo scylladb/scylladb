@@ -433,11 +433,11 @@ flat_mutation_reader_opt reader_concurrency_semaphore::unregister_inactive_read(
     return {};
 }
 
-bool reader_concurrency_semaphore::try_evict_one_inactive_read() {
+bool reader_concurrency_semaphore::try_evict_one_inactive_read(evict_reason reason) {
     if (_inactive_reads.empty()) {
         return false;
     }
-    evict(_inactive_reads.begin(), evict_reason::manual);
+    evict(_inactive_reads.begin(), reason);
     return true;
 }
 
