@@ -1853,6 +1853,7 @@ public:
     virtual future<> next_partition() override;
     virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override;
     virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) override;
+    virtual future<> close() noexcept override;
 };
 
 void multishard_combining_reader::on_partition_range_change(const dht::partition_range& pr) {
@@ -1994,6 +1995,15 @@ future<> multishard_combining_reader::fast_forward_to(const dht::partition_range
 
 future<> multishard_combining_reader::fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) {
     return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
+}
+
+future<> multishard_combining_reader::close() noexcept {
+    // Move _shard_readers to prevent double stop from
+    // ~multishard_combining_reader.
+    auto shard_readers = std::move(_shard_readers);
+    return parallel_for_each(shard_readers, [] (lw_shared_ptr<shard_reader>& sr) {
+        return sr->close();
+    });
 }
 
 reader_concurrency_semaphore::inactive_read_handle
