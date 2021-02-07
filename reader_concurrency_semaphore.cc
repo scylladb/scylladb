@@ -376,18 +376,27 @@ reader_concurrency_semaphore::~reader_concurrency_semaphore() {
     broken(std::make_exception_ptr(broken_semaphore{}));
 }
 
-reader_concurrency_semaphore::inactive_read_handle reader_concurrency_semaphore::register_inactive_read(flat_mutation_reader reader) {
+reader_concurrency_semaphore::inactive_read_handle reader_concurrency_semaphore::register_inactive_read(flat_mutation_reader reader) noexcept {
     // Implies _inactive_reads.empty(), we don't queue new readers before
     // evicting all inactive reads.
     if (_wait_list.empty()) {
+      try {
         auto irp = std::make_unique<inactive_read>(std::move(reader));
         auto& ir = *irp;
         _inactive_reads.push_back(ir);
         ++_stats.inactive_reads;
         return inactive_read_handle(*this, std::move(irp));
+      } catch (...) {
+        // It is okay to swallow the exception since
+        // we're allowed to drop the reader upon registration
+        // due to lack of resources. Returning an empty
+        // i_r_h here rather than throwing simplifies the caller's
+        // error handling.
+        rcslog.warn("Registering inactive read failed: {}. Ignored as if it was evicted.", std::current_exception());
+      }
+    } else {
+        ++_stats.permit_based_evictions;
     }
-
-    ++_stats.permit_based_evictions;
     return inactive_read_handle();
 }
 

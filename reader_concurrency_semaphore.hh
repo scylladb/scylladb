@@ -201,7 +201,7 @@ public:
     /// interface.
     /// The semaphore takes ownership of the created object and destroys it if
     /// it is evicted.
-    inactive_read_handle register_inactive_read(flat_mutation_reader ir);
+    inactive_read_handle register_inactive_read(flat_mutation_reader ir) noexcept;
 
     /// Set the inactive read eviction notification handler and optionally eviction ttl.
     ///
