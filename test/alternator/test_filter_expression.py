@@ -235,6 +235,30 @@ def test_filter_expression_ge(test_table_sn_with_data):
         expected_items = [item for item in items if item[xn] >= xv]
         assert(got_items == expected_items)
 
+# Comparison operators such as >= or BETWEEN only work on numbers, strings or
+# bytes. When an expression's operands come from the item and has a wrong type
+# (e.g., a list), the result is that the item is skipped - aborting the scan
+# with a ValidationException is a bug (this was issue #8043).
+def test_filter_expression_le_bad_type(test_table_sn_with_data):
+    table, p, items = test_table_sn_with_data
+    got_items = full_query(table, KeyConditionExpression='p=:p', FilterExpression='l <= :xv',
+        ExpressionAttributeValues={':p': p, ':xv': 3})
+    assert got_items == []
+    got_items = full_query(table, KeyConditionExpression='p=:p', FilterExpression=':xv <= l',
+        ExpressionAttributeValues={':p': p, ':xv': 3})
+    assert got_items == []
+def test_filter_expression_between_bad_type(test_table_sn_with_data):
+    table, p, items = test_table_sn_with_data
+    got_items = full_query(table, KeyConditionExpression='p=:p', FilterExpression='s between :xv and l',
+        ExpressionAttributeValues={':p': p, ':xv': 'cat'})
+    assert got_items == []
+    got_items = full_query(table, KeyConditionExpression='p=:p', FilterExpression='s between l and :xv',
+        ExpressionAttributeValues={':p': p, ':xv': 'cat'})
+    assert got_items == []
+    got_items = full_query(table, KeyConditionExpression='p=:p', FilterExpression='s between i and :xv',
+        ExpressionAttributeValues={':p': p, ':xv': 'cat'})
+    assert got_items == []
+
 # Test the "BETWEEN/AND" ternary operator on a numeric, string and bytes
 # attribute. These keywords are case-insensitive.
 def test_filter_expression_between(test_table_sn_with_data):

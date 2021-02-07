@@ -52,6 +52,7 @@ bool verify_expected(const rjson::value& req, const rjson::value* previous_item)
 bool verify_condition(const rjson::value& condition, bool require_all, const rjson::value* previous_item);
 
 bool check_CONTAINS(const rjson::value* v1, const rjson::value& v2);
+bool check_BEGINS_WITH(const rjson::value* v1, const rjson::value& v2, bool v1_from_query, bool v2_from_query);
 
 bool verify_condition_expression(
         const parsed::condition_expression& condition_expression,
