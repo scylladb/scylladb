@@ -1648,6 +1648,7 @@ public:
     virtual future<> next_partition() override;
     virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override;
     virtual future<> fast_forward_to(position_range, db::timeout_clock::time_point timeout) override;
+    virtual future<> close() noexcept override;
     bool done() const {
         return _reader && is_buffer_empty() && is_end_of_stream();
     }
@@ -1657,17 +1658,23 @@ public:
     }
 };
 
+// FIXME: get rid of stop once we make sure
+// shard_reader is always closed before destruction
 void shard_reader::stop() noexcept {
+    (void)close();
+}
+
+future<> shard_reader::close() noexcept {
     // Nothing to do if there was no reader created, nor is there a background
     // read ahead in progress which will create one.
     if (!_reader && !_read_ahead) {
-        return;
+        return make_ready_future<>();
     }
 
     auto f = _read_ahead ? *std::exchange(_read_ahead, std::nullopt) : make_ready_future<>();
 
     // TODO: return future upstream as part of close()
-    (void)_lifecycle_policy->destroy_reader(_shard, f.then([this] {
+    return _lifecycle_policy->destroy_reader(_shard, f.then([this] {
         return smp::submit_to(_shard, [this] {
             auto ret = std::tuple(
                     make_foreign(std::make_unique<reader_concurrency_semaphore::inactive_read_handle>(std::move(*_reader).inactive_read_handle())),
