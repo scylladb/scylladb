@@ -1012,7 +1012,7 @@ void segment_pool::prime(size_t available_memory, size_t min_free_memory) {
     // We want to leave more free memory than just min_free_memory() in order to reduce
     // the frequency of expensive segment-migrating reclaim() called by the seastar allocator.
     size_t min_gap = 1 * 1024 * 1024;
-    size_t max_gap = 64 * 1024 * 1024;
+    size_t max_gap = 32 * 1024 * 1024;
     size_t gap = std::min(max_gap, std::max(available_memory / 16, min_gap));
     _store.non_lsa_reserve = min_free_memory + gap;
     // Since the reclaimer is not yet in place, free some low memory for general use
