@@ -645,6 +645,55 @@ std::unordered_map<std::string_view, function_handler_type*> function_handlers {
     },
 };
 
+// Given a parsed::path and an item read from the table, extract the value
+// of a certain attribute path, such as "a" or "a.b.c[3]". Returns a null
+// value if the item or the requested attribute does not exist.
+// Note that the item is assumed to be encoded in JSON using DynamoDB
+// conventions - each level of a nested document is a map with one key -
+// a type (e.g., "M" for map) - and its value is the representation of
+// that value.
+static rjson::value extract_path(const rjson::value* item,
+        const parsed::path& p, calculate_value_caller caller) {
+    if (!item) {
+        return rjson::null_value();
+    }
+    const rjson::value* v = rjson::find(*item, p.root());
+    if (!v) {
+        return rjson::null_value();
+    }
+    for (const auto& op : p.operators()) {
+        if (!v->IsObject() || v->MemberCount() != 1) {
+            // This shouldn't happen. We shouldn't have stored malformed
+            // objects. But today Alternator does not validate the structure
+            // of nested documents before storing them, so this can happen on
+            // read.
+            throw api_error::validation(format("{}: malformed item read: {}", *item));
+        }
+        const char* type = v->MemberBegin()->name.GetString();
+        v = &(v->MemberBegin()->value);
+        std::visit(overloaded_functor {
+            [&] (const std::string& member) {
+                if (type[0] == 'M' && v->IsObject()) {
+                    v = rjson::find(*v, member);
+                } else {
+                    v = nullptr;
+                }
+            },
+            [&] (unsigned index) {
+                if (type[0] == 'L' && v->IsArray() && index < v->Size()) {
+                    v = &(v->GetArray()[index]);
+                } else {
+                    v = nullptr;
+                }
+            }
+        }, op);
+        if (!v) {
+            return rjson::null_value();
+        }
+    }
+    return rjson::copy(*v);
+}
+
 // Given a parsed::value, which can refer either to a constant value from
 // ExpressionAttributeValues, to the value of some attribute, or to a function
 // of other values, this function calculates the resulting value.
@@ -662,21 +711,12 @@ rjson::value calculate_value(const parsed::value& v,
             auto function_it = function_handlers.find(std::string_view(f._function_name));
             if (function_it == function_handlers.end()) {
                 throw api_error::validation(
-                        format("UpdateExpression: unknown function '{}' called.", f._function_name));
+                        format("{}: unknown function '{}' called.", caller, f._function_name));
             }
             return function_it->second(caller, previous_item, f);
         },
         [&] (const parsed::path& p) -> rjson::value {
-            if (!previous_item) {
-                return rjson::null_value();
-            }
-            std::string update_path = p.root();
-            if (p.has_operators()) {
-                // FIXME: support this
-                throw api_error::validation("Reading attribute paths not yet implemented");
-            }
-            const rjson::value* previous_value = rjson::find(*previous_item, update_path);
-            return previous_value ? rjson::copy(*previous_value) : rjson::null_value();
+            return extract_path(previous_item, p, caller);
         }
     }, v._value);
 }

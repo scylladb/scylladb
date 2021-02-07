@@ -1262,7 +1262,6 @@ def test_update_condition_other_funcs(test_table_s):
 # ConditionExpressions also allows reading nested attributes, and we should
 # support that too. This test just checks a few random operators - we don't
 # test all the different operators here.
-@pytest.mark.xfail(reason="nested attributes not yet implemented in ConditionExpression")
 def test_update_condition_nested_attributes(test_table_s):
     p = random_string()
     test_table_s.update_item(Key={'p': p},
@@ -1308,7 +1307,6 @@ def test_update_condition_attribute_reference(test_table_s):
             ExpressionAttributeValues={':val': 1})
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['c'] == 1
 
-@pytest.mark.xfail(reason="nested attributes not yet implemented in ConditionExpression")
 def test_update_condition_nested_attribute_reference(test_table_s):
     p = random_string()
     test_table_s.update_item(Key={'p': p},
