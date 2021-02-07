@@ -237,6 +237,30 @@ def test_update_expected_1_le(test_table_s):
                             'AttributeValueList': [2, 3]}}
         )
 
+# Comparison operators like le work only on numbers, strings or bytes.
+# As noted in issue #8043, if any other type is included in *the query*,
+# the result should be a ValidationException, but if the wrong type appears
+# in the item, not the query, the result is a failed condition.
+def test_update_expected_1_le_validation(test_table_s):
+    p = random_string()
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'a': {'Value': 1, 'Action': 'PUT'},
+                          'b': {'Value': [1,2], 'Action': 'PUT'}})
+    # Bad type (a list) in the query. Result is ValidationException.
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'z': {'Value': 17, 'Action': 'PUT'}},
+            Expected={'a': {'ComparisonOperator': 'LE',
+                            'AttributeValueList': [[1,2,3]]}}
+        )
+    with pytest.raises(ClientError, match='ConditionalCheckFailedException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'z': {'Value': 17, 'Action': 'PUT'}},
+            Expected={'b': {'ComparisonOperator': 'LE',
+                            'AttributeValueList': [3]}}
+        )
+    assert not 'z' in test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']
+
 # Tests for Expected with ComparisonOperator = "LT":
 def test_update_expected_1_lt(test_table_s):
     p = random_string()
@@ -893,6 +917,34 @@ def test_update_expected_1_between(test_table_s):
         test_table_s.update_item(Key={'p': p},
             AttributeUpdates={'z': {'Value': 2, 'Action': 'PUT'}},
             Expected={'d': {'ComparisonOperator': 'BETWEEN', 'AttributeValueList': [set([1]), set([2])]}})
+
+# BETWEEN work only on numbers, strings or bytes. As noted in issue #8043,
+# if any other type is included in *the query*, the result should be a
+# ValidationException, but if the wrong type appears in the item, not the
+# query, the result is a failed condition.
+# BETWEEN should also generate ValidationException if the two ends of the
+# range are not of the same type or not in the correct order, but this
+# already is tested in the test above (test_update_expected_1_between).
+def test_update_expected_1_between_validation(test_table_s):
+    p = random_string()
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'a': {'Value': 1, 'Action': 'PUT'},
+                          'b': {'Value': [1,2], 'Action': 'PUT'}})
+    # Bad type (a list) in the query. Result is ValidationException.
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'z': {'Value': 17, 'Action': 'PUT'}},
+            Expected={'a': {'ComparisonOperator': 'BETWEEN',
+                            'AttributeValueList': [[1,2,3], [2,3,4]]}}
+        )
+    with pytest.raises(ClientError, match='ConditionalCheckFailedException'):
+        test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'z': {'Value': 17, 'Action': 'PUT'}},
+            Expected={'b': {'ComparisonOperator': 'BETWEEN',
+                            'AttributeValueList': [1,2]}}
+        )
+    assert not 'z' in test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']
+
 
 ##############################################################################
 # Instead of ComparisonOperator and AttributeValueList, one can specify either
