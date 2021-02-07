@@ -603,52 +603,8 @@ std::unordered_map<std::string_view, function_handler_type*> function_handlers {
             }
             rjson::value v1 = calculate_value(f._parameters[0], caller, previous_item);
             rjson::value v2 = calculate_value(f._parameters[1], caller, previous_item);
-            // TODO: There's duplication here with check_BEGINS_WITH().
-            // But unfortunately, the two functions differ a bit.
-
-            // If one of v1 or v2 is malformed or has an unsupported type
-            // (not B or S), what we do depends on whether it came from
-            // the user's query (is_constant()), or the item. Unsupported
-            // values in the query result in an error, but if they are in
-            // the item, we silently return false (no match).
-            bool bad = false;
-            if (!v1.IsObject() || v1.MemberCount() != 1) {
-                bad = true;
-                if (f._parameters[0].is_constant()) {
-                    throw api_error("ValidationException", format("{}: begins_with() encountered malformed AttributeValue: {}", caller, v1));
-                }
-            } else if (v1.MemberBegin()->name != "S" && v1.MemberBegin()->name != "B") {
-                bad = true;
-                if (f._parameters[0].is_constant()) {
-                    throw api_error("ValidationException", format("{}: begins_with() supports only string or binary in AttributeValue: {}", caller, v1));
-                }
-            }
-            if (!v2.IsObject() || v2.MemberCount() != 1) {
-                bad = true;
-                if (f._parameters[1].is_constant()) {
-                    throw api_error("ValidationException", format("{}: begins_with() encountered malformed AttributeValue: {}", caller, v2));
-                }
-            } else if (v2.MemberBegin()->name != "S" && v2.MemberBegin()->name != "B") {
-                bad = true;
-                if (f._parameters[1].is_constant()) {
-                    throw api_error("ValidationException", format("{}: begins_with() supports only string or binary in AttributeValue: {}", caller, v2));
-                }
-            }
-            bool ret = false;
-            if (!bad) {
-                auto it1 = v1.MemberBegin();
-                auto it2 = v2.MemberBegin();
-                if (it1->name == it2->name) {
-                    if (it2->name == "S") {
-                        std::string_view val1 = rjson::to_string_view(it1->value);
-                        std::string_view val2 = rjson::to_string_view(it2->value);
-                        ret = val1.starts_with(val2);
-                    } else /* it2->name == "B" */ {
-                        ret = base64_begins_with(rjson::to_string_view(it1->value), rjson::to_string_view(it2->value));
-                    }
-                }
-            }
-            return to_bool_json(ret);
+            return to_bool_json(check_BEGINS_WITH(v1.IsNull() ? nullptr : &v1,  v2,
+                                    f._parameters[0].is_constant(), f._parameters[1].is_constant()));
         }
     },
     {"contains", [] (calculate_value_caller caller, const rjson::value* previous_item, const parsed::value::function_call& f) {

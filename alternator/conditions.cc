@@ -159,23 +159,40 @@ static bool check_NE(const rjson::value* v1, const rjson::value& v2) {
 }
 
 // Check if two JSON-encoded values match with the BEGINS_WITH relation
-static bool check_BEGINS_WITH(const rjson::value* v1, const rjson::value& v2) {
-    // BEGINS_WITH requires that its single operand (v2) be a string or
-    // binary - otherwise it's a validation error. However, problems with
-    // the stored attribute (v1) will just return false (no match).
-    if (!v2.IsObject() || v2.MemberCount() != 1) {
-        throw api_error("ValidationException", format("BEGINS_WITH operator encountered malformed AttributeValue: {}", v2));
-    }
-    auto it2 = v2.MemberBegin();
-    if (it2->name != "S" && it2->name != "B") {
-        throw api_error("ValidationException", format("BEGINS_WITH operator requires String or Binary type in AttributeValue, got {}", it2->name));
-    }
-
-
+bool check_BEGINS_WITH(const rjson::value* v1, const rjson::value& v2,
+                       bool v1_from_query, bool v2_from_query) {
+    bool bad = false;
     if (!v1 || !v1->IsObject() || v1->MemberCount() != 1) {
+        if (v1_from_query) {
+            throw api_error("ValidationException", "begins_with() encountered malformed argument");
+        } else {
+            bad = true;
+        }
+    } else if (v1->MemberBegin()->name != "S" && v1->MemberBegin()->name != "B") {
+        if (v1_from_query) {
+            throw api_error("ValidationException", format("begins_with supports only string or binary type, got: {}", *v1));
+        } else {
+            bad = true;
+        }
+    }
+    if (!v2.IsObject() || v2.MemberCount() != 1) {
+        if (v2_from_query) {
+            throw api_error("ValidationException", "begins_with() encountered malformed argument");
+        } else {
+            bad = true;
+        }
+    } else if (v2.MemberBegin()->name != "S" && v2.MemberBegin()->name != "B") {
+        if (v2_from_query) {
+            throw api_error("ValidationException", format("begins_with() supports only string or binary type, got: {}", v2));
+        } else {
+            bad = true;
+        }
+    }
+    if (bad) {
         return false;
     }
     auto it1 = v1->MemberBegin();
+    auto it2 = v2.MemberBegin();
     if (it1->name != it2->name) {
         return false;
     }
@@ -279,24 +296,38 @@ static bool check_NOT_NULL(const rjson::value* val) {
     return val != nullptr;
 }
 
+// Only types S, N or B (string, number or bytes) may be compared by the
+// various comparion operators - lt, le, gt, ge, and between.
+static bool check_comparable_type(const rjson::value& v) {
+    if (!v.IsObject() || v.MemberCount() != 1) {
+        return false;
+    }
+    const rjson::value& type = v.MemberBegin()->name;
+    return type == "S" || type == "N" || type == "B";
+}
+
 // Check if two JSON-encoded values match with cmp.
 template <typename Comparator>
-bool check_compare(const rjson::value* v1, const rjson::value& v2, const Comparator& cmp) {
-    if (!v2.IsObject() || v2.MemberCount() != 1) {
-        throw api_error("ValidationException",
-                        format("{} requires a single AttributeValue of type String, Number, or Binary",
-                               cmp.diagnostic));
+bool check_compare(const rjson::value* v1, const rjson::value& v2, const Comparator& cmp,
+                   bool v1_from_query, bool v2_from_query) {
+    bool bad = false;
+    if (!v1 || !check_comparable_type(*v1)) {
+        if (v1_from_query) {
+            throw api_error("ValidationException", format("{} allow only the types String, Number, or Binary", cmp.diagnostic));
+        }
+        bad = true;
     }
-    const auto& kv2 = *v2.MemberBegin();
-    if (kv2.name != "S" && kv2.name != "N" && kv2.name != "B") {
-        throw api_error("ValidationException",
-                        format("{} requires a single AttributeValue of type String, Number, or Binary",
-                               cmp.diagnostic));
+    if (!check_comparable_type(v2)) {
+        if (v2_from_query) {
+            throw api_error("ValidationException", format("{} allow only the types String, Number, or Binary", cmp.diagnostic));
+        }
+        bad = true;
     }
-    if (!v1 || !v1->IsObject() || v1->MemberCount() != 1) {
+    if (bad) {
         return false;
     }
     const auto& kv1 = *v1->MemberBegin();
+    const auto& kv2 = *v2.MemberBegin();
     if (kv1.name != kv2.name) {
         return false;
     }
@@ -310,7 +341,8 @@ bool check_compare(const rjson::value* v1, const rjson::value& v2, const Compara
     if (kv1.name == "B") {
         return cmp(base64_decode(kv1.value), base64_decode(kv2.value));
     }
-    clogger.error("check_compare panic: LHS type equals RHS type, but one is in {N,S,B} while the other isn't");
+    // cannot reach here, as check_comparable_type() verifies the type is one
+    // of the above options.
     return false;
 }
 
@@ -341,57 +373,71 @@ struct cmp_gt {
     static constexpr const char* diagnostic = "GT operator";
 };
 
-// True if v is between lb and ub, inclusive.  Throws if lb > ub.
+// True if v is between lb and ub, inclusive.  Throws or returns false
+// (depending on bounds_from_query parameter) if lb > ub.
 template <typename T>
-static bool check_BETWEEN(const T& v, const T& lb, const T& ub) {
+static bool check_BETWEEN(const T& v, const T& lb, const T& ub, bool bounds_from_query) {
     if (cmp_lt()(ub, lb)) {
-        throw api_error("ValidationException",
-                        format("BETWEEN operator requires lower_bound <= upper_bound, but {} > {}", lb, ub));
+        if (bounds_from_query) {
+            throw api_error("ValidationException",
+                format("BETWEEN operator requires lower_bound <= upper_bound, but {} > {}", lb, ub));
+        } else {
+            return false;
+        }
     }
     return cmp_ge()(v, lb) && cmp_le()(v, ub);
 }
 
-static bool check_BETWEEN(const rjson::value* v, const rjson::value& lb, const rjson::value& ub) {
-    if (!v) {
+static bool check_BETWEEN(const rjson::value* v, const rjson::value& lb, const rjson::value& ub,
+                          bool v_from_query, bool lb_from_query, bool ub_from_query) {
+    if ((v && v_from_query && !check_comparable_type(*v)) ||
+        (lb_from_query && !check_comparable_type(lb)) ||
+        (ub_from_query && !check_comparable_type(ub))) {
+        throw api_error("ValidationException", "between allow only the types String, Number, or Binary");
+
+    }
+    if (!v || !v->IsObject() || v->MemberCount() != 1 ||
+        !lb.IsObject() || lb.MemberCount() != 1 ||
+        !ub.IsObject() || ub.MemberCount() != 1) {
         return false;
-    }
-    if (!v->IsObject() || v->MemberCount() != 1) {
-        throw api_error("ValidationException", format("BETWEEN operator encountered malformed AttributeValue: {}", *v));
-    }
-    if (!lb.IsObject() || lb.MemberCount() != 1) {
-        throw api_error("ValidationException", format("BETWEEN operator encountered malformed AttributeValue: {}", lb));
-    }
-    if (!ub.IsObject() || ub.MemberCount() != 1) {
-        throw api_error("ValidationException", format("BETWEEN operator encountered malformed AttributeValue: {}", ub));
     }
 
     const auto& kv_v = *v->MemberBegin();
     const auto& kv_lb = *lb.MemberBegin();
     const auto& kv_ub = *ub.MemberBegin();
+    bool bounds_from_query = lb_from_query && ub_from_query;
     if (kv_lb.name != kv_ub.name) {
-        throw api_error(
-                "ValidationException",
+        if (bounds_from_query) {
+           throw api_error("ValidationException",
                 format("BETWEEN operator requires the same type for lower and upper bound; instead got {} and {}",
                        kv_lb.name, kv_ub.name));
+        } else {
+            return false;
+        }
     }
     if (kv_v.name != kv_lb.name) { // Cannot compare different types, so v is NOT between lb and ub.
         return false;
     }
     if (kv_v.name == "N") {
         const char* diag = "BETWEEN operator";
-        return check_BETWEEN(unwrap_number(*v, diag), unwrap_number(lb, diag), unwrap_number(ub, diag));
+        return check_BETWEEN(unwrap_number(*v, diag), unwrap_number(lb, diag), unwrap_number(ub, diag), bounds_from_query);
     }
     if (kv_v.name == "S") {
         return check_BETWEEN(std::string_view(kv_v.value.GetString(), kv_v.value.GetStringLength()),
                              std::string_view(kv_lb.value.GetString(), kv_lb.value.GetStringLength()),
-                             std::string_view(kv_ub.value.GetString(), kv_ub.value.GetStringLength()));
+                             std::string_view(kv_ub.value.GetString(), kv_ub.value.GetStringLength()),
+                             bounds_from_query);
     }
     if (kv_v.name == "B") {
-        return check_BETWEEN(base64_decode(kv_v.value), base64_decode(kv_lb.value), base64_decode(kv_ub.value));
+        return check_BETWEEN(base64_decode(kv_v.value), base64_decode(kv_lb.value), base64_decode(kv_ub.value), bounds_from_query);
     }
-    throw api_error("ValidationException",
-        format("BETWEEN operator requires AttributeValueList elements to be of type String, Number, or Binary; instead got {}",
+    if (v_from_query) {
+        throw api_error("ValidationException",
+            format("BETWEEN operator requires AttributeValueList elements to be of type String, Number, or Binary; instead got {}",
                kv_lb.name));
+    } else {
+        return false;
+    }
 }
 
 // Verify one Expect condition on one attribute (whose content is "got")
@@ -438,19 +484,19 @@ static bool verify_expected_one(const rjson::value& condition, const rjson::valu
             return check_NE(got, (*attribute_value_list)[0]);
         case comparison_operator_type::LT:
             verify_operand_count(attribute_value_list, exact_size(1), *comparison_operator);
-            return check_compare(got, (*attribute_value_list)[0], cmp_lt{});
+            return check_compare(got, (*attribute_value_list)[0], cmp_lt{}, false, true);
         case comparison_operator_type::LE:
             verify_operand_count(attribute_value_list, exact_size(1), *comparison_operator);
-            return check_compare(got, (*attribute_value_list)[0], cmp_le{});
+            return check_compare(got, (*attribute_value_list)[0], cmp_le{}, false, true);
         case comparison_operator_type::GT:
             verify_operand_count(attribute_value_list, exact_size(1), *comparison_operator);
-            return check_compare(got, (*attribute_value_list)[0], cmp_gt{});
+            return check_compare(got, (*attribute_value_list)[0], cmp_gt{}, false, true);
         case comparison_operator_type::GE:
             verify_operand_count(attribute_value_list, exact_size(1), *comparison_operator);
-            return check_compare(got, (*attribute_value_list)[0], cmp_ge{});
+            return check_compare(got, (*attribute_value_list)[0], cmp_ge{}, false, true);
         case comparison_operator_type::BEGINS_WITH:
             verify_operand_count(attribute_value_list, exact_size(1), *comparison_operator);
-            return check_BEGINS_WITH(got, (*attribute_value_list)[0]);
+            return check_BEGINS_WITH(got, (*attribute_value_list)[0], false, true);
         case comparison_operator_type::IN:
             verify_operand_count(attribute_value_list, nonempty(), *comparison_operator);
             return check_IN(got, *attribute_value_list);
@@ -462,7 +508,8 @@ static bool verify_expected_one(const rjson::value& condition, const rjson::valu
             return check_NOT_NULL(got);
         case comparison_operator_type::BETWEEN:
             verify_operand_count(attribute_value_list, exact_size(2), *comparison_operator);
-            return check_BETWEEN(got, (*attribute_value_list)[0], (*attribute_value_list)[1]);
+            return check_BETWEEN(got, (*attribute_value_list)[0], (*attribute_value_list)[1],
+                                 false, true, true);
         case comparison_operator_type::CONTAINS:
             {
                 verify_operand_count(attribute_value_list, exact_size(1), *comparison_operator);
@@ -574,7 +621,8 @@ static bool calculate_primitive_condition(const parsed::primitive_condition& con
             // Shouldn't happen unless we have a bug in the parser
             throw std::logic_error(format("Wrong number of values {} in BETWEEN primitive_condition", cond._values.size()));
         }
-        return check_BETWEEN(&calculated_values[0], calculated_values[1], calculated_values[2]);
+        return check_BETWEEN(&calculated_values[0], calculated_values[1], calculated_values[2],
+                             cond._values[0].is_constant(), cond._values[1].is_constant(), cond._values[2].is_constant());
     case parsed::primitive_condition::type::IN:
         return check_IN(calculated_values);
     case parsed::primitive_condition::type::VALUE:
@@ -605,13 +653,17 @@ static bool calculate_primitive_condition(const parsed::primitive_condition& con
     case parsed::primitive_condition::type::NE:
         return check_NE(&calculated_values[0], calculated_values[1]);
     case parsed::primitive_condition::type::GT:
-        return check_compare(&calculated_values[0], calculated_values[1], cmp_gt{});
+        return check_compare(&calculated_values[0], calculated_values[1], cmp_gt{},
+            cond._values[0].is_constant(), cond._values[1].is_constant());
     case parsed::primitive_condition::type::GE:
-        return check_compare(&calculated_values[0], calculated_values[1], cmp_ge{});
+        return check_compare(&calculated_values[0], calculated_values[1], cmp_ge{},
+            cond._values[0].is_constant(), cond._values[1].is_constant());
     case parsed::primitive_condition::type::LT:
-        return check_compare(&calculated_values[0], calculated_values[1], cmp_lt{});
+        return check_compare(&calculated_values[0], calculated_values[1], cmp_lt{},
+            cond._values[0].is_constant(), cond._values[1].is_constant());
     case parsed::primitive_condition::type::LE:
-        return check_compare(&calculated_values[0], calculated_values[1], cmp_le{});
+        return check_compare(&calculated_values[0], calculated_values[1], cmp_le{},
+            cond._values[0].is_constant(), cond._values[1].is_constant());
     default:
         // Shouldn't happen unless we have a bug in the parser
         throw std::logic_error(format("Unknown type {} in primitive_condition object", (int)(cond._op)));
