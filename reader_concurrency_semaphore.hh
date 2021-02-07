@@ -62,30 +62,6 @@ public:
 
     using eviction_notify_handler = noncopyable_function<void(evict_reason)>;
 
-    class inactive_read_handle {
-        reader_concurrency_semaphore* _sem = nullptr;
-        uint64_t _id = 0;
-
-        friend class reader_concurrency_semaphore;
-
-        explicit inactive_read_handle(reader_concurrency_semaphore& sem, uint64_t id) noexcept
-            : _sem(&sem), _id(id) {
-        }
-    public:
-        inactive_read_handle() = default;
-        inactive_read_handle(inactive_read_handle&& o) noexcept
-            : _sem(std::exchange(o._sem, nullptr)), _id(std::exchange(o._id, 0)) {
-        }
-        inactive_read_handle& operator=(inactive_read_handle&& o) noexcept {
-            _sem = std::exchange(o._sem, nullptr);
-            _id = std::exchange(o._id, 0);
-            return *this;
-        }
-        explicit operator bool() const noexcept {
-            return bool(_id);
-        }
-    };
-
     struct stats {
         // The number of inactive reads evicted to free up permits.
         uint64_t permit_based_evictions = 0;
@@ -133,6 +109,31 @@ private:
     };
 
     using inactive_reads_type = std::map<uint64_t, inactive_read>;
+
+public:
+    class inactive_read_handle {
+        reader_concurrency_semaphore* _sem = nullptr;
+        uint64_t _id = 0;
+
+        friend class reader_concurrency_semaphore;
+
+        explicit inactive_read_handle(reader_concurrency_semaphore& sem, uint64_t id) noexcept
+            : _sem(&sem), _id(id) {
+        }
+    public:
+        inactive_read_handle() = default;
+        inactive_read_handle(inactive_read_handle&& o) noexcept
+            : _sem(std::exchange(o._sem, nullptr)), _id(std::exchange(o._id, 0)) {
+        }
+        inactive_read_handle& operator=(inactive_read_handle&& o) noexcept {
+            _sem = std::exchange(o._sem, nullptr);
+            _id = std::exchange(o._id, 0);
+            return *this;
+        }
+        explicit operator bool() const noexcept {
+            return bool(_id);
+        }
+    };
 
 private:
     const resources _initial_resources;
