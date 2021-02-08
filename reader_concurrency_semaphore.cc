@@ -386,18 +386,18 @@ reader_concurrency_semaphore::inactive_read_handle reader_concurrency_semaphore:
     // Implies _inactive_reads.empty(), we don't queue new readers before
     // evicting all inactive reads.
     if (_wait_list.empty()) {
-        inactive_read ir(std::move(reader));
+        auto irp = std::make_unique<inactive_read>(std::move(reader));
+        auto& ir = *irp;
         ir.notify_handler = std::move(notify_handler);
-        const auto [it, _] = _inactive_reads.emplace(_next_id++, std::move(ir));
-        (void)_;
         if (ttl != std::chrono::duration_values<std::chrono::seconds>::max()) {
-            it->second.ttl_timer.emplace([this, it = it] {
-                evict(it, evict_reason::time);
+            ir.ttl_timer.emplace([this, &ir] {
+                evict(ir, evict_reason::time);
             });
-            it->second.ttl_timer->arm(lowres_clock::now() + ttl);
+            ir.ttl_timer->arm(lowres_clock::now() + ttl);
         }
+        _inactive_reads.push_back(ir);
         ++_stats.inactive_reads;
-        return inactive_read_handle(*this, it->first);
+        return inactive_read_handle(*this, std::move(irp));
     }
 
     // The evicted reader will release its permit, hopefully allowing us to
@@ -424,27 +424,27 @@ flat_mutation_reader_opt reader_concurrency_semaphore::unregister_inactive_read(
                     reinterpret_cast<uintptr_t>(irh._sem)));
     }
 
-    if (auto it = _inactive_reads.find(irh._id); it != _inactive_reads.end()) {
-        auto ir = std::move(it->second);
-        _inactive_reads.erase(it);
-        --_stats.inactive_reads;
-        return std::move(ir.reader);
-    }
-    return {};
+    --_stats.inactive_reads;
+    auto irp = std::move(irh._irp);
+    irp->unlink();
+    return std::move(irp->reader);
 }
 
 bool reader_concurrency_semaphore::try_evict_one_inactive_read(evict_reason reason) {
     if (_inactive_reads.empty()) {
         return false;
     }
-    evict(_inactive_reads.begin(), reason);
+    evict(_inactive_reads.front(), reason);
     return true;
 }
 
-reader_concurrency_semaphore::inactive_reads_type::iterator reader_concurrency_semaphore::evict(inactive_reads_type::iterator it, evict_reason reason) {
-    auto ir = std::move(it->second);
-    if (ir.notify_handler) {
-        ir.notify_handler(reason);
+void reader_concurrency_semaphore::evict(inactive_read& ir, evict_reason reason) {
+    auto reader = std::move(ir.reader);
+    ir.unlink();
+    if (auto notify_handler = std::move(ir.notify_handler)) {
+        notify_handler(reason);
+        // The notify_handler may destroy the inactive_read.
+        // Do not use it after this point!
     }
     switch (reason) {
         case evict_reason::permit:
@@ -457,7 +457,6 @@ reader_concurrency_semaphore::inactive_reads_type::iterator reader_concurrency_s
             break;
     }
     --_stats.inactive_reads;
-    return _inactive_reads.erase(it);
 }
 
 bool reader_concurrency_semaphore::has_available_units(const resources& r) const {

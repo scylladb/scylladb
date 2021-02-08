@@ -21,10 +21,12 @@
 
 #pragma once
 
-#include <map>
+#include <boost/intrusive/list.hpp>
 #include <seastar/core/future.hh>
 #include "reader_permit.hh"
 #include "flat_mutation_reader.hh"
+
+namespace bi = boost::intrusive;
 
 using namespace seastar;
 
@@ -96,7 +98,7 @@ private:
         void operator()(entry& e) noexcept;
     };
 
-    struct inactive_read {
+    struct inactive_read : public bi::list_base_hook<bi::link_mode<bi::auto_unlink>> {
         flat_mutation_reader reader;
         eviction_notify_handler notify_handler;
         std::optional<timer<lowres_clock>> ttl_timer;
@@ -108,30 +110,31 @@ private:
         ~inactive_read();
     };
 
-    using inactive_reads_type = std::map<uint64_t, inactive_read>;
+    using inactive_reads_type = bi::list<inactive_read, bi::constant_time_size<false>>;
 
 public:
     class inactive_read_handle {
         reader_concurrency_semaphore* _sem = nullptr;
-        uint64_t _id = 0;
+        std::unique_ptr<inactive_read> _irp;
 
         friend class reader_concurrency_semaphore;
 
-        explicit inactive_read_handle(reader_concurrency_semaphore& sem, uint64_t id) noexcept
-            : _sem(&sem), _id(id) {
+        explicit inactive_read_handle(reader_concurrency_semaphore& sem, std::unique_ptr<inactive_read> irp) noexcept
+            : _sem(&sem), _irp(std::move(irp)) {
         }
     public:
         inactive_read_handle() = default;
         inactive_read_handle(inactive_read_handle&& o) noexcept
-            : _sem(std::exchange(o._sem, nullptr)), _id(std::exchange(o._id, 0)) {
+            : _sem(std::exchange(o._sem, nullptr))
+            , _irp(std::move(o._irp)) {
         }
         inactive_read_handle& operator=(inactive_read_handle&& o) noexcept {
             _sem = std::exchange(o._sem, nullptr);
-            _id = std::exchange(o._id, 0);
+            _irp = std::move(o._irp);
             return *this;
         }
         explicit operator bool() const noexcept {
-            return bool(_id);
+            return bool(_irp);
         }
     };
 
@@ -144,13 +147,12 @@ private:
     sstring _name;
     size_t _max_queue_length = std::numeric_limits<size_t>::max();
     std::function<void()> _prethrow_action;
-    uint64_t _next_id = 1;
     inactive_reads_type _inactive_reads;
     stats _stats;
     std::unique_ptr<permit_list> _permit_list;
 
 private:
-    inactive_reads_type::iterator evict(inactive_reads_type::iterator it, evict_reason reason);
+    void evict(inactive_read&, evict_reason reason);
 
     bool has_available_units(const resources& r) const;
 
