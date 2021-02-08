@@ -89,6 +89,8 @@ public:
 
     size_t size() { return _arrival_intervals.size(); }
 
+    clk::time_point last_update() const { return _tlast; }
+
     friend std::ostream& operator<<(std::ostream& os, const arrival_window& w);
 
 };
