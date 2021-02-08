@@ -358,6 +358,7 @@ void table::notify_bootstrap_or_replace_start() {
 
 void table::notify_bootstrap_or_replace_end() {
     _is_bootstrap_or_replace = false;
+    _compaction_manager.submit_offstrategy(this);
 }
 
 void table::update_stats_for_new_sstable(uint64_t disk_space_used_by_sstable) noexcept {

@@ -23,6 +23,7 @@
 #include "message/messaging_service.hh"
 #include "sstables/sstables.hh"
 #include "sstables/sstables_manager.hh"
+#include "sstables/sstable_set.hh"
 #include "mutation_fragment.hh"
 #include "mutation_writer/multishard_writer.hh"
 #include "dht/i_partitioner.hh"
@@ -564,6 +565,14 @@ public:
         }
     };
 
+    static sstables::offstrategy is_offstrategy_supported(streaming::stream_reason reason) {
+        std::unordered_set<streaming::stream_reason> operations_supported = {
+            streaming::stream_reason::bootstrap,
+            streaming::stream_reason::replace,
+        };
+        return sstables::offstrategy(operations_supported.contains(reason));
+    }
+
     void create_writer(sharded<database>& db) {
         if (_writer_done) {
             return;
@@ -575,13 +584,14 @@ public:
         _writer_done = mutation_writer::distribute_reader_and_consume_on_shards(_schema, std::move(queue_reader),
                 [&db, reason = this->_reason, estimated_partitions = this->_estimated_partitions] (flat_mutation_reader reader) {
             auto& t = db.local().find_column_family(reader.schema());
-            return db::view::check_needs_view_update_path(_sys_dist_ks->local(), t, reason).then([t = t.shared_from_this(), estimated_partitions, reader = std::move(reader)] (bool use_view_update_path) mutable {
+            return db::view::check_needs_view_update_path(_sys_dist_ks->local(), t, reason).then([t = t.shared_from_this(), estimated_partitions, reader = std::move(reader), reason] (bool use_view_update_path) mutable {
                 //FIXME: for better estimations this should be transmitted from remote
                 auto metadata = mutation_source_metadata{};
                 auto& cs = t->get_compaction_strategy();
                 const auto adjusted_estimated_partitions = cs.adjust_partition_estimate(metadata, estimated_partitions);
+                sstables::offstrategy offstrategy = is_offstrategy_supported(reason);
                 auto consumer = cs.make_interposer_consumer(metadata,
-                        [t = std::move(t), use_view_update_path, adjusted_estimated_partitions] (flat_mutation_reader reader) {
+                        [t = std::move(t), use_view_update_path, adjusted_estimated_partitions, offstrategy] (flat_mutation_reader reader) {
                     sstables::shared_sstable sst = use_view_update_path ? t->make_streaming_staging_sstable() : t->make_streaming_sstable_for_write();
                     schema_ptr s = reader.schema();
                     auto& pc = service::get_local_streaming_priority();
@@ -589,8 +599,8 @@ public:
                                                  t->get_sstables_manager().configure_writer("repair"),
                                                  encoding_stats{}, pc).then([sst] {
                         return sst->open_data();
-                    }).then([t, sst] {
-                        return t->add_sstable_and_update_cache(sst);
+                    }).then([t, sst, offstrategy] {
+                        return t->add_sstable_and_update_cache(sst, offstrategy);
                     }).then([t, s, sst, use_view_update_path]() mutable -> future<> {
                         if (!use_view_update_path) {
                             return make_ready_future<>();
