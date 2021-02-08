@@ -746,6 +746,10 @@ SEASTAR_THREAD_TEST_CASE(test_unique_inactive_read_handle) {
     // Sanity check that lookup still works with empty handle.
     BOOST_REQUIRE(!sem1.unregister_inactive_read(reader_concurrency_semaphore::inactive_read_handle{}));
 
+    set_abort_on_internal_error(false);
+    auto reset_on_internal_abort = defer([] {
+        set_abort_on_internal_error(true);
+    });
     BOOST_REQUIRE_THROW(sem1.unregister_inactive_read(std::move(sem2_h1)), std::runtime_error);
     BOOST_REQUIRE_THROW(sem2.unregister_inactive_read(std::move(sem1_h1)), std::runtime_error);
 }

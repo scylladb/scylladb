@@ -414,7 +414,7 @@ flat_mutation_reader_opt reader_concurrency_semaphore::unregister_inactive_read(
         return {};
     }
     if (irh._sem != this) {
-        throw std::runtime_error(fmt::format(
+        on_internal_error(rcslog, fmt::format(
                     "reader_concurrency_semaphore::unregister_inactive_read(): "
                     "attempted to unregister an inactive read with a handle belonging to another semaphore: "
                     "this is {} (0x{:x}) but the handle belongs to {} (0x{:x})",
