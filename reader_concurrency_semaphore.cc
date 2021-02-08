@@ -483,9 +483,10 @@ future<reader_permit::resource_units> reader_concurrency_semaphore::do_wait_admi
                         format("{}: restricted mutation reader queue overload", _name))));
     }
     auto r = resources(1, static_cast<ssize_t>(memory));
-    auto it = _inactive_reads.begin();
-    while (!may_proceed(r) && it != _inactive_reads.end()) {
-        it = evict(it, evict_reason::permit);
+    while (!may_proceed(r)) {
+        if (!try_evict_one_inactive_read(evict_reason::permit)) {
+            break;
+        }
     }
     if (may_proceed(r)) {
         permit.on_admission();
