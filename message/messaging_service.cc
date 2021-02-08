@@ -357,9 +357,29 @@ void messaging_service::do_start_listen() {
         cfg.sched_group = scheduling_group_for_isolation_cookie(isolation_cookie);
         return cfg;
     };
-    if (!_server[0]) {
+    if (!_server[0] && _cfg.encrypt != encrypt_what::all) {
         auto listen = [&] (const gms::inet_address& a, rpc::streaming_domain_type sdomain) {
             so.streaming_domain = sdomain;
+            so.filter_connection = {};
+            switch (_cfg.encrypt) {
+                default:
+                case encrypt_what::none:
+                    break;
+                case encrypt_what::dc:
+                    so.filter_connection = [](const seastar::socket_address& addr) {
+                        auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
+                        return snitch->get_datacenter(addr) == snitch->get_datacenter(utils::fb_utilities::get_broadcast_address());
+                    };
+                    break;
+                case encrypt_what::rack:
+                    so.filter_connection = [](const seastar::socket_address& addr) {
+                        auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
+                        return snitch->get_datacenter(addr) == snitch->get_datacenter(utils::fb_utilities::get_broadcast_address())
+                            && snitch->get_rack(addr) == snitch->get_rack(utils::fb_utilities::get_broadcast_address())
+                            ;
+                    };
+                    break;
+            }
             auto addr = socket_address{a, _cfg.port};
             return std::unique_ptr<rpc_protocol_server_wrapper>(new rpc_protocol_server_wrapper(_rpc->protocol(),
                     so, addr, limits));
@@ -369,9 +389,10 @@ void messaging_service::do_start_listen() {
             _server[1] = listen(utils::fb_utilities::get_broadcast_address(), rpc::streaming_domain_type(0x66BB));
         }
     }
-
+    
     if (!_server_tls[0]) {
         auto listen = [&] (const gms::inet_address& a, rpc::streaming_domain_type sdomain) {
+            so.filter_connection = {};
             so.streaming_domain = sdomain;
             return std::unique_ptr<rpc_protocol_server_wrapper>(
                     [this, &so, &a, limits] () -> std::unique_ptr<rpc_protocol_server_wrapper>{
@@ -691,7 +712,7 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
         remove_error_rpc_client(verb, id);
     }
 
-    auto must_encrypt = [&id, this] {
+    auto must_encrypt = [&id, &verb, this] {
         if (_cfg.encrypt == encrypt_what::none) {
             return false;
         }
@@ -699,14 +720,23 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
             return true;
         }
 
+        // if we have dc/rack encryption but this is gossip, we should
+        // use tls anyway, to avoid having mismatched ideas on which 
+        // group we/client are in. 
+        if (verb >= messaging_verb::GOSSIP_DIGEST_SYN && verb <= messaging_verb::GOSSIP_SHUTDOWN) {
+            return true;
+        }
+
         auto& snitch_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
 
-        if (_cfg.encrypt == encrypt_what::dc) {
-            return snitch_ptr->get_datacenter(id.addr)
-                            != snitch_ptr->get_datacenter(utils::fb_utilities::get_broadcast_address());
+        // either rack/dc need to be in same dc to use non-tls
+        if (snitch_ptr->get_datacenter(id.addr) != snitch_ptr->get_datacenter(utils::fb_utilities::get_broadcast_address())) {
+            return true;
         }
-        return snitch_ptr->get_rack(id.addr)
-                        != snitch_ptr->get_rack(utils::fb_utilities::get_broadcast_address());
+        // if cross-rack tls, check rack.
+        return _cfg.encrypt == encrypt_what::rack &&
+            snitch_ptr->get_rack(id.addr) != snitch_ptr->get_rack(utils::fb_utilities::get_broadcast_address())
+            ;
     }();
 
     auto must_compress = [&id, this] {
@@ -750,11 +780,12 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
         opts.isolation_cookie = _scheduling_info_for_connection_index[idx].isolation_cookie;
     }
 
+    auto baddr = socket_address(utils::fb_utilities::get_broadcast_address(), 0);
     auto client = must_encrypt ?
                     ::make_shared<rpc_protocol_client_wrapper>(_rpc->protocol(), std::move(opts),
-                                    remote_addr, socket_address(), _credentials) :
+                                    remote_addr, baddr, _credentials) :
                     ::make_shared<rpc_protocol_client_wrapper>(_rpc->protocol(), std::move(opts),
-                                    remote_addr);
+                                    remote_addr, baddr);
 
     auto res = _clients[idx].emplace(id, shard_info(std::move(client)));
     assert(res.second);
