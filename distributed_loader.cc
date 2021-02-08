@@ -41,8 +41,6 @@
 
 extern logging::logger dblog;
 
-static future<> execute_futures(std::vector<future<>>& futures);
-
 static const std::unordered_set<std::string_view> system_keyspaces = {
                 db::system_keyspace::NAME, db::schema_tables::NAME
 };
@@ -484,29 +482,6 @@ distributed_loader::get_sstables_from_upload_dir(distributed<database>& db, sstr
     });
 }
 
-static future<> execute_futures(std::vector<future<>>& futures) {
-    return seastar::when_all(futures.begin(), futures.end()).then([] (std::vector<future<>> ret) {
-        std::exception_ptr eptr;
-
-        for (auto& f : ret) {
-            try {
-                if (eptr) {
-                    f.ignore_ready_future();
-                } else {
-                    f.get();
-                }
-            } catch(...) {
-                eptr = std::current_exception();
-            }
-        }
-
-        if (eptr) {
-            return make_exception_future<>(eptr);
-        }
-        return make_ready_future<>();
-    });
-}
-
 future<> distributed_loader::cleanup_column_family_temp_sst_dirs(sstring sstdir) {
     return do_with(std::vector<future<>>(), [sstdir = std::move(sstdir)] (std::vector<future<>>& futures) {
         return lister::scan_dir(sstdir, { directory_entry_type::directory }, [&futures] (fs::path sstdir, directory_entry de) {
@@ -520,7 +495,7 @@ future<> distributed_loader::cleanup_column_family_temp_sst_dirs(sstring sstdir)
             }
             return make_ready_future<>();
         }).then([&futures] {
-            return execute_futures(futures);
+            return when_all_succeed(futures.begin(), futures.end()).discard_result();
         });
     });
 }
@@ -547,7 +522,7 @@ future<> distributed_loader::handle_sstables_pending_delete(sstring pending_dele
             }
             return make_ready_future<>();
         }).then([&futures] {
-            return execute_futures(futures);
+            return when_all_succeed(futures.begin(), futures.end()).discard_result();
         });
     });
 }
@@ -774,7 +749,7 @@ future<> distributed_loader::init_non_system_keyspaces(distributed<database>& db
             }));
         }
 
-        execute_futures(futures).get();
+        when_all_succeed(futures.begin(), futures.end()).discard_result().get();
 
         db.invoke_on_all([] (database& db) {
             return parallel_for_each(db.get_non_system_column_families(), [] (lw_shared_ptr<table> table) {
