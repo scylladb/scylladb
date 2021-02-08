@@ -146,6 +146,15 @@ Next, the node starts gossiping the timestamp of the new generation together wit
         }).get();
 ```
 
+The node persists the currently gossiped timestamp in order to recover it on restart in the `system.cdc_local` table. This is the schema:
+```
+CREATE TABLE system.cdc_local (
+    key text PRIMARY KEY,
+    streams_timestamp timestamp
+) ...
+```
+The timestamp is kept under the `"cdc_local"` key in the `streams_timestamp` column.
+
 When other nodes learn about the generation, they'll extract it from the `cdc_generation_descriptions` table and save it using `cdc::metadata::insert(db_clock::time_point, topology_description&&)`.
 Notice that nodes learn about the generation together with the new node's tokens. When they learn about its tokens they'll immediately start sending writes to the new node (in the case of bootstrapping, it will become a pending replica). But the old generation will still be operating for a minute or two. Thus colocation will be lost for a while. This problem will be fixed when the two-phase-commit approach is implemented.
 
