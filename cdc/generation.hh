@@ -41,6 +41,7 @@
 #include "db_clock.hh"
 #include "dht/token.hh"
 #include "locator/token_metadata.hh"
+#include "utils/chunked_vector.hh"
 
 namespace seastar {
     class abort_source;
@@ -121,10 +122,10 @@ public:
  */ 
 class streams_version {
 public:
-    std::vector<stream_id> streams;
+    utils::chunked_vector<stream_id> streams;
     db_clock::time_point timestamp;
 
-    streams_version(std::vector<stream_id> s, db_clock::time_point ts)
+    streams_version(utils::chunked_vector<stream_id> s, db_clock::time_point ts)
         : streams(std::move(s))
         , timestamp(ts)
     {}
