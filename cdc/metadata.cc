@@ -51,7 +51,8 @@ static cdc::stream_id get_stream(
     return entry.streams[shard_id];
 }
 
-static cdc::stream_id get_stream(
+// non-static for testing
+cdc::stream_id get_stream(
         const std::vector<cdc::token_range_description>& entries,
         dht::token tok) {
     if (entries.empty()) {
