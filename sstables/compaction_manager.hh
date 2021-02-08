@@ -194,6 +194,9 @@ public:
     // Submit a column family to be compacted.
     void submit(column_family* cf);
 
+    // Submit a column family to be off-strategy compacted.
+    void submit_offstrategy(column_family* cf);
+
     // Submit a column family to be cleaned up and wait for its termination.
     //
     // Performs a cleanup on each sstable of the column family, excluding
