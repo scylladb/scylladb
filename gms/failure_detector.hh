@@ -138,7 +138,7 @@ public:
             : _phi(phi), _initial(initial), _max_interval(max_interval) {
     }
 
-    std::map<inet_address, arrival_window> arrival_samples() const {
+    const std::map<inet_address, arrival_window>& arrival_samples() const {
         return _arrival_samples;
     }
 
