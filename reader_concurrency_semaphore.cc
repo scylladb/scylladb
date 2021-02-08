@@ -390,10 +390,10 @@ reader_concurrency_semaphore::inactive_read_handle reader_concurrency_semaphore:
         auto& ir = *irp;
         ir.notify_handler = std::move(notify_handler);
         if (ttl != std::chrono::duration_values<std::chrono::seconds>::max()) {
-            ir.ttl_timer.emplace([this, &ir] {
+            ir.ttl_timer.set_callback([this, &ir] {
                 evict(ir, evict_reason::time);
             });
-            ir.ttl_timer->arm(lowres_clock::now() + ttl);
+            ir.ttl_timer.arm(lowres_clock::now() + ttl);
         }
         _inactive_reads.push_back(ir);
         ++_stats.inactive_reads;

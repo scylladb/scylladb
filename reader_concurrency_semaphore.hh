@@ -101,7 +101,7 @@ private:
     struct inactive_read : public bi::list_base_hook<bi::link_mode<bi::auto_unlink>> {
         flat_mutation_reader reader;
         eviction_notify_handler notify_handler;
-        std::optional<timer<lowres_clock>> ttl_timer;
+        timer<lowres_clock> ttl_timer;
 
         explicit inactive_read(flat_mutation_reader reader_) noexcept
             : reader(std::move(reader_))
