@@ -410,7 +410,10 @@ reader_concurrency_semaphore::inactive_read_handle reader_concurrency_semaphore:
 }
 
 flat_mutation_reader_opt reader_concurrency_semaphore::unregister_inactive_read(inactive_read_handle irh) {
-    if (irh && irh._sem != this) {
+    if (!irh) {
+        return {};
+    }
+    if (irh._sem != this) {
         throw std::runtime_error(fmt::format(
                     "reader_concurrency_semaphore::unregister_inactive_read(): "
                     "attempted to unregister an inactive read with a handle belonging to another semaphore: "
