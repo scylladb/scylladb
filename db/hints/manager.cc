@@ -803,6 +803,11 @@ bool manager::end_point_hints_manager::sender::send_one_file(const sstring& fnam
     lw_shared_ptr<send_one_file_ctx> ctx_ptr = make_lw_shared<send_one_file_ctx>(_last_schema_ver_to_column_mapping);
 
     try {
+        if (!can_send()) {
+            // The destination node is down. Trying to send hints doesn't make sense now,
+            // so skip reading the file altogether.
+            ctx_ptr->segment_replay_failed = true;
+        } else {
         commitlog::read_log_file(fname, manager::FILENAME_PREFIX, service::get_local_streaming_priority(), [this, secs_since_file_mod, &fname, ctx_ptr] (commitlog::buffer_and_replay_position buf_rp) mutable {
             auto& buf = buf_rp.buffer;
             auto& rp = buf_rp.position;
@@ -822,6 +827,7 @@ bool manager::end_point_hints_manager::sender::send_one_file(const sstring& fnam
                 return send_one_hint(std::move(ctx_ptr), std::move(buf), rp, secs_since_file_mod, fname);
             });
         }, _last_not_complete_rp.pos, &_db.extensions()).get();
+        }
     } catch (db::commitlog::segment_error& ex) {
         manager_logger.error("{}: {}. Dropping...", fname, ex.what());
         ctx_ptr->segment_replay_failed = false;
@@ -871,7 +877,7 @@ void manager::end_point_hints_manager::sender::send_hints_maybe() noexcept {
     int replayed_segments_count = 0;
 
     try {
-        while (replay_allowed() && have_segments() && can_send()) {
+        while (replay_allowed() && have_segments()) {
             if (!send_one_file(*_segments_to_replay.begin())) {
                 break;
             }
