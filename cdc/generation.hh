@@ -111,7 +111,8 @@ public:
     topology_description(std::vector<token_range_description> entries);
     bool operator==(const topology_description&) const;
 
-    const std::vector<token_range_description>& entries() const;
+    const std::vector<token_range_description>& entries() const&;
+    std::vector<token_range_description>&& entries() &&;
 };
 
 /**
