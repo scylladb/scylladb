@@ -40,6 +40,7 @@
 #include "sstables/compaction_manager.hh"
 #include "transport/messages/result_message.hh"
 #include "sstables/shared_index_lists.hh"
+#include <fstream>
 
 using namespace std::chrono_literals;
 using namespace seastar;
