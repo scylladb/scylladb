@@ -1473,6 +1473,7 @@ abseil_libs = ['absl/' + lib for lib in [
     'numeric/libabsl_int128.a',
     'hash/libabsl_city.a',
     'hash/libabsl_hash.a',
+    'hash/libabsl_wyhash.a',
     'base/libabsl_malloc_internal.a',
     'base/libabsl_spinlock_wait.a',
     'base/libabsl_base.a',
