@@ -171,8 +171,6 @@ public:
 
     double get_phi_convict_threshold();
 
-    bool is_alive(inet_address ep);
-
     void report(inet_address ep);
 
     void interpret(inet_address ep);
