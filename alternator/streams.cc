@@ -858,7 +858,7 @@ future<executor::request_return_type> executor::get_records(client_state& client
     auto key_names = boost::copy_range<attrs_to_get>(
         boost::range::join(std::move(base->partition_key_columns()), std::move(base->clustering_key_columns()))
         | boost::adaptors::transformed([&] (const column_definition& cdef) {
-            return std::make_pair<std::string, lw_shared_ptr<hierarchy_filter>>(cdef.name_as_text(), nullptr); })
+            return std::make_pair<std::string, attrs_to_get_node>(cdef.name_as_text(), {}); })
     );
     // Include all base table columns as values (in case pre or post is enabled).
     // This will include attributes not stored in the frozen map column
@@ -866,7 +866,7 @@ future<executor::request_return_type> executor::get_records(client_state& client
         // this will include the :attrs column, which we will also force evaluating. 
         // But not having this set empty forces out any cdc columns from actual result 
         | boost::adaptors::transformed([] (const column_definition& cdef) {
-            return std::make_pair<std::string, lw_shared_ptr<hierarchy_filter>>(cdef.name_as_text(), nullptr); })
+            return std::make_pair<std::string, attrs_to_get_node>(cdef.name_as_text(), {}); })
     );
 
     std::vector<const column_definition*> columns;

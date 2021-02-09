@@ -1882,32 +1882,38 @@ static std::string get_item_type_string(const rjson::value& v) {
     return it->name.GetString();
 }
 
-bool hierarchy_filter::filter(rjson::value& val) {
-    // Importantly, val is a DynamoDB-encoded JSON object - it's a map whose
-    // key is the type, and the value is the actual object.
+// attrs_to_get saves for each top-level attribute an attrs_to_get_node,
+// a hierarchy of subparts that need to be kep. The following function
+// takes a given JSON value and drops its parts which weren't asked to be
+// kept. It modifies the given JSON value, or returns false to signify that
+// the entire object should be dropped.
+// Note that The JSON value is assumed to be encoded using the DynamoDB
+// conventions - i.e., it is really a map whose key has a type string,
+// and the value is the real object.
+static bool hierarchy_filter(rjson::value& val, const attrs_to_get_node& h) {
     if (!val.IsObject() || val.MemberCount() != 1) {
         // This shouldn't happen. We shouldn't have stored malformed objects.
         // But today Alternator does not validate the structure of nested
         // documents before storing them, so this can happen on read.
-        throw api_error::validation(format("Malformed value object for filtering: {}", val));
+        throw api_error::internal(format("Malformed value object read: {}", val));
     }
     const char* type = val.MemberBegin()->name.GetString();
     rjson::value& v = val.MemberBegin()->value;
-    if (!members.empty()) {
+    if (h.has_members()) {
+        const auto& members = h.get_members();
         if (type[0] != 'M' || !v.IsObject()) {
             // If v is not an object (dictionary, map), none of the members
-            // can match. We return immediately because we assume that either
-            // members or indexes are set, but not both.
+            // can match.
             return false;
         }
         rjson::value newv = rjson::empty_object();
         for (auto it = v.MemberBegin(); it != v.MemberEnd(); ++it) {
             std::string attr = it->name.GetString();
-            auto h = members.find(attr);
-            if (h != members.end()) {
-                if (h->second) {
+            auto x = members.find(attr);
+            if (x != members.end()) {
+                if (x->second) {
                     // Only a part of this attribute is to be filtered, do it.
-                    if (h->second->filter(it->value)) {
+                    if (hierarchy_filter(it->value, *x->second)) {
                         rjson::set_with_string_name(newv, attr, std::move(it->value));
                     }
                 } else {
@@ -1920,17 +1926,18 @@ bool hierarchy_filter::filter(rjson::value& val) {
             return false;
         }
         v = newv;
-    } else if (!indexes.empty()) {
+    } else if (h.has_indexes()) {
+        const auto& indexes = h.get_indexes();
         if (type[0] != 'L' || !v.IsArray()) {
             return false;
         }
         rjson::value newv = rjson::empty_array();
         const auto& a = v.GetArray();
         for (unsigned i = 0; i < v.Size(); i++) {
-            auto h = indexes.find(i);
-            if (h != indexes.end()) {
-                if (h->second) {
-                    if (h->second->filter(a[i])) {
+            auto x = indexes.find(i);
+            if (x != indexes.end()) {
+                if (x->second) {
+                    if (hierarchy_filter(a[i], *x->second)) {
                         rjson::push_back(newv, std::move(a[i]));
                     }
                 } else {
@@ -1946,69 +1953,94 @@ bool hierarchy_filter::filter(rjson::value& val) {
     }
     return true;
 }
-void hierarchy_filter::add(const parsed::path& p) {
-    hierarchy_filter* h = this;
-    // new_level is false if the previous iteration of the loop below found
-    // its level in the hierarchy already existed, and true means that we
-    // just created this level now. We start with true because we assume
-    // the caller (calculate_attrs_to_get()) takes cares of not allowing
-    // the same top-level attribute twice.
-    bool new_level = true;
+
+// Add a path to a attribute_path_map. Throws a validation error if the path
+// "overlaps" with one already in the filter (one is a sub-path of the other)
+// or "conflicts" with it (both a member and index is requested).
+template<typename T>
+void attribute_path_map_add(const char* source, attribute_path_map<T>& map, const parsed::path& p, T value = {}) {
+   using node = attribute_path_map_node<T>;
+    // The first step is to look for the top-level attribute (p.root()):
+    auto it = map.find(p.root());
+    if (it == map.end()) {
+        if (p.has_operators()) {
+            it = map.emplace(p.root(), node {std::nullopt}).first;
+        } else {
+            (void) map.emplace(p.root(), node {std::move(value)}).first;
+            // Value inserted for top-level node. We're done.
+            return;
+        }
+    } else if(!p.has_operators()) {
+        // If p is top-level and we already have it or a part of it
+        // in map, it's a forbidden overlapping path.
+        throw api_error::validation(format(
+            "Invalid {}: two document paths overlap at {}", source, p.root()));
+    } else if (it->second.has_value()) {
+        // If we're here, it != map.end() && p.has_operators && it->second.has_value().
+        // This means the top-level attribute already has a value, and we're
+        // trying to add a non-top-level value. It's an overlap.
+        throw api_error::validation(format("Invalid {}: two document paths overlap at {}", source, p.root()));
+    }
+    node* h = &it->second;
+    // The second step is to walk h from the top-level node to the inner node
+    // where we're supposed to insert the value:
     for (const auto& op : p.operators()) {
         std::visit(overloaded_functor {
             [&] (const std::string& member) {
-                if (!h->indexes.empty()) {
-                    throw api_error::validation(
-                        // TODO: print the conflicting paths
-                        "Invalid ProjectionExpression: two document paths conflict with each other");
+                if (h->is_empty()) {
+                    *h = node {typename node::members_t()};
+                } else if (h->has_indexes()) {
+                    throw api_error::validation(format("Invalid {}: two document paths conflict at {}", source, p));
+                } else if (h->has_value()) {
+                    throw api_error::validation(format("Invalid {}: two document paths overlap at {}", source, p));
                 }
-                // If a.b itself (not its children) was already in the filter
-                // and now we add a.b.c, this is an overlap - and considered
-                // an error.
-                if (!new_level && h->members.empty()) {
-                    throw api_error::validation(
-                        // TODO: print the overlapping paths
-                        "Invalid ProjectionExpression: two document paths overlap with each other");
-                }
-                auto it = h->members.find(member);
-                if (it == h->members.end()) {
-                    it = h->members.insert({member, std::make_unique<hierarchy_filter>()}).first;
-                    new_level = true;
-                } else {
-                    new_level = false;
+                typename node::members_t& members = h->get_members();
+                auto it = members.find(member);
+                if (it == members.end()) {
+                    it = members.insert({member, make_shared<node>()}).first;
                 }
                 h = it->second.get();
             },
             [&] (unsigned index) {
-                if (!h->members.empty()) {
-                    throw api_error::validation(
-                        // TODO: print the conflicting paths
-                        "Invalid ProjectionExpression: two document paths conflict with each other");
+                if (h->is_empty()) {
+                    *h = node {typename node::indexes_t()};
+                } else if (h->has_members()) {
+                    throw api_error::validation(format("Invalid {}: two document paths conflict at {}", source, p));
+                } else if (h->has_value()) {
+                    throw api_error::validation(format("Invalid {}: two document paths overlap at {}", source, p));
                 }
-                if (!new_level && h->indexes.empty()) {
-                    throw api_error::validation(
-                        // TODO: print the overlapping paths
-                        "Invalid ProjectionExpression: two document paths overlap with each other");
-                }
-                auto it = h->indexes.find(index);
-                if (it == h->indexes.end()) {
-                    it = h->indexes.insert({index, std::make_unique<hierarchy_filter>()}).first;
-                    new_level = true;
-                } else {
-                    new_level = false;
+                typename node::indexes_t& indexes = h->get_indexes();
+                auto it = indexes.find(index);
+                if (it == indexes.end()) {
+                    it = indexes.insert({index, make_shared<node>()}).first;
                 }
                 h = it->second.get();
             }
         }, op);
     }
-    // If a.b.c was already in the filter, and now we tried to add
-    // a.b, this is considered an overlap - and an error. We can
-    // recognize this when new_level ends as false: It means the leaf
-    // of the path was not a new node.
-    if (!new_level) {
-        throw api_error::validation(
-        // TODO: print the overlapping paths
-            "Invalid ProjectionExpression: two document paths overlap with each other");
+    // Finally, insert the value in the node h.
+    if (h->is_empty()) {
+        *h = node {std::move(value)};
+    } else {
+        throw api_error::validation(format("Invalid {}: two document paths overlap at {}", source, p));
+    }
+}
+
+// A very simplified version of the above function for the special case of
+// adding only top-level attribute. It's not only simpler, we also use a
+// different error message, referring to a "duplicate attribute"instead of
+// "overlapping paths". DynamoDB also has this distinction (errors in
+// AttributesToGet refer to duplicates, not overlaps, but errors in
+// ProjectionExpression refer to overlap - even if it's an exact duplicate).
+template<typename T>
+void attribute_path_map_add(const char* source, attribute_path_map<T>& map, const std::string& attr, T value = {}) {
+   using node = attribute_path_map_node<T>;
+    auto it = map.find(attr);
+    if (it == map.end()) {
+        map.emplace(attr, node {std::move(value)});
+    } else {
+        throw api_error::validation(format(
+            "Invalid {}: Duplicate attribute: {}", source, attr));
     }
 }
 
@@ -2035,11 +2067,7 @@ static attrs_to_get calculate_attrs_to_get(const rjson::value& req, std::unorder
         const rjson::value& attributes_to_get = req["AttributesToGet"];
         attrs_to_get ret;
         for (auto it = attributes_to_get.Begin(); it != attributes_to_get.End(); ++it) {
-            if (ret.contains(it->GetString())) {
-                throw api_error::validation(format(
-                    "Invalid AttributesToGet: Duplicate attribute: {}", it->GetString()));
-            }
-            ret.emplace(it->GetString(), nullptr);
+            attribute_path_map_add("AttributesToGet", ret, it->GetString());
         }
         return ret;
     } else if (has_projection_expression) {
@@ -2054,29 +2082,7 @@ static attrs_to_get calculate_attrs_to_get(const rjson::value& req, std::unorder
         resolve_projection_expression(paths_to_get, expression_attribute_names, used_attribute_names);
         attrs_to_get ret;
         for (const parsed::path& p : paths_to_get) {
-            auto it = ret.find(p.root());
-            if (it == ret.end()) {
-                // As an optimization, if p is top-level, don't bother to
-                // add a hierarchy.
-                it = ret.emplace(p.root(), p.has_operators() ? make_lw_shared<hierarchy_filter>() : nullptr).first;
-            } else if(!p.has_operators()) {
-                // If p is top-level and we already have it or a part of it
-                // in ret, it's a forbidden overlapping path.
-                throw api_error::validation(format(
-                    "Invalid ProjectionExpression: two document paths overlap with each other: {}",
-                    p.root()));
-            }
-            if (p.has_operators()) {
-                if (!it->second) {
-                    // This (a nullptr value) can only mean that a previous
-                    // path was !has_operators (a top-level attribute) and now
-                    // we found the same one again.
-                    throw api_error::validation(format(
-                        "Invalid ProjectionExpression: two document paths overlap with each other: {}",
-                        p.root()));
-                }
-                it->second->add(p);
-            }
+            attribute_path_map_add("ProjectionExpression", ret, p);
         }
         return ret;
     }
@@ -2124,9 +2130,9 @@ void executor::describe_single_item(const cql3::selection::selection& selection,
                     bytes value = value_cast<bytes>(entry.second);
                     rjson::value v = deserialize_item(value);
                     auto it = attrs_to_get.find(attr_name);
-                    if (it != attrs_to_get.end() && it->second) {
-                        // attrs_to_get asked for only part of this attribute:
-                        if (it->second->filter(v)) {
+                    if (it != attrs_to_get.end()) {
+                        // attrs_to_get may have asked for only part of this attribute:
+                        if (hierarchy_filter(v, it->second)) {
                             rjson::set_with_string_name(item, attr_name, std::move(v));
                         }
                     } else {
@@ -2926,11 +2932,11 @@ public:
             // As noted above, we kept entire top-level attributes listed in
             // _attrs_to_get. We may need to only keep parts of them.
             for (const auto& attr: _attrs_to_get) {
-                if (attr.second) {
+                // If !attr.has_value() it means we were asked not to keep
+                // attr entirely, but just parts of it.
+                if (!attr.second.has_value()) {
                     rjson::value* toplevel= rjson::find(_item, attr.first);
-                    // filter() either modifies toplevel_attr directly, or
-                    // asks us to delete it:
-                    if (toplevel && !attr.second->filter(*toplevel)) {
+                    if (toplevel && !hierarchy_filter(*toplevel, attr.second)) {
                         rjson::remove_member(_item, attr.first);
                     }
                 }

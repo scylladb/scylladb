@@ -74,37 +74,66 @@ namespace parsed {
 class path;
 };
 
-// A hierarchy_filter is used to specify only a part of the hierarchy that we
-// wish to extract from a JSON object. For example when a ProjectionExpression
-// requires that we only return certain pieces of a top-level attribute.
-struct hierarchy_filter {
-    // Either "members" or "indexes" may be non-empty, but not both. This is
-    // because DynamoDB does not allow both a.b and a[1] to be requested at
-    // the same time. Those are considered to be "conflicting" document paths.
-    // We could allow both, if we wanted to diverge from DynamoDB.
-    // We need the extra unique_ptr<> here because libstdc++ unordered_map
-    // doesn't work with incomplete types :-(
-    std::unordered_map<std::string, std::unique_ptr<hierarchy_filter>> members;
-    std::unordered_map<unsigned, std::unique_ptr<hierarchy_filter>> indexes;
-    // Add a path to the filter. Throws a validation error if the path
-    // "overlaps" with one already in the filter (one is a sub-path
-    // of the other) or "conflicts" with it (both a member and index is
-    // requested).
-    void add(const parsed::path&);
-    // Run the filter on a given JSON object, dropping its parts which
-    // weren't asked to be kept. Modifies the given JSON object, or
-    // returns false to signify the entire object should be dropped.
-    // Important note: The JSON object is assumed to be using the DynamoDB
-    // conventions, i.e., it is really a map whose key has a type string,
-    // and the value is the real object.
-    bool filter(rjson::value&);
+// An attribute_path_map object is used to hold data for various attributes
+// paths (parsed::path) in a hierarchy of attribute paths. Each attribute path
+// has a root attribute, and then modified by member and index operators -
+// for example in "a.b[2].c" we have "a" as the root, then ".b" member, then
+// "[2]" index, and finally ".c" member.
+// Data can be added to an attribute_path_map using the add() function, but
+// requires that attributes with data not be *overlapping* or *conflicting*:
+//
+// 1. Two attribute paths which are identical or an ancestor of one another
+//    are considered *overlapping* and not allowed. If a.b.c has data,
+//    we can't add more data in a.b.c or any of its descendants like a.b.c.d.
+//
+// 2. Two attribute paths which need the same parent to have both a member and
+//    an index are considered *conflicting* and not allowed. E.g., if a.b has
+//    data, you can't add a[1]. The meaning of adding both would be that the
+//    attribute a is both a map and an array, which isn't sensible.
+//
+// These two requirements are common to the two places where Alternator uses
+// this abstraction to describe how a hierarchical item is to be transformed:
+//
+// 1. In ProjectExpression: for filtering from a full top-level attribute
+//    only the parts for which user asked in ProjectionExpression.
+//
+// 2. In UpdateExpression: for taking the previous value of a top-level
+//    attribute, and modifying it based on the instructions in the user
+//    wrote in UpdateExpression.
+
+template<typename T>
+class attribute_path_map_node {
+public:
+    using data_t = T;
+    // We need the extra shared_ptr<> here because libstdc++ unordered_map
+    // doesn't work with incomplete types :-( We couldn't use lw_shared_ptr<>
+    // because it doesn't work for incomplete types either. We couldn't use
+    // std::unique_ptr<> because it makes the entire object uncopyable. We
+    // don't often need to copy such a map, but we do have some code that
+    // copies an attrs_to_get object, and is hard to find and remove.
+    using members_t =  std::unordered_map<std::string, seastar::shared_ptr<attribute_path_map_node<T>>>;
+    using indexes_t = std::unordered_map<unsigned, seastar::shared_ptr<attribute_path_map_node<T>>>;
+    // The prohibition on "overlap" and "conflict" explained above means
+    // That only one of data, members or indexes is non-empty.
+    std::optional<std::variant<data_t, members_t, indexes_t>> _content;
+
+    bool is_empty() const { return !_content; }
+    bool has_value() const { return _content && std::holds_alternative<data_t>(*_content); }
+    bool has_members() const { return _content && std::holds_alternative<members_t>(*_content); }
+    bool has_indexes() const { return _content && std::holds_alternative<indexes_t>(*_content); }
+    // get_members() assumes that has_members() is true
+    members_t& get_members() { return std::get<members_t>(*_content); }
+    const members_t& get_members() const { return std::get<members_t>(*_content); }
+    indexes_t& get_indexes() { return std::get<indexes_t>(*_content); }
+    const indexes_t& get_indexes() const { return std::get<indexes_t>(*_content); }
 };
 
-// We use lw_shared_ptr<hierarchy_filter>  allows us to efficiently represent
-// with a nullptr the common case where there is no hierarchy filter, i.e.,
-// a top-level attribute is requested. We use lw_shared_ptr and not unique_ptr
-// to allow copying attrs_to_get.
-using attrs_to_get = std::unordered_map<std::string, lw_shared_ptr<hierarchy_filter>>;
+template<typename T>
+using attribute_path_map = std::unordered_map<std::string, attribute_path_map_node<T>>;
+
+using attrs_to_get_node = attribute_path_map_node<std::monostate>;
+using attrs_to_get = attribute_path_map<std::monostate>;
+
 
 class executor : public peering_sharded_service<executor> {
     service::storage_proxy& _proxy;
