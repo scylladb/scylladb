@@ -808,25 +808,25 @@ bool manager::end_point_hints_manager::sender::send_one_file(const sstring& fnam
             // so skip reading the file altogether.
             ctx_ptr->segment_replay_failed = true;
         } else {
-        commitlog::read_log_file(fname, manager::FILENAME_PREFIX, service::get_local_streaming_priority(), [this, secs_since_file_mod, &fname, ctx_ptr] (commitlog::buffer_and_replay_position buf_rp) mutable {
-            auto& buf = buf_rp.buffer;
-            auto& rp = buf_rp.position;
-            // Check that we can still send the next hint. Don't try to send it if the destination host
-            // is DOWN or if we have already failed to send some of the previous hints.
-            if (!draining() && ctx_ptr->segment_replay_failed) {
-                return make_ready_future<>();
-            }
+            commitlog::read_log_file(fname, manager::FILENAME_PREFIX, service::get_local_streaming_priority(), [this, secs_since_file_mod, &fname, ctx_ptr] (commitlog::buffer_and_replay_position buf_rp) mutable {
+                auto& buf = buf_rp.buffer;
+                auto& rp = buf_rp.position;
+                // Check that we can still send the next hint. Don't try to send it if the destination host
+                // is DOWN or if we have already failed to send some of the previous hints.
+                if (!draining() && ctx_ptr->segment_replay_failed) {
+                    return make_ready_future<>();
+                }
 
-            // Break early if stop() was called or the destination node went down.
-            if (!can_send()) {
-                ctx_ptr->segment_replay_failed = true;
-                return make_ready_future<>();
-            }
+                // Break early if stop() was called or the destination node went down.
+                if (!can_send()) {
+                    ctx_ptr->segment_replay_failed = true;
+                    return make_ready_future<>();
+                }
 
-            return flush_maybe().finally([this, ctx_ptr, buf = std::move(buf), rp, secs_since_file_mod, &fname] () mutable {
-                return send_one_hint(std::move(ctx_ptr), std::move(buf), rp, secs_since_file_mod, fname);
-            });
-        }, _last_not_complete_rp.pos, &_db.extensions()).get();
+                return flush_maybe().finally([this, ctx_ptr, buf = std::move(buf), rp, secs_since_file_mod, &fname] () mutable {
+                    return send_one_hint(std::move(ctx_ptr), std::move(buf), rp, secs_since_file_mod, fname);
+                });
+            }, _last_not_complete_rp.pos, &_db.extensions()).get();
         }
     } catch (db::commitlog::segment_error& ex) {
         manager_logger.error("{}: {}. Dropping...", fname, ex.what());
