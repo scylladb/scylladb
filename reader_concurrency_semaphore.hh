@@ -294,5 +294,5 @@ public:
         return _wait_list.size();
     }
 
-    void broken(std::exception_ptr ex);
+    void broken(std::exception_ptr ex = {});
 };

@@ -148,7 +148,7 @@ public:
         return reader.then([shard, this] (stopped_reader&& reader) {
             return smp::submit_to(shard, [handle = std::move(reader.handle), ctx = &*_contexts[shard]] () mutable {
                 ctx->semaphore->unregister_inactive_read(std::move(*handle));
-                ctx->semaphore->broken(std::make_exception_ptr(broken_semaphore{}));
+                ctx->semaphore->broken();
                 if (ctx->wait_future) {
                     return ctx->wait_future->then_wrapped([ctx = std::move(ctx)] (future<reader_permit::resource_units> f) mutable {
                         f.ignore_ready_future();
