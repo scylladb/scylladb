@@ -897,12 +897,13 @@ sstables::shared_sstable create_sstable(sstables::test_env& env, simple_schema& 
         , mutations);
 }
 
-SEASTAR_TEST_CASE(test_reader_concurrency_semaphore_clear_inactive_reads) {
+SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_clear_inactive_reads) {
     simple_schema s;
     std::vector<reader_concurrency_semaphore::inactive_read_handle> handles;
 
     {
         reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::no_limits{}, get_name());
+        auto stop_sem = deferred_stop(semaphore);
 
         for (int i = 0; i < 10; ++i) {
             handles.emplace_back(semaphore.register_inactive_read(make_empty_flat_reader(s.schema(), semaphore.make_permit(s.schema().get(), get_name()))));
@@ -925,14 +926,13 @@ SEASTAR_TEST_CASE(test_reader_concurrency_semaphore_clear_inactive_reads) {
 
     // Check that the destructor also clears inactive reads.
     BOOST_REQUIRE(std::all_of(handles.begin(), handles.end(), [] (const reader_concurrency_semaphore::inactive_read_handle& handle) { return !bool(handle); }));
-
-    return make_ready_future<>();
 }
 
 SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_destroyed_permit_releases_units) {
     simple_schema s;
     const auto initial_resources = reader_concurrency_semaphore::resources{10, 1024 * 1024};
     reader_concurrency_semaphore semaphore(initial_resources.count, initial_resources.memory, get_name());
+    auto stop_sem = deferred_stop(semaphore);
 
     // Not admitted, active
     {
@@ -1164,6 +1164,7 @@ class dummy_file_impl : public file_impl {
 SEASTAR_TEST_CASE(reader_restriction_file_tracking) {
     return async([&] {
         reader_concurrency_semaphore semaphore(100, 4 * 1024, get_name());
+        auto stop_sem = deferred_stop(semaphore);
         auto permit = semaphore.make_permit(nullptr, get_name());
         permit.wait_admission(0, db::no_timeout).get();
 
@@ -1221,6 +1222,7 @@ SEASTAR_TEST_CASE(restricted_reader_reading) {
     return sstables::test_env::do_with_async([&] (sstables::test_env& env) {
         storage_service_for_tests ssft;
         reader_concurrency_semaphore semaphore(2, new_reader_base_cost, get_name());
+        auto stop_sem = deferred_stop(semaphore);
 
         {
             simple_schema s;
@@ -1295,6 +1297,7 @@ SEASTAR_TEST_CASE(restricted_reader_timeout) {
     return sstables::test_env::do_with_async([&] (sstables::test_env& env) {
         storage_service_for_tests ssft;
         reader_concurrency_semaphore semaphore(2, new_reader_base_cost, get_name());
+        auto stop_sem = deferred_stop(semaphore);
 
         {
             simple_schema s;
@@ -1346,6 +1349,7 @@ SEASTAR_TEST_CASE(restricted_reader_max_queue_length) {
         storage_service_for_tests ssft;
 
         reader_concurrency_semaphore semaphore(2, new_reader_base_cost, get_name(), 2);
+        auto stop_sem = deferred_stop(semaphore);
 
         {
             simple_schema s;
@@ -1386,6 +1390,7 @@ SEASTAR_TEST_CASE(restricted_reader_create_reader) {
     return sstables::test_env::do_with_async([&] (sstables::test_env& env) {
         storage_service_for_tests ssft;
         reader_concurrency_semaphore semaphore(100, new_reader_base_cost, get_name());
+        auto stop_sem = deferred_stop(semaphore);
 
         {
             simple_schema s;
@@ -3368,6 +3373,7 @@ flat_mutation_reader create_evictable_reader_and_evict_after_first_buffer(
 
 SEASTAR_THREAD_TEST_CASE(test_evictable_reader_trim_range_tombstones) {
     reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::no_limits{}, get_name());
+    auto stop_sem = deferred_stop(semaphore);
     simple_schema s;
     auto permit = semaphore.make_permit(s.schema().get(), get_name());
 
@@ -3459,6 +3465,7 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_self_validation) {
     });
 
     reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::no_limits{}, get_name());
+    auto stop_sem = deferred_stop(semaphore);
     simple_schema s;
     auto permit = semaphore.make_permit(s.schema().get(), get_name());
 
@@ -3813,6 +3820,7 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_recreate_before_fast_forward_to) 
     };
 
     reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::no_limits{}, get_name());
+    auto stop_sem = deferred_stop(semaphore);
     simple_schema s;
     auto permit = semaphore.make_permit(s.schema().get(), get_name());
     auto pkeys = s.make_pkeys(6);

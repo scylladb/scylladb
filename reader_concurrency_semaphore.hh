@@ -170,6 +170,7 @@ private:
     inactive_reads_type _inactive_reads;
     stats _stats;
     std::unique_ptr<permit_list> _permit_list;
+    bool _stopped = false;
 
 private:
     void evict(inactive_read&, evict_reason reason) noexcept;
@@ -181,6 +182,8 @@ private:
     future<reader_permit::resource_units> enqueue_waiter(reader_permit permit, resources r, db::timeout_clock::time_point timeout);
 
     future<reader_permit::resource_units> do_wait_admission(reader_permit permit, size_t memory, db::timeout_clock::time_point timeout);
+
+    std::runtime_error stopped_exception();
 
 public:
     struct no_limits { };
@@ -249,7 +252,13 @@ public:
     /// (if there was no reader to evict).
     bool try_evict_one_inactive_read(evict_reason = evict_reason::manual);
 
+    /// Clear all inactive reads.
     void clear_inactive_reads();
+
+    /// Stop the reader_concurrency_semaphore and clear all inactive reads.
+    ///
+    /// Wait on all async background work to complete.
+    future<> stop() noexcept;
 
     const stats& get_stats() const {
         return _stats;

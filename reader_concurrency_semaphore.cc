@@ -23,6 +23,7 @@
 #include <seastar/core/print.hh>
 #include <seastar/util/lazy.hh>
 #include <seastar/util/log.hh>
+#include <seastar/core/coroutine.hh>
 
 #include "reader_concurrency_semaphore.hh"
 #include "utils/exceptions.hh"
@@ -418,8 +419,10 @@ reader_concurrency_semaphore::reader_concurrency_semaphore(no_limits, sstring na
             std::move(name)) {}
 
 reader_concurrency_semaphore::~reader_concurrency_semaphore() {
+    // FIXME: assert(_stopped) once all reader_concurrency_semaphore:s
+    // are properly closed (needs de-static-fying tests::the_semaphore)
+    assert(_inactive_reads.empty());
     broken();
-    clear_inactive_reads();
 }
 
 reader_concurrency_semaphore::inactive_read_handle reader_concurrency_semaphore::register_inactive_read(flat_mutation_reader reader) noexcept {
@@ -497,6 +500,18 @@ void reader_concurrency_semaphore::clear_inactive_reads() {
         // Destroying the read unlinks it too.
         std::unique_ptr<inactive_read> _(&*_inactive_reads.begin());
     }
+}
+
+std::runtime_error reader_concurrency_semaphore::stopped_exception() {
+    return std::runtime_error(format("{} was stopped", _name));
+}
+
+future<> reader_concurrency_semaphore::stop() noexcept {
+    assert(!_stopped);
+    _stopped = true;
+    clear_inactive_reads();
+    broken(std::make_exception_ptr(stopped_exception()));
+    co_return;
 }
 
 void reader_concurrency_semaphore::evict(inactive_read& ir, evict_reason reason) noexcept {

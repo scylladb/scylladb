@@ -720,9 +720,6 @@ void database::set_format_by_config() {
 }
 
 database::~database() {
-    _read_concurrency_sem.clear_inactive_reads();
-    _streaming_concurrency_sem.clear_inactive_reads();
-    _system_read_concurrency_sem.clear_inactive_reads();
 }
 
 void database::update_version(const utils::UUID& version) {
@@ -2015,6 +2012,12 @@ database::stop() {
         return _user_sstables_manager->close();
     }).then([this] {
         return _system_sstables_manager->close();
+    }).finally([this] {
+        return when_all_succeed(
+                _read_concurrency_sem.stop(),
+                _streaming_concurrency_sem.stop(),
+                _compaction_concurrency_sem.stop(),
+                _system_read_concurrency_sem.stop()).discard_result();
     });
 }
 
