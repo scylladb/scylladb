@@ -22,7 +22,7 @@
 
 #include <seastar/core/condition-variable.hh>
 #include "raft.hh"
-#include "progress.hh"
+#include "tracker.hh"
 #include "log.hh"
 
 namespace raft {
