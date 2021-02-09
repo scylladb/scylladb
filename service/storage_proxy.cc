@@ -1266,6 +1266,14 @@ void paxos_response_handler::prune(utils::UUID ballot) {
         }
     }).finally([h = shared_from_this()] {
         h->_proxy->get_stats().cas_now_pruning--;
+    }).handle_exception([id = _id] (std::exception_ptr eptr) {
+       try {
+           std::rethrow_exception(eptr);
+       } catch(rpc::closed_error&) {
+       // ignore errors due to closed connection
+       } catch(...) {
+           paxos::paxos_state::logger.error("CAS[{}] prune: failed {}", id, std::current_exception());
+       }
     });
 }
 
