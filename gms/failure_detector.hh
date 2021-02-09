@@ -89,6 +89,8 @@ public:
 
     size_t size() { return _arrival_intervals.size(); }
 
+    clk::time_point last_update() const { return _tlast; }
+
     friend std::ostream& operator<<(std::ostream& os, const arrival_window& w);
 
 };
@@ -138,7 +140,7 @@ public:
             : _phi(phi), _initial(initial), _max_interval(max_interval) {
     }
 
-    std::map<inet_address, arrival_window> arrival_samples() const {
+    const std::map<inet_address, arrival_window>& arrival_samples() const {
         return _arrival_samples;
     }
 
@@ -170,8 +172,6 @@ public:
     void set_phi_convict_threshold(double phi);
 
     double get_phi_convict_threshold();
-
-    bool is_alive(inet_address ep);
 
     void report(inet_address ep);
 
