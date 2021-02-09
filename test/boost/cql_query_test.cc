@@ -3634,19 +3634,9 @@ SEASTAR_TEST_CASE(test_rf_expand) {
             {"datacenter1", "3"}
         });
 
-        e.execute_cql("CREATE KEYSPACE rf_expand_3 WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 3}").get();
-        assert_replication_contains("rf_expand_3", {
-            {"class", simple},
-            {"replication_factor", "3"}
-        });
-
-        // Should not auto-expand when switching to NetworkTopologyStrategy with additional options.
-        e.execute_cql("ALTER KEYSPACE rf_expand_3 WITH replication = {'class': 'NetworkTopologyStrategy', 'datacenter2': 2}").get();
-        assert_replication_not_contains("rf_expand_3", {"datacenter1"});
-
         // Respect factors specified manually.
-        e.execute_cql("CREATE KEYSPACE rf_expand_4 WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3, 'datacenter1': 2}").get();
-        assert_replication_contains("rf_expand_4", {
+        e.execute_cql("CREATE KEYSPACE rf_expand_3 WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3, 'datacenter1': 2}").get();
+        assert_replication_contains("rf_expand_3", {
             {"class", network_topology},
             {"datacenter1", "2"}
         });
