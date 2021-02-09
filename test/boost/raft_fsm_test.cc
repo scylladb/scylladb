@@ -107,6 +107,10 @@ BOOST_AUTO_TEST_CASE(test_single_node_is_quiet) {
     fsm.add_entry(raft::command{});
 
     BOOST_CHECK(fsm.get_output().messages.empty());
+
+    fsm.tick();
+
+    BOOST_CHECK(fsm.get_output().messages.empty());
 }
 
 BOOST_AUTO_TEST_CASE(test_election_two_nodes) {
