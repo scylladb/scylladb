@@ -92,6 +92,7 @@ public:
     uint64_t write_using_lwt = 0;
     uint64_t shard_bounce_for_lwt = 0;
     uint64_t requests_blocked_memory = 0;
+    uint64_t requests_shed = 0;
     // CQL-derived stats
     cql3::cql_stats cql_stats;
 private:

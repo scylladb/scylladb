@@ -28,6 +28,7 @@
 #include <optional>
 #include "alternator/auth.hh"
 #include "utils/small_vector.hh"
+#include "utils/updateable_value.hh"
 #include <seastar/core/units.hh>
 
 namespace alternator {
@@ -50,6 +51,7 @@ class server {
     alternator_callbacks_map _callbacks;
 
     semaphore* _memory_limiter;
+    utils::updateable_value<uint32_t> _max_concurrent_requests;
 
     class json_parser {
         static constexpr size_t yieldable_parsing_threshold = 16*KB;
@@ -72,7 +74,7 @@ public:
     server(executor& executor, cql3::query_processor& qp);
 
     future<> init(net::inet_address addr, std::optional<uint16_t> port, std::optional<uint16_t> https_port, std::optional<tls::credentials_builder> creds,
-            bool enforce_authorization, semaphore* memory_limiter);
+            bool enforce_authorization, semaphore* memory_limiter, utils::updateable_value<uint32_t> max_concurrent_requests);
     future<> stop();
 private:
     void set_routes(seastar::httpd::routes& r);
