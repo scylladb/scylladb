@@ -273,8 +273,12 @@ void network_topology_strategy::validate_options() const {
 }
 
 std::optional<std::set<sstring>> network_topology_strategy::recognized_options() const {
-    // We explicitely allow all options
-    return std::nullopt;
+    std::set<sstring> datacenters;
+    for (const auto& [dc_name, endpoints] : _shared_token_metadata.get()->get_topology().get_datacenter_endpoints()) {
+        datacenters.insert(dc_name);
+    }
+    // We only allow datacenter names as options
+    return datacenters;
 }
 
 using registry = class_registrator<abstract_replication_strategy, network_topology_strategy, const sstring&, const shared_token_metadata&, snitch_ptr&, const std::map<sstring, sstring>&>;
