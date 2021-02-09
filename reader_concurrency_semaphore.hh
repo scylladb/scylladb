@@ -188,6 +188,9 @@ private:
 
     std::runtime_error stopped_exception();
 
+    // closes reader in the background.
+    void close_reader(flat_mutation_reader reader);
+
 public:
     struct no_limits { };
 
