@@ -248,6 +248,9 @@ def test_projection_expression_path_conflict(test_table_s):
     # key for the GetItem call :-)
     p = random_string()
     for expr in ['a.b, a[1]',
+                 'a[1], a.b',
+                 'a.b[1], a.b.c',
+                 'a.b.c, a.b[1]',
                 ]:
         with pytest.raises(ClientError, match='ValidationException.* conflict'):
             test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression=expr)
