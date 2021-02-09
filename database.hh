@@ -1318,9 +1318,6 @@ public:
     void set_local_id(utils::UUID uuid) noexcept { _local_host_id = std::move(uuid); }
 
 private:
-    // Unless you are an earlier boostraper or the database itself, you should
-    // not be using this directly.  Go for the public create_keyspace instead.
-    void add_keyspace(sstring name, keyspace k);
     using system_keyspace = bool_class<struct system_keyspace_tag>;
     void create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, system_keyspace system);
     friend future<> db::system_keyspace::make(database& db);

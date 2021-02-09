@@ -886,12 +886,6 @@ database::shard_of(const frozen_mutation& m) {
     return dht::shard_of(*schema, dht::get_token(*schema, m.key()));
 }
 
-void database::add_keyspace(sstring name, keyspace k) {
-    if (auto [ignored, added] = _keyspaces.try_emplace(std::move(name), std::move(k)); !added) {
-        throw std::invalid_argument("Keyspace " + name + " already exists");
-    }
-}
-
 future<> database::update_keyspace(sharded<service::storage_proxy>& proxy, const sstring& name) {
     return db::schema_tables::read_schema_partition_for_keyspace(proxy, db::schema_tables::KEYSPACES, name).then([this, name](db::schema_tables::schema_result_value_type&& v) {
         auto& ks = find_keyspace(name);
