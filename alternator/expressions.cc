@@ -130,6 +130,21 @@ void condition_expression::append(condition_expression&& a, char op) {
     }, _expression);
 }
 
+std::ostream& operator<<(std::ostream& os, const path& p) {
+    os << p.root();
+    for (const auto& op : p.operators()) {
+        std::visit(overloaded_functor {
+            [&] (const std::string& member) {
+                os << '.' << member;
+            },
+            [&] (unsigned index) {
+                os << '[' << index << ']';
+            }
+        }, op);
+    }
+    return os;
+}
+
 } // namespace parsed
 
 // The following resolve_*() functions resolve references in parsed
