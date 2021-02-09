@@ -648,17 +648,13 @@ future<> distributed_loader::init_system_keyspace(distributed<database>& db) {
         }).get();
 
         db.invoke_on_all([] (database& db) {
-            auto& cfg = db.get_config();
-            bool durable = cfg.data_file_directories().size() > 0;
-            db::system_keyspace::make(db, durable, cfg.volatile_system_keyspace_for_testing());
+            return db::system_keyspace::make(db);
         }).get();
 
         const auto& cfg = db.local().get_config();
         for (auto& data_dir : cfg.data_file_directories()) {
-            for (auto ksname_view : system_keyspaces) {
-                sstring ksname(ksname_view);
-                io_check([name = data_dir + "/" + ksname] { return touch_directory(name); }).get();
-                distributed_loader::populate_keyspace(db, data_dir, ksname).get();
+            for (auto ksname : system_keyspaces) {
+                distributed_loader::populate_keyspace(db, data_dir, sstring(ksname)).get();
             }
         }
 

@@ -43,6 +43,7 @@
 #include <boost/range/adaptor/filtered.hpp>
 #include <boost/range/adaptor/map.hpp>
 
+#include <seastar/core/coroutine.hh>
 #include "system_keyspace.hh"
 #include "types.hh"
 #include "service/storage_proxy.hh"
@@ -1770,8 +1771,9 @@ static bool maybe_write_in_user_memory(schema_ptr s, database& db) {
             || s == v3::scylla_views_builds_in_progress();
 }
 
-void make(database& db, bool durable, bool volatile_testing_only) {
+future<> make(database& db) {
     auto enable_cache = db.get_config().enable_cache();
+    bool durable = db.get_config().data_file_directories().size() > 0;
     for (auto&& table : all_tables()) {
         auto ks_name = table->ks_name();
         if (!db.has_keyspace(ks_name)) {
@@ -1780,18 +1782,7 @@ void make(database& db, bool durable, bool volatile_testing_only) {
                     std::map<sstring, sstring>{},
                     durable
                     );
-            auto kscfg = db.make_keyspace_config(*ksm);
-            kscfg.enable_disk_reads = !volatile_testing_only;
-            kscfg.enable_disk_writes = !volatile_testing_only;
-            kscfg.enable_commitlog = !volatile_testing_only;
-            kscfg.enable_cache = enable_cache;
-            kscfg.compaction_concurrency_semaphore = &db._compaction_concurrency_sem;
-            // don't make system keyspace writes wait for user writes (if under pressure)
-            kscfg.dirty_memory_manager = &db._system_dirty_memory_manager;
-            keyspace _ks{ksm, std::move(kscfg)};
-            auto rs(locator::abstract_replication_strategy::create_replication_strategy(NAME, "LocalStrategy", db.get_shared_token_metadata(), ksm->strategy_options()));
-            _ks.set_replication_strategy(std::move(rs));
-            db.add_keyspace(ks_name, std::move(_ks));
+            co_await db.create_keyspace(ksm, true, database::system_keyspace::yes);
         }
         auto& ks = db.find_keyspace(ks_name);
         auto cfg = ks.make_column_family_config(*table, db);

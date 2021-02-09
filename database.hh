@@ -146,7 +146,7 @@ class data_listeners;
 class large_data_handler;
 
 namespace system_keyspace {
-void make(database& db, bool durable, bool volatile_testing_only);
+future<> make(database& db);
 }
 }
 
@@ -1321,8 +1321,9 @@ private:
     // Unless you are an earlier boostraper or the database itself, you should
     // not be using this directly.  Go for the public create_keyspace instead.
     void add_keyspace(sstring name, keyspace k);
-    void create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm);
-    friend void db::system_keyspace::make(database& db, bool durable, bool volatile_testing_only);
+    using system_keyspace = bool_class<struct system_keyspace_tag>;
+    void create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, system_keyspace system);
+    friend future<> db::system_keyspace::make(database& db);
     void setup_metrics();
     void setup_scylla_memory_diagnostics_producer();
 
@@ -1337,7 +1338,7 @@ private:
     template<typename Future>
     Future update_write_metrics(Future&& f);
     void update_write_metrics_for_timed_out_write();
-    future<> create_keyspace(const lw_shared_ptr<keyspace_metadata>&, bool is_bootstrap);
+    future<> create_keyspace(const lw_shared_ptr<keyspace_metadata>&, bool is_bootstrap, system_keyspace system);
 public:
     static utils::UUID empty_version;
 

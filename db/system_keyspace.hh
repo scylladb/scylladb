@@ -211,7 +211,7 @@ future<> set_scylla_local_param(const sstring& key, const sstring& value);
 future<std::optional<sstring>> get_scylla_local_param(const sstring& key);
 
 std::vector<schema_ptr> all_tables();
-void make(database& db, bool durable, bool volatile_testing_only = false);
+future<> make(database& db);
 
 /// overloads
 

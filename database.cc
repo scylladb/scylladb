@@ -808,7 +808,7 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
     using namespace db::schema_tables;
     return do_parse_schema_tables(proxy, db::schema_tables::KEYSPACES, [this] (schema_result_value_type &v) {
         auto ksm = create_keyspace_from_schema_partition(v);
-        return create_keyspace(ksm, true /* bootstrap. do not mark populated yet */);
+        return create_keyspace(ksm, true /* bootstrap. do not mark populated yet */, system_keyspace::no);
     }).then([&proxy, this] {
         return do_parse_schema_tables(proxy, db::schema_tables::TYPES, [this, &proxy] (schema_result_value_type &v) {
             auto& ks = this->find_keyspace(v.first);
@@ -1315,24 +1315,31 @@ std::vector<view_ptr> database::get_views() const {
             | boost::adaptors::transformed([] (auto& cf) { return view_ptr(cf->schema()); }));
 }
 
-void database::create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm) {
-    keyspace ks(ksm, std::move(make_keyspace_config(*ksm)));
+void database::create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, system_keyspace system) {
+    auto kscfg = make_keyspace_config(*ksm);
+    if (system == system_keyspace::yes) {
+        kscfg.enable_disk_reads = kscfg.enable_disk_writes = kscfg.enable_commitlog = !_cfg.volatile_system_keyspace_for_testing();
+        kscfg.enable_cache = _cfg.enable_cache();
+        // don't make system keyspace writes wait for user writes (if under pressure)
+        kscfg.dirty_memory_manager = &_system_dirty_memory_manager;
+    }
+    keyspace ks(ksm, std::move(kscfg));
     ks.create_replication_strategy(get_shared_token_metadata(), ksm->strategy_options());
     _keyspaces.emplace(ksm->name(), std::move(ks));
 }
 
 future<>
 database::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm) {
-    return create_keyspace(ksm, false);
+    return create_keyspace(ksm, false, system_keyspace::no);
 }
 
 future<>
-database::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, bool is_bootstrap) {
+database::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, bool is_bootstrap, system_keyspace system) {
     if (_keyspaces.contains(ksm->name())) {
         return make_ready_future<>();
     }
 
-    create_in_memory_keyspace(ksm);
+    create_in_memory_keyspace(ksm, system);
     auto& ks = _keyspaces.at(ksm->name());
     auto& datadir = ks.datadir();
 
