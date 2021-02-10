@@ -23,6 +23,12 @@
 
 #include "mutation_fragment.hh"
 
+enum class mutation_fragment_stream_validation_level {
+    partition_region, // fragment kind
+    partition_key,
+    clustering_key,
+};
+
 /// Low level fragment stream validator.
 ///
 /// Tracks and validates the monotonicity of the passed in fragment kinds,
@@ -110,7 +116,7 @@ struct invalid_mutation_fragment_stream : public std::runtime_error {
 class mutation_fragment_stream_validating_filter {
     mutation_fragment_stream_validator _validator;
     sstring _name;
-    bool _compare_keys;
+    mutation_fragment_stream_validation_level _validation_level;
 
 public:
     /// Constructor.
@@ -118,7 +124,7 @@ public:
     /// \arg name is used in log messages to identify the validator, the
     ///     schema identity is added automatically
     /// \arg compare_keys enable validating clustering key monotonicity
-    mutation_fragment_stream_validating_filter(sstring_view name, const schema& s, bool compare_keys = false);
+    mutation_fragment_stream_validating_filter(sstring_view name, const schema& s, mutation_fragment_stream_validation_level level);
 
     bool operator()(const dht::decorated_key& dk);
     bool operator()(mutation_fragment::kind kind, position_in_partition_view pos);
