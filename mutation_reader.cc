@@ -24,9 +24,11 @@
 #include <boost/move/iterator.hpp>
 #include <variant>
 
-#include "mutation_reader.hh"
 #include <seastar/core/future-util.hh>
 #include <seastar/core/coroutine.hh>
+#include <seastar/util/closeable.hh>
+
+#include "mutation_reader.hh"
 #include "flat_mutation_reader.hh"
 #include "schema_registry.hh"
 #include "mutation_compactor.hh"
@@ -1510,7 +1512,7 @@ future<> evictable_reader::fill_buffer(db::timeout_clock::time_point timeout) {
     if (is_end_of_stream()) {
         return make_ready_future<>();
     }
-    return do_with(resume_or_create_reader(), [this, timeout] (flat_mutation_reader& reader) mutable {
+    return with_closeable(resume_or_create_reader(), [this, timeout] (flat_mutation_reader& reader) mutable {
         return fill_buffer(reader, timeout).then([this, &reader] {
             _end_of_stream = reader.is_end_of_stream() && reader.is_buffer_empty();
             maybe_pause(std::move(reader));
