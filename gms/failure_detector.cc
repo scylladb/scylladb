@@ -74,7 +74,7 @@ void arrival_window::add(clk::time_point value, const gms::inet_address& ep) {
     _tlast = value;
 }
 
-double arrival_window::mean() {
+double arrival_window::mean() const {
     return _arrival_intervals.mean();
 }
 

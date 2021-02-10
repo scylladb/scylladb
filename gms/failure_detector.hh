@@ -82,7 +82,7 @@ public:
 
     void add(clk::time_point value, const gms::inet_address& ep);
 
-    double mean();
+    double mean() const;
 
     // see CASSANDRA-2597 for an explanation of the math at work here.
     double phi(clk::time_point tnow);
