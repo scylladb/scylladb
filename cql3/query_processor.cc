@@ -668,10 +668,14 @@ struct internal_query_state {
     bool more_results = true;
 };
 
-::shared_ptr<internal_query_state> query_processor::create_paged_state(const sstring& query_string,
-        const std::initializer_list<data_value>& values, int32_t page_size) {
+::shared_ptr<internal_query_state> query_processor::create_paged_state(
+        const sstring& query_string,
+        db::consistency_level cl,
+        const timeout_config& timeout_config,
+        const std::initializer_list<data_value>& values,
+        int32_t page_size) {
     auto p = prepare_internal(query_string);
-    auto opts = make_internal_options(p, values, db::consistency_level::ONE, infinite_timeout_config, page_size);
+    auto opts = make_internal_options(p, values, cl, timeout_config, page_size);
     ::shared_ptr<internal_query_state> res = ::make_shared<internal_query_state>(
             internal_query_state{
                     query_string,
@@ -935,17 +939,20 @@ bool query_processor::migration_subscriber::should_invalidate(
     return statement->depends_on_keyspace(ks_name) && (!cf_name || statement->depends_on_column_family(*cf_name));
 }
 
-future<> query_processor::query(
+future<> query_processor::query_internal(
         const sstring& query_string,
+        db::consistency_level cl,
+        const timeout_config& timeout_config,
         const std::initializer_list<data_value>& values,
+        int32_t page_size,
         noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)>&& f) {
-    return for_each_cql_result(create_paged_state(query_string, values), std::move(f));
+    return for_each_cql_result(create_paged_state(query_string, cl, timeout_config, values, page_size), std::move(f));
 }
 
-future<> query_processor::query(
+future<> query_processor::query_internal(
         const sstring& query_string,
         noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)>&& f) {
-    return for_each_cql_result(create_paged_state(query_string, {}), std::move(f));
+    return query_internal(query_string, db::consistency_level::ONE, infinite_timeout_config, {}, 1000, std::move(f));
 }
 
 }
