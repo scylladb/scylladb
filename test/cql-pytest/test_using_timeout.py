@@ -136,7 +136,7 @@ def test_mix_per_query_timeout_with_other_params(scylla_only, cql, table1):
     cql.execute(f"INSERT INTO {table} (p,c,v) VALUES ({key},1,1) USING TIMEOUT 60m AND TTL 1000000 AND TIMESTAMP 321")
     cql.execute(f"INSERT INTO {table} (p,c,v) VALUES ({key},2,1) USING TIMESTAMP 42 AND TIMEOUT 30m")
     res = list(cql.execute(f"SELECT ttl(v), writetime(v) FROM {table} WHERE p = {key} and c = 1"))
-    assert len(res) == 1 and res[0].ttl_v == 1000000 and res[0].writetime_v == 321
+    assert len(res) == 1 and res[0].ttl_v > 0 and res[0].writetime_v == 321
     res = list(cql.execute(f"SELECT ttl(v), writetime(v) FROM {table} WHERE p = {key} and c = 2"))
     assert len(res) == 1 and not res[0].ttl_v and res[0].writetime_v == 42
 
