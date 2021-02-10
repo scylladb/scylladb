@@ -643,38 +643,36 @@ void fsm::replicate_to(follower_progress& progress, bool allow_empty) {
 
         allow_empty = false; // allow only one empty message
 
-        // With snapshot prefix enaled the log may look like this:
+        // A log containing a snapshot, a few trailing entries and
+        // a few new entries may look like this:
         // E - log entry
-        // S - snapshot
-        // Ei1 Ei2 Ei3 Si4 Ei5 Ei6
-        // If the next_idx is before i2 we need to enter snaphot transfer mode
-        // even though we still have i1 since it is not possibel to get prev
-        // term for it.
-        auto& s = _log.get_snapshot();
-        if (progress.next_idx <= s.idx && progress.next_idx < (_log.start_idx() + 1)) {
-            // The next index to be sent points to a snapshot so
-            // we need to transfer the snapshot before we can
+        // S_idx - snapshot index
+        // E_i1 E_i2 E_i3 Ei_4 E_i5 E_i6
+        //      ^
+        //      S_idx = i2
+        // If the follower's next_idx is i1 we need to
+        // enter snapshot transfer mode even when we have
+        // i1 in the log, since it is not possible to get the term of
+        // the entry previous to i1 and verify that the follower's tail
+        // contains no uncommitted entries.
+        index_t prev_idx = progress.next_idx - index_t{1};
+        std::optional<term_t> prev_term = _log.term_for(prev_idx);
+        if (!prev_term) {
+            const snapshot& snapshot = _log.get_snapshot();
+            // We need to transfer the snapshot before we can
             // continue syncing the log.
             progress.become_snapshot();
-            send_to(progress.id, install_snapshot{_current_term, _log.get_snapshot()});
+            send_to(progress.id, install_snapshot{_current_term, snapshot});
             logger.trace("replicate_to[{}->{}]: send snapshot next={} snapshot={}",
-                    _my_id, progress.id, progress.next_idx,  _log.get_snapshot().idx);
+                    _my_id, progress.id, progress.next_idx,  snapshot.idx);
             return;
-        }
-
-        index_t prev_idx = index_t(0);
-        term_t prev_term = _current_term;
-        if (progress.next_idx != 1) {
-            prev_idx = index_t(progress.next_idx - 1);
-            assert (prev_idx >= _log.start_idx() || s.idx == prev_idx);
-            prev_term = s.idx == prev_idx ? s.term : _log[prev_idx]->term;
         }
 
         append_request req = {
             .current_term = _current_term,
             .leader_id = _my_id,
             .prev_log_idx = prev_idx,
-            .prev_log_term = prev_term,
+            .prev_log_term = prev_term.value(),
             .leader_commit_idx = _commit_idx,
             .entries = std::vector<log_entry_ptr>()
         };
