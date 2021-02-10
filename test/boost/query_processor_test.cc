@@ -134,7 +134,7 @@ SEASTAR_TEST_CASE(test_querying_with_consumer) {
         auto& db = e.local_db();
         auto s = db.find_schema("ks", "cf");
 
-        e.local_qp().query("SELECT * from ks.cf", [&counter] (const cql3::untyped_result_set::row& row) mutable {
+        e.local_qp().query_internal("SELECT * from ks.cf", [&counter] (const cql3::untyped_result_set::row& row) mutable {
             counter++;
             return make_ready_future<stop_iteration>(stop_iteration::no);
         }).get();
@@ -145,7 +145,7 @@ SEASTAR_TEST_CASE(test_querying_with_consumer) {
             total += i;
             e.local_qp().execute_internal("insert into ks.cf (k , v) values (?, ? );", { to_sstring(i), i}).get();
         }
-        e.local_qp().query("SELECT * from ks.cf", [&counter, &sum] (const cql3::untyped_result_set::row& row) mutable {
+        e.local_qp().query_internal("SELECT * from ks.cf", [&counter, &sum] (const cql3::untyped_result_set::row& row) mutable {
             counter++;
             sum += row.get_as<int>("v");
             return make_ready_future<stop_iteration>(stop_iteration::no);
@@ -158,7 +158,7 @@ SEASTAR_TEST_CASE(test_querying_with_consumer) {
             total += i;
             e.local_qp().execute_internal("insert into ks.cf (k , v) values (?, ? );", { to_sstring(i), i}).get();
         }
-        e.local_qp().query("SELECT * from ks.cf", [&counter, &sum] (const cql3::untyped_result_set::row& row) mutable {
+        e.local_qp().query_internal("SELECT * from ks.cf", [&counter, &sum] (const cql3::untyped_result_set::row& row) mutable {
             counter++;
             sum += row.get_as<int>("v");
             return make_ready_future<stop_iteration>(stop_iteration::no);
@@ -166,7 +166,7 @@ SEASTAR_TEST_CASE(test_querying_with_consumer) {
         BOOST_CHECK_EQUAL(counter, 2200);
         BOOST_CHECK_EQUAL(total, sum);
         counter = 1000;
-        e.local_qp().query("SELECT * from ks.cf", [&counter] (const cql3::untyped_result_set::row& row) mutable {
+        e.local_qp().query_internal("SELECT * from ks.cf", [&counter] (const cql3::untyped_result_set::row& row) mutable {
             counter++;
             if (counter == 1010) {
                 return make_ready_future<stop_iteration>(stop_iteration::yes);

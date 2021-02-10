@@ -1901,7 +1901,7 @@ future<> get_compaction_history(compaction_history_consumer&& f) {
     return do_with(compaction_history_consumer(std::move(f)),
             [](compaction_history_consumer& consumer) mutable {
         sstring req = format("SELECT * from system.{}", COMPACTION_HISTORY);
-        return qctx->qp().query(req, [&consumer] (const cql3::untyped_result_set::row& row) mutable {
+        return qctx->qp().query_internal(req, [&consumer] (const cql3::untyped_result_set::row& row) mutable {
             compaction_history_entry entry;
             entry.id = row.get_as<utils::UUID>("id");
             entry.ks = row.get_as<sstring>("keyspace_name");
