@@ -130,6 +130,12 @@ void condition_expression::append(condition_expression&& a, char op) {
     }, _expression);
 }
 
+void path::check_depth_limit() {
+    if (1 + _operators.size() > depth_limit) {
+        throw expressions_syntax_error(format("Document path exceeded {} nesting levels", depth_limit));
+    }
+}
+
 std::ostream& operator<<(std::ostream& os, const path& p) {
     os << p.root();
     for (const auto& op : p.operators()) {

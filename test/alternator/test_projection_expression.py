@@ -333,3 +333,20 @@ def test_projection_expression_and_key_condition_expression(test_table_s):
         ExpressionAttributeNames={'#name1': 'p', '#name2': 'a'},
         ExpressionAttributeValues={':val1': p});
     assert got_items == [{'a': 'hello'}]
+
+# Test whether the nesting depth of an a path in a projection expression
+# is limited. If the implementation is done using recursion, it is goood
+# practice to limit it and not crash the server. According to the DynamoDB
+# documentation, DynamoDB supports nested attributes up to 32 levels deep:
+# https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Limits.html#limits-attributes-nested-depth
+# There is no reason why Alternator should not use exactly the same limit
+# as is officially documented by DynamoDB.
+def test_projection_expression_path_nesting_levels(test_table_s):
+    p = random_string()
+    # 32 nesting levels (including the top-level attribute) work
+    test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression='a'+('.b'*31))
+    # 33 nesting levels do not. DynamoDB gives an error: "Invalid
+    # ProjectionExpression: The document path has too many nesting levels;
+    # nesting levels: 33".
+    with pytest.raises(ClientError, match='ValidationException.*nesting levels'):
+        test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression='a'+('.b'*32))
