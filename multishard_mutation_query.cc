@@ -358,7 +358,8 @@ future<> read_context::stop() {
         return parallel_for_each(smp::all_cpus(), [this] (unsigned shard) {
             if (_readers[shard].handle && *_readers[shard].handle) {
                 return _db.invoke_on(shard, [rm = std::move(_readers[shard])] (database& db) mutable {
-                    rm.rparts->permit.semaphore().unregister_inactive_read(std::move(*rm.handle));
+                    auto reader_opt = rm.rparts->permit.semaphore().unregister_inactive_read(std::move(*rm.handle));
+                    return reader_opt ? reader_opt->close() : make_ready_future<>();
                 });
             }
             return make_ready_future<>();
