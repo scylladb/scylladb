@@ -65,6 +65,7 @@ public:
 
     stream_id() = default;
     stream_id(bytes);
+    stream_id(dht::token, size_t);
 
     bool is_set() const;
     bool operator==(const stream_id&) const;
@@ -78,9 +79,6 @@ public:
 
     partition_key to_partition_key(const schema& log_schema) const;
     static int64_t token_from_bytes(bytes_view);
-private:
-    friend class topology_description_generator;
-    stream_id(dht::token, size_t);
 };
 
 /* Describes a mapping of tokens to CDC streams in a token range.

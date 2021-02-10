@@ -178,6 +178,21 @@ const std::vector<token_range_description>& topology_description::entries() cons
     return _entries;
 }
 
+static std::vector<stream_id> create_stream_ids(
+        size_t index, dht::token start, dht::token end, size_t shard_count, uint8_t ignore_msb) {
+    std::vector<stream_id> result;
+    result.reserve(shard_count);
+    dht::sharder sharder(shard_count, ignore_msb);
+    for (size_t shard_idx = 0; shard_idx < shard_count; ++shard_idx) {
+        auto t = dht::find_first_token_for_shard(sharder, start, end, shard_idx);
+        // compose the id from token and the "index" of the range end owning vnode
+        // as defined by token sort order. Basically grouping within this
+        // shard set.
+        result.emplace_back(stream_id(t, index));
+    }
+    return result;
+}
+
 class topology_description_generator final {
     const db::config& _cfg;
     const std::unordered_set<dht::token>& _bootstrap_tokens;
@@ -217,17 +232,8 @@ class topology_description_generator final {
         desc.token_range_end = end;
 
         auto [shard_count, ignore_msb] = get_sharding_info(end);
-        desc.streams.reserve(shard_count);
+        desc.streams = create_stream_ids(index, start, end, shard_count, ignore_msb);
         desc.sharding_ignore_msb = ignore_msb;
-
-        dht::sharder sharder(shard_count, ignore_msb);
-        for (size_t shard_idx = 0; shard_idx < shard_count; ++shard_idx) {
-            auto t = dht::find_first_token_for_shard(sharder, start, end, shard_idx);
-            // compose the id from token and the "index" of the range end owning vnode
-            // as defined by token sort order. Basically grouping within this
-            // shard set.
-            desc.streams.emplace_back(stream_id(t, index));
-        }
 
         return desc;
     }
