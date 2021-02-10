@@ -418,10 +418,10 @@ struct test_case {
 };
 
 future<> wait_log(std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>& rafts,
-        size_t nodes, size_t leader) {
+        size_t leader) {
     // Wait for leader log to propagate
     auto leader_log_idx = rafts[leader].first->log_last_idx();
-    for (size_t s = 0; s < nodes; ++s) {
+    for (size_t s = 0; s < rafts.size(); ++s) {
         auto id = raft::server_id{utils::UUID(0, s + 1)};
         if (s != leader && server_disconnected.find(id) == server_disconnected.end()) {
             co_await rafts[s].first->wait_log_idx(leader_log_idx);
@@ -492,9 +492,9 @@ future<int> run_test(test_case test) {
                 return rafts[leader].first->add_entry(std::move(cmd), raft::wait_type::committed);
             });
             next_val += n;
-            co_await wait_log(rafts, test.nodes, leader);
+            co_await wait_log(rafts, leader);
         } else if (std::holds_alternative<new_leader>(update)) {
-            co_await wait_log(rafts, test.nodes, leader);
+            co_await wait_log(rafts, leader);
             unsigned next_leader = std::get<new_leader>(update);
             if (next_leader != leader) {
                 assert(next_leader < rafts.size());
@@ -517,7 +517,7 @@ future<int> run_test(test_case test) {
                 leader = next_leader;
             }
         } else if (std::holds_alternative<partition>(update)) {
-            co_await wait_log(rafts, test.nodes, leader);
+            co_await wait_log(rafts, leader);
             auto p = std::get<partition>(update);
             server_disconnected.clear();
             std::unordered_set<size_t> partition_servers;
