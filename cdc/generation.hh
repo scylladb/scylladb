@@ -131,6 +131,13 @@ public:
     {}
 };
 
+class no_generation_data_exception : public std::runtime_error {
+public:
+    no_generation_data_exception(db_clock::time_point generation_ts)
+        : std::runtime_error(format("could not find generation data for timestamp {}", generation_ts))
+    {}
+};
+
 /* Should be called when we're restarting and we noticed that we didn't save any streams timestamp in our local tables,
  * which means that we're probably upgrading from a non-CDC/old CDC version (another reason could be
  * that there's a bug, or the user messed with our local tables).
