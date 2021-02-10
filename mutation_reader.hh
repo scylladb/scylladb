@@ -121,6 +121,9 @@ public:
         _end_of_stream = false;
         return _rd.fast_forward_to(std::move(pr), timeout);
     }
+    virtual future<> close() noexcept {
+        return _rd.close();
+    }
 };
 
 // Creates a mutation_reader wrapper which creates a new stream of mutations
