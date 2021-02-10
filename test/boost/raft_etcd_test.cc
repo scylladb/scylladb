@@ -493,7 +493,7 @@ BOOST_AUTO_TEST_CASE(test_log_replication_1) {
     for (auto& [id, msg] : output.messages) {
         BOOST_REQUIRE_NO_THROW(areq = std::get<raft::append_request>(msg));
         BOOST_CHECK(areq.prev_log_idx == 0);
-        BOOST_CHECK(areq.prev_log_term == current_term);
+        BOOST_CHECK(areq.prev_log_term == 0);
         BOOST_CHECK(areq.entries.size() == 1);
         lep =  areq.entries.back();
         BOOST_CHECK(lep->idx == dummy_idx);

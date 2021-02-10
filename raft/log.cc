@@ -154,6 +154,16 @@ std::pair<bool, term_t> log::match_term(index_t idx, term_t term) const {
     return my_term == term ? std::make_pair(true, term_t(0)) : std::make_pair(false, my_term);
 }
 
+std::optional<term_t> log::term_for(index_t idx) const {
+    if (!_log.empty() && idx >= start_idx()) {
+        return _log[idx - start_idx()]->term;
+    }
+    if (idx == _snapshot.idx) {
+        return _snapshot.term;
+    }
+    return {};
+}
+
 index_t log::maybe_append(std::vector<log_entry_ptr>&& entries) {
     assert(!entries.empty());
 
