@@ -459,7 +459,7 @@ future<> read_context::save_reader(shard_id shard, const dht::decorated_key& las
     return _db.invoke_on(shard, [this, query_uuid = _cmd.query_uuid, query_ranges = _ranges, &rm,
             &last_pkey, &last_ckey, gts = tracing::global_trace_state_ptr(_trace_state)] (database& db) mutable {
         try {
-            flat_mutation_reader_opt reader = try_resume(rm.rparts->permit.semaphore(), std::move(*rm.handle));
+            flat_mutation_reader_opt reader = rm.rparts->permit.semaphore().unregister_inactive_read(std::move(*rm.handle));
 
             if (!reader) {
                 return make_ready_future<>();

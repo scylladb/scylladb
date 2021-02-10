@@ -22,10 +22,13 @@
 #include "querier.hh"
 
 #include "schema.hh"
+#include "log.hh"
 
 #include <boost/range/adaptor/map.hpp>
 
 namespace query {
+
+logging::logger qlogger("querier_cache");
 
 enum class can_use {
     yes,
@@ -211,16 +214,16 @@ querier_cache::querier_cache(std::chrono::seconds entry_ttl)
 }
 
 struct querier_utils {
-    static flat_mutation_reader get_reader(querier_base& q) {
+    static flat_mutation_reader get_reader(querier_base& q) noexcept {
         return std::move(std::get<flat_mutation_reader>(q._reader));
     }
-    static reader_concurrency_semaphore::inactive_read_handle get_inactive_read_handle(querier_base& q) {
+    static reader_concurrency_semaphore::inactive_read_handle get_inactive_read_handle(querier_base& q) noexcept {
         return std::move(std::get<reader_concurrency_semaphore::inactive_read_handle>(q._reader));
     }
-    static void set_reader(querier_base& q, flat_mutation_reader r) {
+    static void set_reader(querier_base& q, flat_mutation_reader r) noexcept {
         q._reader = std::move(r);
     }
-    static void set_inactive_read_handle(querier_base& q, reader_concurrency_semaphore::inactive_read_handle h) {
+    static void set_inactive_read_handle(querier_base& q, reader_concurrency_semaphore::inactive_read_handle h) noexcept {
         q._reader = std::move(h);
     }
 };
@@ -247,9 +250,22 @@ static void insert_querier(
 
     auto& sem = q.permit().semaphore();
 
+    auto irh = sem.register_inactive_read(querier_utils::get_reader(q));
+    if (!irh) {
+        return;
+    }
+  try {
+    auto cleanup_irh = defer([&] {
+        sem.unregister_inactive_read(std::move(irh));
+    });
+
     auto it = index.emplace(key, std::make_unique<Querier>(std::move(q)));
 
     ++stats.population;
+    auto cleanup_index = defer([&] {
+        index.erase(it);
+        --stats.population;
+    });
 
     auto notify_handler = [&stats, &index, it] (reader_concurrency_semaphore::evict_reason reason) {
         index.erase(it);
@@ -266,9 +282,17 @@ static void insert_querier(
         --stats.population;
     };
 
-    if (auto irh = sem.register_inactive_read(querier_utils::get_reader(*it->second), ttl, std::move(notify_handler))) {
-        querier_utils::set_inactive_read_handle(*it->second, std::move(irh));
-    }
+    sem.set_notify_handler(irh, std::move(notify_handler), ttl);
+    querier_utils::set_inactive_read_handle(*it->second, std::move(irh));
+    cleanup_index.cancel();
+    cleanup_irh.cancel();
+  } catch (...) {
+    // It is okay to swallow the exception since
+    // we're allowed to drop the reader upon registration
+    // due to lack of resources - in which case we already
+    // drop the querier.
+    qlogger.warn("Failed to insert querier into index: {}. Ignored as if it was evicted upon registration", std::current_exception());
+  }
 }
 
 void querier_cache::insert(utils::UUID key, data_querier&& q, tracing::trace_state_ptr trace_state) {
@@ -304,11 +328,11 @@ static std::optional<Querier> lookup_querier(
         throw std::runtime_error("lookup_querier(): found querier is not of the expected type");
     }
     auto& q = *q_ptr;
-    auto read_ptr = q.permit().semaphore().unregister_inactive_read(querier_utils::get_inactive_read_handle(q));
-    if (!read_ptr) {
+    auto reader_opt = q.permit().semaphore().unregister_inactive_read(querier_utils::get_inactive_read_handle(q));
+    if (!reader_opt) {
         throw std::runtime_error("lookup_querier(): found querier that is evicted");
     }
-    querier_utils::set_reader(q, std::move(*read_ptr.get()));
+    querier_utils::set_reader(q, std::move(*reader_opt));
     --stats.population;
 
     const auto can_be_used = can_be_used_for_page(q, s, ranges.front(), slice);

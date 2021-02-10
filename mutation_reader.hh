@@ -444,7 +444,6 @@ protected:
     // Helpers for implementations, who might wish to provide the semaphore in
     // other ways than through the official `semaphore()` override.
     static reader_concurrency_semaphore::inactive_read_handle pause(reader_concurrency_semaphore& sem, flat_mutation_reader reader);
-    static flat_mutation_reader_opt try_resume(reader_concurrency_semaphore& sem, reader_concurrency_semaphore::inactive_read_handle irh);
 
 public:
     /// Create an appropriate reader on the shard it is called on.
