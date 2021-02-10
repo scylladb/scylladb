@@ -374,6 +374,20 @@ std::optional<shard_mutation_querier> querier_cache::lookup_shard_mutation_queri
             std::move(trace_state));
 }
 
+future<> querier_base::close() noexcept {
+    struct variant_closer {
+        querier_base& q;
+        future<> operator()(flat_mutation_reader& reader) {
+            return reader.close();
+        }
+        future<> operator()(reader_concurrency_semaphore::inactive_read_handle& irh) {
+            auto reader_opt = q.permit().semaphore().unregister_inactive_read(std::move(irh));
+            return reader_opt ? reader_opt->close() : make_ready_future<>();
+        }
+    };
+    return std::visit(variant_closer{*this}, _reader);
+}
+
 void querier_cache::set_entry_ttl(std::chrono::seconds entry_ttl) {
     _entry_ttl = entry_ttl;
 }

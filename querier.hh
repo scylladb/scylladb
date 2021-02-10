@@ -176,6 +176,8 @@ public:
     size_t memory_usage() const {
         return _permit.consumed_resources().memory;
     }
+
+    future<> close() noexcept;
 };
 
 /// One-stop object for serving queries.
