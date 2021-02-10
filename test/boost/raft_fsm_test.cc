@@ -27,6 +27,8 @@
 #include "raft/fsm.hh"
 
 using raft::term_t, raft::index_t, raft::server_id;
+using raft::log_entry;
+using seastar::make_lw_shared;
 
 void election_threshold(raft::fsm& fsm) {
     for (int i = 0; i <= raft::ELECTION_TIMEOUT.count(); i++) {
@@ -47,7 +49,65 @@ struct failure_detector: public raft::failure_detector {
     }
 };
 
+template <typename T> void add_entry(raft::log& log, T cmd) {
+    log.emplace_back(make_lw_shared<log_entry>(log_entry{log.last_term(), log.next_idx(), cmd}));
+}
+
+raft::snapshot log_snapshot(raft::log& log, index_t idx) {
+    return raft::snapshot{.idx = idx, .term = log.last_term(), .config = log.get_snapshot().config};
+}
+
 raft::fsm_config fsm_cfg{.append_request_threshold = 1};
+
+BOOST_AUTO_TEST_CASE(test_log_last_conf_idx) {
+    // last_conf_idx, prev_conf_idx are initialized correctly,
+    // and maintained during truncate head/truncate tail
+    server_id id1{utils::make_random_uuid()};
+    raft::configuration cfg({id1});
+    raft::log log{raft::snapshot{.config = cfg}};
+    BOOST_CHECK_EQUAL(log.last_conf_idx(), 0);
+    add_entry(log, cfg);
+    BOOST_CHECK_EQUAL(log.last_conf_idx(), 1);
+    add_entry(log, log_entry::dummy{});
+    add_entry(log, cfg);
+    BOOST_CHECK_EQUAL(log.last_conf_idx(), 3);
+    // apply snapshot truncates the log and resets last_conf_idx()
+    log.apply_snapshot(log_snapshot(log, log.last_idx()), 0);
+    BOOST_CHECK_EQUAL(log.last_conf_idx(), 0);
+    // log::last_term() is maintained correctly by truncate_head/truncate_tail() (snapshotting)
+    BOOST_CHECK_EQUAL(log.last_term(), log.get_snapshot().term);
+    BOOST_CHECK(log.term_for(log.get_snapshot().idx).has_value());
+    BOOST_CHECK_EQUAL(log.term_for(log.get_snapshot().idx).value(), log.get_snapshot().term);
+    BOOST_CHECK(! log.term_for(log.last_idx() - index_t{1}).has_value());
+    add_entry(log, log_entry::dummy{});
+    BOOST_CHECK(log.term_for(log.last_idx()).has_value());
+    add_entry(log, log_entry::dummy{});
+    const size_t GAP = 10;
+    // apply_snapshot with a log gap, this should clear all log
+    // entries, despite that trailing is given, a gap
+    // between old log entries and a snapshot would violate
+    // log continuity.
+    log.apply_snapshot(log_snapshot(log, log.last_idx() + index_t{GAP}), GAP * 2);
+    BOOST_CHECK(log.empty());
+    BOOST_CHECK_EQUAL(log.next_idx(), log.get_snapshot().idx + index_t{1});
+    add_entry(log, log_entry::dummy{});
+    BOOST_CHECK_EQUAL(log.in_memory_size(), 1);
+    add_entry(log, log_entry::dummy{});
+    BOOST_CHECK_EQUAL(log.in_memory_size(), 2);
+    // Set trailing longer than the length of the log.
+    log.apply_snapshot(log_snapshot(log, log.last_idx()), 3);
+    BOOST_CHECK_EQUAL(log.in_memory_size(), 2);
+    // Set trailing the same length as the current log length
+    add_entry(log, log_entry::dummy{});
+    BOOST_CHECK_EQUAL(log.in_memory_size(), 3);
+    log.apply_snapshot(log_snapshot(log, log.last_idx()), 3);
+    BOOST_CHECK_EQUAL(log.in_memory_size(), 3);
+    BOOST_CHECK_EQUAL(log.last_conf_idx(), 0);
+    add_entry(log, log_entry::dummy{});
+    // Set trailing shorter than the length of the log
+    log.apply_snapshot(log_snapshot(log, log.last_idx()), 1);
+    BOOST_CHECK_EQUAL(log.in_memory_size(), 1);
+}
 
 BOOST_AUTO_TEST_CASE(test_election_single_node) {
 
