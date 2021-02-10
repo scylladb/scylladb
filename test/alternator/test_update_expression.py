@@ -265,7 +265,6 @@ def test_update_expression_multi_overlap(test_table_s):
 
 # The problem isn't just with identical paths - we can't modify two paths that
 # "overlap" in the sense that one is the ancestor of the other.
-@pytest.mark.xfail(reason="nested updates not yet implemented")
 def test_update_expression_multi_overlap_nested(test_table_s):
     p = random_string()
     # Note that the overlap checks happen before checking the actual content
@@ -301,7 +300,6 @@ def test_update_expression_multi_overlap_nested(test_table_s):
 # Besides the concept of "overlapping" paths tested above, DynamoDB also has
 # the concept of "conflicting" paths - e.g., attempting to set both a.b and
 # a[1] together doesn't make sense.
-@pytest.mark.xfail(reason="nested updates not yet implemented")
 def test_update_expression_multi_conflict_nested(test_table_s):
     p = random_string()
     for expr in ['SET a.b = :val1, a[1] = :val2',
@@ -831,7 +829,6 @@ def test_update_expression_dot_in_name(test_table_s):
 # Below we have several tests of what happens when a nested attribute is
 # on the left-hand side of an assignment, but an every simpler case of
 # nested attributes is having one on the right hand side of an assignment:
-@pytest.mark.xfail(reason="nested updates not yet implemented")
 def test_update_expression_nested_attribute_rhs(test_table_s):
     p = random_string()
     test_table_s.put_item(Item={'p': p, 'a': {'b': 3, 'c': {'x': 7, 'y': 8}}, 'd': 5})

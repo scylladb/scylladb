@@ -126,6 +126,8 @@ public:
     const members_t& get_members() const { return std::get<members_t>(*_content); }
     indexes_t& get_indexes() { return std::get<indexes_t>(*_content); }
     const indexes_t& get_indexes() const { return std::get<indexes_t>(*_content); }
+    T& get_value() { return std::get<T>(*_content); }
+    const T& get_value() const { return std::get<T>(*_content); }
 };
 
 template<typename T>

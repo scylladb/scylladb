@@ -2185,8 +2185,16 @@ static bool check_needs_read_before_write(const parsed::value& v) {
     }, v._value);
 }
 
-static bool check_needs_read_before_write(const parsed::update_expression& update_expression) {
-    return boost::algorithm::any_of(update_expression.actions(), [](const parsed::update_expression::action& action) {
+static bool check_needs_read_before_write(const attribute_path_map<parsed::update_expression::action>& update_expression) {
+    return boost::algorithm::any_of(update_expression, [](const auto& p) {
+        if (!p.second.has_value()) {
+            // If the action is not on the top-level attribute, we need to
+            // read the old item: we change only a part of the top-level
+            // attribute, and write the full top-level attribute back.
+            return true;
+        }
+        // Otherwise, the action p.second.get_value() is just on top-level
+        // attribute. Check if it needs read-before-write:
         return std::visit(overloaded_functor {
             [&] (const parsed::update_expression::action::set& a) -> bool {
                 return check_needs_read_before_write(a._rhs._v1) || (a._rhs._op != 'v' && check_needs_read_before_write(a._rhs._v2));
@@ -2200,7 +2208,7 @@ static bool check_needs_read_before_write(const parsed::update_expression& updat
             [&] (const parsed::update_expression::action::del& a) -> bool {
                 return true;
             }
-        }, action._action);
+        }, p.second.get_value()._action);
     });
 }
 
@@ -2209,7 +2217,11 @@ public:
     // Some information parsed during the constructor to check for input
     // errors, and cached to be used again during apply().
     rjson::value* _attribute_updates;
-    parsed::update_expression _update_expression;
+    // Instead of keeping a parsed::update_expression with an unsorted list
+    // list of actions, we keep them in an attribute_path_map which groups
+    // them by top-level attribute, and detects forbidden overlaps/conflicts.
+    attribute_path_map<parsed::update_expression::action> _update_expression;
+
     parsed::condition_expression _condition_expression;
 
     update_item_operation(service::storage_proxy& proxy, rjson::value&& request);
@@ -2240,15 +2252,21 @@ update_item_operation::update_item_operation(service::storage_proxy& proxy, rjso
             throw api_error::validation("UpdateExpression must be a string");
         }
         try {
-            _update_expression = parse_update_expression(update_expression->GetString());
-            resolve_update_expression(_update_expression,
+            parsed::update_expression expr = parse_update_expression(update_expression->GetString());
+            resolve_update_expression(expr,
                     expression_attribute_names, expression_attribute_values,
                     used_attribute_names, used_attribute_values);
+            if (expr.empty()) {
+                throw api_error::validation("Empty expression in UpdateExpression is not allowed");
+            }
+            for (auto& action : expr.actions()) {
+                // Unfortunately we need to copy the action's path, because
+                // we std::move the action object.
+                auto p = action._path;
+                attribute_path_map_add("UpdateExpression", _update_expression, p, std::move(action));
+            }
         } catch(expressions_syntax_error& e) {
             throw api_error::validation(e.what());
-        }
-        if (_update_expression.empty()) {
-            throw api_error::validation("Empty expression in UpdateExpression is not allowed");
         }
     }
     _attribute_updates = rjson::find(_request, "AttributeUpdates");
@@ -2289,6 +2307,76 @@ update_item_operation::needs_read_before_write() const {
            check_needs_read_before_write(_condition_expression) ||
            _request.HasMember("Expected") ||
            (_returnvalues != returnvalues::NONE && _returnvalues != returnvalues::UPDATED_NEW);
+}
+
+// action_result() returns the result of applying an UpdateItem action -
+// this result is either a JSON object or an unset optional which indicates
+// the action was a deletion. The caller (update_item_operation::apply()
+// below) will either write this JSON as the content of a column, or
+// use it as a piece in a bigger top-level attribute.
+static std::optional<rjson::value> action_result(
+        const parsed::update_expression::action& action,
+        const rjson::value* previous_item) {
+    return std::visit(overloaded_functor {
+        [&] (const parsed::update_expression::action::set& a) -> std::optional<rjson::value> {
+            return calculate_value(a._rhs, previous_item);
+        },
+        [&] (const parsed::update_expression::action::remove& a) -> std::optional<rjson::value> {
+            return std::nullopt;
+        },
+        [&] (const parsed::update_expression::action::add& a) -> std::optional<rjson::value> {
+            parsed::value base;
+            parsed::value addition;
+            base.set_path(action._path);
+            addition.set_constant(a._valref);
+            rjson::value v1 = calculate_value(base, calculate_value_caller::UpdateExpression, previous_item);
+            rjson::value v2 = calculate_value(addition, calculate_value_caller::UpdateExpression, previous_item);
+            rjson::value result;
+            // An ADD can be used to create a new attribute (when
+            // v1.IsNull()) or to add to a pre-existing attribute:
+            if (v1.IsNull()) {
+                std::string v2_type = get_item_type_string(v2);
+                if (v2_type == "N" || v2_type == "SS" || v2_type == "NS" || v2_type == "BS") {
+                    result = v2;
+                } else {
+                    throw api_error::validation(format("An operand in the update expression has an incorrect data type: {}", v2));
+                }
+            } else {
+                std::string v1_type = get_item_type_string(v1);
+                if (v1_type == "N") {
+                    if (get_item_type_string(v2) != "N") {
+                        throw api_error::validation(format("Incorrect operand type for operator or function. Expected {}: {}", v1_type, rjson::print(v2)));
+                    }
+                    result = number_add(v1, v2);
+                } else if (v1_type == "SS" || v1_type == "NS" || v1_type == "BS") {
+                    if (get_item_type_string(v2) != v1_type) {
+                        throw api_error::validation(format("Incorrect operand type for operator or function. Expected {}: {}", v1_type, rjson::print(v2)));
+                    }
+                    result = set_sum(v1, v2);
+                } else {
+                    throw api_error::validation(format("An operand in the update expression has an incorrect data type: {}", v1));
+                }
+            }
+            return result;
+        },
+        [&] (const parsed::update_expression::action::del& a) -> std::optional<rjson::value> {
+            parsed::value base;
+            parsed::value subset;
+            base.set_path(action._path);
+            subset.set_constant(a._valref);
+            rjson::value v1 = calculate_value(base, calculate_value_caller::UpdateExpression, previous_item);
+            rjson::value v2 = calculate_value(subset, calculate_value_caller::UpdateExpression, previous_item);
+            if (!v1.IsNull()) {
+                return set_diff(v1, v2);
+            }
+            // When we return nullopt here, we ask to *delete* this attribute,
+            // which is unnecessary because we know the attribute does not
+            // exist anyway. This is a waste, but a small one. Note that also
+            // for the "remove" action above we don't bother to check if the
+            // previous_item add anything to remove.
+            return std::nullopt;
+        }
+    }, action._action);
 }
 
 std::optional<mutation>
@@ -2370,88 +2458,28 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
     }
 
     if (!_update_expression.empty()) {
-        std::unordered_set<std::string> seen_column_names;
-        for (auto& action : _update_expression.actions()) {
-            if (action._path.has_operators()) {
+        for (auto& actions : _update_expression) {
+            // The actions of _update_expression are grouped by top-level
+            // attributes. Here, all actions in actions.second share the same
+            // top-level attribute actions.first.
+            std::string column_name = actions.first;
+            const column_definition* cdef = _schema->get_column_definition(to_bytes(column_name));
+            if (cdef && cdef->is_primary_key()) {
+                throw api_error::validation(format("UpdateItem cannot update key column {}", column_name));
+            }
+            if (actions.second.has_value()) {
+                // The single action actions.second.get_value() is on a
+                // top-level attribute. We can simply replace the attribute:
+                std::optional<rjson::value> result = action_result(actions.second.get_value(), previous_item.get());
+                if (result) {
+                    do_update(to_bytes(column_name), *result);
+                } else {
+                    do_delete(to_bytes(column_name));
+                }
+            } else {
                 // FIXME: implement this case
                 throw api_error::validation("UpdateItem support for nested updates not yet implemented");
             }
-            std::string column_name = action._path.root();
-            const column_definition* cdef = _schema->get_column_definition(to_bytes(column_name));
-            if (cdef && cdef->is_primary_key()) {
-                throw api_error::validation(
-                        format("UpdateItem cannot update key column {}", column_name));
-            }
-            // DynamoDB forbids multiple updates in the same expression to
-            // modify overlapping document paths. Updates of one expression
-            // have the same timestamp, so it's unclear which would "win".
-            // FIXME: currently, without full support for document paths,
-            // we only check if the paths' roots are the same.
-            if (!seen_column_names.insert(column_name).second) {
-                throw api_error::validation(
-                        format("Invalid UpdateExpression: two document paths overlap with each other: {} and {}.",
-                                column_name, column_name));
-            }
-            std::visit(overloaded_functor {
-                [&] (const parsed::update_expression::action::set& a) {
-                    auto value = calculate_value(a._rhs, previous_item.get());
-                    do_update(to_bytes(column_name), value);
-                },
-                [&] (const parsed::update_expression::action::remove& a) {
-                    do_delete(to_bytes(column_name));
-                },
-                [&] (const parsed::update_expression::action::add& a) {
-                    parsed::value base;
-                    parsed::value addition;
-                    base.set_path(action._path);
-                    addition.set_constant(a._valref);
-                    rjson::value v1 = calculate_value(base, calculate_value_caller::UpdateExpression, previous_item.get());
-                    rjson::value v2 = calculate_value(addition, calculate_value_caller::UpdateExpression, previous_item.get());
-                    rjson::value result;
-                    // An ADD can be used to create a new attribute (when
-                    // v1.IsNull()) or to add to a pre-existing attribute:
-                    if (v1.IsNull()) {
-                        std::string v2_type = get_item_type_string(v2);
-                        if (v2_type == "N" || v2_type == "SS" || v2_type == "NS" || v2_type == "BS") {
-                            result = v2;
-                        } else {
-                            throw api_error::validation(format("An operand in the update expression has an incorrect data type: {}", v2));
-                        }
-                    } else {
-                        std::string v1_type = get_item_type_string(v1);
-                        if (v1_type == "N") {
-                            if (get_item_type_string(v2) != "N") {
-                                throw api_error::validation(format("Incorrect operand type for operator or function. Expected {}: {}", v1_type, rjson::print(v2)));
-                            }
-                            result = number_add(v1, v2);
-                        } else if (v1_type == "SS" || v1_type == "NS" || v1_type == "BS") {
-                            if (get_item_type_string(v2) != v1_type) {
-                                throw api_error::validation(format("Incorrect operand type for operator or function. Expected {}: {}", v1_type, rjson::print(v2)));
-                            }
-                            result = set_sum(v1, v2);
-                        } else {
-                            throw api_error::validation(format("An operand in the update expression has an incorrect data type: {}", v1));
-                        }
-                    }
-                    do_update(to_bytes(column_name), result);
-                },
-                [&] (const parsed::update_expression::action::del& a) {
-                    parsed::value base;
-                    parsed::value subset;
-                    base.set_path(action._path);
-                    subset.set_constant(a._valref);
-                    rjson::value v1 = calculate_value(base, calculate_value_caller::UpdateExpression, previous_item.get());
-                    rjson::value v2 = calculate_value(subset, calculate_value_caller::UpdateExpression, previous_item.get());
-                    if (!v1.IsNull()) {
-                        std::optional<rjson::value> result  = set_diff(v1, v2);
-                        if (result) {
-                            do_update(to_bytes(column_name), *result);
-                        } else {
-                            do_delete(to_bytes(column_name));
-                        }
-                    }
-                }
-            }, action._action);
         }
     }
     if (_returnvalues == returnvalues::ALL_OLD && previous_item) {
