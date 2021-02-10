@@ -51,6 +51,7 @@
 
 #include <seastar/core/future-util.hh>
 #include <seastar/core/scheduling.hh>
+#include <seastar/util/closeable.hh>
 
 #include "sstables.hh"
 #include "sstables/progress_monitor.hh"
@@ -643,15 +644,17 @@ private:
         auto now = gc_clock::now();
         auto consumer = make_interposer_consumer([this, gc_consumer = std::move(gc_consumer), now] (flat_mutation_reader reader) mutable
         {
+          return seastar::async([this, reader = std::move(reader), gc_consumer = std::move(gc_consumer), now] () mutable {
+            auto close_reader = deferred_close(reader);
+
             using compact_mutations = compact_for_compaction<compacting_sstable_writer, GCConsumer>;
             auto cfc = make_stable_flattened_mutations_consumer<compact_mutations>(*schema(), now,
                                          max_purgeable_func(),
                                          get_compacting_sstable_writer(),
                                          std::move(gc_consumer));
 
-            return seastar::async([cfc = std::move(cfc), reader = std::move(reader), this] () mutable {
                 reader.consume_in_thread(std::move(cfc), db::no_timeout);
-            });
+          });
         });
         return consumer(make_sstable_reader());
     }
