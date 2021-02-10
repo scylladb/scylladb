@@ -596,6 +596,14 @@
                      "allowMultiple":false,
                      "type":"string",
                      "paramType":"path"
+                  },
+                  {
+                     "name": "add_max",
+                     "description":"if set to true, the result array, will have twice the number of cells and would contain the max per level",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type": "string",
+                     "paramType":"query"
                   }
                ]
             }

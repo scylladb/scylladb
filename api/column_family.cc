@@ -28,6 +28,7 @@
 #include <algorithm>
 #include "db/system_keyspace_view_types.hh"
 #include "db/data_listeners.hh"
+#include <boost/algorithm/string/trim_all.hpp>
 
 extern logging::logger apilog;
 
@@ -951,10 +952,24 @@ void set_column_family(http_context& ctx, routes& r) {
     });
 
     cf::get_sstable_count_per_level.set(r, [&ctx](std::unique_ptr<request> req) {
+        auto max_param = req->get_query_param("add_max");
+        boost::algorithm::to_lower(max_param);
+        bool add_max = max_param == "true";
+
         return map_reduce_cf_raw(ctx, req->param["name"], std::vector<uint64_t>(), [](const column_family& cf) {
             return cf.sstable_count_per_level();
-        }, concat_sstable_count_per_level).then([](const std::vector<uint64_t>& res) {
-            return make_ready_future<json::json_return_type>(res);
+        }, concat_sstable_count_per_level).then([add_max](const std::vector<uint64_t>& per_level_res) {
+            if (add_max) {
+                std::vector<uint64_t> res(per_level_res.size() * 2);
+
+                for (auto i=0; i < per_level_res.size(); i++) {
+                    res[2*i] = per_level_res[i];
+                    res[2*i + 1] = (i == 0) ? 4 : 10;
+                    res[2*i + 1] *= smp::count;
+                }
+                return make_ready_future<json::json_return_type>(res);
+            }
+            return make_ready_future<json::json_return_type>(per_level_res);
         });
     });
 
