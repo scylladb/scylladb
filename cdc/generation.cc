@@ -390,7 +390,7 @@ static future<> do_update_streams_description(
 
     auto topo = co_await sys_dist_ks.read_cdc_topology_description(streams_ts, ctx);
     if (!topo) {
-        throw std::runtime_error(format("could not find streams data for timestamp {}", streams_ts));
+        throw no_generation_data_exception(streams_ts);
     }
 
     co_await sys_dist_ks.create_cdc_desc(streams_ts, *topo, ctx);
