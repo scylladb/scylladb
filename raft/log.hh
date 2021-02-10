@@ -99,6 +99,10 @@ public:
     index_t stable_idx() const {
         return _stable_idx;
     }
+    // Return the term of the last entry in the log,
+    // or the snapshot term if the log is empty.
+    // Used in elections to not vote for a candidate with
+    // a less recent term.
     term_t last_term() const;
     // return the actual number of log entries in memory
     size_t non_snapshoted_length() {

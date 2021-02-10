@@ -116,7 +116,7 @@ index_t log::start_idx() const {
 
 term_t log::last_term() const {
     if (_log.empty()) {
-        return term_t(0);
+        return _snapshot.term;
     }
     return _log.back()->term;
 }
