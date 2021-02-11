@@ -49,6 +49,16 @@ def testTimeuuid(cql, test_keyspace):
         for i in range(4):
             uuid = rows[i][1]
             datetime = datetime_from_uuid1(uuid)
+            # Before comparing this datetime to the result of dateOf(), we
+            # must truncate the resolution of datetime to milliseconds.
+            # he problem is that the dateOf(timeuuid) CQL function converts a
+            # timeuuid to CQL's "timestamp" type, which has millisecond
+            # resolution, but datetime *may* have finer resolution. It will
+            # usually be whole milliseconds, because this is what the now()
+            # implementation usually does, but when now() is called more than
+            # once per millisecond, it *may* start incrementing the sub-
+            # millisecond part.
+            datetime = datetime.replace(microsecond=datetime.microsecond//1000*1000)
             timestamp = round(datetime.replace(tzinfo=timezone.utc).timestamp() * 1000)
             assert_rows(execute(cql, table, "SELECT dateOf(t), unixTimestampOf(t) FROM %s WHERE k = 0 AND t = ?", rows[i][1]),
                        [datetime, timestamp])
