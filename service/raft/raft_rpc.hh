@@ -47,4 +47,15 @@ public:
     future<> abort() override;
     // Map raft server_id to inet_address to be consumed by `messaging_service`
     gms::inet_address get_inet_address(raft::server_id id) const;
+    // Update inet_address mapping for a raft server with a given id.
+    // In case a mapping exists for a given id, it should be equal to the supplied `addr`
+    // otherwise the function will throw.
+    void update_address_mapping(raft::server_id id, gms::inet_address addr);
+
+    // Dispatchers to the `rpc_server` upon receiving an rpc message
+    void append_entries(raft::server_id from, raft::append_request append_request);
+    void append_entries_reply(raft::server_id from, raft::append_reply reply);
+    void request_vote(raft::server_id from, raft::vote_request vote_request);
+    void request_vote_reply(raft::server_id from, raft::vote_reply vote_reply);
+    future<> apply_snapshot(raft::server_id from, raft::install_snapshot snp);
 };

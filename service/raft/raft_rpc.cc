@@ -75,3 +75,27 @@ gms::inet_address raft_rpc::get_inet_address(raft::server_id id) const {
     }
     return it->second;
 }
+
+void raft_rpc::update_address_mapping(raft::server_id id, gms::inet_address addr) {
+    _server_addresses[id] = addr;
+}
+
+void raft_rpc::append_entries(raft::server_id from, raft::append_request append_request) {
+    _client->append_entries(from, std::move(append_request));
+}
+
+void raft_rpc::append_entries_reply(raft::server_id from, raft::append_reply reply) {
+    _client->append_entries_reply(from, std::move(reply));
+}
+
+void raft_rpc::request_vote(raft::server_id from, raft::vote_request vote_request) {
+    _client->request_vote(from, vote_request);
+}
+
+void raft_rpc::request_vote_reply(raft::server_id from, raft::vote_reply vote_reply) {
+    _client->request_vote_reply(from, vote_reply);
+}
+
+future<> raft_rpc::apply_snapshot(raft::server_id from, raft::install_snapshot snp) {
+    return _client->apply_snapshot(from, std::move(snp));
+}
