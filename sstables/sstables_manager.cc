@@ -58,7 +58,7 @@ sstable_writer_config sstables_manager::configure_writer(sstring origin) const {
     cfg.promoted_index_block_size = _db_config.column_index_size_in_kb() * 1024;
     cfg.validation_level = _db_config.enable_sstable_key_validation()
             ? mutation_fragment_stream_validation_level::clustering_key
-            : mutation_fragment_stream_validation_level::partition_region;
+            : mutation_fragment_stream_validation_level::token;
     cfg.summary_byte_cost = summary_byte_cost(_db_config.sstable_summary_ratio());
 
     cfg.correctly_serialize_non_compound_range_tombstones = true;
