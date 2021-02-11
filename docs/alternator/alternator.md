@@ -87,25 +87,13 @@ progresses and compatibility continues to improve.
 * UpdateTable: Not supported.
 * ListTables: Supported.
 ### Item Operations
-* GetItem: Support almost complete except that projection expressions can
-  only ask for top-level attributes.
-* PutItem: Support almost complete except that condition expressions can
-  only refer to to-level attributes.
-* UpdateItem: Nested documents are supported but updates to nested attributes
-  are not (e.g., `SET a.b[3].c=val`), and neither are nested attributes in
-  condition expressions.
-* DeleteItem: Mostly works, but again does not support nested attributes
-  in condition expressions.
+* GetItem, PutItem, UpdateItem, DeleteItem fully supported.
 ### Batch Operations
-* BatchGetItem: Almost complete except that projection expressions can only
-  ask for top-level attributes.
-* BatchWriteItem: Supported. Doesn't limit the number of items (DynamoDB
-  limits to 25) or size of items (400 KB) or total request size (16 MB).
+* BatchGetItem, BatchWriteItem fully supported.
+  Doesn't limit the number of items (DynamoDB limits to 25) or size of items
+  (400 KB) or total request size (16 MB).
 ### Scans
 Scan and Query are mostly supported, with the following limitations:
-* As above, projection expressions only support top-level attributes.
-* The ScanFilter/QueryFilter parameter for filtering results is fully
-  supported, but the newer FilterExpression syntax is not yet supported.
 * The "Select" options which allows to count items instead of returning them
   is not yet supported.
 ### Secondary Indexes
@@ -297,11 +285,10 @@ policies" section.
 DynamoDB allows attributes to be **nested** - a top-level attribute may
 be a list or a map, and each of its elements may further be lists or
 maps, etc. Alternator currently stores the entire content of a top-level
-attribute as one JSON object. This is good enough for most needs, except
-one DynamoDB feature which we cannot support safely: we cannot modify
-a non-top-level attribute (e.g., a.b[3].c) directly without RMW. We plan
-to fix this in a future version by rethinking the data model we use for
-attributes, or rethinking our implementation of RMW (as explained above).
+attribute as one JSON object. This means that UpdateItem requests which
+want modify a non-top-level attribute directly (e.g., a.b[3].c) need RMW:
+Alternator implements such requests by reading the entire top-level
+attribute a, modifying only a.b[3].c, and then writing back a.
 
 ```eval_rst
 .. toctree::

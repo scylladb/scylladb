@@ -202,7 +202,7 @@ static schema_ptr get_table(service::storage_proxy& proxy, const rjson::value& r
     if (!schema) {
         // if we get here then the name was missing, since syntax or missing actual CF 
         // checks throw. Slow path, but just call get_table_name to generate exception. 
-        get_table_name(request);        
+        get_table_name(request);
     }
     return schema;
 }
@@ -2379,6 +2379,117 @@ static std::optional<rjson::value> action_result(
     }, action._action);
 }
 
+// Print an attribute_path_map_node<action> as the list of paths it contains:
+static std::ostream& operator<<(std::ostream& out, const attribute_path_map_node<parsed::update_expression::action>& h) {
+    if (h.has_value()) {
+        out << " " << h.get_value()._path;
+    } else if (h.has_members()) {
+        for (auto& member : h.get_members()) {
+            out << *member.second;
+        }
+    } else if (h.has_indexes()) {
+        for (auto& index : h.get_indexes()) {
+            out << *index.second;
+        }
+    }
+    return out;
+}
+
+// Apply the hierarchy of actions in an attribute_path_map_node<action> to a
+// JSON object which uses DynamoDB's serialization conventions. The complete,
+// unmodified, previous_item is also necessary for the right-hand sides of the
+// actions. Modifies obj in-place or returns false if it is to be removed.
+static bool hierarchy_actions(
+        rjson::value& obj,
+        const attribute_path_map_node<parsed::update_expression::action>& h,
+        const rjson::value* previous_item)
+{
+    if (!obj.IsObject() || obj.MemberCount() != 1) {
+        // This shouldn't happen. We shouldn't have stored malformed objects.
+        // But today Alternator does not validate the structure of nested
+        // documents before storing them, so this can happen on read.
+        throw api_error::validation(format("Malformed value object read: {}", obj));
+    }
+    const char* type = obj.MemberBegin()->name.GetString();
+    rjson::value& v = obj.MemberBegin()->value;
+    if (h.has_value()) {
+        // Action replacing everything in this position in the hierarchy
+        std::optional<rjson::value> newv = action_result(h.get_value(), previous_item);
+        if (newv) {
+            obj = std::move(*newv);
+        } else {
+            return false;
+        }
+    } else if (h.has_members()) {
+        if (type[0] != 'M' || !v.IsObject()) {
+            // A .something on a non-map doesn't work.
+            throw api_error::validation(format("UpdateExpression: document paths not valid for this item:{}", h));
+        }
+        for (const auto& member : h.get_members()) {
+            std::string attr = member.first;
+            const attribute_path_map_node<parsed::update_expression::action>& subh = *member.second;
+            rjson::value *subobj = rjson::find(v, attr);
+            if (subobj) {
+                if (!hierarchy_actions(*subobj, subh, previous_item)) {
+                    rjson::remove_member(v, attr);
+                }
+            } else {
+                // When a.b does not exist, setting a.b itself (i.e.
+                // subh.has_value()) is fine, but setting a.b.c is not.
+                if (subh.has_value()) {
+                    std::optional<rjson::value> newv = action_result(subh.get_value(), previous_item);
+                    if (newv) {
+                        rjson::set_with_string_name(v, attr, std::move(*newv));
+                    } else {
+                        throw api_error::validation(format("Can't remove document path {} - not present in item",
+                            subh.get_value()._path));
+                    }
+                } else {
+                    throw api_error::validation(format("UpdateExpression: document paths not valid for this item:{}", h));
+                }
+            }
+        }
+    } else if (h.has_indexes()) {
+        if (type[0] != 'L' || !v.IsArray()) {
+            // A [i] on a non-list doesn't work.
+            throw api_error::validation(format("UpdateExpression: document paths not valid for this item:{}", h));
+        }
+        unsigned nremoved = 0;
+        for (const auto& index : h.get_indexes()) {
+            unsigned i = index.first - nremoved;
+            const attribute_path_map_node<parsed::update_expression::action>& subh = *index.second;
+            if (i < v.Size()) {
+                if (!hierarchy_actions(v[i], subh, previous_item)) {
+                    v.Erase(v.Begin() + i);
+                    // If we have the actions "REMOVE a[1] SET a[3] = :val",
+                    // the index 3 refers to the original indexes, before any
+                    // items were removed. So we offset the next indexes
+                    // (which are guaranteed to be higher than i - indexes is
+                    // a sorted map) by an increased "nremoved".
+                    nremoved++;
+                }
+            } else {
+                // If a[7] does not exist, setting a[7] itself (i.e.
+                // subh.has_value()) is fine - and appends an item, though
+                // not necessarily with index 7. But setting a[7].b will
+                // not work.
+                if (subh.has_value()) {
+                    std::optional<rjson::value> newv = action_result(subh.get_value(), previous_item);
+                    if (newv) {
+                        rjson::push_back(v, std::move(*newv));
+                    } else {
+                        // Removing a[7] when the list has fewer elements is
+                        // silently ignored. It's not considered an error.
+                    }
+                } else {
+                    throw api_error::validation(format("UpdateExpression: document paths not valid for this item:{}", h));
+                }
+            }
+        }
+    }
+    return true;
+}
+
 std::optional<mutation>
 update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::timestamp_type ts) const {
     if (!verify_expected(_request, previous_item.get()) ||
@@ -2468,8 +2579,9 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
                 throw api_error::validation(format("UpdateItem cannot update key column {}", column_name));
             }
             if (actions.second.has_value()) {
-                // The single action actions.second.get_value() is on a
-                // top-level attribute. We can simply replace the attribute:
+                // An action on a top-level attribute column_name. The single
+                // action is actions.second.get_value(). We can simply invoke
+                // the action and replace the attribute with its result:
                 std::optional<rjson::value> result = action_result(actions.second.get_value(), previous_item.get());
                 if (result) {
                     do_update(to_bytes(column_name), *result);
@@ -2477,8 +2589,23 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
                     do_delete(to_bytes(column_name));
                 }
             } else {
-                // FIXME: implement this case
-                throw api_error::validation("UpdateItem support for nested updates not yet implemented");
+                // We have actions on a path or more than one path in the same
+                // top-level attribute column_name - but not on the top-level
+                // attribute as a whole. We already read the full top-level
+                // attribute (see check_needs_read_before_write()), and now we
+                // need to modify pieces of it and write back the entire
+                // top-level attribute.
+                if (!previous_item) {
+                    throw api_error::validation(format("UpdateItem cannot update nested document path on non-existent item"));
+                }
+                const rjson::value *toplevel = rjson::find(*previous_item, column_name);
+                if (!toplevel) {
+                    throw api_error::validation(format("UpdateItem cannot update document path: missing attribute {}",
+                        column_name));
+                }
+                rjson::value result = rjson::copy(*toplevel);
+                hierarchy_actions(result, actions.second, previous_item.get());
+                do_update(to_bytes(column_name), std::move(result));
             }
         }
     }

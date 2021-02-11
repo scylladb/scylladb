@@ -169,6 +169,14 @@ def test_projection_expression_path(test_table_s):
     with pytest.raises(ClientError, match='ValidationException'):
         test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression='a,a.b[0]')['Item']
 
+    # Above we noted that asking for to project a non-existent attribute in an
+    # existing item yields an empty Item object. However, if the item does not
+    # exist at all, the Item object will be missing entirely:
+    p = random_string()
+    assert not 'Item' in test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression='x')
+    assert not 'Item' in test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression='a.x')
+    assert not 'Item' in test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression='a[0]')
+
 # Above in test_projection_expression_toplevel_syntax() we tested how
 # name references (#name) work in top-level attributes. In the following
 # two tests we test how they work in more elaborate paths:
