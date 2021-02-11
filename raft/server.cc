@@ -72,6 +72,8 @@ public:
     void elapse_election() override;
     bool is_leader() override;
     void tick() override;
+    void pause_ticker() override;
+    void restart_ticker() override;
 private:
     std::unique_ptr<rpc> _rpc;
     std::unique_ptr<state_machine> _state_machine;
@@ -82,6 +84,7 @@ private:
     // id of this server
     server_id _id;
     seastar::timer<lowres_clock> _ticker;
+    lowres_clock::duration _tick_delta = 100ms;
     server::configuration _config;
 
     seastar::pipe<std::vector<log_entry_ptr>> _apply_entries = seastar::pipe<std::vector<log_entry_ptr>>(10);
@@ -213,7 +216,7 @@ future<> server_impl::start() {
     // start fiber to apply committed entries
     _applier_status = applier_fiber();
 
-    _ticker.arm_periodic(100ms);
+    _ticker.arm_periodic(_tick_delta);
     _ticker.set_callback([this] {
         _fsm->tick();
     });
@@ -641,6 +644,14 @@ void server_impl::elapse_election() {
 
 void server_impl::tick() {
     _fsm->tick();
+}
+
+void server_impl::pause_ticker() {
+    _ticker.cancel();
+}
+
+void server_impl::restart_ticker() {
+    _ticker.rearm_periodic(_tick_delta);
 }
 
 std::unique_ptr<server> create_server(server_id uuid, std::unique_ptr<rpc> rpc,
