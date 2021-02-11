@@ -37,7 +37,7 @@
 #include "idl/mutation.dist.impl.hh"
 #include <iostream>
 
-canonical_mutation::canonical_mutation(bytes data)
+canonical_mutation::canonical_mutation(bytes_ostream data)
         : _data(std::move(data))
 { }
 
@@ -45,8 +45,7 @@ canonical_mutation::canonical_mutation(const mutation& m)
 {
     mutation_partition_serializer part_ser(*m.schema(), m.partition());
 
-    bytes_ostream out;
-    ser::writer_of_canonical_mutation<bytes_ostream> wr(out);
+    ser::writer_of_canonical_mutation<bytes_ostream> wr(_data);
     std::move(wr).write_table_id(m.schema()->id())
                  .write_schema_version(m.schema()->version())
                  .write_key(m.key())
@@ -54,7 +53,6 @@ canonical_mutation::canonical_mutation(const mutation& m)
                  .partition([&] (auto wr) {
                      part_ser.write(std::move(wr));
                  }).end_canonical_mutation();
-    _data = to_bytes(out.linearize());
 }
 
 utils::UUID canonical_mutation::column_family_id() const {
