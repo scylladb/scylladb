@@ -403,7 +403,7 @@ future<prepare_message> stream_session::prepare(std::vector<stream_request> requ
             try {
                 db.find_column_family(ks, cf);
             } catch (no_such_column_family&) {
-                auto err = format("[Stream #{{}}] prepare requested ks={{}} cf={{}} does not exist", ks, cf);
+                auto err = format("[Stream #{{}}] prepare requested ks={{}} cf={{}} does not exist", plan_id, ks, cf);
                 sslog.warn(err.c_str());
                 throw std::runtime_error(err);
             }
