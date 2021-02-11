@@ -2534,7 +2534,7 @@ std::deque<mutation_fragment> make_fragments_with_non_monotonic_positions(simple
     size_t mem_usage = fragments.back().memory_usage();
 
     for (int buffers = 0; buffers < 2; ++buffers) {
-        while (mem_usage <= max_buffer_size) {
+        while (mem_usage < max_buffer_size) {
             fragments.emplace_back(*s.schema(), tests::make_permit(),
                     s.make_range_tombstone(query::clustering_range::make(s.make_ckey(0), s.make_ckey(i + 1)), tombstone_deletion_time));
             mem_usage += fragments.back().memory_usage();
