@@ -31,27 +31,27 @@ raft_rpc::raft_rpc(netw::messaging_service& ms, uint64_t group_id, raft::server_
 
 future<> raft_rpc::send_snapshot(raft::server_id id, const raft::install_snapshot& snap) {
     return _messaging.send_raft_send_snapshot(
-        netw::msg_addr(get_inet_address(id)), db::no_timeout, _server_id, id, snap);
+        netw::msg_addr(get_inet_address(id)), db::no_timeout, _group_id, _server_id, id, snap);
 }
 
 future<> raft_rpc::send_append_entries(raft::server_id id, const raft::append_request& append_request) {
     return _messaging.send_raft_append_entries(
-        netw::msg_addr(get_inet_address(id)), db::no_timeout, _server_id, id, append_request);
+        netw::msg_addr(get_inet_address(id)), db::no_timeout, _group_id, _server_id, id, append_request);
 }
 
 future<> raft_rpc::send_append_entries_reply(raft::server_id id, const raft::append_reply& reply) {
     return _messaging.send_raft_append_entries_reply(
-        netw::msg_addr(get_inet_address(id)), db::no_timeout, _server_id, id, reply);
+        netw::msg_addr(get_inet_address(id)), db::no_timeout, _group_id, _server_id, id, reply);
 }
 
 future<> raft_rpc::send_vote_request(raft::server_id id, const raft::vote_request& vote_request) {
     return _messaging.send_raft_vote_request(
-        netw::msg_addr(get_inet_address(id)), db::no_timeout, _server_id, id, vote_request);
+        netw::msg_addr(get_inet_address(id)), db::no_timeout, _group_id, _server_id, id, vote_request);
 }
 
 future<> raft_rpc::send_vote_reply(raft::server_id id, const raft::vote_reply& vote_reply) {
     return _messaging.send_raft_vote_reply(
-        netw::msg_addr(get_inet_address(id)), db::no_timeout, _server_id, id, vote_reply);
+        netw::msg_addr(get_inet_address(id)), db::no_timeout, _group_id, _server_id, id, vote_reply);
 }
 
 void raft_rpc::add_server(raft::server_id id, raft::server_info info) {
