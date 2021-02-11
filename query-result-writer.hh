@@ -230,7 +230,7 @@ class query_result_builder {
     std::optional<mutation_querier> _mutation_consumer;
     stop_iteration _stop;
 public:
-    query_result_builder(const schema& s, query::result::builder& rb);
+    query_result_builder(const schema& s, query::result::builder& rb) noexcept;
 
     void consume_new_partition(const dht::decorated_key& dk);
     void consume(tombstone t);

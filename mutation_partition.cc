@@ -1926,7 +1926,7 @@ uint64_t mutation_querier::consume_end_of_stream() {
     }
 }
 
-query_result_builder::query_result_builder(const schema& s, query::result::builder& rb)
+query_result_builder::query_result_builder(const schema& s, query::result::builder& rb) noexcept
     : _schema(s), _rb(rb)
 { }
 
