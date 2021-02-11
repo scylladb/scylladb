@@ -311,15 +311,15 @@ void querier_cache::insert(utils::UUID key, shard_mutation_querier&& q, tracing:
 }
 
 template <typename Querier>
-static std::optional<Querier> lookup_querier(
+std::optional<Querier> querier_cache::lookup_querier(
         querier_cache::index& index,
-        querier_cache::stats& stats,
         utils::UUID key,
         const schema& s,
         dht::partition_ranges_view ranges,
         const query::partition_slice& slice,
         tracing::trace_state_ptr trace_state) {
     auto base_ptr = find_querier(index, key, ranges, trace_state);
+    auto& stats = _stats;
     ++stats.lookups;
     if (!base_ptr) {
         ++stats.misses;
@@ -354,7 +354,7 @@ std::optional<data_querier> querier_cache::lookup_data_querier(utils::UUID key,
         const dht::partition_range& range,
         const query::partition_slice& slice,
         tracing::trace_state_ptr trace_state) {
-    return lookup_querier<data_querier>(_data_querier_index, _stats, key, s, range, slice, std::move(trace_state));
+    return lookup_querier<data_querier>(_data_querier_index, key, s, range, slice, std::move(trace_state));
 }
 
 std::optional<mutation_querier> querier_cache::lookup_mutation_querier(utils::UUID key,
@@ -362,7 +362,7 @@ std::optional<mutation_querier> querier_cache::lookup_mutation_querier(utils::UU
         const dht::partition_range& range,
         const query::partition_slice& slice,
         tracing::trace_state_ptr trace_state) {
-    return lookup_querier<mutation_querier>(_mutation_querier_index, _stats, key, s, range, slice, std::move(trace_state));
+    return lookup_querier<mutation_querier>(_mutation_querier_index, key, s, range, slice, std::move(trace_state));
 }
 
 std::optional<shard_mutation_querier> querier_cache::lookup_shard_mutation_querier(utils::UUID key,
@@ -370,7 +370,7 @@ std::optional<shard_mutation_querier> querier_cache::lookup_shard_mutation_queri
         const dht::partition_range_vector& ranges,
         const query::partition_slice& slice,
         tracing::trace_state_ptr trace_state) {
-    return lookup_querier<shard_mutation_querier>(_shard_mutation_querier_index, _stats, key, s, ranges, slice,
+    return lookup_querier<shard_mutation_querier>(_shard_mutation_querier_index, key, s, ranges, slice,
             std::move(trace_state));
 }
 
