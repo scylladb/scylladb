@@ -854,6 +854,10 @@ public:
 
     future<std::vector<frozen_mutation_and_schema>> build();
 
+    future<> close() noexcept {
+        return when_all_succeed(_updates.close(), _existings->close()).discard_result();
+    }
+
 private:
     void generate_update(clustering_row&& update, std::optional<clustering_row>&& existing);
     future<stop_iteration> on_results();
@@ -1039,7 +1043,9 @@ future<std::vector<frozen_mutation_and_schema>> generate_view_updates(
     }));
     auto builder = std::make_unique<view_update_builder>(base, std::move(vs), std::move(updates), std::move(existings), now);
     auto f = builder->build();
-    return f.finally([builder = std::move(builder)] { });
+    return f.finally([builder = std::move(builder)] {
+        return builder->close();
+    });
 }
 
 query::clustering_row_ranges calculate_affected_clustering_ranges(const schema& base,
