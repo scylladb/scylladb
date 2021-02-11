@@ -35,7 +35,7 @@ fsm::fsm(server_id id, term_t current_term, server_id voted_for, log log,
     assert(!bool(_current_leader));
 }
 
-future<> fsm::wait() {
+future<> fsm::wait_max_log_size() {
     check_is_leader();
 
    return _log_limiter_semaphore->sem.wait();
@@ -150,7 +150,7 @@ void fsm::become_leader() {
     _votes = std::nullopt;
     _tracker.emplace(_my_id);
     _log_limiter_semaphore.emplace(this);
-    _log_limiter_semaphore->sem.consume(_log.non_snapshoted_length());
+    _log_limiter_semaphore->sem.consume(_log.in_memory_size());
     _last_election_time = _clock.now();
     // a new leader needs to commit at lease one entry to make sure that
     // all existing entries in its log are commited as well. Also it should
