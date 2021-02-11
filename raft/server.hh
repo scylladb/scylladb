@@ -39,11 +39,12 @@ public:
         size_t snapshot_trailing = 200;
         // max size of appended entries in bytes
         size_t append_request_threshold = 100000;
-        // max number of entries of in-memory part of the log after
-        // which requests are stopped to be addmitted unill the log
-        // is shrunk back by snapshoting. It has to be greater than
-        // snapshot_threshold otherwise submition of new entries will
-        // deadlock. 
+        // Max number of entries of in-memory part of the log after
+        // which requests are stopped to be admitted until the log
+        // is shrunk back by a snapshot. Should be greater than
+        // whatever the default number of trailing log entries
+        // is configured by the snapshot, otherwise the state
+        // machine will deadlock on attempt to submit a new entry.
         size_t max_log_length = 5000;
     };
 

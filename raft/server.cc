@@ -184,7 +184,7 @@ server_impl::server_impl(server_id uuid, std::unique_ptr<rpc> rpc,
                     _id(uuid), _config(config) {
     set_rpc_server(_rpc.get());
     if (_config.snapshot_threshold > _config.max_log_length) {
-        throw config_error("snapshot_threshold has to be smaller than max_log_lengths");
+        throw config_error("snapshot_threshold has to be smaller than max_log_length");
     }
 }
 
@@ -225,8 +225,8 @@ template <typename T>
 future<> server_impl::add_entry_internal(T command, wait_type type) {
     logger.trace("An entry is submitted on a leader");
 
-    // wait for new slot to be available
-    co_await _fsm->wait();
+    // Wait for a new slot to become available
+    co_await _fsm->wait_max_log_length();
 
     logger.trace("An entry proceeds after wait");
 
@@ -605,7 +605,7 @@ void server_impl::register_metrics() {
         sm::make_total_operations("snapshots_taken", _stats.snapshots_taken,
              sm::description("how many time the user's state machine was snapshotted"), {server_id_label(_id)}),
 
-        sm::make_gauge("in_memory_log_size", [this] { return _fsm->in_memory_log_size(); },
+        sm::make_gauge("in_memory_log_size", [this] { return _fsm->log_length(); },
              sm::description("size of in-memory part of the log"), {server_id_label(_id)}),
     });
 }
