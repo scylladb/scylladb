@@ -147,8 +147,8 @@ public:
         return _digest_insensitive_to_expiry;
     }
 
-    bool cluster_supports_computed_columns() const {
-        return bool(_computed_columns);
+    const feature& cluster_supports_computed_columns() const {
+        return _computed_columns;
     }
 
     bool cluster_supports_nonfrozen_udts() const {

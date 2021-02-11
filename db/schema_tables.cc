@@ -700,7 +700,9 @@ redact_columns_for_missing_features(mutation m, schema_features features) {
         return std::move(m);
     }
     slogger.debug("adjusting schema_tables mutation due to possible in-progress cluster upgrade");
-    m.upgrade(scylla_tables(features));
+    // The global schema ptr make sure it will be registered in the schema registry.
+    global_schema_ptr redacted_schema{scylla_tables(features)};
+    m.upgrade(redacted_schema);
     return std::move(m);
 }
 
@@ -781,6 +783,13 @@ future<std::vector<canonical_mutation>> convert_schema_to_mutations(distributed<
 
 std::vector<mutation>
 adjust_schema_for_schema_features(std::vector<mutation> schema, schema_features features) {
+    //Don't send the `computed_columns` table mutations to nodes that doesn't know it.
+    if (!features.contains(schema_feature::COMPUTED_COLUMNS)) {
+        schema.erase(std::remove_if(schema.begin(), schema.end(), [] (const mutation& m) {
+            return m.schema()->cf_name() == COMPUTED_COLUMNS;
+        }) , schema.end());
+    }
+
     for (auto& m : schema) {
         m = redact_columns_for_missing_features(m, features);
     }
