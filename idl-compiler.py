@@ -160,22 +160,22 @@ class EnumDef:
     def __repr__(self):
         return self.__str__()
 
-    def serializer_write_impl(self, cout, template_decl):
+    def serializer_write_impl(self, cout):
         name = ns_qualified_name(self.name, self.ns_context)
 
         fprintln(cout, f"""
-{template_decl}
+{self.template_declaration}
 template <typename Output>
 void serializer<{name}>::write(Output& buf, const {name}& v) {{
   serialize(buf, static_cast<{self.underlying_type}>(v));
 }}""")
 
 
-    def serializer_read_impl(self, cout, template_decl):
+    def serializer_read_impl(self, cout):
         name = ns_qualified_name(self.name, self.ns_context)
 
         fprintln(cout, f"""
-{template_decl}
+{self.template_declaration}
 template<typename Input>
 {name} serializer<{name}>::read(Input& buf) {{
   return static_cast<{name}>(deserialize(buf, boost::type<{self.underlying_type}>()));
@@ -280,12 +280,12 @@ class ClassDef:
     def __repr__(self):
         return self.__str__()
 
-    def serializer_write_impl(self, cout, template_decl, template_class_param):
+    def serializer_write_impl(self, cout):
         name = ns_qualified_name(self.name, self.ns_context)
-        full_name = name + template_class_param
+        full_name = name + self.template_param_names_str
 
         fprintln(cout, f"""
-{template_decl}
+{self.template_declaration}
 template <typename Output>
 void serializer<{full_name}>::write(Output& buf, const {full_name}& obj) {{""")
         if not self.final:
@@ -298,13 +298,13 @@ void serializer<{full_name}>::write(Output& buf, const {full_name}& obj) {{""")
         fprintln(cout, "}")
 
 
-    def serializer_read_impl(self, cout, template_decl, template_class_param):
+    def serializer_read_impl(self, cout):
         name = ns_qualified_name(self.name, self.ns_context)
 
         fprintln(cout, f"""
-{template_decl}
+{self.template_declaration}
 template <typename Input>
-{name}{template_class_param} serializer<{name}{template_class_param}>::read(Input& buf) {{
+{name}{self.template_param_names_str} serializer<{name}{self.template_param_names_str}>::read(Input& buf) {{
  return seastar::with_serialized_stream(buf, [] (auto& buf) {{""")
         if not self.members:
             if not self.final:
@@ -334,19 +334,19 @@ template <typename Input>
                 fprintln(cout, f"""  auto {local_param} = {DESERIALIZER}(in, boost::type<{param_type(param.type)}>());""")
             params.append("std::move(" + local_param + ")")
         fprintln(cout, f"""
-  {name}{template_class_param} res {{{", ".join(params)}}};
+  {name}{self.template_param_names_str} res {{{", ".join(params)}}};
   return res;
  }});
 }}""")
 
 
-    def serializer_skip_impl(self, cout, template_decl, template_class_param):
+    def serializer_skip_impl(self, cout):
         name = ns_qualified_name(self.name, self.ns_context)
 
         fprintln(cout, f"""
-{template_decl}
+{self.template_declaration}
 template <typename Input>
-void serializer<{name}{template_class_param}>::skip(Input& buf) {{
+void serializer<{name}{self.template_param_names_str}>::skip(Input& buf) {{
  seastar::with_serialized_stream(buf, [] (auto& buf) {{""")
         if not self.final:
             fprintln(cout, f"""  {SIZETYPE} size = {DESERIALIZER}(buf, boost::type<{SIZETYPE}>());
@@ -566,12 +566,11 @@ def template_params_str(template_params):
 
 def handle_enum(enum, hout, cout):
     temp_def = template_params_str(enum.parent_template_params)
-    template_decl = "template <" + temp_def + ">" if temp_def else ""
     name = ns_qualified_name(enum.name, enum.ns_context)
     declare_methods(hout, name, temp_def)
 
-    enum.serializer_write_impl(cout, template_decl)
-    enum.serializer_read_impl(cout, template_decl)
+    enum.serializer_write_impl(cout)
+    enum.serializer_read_impl(cout)
 
 
 def join_template(template_params):
@@ -1249,7 +1248,6 @@ def handle_class(cls, hout, cout):
     is_tpl = cls.template_params is not None
     template_param_list = cls.template_params if is_tpl else []
     template_params = template_params_str(template_param_list + cls.parent_template_params)
-    template_decl = "template <" + template_params + ">" if is_tpl else ""
     template_class_param = "<" + ",".join(map(lambda a: a.name, template_param_list)) + ">" if is_tpl else ""
 
     name = ns_qualified_name(cls.name, cls.ns_context)
@@ -1262,9 +1260,9 @@ def handle_class(cls, hout, cout):
             handle_enum(member, hout, cout)
     declare_methods(hout, full_name, template_params)
 
-    cls.serializer_write_impl(cout, template_decl, template_class_param)
-    cls.serializer_read_impl(cout, template_decl, template_class_param)
-    cls.serializer_skip_impl(cout, template_decl, template_class_param)
+    cls.serializer_write_impl(cout)
+    cls.serializer_read_impl(cout)
+    cls.serializer_skip_impl(cout)
 
 
 def handle_objects(tree, hout, cout):
@@ -1302,7 +1300,11 @@ def setup_additional_metadata(tree, ns_context = [], parent_template_params=[]):
             setup_additional_metadata(obj.members, ns_context + [obj.name])
         elif isinstance(obj, EnumDef):
             obj.ns_context = ns_context
+
             obj.parent_template_params = parent_template_params
+
+            obj.template_declaration = "template <" + template_params_str(parent_template_params) + ">" \
+                if parent_template_params else ""
         elif isinstance(obj, ClassDef):
             obj.ns_context = ns_context
             # need to account for nested types
@@ -1310,8 +1312,17 @@ def setup_additional_metadata(tree, ns_context = [], parent_template_params=[]):
             if obj.template_params:
                 # current scope name should consider template classes as well
                 current_scope += "<" + ",".join(tp.name for tp in obj.template_params) + ">"
+
+            obj.template_param_names_str = "<" + ",".join(map(lambda a: a.name, obj.template_params)) + ">" \
+                if obj.template_params else ""
+
             obj.parent_template_params = parent_template_params
+
+            obj.template_declaration = "template <" + template_params_str(obj.template_params + obj.parent_template_params) + ">" \
+                if obj.template_params else ""
+
             nested_template_params = parent_template_params + obj.template_params if obj.template_params else []
+
             setup_additional_metadata(obj.members, ns_context + [current_scope], nested_template_params)
 
 
