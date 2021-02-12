@@ -564,8 +564,8 @@ def template_params_str(template_params):
     return ", ".join(map(lambda param: param.typename + " " + param.name, template_params))
 
 
-def handle_enum(enum, hout, cout, parent_template_param=[]):
-    temp_def = template_params_str(parent_template_param)
+def handle_enum(enum, hout, cout):
+    temp_def = template_params_str(enum.parent_template_params)
     template_decl = "template <" + temp_def + ">" if temp_def else ""
     name = ns_qualified_name(enum.name, enum.ns_context)
     declare_methods(hout, name, temp_def)
@@ -1243,12 +1243,12 @@ def add_visitors(cout):
         handle_visitors_nodes(local_writable_types[k], cout)
 
 
-def handle_class(cls, hout, cout, parent_template_param=[]):
+def handle_class(cls, hout, cout):
     if cls.stub:
         return
     is_tpl = cls.template_params is not None
     template_param_list = cls.template_params if is_tpl else []
-    template_params = template_params_str(template_param_list + parent_template_param)
+    template_params = template_params_str(template_param_list + cls.parent_template_params)
     template_decl = "template <" + template_params + ">" if is_tpl else ""
     template_class_param = "<" + ",".join(map(lambda a: a.name, template_param_list)) + ">" if is_tpl else ""
 
@@ -1257,9 +1257,9 @@ def handle_class(cls, hout, cout, parent_template_param=[]):
     # Handle sub-types: can be either enum or class
     for member in cls.members:
         if isinstance(member, ClassDef):
-            handle_class(member, hout, cout, parent_template_param + template_param_list)
+            handle_class(member, hout, cout)
         elif isinstance(member, EnumDef):
-            handle_enum(member, hout, cout, parent_template_param + template_param_list)
+            handle_enum(member, hout, cout)
     declare_methods(hout, full_name, template_params)
 
     cls.serializer_write_impl(cout, template_decl, template_class_param)
@@ -1292,13 +1292,17 @@ def handle_types(tree):
             print(f"Unknown object type: {obj}")
 
 
-def setup_namespace_bindings(tree, ns_context = []):
-    '''Cache namespace information for each type declaration directly in the AST node'''
+def setup_additional_metadata(tree, ns_context = [], parent_template_params=[]):
+    '''Cache additional metadata for each type declaration directly in the AST node.
+
+    This currenty includes namespace info and template parameters for the
+    parent scope (applicable only to enums and classes).'''
     for obj in tree:
         if isinstance(obj, NamespaceDef):
-            setup_namespace_bindings(obj.members, ns_context + [obj.name])
+            setup_additional_metadata(obj.members, ns_context + [obj.name])
         elif isinstance(obj, EnumDef):
             obj.ns_context = ns_context
+            obj.parent_template_params = parent_template_params
         elif isinstance(obj, ClassDef):
             obj.ns_context = ns_context
             # need to account for nested types
@@ -1306,10 +1310,9 @@ def setup_namespace_bindings(tree, ns_context = []):
             if obj.template_params:
                 # current scope name should consider template classes as well
                 current_scope += "<" + ",".join(tp.name for tp in obj.template_params) + ">"
-            setup_namespace_bindings(obj.members, ns_context + [current_scope])
-        else:
-            continue
-
+            obj.parent_template_params = parent_template_params
+            nested_template_params = parent_template_params + obj.template_params if obj.template_params else []
+            setup_additional_metadata(obj.members, ns_context + [current_scope], nested_template_params)
 
 
 def load_file(name):
@@ -1333,7 +1336,7 @@ def load_file(name):
         fprintln(cout, f"namespace {config.ns} {{")
     data = parse_file(name)
     if data:
-        setup_namespace_bindings(data)
+        setup_additional_metadata(data)
         handle_types(data)
         handle_objects(data, hout, cout)
     add_visitors(cout)
