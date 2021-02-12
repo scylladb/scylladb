@@ -176,7 +176,7 @@ index_t log::maybe_append(std::vector<log_entry_ptr>&& entries) {
 }
 
 size_t log::apply_snapshot(snapshot&& snp, size_t trailing) {
-    assert (snp.idx >= _first_idx);
+    assert (snp.idx > _snapshot.idx);
 
     size_t removed;
     auto idx = snp.idx;
