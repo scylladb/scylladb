@@ -82,6 +82,7 @@ public:
     virtual void erase(per_key_t k) = 0;
     virtual void drain(int batch) = 0;
     virtual void clear() = 0;
+    virtual void clone() = 0;
     virtual void show_stats() = 0;
     virtual void insert_and_erase(per_key_t k) = 0;
     virtual ~collection_tester() {};
@@ -128,6 +129,7 @@ public:
         }
     }
     virtual void clear() override { _t.clear(); }
+    virtual void clone() override { }
     virtual void insert_and_erase(per_key_t k) override {
         auto i = _t.emplace(k, 0);
         assert(i.second);
@@ -208,6 +210,7 @@ public:
     virtual void clear() override {
         _t.clear_and_dispose([] (isec_node* n) { delete n; });
     }
+    virtual void clone() override { }
     virtual void insert_and_erase(per_key_t k) override {
         isec_node n(k);
         auto i = _t.insert_before(_t.end(), n);
@@ -244,6 +247,7 @@ public:
     virtual void clear() override {
         _t.clear_and_dispose([] (perf_intrusive_key* k) noexcept { delete k; });
     }
+    virtual void clone() override { }
     virtual void insert_and_erase(per_key_t k) override {
         perf_intrusive_key key(k);
         auto i = _t.insert_before(_t.end(), key);
@@ -288,6 +292,7 @@ public:
         }
     }
     virtual void clear() override { _s.clear(); }
+    virtual void clone() override { }
     virtual void insert_and_erase(per_key_t k) override {
         auto i = _s.insert(k);
         assert(i.second);
@@ -320,6 +325,7 @@ public:
         }
     }
     virtual void clear() override { _m.clear(); }
+    virtual void clone() override { }
     virtual void insert_and_erase(per_key_t k) override {
         auto i = _m.insert({k, 0});
         assert(i.second);
@@ -456,6 +462,11 @@ int main(int argc, char **argv) {
                     });
 
                     fmt::print("scan: {:.6f} ms\n", d.count() * 1000);
+                } else if (tst == "clone") {
+                    d = duration_in_seconds([&] {
+                        c->clone();
+                    });
+                    fmt::print("clone: {:.6f} ms\n", d.count() * 1000);
                 }
 
                 c->clear();
