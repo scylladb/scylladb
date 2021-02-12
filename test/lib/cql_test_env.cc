@@ -559,12 +559,6 @@ public:
                 }
             }).get();
 
-            sharded<cdc::cdc_service> cdc;
-            cdc.start(std::ref(proxy)).get();
-            auto stop_cdc_service = defer([&] {
-                cdc.stop().get();
-            });
-
             auto stop_system_keyspace = defer([] { db::qctx = {}; });
             start_large_data_handler(db).get();
 
@@ -580,6 +574,12 @@ public:
             auto stop_local_cache = defer([] { db::system_keyspace::deinit_local_cache().get(); });
 
             sys_dist_ks.start(std::ref(qp), std::ref(mm), std::ref(proxy)).get();
+
+            sharded<cdc::cdc_service> cdc;
+            cdc.start(std::ref(proxy)).get();
+            auto stop_cdc_service = defer([&] {
+                cdc.stop().get();
+            });
 
             service::get_local_storage_service().init_server(service::bind_messaging_port(false)).get();
             service::get_local_storage_service().join_cluster().get();
