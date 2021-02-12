@@ -352,6 +352,10 @@ void fsm::maybe_commit() {
             cfg.leave_joint();
             _log.emplace_back(seastar::make_lw_shared<log_entry>({_current_term, _log.next_idx(), std::move(cfg)}));
             set_configuration();
+            // Leaving joint configuration may commit more entries
+            // even if we had no new acks, by switching the quorum
+            // from joint to simple majority.
+            maybe_commit();
         } else if (_tracker->leader_progress() == nullptr) {
             // 4.2.2 Removing the current leader
             //
