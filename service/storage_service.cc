@@ -1775,7 +1775,7 @@ future<> storage_service::check_for_endpoint_collision(std::unordered_set<gms::i
                 throw std::runtime_error(sprint("A node with address %s already exists, cancelling join. "
                     "Use replace_address if you want to replace this node.", addr));
             }
-            if (dht::range_streamer::use_strict_consistency()) {
+            if (_db.local().get_config().consistent_rangemovement()) {
                 found_bootstrapping_node = false;
                 for (auto& x : _gossiper.get_endpoint_states()) {
                     auto state = _gossiper.get_gossip_status(x.second);

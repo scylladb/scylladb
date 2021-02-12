@@ -45,7 +45,6 @@
 #include "log.hh"
 #include "streaming/stream_plan.hh"
 #include "streaming/stream_state.hh"
-#include "service/storage_service.hh"
 #include "db/config.hh"
 #include <seastar/core/semaphore.hh>
 #include <boost/range/adaptors.hpp>
@@ -223,7 +222,7 @@ bool range_streamer::use_strict_sources_for_ranges(const sstring& keyspace_name)
     auto& ks = _db.local().find_keyspace(keyspace_name);
     auto& strat = ks.get_replication_strategy();
     return !_db.local().is_replacing()
-           && use_strict_consistency()
+           && _db.local().get_config().consistent_rangemovement()
            && !_tokens.empty()
            && get_token_metadata().get_all_endpoints().size() != strat.get_replication_factor();
 }
@@ -380,11 +379,6 @@ size_t range_streamer::nr_ranges_to_stream() {
         }
     }
     return nr_ranges_remaining;
-}
-
-
-bool range_streamer::use_strict_consistency() {
-    return service::get_local_storage_service().db().local().get_config().consistent_rangemovement();
 }
 
 } // dht

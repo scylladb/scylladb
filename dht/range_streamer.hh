@@ -63,7 +63,6 @@ public:
     using token_metadata_ptr = locator::token_metadata_ptr;
     using stream_plan = streaming::stream_plan;
     using stream_state = streaming::stream_state;
-    static bool use_strict_consistency();
 public:
     /**
      * A filter applied to sources to stream from when constructing a fetch map.
