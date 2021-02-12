@@ -74,6 +74,10 @@ class node_ops_info;
 
 namespace cql_transport { class controller; }
 
+namespace cdc {
+class generation_service;
+}
+
 namespace db {
 class system_distributed_keyspace;
 namespace view {
@@ -200,7 +204,7 @@ private:
     void node_ops_singal_abort(std::optional<utils::UUID> ops_uuid);
     future<> node_ops_abort_thread();
 public:
-    storage_service(abort_source& as, distributed<database>& db, gms::gossiper& gossiper, sharded<db::system_distributed_keyspace>&, sharded<db::view::view_update_generator>&, gms::feature_service& feature_service, storage_service_config config, sharded<service::migration_notifier>& mn, locator::shared_token_metadata& stm, sharded<netw::messaging_service>& ms, /* only for tests */ bool for_testing = false);
+    storage_service(abort_source& as, distributed<database>& db, gms::gossiper& gossiper, sharded<db::system_distributed_keyspace>&, sharded<db::view::view_update_generator>&, gms::feature_service& feature_service, storage_service_config config, sharded<service::migration_notifier>& mn, locator::shared_token_metadata& stm, sharded<netw::messaging_service>& ms, sharded<cdc::generation_service>&, /* only for tests */ bool for_testing = false);
 
     // Needed by distributed<>
     future<> stop();
@@ -281,6 +285,12 @@ private:
     // Maintains the set of known CDC generations used to pick streams for log writes (i.e., the partition keys of these log writes).
     // Updated in response to certain gossip events (see the handle_cdc_generation function).
     cdc::metadata _cdc_metadata;
+
+    /* CDC generation management service.
+     * It is sharded<>& and not simply a reference because the service will not yet be started
+     * when storage_service is constructed (but it will be when init_server is called)
+     */
+    sharded<cdc::generation_service>& _cdc_gen_service;
 public:
     std::chrono::milliseconds get_ring_delay();
 private:
@@ -908,7 +918,7 @@ future<> init_storage_service(sharded<abort_source>& abort_sources, distributed<
         sharded<db::system_distributed_keyspace>& sys_dist_ks,
         sharded<db::view::view_update_generator>& view_update_generator, sharded<gms::feature_service>& feature_service,
         storage_service_config config, sharded<service::migration_notifier>& mn, sharded<locator::shared_token_metadata>& stm,
-        sharded<netw::messaging_service>& ms);
+        sharded<netw::messaging_service>& ms, sharded<cdc::generation_service>&);
 future<> deinit_storage_service();
 
 }

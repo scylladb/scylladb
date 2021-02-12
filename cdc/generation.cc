@@ -40,6 +40,7 @@
 
 #include "cdc/generation.hh"
 #include "cdc/cdc_options.hh"
+#include "cdc/generation_service.hh"
 
 extern logging::logger cdc_log;
 
@@ -600,6 +601,61 @@ future<> maybe_rewrite_streams_descriptions(
 
         co_await db::system_keyspace::cdc_set_rewritten(last_rewritten);
     })());
+}
+
+static void assert_shard_zero(const sstring& where) {
+    if (this_shard_id() != 0) {
+        on_internal_error(cdc_log, format("`{}`: must be run on shard 0", where));
+    }
+}
+
+generation_service::generation_service(
+            const db::config& cfg, gms::gossiper& g, sharded<db::system_distributed_keyspace>& sys_dist_ks,
+            abort_source& abort_src, const locator::shared_token_metadata& stm)
+        : _cfg(cfg), _gossiper(g), _sys_dist_ks(sys_dist_ks), _abort_src(abort_src), _token_metadata(stm) {
+}
+
+future<> generation_service::stop() {
+    if (this_shard_id() == 0) {
+        co_await _gossiper.unregister_(shared_from_this());
+    }
+
+    _stopped = true;
+}
+
+generation_service::~generation_service() {
+    assert(_stopped);
+}
+
+future<> generation_service::after_join() {
+    assert_shard_zero(__PRETTY_FUNCTION__);
+    assert(db::system_keyspace::bootstrap_complete());
+
+    _gossiper.register_(shared_from_this());
+
+    return make_ready_future<>();
+}
+
+void generation_service::on_join(gms::inet_address ep, gms::endpoint_state ep_state) {
+    assert_shard_zero(__PRETTY_FUNCTION__);
+
+    auto val = ep_state.get_application_state_ptr(gms::application_state::CDC_STREAMS_TIMESTAMP);
+    if (!val) {
+        return;
+    }
+
+    on_change(ep, gms::application_state::CDC_STREAMS_TIMESTAMP, *val);
+}
+
+void generation_service::on_change(gms::inet_address ep, gms::application_state app_state, const gms::versioned_value& v) {
+    assert_shard_zero(__PRETTY_FUNCTION__);
+
+    if (app_state != gms::application_state::CDC_STREAMS_TIMESTAMP) {
+        return;
+    }
+
+    auto ts = gms::versioned_value::cdc_streams_timestamp_from_string(v.value);
+    cdc_log.debug("Endpoint: {}, CDC generation timestamp change: {}", ep, ts);
 }
 
 } // namespace cdc

@@ -79,6 +79,7 @@
 #include "database.hh"
 #include <seastar/core/metrics.hh>
 #include "cdc/generation.hh"
+#include "cdc/generation_service.hh"
 #include "repair/repair.hh"
 #include "service/priority_manager.hh"
 #include "utils/generation-number.hh"
@@ -98,7 +99,7 @@ distributed<storage_service> _the_storage_service;
 
 storage_service::storage_service(abort_source& abort_source, distributed<database>& db, gms::gossiper& gossiper, sharded<db::system_distributed_keyspace>& sys_dist_ks,
         sharded<db::view::view_update_generator>& view_update_generator, gms::feature_service& feature_service, storage_service_config config, sharded<service::migration_notifier>& mn,
-        locator::shared_token_metadata& stm, sharded<netw::messaging_service>& ms, bool for_testing)
+        locator::shared_token_metadata& stm, sharded<netw::messaging_service>& ms, sharded<cdc::generation_service>& cdc_gen_service, bool for_testing)
         : _abort_source(abort_source)
         , _feature_service(feature_service)
         , _db(db)
@@ -110,6 +111,7 @@ storage_service::storage_service(abort_source& abort_source, distributed<databas
         , _for_testing(for_testing)
         , _node_ops_abort_thread(node_ops_abort_thread())
         , _shared_token_metadata(stm)
+        , _cdc_gen_service(cdc_gen_service)
         , _sys_dist_ks(sys_dist_ks)
         , _view_update_generator(view_update_generator)
         , _snitch_reconfigure([this] { return snitch_reconfigured(); })
@@ -616,6 +618,7 @@ void storage_service::join_token_ring(int delay) {
         throw std::runtime_error(err);
     }
 
+    _cdc_gen_service.local().after_join().get();
     // Retrieve the latest CDC generation seen in gossip (if any).
     scan_cdc_generations();
 
@@ -3456,8 +3459,8 @@ future<> init_storage_service(sharded<abort_source>& abort_source, distributed<d
         sharded<db::system_distributed_keyspace>& sys_dist_ks,
         sharded<db::view::view_update_generator>& view_update_generator, sharded<gms::feature_service>& feature_service,
         storage_service_config config, sharded<service::migration_notifier>& mn, sharded<locator::shared_token_metadata>& stm,
-        sharded<netw::messaging_service>& ms) {
-    return service::get_storage_service().start(std::ref(abort_source), std::ref(db), std::ref(gossiper), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(feature_service), config, std::ref(mn), std::ref(stm), std::ref(ms));
+        sharded<netw::messaging_service>& ms, sharded<cdc::generation_service>& cdc_gen_service) {
+    return service::get_storage_service().start(std::ref(abort_source), std::ref(db), std::ref(gossiper), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(feature_service), config, std::ref(mn), std::ref(stm), std::ref(ms), std::ref(cdc_gen_service));
 }
 
 future<> deinit_storage_service() {

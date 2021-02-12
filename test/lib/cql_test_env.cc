@@ -26,6 +26,7 @@
 #include "sstables/sstables.hh"
 #include <seastar/core/do_with.hh>
 #include "test/lib/cql_test_env.hh"
+#include "cdc/generation_service.hh"
 #include "cql3/functions/functions.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/query_options.hh"
@@ -121,6 +122,7 @@ private:
     sharded<db::view::view_builder>& _view_builder;
     sharded<db::view::view_update_generator>& _view_update_generator;
     sharded<service::migration_notifier>& _mnotifier;
+    sharded<cdc::generation_service>& _cdc_generation_service;
 private:
     struct core_local_state {
         service::client_state client_state;
@@ -151,7 +153,8 @@ public:
             sharded<auth::service>& auth_service,
             sharded<db::view::view_builder>& view_builder,
             sharded<db::view::view_update_generator>& view_update_generator,
-            sharded<service::migration_notifier>& mnotifier)
+            sharded<service::migration_notifier>& mnotifier,
+            sharded<cdc::generation_service>& cdc_generation_service)
             : _feature_service(feature_service)
             , _db(db)
             , _qp(qp)
@@ -159,6 +162,7 @@ public:
             , _view_builder(view_builder)
             , _view_update_generator(view_update_generator)
             , _mnotifier(mnotifier)
+            , _cdc_generation_service(cdc_generation_service)
     { }
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_cql(sstring_view text) override {
@@ -469,11 +473,12 @@ public:
             auto stop_cql_config = defer([&] { cql_config.stop().get(); });
 
             sharded<db::view::view_update_generator> view_update_generator;
+            sharded<cdc::generation_service> cdc_generation_service;
 
             auto& ss = service::get_storage_service();
             service::storage_service_config sscfg;
             sscfg.available_memory = memory::stats().total_memory();
-            ss.start(std::ref(abort_sources), std::ref(db), std::ref(gms::get_gossiper()), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(feature_service), sscfg, std::ref(mm_notif), std::ref(token_metadata), std::ref(ms), true).get();
+            ss.start(std::ref(abort_sources), std::ref(db), std::ref(gms::get_gossiper()), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(feature_service), sscfg, std::ref(mm_notif), std::ref(token_metadata), std::ref(ms), std::ref(cdc_generation_service), true).get();
             auto stop_storage_service = defer([&ss] { ss.stop().get(); });
 
             sharded<semaphore> sst_dir_semaphore;
@@ -575,6 +580,11 @@ public:
 
             sys_dist_ks.start(std::ref(qp), std::ref(mm), std::ref(proxy)).get();
 
+            cdc_generation_service.start(std::ref(*cfg), std::ref(gms::get_gossiper()), std::ref(sys_dist_ks), std::ref(abort_sources), std::ref(token_metadata)).get();
+            auto stop_cdc_generation_service = defer([&cdc_generation_service] {
+                cdc_generation_service.stop().get();
+            });
+
             sharded<cdc::cdc_service> cdc;
             cdc.start(std::ref(proxy)).get();
             auto stop_cdc_service = defer([&] {
@@ -632,7 +642,7 @@ public:
                 // The default user may already exist if this `cql_test_env` is starting with previously populated data.
             }
 
-            single_node_cql_env env(feature_service, db, qp, auth_service, view_builder, view_update_generator, mm_notif);
+            single_node_cql_env env(feature_service, db, qp, auth_service, view_builder, view_update_generator, mm_notif, cdc_generation_service);
             env.start().get();
             auto stop_env = defer([&env] { env.stop().get(); });
 
