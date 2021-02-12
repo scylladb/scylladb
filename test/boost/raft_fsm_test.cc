@@ -59,6 +59,103 @@ raft::snapshot log_snapshot(raft::log& log, index_t idx) {
 
 raft::fsm_config fsm_cfg{.append_request_threshold = 1};
 
+BOOST_AUTO_TEST_CASE(test_tracker) {
+    auto id = []() -> raft::server_address { return raft::server_address{utils::make_random_uuid()}; };
+    auto id1 = id();
+    raft::tracker tracker(id1.id);
+    raft::configuration cfg({id1});
+    tracker.set_configuration(cfg, index_t{1});
+    BOOST_CHECK_NE(tracker.find(id1.id), nullptr);
+    // The node with id set during construction is assumed to be
+    // the leader, since otherwise we wouldn't create a tracker
+    // in the first place.
+    BOOST_CHECK_EQUAL(tracker.find(id1.id), tracker.leader_progress());
+    BOOST_CHECK_EQUAL(tracker.committed(index_t{0}), index_t{0});
+    // Avoid keeping a reference, follower_progress address may
+    // change with configuration change
+    auto pr = [&tracker](raft::server_address address) -> raft::follower_progress* {
+        return tracker.find(address.id);
+    };
+    BOOST_CHECK_EQUAL(pr(id1)->match_idx, index_t{0});
+    BOOST_CHECK_EQUAL(pr(id1)->next_idx, index_t{1});
+
+    pr(id1)->accepted(index_t{1});
+    BOOST_CHECK_EQUAL(pr(id1)->match_idx, index_t{1});
+    BOOST_CHECK_EQUAL(pr(id1)->next_idx, index_t{2});
+    BOOST_CHECK_EQUAL(tracker.committed(index_t{0}), index_t{1});
+
+    pr(id1)->accepted(index_t{10});
+    BOOST_CHECK_EQUAL(pr(id1)->match_idx, index_t{10});
+    BOOST_CHECK_EQUAL(pr(id1)->next_idx, index_t{11});
+    BOOST_CHECK_EQUAL(tracker.committed(index_t{0}), index_t{10});
+
+    // Out of order confirmation is OK
+    //
+    pr(id1)->accepted(index_t{5});
+    BOOST_CHECK_EQUAL(pr(id1)->match_idx, index_t{10});
+    BOOST_CHECK_EQUAL(pr(id1)->next_idx, index_t{11});
+    BOOST_CHECK_EQUAL(tracker.committed(index_t{5}), index_t{10});
+
+    // Enter joint configuration {A,B,C}
+    auto id2 = id(), id3 = id();
+    cfg.enter_joint({id1, id2, id3});
+    tracker.set_configuration(cfg, index_t{1});
+    BOOST_CHECK_EQUAL(tracker.committed(index_t{10}), index_t{10});
+    pr(id2)->accepted(index_t{11});
+    BOOST_CHECK_EQUAL(tracker.committed(index_t{10}), index_t{10});
+    pr(id3)->accepted(index_t{12});
+    BOOST_CHECK_EQUAL(tracker.committed(index_t{10}), index_t{10});
+    pr(id1)->accepted(index_t{13});
+    BOOST_CHECK_EQUAL(tracker.committed(index_t{10}), index_t{12});
+    pr(id1)->accepted(index_t{14});
+    BOOST_CHECK_EQUAL(tracker.committed(index_t{13}), index_t{13});
+
+    // Leave joint configuration, final configuration is  {A,B,C}
+    cfg.leave_joint();
+    tracker.set_configuration(cfg, index_t{1});
+    BOOST_CHECK_EQUAL(tracker.committed(index_t{13}), index_t{13});
+
+    auto id4 = id(), id5 = id();
+    cfg.enter_joint({id3, id4, id5});
+    tracker.set_configuration(cfg, index_t{1});
+    BOOST_CHECK_EQUAL(tracker.committed(index_t{13}), index_t{13});
+    pr(id1)->accepted(index_t{15});
+    BOOST_CHECK_EQUAL(tracker.committed(index_t{13}), index_t{13});
+    pr(id5)->accepted(index_t{15});
+    BOOST_CHECK_EQUAL(tracker.committed(index_t{13}), index_t{13});
+    pr(id3)->accepted(index_t{15});
+    BOOST_CHECK_EQUAL(tracker.committed(index_t{13}), index_t{15});
+    // This does not advance the joint quorum
+    pr(id1)->accepted(index_t{16});
+    pr(id4)->accepted(index_t{17});
+    pr(id5)->accepted(index_t{18});
+    BOOST_CHECK_EQUAL(tracker.committed(index_t{15}), index_t{15});
+
+    cfg.leave_joint();
+    tracker.set_configuration(cfg, index_t{1});
+    // Leaving joint configuration commits more entries
+    BOOST_CHECK_EQUAL(tracker.committed(index_t{15}), index_t{17});
+    //
+    cfg.enter_joint({id1});
+    cfg.leave_joint();
+    cfg.enter_joint({id2});
+    tracker.set_configuration(cfg, index_t{1});
+    // Sic: we're in a weird state. The joint commit index
+    // is actually 1, since id2 is at position 1. But in
+    // unwinding back the commit index would be weird,
+    // so we report back the hint (prev_commit_idx).
+    // As soon as the cluster enters joint configuration,
+    // and old quorum is insufficient, the leader won't be able to
+    // commit new entries until the new members catch up.
+    BOOST_CHECK_EQUAL(tracker.committed(index_t{17}), index_t{17});
+    pr(id1)->accepted(index_t{18});
+    BOOST_CHECK_EQUAL(tracker.committed(index_t{17}), index_t{17});
+    pr(id2)->accepted(index_t{19});
+    BOOST_CHECK_EQUAL(tracker.committed(index_t{17}), index_t{18});
+    pr(id1)->accepted(index_t{20});
+    BOOST_CHECK_EQUAL(tracker.committed(index_t{18}), index_t{19});
+}
+
 BOOST_AUTO_TEST_CASE(test_log_last_conf_idx) {
     // last_conf_idx, prev_conf_idx are initialized correctly,
     // and maintained during truncate head/truncate tail
