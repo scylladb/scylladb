@@ -25,6 +25,7 @@
 
 enum class mutation_fragment_stream_validation_level {
     partition_region, // fragment kind
+    token,
     partition_key,
     clustering_key,
 };
@@ -32,8 +33,9 @@ enum class mutation_fragment_stream_validation_level {
 /// Low level fragment stream validator.
 ///
 /// Tracks and validates the monotonicity of the passed in fragment kinds,
-/// position in partition and partition keys. Any subset of these can be
-/// used, but what is used have to be consistent across the entire stream.
+/// position in partition, token or partition keys. Any subset of these
+/// can be used, but what is used have to be consistent across the entire
+/// stream.
 class mutation_fragment_stream_validator {
     const schema& _schema;
     mutation_fragment::kind _prev_kind;
@@ -73,11 +75,23 @@ public:
     /// \returns true if the mutation fragment kind is valid.
     bool operator()(const mutation_fragment& mf);
 
+    /// Validates the monotonicity of the token.
+    ///
+    /// Does not check fragment level monotonicity.
+    /// Advances the previous token, but only if the validation passes.
+    /// Cannot be used in parallel with the `dht::decorated_key`
+    /// overload.
+    ///
+    /// \returns true if the token is valid.
+    bool operator()(dht::token t);
+
     /// Validates the monotonicity of the partition.
     ///
     /// Does not check fragment level monotonicity.
     /// Advances the previous partition-key, but only if the validation passes.
-    //
+    /// Cannot be used in parallel with the `dht::token`
+    /// overload.
+    ///
     /// \returns true if the partition key is valid.
     bool operator()(const dht::decorated_key& dk);
 
@@ -98,6 +112,15 @@ public:
         return _prev_pos;
     }
     /// The previous valid partition key.
+    ///
+    /// Only valid if `operator()(const dht::decorated_key&)` or
+    /// `operator()(dht::token)` was used.
+    dht::token previous_token() const {
+        return _prev_partition_key.token();
+    }
+    /// The previous valid partition key.
+    ///
+    /// Only valid if `operator()(const dht::decorated_key&)` was used.
     const dht::decorated_key& previous_partition_key() const {
         return _prev_partition_key;
     }
