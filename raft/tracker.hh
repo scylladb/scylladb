@@ -30,7 +30,7 @@ namespace raft {
 class follower_progress {
 public:
     // Id of this server
-    server_id id;
+    const server_id id;
     // Index of the next log entry to send to this server.
     index_t next_idx;
     // Index of the highest log entry known to be replicated to this
@@ -61,6 +61,18 @@ public:
     void become_probe();
     void become_pipeline();
     void become_snapshot();
+
+    void stable_to(index_t idx) {
+        // AppendEntries replies can arrive out of order.
+        if (idx > match_idx) {
+            match_idx = idx;
+        }
+        if (idx >= next_idx) {
+            // idx may be smaller if we increased next_idx
+            // optimistically in pipeline mode.
+            next_idx = idx + index_t{1};
+        }
+    }
 
     // Return true if a new replication record can be sent to the follower.
     bool can_send_to();
