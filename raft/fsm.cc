@@ -306,9 +306,7 @@ void fsm::advance_stable_idx(index_t idx) {
     // configuration, update it's progress and optionally
     // commit new entries.
     if (is_leader() && _tracker->leader_progress()) {
-        auto& progress = *_tracker->leader_progress();
-        progress.match_idx = idx;
-        progress.next_idx = index_t{idx + 1};
+        _tracker->leader_progress()->accepted(idx);
         replicate();
         maybe_commit();
     }
@@ -496,9 +494,7 @@ void fsm::append_entries_reply(server_id from, append_reply&& reply) {
         logger.trace("append_entries_reply[{}->{}]: accepted match={} last index={}",
             _my_id, from, progress.match_idx, last_idx);
 
-        progress.match_idx = std::max(progress.match_idx, last_idx);
-        // out next_idx may be large because of optimistic increase in pipeline mode
-        progress.next_idx = std::max(progress.next_idx, index_t(last_idx + 1));
+        progress.accepted(last_idx);
 
         progress.become_pipeline();
 
