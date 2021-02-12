@@ -41,6 +41,7 @@ class gossiper;
 } // namespace gms
 
 class raft_rpc;
+class raft_gossip_failure_detector;
 
 // This class is responsible for creating, storing and accessing raft servers.
 // It also manages the raft rpc verbs initialization.
@@ -53,6 +54,8 @@ class raft_services : public seastar::peering_sharded_service<raft_services> {
     netw::messaging_service& _ms;
     gms::gossiper& _gossiper;
     cql3::query_processor& _qp;
+    // Shard-local failure detector instance shared among all raft groups
+    shared_ptr<raft_gossip_failure_detector> _fd;
     std::unordered_map<raft::server_id, create_server_result> _servers;
     // inet_address:es for remote raft servers known to us
     std::unordered_map<raft::server_id, gms::inet_address> _server_addresses;

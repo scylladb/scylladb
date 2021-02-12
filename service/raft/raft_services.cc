@@ -32,7 +32,7 @@
 #include <seastar/core/smp.hh>
 
 raft_services::raft_services(netw::messaging_service& ms, gms::gossiper& gs, cql3::query_processor& qp)
-    : _ms(ms), _gossiper(gs), _qp(qp)
+    : _ms(ms), _gossiper(gs), _qp(qp), _fd(make_shared<raft_gossip_failure_detector>(gs, *this))
 {}
 
 void raft_services::init_rpc_verbs() {
@@ -126,7 +126,6 @@ raft_rpc& raft_services::get_rpc(raft::server_id id) {
 raft_services::create_server_result raft_services::create_schema_server(raft::server_id id) {
     auto rpc = std::make_unique<raft_rpc>(_ms, *this, schema_raft_state_machine::group_id, id);
     auto& rpc_ref = *rpc;
-    auto fd = make_shared<raft_gossip_failure_detector>(_gossiper, *this);
     auto storage = std::make_unique<raft_sys_table_storage>(_qp, schema_raft_state_machine::group_id);
     auto state_machine = std::make_unique<schema_raft_state_machine>();
 
@@ -134,7 +133,7 @@ raft_services::create_server_result raft_services::create_schema_server(raft::se
             std::move(rpc),
             std::move(state_machine),
             std::move(storage),
-            std::move(fd),
+            _fd,
             raft::server::configuration()), // use default raft server configuration
         &rpc_ref);
 }
