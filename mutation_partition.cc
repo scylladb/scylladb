@@ -2297,7 +2297,9 @@ future<mutation_opt> counter_write_query(schema_ptr s, const mutation_source& so
     auto cfq = make_stable_flattened_mutations_consumer<compact_for_query<emit_only_live_rows::yes, counter_write_query_result_builder>>(
             *s, gc_clock::now(), slice, query::max_rows, query::max_partitions, std::move(cwqrb));
     auto f = r_a_r->reader.consume(std::move(cfq), timeout);
-    return f.finally([r_a_r = std::move(r_a_r)] { });
+    return f.finally([r_a_r = std::move(r_a_r)] {
+        return r_a_r->reader.close();
+    });
 }
 
 mutation_cleaner_impl::~mutation_cleaner_impl() {
