@@ -38,7 +38,7 @@ using namespace std::placeholders;
 
 static seastar::logger tlogger("test");
 
-lowres_clock::duration tick_delta = 100ms;
+lowres_clock::duration tick_delta = 1ms;
 
 std::mt19937 random_generator() {
     std::random_device rd;
