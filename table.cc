@@ -313,6 +313,8 @@ table::for_all_partitions_slow(schema_ptr s, reader_permit permit, std::function
             });
         }).then([&is] {
             return is.ok;
+        }).finally([&is] {
+            return is.reader.close();
         });
     });
 }
