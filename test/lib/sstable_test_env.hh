@@ -76,7 +76,7 @@ public:
     template <typename Func>
     static inline auto do_with(Func&& func) {
         return seastar::do_with(test_env(), [func = std::move(func)] (test_env& env) mutable {
-            return func(env).finally([&env] {
+            return futurize_invoke(func, env).finally([&env] {
                 return env.stop();
             });
         });
@@ -85,7 +85,7 @@ public:
     template <typename T, typename Func>
     static inline auto do_with(T&& rval, Func&& func) {
         return seastar::do_with(test_env(), std::forward<T>(rval), [func = std::move(func)] (test_env& env, T& val) mutable {
-            return func(env, val).finally([&env] {
+            return futurize_invoke(func, env, val).finally([&env] {
                 return env.stop();
             });
         });
