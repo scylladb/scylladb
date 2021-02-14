@@ -30,11 +30,13 @@ from cassandra.protocol import FunctionFailure, InvalidRequest
 
 import pytest
 import random
+import json
+from decimal import Decimal
 
 @pytest.fixture(scope="session")
 def table1(cql, test_keyspace):
     table = test_keyspace + "." + unique_name()
-    cql.execute(f"CREATE TABLE {table} (p int PRIMARY KEY, v int, a ascii, b boolean, vi varint, mai map<ascii, int>, tup frozen<tuple<text, int>>, l list<text>, d double)")
+    cql.execute(f"CREATE TABLE {table} (p int PRIMARY KEY, v int, a ascii, b boolean, vi varint, mai map<ascii, int>, tup frozen<tuple<text, int>>, l list<text>, d double, t time, dec decimal)")
     yield table
     cql.execute("DROP TABLE " + table)
 
@@ -237,3 +239,80 @@ def test_tojson_double(cql, table1):
     # does not work.
     cql.execute(stmt, [p, 123123.123123])
     assert list(cql.execute(f"SELECT d, toJson(d) from {table1} where p = {p}")) == [(123123.123123, "123123.123123")]
+
+# Check that toJson() correctly formats "time" values. The JSON translation
+# is a string containing the time (there is no time type in JSON), and of
+# course, a string needs to be wrapped in quotes. (issue #7988
+@pytest.mark.xfail(reason="issue #7988")
+def test_tojson_time(cql, table1):
+    p = random.randint(1,1000000000)
+    stmt = cql.prepare(f"INSERT INTO {table1} (p, t) VALUES (?, ?)")
+    cql.execute(stmt, [p, 123])
+    assert list(cql.execute(f"SELECT toJson(t) from {table1} where p = {p}")) == [('"00:00:00.000000123"',)]
+
+# The EquivalentJson class wraps a JSON string, and compare equal to other
+# strings if both are valid JSON strings which decode to the same object.
+# EquivalentJson("....") can be used in assert_rows() checks below, to check
+# whether functionally-equivalent JSON is returned instead of checking for
+# identical strings.
+class EquivalentJson:
+    def __init__(self, s):
+        self.obj = json.loads(s)
+    def __eq__(self, other):
+        if isinstance(other, EquivalentJson):
+            return self.obj == other.obj
+        elif isinstance(other, str):
+            return self.obj == json.loads(other)
+        return NotImplemented
+    # Implementing __repr__ is useful because when a comparison fails, pytest
+    # helpfully prints what it tried to compare, and uses __repr__ for that.
+    def __repr__(self):
+        return f'EquivalentJson("{self.obj}")'
+
+# Test that toJson() can prints a decimal type with a very high mantissa.
+# Reproduces issue #8002, where it was written as 1 and a billion zeroes,
+# running out of memory.
+# We need to skip this test because in debug mode memory allocation is not
+# bounded, and this test can hang or crash instead of failing immediately.
+# We also have a smaller xfailing test below, test_tojson_decimal_high_mantissa2.
+@pytest.mark.skip(reason="issue #8002")
+def test_tojson_decimal_high_mantissa(cql, table1):
+    p = random.randint(1,1000000000)
+    stmt = cql.prepare(f"INSERT INTO {table1} (p, dec) VALUES ({p}, ?)")
+    high = '1e1000000000'
+    cql.execute(stmt, [Decimal(high)])
+    assert list(cql.execute(f"SELECT toJson(dec) from {table1} where p = {p}")) == [(EquivalentJson(high),)]
+
+# This is a smaller version of test_tojson_decimal_high_mantissa, showing
+# that a much smaller exponent, 1e1000 works (this is not surprising) but
+# results in 1000 digits of output. This hints that 1e1000000000 willl not
+# work at all, without testing it directly as above.
+@pytest.mark.xfail(reason="issue #8002")
+def test_tojson_decimal_high_mantissa2(cql, table1):
+    p = random.randint(1,1000000000)
+    stmt = cql.prepare(f"INSERT INTO {table1} (p, dec) VALUES ({p}, ?)")
+    # Although 1e1000 is higher than a normal double, it should be fine for
+    # Scylla's "decimal" type:
+    high = '1e1000'
+    cql.execute(stmt, [Decimal(high)])
+    result = cql.execute(f"SELECT toJson(dec) from {table1} where p = {p}").one()[0]
+    # We expect the "result" JSON string to be 1E+1000 - not 100000000....000000.
+    assert len(result) < 10
+
+# Reproducers for issue #8077: SELECT JSON on a function call should result
+# in the same JSON strings as it does on Cassandra.
+@pytest.mark.xfail(reason="issue #8077")
+def test_select_json_function_call(cql, table1):
+    p = random.randint(1,1000000000)
+    cql.execute(f"INSERT INTO {table1} (p, v) VALUES ({p}, 17) USING TIMESTAMP 1234")
+    input_and_output = {
+        'v':                       '{"v": 17}',
+        'count(*)':                '{"count": 1}',
+        'ttl(v)':                  '{"ttl(v)": null}',
+        'writetime(v)':            '{"writetime(v)": 1234}',
+        'intAsBlob(v)':            '{"system.intasblob(v)": "0x00000011"}',
+        'blobasInt(intAsBlob(v))': '{"system.blobasint(system.intasblob(v))": 17}',
+        'tojson(v)':               '{"system.tojson(v)": "17"}',
+    }
+    for input, output in input_and_output.items():
+        assert list(cql.execute(f"SELECT JSON {input} from {table1} where p = {p}")) == [(EquivalentJson(output),)]
