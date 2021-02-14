@@ -1883,14 +1883,15 @@ static std::string get_item_type_string(const rjson::value& v) {
 }
 
 // attrs_to_get saves for each top-level attribute an attrs_to_get_node,
-// a hierarchy of subparts that need to be kep. The following function
+// a hierarchy of subparts that need to be kept. The following function
 // takes a given JSON value and drops its parts which weren't asked to be
 // kept. It modifies the given JSON value, or returns false to signify that
 // the entire object should be dropped.
 // Note that The JSON value is assumed to be encoded using the DynamoDB
 // conventions - i.e., it is really a map whose key has a type string,
 // and the value is the real object.
-static bool hierarchy_filter(rjson::value& val, const attrs_to_get_node& h) {
+template<typename T>
+static bool hierarchy_filter(rjson::value& val, const attribute_path_map_node<T>& h) {
     if (!val.IsObject() || val.MemberCount() != 1) {
         // This shouldn't happen. We shouldn't have stored malformed objects.
         // But today Alternator does not validate the structure of nested
@@ -2504,17 +2505,37 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
     auto& row = m.partition().clustered_row(*_schema, _ck);
     attribute_collector attrs_collector;
     bool any_updates = false;
-    auto do_update = [&] (bytes&& column_name, const rjson::value& json_value) {
+    auto do_update = [&] (bytes&& column_name, const rjson::value& json_value,
+                          const attribute_path_map_node<parsed::update_expression::action>* h = nullptr) {
         any_updates = true;
-        if (_returnvalues == returnvalues::ALL_NEW ||
-            _returnvalues == returnvalues::UPDATED_NEW) {
+        if (_returnvalues == returnvalues::ALL_NEW) {
             rjson::set_with_string_name(_return_attributes,
-                    to_sstring_view(column_name), rjson::copy(json_value));
+                to_sstring_view(column_name), rjson::copy(json_value));
+        } else if (_returnvalues == returnvalues::UPDATED_NEW) {
+            rjson::value&& v = rjson::copy(json_value);
+            if (h) {
+                // If the operation was only on specific attribute paths,
+                // leave only them in _return_attributes.
+                if (hierarchy_filter(v, *h)) {
+                    rjson::set_with_string_name(_return_attributes,
+                        to_sstring_view(column_name), std::move(v));
+                }
+            } else {
+                rjson::set_with_string_name(_return_attributes,
+                    to_sstring_view(column_name), std::move(v));
+            }
         } else if (_returnvalues == returnvalues::UPDATED_OLD && previous_item) {
             std::string_view cn =  to_sstring_view(column_name);
             const rjson::value* col = rjson::find(*previous_item, cn);
             if (col) {
-                rjson::set_with_string_name(_return_attributes, cn, rjson::copy(*col));
+                rjson::value&& v = rjson::copy(*col);
+                if (h) {
+                    if (hierarchy_filter(v, *h)) {
+                        rjson::set_with_string_name(_return_attributes, cn, std::move(v));
+                    }
+                } else {
+                    rjson::set_with_string_name(_return_attributes, cn, std::move(v));
+                }
             }
         }
         const column_definition* cdef = _schema->get_column_definition(column_name);
@@ -2605,7 +2626,7 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
                 }
                 rjson::value result = rjson::copy(*toplevel);
                 hierarchy_actions(result, actions.second, previous_item.get());
-                do_update(to_bytes(column_name), std::move(result));
+                do_update(to_bytes(column_name), std::move(result), &actions.second);
             }
         }
     }
