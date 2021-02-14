@@ -38,6 +38,8 @@ using namespace std::placeholders;
 
 static seastar::logger tlogger("test");
 
+lowres_clock::duration tick_delta = 100ms;
+
 std::mt19937 random_generator() {
     std::random_device rd;
     // In case of errors, replace the seed with a fixed value to get a deterministic run.
@@ -429,15 +431,15 @@ future<> wait_log(std::vector<std::pair<std::unique_ptr<raft::server>, state_mac
     }
 }
 
-void pause_tickers(std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>& rafts) {
-    for (auto& r: rafts) {
-        r.first->pause_ticker();
+void pause_tickers(std::vector<seastar::timer<lowres_clock>>& tickers) {
+    for (auto& ticker: tickers) {
+        ticker.cancel();
     }
 }
 
-void restart_tickers(std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>& rafts) {
-    for (auto& r: rafts) {
-        r.first->restart_ticker();
+void restart_tickers(std::vector<seastar::timer<lowres_clock>>& tickers) {
+    for (auto& ticker: tickers) {
+        ticker.rearm_periodic(tick_delta);
     }
 }
 
@@ -490,6 +492,15 @@ future<int> run_test(test_case test) {
 
     auto rafts = co_await create_cluster(states, apply_changes, test.total_values, test.type);
 
+    // Tickers for servers
+    std::vector<seastar::timer<lowres_clock>> tickers(test.nodes);
+    for (size_t s = 0; s < test.nodes; ++s) {
+        tickers[s].arm_periodic(tick_delta);
+        tickers[s].set_callback([&rafts, s] {
+            rafts[s].first->tick();
+        });
+    }
+
     co_await rafts[leader].first->elect_me_leader();
     // Process all updates in order
     size_t next_val = leader_snap_skipped + leader_initial_entries;
@@ -507,7 +518,7 @@ future<int> run_test(test_case test) {
             co_await wait_log(rafts, leader);
         } else if (std::holds_alternative<new_leader>(update)) {
             co_await wait_log(rafts, leader);
-            pause_tickers(rafts);
+            pause_tickers(tickers);
             unsigned next_leader = std::get<new_leader>(update);
             if (next_leader != leader) {
                 assert(next_leader < rafts.size());
@@ -529,10 +540,10 @@ future<int> run_test(test_case test) {
                 tlogger.debug("confirmed leader on {}", next_leader);
                 leader = next_leader;
             }
-            restart_tickers(rafts);
+            restart_tickers(tickers);
         } else if (std::holds_alternative<partition>(update)) {
             co_await wait_log(rafts, leader);
-            pause_tickers(rafts);
+            pause_tickers(tickers);
             auto p = std::get<partition>(update);
             server_disconnected.clear();
             std::unordered_set<size_t> partition_servers;
@@ -583,7 +594,7 @@ future<int> run_test(test_case test) {
                 }
                 tlogger.debug("confirmed new leader on {}", leader);
             }
-            restart_tickers(rafts);
+            restart_tickers(tickers);
         }
     }
 
