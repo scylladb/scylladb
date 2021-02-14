@@ -450,6 +450,11 @@ public:
     /// Should be used when dropping a table.
     future<> evict_all_for_table(const utils::UUID& schema_id) noexcept;
 
+    /// Close all queriers and wait on background work.
+    ///
+    /// Should be used before destroying the querier_cache.
+    future<> stop() noexcept;
+
     const stats& get_stats() const {
         return _stats;
     }

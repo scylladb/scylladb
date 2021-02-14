@@ -2016,7 +2016,9 @@ database::stop() {
                 _read_concurrency_sem.stop(),
                 _streaming_concurrency_sem.stop(),
                 _compaction_concurrency_sem.stop(),
-                _system_read_concurrency_sem.stop()).discard_result();
+                _system_read_concurrency_sem.stop()).discard_result().finally([this] {
+            return _querier_cache.stop();
+        });
     });
 }
 
