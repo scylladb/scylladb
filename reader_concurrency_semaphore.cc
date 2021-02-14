@@ -472,6 +472,12 @@ flat_mutation_reader_opt reader_concurrency_semaphore::unregister_inactive_read(
         return {};
     }
     if (irh._sem != this) {
+        // unregister from the other semaphore
+        // and close the reader, in case on_internal_error
+        // doesn't abort.
+        auto irp = std::move(irh._irp);
+        irp->unlink();
+        irh._sem->close_reader(std::move(irp->reader));
         on_internal_error(rcslog, fmt::format(
                     "reader_concurrency_semaphore::unregister_inactive_read(): "
                     "attempted to unregister an inactive read with a handle belonging to another semaphore: "
