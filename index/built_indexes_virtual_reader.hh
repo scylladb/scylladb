@@ -112,6 +112,10 @@ class built_indexes_virtual_reader {
             _end_of_stream = false;
             return _underlying.fast_forward_to(std::move(range), timeout);
         }
+
+        virtual future<> close() noexcept override {
+            return _underlying.close();
+        }
     };
 
 public:
