@@ -73,6 +73,8 @@ future<> feed_writer(flat_mutation_reader&& rd, Writer&& wr) {
                 wr.consume_end_of_stream();
                 return wr.close();
             }
+        }).finally([&rd] {
+            return rd.close();
         });
     });
 }
