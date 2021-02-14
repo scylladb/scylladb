@@ -4181,6 +4181,12 @@ SEASTAR_THREAD_TEST_CASE(clustering_combined_reader_mutation_source_test) {
             return _it->second.fast_forward_to(std::move(pr), timeout);
         }
 
+        virtual future<> close() noexcept override {
+            return parallel_for_each(_readers, [] (auto& p) {
+                return p.second.close();
+            });
+        }
+
         future<mutation_fragment_opt> next_fragment(db::timeout_clock::time_point timeout) {
             if (_it == _readers.end() || _range.get().after(_it->first, dht::ring_position_comparator(*_schema))) {
                 co_return mutation_fragment_opt{};
