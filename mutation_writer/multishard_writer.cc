@@ -26,6 +26,7 @@
 #include <vector>
 #include <seastar/core/future-util.hh>
 #include <seastar/core/queue.hh>
+#include <seastar/core/smp.hh>
 
 namespace mutation_writer {
 
@@ -41,6 +42,7 @@ public:
         flat_mutation_reader reader,
         std::function<future<> (flat_mutation_reader reader)> consumer);
     future<> consume();
+    future<> close() noexcept;
 };
 
 // The multishard_writer class gets mutation_fragments generated from
@@ -75,6 +77,7 @@ public:
         flat_mutation_reader producer,
         std::function<future<> (flat_mutation_reader)> consumer);
     future<uint64_t> operator()();
+    future<> close() noexcept;
 };
 
 shard_writer::shard_writer(schema_ptr s,
@@ -92,6 +95,10 @@ future<> shard_writer::consume() {
         }
         return make_ready_future<>();
     });
+}
+
+future<> shard_writer::close() noexcept {
+    return _reader.close();
 }
 
 multishard_writer::multishard_writer(
@@ -199,7 +206,22 @@ future<uint64_t> distribute_reader_and_consume_on_shards(schema_ptr s,
     std::function<future<> (flat_mutation_reader)> consumer,
     utils::phased_barrier::operation&& op) {
     return do_with(multishard_writer(std::move(s), std::move(producer), std::move(consumer)), std::move(op), [] (multishard_writer& writer, utils::phased_barrier::operation&) {
-        return writer();
+        return writer().finally([&writer] {
+            return writer.close();
+        });
+    });
+}
+
+future<> multishard_writer::close() noexcept {
+    return _producer.close().then([this] {
+        return parallel_for_each(boost::irange(size_t(0), _shard_writers.size()), [this] (auto shard) {
+            if (auto w = std::move(_shard_writers[shard])) {
+                return smp::submit_to(shard, [w = std::move(w)] () mutable {
+                    return w->close();
+                });
+            }
+            return make_ready_future<>();
+        });
     });
 }
 
