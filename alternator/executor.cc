@@ -2556,7 +2556,7 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
     // can just move previous_item later, when we don't need it any more.
     if (_returnvalues == returnvalues::ALL_NEW) {
         if (previous_item) {
-            _return_attributes = std::move(*previous_item);
+            _return_attributes = rjson::copy(*previous_item);
         } else {
             // If there is no previous item, usually a new item is created
             // and contains they given key. This may be cancelled at the end
