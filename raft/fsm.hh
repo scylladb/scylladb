@@ -250,11 +250,6 @@ private:
     // Tick implementation on a leader
     void tick_leader();
 
-    // Reconfigure this instance to use the provided configuration.
-    // Called on start, state change to candidate or leader, or when
-    // a new configuration entry is added.
-    void set_configuration();
-
 public:
     explicit fsm(server_id id, term_t current_term, server_id voted_for, log log,
             failure_detector& failure_detector, fsm_config conf);

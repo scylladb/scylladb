@@ -87,7 +87,7 @@ const log_entry& fsm::add_entry(T command) {
         // entry is replicated to the C_new servers, and
         // a majority of the new configuration is used to
         // determine the C_new entry’s commitment.
-        set_configuration();
+        _tracker->set_configuration(_log.get_configuration(), _log.last_idx());
     }
 
     return *_log[_log.last_idx()];
@@ -128,18 +128,6 @@ void fsm::update_current_term(term_t current_term)
     _randomized_election_timeout = ELECTION_TIMEOUT + logical_clock::duration{dist(re)};
 }
 
-void fsm::set_configuration() {
-
-    // We unconditionally access configuration.current[0]
-    // to identify which entries are committed.
-    assert(_log.get_configuration().current.size() > 0);
-    if (is_leader()) {
-        _tracker->set_configuration(_log.get_configuration(), _log.last_idx());
-    } else if (is_candidate()) {
-        _votes->set_configuration(_log.get_configuration());
-    }
-}
-
 void fsm::become_leader() {
     assert(!std::holds_alternative<leader>(_state));
     assert(!_tracker);
@@ -157,7 +145,7 @@ void fsm::become_leader() {
     add_entry(log_entry::dummy());
     // set_configuration() begins replicating from the last entry
     // in the log.
-    set_configuration();
+    _tracker->set_configuration(_log.get_configuration(), _log.last_idx());
     replicate();
 }
 
@@ -186,8 +174,7 @@ void fsm::become_candidate() {
     // and initiating another round of RequestVote RPCs.
     _last_election_time = _clock.now();
 
-    _votes.emplace();
-    set_configuration();
+    _votes.emplace(_log.get_configuration());
 
     const auto& voters = _votes->voters();
     if (voters.find(server_address{_my_id}) == voters.end()) {
@@ -349,7 +336,7 @@ void fsm::maybe_commit() {
             configuration cfg(_log.get_configuration());
             cfg.leave_joint();
             _log.emplace_back(seastar::make_lw_shared<log_entry>({_current_term, _log.next_idx(), std::move(cfg)}));
-            set_configuration();
+            _tracker->set_configuration(_log.get_configuration(), _log.last_idx());
             // Leaving joint configuration may commit more entries
             // even if we had no new acks. Imagine the cluster is
             // in joint configuration {{A, B}, {A, B, C, D, E}}.
