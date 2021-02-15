@@ -1071,9 +1071,11 @@ int main(int ac, char** av) {
                 cdc_generation_service.stop().get();
             });
 
+            auto get_cdc_metadata = [] (cdc::generation_service& svc) { return std::ref(svc.get_cdc_metadata()); };
+
             supervisor::notify("starting CDC log service");
             static sharded<cdc::cdc_service> cdc;
-            cdc.start(std::ref(proxy)).get();
+            cdc.start(std::ref(proxy), sharded_parameter(get_cdc_metadata, std::ref(cdc_generation_service))).get();
             auto stop_cdc_service = defer_verbose_shutdown("cdc log service", [] {
                 cdc.stop().get();
             });
@@ -1289,7 +1291,7 @@ int main(int ac, char** av) {
                 smp_service_group_config c;
                 c.max_nonlocal_requests = 5000;
                 smp_service_group ssg = create_smp_service_group(c).get0();
-                alternator_executor.start(std::ref(proxy), std::ref(mm), std::ref(sys_dist_ks), std::ref(service::get_storage_service()), ssg).get();
+                alternator_executor.start(std::ref(proxy), std::ref(mm), std::ref(sys_dist_ks), std::ref(service::get_storage_service()), sharded_parameter(get_cdc_metadata, std::ref(cdc_generation_service)), ssg).get();
                 alternator_server.start(std::ref(alternator_executor), std::ref(qp)).get();
                 std::optional<uint16_t> alternator_port;
                 if (cfg->alternator_port()) {

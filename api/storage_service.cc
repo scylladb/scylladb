@@ -47,6 +47,7 @@
 #include "transport/controller.hh"
 #include "thrift/controller.hh"
 #include "locator/token_metadata.hh"
+#include "cdc/generation_service.hh"
 
 namespace api {
 
@@ -401,7 +402,7 @@ void set_storage_service(http_context& ctx, routes& r) {
     });
 
     ss::cdc_streams_check_and_repair.set(r, [&ctx] (std::unique_ptr<request> req) {
-        return service::get_local_storage_service().check_and_repair_cdc_streams().then([] {
+        return service::get_local_storage_service().get_cdc_generation_service().check_and_repair_cdc_streams().then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
     });
