@@ -7,10 +7,13 @@ an HTTP or HTTPS transport. It is described in detail on Amazon's site:
   https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/
 
 Our goal is that any application written to use Amazon DynamoDB could
-be run, unmodified, against Scylla with Alternator enabled. However, at this
-stage the Alternator implementation is incomplete, and some of DynamoDB's
-API features are not yet supported. The extent of Alternator's compatibility
-with DynamoDB is described in the "current compatibility" section below.
+be run, unmodified, against Scylla with Alternator enabled. Alternator's
+compatibility with DynamoDB is fairly complete, but users should be aware
+of some differences and some of unimplemented features. The extent of
+Alternator's compatibility with DynamoDB is described in the
+[Scylla Alternator for DynamoDB users](compatibility.md) document,
+which we updated as the work on Alternator progresses and compatibility
+continues to improve.
 
 ## Running Alternator
 By default, Scylla does not listen for DynamoDB API requests. To enable
@@ -19,7 +22,7 @@ such requests, you must set the `alternator-port` configuration option
 DynamoDB API requests.
 
 For example., "`--alternator-port=8000`" on the command line will run
-Alternator on port 8000 - the traditional port used by DynamoDB.
+Alternator on port 8000.
 
 By default, Scylla listens on this port on all network interfaces.
 To listen only on a specific interface, pass also an "`alternator-address`"
@@ -49,118 +52,6 @@ Alternator does not provide such a load-balancing setup, so you should
 either set one up, or set up the client library to do the load balancing
 itself. Instructions, code and examples for doing this can be found in:
 https://github.com/scylladb/alternator-load-balancing/
-
-Alternator tables are stored as Scylla tables, each in a separate keyspace.
-Each keyspace is initialized when the corresponding Alternator table is
-created (with a CreateTable request). The replication factor (RF) for this
-keyspace is chosen at that point, depending on the size of the cluster:
-RF=3 is used on clusters with three or more nodes, and RF=1 is used for
-smaller clusters. Such smaller clusters are, of course, only recommended
-for tests because of the risk of data loss.
-
-## Current compatibility with DynamoDB
-
-Our goal is that any application written to use Amazon DynamoDB could
-be run, unmodified, against Scylla with Alternator enabled. However, at this
-stage the Alternator implementation is incomplete, and some of DynamoDB's
-API features are not yet supported. This section documents the extent of
-Alternator's compatibility with DynamoDB, and will be updated as the work
-progresses and compatibility continues to improve.
-
-### API Server
-* Transport: HTTP and HTTPS are mostly supported, but small features like CRC
-  header and compression are still missing.
-* Authorization (verifying the originator of the request): implemented
-  on top of system\_auth.roles table. The secret key used for authorization
-  is the salted\_hash column from the roles table, selected with:
-  SELECT salted\_hash from system\_auth.roles WHERE role = USERNAME;
-  By default, authorization is not enforced at all. It can be turned on
-  by providing an entry in Scylla configuration:
-    alternator\_enforce\_authorization: true
-* Load balancing: Not a part of Alternator. One should use an external load
-  balancer or DNS server to balance the requests between the live Scylla
-  nodes, or a modification to the client library. For more information, see
-  https://github.com/scylladb/alternator-load-balancing/.
-### Table Operations
-* CreateTable and DeleteTable: Supported. Note our implementation is synchronous.
-* DescribeTable: Partial implementation. Missing creation date and size estimate.
-* UpdateTable: Not supported.
-* ListTables: Supported.
-### Item Operations
-* GetItem, PutItem, UpdateItem, DeleteItem fully supported.
-### Batch Operations
-* BatchGetItem, BatchWriteItem fully supported.
-  Doesn't limit the number of items (DynamoDB limits to 25) or size of items
-  (400 KB) or total request size (16 MB).
-### Scans
-Scan and Query are mostly supported, with the following limitations:
-* The "Select" options which allows to count items instead of returning them
-  is not yet supported.
-### Secondary Indexes
-Global Secondary Indexes (GSI) and Local Secondary Indexes (LSI) are
-implemented, with the following limitations:
-* GSIs and LSIs can be added only at CreateTable time: GSIs cannot be added
-  or removed at a later time (UpdateTable is not yet supported).
-* DescribeTable lists the indexes for the table, but is missing some
-  additional information on each index.
-* Projection of only a subset of the base-table attributes to the index is
-  not respected: All attributes are projected.
-### Time To Live (TTL)
-* Not yet supported. Note that this is a different feature from Scylla's
-  feature with the same name.
-### Replication
-* Supported, with RF=3 (unless running on a cluster of less than 3 nodes).
-  Writes are done in LOCAL_QUORUM and reads in LOCAL_ONE (eventual consistency)
-  or LOCAL_QUORUM (strong consistency).
-### Global Tables
-* Currently, *all* Alternator tables are created as "global" tables and can
-  be accessed from all the DCs existing at the time of the table's creation.
-  If a DC is added after a table is created, the table won't be visible from
-  the new DC and changing that requires a CQL "ALTER TABLE" statement to
-  modify the table's replication strategy.
-* We do not yet support the DynamoDB API calls that control which table is
-  visible from what DC: CreateGlobalTable, UpdateGlobalTable,
-  DescribeGlobalTable, ListGlobalTables, UpdateGlobalTableSettings,
-  DescribeGlobalTableSettings, and UpdateTable.
-### Backup and Restore
-* On-demand backup: the DynamoDB APIs are not yet supported: CreateBackup,
-  DescribeBackup, DeleteBackup, ListBackups, RestoreTableFromBackup.
-  Users can use Scylla's [snapshots](https://docs.scylladb.com/operating-scylla/procedures/backup-restore/)
-  or [Scylla Manager](https://docs.scylladb.com/operating-scylla/manager/2.0/backup/).
-* Continuous backup: Not yet supported: UpdateContinuousBackups,
-  DescribeContinuousBackups, RestoreTableToPoinInTime.
-### Transactions
-* Not yet supported: TransactWriteItems, TransactGetItems.
-  Note that this is a new DynamoDB feature - these are more powerful than
-  the old conditional updates which were "lightweight transactions".
-### Streams
-* Implemented via [CDC](https://docs.scylladb.com/using-scylla/cdc/)
-  (change data capture). The Alternator server responds to all DynamoDB
-  Streams API calls.
-  Note that because of how Scylla CDC operates, there is a time window
-  between data being written to a table and it being visible via
-  GetRecords calls (default 10s).
-  
-### Encryption at rest
-* Supported by Scylla Enterprise (not in open-source). Needs to be enabled.
-### Tags
-* Tagging tables is fully supported, at CreateTable time (with the "Tags"
-  parameter) and later using TagResource, UntagResource and ListTagsOfResource.
-### Accounting and capping
-* Not yet supported. Mainly for multi-tenant cloud use, we need to track
-  resource use of individual requests (the API should also optionally
-  return this use), and be able to sum this use for different tenants and/or
-  tables, and possible cap use according to reservation.
-### Multi-tenant support
-* Not yet supported (related to authorization, accounting, etc.)
-### DAX (cache)
-* Not required. Scylla cache is rather advanced and there is no need to place
-  a cache in front of the database: https://www.scylladb.com/2017/07/31/database-caches-not-good/
-### Metrics
-* Several metrics are available through the Grafana/Prometheus stack:
-  https://docs.scylladb.com/operating-scylla/monitoring/
-  Those are different from the current DynamoDB metrics, but Scylla's
-  monitoring is rather advanced and provide more insights to the internals.
 
 ## Alternator-specific API
 
@@ -257,17 +148,25 @@ In Scylla terminology, the node receiving the request acts as the the
 *coordinator*, and often passes the request on to one or more other nodes -
 *replicas* which hold copies of the requested data.
 
-DynamoDB supports two consistency levels for reads, "eventual consistency"
-and "strong consistency". These two modes are implemented using Scylla's CL
-(consistency level) feature: All writes are done using the LOCAL_QUORUM
-consistency level, then strongly-consistent reads are done with
-LOCAL_QUORUM, while eventually-consistent reads are with just LOCAL_ONE.
+Alternator tables are stored as Scylla tables, each in a separate keyspace.
+Each keyspace is initialized when the corresponding Alternator table is
+created (with a CreateTable request). The replication factor (RF) for this
+keyspace is chosen at that point, depending on the size of the cluster:
+RF=3 is used on clusters with three or more nodes, and RF=1 is used for
+smaller clusters. Such smaller clusters are, of course, only recommended
+for tests because of the risk of data loss.
 
 Each table in Alternator is stored as a Scylla table in a separate
 keyspace. The DynamoDB key columns (hash and sort key) have known types,
 and become partition and clustering key columns of the Scylla table.
 All other attributes may be different for each row, so are stored in one
 map column in Scylla, and not as separate columns.
+
+DynamoDB supports two consistency levels for reads, "eventual consistency"
+and "strong consistency". These two modes are implemented using Scylla's CL
+(consistency level) feature: All writes are done using the `LOCAL_QUORUM`
+consistency level, then strongly-consistent reads are done with
+`LOCAL_QUORUM`, while eventually-consistent reads are with just `LOCAL_ONE`.
 
 In Scylla (and its inspiration, Cassandra), high write performance is
 achieved by ensuring that writes do not require reads from disk.
