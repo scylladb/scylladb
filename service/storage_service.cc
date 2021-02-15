@@ -741,7 +741,7 @@ void storage_service::async_handle_cdc_generation(db_clock::time_point ts) {
                 const bool using_this_gen = ss->do_handle_cdc_generation_intercept_nonfatal_errors(ts);
                 if (using_this_gen) {
                     cdc::update_streams_description(ts, sys_dist_ks,
-                            [ss] { return ss->get_token_metadata().count_normal_token_owners(); }, ss->_abort_source);
+                            [ss] { return ss->get_token_metadata().count_normal_token_owners(); }, ss->_abort_source).get();
                 }
                 return;
             } catch (cdc_generation_handling_nonfatal_exception& e) {
@@ -792,7 +792,7 @@ void storage_service::handle_cdc_generation(std::optional<db_clock::time_point> 
 
     if (using_this_gen) {
         cdc::update_streams_description(*ts, _sys_dist_ks.local_shared(),
-               [ss = this->shared_from_this()] { return ss->get_token_metadata().count_normal_token_owners(); }, _abort_source);
+               [ss = this->shared_from_this()] { return ss->get_token_metadata().count_normal_token_owners(); }, _abort_source).get();
     }
 }
 

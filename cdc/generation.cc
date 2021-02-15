@@ -400,34 +400,35 @@ static future<> do_update_streams_description(
     cdc_log.info("CDC description table successfully updated with generation {}.", streams_ts);
 }
 
-void update_streams_description(
+future<> update_streams_description(
         db_clock::time_point streams_ts,
         shared_ptr<db::system_distributed_keyspace> sys_dist_ks,
         noncopyable_function<unsigned()> get_num_token_owners,
         abort_source& abort_src) {
     try {
-        do_update_streams_description(streams_ts, *sys_dist_ks, { get_num_token_owners() }).get();
-    } catch(...) {
+        co_await do_update_streams_description(streams_ts, *sys_dist_ks, { get_num_token_owners() });
+    } catch (...) {
         cdc_log.warn(
             "Could not update CDC description table with generation {}: {}. Will retry in the background.",
             streams_ts, std::current_exception());
 
         // It is safe to discard this future: we keep system distributed keyspace alive.
-        (void)seastar::async([
-            streams_ts, sys_dist_ks, get_num_token_owners = std::move(get_num_token_owners), &abort_src
-        ] {
+        (void)(([] (db_clock::time_point streams_ts,
+                    shared_ptr<db::system_distributed_keyspace> sys_dist_ks,
+                    noncopyable_function<unsigned()> get_num_token_owners,
+                    abort_source& abort_src) -> future<> {
             while (true) {
-                sleep_abortable(std::chrono::seconds(60), abort_src).get();
+                co_await sleep_abortable(std::chrono::seconds(60), abort_src);
                 try {
-                    do_update_streams_description(streams_ts, *sys_dist_ks, { get_num_token_owners() }).get();
-                    return;
+                    co_await do_update_streams_description(streams_ts, *sys_dist_ks, { get_num_token_owners() });
+                    co_return;
                 } catch (...) {
                     cdc_log.warn(
                         "Could not update CDC description table with generation {}: {}. Will try again.",
                         streams_ts, std::current_exception());
                 }
             }
-        });
+        })(streams_ts, std::move(sys_dist_ks), std::move(get_num_token_owners), abort_src));
     }
 }
 
