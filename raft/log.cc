@@ -142,6 +142,10 @@ std::optional<term_t> log::term_for(index_t idx) const {
     return {};
 }
 
+const configuration& log::get_configuration() const {
+    return last_conf_idx() ? std::get<configuration>(_log[last_conf_idx() - _first_idx]->data) : _snapshot.config;
+}
+
 index_t log::maybe_append(std::vector<log_entry_ptr>&& entries) {
     assert(!entries.empty());
 

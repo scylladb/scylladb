@@ -43,7 +43,7 @@ future<> fsm::wait_max_log_length() {
 
 const configuration& fsm::get_configuration() const {
     check_is_leader();
-    return _tracker->get_configuration();
+    return _log.get_configuration();
 }
 
 template<typename T>
@@ -53,7 +53,7 @@ const log_entry& fsm::add_entry(T command) {
 
     if constexpr (std::is_same_v<T, configuration>) {
         if (_log.last_conf_idx() > _commit_idx ||
-            _tracker->get_configuration().is_joint()) {
+            _log.get_configuration().is_joint()) {
             // 4.1. Cluster membership changes/Safety.
             //
             // Leaders avoid overlapping configuration changes by
@@ -71,7 +71,7 @@ const log_entry& fsm::add_entry(T command) {
         // configuration for joint consensus (C_old,new) as a log
         // entry and replicates that entry using the normal Raft
         // mechanism.
-        configuration tmp(_tracker->get_configuration());
+        configuration tmp(_log.get_configuration());
         tmp.enter_joint(command.current);
         command = std::move(tmp);
     }
@@ -130,15 +130,13 @@ void fsm::update_current_term(term_t current_term)
 
 void fsm::set_configuration() {
 
-    configuration configuration = _log.last_conf_idx() ?
-        std::get<raft::configuration>(_log[_log.last_conf_idx()]->data) : _log.get_snapshot().config;
     // We unconditionally access configuration.current[0]
     // to identify which entries are committed.
-    assert(configuration.current.size() > 0);
+    assert(_log.get_configuration().current.size() > 0);
     if (is_leader()) {
-        _tracker->set_configuration(std::move(configuration), _log.last_idx());
+        _tracker->set_configuration(_log.get_configuration(), _log.last_idx());
     } else if (is_candidate()) {
-        _votes->set_configuration(std::move(configuration));
+        _votes->set_configuration(_log.get_configuration());
     }
 }
 
@@ -343,12 +341,12 @@ void fsm::maybe_commit() {
     _sm_events.signal();
 
     if (committed_conf_change) {
-        if (_tracker->get_configuration().is_joint()) {
+        if (_log.get_configuration().is_joint()) {
             // 4.3. Arbitrary configuration changes using joint consensus
             //
             // Once the joint consensus has been committed, the
             // system then transitions to the new configuration.
-            configuration cfg(_tracker->get_configuration());
+            configuration cfg(_log.get_configuration());
             cfg.leave_joint();
             _log.emplace_back(seastar::make_lw_shared<log_entry>({_current_term, _log.next_idx(), std::move(cfg)}));
             set_configuration();
