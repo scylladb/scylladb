@@ -248,4 +248,21 @@ std::ostream& operator<<(std::ostream& os, const votes& v) {
     return os;
 }
 
+std::ostream& operator<<(std::ostream& os, const vote_result& v) {
+    static const char *n;
+    switch (v) {
+    case vote_result::UNKNOWN:
+        n = "UNKNOWN";
+        break;
+    case vote_result::WON:
+        n = "WON";
+        break;
+    case vote_result::LOST:
+        n = "LOST";
+        break;
+    }
+    os << n;
+    return os;
+}
+
 } // end of namespace raft

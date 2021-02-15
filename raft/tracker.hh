@@ -124,12 +124,14 @@ public:
 enum class vote_result {
     // We haven't got enough responses yet, either because
     // the servers haven't voted or responses failed to arrive.
-    UNKNOWN,
+    UNKNOWN = 0,
     // This candidate has won the election
     WON,
     // The quorum of servers has voted against this candidate
     LOST,
 };
+
+std::ostream& operator<<(std::ostream& os, const vote_result& v);
 
 // State of election in a single quorum
 class election_tracker {
