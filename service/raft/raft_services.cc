@@ -44,7 +44,7 @@ void raft_services::init_rpc_verbs() {
             // Update the address mappings for the rpc module
             // in case the sender is encountered for the first time
             auto& rpc = self.get_rpc(dst);
-            rpc.update_address_mapping(from, std::move(addr));
+            self.update_address_mapping(from, std::move(addr));
             // Execute the actual message handling code
             return handler(rpc);
         });
@@ -124,9 +124,9 @@ raft_rpc& raft_services::get_rpc(raft::server_id id) {
 }
 
 raft_services::create_server_result raft_services::create_schema_server(raft::server_id id) {
-    auto rpc = std::make_unique<raft_rpc>(_ms, schema_raft_state_machine::group_id, id);
+    auto rpc = std::make_unique<raft_rpc>(_ms, *this, schema_raft_state_machine::group_id, id);
     auto& rpc_ref = *rpc;
-    auto fd = make_shared<raft_gossip_failure_detector>(_gossiper, rpc_ref);
+    auto fd = make_shared<raft_gossip_failure_detector>(_gossiper, *this);
     auto storage = std::make_unique<raft_sys_table_storage>(_qp, schema_raft_state_machine::group_id);
     auto state_machine = std::make_unique<schema_raft_state_machine>();
 
@@ -149,4 +149,29 @@ unsigned raft_services::shard_for_group(uint64_t group_id) const {
     }
     // We haven't settled yet on how to organize and manage (group_id -> shard_id) mapping
     throw std::runtime_error(format("Could not map raft group id {} to a corresponding shard id", group_id));
+}
+
+gms::inet_address raft_services::get_inet_address(raft::server_id id) const {
+    auto it = _server_addresses.find(id);
+    if (it == _server_addresses.end()) {
+        throw std::runtime_error(format("Destination raft server not found with id {}", id));
+    }
+    return it->second;
+}
+
+void raft_services::update_address_mapping(raft::server_id id, gms::inet_address addr) {
+    auto addr_it = _server_addresses.find(id);
+    if (addr_it == _server_addresses.end()) {
+        _server_addresses[id] = addr;
+        return;
+    }
+    if (addr_it->second != addr) {
+        throw std::runtime_error(
+            format("update_address_mapping: expected to get inet_address {} for raft server id {} (got {})",
+                addr_it->second, id, addr));
+    }
+}
+
+void raft_services::remove_address_mapping(raft::server_id id) {
+    _server_addresses.erase(id);
 }
