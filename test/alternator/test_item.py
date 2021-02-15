@@ -367,6 +367,13 @@ def test_getitem_attributes_to_get(dynamodb, test_table):
         expected_item = {k: item[k] for k in wanted if k in item}
         assert expected_item == got_item
 
+# Verify that it is forbidden to ask for the same attribute multiple times
+def test_getitem_attributes_to_get_duplicate(dynamodb, test_table):
+    p = random_string()
+    c = random_string()
+    with pytest.raises(ClientError, match='ValidationException.*Duplicate'):
+        test_table.get_item(Key={'p': p, 'c': c}, AttributesToGet=['a', 'a'], ConsistentRead=True)
+
 # Basic test for DeleteItem, with hash key only
 def test_delete_item_hash(test_table_s):
     p = random_string()

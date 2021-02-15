@@ -130,6 +130,27 @@ void condition_expression::append(condition_expression&& a, char op) {
     }, _expression);
 }
 
+void path::check_depth_limit() {
+    if (1 + _operators.size() > depth_limit) {
+        throw expressions_syntax_error(format("Document path exceeded {} nesting levels", depth_limit));
+    }
+}
+
+std::ostream& operator<<(std::ostream& os, const path& p) {
+    os << p.root();
+    for (const auto& op : p.operators()) {
+        std::visit(overloaded_functor {
+            [&] (const std::string& member) {
+                os << '.' << member;
+            },
+            [&] (unsigned index) {
+                os << '[' << index << ']';
+            }
+        }, op);
+    }
+    return os;
+}
+
 } // namespace parsed
 
 // The following resolve_*() functions resolve references in parsed
@@ -151,10 +172,9 @@ void condition_expression::append(condition_expression&& a, char op) {
 // we need to resolve the expression just once but then use it many times
 // (once for each item to be filtered).
 
-static void resolve_path(parsed::path& p,
+static std::optional<std::string> resolve_path_component(const std::string& column_name,
         const rjson::value* expression_attribute_names,
         std::unordered_set<std::string>& used_attribute_names) {
-    const std::string& column_name = p.root();
     if (column_name.size() > 0 && column_name.front() == '#') {
         if (!expression_attribute_names) {
             throw api_error::validation(
@@ -166,7 +186,30 @@ static void resolve_path(parsed::path& p,
                     format("ExpressionAttributeNames missing entry '{}' required by expression", column_name));
         }
         used_attribute_names.emplace(column_name);
-        p.set_root(std::string(rjson::to_string_view(*value)));
+        return std::string(rjson::to_string_view(*value));
+    }
+    return std::nullopt;
+}
+
+static void resolve_path(parsed::path& p,
+        const rjson::value* expression_attribute_names,
+        std::unordered_set<std::string>& used_attribute_names) {
+    std::optional<std::string> r = resolve_path_component(p.root(), expression_attribute_names, used_attribute_names);
+    if (r) {
+        p.set_root(std::move(*r));
+    }
+    for (auto& op : p.operators()) {
+        std::visit(overloaded_functor {
+            [&] (std::string& s) {
+                r = resolve_path_component(s, expression_attribute_names, used_attribute_names);
+                if (r) {
+                    s = std::move(*r);
+                }
+            },
+            [&] (unsigned index) {
+                // nothing to resolve
+            }
+        }, op);
     }
 }
 
@@ -603,52 +646,8 @@ std::unordered_map<std::string_view, function_handler_type*> function_handlers {
             }
             rjson::value v1 = calculate_value(f._parameters[0], caller, previous_item);
             rjson::value v2 = calculate_value(f._parameters[1], caller, previous_item);
-            // TODO: There's duplication here with check_BEGINS_WITH().
-            // But unfortunately, the two functions differ a bit.
-
-            // If one of v1 or v2 is malformed or has an unsupported type
-            // (not B or S), what we do depends on whether it came from
-            // the user's query (is_constant()), or the item. Unsupported
-            // values in the query result in an error, but if they are in
-            // the item, we silently return false (no match).
-            bool bad = false;
-            if (!v1.IsObject() || v1.MemberCount() != 1) {
-                bad = true;
-                if (f._parameters[0].is_constant()) {
-                    throw api_error::validation(format("{}: begins_with() encountered malformed AttributeValue: {}", caller, v1));
-                }
-            } else if (v1.MemberBegin()->name != "S" && v1.MemberBegin()->name != "B") {
-                bad = true;
-                if (f._parameters[0].is_constant()) {
-                    throw api_error::validation(format("{}: begins_with() supports only string or binary in AttributeValue: {}", caller, v1));
-                }
-            }
-            if (!v2.IsObject() || v2.MemberCount() != 1) {
-                bad = true;
-                if (f._parameters[1].is_constant()) {
-                    throw api_error::validation(format("{}: begins_with() encountered malformed AttributeValue: {}", caller, v2));
-                }
-            } else if (v2.MemberBegin()->name != "S" && v2.MemberBegin()->name != "B") {
-                bad = true;
-                if (f._parameters[1].is_constant()) {
-                    throw api_error::validation(format("{}: begins_with() supports only string or binary in AttributeValue: {}", caller, v2));
-                }
-            }
-            bool ret = false;
-            if (!bad) {
-                auto it1 = v1.MemberBegin();
-                auto it2 = v2.MemberBegin();
-                if (it1->name == it2->name) {
-                    if (it2->name == "S") {
-                        std::string_view val1 = rjson::to_string_view(it1->value);
-                        std::string_view val2 = rjson::to_string_view(it2->value);
-                        ret = val1.starts_with(val2);
-                    } else /* it2->name == "B" */ {
-                        ret = base64_begins_with(rjson::to_string_view(it1->value), rjson::to_string_view(it2->value));
-                    }
-                }
-            }
-            return to_bool_json(ret);
+            return to_bool_json(check_BEGINS_WITH(v1.IsNull() ? nullptr : &v1,  v2,
+                                    f._parameters[0].is_constant(), f._parameters[1].is_constant()));
         }
     },
     {"contains", [] (calculate_value_caller caller, const rjson::value* previous_item, const parsed::value::function_call& f) {
@@ -667,6 +666,55 @@ std::unordered_map<std::string_view, function_handler_type*> function_handlers {
     },
 };
 
+// Given a parsed::path and an item read from the table, extract the value
+// of a certain attribute path, such as "a" or "a.b.c[3]". Returns a null
+// value if the item or the requested attribute does not exist.
+// Note that the item is assumed to be encoded in JSON using DynamoDB
+// conventions - each level of a nested document is a map with one key -
+// a type (e.g., "M" for map) - and its value is the representation of
+// that value.
+static rjson::value extract_path(const rjson::value* item,
+        const parsed::path& p, calculate_value_caller caller) {
+    if (!item) {
+        return rjson::null_value();
+    }
+    const rjson::value* v = rjson::find(*item, p.root());
+    if (!v) {
+        return rjson::null_value();
+    }
+    for (const auto& op : p.operators()) {
+        if (!v->IsObject() || v->MemberCount() != 1) {
+            // This shouldn't happen. We shouldn't have stored malformed
+            // objects. But today Alternator does not validate the structure
+            // of nested documents before storing them, so this can happen on
+            // read.
+            throw api_error::validation(format("{}: malformed item read: {}", *item));
+        }
+        const char* type = v->MemberBegin()->name.GetString();
+        v = &(v->MemberBegin()->value);
+        std::visit(overloaded_functor {
+            [&] (const std::string& member) {
+                if (type[0] == 'M' && v->IsObject()) {
+                    v = rjson::find(*v, member);
+                } else {
+                    v = nullptr;
+                }
+            },
+            [&] (unsigned index) {
+                if (type[0] == 'L' && v->IsArray() && index < v->Size()) {
+                    v = &(v->GetArray()[index]);
+                } else {
+                    v = nullptr;
+                }
+            }
+        }, op);
+        if (!v) {
+            return rjson::null_value();
+        }
+    }
+    return rjson::copy(*v);
+}
+
 // Given a parsed::value, which can refer either to a constant value from
 // ExpressionAttributeValues, to the value of some attribute, or to a function
 // of other values, this function calculates the resulting value.
@@ -684,21 +732,12 @@ rjson::value calculate_value(const parsed::value& v,
             auto function_it = function_handlers.find(std::string_view(f._function_name));
             if (function_it == function_handlers.end()) {
                 throw api_error::validation(
-                        format("UpdateExpression: unknown function '{}' called.", f._function_name));
+                        format("{}: unknown function '{}' called.", caller, f._function_name));
             }
             return function_it->second(caller, previous_item, f);
         },
         [&] (const parsed::path& p) -> rjson::value {
-            if (!previous_item) {
-                return rjson::null_value();
-            }
-            std::string update_path = p.root();
-            if (p.has_operators()) {
-                // FIXME: support this
-                throw api_error::validation("Reading attribute paths not yet implemented");
-            }
-            const rjson::value* previous_value = rjson::find(*previous_item, update_path);
-            return previous_value ? rjson::copy(*previous_value) : rjson::null_value();
+            return extract_path(previous_item, p, caller);
         }
     }, v._value);
 }

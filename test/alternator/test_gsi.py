@@ -334,6 +334,33 @@ def test_gsi_wrong_type_attribute_update(test_table_gsi_2):
         test_table_gsi_2.update_item(Key={'p':  p}, AttributeUpdates={'x': {'Value': 3, 'Action': 'PUT'}})
     assert test_table_gsi_2.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'x': x}
 
+# Since a GSI key x cannot be a map or an array, in particular updates to
+# nested attributes like x.y or x[1] are not legal. The error that DynamoDB
+# reports is "Key attributes must be scalars; list random access '[]' and map
+# lookup '.' are not allowed: IndexKey: x".
+def test_gsi_wrong_type_attribute_update_nested(test_table_gsi_2):
+    p = random_string()
+    x = random_string()
+    test_table_gsi_2.put_item(Item={'p':  p, 'x': x})
+    # We can't write a map into a GSI key column, which in this case can only
+    # be a string and in any case can never be a map. DynamoDB and Alternator
+    # report different errors here: DynamoDB reports a type mismatch (exactly
+    # like in test test_gsi_wrong_type_attribute_update), but Alternator
+    # reports the obscure message "Malformed value object for key column x".
+    # Alternator's error message should probably be improved here, but let's
+    # not test it in this test.
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_gsi_2.update_item(Key={'p': p}, UpdateExpression='SET x = :val1',
+            ExpressionAttributeValues={':val1': {'a': 3, 'b': 4}})
+    # Here we try to set x.y for the GSI key column x. Again DynamoDB and
+    # Alternator produce different error messages - but both make sense.
+    # DynamoDB says "Key attributes must be scalars; list random access '[]'
+    # and map # lookup '.' are not allowed: IndexKey: x", while Alternator
+    # complains that "document paths not valid for this item: x.y".
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_gsi_2.update_item(Key={'p': p}, UpdateExpression='SET x.y = :val1',
+            ExpressionAttributeValues={':val1': 3})
+
 def test_gsi_wrong_type_attribute_batch(test_table_gsi_2):
     # In a BatchWriteItem, if any update is forbidden, the entire batch is
     # rejected, and none of the updates happen at all.

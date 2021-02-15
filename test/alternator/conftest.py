@@ -230,3 +230,19 @@ def filled_test_table(dynamodb):
 def scylla_only(dynamodb):
     if dynamodb.meta.client._endpoint.host.endswith('.amazonaws.com'):
         pytest.skip('Scylla-only feature not supported by AWS')
+
+# The "test_table_s_forbid_rmw" fixture is the same as test_table_s, except
+# with the "forbid_rmw" write isolation mode. This is useful for verifying
+# that writes that we think should not need a read-before-write in fact do
+# not need it.
+# Because forbid_rmw is a Scylla-only feature, this test is skipped when not
+# running against Scylla.
+@pytest.fixture(scope="session")
+def test_table_s_forbid_rmw(dynamodb, scylla_only):
+    table = create_test_table(dynamodb,
+        KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, ],
+        AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' } ])
+    arn = table.meta.client.describe_table(TableName=table.name)['Table']['TableArn']
+    table.meta.client.tag_resource(ResourceArn=arn, Tags=[{'Key': 'system:write_isolation', 'Value': 'forbid_rmw'}])
+    yield table
+    table.delete()
