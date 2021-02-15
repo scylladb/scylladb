@@ -19,6 +19,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 #include "service/raft/raft_rpc.hh"
+#include "gms/inet_address.hh"
 #include "gms/inet_address_serializer.hh"
 #include "serializer_impl.hh"
 #include "message/msg_addr.hh"

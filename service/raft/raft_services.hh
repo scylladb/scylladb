@@ -1,0 +1,73 @@
+/*
+ * Copyright (C) 2020 ScyllaDB
+ */
+
+/*
+ * This file is part of Scylla.
+ *
+ * Scylla is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * Scylla is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
+ */
+#pragma once
+
+#include <seastar/core/future.hh>
+#include <seastar/core/sharded.hh>
+
+#include "message/messaging_service_fwd.hh"
+#include "gms/inet_address.hh"
+#include "raft/raft.hh"
+#include "raft/server.hh"
+
+namespace cql3 {
+
+class query_processor;
+
+} // namespace cql3
+
+namespace gms {
+
+class gossiper;
+
+} // namespace gms
+
+class raft_rpc;
+
+// This class is responsible for creating, storing and accessing raft servers.
+// It also manages the raft rpc verbs initialization.
+//
+// `peering_sharded_service` inheritance is used to forward requests
+// to the owning shard for a given raft group_id.
+class raft_services : public seastar::peering_sharded_service<raft_services> {
+    using create_server_result = std::pair<std::unique_ptr<raft::server>, raft_rpc*>;
+
+    netw::messaging_service& _ms;
+    gms::gossiper& _gossiper;
+    cql3::query_processor& _qp;
+    std::unordered_map<raft::server_id, create_server_result> _servers;
+
+    void init_rpc_verbs();
+    seastar::future<> uninit_rpc_verbs();
+
+    create_server_result create_schema_server(raft::server_id id);
+
+public:
+
+    raft_services(netw::messaging_service& ms, gms::gossiper& gs, cql3::query_processor& qp);
+
+    void init();
+    seastar::future<> uninit();
+
+    raft_rpc& get_rpc(raft::server_id id);
+    void add_server(raft::server_id id, create_server_result srv);
+    unsigned shard_for_group(uint64_t group_id) const;
+};
