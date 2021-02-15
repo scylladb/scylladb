@@ -165,10 +165,11 @@ class votes {
     election_tracker _current;
     election_tracker _previous;
 public:
+    votes(configuration configuration);
+
     const server_address_set& voters() const {
         return _voters;
     }
-    void set_configuration(configuration configuration);
 
     void register_vote(server_id from, bool granted);
     vote_result tally_votes() const;

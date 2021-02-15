@@ -196,9 +196,10 @@ index_t tracker::committed(index_t prev_commit_idx) {
     }
 }
 
-void votes::set_configuration(configuration configuration) {
-    _configuration = std::move(configuration);
-    _voters = _configuration.current;
+votes::votes(configuration configuration)
+        :_configuration(std::move(configuration))
+        ,_voters(_configuration.current) {
+
     if (_configuration.is_joint()) {
         _voters.insert(_configuration.previous.begin(), _configuration.previous.end());
     }
