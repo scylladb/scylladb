@@ -469,6 +469,7 @@ for i in seastar/scripts/perftune.py seastar/scripts/seastar-addr2line; do
     relocate_python3 "$rprefix"/scripts "$i"
 done
 relocate_python3 "$rprefix"/scyllatop tools/scyllatop/scyllatop.py
+relocate_python3 "$rprefix"/scripts fix_system_distributed_tables.py
 
 if $nonroot; then
     sed -i -e "s#/var/lib/scylla#$rprefix#g" $rsysconfdir/scylla-server
