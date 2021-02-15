@@ -346,7 +346,6 @@ def test_update_item_returnvalues_updated_new(test_table_s):
 
 # Test the ReturnValues from an UpdateItem directly modifying a *nested*
 # attribute, in the relevant ReturnValue modes:
-@pytest.mark.xfail(reason="nested updates not yet implemented")
 def test_update_item_returnvalues_nested(test_table_s):
     p = random_string()
     test_table_s.put_item(Item={'p': p, 'a': {'b': 'dog', 'c': [1, 2, 3]}, 'd': 'cat'})
@@ -398,3 +397,37 @@ def test_update_item_returnvalues_nested(test_table_s):
         UpdateExpression='SET a.c[1] = :val, a.b = :val2',
         ExpressionAttributeValues={':val': 3, ':val2': 'dog'})
     assert ret['Attributes'] == {'p': p, 'a': {'b': 'dog', 'c': [1, 3, 3]}, 'd': 'cat' }
+    # Test with REMOVE, and one of them doing nothing (so shouldn't be in UPDATED_OLD)
+    ret=test_table_s.update_item(Key={'p': p}, ReturnValues='UPDATED_OLD',
+        UpdateExpression='REMOVE a.c[1], a.c[3]')
+    assert ret['Attributes'] == {'a': {'c': [3]}}  # a.c[3] did not exist
+    # When adding a new sub-attribute, UPDATED_OLD does not return anything,
+    # but UPDATED_NEW does:
+    ret=test_table_s.update_item(Key={'p': p}, ReturnValues='UPDATED_OLD',
+        UpdateExpression='SET a.x1 = :val',
+        ExpressionAttributeValues={':val': 8})
+    assert not 'Attributes' in ret
+    ret=test_table_s.update_item(Key={'p': p}, ReturnValues='UPDATED_NEW',
+        UpdateExpression='SET a.x2 = :val',
+        ExpressionAttributeValues={':val': 8})
+    assert ret['Attributes'] == {'a': {'x2': 8}}
+    # Nevertheless, there is one strange exception - although setting an array
+    # element *beyond* its end (e.g., a.c[100]) does add a new array item, it
+    # is *not* returned by UPDATED_NEW. I am not sure DynamoDB did this
+    # deliberately (is it a bug or a feature?), but it simplifies our
+    # implementation as well: after setting a.c[100], a.c[100] is not actually
+    # set (instead, maybe a.c[4] was set) so UPDATED_NEW returning a.c[100]
+    # returns nothing.
+    ret=test_table_s.update_item(Key={'p': p}, ReturnValues='UPDATED_NEW',
+        UpdateExpression='SET a.c[100] = :val',
+        ExpressionAttributeValues={':val': 70})
+    assert not 'Attributes' in ret
+    # When removing an item, it shouldn't appear in UPDATED_NEW. Again there
+    # a strange exception - which I'm not sure if we should consider it a
+    # DynamoDB bug or feature - but it simplifies our own implementation as
+    # well: if we remove a.c[1], the new item *will* have a new a.c[1] (the
+    # previous a.c[2] is shifted back), so this value is returned. This is
+    # very odd, but this is what DynamoDB does, so we should too...
+    ret=test_table_s.update_item(Key={'p': p}, ReturnValues='UPDATED_NEW',
+        UpdateExpression='REMOVE a.c[1]')
+    assert ret['Attributes'] == {'a': {'c': [70]}}

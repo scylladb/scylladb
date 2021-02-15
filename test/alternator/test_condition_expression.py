@@ -1262,7 +1262,6 @@ def test_update_condition_other_funcs(test_table_s):
 # ConditionExpressions also allows reading nested attributes, and we should
 # support that too. This test just checks a few random operators - we don't
 # test all the different operators here.
-@pytest.mark.xfail(reason="nested attributes not yet implemented in ConditionExpression")
 def test_update_condition_nested_attributes(test_table_s):
     p = random_string()
     test_table_s.update_item(Key={'p': p},
@@ -1276,6 +1275,21 @@ def test_update_condition_nested_attributes(test_table_s):
         UpdateExpression='SET c = :val',
             ConditionExpression='b.x < b.y[1]',
             ExpressionAttributeValues={':val': 2})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['c'] == 2
+    # Also check the case of a failing condition
+    with pytest.raises(ClientError, match='ConditionalCheckFailedException'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET c = :val',
+                ConditionExpression='b.x < b.y[0]',
+            ExpressionAttributeValues={':val': 3})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['c'] == 2
+    # A condition involving an attribute which doesn't exist results in
+    # failed condition - not an error.
+    with pytest.raises(ClientError, match='ConditionalCheckFailedException'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET c = :val',
+                ConditionExpression='b.z < b.y[100]',
+            ExpressionAttributeValues={':val': 4})
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['c'] == 2
 
 # All the previous tests refered to attributes using their name directly.
@@ -1293,16 +1307,15 @@ def test_update_condition_attribute_reference(test_table_s):
             ExpressionAttributeValues={':val': 1})
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['c'] == 1
 
-@pytest.mark.xfail(reason="nested attributes not yet implemented in ConditionExpression")
 def test_update_condition_nested_attribute_reference(test_table_s):
     p = random_string()
     test_table_s.update_item(Key={'p': p},
-            AttributeUpdates={'and': {'Value': {'or': 1}, 'Action': 'PUT'}})
+            AttributeUpdates={'and': {'Value': {'or': 2}, 'Action': 'PUT'}})
     test_table_s.update_item(Key={'p': p},
         UpdateExpression='SET c = :val',
-            ConditionExpression='attribute_exists (#name1.#name2)',
+            ConditionExpression='#name1.#name2 = :two',
             ExpressionAttributeNames={'#name1': 'and', '#name2': 'or'},
-            ExpressionAttributeValues={':val': 1})
+            ExpressionAttributeValues={':val': 1, ':two': 2})
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['c'] == 1
 
 # All the previous tests involved a single condition. The following tests

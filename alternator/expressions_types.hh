@@ -49,15 +49,23 @@ class path {
     // dot (e.g., ".xyz").
     std::string _root;
     std::vector<std::variant<std::string, unsigned>> _operators;
+    // It is useful to limit the depth of a user-specified path, because is
+    // allows us to use recursive algorithms without worrying about recursion
+    // depth. DynamoDB officially limits the length of paths to 32 components
+    // (including the root) so let's use the same limit.
+    static constexpr unsigned depth_limit = 32;
+    void check_depth_limit();
 public:
     void set_root(std::string root) {
         _root = std::move(root);
     }
     void add_index(unsigned i) {
         _operators.emplace_back(i);
+        check_depth_limit();
     }
     void add_dot(std::string(name)) {
         _operators.emplace_back(std::move(name));
+        check_depth_limit();
     }
     const std::string& root() const {
         return _root;
@@ -65,6 +73,13 @@ public:
     bool has_operators() const {
         return !_operators.empty();
     }
+    const std::vector<std::variant<std::string, unsigned>>& operators() const {
+        return _operators;
+    }
+    std::vector<std::variant<std::string, unsigned>>& operators() {
+        return _operators;
+    }
+    friend std::ostream& operator<<(std::ostream&, const path&);
 };
 
 // When an expression is first parsed, all constants are references, like

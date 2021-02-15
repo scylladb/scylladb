@@ -202,7 +202,7 @@ static schema_ptr get_table(service::storage_proxy& proxy, const rjson::value& r
     if (!schema) {
         // if we get here then the name was missing, since syntax or missing actual CF 
         // checks throw. Slow path, but just call get_table_name to generate exception. 
-        get_table_name(request);        
+        get_table_name(request);
     }
     return schema;
 }
@@ -1882,18 +1882,182 @@ static std::string get_item_type_string(const rjson::value& v) {
     return it->name.GetString();
 }
 
+// attrs_to_get saves for each top-level attribute an attrs_to_get_node,
+// a hierarchy of subparts that need to be kept. The following function
+// takes a given JSON value and drops its parts which weren't asked to be
+// kept. It modifies the given JSON value, or returns false to signify that
+// the entire object should be dropped.
+// Note that The JSON value is assumed to be encoded using the DynamoDB
+// conventions - i.e., it is really a map whose key has a type string,
+// and the value is the real object.
+template<typename T>
+static bool hierarchy_filter(rjson::value& val, const attribute_path_map_node<T>& h) {
+    if (!val.IsObject() || val.MemberCount() != 1) {
+        // This shouldn't happen. We shouldn't have stored malformed objects.
+        // But today Alternator does not validate the structure of nested
+        // documents before storing them, so this can happen on read.
+        throw api_error::internal(format("Malformed value object read: {}", val));
+    }
+    const char* type = val.MemberBegin()->name.GetString();
+    rjson::value& v = val.MemberBegin()->value;
+    if (h.has_members()) {
+        const auto& members = h.get_members();
+        if (type[0] != 'M' || !v.IsObject()) {
+            // If v is not an object (dictionary, map), none of the members
+            // can match.
+            return false;
+        }
+        rjson::value newv = rjson::empty_object();
+        for (auto it = v.MemberBegin(); it != v.MemberEnd(); ++it) {
+            std::string attr = it->name.GetString();
+            auto x = members.find(attr);
+            if (x != members.end()) {
+                if (x->second) {
+                    // Only a part of this attribute is to be filtered, do it.
+                    if (hierarchy_filter(it->value, *x->second)) {
+                        rjson::set_with_string_name(newv, attr, std::move(it->value));
+                    }
+                } else {
+                    // The entire attribute is to be kept
+                    rjson::set_with_string_name(newv, attr, std::move(it->value));
+                }
+            }
+        }
+        if (newv.MemberCount() == 0) {
+            return false;
+        }
+        v = newv;
+    } else if (h.has_indexes()) {
+        const auto& indexes = h.get_indexes();
+        if (type[0] != 'L' || !v.IsArray()) {
+            return false;
+        }
+        rjson::value newv = rjson::empty_array();
+        const auto& a = v.GetArray();
+        for (unsigned i = 0; i < v.Size(); i++) {
+            auto x = indexes.find(i);
+            if (x != indexes.end()) {
+                if (x->second) {
+                    if (hierarchy_filter(a[i], *x->second)) {
+                        rjson::push_back(newv, std::move(a[i]));
+                    }
+                } else {
+                    // The entire attribute is to be kept
+                    rjson::push_back(newv, std::move(a[i]));
+                }
+            }
+        }
+        if (newv.Size() == 0) {
+            return false;
+        }
+        v = newv;
+    }
+    return true;
+}
+
+// Add a path to a attribute_path_map. Throws a validation error if the path
+// "overlaps" with one already in the filter (one is a sub-path of the other)
+// or "conflicts" with it (both a member and index is requested).
+template<typename T>
+void attribute_path_map_add(const char* source, attribute_path_map<T>& map, const parsed::path& p, T value = {}) {
+   using node = attribute_path_map_node<T>;
+    // The first step is to look for the top-level attribute (p.root()):
+    auto it = map.find(p.root());
+    if (it == map.end()) {
+        if (p.has_operators()) {
+            it = map.emplace(p.root(), node {std::nullopt}).first;
+        } else {
+            (void) map.emplace(p.root(), node {std::move(value)}).first;
+            // Value inserted for top-level node. We're done.
+            return;
+        }
+    } else if(!p.has_operators()) {
+        // If p is top-level and we already have it or a part of it
+        // in map, it's a forbidden overlapping path.
+        throw api_error::validation(format(
+            "Invalid {}: two document paths overlap at {}", source, p.root()));
+    } else if (it->second.has_value()) {
+        // If we're here, it != map.end() && p.has_operators && it->second.has_value().
+        // This means the top-level attribute already has a value, and we're
+        // trying to add a non-top-level value. It's an overlap.
+        throw api_error::validation(format("Invalid {}: two document paths overlap at {}", source, p.root()));
+    }
+    node* h = &it->second;
+    // The second step is to walk h from the top-level node to the inner node
+    // where we're supposed to insert the value:
+    for (const auto& op : p.operators()) {
+        std::visit(overloaded_functor {
+            [&] (const std::string& member) {
+                if (h->is_empty()) {
+                    *h = node {typename node::members_t()};
+                } else if (h->has_indexes()) {
+                    throw api_error::validation(format("Invalid {}: two document paths conflict at {}", source, p));
+                } else if (h->has_value()) {
+                    throw api_error::validation(format("Invalid {}: two document paths overlap at {}", source, p));
+                }
+                typename node::members_t& members = h->get_members();
+                auto it = members.find(member);
+                if (it == members.end()) {
+                    it = members.insert({member, make_shared<node>()}).first;
+                }
+                h = it->second.get();
+            },
+            [&] (unsigned index) {
+                if (h->is_empty()) {
+                    *h = node {typename node::indexes_t()};
+                } else if (h->has_members()) {
+                    throw api_error::validation(format("Invalid {}: two document paths conflict at {}", source, p));
+                } else if (h->has_value()) {
+                    throw api_error::validation(format("Invalid {}: two document paths overlap at {}", source, p));
+                }
+                typename node::indexes_t& indexes = h->get_indexes();
+                auto it = indexes.find(index);
+                if (it == indexes.end()) {
+                    it = indexes.insert({index, make_shared<node>()}).first;
+                }
+                h = it->second.get();
+            }
+        }, op);
+    }
+    // Finally, insert the value in the node h.
+    if (h->is_empty()) {
+        *h = node {std::move(value)};
+    } else {
+        throw api_error::validation(format("Invalid {}: two document paths overlap at {}", source, p));
+    }
+}
+
+// A very simplified version of the above function for the special case of
+// adding only top-level attribute. It's not only simpler, we also use a
+// different error message, referring to a "duplicate attribute"instead of
+// "overlapping paths". DynamoDB also has this distinction (errors in
+// AttributesToGet refer to duplicates, not overlaps, but errors in
+// ProjectionExpression refer to overlap - even if it's an exact duplicate).
+template<typename T>
+void attribute_path_map_add(const char* source, attribute_path_map<T>& map, const std::string& attr, T value = {}) {
+   using node = attribute_path_map_node<T>;
+    auto it = map.find(attr);
+    if (it == map.end()) {
+        map.emplace(attr, node {std::move(value)});
+    } else {
+        throw api_error::validation(format(
+            "Invalid {}: Duplicate attribute: {}", source, attr));
+    }
+}
+
 // calculate_attrs_to_get() takes either AttributesToGet or
 // ProjectionExpression parameters (having both is *not* allowed),
 // and returns the list of cells we need to read, or an empty set when
 // *all* attributes are to be returned.
-// In our current implementation, only top-level attributes are stored
-// as cells, and nested documents are stored serialized as JSON.
-// So this function currently returns only the the top-level attributes
-// but we also need to add, after the query, filtering to keep only
-// the parts of the JSON attributes that were chosen in the paths'
-// operators. Because we don't have such filtering yet (FIXME), we fail here
-// if the requested paths are anything but top-level attributes.
-std::unordered_set<std::string> calculate_attrs_to_get(const rjson::value& req, std::unordered_set<std::string>& used_attribute_names) {
+// However, in our current implementation, only top-level attributes are
+// stored as separate cells - a nested document is stored serialized together
+// (as JSON) in the same cell. So this function return a map - each key is the
+// top-level attribute we will need need to read, and the value for each
+// top-level attribute is the partial hierarchy (struct hierarchy_filter)
+// that we will need to extract from that serialized JSON.
+// For example, if ProjectionExpression lists a.b and a.c[2], we
+// return one top-level attribute name, "a", with the value "{b, c[2]}".
+static attrs_to_get calculate_attrs_to_get(const rjson::value& req, std::unordered_set<std::string>& used_attribute_names) {
     const bool has_attributes_to_get = req.HasMember("AttributesToGet");
     const bool has_projection_expression = req.HasMember("ProjectionExpression");
     if (has_attributes_to_get && has_projection_expression) {
@@ -1902,9 +2066,9 @@ std::unordered_set<std::string> calculate_attrs_to_get(const rjson::value& req, 
     }
     if (has_attributes_to_get) {
         const rjson::value& attributes_to_get = req["AttributesToGet"];
-        std::unordered_set<std::string> ret;
+        attrs_to_get ret;
         for (auto it = attributes_to_get.Begin(); it != attributes_to_get.End(); ++it) {
-            ret.insert(it->GetString());
+            attribute_path_map_add("AttributesToGet", ret, it->GetString());
         }
         return ret;
     } else if (has_projection_expression) {
@@ -1917,24 +2081,13 @@ std::unordered_set<std::string> calculate_attrs_to_get(const rjson::value& req, 
             throw api_error::validation(e.what());
         }
         resolve_projection_expression(paths_to_get, expression_attribute_names, used_attribute_names);
-        std::unordered_set<std::string> seen_column_names;
-        auto ret = boost::copy_range<std::unordered_set<std::string>>(paths_to_get |
-            boost::adaptors::transformed([&] (const parsed::path& p) {
-                if (p.has_operators()) {
-                    // FIXME: this check will need to change when we support non-toplevel attributes
-                    throw api_error::validation("Non-toplevel attributes in ProjectionExpression not yet implemented");
-                }
-                if (!seen_column_names.insert(p.root()).second) {
-                    // FIXME: this check will need to change when we support non-toplevel attributes
-                    throw api_error::validation(
-                            format("Invalid ProjectionExpression: two document paths overlap with each other: {} and {}.",
-                                    p.root(), p.root()));
-                }
-                return p.root();
-            }));
+        attrs_to_get ret;
+        for (const parsed::path& p : paths_to_get) {
+            attribute_path_map_add("ProjectionExpression", ret, p);
+        }
         return ret;
     }
-    // An empty set asks to read everything
+    // An empty map asks to read everything
     return {};
 }
 
@@ -1955,7 +2108,7 @@ std::unordered_set<std::string> calculate_attrs_to_get(const rjson::value& req, 
  */ 
 void executor::describe_single_item(const cql3::selection::selection& selection,
     const std::vector<bytes_opt>& result_row,
-    const std::unordered_set<std::string>& attrs_to_get,
+    const attrs_to_get& attrs_to_get,
     rjson::value& item,
     bool include_all_embedded_attributes) 
 {
@@ -1976,7 +2129,16 @@ void executor::describe_single_item(const cql3::selection::selection& selection,
                 std::string attr_name = value_cast<sstring>(entry.first);
                 if (include_all_embedded_attributes || attrs_to_get.empty() || attrs_to_get.contains(attr_name)) {
                     bytes value = value_cast<bytes>(entry.second);
-                    rjson::set_with_string_name(item, attr_name, deserialize_item(value));
+                    rjson::value v = deserialize_item(value);
+                    auto it = attrs_to_get.find(attr_name);
+                    if (it != attrs_to_get.end()) {
+                        // attrs_to_get may have asked for only part of this attribute:
+                        if (hierarchy_filter(v, it->second)) {
+                            rjson::set_with_string_name(item, attr_name, std::move(v));
+                        }
+                    } else {
+                        rjson::set_with_string_name(item, attr_name, std::move(v));
+                    }
                 }
             }
         }
@@ -1988,7 +2150,7 @@ std::optional<rjson::value> executor::describe_single_item(schema_ptr schema,
         const query::partition_slice& slice,
         const cql3::selection::selection& selection,
         const query::result& query_result,
-        const std::unordered_set<std::string>& attrs_to_get) {
+        const attrs_to_get& attrs_to_get) {
     rjson::value item = rjson::empty_object();
 
     cql3::selection::result_set_builder builder(selection, gc_clock::now(), cql_serialization_format::latest());
@@ -2024,8 +2186,16 @@ static bool check_needs_read_before_write(const parsed::value& v) {
     }, v._value);
 }
 
-static bool check_needs_read_before_write(const parsed::update_expression& update_expression) {
-    return boost::algorithm::any_of(update_expression.actions(), [](const parsed::update_expression::action& action) {
+static bool check_needs_read_before_write(const attribute_path_map<parsed::update_expression::action>& update_expression) {
+    return boost::algorithm::any_of(update_expression, [](const auto& p) {
+        if (!p.second.has_value()) {
+            // If the action is not on the top-level attribute, we need to
+            // read the old item: we change only a part of the top-level
+            // attribute, and write the full top-level attribute back.
+            return true;
+        }
+        // Otherwise, the action p.second.get_value() is just on top-level
+        // attribute. Check if it needs read-before-write:
         return std::visit(overloaded_functor {
             [&] (const parsed::update_expression::action::set& a) -> bool {
                 return check_needs_read_before_write(a._rhs._v1) || (a._rhs._op != 'v' && check_needs_read_before_write(a._rhs._v2));
@@ -2039,7 +2209,7 @@ static bool check_needs_read_before_write(const parsed::update_expression& updat
             [&] (const parsed::update_expression::action::del& a) -> bool {
                 return true;
             }
-        }, action._action);
+        }, p.second.get_value()._action);
     });
 }
 
@@ -2048,7 +2218,11 @@ public:
     // Some information parsed during the constructor to check for input
     // errors, and cached to be used again during apply().
     rjson::value* _attribute_updates;
-    parsed::update_expression _update_expression;
+    // Instead of keeping a parsed::update_expression with an unsorted list
+    // list of actions, we keep them in an attribute_path_map which groups
+    // them by top-level attribute, and detects forbidden overlaps/conflicts.
+    attribute_path_map<parsed::update_expression::action> _update_expression;
+
     parsed::condition_expression _condition_expression;
 
     update_item_operation(service::storage_proxy& proxy, rjson::value&& request);
@@ -2079,15 +2253,21 @@ update_item_operation::update_item_operation(service::storage_proxy& proxy, rjso
             throw api_error::validation("UpdateExpression must be a string");
         }
         try {
-            _update_expression = parse_update_expression(update_expression->GetString());
-            resolve_update_expression(_update_expression,
+            parsed::update_expression expr = parse_update_expression(update_expression->GetString());
+            resolve_update_expression(expr,
                     expression_attribute_names, expression_attribute_values,
                     used_attribute_names, used_attribute_values);
+            if (expr.empty()) {
+                throw api_error::validation("Empty expression in UpdateExpression is not allowed");
+            }
+            for (auto& action : expr.actions()) {
+                // Unfortunately we need to copy the action's path, because
+                // we std::move the action object.
+                auto p = action._path;
+                attribute_path_map_add("UpdateExpression", _update_expression, p, std::move(action));
+            }
         } catch(expressions_syntax_error& e) {
             throw api_error::validation(e.what());
-        }
-        if (_update_expression.empty()) {
-            throw api_error::validation("Empty expression in UpdateExpression is not allowed");
         }
     }
     _attribute_updates = rjson::find(_request, "AttributeUpdates");
@@ -2130,6 +2310,187 @@ update_item_operation::needs_read_before_write() const {
            (_returnvalues != returnvalues::NONE && _returnvalues != returnvalues::UPDATED_NEW);
 }
 
+// action_result() returns the result of applying an UpdateItem action -
+// this result is either a JSON object or an unset optional which indicates
+// the action was a deletion. The caller (update_item_operation::apply()
+// below) will either write this JSON as the content of a column, or
+// use it as a piece in a bigger top-level attribute.
+static std::optional<rjson::value> action_result(
+        const parsed::update_expression::action& action,
+        const rjson::value* previous_item) {
+    return std::visit(overloaded_functor {
+        [&] (const parsed::update_expression::action::set& a) -> std::optional<rjson::value> {
+            return calculate_value(a._rhs, previous_item);
+        },
+        [&] (const parsed::update_expression::action::remove& a) -> std::optional<rjson::value> {
+            return std::nullopt;
+        },
+        [&] (const parsed::update_expression::action::add& a) -> std::optional<rjson::value> {
+            parsed::value base;
+            parsed::value addition;
+            base.set_path(action._path);
+            addition.set_constant(a._valref);
+            rjson::value v1 = calculate_value(base, calculate_value_caller::UpdateExpression, previous_item);
+            rjson::value v2 = calculate_value(addition, calculate_value_caller::UpdateExpression, previous_item);
+            rjson::value result;
+            // An ADD can be used to create a new attribute (when
+            // v1.IsNull()) or to add to a pre-existing attribute:
+            if (v1.IsNull()) {
+                std::string v2_type = get_item_type_string(v2);
+                if (v2_type == "N" || v2_type == "SS" || v2_type == "NS" || v2_type == "BS") {
+                    result = v2;
+                } else {
+                    throw api_error::validation(format("An operand in the update expression has an incorrect data type: {}", v2));
+                }
+            } else {
+                std::string v1_type = get_item_type_string(v1);
+                if (v1_type == "N") {
+                    if (get_item_type_string(v2) != "N") {
+                        throw api_error::validation(format("Incorrect operand type for operator or function. Expected {}: {}", v1_type, rjson::print(v2)));
+                    }
+                    result = number_add(v1, v2);
+                } else if (v1_type == "SS" || v1_type == "NS" || v1_type == "BS") {
+                    if (get_item_type_string(v2) != v1_type) {
+                        throw api_error::validation(format("Incorrect operand type for operator or function. Expected {}: {}", v1_type, rjson::print(v2)));
+                    }
+                    result = set_sum(v1, v2);
+                } else {
+                    throw api_error::validation(format("An operand in the update expression has an incorrect data type: {}", v1));
+                }
+            }
+            return result;
+        },
+        [&] (const parsed::update_expression::action::del& a) -> std::optional<rjson::value> {
+            parsed::value base;
+            parsed::value subset;
+            base.set_path(action._path);
+            subset.set_constant(a._valref);
+            rjson::value v1 = calculate_value(base, calculate_value_caller::UpdateExpression, previous_item);
+            rjson::value v2 = calculate_value(subset, calculate_value_caller::UpdateExpression, previous_item);
+            if (!v1.IsNull()) {
+                return set_diff(v1, v2);
+            }
+            // When we return nullopt here, we ask to *delete* this attribute,
+            // which is unnecessary because we know the attribute does not
+            // exist anyway. This is a waste, but a small one. Note that also
+            // for the "remove" action above we don't bother to check if the
+            // previous_item add anything to remove.
+            return std::nullopt;
+        }
+    }, action._action);
+}
+
+// Print an attribute_path_map_node<action> as the list of paths it contains:
+static std::ostream& operator<<(std::ostream& out, const attribute_path_map_node<parsed::update_expression::action>& h) {
+    if (h.has_value()) {
+        out << " " << h.get_value()._path;
+    } else if (h.has_members()) {
+        for (auto& member : h.get_members()) {
+            out << *member.second;
+        }
+    } else if (h.has_indexes()) {
+        for (auto& index : h.get_indexes()) {
+            out << *index.second;
+        }
+    }
+    return out;
+}
+
+// Apply the hierarchy of actions in an attribute_path_map_node<action> to a
+// JSON object which uses DynamoDB's serialization conventions. The complete,
+// unmodified, previous_item is also necessary for the right-hand sides of the
+// actions. Modifies obj in-place or returns false if it is to be removed.
+static bool hierarchy_actions(
+        rjson::value& obj,
+        const attribute_path_map_node<parsed::update_expression::action>& h,
+        const rjson::value* previous_item)
+{
+    if (!obj.IsObject() || obj.MemberCount() != 1) {
+        // This shouldn't happen. We shouldn't have stored malformed objects.
+        // But today Alternator does not validate the structure of nested
+        // documents before storing them, so this can happen on read.
+        throw api_error::validation(format("Malformed value object read: {}", obj));
+    }
+    const char* type = obj.MemberBegin()->name.GetString();
+    rjson::value& v = obj.MemberBegin()->value;
+    if (h.has_value()) {
+        // Action replacing everything in this position in the hierarchy
+        std::optional<rjson::value> newv = action_result(h.get_value(), previous_item);
+        if (newv) {
+            obj = std::move(*newv);
+        } else {
+            return false;
+        }
+    } else if (h.has_members()) {
+        if (type[0] != 'M' || !v.IsObject()) {
+            // A .something on a non-map doesn't work.
+            throw api_error::validation(format("UpdateExpression: document paths not valid for this item:{}", h));
+        }
+        for (const auto& member : h.get_members()) {
+            std::string attr = member.first;
+            const attribute_path_map_node<parsed::update_expression::action>& subh = *member.second;
+            rjson::value *subobj = rjson::find(v, attr);
+            if (subobj) {
+                if (!hierarchy_actions(*subobj, subh, previous_item)) {
+                    rjson::remove_member(v, attr);
+                }
+            } else {
+                // When a.b does not exist, setting a.b itself (i.e.
+                // subh.has_value()) is fine, but setting a.b.c is not.
+                if (subh.has_value()) {
+                    std::optional<rjson::value> newv = action_result(subh.get_value(), previous_item);
+                    if (newv) {
+                        rjson::set_with_string_name(v, attr, std::move(*newv));
+                    } else {
+                        throw api_error::validation(format("Can't remove document path {} - not present in item",
+                            subh.get_value()._path));
+                    }
+                } else {
+                    throw api_error::validation(format("UpdateExpression: document paths not valid for this item:{}", h));
+                }
+            }
+        }
+    } else if (h.has_indexes()) {
+        if (type[0] != 'L' || !v.IsArray()) {
+            // A [i] on a non-list doesn't work.
+            throw api_error::validation(format("UpdateExpression: document paths not valid for this item:{}", h));
+        }
+        unsigned nremoved = 0;
+        for (const auto& index : h.get_indexes()) {
+            unsigned i = index.first - nremoved;
+            const attribute_path_map_node<parsed::update_expression::action>& subh = *index.second;
+            if (i < v.Size()) {
+                if (!hierarchy_actions(v[i], subh, previous_item)) {
+                    v.Erase(v.Begin() + i);
+                    // If we have the actions "REMOVE a[1] SET a[3] = :val",
+                    // the index 3 refers to the original indexes, before any
+                    // items were removed. So we offset the next indexes
+                    // (which are guaranteed to be higher than i - indexes is
+                    // a sorted map) by an increased "nremoved".
+                    nremoved++;
+                }
+            } else {
+                // If a[7] does not exist, setting a[7] itself (i.e.
+                // subh.has_value()) is fine - and appends an item, though
+                // not necessarily with index 7. But setting a[7].b will
+                // not work.
+                if (subh.has_value()) {
+                    std::optional<rjson::value> newv = action_result(subh.get_value(), previous_item);
+                    if (newv) {
+                        rjson::push_back(v, std::move(*newv));
+                    } else {
+                        // Removing a[7] when the list has fewer elements is
+                        // silently ignored. It's not considered an error.
+                    }
+                } else {
+                    throw api_error::validation(format("UpdateExpression: document paths not valid for this item:{}", h));
+                }
+            }
+        }
+    }
+    return true;
+}
+
 std::optional<mutation>
 update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::timestamp_type ts) const {
     if (!verify_expected(_request, previous_item.get()) ||
@@ -2144,17 +2505,37 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
     auto& row = m.partition().clustered_row(*_schema, _ck);
     attribute_collector attrs_collector;
     bool any_updates = false;
-    auto do_update = [&] (bytes&& column_name, const rjson::value& json_value) {
+    auto do_update = [&] (bytes&& column_name, const rjson::value& json_value,
+                          const attribute_path_map_node<parsed::update_expression::action>* h = nullptr) {
         any_updates = true;
-        if (_returnvalues == returnvalues::ALL_NEW ||
-            _returnvalues == returnvalues::UPDATED_NEW) {
+        if (_returnvalues == returnvalues::ALL_NEW) {
             rjson::set_with_string_name(_return_attributes,
-                    to_sstring_view(column_name), rjson::copy(json_value));
+                to_sstring_view(column_name), rjson::copy(json_value));
+        } else if (_returnvalues == returnvalues::UPDATED_NEW) {
+            rjson::value&& v = rjson::copy(json_value);
+            if (h) {
+                // If the operation was only on specific attribute paths,
+                // leave only them in _return_attributes.
+                if (hierarchy_filter(v, *h)) {
+                    rjson::set_with_string_name(_return_attributes,
+                        to_sstring_view(column_name), std::move(v));
+                }
+            } else {
+                rjson::set_with_string_name(_return_attributes,
+                    to_sstring_view(column_name), std::move(v));
+            }
         } else if (_returnvalues == returnvalues::UPDATED_OLD && previous_item) {
             std::string_view cn =  to_sstring_view(column_name);
             const rjson::value* col = rjson::find(*previous_item, cn);
             if (col) {
-                rjson::set_with_string_name(_return_attributes, cn, rjson::copy(*col));
+                rjson::value&& v = rjson::copy(*col);
+                if (h) {
+                    if (hierarchy_filter(v, *h)) {
+                        rjson::set_with_string_name(_return_attributes, cn, std::move(v));
+                    }
+                } else {
+                    rjson::set_with_string_name(_return_attributes, cn, std::move(v));
+                }
             }
         }
         const column_definition* cdef = _schema->get_column_definition(column_name);
@@ -2196,7 +2577,7 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
     // can just move previous_item later, when we don't need it any more.
     if (_returnvalues == returnvalues::ALL_NEW) {
         if (previous_item) {
-            _return_attributes = std::move(*previous_item);
+            _return_attributes = rjson::copy(*previous_item);
         } else {
             // If there is no previous item, usually a new item is created
             // and contains they given key. This may be cancelled at the end
@@ -2209,88 +2590,44 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
     }
 
     if (!_update_expression.empty()) {
-        std::unordered_set<std::string> seen_column_names;
-        for (auto& action : _update_expression.actions()) {
-            if (action._path.has_operators()) {
-                // FIXME: implement this case
-                throw api_error::validation("UpdateItem support for nested updates not yet implemented");
-            }
-            std::string column_name = action._path.root();
+        for (auto& actions : _update_expression) {
+            // The actions of _update_expression are grouped by top-level
+            // attributes. Here, all actions in actions.second share the same
+            // top-level attribute actions.first.
+            std::string column_name = actions.first;
             const column_definition* cdef = _schema->get_column_definition(to_bytes(column_name));
             if (cdef && cdef->is_primary_key()) {
-                throw api_error::validation(
-                        format("UpdateItem cannot update key column {}", column_name));
+                throw api_error::validation(format("UpdateItem cannot update key column {}", column_name));
             }
-            // DynamoDB forbids multiple updates in the same expression to
-            // modify overlapping document paths. Updates of one expression
-            // have the same timestamp, so it's unclear which would "win".
-            // FIXME: currently, without full support for document paths,
-            // we only check if the paths' roots are the same.
-            if (!seen_column_names.insert(column_name).second) {
-                throw api_error::validation(
-                        format("Invalid UpdateExpression: two document paths overlap with each other: {} and {}.",
-                                column_name, column_name));
-            }
-            std::visit(overloaded_functor {
-                [&] (const parsed::update_expression::action::set& a) {
-                    auto value = calculate_value(a._rhs, previous_item.get());
-                    do_update(to_bytes(column_name), value);
-                },
-                [&] (const parsed::update_expression::action::remove& a) {
+            if (actions.second.has_value()) {
+                // An action on a top-level attribute column_name. The single
+                // action is actions.second.get_value(). We can simply invoke
+                // the action and replace the attribute with its result:
+                std::optional<rjson::value> result = action_result(actions.second.get_value(), previous_item.get());
+                if (result) {
+                    do_update(to_bytes(column_name), *result);
+                } else {
                     do_delete(to_bytes(column_name));
-                },
-                [&] (const parsed::update_expression::action::add& a) {
-                    parsed::value base;
-                    parsed::value addition;
-                    base.set_path(action._path);
-                    addition.set_constant(a._valref);
-                    rjson::value v1 = calculate_value(base, calculate_value_caller::UpdateExpression, previous_item.get());
-                    rjson::value v2 = calculate_value(addition, calculate_value_caller::UpdateExpression, previous_item.get());
-                    rjson::value result;
-                    // An ADD can be used to create a new attribute (when
-                    // v1.IsNull()) or to add to a pre-existing attribute:
-                    if (v1.IsNull()) {
-                        std::string v2_type = get_item_type_string(v2);
-                        if (v2_type == "N" || v2_type == "SS" || v2_type == "NS" || v2_type == "BS") {
-                            result = v2;
-                        } else {
-                            throw api_error::validation(format("An operand in the update expression has an incorrect data type: {}", v2));
-                        }
-                    } else {
-                        std::string v1_type = get_item_type_string(v1);
-                        if (v1_type == "N") {
-                            if (get_item_type_string(v2) != "N") {
-                                throw api_error::validation(format("Incorrect operand type for operator or function. Expected {}: {}", v1_type, rjson::print(v2)));
-                            }
-                            result = number_add(v1, v2);
-                        } else if (v1_type == "SS" || v1_type == "NS" || v1_type == "BS") {
-                            if (get_item_type_string(v2) != v1_type) {
-                                throw api_error::validation(format("Incorrect operand type for operator or function. Expected {}: {}", v1_type, rjson::print(v2)));
-                            }
-                            result = set_sum(v1, v2);
-                        } else {
-                            throw api_error::validation(format("An operand in the update expression has an incorrect data type: {}", v1));
-                        }
-                    }
-                    do_update(to_bytes(column_name), result);
-                },
-                [&] (const parsed::update_expression::action::del& a) {
-                    parsed::value base;
-                    parsed::value subset;
-                    base.set_path(action._path);
-                    subset.set_constant(a._valref);
-                    rjson::value v1 = calculate_value(base, calculate_value_caller::UpdateExpression, previous_item.get());
-                    rjson::value v2 = calculate_value(subset, calculate_value_caller::UpdateExpression, previous_item.get());
-                    if (!v1.IsNull()) {
-                        std::optional<rjson::value> result  = set_diff(v1, v2);
-                        if (result) {
-                            do_update(to_bytes(column_name), *result);
-                        } else {
-                            do_delete(to_bytes(column_name));
-                        }
-                    }
                 }
-            }, action._action);
+            } else {
+                // We have actions on a path or more than one path in the same
+                // top-level attribute column_name - but not on the top-level
+                // attribute as a whole. We already read the full top-level
+                // attribute (see check_needs_read_before_write()), and now we
+                // need to modify pieces of it and write back the entire
+                // top-level attribute.
+                if (!previous_item) {
+                    throw api_error::validation(format("UpdateItem cannot update nested document path on non-existent item"));
+                }
+                const rjson::value *toplevel = rjson::find(*previous_item, column_name);
+                if (!toplevel) {
+                    throw api_error::validation(format("UpdateItem cannot update document path: missing attribute {}",
+                        column_name));
+                }
+                rjson::value result = rjson::copy(*toplevel);
+                hierarchy_actions(result, actions.second, previous_item.get());
+                do_update(to_bytes(column_name), std::move(result), &actions.second);
+            }
         }
     }
     if (_returnvalues == returnvalues::ALL_OLD && previous_item) {
@@ -2408,7 +2745,7 @@ static rjson::value describe_item(schema_ptr schema,
         const query::partition_slice& slice,
         const cql3::selection::selection& selection,
         const query::result& query_result,
-        const std::unordered_set<std::string>& attrs_to_get) {
+        const attrs_to_get& attrs_to_get) {
     std::optional<rjson::value> opt_item = executor::describe_single_item(std::move(schema), slice, selection, std::move(query_result), attrs_to_get);
     if (!opt_item) {
         // If there is no matching item, we're supposed to return an empty
@@ -2480,7 +2817,7 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
     struct table_requests {
         schema_ptr schema;
         db::consistency_level cl;
-        std::unordered_set<std::string> attrs_to_get;
+        attrs_to_get attrs_to_get;
         struct single_request {
             partition_key pk;
             clustering_key ck;
@@ -2694,7 +3031,7 @@ void filter::for_filters_on(const noncopyable_function<void(std::string_view)>& 
 class describe_items_visitor {
     typedef std::vector<const column_definition*> columns_t;
     const columns_t& _columns;
-    const std::unordered_set<std::string>& _attrs_to_get;
+    const attrs_to_get& _attrs_to_get;
     std::unordered_set<std::string> _extra_filter_attrs;
     const filter& _filter;
     typename columns_t::const_iterator _column_it;
@@ -2703,7 +3040,7 @@ class describe_items_visitor {
     size_t _scanned_count;
 
 public:
-    describe_items_visitor(const columns_t& columns, const std::unordered_set<std::string>& attrs_to_get, filter& filter)
+    describe_items_visitor(const columns_t& columns, const attrs_to_get& attrs_to_get, filter& filter)
             : _columns(columns)
             , _attrs_to_get(attrs_to_get)
             , _filter(filter)
@@ -2752,6 +3089,12 @@ public:
                     std::string attr_name = value_cast<sstring>(entry.first);
                     if (_attrs_to_get.empty() || _attrs_to_get.contains(attr_name) || _extra_filter_attrs.contains(attr_name)) {
                         bytes value = value_cast<bytes>(entry.second);
+                        // Even if _attrs_to_get asked to keep only a part of a
+                        // top-level attribute, we keep the entire attribute
+                        // at this stage, because the item filter might still
+                        // need the other parts (it was easier for us to keep
+                        // extra_filter_attrs at top-level granularity). We'll
+                        // filter the unneeded parts after item filtering.
                         rjson::set_with_string_name(_item, attr_name, deserialize_item(value));
                     }
                 }
@@ -2762,11 +3105,24 @@ public:
 
     void end_row() {
         if (_filter.check(_item)) {
+            // As noted above, we kept entire top-level attributes listed in
+            // _attrs_to_get. We may need to only keep parts of them.
+            for (const auto& attr: _attrs_to_get) {
+                // If !attr.has_value() it means we were asked not to keep
+                // attr entirely, but just parts of it.
+                if (!attr.second.has_value()) {
+                    rjson::value* toplevel= rjson::find(_item, attr.first);
+                    if (toplevel && !hierarchy_filter(*toplevel, attr.second)) {
+                        rjson::remove_member(_item, attr.first);
+                    }
+                }
+            }
             // Remove the extra attributes _extra_filter_attrs which we had
             // to add just for the filter, and not requested to be returned:
             for (const auto& attr : _extra_filter_attrs) {
                 rjson::remove_member(_item, attr);
             }
+
             rjson::push_back(_items, std::move(_item));
         }
         _item = rjson::empty_object();
@@ -2782,7 +3138,7 @@ public:
     }
 };
 
-static rjson::value describe_items(schema_ptr schema, const query::partition_slice& slice, const cql3::selection::selection& selection, std::unique_ptr<cql3::result_set> result_set, std::unordered_set<std::string>&& attrs_to_get, filter&& filter) {
+static rjson::value describe_items(schema_ptr schema, const query::partition_slice& slice, const cql3::selection::selection& selection, std::unique_ptr<cql3::result_set> result_set, attrs_to_get&& attrs_to_get, filter&& filter) {
     describe_items_visitor visitor(selection.get_columns(), attrs_to_get, filter);
     result_set->visit(visitor);
     auto scanned_count = visitor.get_scanned_count();
@@ -2823,7 +3179,7 @@ static future<executor::request_return_type> do_query(service::storage_proxy& pr
         const rjson::value* exclusive_start_key,
         dht::partition_range_vector&& partition_ranges,
         std::vector<query::clustering_range>&& ck_bounds,
-        std::unordered_set<std::string>&& attrs_to_get,
+        attrs_to_get&& attrs_to_get,
         uint32_t limit,
         db::consistency_level cl,
         filter&& filter,

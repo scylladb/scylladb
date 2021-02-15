@@ -61,12 +61,6 @@ behave the same in Alternator. However, there are a few features which we have
 not implemented yet. Unimplemented features return an error when used, so
 they should be easy to detect. Here is a list of these unimplemented features:
 
-* Missing support for **atribute paths** like `a.b[3].c`.
-  Nested attributes _are_ supported, but Alternator does not yet allow reading
-  or writing directly a piece of a nested attributes using an attribute path -
-  only top-level attributes can be read or written directly.
-  https://github.com/scylladb/scylla/issues/5024
-
 * Currently in Alternator, a GSI (Global Secondary Index) can only be added
   to a table at table creation time. Unlike DynamoDB which also allows adding
   a GSI (but not an LSI) to an existing table using an UpdateTable operation.
