@@ -153,7 +153,30 @@ static rpc::multi_algo_compressor_factory compressor_factory {
     &lz4_compressor_factory,
 };
 
-struct messaging_service::rpc_protocol_wrapper : public rpc_protocol { using rpc_protocol::rpc_protocol; };
+class messaging_service::rpc_protocol_wrapper {
+    rpc_protocol _impl;
+public:
+    explicit rpc_protocol_wrapper(serializer&& s) : _impl(std::move(s)) {}
+
+    rpc_protocol& protocol() { return _impl; }
+
+    template<typename Func>
+    auto make_client(messaging_verb t) { return _impl.make_client<Func>(t); }
+
+    template<typename Func>
+    auto register_handler(messaging_verb t, Func&& func) { return _impl.register_handler(t, std::forward<Func>(func)); }
+
+    template<typename Func>
+    auto register_handler(messaging_verb t, scheduling_group sg, Func&& func) { return _impl.register_handler(t, sg, std::forward<Func>(func)); }
+
+    future<> unregister_handler(messaging_verb t) { return _impl.unregister_handler(t); }
+
+    void set_logger(::seastar::logger* logger) { _impl.set_logger(logger); }
+
+    bool has_handler(messaging_verb msg_id) { return _impl.has_handler(msg_id); }
+
+    bool has_handlers() const noexcept { return _impl.has_handlers(); }
+};
 
 // This wrapper pretends to be rpc_protocol::client, but also handles
 // stopping it before destruction, in case it wasn't stopped already.
@@ -338,7 +361,7 @@ void messaging_service::do_start_listen() {
         auto listen = [&] (const gms::inet_address& a, rpc::streaming_domain_type sdomain) {
             so.streaming_domain = sdomain;
             auto addr = socket_address{a, _cfg.port};
-            return std::unique_ptr<rpc_protocol_server_wrapper>(new rpc_protocol_server_wrapper(*_rpc,
+            return std::unique_ptr<rpc_protocol_server_wrapper>(new rpc_protocol_server_wrapper(_rpc->protocol(),
                     so, addr, limits));
         };
         _server[0] = listen(_cfg.ip, rpc::streaming_domain_type(0x55AA));
@@ -362,7 +385,7 @@ void messaging_service::do_start_listen() {
                 lo.reuse_address = true;
                 lo.lba =  server_socket::load_balancing_algorithm::port;
                 auto addr = socket_address{a, _cfg.ssl_port};
-                return std::make_unique<rpc_protocol_server_wrapper>(*_rpc,
+                return std::make_unique<rpc_protocol_server_wrapper>(_rpc->protocol(),
                         so, seastar::tls::listen(_credentials, addr, lo), limits);
             }());
         };
@@ -728,9 +751,9 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
     }
 
     auto client = must_encrypt ?
-                    ::make_shared<rpc_protocol_client_wrapper>(*_rpc, std::move(opts),
+                    ::make_shared<rpc_protocol_client_wrapper>(_rpc->protocol(), std::move(opts),
                                     remote_addr, socket_address(), _credentials) :
-                    ::make_shared<rpc_protocol_client_wrapper>(*_rpc, std::move(opts),
+                    ::make_shared<rpc_protocol_client_wrapper>(_rpc->protocol(), std::move(opts),
                                     remote_addr);
 
     auto res = _clients[idx].emplace(id, shard_info(std::move(client)));
