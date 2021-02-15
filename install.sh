@@ -516,6 +516,7 @@ for i in seastar/scripts/perftune.py seastar/scripts/seastar-addr2line; do
     relocate_python3 "$rprefix"/scripts "$i"
 done
 relocate_python3 "$rprefix"/scyllatop tools/scyllatop/scyllatop.py
+relocate_python3 "$rprefix"/scripts fix_system_distributed_tables.py
 
 if $supervisor; then
     install -d -m755 `supervisor_dir $retc`
