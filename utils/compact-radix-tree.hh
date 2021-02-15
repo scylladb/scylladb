@@ -28,6 +28,8 @@
 #include "utils/allocation_strategy.hh"
 #include "utils/array-search.hh"
 
+class size_calculator;
+
 namespace compact_radix_tree {
 
 template <typename T, typename Idx> class printer;
@@ -105,6 +107,7 @@ struct variadic_union<Tx, Ty, Ts...> {
 template <typename T, typename Index = unsigned int>
 requires std::is_nothrow_move_constructible_v<T> && std::is_integral_v<Index>
 class tree {
+    friend class ::size_calculator;
     template <typename A, typename I> friend class printer;
 
     class leaf_node;

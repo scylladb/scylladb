@@ -97,6 +97,7 @@ class compaction_garbage_collector;
 //
 //
 class row {
+    friend class size_calculator;
     using size_type = std::make_unsigned_t<column_id>;
     size_type _size = 0;
     using sparse_array_type = compact_radix_tree::tree<cell_and_hash, column_id>;
