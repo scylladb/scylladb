@@ -160,11 +160,11 @@ public:
         , _pc(pc)
         , _trace_state(std::move(trace_state))
         , _fwd_mr(fwd_mr)
-        , _range_query(!range.is_singular() || !range.start()->value().has_key())
+        , _range_query(!query::is_single_partition(range))
         , _underlying(_cache, *this)
     {
         ++_cache._tracker._stats.reads;
-        if (range.is_singular() && range.start()->value().has_key()) {
+        if (!_range_query) {
             _key = range.start()->value().as_decorated_key();
         }
     }
