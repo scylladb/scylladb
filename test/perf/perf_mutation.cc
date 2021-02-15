@@ -21,6 +21,7 @@
  */
 
 #include "database.hh"
+#include "schema_builder.hh"
 #include "test/perf/perf.hh"
 #include <seastar/core/app-template.hh>
 #include <seastar/core/reactor.hh>
@@ -31,9 +32,12 @@ static atomic_cell make_atomic_cell(data_type dt, bytes value) {
 
 int main(int argc, char* argv[]) {
     return app_template().run_deprecated(argc, argv, [] {
-        auto s = make_shared_schema({}, "ks", "cf",
-            {{"p1", utf8_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type);
+        auto builder = schema_builder("ks", "cf")
+            .with_column("p1", utf8_type, column_kind::partition_key)
+            .with_column("c1", int32_type, column_kind::clustering_key)
+            .with_column("r1", int32_type);
 
+        auto s = builder.build();
         memtable mt(s);
 
         std::cout << "Timing mutation of single column within one row...\n";
