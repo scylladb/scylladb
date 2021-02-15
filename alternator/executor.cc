@@ -1998,7 +1998,7 @@ void attribute_path_map_add(const char* source, attribute_path_map<T>& map, cons
                 typename node::members_t& members = h->get_members();
                 auto it = members.find(member);
                 if (it == members.end()) {
-                    it = members.insert({member, make_shared<node>()}).first;
+                    it = members.insert({member, std::make_unique<node>()}).first;
                 }
                 h = it->second.get();
             },
@@ -2013,7 +2013,7 @@ void attribute_path_map_add(const char* source, attribute_path_map<T>& map, cons
                 typename node::indexes_t& indexes = h->get_indexes();
                 auto it = indexes.find(index);
                 if (it == indexes.end()) {
-                    it = indexes.insert({index, make_shared<node>()}).first;
+                    it = indexes.insert({index, std::make_unique<node>()}).first;
                 }
                 h = it->second.get();
             }

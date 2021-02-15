@@ -105,17 +105,12 @@ template<typename T>
 class attribute_path_map_node {
 public:
     using data_t = T;
-    // We need the extra shared_ptr<> here because libstdc++ unordered_map
-    // doesn't work with incomplete types :-( We couldn't use lw_shared_ptr<>
-    // because it doesn't work for incomplete types either. We couldn't use
-    // std::unique_ptr<> because it makes the entire object uncopyable. We
-    // don't often need to copy such a map, but we do have some code that
-    // copies an attrs_to_get object, and is hard to find and remove.
-    // The shared_ptr should never be null.
-    using members_t =  std::unordered_map<std::string, seastar::shared_ptr<attribute_path_map_node<T>>>;
+    // We need the extra unique_ptr<> here because libstdc++ unordered_map
+    // doesn't work with incomplete types :-(
+    using members_t =  std::unordered_map<std::string, std::unique_ptr<attribute_path_map_node<T>>>;
     // The indexes list is sorted because DynamoDB requires handling writes
     // beyond the end of a list in index order.
-    using indexes_t = std::map<unsigned, seastar::shared_ptr<attribute_path_map_node<T>>>;
+    using indexes_t = std::map<unsigned, std::unique_ptr<attribute_path_map_node<T>>>;
     // The prohibition on "overlap" and "conflict" explained above means
     // That only one of data, members or indexes is non-empty.
     std::optional<std::variant<data_t, members_t, indexes_t>> _content;
