@@ -552,6 +552,7 @@ class scanning_and_populating_reader final : public flat_mutation_reader::impl {
     lw_shared_ptr<read_context> _read_context;
     partition_range_cursor _primary;
     range_populating_reader _secondary_reader;
+    bool _read_next_partition = false;
     bool _secondary_in_progress = false;
     bool _advance_primary = false;
     std::optional<dht::partition_range::bound> _lower_bound;
@@ -640,6 +641,7 @@ private:
         });
     }
     future<> read_next_partition(db::timeout_clock::time_point timeout) {
+        _read_next_partition = false;
         return (_secondary_in_progress ? read_from_secondary(timeout) : read_from_primary(timeout)).then([this] (auto&& fropt) {
             if (bool(fropt)) {
                 _reader = std::move(fropt);
@@ -647,9 +649,6 @@ private:
                 _end_of_stream = true;
             }
         });
-    }
-    void on_end_of_stream() {
-        _reader = {};
     }
 public:
     scanning_and_populating_reader(row_cache& cache,
@@ -665,12 +664,12 @@ public:
     { }
     virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override {
         return do_until([this] { return is_end_of_stream() || is_buffer_full(); }, [this, timeout] {
-            if (!_reader) {
+            if (!_reader || _read_next_partition) {
                 return read_next_partition(timeout);
             } else {
                 return fill_buffer_from(*_reader, timeout).then([this] (bool reader_finished) {
                     if (reader_finished) {
-                        on_end_of_stream();
+                        _read_next_partition = true;
                     }
                 });
             }
