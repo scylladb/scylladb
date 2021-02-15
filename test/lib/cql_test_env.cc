@@ -586,7 +586,8 @@ public:
             });
 
             sharded<cdc::cdc_service> cdc;
-            cdc.start(std::ref(proxy)).get();
+            auto get_cdc_metadata = [] (cdc::generation_service& svc) { return std::ref(svc.get_cdc_metadata()); };
+            cdc.start(std::ref(proxy), sharded_parameter(get_cdc_metadata, std::ref(cdc_generation_service))).get();
             auto stop_cdc_service = defer([&] {
                 cdc.stop().get();
             });

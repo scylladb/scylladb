@@ -34,6 +34,7 @@
 #include "cdc/log.hh"
 #include "cdc/generation.hh"
 #include "cdc/cdc_options.hh"
+#include "cdc/metadata.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "utils/UUID_gen.hh"
 #include "cql3/selection/selection.hh"
@@ -470,8 +471,7 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
     auto status = "DISABLED";
 
     if (opts.enabled()) {
-        auto& metadata = _ss.get_cdc_metadata();
-        if (!metadata.streams_available()) {
+        if (!_cdc_metadata.streams_available()) {
             status = "ENABLING";
         } else {
             status = "ENABLED";

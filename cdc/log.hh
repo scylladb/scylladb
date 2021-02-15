@@ -80,7 +80,7 @@ class cdc_service final : public async_sharded_service<cdc::cdc_service> {
     std::unique_ptr<impl> _impl;
 public:
     future<> stop();
-    cdc_service(service::storage_proxy&);
+    cdc_service(service::storage_proxy&, cdc::metadata&);
     cdc_service(db_context);
     ~cdc_service();
 
@@ -104,13 +104,12 @@ struct db_context final {
 
     class builder final {
         service::storage_proxy& _proxy;
+        cdc::metadata& _cdc_metadata;
         std::optional<std::reference_wrapper<service::migration_notifier>> _migration_notifier;
-        std::optional<std::reference_wrapper<cdc::metadata>> _cdc_metadata;
     public:
-        builder(service::storage_proxy& proxy);
+        builder(service::storage_proxy& proxy, cdc::metadata&);
 
         builder& with_migration_notifier(service::migration_notifier& migration_notifier);
-        builder& with_cdc_metadata(cdc::metadata&);
 
         db_context build();
     };
