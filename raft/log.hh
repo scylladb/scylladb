@@ -168,6 +168,13 @@ public:
     // Used to validate the log matching rule.
     std::optional<term_t> term_for(index_t idx) const;
 
+    // Return the latest configuration present in the log.
+    // This would be either the entry at last_conf_idx()
+    // or, if it's not set, the snapshot configuration.
+    // The returned reference is only valid until the next
+    // operation on the log.
+    const configuration& get_configuration() const;
+
     // Called on a follower to append entries from a leader.
     // @retval return an index of last appended entry
     index_t maybe_append(std::vector<log_entry_ptr>&& entries);

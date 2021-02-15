@@ -113,8 +113,6 @@ public:
     follower_progress* leader_progress() {
         return _leader_progress;
     }
-    const configuration& get_configuration() const { return _configuration; }
-
     // Calculate the current commit index based on the current
     // simple or joint quorum.
     index_t committed(index_t prev_commit_idx);
@@ -170,10 +168,6 @@ public:
 
     void register_vote(server_id from, bool granted);
     vote_result tally_votes() const;
-
-    const configuration& get_configuration() const {
-        return _configuration;
-    }
 
     friend std::ostream& operator<<(std::ostream& os, const votes& v);
 };
