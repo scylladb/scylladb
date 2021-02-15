@@ -2817,7 +2817,7 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
     struct table_requests {
         schema_ptr schema;
         db::consistency_level cl;
-        attrs_to_get attrs_to_get;
+        ::shared_ptr<const attrs_to_get> attrs_to_get;
         struct single_request {
             partition_key pk;
             clustering_key ck;
@@ -2832,7 +2832,7 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
         tracing::add_table_name(trace_state, sstring(executor::KEYSPACE_NAME_PREFIX) + rs.schema->cf_name(), rs.schema->cf_name());
         rs.cl = get_read_consistency(it->value);
         std::unordered_set<std::string> used_attribute_names;
-        rs.attrs_to_get = calculate_attrs_to_get(it->value, used_attribute_names);
+        rs.attrs_to_get = ::make_shared<const attrs_to_get>(calculate_attrs_to_get(it->value, used_attribute_names));
         verify_all_are_used(request, "ExpressionAttributeNames", used_attribute_names, "GetItem");
         auto& keys = (it->value)["Keys"];
         for (const rjson::value& key : keys.GetArray()) {
@@ -2862,7 +2862,7 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
             future<std::tuple<std::string, std::optional<rjson::value>>> f = _proxy.query(rs.schema, std::move(command), std::move(partition_ranges), rs.cl,
                     service::storage_proxy::coordinator_query_options(executor::default_timeout(), permit, client_state, trace_state)).then(
                     [schema = rs.schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = rs.attrs_to_get] (service::storage_proxy::coordinator_query_result qr) mutable {
-                std::optional<rjson::value> json = describe_single_item(schema, partition_slice, *selection, *qr.query_result, std::move(attrs_to_get));
+                std::optional<rjson::value> json = describe_single_item(schema, partition_slice, *selection, *qr.query_result, *attrs_to_get);
                 return make_ready_future<std::tuple<std::string, std::optional<rjson::value>>>(
                         std::make_tuple(schema->cf_name(), std::move(json)));
             });
