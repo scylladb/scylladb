@@ -341,8 +341,7 @@ topology_description limit_number_of_streams_if_needed(topology_description&& de
     return topology_description(std::move(entries));
 }
 
-// Run inside seastar::async context.
-db_clock::time_point make_new_cdc_generation(
+future<db_clock::time_point> make_new_cdc_generation(
         const db::config& cfg,
         const std::unordered_set<dht::token>& bootstrap_tokens,
         const locator::token_metadata_ptr tmptr,
@@ -369,9 +368,9 @@ db_clock::time_point make_new_cdc_generation(
     auto ts = db_clock::now() + (
             (!add_delay || ring_delay == milliseconds(0)) ? milliseconds(0) : (
                 2 * ring_delay + duration_cast<milliseconds>(generation_leeway)));
-    sys_dist_ks.insert_cdc_topology_description(ts, std::move(gen), { tmptr->count_normal_token_owners() }).get();
+    co_await sys_dist_ks.insert_cdc_topology_description(ts, std::move(gen), { tmptr->count_normal_token_owners() });
 
-    return ts;
+    co_return ts;
 }
 
 std::optional<db_clock::time_point> get_streams_timestamp_for(const gms::inet_address& endpoint, const gms::gossiper& g) {

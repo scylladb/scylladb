@@ -167,7 +167,7 @@ future<db_clock::time_point> get_local_streams_timestamp();
  * (not guaranteed in the current implementation, but expected to be the common case;
  *  we assume that `ring_delay` is enough for other nodes to learn about the new generation).
  */
-db_clock::time_point make_new_cdc_generation(
+future<db_clock::time_point> make_new_cdc_generation(
         const db::config& cfg,
         const std::unordered_set<dht::token>& bootstrap_tokens,
         const locator::token_metadata_ptr tmptr,
