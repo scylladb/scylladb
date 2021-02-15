@@ -93,6 +93,7 @@
 #include "user_types_metadata.hh"
 #include <seastar/core/shared_ptr_incomplete.hh>
 #include <seastar/util/memory_diagnostics.hh>
+#include <seastar/core/coroutine.hh>
 
 #include "schema_builder.hh"
 
@@ -966,7 +967,7 @@ bool database::update_column_family(schema_ptr new_schema) {
     return columns_changed;
 }
 
-void database::remove(const column_family& cf) {
+future<> database::remove(const column_family& cf) noexcept {
     auto s = cf.schema();
     auto& ks = find_keyspace(s->ks_name());
     _querier_cache.evict_all_for_table(s->id());
@@ -980,15 +981,16 @@ void database::remove(const column_family& cf) {
             // Drop view mutations received after base table drop.
         }
     }
+    co_return;
 }
 
 future<> database::drop_column_family(const sstring& ks_name, const sstring& cf_name, timestamp_func tsf, bool snapshot) {
+    auto& ks = find_keyspace(ks_name);
     auto uuid = find_uuid(ks_name, cf_name);
     auto cf = _column_families.at(uuid);
-    remove(*cf);
+    co_await remove(*cf);
     cf->clear_views();
-    auto& ks = find_keyspace(ks_name);
-    return cf->await_pending_ops().then([this, &ks, cf, tsf = std::move(tsf), snapshot] {
+    co_return co_await cf->await_pending_ops().then([this, &ks, cf, tsf = std::move(tsf), snapshot] {
         return truncate(ks, *cf, std::move(tsf), snapshot).finally([this, cf] {
             return cf->stop();
         });
