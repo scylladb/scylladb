@@ -152,7 +152,7 @@ class reconcilable_result_builder {
     utils::chunked_vector<partition> _result;
 public:
     reconcilable_result_builder(const schema& s, const query::partition_slice& slice,
-                                query::result_memory_accounter&& accounter)
+                                query::result_memory_accounter&& accounter) noexcept
         : _schema(s), _slice(slice)
         , _memory_accounter(std::move(accounter))
     { }
