@@ -37,7 +37,7 @@ namespace cache {
 class autoupdating_underlying_reader final {
     row_cache& _cache;
     read_context& _read_context;
-    std::optional<flat_mutation_reader> _reader;
+    flat_mutation_reader_opt _reader;
     utils::phased_barrier::phase_type _reader_creation_phase = 0;
     dht::partition_range _range = { };
     std::optional<dht::decorated_key> _last_key;

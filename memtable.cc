@@ -380,7 +380,7 @@ protected:
 
 class scanning_reader final : public flat_mutation_reader::impl, private iterator_reader {
     std::optional<dht::partition_range> _delegate_range;
-    std::optional<flat_mutation_reader> _delegate;
+    flat_mutation_reader_opt _delegate;
     const io_priority_class& _pc;
     const query::partition_slice& _slice;
     mutation_reader::forwarding _fwd_mr;

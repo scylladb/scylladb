@@ -1572,7 +1572,7 @@ SEASTAR_TEST_CASE(test_mvcc) {
 
             auto m12 = m1 + m2;
 
-            std::optional<flat_mutation_reader> mt1_reader_opt;
+            flat_mutation_reader_opt mt1_reader_opt;
             if (with_active_memtable_reader) {
                 mt1_reader_opt = mt1->make_flat_reader(s, tests::make_permit());
                 mt1_reader_opt->set_max_buffer_size(1);
@@ -2302,7 +2302,7 @@ SEASTAR_TEST_CASE(test_exception_safety_of_update_from_memtable) {
 
             populate_range(cache, population_range);
             auto rd1_v1 = assert_that(make_reader(population_range));
-            std::optional<flat_mutation_reader> snap;
+            flat_mutation_reader_opt snap;
 
             auto d = defer([&] {
                 memory::scoped_critical_alloc_section dfg;

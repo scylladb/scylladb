@@ -102,7 +102,7 @@ class cache_flat_mutation_reader final : public flat_mutation_reader::impl {
     // Points to the underlying reader conforming to _schema,
     // either to *_underlying_holder or _read_context->underlying().underlying().
     flat_mutation_reader* _underlying = nullptr;
-    std::optional<flat_mutation_reader> _underlying_holder;
+    flat_mutation_reader_opt _underlying_holder;
 
     future<> do_fill_buffer(db::timeout_clock::time_point);
     future<> ensure_underlying(db::timeout_clock::time_point);
