@@ -59,6 +59,76 @@ raft::snapshot log_snapshot(raft::log& log, index_t idx) {
 
 raft::fsm_config fsm_cfg{.append_request_threshold = 1};
 
+BOOST_AUTO_TEST_CASE(test_votes) {
+    auto id = []() -> raft::server_address { return raft::server_address{utils::make_random_uuid()}; };
+    auto id1 = id();
+
+    raft::votes votes(raft::configuration({id1}));
+    BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::UNKNOWN);
+    BOOST_CHECK_EQUAL(votes.voters().size(), 1);
+    // Try a vote from an unknown server, it should be ignored.
+    BOOST_CHECK_THROW(votes.register_vote(id().id, true), std::runtime_error);
+    votes.register_vote(id1.id, false);
+    // Quorum votes against the decision
+    BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::LOST);
+    // Another vote from the same server is ignored
+    votes.register_vote(id1.id, true);
+    votes.register_vote(id1.id, true);
+    BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::LOST);
+    auto id2 = id();
+    votes = raft::votes(raft::configuration({id1, id2}));
+    BOOST_CHECK_EQUAL(votes.voters().size(), 2);
+    votes.register_vote(id1.id, true);
+    // We need a quorum of participants to win an election
+    BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::UNKNOWN);
+    votes.register_vote(id2.id, false);
+    // At this point it's clear we don't have enough votes
+    BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::LOST);
+    auto id3 = id();
+    // Joint configuration
+    votes = raft::votes(raft::configuration({id1}, {id2, id3}));
+    BOOST_CHECK_EQUAL(votes.voters().size(), 3);
+    BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::UNKNOWN);
+    votes.register_vote(id2.id, true);
+    votes.register_vote(id3.id, true);
+    BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::UNKNOWN);
+    votes.register_vote(id1.id, false);
+    BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::LOST);
+    votes = raft::votes(raft::configuration({id1}, {id2, id3}));
+    votes.register_vote(id2.id, true);
+    votes.register_vote(id3.id, true);
+    votes.register_vote(id1.id, true);
+    BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::WON);
+    votes = raft::votes(raft::configuration({id1, id2, id3}, {id1}));
+    BOOST_CHECK_EQUAL(votes.voters().size(), 3);
+    votes.register_vote(id1.id, true);
+    BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::UNKNOWN);
+    // This gives us a majority in both new and old
+    // configurations.
+    votes.register_vote(id2.id, true);
+    BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::WON);
+    // Basic voting test for 4 nodes
+    auto id4 = id();
+    votes = raft::votes(raft::configuration({id1, id2, id3, id4}));
+    votes.register_vote(id1.id, true);
+    votes.register_vote(id2.id, true);
+    BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::UNKNOWN);
+    votes.register_vote(id3.id, false);
+    BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::UNKNOWN);
+    votes.register_vote(id4.id, false);
+    BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::LOST);
+    auto id5 = id();
+    // Basic voting test for 5 nodes
+    votes = raft::votes(raft::configuration({id1, id2, id3, id4, id5}, {id1, id2, id3}));
+    votes.register_vote(id1.id, false);
+    votes.register_vote(id2.id, false);
+    BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::LOST);
+    votes.register_vote(id3.id, true);
+    votes.register_vote(id4.id, true);
+    votes.register_vote(id5.id, true);
+    BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::LOST);
+}
+
 BOOST_AUTO_TEST_CASE(test_tracker) {
     auto id = []() -> raft::server_address { return raft::server_address{utils::make_random_uuid()}; };
     auto id1 = id();
