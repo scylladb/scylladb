@@ -93,7 +93,7 @@ public:
 private:
     mutable std::optional<sstables::compaction_strategy_type> _compaction_strategy_class;
 public:
-    schema::extensions_map make_schema_extensions(const db::extensions& exts);
+    schema::extensions_map make_schema_extensions(const db::extensions& exts) const;
     void validate(const database& db, const schema::extensions_map& schema_extensions) const;
     std::map<sstring, sstring> get_compaction_options() const;
     std::optional<std::map<sstring, sstring>> get_compression_options() const;
@@ -121,7 +121,7 @@ public:
     int32_t get_paxos_grace_seconds() const;
     std::optional<utils::UUID> get_id() const;
 
-    void apply_to_builder(schema_builder& builder, schema::extensions_map schema_extensions);
+    void apply_to_builder(schema_builder& builder, schema::extensions_map schema_extensions) const;
     void validate_minimum_int(const sstring& field, int32_t minimum_value, int32_t default_value) const;
 };
 

@@ -55,9 +55,9 @@ namespace statements {
 /** An <code>ALTER MATERIALIZED VIEW</code> parsed from a CQL query statement. */
 class alter_view_statement : public schema_altering_statement {
 private:
-    ::shared_ptr<cf_prop_defs> _properties;
+    std::optional<cf_prop_defs> _properties;
 public:
-    alter_view_statement(cf_name view_name, ::shared_ptr<cf_prop_defs> properties);
+    alter_view_statement(cf_name view_name, std::optional<cf_prop_defs> properties);
 
     virtual future<> check_access(service::storage_proxy& proxy, const service::client_state& state) const override;
 

@@ -931,7 +931,7 @@ alterKeyspaceStatement returns [std::unique_ptr<cql3::statements::alter_keyspace
 alterTableStatement returns [std::unique_ptr<alter_table_statement> expr]
     @init {
         alter_table_statement::type type;
-        auto props = make_shared<cql3::statements::cf_prop_defs>();
+        auto props = cql3::statements::cf_prop_defs();
         std::vector<alter_table_statement::column_change> column_changes;
         std::vector<std::pair<shared_ptr<cql3::column_identifier::raw>, shared_ptr<cql3::column_identifier::raw>>> renames;
     }
@@ -947,7 +947,7 @@ alterTableStatement returns [std::unique_ptr<alter_table_statement> expr]
             | '('     id1=cident { column_changes.emplace_back(alter_table_statement::column_change{id1}); }
                  (',' idn=cident { column_changes.emplace_back(alter_table_statement::column_change{idn}); } )* ')'
             )
-          | K_WITH  properties[*props]                 { type = alter_table_statement::type::opts; }
+          | K_WITH  properties[props]                 { type = alter_table_statement::type::opts; }
           | K_RENAME                                  { type = alter_table_statement::type::rename; }
                id1=cident K_TO toId1=cident { renames.emplace_back(id1, toId1); }
                ( K_AND idn=cident K_TO toIdn=cident { renames.emplace_back(idn, toIdn); } )*
@@ -987,9 +987,9 @@ alterTypeStatement returns [std::unique_ptr<alter_type_statement> expr]
  */
 alterViewStatement returns [std::unique_ptr<alter_view_statement> expr]
     @init {
-        auto props = make_shared<cql3::statements::cf_prop_defs>();
+        auto props = cql3::statements::cf_prop_defs();
     }
-    : K_ALTER K_MATERIALIZED K_VIEW cf=columnFamilyName K_WITH properties[*props]
+    : K_ALTER K_MATERIALIZED K_VIEW cf=columnFamilyName K_WITH properties[props]
     {
         $expr = std::make_unique<alter_view_statement>(std::move(cf), std::move(props));
     }
