@@ -623,7 +623,10 @@ public:
 
     future<> do_write(lw_shared_ptr<const decorated_key_with_hash> dk, mutation_fragment mf) {
         if (_current_dk_written_to_sstable) {
-            if (_current_dk_written_to_sstable->dk.equal(*_schema, dk->dk)) {
+            const auto cmp_res = _current_dk_written_to_sstable->dk.tri_compare(*_schema, dk->dk);
+            if (cmp_res > 0) {
+                on_internal_error(rlogger, format("repair_writer::do_write(): received out-of-order partition, current: {}, next: {}", _current_dk_written_to_sstable->dk, dk->dk));
+            } else if (cmp_res == 0) {
                 return _mq->push(std::move(mf));
             } else {
                 return write_partition_end().then([this,
