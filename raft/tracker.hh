@@ -137,22 +137,35 @@ std::ostream& operator<<(std::ostream& os, const vote_result& v);
 
 // State of election in a single quorum
 class election_tracker {
-    size_t _responded = 0;
+    // All eligible voters
+    std::unordered_set<server_id> _suffrage;
+    // Votes collected
+    std::unordered_set<server_id> _responded;
     size_t _granted = 0;
 public:
-    void register_vote(bool granted) {
-        _responded++;
-        if (granted) {
-            _granted++;
+    election_tracker(const server_address_set& configuration) {
+        for (const auto& a : configuration) {
+            _suffrage.emplace(a.id);
         }
     }
-    vote_result tally_votes(size_t cluster_size) const {
-        auto quorum = cluster_size / 2 + 1;
+
+    bool register_vote(server_id from, bool granted) {
+        if (_suffrage.find(from) == _suffrage.end()) {
+            return false;
+        }
+        if (_responded.emplace(from).second) {
+            // Have not counted this vote yet
+            _granted += static_cast<int>(granted);
+        }
+        return true;
+    }
+    vote_result tally_votes() const {
+        auto quorum = _suffrage.size() / 2 + 1;
         if (_granted >= quorum) {
             return vote_result::WON;
         }
-        assert(_responded <= cluster_size);
-        auto unknown = cluster_size - _responded;
+        assert(_responded.size() <= _suffrage.size());
+        auto unknown = _suffrage.size() - _responded.size();
         return _granted + unknown >= quorum ? vote_result::UNKNOWN : vote_result::LOST;
     }
     friend std::ostream& operator<<(std::ostream& os, const election_tracker& v);
@@ -160,10 +173,9 @@ public:
 
 // Candidate's state specific to election
 class votes {
-    configuration _configuration;
     server_address_set _voters;
     election_tracker _current;
-    election_tracker _previous;
+    std::optional<election_tracker> _previous;
 public:
     votes(configuration configuration);
 

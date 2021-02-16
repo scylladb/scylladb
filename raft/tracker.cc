@@ -197,29 +197,25 @@ index_t tracker::committed(index_t prev_commit_idx) {
 }
 
 votes::votes(configuration configuration)
-        :_configuration(std::move(configuration))
-        ,_voters(_configuration.current) {
+        :_voters(configuration.current)
+        , _current(configuration.current) {
 
-    if (_configuration.is_joint()) {
-        _voters.insert(_configuration.previous.begin(), _configuration.previous.end());
+    if (configuration.is_joint()) {
+        _previous.emplace(configuration.previous);
+        _voters.insert(configuration.previous.begin(), configuration.previous.end());
     }
 }
 
 void votes::register_vote(server_id from, bool granted) {
-    server_address from_address{from};
     bool registered = false;
 
-    if (_configuration.current.find(from_address) != _configuration.current.end()) {
-        _current.register_vote(granted);
+    if (_current.register_vote(from, granted)) {
         registered = true;
     }
-    if (_configuration.is_joint() &&
-        _configuration.previous.find(from_address) != _configuration.previous.end()) {
-        _previous.register_vote(granted);
+    if (_previous && _previous->register_vote(from, granted)) {
         registered = true;
     }
-    // Should never receive a vote not requested, unless an RPC
-    // bug.
+    // Should never receive a vote not requested, unless an RPC bug.
     if (! registered) {
         seastar::on_internal_error(logger,
             format("Got a vote from unregistered server {} during election", from));
@@ -227,17 +223,17 @@ void votes::register_vote(server_id from, bool granted) {
 }
 
 vote_result votes::tally_votes() const {
-    if (_configuration.is_joint()) {
-        auto previous_result = _previous.tally_votes(_configuration.previous.size());
+    if (_previous) {
+        auto previous_result = _previous->tally_votes();
         if (previous_result != vote_result::WON) {
             return previous_result;
         }
     }
-    return _current.tally_votes(_configuration.current.size());
+    return _current.tally_votes();
 }
 
 std::ostream& operator<<(std::ostream& os, const election_tracker& v) {
-    os << "responded: " << v._responded << ", ";
+    os << "responded: " << v._responded.size() << ", ";
     os << "granted: " << v._granted;
     return os;
 }
@@ -245,7 +241,9 @@ std::ostream& operator<<(std::ostream& os, const election_tracker& v) {
 
 std::ostream& operator<<(std::ostream& os, const votes& v) {
     os << "current: " << v._current << std::endl;
-    os << "previous: " << v._previous << std::endl;
+    if (v._previous) {
+        os << "previous: " << v._previous.value() << std::endl;
+    }
     return os;
 }
 
