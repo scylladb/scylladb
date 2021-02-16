@@ -167,7 +167,7 @@ future<shared_ptr<cql_transport::event::schema_change>> create_view_statement::a
     // If a keyspace was not specified for the base table name, it is assumed
     // it is in the same keyspace as the view table being created (which
     // itself might be the current USEd keyspace, or explicitly specified).
-    if (_base_name->get_keyspace().empty()) {
+    if (!_base_name->has_keyspace()) {
         _base_name->set_keyspace(keyspace(), true);
     }
     if (_base_name->get_keyspace() != keyspace()) {

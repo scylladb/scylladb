@@ -1124,7 +1124,7 @@ dataResource returns [uninitialized<auth::resource> res]
     : K_ALL K_KEYSPACES { $res = auth::resource(auth::resource_kind::data); }
     | K_KEYSPACE ks = keyspaceName { $res = auth::make_data_resource($ks.id); }
     | ( K_COLUMNFAMILY )? cf = columnFamilyName
-      { $res = auth::make_data_resource($cf.name->get_keyspace(), $cf.name->get_column_family()); }
+      { $res = auth::make_data_resource($cf.name->has_keyspace() ? $cf.name->get_keyspace() : "", $cf.name->get_column_family()); }
     ;
 
 roleResource returns [uninitialized<auth::resource> res]
