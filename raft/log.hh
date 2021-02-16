@@ -38,6 +38,12 @@ class log {
     // We need something that can be truncated from both sides.
     // std::deque move constructor is not nothrow hence cannot be used
     log_entries _log;
+    // Raft log index of the first entry in the log.
+    // Usually it's simply _snapshot.idx + 1,
+    // but if apply_snapshot() with non-zero trailing was used,
+    // it may point at an entry older than the snapshot.
+    // If the log is empty, same as next_idx()
+    index_t _first_idx;
     // Index of the last stable (persisted) entry in the log.
     index_t _stable_idx = index_t(0);
     // Log index of the last configuration change.
@@ -65,14 +71,28 @@ class log {
     // the log backwards after truncate().
     index_t _prev_conf_idx = index_t{0};
 private:
+    // Drop uncommitted log entries not present on the leader.
     void truncate_head(index_t i);
-    void truncate_tail(index_t i);
+    size_t truncate_tail(index_t idx, size_t trailing);
     // A helper used to find the last configuration entry in the
     // log after it's been loaded from disk.
     void init_last_conf_idx();
     log_entry_ptr& get_entry(index_t);
 public:
-    explicit log(snapshot snp, log_entries log = {}) : _snapshot(std::move(snp)), _log(std::move(log)) {
+    explicit log(snapshot snp, log_entries log = {})
+            : _snapshot(std::move(snp)), _log(std::move(log)) {
+        if (_log.empty()) {
+            _first_idx = _snapshot.idx + index_t{1};
+        } else {
+            _first_idx = _log[0]->idx;
+            // All log entries following the snapshot must
+            // be present, otherwise we will not be able to
+            // perform an initial state transfer.
+            assert(_first_idx <= _snapshot.idx + 1);
+        }
+        // The snapshot index is at least 0, so _first_idx
+        // is at least 1
+        assert(_first_idx > 0);
         stable_to(last_idx());
         init_last_conf_idx();
     }
@@ -90,8 +110,9 @@ public:
     // The voter denies its vote if its own log is more up-to-date
     // than that of the candidate.
     bool is_up_to_date(index_t idx, term_t term) const;
-    index_t start_idx() const;
     index_t next_idx() const;
+    // Return index of the last entry. If the log is empty,
+    // return the index of the last entry in the snapshot.
     index_t last_idx() const;
     index_t last_conf_idx() const {
         return _last_conf_idx;
