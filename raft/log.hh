@@ -72,8 +72,7 @@ class log {
     index_t _prev_conf_idx = index_t{0};
 private:
     // Drop uncommitted log entries not present on the leader.
-    void truncate_head(index_t i);
-    size_t truncate_tail(index_t idx, size_t trailing);
+    void truncate(index_t i);
     // A helper used to find the last configuration entry in the
     // log after it's been loaded from disk.
     void init_last_conf_idx();

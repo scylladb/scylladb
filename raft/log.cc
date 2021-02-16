@@ -61,7 +61,7 @@ index_t log::next_idx() const {
     return last_idx() + index_t(1);
 }
 
-void log::truncate_head(index_t idx) {
+void log::truncate(index_t idx) {
     assert(idx >= _first_idx);
     auto it = _log.begin() + (idx - _first_idx);
     _log.erase(it, _log.end());
@@ -74,35 +74,6 @@ void log::truncate_head(index_t idx) {
         _last_conf_idx = _prev_conf_idx;
         _prev_conf_idx = index_t{0};
     }
-}
-
-size_t log::truncate_tail(index_t idx, size_t trailing) {
-
-    size_t removed;
-    if (idx > last_idx()) {
-        // Remove all entries ignoring the 'trailing' argument,
-        // since otherwise there would be a gap between old
-        // entries and the next entry index.
-        removed = _log.size();
-        _log.clear();
-        _first_idx = idx + index_t{1};
-    } else {
-        removed = _log.size() - (last_idx() - idx);
-        removed -= std::min(trailing, removed);
-        _log.erase(_log.begin(), _log.begin() + removed);
-        _first_idx = _first_idx + index_t{removed};
-    }
-
-    _stable_idx = std::max(idx, _stable_idx);
-
-    if (_first_idx > _prev_conf_idx) {
-        _prev_conf_idx = index_t{0};
-        if (_first_idx > _last_conf_idx) {
-            _last_conf_idx = index_t{0};
-        }
-    }
-
-    return removed;
 }
 
 void log::init_last_conf_idx() {
@@ -194,7 +165,7 @@ index_t log::maybe_append(std::vector<log_entry_ptr>&& entries) {
             // If an existing entry conflicts with a new one (same
             // index but different terms), delete the existing
             // entry and all that follow it (§5.3).
-            truncate_head(e->idx);
+            truncate(e->idx);
         }
         // Assert log monotonicity
         assert(e->idx == next_idx());
@@ -207,10 +178,35 @@ index_t log::maybe_append(std::vector<log_entry_ptr>&& entries) {
 size_t log::apply_snapshot(snapshot&& snp, size_t trailing) {
     assert (snp.idx >= _first_idx);
 
-    size_t ret  = truncate_tail(snp.idx, trailing);
+    size_t removed;
+    auto idx = snp.idx;
+
+    if (idx > last_idx()) {
+        // Remove all entries ignoring the 'trailing' argument,
+        // since otherwise there would be a gap between old
+        // entries and the next entry index.
+        removed = _log.size();
+        _log.clear();
+        _first_idx = idx + index_t{1};
+    } else {
+        removed = _log.size() - (last_idx() - idx);
+        removed -= std::min(trailing, removed);
+        _log.erase(_log.begin(), _log.begin() + removed);
+        _first_idx = _first_idx + index_t{removed};
+    }
+
+    _stable_idx = std::max(idx, _stable_idx);
+
+    if (_first_idx > _prev_conf_idx) {
+        _prev_conf_idx = index_t{0};
+        if (_first_idx > _last_conf_idx) {
+            _last_conf_idx = index_t{0};
+        }
+    }
 
     _snapshot = std::move(snp);
-    return ret;
+
+    return removed;
 }
 
 std::ostream& operator<<(std::ostream& os, const log& l) {
