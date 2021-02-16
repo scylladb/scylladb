@@ -137,8 +137,10 @@ std::pair<bool, term_t> log::match_term(index_t idx, term_t term) const {
         return std::make_pair(true, term_t(0));
     }
 
-    // idx cannot point into the snapshot
-    assert(idx >= _first_idx || idx == _snapshot.idx);
+    // We got some very old AppendEntries we can safely ignore.
+    if (idx < _snapshot.idx) {
+        return std::make_pair(false, last_term());
+    }
 
     term_t my_term;
 
