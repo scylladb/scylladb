@@ -3443,9 +3443,12 @@ protected:
             return _proxy->query_mutations_locally(_schema, cmd, _partition_range, timeout, _trace_state);
         } else {
             tracing::trace(_trace_state, "read_mutation_data: sending a message to /{}", ep);
-            return _proxy->_messaging.send_read_mutation_data(netw::messaging_service::msg_addr{ep, 0}, timeout, *cmd, _partition_range).then([this, ep](rpc::tuple<reconcilable_result, rpc::optional<cache_temperature>> result_and_hit_rate) {
+            clock_type::time_point req_time = clock_type::now();
+            _proxy->mark_sent(ep, req_time);
+            return _proxy->_messaging.send_read_mutation_data(netw::messaging_service::msg_addr{ep, 0}, timeout, *cmd, _partition_range).then([this, ep, req_time](rpc::tuple<reconcilable_result, rpc::optional<cache_temperature>> result_and_hit_rate) {
                 auto&& [result, hit_rate] = result_and_hit_rate;
                 tracing::trace(_trace_state, "read_mutation_data: got response from /{}", ep);
+                _proxy->mark_responded(ep, req_time, clock_type::now());
                 return make_ready_future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>>(rpc::tuple(make_foreign(::make_lw_shared<reconcilable_result>(std::move(result))), hit_rate.value_or(cache_temperature::invalid())));
             });
         }
@@ -3460,9 +3463,12 @@ protected:
             return _proxy->query_result_local(_schema, _cmd, _partition_range, opts, _trace_state, timeout);
         } else {
             tracing::trace(_trace_state, "read_data: sending a message to /{}", ep);
-            return _proxy->_messaging.send_read_data(netw::messaging_service::msg_addr{ep, 0}, timeout, *_cmd, _partition_range, opts.digest_algo).then([this, ep](rpc::tuple<query::result, rpc::optional<cache_temperature>> result_hit_rate) {
+            clock_type::time_point req_time = clock_type::now();
+            _proxy->mark_sent(ep, req_time);
+            return _proxy->_messaging.send_read_data(netw::messaging_service::msg_addr{ep, 0}, timeout, *_cmd, _partition_range, opts.digest_algo).then([this, ep, req_time](rpc::tuple<query::result, rpc::optional<cache_temperature>> result_hit_rate) {
                 auto&& [result, hit_rate] = result_hit_rate;
                 tracing::trace(_trace_state, "read_data: got response from /{}", ep);
+                _proxy->mark_responded(ep, req_time, clock_type::now());
                 return make_ready_future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>>(rpc::tuple(make_foreign(::make_lw_shared<query::result>(std::move(result))), hit_rate.value_or(cache_temperature::invalid())));
             });
         }
@@ -3475,20 +3481,26 @@ protected:
                         timeout, digest_algorithm(*_proxy));
         } else {
             tracing::trace(_trace_state, "read_digest: sending a message to /{}", ep);
+            clock_type::time_point req_time = clock_type::now();
+            _proxy->mark_sent(ep, req_time);
             return _proxy->_messaging.send_read_digest(netw::messaging_service::msg_addr{ep, 0}, timeout, *_cmd,
-                        _partition_range, digest_algorithm(*_proxy)).then([this, ep] (
+                        _partition_range, digest_algorithm(*_proxy)).then([this, ep, req_time] (
                     rpc::tuple<query::result_digest, rpc::optional<api::timestamp_type>, rpc::optional<cache_temperature>> digest_timestamp_hit_rate) {
                 auto&& [d, t, hit_rate] = digest_timestamp_hit_rate;
                 tracing::trace(_trace_state, "read_digest: got response from /{}", ep);
+                _proxy->mark_responded(ep, req_time, clock_type::now());
                 return make_ready_future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature>>(rpc::tuple(d, t ? t.value() : api::missing_timestamp, hit_rate.value_or(cache_temperature::invalid())));
             });
         }
     }
     future<> make_mutation_data_requests(lw_shared_ptr<query::read_command> cmd, data_resolver_ptr resolver, targets_iterator begin, targets_iterator end, clock_type::time_point timeout) {
         return parallel_for_each(begin, end, [this, &cmd, resolver = std::move(resolver), timeout] (gms::inet_address ep) {
-            return make_mutation_data_request(cmd, ep, timeout).then_wrapped([this, resolver, ep] (future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>> f) {
+            clock_type::time_point req_time = clock_type::now();
+            _proxy->mark_sent(ep, req_time);
+            return make_mutation_data_request(cmd, ep, timeout).then_wrapped([this, resolver, ep, req_time] (future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>> f) {
                 try {
                     auto v = f.get0();
+                    _proxy->mark_responded(ep, req_time, clock_type::now());
                     _cf->set_hit_rate(ep, std::get<1>(v));
                     resolver->add_mutate_data(ep, std::get<0>(std::move(v)));
                     ++_proxy->get_stats().mutation_data_read_completed.get_ep_stat(ep);
@@ -5254,6 +5266,27 @@ const db::hints::host_filter& storage_proxy::get_hints_host_filter() const {
     return _hints_manager.get_host_filter();
 }
 
+void storage_proxy::mark_responded(const gms::inet_address& ep, clock_type::time_point req_time, clock_type::time_point response_time) {
+    last_seen_info& info = _last_seen[ep];
+    info.last_rtt = response_time - req_time;
+    info.last_responded = response_time;
+}
+
+void storage_proxy::mark_sent(const gms::inet_address& ep, clock_type::time_point req_time) {
+    last_seen_info& info = _last_seen[ep];
+    // If last sending attempt was sufficiently old, the response
+    // info should be reset in order to avoid having stale records.
+    if (info.last_sent + 5s < req_time) {
+        info.last_responded = last_seen_info::unknown;
+    }
+    info.last_sent = req_time;
+}
+
+std::optional<storage_proxy::last_seen_info> storage_proxy::last_seen(const gms::inet_address& ep) const {
+    auto it = _last_seen.find(ep);
+    return it != _last_seen.end() ? std::make_optional(it->second) : std::nullopt;
+}
+
 void storage_proxy::on_join_cluster(const gms::inet_address& endpoint) {};
 
 void storage_proxy::on_leave_cluster(const gms::inet_address& endpoint) {};
@@ -5277,6 +5310,7 @@ void storage_proxy::retire_view_response_handlers(noncopyable_function<bool(cons
 }
 
 void storage_proxy::on_down(const gms::inet_address& endpoint) {
+    _last_seen.erase(endpoint);
     return retire_view_response_handlers([endpoint] (const abstract_write_response_handler& handler) {
         return handler.get_targets().contains(endpoint);
     });
