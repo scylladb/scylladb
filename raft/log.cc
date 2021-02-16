@@ -23,11 +23,11 @@
 namespace raft {
 
 log_entry_ptr& log::get_entry(index_t i) {
-    return _log[i - start_idx()];
+    return _log[i - _first_idx];
 }
 
 log_entry_ptr& log::operator[](size_t i) {
-    assert(index_t(i) >= start_idx());
+    assert(!_log.empty() && index_t(i) >= _first_idx);
     return get_entry(index_t(i));
 }
 
@@ -54,7 +54,7 @@ bool log::is_up_to_date(index_t idx, term_t term) const {
 }
 
 index_t log::last_idx() const {
-    return index_t(_log.size()) + start_idx() - index_t(1);
+    return index_t(_log.size()) + _first_idx - index_t(1);
 }
 
 index_t log::next_idx() const {
@@ -62,11 +62,11 @@ index_t log::next_idx() const {
 }
 
 void log::truncate_head(index_t idx) {
-    assert(idx >= start_idx());
-    auto it = _log.begin() + (idx - start_idx());
+    assert(idx >= _first_idx);
+    auto it = _log.begin() + (idx - _first_idx);
     _log.erase(it, _log.end());
     stable_to(std::min(_stable_idx, last_idx()));
-    if (_last_conf_idx > last_idx() ) {
+    if (_last_conf_idx > last_idx()) {
         // If _prev_conf_idx is 0, this log does not contain any
         // other configuration changes, since no two uncommitted
         // configuration changes can be in progress.
@@ -76,23 +76,33 @@ void log::truncate_head(index_t idx) {
     }
 }
 
-void log::truncate_tail(index_t idx) {
-    assert(start_idx() <= idx);
+size_t log::truncate_tail(index_t idx, size_t trailing) {
 
-    if (idx >= last_idx()) {
+    size_t removed;
+    if (idx > last_idx()) {
+        // Remove all entries ignoring the 'trailing' argument,
+        // since otherwise there would be a gap between old
+        // entries and the next entry index.
+        removed = _log.size();
         _log.clear();
-    } else if (idx > start_idx()) {
-        _log.erase(_log.begin(), _log.begin() + idx - start_idx() + 1);
+        _first_idx = idx + index_t{1};
+    } else {
+        removed = _log.size() - (last_idx() - idx);
+        removed -= std::min(trailing, removed);
+        _log.erase(_log.begin(), _log.begin() + removed);
+        _first_idx = _first_idx + index_t{removed};
     }
 
     _stable_idx = std::max(idx, _stable_idx);
 
-    if (start_idx() > _prev_conf_idx) {
+    if (_first_idx > _prev_conf_idx) {
         _prev_conf_idx = index_t{0};
-        if (start_idx() > _last_conf_idx) {
+        if (_first_idx > _last_conf_idx) {
             _last_conf_idx = index_t{0};
         }
     }
+
+    return removed;
 }
 
 void log::init_last_conf_idx() {
@@ -106,12 +116,6 @@ void log::init_last_conf_idx() {
             }
         }
    }
-}
-
-index_t log::start_idx() const {
-    // log my contain entries included in the snapshot, so start idx
-    // may be smaller that snapshot index
-    return (_log.empty() ? _snapshot.idx  + index_t(1): _log[0]->idx);
 }
 
 term_t log::last_term() const {
@@ -134,14 +138,15 @@ std::pair<bool, term_t> log::match_term(index_t idx, term_t term) const {
     }
 
     // idx cannot point into the snapshot
-    assert(idx >= start_idx() || idx == _snapshot.idx);
+    assert(idx >= _first_idx || idx == _snapshot.idx);
 
     term_t my_term;
 
     if (idx == _snapshot.idx) {
         my_term = _snapshot.term;
     } else {
-        auto i = idx - start_idx();
+        assert(idx >= _first_idx);
+        auto i = idx - _first_idx;
 
         if (i >= _log.size()) {
             // We have a gap between the follower and the leader.
@@ -155,8 +160,8 @@ std::pair<bool, term_t> log::match_term(index_t idx, term_t term) const {
 }
 
 std::optional<term_t> log::term_for(index_t idx) const {
-    if (!_log.empty() && idx >= start_idx()) {
-        return _log[idx - start_idx()]->term;
+    if (!_log.empty() && idx >= _first_idx) {
+        return _log[idx - _first_idx]->term;
     }
     if (idx == _snapshot.idx) {
         return _snapshot.term;
@@ -173,9 +178,9 @@ index_t log::maybe_append(std::vector<log_entry_ptr>&& entries) {
     // contains them to ensure the terms match.
     for (auto& e : entries) {
         if (e->idx <= last_idx()) {
-            if (e->idx < start_idx()) {
+            if (e->idx < _first_idx) {
                 logger.trace("append_entries: skipping entry with idx {} less than log start {}",
-                    e->idx, start_idx());
+                    e->idx, _first_idx);
                 continue;
             }
             if (e->term == get_entry(e->idx)->term) {
@@ -198,24 +203,19 @@ index_t log::maybe_append(std::vector<log_entry_ptr>&& entries) {
 }
 
 size_t log::apply_snapshot(snapshot&& snp, size_t trailing) {
-    size_t ret = 0;
-    assert (snp.idx >= start_idx());
-    if (snp.idx - start_idx() > index_t(trailing)) {
-        ret = _log.size();
-       // call truncate first since it uses old snapshot
-       truncate_tail(index_t(snp.idx - trailing));
-       ret -= _log.size();
-    }
+    assert (snp.idx >= _first_idx);
+
+    size_t ret  = truncate_tail(snp.idx, trailing);
 
     _snapshot = std::move(snp);
     return ret;
 }
 
 std::ostream& operator<<(std::ostream& os, const log& l) {
-    os << "next idx: " << l.next_idx() << ", ";
+    os << "first idx: " << l._first_idx << ", ";
     os << "last idx: " << l.last_idx() << ", ";
+    os << "next idx: " << l.next_idx() << ", ";
     os << "stable idx: " << l.stable_idx() << ", ";
-    os << "start idx: " << l.start_idx() << ", ";
     os << "last term: " << l.last_term();
     return os;
 }
