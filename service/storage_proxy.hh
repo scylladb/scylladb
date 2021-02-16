@@ -481,6 +481,11 @@ public:
         }
         return next;
     }
+
+    std::default_random_engine& get_urandom() {
+        return _urandom;
+    }
+
     void init_messaging_service(shared_ptr<migration_manager>);
     future<> uninit_messaging_service();
 
