@@ -310,6 +310,7 @@ struct compaction_read_monitor_generator final : public read_monitor_generator {
         _generated_monitors.emplace_back(std::move(sst), _compaction_manager, _cf);
         return _generated_monitors.back();
     }
+
     compaction_read_monitor_generator(compaction_manager& cm, column_family& cf)
         : _compaction_manager(cm)
         , _cf(cf) {}
@@ -574,6 +575,7 @@ private:
             // Do not actually compact a sstable that is fully expired and can be safely
             // dropped without ressurrecting old data.
             if (tombstone_expiration_enabled() && fully_expired.contains(sst)) {
+                on_skipped_expired_sstable(sst);
                 continue;
             }
 
@@ -679,6 +681,9 @@ private:
     virtual void on_new_partition() {}
 
     virtual void on_end_of_compaction() {};
+
+    // Inform about every expired sstable that was skipped during setup phase
+    virtual void on_skipped_expired_sstable(shared_sstable sstable) {}
 
     // create a writer based on decorated key.
     virtual compaction_writer create_compaction_writer(const dht::decorated_key& dk) = 0;
@@ -922,6 +927,12 @@ public:
             _cf.get_compaction_manager().on_compaction_complete(*_weight_registration);
         }
         replace_remaining_exhausted_sstables();
+    }
+
+    virtual void on_skipped_expired_sstable(shared_sstable sstable) override {
+        // manually register expired sstable into monitor, as it's not being actually compacted
+        // this will allow expired sstable to be removed from tracker once compaction completes
+        _monitor_generator(std::move(sstable));
     }
 private:
     void backlog_tracker_incrementally_adjust_charges(std::vector<shared_sstable> exhausted_sstables) {
