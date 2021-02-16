@@ -181,6 +181,7 @@ concept FragmentedMutableView = requires (T view) {
 
 template<FragmentedView View>
 struct fragment_range {
+    using fragment_type = typename View::fragment_type;
     View view;
     class fragment_iterator {
         using iterator_category = std::input_iterator_tag;
@@ -209,9 +210,12 @@ struct fragment_range {
         pointer operator->() const { return &_current; }
         bool operator==(const fragment_iterator& i) const { return _view.size_bytes() == i._view.size_bytes(); }
     };
+    using iterator = fragment_iterator;
     fragment_range(const View& v) : view(v) {}
     fragment_iterator begin() const { return fragment_iterator(view); }
     fragment_iterator end() const { return fragment_iterator(); }
+    size_t size_bytes() const { return view.size_bytes(); }
+    bool empty() const { return view.empty(); }
 };
 
 template<FragmentedView View>
