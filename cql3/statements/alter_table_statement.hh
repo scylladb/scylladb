@@ -72,7 +72,7 @@ private:
     const shared_ptr<cf_prop_defs> _properties;
     const renames_type _renames;
 public:
-    alter_table_statement(shared_ptr<cf_name> name,
+    alter_table_statement(cf_name name,
                           type t,
                           std::vector<column_change> column_changes,
                           shared_ptr<cf_prop_defs> properties,

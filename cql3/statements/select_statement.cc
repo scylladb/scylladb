@@ -1336,7 +1336,7 @@ static void validate_attrs(const cql3::attributes::raw& attrs) {
     }
 }
 
-select_statement::select_statement(::shared_ptr<cf_name> cf_name,
+select_statement::select_statement(cf_name cf_name,
                                    lw_shared_ptr<const parameters> parameters,
                                    std::vector<::shared_ptr<selection::raw_selector>> select_clause,
                                    std::vector<::shared_ptr<relation>> where_clause,
@@ -1344,7 +1344,7 @@ select_statement::select_statement(::shared_ptr<cf_name> cf_name,
                                    ::shared_ptr<term::raw> per_partition_limit,
                                    std::vector<::shared_ptr<cql3::column_identifier::raw>> group_by_columns,
                                    std::unique_ptr<attributes::raw> attrs)
-    : cf_statement(std::move(cf_name))
+    : cf_statement(cf_name)
     , _parameters(std::move(parameters))
     , _select_clause(std::move(select_clause))
     , _where_clause(std::move(where_clause))

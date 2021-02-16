@@ -74,7 +74,7 @@ public:
      * @param updates a map of column operations to perform
      * @param whereClause the where clause
      */
-    update_statement(::shared_ptr<cf_name> name,
+    update_statement(cf_name name,
         std::unique_ptr<attributes::raw> attrs,
         std::vector<std::pair<::shared_ptr<column_identifier::raw>, std::unique_ptr<operation::raw_update>>> updates,
         std::vector<relation_ptr> where_clause,

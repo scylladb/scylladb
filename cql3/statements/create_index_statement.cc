@@ -58,7 +58,7 @@ namespace cql3 {
 
 namespace statements {
 
-create_index_statement::create_index_statement(::shared_ptr<cf_name> name,
+create_index_statement::create_index_statement(cf_name name,
                                                ::shared_ptr<index_name> index_name,
                                                std::vector<::shared_ptr<index_target::raw>> raw_targets,
                                                ::shared_ptr<index_prop_defs> properties,

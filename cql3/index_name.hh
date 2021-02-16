@@ -55,7 +55,7 @@ public:
 
     const sstring& get_idx() const;
 
-    ::shared_ptr<cf_name> get_cf_name() const;
+    cf_name get_cf_name() const;
 
     virtual sstring to_string() const override;
 };

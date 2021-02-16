@@ -57,7 +57,7 @@ class drop_view_statement : public schema_altering_statement {
 private:
     bool _if_exists;
 public:
-    drop_view_statement(::shared_ptr<cf_name> view_name, bool if_exists);
+    drop_view_statement(cf_name view_name, bool if_exists);
 
     virtual future<> check_access(service::storage_proxy& proxy, const service::client_state& state) const override;
 

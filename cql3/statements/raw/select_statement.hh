@@ -108,7 +108,7 @@ private:
     std::vector<::shared_ptr<cql3::column_identifier::raw>> _group_by_columns;
     std::unique_ptr<cql3::attributes::raw> _attrs;
 public:
-    select_statement(::shared_ptr<cf_name> cf_name,
+    select_statement(cf_name cf_name,
             lw_shared_ptr<const parameters> parameters,
             std::vector<::shared_ptr<selection::raw_selector>> select_clause,
             std::vector<::shared_ptr<relation>> where_clause,

@@ -69,7 +69,7 @@ private:
 protected:
     explicit schema_altering_statement(timeout_config_selector timeout_selector = &timeout_config::other_timeout);
 
-    schema_altering_statement(::shared_ptr<cf_name> name, timeout_config_selector timeout_selector = &timeout_config::other_timeout);
+    schema_altering_statement(cf_name name, timeout_config_selector timeout_selector = &timeout_config::other_timeout);
 
     /**
      * When a new database object (keyspace, table) is created, the creator needs to be granted all applicable

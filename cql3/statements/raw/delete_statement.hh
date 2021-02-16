@@ -58,7 +58,7 @@ private:
     std::vector<std::unique_ptr<operation::raw_deletion>> _deletions;
     std::vector<::shared_ptr<relation>> _where_clause;
 public:
-    delete_statement(::shared_ptr<cf_name> name,
+    delete_statement(cf_name name,
            std::unique_ptr<attributes::raw> attrs,
            std::vector<std::unique_ptr<operation::raw_deletion>> deletions,
            std::vector<::shared_ptr<relation>> where_clause,

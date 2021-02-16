@@ -72,7 +72,7 @@ public:
         type type_,
         std::unique_ptr<attributes::raw> attrs,
         std::vector<std::unique_ptr<raw::modification_statement>> parsed_statements)
-            : cf_statement(nullptr)
+            : cf_statement(std::nullopt)
             , _type(type_)
             , _attrs(std::move(attrs))
             , _parsed_statements(std::move(parsed_statements)) {

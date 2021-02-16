@@ -60,9 +60,9 @@ namespace raw {
  */
 class cf_statement : public parsed_statement {
 protected:
-    ::shared_ptr<cf_name> _cf_name;
+    std::optional<cf_name> _cf_name;
 
-    cf_statement(::shared_ptr<cf_name> cf_name);
+    cf_statement(std::optional<cf_name> cf_name);
 public:
     virtual void prepare_keyspace(const service::client_state& state);
 

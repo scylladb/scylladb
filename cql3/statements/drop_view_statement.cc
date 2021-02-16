@@ -49,7 +49,7 @@ namespace cql3 {
 
 namespace statements {
 
-drop_view_statement::drop_view_statement(::shared_ptr<cf_name> view_name, bool if_exists)
+drop_view_statement::drop_view_statement(cf_name view_name, bool if_exists)
     : schema_altering_statement{std::move(view_name), &timeout_config::truncate_timeout}
     , _if_exists{if_exists}
 {

@@ -51,7 +51,7 @@ namespace cql3 {
 
 namespace statements {
 
-alter_view_statement::alter_view_statement(::shared_ptr<cf_name> view_name, ::shared_ptr<cf_prop_defs> properties)
+alter_view_statement::alter_view_statement(cf_name view_name, ::shared_ptr<cf_prop_defs> properties)
         : schema_altering_statement{std::move(view_name)}
         , _properties{std::move(properties)}
 {

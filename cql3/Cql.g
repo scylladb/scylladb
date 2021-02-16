@@ -1124,7 +1124,7 @@ dataResource returns [uninitialized<auth::resource> res]
     : K_ALL K_KEYSPACES { $res = auth::resource(auth::resource_kind::data); }
     | K_KEYSPACE ks = keyspaceName { $res = auth::make_data_resource($ks.id); }
     | ( K_COLUMNFAMILY )? cf = columnFamilyName
-      { $res = auth::make_data_resource($cf.name->has_keyspace() ? $cf.name->get_keyspace() : "", $cf.name->get_column_family()); }
+      { $res = auth::make_data_resource($cf.name.has_keyspace() ? $cf.name.get_keyspace() : "", $cf.name.get_column_family()); }
     ;
 
 roleResource returns [uninitialized<auth::resource> res]
@@ -1261,8 +1261,8 @@ ident returns [shared_ptr<cql3::column_identifier> id]
 
 // Keyspace & Column family names
 keyspaceName returns [sstring id]
-    @init { auto name = make_shared<cql3::cf_name>(); }
-    : ksName[*name] { $id = name->get_keyspace(); }
+    @init { auto name = cql3::cf_name(); }
+    : ksName[name] { $id = name.get_keyspace(); }
     ;
 
 indexName returns [::shared_ptr<cql3::index_name> name]
@@ -1270,9 +1270,9 @@ indexName returns [::shared_ptr<cql3::index_name> name]
     : (ksName[*name] '.')? idxName[*name]
     ;
 
-columnFamilyName returns [::shared_ptr<cql3::cf_name> name]
-    @init { $name = ::make_shared<cql3::cf_name>(); }
-    : (ksName[*name] '.')? cfName[*name]
+columnFamilyName returns [cql3::cf_name name]
+    @init { $name = cql3::cf_name(); }
+    : (ksName[name] '.')? cfName[name]
     ;
 
 userTypeName returns [uninitialized<cql3::ut_name> name]

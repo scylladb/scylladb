@@ -43,7 +43,8 @@ namespace statements {
 /** A <code>CREATE MATERIALIZED VIEW</code> parsed from a CQL query statement. */
 class create_view_statement : public schema_altering_statement {
 private:
-    ::shared_ptr<cf_name> _base_name;
+    // Mutable because announce_migration() modifies it while marked as const
+    mutable cf_name _base_name;
     std::vector<::shared_ptr<selection::raw_selector>> _select_clause;
     std::vector<::shared_ptr<relation>> _where_clause;
     std::vector<::shared_ptr<cql3::column_identifier::raw>> _partition_keys;
@@ -53,8 +54,8 @@ private:
 
 public:
     create_view_statement(
-            ::shared_ptr<cf_name> view_name,
-            ::shared_ptr<cf_name> base_name,
+            cf_name view_name,
+            cf_name base_name,
             std::vector<::shared_ptr<selection::raw_selector>> select_clause,
             std::vector<::shared_ptr<relation>> where_clause,
             std::vector<::shared_ptr<cql3::column_identifier::raw>> partition_keys,

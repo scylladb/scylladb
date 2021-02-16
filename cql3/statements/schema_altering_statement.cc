@@ -50,13 +50,13 @@ namespace cql3 {
 namespace statements {
 
 schema_altering_statement::schema_altering_statement(timeout_config_selector timeout_selector)
-    : cf_statement{::shared_ptr<cf_name>{}}
+    : cf_statement(cf_name())
     , cql_statement_no_metadata(timeout_selector)
     , _is_column_family_level{false}
 {
 }
 
-schema_altering_statement::schema_altering_statement(::shared_ptr<cf_name> name, timeout_config_selector timeout_selector)
+schema_altering_statement::schema_altering_statement(cf_name name, timeout_config_selector timeout_selector)
     : cf_statement{std::move(name)}
     , cql_statement_no_metadata(timeout_selector)
     , _is_column_family_level{true}

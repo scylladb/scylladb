@@ -92,7 +92,7 @@ class create_table_statement : public schema_altering_statement {
     const bool _if_not_exists;
     std::optional<utils::UUID> _id;
 public:
-    create_table_statement(::shared_ptr<cf_name> name,
+    create_table_statement(cf_name name,
                            ::shared_ptr<cf_prop_defs> properties,
                            bool if_not_exists,
                            column_set_type static_columns,
@@ -137,7 +137,7 @@ private:
     bool _if_not_exists;
     cf_properties _properties;
 public:
-    raw_statement(::shared_ptr<cf_name> name, bool if_not_exists);
+    raw_statement(cf_name name, bool if_not_exists);
 
     virtual std::unique_ptr<prepared_statement> prepare(database& db, cql_stats& stats) override;
 

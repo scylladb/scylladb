@@ -52,7 +52,7 @@ namespace statements {
 
 class truncate_statement : public raw::cf_statement, public cql_statement_no_metadata {
 public:
-    truncate_statement(::shared_ptr<cf_name> name);
+    truncate_statement(cf_name name);
 
     virtual uint32_t get_bound_terms() const override;
 

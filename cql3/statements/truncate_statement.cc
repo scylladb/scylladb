@@ -50,7 +50,7 @@ namespace cql3 {
 
 namespace statements {
 
-truncate_statement::truncate_statement(::shared_ptr<cf_name> name)
+truncate_statement::truncate_statement(cf_name name)
     : cf_statement{std::move(name)}
     , cql_statement_no_metadata(&timeout_config::truncate_timeout)
 {

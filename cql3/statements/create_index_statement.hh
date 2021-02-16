@@ -73,7 +73,7 @@ class create_index_statement : public schema_altering_statement {
     cql_stats* _cql_stats = nullptr;
 
 public:
-    create_index_statement(::shared_ptr<cf_name> name, ::shared_ptr<index_name> index_name,
+    create_index_statement(cf_name name, ::shared_ptr<index_name> index_name,
             std::vector<::shared_ptr<index_target::raw>> raw_targets,
             ::shared_ptr<index_prop_defs> properties, bool if_not_exists);
 

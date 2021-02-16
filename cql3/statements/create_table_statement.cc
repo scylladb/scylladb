@@ -61,7 +61,7 @@ namespace cql3 {
 
 namespace statements {
 
-create_table_statement::create_table_statement(::shared_ptr<cf_name> name,
+create_table_statement::create_table_statement(cf_name name,
                                                ::shared_ptr<cf_prop_defs> properties,
                                                bool if_not_exists,
                                                column_set_type static_columns,
@@ -179,7 +179,7 @@ future<> create_table_statement::grant_permissions_to_creator(const service::cli
     });
 }
 
-create_table_statement::raw_statement::raw_statement(::shared_ptr<cf_name> name, bool if_not_exists)
+create_table_statement::raw_statement::raw_statement(cf_name name, bool if_not_exists)
     : cf_statement{std::move(name)}
     , _if_not_exists{if_not_exists}
 { }
@@ -206,7 +206,7 @@ std::unique_ptr<prepared_statement> create_table_statement::raw_statement::prepa
     _properties.validate(db, _properties.properties()->make_schema_extensions(db.extensions()));
     const bool has_default_ttl = _properties.properties()->get_default_time_to_live() > 0;
 
-    auto stmt = ::make_shared<create_table_statement>(_cf_name, _properties.properties(), _if_not_exists, _static_columns, _properties.properties()->get_id());
+    auto stmt = ::make_shared<create_table_statement>(*_cf_name, _properties.properties(), _if_not_exists, _static_columns, _properties.properties()->get_id());
 
     std::optional<std::map<bytes, data_type>> defined_multi_cell_columns;
     for (auto&& entry : _definitions) {

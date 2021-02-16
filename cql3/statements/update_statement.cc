@@ -289,7 +289,7 @@ void insert_prepared_json_statement::execute_operations_for_key(mutation& m, con
 
 namespace raw {
 
-insert_statement::insert_statement(::shared_ptr<cf_name> name,
+insert_statement::insert_statement(cf_name name,
                                    std::unique_ptr<attributes::raw> attrs,
                                    std::vector<::shared_ptr<column_identifier::raw>> column_names,
                                    std::vector<::shared_ptr<term::raw>> column_values,
@@ -347,7 +347,7 @@ insert_statement::prepare_internal(database& db, schema_ptr schema,
     return stmt;
 }
 
-insert_json_statement::insert_json_statement(::shared_ptr<cf_name> name,
+insert_json_statement::insert_json_statement(cf_name name,
                                              std::unique_ptr<attributes::raw> attrs,
                                              ::shared_ptr<term::raw> json_value,
                                              bool if_not_exists,
@@ -371,7 +371,7 @@ insert_json_statement::prepare_internal(database& db, schema_ptr schema,
     return stmt;
 }
 
-update_statement::update_statement(::shared_ptr<cf_name> name,
+update_statement::update_statement(cf_name name,
                                    std::unique_ptr<attributes::raw> attrs,
                                    std::vector<std::pair<::shared_ptr<column_identifier::raw>, std::unique_ptr<operation::raw_update>>> updates,
                                    std::vector<relation_ptr> where_clause,
