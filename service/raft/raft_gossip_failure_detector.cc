@@ -20,13 +20,13 @@
  */
 
 #include "service/raft/raft_gossip_failure_detector.hh"
-#include "service/raft/raft_rpc.hh"
+#include "service/raft/raft_services.hh"
 #include "gms/gossiper.hh"
 
-raft_gossip_failure_detector::raft_gossip_failure_detector(gms::gossiper& gs, raft_rpc& rpc)
-    : _gossip(gs), _rpc(rpc)
+raft_gossip_failure_detector::raft_gossip_failure_detector(gms::gossiper& gs, raft_services& raft_srvs)
+    : _gossip(gs), _raft_services(raft_srvs)
 {}
 
 bool raft_gossip_failure_detector::is_alive(raft::server_id server) {
-    return _gossip.is_alive(_rpc.get_inet_address(server));
+    return _gossip.is_alive(_raft_services.get_inet_address(server));
 }

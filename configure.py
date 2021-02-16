@@ -879,6 +879,7 @@ scylla_core = (['database.cc',
                 'serializer.cc',
                 'service/raft/raft_rpc.cc',
                 'service/raft/raft_gossip_failure_detector.cc',
+                'service/raft/raft_services.cc',
                 ] + [Antlr3Grammar('cql3/Cql.g')] + [Thrift('interface/cassandra.thrift', 'Cassandra')] \
                   + scylla_raft_core
                )
