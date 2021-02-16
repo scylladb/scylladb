@@ -1894,6 +1894,10 @@ storage_proxy::mutate_counter_on_leader_and_replicate(const schema_ptr& s, froze
     return _db.invoke_on(shard, {_write_smp_service_group, timeout}, [gs = global_schema_ptr(s), fm = std::move(fm), cl, timeout, gt = tracing::global_trace_state_ptr(std::move(trace_state)), permit = std::move(permit), local] (database& db) {
         auto trace_state = gt.get();
         auto p = local ? std::move(permit) : /* FIXME: either obtain a real permit on this shard or hold original one across shard */ empty_service_permit();
+
+        // counter delta is applied here, unlike typical mutations => write stats also need to be updated here
+        ++service::get_local_storage_proxy().get_stats().writes_attempts.get_ep_stat(utils::fb_utilities::get_broadcast_address());
+        
         return db.apply_counter_update(gs, fm, timeout, trace_state).then([cl, timeout, trace_state, p = std::move(p)] (mutation m) mutable {
             return service::get_local_storage_proxy().replicate_counter_from_leader(std::move(m), cl, std::move(trace_state), timeout, std::move(p));
         });
