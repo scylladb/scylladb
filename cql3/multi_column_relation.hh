@@ -59,30 +59,32 @@ namespace cql3 {
  *  - SELECT ... WHERE (a, b) IN ?
  */
 class multi_column_relation final : public relation {
+public:
+    using mode = restrictions::multi_column_restriction::slice::mode;
 private:
     std::vector<shared_ptr<column_identifier::raw>> _entities;
     shared_ptr<term::multi_column_raw> _values_or_marker;
     std::vector<shared_ptr<term::multi_column_raw>> _in_values;
     shared_ptr<tuples::in_raw> _in_marker;
-
+    mode _mode;
 public:
-
     multi_column_relation(std::vector<shared_ptr<column_identifier::raw>> entities,
         expr::oper_t relation_type, shared_ptr<term::multi_column_raw> values_or_marker,
-        std::vector<shared_ptr<term::multi_column_raw>> in_values, shared_ptr<tuples::in_raw> in_marker)
+        std::vector<shared_ptr<term::multi_column_raw>> in_values, shared_ptr<tuples::in_raw> in_marker, mode m = mode::normal)
         : relation(relation_type)
         , _entities(std::move(entities))
         , _values_or_marker(std::move(values_or_marker))
         , _in_values(std::move(in_values))
         , _in_marker(std::move(in_marker))
+        , _mode(m)
     { }
 
     static shared_ptr<multi_column_relation> create_multi_column_relation(
         std::vector<shared_ptr<column_identifier::raw>> entities, expr::oper_t relation_type,
         shared_ptr<term::multi_column_raw> values_or_marker, std::vector<shared_ptr<term::multi_column_raw>> in_values,
-        shared_ptr<tuples::in_raw> in_marker) {
+        shared_ptr<tuples::in_raw> in_marker, mode m = mode::normal) {
         return ::make_shared<multi_column_relation>(std::move(entities), relation_type, std::move(values_or_marker),
-            std::move(in_values), std::move(in_marker));
+            std::move(in_values), std::move(in_marker), m);
     }
 
     /**
@@ -97,6 +99,15 @@ public:
                                                                     expr::oper_t relation_type, shared_ptr<term::multi_column_raw> values_or_marker) {
         assert(relation_type != expr::oper_t::IN);
         return create_multi_column_relation(std::move(entities), relation_type, std::move(values_or_marker), {}, {});
+    }
+
+    /**
+     * Same as above, but sets the magic mode that causes us to treat the restrictions as "raw" clustering bounds
+     */
+    static shared_ptr<multi_column_relation> create_scylla_clustering_bound_non_in_relation(std::vector<shared_ptr<column_identifier::raw>> entities,
+                                                                    expr::oper_t relation_type, shared_ptr<term::multi_column_raw> values_or_marker) {
+        assert(relation_type != expr::oper_t::IN);
+        return create_multi_column_relation(std::move(entities), relation_type, std::move(values_or_marker), {}, {}, mode::scylla_clustering_bound);
     }
 
     /**
@@ -191,7 +202,7 @@ protected:
             return cs->column_specification;
         });
         auto t = to_term(col_specs, *get_value(), db, schema->ks_name(), bound_names);
-        return ::make_shared<restrictions::multi_column_restriction::slice>(schema, rs, bound, inclusive, t);
+        return ::make_shared<restrictions::multi_column_restriction::slice>(schema, rs, bound, inclusive, t, _mode);
     }
 
     virtual shared_ptr<restrictions::restriction> new_contains_restriction(database& db, schema_ptr schema,

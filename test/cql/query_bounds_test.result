@@ -1,0 +1,510 @@
+create table foo (a int, b int, c int, PRIMARY KEY (a, b, c)) WITH CLUSTERING ORDER BY (b DESC, c ASC);
+{
+	"status" : "ok"
+}
+
+INSERT INTO foo (a, b, c) VALUES (0, 2, 0);
+{
+	"status" : "ok"
+}
+INSERT INTO foo (a, b, c) VALUES (0, 1, 0);
+{
+	"status" : "ok"
+}
+INSERT INTO foo (a, b, c) VALUES (0, 1, 1);
+{
+	"status" : "ok"
+}
+INSERT INTO foo (a, b, c) VALUES (0, 0, 0);
+{
+	"status" : "ok"
+}
+
+SELECT * FROM foo WHERE a=0 AND (b, c) > (1, 0);
+{
+	"rows" : 
+	[
+		{
+			"a" : "0",
+			"b" : "2",
+			"c" : "0"
+		},
+		{
+			"a" : "0",
+			"b" : "1",
+			"c" : "1"
+		}
+	]
+}
+
+SELECT * FROM foo WHERE a=0 AND (b, c) > SCYLLA_CLUSTERING_BOUND (1, 0);
+{
+	"rows" : 
+	[
+		{
+			"a" : "0",
+			"b" : "1",
+			"c" : "1"
+		},
+		{
+			"a" : "0",
+			"b" : "0",
+			"c" : "0"
+		}
+	]
+}
+
+SELECT * FROM foo WHERE a=0 AND (b, c) > (2, 0);
+{
+	"rows" : null
+}
+
+SELECT * FROM foo WHERE a=0 AND (b, c) > SCYLLA_CLUSTERING_BOUND (2, 0);
+{
+	"rows" : 
+	[
+		{
+			"a" : "0",
+			"b" : "1",
+			"c" : "0"
+		},
+		{
+			"a" : "0",
+			"b" : "1",
+			"c" : "1"
+		},
+		{
+			"a" : "0",
+			"b" : "0",
+			"c" : "0"
+		}
+	]
+}
+
+SELECT * FROM foo WHERE a=0 AND (b, c) >= (2, 0);
+{
+	"rows" : 
+	[
+		{
+			"a" : "0",
+			"b" : "2",
+			"c" : "0"
+		}
+	]
+}
+
+SELECT * FROM foo WHERE a=0 AND (b, c) >= SCYLLA_CLUSTERING_BOUND (2, 0);
+{
+	"rows" : 
+	[
+		{
+			"a" : "0",
+			"b" : "2",
+			"c" : "0"
+		},
+		{
+			"a" : "0",
+			"b" : "1",
+			"c" : "0"
+		},
+		{
+			"a" : "0",
+			"b" : "1",
+			"c" : "1"
+		},
+		{
+			"a" : "0",
+			"b" : "0",
+			"c" : "0"
+		}
+	]
+}
+
+SELECT * FROM foo WHERE a=0 AND (b, c) < (1, 0);
+{
+	"rows" : 
+	[
+		{
+			"a" : "0",
+			"b" : "0",
+			"c" : "0"
+		}
+	]
+}
+
+SELECT * FROM foo WHERE a=0 AND (b, c) < SCYLLA_CLUSTERING_BOUND (1, 0);
+{
+	"rows" : 
+	[
+		{
+			"a" : "0",
+			"b" : "2",
+			"c" : "0"
+		}
+	]
+}
+
+SELECT * FROM foo WHERE a=0 AND (b, c) < (2, 0);
+{
+	"rows" : 
+	[
+		{
+			"a" : "0",
+			"b" : "1",
+			"c" : "0"
+		},
+		{
+			"a" : "0",
+			"b" : "1",
+			"c" : "1"
+		},
+		{
+			"a" : "0",
+			"b" : "0",
+			"c" : "0"
+		}
+	]
+}
+
+SELECT * FROM foo WHERE a=0 AND (b, c) < SCYLLA_CLUSTERING_BOUND (2, 0);
+{
+	"rows" : null
+}
+
+SELECT * FROM foo WHERE a=0 AND (b, c) <= (2, 0);
+{
+	"rows" : 
+	[
+		{
+			"a" : "0",
+			"b" : "2",
+			"c" : "0"
+		},
+		{
+			"a" : "0",
+			"b" : "1",
+			"c" : "0"
+		},
+		{
+			"a" : "0",
+			"b" : "1",
+			"c" : "1"
+		},
+		{
+			"a" : "0",
+			"b" : "0",
+			"c" : "0"
+		}
+	]
+}
+
+SELECT * FROM foo WHERE a=0 AND (b, c) <= SCYLLA_CLUSTERING_BOUND (2, 0);
+{
+	"rows" : 
+	[
+		{
+			"a" : "0",
+			"b" : "2",
+			"c" : "0"
+		}
+	]
+}
+
+
+SELECT * FROM foo WHERE a=0 AND (b) > (1);
+{
+	"rows" : 
+	[
+		{
+			"a" : "0",
+			"b" : "2",
+			"c" : "0"
+		}
+	]
+}
+
+SELECT * FROM foo WHERE a=0 AND (b) > SCYLLA_CLUSTERING_BOUND (1);
+{
+	"rows" : 
+	[
+		{
+			"a" : "0",
+			"b" : "0",
+			"c" : "0"
+		}
+	]
+}
+
+SELECT * FROM foo WHERE a=0 AND (b) > (2);
+{
+	"rows" : null
+}
+
+SELECT * FROM foo WHERE a=0 AND (b) > SCYLLA_CLUSTERING_BOUND (2);
+{
+	"rows" : 
+	[
+		{
+			"a" : "0",
+			"b" : "1",
+			"c" : "0"
+		},
+		{
+			"a" : "0",
+			"b" : "1",
+			"c" : "1"
+		},
+		{
+			"a" : "0",
+			"b" : "0",
+			"c" : "0"
+		}
+	]
+}
+
+SELECT * FROM foo WHERE a=0 AND (b) >= (2);
+{
+	"rows" : 
+	[
+		{
+			"a" : "0",
+			"b" : "2",
+			"c" : "0"
+		}
+	]
+}
+
+SELECT * FROM foo WHERE a=0 AND (b) >= SCYLLA_CLUSTERING_BOUND (2);
+{
+	"rows" : 
+	[
+		{
+			"a" : "0",
+			"b" : "2",
+			"c" : "0"
+		},
+		{
+			"a" : "0",
+			"b" : "1",
+			"c" : "0"
+		},
+		{
+			"a" : "0",
+			"b" : "1",
+			"c" : "1"
+		},
+		{
+			"a" : "0",
+			"b" : "0",
+			"c" : "0"
+		}
+	]
+}
+
+SELECT * FROM foo WHERE a=0 AND (b) < (1);
+{
+	"rows" : 
+	[
+		{
+			"a" : "0",
+			"b" : "0",
+			"c" : "0"
+		}
+	]
+}
+
+SELECT * FROM foo WHERE a=0 AND (b) < SCYLLA_CLUSTERING_BOUND (1);
+{
+	"rows" : 
+	[
+		{
+			"a" : "0",
+			"b" : "2",
+			"c" : "0"
+		}
+	]
+}
+
+SELECT * FROM foo WHERE a=0 AND (b) < (2);
+{
+	"rows" : 
+	[
+		{
+			"a" : "0",
+			"b" : "1",
+			"c" : "0"
+		},
+		{
+			"a" : "0",
+			"b" : "1",
+			"c" : "1"
+		},
+		{
+			"a" : "0",
+			"b" : "0",
+			"c" : "0"
+		}
+	]
+}
+
+SELECT * FROM foo WHERE a=0 AND (b) < SCYLLA_CLUSTERING_BOUND (2);
+{
+	"rows" : null
+}
+
+SELECT * FROM foo WHERE a=0 AND (b) <= (2);
+{
+	"rows" : 
+	[
+		{
+			"a" : "0",
+			"b" : "2",
+			"c" : "0"
+		},
+		{
+			"a" : "0",
+			"b" : "1",
+			"c" : "0"
+		},
+		{
+			"a" : "0",
+			"b" : "1",
+			"c" : "1"
+		},
+		{
+			"a" : "0",
+			"b" : "0",
+			"c" : "0"
+		}
+	]
+}
+
+SELECT * FROM foo WHERE a=0 AND (b) <= SCYLLA_CLUSTERING_BOUND (2);
+{
+	"rows" : 
+	[
+		{
+			"a" : "0",
+			"b" : "2",
+			"c" : "0"
+		}
+	]
+}
+
+
+
+
+SELECT * FROM foo WHERE a=0 AND (b) > (1) AND (b, c) <= (2, 0);
+{
+	"rows" : 
+	[
+		{
+			"a" : "0",
+			"b" : "2",
+			"c" : "0"
+		}
+	]
+}
+
+SELECT * FROM foo WHERE a=0 AND (b) > SCYLLA_CLUSTERING_BOUND (1) AND (b, c) <= SCYLLA_CLUSTERING_BOUND (0, 0);
+{
+	"rows" : 
+	[
+		{
+			"a" : "0",
+			"b" : "0",
+			"c" : "0"
+		}
+	]
+}
+
+SELECT * FROM foo WHERE a=0 AND (b) > (2) AND (b, c) <= (2, 1);
+{
+	"rows" : null
+}
+
+SELECT * FROM foo WHERE a=0 AND (b) > SCYLLA_CLUSTERING_BOUND (2) AND (b, c) <= SCYLLA_CLUSTERING_BOUND(1, 1);
+{
+	"rows" : 
+	[
+		{
+			"a" : "0",
+			"b" : "1",
+			"c" : "0"
+		},
+		{
+			"a" : "0",
+			"b" : "1",
+			"c" : "1"
+		}
+	]
+}
+
+-- error checks --
+
+-- wrong side of condition
+SELECT * FROM foo WHERE a=0 AND SCYLLA_CLUSTERING_BOUND(b) > (2);
+{
+	"message" : "exceptions::syntax_exception (line 1:32 no viable alternative at input 'SCYLLA_CLUSTERING_BOUND')",
+	"status" : "error"
+}
+
+-- both sides of condition
+SELECT * FROM foo WHERE a=0 AND SCYLLA_CLUSTERING_BOUND(b) > SCYLLA_CLUSTERING_BOUND(2);
+{
+	"message" : "exceptions::syntax_exception (line 1:32 no viable alternative at input 'SCYLLA_CLUSTERING_BOUND')",
+	"status" : "error"
+}
+
+-- too many values --
+SELECT * FROM foo WHERE a=0 AND (b, c) > SCYLLA_CLUSTERING_BOUND (1, 0, 5);
+{
+	"message" : "exceptions::invalid_request_exception (Expected 2 elements in value tuple, but got 3: (1, 0, 5))",
+	"status" : "error"
+}
+
+-- too few values --
+SELECT * FROM foo WHERE a=0 AND (b, c) > SCYLLA_CLUSTERING_BOUND (1);
+{
+	"message" : "exceptions::invalid_request_exception (Expected 2 elements in value tuple, but got 1: (1))",
+	"status" : "error"
+}
+
+-- missing values --
+SELECT * FROM foo WHERE a=0 AND (b, c) > SCYLLA_CLUSTERING_BOUND;
+{
+	"message" : "exceptions::syntax_exception (line 1:64  : syntax error...\n)",
+	"status" : "error"
+}
+
+-- not tuple  --
+SELECT * FROM foo WHERE a=0 AND (b, c) > SCYLLA_CLUSTERING_BOUND 45;
+{
+	"message" : "exceptions::syntax_exception (line 1:65 missing '(' at '<missing ')",
+	"status" : "error"
+}
+
+-- just wrong  --
+SELECT * FROM foo WHERE a=0 SCYLLA_CLUSTERING_BOUND AND (b, c) > (0, 1);
+{
+	"message" : "exceptions::syntax_exception (line 1:28  : syntax error...\n)",
+	"status" : "error"
+}
+SELECT * FROM foo WHERE a=0 AND (b, c) > (0, 1) SCYLLA_CLUSTERING_BOUND;
+{
+	"message" : "exceptions::syntax_exception (line 1:48  : syntax error...\n)",
+	"status" : "error"
+}
+
+-- mixing apples and make_count_rows_function
+SELECT * FROM foo WHERE a=0 AND (b, c) > SCYLLA_CLUSTERING_BOUND(2, 0)  AND (b, c) < (1, 1);
+{
+	"message" : "exceptions::invalid_request_exception (Invalid combination of restrictions (SCYLLA_CLUSTERING_BOUND / plain))",
+	"status" : "error"
+}
+-- and again --
+SELECT * FROM foo WHERE a=0 AND (b, c) > SCYLLA_CLUSTERING_BOUND(2, 0)  AND (b, c) < (2, 0);
+{
+	"message" : "exceptions::invalid_request_exception (Invalid combination of restrictions (SCYLLA_CLUSTERING_BOUND / plain))",
+	"status" : "error"
+}

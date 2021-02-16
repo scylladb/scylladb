@@ -1549,6 +1549,10 @@ relation[std::vector<cql3::relation_ptr>& clauses]
           {
               $clauses.emplace_back(cql3::multi_column_relation::create_non_in_relation(ids, type, literal));
           }
+      | type=relationType K_SCYLLA_CLUSTERING_BOUND literal=tupleLiteral /* (a, b, c) > (1, 2, 3) or (a, b, c) > (?, ?, ?) */
+          {
+              $clauses.emplace_back(cql3::multi_column_relation::create_scylla_clustering_bound_non_in_relation(ids, type, literal));
+          }
       | type=relationType tupleMarker=markerForTuple /* (a, b, c) >= ? */
           { $clauses.emplace_back(cql3::multi_column_relation::create_non_in_relation(ids, type, tupleMarker)); }
       )
@@ -1915,6 +1919,8 @@ K_PARTITION:   P A R T I T I O N;
 
 K_SCYLLA_TIMEUUID_LIST_INDEX: S C Y L L A '_' T I M E U U I D '_' L I S T '_' I N D E X;
 K_SCYLLA_COUNTER_SHARD_LIST: S C Y L L A '_' C O U N T E R '_' S H A R D '_' L I S T; 
+K_SCYLLA_CLUSTERING_BOUND: S C Y L L A '_' C L U S T E R I N G '_' B O U N D;
+
 
 K_GROUP:       G R O U P;
 
