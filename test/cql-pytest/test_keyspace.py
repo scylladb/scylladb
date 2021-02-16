@@ -82,7 +82,7 @@ def test_create_keyspace_invalid_name(cql):
     cql.execute('DROP KEYSPACE "123"')
 
 # Test trying to ALTER a keyspace with invalid options.
-@pytest.mark.xfail(reason="fails because of issue #7595")
+# Reproduces #7595.
 def test_create_keyspace_nonexistent_dc(cql):
     with pytest.raises(ConfigurationException):
         ks = unique_name()
@@ -124,7 +124,7 @@ def test_alter_keyspace_invalid(cql):
             cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'SimpleStrategy', 'replication_factor' : 'foo' }}")
 
 # Test trying to ALTER a keyspace with invalid options.
-@pytest.mark.xfail(reason="fails because of issue #7595")
+# Reproduces #7595.
 def test_alter_keyspace_nonexistent_dc(cql):
     with new_test_keyspace(cql, "WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 }") as keyspace:
         with pytest.raises(ConfigurationException):
