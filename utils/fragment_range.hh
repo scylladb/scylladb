@@ -242,19 +242,27 @@ decltype(auto) with_linearized(const View& v, Function&& fn)
     }
 }
 
-class single_fragmented_view {
-    bytes_view _view;
+template <mutable_view is_mutable>
+class basic_single_fragmented_view {
 public:
-    using fragment_type = bytes_view;
-    explicit single_fragmented_view(bytes_view bv) : _view(bv) {}
+    using fragment_type = std::conditional_t<is_mutable == mutable_view::yes, bytes_mutable_view, bytes_view>;
+private:
+    fragment_type _view;
+public:
+    explicit basic_single_fragmented_view(fragment_type bv) : _view(bv) {}
     size_t size_bytes() const { return _view.size(); }
     bool empty() const { return _view.empty(); }
     void remove_prefix(size_t n) { _view.remove_prefix(n); }
-    void remove_current() { _view = bytes_view(); }
-    bytes_view current_fragment() const { return _view; }
-    single_fragmented_view prefix(size_t n) { return single_fragmented_view(_view.substr(0, n)); }
+    void remove_current() { _view = fragment_type(); }
+    fragment_type current_fragment() const { return _view; }
+    basic_single_fragmented_view prefix(size_t n) { return basic_single_fragmented_view(_view.substr(0, n)); }
 };
+using single_fragmented_view = basic_single_fragmented_view<mutable_view::no>;
+using single_fragmented_mutable_view = basic_single_fragmented_view<mutable_view::yes>;
 static_assert(FragmentedView<single_fragmented_view>);
+static_assert(FragmentedMutableView<single_fragmented_mutable_view>);
+static_assert(FragmentRange<fragment_range<single_fragmented_view>>);
+static_assert(FragmentRange<fragment_range<single_fragmented_mutable_view>>);
 
 template<FragmentedView View, typename Function>
 requires std::invocable<Function, View> && std::invocable<Function, single_fragmented_view>
