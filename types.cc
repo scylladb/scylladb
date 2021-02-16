@@ -3051,14 +3051,6 @@ std::optional<data_type> abstract_type::update_user_type(const shared_ptr<const 
     return visit(*this, visitor{updated});
 }
 
-static bytes_view linearized(const data::value_view& v, std::vector<bytes>& store) {
-    if (v.is_fragmented()) {
-        return store.emplace_back(v.linearize());
-    }
-
-    return v.first_fragment();
-}
-
 static bytes_ostream serialize_for_cql_aux(const map_type_impl&, collection_mutation_view_description mut, cql_serialization_format sf) {
     bytes_ostream out;
     auto len_slot = out.write_place_holder(collection_size_len(sf));
