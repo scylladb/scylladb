@@ -35,6 +35,7 @@
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/scheduling.hh>
+#include <seastar/core/reactor.hh>
 #include "utils/UUID_gen.hh"
 #include "service/migration_manager.hh"
 #include "sstables/compaction_manager.hh"
@@ -357,6 +358,12 @@ public:
         using namespace std::filesystem;
 
         return seastar::async([cfg_in = std::move(cfg_in), func] {
+            // disable reactor stall detection during startup
+            auto blocked_reactor_notify_ms = engine().get_blocked_reactor_notify_ms();
+            smp::invoke_on_all([] {
+                engine().update_blocked_reactor_notify_ms(std::chrono::milliseconds(1000000));
+            }).get();
+
             logalloc::prime_segment_pool(memory::stats().total_memory(), memory::min_free_memory()).get();
             bool old_active = false;
             if (!active.compare_exchange_strong(old_active, true)) {
@@ -496,6 +503,10 @@ public:
 
             ss.invoke_on_all([] (auto&& ss) {
                 ss.enable_all_features();
+            }).get();
+
+            smp::invoke_on_all([blocked_reactor_notify_ms] {
+                engine().update_blocked_reactor_notify_ms(blocked_reactor_notify_ms);
             }).get();
 
             service::storage_proxy::config spcfg {
