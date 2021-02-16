@@ -34,9 +34,16 @@ import json
 from decimal import Decimal
 
 @pytest.fixture(scope="session")
-def table1(cql, test_keyspace):
+def type1(cql, test_keyspace):
+    type_name = test_keyspace + "." + unique_name()
+    cql.execute("CREATE TYPE " + type_name + " (t text, b boolean)")
+    yield type_name
+    cql.execute("DROP TYPE " + type_name)
+
+@pytest.fixture(scope="session")
+def table1(cql, test_keyspace, type1):
     table = test_keyspace + "." + unique_name()
-    cql.execute(f"CREATE TABLE {table} (p int PRIMARY KEY, v int, a ascii, b boolean, vi varint, mai map<ascii, int>, tup frozen<tuple<text, int>>, l list<text>, d double, t time, dec decimal)")
+    cql.execute(f"CREATE TABLE {table} (p int PRIMARY KEY, v int, a ascii, b boolean, vi varint, mai map<ascii, int>, tup frozen<tuple<text, int>>, l list<text>, d double, t time, dec decimal, tupmap map<frozen<tuple<text, int>>, int>, t1 frozen<{type1}>)")
     yield table
     cql.execute("DROP TABLE " + table)
 
@@ -313,6 +320,37 @@ def test_select_json_function_call(cql, table1):
         'intAsBlob(v)':            '{"system.intasblob(v)": "0x00000011"}',
         'blobasInt(intAsBlob(v))': '{"system.blobasint(system.intasblob(v))": 17}',
         'tojson(v)':               '{"system.tojson(v)": "17"}',
+        'CAST(v AS FLOAT)':        '{"cast(v as float)": 17.0}',
     }
     for input, output in input_and_output.items():
         assert list(cql.execute(f"SELECT JSON {input} from {table1} where p = {p}")) == [(EquivalentJson(output),)]
+
+# Whereas in CQL map keys might be of many types, in JSON map keys must always
+# be strings. So when SELECT JSON prints a map value with a non-string key to
+# JSON, it needs to format this key as a string. When the map key *contains* a
+# string, e.g., tuple<int, text>, we must not forget to *quote* that string
+# before inserting into the key's string representation. But we forgot :-)
+# This is issue #8087.
+# This issue is also reproduced by the much more comprehensive test
+# cassandra_tests/validation/entities/json_test.py::testInsertJsonSyntaxWithNonNativeMapKeys
+@pytest.mark.xfail(reason="issue #8087")
+def test_select_json_string_in_nonstring_map_key(cql, table1):
+    p = random.randint(1,1000000000)
+    stmt = cql.prepare(f"INSERT INTO {table1} (p, tupmap) VALUES ({p}, ?)")
+    cql.execute(stmt, [{('hello', 3): 7}])
+    expected = '{"tupmap": {"[\\"hello\\", 3]": 7}}'
+    assert list(cql.execute(f"SELECT JSON tupmap from {table1} where p = {p}")) == [(expected,)]
+
+# Test that SELECT JSON correctly prints unset components of a UDT or tuple
+# as "null". This test passes which demonstrates that issue #8092 is specific
+# to altering a UDT, and doesn't just happen for every null component of a
+# UDT or tuple.
+def test_select_json_null_component(cql, table1, type1):
+    p = random.randint(1,1000000000)
+    stmt = cql.prepare(f"INSERT INTO {table1} (p, tup) VALUES ({p}, ?)")
+    cql.execute(stmt, [('hello', None)])
+    assert list(cql.execute(f"SELECT JSON tup from {table1} where p = {p}")) == [('{"tup": ["hello", null]}',)]
+
+    stmt = cql.prepare(f"INSERT INTO {table1} (p, t1) VALUES ({p}, ?)")
+    cql.execute(stmt, [('hello', None)])
+    assert list(cql.execute(f"SELECT JSON t1 from {table1} where p = {p}")) == [('{"t1": {"t": "hello", "b": null}}',)]
