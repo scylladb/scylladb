@@ -59,6 +59,40 @@ inline std::vector<std::string_view> split(std::string_view text, char separator
     return tokens;
 }
 
+// Handle CORS (Cross-origin resource sharing) in the HTTP request:
+// If the request has the "Origin" header specifying where the script which
+// makes this request comes from, we need to reply with the header
+// "Access-Control-Allow-Origin: *" saying that this (and any) origin is fine.
+// Additionally, if preflight==true (i.e., this is an OPTIONS request),
+// the script can also "request" in headers that the server allows it to use
+// some HTTP methods and headers in the followup request, and the server
+// should respond by "allowing" them in the response headers.
+// We also add the header "Access-Control-Expose-Headers" to let the script
+// access additional headers in the response.
+// This handle_CORS() should be used when handling any HTTP method - both the
+// usual GET and POST, and also the "preflight" OPTIONS method.
+static void handle_CORS(const request& req, reply& rep, bool preflight) {
+    if (!req.get_header("origin").empty()) {
+        rep.add_header("Access-Control-Allow-Origin", "*");
+        // This is the list that DynamoDB returns for expose headers. I am
+        // not sure why not just return "*" here, what's the risk?
+        rep.add_header("Access-Control-Expose-Headers", "x-amzn-RequestId,x-amzn-ErrorType,x-amzn-ErrorMessage,Date");
+        if (preflight) {
+            sstring s = req.get_header("Access-Control-Request-Headers");
+            if (!s.empty()) {
+                rep.add_header("Access-Control-Allow-Headers", std::move(s));
+            }
+            s = req.get_header("Access-Control-Request-Method");
+            if (!s.empty()) {
+                rep.add_header("Access-Control-Allow-Methods", std::move(s));
+            }
+            // Our CORS response never change anyway, let the browser cache it
+            // for two hours (Chrome's maximum):
+            rep.add_header("Access-Control-Max-Age", "7200");
+        }
+    }
+}
+
 // DynamoDB HTTP error responses are structured as follows
 // https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Programming.Errors.html
 // Our handlers throw an exception to report an error. If the exception
@@ -110,6 +144,7 @@ public:
     api_handler(const api_handler&) = default;
     future<std::unique_ptr<reply>> handle(const sstring& path,
             std::unique_ptr<request> req, std::unique_ptr<reply> rep) override {
+        handle_CORS(*req, *rep, false);
         return _f_handle(std::move(req), std::move(rep)).then(
                 [this](std::unique_ptr<reply> rep) {
                     rep->done(_type);
@@ -146,6 +181,7 @@ public:
     health_handler(seastar::gate& pending_requests) : gated_handler(pending_requests) {}
 protected:
     virtual future<std::unique_ptr<reply>> do_handle(const sstring& path, std::unique_ptr<request> req, std::unique_ptr<reply> rep) override {
+        handle_CORS(*req, *rep, false);
         rep->set_status(reply::status_type::ok);
         rep->write_body("txt", format("healthy: {}", req->get_header("Host")));
         return make_ready_future<std::unique_ptr<reply>>(std::move(rep));
@@ -174,6 +210,22 @@ protected:
         rep->set_status(reply::status_type::ok);
         rep->set_content_type("json");
         rep->_content = rjson::print(results);
+        return make_ready_future<std::unique_ptr<reply>>(std::move(rep));
+    }
+};
+
+// The CORS (Cross-origin resource sharing) protocol can send an OPTIONS
+// request before ("pre-flight") the main request. The response to this
+// request can be empty, but needs to have the right headers (which we
+// fill with handle_CORS())
+class options_handler : public gated_handler {
+public:
+    options_handler(seastar::gate& pending_requests) : gated_handler(pending_requests) {}
+protected:
+    virtual future<std::unique_ptr<reply>> do_handle(const sstring& path, std::unique_ptr<request> req, std::unique_ptr<reply> rep) override {
+        handle_CORS(*req, *rep, true);
+        rep->set_status(reply::status_type::ok);
+        rep->write_body("txt", sstring(""));
         return make_ready_future<std::unique_ptr<reply>>(std::move(rep));
     }
 };
@@ -328,6 +380,7 @@ void server::set_routes(routes& r) {
     // scan an entire subnet for nodes responding to the health request,
     // or even just scan for open ports.
     r.put(operation_type::GET, "/localnodes", new local_nodelist_handler(_pending_requests));
+    r.put(operation_type::OPTIONS, "/", new options_handler(_pending_requests));
 }
 
 //FIXME: A way to immediately invalidate the cache should be considered,
