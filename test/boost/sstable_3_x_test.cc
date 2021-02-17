@@ -91,7 +91,7 @@ public:
     void load() {
         _sst->load().get();
     }
-    future<index_list> read_index() {
+    future<std::vector<sstables::test::index_entry>> read_index() {
         load();
         return sstables::test(_sst).read_indexes();
     }

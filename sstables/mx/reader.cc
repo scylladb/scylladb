@@ -1618,7 +1618,7 @@ private:
             sstlog.trace("reader {}: no tombstone", fmt::ptr(this));
             return read_from_datafile();
         }
-        auto pk = _index_reader->partition_key().to_partition_key(*_schema);
+        auto pk = _index_reader->get_partition_key();
         auto key = dht::decorate_key(*_schema, std::move(pk));
         _consumer.setup_for_partition(key.key());
         on_next_partition(std::move(key), tombstone(*tomb));

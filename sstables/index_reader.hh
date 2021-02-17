@@ -745,10 +745,23 @@ public:
 
     // Returns the key for current partition.
     // Can be called only when partition_data_ready().
-    // The result is valid as long as index_reader is valid.
-    key_view partition_key() {
+    partition_key get_partition_key() {
         index_entry& e = current_partition_entry(_lower_bound);
-        return e.get_key();
+        return e.get_key().to_partition_key(*_sstable->_schema);
+    }
+
+    // Returns the data file position for the current partition.
+    // Can be called only when partition_data_ready().
+    uint64_t get_data_file_position() {
+        index_entry& e = current_partition_entry(_lower_bound);
+        return e.position();
+    }
+
+    // Returns the number of promoted index entries for the current partition.
+    // Can be called only when partition_data_ready().
+    uint64_t get_promoted_index_size() {
+        index_entry& e = current_partition_entry(_lower_bound);
+        return e.get_promoted_index_size();
     }
 
     bool partition_data_ready() const {
