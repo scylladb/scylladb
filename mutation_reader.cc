@@ -26,6 +26,7 @@
 
 #include "mutation_reader.hh"
 #include <seastar/core/future-util.hh>
+#include <seastar/core/coroutine.hh>
 #include "flat_mutation_reader.hh"
 #include "schema_registry.hh"
 #include "mutation_compactor.hh"
@@ -1525,18 +1526,18 @@ future<> evictable_reader::fast_forward_to(const dht::partition_range& pr, db::t
     _end_of_stream = false;
 
     if (_reader) {
-        return _reader->fast_forward_to(pr, timeout);
+        co_await _reader->fast_forward_to(pr, timeout);
+        _range_override.reset();
+        co_return;
     }
     if (!_reader_created || !_irh) {
-        return make_ready_future<>();
+        co_return;
     }
     if (auto reader_opt = try_resume()) {
-        auto f = reader_opt->fast_forward_to(pr, timeout);
-        return f.then([this, reader = std::move(*reader_opt)] () mutable {
-            maybe_pause(std::move(reader));
-        });
+        co_await reader_opt->fast_forward_to(pr, timeout);
+        _range_override.reset();
+        maybe_pause(std::move(*reader_opt));
     }
-    return make_ready_future<>();
 }
 
 evictable_reader_handle::evictable_reader_handle(evictable_reader& r) : _r(&r)
