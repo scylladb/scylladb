@@ -7005,3 +7005,39 @@ SEASTAR_TEST_CASE(compound_sstable_set_incremental_selector_test) {
         return make_ready_future<>();
     });
 }
+
+SEASTAR_TEST_CASE(test_offstrategy_sstable_compaction) {
+    return test_env::do_with_async([tmp = tmpdir()] (test_env& env) {
+        storage_service_for_tests ssft;
+        simple_schema ss;
+        auto s = ss.schema();
+
+        auto pk = ss.make_pkey(make_local_key(s));
+        auto mut = mutation(s, pk);
+        ss.add_row(mut, ss.make_ckey(0), "val");
+
+        auto sst_gen = [&env, s, path = tmp.path().string(), gen = make_lw_shared<unsigned>(1)] () mutable {
+            return env.make_sstable(s, path, (*gen)++, la, big);
+        };
+
+        auto cm = make_lw_shared<compaction_manager>();
+        column_family::config cfg = column_family_test_config(env.manager());
+        cfg.datadir = tmp.path().string();
+        cfg.enable_disk_writes = true;
+        cfg.enable_cache = false;
+        auto tracker = make_lw_shared<cache_tracker>();
+        cell_locker_stats cl_stats;
+        auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), *cm, cl_stats, *tracker);
+        cf->mark_ready_for_writes();
+        cf->start();
+
+        for (auto i = 0; i < cf->schema()->max_compaction_threshold(); i++) {
+            auto sst = make_sstable_containing(sst_gen, {mut});
+            cf->add_sstable_and_update_cache(std::move(sst), sstables::offstrategy::yes).get();
+        }
+        cf->run_offstrategy_compaction().get();
+
+        // Make sure we release reference to all sstables, allowing them to be deleted before dir is destroyed
+        cf->stop().get();
+    });
+}
