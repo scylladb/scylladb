@@ -282,6 +282,7 @@ modes = {
 
 scylla_tests = set([
     'test/boost/UUID_test',
+    'test/boost/cdc_generation_test',
     'test/boost/aggregate_fcts_test',
     'test/boost/allocation_strategy_test',
     'test/boost/alternator_base64_test',
