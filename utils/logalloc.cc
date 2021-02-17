@@ -211,6 +211,8 @@ uint32_t
 migrate_fn_type::register_migrator(migrate_fn_type* m) {
     auto& migrators = *debug::static_migrators;
     auto idx = migrators.add(m);
+    // object_descriptor encodes 2 * index() + 1
+    assert(idx * 2 + 1 < utils::uleb64_express_supreme);
     m->_migrators = migrators.shared_from_this();
     return idx;
 }
@@ -1159,9 +1161,10 @@ class region_impl final : public basic_region_impl {
         }
 
         // non-canonical encoding to allow padding (for alignment); encoded_size must be
-        // sufficient (greater than this->encoded_size())
-        void encode(char*& pos, size_t encoded_size) const {
-            utils::uleb64_encode(pos, _n, encoded_size, poison<char>, unpoison);
+        // sufficient (greater than this->encoded_size()), _n must be the migrator's
+        // index() (i.e. -- suitable for express encoding)
+        void encode(char*& pos, size_t encoded_size, size_t size) const {
+            utils::uleb64_express_encode(pos, _n, encoded_size, size, poison<char>, unpoison);
         }
 
         static object_descriptor decode_forwards(const char*& pos) {
@@ -1241,7 +1244,7 @@ private:
         auto old_active_offset = _active_offset;
         auto pos = _active->at<char>(_active_offset);
         // Use non-canonical encoding to allow for alignment pad
-        desc.encode(pos, obj_offset - _active_offset);
+        desc.encode(pos, obj_offset - _active_offset, size);
         unpoison(pos, size);
         _active_offset = obj_offset + size;
 
