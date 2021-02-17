@@ -24,6 +24,7 @@
 import pytest
 import re
 import collections
+import struct
 from util import unique_name
 from contextlib import contextmanager
 from cassandra.protocol import SyntaxException, InvalidRequest
@@ -76,6 +77,16 @@ def execute(cql, table, cmd, *args):
         return cql.execute(prepared, args)
     else:
         return cql.execute(subs_table(cmd, table))
+
+def execute_with_paging(cql, table, cmd, page_size, *args):
+    prepared = cql.prepare(subs_table(cmd, table))
+    prepared.fetch_size = page_size
+    return cql.execute(prepared, args)
+
+def execute_without_paging(cql, table, cmd, *args):
+    prepared = cql.prepare(subs_table(cmd, table))
+    prepared.fetch_size = 0
+    return cql.execute(prepared, args)
 
 def assert_invalid_throw(cql, table, type, cmd, *args):
     with pytest.raises(type):
@@ -189,3 +200,10 @@ def before_and_after_flush(cql, table):
     yield None
     flush(cql, table)
     yield None
+
+# Utility function for truncating a number to single-precision floating point,
+# which is what we can expect when reading a "float" column from Scylla.
+# unfortunately, I couldn't find a function from the Cassandra driver or
+# Python to do this more easily (maybe I'm missing something?)
+def to_float(num):
+    return struct.unpack('f', struct.pack('f', num))[0]
