@@ -1156,8 +1156,8 @@ SEASTAR_TEST_CASE(compact) {
                         auto &cells = row.cells();
                         auto& cdef1 = *s->get_column_definition("age");
                         auto& cdef2 = *s->get_column_definition("height");
-                        BOOST_REQUIRE(cells.cell_at(cdef1.id).as_atomic_cell(cdef1).value() == bytes({0,0,0,40}));
-                        BOOST_REQUIRE(cells.cell_at(cdef2.id).as_atomic_cell(cdef2).value() == bytes({0,0,0,(int8_t)170}));
+                        BOOST_REQUIRE(cells.cell_at(cdef1.id).as_atomic_cell(cdef1).value() == managed_bytes({0,0,0,40}));
+                        BOOST_REQUIRE(cells.cell_at(cdef2.id).as_atomic_cell(cdef2).value() == managed_bytes({0,0,0,(int8_t)170}));
                         return read_mutation_from_flat_mutation_reader(*reader, db::no_timeout);
                     }).then([reader, s] (mutation_opt m) {
                         BOOST_REQUIRE(m);
@@ -1170,8 +1170,8 @@ SEASTAR_TEST_CASE(compact) {
                         auto &cells = row.cells();
                         auto& cdef1 = *s->get_column_definition("age");
                         auto& cdef2 = *s->get_column_definition("height");
-                        BOOST_REQUIRE(cells.cell_at(cdef1.id).as_atomic_cell(cdef1).value() == bytes({0,0,0,20}));
-                        BOOST_REQUIRE(cells.cell_at(cdef2.id).as_atomic_cell(cdef2).value() == bytes({0,0,0,(int8_t)180}));
+                        BOOST_REQUIRE(cells.cell_at(cdef1.id).as_atomic_cell(cdef1).value() == managed_bytes({0,0,0,20}));
+                        BOOST_REQUIRE(cells.cell_at(cdef2.id).as_atomic_cell(cdef2).value() == managed_bytes({0,0,0,(int8_t)180}));
                         return read_mutation_from_flat_mutation_reader(*reader, db::no_timeout);
                     }).then([reader, s] (mutation_opt m) {
                         BOOST_REQUIRE(m);
@@ -1184,7 +1184,7 @@ SEASTAR_TEST_CASE(compact) {
                         auto &cells = row.cells();
                         auto& cdef1 = *s->get_column_definition("age");
                         auto& cdef2 = *s->get_column_definition("height");
-                        BOOST_REQUIRE(cells.cell_at(cdef1.id).as_atomic_cell(cdef1).value() == bytes({0,0,0,20}));
+                        BOOST_REQUIRE(cells.cell_at(cdef1.id).as_atomic_cell(cdef1).value() == managed_bytes({0,0,0,20}));
                         BOOST_REQUIRE(cells.find_cell(cdef2.id) == nullptr);
                         return read_mutation_from_flat_mutation_reader(*reader, db::no_timeout);
                     }).then([reader, s] (mutation_opt m) {
@@ -2450,7 +2450,7 @@ SEASTAR_TEST_CASE(check_multi_schema) {
                     auto& cells = row.cells();
                     BOOST_REQUIRE_EQUAL(cells.size(), 1);
                     auto& cdef = *s->get_column_definition("e");
-                    BOOST_REQUIRE_EQUAL(cells.cell_at(cdef.id).as_atomic_cell(cdef).value(), int32_type->decompose(5));
+                    BOOST_REQUIRE_EQUAL(cells.cell_at(cdef.id).as_atomic_cell(cdef).value(), managed_bytes(int32_type->decompose(5)));
                     return (*reader)(db::no_timeout);
                 }).then([reader, s] (mutation_fragment_opt m) {
                     BOOST_REQUIRE(!m);
@@ -2761,7 +2761,7 @@ SEASTAR_TEST_CASE(test_counter_read) {
             BOOST_REQUIRE(mfopt->is_clustering_row());
             const clustering_row* cr = &mfopt->as_clustering_row();
             cr->cells().for_each_cell([&] (column_id id, const atomic_cell_or_collection& c) {
-              counter_cell_view::with_linearized(c.as_atomic_cell(s->regular_column_at(id)), [&] (counter_cell_view ccv) {
+                counter_cell_view ccv(c.as_atomic_cell(s->regular_column_at(id)));
                 auto& col = s->column_at(column_kind::regular_column, id);
                 if (col.name_as_text() == "c1") {
                     BOOST_REQUIRE_EQUAL(ccv.total_value(), 13);
@@ -2782,7 +2782,6 @@ SEASTAR_TEST_CASE(test_counter_read) {
                 } else {
                     BOOST_FAIL(format("Unexpected column \'{}\'", col.name_as_text()));
                 }
-              });
             });
 
             mfopt = reader(db::no_timeout).get0();
@@ -4959,12 +4958,11 @@ SEASTAR_TEST_CASE(test_wrong_counter_shard_order) {
                 size_t n = 0;
                 row.cells().for_each_cell([&] (column_id id, const atomic_cell_or_collection& ac_o_c) {
                     auto acv = ac_o_c.as_atomic_cell(s->regular_column_at(id));
-                  counter_cell_view::with_linearized(acv, [&] (counter_cell_view ccv) {
+                    counter_cell_view ccv(acv);
                     counter_shard_view::less_compare_by_id cmp;
                     BOOST_REQUIRE_MESSAGE(boost::algorithm::is_sorted(ccv.shards(), cmp), ccv << " is expected to be sorted");
                     BOOST_REQUIRE_EQUAL(ccv.total_value(), expected_value);
                     n++;
-                  });
                 });
                 BOOST_REQUIRE_EQUAL(n, 5);
             };
@@ -5678,7 +5676,7 @@ SEASTAR_TEST_CASE(sstable_run_based_compaction_test) {
 
         auto tokens = token_generation_for_current_shard(16);
         std::unordered_set<shared_sstable> sstables;
-        std::optional<utils::observer<sstable&>> observer;
+        std::vector<utils::observer<sstable&>> observers;
         sstables::sstable_run_based_compaction_strategy_for_tests cs;
 
         auto do_replace = [&] (const std::vector<shared_sstable>& old_sstables, const std::vector<shared_sstable>& new_sstables) {
@@ -5701,15 +5699,20 @@ SEASTAR_TEST_CASE(sstable_run_based_compaction_test) {
             // check that sstable replacement follows token order
             BOOST_REQUIRE(*expected_sst == old_sstables.front()->generation());
             expected_sst++;
-            // check that previously released sstable was already closed
-            BOOST_REQUIRE(*closed_sstables_tracker == old_sstables.front()->generation());
+            // check that previously released sstables were already closed
+            if (old_sstables.front()->generation() % 4 == 0) {
+                // Due to performance reasons, sstables are not released immediately, but in batches.
+                // At the time of writing, mutation_reader_merger releases it's sstable references
+                // in batches of 4. That's why we only perform this check every 4th sstable. 
+                BOOST_REQUIRE(*closed_sstables_tracker == old_sstables.front()->generation());
+            }
 
             do_replace(old_sstables, new_sstables);
 
-            observer = old_sstables.front()->add_on_closed_handler([&] (sstable& sst) {
+            observers.push_back(old_sstables.front()->add_on_closed_handler([&] (sstable& sst) {
                 testlog.info("Closing sstable of generation {}", sst.generation());
                 closed_sstables_tracker++;
-            });
+            }));
 
             testlog.info("Removing sstable of generation {}, refcnt: {}", old_sstables.front()->generation(), old_sstables.front().use_count());
         };
@@ -5745,7 +5748,6 @@ SEASTAR_TEST_CASE(sstable_run_based_compaction_test) {
             };
 
             auto result = compact(std::move(desc.sstables), replacer);
-            observer.reset();
             BOOST_REQUIRE_EQUAL(expected_output, result.size());
             BOOST_REQUIRE(expected_sst == sstable_run.end());
             return result;

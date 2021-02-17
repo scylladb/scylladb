@@ -24,8 +24,10 @@
 #include <concepts>
 #include <boost/range/algorithm/copy.hpp>
 #include <boost/range/algorithm/for_each.hpp>
+#include <seastar/net/byteorder.hh>
 #include <seastar/core/print.hh>
 
+#include "marshal_exception.hh"
 #include "bytes.hh"
 
 enum class mutable_view { no, yes, };
@@ -181,6 +183,7 @@ concept FragmentedMutableView = requires (T view) {
 
 template<FragmentedView View>
 struct fragment_range {
+    using fragment_type = typename View::fragment_type;
     View view;
     class fragment_iterator {
         using iterator_category = std::input_iterator_tag;
@@ -209,9 +212,12 @@ struct fragment_range {
         pointer operator->() const { return &_current; }
         bool operator==(const fragment_iterator& i) const { return _view.size_bytes() == i._view.size_bytes(); }
     };
+    using iterator = fragment_iterator;
     fragment_range(const View& v) : view(v) {}
     fragment_iterator begin() const { return fragment_iterator(view); }
     fragment_iterator end() const { return fragment_iterator(); }
+    size_t size_bytes() const { return view.size_bytes(); }
+    bool empty() const { return view.empty(); }
 };
 
 template<FragmentedView View>
@@ -238,19 +244,27 @@ decltype(auto) with_linearized(const View& v, Function&& fn)
     }
 }
 
-class single_fragmented_view {
-    bytes_view _view;
+template <mutable_view is_mutable>
+class basic_single_fragmented_view {
 public:
-    using fragment_type = bytes_view;
-    explicit single_fragmented_view(bytes_view bv) : _view(bv) {}
+    using fragment_type = std::conditional_t<is_mutable == mutable_view::yes, bytes_mutable_view, bytes_view>;
+private:
+    fragment_type _view;
+public:
+    explicit basic_single_fragmented_view(fragment_type bv) : _view(bv) {}
     size_t size_bytes() const { return _view.size(); }
     bool empty() const { return _view.empty(); }
     void remove_prefix(size_t n) { _view.remove_prefix(n); }
-    void remove_current() { _view = bytes_view(); }
-    bytes_view current_fragment() const { return _view; }
-    single_fragmented_view prefix(size_t n) { return single_fragmented_view(_view.substr(0, n)); }
+    void remove_current() { _view = fragment_type(); }
+    fragment_type current_fragment() const { return _view; }
+    basic_single_fragmented_view prefix(size_t n) { return basic_single_fragmented_view(_view.substr(0, n)); }
 };
+using single_fragmented_view = basic_single_fragmented_view<mutable_view::no>;
+using single_fragmented_mutable_view = basic_single_fragmented_view<mutable_view::yes>;
 static_assert(FragmentedView<single_fragmented_view>);
+static_assert(FragmentedMutableView<single_fragmented_mutable_view>);
+static_assert(FragmentRange<fragment_range<single_fragmented_view>>);
+static_assert(FragmentRange<fragment_range<single_fragmented_mutable_view>>);
 
 template<FragmentedView View, typename Function>
 requires std::invocable<Function, View> && std::invocable<Function, single_fragmented_view>
@@ -276,6 +290,11 @@ int compare_unsigned(V1 v1, V2 v2) {
     return v1.size_bytes() - v2.size_bytes();
 }
 
+template<FragmentedView V1, FragmentedView V2>
+int equal_unsigned(V1 v1, V2 v2) {
+    return v1.size_bytes() == v2.size_bytes() && compare_unsigned(v1, v2) == 0;
+}
+
 template<FragmentedMutableView Dest, FragmentedView Src>
 void write_fragmented(Dest& dest, Src src) {
     if (dest.size_bytes() < src.size_bytes()) [[unlikely]] {
@@ -286,5 +305,107 @@ void write_fragmented(Dest& dest, Src src) {
         memcpy(dest.current_fragment().data(), src.current_fragment().data(), n);
         dest.remove_prefix(n);
         src.remove_prefix(n);
+    }
+}
+
+template<FragmentedMutableView Dest, FragmentedView Src>
+void copy_fragmented_view(Dest dest, Src src) {
+    if (dest.size_bytes() < src.size_bytes()) [[unlikely]] {
+        throw std::out_of_range(format("tried to copy a buffer of size {} to a buffer of smaller size {}", src.size_bytes(), dest.size_bytes()));
+    }
+    while (!src.empty()) {
+        size_t n = std::min(dest.current_fragment().size(), src.current_fragment().size());
+        memcpy(dest.current_fragment().data(), src.current_fragment().data(), n);
+        dest.remove_prefix(n);
+        src.remove_prefix(n);
+    }
+}
+
+// Does not check bounds. Must be called only after size is already checked.
+template<FragmentedView View>
+void read_fragmented(View& v, size_t n, bytes::value_type* out) {
+    while (n) {
+        if (n <= v.current_fragment().size()) {
+            std::copy_n(v.current_fragment().data(), n, out);
+            v.remove_prefix(n);
+            n = 0;
+        } else {
+            out = std::copy_n(v.current_fragment().data(), v.current_fragment().size(), out);
+            n -= v.current_fragment().size();
+            v.remove_current();
+        }
+    }
+}
+template<> void inline read_fragmented(single_fragmented_view& v, size_t n, bytes::value_type* out) {
+    std::copy_n(v.current_fragment().data(), n, out);
+    v.remove_prefix(n);
+}
+
+template<typename T, FragmentedView View>
+T read_simple_native(View& v) {
+    if (v.current_fragment().size() >= sizeof(T)) [[likely]] {
+        auto p = v.current_fragment().data();
+        v.remove_prefix(sizeof(T));
+        return *reinterpret_cast<const net::packed<T>*>(p);
+    } else if (v.size_bytes() >= sizeof(T)) {
+        T buf;
+        read_fragmented(v, sizeof(T), reinterpret_cast<bytes::value_type*>(&buf));
+        return buf;
+    } else {
+        throw_with_backtrace<marshal_exception>(format("read_simple - not enough bytes (expected {:d}, got {:d})", sizeof(T), v.size_bytes()));
+    }
+}
+
+template<typename T, FragmentedView View>
+T read_simple(View& v) {
+    if (v.current_fragment().size() >= sizeof(T)) [[likely]] {
+        auto p = v.current_fragment().data();
+        v.remove_prefix(sizeof(T));
+        return net::ntoh(*reinterpret_cast<const net::packed<T>*>(p));
+    } else if (v.size_bytes() >= sizeof(T)) {
+        T buf;
+        read_fragmented(v, sizeof(T), reinterpret_cast<bytes::value_type*>(&buf));
+        return net::ntoh(buf);
+    } else {
+        throw_with_backtrace<marshal_exception>(format("read_simple - not enough bytes (expected {:d}, got {:d})", sizeof(T), v.size_bytes()));
+    }
+}
+
+template<typename T, FragmentedView View>
+T read_simple_exactly(View v) {
+    if (v.current_fragment().size() == sizeof(T)) [[likely]] {
+        auto p = v.current_fragment().data();
+        return net::ntoh(*reinterpret_cast<const net::packed<T>*>(p));
+    } else if (v.size_bytes() == sizeof(T)) {
+        T buf;
+        read_fragmented(v, sizeof(T), reinterpret_cast<bytes::value_type*>(&buf));
+        return net::ntoh(buf);
+    } else {
+        throw_with_backtrace<marshal_exception>(format("read_simple_exactly - size mismatch (expected {:d}, got {:d})", sizeof(T), v.size_bytes()));
+    }
+}
+
+template<typename T, FragmentedMutableView Out>
+static inline
+void write(Out& out, std::type_identity_t<T> val) {
+    auto v = net::ntoh(val);
+    auto p = reinterpret_cast<const bytes_view::value_type*>(&v);
+    if (out.current_fragment().size() >= sizeof(v)) [[likely]] {
+        std::copy_n(p, sizeof(v), out.current_fragment().data());
+        out.remove_prefix(sizeof(v));
+    } else {
+        write_fragmented(out, single_fragmented_view(bytes_view(p, sizeof(v))));
+    }
+}
+
+template<typename T, FragmentedMutableView Out>
+static inline
+void write_native(Out& out, std::type_identity_t<T> v) {
+    auto p = reinterpret_cast<const bytes_view::value_type*>(&v);
+    if (out.current_fragment().size() >= sizeof(v)) [[likely]] {
+        std::copy_n(p, sizeof(v), out.current_fragment().data());
+        out.remove_prefix(sizeof(v));
+    } else {
+        write_fragmented(out, single_fragmented_view(bytes_view(p, sizeof(v))));
     }
 }

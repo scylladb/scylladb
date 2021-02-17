@@ -182,13 +182,12 @@ void sstable_writer_k_l::write_cell(file_writer& out, atomic_cell_view cell, con
         column_mask mask = column_mask::counter;
         write(_version, out, mask, int64_t(0), timestamp);
 
-      counter_cell_view::with_linearized(cell, [&] (counter_cell_view ccv) {
+        auto ccv = counter_cell_view(cell);
         write_counter_value(ccv, out, _version, [v = _version] (file_writer& out, uint32_t value) {
             return write(v, out, value);
         });
 
         _c_stats.update_local_deletion_time(std::numeric_limits<int>::max());
-      });
     } else if (cell.is_live_and_has_ttl()) {
         // expiring cell
 

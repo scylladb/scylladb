@@ -22,6 +22,8 @@
 #include "row_locking.hh"
 #include "log.hh"
 
+#include <seastar/core/when_all.hh>
+
 static logging::logger mylog("row_locking");
 
 row_locker::row_locker(schema_ptr s)

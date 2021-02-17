@@ -118,16 +118,14 @@ void counter_cell_view::apply(const column_definition& cdef, atomic_cell_or_coll
 
     assert(!dst_ac.is_counter_update());
     assert(!src_ac.is_counter_update());
- with_linearized(dst_ac, [&] (counter_cell_view dst_ccv) {
-  with_linearized(src_ac, [&] (counter_cell_view src_ccv) {
 
+    auto src_ccv = counter_cell_view(src_ac);
+    auto dst_ccv = counter_cell_view(dst_ac);
     if (dst_ccv.shard_count() >= src_ccv.shard_count()) {
         auto dst_amc = dst.as_mutable_atomic_cell(cdef);
         auto src_amc = src.as_mutable_atomic_cell(cdef);
-        if (!dst_amc.is_value_fragmented() && !src_amc.is_value_fragmented()) {
-            if (apply_in_place(cdef, dst_amc, src_amc)) {
-                return;
-            }
+        if (apply_in_place(cdef, dst_amc, src_amc)) {
+            return;
         }
     }
 
@@ -142,8 +140,6 @@ void counter_cell_view::apply(const column_definition& cdef, atomic_cell_or_coll
 
     auto cell = result.build(std::max(dst_ac.timestamp(), src_ac.timestamp()));
     src = std::exchange(dst, atomic_cell_or_collection(std::move(cell)));
-  });
- });
 }
 
 std::optional<atomic_cell> counter_cell_view::difference(atomic_cell_view a, atomic_cell_view b)
@@ -158,8 +154,8 @@ std::optional<atomic_cell> counter_cell_view::difference(atomic_cell_view a, ato
         return { };
     }
 
- return with_linearized(a, [&] (counter_cell_view a_ccv) {
-  return with_linearized(b, [&] (counter_cell_view b_ccv) {
+    auto a_ccv = counter_cell_view(a);
+    auto b_ccv = counter_cell_view(b);
     auto a_shards = a_ccv.shards();
     auto b_shards = b_ccv.shards();
 
@@ -186,8 +182,6 @@ std::optional<atomic_cell> counter_cell_view::difference(atomic_cell_view a, ato
         diff = atomic_cell::make_live(*counter_type, a.timestamp(), bytes_view());
     }
     return diff;
-  });
- });
 }
 
 
@@ -225,14 +219,13 @@ void transform_counter_updates_to_shards(mutation& m, const mutation* current_st
             if (!acv.is_live()) {
                 return; // continue -- we are in lambda
             }
-          counter_cell_view::with_linearized(acv, [&] (counter_cell_view ccv) {
+            auto ccv = counter_cell_view(acv);
             auto cs = ccv.get_shard(counter_id(local_id));
             if (!cs) {
                 return; // continue
             }
             shards.emplace_back(std::make_pair(id, counter_shard(*cs)));
           });
-        });
 
         transformee.for_each_cell([&] (column_id id, atomic_cell_or_collection& ac_o_c) {
             auto& cdef = s.column_at(kind, id);

@@ -25,6 +25,7 @@
 #include "utils/utf8.hh"
 #include "utils/ascii.hh"
 #include "utils/date.h"
+#include <seastar/core/align.hh>
 #include <lua.hpp>
 
 // Lua 5.4 added an extra parameter to lua_resume

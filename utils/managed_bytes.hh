@@ -394,6 +394,7 @@ private:
     size_t _size = 0;
 public:
     managed_bytes_basic_view() = default;
+    managed_bytes_basic_view(const managed_bytes_basic_view&) = default;
     managed_bytes_basic_view(owning_type& mb) {
         if (mb._u.small.size != -1) {
             _current_fragment = fragment_type(mb._u.small.data, mb._u.small.size);
@@ -437,11 +438,34 @@ public:
         v._current_fragment = v._current_fragment.substr(0, len);
         return v;
     }
+    managed_bytes_basic_view substr(size_t offset, size_t len) const {
+        size_t end = std::min(offset + len, _size);
+        managed_bytes_basic_view v = prefix(end);
+        v.remove_prefix(offset);
+        return v;
+    }
+    const auto& front() const { return _current_fragment.front(); }
+    auto& front() { return _current_fragment.front(); }
     const value_type& operator[](size_t index) const {
         auto v = *this;
         v.remove_prefix(index);
         return v.current_fragment().front();
     }
+    bool is_fragmented() const {
+        return _size != _current_fragment.size();
+    }
+    bytes linearize() const {
+        return linearized(*this);
+    }
+
+    // Allow casting mutable views to immutable views.
+    friend class managed_bytes_basic_view<mutable_view::no>;
+    managed_bytes_basic_view(const managed_bytes_basic_view<mutable_view::yes>& other)
+    requires (is_mutable == mutable_view::no)
+        : _current_fragment(other._current_fragment.data(), other._current_fragment.size())
+        , _next_fragments(other._next_fragments)
+        , _size(other._size)
+    {}
 };
 static_assert(FragmentedView<managed_bytes_view>);
 static_assert(FragmentedMutableView<managed_bytes_mutable_view>);

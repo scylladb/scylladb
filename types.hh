@@ -24,7 +24,6 @@
 #include <optional>
 #include <boost/functional/hash.hpp>
 #include <iosfwd>
-#include "data/cell.hh"
 #include <sstream>
 #include <iterator>
 
@@ -35,7 +34,6 @@
 #include "db_clock.hh"
 #include "bytes.hh"
 #include "log.hh"
-#include "atomic_cell.hh"
 #include "cql_serialization_format.hh"
 #include "tombstone.hh"
 #include "to_string.hh"
@@ -51,6 +49,7 @@
 #include "hashing.hh"
 #include "utils/fragmented_temporary_buffer.hh"
 #include "utils/exceptions.hh"
+#include "utils/managed_bytes.hh"
 
 class tuple_type_impl;
 class big_decimal;
@@ -466,7 +465,6 @@ class user_type_impl;
 class abstract_type : public enable_shared_from_this<abstract_type> {
     sstring _name;
     std::optional<uint32_t> _value_length_if_fixed;
-    data::type_imr_descriptor _imr_state;
 public:
     enum class kind : int8_t {
         ascii,
@@ -504,10 +502,9 @@ private:
 public:
     kind get_kind() const { return _kind; }
 
-    abstract_type(kind k, sstring name, std::optional<uint32_t> value_length_if_fixed, data::type_info ti)
-        : _name(name), _value_length_if_fixed(std::move(value_length_if_fixed)), _imr_state(ti), _kind(k) {}
+    abstract_type(kind k, sstring name, std::optional<uint32_t> value_length_if_fixed)
+        : _name(name), _value_length_if_fixed(std::move(value_length_if_fixed)), _kind(k) {}
     virtual ~abstract_type() {}
-    const data::type_imr_descriptor& imr_state() const { return _imr_state; }
     bool less(bytes_view v1, bytes_view v2) const { return compare(v1, v2) < 0; }
     // returns a callable that can be called with two byte_views, and calls this->less() on them.
     serialized_compare as_less_comparator() const ;
@@ -834,7 +831,7 @@ class reversed_type_impl : public abstract_type {
     data_type _underlying_type;
     reversed_type_impl(data_type t)
         : abstract_type(kind::reversed, "org.apache.cassandra.db.marshal.ReversedType(" + t->name() + ")",
-                        t->value_length_if_fixed(), t->imr_state().type_info())
+                        t->value_length_if_fixed())
         , _underlying_type(t)
     {}
 public:
@@ -1161,26 +1158,6 @@ typename Type::value_type deserialize_value(Type& t, bytes_view v) {
     return t.deserialize_value(v);
 }
 
-// Does not check bounds. Must be called only after size is already checked.
-template<FragmentedView View>
-void read_fragmented(View& v, size_t n, bytes::value_type* out) {
-    while (n) {
-        if (n <= v.current_fragment().size()) {
-            std::copy_n(v.current_fragment().data(), n, out);
-            v.remove_prefix(n);
-            n = 0;
-        } else {
-            out = std::copy_n(v.current_fragment().data(), v.current_fragment().size(), out);
-            n -= v.current_fragment().size();
-            v.remove_current();
-        }
-    }
-}
-template<> void inline read_fragmented(single_fragmented_view& v, size_t n, bytes::value_type* out) {
-    std::copy_n(v.current_fragment().data(), n, out);
-    v.remove_prefix(n);
-}
-
 template<typename T>
 T read_simple(bytes_view& v) {
     if (v.size() < sizeof(T)) {
@@ -1191,21 +1168,6 @@ T read_simple(bytes_view& v) {
     return net::ntoh(*reinterpret_cast<const net::packed<T>*>(p));
 }
 
-template<typename T, FragmentedView View>
-T read_simple(View& v) {
-    if (v.current_fragment().size() >= sizeof(T)) [[likely]] {
-        auto p = v.current_fragment().data();
-        v.remove_prefix(sizeof(T));
-        return net::ntoh(*reinterpret_cast<const net::packed<T>*>(p));
-    } else if (v.size_bytes() >= sizeof(T)) {
-        T buf;
-        read_fragmented(v, sizeof(T), reinterpret_cast<bytes::value_type*>(&buf));
-        return net::ntoh(buf);
-    } else {
-        throw_with_backtrace<marshal_exception>(format("read_simple - not enough bytes (expected {:d}, got {:d})", sizeof(T), v.size_bytes()));
-    }
-}
-
 template<typename T>
 T read_simple_exactly(bytes_view v) {
     if (v.size() != sizeof(T)) {
@@ -1213,20 +1175,6 @@ T read_simple_exactly(bytes_view v) {
     }
     auto p = v.begin();
     return net::ntoh(*reinterpret_cast<const net::packed<T>*>(p));
-}
-
-template<typename T, FragmentedView View>
-T read_simple_exactly(View v) {
-    if (v.current_fragment().size() == sizeof(T)) [[likely]] {
-        auto p = v.current_fragment().data();
-        return net::ntoh(*reinterpret_cast<const net::packed<T>*>(p));
-    } else if (v.size_bytes() == sizeof(T)) {
-        T buf;
-        read_fragmented(v, sizeof(T), reinterpret_cast<bytes::value_type*>(&buf));
-        return net::ntoh(buf);
-    } else {
-        throw_with_backtrace<marshal_exception>(format("read_simple_exactly - size mismatch (expected {:d}, got {:d})", sizeof(T), v.size_bytes()));
-    }
 }
 
 inline

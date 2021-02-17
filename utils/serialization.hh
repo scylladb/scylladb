@@ -160,16 +160,3 @@ void write(CharOutputIterator& out, const T& val) {
     auto v = net::ntoh(val);
     out = std::copy_n(reinterpret_cast<char*>(&v), sizeof(v), out);
 }
-
-template<typename T, FragmentedMutableView Out>
-static inline
-void write(Out& out, std::type_identity_t<T> val) {
-    auto v = net::ntoh(val);
-    auto p = reinterpret_cast<const bytes_view::value_type*>(&v);
-    if (out.current_fragment().size() >= sizeof(v)) [[likely]] {
-        std::copy_n(p, sizeof(v), out.current_fragment().data());
-        out.remove_prefix(sizeof(v));
-    } else {
-        write_fragmented(out, single_fragmented_view(bytes_view(p, sizeof(v))));
-    }
-}

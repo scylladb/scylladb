@@ -70,7 +70,8 @@ SEASTAR_TEST_CASE(test_counter_cell) {
         auto c1 = atomic_cell_or_collection(b1.build(0));
         
         atomic_cell_or_collection c2;
-      counter_cell_view::with_linearized(c1.as_atomic_cell(cdef), [&] (counter_cell_view cv) {
+      {
+        counter_cell_view cv(c1.as_atomic_cell(cdef));
         BOOST_REQUIRE_EQUAL(cv.total_value(), 1);
         verify_shard_order(cv);
 
@@ -78,18 +79,20 @@ SEASTAR_TEST_CASE(test_counter_cell) {
         b2.add_shard(counter_shard(*cv.get_shard(id[0])).update(2, 1));
         b2.add_shard(counter_shard(id[2], 1, 1));
         c2 = atomic_cell_or_collection(b2.build(0));
-    });
+      }
 
-      counter_cell_view::with_linearized(c2.as_atomic_cell(cdef), [&] (counter_cell_view cv) {
+      {
+        counter_cell_view cv(c2.as_atomic_cell(cdef));
         BOOST_REQUIRE_EQUAL(cv.total_value(), 8);
         verify_shard_order(cv);
-      });
+      }
 
         counter_cell_view::apply(cdef, c1, c2);
-      counter_cell_view::with_linearized(c1.as_atomic_cell(cdef), [&] (counter_cell_view cv) {
+      {
+        counter_cell_view cv(c1.as_atomic_cell(cdef));
         BOOST_REQUIRE_EQUAL(cv.total_value(), 4);
         verify_shard_order(cv);
-      });
+      }
     });
 }
 
@@ -102,10 +105,11 @@ SEASTAR_TEST_CASE(test_apply) {
             auto src = b.copy(*cdef.type);
             counter_cell_view::apply(cdef, dst, src);
 
-          counter_cell_view::with_linearized(dst.as_atomic_cell(cdef), [&] (counter_cell_view cv) {
+          {
+            counter_cell_view cv(dst.as_atomic_cell(cdef));
             BOOST_REQUIRE_EQUAL(cv.total_value(), value);
             BOOST_REQUIRE_EQUAL(cv.timestamp(), std::max(dst.as_atomic_cell(cdef).timestamp(), src.as_atomic_cell(cdef).timestamp()));
-          });
+          }
         };
         auto id = generate_ids(5);
 
@@ -241,17 +245,19 @@ SEASTAR_TEST_CASE(test_counter_mutations) {
         m.apply(m2);
         auto ac = get_counter_cell(m);
         BOOST_REQUIRE(ac.is_live());
-      counter_cell_view::with_linearized(ac, [&] (counter_cell_view ccv) {
+      {
+        counter_cell_view ccv(ac);
         BOOST_REQUIRE_EQUAL(ccv.total_value(), -102);
         verify_shard_order(ccv);
-      });
+      }
 
         ac = get_static_counter_cell(m);
         BOOST_REQUIRE(ac.is_live());
-      counter_cell_view::with_linearized(ac, [&] (counter_cell_view ccv) {
+      {
+        counter_cell_view ccv(ac);
         BOOST_REQUIRE_EQUAL(ccv.total_value(), 20);
         verify_shard_order(ccv);
-      });
+      }
 
         m.apply(m3);
         ac = get_counter_cell(m);
@@ -271,32 +277,36 @@ SEASTAR_TEST_CASE(test_counter_mutations) {
         m = mutation(s, m1.decorated_key(), m1.partition().difference(s, m2.partition()));
         ac = get_counter_cell(m);
         BOOST_REQUIRE(ac.is_live());
-      counter_cell_view::with_linearized(ac, [&] (counter_cell_view ccv) {
+      {
+        counter_cell_view ccv(ac);
         BOOST_REQUIRE_EQUAL(ccv.total_value(), 2);
         verify_shard_order(ccv);
-      });
+      }
 
         ac = get_static_counter_cell(m);
         BOOST_REQUIRE(ac.is_live());
-      counter_cell_view::with_linearized(ac, [&] (counter_cell_view ccv) {
+      {
+        counter_cell_view ccv(ac);
         BOOST_REQUIRE_EQUAL(ccv.total_value(), 11);
         verify_shard_order(ccv);
-      });
+      }
 
         m = mutation(s, m1.decorated_key(), m2.partition().difference(s, m1.partition()));
         ac = get_counter_cell(m);
         BOOST_REQUIRE(ac.is_live());
-      counter_cell_view::with_linearized(ac, [&] (counter_cell_view ccv) {
+      {
+        counter_cell_view ccv(ac);
         BOOST_REQUIRE_EQUAL(ccv.total_value(), -105);
         verify_shard_order(ccv);
-      });
+      }
 
         ac = get_static_counter_cell(m);
         BOOST_REQUIRE(ac.is_live());
-      counter_cell_view::with_linearized(ac, [&] (counter_cell_view ccv) {
+      {
+        counter_cell_view ccv(ac);
         BOOST_REQUIRE_EQUAL(ccv.total_value(), 9);
         verify_shard_order(ccv);
-      });
+      }
 
         m = mutation(s, m1.decorated_key(), m1.partition().difference(s, m3.partition()));
         BOOST_REQUIRE_EQUAL(m.partition().clustered_rows().calculate_size(), 0);
@@ -434,34 +444,38 @@ SEASTAR_TEST_CASE(test_transfer_updates_to_shards) {
 
         auto ac = get_counter_cell(m);
         BOOST_REQUIRE(ac.is_live());
-      counter_cell_view::with_linearized(ac, [&] (counter_cell_view ccv) {
+      {
+        counter_cell_view ccv(ac);
         BOOST_REQUIRE_EQUAL(ccv.total_value(), 5);
         verify_shard_order(ccv);
-      });
+      }
 
         ac = get_static_counter_cell(m);
         BOOST_REQUIRE(ac.is_live());
-      counter_cell_view::with_linearized(ac, [&] (counter_cell_view ccv) {
+      {
+        counter_cell_view ccv(ac);
         BOOST_REQUIRE_EQUAL(ccv.total_value(), 4);
         verify_shard_order(ccv);
-      });
+      }
 
         m = m2;
         transform_counter_updates_to_shards(m, &m0, 0, utils::UUID{});
 
         ac = get_counter_cell(m);
         BOOST_REQUIRE(ac.is_live());
-      counter_cell_view::with_linearized(ac, [&] (counter_cell_view ccv) {
+      {
+        counter_cell_view ccv(ac);
         BOOST_REQUIRE_EQUAL(ccv.total_value(), 14);
         verify_shard_order(ccv);
-      });
+      }
 
         ac = get_static_counter_cell(m);
         BOOST_REQUIRE(ac.is_live());
-      counter_cell_view::with_linearized(ac, [&] (counter_cell_view ccv) {
+      {
+        counter_cell_view ccv(ac);
         BOOST_REQUIRE_EQUAL(ccv.total_value(), 12);
         verify_shard_order(ccv);
-      });
+      }
 
         m = m3;
         transform_counter_updates_to_shards(m, &m0, 0, utils::UUID{});
@@ -519,14 +533,14 @@ SEASTAR_TEST_CASE(test_sanitize_corrupted_cells) {
             auto c2 = atomic_cell_or_collection(b2.build(0));
 
             // Compare
-         counter_cell_view::with_linearized(c1.as_atomic_cell(cdef), [&] (counter_cell_view cv1) {
-          counter_cell_view::with_linearized(c2.as_atomic_cell(cdef), [&] (counter_cell_view cv2) {
+          {
+            counter_cell_view cv1(c1.as_atomic_cell(cdef));
+            counter_cell_view cv2(c2.as_atomic_cell(cdef));
             BOOST_REQUIRE_EQUAL(cv1, cv2);
             BOOST_REQUIRE_EQUAL(cv1.total_value(), cv2.total_value());
             verify_shard_order(cv1);
             verify_shard_order(cv2);
-          });
-         });
+          }
         }
     });
 }

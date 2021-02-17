@@ -432,12 +432,11 @@ static bytes make_payload(const schema& schema, size_t size, const partition_key
     return std::move(buf_os).detach();
 }
 
-static bool validate_payload(const schema& schema, data::value_view payload_view, const partition_key& pk, const clustering_key* const ck) {
-    auto istream = fragmented_memory_input_stream(payload_view.begin(), payload_view.size_bytes());
-
+static bool validate_payload(const schema& schema, atomic_cell_value_view payload_view, const partition_key& pk, const clustering_key* const ck) {
+    auto istream = fragmented_memory_input_stream(fragment_range(payload_view).begin(), payload_view.size());
     auto head = ser::deserialize(istream, boost::type<blob_header>{});
 
-    const size_t actual_size = payload_view.size_bytes();
+    const size_t actual_size = payload_view.size();
 
     if (head.size != actual_size) {
         testlog.error("Validating payload for pk={}, ck={} failed, sizes differ: stored={}, actual={}", pk, seastar::lazy_deref(ck), head.size,

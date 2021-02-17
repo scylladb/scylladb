@@ -1902,7 +1902,7 @@ SEASTAR_TEST_CASE(test_continuity_merging) {
 }
 
 class measuring_allocator final : public allocation_strategy {
-    size_t _allocated_bytes;
+    size_t _allocated_bytes = 0;
 public:
     measuring_allocator() {
         _preferred_max_contiguous_allocation = standard_allocator().preferred_max_contiguous_allocation();
@@ -2002,7 +2002,6 @@ SEASTAR_THREAD_TEST_CASE(test_cell_external_memory_usage) {
             auto before = alloc.allocated_bytes();
             auto ac = atomic_cell_or_collection(atomic_cell::make_live(*dt, 1, bv));
             auto after = alloc.allocated_bytes();
-            BOOST_CHECK_GE(ac.external_memory_usage(*dt), bv.size());
             BOOST_CHECK_EQUAL(ac.external_memory_usage(*dt), after - before);
         });
     };
@@ -2030,7 +2029,6 @@ SEASTAR_THREAD_TEST_CASE(test_cell_external_memory_usage) {
             auto before = alloc.allocated_bytes();
             auto cell2 = cell.copy(*collection_type);
             auto after = alloc.allocated_bytes();
-            BOOST_CHECK_GE(cell2.external_memory_usage(*collection_type), bv.size());
             BOOST_CHECK_EQUAL(cell2.external_memory_usage(*collection_type), cell.external_memory_usage(*collection_type));
             BOOST_CHECK_EQUAL(cell2.external_memory_usage(*collection_type), after - before);
         });
