@@ -131,9 +131,12 @@ static inline int calculate_weight(uint64_t total_size) {
     // comes along, you do them in parallel.
     // TODO: Find a possibly better log base through experimentation.
     static constexpr int WEIGHT_LOG_BASE = 4;
+    // Fixed tax is added to size before taking the log, to make sure all jobs
+    // smaller than the tax (i.e. 1MB) will be serialized.
+    static constexpr int fixed_size_tax = 1024*1024;
 
     // computes the logarithm (base WEIGHT_LOG_BASE) of total_size.
-    return int(std::log(total_size) / std::log(WEIGHT_LOG_BASE));
+    return int(std::log(total_size + fixed_size_tax) / std::log(WEIGHT_LOG_BASE));
 }
 
 static inline int calculate_weight(const std::vector<sstables::shared_sstable>& sstables) {
