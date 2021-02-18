@@ -176,11 +176,6 @@ def warn_offline(setup):
 def warn_offline_missing_pkg(setup, pkg):
     colorprint('{red}{setup} disabled by default, since {pkg} not available.{nocolor}', setup=setup, pkg=pkg)
 
-def current_umask():
-    current = os.umask(0)
-    os.umask(current)
-    return current
-
 if __name__ == '__main__':
     if not is_nonroot() and os.getuid() > 0:
         print('Requires root permission.')
@@ -331,12 +326,6 @@ if __name__ == '__main__':
     selinux_reboot_required = False
     set_clocksource = False
 
-    umask = current_umask()
-    # files have to be world-readable
-    if not is_nonroot() and (umask & 0o7) != 0o2:
-        colorprint('{red}Scylla does not work with current umask setting ({umask}),\nplease restore umask to the default value (0022).{nocolor}', umask='{0:o}'.format(umask).zfill(4))
-        sys.exit(1)
-
     if interactive:
         colorprint('{green}Skip any of the following steps by answering \'no\'{nocolor}')
 
@@ -375,11 +364,13 @@ if __name__ == '__main__':
             if version_check:
                 with open('/etc/scylla.d/housekeeping.cfg', 'w') as f:
                     f.write('[housekeeping]\ncheck-version: True\n')
+                os.chmod('/etc/scylla.d/housekeeping.cfg', 0o644)
                 systemd_unit('scylla-housekeeping-daily.timer').unmask()
                 systemd_unit('scylla-housekeeping-restart.timer').unmask()
             else:
                 with open('/etc/scylla.d/housekeeping.cfg', 'w') as f:
                     f.write('[housekeeping]\ncheck-version: False\n')
+                os.chmod('/etc/scylla.d/housekeeping.cfg', 0o644)
                 hk_daily = systemd_unit('scylla-housekeeping-daily.timer')
                 hk_daily.mask()
                 hk_daily.stop()
