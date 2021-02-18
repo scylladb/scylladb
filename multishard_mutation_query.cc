@@ -648,29 +648,28 @@ static future<reconcilable_result> do_query_mutations(
         tracing::trace_state_ptr trace_state,
         db::timeout_clock::time_point timeout,
         query::result_memory_accounter&& accounter) {
-    return do_with(seastar::make_shared<read_context>(db, s, cmd, ranges, trace_state), [&db, s, &cmd, &ranges, trace_state, timeout,
-            accounter = std::move(accounter)] (shared_ptr<read_context>& ctx) mutable {
-        return ctx->lookup_readers().then([&ctx, s = std::move(s), &cmd, &ranges, trace_state, timeout,
-                accounter = std::move(accounter)] () mutable {
-            return read_page(ctx, s, cmd, ranges, trace_state, timeout, std::move(accounter)).then_wrapped([&ctx] (future<page_consume_result>&& result_fut) {
-                if (result_fut.failed()) {
-                    return make_exception_future<reconcilable_result>(std::move(result_fut.get_exception()));
-                }
+    auto ctx = seastar::make_shared<read_context>(db, s, cmd, ranges, trace_state);
 
-                auto [last_ckey, result, unconsumed_buffer, compaction_state] = result_fut.get0();
-                if (!compaction_state->are_limits_reached() && !result.is_short_read()) {
-                    return make_ready_future<reconcilable_result>(std::move(result));
-                }
+    co_await ctx->lookup_readers();
 
-                return ctx->save_readers(std::move(unconsumed_buffer), std::move(*compaction_state).detach_state(),
-                        std::move(last_ckey)).then_wrapped([result = std::move(result)] (future<>&&) mutable {
-                    return make_ready_future<reconcilable_result>(std::move(result));
-                });
-            }).finally([&ctx] {
-                return ctx->stop();
-            });
-        });
-    });
+    std::exception_ptr ex;
+
+    try {
+        auto [last_ckey, result, unconsumed_buffer, compaction_state] = co_await read_page(ctx, s, cmd, ranges, trace_state, timeout, std::move(accounter));
+
+        if (compaction_state->are_limits_reached() || result.is_short_read()) {
+            co_await ctx->save_readers(std::move(unconsumed_buffer), std::move(*compaction_state).detach_state(), std::move(last_ckey));
+        }
+
+        co_await ctx->stop();
+        co_return std::move(result);
+    } catch (...) {
+        ex = std::current_exception();
+    }
+
+    co_await ctx->stop();
+
+    std::rethrow_exception(std::move(ex));
 }
 
 future<std::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>> query_mutations_on_all_shards(
