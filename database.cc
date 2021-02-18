@@ -399,8 +399,6 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
 
     _row_cache_tracker.set_compaction_scheduling_group(dbcfg.memory_compaction_scheduling_group);
 
-    dblog.debug("Row: max_vector_size: {}, internal_count: {}", size_t(row::max_vector_size), size_t(row::internal_count));
-
     _infinite_bound_range_deletions_reg = _feat.cluster_supports_unbounded_range_tombstones().when_enabled([this] {
         dblog.debug("Enabling infinite bound range deletions");
         _supports_infinite_bound_range_deletions = true;

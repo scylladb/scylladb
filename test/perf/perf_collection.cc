@@ -82,6 +82,7 @@ public:
     virtual void erase(per_key_t k) = 0;
     virtual void drain(int batch) = 0;
     virtual void clear() = 0;
+    virtual void clone() = 0;
     virtual void show_stats() = 0;
     virtual void insert_and_erase(per_key_t k) = 0;
     virtual ~collection_tester() {};
@@ -128,6 +129,7 @@ public:
         }
     }
     virtual void clear() override { _t.clear(); }
+    virtual void clone() override { }
     virtual void insert_and_erase(per_key_t k) override {
         auto i = _t.emplace(k, 0);
         assert(i.second);
@@ -146,6 +148,56 @@ public:
         fmt::print("datas:     {}\n", st.datas);
     }
     virtual ~bptree_tester() { clear(); }
+};
+
+#include "utils/compact-radix-tree.hh"
+
+class radix_tester : public collection_tester {
+public:
+    using test_tree = compact_radix_tree::tree<unsigned long>;
+
+private:
+    test_tree _t;
+public:
+    radix_tester() : _t() {}
+    virtual void insert(per_key_t k) override { _t.emplace(k, 0); }
+    virtual void lower_bound(per_key_t k) override {
+        auto i = _t.get(k);
+        assert(i != nullptr);
+    }
+    virtual void scan(int batch) override {
+        scan_collection(_t, batch);
+    }
+    virtual void erase(per_key_t k) override { _t.erase(k); }
+    virtual void drain(int batch) override {
+        int x = 0;
+        while (!_t.empty()) {
+            _t.erase(_t.begin().key());
+            if (++x % batch == 0) {
+                seastar::thread::yield();
+            }
+        }
+    }
+    virtual void clear() override { _t.clear(); }
+    virtual void clone() override {
+        test_tree ct;
+        ct.clone_from(_t, [] (unsigned, const unsigned long& data) { return data; });
+    }
+    virtual void insert_and_erase(per_key_t k) override {
+        _t.emplace(k, 0);
+        _t.erase(k);
+    }
+    void show_node_stats(std::string typ, typename test_tree::stats::node_stats& st) {
+        fmt::print("{}: indirect: {}/{}/{}/{}  direct: static {} dynamic {}\n", typ,
+                st.indirect_tiny, st.indirect_small, st.indirect_medium, st.indirect_large,
+                st.direct_static, st.direct_dynamic);
+    }
+    virtual void show_stats() {
+        test_tree::stats st = _t.get_stats();
+        show_node_stats("inner", st.inners);
+        show_node_stats(" leaf", st.leaves);
+    }
+    virtual ~radix_tester() { clear(); }
 };
 
 #include "intrusive_set_external_comparator.hh"
@@ -208,6 +260,7 @@ public:
     virtual void clear() override {
         _t.clear_and_dispose([] (isec_node* n) { delete n; });
     }
+    virtual void clone() override { }
     virtual void insert_and_erase(per_key_t k) override {
         isec_node n(k);
         auto i = _t.insert_before(_t.end(), n);
@@ -244,6 +297,7 @@ public:
     virtual void clear() override {
         _t.clear_and_dispose([] (perf_intrusive_key* k) noexcept { delete k; });
     }
+    virtual void clone() override { }
     virtual void insert_and_erase(per_key_t k) override {
         perf_intrusive_key key(k);
         auto i = _t.insert_before(_t.end(), key);
@@ -288,6 +342,7 @@ public:
         }
     }
     virtual void clear() override { _s.clear(); }
+    virtual void clone() override { }
     virtual void insert_and_erase(per_key_t k) override {
         auto i = _s.insert(k);
         assert(i.second);
@@ -320,6 +375,7 @@ public:
         }
     }
     virtual void clear() override { _m.clear(); }
+    virtual void clone() override { }
     virtual void insert_and_erase(per_key_t k) override {
         auto i = _m.insert({k, 0});
         assert(i.second);
@@ -361,6 +417,8 @@ int main(int argc, char **argv) {
                 c = std::make_unique<map_tester>();
             } else if (col == "isec") {
                 c = std::make_unique<isec_tester>();
+            } else if (col == "radix") {
+                c = std::make_unique<radix_tester>();
             } else {
                 fmt::print("Unknown collection\n");
                 return;
@@ -456,6 +514,11 @@ int main(int argc, char **argv) {
                     });
 
                     fmt::print("scan: {:.6f} ms\n", d.count() * 1000);
+                } else if (tst == "clone") {
+                    d = duration_in_seconds([&] {
+                        c->clone();
+                    });
+                    fmt::print("clone: {:.6f} ms\n", d.count() * 1000);
                 }
 
                 c->clear();

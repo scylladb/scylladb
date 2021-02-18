@@ -1368,10 +1368,6 @@ public:
 
     virtual proceed consume_row_end() override {
         auto fill_cells = [this] (column_kind kind, row& cells) {
-            auto max_id = boost::max_element(_cells, [](auto &&a, auto &&b) {
-                return a.id < b.id;
-            });
-            cells.reserve(max_id->id);
             for (auto &&c : _cells) {
                 cells.apply(_schema->column_at(kind, c.id), std::move(c.val));
             }

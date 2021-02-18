@@ -21,6 +21,7 @@
  */
 
 #include "database.hh"
+#include "schema_builder.hh"
 #include "test/perf/perf.hh"
 #include <seastar/core/app-template.hh>
 #include <seastar/core/reactor.hh>
@@ -30,10 +31,23 @@ static atomic_cell make_atomic_cell(data_type dt, bytes value) {
 };
 
 int main(int argc, char* argv[]) {
-    return app_template().run_deprecated(argc, argv, [] {
-        auto s = make_shared_schema({}, "ks", "cf",
-            {{"p1", utf8_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type);
+    namespace bpo = boost::program_options;
+    app_template app;
+    app.add_options()
+        ("column-count", bpo::value<size_t>()->default_value(1), "column count");
+    return app.run_deprecated(argc, argv, [&] {
+        size_t column_count = app.configuration()["column-count"].as<size_t>();
+        auto builder = schema_builder("ks", "cf")
+            .with_column("p1", utf8_type, column_kind::partition_key)
+            .with_column("c1", int32_type, column_kind::clustering_key);
 
+        std::vector<sstring> cnames;
+        for (int i = 0; i < column_count; i++) {
+            cnames.push_back(fmt::format("r{}", i + 1));
+            builder.with_column(to_bytes(cnames.back()), int32_type);
+        }
+
+        auto s = builder.build();
         memtable mt(s);
 
         std::cout << "Timing mutation of single column within one row...\n";
@@ -44,7 +58,7 @@ int main(int argc, char* argv[]) {
 
         time_it([&] {
             mutation m(s, key);
-            const column_definition& col = *s->get_column_definition("r1");
+            const column_definition& col = *s->get_column_definition(to_bytes(cnames[std::rand() % column_count]));
             m.set_clustered_cell(c_key, col, make_atomic_cell(col.type, value));
             mt.apply(std::move(m));
         });

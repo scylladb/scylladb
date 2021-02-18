@@ -40,6 +40,8 @@
 #include "test/lib/reader_permit.hh"
 
 class size_calculator {
+    using cells_type = row::sparse_array_type;
+
     class nest {
     public:
         static thread_local int level;
@@ -73,6 +75,19 @@ public:
         std::cout << prefix() << "sizeof(lru_link_type) = " << sizeof(rows_entry::lru_link_type) << "\n";
         std::cout << prefix() << "sizeof(deletable_row) = " << sizeof(deletable_row) << "\n";
         std::cout << prefix() << "sizeof(row) = " << sizeof(row) << "\n";
+        std::cout << prefix() << "radix_tree::inner_node::node_sizes = ";
+        for (int i = 4; i <= 128; i *= 2) {
+            std::cout << " " << cells_type::inner_node::node_type::node_size(cells_type::layout::direct_dynamic, i);
+        }
+        std::cout << "\n";
+        std::cout << prefix() << "radix_tree::leaf_node::node_sizes = ";
+        std::cout << " " << cells_type::leaf_node::node_type::node_size(cells_type::layout::indirect_tiny, 0);
+        std::cout << " " << cells_type::leaf_node::node_type::node_size(cells_type::layout::indirect_small, 0);
+        std::cout << " " << cells_type::leaf_node::node_type::node_size(cells_type::layout::indirect_medium, 0);
+        std::cout << " " << cells_type::leaf_node::node_type::node_size(cells_type::layout::indirect_large, 0);
+        std::cout << " " << cells_type::leaf_node::node_type::node_size(cells_type::layout::direct_static, 0);
+        std::cout << "\n";
+
         std::cout << prefix() << "sizeof(atomic_cell_or_collection) = " << sizeof(atomic_cell_or_collection) << "\n";
         std::cout << prefix() << "btree::linear_node_size(1) = " << mutation_partition::rows_type::node::linear_node_size(1) << "\n";
         std::cout << prefix() << "btree::inner_node_size = " << mutation_partition::rows_type::node::inner_node_size << "\n";

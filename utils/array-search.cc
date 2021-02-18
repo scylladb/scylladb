@@ -41,6 +41,30 @@ arch_target("default") int array_search_gt_impl(int64_t val, const int64_t* arra
     return i;
 }
 
+static inline unsigned array_search_eq_impl(uint8_t val, const uint8_t* arr, unsigned len) {
+    unsigned i;
+
+    for (i = 0; i < len; i++) {
+        if (arr[i] == val) {
+            break;
+        }
+    }
+
+    return i;
+}
+
+arch_target("default") unsigned array_search_16_eq_impl(uint8_t val, const uint8_t* arr) {
+    return array_search_eq_impl(val, arr, 16);
+}
+
+arch_target("default") unsigned array_search_32_eq_impl(uint8_t val, const uint8_t* arr) {
+    return array_search_eq_impl(val, arr, 32);
+}
+
+arch_target("default") unsigned array_search_x32_eq_impl(uint8_t val, const uint8_t* arr, int nr) {
+    return array_search_eq_impl(val, arr, 32 * nr);
+}
+
 #ifdef __x86_64__
 
 /*
@@ -89,10 +113,58 @@ arch_target("avx2") int array_search_gt_impl(int64_t val, const int64_t* array, 
     return size - cnt;
 }
 
+/*
+ * SSE4 version of searching in array for an exact match.
+ */
+arch_target("sse") unsigned array_search_16_eq_impl(uint8_t val, const uint8_t* arr) {
+	auto a = _mm_set1_epi8(val);
+	auto b = _mm_lddqu_si128((__m128i*)arr);
+	auto c = _mm_cmpeq_epi8(a, b);
+	unsigned int m = _mm_movemask_epi8(c);
+	return __builtin_ctz(m | 0x10000);
+}
+
+/*
+ * AVX2 version of searching in array for an exact match.
+ */
+arch_target("avx2") unsigned array_search_32_eq_impl(uint8_t val, const uint8_t* arr) {
+    auto a = _mm256_set1_epi8(val);
+    auto b = _mm256_lddqu_si256((__m256i*)arr);
+    auto c = _mm256_cmpeq_epi8(a, b);
+    unsigned long long m = _mm256_movemask_epi8(c);
+    return __builtin_ctzll(m | 0x100000000ull);
+}
+
+arch_target("avx2") unsigned array_search_x32_eq_impl(uint8_t val, const uint8_t* arr, int nr) {
+    unsigned len = 32 * nr;
+    auto a = _mm256_set1_epi8(val);
+    for (unsigned off = 0; off < len; off += 32) {
+        auto b = _mm256_lddqu_si256((__m256i*)arr);
+        auto c = _mm256_cmpeq_epi8(a, b);
+        unsigned m = _mm256_movemask_epi8(c);
+        if (m != 0) {
+            return __builtin_ctz(m) + off;
+        }
+    }
+    return len;
+}
+
 #endif
 
 int array_search_gt(int64_t val, const int64_t* array, const int capacity, const int size) {
     return array_search_gt_impl(val, array, capacity, size);
+}
+
+unsigned array_search_16_eq(uint8_t val, const uint8_t* arr) {
+    return array_search_16_eq_impl(val, arr);
+}
+
+unsigned array_search_32_eq(uint8_t val, const uint8_t* array) {
+    return array_search_32_eq_impl(val, array);
+}
+
+unsigned array_search_x32_eq(uint8_t val, const uint8_t* array, int nr) {
+    return array_search_x32_eq_impl(val, array, nr);
 }
 
 }
