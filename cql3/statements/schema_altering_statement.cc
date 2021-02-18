@@ -90,10 +90,10 @@ void schema_altering_statement::prepare_keyspace(const service::client_state& st
 }
 
 future<::shared_ptr<messages::result_message>>
-schema_altering_statement::execute0(service::storage_proxy& proxy, service::query_state& state, const query_options& options) const {
+schema_altering_statement::execute0(query_processor& qp, service::query_state& state, const query_options& options) const {
     // If an IF [NOT] EXISTS clause was used, this may not result in an actual schema change.  To avoid doing
     // extra work in the drivers to handle schema changes, we return an empty message in this case. (CASSANDRA-7600)
-    return announce_migration(proxy).then([this] (auto ce) {
+    return announce_migration(qp.proxy()).then([this] (auto ce) {
         ::shared_ptr<messages::result_message> result;
         if (!ce) {
             result = ::make_shared<messages::result_message::void_message>();
@@ -106,11 +106,10 @@ schema_altering_statement::execute0(service::storage_proxy& proxy, service::quer
 
 future<::shared_ptr<messages::result_message>>
 schema_altering_statement::execute(query_processor& qp, service::query_state& state, const query_options& options) const {
-    service::storage_proxy& proxy = qp.proxy();
     bool internal = state.get_client_state().is_internal();
     if (internal) {
         auto replication_type = locator::replication_strategy_type::everywhere_topology;
-        database& db = proxy.get_db().local();
+        database& db = qp.db();
         if (_cf_name && _cf_name->has_keyspace()) {
            const auto& ks = db.find_keyspace(_cf_name->get_keyspace());
            replication_type = ks.get_replication_strategy().get_type();
@@ -121,7 +120,7 @@ schema_altering_statement::execute(query_processor& qp, service::query_state& st
         }
     }
 
-    return execute0(proxy, state, options).then([this, &state, internal](::shared_ptr<messages::result_message> result) {
+    return execute0(qp, state, options).then([this, &state, internal](::shared_ptr<messages::result_message> result) {
         auto permissions_granted_fut = internal
                 ? make_ready_future<>()
                 : grant_permissions_to_creator(state.get_client_state());

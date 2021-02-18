@@ -67,7 +67,7 @@ private:
     const bool _is_column_family_level;
 
     future<::shared_ptr<messages::result_message>>
-    execute0(service::storage_proxy& proxy, service::query_state& state, const query_options& options) const;
+    execute0(query_processor& qp, service::query_state& state, const query_options& options) const;
 protected:
     explicit schema_altering_statement(timeout_config_selector timeout_selector = &timeout_config::other_timeout);
 
