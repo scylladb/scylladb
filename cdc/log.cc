@@ -982,9 +982,9 @@ static bytes get_bytes(const atomic_cell_view& acv) {
     return to_bytes(acv.value());
 }
 
-static bytes_view get_bytes_view(const atomic_cell_view& acv, std::vector<bytes>& buf) {
+static bytes_view get_bytes_view(const atomic_cell_view& acv, std::forward_list<bytes>& buf) {
     return acv.value().is_fragmented()
-        ? bytes_view{buf.emplace_back(to_bytes(acv.value()))}
+        ? bytes_view{buf.emplace_front(to_bytes(acv.value()))}
         : acv.value().current_fragment();
 }
 
@@ -1138,10 +1138,10 @@ struct process_row_visitor {
                 _touched_parts.set<stats::part_type::UDT>();
 
                 struct udt_visitor : public collection_visitor {
-                    std::vector<bytes_opt> _added_cells;
-                    std::vector<bytes>& _buf;
+                    std::vector<bytes_view_opt> _added_cells;
+                    std::forward_list<bytes>& _buf;
 
-                    udt_visitor(ttl_opt& ttl_column, size_t num_keys, std::vector<bytes>& buf)
+                    udt_visitor(ttl_opt& ttl_column, size_t num_keys, std::forward_list<bytes>& buf)
                         : collection_visitor(ttl_column), _added_cells(num_keys), _buf(buf) {}
 
                     void live_collection_cell(bytes_view key, const atomic_cell_view& cell) {
@@ -1150,7 +1150,7 @@ struct process_row_visitor {
                     }
                 };
 
-                std::vector<bytes> buf;
+                std::forward_list<bytes> buf;
                 udt_visitor v(_ttl_column, type.size(), buf);
 
                 visit_collection(v);
@@ -1169,9 +1169,9 @@ struct process_row_visitor {
 
                 struct map_or_list_visitor : public collection_visitor {
                     std::vector<std::pair<bytes_view, bytes_view>> _added_cells;
-                    std::vector<bytes>& _buf;
+                    std::forward_list<bytes>& _buf;
 
-                    map_or_list_visitor(ttl_opt& ttl_column, std::vector<bytes>& buf)
+                    map_or_list_visitor(ttl_opt& ttl_column, std::forward_list<bytes>& buf)
                         : collection_visitor(ttl_column), _buf(buf) {}
 
                     void live_collection_cell(bytes_view key, const atomic_cell_view& cell) {
@@ -1180,7 +1180,7 @@ struct process_row_visitor {
                     }
                 };
 
-                std::vector<bytes> buf;
+                std::forward_list<bytes> buf;
                 map_or_list_visitor v(_ttl_column, buf);
 
                 visit_collection(v);
