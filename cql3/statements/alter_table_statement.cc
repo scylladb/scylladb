@@ -291,8 +291,7 @@ void alter_table_statement::drop_column(const schema& schema, const table& cf, s
 
 future<shared_ptr<cql_transport::event::schema_change>> alter_table_statement::announce_migration(query_processor& qp) const
 {
-    service::storage_proxy& proxy = qp.proxy();
-    auto& db = proxy.get_db().local();
+    database& db = qp.db();
     auto s = validation::validate_column_family(db, keyspace(), column_family());
     if (s->is_view()) {
         throw exceptions::invalid_request_exception("Cannot use ALTER TABLE on Materialized View");

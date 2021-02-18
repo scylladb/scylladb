@@ -151,8 +151,7 @@ future<shared_ptr<cql_transport::event::schema_change>> create_view_statement::a
     //  - make sure there is not currently a table or view
     //  - make sure base_table gc_grace_seconds > 0
 
-    service::storage_proxy& proxy = qp.proxy();
-    auto&& db = proxy.get_db().local();
+    auto&& db = qp.db();
     auto schema_extensions = _properties.properties()->make_schema_extensions(db.extensions());
     _properties.validate(db, schema_extensions);
 

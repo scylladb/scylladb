@@ -273,8 +273,7 @@ void create_index_statement::validate_targets_for_multi_column_index(std::vector
 
 future<::shared_ptr<cql_transport::event::schema_change>>
 create_index_statement::announce_migration(query_processor& qp) const {
-    service::storage_proxy& proxy = qp.proxy();
-    auto& db = proxy.get_db().local();
+    database& db = qp.db();
     auto schema = db.find_schema(keyspace(), column_family());
     std::vector<::shared_ptr<index_target>> targets;
     for (auto& raw_target : _raw_targets) {

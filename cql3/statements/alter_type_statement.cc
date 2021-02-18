@@ -127,8 +127,7 @@ void alter_type_statement::do_announce_migration(database& db, service::migratio
 future<shared_ptr<cql_transport::event::schema_change>> alter_type_statement::announce_migration(query_processor& qp) const
 {
     return seastar::async([this, &qp] {
-        service::storage_proxy& proxy = qp.proxy();
-        auto&& db = proxy.get_db().local();
+        database& db = qp.db();
         try {
             auto&& ks = db.find_keyspace(keyspace());
             do_announce_migration(db, qp.get_migration_manager(), ks);

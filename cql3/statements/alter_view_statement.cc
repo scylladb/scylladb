@@ -79,8 +79,7 @@ void alter_view_statement::validate(service::storage_proxy&, const service::clie
 
 future<shared_ptr<cql_transport::event::schema_change>> alter_view_statement::announce_migration(query_processor& qp) const
 {
-    service::storage_proxy& proxy = qp.proxy();
-    auto&& db = proxy.get_db().local();
+    database& db = qp.db();
     schema_ptr schema = validation::validate_column_family(db, keyspace(), column_family());
     if (!schema->is_view()) {
         throw exceptions::invalid_request_exception("Cannot use ALTER MATERIALIZED VIEW on Table");
@@ -91,7 +90,7 @@ future<shared_ptr<cql_transport::event::schema_change>> alter_view_statement::an
     }
 
     auto schema_extensions = _properties->make_schema_extensions(db.extensions());
-    _properties->validate(proxy.get_db().local(), schema_extensions);
+    _properties->validate(db, schema_extensions);
 
     auto builder = schema_builder(schema);
     _properties->apply_to_builder(builder, std::move(schema_extensions));

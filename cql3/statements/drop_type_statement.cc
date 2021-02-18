@@ -145,8 +145,7 @@ const sstring& drop_type_statement::keyspace() const
 
 future<shared_ptr<cql_transport::event::schema_change>> drop_type_statement::announce_migration(query_processor& qp) const
 {
-    service::storage_proxy& proxy = qp.proxy();
-    auto&& db = proxy.get_db().local();
+    database& db = qp.db();
 
     // Keyspace exists or we wouldn't have validated otherwise
     auto&& ks = db.find_keyspace(keyspace());

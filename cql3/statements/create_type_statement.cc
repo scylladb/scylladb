@@ -141,8 +141,7 @@ inline user_type create_type_statement::create_type(database& db) const
 
 future<shared_ptr<cql_transport::event::schema_change>> create_type_statement::announce_migration(query_processor& qp) const
 {
-    service::storage_proxy& proxy = qp.proxy();
-    auto&& db = proxy.get_db().local();
+    database& db = qp.db();
 
     // Keyspace exists or we wouldn't have validated otherwise
     auto&& ks = db.find_keyspace(keyspace());
