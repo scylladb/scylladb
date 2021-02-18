@@ -110,7 +110,7 @@ future<shared_ptr<cql_transport::event::schema_change>> alter_view_statement::an
                 "the corresponding data in the parent table.");
     }
 
-    return service::get_local_migration_manager().announce_view_update(view_ptr(builder.build())).then([this] {
+    return qp.get_migration_manager().announce_view_update(view_ptr(builder.build())).then([this] {
         using namespace cql_transport;
 
         return ::make_shared<event::schema_change>(

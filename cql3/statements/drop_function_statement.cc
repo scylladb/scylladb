@@ -23,6 +23,7 @@
 #include "cql3/functions/functions.hh"
 #include "prepared_statement.hh"
 #include "service/migration_manager.hh"
+#include "cql3/query_processor.hh"
 
 namespace cql3 {
 
@@ -41,7 +42,7 @@ future<shared_ptr<cql_transport::event::schema_change>> drop_function_statement:
     if (!user_func) {
         throw exceptions::invalid_request_exception(format("'{}' is not a user defined function", _func));
     }
-    return service::get_local_migration_manager().announce_function_drop(user_func).then([this] {
+    return qp.get_migration_manager().announce_function_drop(user_func).then([this] {
         return create_schema_change(*_func, false);
     });
 }

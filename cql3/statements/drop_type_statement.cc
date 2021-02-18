@@ -159,7 +159,7 @@ future<shared_ptr<cql_transport::event::schema_change>> drop_type_statement::ann
         return make_ready_future<::shared_ptr<cql_transport::event::schema_change>>();
     }
 
-    return service::get_local_migration_manager().announce_type_drop(to_drop->second).then([this] {
+    return qp.get_migration_manager().announce_type_drop(to_drop->second).then([this] {
         using namespace cql_transport;
 
         return ::make_shared<event::schema_change>(

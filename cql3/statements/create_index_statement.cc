@@ -311,7 +311,7 @@ create_index_statement::announce_migration(query_processor& qp) const {
     ++_cql_stats->secondary_index_creates;
     schema_builder builder{schema};
     builder.with_index(index);
-    return service::get_local_migration_manager().announce_column_family_update(
+    return qp.get_migration_manager().announce_column_family_update(
             builder.build(), false, {}).then([this]() {
         using namespace cql_transport;
         return ::make_shared<event::schema_change>(

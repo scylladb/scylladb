@@ -154,7 +154,7 @@ future<shared_ptr<cql_transport::event::schema_change>> create_type_statement::a
 
     auto type = create_type(db);
     check_for_duplicate_names(type);
-    return service::get_local_migration_manager().announce_new_type(type).then([this] {
+    return qp.get_migration_manager().announce_new_type(type).then([this] {
         using namespace cql_transport;
 
         return ::make_shared<event::schema_change>(

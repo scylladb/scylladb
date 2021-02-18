@@ -25,6 +25,7 @@
 #include "service/migration_manager.hh"
 #include "lua.hh"
 #include "database.hh"
+#include "cql3/query_processor.hh"
 
 namespace cql3 {
 
@@ -63,7 +64,7 @@ future<shared_ptr<cql_transport::event::schema_change>> create_function_statemen
     if (!_func) {
         return make_ready_future<::shared_ptr<cql_transport::event::schema_change>>();
     }
-    return service::get_local_migration_manager().announce_new_function(_func).then([this] {
+    return qp.get_migration_manager().announce_new_function(_func).then([this] {
         return create_schema_change(*_func, true);
     });
 }
