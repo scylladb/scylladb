@@ -680,30 +680,26 @@ future<std::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_tempera
         tracing::trace_state_ptr trace_state,
         db::timeout_clock::time_point timeout) {
     if (cmd.get_row_limit() == 0 || cmd.slice.partition_row_limit() == 0 || cmd.partition_limit == 0) {
-        return make_ready_future<std::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>>(
-            std::tuple(
+        co_return std::tuple(
                 make_foreign(make_lw_shared<reconcilable_result>()),
-                db.local().find_column_family(s).get_global_cache_hit_rate()));
+                db.local().find_column_family(s).get_global_cache_hit_rate());
     }
 
+    auto& local_db = db.local();
+    auto& stats = local_db.get_stats();
     const auto short_read_allowed = query::short_read(cmd.slice.options.contains<query::partition_slice::option::allow_short_read>());
-    return db.local().get_result_memory_limiter().new_mutation_read(*cmd.max_result_size, short_read_allowed).then([&, s = std::move(s),
-            trace_state = std::move(trace_state), timeout] (query::result_memory_accounter accounter) mutable {
-        return do_query_mutations(db, s, cmd, ranges, std::move(trace_state), timeout, std::move(accounter)).then_wrapped(
-                    [&db, s = std::move(s)] (future<reconcilable_result>&& f) {
-            auto& local_db = db.local();
-            auto& stats = local_db.get_stats();
-            if (f.failed()) {
-                ++stats.total_reads_failed;
-                return make_exception_future<std::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>>(f.get_exception());
-            } else {
-                ++stats.total_reads;
-                auto result = f.get0();
-                stats.short_mutation_queries += bool(result.is_short_read());
-                auto hit_rate = local_db.find_column_family(s).get_global_cache_hit_rate();
-                return make_ready_future<std::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>>(
-                        std::tuple(make_foreign(make_lw_shared<reconcilable_result>(std::move(result))), hit_rate));
-            }
-        });
-    });
+
+    try {
+        auto accounter = co_await local_db.get_result_memory_limiter().new_mutation_read(*cmd.max_result_size, short_read_allowed);
+
+        auto result = co_await do_query_mutations(db, s, cmd, ranges, std::move(trace_state), timeout, std::move(accounter));
+
+        ++stats.total_reads;
+        stats.short_mutation_queries += bool(result.is_short_read());
+        auto hit_rate = local_db.find_column_family(s).get_global_cache_hit_rate();
+        co_return std::tuple(make_foreign(make_lw_shared<reconcilable_result>(std::move(result))), hit_rate);
+    } catch (...) {
+        ++stats.total_reads_failed;
+        throw;
+    }
 }
