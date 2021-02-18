@@ -352,8 +352,8 @@ future<shared_ptr<cql_transport::event::schema_change>> create_view_statement::a
     auto where_clause_text = util::relations_to_where_clause(_where_clause);
     builder.with_view_info(schema->id(), schema->cf_name(), included.empty(), std::move(where_clause_text));
 
-    return make_ready_future<>().then([definition = view_ptr(builder.build())]() mutable {
-        return service::get_local_migration_manager().announce_new_view(definition);
+    return make_ready_future<>().then([definition = view_ptr(builder.build()), &mm = qp.get_migration_manager()]() mutable {
+        return mm.announce_new_view(definition);
     }).then_wrapped([this] (auto&& f) {
         try {
             f.get();

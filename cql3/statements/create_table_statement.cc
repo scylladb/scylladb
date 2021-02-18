@@ -101,8 +101,8 @@ std::vector<column_definition> create_table_statement::get_columns() const
 future<shared_ptr<cql_transport::event::schema_change>> create_table_statement::announce_migration(query_processor& qp) const {
     service::storage_proxy& proxy = qp.proxy();
     auto schema = get_cf_meta_data(proxy.get_db().local());
-    return make_ready_future<>().then([this, schema = std::move(schema)] {
-        return service::get_local_migration_manager().announce_new_column_family(std::move(schema));
+    return make_ready_future<>().then([this, schema = std::move(schema), &mm = qp.get_migration_manager()] {
+        return mm.announce_new_column_family(std::move(schema));
     }).then_wrapped([this] (auto&& f) {
         try {
             f.get();

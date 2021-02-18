@@ -41,6 +41,7 @@
 
 #include "cql3/statements/drop_view_statement.hh"
 #include "cql3/statements/prepared_statement.hh"
+#include "cql3/query_processor.hh"
 #include "service/migration_manager.hh"
 #include "view_info.hh"
 #include "database.hh"
@@ -76,8 +77,8 @@ void drop_view_statement::validate(service::storage_proxy&, const service::clien
 
 future<shared_ptr<cql_transport::event::schema_change>> drop_view_statement::announce_migration(query_processor& qp) const
 {
-    return make_ready_future<>().then([this] {
-        return service::get_local_migration_manager().announce_view_drop(keyspace(), column_family());
+    return make_ready_future<>().then([this, &mm = qp.get_migration_manager()] {
+        return mm.announce_view_drop(keyspace(), column_family());
     }).then_wrapped([this] (auto&& f) {
         try {
             f.get();
