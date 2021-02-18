@@ -82,6 +82,7 @@ def create_perftune_conf(cfg):
         yaml = run('/opt/scylladb/scripts/perftune.py ' + params, shell=True, check=True, capture_output=True, encoding='utf-8').stdout.strip()
         with open('/etc/scylla.d/perftune.yaml', 'w') as f:
             f.write(yaml)
+        os.chmod('/etc/scylla.d/perftune.yaml', 0o644)
         return True
     else:
         return False
