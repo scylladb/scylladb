@@ -59,7 +59,7 @@ future<> cql3::statements::list_users_statement::check_access(service::storage_p
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>>
-cql3::statements::list_users_statement::execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options) const {
+cql3::statements::list_users_statement::execute(query_processor& qp, service::query_state& state, const query_options& options) const {
     static const sstring virtual_table_name("users");
 
     static const auto make_column_spec = [](const sstring& name, const ::shared_ptr<const abstract_type>& ty) {

@@ -42,7 +42,7 @@
 #include "cql3/statements/schema_altering_statement.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "database.hh"
-
+#include "cql3/query_processor.hh"
 #include "transport/messages/result_message.hh"
 
 namespace cql3 {
@@ -105,7 +105,8 @@ schema_altering_statement::execute0(service::storage_proxy& proxy, service::quer
 }
 
 future<::shared_ptr<messages::result_message>>
-schema_altering_statement::execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options) const {
+schema_altering_statement::execute(query_processor& qp, service::query_state& state, const query_options& options) const {
+    service::storage_proxy& proxy = qp.proxy();
     bool internal = state.get_client_state().is_internal();
     if (internal) {
         auto replication_type = locator::replication_strategy_type::everywhere_topology;

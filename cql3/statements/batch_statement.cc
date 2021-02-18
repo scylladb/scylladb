@@ -45,6 +45,7 @@
 #include "database.hh"
 #include <seastar/core/execution_stage.hh>
 #include "cas_request.hh"
+#include "cql3/query_processor.hh"
 
 namespace cql3 {
 
@@ -263,7 +264,8 @@ static thread_local inheriting_concrete_execution_stage<
         api::timestamp_type> batch_stage{"cql3_batch", batch_statement_executor::get()};
 
 future<shared_ptr<cql_transport::messages::result_message>> batch_statement::execute(
-        service::storage_proxy& storage, service::query_state& state, const query_options& options) const {
+        query_processor& qp, service::query_state& state, const query_options& options) const {
+    service::storage_proxy& storage = qp.proxy();
     cql3::util::validate_timestamp(options, _attrs);
     return batch_stage(this, seastar::ref(storage), seastar::ref(state),
                        seastar::cref(options), false, options.get_timestamp(state));

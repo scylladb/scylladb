@@ -59,6 +59,8 @@ class result_message;
 
 namespace cql3 {
 
+class query_processor;
+
 class metadata;
 shared_ptr<const metadata> make_empty_metadata();
 
@@ -99,7 +101,7 @@ public:
      * @param options options for this query (consistency, variables, pageSize, ...)
      */
     virtual future<::shared_ptr<cql_transport::messages::result_message>>
-        execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options) const = 0;
+        execute(query_processor& qp, service::query_state& state, const query_options& options) const = 0;
 
     virtual bool depends_on_keyspace(const sstring& ks_name) const = 0;
 

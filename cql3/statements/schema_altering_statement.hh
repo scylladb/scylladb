@@ -53,6 +53,8 @@
 
 namespace cql3 {
 
+class query_processor;
+
 namespace statements {
 
 namespace messages = cql_transport::messages;
@@ -90,7 +92,7 @@ protected:
     virtual future<::shared_ptr<cql_transport::event::schema_change>> announce_migration(service::storage_proxy& proxy) const = 0;
 
     virtual future<::shared_ptr<messages::result_message>>
-    execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options) const override;
+    execute(query_processor& qp, service::query_state& state, const query_options& options) const override;
 };
 
 }

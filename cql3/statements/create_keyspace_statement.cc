@@ -44,6 +44,7 @@
 #include "database.hh"
 #include "service/migration_manager.hh"
 #include "transport/messages/result_message.hh"
+#include "cql3/query_processor.hh"
 
 #include <regex>
 
@@ -145,8 +146,9 @@ future<> cql3::statements::create_keyspace_statement::grant_permissions_to_creat
 }
 
 future<::shared_ptr<messages::result_message>>
-create_keyspace_statement::execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options) const {
-    return schema_altering_statement::execute(proxy, state, options).then([this, p = proxy.shared_from_this()] (::shared_ptr<messages::result_message> msg) {
+create_keyspace_statement::execute(query_processor& qp, service::query_state& state, const query_options& options) const {
+    service::storage_proxy& proxy = qp.proxy();
+    return schema_altering_statement::execute(qp, state, options).then([this, p = proxy.shared_from_this()] (::shared_ptr<messages::result_message> msg) {
         bool multidc = p->get_token_metadata_ptr()->get_topology().get_datacenter_endpoints().size() > 1;
         bool simple = _attrs->get_replication_strategy_class() == "SimpleStrategy";
 

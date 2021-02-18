@@ -48,7 +48,7 @@ std::unique_ptr<cql3::statements::prepared_statement> cql3::statements::revoke_s
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>>
-cql3::statements::revoke_statement::execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options) const {
+cql3::statements::revoke_statement::execute(query_processor& qp, service::query_state& state, const query_options& options) const {
     auto& auth_service = *state.get_client_state().get_auth_service();
 
     return auth::revoke_permissions(auth_service, _role_name, _permissions, _resource).then([] {

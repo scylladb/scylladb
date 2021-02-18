@@ -106,10 +106,10 @@ future<> table_helper::cache_table_info(cql3::query_processor& qp, service::quer
 }
 
 future<> table_helper::insert(cql3::query_processor& qp, service::query_state& qs, noncopyable_function<cql3::query_options ()> opt_maker) {
-    return cache_table_info(qp, qs).then([this, &qs, opt_maker = std::move(opt_maker)] () mutable {
-        return do_with(opt_maker(), [this, &qs] (auto& opts) {
+    return cache_table_info(qp, qs).then([this, &qp, &qs, opt_maker = std::move(opt_maker)] () mutable {
+        return do_with(opt_maker(), [this, &qp, &qs] (auto& opts) {
             opts.prepare(_prepared_stmt->bound_names);
-            return _insert_stmt->execute(service::get_storage_proxy().local(), qs, opts);
+            return _insert_stmt->execute(qp, qs, opts);
         });
     }).discard_result();
 }

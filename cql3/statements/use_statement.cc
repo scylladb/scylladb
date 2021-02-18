@@ -41,7 +41,7 @@
 
 #include "cql3/statements/use_statement.hh"
 #include "cql3/statements/raw/use_statement.hh"
-
+#include "cql3/query_processor.hh"
 #include "transport/messages/result_message.hh"
 
 namespace cql3 {
@@ -94,7 +94,8 @@ void use_statement::validate(service::storage_proxy&, const service::client_stat
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>>
-use_statement::execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options) const {
+use_statement::execute(query_processor& qp, service::query_state& state, const query_options& options) const {
+    service::storage_proxy& proxy = qp.proxy();
     state.get_client_state().set_keyspace(proxy.get_db().local(), _keyspace);
     auto result =::make_shared<cql_transport::messages::result_message::set_keyspace>(_keyspace);
     return make_ready_future<::shared_ptr<cql_transport::messages::result_message>>(result);

@@ -50,6 +50,8 @@
 
 namespace cql3 {
 
+class query_processor;
+
 namespace statements {
 
 /** A <code>CREATE KEYSPACE</code> statement parsed from a CQL query. */
@@ -91,7 +93,7 @@ public:
     virtual future<> grant_permissions_to_creator(const service::client_state&) const override;
 
     virtual future<::shared_ptr<messages::result_message>>
-    execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options) const override;
+    execute(query_processor& qp, service::query_state& state, const query_options& options) const override;
 };
 
 }

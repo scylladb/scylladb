@@ -43,7 +43,7 @@
 #include "cql3/statements/prepared_statement.hh"
 #include "cql3/cql_statement.hh"
 #include "database.hh"
-
+#include "cql3/query_processor.hh"
 #include <optional>
 
 namespace cql3 {
@@ -90,8 +90,9 @@ void truncate_statement::validate(service::storage_proxy&, const service::client
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>>
-truncate_statement::execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options) const
+truncate_statement::execute(query_processor& qp, service::query_state& state, const query_options& options) const
 {
+    service::storage_proxy& proxy = qp.proxy();
     if (proxy.get_db().local().find_schema(keyspace(), column_family())->is_view()) {
         throw exceptions::invalid_request_exception("Cannot TRUNCATE materialized view directly; must truncate base table instead");
     }
