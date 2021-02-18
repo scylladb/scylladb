@@ -84,11 +84,12 @@ public:
     }
 };
 
-query_processor::query_processor(service::storage_proxy& proxy, database& db, service::migration_notifier& mn, query_processor::memory_config mcfg, cql_config& cql_cfg)
+query_processor::query_processor(service::storage_proxy& proxy, database& db, service::migration_notifier& mn, service::migration_manager& mm, query_processor::memory_config mcfg, cql_config& cql_cfg)
         : _migration_subscriber{std::make_unique<migration_subscriber>(this)}
         , _proxy(proxy)
         , _db(db)
         , _mnotifier(mn)
+        , _mm(mm)
         , _cql_config(cql_cfg)
         , _internal_state(new internal_state())
         , _prepared_cache(prep_cache_log, mcfg.prepared_statment_cache_size)
