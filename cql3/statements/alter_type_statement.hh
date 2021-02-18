@@ -45,6 +45,10 @@
 #include "cql3/cql3_type.hh"
 #include "cql3/ut_name.hh"
 
+namespace service {
+class migration_manager;
+}
+
 namespace cql3 {
 
 class query_processor;
@@ -72,7 +76,7 @@ public:
 protected:
     virtual user_type make_updated_type(database& db, user_type to_update) const = 0;
 private:
-    void do_announce_migration(database& db, ::keyspace& ks) const;
+    void do_announce_migration(database& db, service::migration_manager& mm, ::keyspace& ks) const;
 };
 
 class alter_type_statement::add_or_alter : public alter_type_statement {
