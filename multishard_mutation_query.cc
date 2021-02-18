@@ -672,7 +672,7 @@ static future<reconcilable_result> do_query_mutations(
     std::rethrow_exception(std::move(ex));
 }
 
-future<std::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>> query_mutations_on_all_shards(
+static future<std::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>> do_query_mutations_on_all_shards(
         distributed<database>& db,
         schema_ptr s,
         const query::read_command& cmd,
@@ -702,4 +702,14 @@ future<std::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_tempera
         ++stats.total_reads_failed;
         throw;
     }
+}
+
+future<std::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>> query_mutations_on_all_shards(
+        distributed<database>& db,
+        schema_ptr s,
+        const query::read_command& cmd,
+        const dht::partition_range_vector& ranges,
+        tracing::trace_state_ptr trace_state,
+        db::timeout_clock::time_point timeout) {
+    return do_query_mutations_on_all_shards(db, std::move(s), cmd, ranges, std::move(trace_state), timeout);
 }
