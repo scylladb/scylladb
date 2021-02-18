@@ -30,7 +30,7 @@ namespace raft {
 class follower_progress {
 public:
     // Id of this server
-    server_id id;
+    const server_id id;
     // Index of the next log entry to send to this server.
     index_t next_idx;
     // Index of the highest log entry known to be replicated to this
@@ -61,6 +61,18 @@ public:
     void become_probe();
     void become_pipeline();
     void become_snapshot();
+
+    void stable_to(index_t idx) {
+        // AppendEntries replies can arrive out of order.
+        if (idx > match_idx) {
+            match_idx = idx;
+        }
+        if (idx >= next_idx) {
+            // idx may be smaller if we increased next_idx
+            // optimistically in pipeline mode.
+            next_idx = idx + index_t{1};
+        }
+    }
 
     // Return true if a new replication record can be sent to the follower.
     bool can_send_to();
@@ -105,8 +117,6 @@ public:
     follower_progress* leader_progress() {
         return _leader_progress;
     }
-    const configuration& get_configuration() const { return _configuration; }
-
     // Calculate the current commit index based on the current
     // simple or joint quorum.
     index_t committed(index_t prev_commit_idx);
@@ -116,31 +126,46 @@ public:
 enum class vote_result {
     // We haven't got enough responses yet, either because
     // the servers haven't voted or responses failed to arrive.
-    UNKNOWN,
+    UNKNOWN = 0,
     // This candidate has won the election
     WON,
     // The quorum of servers has voted against this candidate
     LOST,
 };
 
+std::ostream& operator<<(std::ostream& os, const vote_result& v);
+
 // State of election in a single quorum
 class election_tracker {
-    size_t _responded = 0;
+    // All eligible voters
+    std::unordered_set<server_id> _suffrage;
+    // Votes collected
+    std::unordered_set<server_id> _responded;
     size_t _granted = 0;
 public:
-    void register_vote(bool granted) {
-        _responded++;
-        if (granted) {
-            _granted++;
+    election_tracker(const server_address_set& configuration) {
+        for (const auto& a : configuration) {
+            _suffrage.emplace(a.id);
         }
     }
-    vote_result tally_votes(size_t cluster_size) const {
-        auto quorum = cluster_size / 2 + 1;
+
+    bool register_vote(server_id from, bool granted) {
+        if (_suffrage.find(from) == _suffrage.end()) {
+            return false;
+        }
+        if (_responded.emplace(from).second) {
+            // Have not counted this vote yet
+            _granted += static_cast<int>(granted);
+        }
+        return true;
+    }
+    vote_result tally_votes() const {
+        auto quorum = _suffrage.size() / 2 + 1;
         if (_granted >= quorum) {
             return vote_result::WON;
         }
-        assert(_responded <= cluster_size);
-        auto unknown = cluster_size - _responded;
+        assert(_responded.size() <= _suffrage.size());
+        auto unknown = _suffrage.size() - _responded.size();
         return _granted + unknown >= quorum ? vote_result::UNKNOWN : vote_result::LOST;
     }
     friend std::ostream& operator<<(std::ostream& os, const election_tracker& v);
@@ -148,22 +173,18 @@ public:
 
 // Candidate's state specific to election
 class votes {
-    configuration _configuration;
     server_address_set _voters;
     election_tracker _current;
-    election_tracker _previous;
+    std::optional<election_tracker> _previous;
 public:
+    votes(configuration configuration);
+
     const server_address_set& voters() const {
         return _voters;
     }
-    void set_configuration(configuration configuration);
 
     void register_vote(server_id from, bool granted);
     vote_result tally_votes() const;
-
-    const configuration& get_configuration() const {
-        return _configuration;
-    }
 
     friend std::ostream& operator<<(std::ostream& os, const votes& v);
 };

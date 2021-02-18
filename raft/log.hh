@@ -38,6 +38,12 @@ class log {
     // We need something that can be truncated from both sides.
     // std::deque move constructor is not nothrow hence cannot be used
     log_entries _log;
+    // Raft log index of the first entry in the log.
+    // Usually it's simply _snapshot.idx + 1,
+    // but if apply_snapshot() with non-zero trailing was used,
+    // it may point at an entry older than the snapshot.
+    // If the log is empty, same as next_idx()
+    index_t _first_idx;
     // Index of the last stable (persisted) entry in the log.
     index_t _stable_idx = index_t(0);
     // Log index of the last configuration change.
@@ -65,14 +71,27 @@ class log {
     // the log backwards after truncate().
     index_t _prev_conf_idx = index_t{0};
 private:
-    void truncate_head(index_t i);
-    void truncate_tail(index_t i);
+    // Drop uncommitted log entries not present on the leader.
+    void truncate(index_t i);
     // A helper used to find the last configuration entry in the
     // log after it's been loaded from disk.
     void init_last_conf_idx();
     log_entry_ptr& get_entry(index_t);
 public:
-    explicit log(snapshot snp, log_entries log = {}) : _snapshot(std::move(snp)), _log(std::move(log)) {
+    explicit log(snapshot snp, log_entries log = {})
+            : _snapshot(std::move(snp)), _log(std::move(log)) {
+        if (_log.empty()) {
+            _first_idx = _snapshot.idx + index_t{1};
+        } else {
+            _first_idx = _log[0]->idx;
+            // All log entries following the snapshot must
+            // be present, otherwise we will not be able to
+            // perform an initial state transfer.
+            assert(_first_idx <= _snapshot.idx + 1);
+        }
+        // The snapshot index is at least 0, so _first_idx
+        // is at least 1
+        assert(_first_idx > 0);
         stable_to(last_idx());
         init_last_conf_idx();
     }
@@ -90,8 +109,9 @@ public:
     // The voter denies its vote if its own log is more up-to-date
     // than that of the candidate.
     bool is_up_to_date(index_t idx, term_t term) const;
-    index_t start_idx() const;
     index_t next_idx() const;
+    // Return index of the last entry. If the log is empty,
+    // return the index of the last entry in the snapshot.
     index_t last_idx() const;
     index_t last_conf_idx() const {
         return _last_conf_idx;
@@ -99,9 +119,13 @@ public:
     index_t stable_idx() const {
         return _stable_idx;
     }
+    // Return the term of the last entry in the log,
+    // or the snapshot term if the log is empty.
+    // Used in elections to not vote for a candidate with
+    // a less recent term.
     term_t last_term() const;
-    // return the actual number of log entries in memory
-    size_t non_snapshoted_length() {
+    // Return the number of log entries in memory
+    size_t length() const {
         return _log.size();
     }
 
@@ -138,6 +162,18 @@ public:
     // @retval first is false - the follower's log doesn't match the leader's
     //                          and non matching term is in second
     std::pair<bool, term_t> match_term(index_t idx, term_t term) const;
+    // Return term number of the entry matching the index. If the
+    // entry is not in the log and does not match snapshot index,
+    // return an empty optional.
+    // Used to validate the log matching rule.
+    std::optional<term_t> term_for(index_t idx) const;
+
+    // Return the latest configuration present in the log.
+    // This would be either the entry at last_conf_idx()
+    // or, if it's not set, the snapshot configuration.
+    // The returned reference is only valid until the next
+    // operation on the log.
+    const configuration& get_configuration() const;
 
     // Called on a follower to append entries from a leader.
     // @retval return an index of last appended entry

@@ -78,7 +78,7 @@ raft::fsm_config fsm_cfg{.append_request_threshold = 1};
 class fsm_debug : public raft::fsm {
 public:
     using raft::fsm::fsm;
-    raft::follower_progress& get_progress(server_id id) {
+    const raft::follower_progress& get_progress(server_id id) {
         raft::follower_progress* progress = _tracker->find(id);
         return *progress;
     }
@@ -139,18 +139,18 @@ BOOST_AUTO_TEST_CASE(test_progress_resume_by_append_resp) {
     fsm.step(id2, raft::vote_reply{output.term, true});
     BOOST_CHECK(fsm.is_leader());
 
-    raft::follower_progress& fprogress = fsm.get_progress(id2);
+    const raft::follower_progress& fprogress = fsm.get_progress(id2);
     BOOST_CHECK(fprogress.state == raft::follower_progress::state::PROBE);
 
-    fprogress = fsm.get_progress(id2);
-    BOOST_CHECK(!fprogress.probe_sent);
+    const raft::follower_progress& fprogress2 = fsm.get_progress(id2);
+    BOOST_CHECK(!fprogress2.probe_sent);
     raft::command cmd = create_command(1);
     raft::log_entry le = fsm.add_entry(std::move(cmd));
     do {
         output = fsm.get_output();
     } while (output.messages.size() == 0);
 
-    BOOST_CHECK(fprogress.probe_sent);
+    BOOST_CHECK(fprogress2.probe_sent);
 }
 
 // TestProgressPaused
@@ -200,7 +200,7 @@ BOOST_AUTO_TEST_CASE(test_progress_flow_control) {
     fsm.step(id2, raft::vote_reply{output.term, true});
     // Throw away all the messages relating to the initial election.
     output = fsm.get_output();
-    raft::follower_progress& fprogress = fsm.get_progress(id2);
+    const raft::follower_progress& fprogress = fsm.get_progress(id2);
     BOOST_CHECK(fprogress.state == raft::follower_progress::state::PROBE);
 
     // While node 2 is in probe state, propose a bunch of entries.
@@ -228,8 +228,8 @@ BOOST_AUTO_TEST_CASE(test_progress_flow_control) {
     // When this append is acked, we change to replicate state and can
     // send multiple messages at once. (PIPELINE)
     fsm.step(id2, raft::append_reply{msg.current_term, le->idx, raft::append_reply::accepted{le->idx}});
-    fprogress = fsm.get_progress(id2);
-    BOOST_CHECK(fprogress.state == raft::follower_progress::state::PIPELINE);
+    const raft::follower_progress& fprogress2 = fsm.get_progress(id2);
+    BOOST_CHECK(fprogress2.state == raft::follower_progress::state::PIPELINE);
 
     do {
         output = fsm.get_output();
@@ -493,7 +493,7 @@ BOOST_AUTO_TEST_CASE(test_log_replication_1) {
     for (auto& [id, msg] : output.messages) {
         BOOST_REQUIRE_NO_THROW(areq = std::get<raft::append_request>(msg));
         BOOST_CHECK(areq.prev_log_idx == 0);
-        BOOST_CHECK(areq.prev_log_term == current_term);
+        BOOST_CHECK(areq.prev_log_term == 0);
         BOOST_CHECK(areq.entries.size() == 1);
         lep =  areq.entries.back();
         BOOST_CHECK(lep->idx == dummy_idx);
