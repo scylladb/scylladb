@@ -48,6 +48,7 @@
 
 #include "cql3/statements/create_table_statement.hh"
 #include "cql3/statements/prepared_statement.hh"
+#include "cql3/query_processor.hh"
 
 #include "auth/resource.hh"
 #include "auth/service.hh"
@@ -97,7 +98,8 @@ std::vector<column_definition> create_table_statement::get_columns() const
     return column_defs;
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> create_table_statement::announce_migration(service::storage_proxy& proxy) const {
+future<shared_ptr<cql_transport::event::schema_change>> create_table_statement::announce_migration(query_processor& qp) const {
+    service::storage_proxy& proxy = qp.proxy();
     auto schema = get_cf_meta_data(proxy.get_db().local());
     return make_ready_future<>().then([this, schema = std::move(schema)] {
         return service::get_local_migration_manager().announce_new_column_family(std::move(schema));

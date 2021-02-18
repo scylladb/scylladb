@@ -46,6 +46,7 @@
 #include "view_info.hh"
 #include "db/extensions.hh"
 #include "database.hh"
+#include "cql3/query_processor.hh"
 
 namespace cql3 {
 
@@ -76,8 +77,9 @@ void alter_view_statement::validate(service::storage_proxy&, const service::clie
     // validated in announce_migration()
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> alter_view_statement::announce_migration(service::storage_proxy& proxy) const
+future<shared_ptr<cql_transport::event::schema_change>> alter_view_statement::announce_migration(query_processor& qp) const
 {
+    service::storage_proxy& proxy = qp.proxy();
     auto&& db = proxy.get_db().local();
     schema_ptr schema = validation::validate_column_family(db, keyspace(), column_family());
     if (!schema->is_view()) {

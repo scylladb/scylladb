@@ -39,6 +39,7 @@
 
 #include "cql3/statements/alter_type_statement.hh"
 #include "cql3/statements/create_type_statement.hh"
+#include "cql3/query_processor.hh"
 #include "prepared_statement.hh"
 #include "schema_builder.hh"
 #include "service/migration_manager.hh"
@@ -123,9 +124,10 @@ void alter_type_statement::do_announce_migration(database& db, ::keyspace& ks) c
     }
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> alter_type_statement::announce_migration(service::storage_proxy& proxy) const
+future<shared_ptr<cql_transport::event::schema_change>> alter_type_statement::announce_migration(query_processor& qp) const
 {
-    return seastar::async([this, &proxy] {
+    return seastar::async([this, &qp] {
+        service::storage_proxy& proxy = qp.proxy();
         auto&& db = proxy.get_db().local();
         try {
             auto&& ks = db.find_keyspace(keyspace());

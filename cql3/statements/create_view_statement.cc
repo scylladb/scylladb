@@ -57,6 +57,7 @@
 #include "cql3/selection/selectable_with_field_selection.hh"
 #include "cql3/selection/selection.hh"
 #include "cql3/selection/writetime_or_ttl.hh"
+#include "cql3/query_processor.hh"
 #include "cql3/util.hh"
 #include "schema_builder.hh"
 #include "service/storage_proxy.hh"
@@ -140,7 +141,7 @@ static bool validate_primary_key(
     return new_non_pk_column;
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> create_view_statement::announce_migration(service::storage_proxy& proxy) const {
+future<shared_ptr<cql_transport::event::schema_change>> create_view_statement::announce_migration(query_processor& qp) const {
     // We need to make sure that:
     //  - primary key includes all columns in base table's primary key
     //  - make sure that the select statement does not have anything other than columns
@@ -150,6 +151,7 @@ future<shared_ptr<cql_transport::event::schema_change>> create_view_statement::a
     //  - make sure there is not currently a table or view
     //  - make sure base_table gc_grace_seconds > 0
 
+    service::storage_proxy& proxy = qp.proxy();
     auto&& db = proxy.get_db().local();
     auto schema_extensions = _properties.properties()->make_schema_extensions(db.extensions());
     _properties.validate(db, schema_extensions);

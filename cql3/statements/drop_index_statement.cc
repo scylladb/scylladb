@@ -45,6 +45,7 @@
 #include "schema_builder.hh"
 #include "database.hh"
 #include "gms/feature_service.hh"
+#include "cql3/query_processor.hh"
 
 namespace cql3 {
 
@@ -86,9 +87,9 @@ void drop_index_statement::validate(service::storage_proxy& proxy, const service
     }
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> drop_index_statement::announce_migration(service::storage_proxy& proxy) const
+future<shared_ptr<cql_transport::event::schema_change>> drop_index_statement::announce_migration(query_processor& qp) const
 {
-    auto cfm = lookup_indexed_table(proxy);
+    auto cfm = lookup_indexed_table(qp.proxy());
     if (!cfm) {
         return make_ready_future<::shared_ptr<cql_transport::event::schema_change>>(nullptr);
     }

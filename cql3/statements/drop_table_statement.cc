@@ -72,7 +72,7 @@ void drop_table_statement::validate(service::storage_proxy&, const service::clie
     // validated in announce_migration()
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> drop_table_statement::announce_migration(service::storage_proxy& proxy) const
+future<shared_ptr<cql_transport::event::schema_change>> drop_table_statement::announce_migration(query_processor& qp) const
 {
     return make_ready_future<>().then([this] {
         return service::get_local_migration_manager().announce_column_family_drop(keyspace(), column_family());

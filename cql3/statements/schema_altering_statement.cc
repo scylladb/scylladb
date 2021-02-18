@@ -93,7 +93,7 @@ future<::shared_ptr<messages::result_message>>
 schema_altering_statement::execute0(query_processor& qp, service::query_state& state, const query_options& options) const {
     // If an IF [NOT] EXISTS clause was used, this may not result in an actual schema change.  To avoid doing
     // extra work in the drivers to handle schema changes, we return an empty message in this case. (CASSANDRA-7600)
-    return announce_migration(qp.proxy()).then([this] (auto ce) {
+    return announce_migration(qp).then([this] (auto ce) {
         ::shared_ptr<messages::result_message> result;
         if (!ce) {
             result = ::make_shared<messages::result_message::void_message>();

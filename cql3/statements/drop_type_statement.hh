@@ -45,6 +45,8 @@
 
 namespace cql3 {
 
+class query_processor;
+
 namespace statements {
 
 class drop_type_statement : public schema_altering_statement {
@@ -61,7 +63,7 @@ public:
 
     virtual const sstring& keyspace() const override;
 
-    virtual future<shared_ptr<cql_transport::event::schema_change>> announce_migration(service::storage_proxy& proxy) const override;
+    virtual future<shared_ptr<cql_transport::event::schema_change>> announce_migration(query_processor& qp) const override;
 
     virtual std::unique_ptr<prepared_statement> prepare(database& db, cql_stats& stats) override;
 };

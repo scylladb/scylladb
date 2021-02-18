@@ -39,6 +39,7 @@
 
 #include "cql3/statements/drop_type_statement.hh"
 #include "cql3/statements/prepared_statement.hh"
+#include "cql3/query_processor.hh"
 
 #include "boost/range/adaptor/map.hpp"
 
@@ -142,8 +143,9 @@ const sstring& drop_type_statement::keyspace() const
     return _name.get_keyspace();
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> drop_type_statement::announce_migration(service::storage_proxy& proxy) const
+future<shared_ptr<cql_transport::event::schema_change>> drop_type_statement::announce_migration(query_processor& qp) const
 {
+    service::storage_proxy& proxy = qp.proxy();
     auto&& db = proxy.get_db().local();
 
     // Keyspace exists or we wouldn't have validated otherwise

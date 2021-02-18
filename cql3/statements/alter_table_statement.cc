@@ -51,6 +51,7 @@
 #include "view_info.hh"
 #include "database.hh"
 #include "db/view/view.hh"
+#include "cql3/query_processor.hh"
 
 namespace cql3 {
 
@@ -288,8 +289,9 @@ void alter_table_statement::drop_column(const schema& schema, const table& cf, s
     }
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> alter_table_statement::announce_migration(service::storage_proxy& proxy) const
+future<shared_ptr<cql_transport::event::schema_change>> alter_table_statement::announce_migration(query_processor& qp) const
 {
+    service::storage_proxy& proxy = qp.proxy();
     auto& db = proxy.get_db().local();
     auto s = validation::validate_column_family(db, keyspace(), column_family());
     if (s->is_view()) {

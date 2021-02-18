@@ -74,7 +74,7 @@ void drop_view_statement::validate(service::storage_proxy&, const service::clien
     // validated in migration_manager::announce_view_drop()
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> drop_view_statement::announce_migration(service::storage_proxy& proxy) const
+future<shared_ptr<cql_transport::event::schema_change>> drop_view_statement::announce_migration(query_processor& qp) const
 {
     return make_ready_future<>().then([this] {
         return service::get_local_migration_manager().announce_view_drop(keyspace(), column_family());
