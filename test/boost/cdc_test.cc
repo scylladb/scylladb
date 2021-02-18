@@ -252,29 +252,46 @@ SEASTAR_THREAD_TEST_CASE(test_disallow_cdc_on_materialized_view) {
 
 SEASTAR_THREAD_TEST_CASE(test_permissions_of_cdc_description) {
     do_with_cql_env_thread([] (cql_test_env& e) {
-        auto test_table = [&e] (const sstring& table_name) {
-            auto assert_unauthorized = [&e] (const sstring& stmt) {
-                testlog.info("Must throw unauthorized_exception: {}", stmt);
-                BOOST_REQUIRE_THROW(e.execute_cql(stmt).get(), exceptions::unauthorized_exception);
-            };
-
-            e.require_table_exists("system_distributed", table_name).get();
-
-            const sstring full_name = "system_distributed." + table_name;
-
-            // Allow MODIFY, SELECT
-            e.execute_cql(format("INSERT INTO {} (time) VALUES (toTimeStamp(now()))", full_name)).get();
-            e.execute_cql(format("UPDATE {} SET expired = toTimeStamp(now()) WHERE time = toTimeStamp(now())", full_name)).get();
-            e.execute_cql(format("DELETE FROM {} WHERE time = toTimeStamp(now())", full_name)).get();
-            e.execute_cql(format("SELECT * FROM {}", full_name)).get();
-
-            // Disallow ALTER, DROP
-            assert_unauthorized(format("ALTER TABLE {} ALTER time TYPE blob", full_name));
-            assert_unauthorized(format("DROP TABLE {}", full_name));
+        auto assert_unauthorized = [&e] (const sstring& stmt) {
+            testlog.info("Must throw unauthorized_exception: {}", stmt);
+            BOOST_REQUIRE_THROW(e.execute_cql(stmt).get(), exceptions::unauthorized_exception);
         };
 
-        test_table("cdc_streams_descriptions");
-        test_table("cdc_generation_descriptions");
+        auto full_name = [] (const sstring& table_name) {
+            return "system_distributed." + table_name;
+        };
+
+        const sstring generations = "cdc_generation_descriptions";
+        const sstring streams = "cdc_streams_descriptions_v2";
+        const sstring timestamps = "cdc_generation_timestamps";
+
+        for (auto& t : {generations, streams, timestamps}) {
+            e.require_table_exists("system_distributed", t).get();
+
+            // Disallow DROP
+            assert_unauthorized(format("DROP TABLE {}", full_name(t)));
+
+            // Allow SELECT
+            e.execute_cql(format("SELECT * FROM {}", full_name(t))).get();
+        }
+
+        // Disallow ALTER
+        for (auto& t : {generations, streams}) {
+            assert_unauthorized(format("ALTER TABLE {} ALTER time TYPE blob", full_name(t)));
+        }
+        assert_unauthorized(format("ALTER TABLE {} ALTER key TYPE blob", full_name(timestamps)));
+
+        // Allow DELETE
+        for (auto& t : {generations, streams}) {
+            e.execute_cql(format("DELETE FROM {} WHERE time = toTimeStamp(now())", full_name(t))).get();
+        }
+        e.execute_cql(format("DELETE FROM {} WHERE key = 'timestamps'", full_name(timestamps))).get();
+
+        // Allow UPDATE, INSERT
+        e.execute_cql(format("UPDATE {} SET expired = toTimeStamp(now()) WHERE time = toTimeStamp(now())", full_name(generations))).get();
+        e.execute_cql(format("INSERT INTO {} (time) VALUES (toTimeStamp(now()))", full_name(generations))).get();
+        e.execute_cql(format("INSERT INTO {} (time, range_end) VALUES (toTimeStamp(now()), 0)", full_name(streams))).get();
+        e.execute_cql(format("UPDATE {} SET expired = toTimeStamp(now()) WHERE key = 'timestamps' AND time = toTimeStamp(now())", full_name(timestamps))).get();
     }).get();
 }
 

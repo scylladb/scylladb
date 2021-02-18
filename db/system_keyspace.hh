@@ -634,5 +634,8 @@ future<> save_paxos_proposal(const schema& s, const service::paxos::proposal& pr
 future<> save_paxos_decision(const schema& s, const service::paxos::proposal& decision, db::timeout_clock::time_point timeout);
 future<> delete_paxos_decision(const schema& s, const partition_key& key, const utils::UUID& ballot, db::timeout_clock::time_point timeout);
 
+future<bool> cdc_is_rewritten();
+future<> cdc_set_rewritten(std::optional<db_clock::time_point>);
+
 } // namespace system_keyspace
 } // namespace db
