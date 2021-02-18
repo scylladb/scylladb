@@ -281,3 +281,5 @@ if __name__ == "__main__":
                 run_iotune()
         else:
             run_iotune()
+        os.chmod(etcdir() + '/scylla.d/io_properties.yaml', 0o644)
+        os.chmod(etcdir() + '/scylla.d/io.conf', 0o644)
