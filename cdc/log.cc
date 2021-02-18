@@ -1138,7 +1138,7 @@ struct process_row_visitor {
                 _touched_parts.set<stats::part_type::UDT>();
 
                 struct udt_visitor : public collection_visitor {
-                    std::vector<bytes_opt> _added_cells;
+                    std::vector<bytes_view_opt> _added_cells;
                     std::forward_list<bytes>& _buf;
 
                     udt_visitor(ttl_opt& ttl_column, size_t num_keys, std::forward_list<bytes>& buf)
