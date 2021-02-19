@@ -285,7 +285,7 @@ public:
     // needs to be handled.
     // This includes a list of the entries that need
     // to be logged. The logged entries are eventually
-    // discarded from the state machine after snapshotting.
+    // discarded from the state machine after applying a snapshot.
     future<fsm_output> poll_output();
 
     // Get state machine output, if there is any. Doesn't
@@ -324,9 +324,9 @@ public:
 
     void snapshot_status(server_id id, std::optional<index_t> idx);
 
-    // This call will update the log to point to the new snaphot
+    // This call will update the log to point to the new snapshot
     // and will truncate the log prefix up to (snp.idx - trailing)
-    // entry. Retruns false if the snapshot is older than existing one.
+    // entry. Returns false if the snapshot is older than existing one.
     bool apply_snapshot(snapshot snp, size_t traling);
 
     size_t in_memory_log_size() const {

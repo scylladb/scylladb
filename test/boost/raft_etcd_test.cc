@@ -598,5 +598,5 @@ BOOST_AUTO_TEST_CASE(test_log_replication_2) {
     }
     output = fsm.get_output();
     BOOST_CHECK(output.committed.size() == 1);  // Entry 2 was committed
-} 
+}
 

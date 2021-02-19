@@ -138,7 +138,7 @@ private:
     // Called to commit entries (on a leader or otherwise).
     void notify_waiters(std::map<index_t, op_status>& waiters, const std::vector<log_entry_ptr>& entries);
 
-    // Drop waiter that we lost track of, can happen due to snapshot transfere
+    // Drop waiter that we lost track of, can happen due to a snapshot transfer.
     void drop_waiters(std::map<index_t, op_status>& waiters, index_t idx);
 
     // This fiber processes FSM output by doing the following steps in order:

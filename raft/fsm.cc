@@ -139,9 +139,9 @@ void fsm::become_leader() {
     _log_limiter_semaphore->sem.consume(_log.in_memory_size());
     _last_election_time = _clock.now();
     // a new leader needs to commit at lease one entry to make sure that
-    // all existing entries in its log are commited as well. Also it should
-    // send append entries rpc as soon as possible to establish its leqdership
-    // (3.4).  Do both of those by commiting a dummy entry.
+    // all existing entries in its log are committed as well. Also it should
+    // send append entries RPC as soon as possible to establish its leadership
+    // (3.4). Do both of those by committing a dummy entry.
     add_entry(log_entry::dummy());
     // set_configuration() begins replicating from the last entry
     // in the log.
@@ -535,7 +535,7 @@ void fsm::append_entries_reply(server_id from, append_reply&& reply) {
         _my_id, from, progress.next_idx, progress.match_idx);
 
     // We may have just applied a configuration that removes this
-    // followre, so re-track it.
+    // follower, so re-track it.
     opt_progress = _tracker->find(from);
     if (opt_progress != nullptr) {
         replicate_to(*opt_progress, false);
@@ -751,7 +751,7 @@ void fsm::snapshot_status(server_id id, std::optional<index_t> idx) {
         // If snapshot was successfully transferred start replication immediately
         replicate_to(progress, false);
     }
-    // Otherwise wait for a heartbeat. Next attempt will move us to snapshotting state
+    // Otherwise wait for a heartbeat. Next attempt will move us to SNAPSHOT state
     // again and snapshot transfer will be attempted one more time.
 }
 
