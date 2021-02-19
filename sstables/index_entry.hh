@@ -24,9 +24,15 @@
 #include <variant>
 #include "position_in_partition.hh"
 #include "utils/overloaded_functor.hh"
+#include "utils/lsa/chunked_managed_vector.hh"
 #include "reader_permit.hh"
 #include "sstables/types.hh"
 #include "sstables/shared_sstable.hh"
+#include "sstables/mx/parsers.hh"
+#include "utils/allocation_strategy.hh"
+#include "utils/managed_ref.hh"
+#include "utils/managed_bytes.hh"
+#include "utils/managed_vector.hh"
 
 #include <seastar/core/fstream.hh>
 
@@ -205,6 +211,7 @@ public:
     virtual future<std::optional<entry_info>> next_entry() = 0;
 };
 
+// Allocated inside LSA.
 class promoted_index {
     deletion_time _del_time;
     uint64_t _promoted_index_start;
@@ -228,29 +235,29 @@ public:
     [[nodiscard]] deletion_time get_deletion_time() const { return _del_time; }
     [[nodiscard]] uint32_t get_promoted_index_size() const { return _promoted_index_size; }
 
+    // Call under allocating_section.
     std::unique_ptr<clustered_index_cursor> make_cursor(shared_sstable,
         reader_permit,
         tracing::trace_state_ptr,
         file_input_stream_options);
 };
 
+// A partition index element.
+// Allocated inside LSA.
 class index_entry {
 private:
-    temporary_buffer<char> _key;
+    managed_bytes _key;
     mutable std::optional<dht::token> _token;
     uint64_t _position;
-    std::unique_ptr<promoted_index> _index;
+    managed_ref<promoted_index> _index;
 
 public:
 
-    bytes_view get_key_bytes() const {
-        return to_bytes_view(_key);
-    }
-
     key_view get_key() const {
-        return key_view{get_key_bytes()};
+        return key_view{_key};
     }
 
+    // May allocate so must be called under allocating_section.
     decorated_key_view get_decorated_key(const schema& s) const {
         if (!_token) {
             _token.emplace(s.get_partitioner().get_token(get_key()));
@@ -268,7 +275,7 @@ public:
         return {};
     }
 
-    index_entry(temporary_buffer<char>&& key, uint64_t position, std::unique_ptr<promoted_index>&& index)
+    index_entry(managed_bytes&& key, uint64_t position, managed_ref<promoted_index>&& index)
         : _key(std::move(key))
         , _position(position)
         , _index(std::move(index))
@@ -278,9 +285,25 @@ public:
     index_entry& operator=(index_entry&&) = default;
 
     // Can be nullptr
-    const std::unique_ptr<promoted_index>& get_promoted_index() const { return _index; }
-    std::unique_ptr<promoted_index>& get_promoted_index() { return _index; }
+    const managed_ref<promoted_index>& get_promoted_index() const { return _index; }
+    managed_ref<promoted_index>& get_promoted_index() { return _index; }
     uint32_t get_promoted_index_size() const { return _index ? _index->get_promoted_index_size() : 0; }
+};
+
+// A partition index page.
+//
+// Allocated in the standard allocator space but with an LSA allocator as the current allocator.
+// So the shallow part is in the standard allocator but all indirect objects are inside LSA.
+class index_list {
+public:
+    lsa::chunked_managed_vector<managed_ref<index_entry>> _entries;
+public:
+    index_list() = default;
+    index_list(index_list&&) noexcept = default;
+    index_list& operator=(index_list&&) noexcept = default;
+
+    bool empty() const { return _entries.empty(); }
+    size_t size() const { return _entries.size(); }
 };
 
 }

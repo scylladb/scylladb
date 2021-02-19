@@ -29,8 +29,6 @@
 
 namespace sstables {
 
-using index_list = utils::chunked_vector<index_entry>;
-
 // Associative cache of summary index -> index_list
 // Entries stay around as long as there is any live external reference (list_ptr) to them.
 // Supports asynchronous insertion, ensures that only one entry will be loaded.

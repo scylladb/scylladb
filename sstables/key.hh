@@ -31,13 +31,21 @@
 namespace sstables {
 
 class key_view {
-    bytes_view _bytes;
+    managed_bytes_view _bytes;
 public:
+    explicit key_view(managed_bytes_view b) : _bytes(b) {}
     explicit key_view(bytes_view b) : _bytes(b) {}
     key_view() : _bytes() {}
 
+    template <std::invocable<bytes_view> Func>
+    std::invoke_result_t<Func, bytes_view> with_linearized(Func&& func) const {
+        return ::with_linearized(_bytes, func);
+    }
+
     std::vector<bytes_view> explode(const schema& s) const {
-        return composite_view(_bytes, s.partition_key_size() > 1).explode();
+        return with_linearized([&] (bytes_view v) {
+            return composite_view(v, s.partition_key_size() > 1).explode();
+        });
     }
 
     partition_key to_partition_key(const schema& s) const {
@@ -49,19 +57,17 @@ public:
 
     bool empty() const { return _bytes.empty(); }
 
-    explicit operator bytes_view() const {
-        return _bytes;
-    }
-
     int tri_compare(key_view other) const {
         return compare_unsigned(_bytes, other._bytes);
     }
 
     int tri_compare(const schema& s, partition_key_view other) const {
-        auto lf = other.legacy_form(s);
-        return lexicographical_tri_compare(
-            _bytes.begin(), _bytes.end(), lf.begin(), lf.end(),
-            [] (uint8_t b1, uint8_t b2) { return (int)b1 - b2; });
+        return with_linearized([&] (bytes_view v) {
+            auto lf = other.legacy_form(s);
+            return lexicographical_tri_compare(
+                    v.begin(), v.end(), lf.begin(), lf.end(),
+                    [](uint8_t b1, uint8_t b2) { return (int) b1 - b2; });
+        });
     }
 };
 

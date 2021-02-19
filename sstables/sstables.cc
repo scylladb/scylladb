@@ -1752,13 +1752,13 @@ future<> sstable::generate_summary(const io_priority_class& pc) {
         bool should_continue() {
             return true;
         }
-        void consume_entry(index_entry&& ie, uint64_t index_offset) {
-            auto token = _partitioner.get_token(ie.get_key());
-            maybe_add_summary_entry(_summary, token, ie.get_key_bytes(), ie.position(), index_offset, _state);
+        void consume_entry(parsed_partition_index_entry&& e) {
+            auto token = _partitioner.get_token(key_view(to_bytes_view(e.key)));
+            maybe_add_summary_entry(_summary, token, to_bytes_view(e.key), e.data_file_offset, e.index_offset, _state);
             if (!first_key) {
-                first_key = key(to_bytes(ie.get_key_bytes()));
+                first_key = key(to_bytes(to_bytes_view(e.key)));
             } else {
-                last_key = key(to_bytes(ie.get_key_bytes()));
+                last_key = key(to_bytes(to_bytes_view(e.key)));
             }
         }
         const index_sampling_state& state() const {
@@ -2971,6 +2971,7 @@ sstable::sstable(schema_ptr schema,
     , _large_data_handler(large_data_handler)
     , _manager(manager)
 {
+    _index_lists.set_allocator(manager.get_cache_tracker().region().allocator());
     tracker.add(*this);
     manager.add(this);
 }

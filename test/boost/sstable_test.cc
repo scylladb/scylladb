@@ -354,7 +354,7 @@ public:
     }
 
     virtual proceed consume_row_start(sstables::key_view key, sstables::deletion_time deltime) override {
-        BOOST_REQUIRE(bytes_view(key) == as_bytes("vinna"));
+        BOOST_REQUIRE(key == sstables::key_view(as_bytes("vinna")));
         BOOST_REQUIRE(deltime.local_deletion_time == std::numeric_limits<int32_t>::max());
         BOOST_REQUIRE(deltime.marked_for_delete_at == std::numeric_limits<int64_t>::min());
         count_row_start++;
@@ -629,7 +629,7 @@ public:
     ttl_row_consumer(int64_t t) : desired_timestamp(t) { }
     virtual proceed consume_row_start(sstables::key_view key, sstables::deletion_time deltime) override {
         count_row_consumer::consume_row_start(key, deltime);
-        BOOST_REQUIRE(bytes_view(key) == as_bytes("nadav"));
+        BOOST_REQUIRE(key == sstables::key_view(as_bytes("nadav")));
         BOOST_REQUIRE(deltime.local_deletion_time == std::numeric_limits<int32_t>::max());
         BOOST_REQUIRE(deltime.marked_for_delete_at == std::numeric_limits<int64_t>::min());
         return proceed::yes;
@@ -683,7 +683,7 @@ class deleted_cell_row_consumer : public count_row_consumer {
 public:
     virtual proceed consume_row_start(sstables::key_view key, sstables::deletion_time deltime) override {
         count_row_consumer::consume_row_start(key, deltime);
-        BOOST_REQUIRE(bytes_view(key) == as_bytes("nadav"));
+        BOOST_REQUIRE(key == key_view(as_bytes("nadav")));
         BOOST_REQUIRE(deltime.local_deletion_time == std::numeric_limits<int32_t>::max());
         BOOST_REQUIRE(deltime.marked_for_delete_at == std::numeric_limits<int64_t>::min());
         return proceed::yes;
