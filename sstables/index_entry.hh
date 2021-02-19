@@ -217,19 +217,16 @@ class promoted_index {
     uint64_t _promoted_index_start;
     uint32_t _promoted_index_size;
     uint32_t _num_blocks;
-    bool _use_binary_search;
 public:
     promoted_index(const schema& s,
         deletion_time del_time,
         uint64_t promoted_index_start,
         uint32_t promoted_index_size,
-        uint32_t num_blocks,
-        bool use_binary_search)
+        uint32_t num_blocks)
             : _del_time{del_time}
             , _promoted_index_start(promoted_index_start)
             , _promoted_index_size(promoted_index_size)
             , _num_blocks(num_blocks)
-            , _use_binary_search(use_binary_search)
     { }
 
     [[nodiscard]] deletion_time get_deletion_time() const { return _del_time; }

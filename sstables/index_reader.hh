@@ -44,7 +44,6 @@ struct parsed_promoted_index_entry {
     uint64_t promoted_index_start;
     uint32_t promoted_index_size;
     uint32_t num_blocks;
-    bool use_binary_search;
 };
 
 // Partition index entry information produced by the parser.
@@ -98,8 +97,7 @@ public:
                             e.promoted_index->del_time,
                             e.promoted_index->promoted_index_start,
                             e.promoted_index->promoted_index_size,
-                            e.promoted_index->num_blocks,
-                            e.promoted_index->use_binary_search);
+                            e.promoted_index->num_blocks);
                 }
                 auto key = managed_bytes(reinterpret_cast<const blob_storage::char_type*>(e.key.get()), e.key.size());
                 indexes._entries.emplace_back(make_managed<index_entry>(std::move(key), e.data_file_offset, std::move(pi)));
@@ -166,7 +164,6 @@ private:
     trust_promoted_index _trust_pi;
     const schema& _s;
     std::optional<column_values_fixed_lengths> _ck_values_fixed_lengths;
-    bool _use_binary_search;
     tracing::trace_state_ptr _trace_state;
 
     inline bool is_mc_format() const { return static_cast<bool>(_ck_values_fixed_lengths); }
@@ -281,7 +278,6 @@ public:
                 pi->promoted_index_start = promoted_index_start;
                 pi->promoted_index_size = promoted_index_size;
                 pi->del_time = *_deletion_time;
-                pi->use_binary_search = _use_binary_search;
             }
             _consumer.consume_entry(parsed_partition_index_entry{
                 .key = std::move(_key),
@@ -312,7 +308,6 @@ public:
         : continuous_data_consumer(std::move(permit), make_file_input_stream(index_file, start, maxlen, options), start, maxlen)
         , _consumer(consumer), _index_file(index_file)
         , _entry_offset(start), _trust_pi(trust_pi), _s(s), _ck_values_fixed_lengths(std::move(ck_values_fixed_lengths))
-        , _use_binary_search(is_mc_format() && use_binary_search_in_promoted_index)
         , _trace_state(std::move(trace_state))
     {}
 };
@@ -337,7 +332,7 @@ std::unique_ptr<clustered_index_cursor> promoted_index::make_cursor(shared_sstab
             get_clustering_values_fixed_lengths(sst->get_serialization_header()));
     }
 
-    if (_use_binary_search) {
+    if (sst->get_version() >= sstable_version_types::mc && use_binary_search_in_promoted_index) {
         return std::make_unique<mc::bsearch_clustered_cursor>(*sst->get_schema(),
             _promoted_index_start, _promoted_index_size,
             promoted_index_cache_metrics, permit,
