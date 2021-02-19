@@ -1010,3 +1010,39 @@ BOOST_AUTO_TEST_CASE(test_leader_stepdown) {
     BOOST_CHECK_EQUAL(output.messages.size(), 1);
     BOOST_CHECK(std::holds_alternative<raft::timeout_now>(output.messages.back().second));
 }
+
+BOOST_AUTO_TEST_CASE(test_empty_configuration) {
+    // When a server is joining an existing cluster, its configuration is empty.
+    // The leader sends its configuration over in AppendEntries or
+    // ApplySnapshot RPC. Test this scenario.
+
+    server_id id1 = id();
+
+    raft::configuration cfg({});
+    raft::log log(raft::snapshot{.idx = index_t{0}, .config = cfg});
+    auto follower = create_follower(id1, std::move(log));
+    // Initial state is follower
+    BOOST_CHECK(follower.is_follower());
+    election_timeout(follower);
+    BOOST_CHECK(follower.is_follower());
+    auto output = follower.get_output();
+    BOOST_CHECK_EQUAL(output.log_entries.size(), 0);
+    BOOST_CHECK_EQUAL(output.messages.size(), 0);
+    BOOST_CHECK_EQUAL(follower.get_current_term(), 0);
+    BOOST_CHECK_THROW(follower.get_configuration(), raft::not_a_leader);
+
+    server_id id2 = id();
+    auto log2 = raft::log(raft::snapshot{.idx = index_t{0}, .config = raft::configuration({id2})});
+    auto leader = create_follower(id2, std::move(log2));
+    election_timeout(leader);
+    BOOST_CHECK(leader.is_leader());
+    // Transitioning to an empty configuration is not supported.
+    BOOST_CHECK_THROW(leader.add_entry(raft::configuration({})), std::invalid_argument);
+    leader.add_entry(raft::configuration({id1, id2}));
+
+    communicate(leader, follower);
+    BOOST_CHECK_EQUAL(follower.get_current_term(), 1);
+    BOOST_CHECK_EQUAL(follower.in_memory_log_size(), leader.in_memory_log_size());
+    BOOST_CHECK_EQUAL(leader.get_configuration().is_joint(), false);
+}
+
