@@ -870,6 +870,17 @@ def test_update_expression_nested_attribute_index_reference(test_table_s):
         test_table_s.update_item(Key={'p': p}, UpdateExpression='SET a[:xyz] = :val1',
             ExpressionAttributeValues={':val1': 'hello', ':xyz': 1})
 
+# In the previous test we saw that a value reference (:xyz) can't be used
+# as an index. Here we see that a name reference (#xyz) also can't be used
+# as an index. It too is a syntax error - it doesn't even matter if we
+# define this #xyz or not.
+def test_update_expression_nested_attribute_index_reference_name(test_table_s):
+    p = random_string()
+    test_table_s.put_item(Item={'p': p, 'a': ['one', 'two', 'three']})
+    with pytest.raises(ClientError, match='ValidationException.*yntax'):
+        test_table_s.update_item(Key={'p': p}, UpdateExpression='SET a[#xyz] = :val1',
+            ExpressionAttributeValues={':val1': 'hello'})
+
 # Test that just like happens in top-level attributes, also in nested
 # attributes, setting them replaces the old value - potentially an entire
 # nested document, by the whole value (which may have a different type)
