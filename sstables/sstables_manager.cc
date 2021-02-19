@@ -78,7 +78,7 @@ void sstables_manager::deactivate(sstable* sst) {
     // guard against sstable::close_files() calling shared_from_this() and immediately destroying
     // the result, which will dispose of the sstable recursively
     auto ptr = sst->shared_from_this();
-    (void)sst->close_files().finally([ptr] {
+    (void)sst->destroy().finally([ptr] {
         // destruction of ptr will call maybe_done() and release close()
     });
 }

@@ -194,6 +194,10 @@ public:
     future<> open_data() noexcept;
     future<> update_info_for_opened_data();
 
+    // Call as the last method before the object is destroyed.
+    // No other uses of the object can happen at this point.
+    future<> destroy();
+
     future<> set_generation(int64_t generation);
     future<> move_to_new_dir(sstring new_dir, int64_t generation, bool do_sync_dirs = true);
 

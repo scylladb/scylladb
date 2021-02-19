@@ -2991,6 +2991,12 @@ void sstable::unused() {
     }
 }
 
+future<> sstable::destroy() {
+    return close_files().finally([this] {
+        return _index_lists.evict_gently();
+    });
+}
+
 future<file_writer> file_writer::make(file f, file_output_stream_options options, sstring filename) noexcept {
     // note: make_file_output_stream closes the file if the stream creation fails
     return make_file_output_stream(std::move(f), std::move(options))
