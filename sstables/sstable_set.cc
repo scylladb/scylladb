@@ -613,7 +613,7 @@ public:
 
         // prevents sstable_set::incremental_selector::_current_sstables from holding reference to
         // sstables when done selecting.
-        if (_selector_position.is_max()) {
+        if (is_finished()) {
             _selector.reset();
         }
 

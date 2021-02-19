@@ -35,6 +35,9 @@ class reader_selector {
 protected:
     schema_ptr _s;
     dht::ring_position_view _selector_position;
+    bool is_finished() const {
+        return _selector_position.is_max();
+    }
 public:
     reader_selector(schema_ptr s, dht::ring_position_view rpv) noexcept : _s(std::move(s)), _selector_position(std::move(rpv)) {}
 
@@ -46,7 +49,7 @@ public:
     // Can be false-positive but never false-negative!
     bool has_new_readers(const std::optional<dht::ring_position_view>& pos) const noexcept {
         dht::ring_position_comparator cmp(*_s);
-        return !_selector_position.is_max() && (!pos || cmp(*pos, _selector_position) >= 0);
+        return !is_finished() && (!pos || cmp(*pos, _selector_position) >= 0);
     }
 };
 
