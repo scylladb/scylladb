@@ -730,7 +730,7 @@ public:
             return readers;
         }
 
-        while (!_readers_mutations.empty() && dht::ring_position_tri_compare(*_s, _selector_position, *pos) <= 0) {
+        while (!_readers_mutations.empty() && has_new_readers(pos)) {
             readers.emplace_back(pop_reader());
         }
         return readers;

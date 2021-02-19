@@ -607,7 +607,7 @@ public:
             readers = boost::copy_range<std::vector<flat_mutation_reader>>(selection.sstables
                     | boost::adaptors::filtered([this] (auto& sst) { return _read_sstable_gens.emplace(sst->generation()).second; })
                     | boost::adaptors::transformed([this] (auto& sst) { return this->create_reader(sst); }));
-        } while (!_selector_position.is_max() && readers.empty() && (!pos || dht::ring_position_tri_compare(*_s, *pos, _selector_position) >= 0));
+        } while (readers.empty() && has_new_readers(pos));
 
         irclogger.trace("{}: created {} new readers", fmt::ptr(this), readers.size());
 
@@ -624,7 +624,7 @@ public:
         _pr = &pr;
 
         auto pos = dht::ring_position_view::for_range_start(*_pr);
-        if (dht::ring_position_tri_compare(*_s, pos, _selector_position) >= 0) {
+        if (has_new_readers(pos)) {
             return create_new_readers(pos);
         }
 
