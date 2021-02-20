@@ -309,7 +309,7 @@ range_tombstone_list::reverter range_tombstone_list::apply_reversibly(const sche
     return rev;
 }
 
-boost::iterator_range<range_tombstone_list::const_iterator>
+range_tombstone_list::iterator_range
 range_tombstone_list::slice(const schema& s, const query::clustering_range& r) const {
     auto bv_range = bound_view::from_range(r);
     struct order_by_end {
@@ -329,7 +329,7 @@ range_tombstone_list::slice(const schema& s, const query::clustering_range& r) c
         _tombstones.upper_bound(bv_range.second, order_by_start{s}));
 }
 
-boost::iterator_range<range_tombstone_list::const_iterator>
+range_tombstone_list::iterator_range
 range_tombstone_list::slice(const schema& s, position_in_partition_view start, position_in_partition_view end) const {
     struct order_by_end {
         position_in_partition::less_compare less;
