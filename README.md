@@ -65,7 +65,7 @@ $ ./tools/toolchain/dbuild ./build/release/scylla --help
 
 ## Testing
 
-See [test.py manual](docs/testing.md).
+See [test.py manual](docs/guides/testing.md).
 
 ## Scylla APIs and compatibility
 By default, Scylla is compatible with Apache Cassandra and its APIs - CQL and
