@@ -278,13 +278,6 @@ void range_tombstone_stream::forward_to(position_in_partition_view pos) {
     });
 }
 
-void range_tombstone_stream::apply(const range_tombstone_list& list, const query::clustering_range& range) {
-    for (range_tombstone rt : list.slice(_schema, range)) {
-        rt.trim_front(_schema, position_in_partition_view::for_range_start(range));
-        _list.apply(_schema, std::move(rt));
-    }
-}
-
 void range_tombstone_stream::reset() {
     _list.clear();
 }

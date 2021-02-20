@@ -598,13 +598,6 @@ public:
     void apply(range_tombstone&& rt) {
         _list.apply(_schema, std::move(rt));
     }
-    void apply(const range_tombstone_list& list) {
-        _list.apply(_schema, list);
-    }
-    // Apply those range tombstones from the list, that overlap with the
-    // range. Range tombstones will be trimmed to the start of the
-    // clustering range.
-    void apply(const range_tombstone_list&, const query::clustering_range&);
     void reset();
     bool empty() const;
     friend std::ostream& operator<<(std::ostream& out, const range_tombstone_stream&);
