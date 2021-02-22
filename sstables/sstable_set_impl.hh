@@ -31,7 +31,7 @@ namespace sstables {
 class incremental_selector_impl {
 public:
     virtual ~incremental_selector_impl() {}
-    virtual std::tuple<dht::partition_range, std::vector<shared_sstable>, dht::ring_position_view> select(const dht::ring_position_view&) = 0;
+    virtual std::tuple<dht::partition_range, std::vector<shared_sstable>, optimized_optional<dht::ring_position_view>> select(const dht::ring_position_view&) = 0;
 };
 
 class sstable_set_impl {

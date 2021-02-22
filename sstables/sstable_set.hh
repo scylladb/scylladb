@@ -26,6 +26,7 @@
 #include "shared_sstable.hh"
 #include "dht/i_partitioner.hh"
 #include <seastar/core/shared_ptr.hh>
+#include <seastar/util/optimized_optional.hh>
 #include <vector>
 
 namespace utils {
@@ -78,7 +79,7 @@ public:
         mutable std::optional<dht::partition_range> _current_range;
         mutable std::optional<nonwrapping_range<dht::ring_position_view>> _current_range_view;
         mutable std::vector<shared_sstable> _current_sstables;
-        mutable dht::ring_position_view _current_next_position = dht::ring_position_view::min();
+        mutable optimized_optional<dht::ring_position_view> _current_next_position;
     public:
         ~incremental_selector();
         incremental_selector(std::unique_ptr<incremental_selector_impl> impl, const schema& s);
@@ -86,7 +87,8 @@ public:
 
         struct selection {
             const std::vector<shared_sstable>& sstables;
-            dht::ring_position_view next_position;
+            // Disengaged when there's no next position - we're finished
+            optimized_optional<dht::ring_position_view> next_position;
         };
 
         // Return the sstables that intersect with `pos` and the next
