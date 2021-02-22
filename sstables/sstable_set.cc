@@ -598,11 +598,11 @@ public:
         auto readers = std::vector<flat_mutation_reader>();
 
         do {
-            auto selection = _selector->select(_selector_position);
-            _selector_position = selection.next_position;
+            auto selection = _selector->select(position());
+            set_position(selection.next_position);
 
             irclogger.trace("{}: {} sstables to consider, advancing selector to {}", fmt::ptr(this), selection.sstables.size(),
-                    _selector_position);
+                    position());
 
             readers = boost::copy_range<std::vector<flat_mutation_reader>>(selection.sstables
                     | boost::adaptors::filtered([this] (auto& sst) { return _read_sstable_gens.emplace(sst->generation()).second; })

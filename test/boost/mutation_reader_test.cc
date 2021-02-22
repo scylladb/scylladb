@@ -698,7 +698,7 @@ class dummy_incremental_selector : public reader_selector {
         auto muts = std::move(_readers_mutations.back());
         _readers_mutations.pop_back();
         _position = _readers_mutations.empty() ? dht::ring_position::max() : _readers_mutations.back().front().decorated_key();
-        _selector_position = _position;
+        set_position(_position);
         return flat_mutation_reader_from_mutations(tests::make_permit(), std::move(muts), _pr, _fwd);
     }
 public:

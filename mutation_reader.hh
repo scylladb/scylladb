@@ -34,7 +34,15 @@
 class reader_selector {
 protected:
     schema_ptr _s;
+private:
     dht::ring_position_view _selector_position;
+protected:
+    void set_position(dht::ring_position_view pos) {
+        _selector_position = pos;
+    }
+    dht::ring_position_view position() const {
+        return _selector_position;
+    }
     bool is_finished() const {
         return _selector_position.is_max();
     }
