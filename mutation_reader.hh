@@ -27,6 +27,7 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/future-util.hh>
 #include <seastar/core/do_with.hh>
+#include <seastar/util/optimized_optional.hh>
 #include "tracing/trace_state.hh"
 #include "flat_mutation_reader.hh"
 #include "reader_concurrency_semaphore.hh"
@@ -35,20 +36,20 @@ class reader_selector {
 protected:
     schema_ptr _s;
 private:
-    dht::ring_position_view _selector_position;
+    optimized_optional<dht::ring_position_view> _selector_position;
 protected:
     void set_position(dht::ring_position_view pos) {
         assert(!pos.is_max());
         _selector_position = pos;
     }
     dht::ring_position_view position() const {
-        return _selector_position;
+        return *_selector_position;
     }
     void mark_finished() {
-        _selector_position = dht::ring_position_view::max();
+        _selector_position = { };
     }
     bool is_finished() const {
-        return _selector_position.is_max();
+        return !bool(_selector_position);
     }
 public:
     reader_selector(schema_ptr s, dht::ring_position_view rpv) noexcept : _s(std::move(s)), _selector_position(std::move(rpv)) {}
@@ -61,7 +62,7 @@ public:
     // Can be false-positive but never false-negative!
     bool has_new_readers(const std::optional<dht::ring_position_view>& pos) const noexcept {
         dht::ring_position_comparator cmp(*_s);
-        return !is_finished() && (!pos || cmp(*pos, _selector_position) >= 0);
+        return !is_finished() && (!pos || cmp(*pos, *_selector_position) >= 0);
     }
 };
 
