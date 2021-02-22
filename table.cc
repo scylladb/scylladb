@@ -1677,7 +1677,8 @@ write_memtable_to_sstable(flat_mutation_reader reader,
                           const io_priority_class& pc) {
     cfg.replay_position = mt.replay_position();
     cfg.monitor = &monitor;
-    return sst->write_components(std::move(reader), mt.partition_count(), mt.schema(), cfg, mt.get_encoding_stats(), pc);
+    schema_ptr s = reader.schema();
+    return sst->write_components(std::move(reader), mt.partition_count(), s, cfg, mt.get_encoding_stats(), pc);
 }
 
 future<>
