@@ -171,7 +171,7 @@ void constants::deleter::execute(mutation& m, const clustering_key_prefix& prefi
 
         m.set_cell(prefix, column, coll_m.serialize(*column.type));
     } else {
-        m.set_cell(prefix, column, make_dead_cell(params));
+        m.set_cell(prefix, column, params.make_dead_cell());
     }
 }
 

@@ -302,7 +302,7 @@ sets::adder::do_add(mutation& m, const clustering_key_prefix& row_key, const upd
         auto v = set_type_impl::serialize_partially_deserialized_form(
                 {set_value->_elements.begin(), set_value->_elements.end()},
                 cql_serialization_format::internal());
-        m.set_cell(row_key, column, params.make_cell(*column.type, fragmented_temporary_buffer::view(v)));
+        m.set_cell(row_key, column, params.make_cell(*column.type, v));
     } else {
         m.set_cell(row_key, column, params.make_dead_cell());
     }

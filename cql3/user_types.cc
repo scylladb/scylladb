@@ -290,7 +290,7 @@ void user_types::setter::execute(mutation& m, const clustering_key_prefix& row_k
         if (value) {
             m.set_cell(row_key, column, params.make_cell(type, value->get(params._options).to_view()));
         } else {
-            m.set_cell(row_key, column, make_dead_cell(params));
+            m.set_cell(row_key, column, params.make_dead_cell());
         }
     }
 }
@@ -308,7 +308,7 @@ void user_types::setter_by_field::execute(mutation& m, const clustering_key_pref
     collection_mutation_description mut;
     mut.cells.emplace_back(serialize_field_index(_field_idx), value
                 ? params.make_cell(*type.type(_field_idx), value, atomic_cell::collection_member::yes)
-                : make_dead_cell(params));
+                : params.make_dead_cell());
 
     m.set_cell(row_key, column, mut.serialize(type));
 }
@@ -317,7 +317,7 @@ void user_types::deleter_by_field::execute(mutation& m, const clustering_key_pre
     assert(column.type->is_user_type() && column.type->is_multi_cell());
 
     collection_mutation_description mut;
-    mut.cells.emplace_back(serialize_field_index(_field_idx), make_dead_cell(params));
+    mut.cells.emplace_back(serialize_field_index(_field_idx), params.make_dead_cell());
 
     m.set_cell(row_key, column, mut.serialize(*column.type));
 }

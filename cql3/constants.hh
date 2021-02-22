@@ -213,7 +213,7 @@ public:
 
         static void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params, const column_definition& column, cql3::raw_value_view value) {
             if (value.is_null()) {
-                m.set_cell(prefix, column, std::move(make_dead_cell(params)));
+                m.set_cell(prefix, column, params.make_dead_cell());
             } else if (value.is_value()) {
                 m.set_cell(prefix, column, params.make_cell(*column.type, value));
             }
@@ -231,7 +231,7 @@ public:
                 return;
             }
             auto increment = value.deserialize<int64_t>(*long_type);
-            m.set_cell(prefix, column, make_counter_update_cell(increment, params));
+            m.set_cell(prefix, column, params.make_counter_update_cell(increment));
         }
     };
 
@@ -249,7 +249,7 @@ public:
             if (increment == std::numeric_limits<int64_t>::min()) {
                 throw exceptions::invalid_request_exception(format("The negation of {:d} overflows supported counter precision (signed 8 bytes integer)", increment));
             }
-            m.set_cell(prefix, column, make_counter_update_cell(-increment, params));
+            m.set_cell(prefix, column, params.make_counter_update_cell(-increment));
         }
     };
 

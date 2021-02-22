@@ -205,7 +205,7 @@ insert_prepared_json_statement::execute_set_value(mutation& m, const clustering_
             if (type.is_collection()) {
                 throw std::runtime_error(format("insert_prepared_json_statement::execute_set_value: unhandled collection type {}", type.name()));
             }
-            m.set_cell(prefix, column, operation::make_dead_cell(params));
+            m.set_cell(prefix, column, params.make_dead_cell());
         }
         ));
         return;

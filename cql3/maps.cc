@@ -346,7 +346,7 @@ maps::do_put(mutation& m, const clustering_key_prefix& prefix, const update_para
 
         auto ctype = static_cast<const map_type_impl*>(column.type.get());
         for (auto&& e : map_value->map) {
-            mut.cells.emplace_back(e.first, params.make_cell(*ctype->get_values_type(), fragmented_temporary_buffer::view(e.second), atomic_cell::collection_member::yes));
+            mut.cells.emplace_back(e.first, params.make_cell(*ctype->get_values_type(), e.second, atomic_cell::collection_member::yes));
         }
 
         m.set_cell(prefix, column, mut.serialize(*ctype));
@@ -357,7 +357,7 @@ maps::do_put(mutation& m, const clustering_key_prefix& prefix, const update_para
         } else {
             auto v = map_type_impl::serialize_partially_deserialized_form({map_value->map.begin(), map_value->map.end()},
                     cql_serialization_format::internal());
-            m.set_cell(prefix, column, params.make_cell(*column.type, fragmented_temporary_buffer::view(std::move(v))));
+            m.set_cell(prefix, column, params.make_cell(*column.type, v));
         }
     }
 }
