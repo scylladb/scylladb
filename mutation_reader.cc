@@ -941,8 +941,6 @@ public:
             foreign_unique_ptr<flat_mutation_reader> reader,
             streamed_mutation::forwarding fwd_sm = streamed_mutation::forwarding::no);
 
-    ~foreign_reader();
-
     // this is captured.
     foreign_reader(const foreign_reader&) = delete;
     foreign_reader& operator=(const foreign_reader&) = delete;
@@ -963,18 +961,6 @@ foreign_reader::foreign_reader(schema_ptr schema,
     : impl(std::move(schema), std::move(permit))
     , _reader(std::move(reader))
     , _fwd_sm(fwd_sm) {
-}
-
-foreign_reader::~foreign_reader() {
-    if (!_reader) {
-        return;
-    }
-    // Can't wait on this future directly. Right now we don't wait on it at all.
-    // If this proves problematic we can collect these somewhere and wait on them.
-    // FIXME: get rid of background close once we guarantee that
-    // readers are always closed when destroyed.
-    mrlog.warn("foreign_reader was not closed. Closing in background");
-    (void)close();
 }
 
 future<> foreign_reader::fill_buffer(db::timeout_clock::time_point timeout) {
@@ -2100,6 +2086,9 @@ public:
     }
     virtual future<> fast_forward_to(position_range, db::timeout_clock::time_point) override {
         return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
+    }
+    virtual future<> close() noexcept override {
+        return make_ready_future<>();
     }
     future<> push(mutation_fragment&& mf) {
         push_and_maybe_notify(std::move(mf));

@@ -293,6 +293,7 @@ SEASTAR_THREAD_TEST_CASE(test_flat_mutation_reader_move_buffer_content_to) {
         virtual future<> next_partition() { return make_ready_future<>(); }
         virtual future<> fast_forward_to(const dht::partition_range&, db::timeout_clock::time_point) override { return make_ready_future<>(); }
         virtual future<> fast_forward_to(position_range, db::timeout_clock::time_point) override { return make_ready_future<>(); }
+        virtual future<> close() noexcept override { return make_ready_future<>(); };
     };
 
     simple_schema s;

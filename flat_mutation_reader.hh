@@ -283,9 +283,7 @@ public:
         // Once closed, the reader should be unusable.
         //
         // Similar to destructors, close must never fail.
-        virtual future<> close() noexcept {
-            return make_ready_future<>();
-        }
+        virtual future<> close() noexcept = 0;
 
         size_t buffer_size() const {
             return _buffer_size;
