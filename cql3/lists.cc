@@ -124,12 +124,12 @@ lists::literal::to_string() const {
 }
 
 lists::value
-lists::value::from_serialized(const fragmented_temporary_buffer::view& val, const list_type_impl& type, cql_serialization_format sf) {
+lists::value::from_serialized(const raw_value_view& val, const list_type_impl& type, cql_serialization_format sf) {
     try {
         // Collections have this small hack that validate cannot be called on a serialized object,
         // but compose does the validation (so we're fine).
         // FIXME: deserializeForNativeProtocol()?!
-        auto l = value_cast<list_type_impl::native_type>(type.deserialize(val, sf));
+        auto l = val.deserialize<list_type_impl::native_type>(type, sf);
         std::vector<bytes_opt> elements;
         elements.reserve(l.size());
         for (auto&& element : l) {
@@ -212,7 +212,7 @@ lists::delayed_value::bind(const query_options& options) {
             return constants::UNSET_VALUE;
         }
 
-        buffers.push_back(std::move(to_bytes(*bo)));
+        buffers.push_back(to_bytes(bo));
     }
     return ::make_shared<value>(buffers);
 }
@@ -227,8 +227,8 @@ lists::marker::bind(const query_options& options) {
         return constants::UNSET_VALUE;
     } else {
         try {
-            ltype.validate(*value, options.get_cql_serialization_format());
-            return make_shared<lists::value>(value::from_serialized(*value, ltype, options.get_cql_serialization_format()));
+            value.validate(ltype, options.get_cql_serialization_format());
+            return make_shared<lists::value>(value::from_serialized(value, ltype, options.get_cql_serialization_format()));
         } catch (marshal_exception& e) {
             throw exceptions::invalid_request_exception(
                     format("Exception while binding column {:s}: {:s}", _receiver->name->to_cql_string(), e.what()));
@@ -285,7 +285,7 @@ lists::setter_by_index::execute(mutation& m, const clustering_key_prefix& prefix
         return;
     }
 
-    auto idx = value_cast<int32_t>(data_type_for<int32_t>()->deserialize(*index));
+    auto idx = index.deserialize<int32_t>(*int32_type);
     auto&& existing_list_opt = params.get_prefetched_list(m.key(), prefix, column);
     if (!existing_list_opt) {
         throw exceptions::invalid_request_exception("Attempted to set an element on a list which is null");
@@ -306,7 +306,7 @@ lists::setter_by_index::execute(mutation& m, const clustering_key_prefix& prefix
         mut.cells.emplace_back(std::move(eidx), params.make_dead_cell());
     } else {
         mut.cells.emplace_back(std::move(eidx),
-                params.make_cell(*ltype->value_comparator(), *value, atomic_cell::collection_member::yes));
+                params.make_cell(*ltype->value_comparator(), value, atomic_cell::collection_member::yes));
     }
 
     m.set_cell(prefix, column, mut.serialize(*ltype));
@@ -335,9 +335,9 @@ lists::setter_by_uuid::execute(mutation& m, const clustering_key_prefix& prefix,
     mut.cells.reserve(1);
 
     if (!value) {
-        mut.cells.emplace_back(to_bytes(*index), params.make_dead_cell());
+        mut.cells.emplace_back(to_bytes(index), params.make_dead_cell());
     } else {
-        mut.cells.emplace_back(to_bytes(*index), params.make_cell(*ltype->value_comparator(), *value, atomic_cell::collection_member::yes));
+        mut.cells.emplace_back(to_bytes(index), params.make_cell(*ltype->value_comparator(), value, atomic_cell::collection_member::yes));
     }
 
     m.set_cell(prefix, column, mut.serialize(*ltype));
@@ -520,7 +520,8 @@ lists::discarder_by_index::execute(mutation& m, const clustering_key_prefix& pre
     assert(cvalue);
 
     auto&& existing_list_opt = params.get_prefetched_list(m.key(), prefix, column);
-    int32_t idx = read_simple_exactly<int32_t>(*cvalue->_bytes);
+    int32_t idx = cvalue->_bytes.to_view().deserialize<int32_t>(*int32_type);
+
     if (!existing_list_opt) {
         throw exceptions::invalid_request_exception("Attempted to delete an element from a list which is null");
     }

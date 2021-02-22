@@ -176,7 +176,7 @@ bool column_condition::applies_to(const data_value* cell_value, const query_opti
             const std::vector<std::pair<data_value, data_value>>& map = map_type.from_value(*cell_value);
             if (column.type->is_map()) {
                 // We're working with a map *type*, not only map *representation*.
-                with_linearized(*key, [&map, &map_type, &cell_value] (bytes_view key) {
+                key.with_linearized([&map, &map_type, &cell_value] (bytes_view key) {
                     auto end = map.end();
                     const auto& map_key_type = *map_type.get_keys_type();
                     auto less = [&map_key_type](const std::pair<data_value, data_value>& value, bytes_view key) {

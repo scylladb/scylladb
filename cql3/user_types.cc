@@ -154,13 +154,16 @@ user_types::value::value(std::vector<bytes_view_opt> elements)
     : value(to_bytes_opt_vec(std::move(elements))) {
 }
 
-user_types::value user_types::value::from_serialized(const fragmented_temporary_buffer::view& v, const user_type_impl& type) {
-    auto elements = type.split(v);
-    if (elements.size() > type.size()) {
-        throw exceptions::invalid_request_exception(
-                format("User Defined Type value contained too many fields (expected {}, got {})", type.size(), elements.size()));
-    }
-    return value(elements);
+user_types::value user_types::value::from_serialized(const raw_value_view& v, const user_type_impl& type) {
+    return v.with_linearized([&] (bytes_view val) {
+        auto elements = type.split(val);
+        if (elements.size() > type.size()) {
+            throw exceptions::invalid_request_exception(
+                    format("User Defined Type value contained too many fields (expected {}, got {})", type.size(), elements.size()));
+        }
+
+        return value(elements);
+    });
 }
 
 cql3::raw_value user_types::value::get(const query_options&) {
@@ -231,7 +234,7 @@ shared_ptr<terminal> user_types::marker::bind(const query_options& options) {
     if (value.is_unset_value()) {
         return constants::UNSET_VALUE;
     }
-    return make_shared<user_types::value>(value::from_serialized(*value, static_cast<const user_type_impl&>(*_receiver->type)));
+    return make_shared<user_types::value>(value::from_serialized(value, static_cast<const user_type_impl&>(*_receiver->type)));
 }
 
 void user_types::setter::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) {
@@ -285,7 +288,7 @@ void user_types::setter::execute(mutation& m, const clustering_key_prefix& row_k
         m.set_cell(row_key, column, mut.serialize(type));
     } else {
         if (value) {
-            m.set_cell(row_key, column, make_cell(type, *value->get(params._options), params));
+            m.set_cell(row_key, column, params.make_cell(type, value->get(params._options).to_view()));
         } else {
             m.set_cell(row_key, column, make_dead_cell(params));
         }
@@ -304,7 +307,7 @@ void user_types::setter_by_field::execute(mutation& m, const clustering_key_pref
 
     collection_mutation_description mut;
     mut.cells.emplace_back(serialize_field_index(_field_idx), value
-                ? params.make_cell(*type.type(_field_idx), *value, atomic_cell::collection_member::yes)
+                ? params.make_cell(*type.type(_field_idx), value, atomic_cell::collection_member::yes)
                 : make_dead_cell(params));
 
     m.set_cell(row_key, column, mut.serialize(type));

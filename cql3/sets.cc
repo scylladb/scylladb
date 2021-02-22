@@ -133,12 +133,12 @@ sets::literal::to_string() const {
 }
 
 sets::value
-sets::value::from_serialized(const fragmented_temporary_buffer::view& val, const set_type_impl& type, cql_serialization_format sf) {
+sets::value::from_serialized(const raw_value_view& val, const set_type_impl& type, cql_serialization_format sf) {
     try {
         // Collections have this small hack that validate cannot be called on a serialized object,
         // but compose does the validation (so we're fine).
         // FIXME: deserializeForNativeProtocol?!
-        auto s = value_cast<set_type_impl::native_type>(type.deserialize(val, sf));
+        auto s = val.deserialize<set_type_impl::native_type>(type, sf);
         std::set<bytes, serialized_compare> elements(type.get_elements_type()->as_less_comparator());
         for (auto&& element : s) {
             elements.insert(elements.end(), type.get_elements_type()->decompose(element));
@@ -211,13 +211,12 @@ sets::delayed_value::bind(const query_options& options) {
             return constants::UNSET_VALUE;
         }
         // We don't support value > 64K because the serialization format encode the length as an unsigned short.
-        if (b->size_bytes() > std::numeric_limits<uint16_t>::max()) {
+        if (b.size_bytes() > std::numeric_limits<uint16_t>::max()) {
             throw exceptions::invalid_request_exception(format("Set value is too long. Set values are limited to {:d} bytes but {:d} bytes value provided",
                     std::numeric_limits<uint16_t>::max(),
-                    b->size_bytes()));
+                    b.size_bytes()));
         }
-
-        buffers.insert(buffers.end(), std::move(to_bytes(*b)));
+        buffers.insert(buffers.end(), to_bytes(b));
     }
     return ::make_shared<value>(std::move(buffers));
 }
@@ -241,12 +240,12 @@ sets::marker::bind(const query_options& options) {
     } else {
         auto& type = dynamic_cast<const set_type_impl&>(_receiver->type->without_reversed());
         try {
-            type.validate(*value, options.get_cql_serialization_format());
+            value.validate(type, options.get_cql_serialization_format());
         } catch (marshal_exception& e) {
             throw exceptions::invalid_request_exception(
                     format("Exception while binding column {:s}: {:s}", _receiver->name->to_cql_string(), e.what()));
         }
-        return make_shared<cql3::sets::value>(value::from_serialized(*value, type, options.get_cql_serialization_format()));
+        return make_shared<cql3::sets::value>(value::from_serialized(value, type, options.get_cql_serialization_format()));
     }
 }
 
@@ -339,7 +338,7 @@ void sets::element_discarder::execute(mutation& m, const clustering_key_prefix& 
         throw exceptions::invalid_request_exception("Invalid null set element");
     }
     collection_mutation_description mut;
-    mut.cells.emplace_back(*elt->get(params._options), params.make_dead_cell());
+    mut.cells.emplace_back(elt->get(params._options).to_bytes(), params.make_dead_cell());
     m.set_cell(row_key, column, mut.serialize(*column.type));
 }
 

@@ -155,12 +155,12 @@ maps::literal::to_string() const {
 }
 
 maps::value
-maps::value::from_serialized(const fragmented_temporary_buffer::view& fragmented_value, const map_type_impl& type, cql_serialization_format sf) {
+maps::value::from_serialized(const raw_value_view& fragmented_value, const map_type_impl& type, cql_serialization_format sf) {
     try {
         // Collections have this small hack that validate cannot be called on a serialized object,
         // but compose does the validation (so we're fine).
         // FIXME: deserialize_for_native_protocol?!
-        auto m = value_cast<map_type_impl::native_type>(type.deserialize(fragmented_value, sf));
+        auto m = fragmented_value.deserialize<map_type_impl::native_type>(type, sf);
         std::map<bytes, bytes, serialized_compare> map(type.get_keys_type()->as_less_comparator());
         for (auto&& e : m) {
             map.emplace(type.get_keys_type()->decompose(e.first),
@@ -236,10 +236,10 @@ maps::delayed_value::bind(const query_options& options) {
         if (key_bytes.is_unset_value()) {
             throw exceptions::invalid_request_exception("unset value is not supported inside collections");
         }
-        if (key_bytes->size_bytes() > std::numeric_limits<uint16_t>::max()) {
+        if (key_bytes.size_bytes() > std::numeric_limits<uint16_t>::max()) {
             throw exceptions::invalid_request_exception(format("Map key is too long. Map keys are limited to {:d} bytes but {:d} bytes keys provided",
                                                    std::numeric_limits<uint16_t>::max(),
-                                                   key_bytes->size_bytes()));
+                                                   key_bytes.size_bytes()));
         }
         auto value_bytes = value->bind_and_get(options);
         if (value_bytes.is_null()) {
@@ -248,7 +248,7 @@ maps::delayed_value::bind(const query_options& options) {
         if (value_bytes.is_unset_value()) {
             return constants::UNSET_VALUE;
         }
-        buffers.emplace(std::move(to_bytes(*key_bytes)), std::move(to_bytes(*value_bytes)));
+        buffers.emplace(std::move(to_bytes(key_bytes)), std::move(to_bytes(value_bytes)));
     }
     return ::make_shared<value>(std::move(buffers));
 }
@@ -263,14 +263,14 @@ maps::marker::bind(const query_options& options) {
         return constants::UNSET_VALUE;
     }
     try {
-        _receiver->type->validate(*val, options.get_cql_serialization_format());
+        val.validate(*_receiver->type, options.get_cql_serialization_format());
     } catch (marshal_exception& e) {
         throw exceptions::invalid_request_exception(
                 format("Exception while binding column {:s}: {:s}", _receiver->name->to_cql_string(), e.what()));
     }
     return ::make_shared<maps::value>(
             maps::value::from_serialized(
-                    *val,
+                    val,
                     dynamic_cast<const map_type_impl&>(_receiver->type->without_reversed()),
                     options.get_cql_serialization_format()));
 }
@@ -317,9 +317,9 @@ maps::setter_by_key::execute(mutation& m, const clustering_key_prefix& prefix, c
         throw invalid_request_exception("Invalid null map key");
     }
     auto ctype = static_cast<const map_type_impl*>(column.type.get());
-    auto avalue = value ? params.make_cell(*ctype->get_values_type(), *value, atomic_cell::collection_member::yes) : params.make_dead_cell();
+    auto avalue = value ? params.make_cell(*ctype->get_values_type(), value, atomic_cell::collection_member::yes) : params.make_dead_cell();
     collection_mutation_description update;
-    update.cells.emplace_back(std::move(to_bytes(*key)), std::move(avalue));
+    update.cells.emplace_back(to_bytes(key), std::move(avalue));
 
     m.set_cell(prefix, column, update.serialize(*ctype));
 }
@@ -373,7 +373,7 @@ maps::discarder_by_key::execute(mutation& m, const clustering_key_prefix& prefix
         throw exceptions::invalid_request_exception("Invalid unset map key");
     }
     collection_mutation_description mut;
-    mut.cells.emplace_back(*key->get(params._options), params.make_dead_cell());
+    mut.cells.emplace_back(key->get(params._options).to_bytes(), params.make_dead_cell());
 
     m.set_cell(prefix, column, mut.serialize(*column.type));
 }

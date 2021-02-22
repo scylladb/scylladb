@@ -99,7 +99,7 @@ SEASTAR_THREAD_TEST_CASE(test_response_request_reader) {
 
     BOOST_CHECK(req.read_value_view(version).is_null());
     BOOST_CHECK(req.read_value_view(version).is_unset_value());
-    BOOST_CHECK_EQUAL(linearized(*req.read_value_view(version)), value);
+    BOOST_CHECK_EQUAL(to_bytes(req.read_value_view(version)), value);
 
     std::vector<sstring_view> names;
     std::vector<cql3::raw_value_view> values;

@@ -487,26 +487,19 @@ function_call::contains_bind_marker() const {
 
 shared_ptr<terminal>
 function_call::make_terminal(shared_ptr<function> fun, cql3::raw_value result, cql_serialization_format sf)  {
-    static constexpr auto to_buffer = [] (const cql3::raw_value& v) {
-        if (v) {
-            return fragmented_temporary_buffer::view{bytes_view{*v}};
-        }
-        return fragmented_temporary_buffer::view{};
-    };
-
     return visit(*fun->return_type(), make_visitor(
     [&] (const list_type_impl& ltype) -> shared_ptr<terminal> {
-        return make_shared<lists::value>(lists::value::from_serialized(to_buffer(result), ltype, sf));
+        return make_shared<lists::value>(lists::value::from_serialized(result.to_view(), ltype, sf));
     },
     [&] (const set_type_impl& stype) -> shared_ptr<terminal> {
-        return make_shared<sets::value>(sets::value::from_serialized(to_buffer(result), stype, sf));
+        return make_shared<sets::value>(sets::value::from_serialized(result.to_view(), stype, sf));
     },
     [&] (const map_type_impl& mtype) -> shared_ptr<terminal> {
-        return make_shared<maps::value>(maps::value::from_serialized(to_buffer(result), mtype, sf));
+        return make_shared<maps::value>(maps::value::from_serialized(result.to_view(), mtype, sf));
     },
     [&] (const user_type_impl& utype) -> shared_ptr<terminal> {
         // TODO (kbraun): write a test for this case when User Defined Functions are implemented
-        return make_shared<user_types::value>(user_types::value::from_serialized(to_buffer(result), utype));
+        return make_shared<user_types::value>(user_types::value::from_serialized(result.to_view(), utype));
     },
     [&] (const abstract_type& type) -> shared_ptr<terminal> {
         if (type.is_collection()) {

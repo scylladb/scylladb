@@ -117,7 +117,7 @@ bytes_opt get_value_from_partition_slice(
         const auto& data_map = value_cast<map_type_impl::native_type>(deserialized);
         const auto key = col.sub->bind_and_get(options);
         auto&& key_type = col_type->name_comparator();
-        const auto found = with_linearized(*key, [&] (bytes_view key_bv) {
+        const auto found = key.with_linearized([&] (bytes_view key_bv) {
             using entry = std::pair<data_value, data_value>;
             return std::find_if(data_map.cbegin(), data_map.cend(), [&] (const entry& element) {
                 return key_type->compare(element.first.serialize_nonnull(), key_bv) == 0;
@@ -294,7 +294,7 @@ bool contains(const data_value& collection, const raw_value_view& value) {
     }
     auto col_type = static_pointer_cast<const collection_type_impl>(collection.type());
     auto&& element_type = col_type->is_set() ? col_type->name_comparator() : col_type->value_comparator();
-    return with_linearized(*value, [&] (bytes_view val) {
+    return value.with_linearized([&] (bytes_view val) {
         auto exists_in = [&](auto&& range) {
             auto found = std::find_if(range.begin(), range.end(), [&] (auto&& element) {
                 return element_type->compare(element.serialize_nonnull(), val) == 0;
@@ -343,7 +343,7 @@ bool contains_key(const column_value& col, cql3::raw_value_view key, const colum
     }
     const auto data_map = value_cast<map_type_impl::native_type>(type->deserialize(*collection));
     auto key_type = static_pointer_cast<const collection_type_impl>(type)->name_comparator();
-    auto found = with_linearized(*key, [&] (bytes_view k_bv) {
+    auto found = key.with_linearized([&] (bytes_view k_bv) {
         using entry = std::pair<data_value, data_value>;
         return std::find_if(data_map.begin(), data_map.end(), [&] (const entry& element) {
             return key_type->compare(element.first.serialize_nonnull(), k_bv) == 0;

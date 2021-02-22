@@ -78,11 +78,10 @@ int64_t attributes::get_timestamp(int64_t now, const query_options& options) {
         return now;
     }
     try {
-        data_type_for<int64_t>()->validate(*tval, options.get_cql_serialization_format());
+        return tval.validate_and_deserialize<int64_t>(*long_type, options.get_cql_serialization_format());
     } catch (marshal_exception& e) {
         throw exceptions::invalid_request_exception("Invalid timestamp value");
     }
-    return value_cast<int64_t>(data_type_for<int64_t>()->deserialize(*tval));
 }
 
 int32_t attributes::get_time_to_live(const query_options& options) {
@@ -97,13 +96,13 @@ int32_t attributes::get_time_to_live(const query_options& options) {
         return 0;
     }
 
+    int32_t ttl;
     try {
-        data_type_for<int32_t>()->validate(*tval, options.get_cql_serialization_format());
+        ttl = tval.validate_and_deserialize<int32_t>(*int32_type, options.get_cql_serialization_format());
     }
     catch (marshal_exception& e) {
         throw exceptions::invalid_request_exception("Invalid TTL value");
     }
-    auto ttl = value_cast<int32_t>(data_type_for<int32_t>()->deserialize(*tval));
 
     if (ttl < 0) {
         throw exceptions::invalid_request_exception("A TTL must be greater or equal to 0");
@@ -123,7 +122,7 @@ db::timeout_clock::duration attributes::get_timeout(const query_options& options
     if (timeout.is_null() || timeout.is_unset_value()) {
         throw exceptions::invalid_request_exception("Timeout value cannot be unset/null");
     }
-    cql_duration duration = value_cast<cql_duration>(duration_type->deserialize(*timeout));
+    cql_duration duration = timeout.deserialize<cql_duration>(*duration_type);
     if (duration.months || duration.days) {
         throw exceptions::invalid_request_exception("Timeout values cannot be expressed in days/months");
     }

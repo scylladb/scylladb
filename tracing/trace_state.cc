@@ -315,7 +315,7 @@ sstring trace_state::raw_value_to_sstring(const cql3::raw_value_view& v, const d
     } else if (v.is_unset_value()) {
         return "unset value";
     } else {
-      return with_linearized(*v, [&] (bytes_view val) {
+      return v.with_linearized([&] (bytes_view val) {
         sstring str_rep;
 
         if (t) {
