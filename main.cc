@@ -1088,9 +1088,15 @@ int main(int ac, char** av) {
 
             sys_dist_ks.start(std::ref(qp), std::ref(mm), std::ref(proxy)).get();
 
-            ss.init_server().get();
+            with_scheduling_group(maintenance_scheduling_group, [&] {
+                return ss.init_server();
+            }).get();
+
             sst_format_selector.sync();
-            ss.join_cluster().get();
+
+            with_scheduling_group(maintenance_scheduling_group, [&] {
+                return ss.join_cluster();
+            }).get();
 
             supervisor::notify("starting tracing");
             tracing::tracing::start_tracing(qp).get();
