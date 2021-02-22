@@ -599,7 +599,11 @@ public:
 
         do {
             auto selection = _selector->select(position());
-            set_position(selection.next_position);
+            if (selection.next_position.is_max()) {
+                mark_finished();
+            } else {
+                set_position(selection.next_position);
+            }
 
             irclogger.trace("{}: {} sstables to consider, advancing selector to {}", fmt::ptr(this), selection.sstables.size(),
                     position());

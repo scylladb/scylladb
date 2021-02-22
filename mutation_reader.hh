@@ -38,10 +38,14 @@ private:
     dht::ring_position_view _selector_position;
 protected:
     void set_position(dht::ring_position_view pos) {
+        assert(!pos.is_max());
         _selector_position = pos;
     }
     dht::ring_position_view position() const {
         return _selector_position;
+    }
+    void mark_finished() {
+        _selector_position = dht::ring_position_view::max();
     }
     bool is_finished() const {
         return _selector_position.is_max();

@@ -291,7 +291,7 @@ public:
     list_reader_selector& operator=(list_reader_selector&&) = default;
 
     virtual std::vector<flat_mutation_reader> create_new_readers(const std::optional<dht::ring_position_view>&) override {
-        set_position(dht::ring_position_view::max());
+        mark_finished();
         return std::exchange(_readers, {});
     }
 
