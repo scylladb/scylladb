@@ -1923,43 +1923,43 @@ uint64_t mutation_querier::consume_end_of_stream() {
     }
 }
 
-    query_result_builder::query_result_builder(const schema& s, query::result::builder& rb)
-        : _schema(s), _rb(rb)
-    { }
+query_result_builder::query_result_builder(const schema& s, query::result::builder& rb)
+    : _schema(s), _rb(rb)
+{ }
 
-    void query_result_builder::consume_new_partition(const dht::decorated_key& dk) {
-        _mutation_consumer.emplace(mutation_querier(_schema, _rb.add_partition(_schema, dk.key()), _rb.memory_accounter()));
-    }
+void query_result_builder::consume_new_partition(const dht::decorated_key& dk) {
+    _mutation_consumer.emplace(mutation_querier(_schema, _rb.add_partition(_schema, dk.key()), _rb.memory_accounter()));
+}
 
-    void query_result_builder::consume(tombstone t) {
-        _mutation_consumer->consume(t);
-    }
-    stop_iteration query_result_builder::consume(static_row&& sr, tombstone t, bool) {
-        _stop = _mutation_consumer->consume(std::move(sr), t);
-        return _stop;
-    }
-    stop_iteration query_result_builder::consume(clustering_row&& cr, row_tombstone t,  bool) {
-        _stop = _mutation_consumer->consume(std::move(cr), t);
-        return _stop;
-    }
-    stop_iteration query_result_builder::consume(range_tombstone&& rt) {
-        _stop = _mutation_consumer->consume(std::move(rt));
-        return _stop;
-    }
+void query_result_builder::consume(tombstone t) {
+    _mutation_consumer->consume(t);
+}
+stop_iteration query_result_builder::consume(static_row&& sr, tombstone t, bool) {
+    _stop = _mutation_consumer->consume(std::move(sr), t);
+    return _stop;
+}
+stop_iteration query_result_builder::consume(clustering_row&& cr, row_tombstone t,  bool) {
+    _stop = _mutation_consumer->consume(std::move(cr), t);
+    return _stop;
+}
+stop_iteration query_result_builder::consume(range_tombstone&& rt) {
+    _stop = _mutation_consumer->consume(std::move(rt));
+    return _stop;
+}
 
-    stop_iteration query_result_builder::consume_end_of_partition() {
-        auto live_rows_in_partition = _mutation_consumer->consume_end_of_stream();
-        if (live_rows_in_partition > 0 && !_stop) {
-            _stop = _rb.memory_accounter().check();
-        }
-        if (_stop) {
-            _rb.mark_as_short_read();
-        }
-        return _stop;
+stop_iteration query_result_builder::consume_end_of_partition() {
+    auto live_rows_in_partition = _mutation_consumer->consume_end_of_stream();
+    if (live_rows_in_partition > 0 && !_stop) {
+        _stop = _rb.memory_accounter().check();
     }
+    if (_stop) {
+        _rb.mark_as_short_read();
+    }
+    return _stop;
+}
 
-    void query_result_builder::consume_end_of_stream() {
-    }
+void query_result_builder::consume_end_of_stream() {
+}
 
 future<> data_query(
         schema_ptr s,
