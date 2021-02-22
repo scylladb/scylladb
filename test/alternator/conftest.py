@@ -80,7 +80,7 @@ def dynamodb(request):
         verify = not request.config.getoption('https')
         return boto3.resource('dynamodb', endpoint_url=local_url, verify=verify,
             region_name='us-east-1', aws_access_key_id='alternator', aws_secret_access_key='secret_pass',
-            config=botocore.client.Config(retries={"max_attempts": 3}))
+            config=botocore.client.Config(retries={"max_attempts": 0}, read_timeout=300))
 
 @pytest.fixture(scope="session")
 def dynamodbstreams(request):
