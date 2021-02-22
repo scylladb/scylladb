@@ -193,7 +193,7 @@ std::ostream& operator<<(std::ostream& os, const atomic_cell_or_collection::prin
         return os << "{ null atomic_cell_or_collection }";
     }
     os << "{ ";
-    if (p._cdef.type->is_collection()) {
+    if (p._cdef.type->is_multi_cell()) {
         os << "collection ";
         auto cmv = p._cell.as_collection_mutation();
         os << collection_mutation_view::printer(*p._cdef.type, cmv);
