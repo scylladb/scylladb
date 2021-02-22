@@ -23,6 +23,7 @@
 
 #include "reader_permit.hh"
 #include "utils/div_ceil.hh"
+#include "utils/bptree.hh"
 #include "tracing/trace_state.hh"
 
 #include <seastar/core/file.hh>
@@ -69,20 +70,35 @@ public:
         uint64_t cached_bytes = 0;
     };
 private:
-    struct cached_page {
+    class cached_page {
+    public:
+        cached_file* parent;
+        page_idx_type idx;
         temporary_buffer<char> buf;
-        explicit cached_page(temporary_buffer<char> buf) : buf(std::move(buf)) {}
+        explicit cached_page(cached_file* parent, page_idx_type idx, temporary_buffer<char> buf)
+            : parent(parent)
+            , idx(idx)
+            , buf(std::move(buf))
+        { }
+        cached_page(cached_page&&) noexcept = default;
+    };
+
+    struct page_idx_less_comparator {
+        bool operator()(page_idx_type lhs, page_idx_type rhs) const noexcept {
+            return lhs < rhs;
+        }
     };
 
     file _file;
     sstring _file_name; // for logging / tracing
     metrics& _metrics;
 
-    using cache_type = std::map<page_idx_type, cached_page>;
+    using cache_type = bplus::tree<page_idx_type, cached_page, page_idx_less_comparator, 12, bplus::key_search::linear>;
     cache_type _cache;
 
     const offset_type _start;
     const offset_type _size;
+    offset_type _cached_bytes = 0;
 
     offset_type _last_page_size; // Ignores _start in case the start lies on the same page.
     page_idx_type _last_page;
@@ -90,10 +106,10 @@ private:
     future<temporary_buffer<char>> get_page(page_idx_type idx, const io_priority_class& pc,
             tracing::trace_state_ptr trace_state) {
         auto i = _cache.lower_bound(idx);
-        if (i != _cache.end() && i->first == idx) {
+        if (i != _cache.end() && i->idx == idx) {
             ++_metrics.page_hits;
             tracing::trace(trace_state, "page cache hit: file={}, page={}", _file_name, idx);
-            cached_page& cp = i->second;
+            cached_page& cp = *i;
             return make_ready_future<temporary_buffer<char>>(cp.buf.share());
         }
         tracing::trace(trace_state, "page cache miss: file={}, page={}", _file_name, idx);
@@ -103,7 +119,8 @@ private:
             .then([this, idx] (temporary_buffer<char>&& buf) mutable {
                 ++_metrics.page_populations;
                 _metrics.cached_bytes += buf.size();
-                _cache.emplace(idx, cached_page(buf.share()));
+                _cached_bytes += buf.size();
+                _cache.emplace(idx, cached_page(this, idx, buf.share()));
                 return std::move(buf);
             });
     }
@@ -157,14 +174,20 @@ public:
         }
     };
 
+    void on_evicted(cached_page& p) {
+        _metrics.cached_bytes -= p.buf.size();
+        _cached_bytes -= p.buf.size();
+        ++_metrics.page_evictions;
+    }
+
     size_t evict_range(cache_type::iterator start, cache_type::iterator end) noexcept {
         size_t count = 0;
+        auto disposer = [] (auto* p) noexcept {};
         while (start != end) {
             ++count;
-            _metrics.cached_bytes -= start->second.buf.size();
-            start = _cache.erase(start);
+            on_evicted(*start);
+            start = start.erase_and_dispose(disposer, page_idx_less_comparator());
         }
-        _metrics.page_evictions += count;
         return count;
     }
 public:
@@ -179,6 +202,7 @@ public:
         : _file(std::move(f))
         , _file_name(std::move(file_name))
         , _metrics(m)
+        , _cache(page_idx_less_comparator())
         , _start(start)
         , _size(size)
     {
@@ -187,7 +211,7 @@ public:
         _last_page = last_byte_offset / page_size;
     }
 
-    cached_file(cached_file&&) = default;
+    cached_file(cached_file&&) = delete; // captured this
     cached_file(const cached_file&) = delete;
 
     ~cached_file() {
@@ -206,7 +230,7 @@ public:
             page_buf.trim(page_size);
             ++_metrics.page_populations;
             _metrics.cached_bytes += page_buf.size();
-            _cache.emplace(idx, cached_page(std::move(page_buf)));
+            _cache.emplace(idx, cached_page(this, idx, std::move(page_buf)));
             buf.trim_front(page_size);
             ++idx;
         }
@@ -214,7 +238,7 @@ public:
         if (buf.size() == page_size || (idx == _last_page && buf.size() >= _last_page_size)) {
             ++_metrics.page_populations;
             _metrics.cached_bytes += buf.size();
-            _cache.emplace(idx, cached_page(std::move(buf)));
+            _cache.emplace(idx, cached_page(this, idx, std::move(buf)));
         }
     }
 
@@ -278,7 +302,7 @@ public:
 
     /// \brief Returns the number of bytes cached.
     size_t cached_bytes() const {
-        return _cache.size() * page_size;
+        return _cached_bytes;
     }
 
     /// \brief Returns the underlying file.
