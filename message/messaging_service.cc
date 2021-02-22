@@ -477,6 +477,7 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     // as well as reduce latency as there are potentially many requests
     // blocked on schema version request.
     case messaging_verb::GOSSIP_DIGEST_SYN:
+    case messaging_verb::GOSSIP_DIGEST_ACK:
     case messaging_verb::GOSSIP_DIGEST_ACK2:
     case messaging_verb::GOSSIP_SHUTDOWN:
     case messaging_verb::GOSSIP_ECHO:
@@ -511,7 +512,6 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::READ_DATA:
     case messaging_verb::READ_MUTATION_DATA:
     case messaging_verb::READ_DIGEST:
-    case messaging_verb::GOSSIP_DIGEST_ACK:
     case messaging_verb::DEFINITIONS_UPDATE:
     case messaging_verb::TRUNCATE:
     case messaging_verb::MIGRATION_REQUEST:
