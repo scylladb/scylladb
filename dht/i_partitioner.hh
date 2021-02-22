@@ -42,6 +42,7 @@
 
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/sstring.hh>
+#include <seastar/util/optimized_optional.hh>
 #include "types.hh"
 #include "keys.hh"
 #include "utils/managed_bytes.hh"
@@ -342,9 +343,12 @@ class ring_position_view {
     // For example {_token=t1, _key=nullptr, _weight=1} is ordered after {_token=t1, _key=k1, _weight=0},
     // but {_token=t1, _key=nullptr, _weight=-1} is ordered before it.
     //
-    const dht::token* _token; // always not nullptr
+    const dht::token* _token; // nullptr only for usage in optimized_optional
     const partition_key* _key; // Can be nullptr
     int8_t _weight;
+
+    ring_position_view() : _token(nullptr), _key(nullptr), _weight(0) { };
+    explicit operator bool() const noexcept { return _token != nullptr; }
 public:
     using token_bound = ring_position::token_bound;
     struct after_key_tag {};
@@ -431,6 +435,7 @@ public:
     // Only when key() != nullptr
     after_key is_after_key() const { return after_key(_weight == 1); }
 
+    friend class optimized_optional<ring_position_view>;
     friend std::ostream& operator<<(std::ostream&, ring_position_view);
 };
 
