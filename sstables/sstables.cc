@@ -85,6 +85,7 @@
 #include "kl/reader.hh"
 #include "mx/reader.hh"
 #include "utils/bit_cast.hh"
+#include "utils/cached_file.hh"
 
 thread_local disk_error_signal_type sstable_read_error;
 thread_local disk_error_signal_type sstable_write_error;
@@ -1343,6 +1344,13 @@ future<> sstable::update_info_for_opened_data() {
     }).then([this] {
         return _index_file.size().then([this] (auto size) {
             _index_file_size = size;
+            assert(!_cached_index_file);
+            _cached_index_file = seastar::make_shared<cached_file>(_index_file,
+                                                                   index_page_cache_metrics, 0,
+                                                                   _manager.get_cache_tracker().get_lru(),
+                                                                   _manager.get_cache_tracker().region(),
+                                                                   _index_file_size);
+            _index_file = make_cached_seastar_file(*_cached_index_file);
         });
     }).then([this] {
         if (this->has_component(component_type::Filter)) {
@@ -2849,6 +2857,8 @@ future<> init_metrics() {
             sm::description("Total number of index page cache pages which were inserted into the cache")),
         sm::make_gauge("index_page_cache_bytes", [] { return index_page_cache_metrics.cached_bytes; },
             sm::description("Total number of bytes cached in the index page cache")),
+        sm::make_gauge("index_page_cache_bytes_in_std", [] { return index_page_cache_metrics.bytes_in_std; },
+            sm::description("Total number of bytes in temporary buffers which live in the std allocator")),
 
         sm::make_derive("pi_cache_hits_l0", [] { return promoted_index_cache_metrics.hits_l0; },
             sm::description("Number of requests for promoted index block in state l0 which didn't have to go to the page cache")),

@@ -22,6 +22,7 @@
 #include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/core/iostream.hh>
+#include <seastar/core/when_all.hh>
 #include <seastar/core/fstream.hh>
 #include <seastar/core/file.hh>
 #include <seastar/core/reactor.hh>
@@ -35,6 +36,8 @@
 #include "utils/cached_file.hh"
 
 using namespace seastar;
+
+static lru cf_lru;
 
 static sstring read_to_string(cached_file::stream& s, size_t limit = std::numeric_limits<size_t>::max()) {
     sstring b;
@@ -96,7 +99,8 @@ SEASTAR_THREAD_TEST_CASE(test_file_wrapper) {
     auto page_size = cached_file::page_size;
     cached_file::metrics metrics;
     test_file tf = make_test_file(page_size * 3);
-    cached_file cf(tf.f, metrics, 0, page_size * 3);
+    logalloc::region region;
+    cached_file cf(tf.f, metrics, 0, cf_lru, region, page_size * 3);
     seastar::file f = make_cached_seastar_file(cf);
 
     BOOST_REQUIRE_EQUAL(tf.contents.substr(0, 1),
@@ -114,17 +118,42 @@ SEASTAR_THREAD_TEST_CASE(test_file_wrapper) {
     BOOST_CHECK_THROW(read_to_string(f, 0, cf.size() + 1), seastar::file::eof_error);
 }
 
+SEASTAR_THREAD_TEST_CASE(test_concurrent_population) {
+    auto page_size = cached_file::page_size;
+    cached_file::metrics metrics;
+    test_file tf = make_test_file(page_size * 3);
+    logalloc::region region;
+    cached_file cf(tf.f, metrics, 0, cf_lru, region, page_size * 3);
+    seastar::file f = make_cached_seastar_file(cf);
+
+    seastar::when_all(
+        seastar::async([&] {
+            BOOST_REQUIRE_EQUAL(tf.contents.substr(0, 1), read_to_string(f, 0, 1));
+        }),
+        seastar::async([&] {
+            BOOST_REQUIRE_EQUAL(tf.contents.substr(0, 1), read_to_string(f, 0, 1));
+        })
+    ).get();
+
+    BOOST_REQUIRE_EQUAL(page_size, metrics.cached_bytes);
+    BOOST_REQUIRE_EQUAL(2, metrics.page_misses);
+    BOOST_REQUIRE_EQUAL(0, metrics.page_evictions);
+    BOOST_REQUIRE_EQUAL(0, metrics.page_hits);
+    BOOST_REQUIRE_EQUAL(1, metrics.page_populations);
+}
+
 SEASTAR_THREAD_TEST_CASE(test_reading_from_small_file) {
     test_file tf = make_test_file(1024);
 
     {
         cached_file::metrics metrics;
-        cached_file cf(tf.f, metrics, 0, tf.contents.size());
+        logalloc::region region;
+        cached_file cf(tf.f, metrics, 0, cf_lru, region, tf.contents.size());
 
         {
             BOOST_REQUIRE_EQUAL(tf.contents, read_to_string(cf, 0));
 
-            BOOST_REQUIRE_EQUAL(1024, metrics.cached_bytes);
+            BOOST_REQUIRE_EQUAL(cached_file::page_size, metrics.cached_bytes);
             BOOST_REQUIRE_EQUAL(1, metrics.page_misses);
             BOOST_REQUIRE_EQUAL(0, metrics.page_evictions);
             BOOST_REQUIRE_EQUAL(0, metrics.page_hits);
@@ -134,7 +163,7 @@ SEASTAR_THREAD_TEST_CASE(test_reading_from_small_file) {
         {
             BOOST_REQUIRE_EQUAL(tf.contents.substr(2), read_to_string(cf, 2));
 
-            BOOST_REQUIRE_EQUAL(1024, metrics.cached_bytes);
+            BOOST_REQUIRE_EQUAL(cached_file::page_size, metrics.cached_bytes);
             BOOST_REQUIRE_EQUAL(1, metrics.page_misses);
             BOOST_REQUIRE_EQUAL(0, metrics.page_evictions);
             BOOST_REQUIRE_EQUAL(1, metrics.page_hits); // change here
@@ -145,7 +174,7 @@ SEASTAR_THREAD_TEST_CASE(test_reading_from_small_file) {
             BOOST_REQUIRE_EQUAL(sstring(), read_to_string(cf, 3000));
 
             // no change
-            BOOST_REQUIRE_EQUAL(1024, metrics.cached_bytes);
+            BOOST_REQUIRE_EQUAL(cached_file::page_size, metrics.cached_bytes);
             BOOST_REQUIRE_EQUAL(1, metrics.page_misses);
             BOOST_REQUIRE_EQUAL(0, metrics.page_evictions);
             BOOST_REQUIRE_EQUAL(1, metrics.page_hits);
@@ -156,11 +185,85 @@ SEASTAR_THREAD_TEST_CASE(test_reading_from_small_file) {
     {
         size_t off = 100;
         cached_file::metrics metrics;
-        cached_file cf(tf.f, metrics, off, tf.contents.size() - off);
+        logalloc::region region;
+        cached_file cf(tf.f, metrics, off, cf_lru, region, tf.contents.size() - off);
 
         BOOST_REQUIRE_EQUAL(tf.contents.substr(off), read_to_string(cf, 0));
         BOOST_REQUIRE_EQUAL(tf.contents.substr(off + 2), read_to_string(cf, 2));
         BOOST_REQUIRE_EQUAL(sstring(), read_to_string(cf, 3000));
+    }
+}
+
+SEASTAR_THREAD_TEST_CASE(test_eviction_via_lru) {
+    auto page = cached_file::page_size;
+    auto file_size = page * 2 + 12;
+    test_file tf = make_test_file(file_size);
+
+    {
+        cached_file::metrics metrics;
+        logalloc::region region;
+        cached_file cf(tf.f, metrics, 0, cf_lru, region, tf.contents.size());
+
+        {
+            BOOST_REQUIRE_EQUAL(tf.contents, read_to_string(cf, 0));
+
+            BOOST_REQUIRE_EQUAL(page * 3, metrics.cached_bytes);
+            BOOST_REQUIRE_EQUAL(page * 3, cf.cached_bytes());
+            BOOST_REQUIRE_EQUAL(3, metrics.page_misses);
+            BOOST_REQUIRE_EQUAL(0, metrics.page_evictions);
+            BOOST_REQUIRE_EQUAL(0, metrics.page_hits);
+            BOOST_REQUIRE_EQUAL(3, metrics.page_populations);
+        }
+
+        {
+            cf_lru.evict_all();
+
+            BOOST_REQUIRE_EQUAL(0, metrics.cached_bytes); // change here
+            BOOST_REQUIRE_EQUAL(0, cf.cached_bytes()); // change here
+            BOOST_REQUIRE_EQUAL(3, metrics.page_misses);
+            BOOST_REQUIRE_EQUAL(3, metrics.page_evictions); // change here
+            BOOST_REQUIRE_EQUAL(0, metrics.page_hits);
+            BOOST_REQUIRE_EQUAL(3, metrics.page_populations);
+        }
+
+        {
+            BOOST_REQUIRE_EQUAL(tf.contents, read_to_string(cf, 0));
+
+            BOOST_REQUIRE_EQUAL(page * 3, metrics.cached_bytes); // change here
+            BOOST_REQUIRE_EQUAL(page * 3, cf.cached_bytes());
+            BOOST_REQUIRE_EQUAL(6, metrics.page_misses); // change here
+            BOOST_REQUIRE_EQUAL(3, metrics.page_evictions);
+            BOOST_REQUIRE_EQUAL(0, metrics.page_hits);
+            BOOST_REQUIRE_EQUAL(6, metrics.page_populations); // change here
+        }
+
+        {
+            // Test that the page which is touched is evicted last
+            BOOST_REQUIRE_EQUAL(tf.contents.substr(page, 1), read_to_string(cf, page, 1)); // hit page 1
+
+            BOOST_REQUIRE_EQUAL(6, metrics.page_misses);
+            BOOST_REQUIRE_EQUAL(3, metrics.page_evictions);
+            BOOST_REQUIRE_EQUAL(1, metrics.page_hits);
+            BOOST_REQUIRE_EQUAL(6, metrics.page_populations);
+
+            cf_lru.evict();
+
+            BOOST_REQUIRE_EQUAL(tf.contents.substr(page, 1), read_to_string(cf, page, 1)); // hit page 1
+
+            BOOST_REQUIRE_EQUAL(6, metrics.page_misses);
+            BOOST_REQUIRE_EQUAL(4, metrics.page_evictions); // change
+            BOOST_REQUIRE_EQUAL(2, metrics.page_hits); // change
+            BOOST_REQUIRE_EQUAL(6, metrics.page_populations);
+
+            cf_lru.evict();
+
+            BOOST_REQUIRE_EQUAL(tf.contents.substr(page, 1), read_to_string(cf, page, 1)); // hit page 1
+
+            BOOST_REQUIRE_EQUAL(6, metrics.page_misses);
+            BOOST_REQUIRE_EQUAL(5, metrics.page_evictions); // change
+            BOOST_REQUIRE_EQUAL(3, metrics.page_hits); // change
+            BOOST_REQUIRE_EQUAL(6, metrics.page_populations);
+        }
     }
 }
 
@@ -169,7 +272,8 @@ SEASTAR_THREAD_TEST_CASE(test_invalidation) {
     test_file tf = make_test_file(page_size * 2);
 
     cached_file::metrics metrics;
-    cached_file cf(tf.f, metrics, 0, page_size * 2);
+    logalloc::region region;
+    cached_file cf(tf.f, metrics, 0, cf_lru, region, page_size * 2);
 
     // Reads one page, half of the first page and half of the second page.
     auto read = [&] {
@@ -260,7 +364,8 @@ SEASTAR_THREAD_TEST_CASE(test_invalidation_skewed_cached_file) {
 
     size_t offset = page_size / 2;
     cached_file::metrics metrics;
-    cached_file cf(tf.f, metrics, offset, page_size * 2);
+    logalloc::region region;
+    cached_file cf(tf.f, metrics, offset, cf_lru, region, page_size * 2);
 
     // Reads one page, half of the first page and half of the second page.
     auto read = [&] {

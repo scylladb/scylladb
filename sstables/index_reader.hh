@@ -292,17 +292,10 @@ std::unique_ptr<clustered_index_cursor> promoted_index::make_cursor(shared_sstab
     }
 
     if (_use_binary_search) {
-        cached_file f(_index_file,
-            index_page_cache_metrics,
-            _promoted_index_start,
-            _promoted_index_size,
-            trace_state ? sst->filename(component_type::Index) : sstring());
-
-        f.populate_front(_front.share());
-
         return std::make_unique<mc::bsearch_clustered_cursor>(*sst->get_schema(),
+            _promoted_index_start, _promoted_index_size,
             promoted_index_cache_metrics, permit,
-            *ck_values_fixed_lengths, std::move(f), options.io_priority_class, _num_blocks, trace_state);
+            *ck_values_fixed_lengths, *sst->_cached_index_file, options.io_priority_class, _num_blocks, trace_state);
     }
 
     input_stream<char> promoted_index_stream = [&] {

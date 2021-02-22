@@ -169,10 +169,12 @@ private:
     block_set_type _blocks;
 public:
     const schema& _s;
+    uint64_t _promoted_index_start;
+    uint64_t _promoted_index_size;
     metrics& _metrics;
     const pi_index_type _blocks_count;
     const io_priority_class _pc;
-    cached_file _cached_file;
+    cached_file& _cached_file;
     data_consumer::primitive_consumer _primitive_parser;
     clustering_parser _clustering_parser;
     promoted_index_block_parser _block_parser;
@@ -197,11 +199,11 @@ private:
     // The offset is relative to the promoted index start in the index file.
     // idx must be in the range 0..(_blocks_count-1)
     pi_offset_type get_offset_entry_pos(pi_index_type idx) const {
-        return _cached_file.size() - (_blocks_count - idx) * sizeof(pi_offset_type);
+        return _promoted_index_size - (_blocks_count - idx) * sizeof(pi_offset_type);
     }
 
     future<pi_offset_type> read_block_offset(pi_index_type idx, tracing::trace_state_ptr trace_state) {
-        _stream = _cached_file.read(get_offset_entry_pos(idx), _pc, _permit, trace_state);
+        _stream = _cached_file.read(_promoted_index_start + get_offset_entry_pos(idx), _pc, _permit, trace_state);
         return _stream.next().then([this, idx] (temporary_buffer<char>&& buf) {
             if (__builtin_expect(_primitive_parser.read_32(buf) == data_consumer::read_status::ready, true)) {
                 return make_ready_future<pi_offset_type>(_primitive_parser._u32);
@@ -215,7 +217,7 @@ private:
     // Postconditions:
     //   - block.start is engaged and valid.
     future<> read_block_start(promoted_index_block& block, tracing::trace_state_ptr trace_state) {
-        _stream = _cached_file.read(block.offset, _pc, _permit, trace_state);
+        _stream = _cached_file.read(_promoted_index_start + block.offset, _pc, _permit, trace_state);
         _clustering_parser.reset();
         return consume_stream(_stream, _clustering_parser).then([this, &block] {
             auto mem_before = block.memory_usage();
@@ -227,7 +229,7 @@ private:
     // Postconditions:
     //   - block.end is engaged, all fields in the block are valid
     future<> read_block(promoted_index_block& block, tracing::trace_state_ptr trace_state) {
-        _stream = _cached_file.read(block.offset, _pc, _permit, trace_state);
+        _stream = _cached_file.read(_promoted_index_start + block.offset, _pc, _permit, trace_state);
         _block_parser.reset();
         return consume_stream(_stream, _block_parser).then([this, &block] {
             auto mem_before = block.memory_usage();
@@ -267,18 +269,22 @@ private:
     }
 public:
     cached_promoted_index(const schema& s,
+            uint64_t promoted_index_start,
+            uint64_t promoted_index_size,
             metrics& m,
             reader_permit permit,
             column_values_fixed_lengths cvfl,
-            cached_file f,
+            cached_file& f,
             io_priority_class pc,
             pi_index_type blocks_count)
         : _blocks(block_comparator{s})
         , _s(s)
+        , _promoted_index_start(promoted_index_start)
+        , _promoted_index_size(promoted_index_size)
         , _metrics(m)
         , _blocks_count(blocks_count)
         , _pc(pc)
-        , _cached_file(std::move(f))
+        , _cached_file(f)
         , _primitive_parser(permit)
         , _clustering_parser(s, permit, cvfl, true)
         , _block_parser(s, permit, std::move(cvfl))
@@ -343,8 +349,6 @@ public:
 
     // Invalidates information about blocks with smaller indexes than a given block.
     void invalidate_prior(promoted_index_block* block, tracing::trace_state_ptr trace_state) {
-        _cached_file.invalidate_at_most_front(block->offset, trace_state);
-        _cached_file.invalidate_at_most(get_offset_entry_pos(0), get_offset_entry_pos(block->index), trace_state);
         erase_range(_blocks.begin(), _blocks.lower_bound(block->index));
     }
 
@@ -438,16 +442,26 @@ private:
     }
 public:
     bsearch_clustered_cursor(const schema& s,
+            uint64_t promoted_index_start,
+            uint64_t promoted_index_size,
             cached_promoted_index::metrics& metrics,
             reader_permit permit,
             column_values_fixed_lengths cvfl,
-            cached_file f,
+            cached_file& f,
             io_priority_class pc,
             pi_index_type blocks_count,
             tracing::trace_state_ptr trace_state)
         : _s(s)
         , _blocks_count(blocks_count)
-        , _promoted_index(s, metrics, std::move(permit), std::move(cvfl), std::move(f), pc, blocks_count)
+        , _promoted_index(s,
+            promoted_index_start,
+            promoted_index_size,
+            metrics,
+            std::move(permit),
+            std::move(cvfl),
+            f,
+            pc,
+            blocks_count)
         , _trace_state(std::move(trace_state))
     { }
 
