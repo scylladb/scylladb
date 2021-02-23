@@ -146,6 +146,7 @@ extern const std::string_view DIGEST_FOR_NULL_VALUES;
 extern const std::string_view CORRECT_IDX_TOKEN_IN_SECONDARY_INDEX;
 extern const std::string_view ALTERNATOR_STREAMS;
 extern const std::string_view RANGE_SCAN_DATA_VARIANT;
+extern const std::string_view CDC_GENERATIONS_V2;
 
 }
 

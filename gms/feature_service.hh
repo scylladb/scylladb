@@ -92,6 +92,7 @@ private:
     gms::feature _correct_idx_token_in_secondary_index_feature;
     gms::feature _alternator_streams_feature;
     gms::feature _range_scan_data_variant;
+    gms::feature _cdc_generations_v2;
 
 public:
     bool cluster_supports_user_defined_functions() const {
@@ -161,6 +162,10 @@ public:
     // instead of through the intermediate reconcilable_result format.
     bool cluster_supports_range_scan_data_variant() const {
         return bool(_range_scan_data_variant);
+    }
+
+    bool cluster_supports_cdc_generations_v2() const {
+        return bool(_cdc_generations_v2);
     }
 };
 
