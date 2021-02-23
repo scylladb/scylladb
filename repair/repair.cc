@@ -1624,6 +1624,9 @@ static int do_repair_start(seastar::sharded<database>& db, seastar::sharded<netw
                     dht::token_comparator());
             intersections.insert(intersections.end(), rs.begin(), rs.end());
         }
+        if (intersections.empty()) {
+            throw std::runtime_error("The range specified by startToken and endToken does not intersect with any ranges owned by this node");
+        }
         ranges = std::move(intersections);
     }
 
