@@ -161,7 +161,7 @@ time_window_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> i
     auto all_buckets = get_buckets(single_window, _options);
     for (auto& pair : all_buckets.first) {
         auto ssts = std::move(pair.second);
-        if (ssts.size() > offstrategy_threshold) {
+        if (ssts.size() >= offstrategy_threshold) {
             ssts.resize(std::min(ssts.size(), max_sstables));
             compaction_descriptor desc(std::move(ssts), std::optional<sstables::sstable_set>(), iop);
             desc.options = compaction_options::make_reshape();
