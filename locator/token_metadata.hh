@@ -238,7 +238,6 @@ public:
     void remove_bootstrap_tokens(std::unordered_set<token> tokens);
 
     void add_leaving_endpoint(inet_address endpoint);
-    void del_leaving_endpoint(inet_address endpoint);
 
     void remove_endpoint(inet_address endpoint);
 
