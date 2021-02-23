@@ -910,6 +910,34 @@ schema_ptr scylla_views_builds_in_progress() {
     return cdc_local;
 }
 
+static schema_ptr cdc_generations() {
+    static thread_local auto cdc_generations = [] {
+        schema_builder builder(make_shared_schema(generate_legacy_id(NAME, CDC_GENERATIONS), NAME, CDC_GENERATIONS,
+        // partition key
+        {{"time", timestamp_type}},
+        // clustering key
+        {{"range_end", long_type}},
+        // regular columns
+        {
+        // TODO comments
+            {"ignore_msb", byte_type},
+            {"streams", list_type_impl::get_instance(bytes_type, false)},
+
+        },
+        // static columns
+        {},
+        // regular column name type
+        utf8_type,
+        // comment
+        "Internal descriptions of CDC generations"
+       ));
+       builder.set_gc_grace_seconds(0);
+       builder.with_version(generate_schema_version(builder.uuid()));
+       return builder.build(schema_builder::compact_storage::no);
+    }();
+    return cdc_generations;
+}
+
 } //</v3>
 
 namespace legacy {
@@ -1765,6 +1793,7 @@ std::vector<schema_ptr> all_tables() {
                     v3::scylla_views_builds_in_progress(),
                     v3::truncated(),
                     v3::cdc_local(),
+                    v3::cdc_generations(),
     });
     // legacy schema
     r.insert(r.end(), {
@@ -2180,6 +2209,48 @@ future<> delete_paxos_decision(const schema& s, const partition_key& key, const 
             to_legacy(*key.get_compound_type(s), key.representation()),
             s.id()
         ).discard_result();
+}
+
+// TODO: unit test these 2 funcs
+future<> store_cdc_generation(db_clock::time_point gen_ts, const cdc::topology_description& gen) {
+    static auto insert_row = format("INSERT INTO system.{} (time, range_end, ignore_msb, streams) VALUES (?, ?, ?, ?)", v3::CDC_GENERATIONS);
+
+    for (auto& e : gen.entries()) {
+        list_type_impl::native_type streams;
+        for (auto& s : e.streams) {
+            streams.push_back(data_value(s.to_bytes()));
+        }
+
+        co_await qctx->execute_cql(insert_row,
+                gen_ts, dht::token::to_int64(e.token_range_end), int8_t(e.sharding_ignore_msb),
+                make_list_value(list_type_impl::get_instance(bytes_type, false), std::move(streams)));
+    }
+}
+
+future<std::optional<cdc::topology_description>> load_cdc_generation(db_clock::time_point gen_ts) {
+    // TODO: use a different API?
+    std::vector<cdc::token_range_description> entries;
+    co_await qctx->qp().query_internal(
+            format("SELECT range_end, ignore_msb, streams FROM system.{} WHERE time = ?", v3::CDC_GENERATIONS),
+            cql3::query_options::DEFAULT.get_consistency(),
+            cql3::query_options::DEFAULT.get_timeout_config(),
+            { gen_ts },
+            1000,
+            [&] (const cql3::untyped_result_set_row& r) {
+        std::vector<cdc::stream_id> streams;
+        r.get_list_data<bytes>("streams", std::back_inserter(streams));
+        entries.push_back(cdc::token_range_description{
+                dht::token::from_int64(r.get_as<int64_t>("range_end")),
+                std::move(streams),
+                uint8_t(r.get_as<int8_t>("ignore_msb"))});
+        return make_ready_future<stop_iteration>(stop_iteration::no);
+    });
+
+    if (entries.empty()) {
+        co_return std::nullopt;
+    }
+
+    co_return cdc::topology_description{std::move(entries)};
 }
 
 } // namespace system_keyspace

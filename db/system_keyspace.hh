@@ -76,6 +76,10 @@ namespace gms {
     class feature_service;
 }
 
+namespace cdc {
+    class topology_description;
+}
+
 bool is_system_keyspace(std::string_view ks_name);
 
 namespace db {
@@ -122,6 +126,7 @@ static constexpr auto VIEWS_BUILDS_IN_PROGRESS = "views_builds_in_progress";
 static constexpr auto BUILT_VIEWS = "built_views";
 static constexpr auto SCYLLA_VIEWS_BUILDS_IN_PROGRESS = "scylla_views_builds_in_progress";
 static constexpr auto CDC_LOCAL = "cdc_local";
+static constexpr auto CDC_GENERATIONS = "cdc_generations";
 }
 
 namespace legacy {
@@ -640,6 +645,9 @@ future<> delete_paxos_decision(const schema& s, const partition_key& key, const 
 
 future<bool> cdc_is_rewritten();
 future<> cdc_set_rewritten(std::optional<db_clock::time_point>);
+
+future<> store_cdc_generation(db_clock::time_point, const cdc::topology_description&);
+future<std::optional<cdc::topology_description>> load_cdc_generation(db_clock::time_point);
 
 } // namespace system_keyspace
 } // namespace db
