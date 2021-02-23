@@ -37,6 +37,7 @@
 #include "gms/application_state.hh"
 #include "gms/inet_address.hh"
 #include "gms/gossiper.hh"
+#include "message/messaging_service.hh"
 
 #include "cdc/generation.hh"
 #include "cdc/cdc_options.hh"
@@ -644,8 +645,8 @@ constexpr char could_not_retrieve_msg_template[]
 
 generation_service::generation_service(
             const db::config& cfg, gms::gossiper& g, sharded<db::system_distributed_keyspace>& sys_dist_ks,
-            abort_source& abort_src, const locator::shared_token_metadata& stm)
-        : _cfg(cfg), _gossiper(g), _sys_dist_ks(sys_dist_ks), _abort_src(abort_src), _token_metadata(stm) {
+            abort_source& abort_src, const locator::shared_token_metadata& stm, netw::messaging_service& ms)
+        : _cfg(cfg), _gossiper(g), _sys_dist_ks(sys_dist_ks), _abort_src(abort_src), _token_metadata(stm), _ms(ms) {
 }
 
 future<> generation_service::stop() {
