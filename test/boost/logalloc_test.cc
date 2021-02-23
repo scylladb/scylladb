@@ -1459,4 +1459,84 @@ SEASTAR_THREAD_TEST_CASE(test_decay_reserves) {
     BOOST_REQUIRE_LE(reclaims, expected_reclaims);
 }
 
+SEASTAR_THREAD_TEST_CASE(background_reclaim) {
+    prime_segment_pool(memory::stats().total_memory(), memory::min_free_memory()).get();  // if previous test cases muddied the pool
+
+    region evictable;
+    std::vector<managed_bytes> evictable_allocs;
+
+    auto& rnd = seastar::testing::local_random_engine;
+
+    auto clean_up = defer([&] {
+        with_allocator(evictable.allocator(), [&] {
+            evictable_allocs.clear();
+        });
+    });
+
+
+    // Fill up memory with allocations
+    size_t lsa_alloc_size = 300;
+
+    while (true) {
+        try {
+            with_allocator(evictable.allocator(), [&] {
+                evictable_allocs.push_back(managed_bytes(managed_bytes::initialized_later(), lsa_alloc_size));
+            });
+        } catch (std::bad_alloc&) {
+            break;
+        }
+    }
+
+    // make the reclaimer work harder
+    std::shuffle(evictable_allocs.begin(), evictable_allocs.end(), rnd);
+
+    evictable.make_evictable([&] () -> memory::reclaiming_result {
+       if (evictable_allocs.empty()) {
+           return memory::reclaiming_result::reclaimed_nothing;
+       }
+       with_allocator(evictable.allocator(), [&] {
+           evictable_allocs.pop_back();
+       });
+       return memory::reclaiming_result::reclaimed_something;
+    });
+
+    // Set up the background reclaimer
+
+    auto background_reclaim_scheduling_group = create_scheduling_group("background_reclaim", 100).get0();
+    auto kill_sched_group = defer([&] {
+        destroy_scheduling_group(background_reclaim_scheduling_group).get();
+    });
+
+    logalloc::tracker::config st_cfg;
+    st_cfg.defragment_on_idle = false;
+    st_cfg.abort_on_lsa_bad_alloc = false;
+    st_cfg.lsa_reclamation_step = 1;
+    st_cfg.background_reclaim_sched_group = background_reclaim_scheduling_group;
+    logalloc::shard_tracker().configure(st_cfg);
+
+    auto stop_lsa_background_reclaim = defer([&] {
+        return logalloc::shard_tracker().stop().get();
+    });
+
+    sleep(500ms).get(); // sleep a little, to give the reclaimer a head start
+
+    std::vector<managed_bytes> std_allocs;
+    size_t std_alloc_size = 1000000; // note that managed_bytes fragments these, even in std
+    for (int i = 0; i < 50; ++i) {
+        auto compacted_pre = logalloc::memory_compacted();
+        fmt::print("compacted {} items {} (pre)\n", compacted_pre, evictable_allocs.size());
+        std_allocs.emplace_back(managed_bytes::initialized_later(), std_alloc_size);
+        auto compacted_post = logalloc::memory_compacted();
+        fmt::print("compacted {} items {} (post)\n", compacted_post, evictable_allocs.size());
+        BOOST_REQUIRE_EQUAL(compacted_pre, compacted_post);
+    
+        // Pretend to do some work. Sleeping would be too easy, as the background reclaim group would use
+        // all that time.
+        auto deadline = std::chrono::steady_clock::now() + 100ms;
+        while (std::chrono::steady_clock::now() < deadline) {
+            thread::maybe_yield();
+        }
+    }
+}
+
 #endif
