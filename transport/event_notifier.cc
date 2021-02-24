@@ -42,8 +42,9 @@ cql_server::event_notifier::~event_notifier()
 
 future<> cql_server::event_notifier::stop() {
     return _mnotifier.unregister_listener(this).then([this]{
-        service::get_local_storage_service().unregister_subscriber(this);
+      return service::get_local_storage_service().unregister_subscriber(this).finally([this] {
         _stopped = true;
+      });
     });
 }
 
