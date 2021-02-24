@@ -375,7 +375,7 @@ private:
     void shutdown_client_servers();
 
     // Tokens and the CDC streams timestamp of the replaced node.
-    using replacement_info = std::pair<std::unordered_set<token>, std::optional<db_clock::time_point>>;
+    using replacement_info = std::unordered_set<token>;
     future<replacement_info> prepare_replacement_info(std::unordered_set<gms::inet_address> initial_contact_nodes,
             const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features, bind_messaging_port do_bind = bind_messaging_port::yes);
 
