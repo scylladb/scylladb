@@ -736,8 +736,6 @@ future<> cql_server::connection::process_request() {
 
             _pending_requests_gate.enter();
             auto leave = defer([this] { _pending_requests_gate.leave(); });
-            // Replacing the immediately-invoked lambda below with just its body costs 5-10 usec extra per invocation.
-            // Cause not understood.
             auto istream = buf.get_istream();
             (void)_process_request_stage(this, istream, op, stream, seastar::ref(_client_state), tracing_requested, mem_permit)
                     .then_wrapped([this, buf = std::move(buf), mem_permit, leave = std::move(leave)] (future<foreign_ptr<std::unique_ptr<cql_server::response>>> response_f) mutable {
