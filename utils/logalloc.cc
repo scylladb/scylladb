@@ -34,6 +34,7 @@
 #include <seastar/core/print.hh>
 #include <seastar/core/metrics.hh>
 #include <seastar/core/reactor.hh>
+#include <seastar/core/coroutine.hh>
 #include <seastar/util/alloc_failure_injector.hh>
 #include <seastar/util/backtrace.hh>
 
@@ -41,8 +42,12 @@
 #include "log.hh"
 #include "utils/dynamic_bitset.hh"
 #include "utils/log_heap.hh"
+#include "utils/preempt.hh"
 
 #include <random>
+#include <chrono>
+
+using namespace std::chrono_literals;
 
 #ifdef SEASTAR_ASAN_ENABLED
 #include "sanitizer/asan_interface.h"
@@ -360,7 +365,74 @@ static thread_local tracker& tracker_instance = get_tracker_instance();
 
 using clock = std::chrono::steady_clock;
 
+class background_reclaimer {
+    scheduling_group _sg;
+    noncopyable_function<void (size_t target)> _reclaim;
+    timer<lowres_clock> _adjust_shares_timer;
+    // If engaged, main loop is not running, set_value() to wake it.
+    promise<>* _main_loop_wait = nullptr;
+    future<> _done;
+    bool _stopping = false;
+    static constexpr size_t free_memory_threshold = 60'000'000;
+private:
+    bool have_work() const {
+#ifndef SEASTAR_DEFAULT_ALLOCATOR
+        return memory::stats().free_memory() < free_memory_threshold;
+#else
+        return false;
+#endif
+    }
+    void main_loop_wake() {
+        llogger.debug("background_reclaimer::main_loop_wake: waking {}", bool(_main_loop_wait));
+        if (_main_loop_wait) {
+            _main_loop_wait->set_value();
+            _main_loop_wait = nullptr;
+        }
+    }
+    future<> main_loop() {
+        llogger.debug("background_reclaimer::main_loop: entry");
+        while (true) {
+            while (!_stopping && !have_work()) {
+                promise<> wait;
+                _main_loop_wait = &wait;
+                llogger.trace("background_reclaimer::main_loop: sleep");
+                co_await wait.get_future();
+                llogger.trace("background_reclaimer::main_loop: awakened");
+                _main_loop_wait = nullptr;
+            }
+            if (_stopping) {
+                break;
+            }
+            _reclaim(free_memory_threshold - memory::stats().free_memory());
+            co_await make_ready_future<>();
+        }
+        llogger.debug("background_reclaimer::main_loop: exit");
+    }
+    void adjust_shares() {
+        if (_main_loop_wait && have_work()) {
+            _sg.set_shares(1 + (1000 * (free_memory_threshold - memory::stats().free_memory())) / free_memory_threshold);
+            main_loop_wake();
+        }
+    }
+public:
+    explicit background_reclaimer(scheduling_group sg, noncopyable_function<void (size_t target)> reclaim)
+            : _sg(sg)
+            , _reclaim(std::move(reclaim))
+            , _adjust_shares_timer(_sg, [this] { adjust_shares(); })
+            , _done(with_scheduling_group(_sg, [this] { return main_loop(); })) {
+        if (sg != default_scheduling_group()) {
+            _adjust_shares_timer.arm_periodic(50ms);
+        }
+    }
+    future<> stop() {
+        _stopping = true;
+        main_loop_wake();
+        return std::move(_done);
+    }
+};
+
 class tracker::impl {
+    std::optional<background_reclaimer> _background_reclaimer;
     std::vector<region::impl*> _regions;
     seastar::metrics::metric_groups _metrics;
     bool _reclaiming_enabled = true;
@@ -387,9 +459,16 @@ private:
 public:
     impl();
     ~impl();
+    future<> stop() {
+        if (_background_reclaimer) {
+            return _background_reclaimer->stop();
+        } else {
+            return make_ready_future<>();
+        }
+    }
     void register_region(region::impl*);
     void unregister_region(region::impl*) noexcept;
-    size_t reclaim(size_t bytes);
+    size_t reclaim(size_t bytes, is_preemptible p);
     // Compacts one segment at a time from sparsest segment to least sparse until work_waiting_on_reactor returns true
     // or there are no more segments to compact.
     idle_cpu_handler_result compact_on_idle(work_waiting_on_reactor check_for_work);
@@ -397,7 +476,7 @@ public:
     // After the call, if there is enough evictable memory, the amount of free segments in the pool
     // will be at least reserve_segments + div_ceil(bytes, segment::size).
     // Returns the amount by which segment_pool.total_memory_in_use() has decreased.
-    size_t compact_and_evict(size_t reserve_segments, size_t bytes);
+    size_t compact_and_evict(size_t reserve_segments, size_t bytes, is_preemptible p);
     void full_compaction();
     void reclaim_all_free_segments();
     occupancy_stats region_occupancy();
@@ -409,9 +488,15 @@ public:
     // Abort on allocation failure from LSA
     void enable_abort_on_bad_alloc() { _abort_on_bad_alloc = true; }
     bool should_abort_on_bad_alloc() const { return _abort_on_bad_alloc; }
+    void setup_background_reclaim(scheduling_group sg) {
+        assert(!_background_reclaimer);
+        _background_reclaimer.emplace(sg, [this] (size_t target) {
+            reclaim(target, is_preemptible::yes);
+        });
+    }
 private:
     // Like compact_and_evict() but assumes that reclaim_lock is held around the operation.
-    size_t compact_and_evict_locked(size_t reserve_segments, size_t bytes);
+    size_t compact_and_evict_locked(size_t reserve_segments, size_t bytes, is_preemptible preempt);
 };
 
 class tracker_reclaimer_lock {
@@ -428,8 +513,13 @@ tracker::tracker()
 tracker::~tracker() {
 }
 
+future<>
+tracker::stop() {
+    return _impl->stop();
+}
+
 size_t tracker::reclaim(size_t bytes) {
-    return _impl->reclaim(bytes);
+    return _impl->reclaim(bytes, is_preemptible::no);
 }
 
 occupancy_stats tracker::region_occupancy() {
@@ -714,9 +804,9 @@ public:
     void set_region(segment_descriptor& desc, region::impl* r) {
         desc._region = r;
     }
-    size_t reclaim_segments(size_t target);
+    size_t reclaim_segments(size_t target, is_preemptible preempt);
     void reclaim_all_free_segments() {
-        reclaim_segments(std::numeric_limits<size_t>::max());
+        reclaim_segments(std::numeric_limits<size_t>::max(), is_preemptible::no);
     }
 
     struct stats {
@@ -734,7 +824,7 @@ public:
     size_t free_segments() const { return _free_segments; }
 };
 
-size_t segment_pool::reclaim_segments(size_t target) {
+size_t segment_pool::reclaim_segments(size_t target, is_preemptible preempt) {
     // Reclaimer tries to release segments occupying lower parts of the address
     // space.
 
@@ -777,6 +867,9 @@ size_t segment_pool::reclaim_segments(size_t target) {
         ::free(src);
         ++reclaimed_segments;
         --_free_segments;
+        if (preempt && need_preempt()) {
+            break;
+        }
     }
 
     llogger.debug("Reclaimed {} segments (requested {})", reclaimed_segments, target);
@@ -819,7 +912,7 @@ segment* segment_pool::allocate_segment(size_t reserve)
             _lsa_owned_segments_bitmap.set(idx);
             return seg;
         }
-    } while (shard_tracker().get_impl().compact_and_evict(reserve, shard_tracker().reclamation_step() * segment::size));
+    } while (shard_tracker().get_impl().compact_and_evict(reserve, shard_tracker().reclamation_step() * segment::size, is_preemptible::no));
     return nullptr;
 }
 
@@ -919,11 +1012,11 @@ void segment_pool::prime(size_t available_memory, size_t min_free_memory) {
     // We want to leave more free memory than just min_free_memory() in order to reduce
     // the frequency of expensive segment-migrating reclaim() called by the seastar allocator.
     size_t min_gap = 1 * 1024 * 1024;
-    size_t max_gap = 64 * 1024 * 1024;
+    size_t max_gap = 32 * 1024 * 1024;
     size_t gap = std::min(max_gap, std::max(available_memory / 16, min_gap));
     _store.non_lsa_reserve = min_free_memory + gap;
     // Since the reclaimer is not yet in place, free some low memory for general use
-    reclaim_segments(_store.non_lsa_reserve / segment::size);
+    reclaim_segments(_store.non_lsa_reserve / segment::size, is_preemptible::no);
 }
 
 void segment_pool::on_segment_compaction(size_t used_size) {
@@ -1673,6 +1766,7 @@ void tracker::configure(const config& cfg) {
     if (cfg.abort_on_lsa_bad_alloc) {
         _impl->enable_abort_on_bad_alloc();
     }
+    _impl->setup_background_reclaim(cfg.background_reclaim_sched_group);
 }
 
 memory::reclaiming_result tracker::reclaim(seastar::memory::reclaimer::request r) {
@@ -1811,7 +1905,7 @@ void tracker::impl::full_compaction() {
     llogger.debug("Compaction done, {}", region_occupancy());
 }
 
-static void reclaim_from_evictable(region::impl& r, size_t target_mem_in_use) {
+static void reclaim_from_evictable(region::impl& r, size_t target_mem_in_use, is_preemptible preempt) {
     while (true) {
         auto deficit = shard_segment_pool.total_memory_in_use() - target_mem_in_use;
         auto occupancy = r.occupancy();
@@ -1837,6 +1931,9 @@ static void reclaim_from_evictable(region::impl& r, size_t target_mem_in_use) {
                 return;
             }
             if (r.empty()) {
+                return;
+            }
+            if (preempt && need_preempt()) {
                 return;
             }
         }
@@ -1909,7 +2006,7 @@ idle_cpu_handler_result tracker::impl::compact_on_idle(work_waiting_on_reactor c
     return idle_cpu_handler_result::interrupted_by_higher_priority_task;
 }
 
-size_t tracker::impl::reclaim(size_t memory_to_release) {
+size_t tracker::impl::reclaim(size_t memory_to_release, is_preemptible preempt) {
     // Reclamation steps:
     // 1. Try to release free segments from segment pool and emergency reserve.
     // 2. Compact used segments and/or evict data.
@@ -1922,33 +2019,40 @@ size_t tracker::impl::reclaim(size_t memory_to_release) {
 
     constexpr auto max_bytes = std::numeric_limits<size_t>::max() - segment::size;
     auto segments_to_release = align_up(std::min(max_bytes, memory_to_release), segment::size) >> segment::size_shift;
-    auto nr_released = shard_segment_pool.reclaim_segments(segments_to_release);
+    auto nr_released = shard_segment_pool.reclaim_segments(segments_to_release, preempt);
     size_t mem_released = nr_released * segment::size;
     if (mem_released >= memory_to_release) {
         return memory_to_release;
     }
+    if (preempt && need_preempt()) {
+        return mem_released;
+    }
 
-    auto compacted = compact_and_evict_locked(shard_segment_pool.current_emergency_reserve_goal(), memory_to_release - mem_released);
+    auto compacted = compact_and_evict_locked(shard_segment_pool.current_emergency_reserve_goal(), memory_to_release - mem_released, preempt);
+
+    if (compacted == 0) {
+        return mem_released;
+    }
 
     // compact_and_evict_locked() will not return segments to the standard allocator,
     // so do it here:
-    nr_released = shard_segment_pool.reclaim_segments(compacted / segment::size);
+    nr_released = shard_segment_pool.reclaim_segments(compacted / segment::size, preempt);
 
     return mem_released + nr_released * segment::size;
 }
 
-size_t tracker::impl::compact_and_evict(size_t reserve_segments, size_t memory_to_release) {
+size_t tracker::impl::compact_and_evict(size_t reserve_segments, size_t memory_to_release, is_preemptible preempt) {
     if (!_reclaiming_enabled) {
         return 0;
     }
     reclaiming_lock rl(*this);
     reclaim_timer timing_guard;
-    size_t released = compact_and_evict_locked(reserve_segments, memory_to_release);
+    size_t released = compact_and_evict_locked(reserve_segments, memory_to_release, preempt);
     timing_guard.stop(released);
     return released;
 }
 
-size_t tracker::impl::compact_and_evict_locked(size_t reserve_segments, size_t memory_to_release) {
+size_t tracker::impl::compact_and_evict_locked(size_t reserve_segments, size_t memory_to_release, is_preemptible preempt) {
     //
     // Algorithm outline.
     //
@@ -2010,12 +2114,16 @@ size_t tracker::impl::compact_and_evict_locked(size_t reserve_segments, size_t m
         // we can reclaim memory by eviction only. In some cases the cost of compaction on allocation
         // would be higher than the cost of repopulating the region with evicted items.
         if (r->is_evictable() && r->occupancy().used_space() >= max_used_space_ratio_for_compaction * r->occupancy().total_space()) {
-            reclaim_from_evictable(*r, target_mem);
+            reclaim_from_evictable(*r, target_mem, preempt);
         } else {
             r->compact();
         }
 
         boost::range::push_heap(_regions, cmp);
+
+        if (preempt && need_preempt()) {
+            break;
+        }
     }
 
     auto released_during_compaction = mem_in_use - shard_segment_pool.total_memory_in_use();
@@ -2024,8 +2132,11 @@ size_t tracker::impl::compact_and_evict_locked(size_t reserve_segments, size_t m
         llogger.debug("Considering evictable regions.");
         // FIXME: Fair eviction
         for (region::impl* r : _regions) {
+            if (preempt && need_preempt()) {
+                break;
+            }
             if (r->is_evictable()) {
-                reclaim_from_evictable(*r, target_mem);
+                reclaim_from_evictable(*r, target_mem, preempt);
                 if (shard_segment_pool.total_memory_in_use() <= target_mem) {
                     break;
                 }
