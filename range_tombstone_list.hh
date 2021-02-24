@@ -170,6 +170,7 @@ public:
     iterator_range slice(const schema& s, const query::clustering_range&) const;
     // Returns range tombstones which overlap with [start, end)
     iterator_range slice(const schema& s, position_in_partition_view start, position_in_partition_view end) const;
+    iterator_range upper_slice(const schema& s, position_in_partition_view start, bound_view end) const;
     iterator erase(const_iterator, const_iterator);
 
     // Pops the first element and bans (in theory) further additions
