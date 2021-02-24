@@ -37,12 +37,12 @@ cql_server::event_notifier::event_notifier(service::migration_notifier& mn) : _m
 
 cql_server::event_notifier::~event_notifier()
 {
-    service::get_local_storage_service().unregister_subscriber(this);
     assert(_stopped);
 }
 
 future<> cql_server::event_notifier::stop() {
     return _mnotifier.unregister_listener(this).then([this]{
+        service::get_local_storage_service().unregister_subscriber(this);
         _stopped = true;
     });
 }
