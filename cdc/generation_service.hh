@@ -113,20 +113,20 @@ private:
     /* Retrieve the CDC generation which starts at the given timestamp (from a distributed table created for this purpose)
      * and start using it for CDC log writes if it's not obsolete.
      */
-    future<> handle_cdc_generation(std::optional<db_clock::time_point>);
+    future<> handle_cdc_generation(std::optional<db_clock::time_point>, gms::inet_address source);
 
     /* If `handle_cdc_generation` fails, it schedules an asynchronous retry in the background
      * using `async_handle_cdc_generation`.
      */
-    void async_handle_cdc_generation(db_clock::time_point);
+    void async_handle_cdc_generation(db_clock::time_point, gms::inet_address source);
 
     /* Wrapper around `do_handle_cdc_generation` which intercepts timeout/unavailability exceptions.
      * Returns: do_handle_cdc_generation(ts). */
-    future<bool> do_handle_cdc_generation_intercept_nonfatal_errors(db_clock::time_point);
+    future<bool> do_handle_cdc_generation_intercept_nonfatal_errors(db_clock::time_point, gms::inet_address source);
 
     /* Returns `true` iff we started using the generation (it was not obsolete or already known),
      * which means that this node might write some CDC log entries using streams from this generation. */
-    future<bool> do_handle_cdc_generation(db_clock::time_point);
+    future<bool> do_handle_cdc_generation(db_clock::time_point, gms::inet_address source);
 
     /* Scan CDC generation timestamps gossiped by other nodes and retrieve the latest one.
      * This function should be called once at the end of the node startup procedure

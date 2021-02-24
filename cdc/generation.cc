@@ -761,7 +761,7 @@ void generation_service::on_change(gms::inet_address ep, gms::application_state 
     auto ts = gms::versioned_value::cdc_streams_timestamp_from_string(v.value);
     cdc_log.debug("Endpoint: {}, CDC generation timestamp change: {}", ep, ts);
 
-    handle_cdc_generation(ts).get();
+    handle_cdc_generation(ts, ep).get();
 }
 
 future<> generation_service::check_and_repair_cdc_streams() {
@@ -770,6 +770,8 @@ future<> generation_service::check_and_repair_cdc_streams() {
     }
 
     auto latest = _gen_ts;
+    gms::inet_address source = utils::fb_utilities::get_broadcast_address();
+
     const auto& endpoint_states = _gossiper.get_endpoint_states();
     for (const auto& [addr, state] : endpoint_states) {
         if (!_gossiper.is_normal(addr))  {
@@ -780,6 +782,7 @@ future<> generation_service::check_and_repair_cdc_streams() {
         const auto ts = get_streams_timestamp_for(addr, _gossiper);
         if (!latest || (ts && *ts > *latest)) {
             latest = ts;
+            source = addr;
         }
     }
 
@@ -839,7 +842,7 @@ future<> generation_service::check_and_repair_cdc_streams() {
 
     if (!should_regenerate) {
         if (latest != _gen_ts) {
-            co_await do_handle_cdc_generation(*latest);
+            co_await do_handle_cdc_generation(*latest, source);
         }
         cdc_log.info("CDC generation {} does not need repair", latest);
         co_return;
@@ -865,7 +868,7 @@ future<> generation_service::check_and_repair_cdc_streams() {
     co_await db::system_keyspace::update_cdc_streams_timestamp(new_gen_ts);
 }
 
-future<> generation_service::handle_cdc_generation(std::optional<db_clock::time_point> ts) {
+future<> generation_service::handle_cdc_generation(std::optional<db_clock::time_point> ts, gms::inet_address source) {
     assert_shard_zero(__PRETTY_FUNCTION__);
 
     if (!ts) {
@@ -891,10 +894,10 @@ future<> generation_service::handle_cdc_generation(std::optional<db_clock::time_
 
     bool using_this_gen = false;
     try {
-        using_this_gen = co_await do_handle_cdc_generation_intercept_nonfatal_errors(*ts);
+        using_this_gen = co_await do_handle_cdc_generation_intercept_nonfatal_errors(*ts, source);
     } catch (generation_handling_nonfatal_exception& e) {
         cdc_log.warn(could_not_retrieve_msg_template, ts, e.what(), "retrying in the background");
-        async_handle_cdc_generation(*ts);
+        async_handle_cdc_generation(*ts, source);
         co_return;
     } catch (...) {
         cdc_log.error(could_not_retrieve_msg_template, ts, std::current_exception(), "not retrying");
@@ -909,15 +912,15 @@ future<> generation_service::handle_cdc_generation(std::optional<db_clock::time_
     }
 }
 
-void generation_service::async_handle_cdc_generation(db_clock::time_point ts) {
+void generation_service::async_handle_cdc_generation(db_clock::time_point ts, gms::inet_address source) {
     assert_shard_zero(__PRETTY_FUNCTION__);
 
-    (void)(([] (db_clock::time_point ts, shared_ptr<generation_service> svc) -> future<> {
+    (void)(([] (db_clock::time_point ts, gms::inet_address source, shared_ptr<generation_service> svc) -> future<> {
         while (true) {
             co_await sleep_abortable(std::chrono::seconds(5), svc->_abort_src);
 
             try {
-                bool using_this_gen = co_await svc->do_handle_cdc_generation_intercept_nonfatal_errors(ts);
+                bool using_this_gen = co_await svc->do_handle_cdc_generation_intercept_nonfatal_errors(ts, source);
                 if (using_this_gen) {
                     cdc_log.info("Starting to use generation {}", ts);
                     co_await update_streams_description(ts, svc->get_sys_dist_ks(),
@@ -938,33 +941,33 @@ void generation_service::async_handle_cdc_generation(db_clock::time_point ts) {
                 co_return;
             }
         }
-    })(ts, shared_from_this()));
+    })(ts, source, shared_from_this()));
 }
 
 future<> generation_service::scan_cdc_generations() {
     assert_shard_zero(__PRETTY_FUNCTION__);
 
-    std::optional<db_clock::time_point> latest;
+    std::optional<std::pair<db_clock::time_point, gms::inet_address>> latest;
     for (const auto& ep: _gossiper.get_endpoint_states()) {
         auto ts = get_streams_timestamp_for(ep.first, _gossiper);
-        if (!latest || (ts && *ts > *latest)) {
-            latest = ts;
+        if (!latest || (ts && *ts > latest->first)) {
+            latest = {*ts, ep.first};
         }
     }
 
     if (latest) {
-        cdc_log.info("Latest generation seen during startup: {}", *latest);
-        co_await handle_cdc_generation(latest);
+        cdc_log.info("Latest generation seen during startup: {}", latest->first);
+        co_await handle_cdc_generation(latest->first, latest->second);
     } else {
         cdc_log.info("No generation seen during startup.");
     }
 }
 
-future<bool> generation_service::do_handle_cdc_generation_intercept_nonfatal_errors(db_clock::time_point ts) {
+future<bool> generation_service::do_handle_cdc_generation_intercept_nonfatal_errors(db_clock::time_point ts, gms::inet_address source) {
     assert_shard_zero(__PRETTY_FUNCTION__);
 
     try {
-        co_return co_await do_handle_cdc_generation(ts);
+        co_return co_await do_handle_cdc_generation(ts, source);
     } catch (exceptions::request_timeout_exception& e) {
         throw generation_handling_nonfatal_exception(e.what());
     } catch (exceptions::unavailable_exception& e) {
@@ -980,7 +983,7 @@ future<bool> generation_service::do_handle_cdc_generation_intercept_nonfatal_err
     }
 }
 
-future<bool> generation_service::do_handle_cdc_generation(db_clock::time_point ts) {
+future<bool> generation_service::do_handle_cdc_generation(db_clock::time_point ts, gms::inet_address) {
     assert_shard_zero(__PRETTY_FUNCTION__);
 
     auto sys_dist_ks = get_sys_dist_ks();
