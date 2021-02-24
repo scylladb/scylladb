@@ -1556,12 +1556,12 @@ void storage_service::set_gossip_tokens(
 
 void storage_service::register_subscriber(endpoint_lifecycle_subscriber* subscriber)
 {
-    _lifecycle_subscribers.emplace_back(subscriber);
+    _lifecycle_subscribers.add(subscriber);
 }
 
-void storage_service::unregister_subscriber(endpoint_lifecycle_subscriber* subscriber)
+future<> storage_service::unregister_subscriber(endpoint_lifecycle_subscriber* subscriber) noexcept
 {
-    _lifecycle_subscribers.erase(std::remove(_lifecycle_subscribers.begin(), _lifecycle_subscribers.end(), subscriber), _lifecycle_subscribers.end());
+    return _lifecycle_subscribers.remove(subscriber);
 }
 
 static std::optional<future<>> drain_in_progress;
@@ -1609,8 +1609,9 @@ future<> storage_service::drain_on_shutdown() {
 
             get_storage_proxy().invoke_on_all([] (storage_proxy& local_proxy) mutable {
                 auto& ss = service::get_local_storage_service();
-                ss.unregister_subscriber(&local_proxy);
+              return ss.unregister_subscriber(&local_proxy).finally([&local_proxy] {
                 return local_proxy.drain_on_shutdown();
+              });
             }).get();
             slogger.info("Drain on shutdown: hints manager is stopped");
 
@@ -3150,13 +3151,13 @@ void storage_service::notify_down(inet_address endpoint) {
     container().invoke_on_all([endpoint] (auto&& ss) {
         ss._messaging.local().remove_rpc_client(netw::msg_addr{endpoint, 0});
         return seastar::async([&ss, endpoint] {
-            for (auto&& subscriber : ss._lifecycle_subscribers) {
+            ss._lifecycle_subscribers.for_each([endpoint] (endpoint_lifecycle_subscriber* subscriber) {
                 try {
                     subscriber->on_down(endpoint);
                 } catch (...) {
                     slogger.warn("Down notification failed {}: {}", endpoint, std::current_exception());
                 }
-            }
+            });
         });
     }).get();
     slogger.debug("Notify node {} has been down", endpoint);
@@ -3165,13 +3166,13 @@ void storage_service::notify_down(inet_address endpoint) {
 void storage_service::notify_left(inet_address endpoint) {
     container().invoke_on_all([endpoint] (auto&& ss) {
         return seastar::async([&ss, endpoint] {
-            for (auto&& subscriber : ss._lifecycle_subscribers) {
+            ss._lifecycle_subscribers.for_each([endpoint] (endpoint_lifecycle_subscriber* subscriber) {
                 try {
                     subscriber->on_leave_cluster(endpoint);
                 } catch (...) {
                     slogger.warn("Leave cluster notification failed {}: {}", endpoint, std::current_exception());
                 }
-            }
+            });
         });
     }).get();
     slogger.debug("Notify node {} has left the cluster", endpoint);
@@ -3184,13 +3185,13 @@ void storage_service::notify_up(inet_address endpoint)
     }
     container().invoke_on_all([endpoint] (auto&& ss) {
         return seastar::async([&ss, endpoint] {
-            for (auto&& subscriber : ss._lifecycle_subscribers) {
+            ss._lifecycle_subscribers.for_each([endpoint] (endpoint_lifecycle_subscriber* subscriber) {
                 try {
                     subscriber->on_up(endpoint);
                 } catch (...) {
                     slogger.warn("Up notification failed {}: {}", endpoint, std::current_exception());
                 }
-            }
+            });
         });
     }).get();
     slogger.debug("Notify node {} has been up", endpoint);
@@ -3204,13 +3205,13 @@ void storage_service::notify_joined(inet_address endpoint)
 
     container().invoke_on_all([endpoint] (auto&& ss) {
         return seastar::async([&ss, endpoint] {
-            for (auto&& subscriber : ss._lifecycle_subscribers) {
+            ss._lifecycle_subscribers.for_each([endpoint] (endpoint_lifecycle_subscriber* subscriber) {
                 try {
                     subscriber->on_join_cluster(endpoint);
                 } catch (...) {
                     slogger.warn("Join cluster notification failed {}: {}", endpoint, std::current_exception());
                 }
-            }
+            });
         });
     }).get();
     slogger.debug("Notify node {} has joined the cluster", endpoint);

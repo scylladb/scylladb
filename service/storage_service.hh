@@ -276,7 +276,7 @@ private:
     drain_progress _drain_progress{};
 
 
-    std::vector<endpoint_lifecycle_subscriber*> _lifecycle_subscribers;
+    atomic_vector<endpoint_lifecycle_subscriber*> _lifecycle_subscribers;
 
     std::unordered_set<token> _bootstrap_tokens;
 
@@ -297,7 +297,7 @@ public:
 
     void register_subscriber(endpoint_lifecycle_subscriber* subscriber);
 
-    void unregister_subscriber(endpoint_lifecycle_subscriber* subscriber);
+    future<> unregister_subscriber(endpoint_lifecycle_subscriber* subscriber) noexcept;
 
     // should only be called via JMX
     future<> stop_gossiping();
