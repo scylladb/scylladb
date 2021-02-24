@@ -142,6 +142,10 @@ public:
         // key restrictions and the partition doesn't have any rows matching
         // the restrictions, see #589. This flag overrides this behavior.
         always_return_static_content,
+        // Use the new data range scan variant, which builds query::result
+        // directly, bypassing the intermediate reconcilable_result format used
+        // in pre 4.5 range scans.
+        range_scan_data_variant,
     };
     using option_set = enum_set<super_enum<option,
         option::send_clustering_key,
@@ -155,7 +159,8 @@ public:
         option::allow_short_read,
         option::with_digest,
         option::bypass_cache,
-        option::always_return_static_content>>;
+        option::always_return_static_content,
+        option::range_scan_data_variant>>;
     clustering_row_ranges _row_ranges;
 public:
     column_id_vector static_columns; // TODO: consider using bitmap
