@@ -93,19 +93,59 @@ protocol. Scylla supports several Scylla-only extensions to this protocol,
 described in [protocol-extensions.md](protocol-extensions.md).
 
 By default, Scylla listens to the CQL protocol on port 9042, which can be
-configured via the `native_transport_port` configuration option.
+configured via the `native_transport_port` configuration option. If set
+to 0, the OS will choose the port randomly (which also applies to every CQL
+port discussed later). To explicitly disable listening on a CQL port one
+should set its value to `~` , or `null`.
 
 Scylla also supports the CQL protocol via TLS/SSL encryption which is
 disabled by default and can be enabled via the `native_transport_port_ssl`
-configuration option (the traditional choice is port 9142). Users
-that want to only support the encrypted CQL protocol can disable the
-unencrypted default CQL protocol by setting the `native_transport_port` to 0.
+configuration option. Traditional choice for the port for secure
+connections is 9142, but if `client_encryption_options` are specified and
+`native_transport_port_ssl` is not, then `native_transport_port` will
+handle encrypted connections only. The same thing happens when
+`native_transport_port` and `native_transport_port_ssl` are set to the same
+value. The rules governing port assignment/encryption are summed up in
+the table below:
+
+```
+np  := native_transport_port is set
+nps := native_transport_port_ssl is set
+ceo := client_encryption_options are enabled
+eq  := native_transport_port_ssl == native_transport_port
+
++-----+-----+-----+-----+
+|  np | nps | ceo |  eq |
++-----+-----+-----+-----+
+|  0  |  0  |  0  |  *  |   =>   listen on native_transport_port, unencrypted
+|  0  |  0  |  1  |  *  |   =>   listen on native_transport_port, encrypted
+|  0  |  1  |  0  |  *  |   =>   don't listen
+|  0  |  1  |  1  |  *  |   =>   listen on native_transport_port_ssl, encrypted
+|  1  |  0  |  0  |  *  |   =>   listen on native_transport_port, unencrypted
+|  1  |  0  |  1  |  *  |   =>   listen on native_transport_port, encrypted
+|  1  |  1  |  0  |  *  |   =>   listen on native_transport_port, unencrypted
+|  1  |  1  |  1  |  0  |   =>   listen on native_transport_port, unencrypted + native_transport_port_ssl, encrypted
+|  1  |  1  |  1  |  1  |   =>   listen on native_transport_port(_ssl - same thing), encrypted
++-----+-----+-----+-----+
+```
+
+To allow "advanced shard-awareness" Scylla can accept CQL connections on
+additional port(s): `native_shard_aware_transport_port` (by default 19042)
+and `native_shard_aware_transport_port_ssl` (encrypted, disabled by default
+just like `native_transport_port_ssl`). The typical choice for
+`native_shard_aware_transport_port_ssl` is 19142.
+
+Both shard-aware ports work almost identically as their non-shard-aware
+counterparts, with only one difference: client connections arriving on
+"shard-aware" ports are routed to specific shards, determined by the
+client-side (local) port numbers. This feature is enabled by default and can
+be disabled by setting `enable_shard_aware_drivers: false`.
 
 The CQL protocol support can be disabled altogether by setting the
 `start_native_transport` option to `false`.
 
 These option names were chosen for backward-compatibility with Cassandra
-configuration files: They refers to CQL as the "native transport", to
+configuration files: they refer to CQL as the "native transport", to
 contrast with the older Thrift protocol (described below) which wasn't
 native to Cassandra.
 
