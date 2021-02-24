@@ -521,6 +521,10 @@ cql_server::connection::connection(cql_server& server, socket_address server_add
     , _server_addr(server_addr)
     , _client_state(service::client_state::external_tag{}, server._auth_service, &server._sl_controller, server.timeout_config(), addr)
 {
+    _shedding_timer.set_callback([this] {
+        clogger.debug("Shedding all incoming requests due to overload");
+        _shed_incoming_requests = true;
+    });
 }
 
 cql_server::connection::~connection() {
@@ -577,6 +581,13 @@ future<> cql_server::connection::process_request() {
         }
 
         auto& f = *maybe_frame;
+
+        const bool allow_shedding = _client_state.get_workload_type() == service::client_state::workload_type::interactive;
+        if (allow_shedding && _shed_incoming_requests) {
+            ++_server._stats.requests_shed;
+            return _read_buf.skip(f.length);
+        }
+
         tracing_request_type tracing_requested = tracing_request_type::not_requested;
         if (f.flags & cql_frame_flags::tracing) {
             // If tracing is requested for a specific CQL command - flush
@@ -608,19 +619,47 @@ future<> cql_server::connection::process_request() {
             });
         }
 
-        auto fut = get_units(_server._memory_available, mem_estimate);
+        const auto shedding_timeout = std::chrono::milliseconds(50);
+        auto fut = allow_shedding
+                ? get_units(_server._memory_available, mem_estimate, shedding_timeout).then_wrapped([this, length = f.length] (auto f) {
+                    try {
+                        return make_ready_future<semaphore_units<>>(f.get0());
+                    } catch (semaphore_timed_out sto) {
+                        // Cancel shedding in case no more requests are going to do that on completion
+                        if (_pending_requests_gate.get_count() == 0) {
+                            _shed_incoming_requests = false;
+                        }
+                        return _read_buf.skip(length).then([sto = std::move(sto)] () mutable {
+                            return make_exception_future<semaphore_units<>>(std::move(sto));
+                        });
+                    }
+                })
+                : get_units(_server._memory_available, mem_estimate);
         if (_server._memory_available.waiters()) {
+            if (allow_shedding && !_shedding_timer.armed()) {
+                _shedding_timer.arm(shedding_timeout);
+            }
             ++_server._stats.requests_blocked_memory;
         }
 
-        return fut.then([this, length = f.length, flags = f.flags, op, stream, tracing_requested] (semaphore_units<> mem_permit) {
+        return fut.then_wrapped([this, length = f.length, flags = f.flags, op, stream, tracing_requested] (auto mem_permit_fut) {
+          if (mem_permit_fut.failed()) {
+              // Ignore semaphore errors - they are expected if load shedding took place
+              mem_permit_fut.ignore_ready_future();
+              return make_ready_future<>();
+          }
+          semaphore_units<> mem_permit = mem_permit_fut.get0();
           return this->read_and_decompress_frame(length, flags).then([this, op, stream, tracing_requested, mem_permit = make_service_permit(std::move(mem_permit))] (fragmented_temporary_buffer buf) mutable {
 
             ++_server._stats.requests_served;
             ++_server._stats.requests_serving;
 
             _pending_requests_gate.enter();
-            auto leave = defer([this] { _pending_requests_gate.leave(); });
+            auto leave = defer([this] {
+                _shedding_timer.cancel();
+                _shed_incoming_requests = false;
+                _pending_requests_gate.leave();
+            });
             auto istream = buf.get_istream();
             (void)_process_request_stage(this, istream, op, stream, seastar::ref(_client_state), tracing_requested, mem_permit)
                     .then_wrapped([this, buf = std::move(buf), mem_permit, leave = std::move(leave)] (future<foreign_ptr<std::unique_ptr<cql_server::response>>> response_f) mutable {
