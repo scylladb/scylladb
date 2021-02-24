@@ -284,7 +284,7 @@ void storage_service::prepare_to_join(
         if (db::system_keyspace::bootstrap_complete()) {
             throw std::runtime_error("Cannot replace address with a node that is already bootstrapped");
         }
-        std::tie(_bootstrap_tokens, _cdc_streams_ts) = prepare_replacement_info(initial_contact_nodes, loaded_peer_features, do_bind).get0();
+        std::tie(_bootstrap_tokens) = prepare_replacement_info(initial_contact_nodes, loaded_peer_features, do_bind).get0();
         auto replace_address = db().local().get_replace_address();
         replacing_a_node_with_same_ip = replace_address && *replace_address == get_broadcast_address();
         replacing_a_node_with_diff_ip = replace_address && *replace_address != get_broadcast_address();
@@ -558,8 +558,8 @@ void storage_service::join_token_ring(int delay) {
     }).get();
 
     if (!db::system_keyspace::bootstrap_complete()) {
-        // If we're not bootstrapping nor replacing, then we shouldn't have chosen a CDC streams timestamp yet.
-        assert(should_bootstrap() || db().local().is_replacing() || !_cdc_streams_ts);
+        // If we're not bootstrapping then we shouldn't have chosen a CDC streams timestamp yet.
+        assert(should_bootstrap() || !_cdc_streams_ts);
 
         // Don't try rewriting CDC stream description tables.
         // See cdc.md design notes, `Streams description table V1 and rewriting` section, for explanation.
@@ -568,7 +568,7 @@ void storage_service::join_token_ring(int delay) {
 
     if (!_cdc_streams_ts) {
         // If we didn't choose a CDC streams timestamp at this point, then either
-        // 1. we're replacing a node which didn't gossip a CDC streams timestamp for whatever reason,
+        // 1. we're replacing a node,
         // 2. we've already bootstrapped, but are upgrading from a non-CDC version,
         // 3. we're starting for the first time, but we're skipping the streaming phase (seed node/auto_bootstrap=off)
         //    and directly joining the token ring.
@@ -1587,8 +1587,7 @@ storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> 
             throw std::runtime_error(format("Could not find tokens for {} to replace", replace_address));
         }
 
-        auto cdc_streams_ts = cdc::get_streams_timestamp_for(replace_address, _gossiper);
-        replacement_info ret {tokens, cdc_streams_ts};
+        replacement_info ret {tokens};
 
         // use the replacee's host Id as our own so we receive hints, etc
         auto host_id = _gossiper.get_host_id(replace_address);
