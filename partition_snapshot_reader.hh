@@ -76,7 +76,16 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
                 return fn();
             });
         }
-        void refresh_state(const query::clustering_range& ck_range,
+        void maybe_refresh_state(const query::clustering_range& ck_range,
+                           const std::optional<position_in_partition>& last_row) {
+            auto mark = _snapshot->get_change_mark();
+            if (!last_row || mark != _change_mark) {
+                do_refresh_state(ck_range, last_row);
+                _change_mark = mark;
+            }
+        }
+
+        void do_refresh_state(const query::clustering_range& ck_range,
                            const std::optional<position_in_partition>& last_row) {
             _clustering_rows.clear();
 
@@ -168,11 +177,8 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
         mutation_fragment_opt next_row(const query::clustering_range& ck_range,
                                        const std::optional<position_in_partition>& last_row) {
             return in_alloc_section([&] () -> mutation_fragment_opt {
-                auto mark = _snapshot->get_change_mark();
-                if (!last_row || mark != _change_mark) {
-                    refresh_state(ck_range, last_row);
-                    _change_mark = mark;
-                }
+                maybe_refresh_state(ck_range, last_row);
+
                 position_in_partition::equal_compare rows_eq(_schema);
                 while (has_more_rows()) {
                     const rows_entry& e = pop_clustering_row();
