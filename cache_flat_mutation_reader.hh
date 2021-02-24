@@ -619,6 +619,8 @@ void cache_flat_mutation_reader::add_to_buffer(const partition_snapshot_row_curs
     if (!row.dummy()) {
         _read_context->cache().on_row_hit();
         add_clustering_row_to_buffer(mutation_fragment(*_schema, _permit, row.row(_read_context->digest_requested())));
+    } else {
+        _read_context->cache()._tracker.on_dummy_row_hit();
     }
 }
 
