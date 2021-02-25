@@ -14,13 +14,7 @@
 #
 # You should have received a copy of the GNU Affero General Public License
 # along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
-
-# This file configures pytest for all tests in this directory, and also
-# defines common test fixtures for all of them to use. A "fixture" is some
-# setup which an invididual test requires to run; The fixture has setup code
-# and teardown code, and if multiple tests require the same fixture, it can
-# be set up only once - while still allowing the user to run individual tests
-# and automatically setting up the fixtures they need.
+##################################################################
 
 # Various utility functions which are useful for multiple tests.
 # Note that fixtures aren't here - they are in conftest.py.
@@ -48,7 +42,7 @@ unique_name.last_ms = 0
 
 # A utility function for creating a new temporary keyspace with given options.
 # It can be used in a "with", as:
-#   with create_test_keyspace(cql, '...') as keyspace:
+#   with new_test_keyspace(cql, '...') as keyspace:
 # This is not a fixture - see those in conftest.py.
 @contextmanager
 def new_test_keyspace(cql, opts):
@@ -59,7 +53,7 @@ def new_test_keyspace(cql, opts):
 
 # A utility function for creating a new temporary table with a given schema.
 # It can be used in a "with", as:
-#   with create_test_table(cql, keyspace, '...') as table:
+#   with new_test_table(cql, keyspace, '...') as table:
 # This is not a fixture - see those in conftest.py.
 @contextmanager
 def new_test_table(cql, keyspace, schema, extra=""):
