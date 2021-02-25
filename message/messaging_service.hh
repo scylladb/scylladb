@@ -40,6 +40,7 @@
 #include "cache_temperature.hh"
 #include "service/paxos/prepare_response.hh"
 #include "raft/raft.hh"
+#include "cdc/generation.hh"
 
 #include <list>
 #include <vector>
@@ -150,7 +151,8 @@ enum class messaging_verb : int32_t {
     RAFT_APPEND_ENTRIES_REPLY = 48,
     RAFT_VOTE_REQUEST = 49,
     RAFT_VOTE_REPLY = 50,
-    LAST = 51,
+    FETCH_CDC_GENERATION = 51,
+    LAST = 52,
 };
 
 } // namespace netw
@@ -572,6 +574,36 @@ public:
     void register_raft_vote_reply(std::function<future<> (const rpc::client_info&, rpc::opt_time_point, uint64_t group_id, raft::server_id from_id, raft::server_id dst_id, raft::vote_reply)>&& func);
     future<> unregister_raft_vote_reply();
     future<> send_raft_vote_reply(msg_addr id, clock_type::time_point timeout, uint64_t group_id, raft::server_id from_id, raft::server_id dst_id, const raft::vote_reply& vote_reply);
+
+    /* CDC generation management */
+
+    /* Call a remote node in order to create:
+     * - a sink, which we'll use to send the timestamp of the generation that we want to fetch to the remote node,
+     * - and a source, which we'll use to receive the generation from the remote node.
+     *
+     * The function expects the caller to provide the CDC generation serialization format version number used by the local node.
+     * A sink and source will be returned only if our and remote's version numbers match.
+     * Otherwise the remote's version will be returned.
+     */
+    future<std::variant<uint8_t, std::tuple<rpc::sink<db_clock::time_point>, rpc::source<cdc::token_range_description>>>>
+    make_sink_and_source_for_fetch_cdc_generation(msg_addr, uint8_t my_version);
+
+    /* Register a handler that will be called back whenever a node wants to fetch a CDC generation from us.
+     *
+     * The calling node provides us with a source using which it will send the requested generation's timestamp
+     * and with the generation serialization format version number that it's using.
+     * In return it expects us to return our serialization format version number and, if the versions match, a sink
+     * (which they'll receive as a source) which we'll use to push the generation to that node.
+     * If the versions don't match we'll also send a sink but the remote is expected not to use the received source
+     * (it will also check that the versions don't match). We would send an optional<sink> but that's not currently
+     * possible: see seastar issue #871.
+     */
+    void register_fetch_cdc_generation(noncopyable_function<future<rpc::tuple<uint8_t, rpc::sink<cdc::token_range_description>>>(rpc::client_info&, uint8_t version, rpc::source<db_clock::time_point>)>&& handler);
+
+    /* Unregister the handler (if any) registered by the above function. */
+    future<> unregister_fetch_cdc_generation();
+
+    /**/
 
     void foreach_server_connection_stats(std::function<void(const rpc::client_info&, const rpc::stats&)>&& f) const;
 private:

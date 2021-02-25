@@ -66,6 +66,7 @@
 #include "idl/messaging_service.dist.hh"
 #include "idl/paxos.dist.hh"
 #include "idl/raft.dist.hh"
+#include "idl/cdc_generation.dist.hh"
 #include "serializer_impl.hh"
 #include "serialization_visitors.hh"
 #include "idl/consistency_level.dist.impl.hh"
@@ -89,9 +90,11 @@
 #include "idl/messaging_service.dist.impl.hh"
 #include "idl/paxos.dist.impl.hh"
 #include "idl/raft.dist.impl.hh"
+#include "idl/cdc_generation.dist.impl.hh"
 #include <seastar/rpc/lz4_compressor.hh>
 #include <seastar/rpc/lz4_fragmented_compressor.hh>
 #include <seastar/rpc/multi_algo_compressor_factory.hh>
+#include <seastar/core/coroutine.hh>
 #include "idl/view.dist.impl.hh"
 #include "partition_range_compat.hh"
 #include <boost/range/adaptor/filtered.hpp>
@@ -322,6 +325,7 @@ template rpc::sink<int32_t> messaging_service::make_sink<>(rpc::source<frozen_mu
 template rpc::sink<repair_row_on_wire_with_cmd> messaging_service::make_sink<>(rpc::source<repair_hash_with_cmd>&);
 template rpc::sink<repair_stream_cmd> messaging_service::make_sink<>(rpc::source<repair_row_on_wire_with_cmd>&);
 template rpc::sink<repair_hash_with_cmd> messaging_service::make_sink(rpc::source<repair_stream_cmd>&);
+template rpc::sink<cdc::token_range_description> messaging_service::make_sink<>(rpc::source<db_clock::time_point>&);
 
 static
 rpc::resource_limits
@@ -542,6 +546,7 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::REPAIR_GET_FULL_ROW_HASHES_WITH_RPC_STREAM:
     case messaging_verb::NODE_OPS_CMD:
     case messaging_verb::HINT_MUTATION:
+    case messaging_verb::FETCH_CDC_GENERATION:
         return 1;
     case messaging_verb::CLIENT_ID:
     case messaging_verb::MUTATION:
@@ -1508,6 +1513,43 @@ future<> messaging_service::unregister_raft_vote_reply() {
 }
 future<> messaging_service::send_raft_vote_reply(msg_addr id, clock_type::time_point timeout, uint64_t group_id, raft::server_id from_id, raft::server_id dst_id, const raft::vote_reply& vote_reply) {
    return send_message_oneway_timeout(this, timeout, messaging_verb::RAFT_VOTE_REPLY, std::move(id), group_id, std::move(from_id), std::move(dst_id), vote_reply);
+}
+
+future<std::variant<uint8_t, std::tuple<rpc::sink<db_clock::time_point>, rpc::source<cdc::token_range_description>>>>
+messaging_service::make_sink_and_source_for_fetch_cdc_generation(msg_addr id, uint8_t my_version) {
+    using sink_t = rpc::sink<db_clock::time_point>;
+    using source_t = rpc::source<cdc::token_range_description>;
+    using response_t = rpc::tuple<uint8_t, source_t>;
+
+    if (is_shutting_down()) {
+        throw rpc::closed_error();
+    }
+
+    auto client = get_rpc_client(messaging_verb::FETCH_CDC_GENERATION, id);
+    auto handler = rpc()->make_client<response_t(uint8_t, sink_t)>(messaging_verb::FETCH_CDC_GENERATION);
+    auto sink = co_await client->make_stream_sink<netw::serializer, db_clock::time_point>();
+    auto [remote_version, source] = co_await handler(*client, my_version, sink)
+        .handle_exception([_sink = sink] (std::exception_ptr ep) mutable -> future<response_t> {
+            // TODO: what if the allocation of this lambda fails? Then sink won't get closed
+            auto sink = std::move(_sink);
+            co_await sink.close();
+            std::rethrow_exception(ep);
+        });
+
+    if (remote_version != my_version) {
+        co_return co_await sink.close().then([v = remote_version] { return v; });
+    }
+
+    co_return std::tuple{std::move(sink), std::move(source)};
+}
+
+void messaging_service::register_fetch_cdc_generation(
+        noncopyable_function<future<rpc::tuple<uint8_t, rpc::sink<cdc::token_range_description>>>(rpc::client_info&, uint8_t version, rpc::source<db_clock::time_point> source)>&& handler) {
+    register_handler(this, messaging_verb::FETCH_CDC_GENERATION, std::move(handler));
+}
+
+future<> messaging_service::unregister_fetch_cdc_generation() {
+    return unregister_handler(messaging_verb::FETCH_CDC_GENERATION);
 }
 
 void init_messaging_service(sharded<messaging_service>& ms,
