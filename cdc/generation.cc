@@ -652,6 +652,7 @@ generation_service::generation_service(
 future<> generation_service::stop() {
     if (this_shard_id() == 0) {
         co_await _gossiper.unregister_(shared_from_this());
+        co_await _ms.unregister_fetch_cdc_generation();
     }
 
     _stopped = true;
@@ -659,6 +660,71 @@ future<> generation_service::stop() {
 
 generation_service::~generation_service() {
     assert(_stopped);
+}
+
+/*
+ * Push CDC generation data to a node.
+ * The timestamp of the requested generation is obtained from `timestamp_source`
+ * and the generation is pushed in parts through `generation_sink`.
+ */
+static future<> push_generation(
+        gms::inet_address to,
+        rpc::source<db_clock::time_point> timestamp_source,
+        rpc::sink<cdc::token_range_description> generation_sink) {
+    auto gen_ts_opt = co_await timestamp_source();
+    if (!gen_ts_opt) {
+        cdc_log.error("A generation fetch call arrived but they didn't provide us any timestamp.");
+        co_return;
+    }
+
+    auto [gen_ts] = *gen_ts_opt;
+    cdc_log.info("Pushing generation {} to {}", gen_ts, to);
+
+    auto gen = co_await db::system_keyspace::load_cdc_generation(gen_ts);
+    if (!gen) {
+        cdc_log.error("Request arrived for generation {} but we don't have it in our tables.", gen_ts);
+        co_return;
+    }
+
+    for (auto& e : std::move(*gen).entries()) {
+        co_await generation_sink(std::move(e));
+    }
+}
+
+static const uint8_t GENERATION_FORMAT_VERSION = 1;
+
+void generation_service::initialize() {
+    if (this_shard_id() != 0) {
+        return;
+    }
+
+    _ms.register_fetch_cdc_generation([this, self = shared_from_this()]
+            (rpc::client_info& cinfo, uint8_t remote_version, rpc::source<db_clock::time_point> source)
+                -> future<rpc::tuple<uint8_t, rpc::sink<cdc::token_range_description>>> {
+        using sink_t = rpc::sink<cdc::token_range_description>;
+        using ret_t = rpc::tuple<uint8_t, sink_t>;
+
+        auto remote_addr = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
+        auto generation_sink = _ms.make_sink<cdc::token_range_description>(source);
+        if (remote_version == GENERATION_FORMAT_VERSION) {
+            (void)push_generation(remote_addr, std::move(source), generation_sink)
+                    .finally([self, s = generation_sink] () mutable {
+                            return s.flush().then([s] () mutable { return s.close(); }).then([s] {});
+                    });
+        } else {
+            cdc_log.warn(
+                    "Got CDC generation fetch request from remote node {} but it uses format version {} which is different than ours ({})."
+                    " Abandoning the generation push.", remote_addr, remote_version, GENERATION_FORMAT_VERSION);
+            // If the RPC framework allowed it, the return type of the handler would be tuple<uint8_t, optional<sink>>
+            // but that's not possible at the moment (see seastar issue #871). Hence we always create and send the sink,
+            // even if the versions don't match; the other side is expected to also check if the versions match
+            // and not use the received source of they don't.
+            // Anyway, we can send the sink closed.
+            co_await generation_sink.close();
+        }
+
+        co_return ret_t{GENERATION_FORMAT_VERSION, std::move(generation_sink)};
+    });
 }
 
 future<> generation_service::after_join(std::optional<db_clock::time_point>&& startup_gen_ts) {

@@ -1071,6 +1071,10 @@ int main(int ac, char** av) {
                 cdc_generation_service.stop().get();
             });
 
+            // This must be called before `init_server` because during/after `init_server` this node may be called
+            // using RPC verbs that are registered in generation_service::initialize.
+            cdc_generation_service.local().initialize();
+
             auto get_cdc_metadata = [] (cdc::generation_service& svc) { return std::ref(svc.get_cdc_metadata()); };
 
             supervisor::notify("starting CDC log service");

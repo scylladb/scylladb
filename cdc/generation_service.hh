@@ -74,6 +74,11 @@ public:
             sharded<db::system_distributed_keyspace>&, abort_source&, const locator::shared_token_metadata&,
             netw::messaging_service&);
 
+    /* This function initializes RPC handlers for calls that may start arriving as soon as we join
+     * the token ring (or in the middle of it). Hence the function must be called before we join
+     * the token ring. */
+    void initialize();
+
     future<> stop();
     ~generation_service();
 
@@ -81,7 +86,7 @@ public:
      * known generation timestamp from persistent storage, this function should be called with
      * that generation timestamp moved in as the `startup_gen_ts` parameter.
      * This passes the responsibility of managing generations from the node startup code to this service;
-     * until then, the service remains dormant.
+     * until then, the service remains dormant (except for answering generation fetch requests).
      * At the time of writing this comment, the startup code is in `storage_service::join_token_ring`, hence
      * `after_join` should be called at the end of that function.
      * Precondition: the node has completed bootstrapping and system_distributed_keyspace is initialized.
