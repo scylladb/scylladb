@@ -2276,7 +2276,7 @@ future<> row_level_repair_init_messaging_service_handler(repair_service& rs, dis
         ms.register_repair_get_row_diff_with_rpc_stream([&ms] (const rpc::client_info& cinfo, uint64_t repair_meta_id, rpc::source<repair_hash_with_cmd> source) {
             auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
             auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
-            auto sink = ms.make_sink_for_repair_get_row_diff_with_rpc_stream(source);
+            auto sink = ms.make_sink(source);
             // Start a new fiber.
             (void)repair_get_row_diff_with_rpc_stream_handler(from, src_cpu_id, repair_meta_id, sink, source).handle_exception(
                     [from, repair_meta_id, sink, source] (std::exception_ptr ep) {
@@ -2287,7 +2287,7 @@ future<> row_level_repair_init_messaging_service_handler(repair_service& rs, dis
         ms.register_repair_put_row_diff_with_rpc_stream([&ms] (const rpc::client_info& cinfo, uint64_t repair_meta_id, rpc::source<repair_row_on_wire_with_cmd> source) {
             auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
             auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
-            auto sink = ms.make_sink_for_repair_put_row_diff_with_rpc_stream(source);
+            auto sink = ms.make_sink(source);
             // Start a new fiber.
             (void)repair_put_row_diff_with_rpc_stream_handler(from, src_cpu_id, repair_meta_id, sink, source).handle_exception(
                     [from, repair_meta_id, sink, source] (std::exception_ptr ep) {
@@ -2298,7 +2298,7 @@ future<> row_level_repair_init_messaging_service_handler(repair_service& rs, dis
         ms.register_repair_get_full_row_hashes_with_rpc_stream([&ms] (const rpc::client_info& cinfo, uint64_t repair_meta_id, rpc::source<repair_stream_cmd> source) {
             auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
             auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
-            auto sink = ms.make_sink_for_repair_get_full_row_hashes_with_rpc_stream(source);
+            auto sink = ms.make_sink(source);
             // Start a new fiber.
             (void)repair_get_full_row_hashes_with_rpc_stream_handler(from, src_cpu_id, repair_meta_id, sink, source).handle_exception(
                     [from, repair_meta_id, sink, source] (std::exception_ptr ep) {

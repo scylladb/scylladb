@@ -313,6 +313,16 @@ messaging_service::messaging_service(gms::inet_address ip, uint16_t port)
     : messaging_service(config{std::move(ip), port}, scheduling_config{{{{}, "$default"}}, {}, {}}, nullptr)
 {}
 
+template <typename... Ret, typename... Args>
+rpc::sink<Ret...> messaging_service::make_sink(rpc::source<Args...>& source) {
+    return source.template make_sink<netw::serializer, Ret...>();
+}
+
+template rpc::sink<int32_t> messaging_service::make_sink<>(rpc::source<frozen_mutation_fragment, rpc::optional<streaming::stream_mutation_fragments_cmd>>&);
+template rpc::sink<repair_row_on_wire_with_cmd> messaging_service::make_sink<>(rpc::source<repair_hash_with_cmd>&);
+template rpc::sink<repair_stream_cmd> messaging_service::make_sink<>(rpc::source<repair_row_on_wire_with_cmd>&);
+template rpc::sink<repair_hash_with_cmd> messaging_service::make_sink(rpc::source<repair_stream_cmd>&);
+
 static
 rpc::resource_limits
 rpc_resource_limits(size_t memory_limit) {
@@ -813,10 +823,6 @@ std::unique_ptr<messaging_service::rpc_protocol_wrapper>& messaging_service::rpc
     return _rpc;
 }
 
-rpc::sink<int32_t> messaging_service::make_sink_for_stream_mutation_fragments(rpc::source<frozen_mutation_fragment, rpc::optional<streaming::stream_mutation_fragments_cmd>>& source) {
-    return source.make_sink<netw::serializer, int32_t>();
-}
-
 future<std::tuple<rpc::sink<frozen_mutation_fragment, streaming::stream_mutation_fragments_cmd>, rpc::source<int32_t>>>
 messaging_service::make_sink_and_source_for_stream_mutation_fragments(utils::UUID schema_id, utils::UUID plan_id, utils::UUID cf_id, uint64_t estimated_partitions, streaming::stream_reason reason, msg_addr id) {
     using value_type = std::tuple<rpc::sink<frozen_mutation_fragment, streaming::stream_mutation_fragments_cmd>, rpc::source<int32_t>>;
@@ -867,10 +873,6 @@ messaging_service::make_sink_and_source_for_repair_get_row_diff_with_rpc_stream(
     return do_make_sink_source<repair_hash_with_cmd, repair_row_on_wire_with_cmd>(verb, repair_meta_id, std::move(rpc_client), rpc());
 }
 
-rpc::sink<repair_row_on_wire_with_cmd> messaging_service::make_sink_for_repair_get_row_diff_with_rpc_stream(rpc::source<repair_hash_with_cmd>& source) {
-    return source.make_sink<netw::serializer, repair_row_on_wire_with_cmd>();
-}
-
 void messaging_service::register_repair_get_row_diff_with_rpc_stream(std::function<future<rpc::sink<repair_row_on_wire_with_cmd>> (const rpc::client_info& cinfo, uint32_t repair_meta_id, rpc::source<repair_hash_with_cmd> source)>&& func) {
     register_handler(this, messaging_verb::REPAIR_GET_ROW_DIFF_WITH_RPC_STREAM, std::move(func));
 }
@@ -889,10 +891,6 @@ messaging_service::make_sink_and_source_for_repair_put_row_diff_with_rpc_stream(
     return do_make_sink_source<repair_row_on_wire_with_cmd, repair_stream_cmd>(verb, repair_meta_id, std::move(rpc_client), rpc());
 }
 
-rpc::sink<repair_stream_cmd> messaging_service::make_sink_for_repair_put_row_diff_with_rpc_stream(rpc::source<repair_row_on_wire_with_cmd>& source) {
-    return source.make_sink<netw::serializer, repair_stream_cmd>();
-}
-
 void messaging_service::register_repair_put_row_diff_with_rpc_stream(std::function<future<rpc::sink<repair_stream_cmd>> (const rpc::client_info& cinfo, uint32_t repair_meta_id, rpc::source<repair_row_on_wire_with_cmd> source)>&& func) {
     register_handler(this, messaging_verb::REPAIR_PUT_ROW_DIFF_WITH_RPC_STREAM, std::move(func));
 }
@@ -909,10 +907,6 @@ messaging_service::make_sink_and_source_for_repair_get_full_row_hashes_with_rpc_
     }
     auto rpc_client = get_rpc_client(verb, id);
     return do_make_sink_source<repair_stream_cmd, repair_hash_with_cmd>(verb, repair_meta_id, std::move(rpc_client), rpc());
-}
-
-rpc::sink<repair_hash_with_cmd> messaging_service::make_sink_for_repair_get_full_row_hashes_with_rpc_stream(rpc::source<repair_stream_cmd>& source) {
-    return source.make_sink<netw::serializer, repair_hash_with_cmd>();
 }
 
 void messaging_service::register_repair_get_full_row_hashes_with_rpc_stream(std::function<future<rpc::sink<repair_hash_with_cmd>> (const rpc::client_info& cinfo, uint32_t repair_meta_id, rpc::source<repair_stream_cmd> source)>&& func) {
