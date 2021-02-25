@@ -347,7 +347,6 @@ future<db_clock::time_point> make_new_cdc_generation(
         const std::unordered_set<dht::token>& bootstrap_tokens,
         const locator::token_metadata_ptr tmptr,
         const gms::gossiper& g,
-        db::system_distributed_keyspace& sys_dist_ks,
         std::chrono::milliseconds ring_delay,
         bool add_delay) {
     using namespace std::chrono;
@@ -369,7 +368,7 @@ future<db_clock::time_point> make_new_cdc_generation(
     auto ts = db_clock::now() + (
             (!add_delay || ring_delay == milliseconds(0)) ? milliseconds(0) : (
                 2 * ring_delay + duration_cast<milliseconds>(generation_leeway)));
-    co_await sys_dist_ks.insert_cdc_topology_description(ts, std::move(gen), { tmptr->count_normal_token_owners() });
+    co_await db::system_keyspace::store_cdc_generation(ts, gen);
 
     co_return ts;
 }
@@ -391,10 +390,8 @@ static future<> do_update_streams_description(
 
     // We might race with another node also inserting the description, but that's ok. It's an idempotent operation.
 
-    auto topo = co_await sys_dist_ks.read_cdc_topology_description(streams_ts, ctx);
-    if (!topo) {
-        throw no_generation_data_exception(streams_ts);
-    }
+    // TODO handle upgrade: may need to try old source (sys_dist_ks internal table)
+    auto topo = co_await db::system_keyspace::load_cdc_generation(streams_ts);
 
     co_await sys_dist_ks.create_cdc_desc(streams_ts, *topo, ctx);
     cdc_log.info("CDC description table successfully updated with generation {}.", streams_ts);
@@ -727,6 +724,50 @@ void generation_service::initialize() {
     });
 }
 
+/*
+ * Pulls generation with timestamp `gen_ts` from node `ep` using RPC streaming.
+ * The RPC call checks if our and remote generation format versions match; if they don't,
+ * we abandon the pull and return nullopt.
+ */
+static future<std::optional<cdc::topology_description>> fetch_generation(
+        netw::messaging_service& ms,
+        gms::inet_address ep, db_clock::time_point gen_ts) {
+    assert_shard_zero(__PRETTY_FUNCTION__);
+    // TODO if receiving entries gets interrupted, make it a non-fatal error so the caller retries
+    auto ret = co_await ms.make_sink_and_source_for_fetch_cdc_generation(netw::msg_addr{ep, 0}, GENERATION_FORMAT_VERSION);
+
+    using sink_and_source_t = std::tuple<rpc::sink<db_clock::time_point>, rpc::source<cdc::token_range_description>>;
+    auto sink_and_source_opt = std::visit(make_visitor(
+        [&] (uint8_t remote_version) -> std::optional<sink_and_source_t> {
+            cdc_log.warn(
+                    "Remote node {} has a different CDC generation format version: {} (ours is {})."
+                    " Abandoning generation pull (generation timestamp: {}).", ep, remote_version, GENERATION_FORMAT_VERSION, gen_ts);
+            return std::nullopt;
+        },
+        [] (sink_and_source_t& t) -> std::optional<sink_and_source_t> {
+            return {std::move(t)};
+        }
+    ), ret);
+
+    if (!sink_and_source_opt) {
+        co_return std::nullopt;
+    }
+
+    auto [timestamp_sink, generation_source] = std::move(*sink_and_source_opt);
+    co_await timestamp_sink(gen_ts)
+        .finally([s = timestamp_sink] () mutable {
+                return s.flush().then([s] () mutable { return s.close(); }).then([s] {});
+        });
+
+    std::vector<token_range_description> entries;
+    while (auto frag_opt = co_await generation_source()) {
+        auto [frag] = std::move(*frag_opt);
+        entries.push_back(frag);
+    }
+
+    co_return topology_description{std::move(entries)};
+}
+
 future<> generation_service::after_join(std::optional<db_clock::time_point>&& startup_gen_ts) {
     assert_shard_zero(__PRETTY_FUNCTION__);
     assert(db::system_keyspace::bootstrap_complete());
@@ -795,10 +836,8 @@ future<> generation_service::check_and_repair_cdc_streams() {
             " restart/remove the failed node(s), then retry checkAndRepairCdcStreams command";
     static const auto exception_translating_msg = "Translating the exception to `request_execution_exception`";
     const auto tmptr = _token_metadata.get();
-    auto sys_dist_ks = get_sys_dist_ks();
     try {
-        gen = co_await sys_dist_ks->read_cdc_topology_description(
-                *latest, { tmptr->count_normal_token_owners() });
+        gen = co_await db::system_keyspace::load_cdc_generation(*latest);
     } catch (exceptions::request_timeout_exception& e) {
         cdc_log.error("{}: \"{}\". {}.", timeout_msg, e.what(), exception_translating_msg);
         throw exceptions::request_execution_exception(exceptions::exception_code::READ_TIMEOUT,
@@ -822,9 +861,11 @@ future<> generation_service::check_and_repair_cdc_streams() {
 
     if (!gen) {
         cdc_log.error(
-            "Could not find CDC generation with timestamp {} in distributed system tables (current time: {}),"
+            "Could not find CDC generation with timestamp {} in system tables (current time: {}),"
             " even though some node gossiped about it.",
             latest, db_clock::now());
+        // Some node gossiped the generation so we should have retrieved it.
+        // We don't have it => something's wrong. Let's regenerate.
         should_regenerate = true;
     } else {
         std::unordered_set<dht::token> gen_ends;
@@ -848,7 +889,7 @@ future<> generation_service::check_and_repair_cdc_streams() {
         co_return;
     }
     const auto new_gen_ts = co_await make_new_cdc_generation(_cfg,
-            {}, std::move(tmptr), _gossiper, *sys_dist_ks,
+            {}, std::move(tmptr), _gossiper,
             std::chrono::milliseconds(_cfg.ring_delay_ms()), true /* add delay */);
     // Need to artificially update our STATUS so other nodes handle the timestamp change
     auto status = _gossiper.get_application_state_ptr(
@@ -983,18 +1024,35 @@ future<bool> generation_service::do_handle_cdc_generation_intercept_nonfatal_err
     }
 }
 
-future<bool> generation_service::do_handle_cdc_generation(db_clock::time_point ts, gms::inet_address) {
+future<bool> generation_service::do_handle_cdc_generation(db_clock::time_point ts, gms::inet_address source) {
     assert_shard_zero(__PRETTY_FUNCTION__);
 
-    auto sys_dist_ks = get_sys_dist_ks();
-    auto gen = co_await sys_dist_ks->read_cdc_topology_description(
-            ts, { _token_metadata.get()->count_normal_token_owners() });
-    if (!gen) {
-        throw std::runtime_error(format(
-            "Could not find CDC generation with timestamp {} in distributed system tables (current time: {}),"
-            " even though some node gossiped about it.",
-            ts, db_clock::now()));
+    // TODO: handle upgrade (may need to fetch from old source: sys_dist_ks internal table)
+    cdc_log.info("Fetching generation {} from {}", ts, source);
+    auto gen_opt = co_await fetch_generation(_ms, source, ts)
+        .handle_exception([ts, source] (std::exception_ptr ep) -> future<std::optional<topology_description>> {
+            try {
+                std::rethrow_exception(ep);
+            } catch (...) {
+                // TODO: handle non-fatal errors (e.g. caused by network partitions)
+                std::throw_with_nested(std::runtime_error(format(
+                    "Could not retrieve CDC generation with timestamp {} (current time: {}),"
+                    " even though node {} gossiped about it.",
+                    ts, db_clock::now(), source)));
+            }
+        });
+
+    if (!gen_opt) {
+        // There was a version mismatch - we're in the middle of an upgrade.
+        // This should not happen, i.e. new generations should not be introduced during an upgrade
+        // so we shouldn't have needed to fetch a generation from a remote node at this time.
+        // Still, we did observe a new generation, meaning that the user did something weird;
+        // anyway, there's nothing smart we can do so just finish the operation.
+        co_return false;
     }
+
+    // TODO: may not be necessary if we already know it (e.g. source == me)
+    co_await db::system_keyspace::store_cdc_generation(ts, *gen_opt);
 
     // If we're not gossiping our own generation timestamp (because we've upgraded from a non-CDC/old version,
     // or we somehow lost it due to a byzantine failure), start gossiping someone else's timestamp.
@@ -1010,8 +1068,8 @@ future<bool> generation_service::do_handle_cdc_generation(db_clock::time_point t
     }
 
     // Return `true` iff the generation was inserted on any of our shards.
-    co_return co_await container().map_reduce(or_reducer(), [ts, &gen] (generation_service& svc) {
-        auto gen_ = *gen;
+    co_return co_await container().map_reduce(or_reducer(), [ts, &gen_opt] (generation_service& svc) {
+        auto gen_ = *gen_opt;
         return svc._cdc_metadata.insert(ts, std::move(gen_));
     });
 }

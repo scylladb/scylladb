@@ -172,7 +172,6 @@ future<db_clock::time_point> make_new_cdc_generation(
         const std::unordered_set<dht::token>& bootstrap_tokens,
         const locator::token_metadata_ptr tmptr,
         const gms::gossiper& g,
-        db::system_distributed_keyspace& sys_dist_ks,
         std::chrono::milliseconds ring_delay,
         bool add_delay);
 
