@@ -34,6 +34,7 @@
 #include "service/storage_service.hh"
 #include <seastar/core/distributed.hh>
 #include <seastar/core/abort_source.hh>
+#include "cdc/generation_service.hh"
 #include "database.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "db/config.hh"
@@ -57,6 +58,7 @@ SEASTAR_TEST_CASE(test_boot_shutdown){
         sharded<gms::feature_service> feature_service;
         sharded<locator::shared_token_metadata> token_metadata;
         sharded<netw::messaging_service> _messaging;
+        sharded<cdc::generation_service> cdc_generation_service;
 
         token_metadata.start().get();
         auto stop_token_mgr = defer([&token_metadata] { token_metadata.stop().get(); });
@@ -82,7 +84,7 @@ SEASTAR_TEST_CASE(test_boot_shutdown){
         service::storage_service_config sscfg;
         sscfg.available_memory =  memory::stats().total_memory();
 
-        service::get_storage_service().start(std::ref(abort_sources), std::ref(db), std::ref(gms::get_gossiper()), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(feature_service), sscfg, std::ref(mm_notif), std::ref(token_metadata), std::ref(_messaging), true).get();
+        service::get_storage_service().start(std::ref(abort_sources), std::ref(db), std::ref(gms::get_gossiper()), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(feature_service), sscfg, std::ref(mm_notif), std::ref(token_metadata), std::ref(_messaging), std::ref(cdc_generation_service), true).get();
         auto stop_ss = defer([&] { service::get_storage_service().stop().get(); });
 
         sharded<semaphore> sst_dir_semaphore;
@@ -101,5 +103,9 @@ SEASTAR_TEST_CASE(test_boot_shutdown){
             stop_database(db).get();
         });
 
+        cdc_generation_service.start(std::ref(*cfg), std::ref(gms::get_gossiper()), std::ref(sys_dist_ks), std::ref(abort_sources), std::ref(token_metadata)).get();
+        auto stop_cdc_generation_service = defer([&cdc_generation_service] {
+            cdc_generation_service.stop().get();
+        });
     });
 }

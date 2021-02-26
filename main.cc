@@ -82,6 +82,7 @@
 #include "redis/service.hh"
 #include "cdc/log.hh"
 #include "cdc/cdc_extension.hh"
+#include "cdc/generation_service.hh"
 #include "alternator/tags_extension.hh"
 #include "alternator/rmw_operation.hh"
 #include "db/paxos_grace_seconds_extension.hh"
@@ -788,6 +789,7 @@ int main(int ac, char** av) {
             static sharded<db::view::view_update_generator> view_update_generator;
             static sharded<cql3::cql_config> cql_config;
             static sharded<::cql_config_updater> cql_config_updater;
+            static sharded<cdc::generation_service> cdc_generation_service;
             cql_config.start().get();
             //FIXME: discarded future
             (void)cql_config_updater.start(std::ref(cql_config), std::ref(*cfg));
@@ -802,7 +804,7 @@ int main(int ac, char** av) {
             supervisor::notify("initializing storage service");
             service::storage_service_config sscfg;
             sscfg.available_memory = memory::stats().total_memory();
-            service::init_storage_service(stop_signal.as_sharded_abort_source(), db, gossiper, sys_dist_ks, view_update_generator, feature_service, sscfg, mm_notifier, token_metadata, messaging).get();
+            service::init_storage_service(stop_signal.as_sharded_abort_source(), db, gossiper, sys_dist_ks, view_update_generator, feature_service, sscfg, mm_notifier, token_metadata, messaging, cdc_generation_service).get();
             supervisor::notify("starting per-shard database core");
 
             sst_dir_semaphore.start(cfg->initial_sstable_loading_concurrency()).get();
@@ -934,12 +936,6 @@ int main(int ac, char** av) {
 
             distributed_loader::ensure_system_table_directories(db).get();
 
-            static sharded<cdc::cdc_service> cdc;
-            cdc.start(std::ref(proxy)).get();
-            auto stop_cdc_service = defer_verbose_shutdown("cdc", [] {
-                cdc.stop().get();
-            });
-
             supervisor::notify("loading non-system sstables");
             distributed_loader::init_non_system_keyspaces(db, proxy, mm).get();
 
@@ -1057,6 +1053,34 @@ int main(int ac, char** av) {
             auto stop_repair_messages = defer_verbose_shutdown("repair message handlers", [] {
                 repair_uninit_messaging_service_handler().get();
             });
+
+            supervisor::notify("starting CDC Generation Management service");
+            /* This service uses the system distributed keyspace.
+             * It will only do that *after* the node has joined the token ring, and the token ring joining
+             * procedure (`storage_service::init_server`) is responsible for initializing sys_dist_ks.
+             * Hence the service will start using sys_dist_ks only after it was initialized.
+             *
+             * However, there is a problem with the service shutdown order: sys_dist_ks is stopped
+             * *before* CDC generation service is stopped (`storage_service::drain_on_shutdown` below),
+             * so CDC generation service takes sharded<db::sys_dist_ks> and must check local_is_initialized()
+             * every time it accesses it (because it may have been stopped already), then take local_shared()
+             * which will prevent sys_dist_ks from being destroyed while the service operates on it.
+             */
+            cdc_generation_service.start(std::ref(*cfg), std::ref(gossiper), std::ref(sys_dist_ks),
+                    std::ref(stop_signal.as_sharded_abort_source()), std::ref(token_metadata)).get();
+            auto stop_cdc_generation_service = defer_verbose_shutdown("CDC Generation Management service", [] {
+                cdc_generation_service.stop().get();
+            });
+
+            auto get_cdc_metadata = [] (cdc::generation_service& svc) { return std::ref(svc.get_cdc_metadata()); };
+
+            supervisor::notify("starting CDC log service");
+            static sharded<cdc::cdc_service> cdc;
+            cdc.start(std::ref(proxy), sharded_parameter(get_cdc_metadata, std::ref(cdc_generation_service))).get();
+            auto stop_cdc_service = defer_verbose_shutdown("cdc log service", [] {
+                cdc.stop().get();
+            });
+
             supervisor::notify("starting storage service", true);
             auto& ss = service::get_local_storage_service();
             ss.init_messaging_service_part().get();
@@ -1274,7 +1298,7 @@ int main(int ac, char** av) {
                 smp_service_group_config c;
                 c.max_nonlocal_requests = 5000;
                 smp_service_group ssg = create_smp_service_group(c).get0();
-                alternator_executor.start(std::ref(proxy), std::ref(mm), std::ref(sys_dist_ks), std::ref(service::get_storage_service()), ssg).get();
+                alternator_executor.start(std::ref(proxy), std::ref(mm), std::ref(sys_dist_ks), std::ref(service::get_storage_service()), sharded_parameter(get_cdc_metadata, std::ref(cdc_generation_service)), ssg).get();
                 alternator_server.start(std::ref(alternator_executor), std::ref(qp)).get();
                 std::optional<uint16_t> alternator_port;
                 if (cfg->alternator_port()) {

@@ -32,6 +32,7 @@
 #include "cdc/split.hh"
 #include "cdc/cdc_options.hh"
 #include "cdc/change_visitor.hh"
+#include "cdc/metadata.hh"
 #include "bytes.hh"
 #include "database.hh"
 #include "db/config.hh"
@@ -278,8 +279,8 @@ private:
     }
 };
 
-cdc::cdc_service::cdc_service(service::storage_proxy& proxy)
-    : cdc_service(db_context::builder(proxy).build())
+cdc::cdc_service::cdc_service(service::storage_proxy& proxy, cdc::metadata& cdc_metadata)
+    : cdc_service(db_context::builder(proxy, cdc_metadata).build())
 {}
 
 cdc::cdc_service::cdc_service(db_context ctxt)
@@ -571,8 +572,8 @@ static schema_ptr create_log_schema(const schema& s, std::optional<utils::UUID> 
     return b.build();
 }
 
-db_context::builder::builder(service::storage_proxy& proxy) 
-    : _proxy(proxy) 
+db_context::builder::builder(service::storage_proxy& proxy, cdc::metadata& cdc_metadata)
+    : _proxy(proxy), _cdc_metadata(cdc_metadata)
 {}
 
 db_context::builder& db_context::builder::with_migration_notifier(service::migration_notifier& migration_notifier) {
@@ -580,16 +581,11 @@ db_context::builder& db_context::builder::with_migration_notifier(service::migra
     return *this;
 }
 
-db_context::builder& db_context::builder::with_cdc_metadata(cdc::metadata& cdc_metadata) {
-    _cdc_metadata = cdc_metadata;
-    return *this;
-}
-
 db_context db_context::builder::build() {
     return db_context{
         _proxy,
         _migration_notifier ? _migration_notifier->get() : service::get_local_storage_service().get_migration_notifier(),
-        _cdc_metadata ? _cdc_metadata->get() : service::get_local_storage_service().get_cdc_metadata(),
+        _cdc_metadata,
     };
 }
 
