@@ -205,6 +205,10 @@ public:
             auto to_block = std::min(_used_memory - _blocked_bytes, n);
             _blocked_bytes += to_block;
             stop = (_limiter->update_and_check(to_block) && _stop_on_global_limit) || stop;
+            if (stop && !_short_read_allowed) {
+                // If we are here we stopped because of the global limit.
+                throw std::runtime_error("Maximum amount of memory for building query results is exhausted, unpaged query cannot be finished");
+            }
         }
         return stop;
     }
