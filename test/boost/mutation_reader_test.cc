@@ -2285,6 +2285,74 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_custom_shard_number) {
     }).get();
 }
 
+// Regression test for #8161
+SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_only_reads_from_needed_shards) {
+    if (smp::count < 2) {
+        std::cerr << "Cannot run test " << get_name() << " with smp::count < 2" << std::endl;
+        return;
+    }
+
+    test_reader_lifecycle_policy::operations_gate operations_gate;
+
+    do_with_cql_env([&] (cql_test_env& env) -> future<> {
+        std::vector<std::atomic<bool>> shards_touched(smp::count);
+        simple_schema s;
+        auto factory = [&shards_touched] (
+                schema_ptr s,
+                const dht::partition_range& range,
+                const query::partition_slice& slice,
+                const io_priority_class& pc,
+                tracing::trace_state_ptr trace_state,
+                mutation_reader::forwarding fwd_mr) {
+            shards_touched[this_shard_id()] = true;
+            return make_empty_flat_reader(s, tests::make_permit());
+        };
+
+        std::vector<bool> expected_shards_touched(smp::count);
+
+        const dht::sharder& sharder = s.schema()->get_sharder();
+        dht::token start_token(dht::token_kind::key, 0);
+        dht::token end_token(dht::token_kind::key, 0);
+        const auto additional_shards = tests::random::get_int<unsigned>(0, smp::count - 1);
+
+        auto shard = sharder.shard_of(start_token);
+        expected_shards_touched[shard] = true;
+
+        for (auto i = 0u; i < additional_shards; ++i) {
+            shard = (shard + 1) % smp::count;
+            end_token = sharder.token_for_next_shard(end_token, shard);
+            expected_shards_touched[shard] = true;
+        }
+        const auto inclusive_end = !additional_shards || tests::random::get_bool();
+        auto pr = dht::partition_range::make(
+                dht::ring_position(start_token, dht::ring_position::token_bound::start),
+                dht::ring_position(end_token, inclusive_end ? dht::ring_position::token_bound::end : dht::ring_position::token_bound::start));
+
+        if (!inclusive_end) {
+            expected_shards_touched[shard] = false;
+        }
+
+        testlog.info("{}: including {} additional shards out of a total of {}, with an {} end", get_name(), additional_shards, smp::count,
+                inclusive_end ? "inclusive" : "exclusive");
+
+        assert_that(make_multishard_combining_reader(
+                seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory), operations_gate),
+                s.schema(),
+                tests::make_permit(),
+                pr,
+                s.schema()->full_slice(),
+                service::get_local_sstable_query_read_priority()))
+            .produces_end_of_stream();
+
+        for (unsigned i = 0; i < smp::count; ++i) {
+            testlog.info("[{}]: {} == {}", i, shards_touched[i], expected_shards_touched[i]);
+            BOOST_CHECK(shards_touched[i] == expected_shards_touched[i]);
+        }
+
+        return operations_gate.close();
+    }).get();
+}
+
 // Test a background pending read-ahead outliving the reader.
 //
 // The multishard reader will issue read-aheads according to its internal

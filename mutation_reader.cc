@@ -30,6 +30,7 @@
 #include "flat_mutation_reader.hh"
 #include "schema_registry.hh"
 #include "mutation_compactor.hh"
+#include "dht/sharder.hh"
 
 logging::logger mrlog("mutation_reader");
 
@@ -1792,17 +1793,16 @@ void multishard_combining_reader::on_partition_range_change(const dht::partition
     auto token = pr.start() ? pr.start()->value().token() : dht::minimum_token();
     _current_shard = _sharder.shard_of(token);
 
-    const auto update_and_push_token_for_shard = [this, &token] (shard_id shard) {
-        token = _sharder.token_for_next_shard(token, shard);
-        _shard_selection_min_heap.push_back(shard_and_token{shard, token});
-        boost::push_heap(_shard_selection_min_heap);
-    };
+    auto sharder = dht::ring_position_range_sharder(_sharder, pr);
 
-    for (auto shard = _current_shard + 1; shard < _sharder.shard_count(); ++shard) {
-        update_and_push_token_for_shard(shard);
-    }
-    for (auto shard = 0u; shard < _current_shard; ++shard) {
-        update_and_push_token_for_shard(shard);
+    auto next = sharder.next(*_schema);
+
+    // The first value of `next` is thrown away, as it is the ring range of the current shard.
+    // We only want to do a full round, until we get back to the shard we started from (`_current_shard`).
+    // We stop earlier if the sharder has no ranges for the remaining shards.
+    for (next = sharder.next(*_schema); next && next->shard != _current_shard; next = sharder.next(*_schema)) {
+        _shard_selection_min_heap.push_back(shard_and_token{next->shard, next->ring_range.start()->value().token()});
+        boost::push_heap(_shard_selection_min_heap);
     }
 }
 
@@ -1844,11 +1844,17 @@ future<> multishard_combining_reader::handle_empty_reader_buffer(db::timeout_clo
         if (_crossed_shards) {
             _concurrency = std::min(_concurrency * 2, _sharder.shard_count());
 
+            // Read ahead shouldn't change the min selection heap so we work on a local copy.
+            auto shard_selection_min_heap_copy = _shard_selection_min_heap;
+
             // If concurrency > 1 we kick-off concurrency-1 read-aheads in the
             // background. They will be brought to the foreground when we move
             // to their respective shard.
-            for (unsigned i = 1; i < _concurrency; ++i) {
-                _shard_readers[(_current_shard + i) % _sharder.shard_count()]->read_ahead(timeout);
+            for (unsigned i = 1; i < _concurrency && !shard_selection_min_heap_copy.empty(); ++i) {
+                boost::pop_heap(shard_selection_min_heap_copy);
+                const auto next_shard = shard_selection_min_heap_copy.back().shard;
+                shard_selection_min_heap_copy.pop_back();
+                _shard_readers[next_shard]->read_ahead(timeout);
             }
         }
         return reader.fill_buffer(timeout);
