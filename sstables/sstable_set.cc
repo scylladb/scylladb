@@ -790,8 +790,8 @@ time_series_sstable_set::create_single_key_sstable_reader(
         return flat_mutation_reader_from_mutations(std::move(permit), {mutation(schema, *pos.key())}, slice, fwd_sm);
     }
 
-    auto create_reader = [schema, permit, &pos, &slice, &pc, trace_state, fwd_sm] (sstable& sst) {
-        return sst.make_reader(schema, permit, pos, slice, pc, trace_state, fwd_sm);
+    auto create_reader = [schema, permit, &pr, &slice, &pc, trace_state, fwd_sm] (sstable& sst) {
+        return sst.make_reader(schema, permit, pr, slice, pc, trace_state, fwd_sm);
     };
 
     // We're going to pass this filter into min_position_reader_queue. The queue guarantees that

@@ -4810,3 +4810,28 @@ SEASTAR_THREAD_TEST_CASE(test_twcs_non_optimal_query_path) {
         e.execute_cql("SELECT * FROM tbl WHERE pk = 0 BYPASS CACHE").get();
     }).get();
 }
+
+SEASTAR_THREAD_TEST_CASE(test_twcs_optimal_query_path) {
+    do_with_cql_env_thread([] (cql_test_env& e) {
+        auto now_nano = std::chrono::duration_cast<std::chrono::nanoseconds>(db_clock::now().time_since_epoch()).count();
+        e.execute_cql(
+                "CREATE TABLE tbl (pk int, ck int, v int, PRIMARY KEY (pk, ck))"
+                " WITH compaction = {"
+                "   'compaction_window_size': '1',"
+                "   'compaction_window_unit': 'MINUTES',"
+                "   'class': 'org.apache.cassandra.db.compaction.TimeWindowCompactionStrategy'"
+                "}").get();
+
+        e.execute_cql("INSERT INTO tbl (pk, ck, v) VALUES (0, 0, 0)").get();
+
+        e.db().invoke_on_all([] (database& db) {
+            return db.flush_all_memtables();
+        }).get();
+
+        // Not really testing anything, just ensure that we execute the optimal
+        // sstable read path of TWCS tables too, allowing ASAN to shake out any memory
+        // related bugs.
+        assert_that(e.execute_cql("SELECT * FROM tbl WHERE pk = 0 BYPASS CACHE").get0())
+            .is_rows().with_size(1);
+    }).get();
+}
