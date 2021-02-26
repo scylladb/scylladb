@@ -1211,8 +1211,13 @@ void rows_entry::on_evicted(cache_tracker& tracker) noexcept {
         // with no regular rows, and we need to track them.
         unlink_from_lru();
     } else {
+        // When evicting a dummy with both sides continuous we don't need to break continuity.
+        //
+        auto still_continuous = continuous() && dummy();
         it = it.erase_and_dispose(current_deleter<rows_entry>());
-        it->set_continuous(false);
+        if (!still_continuous) {
+            it->set_continuous(false);
+        }
         tracker.on_row_eviction();
     }
 

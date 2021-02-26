@@ -112,6 +112,7 @@ class cache_flat_mutation_reader final : public flat_mutation_reader::impl {
     void move_to_next_range();
     void move_to_range(query::clustering_row_ranges::const_iterator);
     void move_to_next_entry();
+    void maybe_drop_last_entry() noexcept;
     void add_to_buffer(const partition_snapshot_row_cursor&);
     void add_clustering_row_to_buffer(mutation_fragment&&);
     void add_to_buffer(range_tombstone&&);
@@ -122,6 +123,7 @@ class cache_flat_mutation_reader final : public flat_mutation_reader::impl {
     bool can_populate() const;
     // Marks the range between _last_row (exclusive) and _next_row (exclusive) as continuous,
     // provided that the underlying reader still matches the latest version of the partition.
+    // Invalidates _last_row.
     void maybe_update_continuity();
     // Tries to ensure that the lower bound of the current population range exists.
     // Returns false if it failed and range cannot be populated.
@@ -329,7 +331,6 @@ future<> cache_flat_mutation_reader::read_from_underlying(db::timeout_clock::tim
                 }
                 if (_next_row_in_range) {
                     maybe_update_continuity();
-                    _last_row = _next_row;
                     add_to_buffer(_next_row);
                     try {
                         move_to_next_entry();
@@ -375,6 +376,7 @@ future<> cache_flat_mutation_reader::read_from_underlying(db::timeout_clock::tim
                                     clogger.trace("csm {}: mark {} as continuous", fmt::ptr(this), insert_result.first->position());
                                     insert_result.first->set_continuous(true);
                                 }
+                                maybe_drop_last_entry();
                             });
                         }
                     } else {
@@ -428,6 +430,7 @@ void cache_flat_mutation_reader::maybe_update_continuity() {
         with_allocator(_snp->region().allocator(), [&] {
             rows_entry& e = _next_row.ensure_entry_in_latest().row;
             e.set_continuous(true);
+            maybe_drop_last_entry();
         });
     } else {
         _read_context->cache().on_mispopulate();
@@ -522,7 +525,6 @@ void cache_flat_mutation_reader::copy_from_cache_to_buffer() {
     // We add the row to the buffer even when it's full.
     // This simplifies the code. For more info see #3139.
     if (_next_row_in_range) {
-        _last_row = _next_row;
         add_to_buffer(_next_row);
         move_to_next_entry();
     } else {
@@ -584,6 +586,38 @@ void cache_flat_mutation_reader::move_to_range(query::clustering_row_ranges::con
     }
 }
 
+// Drops _last_row entry when possible without changing logical contents of the partition.
+// Call only when _last_row and _next_row are valid.
+// Calling after ensure_population_lower_bound() is ok.
+// _next_row must have a greater position than _last_row.
+// Invalidates references but keeps the _next_row valid.
+inline
+void cache_flat_mutation_reader::maybe_drop_last_entry() noexcept {
+    // Drop dummy entry if it falls inside a continuous range.
+    // This prevents unnecessary dummy entries from accumulating in cache and slowing down scans.
+    //
+    // Eviction can happen only from oldest versions to preserve the continuity non-overlapping rule
+    // (See docs/design-notes/row_cache.md)
+    //
+    if (_last_row
+            && _last_row->dummy()
+            && _last_row->continuous()
+            && _snp->at_latest_version()
+            && _snp->at_oldest_version()) {
+
+        with_allocator(_snp->region().allocator(), [&] {
+            _last_row->on_evicted(_read_context->cache()._tracker);
+        });
+        _last_row = nullptr;
+
+        // There could be iterators pointing to _last_row, invalidate them
+        _snp->region().allocator().invalidate_references();
+
+        // Don't invalidate _next_row, move_to_next_entry() expects it to be still valid.
+        _next_row.force_valid();
+    }
+}
+
 // _next_row must be inside the range.
 inline
 void cache_flat_mutation_reader::move_to_next_entry() {
@@ -591,14 +625,18 @@ void cache_flat_mutation_reader::move_to_next_entry() {
     if (no_clustering_row_between(*_schema, _next_row.position(), _upper_bound)) {
         move_to_next_range();
     } else {
+        auto new_last_row = partition_snapshot_row_weakref(_next_row);
         if (!_next_row.next()) {
             move_to_end();
             return;
         }
+        _last_row = std::move(new_last_row);
         _next_row_in_range = !after_current_range(_next_row.position());
         clogger.trace("csm {}: next={}, cont={}, in_range={}", fmt::ptr(this), _next_row.position(), _next_row.continuous(), _next_row_in_range);
         if (!_next_row.continuous()) {
             start_reading_from_underlying();
+        } else {
+            maybe_drop_last_entry();
         }
     }
 }

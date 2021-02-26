@@ -392,6 +392,10 @@ public:
         return _entry != nullptr;
     }
 
+    bool at_oldest_version() const {
+        return !version()->next();
+    }
+
     const schema_ptr& schema() const { return _schema; }
     logalloc::region& region() const { return *_region; }
     cache_tracker* tracker() const { return _tracker; }

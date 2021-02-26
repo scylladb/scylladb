@@ -3599,3 +3599,60 @@ SEASTAR_TEST_CASE(test_reading_progress_with_small_buffer_and_invalidation) {
         assert_that(result).is_equal_to(m1);
     });
 }
+
+SEASTAR_TEST_CASE(test_scans_erase_dummies) {
+    return seastar::async([] {
+        simple_schema s;
+        auto cache_mt = make_lw_shared<memtable>(s.schema());
+
+        auto pkey = s.make_pkey("pk");
+
+        // underlying should not be empty, otherwise cache will make the whole range continuous
+        mutation m1(s.schema(), pkey);
+        s.add_row(m1, s.make_ckey(0), "v1");
+        cache_mt->apply(m1);
+
+        cache_tracker tracker;
+        row_cache cache(s.schema(), snapshot_source_from_snapshot(cache_mt->as_data_source()), tracker);
+
+        auto pr = dht::partition_range::make_singular(pkey);
+
+        auto populate_range = [&] (int start, int end) {
+            auto slice = partition_slice_builder(*s.schema())
+                    .with_range(query::clustering_range::make(s.make_ckey(start), s.make_ckey(end)))
+                    .build();
+            assert_that(cache.make_reader(s.schema(), tests::make_permit(), pr, slice))
+                    .produces_partition_start(pkey)
+                    .produces_partition_end()
+                    .produces_end_of_stream();
+        };
+
+        populate_range(10, 20);
+
+        // Expect 3 dummies, 2 for the last query's bounds and 1 for the last dummy.
+        BOOST_REQUIRE_EQUAL(tracker.get_stats().rows, 3);
+
+        populate_range(5, 15);
+
+        BOOST_REQUIRE_EQUAL(tracker.get_stats().rows, 3);
+
+        populate_range(16, 21);
+
+        BOOST_REQUIRE_EQUAL(tracker.get_stats().rows, 3);
+
+        populate_range(30, 31);
+
+        BOOST_REQUIRE_EQUAL(tracker.get_stats().rows, 5);
+
+        populate_range(2, 40);
+
+        BOOST_REQUIRE_EQUAL(tracker.get_stats().rows, 3);
+
+        // full scan
+        assert_that(cache.make_reader(s.schema(), tests::make_permit()))
+            .produces(m1)
+            .produces_end_of_stream();
+
+        BOOST_REQUIRE_EQUAL(tracker.get_stats().rows, 2);
+    });
+}

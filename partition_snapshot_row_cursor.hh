@@ -202,6 +202,12 @@ public:
         return _snp.get_change_mark() == _change_mark;
     }
 
+    // Marks the iterators as valid without refreshing them.
+    // Call only when the iterators are known to be valid.
+    void force_valid() {
+        _change_mark = _snp.get_change_mark();
+    }
+
     // Advances cursor to the first entry with position >= pos, if such entry exists.
     // Otherwise returns false and the cursor is left not pointing at a row and invalid.
     bool maybe_advance_to(position_in_partition_view pos) {
