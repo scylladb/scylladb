@@ -30,6 +30,12 @@
 #include "gms/gossiper.hh"
 
 #include <seastar/core/smp.hh>
+#include <seastar/core/coroutine.hh>
+#include <seastar/core/on_internal_error.hh>
+#include <seastar/util/log.hh>
+#include <seastar/util/defer.hh>
+
+static logging::logger rslog("raft_services");
 
 raft_services::raft_services(netw::messaging_service& ms, gms::gossiper& gs, cql3::query_processor& qp)
     : _ms(ms), _gossiper(gs), _qp(qp), _fd(make_shared<raft_gossip_failure_detector>(gs, *this))
@@ -100,19 +106,32 @@ future<> raft_services::uninit_rpc_verbs() {
     ).discard_result();
 }
 
-void raft_services::init() {
+future<> raft_services::stop_servers() {
+    std::vector<future<>> stop_futures;
+    stop_futures.reserve(_servers.size());
+    for (auto& entry : _servers) {
+        stop_futures.emplace_back(entry.second.server->abort());
+    }
+    co_await when_all_succeed(stop_futures.begin(), stop_futures.end());
+}
+
+seastar::future<> raft_services::init() {
     init_rpc_verbs();
+    auto uninit_rpc_verbs = defer([this] { this->uninit_rpc_verbs().get(); });
     // schema raft server instance always resides on shard 0
     if (this_shard_id() == 0) {
         // FIXME: Server id will change each time scylla server restarts,
         // need to persist it or find a deterministic way to compute!
         raft::server_id id = {.id = utils::make_random_uuid()};
-        add_server(id, create_schema_server(id));
+        co_await add_server(id, create_schema_server(id));
     }
+    uninit_rpc_verbs.cancel();
 }
 
 seastar::future<> raft_services::uninit() {
-    return uninit_rpc_verbs();
+    return uninit_rpc_verbs().then([this] {
+        return stop_servers();
+    });
 }
 
 raft_rpc& raft_services::get_rpc(raft::server_id id) {
@@ -120,7 +139,7 @@ raft_rpc& raft_services::get_rpc(raft::server_id id) {
     if (it == _servers.end()) {
         throw std::runtime_error(format("No raft server found with id = {}", id));
     }
-    return *it->second.second;
+    return *it->second.rpc;
 }
 
 raft_services::create_server_result raft_services::create_schema_server(raft::server_id id) {
@@ -138,8 +157,25 @@ raft_services::create_server_result raft_services::create_schema_server(raft::se
         &rpc_ref);
 }
 
-void raft_services::add_server(raft::server_id id, create_server_result srv) {
-    _servers.emplace(std::pair(id, std::move(srv)));
+future<> raft_services::add_server(raft::server_id id, create_server_result srv) {
+    auto srv_ref = std::ref(*srv.first);
+    auto [it, inserted] = _servers.emplace(std::pair(id, servers_value_type{
+        .server = std::move(srv.first),
+        .rpc = srv.second,
+    }));
+    if (!inserted) {
+        on_internal_error(rslog, format("Attempt to add the second instance of raft server with the same id={}", id));
+    }
+    try {
+        // start the server instance prior to arming the ticker timer.
+        // By the time the tick() is executed the server should already be initialized.
+        co_await srv_ref.get().start();
+    } catch (...) {
+        // remove server from the map to prevent calling `abort()` on a
+        // non-started instance when `raft_services::uninit` is called.
+        _servers.erase(it);
+        on_internal_error(rslog, std::current_exception());
+    }
 }
 
 unsigned raft_services::shard_for_group(uint64_t group_id) const {

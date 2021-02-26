@@ -56,12 +56,18 @@ class raft_services : public seastar::peering_sharded_service<raft_services> {
     cql3::query_processor& _qp;
     // Shard-local failure detector instance shared among all raft groups
     shared_ptr<raft_gossip_failure_detector> _fd;
-    std::unordered_map<raft::server_id, create_server_result> _servers;
+
+    struct servers_value_type {
+        std::unique_ptr<raft::server> server;
+        raft_rpc* rpc;
+    };
+    std::unordered_map<raft::server_id, servers_value_type> _servers;
     // inet_address:es for remote raft servers known to us
     std::unordered_map<raft::server_id, gms::inet_address> _server_addresses;
 
     void init_rpc_verbs();
     seastar::future<> uninit_rpc_verbs();
+    seastar::future<> stop_servers();
 
     create_server_result create_schema_server(raft::server_id id);
 
@@ -69,11 +75,12 @@ public:
 
     raft_services(netw::messaging_service& ms, gms::gossiper& gs, cql3::query_processor& qp);
 
-    void init();
+    seastar::future<> init();
     seastar::future<> uninit();
 
     raft_rpc& get_rpc(raft::server_id id);
-    void add_server(raft::server_id id, create_server_result srv);
+    // Start raft server instance and store in the map of raft servers.
+    future<> add_server(raft::server_id id, create_server_result srv);
     unsigned shard_for_group(uint64_t group_id) const;
 
     // Map raft server_id to inet_address to be consumed by `messaging_service`
