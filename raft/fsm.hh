@@ -386,7 +386,8 @@ void fsm::step(server_id from, Message&& msg) {
         logger.trace("{} [term: {}] received a message with higher term from {} [term: {}]",
             _my_id, _current_term, from, msg.current_term);
 
-        if constexpr (std::is_same_v<Message, append_request>) {
+        if constexpr (std::is_same_v<Message, append_request> ||
+                      std::is_same_v<Message, install_snapshot>) {
             leader = from;
         } else {
             if constexpr (std::is_same_v<Message, vote_request>) {
