@@ -1197,7 +1197,7 @@ future<> mutate_MV(
         auto& keyspace_name = mut.s->ks_name();
         auto target_endpoint = get_view_natural_endpoint(keyspace_name, base_token, view_token);
         auto remote_endpoints = service::get_local_storage_service().get_token_metadata().pending_endpoints_for(view_token, keyspace_name);
-        auto maybe_account_failure = [tr_state, &stats, &cf_stats, units = pending_view_updates.split(mut.fm.representation().size())] (
+        auto maybe_account_failure = [s = mut.s, tr_state, &stats, &cf_stats, base_token, view_token, units = pending_view_updates.split(mut.fm.representation().size())] (
                 future<>&& f,
                 gms::inet_address target,
                 bool is_local,
@@ -1210,7 +1210,8 @@ future<> mutate_MV(
                 auto ep = f.get_exception();
                 tracing::trace(tr_state, "Failed to apply {}view update for {} and {} remote endpoints",
                         seastar::value_of([is_local]{return is_local ? "local " : "";}), target, remotes);
-                vlogger.error("Error applying view update to {}: {}", target, ep);
+                vlogger.error("Error applying view update to {} (view: {}.{}, base token: {}, view token: {}): {}",
+                        target, s->ks_name(), s->cf_name(), base_token, view_token, ep);
                 return make_exception_future<>(std::move(ep));
             } else {
                 tracing::trace(tr_state, "Successfully applied {}view update for {} and {} remote endpoints",
