@@ -28,6 +28,22 @@
 #include <boost/range/algorithm/copy.hpp>
 #include <boost/range/adaptor/sliced.hpp>
 #include <boost/range/adaptor/transformed.hpp>
+#include <compare>
+
+inline
+bool
+require_ordering_and_on_equal_return(
+        std::strong_ordering input,
+        std::strong_ordering match_to_return_true,
+        bool return_if_equal) {
+    if (input == match_to_return_true) {
+        return true;
+    } else if (input == std::strong_ordering::equal) {
+        return return_if_equal;
+    } else {
+        return false;
+    }
+}
 
 template<typename T>
 class interval_bound {
@@ -95,8 +111,10 @@ private:
 
     template<typename Comparator>
     static bool greater_than_or_equal(end_bound_ref end, start_bound_ref start, Comparator&& cmp) {
-        return !end.b || !start.b || cmp(end.b->value(), start.b->value())
-                                     >= (!end.b->is_inclusive() || !start.b->is_inclusive());
+        return !end.b || !start.b || require_ordering_and_on_equal_return(
+                cmp(end.b->value(), start.b->value()) <=> 0,
+                std::strong_ordering::greater,
+                end.b->is_inclusive() && start.b->is_inclusive());
     }
 
     template<typename Comparator>
@@ -106,20 +124,26 @@ private:
 
     template<typename Comparator>
     static bool less_than_or_equal(start_bound_ref first, start_bound_ref second, Comparator&& cmp) {
-        return !first.b || (second.b && cmp(first.b->value(), second.b->value())
-                                        <= -(!first.b->is_inclusive() && second.b->is_inclusive()));
+        return !first.b || (second.b && require_ordering_and_on_equal_return(
+                cmp(first.b->value(), second.b->value()) <=> 0,
+                std::strong_ordering::less,
+                first.b->is_inclusive() || !second.b->is_inclusive()));
     }
 
     template<typename Comparator>
     static bool less_than(start_bound_ref first, start_bound_ref second, Comparator&& cmp) {
-        return second.b && (!first.b || cmp(first.b->value(), second.b->value())
-                                        < (first.b->is_inclusive() && !second.b->is_inclusive()));
+        return second.b && (!first.b || require_ordering_and_on_equal_return(
+                cmp(first.b->value(), second.b->value()) <=> 0,
+                std::strong_ordering::less,
+                first.b->is_inclusive() && !second.b->is_inclusive()));
     }
 
     template<typename Comparator>
     static bool greater_than_or_equal(end_bound_ref first, end_bound_ref second, Comparator&& cmp) {
-        return !first.b || (second.b && cmp(first.b->value(), second.b->value())
-                                        >= (!first.b->is_inclusive() && second.b->is_inclusive()));
+        return !first.b || (second.b && require_ordering_and_on_equal_return(
+                cmp(first.b->value(), second.b->value()) <=> 0,
+                std::strong_ordering::greater,
+                first.b->is_inclusive() || !second.b->is_inclusive()));
     }
 public:
     // the point is before the interval (works only for non wrapped intervals)
@@ -259,10 +283,14 @@ public:
         bool other_wraps = other.is_wrap_around(cmp);
 
         if (this_wraps && other_wraps) {
-            return cmp(start()->value(), other.start()->value())
-                   <= -(!start()->is_inclusive() && other.start()->is_inclusive())
-                && cmp(end()->value(), other.end()->value())
-                   >= (!end()->is_inclusive() && other.end()->is_inclusive());
+            return require_ordering_and_on_equal_return(
+                            cmp(start()->value(), other.start()->value()) <=> 0,
+                            std::strong_ordering::less,
+                            start()->is_inclusive() || !other.start()->is_inclusive())
+                && require_ordering_and_on_equal_return(
+                            cmp(end()->value(), other.end()->value()) <=> 0,
+                            std::strong_ordering::greater,
+                            end()->is_inclusive() || !other.end()->is_inclusive());
         }
 
         if (!this_wraps && !other_wraps) {
@@ -275,10 +303,14 @@ public:
         }
 
         // !other_wraps && this_wraps
-        return (other.start() && cmp(start()->value(), other.start()->value())
-                                 <= -(!start()->is_inclusive() && other.start()->is_inclusive()))
-                || (other.end() && cmp(end()->value(), other.end()->value())
-                                   >= (!end()->is_inclusive() && other.end()->is_inclusive()));
+        return (other.start() && require_ordering_and_on_equal_return(
+                                    cmp(start()->value(), other.start()->value()) <=> 0,
+                                    std::strong_ordering::less,
+                                    start()->is_inclusive() || !other.start()->is_inclusive()))
+                || (other.end() && (require_ordering_and_on_equal_return(
+                                        cmp(end()->value(), other.end()->value()) <=> 0,
+                                        std::strong_ordering::greater,
+                                        end()->is_inclusive() || !other.end()->is_inclusive())));
     }
     // Returns intervals which cover all values covered by this interval but not covered by the other interval.
     // Ranges are not overlapping and ordered.
