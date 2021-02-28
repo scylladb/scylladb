@@ -83,7 +83,7 @@ public:
 
 inline atomic_cell make_atomic_cell(const abstract_type& type,
                                     api::timestamp_type timestamp,
-                                    bytes_view value,
+                                    fragmented_temporary_buffer::view value,
                                     gc_clock::duration ttl,
                                     gc_clock::time_point expiration,
                                     atomic_cell::collection_member cm) {
@@ -94,7 +94,7 @@ inline atomic_cell make_atomic_cell(const abstract_type& type,
     }
 }
 
-atomic_cell make_counter_cell(api::timestamp_type timestamp, bytes_view value);
+atomic_cell make_counter_cell(api::timestamp_type timestamp, fragmented_temporary_buffer::view value);
 
 position_in_partition_view get_slice_upper_bound(const schema& s, const query::partition_slice& slice, dht::ring_position_view key);
 

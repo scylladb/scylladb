@@ -23,13 +23,14 @@
 
 #include "column_translation.hh"
 #include "concrete_types.hh"
+#include "utils/fragment_range.hh"
 
 namespace sstables {
 
-atomic_cell make_counter_cell(api::timestamp_type timestamp, bytes_view value) {
+atomic_cell make_counter_cell(api::timestamp_type timestamp, fragmented_temporary_buffer::view cell_value) {
     static constexpr size_t shard_size = 32;
 
-    if (value.empty()) {
+    if (cell_value.empty()) {
         // This will never happen in a correct MC sstable but
         // we had a bug #4363 that caused empty counters
         // to be incorrectly stored inside sstables.
@@ -37,27 +38,27 @@ atomic_cell make_counter_cell(api::timestamp_type timestamp, bytes_view value) {
         return ccb.build(timestamp);
     }
 
-    data_input in(value);
+    auto cell_value_size = cell_value.size_bytes();
 
-    auto header_size = in.read<int16_t>();
+    auto header_size = read_simple<int16_t>(cell_value);
     for (auto i = 0; i < header_size; i++) {
-        auto idx = in.read<int16_t>();
+        auto idx = read_simple<int16_t>(cell_value);
         if (idx >= 0) {
             throw marshal_exception("encountered a local shard in a counter cell");
         }
     }
     auto header_length = (size_t(header_size) + 1) * sizeof(int16_t);
-    auto shard_count = (value.size() - header_length) / shard_size;
+    auto shard_count = (cell_value_size - header_length) / shard_size;
     if (shard_count != size_t(header_size)) {
         throw marshal_exception("encountered remote shards in a counter cell");
     }
 
     counter_cell_builder ccb(shard_count);
     for (auto i = 0u; i < shard_count; i++) {
-        auto id_hi = in.read<int64_t>();
-        auto id_lo = in.read<int64_t>();
-        auto clock = in.read<int64_t>();
-        auto value = in.read<int64_t>();
+        auto id_hi = read_simple<int64_t>(cell_value);
+        auto id_lo = read_simple<int64_t>(cell_value);
+        auto clock = read_simple<int64_t>(cell_value);
+        auto value = read_simple<int64_t>(cell_value);
         ccb.add_maybe_unsorted_shard(counter_shard(counter_id(utils::UUID(id_hi, id_lo)), value, clock));
     }
     ccb.sort_and_remove_duplicates();

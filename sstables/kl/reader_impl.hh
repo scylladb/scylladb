@@ -83,13 +83,13 @@ public:
     // (in seconds) originally set for this cell, and "expiration" is the
     // absolute time (in seconds since the UNIX epoch) when this cell will
     // expire. Typical cells, not set to expire, will get expiration = 0.
-    virtual proceed consume_cell(bytes_view col_name, bytes_view value,
+    virtual proceed consume_cell(bytes_view col_name, fragmented_temporary_buffer::view value,
             int64_t timestamp,
             int64_t ttl, int64_t expiration) = 0;
 
     // Consume one counter cell. Column name and value are serialized, and need
     // to be deserialized according to the schema.
-    virtual proceed consume_counter_cell(bytes_view col_name, bytes_view value,
+    virtual proceed consume_counter_cell(bytes_view col_name, fragmented_temporary_buffer::view value,
             int64_t timestamp) = 0;
 
     // Consume a deleted cell (i.e., a cell tombstone).
@@ -162,6 +162,7 @@ private:
 
     temporary_buffer<char> _key;
     temporary_buffer<char> _val;
+    fragmented_temporary_buffer _val_fragmented;
 
     // state for reading a cell
     bool _deleted;
@@ -334,7 +335,7 @@ private:
                 break;
             }
         case state::CELL_VALUE_BYTES:
-            if (read_bytes_contiguous(data, _u32, _val) != read_status::ready) {
+            if (read_bytes(data, _u32, _val_fragmented) != read_status::ready) {
                 _state = state::CELL_VALUE_BYTES_2;
                 break;
             }
@@ -342,24 +343,28 @@ private:
         {
             row_consumer::proceed ret;
             if (_deleted) {
-                if (_val.size() != 4) {
+                if (_val_fragmented.size_bytes() != 4) {
                     throw malformed_sstable_exception("deleted cell expects local_deletion_time value");
                 }
+                _val = temporary_buffer<char>(4);
+                auto v = fragmented_temporary_buffer::view(_val_fragmented);
+                read_fragmented(v, 4, reinterpret_cast<bytes::value_type*>(_val.get_write()));
                 deletion_time del;
                 del.local_deletion_time = consume_be<uint32_t>(_val);
                 del.marked_for_delete_at = _u64;
                 ret = _consumer.consume_deleted_cell(to_bytes_view(_key), del);
+                _val.release();
             } else if (_counter) {
                 ret = _consumer.consume_counter_cell(to_bytes_view(_key),
-                        to_bytes_view(_val), _u64);
+                        fragmented_temporary_buffer::view(_val_fragmented), _u64);
             } else {
                 ret = _consumer.consume_cell(to_bytes_view(_key),
-                        to_bytes_view(_val), _u64, _ttl, _expiration);
+                        fragmented_temporary_buffer::view(_val_fragmented), _u64, _ttl, _expiration);
             }
             // after calling the consume function, we can release the
             // buffers we held for it.
             _key.release();
-            _val.release();
+            _val_fragmented.remove_prefix(_val_fragmented.size_bytes());
             _state = state::ATOM_START;
             if (ret == row_consumer::proceed::no) {
                 return row_consumer::proceed::no;

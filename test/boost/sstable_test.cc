@@ -350,7 +350,7 @@ public:
         return proceed::yes;
     }
 
-    virtual proceed consume_cell(bytes_view col_name, bytes_view value,
+    virtual proceed consume_cell(bytes_view col_name, fragmented_temporary_buffer::view value,
             int64_t timestamp, int64_t ttl, int64_t expiration) override {
         BOOST_REQUIRE(ttl == 0);
         BOOST_REQUIRE(expiration == 0);
@@ -358,7 +358,7 @@ public:
         case 0:
             // The silly "cql marker" column
             BOOST_REQUIRE(col_name.size() == 3 && col_name[0] == 0 && col_name[1] == 0 && col_name[2] == 0);
-            BOOST_REQUIRE(value.size() == 0);
+            BOOST_REQUIRE(value.size_bytes() == 0);
             BOOST_REQUIRE(timestamp == desired_timestamp);
             break;
         case 1:
@@ -366,7 +366,7 @@ public:
                     col_name[1] == 4 && col_name[2] == 'c' &&
                     col_name[3] == 'o' && col_name[4] == 'l' &&
                     col_name[5] == '1' && col_name[6] == '\0');
-            BOOST_REQUIRE(value == as_bytes("daughter"));
+            BOOST_REQUIRE(linearized(value) == as_bytes("daughter"));
             BOOST_REQUIRE(timestamp == desired_timestamp);
             break;
         case 2:
@@ -374,8 +374,7 @@ public:
                     col_name[1] == 4 && col_name[2] == 'c' &&
                     col_name[3] == 'o' && col_name[4] == 'l' &&
                     col_name[5] == '2' && col_name[6] == '\0');
-            BOOST_REQUIRE(value.size() == 4 && value[0] == 0 &&
-                    value[1] == 0 && value[2] == 0 && value[3] == 3);
+            BOOST_REQUIRE(linearized(value) == bytes({0, 0, 0, 3}));
             BOOST_REQUIRE(timestamp == desired_timestamp);
             break;
         }
@@ -383,7 +382,7 @@ public:
         return proceed::yes;
     }
 
-    virtual proceed consume_counter_cell(bytes_view col_name, bytes_view value, int64_t timestamp) override {
+    virtual proceed consume_counter_cell(bytes_view col_name, fragmented_temporary_buffer::view value, int64_t timestamp) override {
         BOOST_FAIL("counter cell wasn't expected");
         abort(); // BOOST_FAIL is not marked as [[noreturn]].
     }
@@ -470,12 +469,12 @@ public:
         count_row_start++;
         return proceed::yes;
     }
-    virtual proceed consume_cell(bytes_view col_name, bytes_view value,
+    virtual proceed consume_cell(bytes_view col_name, fragmented_temporary_buffer::view value,
             int64_t timestamp, int64_t ttl, int64_t expiration) override {
         count_cell++;
         return proceed::yes;
     }
-    virtual proceed consume_counter_cell(bytes_view col_name, bytes_view value, int64_t timestamp) override {
+    virtual proceed consume_counter_cell(bytes_view col_name, fragmented_temporary_buffer::view value, int64_t timestamp) override {
         count_cell++;
         return proceed::yes;
     }
@@ -625,13 +624,13 @@ public:
         return proceed::yes;
     }
 
-    virtual proceed consume_cell(bytes_view col_name, bytes_view value,
+    virtual proceed consume_cell(bytes_view col_name, fragmented_temporary_buffer::view value,
             int64_t timestamp, int64_t ttl, int64_t expiration) override {
         switch (count_cell) {
         case 0:
             // The silly "cql row marker" cell
             BOOST_REQUIRE(col_name.size() == 3 && col_name[0] == 0 && col_name[1] == 0 && col_name[2] == 0);
-            BOOST_REQUIRE(value.size() == 0);
+            BOOST_REQUIRE(value.size_bytes() == 0);
             BOOST_REQUIRE(timestamp == desired_timestamp);
             BOOST_REQUIRE(ttl == 3600);
             BOOST_REQUIRE(expiration == 1430154618);
@@ -641,8 +640,7 @@ public:
                     col_name[1] == 3 && col_name[2] == 'a' &&
                     col_name[3] == 'g' && col_name[4] == 'e' &&
                     col_name[5] == '\0');
-            BOOST_REQUIRE(value.size() == 4 && value[0] == 0 && value[1] == 0
-                    && value[2] == 0 && value[3] == 40);
+            BOOST_REQUIRE(linearized(value) == bytes({0, 0, 0, 40}));
             BOOST_REQUIRE(timestamp == desired_timestamp);
             BOOST_REQUIRE(ttl == 3600);
             BOOST_REQUIRE(expiration == 1430154618);
