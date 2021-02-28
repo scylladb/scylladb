@@ -165,6 +165,7 @@ public:
         uint64_t partition_hits;
         uint64_t partition_misses;
         uint64_t row_hits;
+        uint64_t dummy_row_hits;
         uint64_t row_misses;
         uint64_t partition_insertions;
         uint64_t row_insertions;
@@ -221,6 +222,7 @@ public:
     void on_partition_eviction() noexcept;
     void on_row_eviction() noexcept;
     void on_row_hit() noexcept;
+    void on_dummy_row_hit() noexcept;
     void on_row_miss() noexcept;
     void on_miss_already_populated() noexcept;
     void on_mispopulate() noexcept;

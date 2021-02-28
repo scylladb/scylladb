@@ -432,6 +432,7 @@ scylla_tests = set([
     'test/perf/perf_mutation',
     'test/perf/perf_collection',
     'test/perf/perf_row_cache_update',
+    'test/perf/perf_row_cache_reads',
     'test/perf/perf_simple_query',
     'test/perf/perf_sstable',
     'test/unit/lsa_async_eviction_test',

@@ -108,6 +108,7 @@ cache_tracker::setup_metrics() {
         sm::make_derive("partition_misses", sm::description("number of partitions needed by reads and missing in cache"), _stats.partition_misses),
         sm::make_derive("partition_insertions", sm::description("total number of partitions added to cache"), _stats.partition_insertions),
         sm::make_derive("row_hits", sm::description("total number of rows needed by reads and found in cache"), _stats.row_hits),
+        sm::make_derive("dummy_row_hits", sm::description("total number of dummy rows touched by reads in cache"), _stats.dummy_row_hits),
         sm::make_derive("row_misses", sm::description("total number of rows needed by reads and missing in cache"), _stats.row_misses),
         sm::make_derive("row_insertions", sm::description("total number of rows added to cache"), _stats.row_insertions),
         sm::make_derive("row_evictions", sm::description("total number of rows evicted from cache"), _stats.row_evictions),
@@ -198,6 +199,10 @@ void cache_tracker::on_row_eviction() noexcept {
 
 void cache_tracker::on_row_hit() noexcept {
     ++_stats.row_hits;
+}
+
+void cache_tracker::on_dummy_row_hit() noexcept {
+    ++_stats.dummy_row_hits;
 }
 
 void cache_tracker::on_row_miss() noexcept {
