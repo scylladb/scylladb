@@ -95,10 +95,8 @@ public:
     { }
     ~impl() {
         if (_resources) {
-            on_internal_error_noexcept(rcslog, format("reader_permit::impl::~impl(): permit {}.{}:{} detected a leak of {{count={}, memory={}}} resources",
-                        _schema ? _schema->ks_name() : "*",
-                        _schema ? _schema->cf_name() : "*",
-                        _op_name_view,
+            on_internal_error_noexcept(rcslog, format("reader_permit::impl::~impl(): permit {} detected a leak of {{count={}, memory={}}} resources",
+                        description(),
                         _resources.count,
                         _resources.memory));
             signal(_resources);
@@ -165,6 +163,13 @@ public:
     reader_resources resources() const {
         return _resources;
     }
+
+    sstring description() const {
+        return format("{}.{}:{}",
+                _schema ? _schema->ks_name() : "*",
+                _schema ? _schema->cf_name() : "*",
+                _op_name_view);
+    }
 };
 
 struct reader_concurrency_semaphore::permit_list {
@@ -222,6 +227,10 @@ reader_permit::resource_units reader_permit::consume_resources(reader_resources 
 
 reader_resources reader_permit::consumed_resources() const {
     return _impl->resources();
+}
+
+sstring reader_permit::description() const {
+    return _impl->description();
 }
 
 std::ostream& operator<<(std::ostream& os, reader_permit::state s) {
