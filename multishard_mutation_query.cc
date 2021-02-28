@@ -359,7 +359,7 @@ future<> read_context::stop() {
     // Forwarded to `fut`.
     (void)gate_fut.then([this] {
         for (shard_id shard = 0; shard != smp::count; ++shard) {
-            if (_readers[shard].state == reader_state::saving) {
+            if (_readers[shard].handle && *_readers[shard].handle) {
                 // Move to the background.
                 (void)_db.invoke_on(shard, [rm = std::move(_readers[shard])] (database& db) mutable {
                     rm.rparts->permit.semaphore().unregister_inactive_read(std::move(*rm.handle));
