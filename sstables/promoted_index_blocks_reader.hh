@@ -104,7 +104,7 @@ private:
                     return;
                 }
             case state_k_l::START_NAME_BYTES:
-                if (this->read_bytes(data, this->_u16, ctx.start) != continuous_data_consumer::read_status::ready) {
+                if (this->read_bytes_contiguous(data, this->_u16, ctx.start) != continuous_data_consumer::read_status::ready) {
                     ctx.state = state_k_l::END_NAME_LENGTH;
                     return;
                 }
@@ -114,7 +114,7 @@ private:
                     return;
                 }
             case state_k_l::END_NAME_BYTES:
-                if (this->read_bytes(data, this->_u16, ctx.end) != continuous_data_consumer::read_status::ready) {
+                if (this->read_bytes_contiguous(data, this->_u16, ctx.end) != continuous_data_consumer::read_status::ready) {
                     ctx.state = state_k_l::OFFSET;
                     return;
                 }

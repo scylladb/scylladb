@@ -334,7 +334,7 @@ private:
                 break;
             }
         case state::CELL_VALUE_BYTES:
-            if (read_bytes(data, _u32, _val) != read_status::ready) {
+            if (read_bytes_contiguous(data, _u32, _val) != read_status::ready) {
                 _state = state::CELL_VALUE_BYTES_2;
                 break;
             }

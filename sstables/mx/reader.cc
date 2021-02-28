@@ -465,9 +465,9 @@ private:
             }
             read_status status = read_status::waiting;
             if (auto len = get_ck_block_value_length()) {
-                status = read_bytes(data, *len, _column_value);
+                status = read_bytes_contiguous(data, *len, _column_value);
             } else {
-                status = read_unsigned_vint_length_bytes(data, _column_value);
+                status = read_unsigned_vint_length_bytes_contiguous(data, _column_value);
             }
             if (status != read_status::ready) {
                 _state = state::CK_BLOCK_END;
@@ -671,7 +671,7 @@ private:
         case state::COLUMN_CELL_PATH:
         column_cell_path_label:
             if (!is_column_simple()) {
-                if (read_unsigned_vint_length_bytes(data, _cell_path) != read_status::ready) {
+                if (read_unsigned_vint_length_bytes_contiguous(data, _cell_path) != read_status::ready) {
                     _state = state::COLUMN_VALUE;
                     break;
                 }
@@ -687,9 +687,9 @@ private:
             }
             read_status status = read_status::waiting;
             if (auto len = get_column_value_length()) {
-                status = read_bytes(data, *len, _column_value);
+                status = read_bytes_contiguous(data, *len, _column_value);
             } else {
-                status = read_unsigned_vint_length_bytes(data, _column_value);
+                status = read_unsigned_vint_length_bytes_contiguous(data, _column_value);
             }
             if (status != read_status::ready) {
                 _state = state::COLUMN_END;

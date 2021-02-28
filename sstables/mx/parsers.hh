@@ -181,9 +181,9 @@ public:
             }
             read_status status = read_status::waiting;
             if (auto len = get_ck_block_value_length()) {
-                status = _primitive.read_bytes(data, *len, column_value);
+                status = _primitive.read_bytes_contiguous(data, *len, column_value);
             } else {
-                status = _primitive.read_unsigned_vint_length_bytes(data, column_value);
+                status = _primitive.read_unsigned_vint_length_bytes_contiguous(data, column_value);
             }
             if (status != read_status::ready) {
                 _state = state::CK_BLOCK_END;
