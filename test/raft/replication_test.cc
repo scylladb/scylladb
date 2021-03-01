@@ -222,7 +222,6 @@ struct initial_state {
     std::vector<raft::log_entry> log;
     raft::snapshot snapshot;
     snapshot_value snp_value;
-    raft::configuration config;    // TODO: custom initial configs
     raft::server::configuration server_config = raft::server::configuration{.append_request_threshold = 200};
 };
 
