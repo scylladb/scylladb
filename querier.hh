@@ -370,6 +370,7 @@ private:
     index _shard_mutation_querier_index;
     std::chrono::seconds _entry_ttl;
     stats _stats;
+    gate _closing_gate;
 
     template <typename Querier>
     std::optional<Querier> lookup_querier(

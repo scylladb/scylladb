@@ -346,6 +346,13 @@ std::optional<Querier> querier_cache::lookup_querier(
 
     tracing::trace(trace_state, "Dropping querier because {}", cannot_use_reason(can_be_used));
     ++stats.drops;
+
+    // Close and drop the querier in the background.
+    // TODO: wait on _closing_gate in querier_cache::close()
+    (void)with_gate(_closing_gate, [this, q = std::move(q)] () mutable {
+        return q.close().finally([q = std::move(q)] {});
+    });
+
     return std::nullopt;
 }
 
