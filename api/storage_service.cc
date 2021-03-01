@@ -987,8 +987,8 @@ void set_storage_service(http_context& ctx, routes& r) {
                         ss::table_sstables tst;
                         tst.keyspace = schema->ks_name();
                         tst.table = schema->cf_name();
-
-                        for (auto sstable : *t->get_sstables_including_compacted_undeleted()) {
+                        auto sstables = t->get_sstables_including_compacted_undeleted();
+                        for (auto sstable : *sstables) {
                             auto ts = db_clock::to_time_t(sstable->data_file_write_time());
                             ::tm t;
                             ::gmtime_r(&ts, &t);
