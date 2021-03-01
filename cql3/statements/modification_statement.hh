@@ -299,7 +299,7 @@ protected:
      */
     virtual void validate_where_clause_for_conditions() const;
 
-    db::timeout_clock::duration get_timeout(const query_options& options) const;
+    db::timeout_clock::duration get_timeout(const service::client_state& state, const query_options& options) const;
 
     friend class raw::modification_statement;
 };

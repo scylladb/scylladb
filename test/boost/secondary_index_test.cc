@@ -427,7 +427,7 @@ SEASTAR_TEST_CASE(test_index_on_pk_ck_with_paging) {
         }
 
         eventually([&] {
-            auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
+            auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, std::vector<cql3::raw_value>{},
                     cql3::query_options::specific_options{101, nullptr, {}, api::new_timestamp()});
             auto res = e.execute_cql("SELECT * FROM tab WHERE v = 1", std::move(qo)).get0();
             assert_that(res).is_rows().with_size(101);
@@ -439,7 +439,7 @@ SEASTAR_TEST_CASE(test_index_on_pk_ck_with_paging) {
         });
 
         eventually([&] {
-            auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
+            auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, std::vector<cql3::raw_value>{},
                     cql3::query_options::specific_options{100, nullptr, {}, api::new_timestamp()});
             auto res = e.execute_cql("SELECT * FROM tab WHERE pk2 = 1", std::move(qo)).get0();
             assert_that(res).is_rows().with_rows({{
@@ -449,7 +449,7 @@ SEASTAR_TEST_CASE(test_index_on_pk_ck_with_paging) {
         });
 
         eventually([&] {
-            auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
+            auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, std::vector<cql3::raw_value>{},
                     cql3::query_options::specific_options{100, nullptr, {}, api::new_timestamp()});
             auto res = e.execute_cql("SELECT * FROM tab WHERE ck2 = 'world8'", std::move(qo)).get0();
             assert_that(res).is_rows().with_rows({{
@@ -485,7 +485,7 @@ SEASTAR_TEST_CASE(test_simple_index_paging) {
         };
 
         eventually([&] {
-            auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
+            auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, std::vector<cql3::raw_value>{},
                     cql3::query_options::specific_options{1, nullptr, {}, api::new_timestamp()});
             auto res = e.execute_cql("SELECT * FROM tab WHERE v = 1", std::move(qo)).get0();
             auto paging_state = extract_paging_state(res);
@@ -495,7 +495,7 @@ SEASTAR_TEST_CASE(test_simple_index_paging) {
                 {int32_type->decompose(1)}, {int32_type->decompose(1)}, {int32_type->decompose(1)},
             }});
 
-            qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
+            qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, std::vector<cql3::raw_value>{},
                     cql3::query_options::specific_options{1, paging_state, {}, api::new_timestamp()});
             res = e.execute_cql("SELECT * FROM tab WHERE v = 1", std::move(qo)).get0();
             expect_more_pages(res, true);
@@ -505,7 +505,7 @@ SEASTAR_TEST_CASE(test_simple_index_paging) {
                 {int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(1)},
             }});
 
-            qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
+            qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, std::vector<cql3::raw_value>{},
                     cql3::query_options::specific_options{1, paging_state, {}, api::new_timestamp()});
             res = e.execute_cql("SELECT * FROM tab WHERE v = 1", std::move(qo)).get0();
             paging_state = extract_paging_state(res);
@@ -520,7 +520,7 @@ SEASTAR_TEST_CASE(test_simple_index_paging) {
             try {
                 expect_more_pages(res, false);
             } catch (...) {
-                qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
+                qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, std::vector<cql3::raw_value>{},
                         cql3::query_options::specific_options{1, paging_state, {}, api::new_timestamp()});
                 res = e.execute_cql("SELECT * FROM tab WHERE v = 1", std::move(qo)).get0();
                 assert_that(res).is_rows().with_size(0);
@@ -530,7 +530,7 @@ SEASTAR_TEST_CASE(test_simple_index_paging) {
         });
 
         eventually([&] {
-            auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
+            auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, std::vector<cql3::raw_value>{},
                     cql3::query_options::specific_options{1, nullptr, {}, api::new_timestamp()});
             auto res = e.execute_cql("SELECT * FROM tab WHERE c = 2", std::move(qo)).get0();
             auto paging_state = extract_paging_state(res);
@@ -539,7 +539,7 @@ SEASTAR_TEST_CASE(test_simple_index_paging) {
                 {int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(1)},
             }});
 
-            qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
+            qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, std::vector<cql3::raw_value>{},
                     cql3::query_options::specific_options{1, paging_state, {}, api::new_timestamp()});
             res = e.execute_cql("SELECT * FROM tab WHERE c = 2", std::move(qo)).get0();
 
@@ -549,7 +549,7 @@ SEASTAR_TEST_CASE(test_simple_index_paging) {
         });
 
         {
-            auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
+            auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, std::vector<cql3::raw_value>{},
                     cql3::query_options::specific_options{1, nullptr, {}, api::new_timestamp()});
             auto res = e.execute_cql("SELECT * FROM tab WHERE c = 2", std::move(qo)).get0();
             auto paging_state = extract_paging_state(res);
@@ -566,7 +566,7 @@ SEASTAR_TEST_CASE(test_simple_index_paging) {
                     paging_state->get_last_replicas(), paging_state->get_query_read_repair_decision(),
                     paging_state->get_rows_fetched_for_last_partition());
 
-            qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
+            qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, std::vector<cql3::raw_value>{},
                     cql3::query_options::specific_options{1, paging_state, {}, api::new_timestamp()});
             res = e.execute_cql("SELECT * FROM tab WHERE c = 2", std::move(qo)).get0();
 
@@ -578,7 +578,7 @@ SEASTAR_TEST_CASE(test_simple_index_paging) {
             // not to return rows (since no row matches an empty partition key)
             auto paging_state = make_lw_shared<service::pager::paging_state>(partition_key::make_empty(), std::nullopt,
                     1, utils::make_random_uuid(), service::pager::paging_state::replicas_per_token_range{}, std::nullopt, 1);
-            auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
+            auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, std::vector<cql3::raw_value>{},
                     cql3::query_options::specific_options{1, paging_state, {}, api::new_timestamp()});
             auto res = e.execute_cql("SELECT * FROM tab WHERE v = 1", std::move(qo)).get0();
 
@@ -817,7 +817,7 @@ SEASTAR_TEST_CASE(test_local_index_paging) {
         };
 
         eventually([&] {
-            auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
+            auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, std::vector<cql3::raw_value>{},
                     cql3::query_options::specific_options{1, nullptr, {}, api::new_timestamp()});
             auto res = e.execute_cql("SELECT * FROM tab WHERE p = 1 and v = 1", std::move(qo)).get0();
             auto paging_state = extract_paging_state(res);
@@ -826,7 +826,7 @@ SEASTAR_TEST_CASE(test_local_index_paging) {
                 {int32_type->decompose(1)}, {int32_type->decompose(1)}, {int32_type->decompose(1)}, {int32_type->decompose(1)},
             }});
 
-            qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
+            qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, std::vector<cql3::raw_value>{},
                     cql3::query_options::specific_options{1, paging_state, {}, api::new_timestamp()});
             res = e.execute_cql("SELECT * FROM tab WHERE p = 1 and v = 1", std::move(qo)).get0();
 
@@ -836,7 +836,7 @@ SEASTAR_TEST_CASE(test_local_index_paging) {
         });
 
         eventually([&] {
-            auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
+            auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, std::vector<cql3::raw_value>{},
                     cql3::query_options::specific_options{1, nullptr, {}, api::new_timestamp()});
             auto res = e.execute_cql("SELECT * FROM tab WHERE p = 1 and c2 = 2", std::move(qo)).get0();
             auto paging_state = extract_paging_state(res);
@@ -845,7 +845,7 @@ SEASTAR_TEST_CASE(test_local_index_paging) {
                 {int32_type->decompose(1)}, {int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(1)},
             }});
 
-            qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
+            qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, std::vector<cql3::raw_value>{},
                     cql3::query_options::specific_options{1, paging_state, {}, api::new_timestamp()});
             res = e.execute_cql("SELECT * FROM tab WHERE p = 1 and c2 = 2", std::move(qo)).get0();
 
@@ -1173,7 +1173,7 @@ SEASTAR_TEST_CASE(test_indexing_paging_and_aggregation) {
         }
 
       eventually([&] {
-        auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
+        auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, std::vector<cql3::raw_value>{},
                 cql3::query_options::specific_options{2, nullptr, {}, api::new_timestamp()});
         auto msg = cquery_nofail(e, "SELECT sum(id) FROM fpa WHERE v = 0;", std::move(qo));
         // Even though we set up paging, we still expect a single result from an aggregation function.
@@ -1188,7 +1188,7 @@ SEASTAR_TEST_CASE(test_indexing_paging_and_aggregation) {
             { int32_type->decompose(row_count * row_count / 4 + row_count / 2)},
         });
 
-        qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
+        qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, std::vector<cql3::raw_value>{},
                 cql3::query_options::specific_options{3, nullptr, {}, api::new_timestamp()});
         msg = cquery_nofail(e, "SELECT avg(id) FROM fpa WHERE v = 1;", std::move(qo));
         assert_that(msg).is_rows().with_rows({
@@ -1206,7 +1206,7 @@ SEASTAR_TEST_CASE(test_indexing_paging_and_aggregation) {
             cquery_nofail(e, format("INSERT INTO fpa2 (id, c1, c2) VALUES ({}, {}, {})", i + 1, i + 1, i % 2).c_str());
         }
 
-        auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
+        auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, std::vector<cql3::raw_value>{},
                 cql3::query_options::specific_options{2, nullptr, {}, api::new_timestamp()});
         auto msg = cquery_nofail(e, "SELECT sum(id) FROM fpa2 WHERE c2 = 0;", std::move(qo));
         // Even though we set up paging, we still expect a single result from an aggregation function
@@ -1214,7 +1214,7 @@ SEASTAR_TEST_CASE(test_indexing_paging_and_aggregation) {
             { int32_type->decompose(row_count * row_count / 4)},
         });
 
-        qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
+        qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, std::vector<cql3::raw_value>{},
                 cql3::query_options::specific_options{3, nullptr, {}, api::new_timestamp()});
         msg = cquery_nofail(e, "SELECT avg(id) FROM fpa2 WHERE c2 = 1;", std::move(qo));
         assert_that(msg).is_rows().with_rows({

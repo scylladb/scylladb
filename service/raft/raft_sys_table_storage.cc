@@ -184,7 +184,6 @@ future<> raft_sys_table_storage::do_store_log_entries(const std::vector<raft::lo
         cql3::query_options(
             cql3::default_cql_config,
             db::consistency_level::ONE,
-            infinite_timeout_config,
             std::nullopt,
             std::vector<cql3::raw_value>{},
             false,

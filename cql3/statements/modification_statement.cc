@@ -74,8 +74,8 @@ modification_statement_timeout(const schema& s) {
     }
 }
 
-db::timeout_clock::duration modification_statement::get_timeout(const query_options& options) const {
-    return attrs->is_timeout_set() ? attrs->get_timeout(options) : options.get_timeout_config().*get_timeout_config_selector();
+db::timeout_clock::duration modification_statement::get_timeout(const service::client_state& state, const query_options& options) const {
+    return attrs->is_timeout_set() ? attrs->get_timeout(options) : state.get_timeout_config().*get_timeout_config_selector();
 }
 
 modification_statement::modification_statement(statement_type type_, uint32_t bound_terms, schema_ptr schema_, std::unique_ptr<attributes> attrs_, cql_stats& stats_)
@@ -291,7 +291,7 @@ modification_statement::do_execute(service::storage_proxy& proxy, service::query
 future<>
 modification_statement::execute_without_condition(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) const {
     auto cl = options.get_consistency();
-    auto timeout = db::timeout_clock::now() + get_timeout(options);
+    auto timeout = db::timeout_clock::now() + get_timeout(qs.get_client_state(), options);
     return get_mutations(proxy, options, timeout, false, options.get_timestamp(qs), qs).then([this, cl, timeout, &proxy, &qs] (auto mutations) {
         if (mutations.empty()) {
             return now();
@@ -307,7 +307,7 @@ modification_statement::execute_with_condition(service::storage_proxy& proxy, se
     auto cl_for_learn = options.get_consistency();
     auto cl_for_paxos = options.check_serial_consistency();
     db::timeout_clock::time_point now = db::timeout_clock::now();
-    const timeout_config& cfg = options.get_timeout_config();
+    const timeout_config& cfg = qs.get_client_state().get_timeout_config();
 
     auto statement_timeout = now + cfg.write_timeout; // All CAS networking operations run with write timeout.
     auto cas_timeout = now + cfg.cas_timeout;         // When to give up due to contention.

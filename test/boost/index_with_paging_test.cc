@@ -36,7 +36,7 @@ SEASTAR_TEST_CASE(test_index_with_paging) {
         }
 
         eventually([&] {
-            auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
+            auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, std::vector<cql3::raw_value>{},
                     cql3::query_options::specific_options{4321, nullptr, {}, api::new_timestamp()});
             auto res = e.execute_cql("SELECT * FROM tab WHERE v = 1", std::move(qo)).get0();
             assert_that(res).is_rows().with_size(4321);

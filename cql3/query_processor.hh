@@ -215,8 +215,7 @@ public:
     // creating namespaces, etc) is explicitly forbidden via this interface.
     future<::shared_ptr<untyped_result_set>>
     execute_internal(const sstring& query_string, const std::initializer_list<data_value>& values = { }) {
-        return execute_internal(query_string, db::consistency_level::ONE,
-                infinite_timeout_config, values, true);
+        return execute_internal(query_string, db::consistency_level::ONE, values, true);
     }
 
     statements::prepared_statement::checked_weak_ptr prepare_internal(const sstring& query);
@@ -234,7 +233,6 @@ public:
             return query_internal(
                     "SELECT * from system.compaction_history",
                     db::consistency_level::ONE,
-                    infinite_timeout_config,
                     {},
                     [&history] (const cql3::untyped_result_set::row& row) mutable {
                 ....
@@ -246,7 +244,6 @@ public:
      *
      * query_string - the cql string, can contain placeholders
      * cl - consistency level of the query
-     * timeout_config - timeout configuration
      * values - values to be substituted for the placeholders in the query
      * page_size - maximum page size
      * f - a function to be run on each row of the query result,
@@ -255,7 +252,6 @@ public:
     future<> query_internal(
             const sstring& query_string,
             db::consistency_level cl,
-            const timeout_config& timeout_config,
             const std::initializer_list<data_value>& values,
             int32_t page_size,
             noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)>&& f);
@@ -282,14 +278,19 @@ public:
     future<::shared_ptr<untyped_result_set>> execute_internal(
             const sstring& query_string,
             db::consistency_level,
-            const timeout_config& timeout_config,
+            const std::initializer_list<data_value>& = { },
+            bool cache = false);
+    future<::shared_ptr<untyped_result_set>> execute_internal(
+            const sstring& query_string,
+            db::consistency_level,
+            service::query_state& query_state,
             const std::initializer_list<data_value>& = { },
             bool cache = false);
 
     future<::shared_ptr<untyped_result_set>> execute_with_params(
             statements::prepared_statement::checked_weak_ptr p,
             db::consistency_level,
-            const timeout_config& timeout_config,
+            service::query_state& query_state,
             const std::initializer_list<data_value>& = { });
 
     future<::shared_ptr<cql_transport::messages::result_message::prepared>>
@@ -318,7 +319,6 @@ private:
             const statements::prepared_statement::checked_weak_ptr& p,
             const std::initializer_list<data_value>&,
             db::consistency_level,
-            const timeout_config& timeout_config,
             int32_t page_size = -1) const;
 
     future<::shared_ptr<cql_transport::messages::result_message>>
@@ -332,7 +332,6 @@ private:
     ::shared_ptr<internal_query_state> create_paged_state(
             const sstring& query_string,
             db::consistency_level,
-            const timeout_config&,
             const std::initializer_list<data_value>&,
             int32_t page_size);
 

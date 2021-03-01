@@ -209,8 +209,7 @@ std::unordered_map<sstring, uint64_t> get_query_metrics() {
 
 /// Creates query_options with cl, infinite timeout, and no named values.
 auto make_options(clevel cl) {
-    return std::make_unique<cql3::query_options>(
-        cl, infinite_timeout_config, std::vector<cql3::raw_value>());
+    return std::make_unique<cql3::query_options>(cl, std::vector<cql3::raw_value>());
 }
 
 } // anonymous namespace

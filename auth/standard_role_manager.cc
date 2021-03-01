@@ -86,7 +86,7 @@ static future<std::optional<record>> find_record(cql3::query_processor& qp, std:
     return qp.execute_internal(
             query,
             consistency_for_role(role_name),
-            internal_distributed_timeout_config(),
+            internal_distributed_query_state(),
             {sstring(role_name)},
             true).then([](::shared_ptr<cql3::untyped_result_set> results) {
         if (results->empty()) {
@@ -165,7 +165,7 @@ future<> standard_role_manager::create_default_role_if_missing() const {
             return _qp.execute_internal(
                     query,
                     db::consistency_level::QUORUM,
-                    internal_distributed_timeout_config(),
+                    internal_distributed_query_state(),
                     {meta::DEFAULT_SUPERUSER_NAME}).then([](auto&&) {
                 log.info("Created default superuser role '{}'.", meta::DEFAULT_SUPERUSER_NAME);
                 return make_ready_future<>();
@@ -192,7 +192,7 @@ future<> standard_role_manager::migrate_legacy_metadata() const {
     return _qp.execute_internal(
             query,
             db::consistency_level::QUORUM,
-            internal_distributed_timeout_config()).then([this](::shared_ptr<cql3::untyped_result_set> results) {
+            internal_distributed_query_state()).then([this](::shared_ptr<cql3::untyped_result_set> results) {
         return do_for_each(*results, [this](const cql3::untyped_result_set_row& row) {
             role_config config;
             config.is_superuser = row.get_or<bool>("super", false);
@@ -253,7 +253,7 @@ future<> standard_role_manager::create_or_replace(std::string_view role_name, co
     return _qp.execute_internal(
             query,
             consistency_for_role(role_name),
-            internal_distributed_timeout_config(),
+            internal_distributed_query_state(),
             {sstring(role_name), c.is_superuser, c.can_login},
             true).discard_result();
 }
@@ -296,7 +296,7 @@ standard_role_manager::alter(std::string_view role_name, const role_config_updat
                         build_column_assignments(u),
                         meta::roles_table::role_col_name),
                 consistency_for_role(role_name),
-                internal_distributed_timeout_config(),
+                internal_distributed_query_state(),
                 {sstring(role_name)}).discard_result();
     });
 }
@@ -315,7 +315,7 @@ future<> standard_role_manager::drop(std::string_view role_name) const {
             return _qp.execute_internal(
                     query,
                     consistency_for_role(role_name),
-                    internal_distributed_timeout_config(),
+                    internal_distributed_query_state(),
                     {sstring(role_name)}).then([this, role_name](::shared_ptr<cql3::untyped_result_set> members) {
                 return parallel_for_each(
                         members->begin(),
@@ -354,7 +354,7 @@ future<> standard_role_manager::drop(std::string_view role_name) const {
             return _qp.execute_internal(
                     query,
                     consistency_for_role(role_name),
-                    internal_distributed_timeout_config(),
+                    internal_distributed_query_state(),
                     {sstring(role_name)}).discard_result();
         };
 
@@ -381,7 +381,7 @@ standard_role_manager::modify_membership(
         return _qp.execute_internal(
                 query,
                 consistency_for_role(grantee_name),
-                internal_distributed_timeout_config(),
+                internal_distributed_query_state(),
                 {role_set{sstring(role_name)}, sstring(grantee_name)}).discard_result();
     };
 
@@ -392,7 +392,7 @@ standard_role_manager::modify_membership(
                         format("INSERT INTO {} (role, member) VALUES (?, ?)",
                                 meta::role_members_table::qualified_name),
                         consistency_for_role(role_name),
-                        internal_distributed_timeout_config(),
+                        internal_distributed_query_state(),
                         {sstring(role_name), sstring(grantee_name)}).discard_result();
 
             case membership_change::remove:
@@ -400,7 +400,7 @@ standard_role_manager::modify_membership(
                         format("DELETE FROM {} WHERE role = ? AND member = ?",
                                 meta::role_members_table::qualified_name),
                         consistency_for_role(role_name),
-                        internal_distributed_timeout_config(),
+                        internal_distributed_query_state(),
                         {sstring(role_name), sstring(grantee_name)}).discard_result();
         }
 
@@ -503,7 +503,7 @@ future<role_set> standard_role_manager::query_all() const {
     return _qp.execute_internal(
             query,
             db::consistency_level::QUORUM,
-            internal_distributed_timeout_config()).then([](::shared_ptr<cql3::untyped_result_set> results) {
+            internal_distributed_query_state()).then([](::shared_ptr<cql3::untyped_result_set> results) {
         role_set roles;
 
         std::transform(
