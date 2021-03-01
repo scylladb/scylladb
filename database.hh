@@ -1351,6 +1351,7 @@ public:
     ~database();
 
     cache_tracker& row_cache_tracker() { return _row_cache_tracker; }
+    future<> drop_caches() const;
 
     void update_version(const utils::UUID& version);
 

@@ -25,6 +25,9 @@
 #include <seastar/core/reactor.hh>
 #include <seastar/http/exception.hh>
 #include "log.hh"
+#include "database.hh"
+
+extern logging::logger apilog;
 
 namespace api {
 
@@ -69,6 +72,16 @@ void set_system(http_context& ctx, routes& r) {
             throw bad_param_exception("Unknown logging level " + req.get_query_param("level"));
         }
         return json::json_void();
+    });
+
+    hs::drop_sstable_caches.set(r, [&ctx](std::unique_ptr<request> req) {
+        apilog.info("Dropping sstable caches");
+        return ctx.db.invoke_on_all([] (database& db) {
+            return db.drop_caches();
+        }).then([] {
+            apilog.info("Caches dropped");
+            return json::json_return_type(json::json_void());
+        });
     });
 }
 

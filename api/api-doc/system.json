@@ -53,6 +53,22 @@
          ]
       },
       {
+         "path":"/system/drop_sstable_caches",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Drop in-memory caches for data which is in sstables",
+               "type":"void",
+               "nickname":"drop_sstable_caches",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
          "path":"/system/uptime_ms",
          "operations":[
             {

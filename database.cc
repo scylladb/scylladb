@@ -33,6 +33,7 @@
 #include "cql3/column_identifier.hh"
 #include "cql3/functions/functions.hh"
 #include <seastar/core/seastar.hh>
+#include <seastar/core/coroutine.hh>
 #include <seastar/core/reactor.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/rwlock.hh>
@@ -1348,6 +1349,16 @@ database::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, bool is_b
     } else {
         return make_ready_future<>();
     }
+}
+
+future<>
+database::drop_caches() const {
+    std::unordered_map<utils::UUID, lw_shared_ptr<column_family>> tables = get_column_families();
+    for (auto&& e : tables) {
+        table& t = *e.second;
+        co_await t.get_row_cache().invalidate(row_cache::external_updater([] {}));
+    }
+    co_return;
 }
 
 std::set<sstring>
