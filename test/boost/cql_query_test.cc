@@ -4609,6 +4609,11 @@ SEASTAR_THREAD_TEST_CASE(test_query_limit) {
     cfg.dbcfg->statement_scheduling_group = seastar::create_scheduling_group("statement", 1000).get0();
     cfg.dbcfg->streaming_scheduling_group = seastar::create_scheduling_group("streaming", 200).get0();
 
+    auto clean_up_sched_groups = defer([dbcfg = *cfg.dbcfg] {
+        seastar::destroy_scheduling_group(dbcfg.statement_scheduling_group).get0();
+        seastar::destroy_scheduling_group(dbcfg.streaming_scheduling_group).get0();
+    });
+
     do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("CREATE TABLE test (pk int, ck int, v text, PRIMARY KEY (pk, ck));").get();
         auto id = e.prepare("INSERT INTO test (pk, ck, v) VALUES (?, ?, ?);").get0();
