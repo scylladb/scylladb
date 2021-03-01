@@ -774,6 +774,9 @@ future<std::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_tempera
         const dht::partition_range_vector& ranges,
         tracing::trace_state_ptr trace_state,
         db::timeout_clock::time_point timeout) {
+    if (cmd.slice.options.contains(query::partition_slice::option::reversed)) {
+        throw std::runtime_error("query_mutations_on_all_shards(): reverse range scans are not supported");
+    }
     return do_query_on_all_shards<mutation_query_result_builder>(db, s, cmd, ranges, std::move(trace_state), timeout,
             [s, &cmd] (query::result_memory_accounter&& accounter) {
         return mutation_query_result_builder(*s, cmd.slice, std::move(accounter));
