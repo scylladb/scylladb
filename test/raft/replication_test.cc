@@ -262,60 +262,80 @@ public:
     virtual future<> abort() { return make_ready_future<>(); }
 };
 
-std::unordered_set<raft::server_id> server_disconnected;
-bool is_disconnected(raft::server_id id) {
-    return server_disconnected.find(id) != server_disconnected.end();
-}
+struct connected {
+    // Usually a test wants to disconnect a leader or very few nodes
+    // so it makes sense to just track those
+    lw_shared_ptr<std::unordered_set<raft::server_id>> _disconnected;
+    // Default copy constructor for other users
+    connected() {
+        _disconnected = make_lw_shared<std::unordered_set<raft::server_id>>();
+    }
+    void disconnect(raft::server_id id) {
+        _disconnected->insert(id);
+    }
+    void connect(raft::server_id id) {
+        _disconnected->erase(id);
+    }
+    void connect_all() {
+        _disconnected->clear();
+    }
+    bool operator()(raft::server_id id) {
+        return _disconnected->find(id) == _disconnected->end();
+    }
+};
 
 class failure_detector : public raft::failure_detector {
     raft::server_id _id;
+    connected _connected;
 public:
-    failure_detector(raft::server_id id) : _id(id) {}
+    failure_detector(raft::server_id id, connected connected) : _id(id), _connected(connected) {}
     bool is_alive(raft::server_id server) override {
-        return !(is_disconnected(server) || is_disconnected(_id));
+        return _connected(server) && _connected(_id);
     }
 };
 
 class rpc : public raft::rpc {
     static std::unordered_map<raft::server_id, rpc*> net;
     raft::server_id _id;
+    connected _connected;
     lw_shared_ptr<snapshots> _snapshots;
     bool _drop_replication;
 public:
-    rpc(raft::server_id id, lw_shared_ptr<snapshots> snapshots, bool drop_replication) : _id(id),
-            _snapshots(snapshots), _drop_replication(drop_replication) {
+    rpc(raft::server_id id, connected connected, lw_shared_ptr<snapshots> snapshots,
+            bool drop_replication) : _id(id), _connected(connected), _snapshots(snapshots),
+            _drop_replication(drop_replication) {
         net[_id] = this;
     }
     virtual future<> send_snapshot(raft::server_id id, const raft::install_snapshot& snap) {
-        if (is_disconnected(id) || is_disconnected(_id)) {
+        if (!_connected(id) || !_connected(_id)) {
             return make_ready_future<>();
         }
         (*_snapshots)[id] = (*_snapshots)[_id];
         return net[id]->_client->apply_snapshot(_id, std::move(snap));
     }
     virtual future<> send_append_entries(raft::server_id id, const raft::append_request& append_request) {
-        if (is_disconnected(id) || is_disconnected(_id) || (_drop_replication && !(rand() % 5))) {
+        if (!_connected(id) || !_connected(_id) || (_drop_replication && !(rand() % 5))) {
             return make_ready_future<>();
         }
         net[id]->_client->append_entries(_id, append_request);
         return make_ready_future<>();
     }
     virtual future<> send_append_entries_reply(raft::server_id id, const raft::append_reply& reply) {
-        if (is_disconnected(id) || is_disconnected(_id) || (_drop_replication && !(rand() % 5))) {
+        if (!_connected(id) || !_connected(_id) || (_drop_replication && !(rand() % 5))) {
             return make_ready_future<>();
         }
         net[id]->_client->append_entries_reply(_id, std::move(reply));
         return make_ready_future<>();
     }
     virtual future<> send_vote_request(raft::server_id id, const raft::vote_request& vote_request) {
-        if (is_disconnected(id) || is_disconnected(_id)) {
+        if (!_connected(id) || !_connected(_id)) {
             return make_ready_future<>();
         }
         net[id]->_client->request_vote(_id, std::move(vote_request));
         return make_ready_future<>();
     }
     virtual future<> send_vote_reply(raft::server_id id, const raft::vote_reply& vote_reply) {
-        if (is_disconnected(id) || is_disconnected(_id)) {
+        if (!_connected(id) || !_connected(_id)) {
             return make_ready_future<>();
         }
         net[id]->_client->request_vote_reply(_id, std::move(vote_reply));
@@ -335,16 +355,16 @@ enum class sm_type {
 
 std::pair<std::unique_ptr<raft::server>, state_machine*>
 create_raft_server(raft::server_id uuid, state_machine::apply_fn apply, initial_state state,
-        size_t apply_entries, sm_type type, lw_shared_ptr<snapshots> snapshots,
+        size_t apply_entries, sm_type type, connected connected, lw_shared_ptr<snapshots> snapshots,
         lw_shared_ptr<persisted_snapshots> persisted_snapshots, bool drop_replication) {
     sm_value val = (type == sm_type::HASH) ? sm_value(std::make_unique<hasher_int>()) : sm_value(std::make_unique<sum_sm>());
 
     auto sm = std::make_unique<state_machine>(uuid, std::move(apply), std::move(val),
             apply_entries, snapshots, persisted_snapshots);
     auto& rsm = *sm;
-    auto mrpc = std::make_unique<rpc>(uuid, snapshots, drop_replication);
+    auto mrpc = std::make_unique<rpc>(uuid, connected, snapshots, drop_replication);
     auto mpersistence = std::make_unique<persistence>(uuid, state, snapshots, persisted_snapshots);
-    auto fd = seastar::make_shared<failure_detector>(uuid);
+    auto fd = seastar::make_shared<failure_detector>(uuid, connected);
 
     auto raft = raft::create_server(uuid, std::move(mrpc), std::move(sm), std::move(mpersistence),
         std::move(fd), state.server_config);
@@ -353,8 +373,8 @@ create_raft_server(raft::server_id uuid, state_machine::apply_fn apply, initial_
 }
 
 future<std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>> create_cluster(std::vector<initial_state> states, state_machine::apply_fn apply, size_t apply_entries, sm_type type,
-        lw_shared_ptr<snapshots> snapshots, lw_shared_ptr<persisted_snapshots> persisted_snapshots,
-        bool drop_replication) {
+        connected connected, lw_shared_ptr<snapshots> snapshots,
+        lw_shared_ptr<persisted_snapshots> persisted_snapshots, bool drop_replication) {
     raft::configuration config;
     std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>> rafts;
 
@@ -369,7 +389,7 @@ future<std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>> cr
         states[i].snapshot.config = config;
         (*snapshots)[s.id] = states[i].snp_value;
         auto& raft = *rafts.emplace_back(create_raft_server(s.id, apply, states[i], apply_entries,
-                    type, snapshots, persisted_snapshots, drop_replication)).first;
+                    type, connected, snapshots, persisted_snapshots, drop_replication)).first;
         co_await raft.start();
     }
 
@@ -454,12 +474,12 @@ struct test_case {
 };
 
 future<> wait_log(std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>& rafts,
-        size_t leader) {
+        connected& connected, size_t leader) {
     // Wait for leader log to propagate
     auto leader_log_idx = rafts[leader].first->log_last_idx();
     for (size_t s = 0; s < rafts.size(); ++s) {
         auto id = raft::server_id{utils::UUID(0, s + 1)};
-        if (s != leader && server_disconnected.find(id) == server_disconnected.end()) {
+        if (s != leader && connected(id)) {
             co_await rafts[s].first->wait_log_idx(leader_log_idx);
         }
     }
@@ -526,9 +546,10 @@ future<int> run_test(test_case test, bool drop_replication = false) {
 
     auto snaps = make_lw_shared<snapshots>();
     auto persisted_snaps = make_lw_shared<persisted_snapshots>();
+    connected connected{};
 
     auto rafts = co_await create_cluster(states, apply_changes, test.total_values, test.type,
-            snaps, persisted_snaps, drop_replication);
+            connected, snaps, persisted_snaps, drop_replication);
 
     // Tickers for servers
     std::vector<seastar::timer<lowres_clock>> tickers(test.nodes);
@@ -553,9 +574,9 @@ future<int> run_test(test_case test, bool drop_replication = false) {
                 return rafts[leader].first->add_entry(std::move(cmd), raft::wait_type::committed);
             });
             next_val += n;
-            co_await wait_log(rafts, leader);
+            co_await wait_log(rafts, connected, leader);
         } else if (std::holds_alternative<new_leader>(update)) {
-            co_await wait_log(rafts, leader);
+            co_await wait_log(rafts, connected, leader);
             pause_tickers(tickers);
             unsigned next_leader = std::get<new_leader>(update);
             if (next_leader != leader) {
@@ -564,26 +585,26 @@ future<int> run_test(test_case test, bool drop_replication = false) {
                 auto leader_log_idx = rafts[leader].first->log_last_idx();
                 for (size_t s = 0; s < test.nodes; ++s) {
                     auto id = raft::server_id{utils::UUID(0, s + 1)};
-                    if (s != leader && server_disconnected.find(id) == server_disconnected.end()) {
+                    if (s != leader && connected(id)) {
                         co_await rafts[s].first->wait_log_idx(leader_log_idx);
                     }
                 }
                 // Make current leader a follower: disconnect, timeout, re-connect
-                server_disconnected.insert(raft::server_id{utils::UUID(0, leader + 1)});
+                connected.disconnect(raft::server_id{utils::UUID{0, leader + 1}});
                 for (size_t s = 0; s < test.nodes; ++s) {
                     rafts[s].first->elapse_election();
                 }
                 co_await rafts[next_leader].first->elect_me_leader();
-                server_disconnected.erase(raft::server_id{utils::UUID(0, leader + 1)});
+                connected.connect(raft::server_id{utils::UUID{0, leader + 1}});
                 tlogger.debug("confirmed leader on {}", next_leader);
                 leader = next_leader;
             }
             restart_tickers(tickers);
         } else if (std::holds_alternative<partition>(update)) {
-            co_await wait_log(rafts, leader);
+            co_await wait_log(rafts, connected, leader);
             pause_tickers(tickers);
             auto p = std::get<partition>(update);
-            server_disconnected.clear();
+            connected.connect_all();
             std::unordered_set<size_t> partition_servers;
             struct leader new_leader;
             bool have_new_leader = false;
@@ -601,7 +622,7 @@ future<int> run_test(test_case test, bool drop_replication = false) {
             for (size_t s = 0; s < test.nodes; ++s) {
                 if (partition_servers.find(s) == partition_servers.end()) {
                     // Disconnect servers not in main partition
-                    server_disconnected.insert(raft::server_id{utils::UUID(0, s + 1)});
+                    connected.disconnect(raft::server_id{utils::UUID{0, s + 1}});
                 }
             }
             if (have_new_leader && new_leader.id != leader) {
@@ -636,7 +657,7 @@ future<int> run_test(test_case test, bool drop_replication = false) {
         }
     }
 
-    server_disconnected.clear();    // Re-connect all servers
+    connected.connect_all();
 
     if (next_val < test.total_values) {
         // Send remaining updates
