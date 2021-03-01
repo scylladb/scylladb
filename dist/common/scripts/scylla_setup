@@ -449,7 +449,7 @@ if __name__ == '__main__':
                 if dsk == '':
                     continue
                 if dsk.find(',') > 0:
-                    dsklist = dsk.split(',')
+                    dsklist = [i.strip() for i in dsk.split(',')]
                     continue
                 if not os.path.exists(dsk):
                     print('{} not found'.format(dsk))
