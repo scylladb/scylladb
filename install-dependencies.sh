@@ -110,6 +110,13 @@ fedora_python3_packages=(
     python3-setuptools
     python3-psutil
     python3-distro
+    python3-click
+    python3-six
+)
+
+pip_packages=(
+    scylla-driver
+    geomet
 )
 
 centos_packages=(
@@ -206,16 +213,22 @@ print_usage() {
     echo "Usage: install-dependencies.sh [OPTION]..."
     echo ""
     echo "  --print-python3-runtime-packages Print required python3 packages for Scylla"
+    echo "  --print-pip-runtime-packages Print required pip packages for Scylla"
     echo "  --print-node-exporter-filename Print node_exporter filename"
     exit 1
 }
 
 PRINT_PYTHON3=false
+PRINT_PIP=false
 PRINT_NODE_EXPORTER=false
 while [ $# -gt 0 ]; do
     case "$1" in
         "--print-python3-runtime-packages")
             PRINT_PYTHON3=true
+            shift 1
+            ;;
+        "--print-pip-runtime-packages")
+            PRINT_PIP=true
             shift 1
             ;;
         "--print-node-exporter-filename")
@@ -234,6 +247,11 @@ if $PRINT_PYTHON3; then
         exit 1
     fi
     echo "${fedora_python3_packages[@]}"
+    exit 0
+fi
+
+if $PRINT_PIP; then
+    echo "${pip_packages[@]}"
     exit 0
 fi
 
@@ -266,7 +284,9 @@ elif [ "$ID" = "fedora" ]; then
         exit 1
     fi
     yum install -y "${fedora_packages[@]}" "${fedora_python3_packages[@]}"
-    pip3 install cassandra-driver
+    pip3 install "geomet<0.3,>=0.1"
+    # Disable C extensions
+    pip3 install scylla-driver --install-option="--no-murmur3" --install-option="--no-libev" --install-option="--no-cython"
 
     if [ -f "$(node_exporter_fullpath)" ] && node_exporter_checksum; then
         echo "$(node_exporter_filename) already exists, skipping download"
