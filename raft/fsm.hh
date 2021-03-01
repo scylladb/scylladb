@@ -29,8 +29,7 @@ namespace raft {
 
 // State of the FSM that needs logging & sending.
 struct fsm_output {
-    term_t term;
-    server_id vote;
+    std::optional<std::pair<term_t, server_id>> term_and_vote;
     std::vector<log_entry_ptr> log_entries;
     std::vector<std::pair<server_id, rpc_message>> messages;
     // Entries to apply.
