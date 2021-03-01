@@ -161,8 +161,8 @@ struct snapshot_value {
 };
 
 // Lets assume one snapshot per server
-std::unordered_map<raft::server_id, snapshot_value> snapshots;
-std::unordered_map<raft::server_id, std::pair<raft::snapshot, snapshot_value>> persisted_snapshots;
+using snapshots = std::unordered_map<raft::server_id, snapshot_value>;
+using persisted_snapshots = std::unordered_map<raft::server_id, std::pair<raft::snapshot, snapshot_value>>;
 
 class state_machine : public raft::state_machine {
 public:
@@ -173,10 +173,13 @@ private:
     size_t _apply_entries;
     size_t _seen = 0;
     promise<> _done;
+    lw_shared_ptr<snapshots> _snapshots;
 public:
     sm_value value;
-    state_machine(raft::server_id id, apply_fn apply, sm_value value_, size_t apply_entries) :
-        _id(id), _apply(std::move(apply)), _apply_entries(apply_entries),
+    state_machine(raft::server_id id, apply_fn apply, sm_value value_, size_t apply_entries,
+            lw_shared_ptr<snapshots> snapshots,
+            lw_shared_ptr<persisted_snapshots> persisted_snapshots) :
+        _id(id), _apply(std::move(apply)), _apply_entries(apply_entries), _snapshots(snapshots),
         value(std::move(value_)) {}
     future<> apply(const std::vector<raft::command_cref> commands) override {
         _apply(_id, commands, value);
@@ -189,18 +192,18 @@ public:
     }
 
     future<raft::snapshot_id> take_snapshot() override {
-        snapshots[_id].value = value;
-        tlogger.debug("sm[{}] takes snapshot {}", _id, snapshots[_id].value.get_value());
-        snapshots[_id].idx = raft::index_t{_seen};
+        (*_snapshots)[_id].value = value;
+        tlogger.debug("sm[{}] takes snapshot {}", _id, (*_snapshots)[_id].value.get_value());
+        (*_snapshots)[_id].idx = raft::index_t{_seen};
         return make_ready_future<raft::snapshot_id>(raft::snapshot_id{utils::make_random_uuid()});
     }
     void drop_snapshot(raft::snapshot_id id) override {
-        snapshots.erase(_id);
+        (*_snapshots).erase(_id);
     }
     future<> load_snapshot(raft::snapshot_id id) override {
-        value = snapshots[_id].value;
-        tlogger.debug("sm[{}] loads snapshot {}", _id, snapshots[_id].value.get_value());
-        _seen = snapshots[_id].idx;
+        value = (*_snapshots)[_id].value;
+        tlogger.debug("sm[{}] loads snapshot {}", _id, (*_snapshots)[_id].value.get_value());
+        _seen = (*_snapshots)[_id].idx;
         if (_seen >= _apply_entries) {
             _done.set_value();
         }
@@ -226,8 +229,13 @@ struct initial_state {
 class persistence : public raft::persistence {
     raft::server_id _id;
     initial_state _conf;
+    lw_shared_ptr<snapshots> _snapshots;
+    lw_shared_ptr<persisted_snapshots> _persisted_snapshots;
 public:
-    persistence(raft::server_id id, initial_state conf) : _id(id), _conf(std::move(conf)) {}
+    persistence(raft::server_id id, initial_state conf, lw_shared_ptr<snapshots> snapshots,
+            lw_shared_ptr<persisted_snapshots> persisted_snapshots) : _id(id),
+            _conf(std::move(conf)), _snapshots(snapshots),
+            _persisted_snapshots(persisted_snapshots) {}
     persistence() {}
     virtual future<> store_term_and_vote(raft::term_t term, raft::server_id vote) { return seastar::sleep(1us); }
     virtual future<std::pair<raft::term_t, raft::server_id>> load_term_and_vote() {
@@ -235,8 +243,8 @@ public:
         return make_ready_future<std::pair<raft::term_t, raft::server_id>>(term_and_vote);
     }
     virtual future<> store_snapshot(const raft::snapshot& snap, size_t preserve_log_entries) {
-        persisted_snapshots[_id] = std::make_pair(snap, snapshots[_id]);
-        tlogger.debug("sm[{}] persists snapshot {}", _id, snapshots[_id].value.get_value());
+        (*_persisted_snapshots)[_id] = std::make_pair(snap, (*_snapshots)[_id]);
+        tlogger.debug("sm[{}] persists snapshot {}", _id, (*_snapshots)[_id].value.get_value());
         return make_ready_future<>();
     }
     future<raft::snapshot> load_snapshot() override {
@@ -271,16 +279,18 @@ public:
 class rpc : public raft::rpc {
     static std::unordered_map<raft::server_id, rpc*> net;
     raft::server_id _id;
+    lw_shared_ptr<snapshots> _snapshots;
     bool _drop_replication;
 public:
-    rpc(raft::server_id id, bool drop_replication) : _id(id), _drop_replication(drop_replication) {
+    rpc(raft::server_id id, lw_shared_ptr<snapshots> snapshots, bool drop_replication) : _id(id),
+            _snapshots(snapshots), _drop_replication(drop_replication) {
         net[_id] = this;
     }
     virtual future<> send_snapshot(raft::server_id id, const raft::install_snapshot& snap) {
         if (is_disconnected(id) || is_disconnected(_id)) {
             return make_ready_future<>();
         }
-        snapshots[id] = snapshots[_id];
+        (*_snapshots)[id] = (*_snapshots)[_id];
         return net[id]->_client->apply_snapshot(_id, std::move(snap));
     }
     virtual future<> send_append_entries(raft::server_id id, const raft::append_request& append_request) {
@@ -325,13 +335,15 @@ enum class sm_type {
 
 std::pair<std::unique_ptr<raft::server>, state_machine*>
 create_raft_server(raft::server_id uuid, state_machine::apply_fn apply, initial_state state,
-        size_t apply_entries, sm_type type, bool drop_replication) {
+        size_t apply_entries, sm_type type, lw_shared_ptr<snapshots> snapshots,
+        lw_shared_ptr<persisted_snapshots> persisted_snapshots, bool drop_replication) {
     sm_value val = (type == sm_type::HASH) ? sm_value(std::make_unique<hasher_int>()) : sm_value(std::make_unique<sum_sm>());
 
-    auto sm = std::make_unique<state_machine>(uuid, std::move(apply), std::move(val), apply_entries);
+    auto sm = std::make_unique<state_machine>(uuid, std::move(apply), std::move(val),
+            apply_entries, snapshots, persisted_snapshots);
     auto& rsm = *sm;
-    auto mrpc = std::make_unique<rpc>(uuid, drop_replication);
-    auto mpersistence = std::make_unique<persistence>(uuid, state);
+    auto mrpc = std::make_unique<rpc>(uuid, snapshots, drop_replication);
+    auto mpersistence = std::make_unique<persistence>(uuid, state, snapshots, persisted_snapshots);
     auto fd = seastar::make_shared<failure_detector>(uuid);
 
     auto raft = raft::create_server(uuid, std::move(mrpc), std::move(sm), std::move(mpersistence),
@@ -341,6 +353,7 @@ create_raft_server(raft::server_id uuid, state_machine::apply_fn apply, initial_
 }
 
 future<std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>> create_cluster(std::vector<initial_state> states, state_machine::apply_fn apply, size_t apply_entries, sm_type type,
+        lw_shared_ptr<snapshots> snapshots, lw_shared_ptr<persisted_snapshots> persisted_snapshots,
         bool drop_replication) {
     raft::configuration config;
     std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>> rafts;
@@ -354,9 +367,9 @@ future<std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>> cr
     for (size_t i = 0; i < states.size(); i++) {
         auto& s = states[i].address;
         states[i].snapshot.config = config;
-        snapshots[s.id] = states[i].snp_value;
+        (*snapshots)[s.id] = states[i].snp_value;
         auto& raft = *rafts.emplace_back(create_raft_server(s.id, apply, states[i], apply_entries,
-                    type, drop_replication)).first;
+                    type, snapshots, persisted_snapshots, drop_replication)).first;
         co_await raft.start();
     }
 
@@ -511,8 +524,11 @@ future<int> run_test(test_case test, bool drop_replication = false) {
         }
     }
 
+    auto snaps = make_lw_shared<snapshots>();
+    auto persisted_snaps = make_lw_shared<persisted_snapshots>();
+
     auto rafts = co_await create_cluster(states, apply_changes, test.total_values, test.type,
-            drop_replication);
+            snaps, persisted_snaps, drop_replication);
 
     // Tickers for servers
     std::vector<seastar::timer<lowres_clock>> tickers(test.nodes);
@@ -656,7 +672,7 @@ future<int> run_test(test_case test, bool drop_replication = false) {
     }
 
     // TODO: check that snapshot is taken when it should be
-    for (auto& s : persisted_snapshots) {
+    for (auto& s : (*persisted_snaps)) {
         auto& [snp, val] = s.second;
         auto& digest = val.value;
         auto expected = sm_value_for(val.idx);
@@ -666,9 +682,6 @@ future<int> run_test(test_case test, bool drop_replication = false) {
             break;
         }
    }
-
-    snapshots.clear();
-    persisted_snapshots.clear();
 
     co_return fail;
 }
