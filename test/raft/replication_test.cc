@@ -26,33 +26,40 @@
 #include <seastar/core/loop.hh>
 #include <seastar/util/log.hh>
 #include <seastar/util/later.hh>
+#include <seastar/testing/thread_test_case.hh>
 #include "raft/server.hh"
 #include "serializer.hh"
 #include "serializer_impl.hh"
 #include "xx_hasher.hh"
 
-
 // Test Raft library with declarative test definitions
 //
-//  For each test defined by
-//      (replication_tests)
-//      - Name
-//      - Number of servers (nodes)
-//      - Current term
-//      - Initial leader
-//      - Initial states for each server (log entries)
-//      - Updates to be procesed
-//          - append to log (trickles from leader to the rest)
-//          - leader change
-//          - configuration change
+//  Each test can be defined by (struct test_case):
+//      .nodes                       number of nodes
+//      .total_values                how many entries to append to leader nodes (default 100)
+//      .initial_term                initial term # for setup
+//      .initial_leader              what server is leader
+//      .initial_states              initial logs of servers
+//          .le                      log entries
+//      .initial_snapshots           snapshots present at initial state for servers
+//      .updates                     updates to execute on these servers
+//          entries{x}               add the following x entries to the current leader
+//          new_leader{x}            elect x as new leader
+//          partition{a,b,c}         Only servers a,b,c are connected
+//          partition{a,leader{b},c} Only servers a,b,c are connected, and make b leader
 //
-//      (run_test)
-//      - Create the servers and initialize
-//      - Set up hasher
-//      - Process updates one by one
-//      - Wait until all servers have logs of size of total_values entries
-//      - Verify hash
-
+//      run_test
+//      - Creates the servers and initializes logs and snapshots
+//        with hasher/digest and tickers to advance servers
+//      - Processes updates one by one
+//      - Appends remaining values
+//      - Waits until all servers have logs of size of total_values entries
+//      - Verifies hash
+//      - Verifies persisted snapshots
+//
+//      Tests are run also with 20% random packet drops.
+//      Two test cases are created for each with the macro
+//          RAFT_TEST_CASE(<test name>, <test case>)
 
 using namespace std::chrono_literals;
 using namespace std::placeholders;
@@ -470,7 +477,6 @@ struct initial_snapshot {
 };
 
 struct test_case {
-    const std::string name;
     const sm_type type = sm_type::HASH;
     const size_t nodes;
     const size_t total_values = 100;
@@ -506,10 +512,9 @@ void restart_tickers(std::vector<seastar::timer<lowres_clock>>& tickers) {
 }
 
 // Run test case (name, nodes, leader, initial logs, updates)
-future<int> run_test(test_case test, bool drop_replication = false) {
+future<> run_test(test_case test, bool drop_replication) {
     std::vector<initial_state> states(test.nodes);       // Server initial states
 
-    tlogger.debug("running test {}:", test.name);
     size_t leader;
     if (test.initial_leader) {
         leader = *test.initial_leader;
@@ -568,7 +573,9 @@ future<int> run_test(test_case test, bool drop_replication = false) {
         });
     }
 
+    BOOST_TEST_MESSAGE("Electing first leader " << leader);
     co_await rafts[leader].first->elect_me_leader();
+    BOOST_TEST_MESSAGE("Processing updates");
     // Process all updates in order
     size_t next_val = leader_snap_skipped + leader_initial_entries;
     for (auto update: test.updates) {
@@ -588,7 +595,8 @@ future<int> run_test(test_case test, bool drop_replication = false) {
             pause_tickers(tickers);
             unsigned next_leader = std::get<new_leader>(update);
             if (next_leader != leader) {
-                assert(next_leader < rafts.size());
+                BOOST_CHECK_MESSAGE(next_leader < rafts.size(),
+                        format("Wrong next leader value {}", next_leader));
                 // Wait for leader log to propagate
                 auto leader_log_idx = rafts[leader].first->log_last_idx();
                 for (size_t s = 0; s < test.nodes; ++s) {
@@ -666,6 +674,7 @@ future<int> run_test(test_case test, bool drop_replication = false) {
 
     connected.connect_all();
 
+    BOOST_TEST_MESSAGE("Appending remaining values");
     if (next_val < test.total_values) {
         // Send remaining updates
         std::vector<int> values(test.total_values - next_val);
@@ -686,171 +695,195 @@ future<int> run_test(test_case test, bool drop_replication = false) {
         co_await r.first->abort(); // Stop servers
     }
 
-    int fail = 0;
-
-    // Verify hash matches expected (snapshot and apply calls)
+    BOOST_TEST_MESSAGE("Verifying hashes match expected (snapshot and apply calls)");
     auto expected = sm_value_for(test.total_values).get_value();
     for (size_t i = 0; i < rafts.size(); ++i) {
         auto digest = rafts[i].second->value.get_value();
-        if (digest != expected) {
-            tlogger.debug("Digest doesn't match for server [{}]: {} != {}", i, digest, expected);
-            fail = -1;  // Fail
-            break;
-        }
+        BOOST_CHECK_MESSAGE(digest == expected,
+                format("Digest doesn't match for server [{}]: {} != {}", i, digest, expected));
     }
 
+    BOOST_TEST_MESSAGE("Verifying persisted snapshots");
     // TODO: check that snapshot is taken when it should be
     for (auto& s : (*persisted_snaps)) {
         auto& [snp, val] = s.second;
         auto& digest = val.value;
         auto expected = sm_value_for(val.idx);
-        if (!(digest == expected)) {
-            tlogger.debug("Persisted snapshot {} doesn't match {} != {}", snp.id, digest.get_value(), expected.get_value());
-            fail = -1;
-            break;
-        }
+        BOOST_CHECK_MESSAGE(digest == expected,
+                format("Persisted snapshot {} doesn't match {} != {}", snp.id, digest.get_value(), expected.get_value()));
    }
 
-    co_return fail;
+    co_return;
 }
 
-int main(int argc, char* argv[]) {
-    namespace bpo = boost::program_options;
+void replication_test(struct test_case test, bool drop_replication) {
+    run_test(std::move(test), drop_replication).get();
+}
 
-    seastar::app_template::config cfg;
-    seastar::app_template app(cfg);
-    app.add_options()
-        ("drop-replication", bpo::value<bool>()->default_value(false), "drop replication packets randomly");
+#define RAFT_TEST_CASE(test_name, test_body)  \
+    SEASTAR_THREAD_TEST_CASE(test_name) { replication_test(test_body, false); }  \
+    SEASTAR_THREAD_TEST_CASE(test_name ## _drops) { replication_test(test_body, true); }
 
-    std::vector<test_case> replication_tests = {
-        // 1 nodes, simple replication, empty, no updates
-        {.name = "simple_replication", .nodes = 1},
-        // 2 nodes, 4 existing leader entries, 4 updates
-        {.name = "non_empty_leader_log", .nodes = 2,
+// 1 nodes, simple replication, empty, no updates
+RAFT_TEST_CASE(simple_replication, (test_case{
+         .nodes = 1}))
+
+// 2 nodes, 4 existing leader entries, 4 updates
+RAFT_TEST_CASE(non_empty_leader_log, (test_case{
+         .nodes = 2,
          .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3}}}},
-         .updates = {entries{4}}},
-        {.name = "non_empty_leader_log_no_new_entries", .nodes = 2, .total_values = 4,
-         .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3}}}}},
-        // 1 nodes, 12 client entries
-        {.name = "simple_1_auto_12", .nodes = 1,
-         .initial_states = {}, .updates = {entries{12}}},
-        // 1 nodes, 12 client entries
-        {.name = "simple_1_expected", .nodes = 1,
-         .initial_states = {},
-         .updates = {entries{4}}},
-        // 1 nodes, 7 leader entries, 12 client entries
-        {.name = "simple_1_pre", .nodes = 1,
+         .updates = {entries{4}}}));
+
+// 2 nodes, don't add more entries besides existing log
+RAFT_TEST_CASE(non_empty_leader_log_no_new_entries, (test_case{
+         .nodes = 2, .total_values = 4,
+         .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3}}}}}));
+
+// 1 nodes, 12 client entries
+RAFT_TEST_CASE(simple_1_auto_12, (test_case{
+         .nodes = 1,
+         .initial_states = {}, .updates = {entries{12}}}));
+
+// 1 nodes, 12 client entries
+RAFT_TEST_CASE(simple_1_expected, (test_case{
+         .nodes = 1, .initial_states = {},
+         .updates = {entries{4}}}));
+
+// 1 nodes, 7 leader entries, 12 client entries
+RAFT_TEST_CASE(simple_1_pre, (test_case{
+         .nodes = 1,
          .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3},{1,4},{1,5},{1,6}}}},
-         .updates = {entries{12}},},
-        // 2 nodes, 7 leader entries, 12 client entries
-        {.name = "simple_2_pre", .nodes = 2,
+         .updates = {entries{12}},}));
+
+// 2 nodes, 7 leader entries, 12 client entries
+RAFT_TEST_CASE(simple_2_pre, (test_case{
+         .nodes = 2,
          .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3},{1,4},{1,5},{1,6}}}},
-         .updates = {entries{12}},},
-        // 3 nodes, 2 leader changes with 4 client entries each
-        {.name = "leader_changes", .nodes = 3,
-         .updates = {entries{4},new_leader{1},entries{4},new_leader{2},entries{4}}},
-        //
-        // NOTE: due to disrupting candidates protection leader doesn't vote for others, and
-        //       servers with entries vote for themselves, so some tests use 3 servers instead of
-        //       2 for simplicity and to avoid a stalemate. This behaviour can be disabled.
-        //
-        // 3 nodes, 7 leader entries, 12 client entries, change leader, 12 client entries
-        {.name = "simple_3_pre_chg", .nodes = 3, .initial_term = 2,
+         .updates = {entries{12}},}));
+
+// 3 nodes, 2 leader changes with 4 client entries each
+RAFT_TEST_CASE(leader_changes, (test_case{
+         .nodes = 3,
+         .updates = {entries{4},new_leader{1},entries{4},new_leader{2},entries{4}}}));
+
+//
+// NOTE: due to disrupting candidates protection leader doesn't vote for others, and
+//       servers with entries vote for themselves, so some tests use 3 servers instead of
+//       2 for simplicity and to avoid a stalemate. This behaviour can be disabled.
+//
+
+// 3 nodes, 7 leader entries, 12 client entries, change leader, 12 client entries
+RAFT_TEST_CASE(simple_3_pre_chg, (test_case{
+         .nodes = 3, .initial_term = 2,
          .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3},{1,4},{1,5},{1,6}}}},
-         .updates = {entries{12},new_leader{1},entries{12}},},
-        // 2 nodes, leader empoty, follower has 3 spurious entries
-        {.name = "replace_log_leaders_log_empty", .nodes = 3, .initial_term = 2,
+         .updates = {entries{12},new_leader{1},entries{12}},}));
+
+// 2 nodes, leader empoty, follower has 3 spurious entries
+RAFT_TEST_CASE(replace_log_leaders_log_empty, (test_case{
+         .nodes = 3, .initial_term = 2,
          .initial_states = {{}, {{{2,10},{2,20},{2,30}}}},
-         .updates = {entries{4}}},
-        // 3 nodes, 7 leader entries, follower has 9 spurious entries
-        {.name = "simple_3_spurious", .nodes = 3, .initial_term = 2,
+         .updates = {entries{4}}}));
+
+// 3 nodes, 7 leader entries, follower has 9 spurious entries
+RAFT_TEST_CASE(simple_3_spurious_1, (test_case{
+         .nodes = 3, .initial_term = 2,
          .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3},{1,4},{1,5},{1,6}}},
                             {{{2,10},{2,11},{2,12},{2,13},{2,14},{2,15},{2,16},{2,17},{2,18}}}},
-         .updates = {entries{4}},},
-        // 3 nodes, term 3, leader has 9 entries, follower has 5 spurious entries, 4 client entries
-        {.name = "simple_3_spurious", .nodes = 3, .initial_term = 3,
+         .updates = {entries{4}},}));
+
+// 3 nodes, term 3, leader has 9 entries, follower has 5 spurious entries, 4 client entries
+RAFT_TEST_CASE(simple_3_spurious_2, (test_case{
+         .nodes = 3, .initial_term = 3,
          .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3},{1,4},{1,5},{1,6}}},
                             {{{2,10},{2,11},{2,12},{2,13},{2,14}}}},
-         .updates = {entries{4}},},
-        // 3 nodes, term 2, leader has 7 entries, follower has 3 good and 3 spurious entries
-        {.name = "simple_3_follower_4_1", .nodes = 3, .initial_term = 3,
+         .updates = {entries{4}},}));
+
+// 3 nodes, term 2, leader has 7 entries, follower has 3 good and 3 spurious entries
+RAFT_TEST_CASE(simple_3_follower_4_1, (test_case{
+         .nodes = 3, .initial_term = 3,
          .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3},{1,4},{1,5},{1,6}}},
                             {.le = {{1,0},{1,1},{1,2},{2,20},{2,30},{2,40}}}},
-         .updates = {entries{4}}},
-        // A follower and a leader have matching logs but leader's is shorter
-        // 3 nodes, term 2, leader has 2 entries, follower has same and 5 more, 12 updates
-        {.name = "simple_3_short_leader", .nodes = 3, .initial_term = 3,
+         .updates = {entries{4}}}));
+
+// A follower and a leader have matching logs but leader's is shorter
+// 3 nodes, term 2, leader has 2 entries, follower has same and 5 more, 12 updates
+RAFT_TEST_CASE(simple_3_short_leader, (test_case{
+         .nodes = 3, .initial_term = 3,
          .initial_states = {{.le = {{1,0},{1,1}}},
                             {.le = {{1,0},{1,1},{1,2},{1,3},{1,4},{1,5},{1,6}}}},
-         .updates = {entries{12}}},
-        // A follower and a leader have no common entries
-        // 3 nodes, term 2, leader has 7 entries, follower has non-matching 6 entries, 12 updates
-        {.name = "follower_not_matching", .nodes = 3, .initial_term = 3,
+         .updates = {entries{12}}}));
+
+// A follower and a leader have no common entries
+// 3 nodes, term 2, leader has 7 entries, follower has non-matching 6 entries, 12 updates
+RAFT_TEST_CASE(follower_not_matching, (test_case{
+         .nodes = 3, .initial_term = 3,
          .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3},{1,4},{1,5},{1,6}}},
                             {.le = {{2,10},{2,20},{2,30},{2,40},{2,50},{2,60}}}},
-         .updates = {entries{12}},},
-        // A follower and a leader have one common entry
-        // 3 nodes, term 2, leader has 3 entries, follower has non-matching 3 entries, 12 updates
-        {.name = "follower_one_common", .nodes = 3, .initial_term = 4,
+         .updates = {entries{12}},}));
+
+// A follower and a leader have one common entry
+// 3 nodes, term 2, leader has 3 entries, follower has non-matching 3 entries, 12 updates
+RAFT_TEST_CASE(follower_one_common_1, (test_case{
+         .nodes = 3, .initial_term = 4,
          .initial_states = {{.le = {{1,0},{1,1},{1,2}}},
                             {.le = {{1,0},{2,11},{2,12},{2,13}}}},
-         .updates = {entries{12}}},
-        // A follower and a leader have 2 common entries in different terms
-        // 3 nodes, term 2, leader has 4 entries, follower has matching but in different term
-        {.name = "follower_one_common", .nodes = 3, .initial_term = 5,
+         .updates = {entries{12}}}));
+
+// A follower and a leader have 2 common entries in different terms
+// 3 nodes, term 2, leader has 4 entries, follower has matching but in different term
+RAFT_TEST_CASE(follower_one_common_2, (test_case{
+         .nodes = 3, .initial_term = 5,
          .initial_states = {{.le = {{1,0},{2,1},{3,2},{3,3}}},
                             {.le = {{1,0},{2,1},{2,2},{2,13}}}},
-         .updates = {entries{4}}},
-        // 3 nodes, leader with snapshot (1) and log (2,3,4), gets updates (5,6)
-        {.name = "simple_snapshot", .nodes = 3, .initial_term = 1,
-         .initial_states = {{.le = {{1,10},{1,11},{1,12},{1,13}}}},
-         .initial_snapshots = {{.snap = {.idx = raft::index_t(10),   // log idx - 1
-                                         .term = raft::term_t(1),
-                                         .id = utils::UUID(0, 1)}}},   // must be 1+
-         .updates = {entries{12}}},
-        // 2 nodes both taking snapshot while simple replication
-        {.name = "take_snapshot", .nodes = 2,
+         .updates = {entries{4}}}));
+
+// 2 nodes both taking snapshot while simple replication
+RAFT_TEST_CASE(take_snapshot, (test_case{
+         .nodes = 2,
          .config = {{.snapshot_threshold = 10, .snapshot_trailing = 5}, {.snapshot_threshold = 20, .snapshot_trailing = 10}},
-         .updates = {entries{100}}},
-        // 2 nodes doing simple replication/snapshoting while leader's log size is limited
-        {.name = "backpressure", .type = sm_type::SUM, .nodes = 2,
+         .updates = {entries{100}}}));
+
+// 2 nodes doing simple replication/snapshoting while leader's log size is limited
+RAFT_TEST_CASE(backpressure, (test_case{
+         .type = sm_type::SUM, .nodes = 2,
          .config = {{.snapshot_threshold = 10, .snapshot_trailing = 5, .max_log_size = 20}, {.snapshot_threshold = 20, .snapshot_trailing = 10}},
-         .updates = {entries{100}}},
-        // 3 nodes, add entries, drop leader 0, add entries [implicit re-join all]
-        {.name = "drops_01", .nodes = 3,
-         .updates = {entries{4},partition{1,2},entries{4}}},
-        // 3 nodes, add entries, drop follower 1, add entries [implicit re-join all]
-        {.name = "drops_02", .nodes = 3,
-         .updates = {entries{4},partition{0,2},entries{4},partition{2,1}}},
-        // 3 nodes, add entries, drop leader 0, custom leader, add entries [implicit re-join all]
-        {.name = "drops_03", .nodes = 3,
-         .updates = {entries{4},partition{leader{1},2},entries{4}}},
-        // 4 nodes, add entries, drop follower 1, custom leader, add entries [implicit re-join all]
-        {.name = "drops_04", .nodes = 4,
-         .updates = {entries{4},partition{0,2,3},entries{4},partition{1,leader{2},3}}},
+         .updates = {entries{100}}}));
+
+// 3 nodes, add entries, drop leader 0, add entries [implicit re-join all]
+RAFT_TEST_CASE(drops_01, (test_case{
+         .nodes = 3,
+         .updates = {entries{4},partition{1,2},entries{4}}}));
+
+// 3 nodes, add entries, drop follower 1, add entries [implicit re-join all]
+RAFT_TEST_CASE(drops_02, (test_case{
+         .nodes = 3,
+         .updates = {entries{4},partition{0,2},entries{4},partition{2,1}}}));
+
+// 3 nodes, add entries, drop leader 0, custom leader, add entries [implicit re-join all]
+RAFT_TEST_CASE(drops_03, (test_case{
+         .nodes = 3,
+         .updates = {entries{4},partition{leader{1},2},entries{4}}}));
+
+// 4 nodes, add entries, drop follower 1, custom leader, add entries [implicit re-join all]
+RAFT_TEST_CASE(drops_04, (test_case{
+         .nodes = 4,
+         .updates = {entries{4},partition{0,2,3},entries{4},partition{1,leader{2},3}}}));
+
+// TODO: change to RAFT_TEST_CASE once it's stable for handling packet drops
+SEASTAR_THREAD_TEST_CASE(test_take_snapshot_and_stream) {
+    replication_test(
         // Snapshot automatic take and load
-        {.name = "take_snapshot_and_stream", .nodes = 3,
+        {.nodes = 3,
          .config = {{.snapshot_threshold = 10, .snapshot_trailing = 5}},
-         .updates = {entries{5}, partition{0,1}, entries{10}, partition{0, 2}, entries{20}}},
-
-        // verifies that each node in a cluster can campaign
-        // and be elected in turn. This ensures that elections work when not
-        // starting from a clean slate (as they do in TestLeaderElection)
-        // TODO: add pre-vote case
-        {.name = "etcd_test_leader_cycle", .nodes = 3,
-         .updates = {new_leader{1},new_leader{2},new_leader{0}}},
-    };
-
-    return app.run(argc, argv, [&replication_tests, &app] () -> future<int> {
-        bool drop_replication = app.configuration()["drop-replication"].as<bool>();
-
-        for (auto test: replication_tests) {
-            if (co_await run_test(test, drop_replication) != 0) {
-                tlogger.error("Test {} failed", test.name);
-                co_return 1; // Fail
-            }
-        }
-        co_return 0;
-    });
+         .updates = {entries{5}, partition{0,1}, entries{10}, partition{0, 2}, entries{20}}}
+    , false);
 }
+
+// verifies that each node in a cluster can campaign
+// and be elected in turn. This ensures that elections work when not
+// starting from a clean slate (as they do in TestLeaderElection)
+// TODO: add pre-vote case
+RAFT_TEST_CASE(etcd_test_leader_cycle, (test_case{
+         .nodes = 3,
+         .updates = {new_leader{1},new_leader{2},new_leader{0}}}));
 
