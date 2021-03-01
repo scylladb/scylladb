@@ -719,8 +719,10 @@ future<> cql_server::connection::process_request() {
 
         if (_server._stats.requests_serving > _server._max_concurrent_requests) {
             ++_server._stats.requests_shed;
-            return make_exception_future<>(
-                    exceptions::overloaded_exception(format("too many in-flight requests (configured via max_concurrent_requests_per_shard): {}", _server._stats.requests_serving)));
+            return _read_buf.skip(f.length).then([this] {
+                return make_exception_future<>(
+                        exceptions::overloaded_exception(format("too many in-flight requests (configured via max_concurrent_requests_per_shard): {}", _server._stats.requests_serving)));
+            });
         }
 
         auto fut = get_units(_server._memory_available, mem_estimate);
