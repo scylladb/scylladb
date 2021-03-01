@@ -45,7 +45,7 @@ if __name__ == '__main__':
         run('sysctl -p /etc/sysctl.d/99-scylla-coredump.conf', shell=True, check=True)
 # Other distributions can use systemd-coredump, so setup it
     else:
-        if is_debian_variant():
+        if is_debian_variant() and not shutil.which('coredumpctl'):
             apt_install('systemd-coredump')
         conf_data = '''
 [Coredump]
