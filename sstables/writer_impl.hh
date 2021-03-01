@@ -46,7 +46,7 @@ struct sstable_writer::writer_impl {
         , _pc(pc)
         , _cfg(cfg)
         , _collector(_schema, sst.get_filename())
-        , _validator(format("sstable writer {}", _sst.get_filename()), _schema, _cfg.validate_keys)
+        , _validator(format("sstable writer {}", _sst.get_filename()), _schema, _cfg.validation_level)
     {}
 
     virtual void consume_new_partition(const dht::decorated_key& dk) = 0;

@@ -62,6 +62,7 @@
 #include "sstables/shareable_components.hh"
 #include "sstables/open_info.hh"
 #include "query-request.hh"
+#include "mutation_fragment_stream_validator.hh"
 
 #include <seastar/util/optimized_optional.hh>
 #include <boost/intrusive/list.hpp>
@@ -113,7 +114,7 @@ struct sstable_writer_config {
     uint64_t max_sstable_size = std::numeric_limits<uint64_t>::max();
     bool backup = false;
     bool leave_unsealed = false;
-    bool validate_keys;
+    mutation_fragment_stream_validation_level validation_level;
     std::optional<db::replay_position> replay_position;
     std::optional<int> sstable_level;
     write_monitor* monitor = &default_write_monitor();

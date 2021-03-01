@@ -969,6 +969,14 @@ bool mutation_fragment_stream_validator::operator()(const dht::decorated_key& dk
     return false;
 }
 
+bool mutation_fragment_stream_validator::operator()(dht::token t) {
+    if (_prev_partition_key.token() <= t) {
+        _prev_partition_key._token = t;
+        return true;
+    }
+    return false;
+}
+
 bool mutation_fragment_stream_validator::operator()(mutation_fragment::kind kind, position_in_partition_view pos) {
     if (_prev_kind == mutation_fragment::kind::partition_end) {
         const bool valid = (kind == mutation_fragment::kind::partition_start);
@@ -1036,22 +1044,48 @@ namespace {
 }
 
 bool mutation_fragment_stream_validating_filter::operator()(const dht::decorated_key& dk) {
-    if (_compare_keys) {
-        if (!_validator(dk)) {
-            on_validation_error(fmr_logger, format("[validator {} for {}] Unexpected partition key: previous {}, current {}",
-                    static_cast<void*>(this), _name, _validator.previous_partition_key(), dk));
-        }
+    if (_validation_level < mutation_fragment_stream_validation_level::token) {
+        return true;
     }
-    return true;
+    if (_validation_level == mutation_fragment_stream_validation_level::token) {
+        if (_validator(dk.token())) {
+            return true;
+        }
+        on_validation_error(fmr_logger, format("[validator {} for {}] Unexpected token: previous {}, current {}",
+                static_cast<void*>(this), _name, _validator.previous_token(), dk.token()));
+    } else {
+        if (_validator(dk)) {
+            return true;
+        }
+        on_validation_error(fmr_logger, format("[validator {} for {}] Unexpected partition key: previous {}, current {}",
+                static_cast<void*>(this), _name, _validator.previous_partition_key(), dk));
+    }
 }
 
-mutation_fragment_stream_validating_filter::mutation_fragment_stream_validating_filter(sstring_view name, const schema& s, bool compare_keys)
+mutation_fragment_stream_validating_filter::mutation_fragment_stream_validating_filter(sstring_view name, const schema& s,
+        mutation_fragment_stream_validation_level level)
     : _validator(s)
     , _name(format("{} ({}.{} {})", name, s.ks_name(), s.cf_name(), s.id()))
-    , _compare_keys(compare_keys)
+    , _validation_level(level)
 {
-    fmr_logger.debug("[validator {} for {}] Will validate {} monotonicity.", static_cast<void*>(this), _name,
-            compare_keys ? "keys" : "only partition regions");
+    if (fmr_logger.level() <= log_level::debug) {
+        std::string_view what;
+        switch (_validation_level) {
+            case mutation_fragment_stream_validation_level::partition_region:
+                what = "partition region";
+                break;
+            case mutation_fragment_stream_validation_level::token:
+                what = "partition region and token";
+                break;
+            case mutation_fragment_stream_validation_level::partition_key:
+                what = "partition region and partition key";
+                break;
+            case mutation_fragment_stream_validation_level::clustering_key:
+                what = "partition region, partition key and clustering key";
+                break;
+        }
+        fmr_logger.debug("[validator {} for {}] Will validate {} monotonicity.", static_cast<void*>(this), _name, what);
+    }
 }
 
 bool mutation_fragment_stream_validating_filter::operator()(mutation_fragment::kind kind, position_in_partition_view pos) {
@@ -1059,14 +1093,14 @@ bool mutation_fragment_stream_validating_filter::operator()(mutation_fragment::k
 
     fmr_logger.debug("[validator {}] {}:{}", static_cast<void*>(this), kind, pos);
 
-    if (_compare_keys) {
+    if (_validation_level >= mutation_fragment_stream_validation_level::clustering_key) {
         valid = _validator(kind, pos);
     } else {
         valid = _validator(kind);
     }
 
     if (__builtin_expect(!valid, false)) {
-        if (_compare_keys) {
+        if (_validation_level >= mutation_fragment_stream_validation_level::clustering_key) {
             on_validation_error(fmr_logger, format("[validator {} for {}] Unexpected mutation fragment: previous {}:{}, current {}:{}",
                     static_cast<void*>(this), _name, _validator.previous_mutation_fragment_kind(), _validator.previous_position(), kind, pos));
         } else {
