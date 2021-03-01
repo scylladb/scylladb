@@ -28,6 +28,7 @@ import distro
 
 from scylla_util import *
 from subprocess import run
+from multiprocessing import cpu_count
 
 def get_mode_cpuset(nic, mode):
     mode_cpu_mask = run('/opt/scylladb/scripts/perftune.py --tune net --nic {} --mode {} --get-cpu-mask-quiet'.format(nic, mode), shell=True, check=True, capture_output=True, encoding='utf-8').stdout.strip()
@@ -99,6 +100,14 @@ def verify_cpu():
                     print('\nIf this is a virtual machine, please update its CPU feature configuration or upgrade to a newer hypervisor.')
                     sys.exit(1)
 
+def configure_aio_slots():
+    with open('/proc/sys/fs/aio-max-nr') as f:
+        aio_max_nr = int(f.read())
+    required_aio_slots = cpu_count() * 11026
+    if aio_max_nr < required_aio_slots:
+        with open('/proc/sys/fs/aio-max-nr', 'w') as f:
+            f.write(str(required_aio_slots))
+
 if __name__ == '__main__':
     verify_cpu()
 
@@ -112,6 +121,8 @@ if __name__ == '__main__':
     if ami == 'yes' and os.path.exists('/etc/scylla/ami_disabled'):
         os.remove('/etc/scylla/ami_disabled')
         sys.exit(1)
+
+    configure_aio_slots()
 
     if mode == 'virtio':
         tap = cfg.get('TAP')

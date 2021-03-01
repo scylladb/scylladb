@@ -205,7 +205,6 @@ if Scylla is the main application on your server and you wish to optimize its la
 # We cannot use the sysctl_apply rpm macro because it is not present in 7.0
 # following is a "manual" expansion
 /usr/lib/systemd/systemd-sysctl 99-scylla-sched.conf >/dev/null 2>&1 || :
-/usr/lib/systemd/systemd-sysctl 99-scylla-aio.conf >/dev/null 2>&1 || :
 /usr/lib/systemd/systemd-sysctl 99-scylla-vm.conf >/dev/null 2>&1 || :
 /usr/lib/systemd/systemd-sysctl 99-scylla-inotify.conf >/dev/null 2>&1 || :
 
