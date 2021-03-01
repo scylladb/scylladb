@@ -25,8 +25,8 @@
 #include "cql3/result_set.hh"
 #include "cql3/statements/prepared_statement.hh"
 
-#include "transport/messages/result_message_base.hh"
-#include "transport/event.hh"
+#include "cql3/transport/messages/result_message_base.hh"
+#include "cql3/transport/event.hh"
 
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/sstring.hh>

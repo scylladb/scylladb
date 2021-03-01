@@ -53,7 +53,7 @@
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/distributed.hh>
 #include "validation.hh"
-#include "transport/messages/result_message.hh"
+#include "cql3/transport/messages/result_message.hh"
 
 namespace cql3 {
 

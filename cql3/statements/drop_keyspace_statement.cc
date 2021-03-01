@@ -43,7 +43,7 @@
 #include "cql3/statements/prepared_statement.hh"
 
 #include "service/migration_manager.hh"
-#include "transport/event.hh"
+#include "cql3/transport/event.hh"
 
 namespace cql3 {
 

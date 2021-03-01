@@ -31,7 +31,7 @@
 #include "auth/service.hh"
 #include "service/migration_manager.hh"
 #include "service/client_state.hh"
-#include "transport/server.hh"
+#include "cql3/transport/server.hh"
 #include "db/system_keyspace.hh"
 #include "schema.hh"
 #include "database.hh"

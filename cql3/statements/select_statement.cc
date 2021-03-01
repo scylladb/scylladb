@@ -42,7 +42,7 @@
 #include "cql3/statements/select_statement.hh"
 #include "cql3/statements/raw/select_statement.hh"
 
-#include "transport/messages/result_message.hh"
+#include "cql3/transport/messages/result_message.hh"
 #include "cql3/functions/as_json_function.hh"
 #include "cql3/selection/selection.hh"
 #include "cql3/util.hh"

@@ -33,7 +33,7 @@
 
 #include <seastar/core/future-util.hh>
 #include <seastar/core/metrics_api.hh>
-#include "transport/messages/result_message.hh"
+#include "cql3/transport/messages/result_message.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/untyped_result_set.hh"
 #include "cql3/cql_config.hh"

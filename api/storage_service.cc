@@ -44,7 +44,7 @@
 #include "database.hh"
 #include "db/extensions.hh"
 #include "db/snapshot-ctl.hh"
-#include "transport/controller.hh"
+#include "cql3/transport/controller.hh"
 #include "thrift/controller.hh"
 #include "locator/token_metadata.hh"
 #include "cdc/generation_service.hh"

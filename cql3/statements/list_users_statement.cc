@@ -43,7 +43,7 @@
 #include "cql3/query_processor.hh"
 #include "cql3/query_options.hh"
 #include "auth/common.hh"
-#include "transport/messages/result_message.hh"
+#include "cql3/transport/messages/result_message.hh"
 
 std::unique_ptr<cql3::statements::prepared_statement> cql3::statements::list_users_statement::prepare(
                 database& db, cql_stats& stats) {

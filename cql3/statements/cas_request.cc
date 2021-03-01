@@ -43,7 +43,7 @@
 #include "cas_request.hh"
 #include <seastar/core/sleep.hh>
 #include "cql3/result_set.hh"
-#include "transport/messages/result_message.hh"
+#include "cql3/transport/messages/result_message.hh"
 #include "types/map.hh"
 
 namespace cql3::statements {

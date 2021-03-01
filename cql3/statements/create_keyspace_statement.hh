@@ -43,7 +43,7 @@
 
 #include "cql3/statements/schema_altering_statement.hh"
 #include "cql3/statements/ks_prop_defs.hh"
-#include "transport/event.hh"
+#include "cql3/transport/event.hh"
 #include "log.hh"
 
 #include <seastar/core/shared_ptr.hh>

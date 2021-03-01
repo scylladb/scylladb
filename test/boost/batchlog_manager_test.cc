@@ -32,7 +32,7 @@
 
 #include <seastar/core/future-util.hh>
 #include <seastar/core/shared_ptr.hh>
-#include "transport/messages/result_message.hh"
+#include "cql3/transport/messages/result_message.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/untyped_result_set.hh"
 #include "db/batchlog_manager.hh"

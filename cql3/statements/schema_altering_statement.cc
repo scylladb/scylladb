@@ -43,7 +43,7 @@
 #include "locator/abstract_replication_strategy.hh"
 #include "database.hh"
 
-#include "transport/messages/result_message.hh"
+#include "cql3/transport/messages/result_message.hh"
 
 namespace cql3 {
 

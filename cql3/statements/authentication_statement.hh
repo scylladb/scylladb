@@ -44,7 +44,7 @@
 #include "cql3/cql_statement.hh"
 #include "prepared_statement.hh"
 #include "raw/parsed_statement.hh"
-#include "transport/messages_fwd.hh"
+#include "cql3/transport/messages_fwd.hh"
 
 namespace cql3 {
 

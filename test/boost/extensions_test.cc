@@ -37,7 +37,7 @@
 #include "cdc/cdc_extension.hh"
 #include "db/paxos_grace_seconds_extension.hh"
 
-#include "transport/messages/result_message.hh"
+#include "cql3/transport/messages/result_message.hh"
 
 SEASTAR_TEST_CASE(simple_schema_extension) {
     class dummy_ext : public schema_extension {

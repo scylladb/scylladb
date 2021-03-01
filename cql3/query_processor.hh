@@ -56,7 +56,7 @@
 #include "log.hh"
 #include "service/migration_listener.hh"
 #include "service/query_state.hh"
-#include "transport/messages/result_message.hh"
+#include "cql3/transport/messages/result_message.hh"
 
 namespace cql3 {
 

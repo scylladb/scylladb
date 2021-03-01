@@ -20,7 +20,7 @@
  */
 
 #include <seastar/core/print.hh>
-#include "transport/cql_protocol_extension.hh"
+#include "cql3/transport/cql_protocol_extension.hh"
 #include "cql3/result_set.hh"
 
 #include <map>

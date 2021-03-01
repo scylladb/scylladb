@@ -19,8 +19,8 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "transport/controller.hh"
-#include "transport/server.hh"
+#include "cql3/transport/controller.hh"
+#include "cql3/transport/server.hh"
 #include "service/storage_service.hh"
 #include "database.hh"
 #include "db/config.hh"

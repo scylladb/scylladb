@@ -38,7 +38,7 @@
 #include <seastar/core/units.hh>
 #include <seastar/testing/test_runner.hh>
 #include "sstables/compaction_manager.hh"
-#include "transport/messages/result_message.hh"
+#include "cql3/transport/messages/result_message.hh"
 #include "sstables/shared_index_lists.hh"
 #include <fstream>
 

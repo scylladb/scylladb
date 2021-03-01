@@ -34,7 +34,7 @@
 #include "test/lib/cql_assertions.hh"
 
 #include <seastar/core/future-util.hh>
-#include "transport/messages/result_message.hh"
+#include "cql3/transport/messages/result_message.hh"
 #include "types/set.hh"
 
 #include "db/config.hh"

@@ -41,8 +41,8 @@
 
 #pragma once
 
-#include "transport/messages_fwd.hh"
-#include "transport/event.hh"
+#include "cql3/transport/messages_fwd.hh"
+#include "cql3/transport/event.hh"
 
 #include "cql3/statements/raw/cf_statement.hh"
 #include "cql3/cql_statement.hh"

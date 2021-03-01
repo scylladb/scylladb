@@ -66,7 +66,7 @@
 
 #include "types/user.hh"
 
-#include "transport/cql_protocol_extension.hh"
+#include "cql3/transport/cql_protocol_extension.hh"
 
 namespace cql_transport {
 

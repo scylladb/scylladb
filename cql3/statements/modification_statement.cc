@@ -52,7 +52,7 @@
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/adaptor/indirected.hpp>
 #include "db/config.hh"
-#include "transport/messages/result_message.hh"
+#include "cql3/transport/messages/result_message.hh"
 #include "database.hh"
 #include <seastar/core/execution_stage.hh>
 #include "utils/UUID_gen.hh"

@@ -42,7 +42,7 @@
 #include "cql3/statements/use_statement.hh"
 #include "cql3/statements/raw/use_statement.hh"
 
-#include "transport/messages/result_message.hh"
+#include "cql3/transport/messages/result_message.hh"
 
 namespace cql3 {
 

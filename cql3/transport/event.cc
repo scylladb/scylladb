@@ -39,7 +39,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "transport/event.hh"
+#include "cql3/transport/event.hh"
 
 namespace cql_transport {
 

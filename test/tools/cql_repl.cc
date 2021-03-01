@@ -31,7 +31,7 @@
 #include <seastar/core/sleep.hh>
 #include <seastar/core/app-template.hh>
 #include <seastar/core/seastar.hh>
-#include "transport/messages/result_message.hh"
+#include "cql3/transport/messages/result_message.hh"
 #include "types/user.hh"
 #include "types/map.hh"
 #include "types/list.hh"

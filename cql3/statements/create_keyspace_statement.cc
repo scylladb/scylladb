@@ -43,7 +43,7 @@
 #include "prepared_statement.hh"
 #include "database.hh"
 #include "service/migration_manager.hh"
-#include "transport/messages/result_message.hh"
+#include "cql3/transport/messages/result_message.hh"
 
 #include <regex>
 

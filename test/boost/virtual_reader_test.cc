@@ -40,7 +40,7 @@
 #include "cql3/query_processor.hh"
 #include "cql3/untyped_result_set.hh"
 #include "dht/i_partitioner.hh"
-#include "transport/messages/result_message.hh"
+#include "cql3/transport/messages/result_message.hh"
 
 using namespace std::literals::chrono_literals;
 

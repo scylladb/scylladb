@@ -19,11 +19,11 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "transport/server.hh"
+#include "cql3/transport/server.hh"
 #include <seastar/core/gate.hh>
 #include "service/migration_listener.hh"
 #include "service/storage_service.hh"
-#include "transport/response.hh"
+#include "cql3/transport/response.hh"
 
 namespace cql_transport {
 

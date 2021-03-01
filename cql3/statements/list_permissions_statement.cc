@@ -46,7 +46,7 @@
 #include "auth/authorizer.hh"
 #include "auth/common.hh"
 #include "cql3/result_set.hh"
-#include "transport/messages/result_message.hh"
+#include "cql3/transport/messages/result_message.hh"
 
 cql3::statements::list_permissions_statement::list_permissions_statement(
         auth::permission_set permissions,

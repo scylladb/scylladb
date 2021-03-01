@@ -21,8 +21,8 @@
 
 #include <seastar/testing/thread_test_case.hh>
 
-#include "transport/request.hh"
-#include "transport/response.hh"
+#include "cql3/transport/request.hh"
+#include "cql3/transport/response.hh"
 
 #include "test/lib/random_utils.hh"
 

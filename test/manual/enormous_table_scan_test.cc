@@ -27,7 +27,7 @@
 #include "test/lib/log.hh"
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/reader_permit.hh"
-#include "transport/messages/result_message.hh"
+#include "cql3/transport/messages/result_message.hh"
 
 #include <boost/range/adaptor/indirected.hpp>
 #include <boost/range/adaptor/map.hpp>
