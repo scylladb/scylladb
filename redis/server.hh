@@ -68,16 +68,16 @@ class redis_server {
     size_t _max_request_size;
     semaphore _memory_available;
     redis::stats _stats;
-private:
     uint64_t _requests_blocked_memory = 0;
     auth::service& _auth_service;
     size_t _total_redis_db_count;
+
 public:
     redis_server(distributed<service::storage_proxy>& proxy, distributed<redis::query_processor>& qp, auth::service& auth_service, redis_server_config config);
     future<> listen(socket_address addr, std::shared_ptr<seastar::tls::credentials_builder> = {}, bool keepalive = false);
     future<> do_accepts(int which, bool keepalive, socket_address server_addr);
     future<> stop();
-public:
+
     struct result {
         result(redis::redis_message&& m) : _data(make_foreign(std::make_unique<redis::redis_message>(std::move(m)))) {}
         foreign_ptr<std::unique_ptr<redis::redis_message>> _data;
@@ -86,6 +86,7 @@ public:
         }
     };
     using response_type = result;
+
 private:
     class fmt_visitor;
     friend class connection;
@@ -132,12 +133,11 @@ private:
         future<result> process_request_internal();
     };
 
-private:
     bool _stopping = false;
     promise<> _all_connections_stopped;
     future<> _stopped = _all_connections_stopped.get_future();
     boost::intrusive::list<connection> _connections_list;
-private:
+
     void maybe_idle() {
         if (_stopping && !_stats._connections_being_accepted && !_stats._current_connections) {
             _all_connections_stopped.set_value();
