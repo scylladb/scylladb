@@ -68,3 +68,16 @@ future<std::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_tempera
         const dht::partition_range_vector& ranges,
         tracing::trace_state_ptr trace_state,
         db::timeout_clock::time_point timeout);
+
+/// Run the data query on all shards.
+///
+/// Identical to `query_mutations_on_all_shards()` except that it builds results
+/// in the `query::result` format instead of in the `reconcilable_result` one.
+future<std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>> query_data_on_all_shards(
+        distributed<database>& db,
+        schema_ptr s,
+        const query::read_command& cmd,
+        const dht::partition_range_vector& ranges,
+        query::result_options opts,
+        tracing::trace_state_ptr trace_state,
+        db::timeout_clock::time_point timeout);

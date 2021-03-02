@@ -3894,11 +3894,11 @@ storage_proxy::query_result_local(schema_ptr s, lw_shared_ptr<query::read_comman
     } else {
         // FIXME: adjust multishard_mutation_query to accept an smp_service_group and propagate it there
         tracing::trace(trace_state, "Start querying token range {}", pr);
-        return query_nonsingular_mutations_locally(s, cmd, {pr}, trace_state, timeout).then([s, cmd, opts, trace_state = std::move(trace_state)] (rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>&& r_ht) {
+        return query_nonsingular_data_locally(s, cmd, {pr}, opts, trace_state, timeout).then(
+                [trace_state = std::move(trace_state)] (rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>&& r_ht) {
             auto&& [r, ht] = r_ht;
             tracing::trace(trace_state, "Querying is done");
-            return make_ready_future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>>(
-                    rpc::tuple(::make_foreign(::make_lw_shared<query::result>(to_data_query_result(*r, s, cmd->slice,  cmd->get_row_limit(), cmd->partition_limit, opts))), ht));
+            return make_ready_future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>>(rpc::tuple(std::move(r), ht));
         });
     }
 }
@@ -4013,6 +4013,10 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
     auto pcf = _db.local().get_config().cache_hit_rate_read_balancing() ? &cf : nullptr;
     std::unordered_map<abstract_read_executor*, std::vector<dht::token_range>> ranges_per_exec;
     const auto tmptr = get_token_metadata_ptr();
+
+    if (_features.cluster_supports_range_scan_data_variant()) {
+        cmd->slice.options.set<query::partition_slice::option::range_scan_data_variant>();
+    }
 
     const auto preferred_replicas_for_range = [this, &preferred_replicas, tmptr] (const dht::partition_range& r) {
         auto it = preferred_replicas.find(r.transform(std::mem_fn(&dht::ring_position::token)));
@@ -5187,6 +5191,22 @@ storage_proxy::query_nonsingular_mutations_locally(schema_ptr s,
             return make_ready_future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>>(std::move(t));
         });
     });
+}
+
+future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>>
+storage_proxy::query_nonsingular_data_locally(schema_ptr s, lw_shared_ptr<query::read_command> cmd, const dht::partition_range_vector&& prs,
+        query::result_options opts, tracing::trace_state_ptr trace_state, storage_proxy::clock_type::time_point timeout) {
+    auto ranges = std::move(prs);
+    auto local_cmd = cmd;
+    rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature> ret;
+    if (local_cmd->slice.options.contains(query::partition_slice::option::range_scan_data_variant)) {
+        ret = co_await query_data_on_all_shards(_db, std::move(s), *local_cmd, ranges, opts, std::move(trace_state), timeout);
+    } else {
+        auto res = co_await query_mutations_on_all_shards(_db, s, *local_cmd, ranges, std::move(trace_state), timeout);
+        ret = rpc::tuple(make_foreign(make_lw_shared<query::result>(to_data_query_result(std::move(*std::get<0>(res)), std::move(s), local_cmd->slice,
+                local_cmd->get_row_limit(), local_cmd->partition_limit, opts))), std::get<1>(res));
+    }
+    co_return ret;
 }
 
 future<> storage_proxy::start_hints_manager(shared_ptr<gms::gossiper> gossiper_ptr, shared_ptr<service::storage_service> ss_ptr) {

@@ -94,6 +94,7 @@ private:
     gms::feature _digest_for_null_values_feature;
     gms::feature _correct_idx_token_in_secondary_index_feature;
     gms::feature _alternator_streams_feature;
+    gms::feature _range_scan_data_variant;
 
 public:
     bool cluster_supports_user_defined_functions() const {
@@ -169,6 +170,12 @@ public:
 
     bool cluster_supports_alternator_streams() const {
         return bool(_alternator_streams_feature);
+    }
+
+    // Range scans have a data variant, which produces query::result directly,
+    // instead of through the intermediate reconcilable_result format.
+    bool cluster_supports_range_scan_data_variant() const {
+        return bool(_range_scan_data_variant);
     }
 };
 

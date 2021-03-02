@@ -685,9 +685,9 @@ future<> do_with_cql_env(std::function<future<>(cql_test_env&)> func, cql_test_c
     return single_node_cql_env::do_with(func, std::move(cfg_in));
 }
 
-future<> do_with_cql_env_thread(std::function<void(cql_test_env&)> func, cql_test_config cfg_in) {
-    return single_node_cql_env::do_with([func = std::move(func)] (auto& e) {
-        return seastar::async([func = std::move(func), &e] {
+future<> do_with_cql_env_thread(std::function<void(cql_test_env&)> func, cql_test_config cfg_in, thread_attributes thread_attr) {
+    return single_node_cql_env::do_with([func = std::move(func), thread_attr] (auto& e) {
+        return seastar::async(thread_attr, [func = std::move(func), &e] {
             return func(e);
         });
     }, std::move(cfg_in));

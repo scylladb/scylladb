@@ -194,3 +194,49 @@ public:
 };
 
 }
+
+class row;
+class static_row;
+class clustering_row;
+class range_tombstone;
+
+// Adds mutation to query::result.
+class mutation_querier {
+    const schema& _schema;
+    query::result_memory_accounter& _memory_accounter;
+    query::result::partition_writer _pw;
+    ser::qr_partition__static_row__cells<bytes_ostream> _static_cells_wr;
+    bool _live_data_in_static_row{};
+    uint64_t _live_clustering_rows = 0;
+    std::optional<ser::qr_partition__rows<bytes_ostream>> _rows_wr;
+private:
+    void query_static_row(const row& r, tombstone current_tombstone);
+    void prepare_writers();
+public:
+    mutation_querier(const schema& s, query::result::partition_writer pw,
+                     query::result_memory_accounter& memory_accounter);
+    void consume(tombstone) { }
+    // Requires that sr.has_any_live_data()
+    stop_iteration consume(static_row&& sr, tombstone current_tombstone);
+    // Requires that cr.has_any_live_data()
+    stop_iteration consume(clustering_row&& cr, row_tombstone current_tombstone);
+    stop_iteration consume(range_tombstone&&) { return stop_iteration::no; }
+    uint64_t consume_end_of_stream();
+};
+
+class query_result_builder {
+    const schema& _schema;
+    query::result::builder& _rb;
+    std::optional<mutation_querier> _mutation_consumer;
+    stop_iteration _stop;
+public:
+    query_result_builder(const schema& s, query::result::builder& rb);
+
+    void consume_new_partition(const dht::decorated_key& dk);
+    void consume(tombstone t);
+    stop_iteration consume(static_row&& sr, tombstone t, bool);
+    stop_iteration consume(clustering_row&& cr, row_tombstone t, bool);
+    stop_iteration consume(range_tombstone&& rt);
+    stop_iteration consume_end_of_partition();
+    void consume_end_of_stream();
+};
