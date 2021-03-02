@@ -246,6 +246,8 @@ private:
     void request_vote(server_id from, vote_request&& vote_request);
     void request_vote_reply(server_id from, vote_reply&& vote_reply);
 
+    void install_snapshot_reply(server_id from, snapshot_reply&& reply);
+
     // Called on a follower with a new known leader commit index.
     // Advances the follower's commit index up to all log-stable
     // entries, known to be committed.
@@ -349,8 +351,6 @@ public:
     // committed and a quorum of followers was alive in the last
     // tick period.
     bool can_read();
-
-    void snapshot_status(server_id id, bool success);
 
     // This call will update the log to point to the new snapshot
     // and will truncate the log prefix up to (snp.idx - trailing)
@@ -490,6 +490,11 @@ void fsm::step(server_id from, Message&& msg) {
             }
             send_to(from, snapshot_reply{.current_term = _current_term,
                     .success = success});
+        } else if constexpr (std::is_same_v<Message, snapshot_reply>) {
+            if constexpr (std::is_same_v<State, leader>) {
+                // Switch the follower to log transfer mode.
+                install_snapshot_reply(from, std::move(msg));
+            }
         }
     };
 
