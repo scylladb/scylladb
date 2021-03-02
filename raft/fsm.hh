@@ -371,6 +371,8 @@ public:
         return _log.in_memory_size();
     };
 
+    server_id id() const { return _my_id; }
+
     friend std::ostream& operator<<(std::ostream& os, const fsm& f);
 };
 
