@@ -21,27 +21,30 @@
 
 #pragma once
 
+#include "redis/options.hh"
+#include "redis/protocol_parser.hh"
+#include "redis/query_processor.hh"
+#include "redis/reply.hh"
+#include "redis/request.hh"
+#include "redis/request.hh"
+#include "redis/stats.hh"
+
+#include "auth/authenticator.hh"
 #include "auth/service.hh"
+#include "cql3/values.hh"
+#include "service/client_state.hh"
 #include "service/storage_proxy.hh"
 #include "service_permit.hh"
-#include "redis/query_processor.hh"
-#include "redis/request.hh"
-#include "cql3/values.hh"
-#include "auth/authenticator.hh"
 #include "timeout_config.hh"
-#include <memory>
-#include <seastar/net/tls.hh>
-#include <seastar/core/semaphore.hh>
-#include "seastar/core/sharded.hh"
-#include "seastar/core/seastar.hh"
-#include "utils/fragmented_temporary_buffer.hh"
 #include "utils/estimated_histogram.hh"
-#include "redis/protocol_parser.hh"
-#include "redis/request.hh"
-#include "redis/reply.hh"
-#include "redis/options.hh"
-#include  "service/client_state.hh"
-#include "redis/stats.hh"
+#include "utils/fragmented_temporary_buffer.hh"
+
+#include <seastar/core/seastar.hh>
+#include <seastar/core/semaphore.hh>
+#include <seastar/core/sharded.hh>
+#include <seastar/net/tls.hh>
+
+#include <memory>
 
 db::consistency_level make_consistency_level(const sstring&);
 

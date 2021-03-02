@@ -20,21 +20,25 @@
  */
 
 #include "redis/server.hh"
-#include "service/storage_service.hh"
-#include "db/consistency_level_type.hh"
+
+#include "redis/request.hh"
+#include "redis/reply.hh"
+
+#include "auth/authenticator.hh"
 #include "db/config.hh"
+#include "db/consistency_level_type.hh"
 #include "db/write_type.hh"
+#include "exceptions/exceptions.hh"
+#include "service/query_state.hh"
+#include "service/storage_service.hh"
+
 #include <seastar/core/future-util.hh>
 #include <seastar/core/seastar.hh>
 #include <seastar/net/byteorder.hh>
 #include <seastar/core/execution_stage.hh>
-#include "service/query_state.hh"
-#include "exceptions/exceptions.hh"
-#include "auth/authenticator.hh"
+
 #include <cassert>
 #include <string>
-#include "redis/request.hh"
-#include "redis/reply.hh"
 #include <unordered_map>
 
 namespace redis_transport {
