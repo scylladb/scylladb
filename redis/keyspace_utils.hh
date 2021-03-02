@@ -23,7 +23,6 @@
 
 #include  "db/config.hh"
 #include "seastar/core/future.hh"
-#include "seastar/core/sstring.hh"
 
 namespace redis {
 
