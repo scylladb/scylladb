@@ -265,12 +265,6 @@ future<> redis_server::connection::process_request() {
     });
 }
 
-static inline bytes_view to_bytes_view(temporary_buffer<char>& b)
-{
-    using byte = bytes_view::value_type;
-    return bytes_view(reinterpret_cast<const byte*>(b.get()), b.size());
-}
-
 }
 
 db::consistency_level make_consistency_level(const sstring& level)
