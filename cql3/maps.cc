@@ -310,7 +310,7 @@ maps::setter_by_key::execute(mutation& m, const clustering_key_prefix& prefix, c
     if (value.is_unset_value()) {
         return;
     }
-    if (key.is_unset_value() || value.is_unset_value()) {
+    if (key.is_unset_value()) {
         throw invalid_request_exception("Invalid unset map key");
     }
     if (!key) {
