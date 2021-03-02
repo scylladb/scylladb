@@ -89,7 +89,6 @@ public:
 private:
     friend class connection;
     class connection : public boost::intrusive::list_base_hook<> {
-       // using result = redis_server::result;
         redis_server& _server;
         socket_address _server_addr;
         connected_socket _fd;
@@ -97,7 +96,6 @@ private:
         output_stream<char> _write_buf;
         redis_protocol_parser _parser;
         seastar::gate _pending_requests_gate;
-        //service::client_state _client_state;
         redis::redis_options _options;
         future<> _ready_to_respond = make_ready_future<>();
         unsigned _request_cpu = 0;
