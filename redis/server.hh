@@ -10,7 +10,7 @@
  * the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
  *
- * Scylla is distributed in the hope that it will be useful,
+ * Scylla is seastar::sharded in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
@@ -32,7 +32,7 @@
 #include <memory>
 #include <seastar/net/tls.hh>
 #include <seastar/core/semaphore.hh>
-#include "seastar/core/distributed.hh"
+#include "seastar/core/sharded.hh"
 #include "seastar/core/seastar.hh"
 #include "utils/fragmented_temporary_buffer.hh"
 #include "utils/estimated_histogram.hh"
@@ -62,8 +62,8 @@ struct redis_server_config {
 
 class redis_server {
     std::vector<server_socket> _listeners;
-    distributed<service::storage_proxy>& _proxy;
-    distributed<redis::query_processor>& _query_processor;
+    seastar::sharded<service::storage_proxy>& _proxy;
+    seastar::sharded<redis::query_processor>& _query_processor;
     redis_server_config _config;
     size_t _max_request_size;
     semaphore _memory_available;
@@ -73,7 +73,7 @@ class redis_server {
     size_t _total_redis_db_count;
 
 public:
-    redis_server(distributed<service::storage_proxy>& proxy, distributed<redis::query_processor>& qp, auth::service& auth_service, redis_server_config config);
+    redis_server(seastar::sharded<service::storage_proxy>& proxy, seastar::sharded<redis::query_processor>& qp, auth::service& auth_service, redis_server_config config);
     future<> listen(socket_address addr, std::shared_ptr<seastar::tls::credentials_builder> = {}, bool keepalive = false);
     future<> do_accepts(int which, bool keepalive, socket_address server_addr);
     future<> stop();

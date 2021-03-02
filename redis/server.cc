@@ -41,7 +41,7 @@ namespace redis_transport {
 
 static logging::logger logging("redis_server");
 
-redis_server::redis_server(distributed<service::storage_proxy>& proxy, distributed<redis::query_processor>& qp, auth::service& auth_service, redis_server_config config)
+redis_server::redis_server(seastar::sharded<service::storage_proxy>& proxy, seastar::sharded<redis::query_processor>& qp, auth::service& auth_service, redis_server_config config)
     : _proxy(proxy)
     , _query_processor(qp)
     , _config(config)
