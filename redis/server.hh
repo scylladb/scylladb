@@ -97,12 +97,6 @@ private:
         seastar::gate _pending_requests_gate;
         redis::redis_options _options;
         future<> _ready_to_respond = make_ready_future<>();
-    private:
-        enum class tracing_request_type : uint8_t {
-            not_requested,
-            no_write_on_close,
-            write_on_close
-        };  
 
         using execution_stage_type = inheriting_concrete_execution_stage<
                 future<redis_server::result>,
