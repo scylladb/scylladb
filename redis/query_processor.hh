@@ -26,9 +26,6 @@
 #include <seastar/core/gate.hh>
 #include <seastar/core/metrics_registration.hh>
 
-
-using namespace seastar;
-
 class database;
 class service_permit;
 
@@ -61,10 +58,10 @@ public:
         return _proxy;
     }
 
-    future<redis_message> process(request&&, redis_options&, service_permit);
+    seastar::future<redis_message> process(request&&, redis_options&, service_permit);
 
-    future<> start();
-    future<> stop();
+    seastar::future<> start();
+    seastar::future<> stop();
 };
 
 }
