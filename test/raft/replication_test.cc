@@ -321,9 +321,11 @@ public:
             _packet_drops(packet_drops) {
         net[_id] = this;
     }
-    virtual future<> send_snapshot(raft::server_id id, const raft::install_snapshot& snap) {
+    virtual future<raft::snapshot_reply> send_snapshot(raft::server_id id, const raft::install_snapshot& snap) {
         if (!_connected(id) || !_connected(_id)) {
-            return make_ready_future<>();
+            return make_ready_future<raft::snapshot_reply>(raft::snapshot_reply{
+                    .current_term = snap.current_term,
+                    .success = false});
         }
         (*_snapshots)[id] = (*_snapshots)[_id];
         return net[id]->_client->apply_snapshot(_id, std::move(snap));

@@ -426,7 +426,8 @@ void fsm::step(server_id from, Message&& msg) {
             append_reply reply{_current_term, _commit_idx, append_reply::rejected{msg.prev_log_idx, _log.last_idx()}};
             send_to(from, std::move(reply));
         } else if constexpr (std::is_same_v<Message, install_snapshot>) {
-            send_to(from, snapshot_reply{ .success = false });
+            send_to(from, snapshot_reply{.current_term = _current_term,
+                    .success = false});
         } else if constexpr (std::is_same_v<Message, vote_request>) {
             if (msg.is_prevote) {
                 send_to(from, vote_reply{_current_term, false, true});
@@ -487,7 +488,8 @@ void fsm::step(server_id from, Message&& msg) {
                 // snapshot can be installed only in follower
                 success = apply_snapshot(std::move(msg.snp), 0);
             }
-            send_to(from, snapshot_reply{ .success = success });
+            send_to(from, snapshot_reply{.current_term = _current_term,
+                    .success = success});
         }
     };
 

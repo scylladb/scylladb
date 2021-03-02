@@ -280,6 +280,9 @@ struct install_snapshot {
 };
 
 struct snapshot_reply {
+    // Follower current term
+    term_t current_term;
+    // True if the snapshot was applied, false otherwise.
     bool success;
 };
 
@@ -351,10 +354,13 @@ public:
     virtual ~rpc() {}
 
     // Send a snapshot snap to a server server_id.
+    //
+    // Unlike other RPC, this is a synchronous call:
+    //
     // A returned future is resolved when snapshot is sent and
     // successfully applied by a receiver. Will be waited to
     // know if a snapshot transfer succeeded.
-    virtual future<> send_snapshot(server_id server_id, const install_snapshot& snap) = 0;
+    virtual future<snapshot_reply> send_snapshot(server_id server_id, const install_snapshot& snap) = 0;
 
     // Send provided append_request to the supplied server, does
     // not wait for reply. The returned future resolves when
@@ -411,7 +417,7 @@ public:
     virtual void request_vote_reply(server_id from, vote_reply vote_reply) = 0;
 
     // Apply incoming snapshot, future resolves when application is complete
-    virtual future<> apply_snapshot(server_id from, install_snapshot snp) = 0;
+    virtual future<snapshot_reply> apply_snapshot(server_id from, install_snapshot snp) = 0;
 
     // Update RPC implementation with this client as
     // the receiver of RPC input.

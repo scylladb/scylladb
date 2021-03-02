@@ -554,9 +554,9 @@ public:
         inet_address reply_to, unsigned shard, response_id_type response_id, std::optional<tracing::trace_info> trace_info = std::nullopt);
 
     // RAFT verbs
-    void register_raft_send_snapshot(std::function<future<> (const rpc::client_info&, rpc::opt_time_point, uint64_t group_id, raft::server_id from_id, raft::server_id dst_id, raft::install_snapshot)>&& func);
+    void register_raft_send_snapshot(std::function<future<raft::snapshot_reply> (const rpc::client_info&, rpc::opt_time_point, uint64_t group_id, raft::server_id from_id, raft::server_id dst_id, raft::install_snapshot)>&& func);
     future<> unregister_raft_send_snapshot();
-    future<> send_raft_send_snapshot(msg_addr id, clock_type::time_point timeout, uint64_t group_id, raft::server_id from_id, raft::server_id dst_id, const raft::install_snapshot& install_snapshot);
+    future<raft::snapshot_reply> send_raft_snapshot(msg_addr id, clock_type::time_point timeout, uint64_t group_id, raft::server_id from_id, raft::server_id dst_id, const raft::install_snapshot& install_snapshot);
 
     void register_raft_append_entries(std::function<future<> (const rpc::client_info&, rpc::opt_time_point, uint64_t group_id, raft::server_id from_id, raft::server_id dst_id, raft::append_request)>&& func);
     future<> unregister_raft_append_entries();
