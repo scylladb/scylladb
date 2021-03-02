@@ -29,12 +29,11 @@ namespace service {
 }
 
 namespace redis {
-using namespace seastar;
 class request;
 class command_factory {
 public:
     command_factory() {}
     ~command_factory() {}
-    static future<redis_message> create_execute(service::storage_proxy&, request&, redis::redis_options&, service_permit);
+    static seastar::future<redis_message> create_execute(service::storage_proxy&, request&, redis::redis_options&, service_permit);
 };
 }
