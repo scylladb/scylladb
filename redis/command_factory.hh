@@ -21,7 +21,7 @@
 
 #pragma once
 
-#include "abstract_command.hh"
+#include "redis/abstract_command.hh"
 #include "redis/options.hh"
 
 namespace service {
