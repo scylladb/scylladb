@@ -21,8 +21,6 @@
 
 #pragma once
 
-#include "bytes.hh"
-#include "seastar/core/shared_ptr.hh"
 #include "abstract_command.hh"
 #include "redis/options.hh"
 
