@@ -317,26 +317,30 @@ cql_server::do_accepts(int which, bool keepalive, socket_address server_addr) {
             auto conn = make_shared<connection>(*this, server_addr, std::move(fd), std::move(addr));
             ++_stats.connects;
             ++_stats.connections;
-            // Move the processing into the background.
+
+            // Move the "advertising" and processing into the background.
             (void)futurize_invoke([this, conn] {
                 return advertise_new_connection(conn); // Notify any listeners about new connection.
-            }).then_wrapped([this, conn] (future<> f) {
-                try {
-                    f.get();
-                } catch (...) {
-                    clogger.info("exception while advertising new connection: {}", std::current_exception());
-                }
-                // Block while monitoring for lifetime/errors.
-                return conn->process().finally([this, conn] {
-                    --_stats.connections;
+            }).handle_exception([] (std::exception_ptr ep) {
+                clogger.info("exception while advertising new connection: {}", ep);
+            });
+
+            // Block while monitoring for lifetime/errors.
+            (void)conn->process().finally([this, conn] {
+                --_stats.connections;
+                
+                // Unadvertise in background
+                (void)futurize_invoke([this, conn] {
                     return unadvertise_connection(conn);
                 }).handle_exception([] (std::exception_ptr ep) {
-                    if (is_broken_pipe_or_connection_reset(ep)) {
-                        // expected if another side closes a connection or we're shutting down
-                        return;
-                    }
-                    clogger.info("exception while processing connection: {}", ep);
+                    clogger.info("exception while unadvertising new connection: {}", ep);
                 });
+            }).handle_exception([] (std::exception_ptr ep) {
+                if (is_broken_pipe_or_connection_reset(ep)) {
+                    // expected if another side closes a connection or we're shutting down
+                    return;
+                }
+                clogger.info("exception while processing connection: {}", ep);
             });
             return stop_iteration::no;
         }).handle_exception([] (auto ep) {
