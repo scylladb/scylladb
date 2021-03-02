@@ -160,6 +160,24 @@ public:
         boost::range::for_each(range, put);
         return ret;
     }
+    template <typename RangeOf_bytes_opt>  // also accepts bytes_view_opt
+    static managed_bytes build_value_fragmented(RangeOf_bytes_opt&& range) {
+        size_t size = 0;
+        for (auto&& v : range) {
+            size += 4 + (v ? v->size() : 0);
+        }
+        auto ret = managed_bytes(managed_bytes::initialized_later(), size);
+        auto out = managed_bytes_mutable_view(ret);
+        for (auto&& v : range) {
+            if (v) {
+                write<int32_t>(out, v->size());
+                write_fragmented(out, single_fragmented_view(*v));
+            } else {
+                write<int32_t>(out, -1);
+            }
+        }
+        return ret;
+    }
 private:
     static sstring make_name(const std::vector<data_type>& types);
     friend abstract_type;
