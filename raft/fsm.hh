@@ -267,6 +267,9 @@ public:
     bool is_candidate() const {
         return std::holds_alternative<candidate>(_state);
     }
+    bool is_prevote_candidate() const {
+        return is_candidate() && _votes->is_prevote();
+    }
     index_t log_last_idx() const {
         return _log.last_idx();
     }
