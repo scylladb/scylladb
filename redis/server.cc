@@ -20,28 +20,32 @@
  */
 
 #include "redis/server.hh"
-#include "service/storage_service.hh"
-#include "db/consistency_level_type.hh"
+
+#include "redis/request.hh"
+#include "redis/reply.hh"
+
+#include "auth/authenticator.hh"
 #include "db/config.hh"
+#include "db/consistency_level_type.hh"
 #include "db/write_type.hh"
+#include "exceptions/exceptions.hh"
+#include "service/query_state.hh"
+#include "service/storage_service.hh"
+
 #include <seastar/core/future-util.hh>
 #include <seastar/core/seastar.hh>
 #include <seastar/net/byteorder.hh>
 #include <seastar/core/execution_stage.hh>
-#include "service/query_state.hh"
-#include "exceptions/exceptions.hh"
-#include "auth/authenticator.hh"
+
 #include <cassert>
 #include <string>
-#include "redis/request.hh"
-#include "redis/reply.hh"
 #include <unordered_map>
 
 namespace redis_transport {
 
 static logging::logger logging("redis_server");
 
-redis_server::redis_server(distributed<service::storage_proxy>& proxy, distributed<redis::query_processor>& qp, auth::service& auth_service, redis_server_config config)
+redis_server::redis_server(seastar::sharded<service::storage_proxy>& proxy, seastar::sharded<redis::query_processor>& qp, auth::service& auth_service, redis_server_config config)
     : _proxy(proxy)
     , _query_processor(qp)
     , _config(config)
@@ -259,12 +263,6 @@ future<> redis_server::connection::process_request() {
             }
         });
     });
-}
-
-static inline bytes_view to_bytes_view(temporary_buffer<char>& b)
-{
-    using byte = bytes_view::value_type;
-    return bytes_view(reinterpret_cast<const byte*>(b.get()), b.size());
 }
 
 }
