@@ -26,7 +26,6 @@
 #include "redis/query_processor.hh"
 #include "redis/reply.hh"
 #include "redis/request.hh"
-#include "redis/request.hh"
 #include "redis/stats.hh"
 
 #include "auth/authenticator.hh"
