@@ -41,49 +41,48 @@ def test_filter_on_unset(cql, test_keyspace):
         assert list(cql.execute(f"SELECT a FROM {table} WHERE c<0 ALLOW FILTERING")) == []
         assert list(cql.execute(f"SELECT a FROM {table} WHERE c>0 ALLOW FILTERING")) == [(4,)]
 
-# Reproducer for issue #7966:
-# Test a whole-table scan with filtering which keeps just one row,
-# after a long list of non-matching rows. As usual, the scan is done with
-# paging, and since most rows do not match the filter, paging should either
-# return empty pages or have high latency - but in either case continuing
-# the paging should eventually return *all* the matches.
-#
-# We use two tricks to make reproducing this issue much faster than the
-# original reproducer we had for that issue:
-# 1. The bug depended on the amount of data being scanned passing some
-#    page size limit, so it doesn't matter if the reproducer has a lot of
-#    small partitions or fewer long partitions - and inserting fewer long
-#    partitions is significantly faster.
-# 2. We want the filter to match only at the end the scan - but we don't know
-#    know the partition order (we don't want the test to depend on the
-#    partitioner) so we scan the table starting at a relatively high token
-#    to find a partition near the end of the scan, and use that in the filter.
-# Both tricks allowed us to reduce "count" below from 40,000 in the original
-# reproducer of #7966 to just 100, and the test's time from 30 seconds to 0.4.
-@pytest.mark.xfail(reason="issue #7966")
-def test_filtering_with_few_matches(cql, test_keyspace):
+# Reproducers for issue #8203, which test a scan (whole-table or single-
+# partition) with filtering which keeps just the last row, after a long list
+# of non-matching rows.
+# As usual, the scan is done with paging, and since most rows do not match
+# the filter, several empty pages should be returned until finally we get
+# the expected matching row. If we allow the Python driver to iterate over
+# all results, it should read all these pages and give us the one result.
+# The bug is that the iteration stops prematurely (it seems after the second
+# empty page) and an empty result set is returned.
+
+# Reproducer for issue #8203, partition-range (whole-table) scan case
+@pytest.mark.xfail(reason="issue #8203")
+def test_filtering_contiguous_nonmatching_partition_range(cql, test_keyspace):
+    # The bug depends on the amount of data being scanned passing some
+    # page size limit, so it doesn't matter if the reproducer has a lot of
+    # small rows or fewer long rows - and inserting fewer long rows is
+    # significantly faster.
     count = 100
     long='x'*60000
     with new_test_table(cql, test_keyspace,
             "p int, c text, v int, PRIMARY KEY (p, c)") as table:
         stmt = cql.prepare(f"INSERT INTO {table} (p, c, v) VALUES (?, '{long}', ?)")
         for i in range(count):
-            cql.execute(stmt, [i, i*100])
+            cql.execute(stmt, [i, i])
+        # We want the filter to match only at the end the scan - but we don't
+        # know the partition order (we don't want the test to depend on the
+        # partitioner). So we first figure out a partition near the end (at
+        # some high token), and use that in the filter.
         p, v = list(cql.execute(f"SELECT p, v FROM {table} WHERE TOKEN(p) > 8000000000000000000 LIMIT 1"))[0]
         assert list(cql.execute(f"SELECT p FROM {table} WHERE v={v} ALLOW FILTERING")) == [(p,)]
 
-# The following test demonstrates that issue #7966 is specific to a
-# partition-range scan, and doesn't happen when scanning a single partition
-# scan. We use a much higher count than above to demonstrate that the test still
-# passes, but slowly, so we mark this test with "skip" because it's not helpful
-# and slow.
-@pytest.mark.skip
-def test_filtering_single_partition_with_few_matches(cql, test_keyspace):
-    count = 1000
+# Reproducer for issue #8203, single-partition scan case
+@pytest.mark.xfail(reason="issue #8203")
+def test_filtering_contiguous_nonmatching_single_partition(cql, test_keyspace):
+    count = 100
     long='x'*60000
     with new_test_table(cql, test_keyspace,
             "p int, c int, s text, v int, PRIMARY KEY (p, c)") as table:
         stmt = cql.prepare(f"INSERT INTO {table} (p, c, v, s) VALUES (1, ?, ?, '{long}')")
         for i in range(count):
             cql.execute(stmt, [i, i])
-        assert list(cql.execute(f"SELECT c FROM {table} WHERE p=1 AND v={count-1} ALLOW FILTERING")) == [(count-1,)]
+        # To fail this test, we must select s here. If s is not selected,
+        # Scylla won't count its size as part of the 1MB limit, and will not
+        # return empty pages - the first page will contain the result.
+        assert list(cql.execute(f"SELECT c, s FROM {table} WHERE p=1 AND v={count-1} ALLOW FILTERING")) == [(count-1, long)]
