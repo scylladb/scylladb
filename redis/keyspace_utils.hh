@@ -25,8 +25,6 @@
 #include "seastar/core/future.hh"
 #include "seastar/core/sstring.hh"
 
-using namespace seastar;
-
 namespace redis {
 
 static constexpr auto DATA_COLUMN_NAME = "data";
@@ -36,6 +34,6 @@ static constexpr auto HASHes          = "HASHes";
 static constexpr auto SETs            = "SETs";
 static constexpr auto ZSETs           = "ZSETs";
 
-future<> maybe_create_keyspace(db::config& cfg);
+seastar::future<> maybe_create_keyspace(db::config& cfg);
 
 }
