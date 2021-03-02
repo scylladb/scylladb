@@ -106,6 +106,38 @@ def test_too_large_request(dynamodb, test_table):
         except ClientError:
             raise BotoCoreError()
 
+# Tests that a request larger than the 16MB limit is rejected, improving on
+# the rather blunt test in test_too_large_request() above. The following two
+# tests verify that:
+# 1. An over-long request is rejected no matter if it is sent using a
+#    Content-Length header or chunked encoding (reproduces issue #8196).
+# 2. The client should be able to recognize this error as a 413 error, not
+#     some I/O error like broken pipe (reproduces issue #8195).
+@pytest.mark.xfail(reason="issue #8195, #8196")
+def test_too_large_request_chunked(dynamodb, test_table):
+    # To make a request very large, we just stuff it with a lot of spaces :-)
+    spaces = ' ' * (17 * 1024 * 1024)
+    req = get_signed_request(dynamodb, 'PutItem',
+        '{"TableName": "' + test_table.name + '", ' + spaces + '"Item": {"p": {"S": "x"}, "c": {"S": "x"}}}')
+    def generator(s):
+        yield s
+    response = requests.post(req.url, headers=req.headers, data=generator(req.body), verify=False)
+    # In issue #8196, Alternator did not recognize the request is too long
+    # because it uses chunked encoding instead of Content-Length, so the
+    # request succeeded, and the status_code was 200 instead of 413.
+    assert response.status_code == 413
+
+@pytest.mark.xfail(reason="issue #8195")
+def test_too_large_request_content_length(dynamodb, test_table):
+    spaces = ' ' * (17 * 1024 * 1024)
+    req = get_signed_request(dynamodb, 'PutItem',
+        '{"TableName": "' + test_table.name + '", ' + spaces + '"Item": {"p": {"S": "x"}, "c": {"S": "x"}}}')
+    response = requests.post(req.url, headers=req.headers, data=req.body, verify=False)
+    # In issue #8195, Alternator closed the connection early, causing the
+    # library to throw an exception (Broken Pipe) instead noticing the error
+    # code 413 which the server did send.
+    assert response.status_code == 413
+
 def test_incorrect_json(dynamodb, test_table):
     correct_req = '{"TableName": "' + test_table.name + '", "Item": {"p": {"S": "x"}, "c": {"S": "x"}}}'
 
