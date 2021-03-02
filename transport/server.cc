@@ -626,9 +626,11 @@ future<> cql_server::connection::process_request() {
 
         if (_server._requests_serving > _server._max_concurrent_requests) {
             ++_server._requests_shed;
-            return _read_buf.skip(f.length).then([this] {
-                return make_exception_future<>(
-                        exceptions::overloaded_exception(format("too many in-flight requests (configured via max_concurrent_requests_per_shard): {}", _server._requests_serving)));
+            return _read_buf.skip(f.length).then([this, stream = f.stream] {
+                write_response(make_error(stream, exceptions::exception_code::OVERLOADED,
+                        format("too many in-flight requests (configured via max_concurrent_requests_per_shard): {}", _server._requests_serving),
+                        tracing::trace_state_ptr()));
+                return make_ready_future<>();
             });
         }
 
