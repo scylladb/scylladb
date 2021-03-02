@@ -44,10 +44,6 @@ class redis_options {
     service::client_state _client_state;
     size_t _total_redis_db_count;
 public:
-    //redis_options(redis_options&&) = default;
-    
-    //explicit redis_options(const redis_options&) = default;
-   
     explicit redis_options(const db::consistency_level rcl,
         const db::consistency_level wcl,
         const timeout_config& tc,
