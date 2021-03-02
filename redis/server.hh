@@ -123,7 +123,6 @@ private:
         future<> shutdown();
     private:
         const ::timeout_config& timeout_config() { return _server.timeout_config(); }
-        friend class process_request_executor;
         future<result> process_request_one(redis::request&& request, redis::redis_options&, service_permit permit);
         future<result> process_request_internal();
     };
