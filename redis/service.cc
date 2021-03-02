@@ -38,12 +38,12 @@ redis_service::~redis_service()
 {
 }
 
-future<> redis_service::listen(distributed<auth::service>& auth_service, db::config& cfg)
+future<> redis_service::listen(seastar::sharded<auth::service>& auth_service, db::config& cfg)
 {
     if (_server) {
         return make_ready_future<>();
     }
-    auto server = make_shared<distributed<redis_transport::redis_server>>();
+    auto server = make_shared<seastar::sharded<redis_transport::redis_server>>();
     _server = server;
 
     auto addr = cfg.rpc_address();
@@ -114,7 +114,7 @@ future<> redis_service::listen(distributed<auth::service>& auth_service, db::con
     });
 }
 
-future<> redis_service::init(distributed<service::storage_proxy>& proxy, distributed<database>& db, distributed<auth::service>& auth_service, db::config& cfg)
+future<> redis_service::init(seastar::sharded<service::storage_proxy>& proxy, seastar::sharded<database>& db, seastar::sharded<auth::service>& auth_service, db::config& cfg)
 {
     // 1. Create keyspace/tables used by redis API if not exists.
     // 2. Initialize the redis query processor.
