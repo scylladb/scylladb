@@ -46,6 +46,7 @@ struct lw_shared_ptr_deleter<sstables::sstable> {
 namespace sstables {
 
 using shared_sstable = seastar::lw_shared_ptr<sstable>;
+using sstable_list = std::unordered_set<shared_sstable>;
 
 }
 
