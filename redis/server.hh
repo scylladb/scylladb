@@ -87,7 +87,6 @@ public:
     using response_type = result;
 
 private:
-    friend class connection;
     class connection : public boost::intrusive::list_base_hook<> {
         redis_server& _server;
         socket_address _server_addr;
