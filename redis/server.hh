@@ -48,9 +48,6 @@
 
 db::consistency_level make_consistency_level(const sstring&);
 
-namespace db {
-class config;
-};
 class redis_exception;
 
 namespace redis_transport {
