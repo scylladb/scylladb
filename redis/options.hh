@@ -30,8 +30,6 @@
 #include "service/client_state.hh"
 #include "auth/service.hh"
 
-using namespace seastar;
-
 namespace service {
 class storage_proxy;
 }
