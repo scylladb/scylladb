@@ -117,12 +117,12 @@ public:
             : value(to_bytes_opt_vec(std::move(elements))) {
         }
         static value from_serialized(const raw_value_view& buffer, const tuple_type_impl& type) {
-          return buffer.with_linearized([&] (bytes_view view) {
+          return buffer.with_value([&] (const FragmentedView auto& view) {
               return value(type.split(view));
           });
         }
         virtual cql3::raw_value get(const query_options& options) override {
-            return cql3::raw_value::make_value(tuple_type_impl::build_value(_elements));
+            return cql3::raw_value::make_value(tuple_type_impl::build_value_fragmented(_elements));
         }
 
         virtual const std::vector<bytes_opt>& get_elements() const override {
@@ -188,7 +188,7 @@ public:
 
         virtual cql3::raw_value_view bind_and_get(const query_options& options) override {
             // We don't "need" that override but it saves us the allocation of a Value object if used
-            return cql3::raw_value_view::make_temporary(cql3::raw_value::make_value(_type->build_value(bind_internal(options))));
+            return cql3::raw_value_view::make_temporary(cql3::raw_value::make_value(_type->build_value_fragmented(bind_internal(options))));
         }
     };
 

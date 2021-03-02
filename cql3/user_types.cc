@@ -155,19 +155,19 @@ user_types::value::value(std::vector<bytes_view_opt> elements)
 }
 
 user_types::value user_types::value::from_serialized(const raw_value_view& v, const user_type_impl& type) {
-    return v.with_linearized([&] (bytes_view val) {
-        auto elements = type.split(val);
+    return v.with_value([&] (const FragmentedView auto& val) {
+        std::vector<bytes_opt> elements = type.split(val);
         if (elements.size() > type.size()) {
             throw exceptions::invalid_request_exception(
                     format("User Defined Type value contained too many fields (expected {}, got {})", type.size(), elements.size()));
         }
 
-        return value(elements);
+        return value(std::move(elements));
     });
 }
 
 cql3::raw_value user_types::value::get(const query_options&) {
-    return cql3::raw_value::make_value(tuple_type_impl::build_value(_elements));
+    return cql3::raw_value::make_value(tuple_type_impl::build_value_fragmented(_elements));
 }
 
 const std::vector<bytes_opt>& user_types::value::get_elements() const {
@@ -223,7 +223,7 @@ shared_ptr<terminal> user_types::delayed_value::bind(const query_options& option
 }
 
 cql3::raw_value_view user_types::delayed_value::bind_and_get(const query_options& options) {
-    return cql3::raw_value_view::make_temporary(cql3::raw_value::make_value(user_type_impl::build_value(bind_internal(options))));
+    return cql3::raw_value_view::make_temporary(cql3::raw_value::make_value(user_type_impl::build_value_fragmented(bind_internal(options))));
 }
 
 shared_ptr<terminal> user_types::marker::bind(const query_options& options) {

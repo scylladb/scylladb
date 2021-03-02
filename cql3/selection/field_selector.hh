@@ -97,12 +97,7 @@ public:
         if (!value) {
             return std::nullopt;
         }
-        auto&& buffers = _type->split(single_fragmented_view(*value));
-        bytes_opt ret;
-        if (_field < buffers.size() && buffers[_field]) {
-            ret = to_bytes(*buffers[_field]);
-        }
-        return ret;
+        return get_nth_tuple_element(single_fragmented_view(*value), _field);
     }
 
     virtual data_type get_type() const override {

@@ -102,6 +102,24 @@ std::optional<View> read_tuple_element(View& v) {
     return read_simple_bytes(v, s);
 }
 
+template <FragmentedView View>
+bytes_opt get_nth_tuple_element(View v, size_t n) {
+    for (size_t i = 0; i < n; ++i) {
+        if (v.empty()) {
+            return std::nullopt;
+        }
+        read_tuple_element(v);
+    }
+    if (v.empty()) {
+        return std::nullopt;
+    }
+    auto el = read_tuple_element(v);
+    if (el) {
+        return linearized(*el);
+    }
+    return std::nullopt;
+}
+
 class tuple_type_impl : public concrete_type<std::vector<data_value>> {
     using intern = type_interning_helper<tuple_type_impl, std::vector<data_type>>;
 protected:
@@ -135,7 +153,7 @@ public:
         }
         return elements;
     }
-    template <typename RangeOf_bytes_opt>  // also accepts managed_bytes_view_opt
+    template <typename RangeOf_bytes_opt>  // also accepts bytes_view_opt
     static bytes build_value(RangeOf_bytes_opt&& range) {
         auto item_size = [] (auto&& v) { return 4 + (v ? v->size() : 0); };
         auto size = boost::accumulate(range | boost::adaptors::transformed(item_size), 0);
