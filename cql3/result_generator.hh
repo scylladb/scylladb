@@ -25,6 +25,7 @@
 #include "stats.hh"
 
 namespace cql3 {
+class untyped_result_set;
 
 class result_generator {
     schema_ptr _schema;
@@ -33,6 +34,7 @@ class result_generator {
     shared_ptr<const selection::selection> _selection;
     cql_stats* _stats;
 private:
+    friend class untyped_result_set;
     template<typename Visitor>
     class query_result_visitor {
         const schema& _schema;
@@ -82,7 +84,7 @@ private:
                     if (_clustering_key.size() > def->component_index()) {
                         _visitor.accept_value(query::result_bytes_view(bytes_view(_clustering_key[def->component_index()])));
                     } else {
-                        _visitor.accept_value({});
+                        _visitor.accept_value(std::nullopt);
                     }
                     break;
                 case column_kind::regular_column:
@@ -107,7 +109,7 @@ private:
                     } else if (def->is_static()) {
                         accept_cell_value(*def, static_row_iterator);
                     } else {
-                        _visitor.accept_value({});
+                        _visitor.accept_value(std::nullopt);
                     }
                 }
                 _visitor.end_row();

@@ -75,7 +75,7 @@ future<raft::log_entries> raft_sys_table_storage::load_log() {
     for (const cql3::untyped_result_set_row& row : *rs) {
         raft::term_t term = raft::term_t(row.get_as<int64_t>("term"));
         raft::index_t idx = raft::index_t(row.get_as<int64_t>("index"));
-        bytes_view raw_data = row.get_view("data");
+        auto raw_data = row.get_blob("data");
         auto in = ser::as_input_stream(raw_data);
         using data_variant_type = decltype(raft::log_entry::data);
         data_variant_type data = ser::deserialize(in, boost::type<data_variant_type>());
@@ -98,7 +98,7 @@ future<raft::snapshot> raft_sys_table_storage::load_snapshot() {
         db::system_keyspace::RAFT_SNAPSHOTS);
     ::shared_ptr<cql3::untyped_result_set> snp_rs = co_await _qp.execute_internal(load_snp_info_cql, {int64_t(_group_id), snapshot_id});
     const auto& snp_row = snp_rs->one(); // should be only one matching row for a given snapshot id
-    bytes_view snp_cfg = snp_row.get_view("config");
+    auto snp_cfg = snp_row.get_blob("config");
     auto in = ser::as_input_stream(snp_cfg);
 
     raft::snapshot s{

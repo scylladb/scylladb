@@ -41,36 +41,60 @@
  */
 #include <unordered_map>
 #include <optional>
+#include <seastar/core/sharded.hh>
 #include "bytes.hh"
 #include "types.hh"
 #include "types/map.hh"
 #include "types/list.hh"
 #include "types/set.hh"
+#include "serializer.hh"
+#include "bytes_ostream.hh"
 #include "transport/messages/result_message_base.hh"
 #include "column_specification.hh"
-#include "absl-flat_hash_map.hh"
+#include "query-result.hh"
 
 #pragma once
 
+namespace query {
+    class result;
+    class partition_slice;
+    // duplicate template def. But avoids a huge include chain
+    using result_bytes_view = ser::buffer_view<bytes_ostream::fragment_iterator>;
+}
+
 namespace cql3 {
+namespace selection {
+    class selection;
+}
+
+class untyped_result_set;
+class result;
+class metadata;
 
 class untyped_result_set_row {
-private:
-    const std::vector<lw_shared_ptr<column_specification>> _columns;
-    using map_t = flat_hash_map<sstring, bytes_opt>;
-    const map_t _data;
 public:
-    untyped_result_set_row(const map_t&);
-    untyped_result_set_row(const std::vector<lw_shared_ptr<column_specification>>&, std::vector<bytes_opt>);
+    using view_type = query::result_bytes_view;
+    using opt_view_type = std::optional<view_type>;
+    using view_holder = std::variant<std::monostate, view_type, bytes>;
+private:
+    friend class untyped_result_set;
+    using index_map = std::unordered_map<std::string_view, size_t>;
+    using data_views = std::vector<view_holder>;
+
+    const index_map& _name_to_index;
+    const cql3::metadata& _metadata;
+    data_views _data;
+
+    untyped_result_set_row(const index_map&, const cql3::metadata&, data_views);
+    size_t index(const std::string_view&) const;
+public:
     untyped_result_set_row(untyped_result_set_row&&) = default;
     untyped_result_set_row(const untyped_result_set_row&) = delete;
 
     bool has(std::string_view) const;
-    bytes_view get_view(std::string_view name) const {
-        return _data.at(name).value();
-    }
+    view_type get_view(std::string_view name) const;
     bytes get_blob(std::string_view name) const {
-        return bytes(get_view(name));
+        return get_view(name).linearize();
     }
     template<typename T>
     T get_as(std::string_view name) const {
@@ -80,7 +104,7 @@ public:
     std::optional<T> get_opt(std::string_view name) const {
         return has(name) ? get_as<T>(name) : std::optional<T>{};
     }
-    bytes_view_opt get_view_opt(const sstring& name) const {
+    opt_view_type get_view_opt(const sstring& name) const {
         if (has(name)) {
             return get_view(name);
         }
@@ -147,9 +171,10 @@ public:
         get_set_data<V>(name, std::inserter(res, res.end()), valtype);
         return res;
     }
-    const std::vector<lw_shared_ptr<column_specification>>& get_columns() const {
-        return _columns;
+    const cql3::metadata& get_metadata() const {
+        return _metadata;
     }
+    const std::vector<lw_shared_ptr<column_specification>>& get_columns() const;
 };
 
 class result_set;
@@ -157,13 +182,14 @@ class result_set;
 class untyped_result_set {
 public:
     using row = untyped_result_set_row;
-    typedef std::vector<row> rows_type;
+    using rows_type = std::vector<row>;
     using const_iterator = rows_type::const_iterator;
     using iterator = rows_type::const_iterator;
 
     untyped_result_set(::shared_ptr<cql_transport::messages::result_message>);
-    untyped_result_set(const cql3::result_set&);
+    untyped_result_set(const schema&, foreign_ptr<lw_shared_ptr<query::result>>, const cql3::selection::selection&, const query::partition_slice&);
     untyped_result_set(untyped_result_set&&) = default;
+    ~untyped_result_set();
 
     const_iterator begin() const {
         return _rows.begin();
@@ -188,8 +214,20 @@ public:
         return _rows.back();
     }
 private:
+    using index_map_ptr = std::unique_ptr<untyped_result_set_row::index_map>;
+    using qr_tuple = std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, shared_ptr<const cql3::metadata>>;
+    using storage = std::variant<std::monostate
+        , ::shared_ptr<cql_transport::messages::result_message>
+        , qr_tuple
+    >;
+    struct visitor;
+
+    storage _storage;
+    index_map_ptr _index;
     rows_type _rows;
+
     untyped_result_set() = default;
+    static index_map_ptr make_index(const cql3::metadata&);
 public:
     static untyped_result_set make_empty() {
         return untyped_result_set();

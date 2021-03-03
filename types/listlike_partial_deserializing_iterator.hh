@@ -28,6 +28,12 @@
 int read_collection_size(bytes_view& in, cql_serialization_format sf);
 bytes_view read_collection_value(bytes_view& in, cql_serialization_format sf);
 
+template <FragmentedView View>
+int read_collection_size(View& in, cql_serialization_format);
+
+template <FragmentedView View>
+View read_collection_value(View& in, cql_serialization_format);
+
 // iterator that takes a set or list in serialized form, and emits
 // each element, still in serialized form
 class listlike_partial_deserializing_iterator {
