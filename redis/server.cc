@@ -154,7 +154,7 @@ redis_server::connection::connection(redis_server& server, socket_address server
     , _write_buf(_fd.output())
     , _options(server._config._read_consistency_level, server._config._write_consistency_level, server._config._timeout_config, server._auth_service, addr, server._total_redis_db_count)
 {
-    ++_server._stats._total_connections;
+    ++_server._total_connections;
     ++_server._current_connections;
     _server._connections_list.push_back(*this);
 }

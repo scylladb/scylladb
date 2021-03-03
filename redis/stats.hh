@@ -50,7 +50,6 @@ public:
     uint64_t _connections = 0;
     uint64_t _requests_served = 0;
     uint64_t _requests_serving = 0;
-    uint64_t _total_connections = 0;
     utils::estimated_histogram _estimated_requests_latency;
     utils::timed_rate_moving_average_and_histogram _requests;
 private:
