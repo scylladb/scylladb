@@ -206,6 +206,7 @@ private:
         virtual ~connection();
         future<> process();
         future<> process_request();
+        future<> do_process_request();
         static std::tuple<net::inet_address, int, client_type> make_client_key(const service::client_state& cli_state);
         client_data make_client_data() const;
         const service::client_state& get_client_state() const { return _client_state; }

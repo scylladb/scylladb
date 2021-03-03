@@ -622,19 +622,6 @@ future<> cql_server::connection::process()
             return _read_buf.eof();
         }, [this] {
             return process_request();
-        }).then_wrapped([this] (future<> f) {
-            try {
-                f.get();
-            } catch (const exceptions::cassandra_exception& ex) {
-                try { ++_server._stats.errors[ex.code()]; } catch(...) {}
-                write_response(make_error(0, ex.code(), ex.what(), tracing::trace_state_ptr()));
-            } catch (std::exception& ex) {
-                try { ++_server._stats.errors[exceptions::exception_code::SERVER_ERROR]; } catch(...) {}
-                write_response(make_error(0, exceptions::exception_code::SERVER_ERROR, ex.what(), tracing::trace_state_ptr()));
-            } catch (...) {
-                try { ++_server._stats.errors[exceptions::exception_code::SERVER_ERROR]; } catch(...) {}
-                write_response(make_error(0, exceptions::exception_code::SERVER_ERROR, "unknown error", tracing::trace_state_ptr()));
-            }
         });
     }).finally([this] {
         return _pending_requests_gate.close().then([this] {
@@ -675,6 +662,23 @@ thread_local cql_server::connection::execution_stage_type
         cql_server::connection::_process_request_stage{"transport", &connection::process_request_one};
 
 future<> cql_server::connection::process_request() {
+    return do_process_request().then_wrapped([this] (future<> f) {
+        try {
+            f.get();
+        } catch (const exceptions::cassandra_exception& ex) {
+            try { ++_server._stats.errors[ex.code()]; } catch(...) {}
+            write_response(make_error(0, ex.code(), ex.what(), tracing::trace_state_ptr()));
+        } catch (std::exception& ex) {
+            try { ++_server._stats.errors[exceptions::exception_code::SERVER_ERROR]; } catch(...) {}
+            write_response(make_error(0, exceptions::exception_code::SERVER_ERROR, ex.what(), tracing::trace_state_ptr()));
+        } catch (...) {
+            try { ++_server._stats.errors[exceptions::exception_code::SERVER_ERROR]; } catch(...) {}
+            write_response(make_error(0, exceptions::exception_code::SERVER_ERROR, "unknown error", tracing::trace_state_ptr()));
+        }
+    });
+}
+
+future<> cql_server::connection::do_process_request() {
     return read_frame().then_wrapped([this] (future<std::optional<cql_binary_frame_v3>>&& v) {
         auto maybe_frame = v.get0();
         if (!maybe_frame) {
