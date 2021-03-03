@@ -74,6 +74,29 @@ namespace sstables {
 
 logging::logger clogger("compaction");
 
+sstring compaction_name(compaction_type type) {
+    switch (type) {
+    case compaction_type::Compaction:
+        return "COMPACTION";
+    case compaction_type::Cleanup:
+        return "CLEANUP";
+    case compaction_type::Validation:
+        return "VALIDATION";
+    case compaction_type::Scrub:
+        return "SCRUB";
+    case compaction_type::Index_build:
+        return "INDEX_BUILD";
+    case compaction_type::Reshard:
+        return "RESHARD";
+    case compaction_type::Upgrade:
+        return "UPGRADE";
+    case compaction_type::Reshape:
+        return "RESHAPE";
+    default:
+        throw std::runtime_error("Invalid Compaction Type");
+    }
+}
+
 static std::string_view to_string(compaction_type type) {
     switch (type) {
     case compaction_type::Compaction: return "Compact";
