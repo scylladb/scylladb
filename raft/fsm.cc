@@ -35,7 +35,7 @@ fsm::fsm(server_id id, term_t current_term, server_id voted_for, log log,
     assert(!bool(_current_leader));
 }
 
-future<> fsm::wait_max_log_length() {
+future<> fsm::wait() {
     check_is_leader();
 
    return _log_limiter_semaphore->sem.wait();
@@ -43,7 +43,7 @@ future<> fsm::wait_max_log_length() {
 
 const configuration& fsm::get_configuration() const {
     check_is_leader();
-    return _log.get_configuration();
+    return _tracker->get_configuration();
 }
 
 template<typename T>
@@ -53,7 +53,7 @@ const log_entry& fsm::add_entry(T command) {
 
     if constexpr (std::is_same_v<T, configuration>) {
         if (_log.last_conf_idx() > _commit_idx ||
-            _log.get_configuration().is_joint()) {
+            _tracker->get_configuration().is_joint()) {
             // 4.1. Cluster membership changes/Safety.
             //
             // Leaders avoid overlapping configuration changes by
@@ -71,7 +71,7 @@ const log_entry& fsm::add_entry(T command) {
         // configuration for joint consensus (C_old,new) as a log
         // entry and replicates that entry using the normal Raft
         // mechanism.
-        configuration tmp(_log.get_configuration());
+        configuration tmp(_tracker->get_configuration());
         tmp.enter_joint(command.current);
         command = std::move(tmp);
     }
@@ -87,7 +87,7 @@ const log_entry& fsm::add_entry(T command) {
         // entry is replicated to the C_new servers, and
         // a majority of the new configuration is used to
         // determine the C_new entry’s commitment.
-        _tracker->set_configuration(_log.get_configuration(), _log.last_idx());
+        set_configuration();
     }
 
     return *_log[_log.last_idx()];
@@ -128,6 +128,20 @@ void fsm::update_current_term(term_t current_term)
     _randomized_election_timeout = ELECTION_TIMEOUT + logical_clock::duration{dist(re)};
 }
 
+void fsm::set_configuration() {
+
+    configuration configuration = _log.last_conf_idx() ?
+        std::get<raft::configuration>(_log[_log.last_conf_idx()]->data) : _log.get_snapshot().config;
+    // We unconditionally access configuration.current[0]
+    // to identify which entries are committed.
+    assert(configuration.current.size() > 0);
+    if (is_leader()) {
+        _tracker->set_configuration(std::move(configuration), _log.last_idx());
+    } else if (is_candidate()) {
+        _votes->set_configuration(std::move(configuration));
+    }
+}
+
 void fsm::become_leader() {
     assert(!std::holds_alternative<leader>(_state));
     assert(!_tracker);
@@ -136,7 +150,7 @@ void fsm::become_leader() {
     _votes = std::nullopt;
     _tracker.emplace(_my_id);
     _log_limiter_semaphore.emplace(this);
-    _log_limiter_semaphore->sem.consume(_log.length());
+    _log_limiter_semaphore->sem.consume(_log.non_snapshoted_length());
     _last_election_time = _clock.now();
     // a new leader needs to commit at lease one entry to make sure that
     // all existing entries in its log are commited as well. Also it should
@@ -145,7 +159,7 @@ void fsm::become_leader() {
     add_entry(log_entry::dummy());
     // set_configuration() begins replicating from the last entry
     // in the log.
-    _tracker->set_configuration(_log.get_configuration(), _log.last_idx());
+    set_configuration();
     replicate();
 }
 
@@ -174,7 +188,8 @@ void fsm::become_candidate() {
     // and initiating another round of RequestVote RPCs.
     _last_election_time = _clock.now();
 
-    _votes.emplace(_log.get_configuration());
+    _votes.emplace();
+    set_configuration();
 
     const auto& voters = _votes->voters();
     if (voters.find(server_address{_my_id}) == voters.end()) {
@@ -291,7 +306,9 @@ void fsm::advance_stable_idx(index_t idx) {
     // configuration, update it's progress and optionally
     // commit new entries.
     if (is_leader() && _tracker->leader_progress()) {
-        _tracker->leader_progress()->stable_to(idx);
+        auto& progress = *_tracker->leader_progress();
+        progress.match_idx = idx;
+        progress.next_idx = index_t{idx + 1};
         replicate();
         maybe_commit();
     }
@@ -328,19 +345,15 @@ void fsm::maybe_commit() {
     _sm_events.signal();
 
     if (committed_conf_change) {
-        if (_log.get_configuration().is_joint()) {
+        if (_tracker->get_configuration().is_joint()) {
             // 4.3. Arbitrary configuration changes using joint consensus
             //
             // Once the joint consensus has been committed, the
             // system then transitions to the new configuration.
-            configuration cfg(_log.get_configuration());
+            configuration cfg(_tracker->get_configuration());
             cfg.leave_joint();
             _log.emplace_back(seastar::make_lw_shared<log_entry>({_current_term, _log.next_idx(), std::move(cfg)}));
-            _tracker->set_configuration(_log.get_configuration(), _log.last_idx());
-            // Leaving joint configuration may commit more entries
-            // even if we had no new acks, by switching the quorum
-            // from joint to simple majority.
-            maybe_commit();
+            set_configuration();
         } else if (_tracker->leader_progress() == nullptr) {
             // 4.2.2 Removing the current leader
             //
@@ -483,7 +496,9 @@ void fsm::append_entries_reply(server_id from, append_reply&& reply) {
         logger.trace("append_entries_reply[{}->{}]: accepted match={} last index={}",
             _my_id, from, progress.match_idx, last_idx);
 
-        progress.stable_to(last_idx);
+        progress.match_idx = std::max(progress.match_idx, last_idx);
+        // out next_idx may be large because of optimistic increase in pipeline mode
+        progress.next_idx = std::max(progress.next_idx, index_t(last_idx + 1));
 
         progress.become_pipeline();
 
@@ -628,36 +643,38 @@ void fsm::replicate_to(follower_progress& progress, bool allow_empty) {
 
         allow_empty = false; // allow only one empty message
 
-        // A log containing a snapshot, a few trailing entries and
-        // a few new entries may look like this:
+        // With snapshot prefix enaled the log may look like this:
         // E - log entry
-        // S_idx - snapshot index
-        // E_i1 E_i2 E_i3 Ei_4 E_i5 E_i6
-        //      ^
-        //      S_idx = i2
-        // If the follower's next_idx is i1 we need to
-        // enter snapshot transfer mode even when we have
-        // i1 in the log, since it is not possible to get the term of
-        // the entry previous to i1 and verify that the follower's tail
-        // contains no uncommitted entries.
-        index_t prev_idx = progress.next_idx - index_t{1};
-        std::optional<term_t> prev_term = _log.term_for(prev_idx);
-        if (!prev_term) {
-            const snapshot& snapshot = _log.get_snapshot();
-            // We need to transfer the snapshot before we can
+        // S - snapshot
+        // Ei1 Ei2 Ei3 Si4 Ei5 Ei6
+        // If the next_idx is before i2 we need to enter snaphot transfer mode
+        // even though we still have i1 since it is not possibel to get prev
+        // term for it.
+        auto& s = _log.get_snapshot();
+        if (progress.next_idx <= s.idx && progress.next_idx < (_log.start_idx() + 1)) {
+            // The next index to be sent points to a snapshot so
+            // we need to transfer the snapshot before we can
             // continue syncing the log.
             progress.become_snapshot();
-            send_to(progress.id, install_snapshot{_current_term, snapshot});
+            send_to(progress.id, install_snapshot{_current_term, _log.get_snapshot()});
             logger.trace("replicate_to[{}->{}]: send snapshot next={} snapshot={}",
-                    _my_id, progress.id, progress.next_idx,  snapshot.idx);
+                    _my_id, progress.id, progress.next_idx,  _log.get_snapshot().idx);
             return;
+        }
+
+        index_t prev_idx = index_t(0);
+        term_t prev_term = _current_term;
+        if (progress.next_idx != 1) {
+            prev_idx = index_t(progress.next_idx - 1);
+            assert (prev_idx >= _log.start_idx() || s.idx == prev_idx);
+            prev_term = s.idx == prev_idx ? s.term : _log[prev_idx]->term;
         }
 
         append_request req = {
             .current_term = _current_term,
             .leader_id = _my_id,
             .prev_log_idx = prev_idx,
-            .prev_log_term = prev_term.value(),
+            .prev_log_term = prev_term,
             .leader_commit_idx = _commit_idx,
             .entries = std::vector<log_entry_ptr>()
         };

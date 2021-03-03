@@ -553,7 +553,7 @@ scylla_raft_core = [
     'raft/raft.cc',
     'raft/server.cc',
     'raft/fsm.cc',
-    'raft/tracker.cc',
+    'raft/progress.cc',
     'raft/log.cc',
 ]
 

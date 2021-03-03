@@ -22,7 +22,7 @@
 
 #include <seastar/core/condition-variable.hh>
 #include "raft.hh"
-#include "tracker.hh"
+#include "progress.hh"
 #include "log.hh"
 
 namespace raft {
@@ -41,12 +41,9 @@ struct fsm_output {
 struct fsm_config {
     // max size of appended entries in bytes
     size_t append_request_threshold;
-    // Max number of entries of in-memory part of the log after
-    // which requests are stopped to be admitted until the log
-    // is shrunk back by a snapshot. Should be greater than
-    // whatever the default number of trailing log entries
-    // is configured by the snapshot, otherwise the state
-    // machine will deadlock.
+    // max number of entries of in-memory part of the log after
+    // which requests are stopped to be addmitted unill the log
+    // is shrunk back by snapshoting
     size_t max_log_length;
 };
 
@@ -250,6 +247,11 @@ private:
     // Tick implementation on a leader
     void tick_leader();
 
+    // Reconfigure this instance to use the provided configuration.
+    // Called on start, state change to candidate or leader, or when
+    // a new configuration entry is added.
+    void set_configuration();
+
 public:
     explicit fsm(server_id id, term_t current_term, server_id voted_for, log log,
             failure_detector& failure_detector, fsm_config conf);
@@ -270,9 +272,9 @@ public:
         return _log.last_term();
     }
 
-    // Call this function to wait for the number of log entries to
-    // go below  max_log_length.
-    future<> wait_max_log_length();
+    // call this function to wait for number of log entries to go below
+    // max_log_length
+    future<> wait();
 
     // Return current configuration. Throws if not a leader.
     const configuration& get_configuration() const;
@@ -329,8 +331,8 @@ public:
     // entry. Retruns false if the snapshot is older than existing one.
     bool apply_snapshot(snapshot snp, size_t traling);
 
-    size_t log_length() const {
-        return _log.length();
+    size_t in_memory_log_size() {
+        return _log.non_snapshoted_length();
     };
 
     friend std::ostream& operator<<(std::ostream& os, const fsm& f);

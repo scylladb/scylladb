@@ -18,7 +18,7 @@
  * You should have received a copy of the GNU General Public License
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
-#include "tracker.hh"
+#include "progress.hh"
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/on_internal_error.hh>
 
@@ -196,26 +196,29 @@ index_t tracker::committed(index_t prev_commit_idx) {
     }
 }
 
-votes::votes(configuration configuration)
-        :_voters(configuration.current)
-        , _current(configuration.current) {
-
-    if (configuration.is_joint()) {
-        _previous.emplace(configuration.previous);
-        _voters.insert(configuration.previous.begin(), configuration.previous.end());
+void votes::set_configuration(configuration configuration) {
+    _configuration = std::move(configuration);
+    _voters = _configuration.current;
+    if (_configuration.is_joint()) {
+        _voters.insert(_configuration.previous.begin(), _configuration.previous.end());
     }
 }
 
 void votes::register_vote(server_id from, bool granted) {
+    server_address from_address{from};
     bool registered = false;
 
-    if (_current.register_vote(from, granted)) {
+    if (_configuration.current.find(from_address) != _configuration.current.end()) {
+        _current.register_vote(granted);
         registered = true;
     }
-    if (_previous && _previous->register_vote(from, granted)) {
+    if (_configuration.is_joint() &&
+        _configuration.previous.find(from_address) != _configuration.previous.end()) {
+        _previous.register_vote(granted);
         registered = true;
     }
-    // Should never receive a vote not requested, unless an RPC bug.
+    // Should never receive a vote not requested, unless an RPC
+    // bug.
     if (! registered) {
         seastar::on_internal_error(logger,
             format("Got a vote from unregistered server {} during election", from));
@@ -223,17 +226,17 @@ void votes::register_vote(server_id from, bool granted) {
 }
 
 vote_result votes::tally_votes() const {
-    if (_previous) {
-        auto previous_result = _previous->tally_votes();
+    if (_configuration.is_joint()) {
+        auto previous_result = _previous.tally_votes(_configuration.previous.size());
         if (previous_result != vote_result::WON) {
             return previous_result;
         }
     }
-    return _current.tally_votes();
+    return _current.tally_votes(_configuration.current.size());
 }
 
 std::ostream& operator<<(std::ostream& os, const election_tracker& v) {
-    os << "responded: " << v._responded.size() << ", ";
+    os << "responded: " << v._responded << ", ";
     os << "granted: " << v._granted;
     return os;
 }
@@ -241,26 +244,7 @@ std::ostream& operator<<(std::ostream& os, const election_tracker& v) {
 
 std::ostream& operator<<(std::ostream& os, const votes& v) {
     os << "current: " << v._current << std::endl;
-    if (v._previous) {
-        os << "previous: " << v._previous.value() << std::endl;
-    }
-    return os;
-}
-
-std::ostream& operator<<(std::ostream& os, const vote_result& v) {
-    static const char *n;
-    switch (v) {
-    case vote_result::UNKNOWN:
-        n = "UNKNOWN";
-        break;
-    case vote_result::WON:
-        n = "WON";
-        break;
-    case vote_result::LOST:
-        n = "LOST";
-        break;
-    }
-    os << n;
+    os << "previous: " << v._previous << std::endl;
     return os;
 }
 
