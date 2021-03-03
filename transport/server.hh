@@ -266,7 +266,6 @@ private:
 private:
     future<> _stopped = _all_connections_stopped.get_future();
     boost::intrusive::list<connection> _connections_list;
-    uint64_t _total_connections = 0;
 private:
     future<> advertise_new_connection(shared_ptr<connection> conn);
     future<> unadvertise_connection(shared_ptr<connection> conn);

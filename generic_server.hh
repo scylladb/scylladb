@@ -46,6 +46,7 @@ protected:
     promise<> _all_connections_stopped;
     uint64_t _current_connections = 0;
     uint64_t _connections_being_accepted = 0;
+    uint64_t _total_connections = 0;
 
     void maybe_idle();
 };
