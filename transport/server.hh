@@ -41,6 +41,7 @@
 #include <seastar/core/sharded.hh>
 #include "utils/updateable_value.hh"
 #include "service/qos/service_level_controller.hh"
+#include "generic_server.hh"
 
 namespace scollectd {
 
@@ -174,10 +175,10 @@ private:
     friend class connection;
     friend std::unique_ptr<cql_server::response> make_result(int16_t stream, messages::result_message& msg,
             const tracing::trace_state_ptr& tr_state, cql_protocol_version_type version, bool skip_metadata);
-    class connection : public boost::intrusive::list_base_hook<> {
+
+    class connection : public generic_server::connection, public boost::intrusive::list_base_hook<> {
         cql_server& _server;
         socket_address _server_addr;
-        connected_socket _fd;
         input_stream<char> _read_buf;
         output_stream<char> _write_buf;
         fragmented_temporary_buffer::reader _buffer_reader;
@@ -211,7 +212,6 @@ private:
         ~connection();
         future<> process();
         future<> process_request();
-        future<> shutdown();
         static std::tuple<net::inet_address, int, client_type> make_client_key(const service::client_state& cli_state);
         client_data make_client_data() const;
         const service::client_state& get_client_state() const { return _client_state; }

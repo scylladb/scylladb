@@ -147,9 +147,9 @@ future<redis_server::result> redis_server::connection::process_request_one(redis
 }
 
 redis_server::connection::connection(redis_server& server, socket_address server_addr, connected_socket&& fd, socket_address addr)
-    : _server(server)
+    : generic_server::connection(std::move(fd))
+    , _server(server)
     , _server_addr(server_addr)
-    , _fd(std::move(fd))
     , _read_buf(_fd.input())
     , _write_buf(_fd.output())
     , _options(server._config._read_consistency_level, server._config._write_consistency_level, server._config._timeout_config, server._auth_service, addr, server._total_redis_db_count)
@@ -193,16 +193,6 @@ future<> redis_server::connection::process()
             });
         });
     });
-}
-
-future<> redis_server::connection::shutdown()
-{
-    try {
-        _fd.shutdown_input();
-        _fd.shutdown_output();
-    } catch (...) {
-    }
-    return make_ready_future<>();
 }
 
 thread_local redis_server::connection::execution_stage_type redis_server::connection::_process_request_stage {"redis_transport", &connection::process_request_one};

@@ -37,6 +37,7 @@
 #include "timeout_config.hh"
 #include "utils/estimated_histogram.hh"
 #include "utils/fragmented_temporary_buffer.hh"
+#include "generic_server.hh"
 
 #include <seastar/core/seastar.hh>
 #include <seastar/core/semaphore.hh>
@@ -87,10 +88,9 @@ public:
     using response_type = result;
 
 private:
-    class connection : public boost::intrusive::list_base_hook<> {
+    class connection : public generic_server::connection, public boost::intrusive::list_base_hook<> {
         redis_server& _server;
         socket_address _server_addr;
-        connected_socket _fd;
         input_stream<char> _read_buf;
         output_stream<char> _write_buf;
         redis_protocol_parser _parser;
@@ -113,7 +113,6 @@ private:
         future<> process_request();
         void write_reply(const redis_exception&);
         void write_reply(redis_server::result result);
-        future<> shutdown();
     private:
         const ::timeout_config& timeout_config() { return _server.timeout_config(); }
         future<result> process_request_one(redis::request&& request, redis::redis_options&, service_permit permit);

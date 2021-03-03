@@ -606,9 +606,9 @@ future<foreign_ptr<std::unique_ptr<cql_server::response>>>
 }
 
 cql_server::connection::connection(cql_server& server, socket_address server_addr, connected_socket&& fd, socket_address addr)
-    : _server(server)
+    : generic_server::connection{std::move(fd)}
+    , _server(server)
     , _server_addr(server_addr)
-    , _fd(std::move(fd))
     , _read_buf(_fd.input())
     , _write_buf(_fd.output())
     , _client_state(service::client_state::external_tag{}, server._auth_service, server.timeout_config(), addr)
@@ -659,16 +659,6 @@ future<> cql_server::connection::process()
             });
         });
     });
-}
-
-future<> cql_server::connection::shutdown()
-{
-    try {
-        _fd.shutdown_input();
-        _fd.shutdown_output();
-    } catch (...) {
-    }
-    return make_ready_future<>();
 }
 
 std::tuple<net::inet_address, int, client_type> cql_server::connection::make_client_key(const service::client_state& cli_state) {
