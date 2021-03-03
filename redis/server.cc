@@ -122,7 +122,7 @@ future<> redis_server::do_accepts(int which, bool keepalive, socket_address serv
             auto conn = make_shared<connection>(*this, server_addr, std::move(fd), std::move(addr));
             ++_stats._connects;
             ++_stats._connections;
-            (void)conn->process().then_wrapped([this, conn] (future<> f) {
+            (void)static_pointer_cast<generic_server::connection>(conn)->process().then_wrapped([this, conn] (future<> f) {
                 --_stats._connections;
                 try {
                     f.get();
@@ -150,30 +150,11 @@ redis_server::connection::connection(redis_server& server, socket_address server
     : generic_server::connection(server, std::move(fd))
     , _server(server)
     , _server_addr(server_addr)
-    , _read_buf(_fd.input())
-    , _write_buf(_fd.output())
     , _options(server._config._read_consistency_level, server._config._write_consistency_level, server._config._timeout_config, server._auth_service, addr, server._total_redis_db_count)
 {
 }
 
 redis_server::connection::~connection() {
-}
-
-future<> redis_server::connection::process()
-{
-    return do_until([this] {
-        return _read_buf.eof();
-    }, [this] {
-        return with_gate(_pending_requests_gate, [this] {
-            return process_request();
-        });
-    }).finally([this] {
-        return _pending_requests_gate.close().then([this] {
-            return _ready_to_respond.finally([this] {
-                return _write_buf.close();
-            });
-        });
-    });
 }
 
 thread_local redis_server::connection::execution_stage_type redis_server::connection::_process_request_stage {"redis_transport", &connection::process_request_one};

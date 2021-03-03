@@ -24,6 +24,7 @@
 #include "seastarx.hh"
 
 #include <seastar/core/future.hh>
+#include <seastar/core/gate.hh>
 #include <seastar/net/api.hh>
 
 #include <boost/intrusive/list.hpp>
@@ -36,10 +37,20 @@ class connection : public boost::intrusive::list_base_hook<> {
 protected:
     server& _server;
     connected_socket _fd;
+    input_stream<char> _read_buf;
+    output_stream<char> _write_buf;
+    future<> _ready_to_respond = make_ready_future<>();
+    seastar::gate _pending_requests_gate;
 
 public:
     connection(server& server, connected_socket&& fd);
     virtual ~connection();
+
+    virtual future<> process();
+
+    virtual future<> process_request() = 0;
+
+    virtual void on_connection_close();
 
     virtual future<> shutdown();
 };

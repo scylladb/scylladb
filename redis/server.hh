@@ -91,12 +91,8 @@ private:
     class connection : public generic_server::connection {
         redis_server& _server;
         socket_address _server_addr;
-        input_stream<char> _read_buf;
-        output_stream<char> _write_buf;
         redis_protocol_parser _parser;
-        seastar::gate _pending_requests_gate;
         redis::redis_options _options;
-        future<> _ready_to_respond = make_ready_future<>();
 
         using execution_stage_type = inheriting_concrete_execution_stage<
                 future<redis_server::result>,
@@ -109,7 +105,6 @@ private:
     public:
         connection(redis_server& server, socket_address server_addr, connected_socket&& fd, socket_address addr);
         virtual ~connection();
-        future<> process();
         future<> process_request();
         future<> do_process_request();
         void write_reply(const redis_exception&);
