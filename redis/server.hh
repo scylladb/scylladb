@@ -88,7 +88,7 @@ public:
     using response_type = result;
 
 private:
-    class connection : public generic_server::connection, public boost::intrusive::list_base_hook<> {
+    class connection : public generic_server::connection {
         redis_server& _server;
         socket_address _server_addr;
         input_stream<char> _read_buf;
