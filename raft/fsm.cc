@@ -31,6 +31,7 @@ fsm::fsm(server_id id, term_t current_term, server_id voted_for, log log,
 
     _observed.advance(*this);
     logger.trace("{}: starting log length {}", _my_id, _log.last_idx());
+    reset_election_timeout();
 
     assert(!bool(_current_leader));
 }
@@ -118,13 +119,11 @@ void fsm::update_current_term(term_t current_term)
     assert(_current_term < current_term);
     _current_term = current_term;
     _voted_for = server_id{};
+}
 
+void fsm::reset_election_timeout() {
     static thread_local std::default_random_engine re{std::random_device{}()};
     static thread_local std::uniform_int_distribution<> dist(1, ELECTION_TIMEOUT.count());
-    // Reset the randomized election timeout on each term
-    // change, even if we do not plan to campaign during this
-    // term: the main purpose of the timeout is to avoid
-    // starting our campaign simultaneously with other followers.
     _randomized_election_timeout = ELECTION_TIMEOUT + logical_clock::duration{dist(re)};
 }
 
@@ -160,12 +159,15 @@ void fsm::become_follower(server_id leader) {
     }
 }
 
-void fsm::become_candidate() {
+void fsm::become_candidate(bool is_prevote) {
     // When starting a campain we need to reset current leader otherwise
     // disruptive server prevention will stall an election if quorum of nodes
     // start election together since each one will ignore vote requests from others
     _current_leader = {};
     _state = candidate{};
+
+    reset_election_timeout();
+
     _tracker = std::nullopt;
     _log_limiter_semaphore = std::nullopt;
     // 3.4 Leader election
@@ -178,7 +180,7 @@ void fsm::become_candidate() {
     // and initiating another round of RequestVote RPCs.
     _last_election_time = _clock.now();
 
-    _votes.emplace(_log.get_configuration());
+    _votes.emplace(_log.get_configuration(), is_prevote);
 
     const auto& voters = _votes->voters();
     if (!voters.contains(server_address{_my_id})) {
@@ -188,24 +190,35 @@ void fsm::become_candidate() {
         become_follower(server_id{});
         return;
     }
-    update_current_term(term_t{_current_term + 1});
+
+    term_t term{_current_term + 1};
+    if (!is_prevote) {
+        update_current_term(term);
+    }
     // Replicate RequestVote
     for (const auto& server : voters) {
         if (server.id == _my_id) {
             // Vote for self.
             _votes->register_vote(server.id, true);
-            _voted_for = _my_id;
+            if (!is_prevote) {
+                // Only record real votes
+                _voted_for = _my_id;
+            }
             // Already signaled _sm_events in update_current_term()
             continue;
         }
-        logger.trace("{} [term: {}, index: {}, last log term: {}] sent vote request to {}",
-            _my_id, _current_term, _log.last_idx(), _log.last_term(), server.id);
+        logger.trace("{} [term: {}, index: {}, last log term: {}{}] sent vote request to {}",
+            _my_id, term, _log.last_idx(), _log.last_term(), is_prevote ? ", prevote" : "", server.id);
 
-        send_to(server.id, vote_request{_current_term, _log.last_idx(), _log.last_term()});
+        send_to(server.id, vote_request{term, _log.last_idx(), _log.last_term(), is_prevote});
     }
     if (_votes->tally_votes() == vote_result::WON) {
         // A single node cluster.
-        become_leader();
+        if (is_prevote) {
+            become_candidate(false);
+        } else {
+            become_leader();
+        }
     }
 }
 
@@ -422,7 +435,7 @@ void fsm::tick() {
     } else if (is_past_election_timeout()) {
         logger.trace("tick[{}]: becoming a candidate, last election: {}, now: {}", _my_id,
             _last_election_time, _clock.now());
-        become_candidate();
+        become_candidate(_config.enable_prevoting);
     }
 }
 
@@ -551,13 +564,17 @@ void fsm::request_vote(server_id from, vote_request&& request) {
     // We can cast a vote in any state. If the candidate's term is
     // lower than ours, we ignore the request. Otherwise we first
     // update our current term and convert to a follower.
-    assert(_current_term == request.current_term);
+    assert(request.is_prevote || _current_term == request.current_term);
 
     bool can_vote =
         // We can vote if this is a repeat of a vote we've already cast...
         _voted_for == from ||
         // ...we haven't voted and we don't think there's a leader yet in this term...
-        (_voted_for == server_id{} && _current_leader == server_id{});
+        (_voted_for == server_id{} && _current_leader == server_id{}) ||
+        // ...this is prevote for a future term...
+        // (we will get here if the node does not know any leader yet and already
+        //  voted for some other node, but now it get even newer prevote request)
+        (request.is_prevote && request.current_term > _current_term);
 
     // ...and we believe the candidate is up to date.
     if (can_vote && _log.is_up_to_date(request.last_log_idx, request.last_log_term)) {
@@ -566,23 +583,34 @@ void fsm::request_vote(server_id from, vote_request&& request) {
             "voted for {} [log_term: {}, log_index: {}]",
             _my_id, _current_term, _log.last_idx(), _log.last_term(), _voted_for,
             from, request.last_log_term, request.last_log_idx);
-        // If a server grants a vote, it must reset its election
-        // timer. See Raft Summary.
-        _last_election_time = _clock.now();
-        _voted_for = from;
-
-        send_to(from, vote_reply{_current_term, true});
+        if (!request.is_prevote) { // Only record real votes
+            // If a server grants a vote, it must reset its election
+            // timer. See Raft Summary.
+            _last_election_time = _clock.now();
+            _voted_for = from;
+        }
+        // The term in the original message and current local term are the
+        // same in the case of regular votes, but different for pre-votes.
+        //
+        // When responding to {Pre,}Vote messages we include the term
+        // from the message, not the local term. To see why, consider the
+        // case where a single node was previously partitioned away and
+        // its local term is now out of date. If we include the local term
+        // (recall that for pre-votes we don't update the local term), the
+        // (pre-)campaigning node on the other end will proceed to ignore
+        // the message (it ignores all out of date messages).
+        send_to(from, vote_reply{request.current_term, true, request.is_prevote});
     } else {
         // If a vote is not granted, this server is a potential
         // viable candidate, so it should not reset its election
         // timer, to avoid election disruption by non-viable
         // candidates.
         logger.trace("{} [term: {}, index: {}, log_term: {}, voted_for: {}] "
-            "rejected vote for {} [log_term: {}, log_index: {}]",
+            "rejected vote for {} [current_term: {}, log_term: {}, log_index: {}, is_prevote: {}]",
             _my_id, _current_term, _log.last_idx(), _log.last_term(), _voted_for,
-            from, request.last_log_term, request.last_log_idx);
+            from, request.current_term, request.last_log_term, request.last_log_idx, request.is_prevote);
 
-        send_to(from, vote_reply{_current_term, false});
+        send_to(from, vote_reply{_current_term, false, request.is_prevote});
     }
 }
 
@@ -597,7 +625,11 @@ void fsm::request_vote_reply(server_id from, vote_reply&& reply) {
     case vote_result::UNKNOWN:
         break;
     case vote_result::WON:
-        become_leader();
+        if (_votes->is_prevote()) {
+            become_candidate(false);
+        } else {
+            become_leader();
+        }
         break;
     case vote_result::LOST:
         become_follower(server_id{});

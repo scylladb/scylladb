@@ -46,6 +46,8 @@ public:
         // is configured by the snapshot, otherwise the state
         // machine will deadlock on attempt to submit a new entry.
         size_t max_log_size = 5000;
+        // If set to true will enable prevoting stage during election
+        bool enable_prevoting = true;
     };
 
     virtual ~server() {}

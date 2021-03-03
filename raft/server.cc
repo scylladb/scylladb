@@ -198,7 +198,8 @@ future<> server_impl::start() {
     _fsm = std::make_unique<fsm>(_id, term, vote, std::move(log), *_failure_detector,
                                  fsm_config {
                                      .append_request_threshold = _config.append_request_threshold,
-                                     .max_log_size = _config.max_log_size
+                                     .max_log_size = _config.max_log_size,
+                                     .enable_prevoting = _config.enable_prevoting
                                  });
     assert(_fsm->get_current_term() != term_t(0));
 
@@ -604,7 +605,7 @@ void server_impl::register_metrics() {
 }
 
 future<> server_impl::elect_me_leader() {
-    while (!_fsm->is_candidate() && !_fsm->is_leader()) {
+    while (_fsm->is_follower()) {
         _fsm->tick();
     }
     do {

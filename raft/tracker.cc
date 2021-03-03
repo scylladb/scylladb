@@ -202,9 +202,9 @@ index_t tracker::committed(index_t prev_commit_idx) {
     }
 }
 
-votes::votes(configuration configuration)
+votes::votes(configuration configuration, bool is_prevote)
         :_voters(configuration.current)
-        , _current(configuration.current) {
+        , _current(configuration.current), _is_prevote(is_prevote) {
 
     if (configuration.is_joint()) {
         _previous.emplace(configuration.previous);

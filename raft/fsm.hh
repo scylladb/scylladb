@@ -48,6 +48,8 @@ struct fsm_config {
     // is configured by the snapshot, otherwise the state
     // machine will deadlock.
     size_t max_log_size;
+    // If set to true will enable prevoting stage during election
+    bool enable_prevoting;
 };
 
 // 3.4 Leader election
@@ -223,7 +225,7 @@ private:
 
     void become_leader();
 
-    void become_candidate();
+    void become_candidate(bool is_prevote);
 
     void become_follower(server_id leader);
 
@@ -249,6 +251,8 @@ private:
     void advance_stable_idx(index_t idx);
     // Tick implementation on a leader
     void tick_leader();
+
+    void reset_election_timeout();
 
 public:
     explicit fsm(server_id id, term_t current_term, server_id voted_for, log log,
@@ -353,11 +357,13 @@ void fsm::step(server_id from, Message&& msg) {
     // follower state. If a server receives a request with
     // a stale term number, it rejects the request.
     if (msg.current_term > _current_term) {
+        server_id leader{};
+
         logger.trace("{} [term: {}] received a message with higher term from {} [term: {}]",
             _my_id, _current_term, from, msg.current_term);
 
         if constexpr (std::is_same_v<Message, append_request>) {
-            become_follower(from);
+            leader = from;
         } else {
             if constexpr (std::is_same_v<Message, vote_request>) {
                 if (_current_leader != server_id{} && election_elapsed() < ELECTION_TIMEOUT) {
@@ -366,15 +372,29 @@ void fsm::step(server_id from, Message&& msg) {
                     // within the minimum election timeout of
                     // hearing from a current leader, it does not
                     // update its term or grant its vote.
-                    logger.trace("{} [term: {}] not granting a vote within a minimum election timeout, elapsed {}",
-                        _my_id, _current_term, election_elapsed());
+                    logger.trace("{} [term: {}] not granting a vote within a minimum election timeout, elapsed {} (current leader = {})",
+                        _my_id, _current_term, election_elapsed(), _current_leader);
                     return;
                 }
             }
-            become_follower(server_id{});
         }
-        update_current_term(msg.current_term);
+        bool ignore_term = false;
+        if constexpr (std::is_same_v<Message, vote_request>) {
+            // Do not update term on prevote request
+            ignore_term = msg.is_prevote;
+        } else if constexpr (std::is_same_v<Message, vote_reply>) {
+            // We send pre-vote requests with a term in our future. If the
+            // pre-vote is granted, we will increment our term when we get a
+            // quorum. If it is not, the term comes from the node that
+            // rejected our vote so we should become a follower at the new
+            // term.
+            ignore_term = msg.is_prevote && msg.vote_granted;
+        }
 
+        if (!ignore_term) {
+            become_follower(leader);
+            update_current_term(msg.current_term);
+        }
     } else if (msg.current_term < _current_term) {
         if constexpr (std::is_same_v<Message, append_request>) {
             // Instructs the leader to step down.
@@ -382,6 +402,10 @@ void fsm::step(server_id from, Message&& msg) {
             send_to(from, std::move(reply));
         } else if constexpr (std::is_same_v<Message, install_snapshot>) {
             send_to(from, snapshot_reply{ .success = false });
+        } else if constexpr (std::is_same_v<Message, vote_request>) {
+            if (msg.is_prevote) {
+                send_to(from, vote_reply{_current_term, false, true});
+            }
         } else {
             // Ignore other cases
             logger.trace("{} [term: {}] ignored a message with lower term from {} [term: {}]",
