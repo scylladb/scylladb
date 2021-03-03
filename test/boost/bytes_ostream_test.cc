@@ -269,6 +269,21 @@ BOOST_AUTO_TEST_CASE(test_writing_placeholders) {
     BOOST_REQUIRE(in.size() == 0);
 }
 
+BOOST_AUTO_TEST_CASE(test_large_placeholder) {
+    bytes_ostream::size_type size;
+    try {
+        for (size = 1; (int32_t)size > 0; size *= 2) {
+            bytes_ostream buf;
+            int8_t* ph;
+            BOOST_TEST_MESSAGE(fmt::format("try size={}", size));
+            ph = buf.write_place_holder(size);
+            std::fill(ph, ph + size, 0);
+        }
+    } catch (const std::bad_alloc&) {
+    }
+    BOOST_REQUIRE(size >= bytes_ostream::max_chunk_size());
+}
+
 BOOST_AUTO_TEST_CASE(test_append_big_and_small_chunks) {
     bytes_ostream small;
     append_sequence(small, 12);
