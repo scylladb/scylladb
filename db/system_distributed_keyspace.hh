@@ -109,6 +109,9 @@ public:
     future<std::vector<db_clock::time_point>> get_cdc_desc_v1_timestamps(context);
 
     future<std::map<db_clock::time_point, cdc::streams_version>> cdc_get_versioned_streams(db_clock::time_point not_older_than, context);
+
+    future<db_clock::time_point> cdc_current_generation_timestamp(context);
+
 };
 
 }
