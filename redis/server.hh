@@ -111,6 +111,7 @@ private:
         virtual ~connection();
         future<> process();
         future<> process_request();
+        future<> do_process_request();
         void write_reply(const redis_exception&);
         void write_reply(redis_server::result result);
     private:
