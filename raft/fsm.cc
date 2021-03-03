@@ -177,7 +177,7 @@ void fsm::become_candidate() {
     _votes.emplace(_log.get_configuration());
 
     const auto& voters = _votes->voters();
-    if (voters.find(server_address{_my_id}) == voters.end()) {
+    if (!voters.contains(server_address{_my_id})) {
         // If the server is not part of the current configuration,
         // revert to the follower state without increasing
         // the current term.
