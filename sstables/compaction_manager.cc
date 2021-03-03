@@ -825,15 +825,11 @@ void compaction_manager::stop_tracking_ongoing_compactions(column_family* cf) {
 }
 
 void compaction_manager::stop_compaction(sstring type) {
-    // TODO: this method only works for compaction of type compaction and cleanup.
-    // Other types are: validation, scrub, index_build.
     sstables::compaction_type target_type;
-    if (type == "COMPACTION") {
-        target_type = sstables::compaction_type::Compaction;
-    } else if (type == "CLEANUP") {
-        target_type = sstables::compaction_type::Cleanup;
-    } else {
-        throw std::runtime_error(format("Compaction of type {} cannot be stopped by compaction manager", type.c_str()));
+    try {
+        target_type = sstables::to_compaction_type(type);
+    } catch (...) {
+        throw std::runtime_error(format("Compaction of type {} cannot be stopped by compaction manager: {}", type.c_str(), std::current_exception()));
     }
     for (auto& info : _compactions) {
         if (target_type == info->type) {
