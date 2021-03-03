@@ -30,7 +30,7 @@ fsm::fsm(server_id id, term_t current_term, server_id voted_for, log log,
         _log(std::move(log)), _failure_detector(failure_detector), _config(config) {
 
     _observed.advance(*this);
-    logger.trace("{}: starting log length {}", _my_id, _log.last_idx());
+    logger.trace("{}: starting, current term {}, log length {}", _my_id, _current_term, _log.last_idx());
     reset_election_timeout();
 
     assert(!bool(_current_leader));
@@ -69,6 +69,9 @@ const log_entry& fsm::add_entry(T command) {
             // start another membership change once a majority of
             // the old cluster has moved to operating under the
             // rules of C_new.
+            logger.trace("A{}configuration change at index {} is not yet committed (commit_idx: {})",
+                _log.get_configuration().is_joint() ? " joint " : " ",
+                _log.last_conf_idx(), _commit_idx);
             throw conf_change_in_progress();
         }
         // 4.3. Arbitrary configuration changes using joint consensus
@@ -147,6 +150,8 @@ void fsm::become_leader() {
     // set_configuration() begins replicating from the last entry
     // in the log.
     leader_state().tracker.set_configuration(_log.get_configuration(), _log.last_idx());
+    logger.trace("fsm::become_leader() {} stable index: {} last index: {}",
+        _my_id, _log.stable_idx(), _log.last_idx());
     replicate();
 }
 
@@ -300,7 +305,9 @@ fsm_output fsm::get_output() {
 }
 
 void fsm::advance_stable_idx(index_t idx) {
+    index_t prev_stable_idx = _log.stable_idx();
     _log.stable_to(idx);
+    logger.trace("advance_stable_idx[{}]: prev_stable_idx={}, idx={}", _my_id, prev_stable_idx, idx);
     if (is_leader()) {
         replicate();
         if (leader_state().tracker.leader_progress()) {
@@ -344,6 +351,7 @@ void fsm::maybe_commit() {
     _sm_events.signal();
 
     if (committed_conf_change) {
+        logger.trace("maybe_commit[{}]: committed conf change at idx {}", _my_id, _log.last_conf_idx());
         if (_log.get_configuration().is_joint()) {
             // 4.3. Arbitrary configuration changes using joint consensus
             //
@@ -370,6 +378,7 @@ void fsm::maybe_commit() {
             // it happen without an extra FSM step.
             maybe_commit();
         } else if (leader_state().tracker.leader_progress() == nullptr) {
+            logger.trace("maybe_commit[{}]: stepping down as leader", _my_id);
             // 4.2.2 Removing the current leader
             //
             // A leader that is removed from the configuration
@@ -431,8 +440,8 @@ void fsm::tick() {
         // simple because there were no AppendEntries RPCs recently.
         _last_election_time = _clock.now();
     } else if (is_past_election_timeout()) {
-        logger.trace("tick[{}]: becoming a candidate, last election: {}, now: {}", _my_id,
-            _last_election_time, _clock.now());
+        logger.trace("tick[{}]: becoming a candidate at term {}, last election: {}, now: {}", _my_id,
+            _current_term, _last_election_time, _clock.now());
         become_candidate(_config.enable_prevoting);
     }
 }
@@ -584,7 +593,7 @@ void fsm::request_vote(server_id from, vote_request&& request) {
     // ...and we believe the candidate is up to date.
     if (can_vote && _log.is_up_to_date(request.last_log_idx, request.last_log_term)) {
 
-        logger.trace("{} [term: {}, index: {}, log_term: {}, voted_for: {}] "
+        logger.trace("{} [term: {}, index: {}, last log term: {}, voted_for: {}] "
             "voted for {} [log_term: {}, log_index: {}]",
             _my_id, _current_term, _log.last_idx(), _log.last_term(), _voted_for,
             from, request.last_log_term, request.last_log_idx);
@@ -797,6 +806,7 @@ void fsm::install_snapshot_reply(server_id from, snapshot_reply&& reply) {
 }
 
 bool fsm::apply_snapshot(snapshot snp, size_t trailing) {
+    logger.trace("apply_snapshot[{}]: term: {}, idx: {}", _my_id, _current_term, snp.idx);
     const auto& current_snp = _log.get_snapshot();
     if (snp.idx <= current_snp.idx) {
         logger.error("apply_snapshot[{}]: ignore outdated snapshot {}/{} current one is {}/{}",
