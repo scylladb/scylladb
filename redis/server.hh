@@ -119,9 +119,6 @@ private:
         future<result> process_request_internal();
     };
 
-    future<> _stopped = _all_connections_stopped.get_future();
-    boost::intrusive::list<connection> _connections_list;
-
     const ::timeout_config& timeout_config() { return _config._timeout_config; }
 };
 }
