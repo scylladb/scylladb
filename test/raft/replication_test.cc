@@ -316,11 +316,11 @@ class rpc : public raft::rpc {
     raft::server_id _id;
     connected _connected;
     lw_shared_ptr<snapshots> _snapshots;
-    bool _drop_replication;
+    bool _packet_drops;
 public:
     rpc(raft::server_id id, connected connected, lw_shared_ptr<snapshots> snapshots,
-            bool drop_replication) : _id(id), _connected(connected), _snapshots(snapshots),
-            _drop_replication(drop_replication) {
+            bool packet_drops) : _id(id), _connected(connected), _snapshots(snapshots),
+            _packet_drops(packet_drops) {
         net[_id] = this;
     }
     virtual future<> send_snapshot(raft::server_id id, const raft::install_snapshot& snap) {
@@ -331,14 +331,14 @@ public:
         return net[id]->_client->apply_snapshot(_id, std::move(snap));
     }
     virtual future<> send_append_entries(raft::server_id id, const raft::append_request& append_request) {
-        if (!_connected(id) || !_connected(_id) || (_drop_replication && !(rand() % 5))) {
+        if (!_connected(id) || !_connected(_id) || (_packet_drops && !(rand() % 5))) {
             return make_ready_future<>();
         }
         net[id]->_client->append_entries(_id, append_request);
         return make_ready_future<>();
     }
     virtual future<> send_append_entries_reply(raft::server_id id, const raft::append_reply& reply) {
-        if (!_connected(id) || !_connected(_id) || (_drop_replication && !(rand() % 5))) {
+        if (!_connected(id) || !_connected(_id) || (_packet_drops && !(rand() % 5))) {
             return make_ready_future<>();
         }
         net[id]->_client->append_entries_reply(_id, std::move(reply));
@@ -373,13 +373,13 @@ enum class sm_type {
 std::pair<std::unique_ptr<raft::server>, state_machine*>
 create_raft_server(raft::server_id uuid, state_machine::apply_fn apply, initial_state state,
         size_t apply_entries, sm_type type, connected connected, lw_shared_ptr<snapshots> snapshots,
-        lw_shared_ptr<persisted_snapshots> persisted_snapshots, bool drop_replication) {
+        lw_shared_ptr<persisted_snapshots> persisted_snapshots, bool packet_drops) {
     sm_value val = (type == sm_type::HASH) ? sm_value(std::make_unique<hasher_int>()) : sm_value(std::make_unique<sum_sm>());
 
     auto sm = std::make_unique<state_machine>(uuid, std::move(apply), std::move(val),
             apply_entries, snapshots, persisted_snapshots);
     auto& rsm = *sm;
-    auto mrpc = std::make_unique<rpc>(uuid, connected, snapshots, drop_replication);
+    auto mrpc = std::make_unique<rpc>(uuid, connected, snapshots, packet_drops);
     auto mpersistence = std::make_unique<persistence>(uuid, state, snapshots, persisted_snapshots);
     auto fd = seastar::make_shared<failure_detector>(uuid, connected);
 
@@ -391,7 +391,7 @@ create_raft_server(raft::server_id uuid, state_machine::apply_fn apply, initial_
 
 future<std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>> create_cluster(std::vector<initial_state> states, state_machine::apply_fn apply, size_t apply_entries, sm_type type,
         connected connected, lw_shared_ptr<snapshots> snapshots,
-        lw_shared_ptr<persisted_snapshots> persisted_snapshots, bool drop_replication) {
+        lw_shared_ptr<persisted_snapshots> persisted_snapshots, bool packet_drops) {
     raft::configuration config;
     std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>> rafts;
 
@@ -405,7 +405,7 @@ future<std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>> cr
         states[i].snapshot.config = config;
         (*snapshots)[s.id] = states[i].snp_value;
         auto& raft = *rafts.emplace_back(create_raft_server(s.id, apply, states[i], apply_entries,
-                    type, connected, snapshots, persisted_snapshots, drop_replication)).first;
+                    type, connected, snapshots, persisted_snapshots, packet_drops)).first;
         co_await raft.start();
     }
 
@@ -512,7 +512,7 @@ void restart_tickers(std::vector<seastar::timer<lowres_clock>>& tickers) {
 }
 
 // Run test case (name, nodes, leader, initial logs, updates)
-future<> run_test(test_case test, bool drop_replication) {
+future<> run_test(test_case test, bool packet_drops) {
     std::vector<initial_state> states(test.nodes);       // Server initial states
 
     size_t leader;
@@ -562,7 +562,7 @@ future<> run_test(test_case test, bool drop_replication) {
     connected connected{};
 
     auto rafts = co_await create_cluster(states, apply_changes, test.total_values, test.type,
-            connected, snaps, persisted_snaps, drop_replication);
+            connected, snaps, persisted_snaps, packet_drops);
 
     // Tickers for servers
     std::vector<seastar::timer<lowres_clock>> tickers(test.nodes);
@@ -716,8 +716,8 @@ future<> run_test(test_case test, bool drop_replication) {
     co_return;
 }
 
-void replication_test(struct test_case test, bool drop_replication) {
-    run_test(std::move(test), drop_replication).get();
+void replication_test(struct test_case test, bool packet_drops) {
+    run_test(std::move(test), packet_drops).get();
 }
 
 #define RAFT_TEST_CASE(test_name, test_body)  \
