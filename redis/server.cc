@@ -106,9 +106,9 @@ future<> redis_server::listen(socket_address addr, std::shared_ptr<seastar::tls:
 
 future<> redis_server::do_accepts(int which, bool keepalive, socket_address server_addr) {
     return repeat([this, which, keepalive, server_addr] {
-        ++_stats._connections_being_accepted;
+        ++_connections_being_accepted;
         return _listeners[which].accept().then_wrapped([this, which, keepalive, server_addr] (future<accept_result> f_cs_sa) mutable {
-            --_stats._connections_being_accepted;
+            --_connections_being_accepted;
             if (_stopping) {
                 f_cs_sa.ignore_ready_future();
                 maybe_idle();
@@ -155,12 +155,12 @@ redis_server::connection::connection(redis_server& server, socket_address server
     , _options(server._config._read_consistency_level, server._config._write_consistency_level, server._config._timeout_config, server._auth_service, addr, server._total_redis_db_count)
 {
     ++_server._stats._total_connections;
-    ++_server._stats._current_connections;
+    ++_server._current_connections;
     _server._connections_list.push_back(*this);
 }
 
 redis_server::connection::~connection() {
-    --_server._stats._current_connections;
+    --_server._current_connections;
     _server._connections_list.erase(_server._connections_list.iterator_to(*this));
     _server.maybe_idle();
 }

@@ -60,7 +60,7 @@ struct redis_server_config {
     size_t _total_redis_db_count;
 };
 
-class redis_server {
+class redis_server : public generic_server::server {
     std::vector<server_socket> _listeners;
     seastar::sharded<service::storage_proxy>& _proxy;
     seastar::sharded<redis::query_processor>& _query_processor;
@@ -119,16 +119,9 @@ private:
         future<result> process_request_internal();
     };
 
-    bool _stopping = false;
-    promise<> _all_connections_stopped;
     future<> _stopped = _all_connections_stopped.get_future();
     boost::intrusive::list<connection> _connections_list;
 
-    void maybe_idle() {
-        if (_stopping && !_stats._connections_being_accepted && !_stats._current_connections) {
-            _all_connections_stopped.set_value();
-        }
-    }
     const ::timeout_config& timeout_config() { return _config._timeout_config; }
 };
 }

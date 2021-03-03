@@ -38,4 +38,14 @@ future<> connection::shutdown()
     return make_ready_future<>();
 }
 
+server::~server()
+{
+}
+
+void server::maybe_idle() {
+    if (_stopping && !_connections_being_accepted && !_current_connections) {
+        _all_connections_stopped.set_value();
+    }
+}
+
 }
