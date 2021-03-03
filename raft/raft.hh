@@ -237,11 +237,11 @@ struct append_reply {
     };
     // Current term, for leader to update itself.
     term_t current_term;
-    // Contains an index of the last commited entry on the follower
+    // Contains an index of the last committed entry on the follower
     // It is used by a leader to know if a follower is behind and issuing
     // empty append entry with updates commit_idx if it is
-    // Regular RAFT handles this by always sending enoty append requests 
-    // as a hearbeat.
+    // Regular RAFT handles this by always sending enoty append requests
+    // as a heartbeat.
     index_t commit_idx;
     std::variant<rejected, accepted> result;
 };
@@ -299,7 +299,7 @@ public:
     // This is called after entries are committed (replicated to
     // at least quorum of servers). If a provided vector contains
     // more than one entry all of them will be committed simultaneously.
-    // Will be eventually called on all replicas, for all commited commands.
+    // Will be eventually called on all replicas, for all committed commands.
     // Raft owns the data since it may be still replicating.
     // Raft will not call another apply until the retuned future
     // will not become ready.

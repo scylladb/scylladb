@@ -27,6 +27,8 @@
 #include "raft/fsm.hh"
 
 using raft::term_t, raft::index_t, raft::server_id;
+using raft::log_entry;
+using seastar::make_lw_shared;
 
 void election_threshold(raft::fsm& fsm) {
     for (int i = 0; i <= raft::ELECTION_TIMEOUT.count(); i++) {
@@ -47,7 +49,232 @@ struct failure_detector: public raft::failure_detector {
     }
 };
 
+template <typename T> void add_entry(raft::log& log, T cmd) {
+    log.emplace_back(make_lw_shared<log_entry>(log_entry{log.last_term(), log.next_idx(), cmd}));
+}
+
+raft::snapshot log_snapshot(raft::log& log, index_t idx) {
+    return raft::snapshot{.idx = idx, .term = log.last_term(), .config = log.get_snapshot().config};
+}
+
 raft::fsm_config fsm_cfg{.append_request_threshold = 1};
+
+BOOST_AUTO_TEST_CASE(test_votes) {
+    auto id = []() -> raft::server_address { return raft::server_address{utils::make_random_uuid()}; };
+    auto id1 = id();
+
+    raft::votes votes(raft::configuration({id1}));
+    BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::UNKNOWN);
+    BOOST_CHECK_EQUAL(votes.voters().size(), 1);
+    // Try a vote from an unknown server, it should be ignored.
+    BOOST_CHECK_THROW(votes.register_vote(id().id, true), std::runtime_error);
+    votes.register_vote(id1.id, false);
+    // Quorum votes against the decision
+    BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::LOST);
+    // Another vote from the same server is ignored
+    votes.register_vote(id1.id, true);
+    votes.register_vote(id1.id, true);
+    BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::LOST);
+    auto id2 = id();
+    votes = raft::votes(raft::configuration({id1, id2}));
+    BOOST_CHECK_EQUAL(votes.voters().size(), 2);
+    votes.register_vote(id1.id, true);
+    // We need a quorum of participants to win an election
+    BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::UNKNOWN);
+    votes.register_vote(id2.id, false);
+    // At this point it's clear we don't have enough votes
+    BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::LOST);
+    auto id3 = id();
+    // Joint configuration
+    votes = raft::votes(raft::configuration({id1}, {id2, id3}));
+    BOOST_CHECK_EQUAL(votes.voters().size(), 3);
+    BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::UNKNOWN);
+    votes.register_vote(id2.id, true);
+    votes.register_vote(id3.id, true);
+    BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::UNKNOWN);
+    votes.register_vote(id1.id, false);
+    BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::LOST);
+    votes = raft::votes(raft::configuration({id1}, {id2, id3}));
+    votes.register_vote(id2.id, true);
+    votes.register_vote(id3.id, true);
+    votes.register_vote(id1.id, true);
+    BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::WON);
+    votes = raft::votes(raft::configuration({id1, id2, id3}, {id1}));
+    BOOST_CHECK_EQUAL(votes.voters().size(), 3);
+    votes.register_vote(id1.id, true);
+    BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::UNKNOWN);
+    // This gives us a majority in both new and old
+    // configurations.
+    votes.register_vote(id2.id, true);
+    BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::WON);
+    // Basic voting test for 4 nodes
+    auto id4 = id();
+    votes = raft::votes(raft::configuration({id1, id2, id3, id4}));
+    votes.register_vote(id1.id, true);
+    votes.register_vote(id2.id, true);
+    BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::UNKNOWN);
+    votes.register_vote(id3.id, false);
+    BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::UNKNOWN);
+    votes.register_vote(id4.id, false);
+    BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::LOST);
+    auto id5 = id();
+    // Basic voting test for 5 nodes
+    votes = raft::votes(raft::configuration({id1, id2, id3, id4, id5}, {id1, id2, id3}));
+    votes.register_vote(id1.id, false);
+    votes.register_vote(id2.id, false);
+    BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::LOST);
+    votes.register_vote(id3.id, true);
+    votes.register_vote(id4.id, true);
+    votes.register_vote(id5.id, true);
+    BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::LOST);
+}
+
+BOOST_AUTO_TEST_CASE(test_tracker) {
+    auto id = []() -> raft::server_address { return raft::server_address{utils::make_random_uuid()}; };
+    auto id1 = id();
+    raft::tracker tracker(id1.id);
+    raft::configuration cfg({id1});
+    tracker.set_configuration(cfg, index_t{1});
+    BOOST_CHECK_NE(tracker.find(id1.id), nullptr);
+    // The node with id set during construction is assumed to be
+    // the leader, since otherwise we wouldn't create a tracker
+    // in the first place.
+    BOOST_CHECK_EQUAL(tracker.find(id1.id), tracker.leader_progress());
+    BOOST_CHECK_EQUAL(tracker.committed(index_t{0}), index_t{0});
+    // Avoid keeping a reference, follower_progress address may
+    // change with configuration change
+    auto pr = [&tracker](raft::server_address address) -> raft::follower_progress* {
+        return tracker.find(address.id);
+    };
+    BOOST_CHECK_EQUAL(pr(id1)->match_idx, index_t{0});
+    BOOST_CHECK_EQUAL(pr(id1)->next_idx, index_t{1});
+
+    pr(id1)->accepted(index_t{1});
+    BOOST_CHECK_EQUAL(pr(id1)->match_idx, index_t{1});
+    BOOST_CHECK_EQUAL(pr(id1)->next_idx, index_t{2});
+    BOOST_CHECK_EQUAL(tracker.committed(index_t{0}), index_t{1});
+
+    pr(id1)->accepted(index_t{10});
+    BOOST_CHECK_EQUAL(pr(id1)->match_idx, index_t{10});
+    BOOST_CHECK_EQUAL(pr(id1)->next_idx, index_t{11});
+    BOOST_CHECK_EQUAL(tracker.committed(index_t{0}), index_t{10});
+
+    // Out of order confirmation is OK
+    //
+    pr(id1)->accepted(index_t{5});
+    BOOST_CHECK_EQUAL(pr(id1)->match_idx, index_t{10});
+    BOOST_CHECK_EQUAL(pr(id1)->next_idx, index_t{11});
+    BOOST_CHECK_EQUAL(tracker.committed(index_t{5}), index_t{10});
+
+    // Enter joint configuration {A,B,C}
+    auto id2 = id(), id3 = id();
+    cfg.enter_joint({id1, id2, id3});
+    tracker.set_configuration(cfg, index_t{1});
+    BOOST_CHECK_EQUAL(tracker.committed(index_t{10}), index_t{10});
+    pr(id2)->accepted(index_t{11});
+    BOOST_CHECK_EQUAL(tracker.committed(index_t{10}), index_t{10});
+    pr(id3)->accepted(index_t{12});
+    BOOST_CHECK_EQUAL(tracker.committed(index_t{10}), index_t{10});
+    pr(id1)->accepted(index_t{13});
+    BOOST_CHECK_EQUAL(tracker.committed(index_t{10}), index_t{12});
+    pr(id1)->accepted(index_t{14});
+    BOOST_CHECK_EQUAL(tracker.committed(index_t{13}), index_t{13});
+
+    // Leave joint configuration, final configuration is  {A,B,C}
+    cfg.leave_joint();
+    tracker.set_configuration(cfg, index_t{1});
+    BOOST_CHECK_EQUAL(tracker.committed(index_t{13}), index_t{13});
+
+    auto id4 = id(), id5 = id();
+    cfg.enter_joint({id3, id4, id5});
+    tracker.set_configuration(cfg, index_t{1});
+    BOOST_CHECK_EQUAL(tracker.committed(index_t{13}), index_t{13});
+    pr(id1)->accepted(index_t{15});
+    BOOST_CHECK_EQUAL(tracker.committed(index_t{13}), index_t{13});
+    pr(id5)->accepted(index_t{15});
+    BOOST_CHECK_EQUAL(tracker.committed(index_t{13}), index_t{13});
+    pr(id3)->accepted(index_t{15});
+    BOOST_CHECK_EQUAL(tracker.committed(index_t{13}), index_t{15});
+    // This does not advance the joint quorum
+    pr(id1)->accepted(index_t{16});
+    pr(id4)->accepted(index_t{17});
+    pr(id5)->accepted(index_t{18});
+    BOOST_CHECK_EQUAL(tracker.committed(index_t{15}), index_t{15});
+
+    cfg.leave_joint();
+    tracker.set_configuration(cfg, index_t{1});
+    // Leaving joint configuration commits more entries
+    BOOST_CHECK_EQUAL(tracker.committed(index_t{15}), index_t{17});
+    //
+    cfg.enter_joint({id1});
+    cfg.leave_joint();
+    cfg.enter_joint({id2});
+    tracker.set_configuration(cfg, index_t{1});
+    // Sic: we're in a weird state. The joint commit index
+    // is actually 1, since id2 is at position 1. But in
+    // unwinding back the commit index would be weird,
+    // so we report back the hint (prev_commit_idx).
+    // As soon as the cluster enters joint configuration,
+    // and old quorum is insufficient, the leader won't be able to
+    // commit new entries until the new members catch up.
+    BOOST_CHECK_EQUAL(tracker.committed(index_t{17}), index_t{17});
+    pr(id1)->accepted(index_t{18});
+    BOOST_CHECK_EQUAL(tracker.committed(index_t{17}), index_t{17});
+    pr(id2)->accepted(index_t{19});
+    BOOST_CHECK_EQUAL(tracker.committed(index_t{17}), index_t{18});
+    pr(id1)->accepted(index_t{20});
+    BOOST_CHECK_EQUAL(tracker.committed(index_t{18}), index_t{19});
+}
+
+BOOST_AUTO_TEST_CASE(test_log_last_conf_idx) {
+    // last_conf_idx, prev_conf_idx are initialized correctly,
+    // and maintained during truncate head/truncate tail
+    server_id id1{utils::make_random_uuid()};
+    raft::configuration cfg({id1});
+    raft::log log{raft::snapshot{.config = cfg}};
+    BOOST_CHECK_EQUAL(log.last_conf_idx(), 0);
+    add_entry(log, cfg);
+    BOOST_CHECK_EQUAL(log.last_conf_idx(), 1);
+    add_entry(log, log_entry::dummy{});
+    add_entry(log, cfg);
+    BOOST_CHECK_EQUAL(log.last_conf_idx(), 3);
+    // apply snapshot truncates the log and resets last_conf_idx()
+    log.apply_snapshot(log_snapshot(log, log.last_idx()), 0);
+    BOOST_CHECK_EQUAL(log.last_conf_idx(), 0);
+    // log::last_term() is maintained correctly by truncate_head/truncate_tail() (snapshotting)
+    BOOST_CHECK_EQUAL(log.last_term(), log.get_snapshot().term);
+    BOOST_CHECK(log.term_for(log.get_snapshot().idx).has_value());
+    BOOST_CHECK_EQUAL(log.term_for(log.get_snapshot().idx).value(), log.get_snapshot().term);
+    BOOST_CHECK(! log.term_for(log.last_idx() - index_t{1}).has_value());
+    add_entry(log, log_entry::dummy{});
+    BOOST_CHECK(log.term_for(log.last_idx()).has_value());
+    add_entry(log, log_entry::dummy{});
+    const size_t GAP = 10;
+    // apply_snapshot with a log gap, this should clear all log
+    // entries, despite that trailing is given, a gap
+    // between old log entries and a snapshot would violate
+    // log continuity.
+    log.apply_snapshot(log_snapshot(log, log.last_idx() + index_t{GAP}), GAP * 2);
+    BOOST_CHECK(log.empty());
+    BOOST_CHECK_EQUAL(log.next_idx(), log.get_snapshot().idx + index_t{1});
+    add_entry(log, log_entry::dummy{});
+    BOOST_CHECK_EQUAL(log.in_memory_size(), 1);
+    add_entry(log, log_entry::dummy{});
+    BOOST_CHECK_EQUAL(log.in_memory_size(), 2);
+    // Set trailing longer than the length of the log.
+    log.apply_snapshot(log_snapshot(log, log.last_idx()), 3);
+    BOOST_CHECK_EQUAL(log.in_memory_size(), 2);
+    // Set trailing the same length as the current log length
+    add_entry(log, log_entry::dummy{});
+    BOOST_CHECK_EQUAL(log.in_memory_size(), 3);
+    log.apply_snapshot(log_snapshot(log, log.last_idx()), 3);
+    BOOST_CHECK_EQUAL(log.in_memory_size(), 3);
+    BOOST_CHECK_EQUAL(log.last_conf_idx(), 0);
+    add_entry(log, log_entry::dummy{});
+    // Set trailing shorter than the length of the log
+    log.apply_snapshot(log_snapshot(log, log.last_idx()), 1);
+    BOOST_CHECK_EQUAL(log.in_memory_size(), 1);
+}
 
 BOOST_AUTO_TEST_CASE(test_election_single_node) {
 
@@ -105,6 +332,10 @@ BOOST_AUTO_TEST_CASE(test_single_node_is_quiet) {
     (void) fsm.get_output();
 
     fsm.add_entry(raft::command{});
+
+    BOOST_CHECK(fsm.get_output().messages.empty());
+
+    fsm.tick();
 
     BOOST_CHECK(fsm.get_output().messages.empty());
 }

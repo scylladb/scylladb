@@ -22,7 +22,7 @@
 
 #include <seastar/core/condition-variable.hh>
 #include "raft.hh"
-#include "progress.hh"
+#include "tracker.hh"
 #include "log.hh"
 
 namespace raft {
@@ -41,10 +41,13 @@ struct fsm_output {
 struct fsm_config {
     // max size of appended entries in bytes
     size_t append_request_threshold;
-    // max number of entries of in-memory part of the log after
-    // which requests are stopped to be addmitted unill the log
-    // is shrunk back by snapshoting
-    size_t max_log_length;
+    // Max number of entries of in-memory part of the log after
+    // which requests are stopped to be admitted until the log
+    // is shrunk back by a snapshot. Should be greater than
+    // whatever the default number of trailing log entries
+    // is configured by the snapshot, otherwise the state
+    // machine will deadlock.
+    size_t max_log_size;
 };
 
 // 3.4 Leader election
@@ -183,7 +186,7 @@ private:
         seastar::semaphore sem;
         server_id& leader;
         log_limiter_semaphore_guard(fsm* fsm) :
-             sem(fsm->_config.max_log_length), leader(fsm->_current_leader) {}
+             sem(fsm->_config.max_log_size), leader(fsm->_current_leader) {}
         ~log_limiter_semaphore_guard() {
             sem.broken(not_a_leader(leader));
         }
@@ -247,11 +250,6 @@ private:
     // Tick implementation on a leader
     void tick_leader();
 
-    // Reconfigure this instance to use the provided configuration.
-    // Called on start, state change to candidate or leader, or when
-    // a new configuration entry is added.
-    void set_configuration();
-
 public:
     explicit fsm(server_id id, term_t current_term, server_id voted_for, log log,
             failure_detector& failure_detector, fsm_config conf);
@@ -272,9 +270,9 @@ public:
         return _log.last_term();
     }
 
-    // call this function to wait for number of log entries to go below
-    // max_log_length
-    future<> wait();
+    // Call this function to wait for the number of log entries to
+    // go below  max_log_size.
+    future<> wait_max_log_size();
 
     // Return current configuration. Throws if not a leader.
     const configuration& get_configuration() const;
@@ -287,7 +285,7 @@ public:
     // needs to be handled.
     // This includes a list of the entries that need
     // to be logged. The logged entries are eventually
-    // discarded from the state machine after snapshotting.
+    // discarded from the state machine after applying a snapshot.
     future<fsm_output> poll_output();
 
     // Get state machine output, if there is any. Doesn't
@@ -326,13 +324,13 @@ public:
 
     void snapshot_status(server_id id, std::optional<index_t> idx);
 
-    // This call will update the log to point to the new snaphot
+    // This call will update the log to point to the new snapshot
     // and will truncate the log prefix up to (snp.idx - trailing)
-    // entry. Retruns false if the snapshot is older than existing one.
+    // entry. Returns false if the snapshot is older than existing one.
     bool apply_snapshot(snapshot snp, size_t traling);
 
-    size_t in_memory_log_size() {
-        return _log.non_snapshoted_length();
+    size_t in_memory_log_size() const {
+        return _log.in_memory_size();
     };
 
     friend std::ostream& operator<<(std::ostream& os, const fsm& f);
