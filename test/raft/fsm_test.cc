@@ -311,7 +311,10 @@ void test_election_single_node_helper(raft::fsm_config fcfg) {
     BOOST_CHECK(output.term_and_vote->second);
     BOOST_CHECK(output.messages.empty());
     // A new leader applies one dummy entry
-    BOOST_CHECK(output.log_entries.size() == 1 && std::holds_alternative<raft::log_entry::dummy>(output.log_entries[0]->data));
+    BOOST_CHECK_EQUAL(output.log_entries.size(), 1);
+    if (output.log_entries.size()) {
+        BOOST_CHECK(std::holds_alternative<raft::log_entry::dummy>(output.log_entries[0]->data));
+    }
     BOOST_CHECK(output.committed.empty());
     // The leader does not become candidate simply because
     // a timeout has elapsed, i.e. there are no spurious
@@ -322,8 +325,11 @@ void test_election_single_node_helper(raft::fsm_config fcfg) {
     BOOST_CHECK(!output.term_and_vote);
     BOOST_CHECK(output.messages.empty());
     BOOST_CHECK(output.log_entries.empty());
-    // Dummy entry is now commited
-    BOOST_CHECK(output.committed.size() == 1 && std::holds_alternative<raft::log_entry::dummy>(output.committed[0]->data));
+    // Dummy entry is now committed
+    BOOST_CHECK_EQUAL(output.committed.size(), 1);
+    if (output.committed.size()) {
+        BOOST_CHECK(std::holds_alternative<raft::log_entry::dummy>(output.committed[0]->data));
+    }
 }
 
 BOOST_AUTO_TEST_CASE(test_election_single_node) {
@@ -680,7 +686,10 @@ BOOST_AUTO_TEST_CASE(test_confchange_add_node) {
 
     output = fsm.get_output();
     // A new leader applies one dummy entry
-    BOOST_CHECK(output.log_entries.size() == 1 && std::holds_alternative<raft::log_entry::dummy>(output.log_entries[0]->data));
+    BOOST_CHECK_EQUAL(output.log_entries.size(), 1);
+    if (output.log_entries.size()) {
+        BOOST_CHECK(std::holds_alternative<raft::log_entry::dummy>(output.log_entries[0]->data));
+    }
     BOOST_CHECK(output.committed.empty());
 
     raft::configuration newcfg({id1, id2, id3});
@@ -690,19 +699,19 @@ BOOST_AUTO_TEST_CASE(test_confchange_add_node) {
     BOOST_CHECK_THROW(fsm.add_entry(newcfg), raft::conf_change_in_progress);
     // Entered joint configuration immediately.
     BOOST_CHECK(fsm.get_configuration().is_joint());
-    BOOST_CHECK(fsm.get_configuration().previous.size() == 2);
-    BOOST_CHECK(fsm.get_configuration().current.size() == 3);
+    BOOST_CHECK_EQUAL(fsm.get_configuration().previous.size(), 2);
+    BOOST_CHECK_EQUAL(fsm.get_configuration().current.size(), 3);
     output = fsm.get_output();
     // The output contains a log entry to be committed.
     // Once it's committed, it will be replicated.
     // The output must contain messages both for id2 and id3
-    BOOST_CHECK(output.log_entries.size() == 1);
+    BOOST_CHECK_EQUAL(output.log_entries.size(), 1);
     // Calling get_output() again indicates the previous output
     // is handled, i.e. the log entry is committed, so now
     // the leader will replicate the confchange
     output = fsm.get_output();
     // Append entry for id2
-    BOOST_CHECK(output.messages.size() == 1);
+    BOOST_CHECK_EQUAL(output.messages.size(), 1);
     auto msg = std::get<raft::append_request>(output.messages.back().second);
     auto idx = msg.entries.back().get()->idx;
     // In order to accept a configuration change
@@ -721,7 +730,7 @@ BOOST_AUTO_TEST_CASE(test_confchange_add_node) {
     BOOST_CHECK_THROW(fsm.add_entry(newcfg), raft::conf_change_in_progress);
     output = fsm.get_output();
     // A log entry for the final configuration
-    BOOST_CHECK(output.log_entries.size() == 1);
+    BOOST_CHECK_EQUAL(output.log_entries.size(), 1);
     output = fsm.get_output();
     // AppendEntries messages for the final configuration
     BOOST_CHECK(output.messages.size() >= 1);
@@ -729,7 +738,7 @@ BOOST_AUTO_TEST_CASE(test_confchange_add_node) {
     idx = msg.entries.back().get()->idx;
     // Ack AppendEntries for the final configuration
     fsm.step(id2, raft::append_reply{msg.current_term, idx, raft::append_reply::accepted{idx}});
-    BOOST_CHECK(fsm.get_configuration().current.size() == 3);
+    BOOST_CHECK_EQUAL(fsm.get_configuration().current.size(), 3);
     fsm.step(id3, raft::append_reply{msg.current_term, idx, raft::append_reply::accepted{idx}});
     // Check that we can start a new confchange
     raft::configuration newcfg2({id1, id2});
@@ -757,33 +766,41 @@ BOOST_AUTO_TEST_CASE(test_confchange_remove_node) {
     BOOST_CHECK(fsm.is_candidate());
     auto output = fsm.get_output();
     // Vote requests to id2 and id3
-    BOOST_CHECK(output.messages.size() == 2);
-    BOOST_CHECK(std::holds_alternative<raft::vote_request>(output.messages[0].second));
-    BOOST_CHECK(std::holds_alternative<raft::vote_request>(output.messages[1].second));
+    BOOST_CHECK_EQUAL(output.messages.size(), 2);
+    if (output.messages.size() > 0) {
+        BOOST_CHECK(std::holds_alternative<raft::vote_request>(output.messages[0].second));
+    }
+    if (output.messages.size() > 1) {
+        BOOST_CHECK(std::holds_alternative<raft::vote_request>(output.messages[1].second));
+    }
 
     BOOST_CHECK(output.term_and_vote);
     fsm.step(id2, raft::vote_reply{output.term_and_vote->first, true});
     BOOST_CHECK(fsm.is_leader());
     output = fsm.get_output();
-    BOOST_CHECK(output.log_entries.size() == 1);
-    BOOST_CHECK(std::holds_alternative<raft::log_entry::dummy>(output.log_entries[0]->data));
+    BOOST_CHECK_EQUAL(output.log_entries.size(), 1);
+    if (output.log_entries.size()) {
+        BOOST_CHECK(std::holds_alternative<raft::log_entry::dummy>(output.log_entries[0]->data));
+    }
 
     raft::configuration newcfg({id1, id2});
     // Suggest a confchange.
     fsm.add_entry(newcfg);
     // Entered joint configuration immediately.
     BOOST_CHECK(fsm.get_configuration().is_joint());
-    BOOST_CHECK(fsm.get_configuration().current.size() == 2);
-    BOOST_CHECK(fsm.get_configuration().previous.size() == 3);
+    BOOST_CHECK_EQUAL(fsm.get_configuration().current.size(), 2);
+    BOOST_CHECK_EQUAL(fsm.get_configuration().previous.size(), 3);
     output = fsm.get_output();
     // The output contains a log entry to be committed.
     // Once it's committed, it will be replicated.
-    BOOST_CHECK(output.log_entries.size() == 1);
-    BOOST_CHECK(std::holds_alternative<raft::configuration>(output.log_entries[0]->data));
-    BOOST_CHECK(output.messages.size() == 2); // Configuration change sent to id2 and id3
+    BOOST_CHECK_EQUAL(output.log_entries.size(), 1);
+    if (output.log_entries.size()) {
+        BOOST_CHECK(std::holds_alternative<raft::configuration>(output.log_entries[0]->data));
+    }
+    BOOST_CHECK_EQUAL(output.messages.size(), 2); // Configuration change sent to id2 and id3
     raft::append_request msg;
     BOOST_REQUIRE_NO_THROW(msg = std::get<raft::append_request>(output.messages[0].second));
-    BOOST_CHECK(msg.entries.size() == 1);
+    BOOST_CHECK_EQUAL(msg.entries.size(), 1);
     auto idx = msg.entries.back().get()->idx;
     // In order to accept a configuration change
     // we need one ACK, since there is a quorum overlap.
@@ -794,35 +811,41 @@ BOOST_AUTO_TEST_CASE(test_confchange_remove_node) {
     BOOST_CHECK(output.messages.size() >= 1);
 
     BOOST_REQUIRE_NO_THROW(msg = std::get<raft::append_request>(output.messages[0].second));
-    BOOST_CHECK(msg.entries.size() == 1);
-    BOOST_CHECK(std::holds_alternative<raft::configuration>(msg.entries[0]->data));
+    BOOST_CHECK_EQUAL(msg.entries.size(), 1);
+    if (msg.entries.size()) {
+        BOOST_CHECK(std::holds_alternative<raft::configuration>(msg.entries[0]->data));
+    }
     idx = msg.entries.back().get()->idx;
-    BOOST_CHECK(idx == 102);
+    BOOST_CHECK_EQUAL(idx, 102);
     // Ack AppendEntries for the joint configuration
     fsm.step(id2, raft::append_reply{msg.current_term, idx, raft::append_reply::accepted{idx}});
 
     output = fsm.get_output();
     // A log entry for the final configuration
-    BOOST_CHECK(output.log_entries.size() == 1);
-    BOOST_CHECK(std::holds_alternative<raft::configuration>(output.log_entries[0]->data));
+    BOOST_CHECK_EQUAL(output.log_entries.size(), 1);
+    if (output.log_entries.size()) {
+        BOOST_CHECK(std::holds_alternative<raft::configuration>(output.log_entries[0]->data));
+    }
 
-    BOOST_CHECK(fsm.get_configuration().current.size() == 2);
+    BOOST_CHECK_EQUAL(fsm.get_configuration().current.size(), 2);
     BOOST_CHECK(!fsm.get_configuration().is_joint());
 
     output = fsm.get_output();
-    BOOST_CHECK(output.messages.size() == 1);
+    BOOST_CHECK_EQUAL(output.messages.size(), 1);
     BOOST_REQUIRE_NO_THROW(msg = std::get<raft::append_request>(output.messages[0].second));
-    BOOST_CHECK(msg.entries.size() == 1);
-    BOOST_CHECK(std::holds_alternative<raft::configuration>(msg.entries[0]->data));
+    BOOST_CHECK_EQUAL(msg.entries.size(), 1);
+    if (msg.entries.size()) {
+        BOOST_CHECK(std::holds_alternative<raft::configuration>(msg.entries[0]->data));
+    }
     idx = msg.entries.back().get()->idx;
-    BOOST_CHECK(idx == 103);
+    BOOST_CHECK_EQUAL(idx, 103);
     // Ack AppendEntries for the final configuration
     fsm.step(id2, raft::append_reply{msg.current_term, idx, raft::append_reply::accepted{idx}});
 
     // Check that we can start a new confchange
     raft::configuration newcfg2({id1, id2, id3});
     fsm.add_entry(newcfg);
-    BOOST_CHECK(fsm.get_configuration().current.size() == 2);
+    BOOST_CHECK_EQUAL(fsm.get_configuration().current.size(), 2);
 }
 
 BOOST_AUTO_TEST_CASE(test_confchange_replace_node) {
@@ -850,7 +873,10 @@ BOOST_AUTO_TEST_CASE(test_confchange_replace_node) {
     fsm.step(id2, raft::vote_reply{output.term_and_vote->first, true});
     BOOST_CHECK(fsm.is_leader());
     output = fsm.get_output();
-    BOOST_CHECK(output.log_entries.size() == 1 && std::holds_alternative<raft::log_entry::dummy>(output.log_entries[0]->data));
+    BOOST_CHECK_EQUAL(output.log_entries.size(), 1);
+    if (output.log_entries.size()) {
+        BOOST_CHECK(std::holds_alternative<raft::log_entry::dummy>(output.log_entries[0]->data));
+    }
     BOOST_CHECK(output.committed.empty());
 
     raft::configuration newcfg({id1, id2, id4});
@@ -858,15 +884,19 @@ BOOST_AUTO_TEST_CASE(test_confchange_replace_node) {
     fsm.add_entry(newcfg);
     // Entered joint configuration immediately.
     BOOST_CHECK(fsm.get_configuration().is_joint());
-    BOOST_CHECK(fsm.get_configuration().current.size() == 3);
-    BOOST_CHECK(fsm.get_configuration().previous.size() == 3);
+    BOOST_CHECK_EQUAL(fsm.get_configuration().current.size(), 3);
+    BOOST_CHECK_EQUAL(fsm.get_configuration().previous.size(), 3);
     output = fsm.get_output();
-    BOOST_CHECK(output.messages.size() == 2);
+    BOOST_CHECK_EQUAL(output.messages.size(), 2);
     raft::append_request msg;
-    BOOST_REQUIRE_NO_THROW(msg = std::get<raft::append_request>(output.messages[0].second));
-    BOOST_CHECK(std::holds_alternative<raft::log_entry::dummy>(msg.entries[0]->data));
-    BOOST_REQUIRE_NO_THROW(msg = std::get<raft::append_request>(output.messages[1].second));
-    BOOST_CHECK(std::holds_alternative<raft::log_entry::dummy>(msg.entries[0]->data));
+    if (output.messages.size() > 0) {
+        BOOST_REQUIRE_NO_THROW(msg = std::get<raft::append_request>(output.messages[0].second));
+        BOOST_CHECK(std::holds_alternative<raft::log_entry::dummy>(msg.entries[0]->data));
+    }
+    if (output.messages.size() > 1) {
+        BOOST_REQUIRE_NO_THROW(msg = std::get<raft::append_request>(output.messages[1].second));
+        BOOST_CHECK(std::holds_alternative<raft::log_entry::dummy>(msg.entries[0]->data));
+    }
 
     output = fsm.get_output();
     BOOST_REQUIRE_NO_THROW(msg = std::get<raft::append_request>(output.messages[0].second));
@@ -877,8 +907,10 @@ BOOST_AUTO_TEST_CASE(test_confchange_replace_node) {
     BOOST_CHECK(!fsm.get_configuration().is_joint());
     // Joint config to log
     output = fsm.get_output();
-    BOOST_CHECK(output.log_entries.size() == 1);
-    BOOST_CHECK(std::holds_alternative<raft::configuration>(output.log_entries[0]->data));
+    BOOST_CHECK_EQUAL(output.log_entries.size(), 1);
+    if (output.log_entries.size()) {
+        BOOST_CHECK(std::holds_alternative<raft::configuration>(output.log_entries[0]->data));
+    }
     output = fsm.get_output();
     // AppendEntries messages for the final configuration
     BOOST_CHECK(output.messages.size() >= 1);
@@ -886,10 +918,9 @@ BOOST_AUTO_TEST_CASE(test_confchange_replace_node) {
     idx = msg.entries.back().get()->idx;
     // Ack AppendEntries for the final configuration
     fsm.step(id2, raft::append_reply{msg.current_term, idx, raft::append_reply::accepted{idx}});
-    BOOST_CHECK(fsm.get_configuration().current.size() == 3);
+    BOOST_CHECK_EQUAL(fsm.get_configuration().current.size(), 3);
     BOOST_CHECK(!fsm.get_configuration().is_joint());
 }
-
 BOOST_AUTO_TEST_CASE(test_leader_stepdown) {
     failure_detector fd;
 
