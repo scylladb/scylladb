@@ -147,22 +147,16 @@ future<redis_server::result> redis_server::connection::process_request_one(redis
 }
 
 redis_server::connection::connection(redis_server& server, socket_address server_addr, connected_socket&& fd, socket_address addr)
-    : generic_server::connection(std::move(fd))
+    : generic_server::connection(server, std::move(fd))
     , _server(server)
     , _server_addr(server_addr)
     , _read_buf(_fd.input())
     , _write_buf(_fd.output())
     , _options(server._config._read_consistency_level, server._config._write_consistency_level, server._config._timeout_config, server._auth_service, addr, server._total_redis_db_count)
 {
-    ++_server._total_connections;
-    ++_server._current_connections;
-    _server._connections_list.push_back(*this);
 }
 
 redis_server::connection::~connection() {
-    --_server._current_connections;
-    _server._connections_list.erase(_server._connections_list.iterator_to(*this));
-    _server.maybe_idle();
 }
 
 future<> redis_server::connection::process()

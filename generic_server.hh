@@ -30,17 +30,23 @@
 
 namespace generic_server {
 
+class server;
+
 class connection : public boost::intrusive::list_base_hook<> {
 protected:
+    server& _server;
     connected_socket _fd;
 
 public:
-    connection(connected_socket&& fd);
+    connection(server& server, connected_socket&& fd);
+    virtual ~connection();
 
     virtual future<> shutdown();
 };
 
 class server {
+    friend class connection;
+
 protected:
     bool _stopping = false;
     promise<> _all_connections_stopped;

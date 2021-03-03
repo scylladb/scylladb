@@ -108,7 +108,7 @@ private:
         static thread_local execution_stage_type _process_request_stage;
     public:
         connection(redis_server& server, socket_address server_addr, connected_socket&& fd, socket_address addr);
-        ~connection();
+        virtual ~connection();
         future<> process();
         future<> process_request();
         void write_reply(const redis_exception&);

@@ -209,7 +209,7 @@ private:
         static thread_local execution_stage_type _process_request_stage;
     public:
         connection(cql_server& server, socket_address server_addr, connected_socket&& fd, socket_address addr);
-        ~connection();
+        virtual ~connection();
         future<> process();
         future<> process_request();
         static std::tuple<net::inet_address, int, client_type> make_client_key(const service::client_state& cli_state);
