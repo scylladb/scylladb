@@ -79,7 +79,7 @@ class fsm_debug : public raft::fsm {
 public:
     using raft::fsm::fsm;
     const raft::follower_progress& get_progress(server_id id) {
-        raft::follower_progress* progress = _tracker->find(id);
+        raft::follower_progress* progress = leader_state().tracker.find(id);
         return *progress;
     }
 };

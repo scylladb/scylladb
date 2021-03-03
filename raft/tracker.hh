@@ -176,9 +176,8 @@ class votes {
     server_address_set _voters;
     election_tracker _current;
     std::optional<election_tracker> _previous;
-    bool _is_prevote;
 public:
-    votes(configuration configuration, bool is_prevote = false);
+    votes(configuration configuration);
 
     const server_address_set& voters() const {
         return _voters;
@@ -186,9 +185,6 @@ public:
 
     void register_vote(server_id from, bool granted);
     vote_result tally_votes() const;
-    bool is_prevote() const {
-        return _is_prevote;
-    };
 
     friend std::ostream& operator<<(std::ostream& os, const votes& v);
 };

@@ -88,7 +88,7 @@ const log_entry& fsm::add_entry(T command) {
         // entry is replicated to the C_new servers, and
         // a majority of the new configuration is used to
         // determine the C_new entry’s commitment.
-        _tracker->set_configuration(_log.get_configuration(), _log.last_idx());
+        leader_state().tracker.set_configuration(_log.get_configuration(), _log.last_idx());
     }
 
     return *_log[_log.last_idx()];
@@ -129,11 +129,8 @@ void fsm::reset_election_timeout() {
 
 void fsm::become_leader() {
     assert(!std::holds_alternative<leader>(_state));
-    assert(!_tracker);
-    _state = leader{};
+    _state = leader(_my_id);
     _current_leader = _my_id;
-    _votes = std::nullopt;
-    _tracker.emplace(_my_id);
     _log_limiter_semaphore.emplace(this);
     _log_limiter_semaphore->sem.consume(_log.in_memory_size());
     _last_election_time = _clock.now();
@@ -144,16 +141,14 @@ void fsm::become_leader() {
     add_entry(log_entry::dummy());
     // set_configuration() begins replicating from the last entry
     // in the log.
-    _tracker->set_configuration(_log.get_configuration(), _log.last_idx());
+    leader_state().tracker.set_configuration(_log.get_configuration(), _log.last_idx());
     replicate();
 }
 
 void fsm::become_follower(server_id leader) {
     _current_leader = leader;
     _state = follower{};
-    _tracker = std::nullopt;
     _log_limiter_semaphore = std::nullopt;
-    _votes = std::nullopt;
     if (_current_leader) {
         _last_election_time = _clock.now();
     }
@@ -164,11 +159,10 @@ void fsm::become_candidate(bool is_prevote) {
     // disruptive server prevention will stall an election if quorum of nodes
     // start election together since each one will ignore vote requests from others
     _current_leader = {};
-    _state = candidate{};
+    _state = candidate(_log.get_configuration(), is_prevote);
 
     reset_election_timeout();
 
-    _tracker = std::nullopt;
     _log_limiter_semaphore = std::nullopt;
     // 3.4 Leader election
     //
@@ -180,9 +174,9 @@ void fsm::become_candidate(bool is_prevote) {
     // and initiating another round of RequestVote RPCs.
     _last_election_time = _clock.now();
 
-    _votes.emplace(_log.get_configuration(), is_prevote);
+    auto& votes = candidate_state().votes;
 
-    const auto& voters = _votes->voters();
+    const auto& voters = votes.voters();
     if (!voters.contains(server_address{_my_id})) {
         // If the server is not part of the current configuration,
         // revert to the follower state without increasing
@@ -199,7 +193,7 @@ void fsm::become_candidate(bool is_prevote) {
     for (const auto& server : voters) {
         if (server.id == _my_id) {
             // Vote for self.
-            _votes->register_vote(server.id, true);
+            votes.register_vote(server.id, true);
             if (!is_prevote) {
                 // Only record real votes
                 _voted_for = _my_id;
@@ -212,7 +206,7 @@ void fsm::become_candidate(bool is_prevote) {
 
         send_to(server.id, vote_request{term, _log.last_idx(), _log.last_term(), is_prevote});
     }
-    if (_votes->tally_votes() == vote_result::WON) {
+    if (votes.tally_votes() == vote_result::WON) {
         // A single node cluster.
         if (is_prevote) {
             become_candidate(false);
@@ -307,8 +301,8 @@ void fsm::advance_stable_idx(index_t idx) {
     // If this server is leader and is part of the current
     // configuration, update it's progress and optionally
     // commit new entries.
-    if (is_leader() && _tracker->leader_progress()) {
-        _tracker->leader_progress()->accepted(idx);
+    if (is_leader() && leader_state().tracker.leader_progress()) {
+        leader_state().tracker.leader_progress()->accepted(idx);
         replicate();
         maybe_commit();
     }
@@ -316,7 +310,7 @@ void fsm::advance_stable_idx(index_t idx) {
 
 void fsm::maybe_commit() {
 
-    index_t new_commit_idx = _tracker->committed(_commit_idx);
+    index_t new_commit_idx = leader_state().tracker.committed(_commit_idx);
 
     if (new_commit_idx <= _commit_idx) {
         return;
@@ -353,7 +347,7 @@ void fsm::maybe_commit() {
             configuration cfg(_log.get_configuration());
             cfg.leave_joint();
             _log.emplace_back(seastar::make_lw_shared<log_entry>({_current_term, _log.next_idx(), std::move(cfg)}));
-            _tracker->set_configuration(_log.get_configuration(), _log.last_idx());
+            leader_state().tracker.set_configuration(_log.get_configuration(), _log.last_idx());
             // Leaving joint configuration may commit more entries
             // even if we had no new acks. Imagine the cluster is
             // in joint configuration {{A, B}, {A, B, C, D, E}}.
@@ -370,7 +364,7 @@ void fsm::maybe_commit() {
             // configuration, and 6 if we assume we left it. Let
             // it happen without an extra FSM step.
             maybe_commit();
-        } else if (_tracker->leader_progress() == nullptr) {
+        } else if (leader_state().tracker.leader_progress() == nullptr) {
             // 4.2.2 Removing the current leader
             //
             // A leader that is removed from the configuration
@@ -394,7 +388,7 @@ void fsm::tick_leader() {
     }
 
     size_t active = 1; // +1 for self
-    for (auto& [id, progress] : *_tracker) {
+    for (auto& [id, progress] : leader_state().tracker) {
         if (progress.id != _my_id) {
             if (_failure_detector.is_alive(progress.id)) {
                 active++;
@@ -416,7 +410,7 @@ void fsm::tick_leader() {
             }
         }
     }
-    if (active >= _tracker->size()/2 + 1) {
+    if (active >= leader_state().tracker.size()/2 + 1) {
         // Advance last election time if we heard from
         // the quorum during this tick.
         _last_election_time = _clock.now();
@@ -483,7 +477,7 @@ void fsm::append_entries(server_id from, append_request&& request) {
 void fsm::append_entries_reply(server_id from, append_reply&& reply) {
     assert(is_leader());
 
-    follower_progress* opt_progress = _tracker->find(from);
+    follower_progress* opt_progress = leader_state().tracker.find(from);
     if (opt_progress == nullptr) {
         // A message from a follower removed from the
         // configuration.
@@ -553,7 +547,7 @@ void fsm::append_entries_reply(server_id from, append_reply&& reply) {
 
     // We may have just applied a configuration that removes this
     // follower, so re-track it.
-    opt_progress = _tracker->find(from);
+    opt_progress = leader_state().tracker.find(from);
     if (opt_progress != nullptr) {
         replicate_to(*opt_progress, false);
     }
@@ -619,13 +613,14 @@ void fsm::request_vote_reply(server_id from, vote_reply&& reply) {
 
     logger.trace("{} received a {} vote from {}", _my_id, reply.vote_granted ? "yes" : "no", from);
 
-    _votes->register_vote(from, reply.vote_granted);
+    auto& state = std::get<candidate>(_state);
+    state.votes.register_vote(from, reply.vote_granted);
 
-    switch (_votes->tally_votes()) {
+    switch (state.votes.tally_votes()) {
     case vote_result::UNKNOWN:
         break;
     case vote_result::WON:
-        if (_votes->is_prevote()) {
+        if (state.is_prevote) {
             become_candidate(false);
         } else {
             become_leader();
@@ -745,7 +740,7 @@ void fsm::replicate_to(follower_progress& progress, bool allow_empty) {
 
 void fsm::replicate() {
     assert(is_leader());
-    for (auto& [id, progress] : *_tracker) {
+    for (auto& [id, progress] : leader_state().tracker) {
         if (progress.id != _my_id) {
             replicate_to(progress, false);
         }
@@ -772,7 +767,7 @@ bool fsm::can_read() {
 }
 
 void fsm::snapshot_status(server_id id, std::optional<index_t> idx) {
-    follower_progress& progress = *_tracker->find(id);
+    follower_progress& progress = *leader_state().tracker.find(id);
 
     if (progress.state != follower_progress::state::SNAPSHOT) {
         logger.trace("snasphot_status[{}]: called not in snapshot state", _my_id);
@@ -823,8 +818,8 @@ std::ostream& operator<<(std::ostream& os, const fsm& f) {
     os << "commit index: " << f._observed._commit_idx << "), ";
     os << "current time: " << f._clock.now() << ", ";
     os << "last election time: " << f._last_election_time << ", ";
-    if (f._votes) {
-        os << "votes (" << *f._votes << "), ";
+    if (f.is_candidate()) {
+        os << "votes (" << f.candidate_state().votes << "), ";
     }
     os << "messages: " << f._messages.size() << ", ";
 
@@ -835,9 +830,9 @@ std::ostream& operator<<(std::ostream& os, const fsm& f) {
     } else if (std::holds_alternative<follower>(f._state)) {
         os << "follower";
     }
-    if (f._tracker) {
+    if (f.is_leader()) {
         os << "followers (";
-        for (const auto& [server_id, follower_progress]: *f._tracker) {
+        for (const auto& [server_id, follower_progress]: f.leader_state().tracker) {
             os << server_id << ", ";
             os << follower_progress.next_idx << ", ";
             os << follower_progress.match_idx << ", ";
