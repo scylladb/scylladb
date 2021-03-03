@@ -26,6 +26,8 @@ namespace generic_server {
 connection::connection(server& server, connected_socket&& fd)
     : _server{server}
     , _fd{std::move(fd)}
+    , _read_buf(_fd.input())
+    , _write_buf(_fd.output())
 {
     ++_server._total_connections;
     ++_server._current_connections;
@@ -37,6 +39,46 @@ connection::~connection()
     --_server._current_connections;
     _server._connections_list.erase(_server._connections_list.iterator_to(*this));
     _server.maybe_idle();
+}
+
+static bool is_broken_pipe_or_connection_reset(std::exception_ptr ep) {
+    try {
+        std::rethrow_exception(ep);
+    } catch (const std::system_error& e) {
+        return e.code().category() == std::system_category()
+            && (e.code().value() == EPIPE || e.code().value() == ECONNRESET);
+    } catch (...) {}
+    return false;
+}
+
+future<> connection::process()
+{
+    return with_gate(_pending_requests_gate, [this] {
+        return do_until([this] {
+            return _read_buf.eof();
+        }, [this] {
+            return process_request();
+        }).then_wrapped([this] (future<> f) {
+            handle_error(std::move(f));
+        });
+    }).finally([this] {
+        return _pending_requests_gate.close().then([this] {
+            on_connection_close();
+            return _ready_to_respond.handle_exception([] (std::exception_ptr ep) {
+                if (is_broken_pipe_or_connection_reset(ep)) {
+                    // expected if another side closes a connection or we're shutting down
+                    return;
+                }
+                std::rethrow_exception(ep);
+            }).finally([this] {
+                 return _write_buf.close();
+            });
+        });
+    });
+}
+
+void connection::on_connection_close()
+{
 }
 
 future<> connection::shutdown()

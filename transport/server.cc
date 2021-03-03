@@ -329,7 +329,7 @@ cql_server::do_accepts(int which, bool keepalive, socket_address server_addr) {
                     clogger.info("exception while advertising new connection: {}", std::current_exception());
                 }
                 // Block while monitoring for lifetime/errors.
-                return conn->process().finally([this, conn] {
+                return static_pointer_cast<generic_server::connection>(conn)->process().finally([this, conn] {
                     --_stats.connections;
                     return unadvertise_connection(conn);
                 }).handle_exception([] (std::exception_ptr ep) {
@@ -609,8 +609,6 @@ cql_server::connection::connection(cql_server& server, socket_address server_add
     : generic_server::connection{server, std::move(fd)}
     , _server(server)
     , _server_addr(server_addr)
-    , _read_buf(_fd.input())
-    , _write_buf(_fd.output())
     , _client_state(service::client_state::external_tag{}, server._auth_service, server.timeout_config(), addr)
 {
 }
@@ -618,30 +616,9 @@ cql_server::connection::connection(cql_server& server, socket_address server_add
 cql_server::connection::~connection() {
 }
 
-future<> cql_server::connection::process()
+void cql_server::connection::on_connection_close()
 {
-    return with_gate(_pending_requests_gate, [this] {
-        return do_until([this] {
-            return _read_buf.eof();
-        }, [this] {
-            return process_request();
-        }).then_wrapped([this] (future<> f) {
-            handle_error(std::move(f));
-        });
-    }).finally([this] {
-        return _pending_requests_gate.close().then([this] {
-            _server._notifier->unregister_connection(this);
-            return _ready_to_respond.handle_exception([] (std::exception_ptr ep) {
-                if (is_broken_pipe_or_connection_reset(ep)) {
-                    // expected if another side closes a connection or we're shutting down
-                    return;
-                }
-                std::rethrow_exception(ep);
-            }).finally([this] {
-                 return _write_buf.close();
-            });
-        });
-    });
+    _server._notifier->unregister_connection(this);
 }
 
 std::tuple<net::inet_address, int, client_type> cql_server::connection::make_client_key(const service::client_state& cli_state) {

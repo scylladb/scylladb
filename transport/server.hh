@@ -179,11 +179,7 @@ private:
     class connection : public generic_server::connection {
         cql_server& _server;
         socket_address _server_addr;
-        input_stream<char> _read_buf;
-        output_stream<char> _write_buf;
         fragmented_temporary_buffer::reader _buffer_reader;
-        seastar::gate _pending_requests_gate;
-        future<> _ready_to_respond = make_ready_future<>();
         cql_protocol_version_type _version = 0;
         cql_compression _compression = cql_compression::none;
         cql_serialization_format _cql_serialization_format = cql_serialization_format::latest();
@@ -210,9 +206,9 @@ private:
     public:
         connection(cql_server& server, socket_address server_addr, connected_socket&& fd, socket_address addr);
         virtual ~connection();
-        future<> process();
-        future<> process_request();
-        void handle_error(future<>&& f);
+        future<> process_request() override;
+        void handle_error(future<>&& f) override;
+        void on_connection_close() override;
         static std::tuple<net::inet_address, int, client_type> make_client_key(const service::client_state& cli_state);
         client_data make_client_data() const;
         const service::client_state& get_client_state() const { return _client_state; }
