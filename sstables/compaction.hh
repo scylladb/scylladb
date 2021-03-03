@@ -51,6 +51,7 @@ namespace sstables {
     };
 
     sstring compaction_name(compaction_type type);
+    compaction_type to_compaction_type(sstring type_name);
 
     struct compaction_info {
         compaction_type type = compaction_type::Compaction;

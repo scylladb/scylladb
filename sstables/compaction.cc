@@ -93,6 +93,15 @@ sstring compaction_name(compaction_type type) {
     throw std::runtime_error("Invalid Compaction Type");
 }
 
+compaction_type to_compaction_type(sstring type_name) {
+    for (auto& it : compaction_types) {
+        if (it.second == type_name) {
+            return it.first;
+        }
+    }
+    throw std::runtime_error("Invalid Compaction Type Name");
+}
+
 static std::string_view to_string(compaction_type type) {
     switch (type) {
     case compaction_type::Compaction: return "Compact";
