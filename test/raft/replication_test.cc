@@ -26,6 +26,7 @@
 #include <seastar/core/loop.hh>
 #include <seastar/util/log.hh>
 #include <seastar/util/later.hh>
+#include <seastar/testing/random.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include "raft/server.hh"
 #include "serializer.hh"
@@ -69,11 +70,8 @@ static seastar::logger tlogger("test");
 lowres_clock::duration tick_delta = 1ms;
 
 std::mt19937 random_generator() {
-    std::random_device rd;
-    // In case of errors, replace the seed with a fixed value to get a deterministic run.
-    auto seed = rd();
-    std::cout << "Random seed: " << seed << "\n";
-    return std::mt19937(seed);
+    auto& gen = seastar::testing::local_random_engine;
+    return std::mt19937(gen());
 }
 
 int rand() {
