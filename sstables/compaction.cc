@@ -74,27 +74,23 @@ namespace sstables {
 
 logging::logger clogger("compaction");
 
+static const std::unordered_map<compaction_type, sstring> compaction_types = {
+    { compaction_type::Compaction, "COMPACTION" },
+    { compaction_type::Cleanup, "CLEANUP" },
+    { compaction_type::Validation, "VALIDATION" },
+    { compaction_type::Scrub, "SCRUB" },
+    { compaction_type::Index_build, "INDEX_BUILD" },
+    { compaction_type::Reshard, "RESHARD" },
+    { compaction_type::Upgrade, "UPGRADE" },
+    { compaction_type::Reshape, "RESHAPE" },
+};
+
 sstring compaction_name(compaction_type type) {
-    switch (type) {
-    case compaction_type::Compaction:
-        return "COMPACTION";
-    case compaction_type::Cleanup:
-        return "CLEANUP";
-    case compaction_type::Validation:
-        return "VALIDATION";
-    case compaction_type::Scrub:
-        return "SCRUB";
-    case compaction_type::Index_build:
-        return "INDEX_BUILD";
-    case compaction_type::Reshard:
-        return "RESHARD";
-    case compaction_type::Upgrade:
-        return "UPGRADE";
-    case compaction_type::Reshape:
-        return "RESHAPE";
-    default:
-        throw std::runtime_error("Invalid Compaction Type");
+    auto ret = compaction_types.find(type);
+    if (ret != compaction_types.end()) {
+        return ret->second;
     }
+    throw std::runtime_error("Invalid Compaction Type");
 }
 
 static std::string_view to_string(compaction_type type) {
