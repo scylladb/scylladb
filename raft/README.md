@@ -115,3 +115,36 @@ this:
   groups, hence failure detection RPC could run once on network peer level,
   not sepately for each Raft instance. The library expects an accurate
   `failure_detector` instance from a complying implementation.
+
+### RPC module address mappings
+
+Raft instance needs to update RPC subsystem on changes in
+configuration, so that RPC can deliver messages to the new nodes
+in configuration, as well as dispose of the old nodes.
+I.e. the nodes which are not the part of the most recent
+configuration anymore.
+
+New nodes are added to the RPC configuration after the
+configuration change is committed but before the instance
+sends messages to the peers.
+
+Until the messages are successfully delivered to at least
+the majority of "old" nodes and we have heard back from them,
+the mappings should be kept intact. After that point the RPC
+mappings for the removed nodes are no longer of interest
+and thus can be immediately disposed.
+
+There is also another problem to be solved: in Raft an instance may
+need to communicate with a peer outside its current configuration.
+This may happen, e.g., when a follower falls out of sync with the
+majority and then a configuration is changed and a leader not present
+in the old configuration is elected.
+
+The solution is to introduce the concept of "expirable" updates to
+the RPC subsystem.
+
+When RPC receives a message from an unknown peer, it also adds the
+return address of the peer to the address map with a TTL. Should
+we need to respond to the peer, its address will be known.
+
+An outgoing communication to an unconfigured peer is impossible.
