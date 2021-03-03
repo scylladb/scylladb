@@ -166,18 +166,7 @@ future<> redis_server::connection::process()
     }, [this] {
         return with_gate(_pending_requests_gate, [this] {
             return process_request().then_wrapped([this] (auto f) {
-                try {
-                    f.get();
-                }
-                catch (redis_exception& e) {
-                    write_reply(e);
-                }
-                catch (std::exception& e) {
-                    write_reply(redis_exception { e.what() });
-                }
-                catch (...) {
-                    write_reply(redis_exception { "Unknown exception" });
-                }
+                handle_error(std::move(f));
             });
         });
     }).finally([this] {
@@ -216,6 +205,7 @@ void redis_server::connection::write_reply(redis_server::result result)
         });
     });
 }
+
 future<> redis_server::connection::process_request() {
     _parser.init();
     return _read_buf.consume(_parser).then([this] {
@@ -247,6 +237,21 @@ future<> redis_server::connection::process_request() {
             }
         });
     });
+}
+
+void redis_server::connection::handle_error(future<>&& f) {
+    try {
+        f.get();
+    }
+    catch (redis_exception& e) {
+        write_reply(e);
+    }
+    catch (std::exception& e) {
+        write_reply(redis_exception { e.what() });
+    }
+    catch (...) {
+        write_reply(redis_exception { "Unknown exception" });
+    }
 }
 
 }
