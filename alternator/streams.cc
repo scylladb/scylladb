@@ -1020,7 +1020,9 @@ future<executor::request_return_type> executor::get_records(client_state& client
         }
 
         // ugh. figure out if we are and end-of-shard
-        return cdc::get_local_streams_timestamp().then([this, iter, high_ts, start_time, ret = std::move(ret)](db_clock::time_point ts) mutable {
+        auto normal_token_owners = _proxy.get_token_metadata_ptr()->count_normal_token_owners();
+        
+        return _sdks.cdc_current_generation_timestamp({ normal_token_owners }).then([this, iter, high_ts, start_time, ret = std::move(ret)](db_clock::time_point ts) mutable {
             auto& shard = iter.shard;            
 
             if (shard.time < ts && ts < high_ts) {
