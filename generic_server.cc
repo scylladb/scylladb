@@ -23,9 +23,20 @@
 
 namespace generic_server {
 
-connection::connection(connected_socket&& fd)
-    : _fd{std::move(fd)}
+connection::connection(server& server, connected_socket&& fd)
+    : _server{server}
+    , _fd{std::move(fd)}
 {
+    ++_server._total_connections;
+    ++_server._current_connections;
+    _server._connections_list.push_back(*this);
+}
+
+connection::~connection()
+{
+    --_server._current_connections;
+    _server._connections_list.erase(_server._connections_list.iterator_to(*this));
+    _server.maybe_idle();
 }
 
 future<> connection::shutdown()

@@ -603,22 +603,16 @@ future<foreign_ptr<std::unique_ptr<cql_server::response>>>
 }
 
 cql_server::connection::connection(cql_server& server, socket_address server_addr, connected_socket&& fd, socket_address addr)
-    : generic_server::connection{std::move(fd)}
+    : generic_server::connection{server, std::move(fd)}
     , _server(server)
     , _server_addr(server_addr)
     , _read_buf(_fd.input())
     , _write_buf(_fd.output())
     , _client_state(service::client_state::external_tag{}, server._auth_service, server.timeout_config(), addr)
 {
-    ++_server._total_connections;
-    ++_server._current_connections;
-    _server._connections_list.push_back(*this);
 }
 
 cql_server::connection::~connection() {
-    --_server._current_connections;
-    _server._connections_list.erase(_server._connections_list.iterator_to(*this));
-    _server.maybe_idle();
 }
 
 future<> cql_server::connection::process()
