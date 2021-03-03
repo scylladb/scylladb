@@ -26,9 +26,11 @@
 #include <seastar/core/future.hh>
 #include <seastar/net/api.hh>
 
+#include <boost/intrusive/list.hpp>
+
 namespace generic_server {
 
-class connection {
+class connection : public boost::intrusive::list_base_hook<> {
 protected:
     connected_socket _fd;
 
