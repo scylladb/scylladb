@@ -40,4 +40,14 @@ public:
     virtual future<> shutdown();
 };
 
+class server {
+protected:
+    bool _stopping = false;
+    promise<> _all_connections_stopped;
+    uint64_t _current_connections = 0;
+    uint64_t _connections_being_accepted = 0;
+
+    void maybe_idle();
+};
+
 }

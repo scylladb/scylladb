@@ -116,7 +116,7 @@ struct cql_server_config {
     smp_service_group bounce_request_smp_service_group = default_smp_service_group();
 };
 
-class cql_server : public seastar::peering_sharded_service<cql_server> {
+class cql_server : public seastar::peering_sharded_service<cql_server>, public generic_server::server {
 private:
     struct transport_stats {
         // server stats
@@ -264,22 +264,13 @@ private:
 
     friend class type_codec;
 private:
-    bool _stopping = false;
-    promise<> _all_connections_stopped;
     future<> _stopped = _all_connections_stopped.get_future();
     boost::intrusive::list<connection> _connections_list;
     uint64_t _total_connections = 0;
-    uint64_t _current_connections = 0;
-    uint64_t _connections_being_accepted = 0;
 private:
     future<> advertise_new_connection(shared_ptr<connection> conn);
     future<> unadvertise_connection(shared_ptr<connection> conn);
 
-    void maybe_idle() {
-        if (_stopping && !_connections_being_accepted && !_current_connections) {
-            _all_connections_stopped.set_value();
-        }
-    }
     const ::timeout_config& timeout_config() { return _config.timeout_config; }
 };
 
