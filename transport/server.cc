@@ -711,16 +711,23 @@ future<> cql_server::connection::process_request() {
         auto op = f.opcode;
         auto stream = f.stream;
         auto mem_estimate = f.length * 2 + 8000; // Allow for extra copies and bookkeeping
-
         if (mem_estimate > _server._max_request_size) {
-            return make_exception_future<>(exceptions::invalid_request_exception(format("request size too large (frame size {:d}; estimate {:d}; allowed {:d}",
-                    f.length, mem_estimate, _server._max_request_size)));
+            return _read_buf.skip(f.length).then([length = f.length, stream = f.stream, mem_estimate, this] () {
+                write_response(make_error(stream, exceptions::exception_code::INVALID,
+                        format("request size too large (frame size {:d}; estimate {:d}; allowed {:d}", length, mem_estimate, _server._max_request_size),
+                        tracing::trace_state_ptr()));
+                return make_ready_future<>();
+            });
         }
 
         if (_server._stats.requests_serving > _server._max_concurrent_requests) {
             ++_server._stats.requests_shed;
-            return make_exception_future<>(
-                    exceptions::overloaded_exception(format("too many in-flight requests (configured via max_concurrent_requests_per_shard): {}", _server._stats.requests_serving)));
+            return _read_buf.skip(f.length).then([this, stream = f.stream] {
+                write_response(make_error(stream, exceptions::exception_code::OVERLOADED,
+                        format("too many in-flight requests (configured via max_concurrent_requests_per_shard): {}", _server._stats.requests_serving),
+                        tracing::trace_state_ptr()));
+                return make_ready_future<>();
+            });
         }
 
         auto fut = get_units(_server._memory_available, mem_estimate);
