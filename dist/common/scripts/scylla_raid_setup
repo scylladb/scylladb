@@ -27,6 +27,7 @@ import grp
 import sys
 import stat
 import distro
+from pathlib import Path
 from scylla_util import *
 from subprocess import run
 
@@ -85,8 +86,14 @@ if __name__ == '__main__':
             raiddevs_to_try = [args.raiddev, ]
         for fsdev in raiddevs_to_try:
             raiddevname = os.path.basename(fsdev)
-            if not os.path.exists(f'/sys/block/{raiddevname}/md/array_state'):
+            array_state = Path(f'/sys/block/{raiddevname}/md/array_state')
+            # mdX is not allocated
+            if not array_state.exists():
                 break
+            with array_state.open() as f:
+                # allocated, but no devices, not running
+                if f.read().strip() == 'clear':
+                    break
             print(f'{fsdev} is already using')
         else:
             if args.raiddev is None:
