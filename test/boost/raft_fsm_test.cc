@@ -67,7 +67,7 @@ BOOST_AUTO_TEST_CASE(test_votes) {
     BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::UNKNOWN);
     BOOST_CHECK_EQUAL(votes.voters().size(), 1);
     // Try a vote from an unknown server, it should be ignored.
-    BOOST_CHECK_THROW(votes.register_vote(id().id, true), std::runtime_error);
+    votes.register_vote(id().id, true);
     votes.register_vote(id1.id, false);
     // Quorum votes against the decision
     BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::LOST);

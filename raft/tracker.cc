@@ -91,15 +91,20 @@ bool follower_progress::can_send_to() {
 // for existing followers, crate progress for new, and remove
 // progress for non-members (to make sure we don't send noise
 // messages to them).
-void tracker::set_configuration(configuration configuration, index_t next_idx) {
-    _configuration = std::move(configuration);
+void tracker::set_configuration(const configuration& configuration, index_t next_idx) {
     _leader_progress = nullptr;
+    _current_voters.clear();
+    _previous_voters.clear();
+
     // Swap out the current progress and then re-add
     // only those entries which are still present.
     progress old_progress = std::move(*this);
 
-    auto emplace_simple_config = [&](const server_address_set& config) {
+    auto emplace_simple_config = [&](const server_address_set& config, std::unordered_set<server_id>& voter_ids) {
         for (const auto& s : config) {
+            if (s.can_vote) {
+                voter_ids.emplace(s.id);
+            }
             auto newp = this->progress::find(s.id);
             if (newp != this->progress::end()) {
                 // Processing joint configuration and already added
@@ -119,9 +124,9 @@ void tracker::set_configuration(configuration configuration, index_t next_idx) {
             }
         }
     };
-    emplace_simple_config(_configuration.current);
-    if (_configuration.is_joint()) {
-        emplace_simple_config(_configuration.previous);
+    emplace_simple_config(configuration.current, _current_voters);
+    if (configuration.is_joint()) {
+        emplace_simple_config(configuration.previous, _previous_voters);
     }
 }
 
@@ -167,17 +172,16 @@ public:
 };
 
 index_t tracker::committed(index_t prev_commit_idx) {
+    match_vector current(prev_commit_idx, _current_voters.size());
 
-    match_vector current(prev_commit_idx, _configuration.current.size());
-
-    if (_configuration.is_joint()) {
-        match_vector previous(prev_commit_idx, _configuration.previous.size());
+    if (!_previous_voters.empty()) {
+        match_vector previous(prev_commit_idx, _previous_voters.size());
 
         for (const auto& [id, p] : *this) {
-            if (_configuration.current.find(server_address{p.id}) != _configuration.current.end()) {
+            if (_current_voters.contains(p.id)) {
                 current.push_back(p.match_idx);
             }
-            if (_configuration.previous.find(server_address{p.id}) != _configuration.previous.end()) {
+            if (_previous_voters.contains(p.id)) {
                 previous.push_back(p.match_idx);
             }
         }
@@ -187,7 +191,9 @@ index_t tracker::committed(index_t prev_commit_idx) {
         return std::min(current.commit_idx(), previous.commit_idx());
     } else {
         for (const auto& [id, p] : *this) {
-            current.push_back(p.match_idx);
+            if (_current_voters.contains(p.id)) {
+                current.push_back(p.match_idx);
+            }
         }
         if (!current.committed()) {
             return prev_commit_idx;
@@ -204,6 +210,8 @@ votes::votes(configuration configuration)
         _previous.emplace(configuration.previous);
         _voters.insert(configuration.previous.begin(), configuration.previous.end());
     }
+    // Filter out non voting members
+    std::erase_if(_voters, [] (const server_address& s) { return !s.can_vote; });
 }
 
 void votes::register_vote(server_id from, bool granted) {
@@ -215,10 +223,10 @@ void votes::register_vote(server_id from, bool granted) {
     if (_previous && _previous->register_vote(from, granted)) {
         registered = true;
     }
-    // Should never receive a vote not requested, unless an RPC bug.
-    if (! registered) {
-        seastar::on_internal_error(logger,
-            format("Got a vote from unregistered server {} during election", from));
+    // We can get an outdated vote from a node that is now non-voting member.
+    // Such vote should be ignored.
+    if (!registered) {
+        logger.info("Got a vote from unregistered server {} during election", from);
     }
 }
 

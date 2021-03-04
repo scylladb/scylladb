@@ -42,6 +42,7 @@ struct term_tag stub {};
 
 struct server_address {
     raft::internal::tagged_id<raft::server_id_tag> id;
+    bool can_vote;
     bytes info;
 };
 

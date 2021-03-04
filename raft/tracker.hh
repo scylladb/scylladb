@@ -83,7 +83,9 @@ using progress = std::unordered_map<server_id, follower_progress>;
 class tracker: private progress {
     // Copy of this server's id
     server_id _my_id;
-    configuration _configuration;
+    std::unordered_set<server_id> _current_voters;
+    std::unordered_set<server_id> _previous_voters;
+
     // Not NULL if the leader is part of the current configuration.
     //
     // 4.2.2 Removing the current leader
@@ -107,7 +109,7 @@ public:
         auto it = this->progress::find(dst);
         return  it == this->progress::end() ? nullptr : &it->second;
     }
-    void set_configuration(configuration configuration, index_t next_idx);
+    void set_configuration(const configuration& configuration, index_t next_idx);
     // Return progress object for the current leader if it's
     // part of the current configuration.
     follower_progress* leader_progress() {
@@ -141,7 +143,9 @@ class election_tracker {
 public:
     election_tracker(const server_address_set& configuration) {
         for (const auto& a : configuration) {
-            _suffrage.emplace(a.id);
+            if (a.can_vote) {
+                _suffrage.emplace(a.id);
+            }
         }
     }
 
