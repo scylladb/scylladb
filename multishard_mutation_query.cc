@@ -774,14 +774,29 @@ future<std::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_tempera
         const dht::partition_range_vector& ranges,
         tracing::trace_state_ptr trace_state,
         db::timeout_clock::time_point timeout) {
-    if (cmd.slice.options.contains(query::partition_slice::option::reversed)) {
-        throw std::runtime_error("query_mutations_on_all_shards(): reverse range scans are not supported");
-    }
     return do_query_on_all_shards<mutation_query_result_builder>(db, s, cmd, ranges, std::move(trace_state), timeout,
             [s, &cmd] (query::result_memory_accounter&& accounter) {
         return mutation_query_result_builder(*s, cmd.slice, std::move(accounter));
     });
 }
+
+namespace {
+
+future<std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>> query_data_on_all_shards_in_reverse(
+        distributed<database>& db,
+        schema_ptr s,
+        const query::read_command& cmd,
+        const dht::partition_range_vector& ranges,
+        query::result_options opts,
+        tracing::trace_state_ptr trace_state,
+        db::timeout_clock::time_point timeout) {
+    auto [res, ct] = co_await query_mutations_on_all_shards(db, s, cmd, ranges, std::move(trace_state), timeout);
+    co_return std::tuple(
+            make_foreign(make_lw_shared<query::result>(to_data_query_result(*res, s, cmd.slice, cmd.get_row_limit(), cmd.partition_limit, opts))),
+            ct);
+}
+
+} // anonymous namespace
 
 future<std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>> query_data_on_all_shards(
         distributed<database>& db,
@@ -792,7 +807,12 @@ future<std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>>
         tracing::trace_state_ptr trace_state,
         db::timeout_clock::time_point timeout) {
     if (cmd.slice.options.contains(query::partition_slice::option::reversed)) {
-        throw std::runtime_error("query_data_on_all_shards(): reverse range scans are not supported");
+        // FIXME: #1413
+        // It is not worth it to add support for the current inefficient way of
+        // doing reverse queries to the multishard reader, so just use the
+        // reconcilable result result format and reverse individual partitions
+        // when converting to the final query::result.
+        return query_data_on_all_shards_in_reverse(db, std::move(s), cmd, ranges, opts, std::move(trace_state), timeout);
     }
     return do_query_on_all_shards<data_query_result_builder>(db, s, cmd, ranges, std::move(trace_state), timeout,
             [s, &cmd, opts] (query::result_memory_accounter&& accounter) {
