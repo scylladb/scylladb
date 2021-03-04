@@ -498,14 +498,14 @@ system_distributed_keyspace::cdc_get_versioned_streams(db_clock::time_point not_
     }
 
     // `time` is the table's clustering key, so the results are already sorted
-    auto first = std::lower_bound(timestamps.begin(), timestamps.end(), not_older_than);
+    auto first = std::lower_bound(timestamps.rbegin(), timestamps.rend(), not_older_than);
     // need first gen _intersecting_ the timestamp.
-    if (first != timestamps.begin()) {
+    if (first != timestamps.rbegin()) {
         --first;
     }
 
     std::map<db_clock::time_point, cdc::streams_version> result;
-    co_await max_concurrent_for_each(first, timestamps.end(), 5, [this, &ctx, &result] (db_clock::time_point ts) -> future<> {
+    co_await max_concurrent_for_each(first, timestamps.rend(), 5, [this, &ctx, &result] (db_clock::time_point ts) -> future<> {
         auto streams_cql = co_await _qp.execute_internal(
                 format("SELECT streams FROM {}.{} WHERE time = ?", NAME, CDC_DESC_V2),
                 quorum_if_many(ctx.num_token_owners),
@@ -523,6 +523,18 @@ system_distributed_keyspace::cdc_get_versioned_streams(db_clock::time_point not_
     });
 
     co_return result;
+}
+
+future<db_clock::time_point> 
+system_distributed_keyspace::cdc_current_generation_timestamp(context ctx) {
+    auto timestamp_cql = co_await _qp.execute_internal(
+            format("SELECT time FROM {}.{} WHERE key = ? limit 1", NAME, CDC_TIMESTAMPS),
+            quorum_if_many(ctx.num_token_owners),
+            internal_distributed_query_state(),
+            { CDC_TIMESTAMPS_KEY },
+            false);
+
+    co_return timestamp_cql->one().get_as<db_clock::time_point>("time");
 }
 
 future<std::vector<db_clock::time_point>>
