@@ -86,7 +86,22 @@ def print_cw(f):
 ###
 ### AST Nodes
 ###
-class BasicType:
+class ASTBase:
+    name: str
+    ns_context: list[str]
+
+    def __init__(self, name):
+        self.name = name
+
+    @staticmethod
+    def combine_ns(namespaces):
+        return "::".join(namespaces)
+
+    def ns_qualified_name(self):
+        return self.name if not self.ns_context \
+            else self.combine_ns(self.ns_context) + "::" + self.name
+
+class BasicType(ASTBase):
     '''AST node that represents terminal grammar nodes for the non-template
     types, defined either inside or outside the IDL.
 
@@ -98,7 +113,7 @@ class BasicType:
     with a `const` specifier, an additional `serializer<const T>` specialization
     is generated for it.'''
     def __init__(self, name, is_const=False):
-        self.name = name
+        super().__init__(name)
         self.is_const = is_const
 
     def __str__(self):
@@ -108,7 +123,7 @@ class BasicType:
         return self.__str__()
 
 
-class TemplateType:
+class TemplateType(ASTBase):
     '''AST node representing template types, for example: `std::vector<T>`.
 
     These can appear either in the definition of the class fields or as a part of
@@ -116,7 +131,7 @@ class TemplateType:
 
     Such types can either be defined inside or outside the IDL.'''
     def __init__(self, name, template_parameters):
-        self.name = name
+        super().__init__(name)
         # FIXME: dirty hack to translate non-type template parameters (numbers) to BasicType objects
         self.template_parameters = [
             t if isinstance(t, BasicType) or isinstance(t, TemplateType) else BasicType(name=str(t)) \
@@ -129,12 +144,12 @@ class TemplateType:
         return self.__str__()
 
 
-class EnumValue:
+class EnumValue(ASTBase):
     '''AST node representing a single `name=value` enumerator in the enum.
 
     Initializer part is optional, the same as in C++ enums.'''
     def __init__(self, name, initializer=None):
-        self.name = name
+        super().__init__(name)
         self.initializer = initializer
 
     def __str__(self):
@@ -144,13 +159,13 @@ class EnumValue:
         return self.__str__()
 
 
-class EnumDef:
+class EnumDef(ASTBase):
     '''AST node representing C++ `enum class` construct.
 
     Consists of individual initializers in form of `EnumValue` objects.
     Should have an underlying type explicitly specified.'''
     def __init__(self, name, underlying_type, members):
-        self.name = name
+        super().__init__(name)
         self.underlying_type = underlying_type
         self.members = members
 
@@ -161,7 +176,7 @@ class EnumDef:
         return self.__str__()
 
     def serializer_write_impl(self, cout):
-        name = ns_qualified_name(self.name, self.ns_context)
+        name = self.ns_qualified_name()
 
         fprintln(cout, f"""
 {self.template_declaration}
@@ -172,7 +187,7 @@ void serializer<{name}>::write(Output& buf, const {name}& v) {{
 
 
     def serializer_read_impl(self, cout):
-        name = ns_qualified_name(self.name, self.ns_context)
+        name = self.ns_qualified_name()
 
         fprintln(cout, f"""
 {self.template_declaration}
@@ -182,7 +197,7 @@ template<typename Input>
 }}""")
 
 
-class Attribute:
+class Attribute(ASTBase):
     ''' AST node for representing class and field attributes.
 
     The following attributes are supported:
@@ -191,7 +206,7 @@ class Attribute:
      - `[[version id]] field attribute, marks that a field is available starting
        from a specific version.'''
     def __init__(self, name):
-        self.name = name
+        super().__init__(name)
 
     def __str__(self):
         return f"[[{self.name}]]"
@@ -200,13 +215,13 @@ class Attribute:
         return self.__str__()
 
 
-class DataClassMember:
+class DataClassMember(ASTBase):
     '''AST node representing a data field in a class.
 
     Can optionally have a version attribute and a default value specified.'''
     def __init__(self, type, name, attribute=None, default_value=None):
+        super().__init__(name)
         self.type = type
-        self.name = name
         self.attribute = attribute
         self.default_value = default_value
 
@@ -217,7 +232,7 @@ class DataClassMember:
         return self.__str__()
 
 
-class FunctionClassMember:
+class FunctionClassMember(ASTBase):
     '''AST node representing getter function in a class definition.
 
     Can optionally have a version attribute and a default value specified.
@@ -225,8 +240,8 @@ class FunctionClassMember:
     Getter functions should be used whenever it's needed to access private
     members of a class.'''
     def __init__(self, type, name, attribute=None, default_value=None):
+        super().__init__(name)
         self.type = type
-        self.name = name
         self.attribute = attribute
         self.default_value = default_value
 
@@ -237,12 +252,12 @@ class FunctionClassMember:
         return self.__str__()
 
 
-class ClassTemplateParam:
+class ClassTemplateParam(ASTBase):
     '''AST node representing a single template argument of a class template
     definition, such as `typename T`.'''
     def __init__(self, typename, name):
+        super().__init__(name)
         self.typename = typename
-        self.name = name
 
     def __str__(self):
         return f"<ClassTemplateParam(typename={self.typename}, name={self.name})>"
@@ -251,7 +266,7 @@ class ClassTemplateParam:
         return self.__str__()
 
 
-class ClassDef:
+class ClassDef(ASTBase):
     '''AST node representing a class definition. Can use either `class` or `struct`
     keyword to define a class.
 
@@ -267,7 +282,7 @@ class ClassDef:
     Classes are also can be declared as template classes, much the same as in C++.
     In this case the template declaration syntax mimics C++ templates.'''
     def __init__(self, name, members, final, stub, attribute, template_params):
-        self.name = name
+        super().__init__(name)
         self.members = members
         self.final = final
         self.stub = stub
@@ -281,7 +296,7 @@ class ClassDef:
         return self.__str__()
 
     def serializer_write_impl(self, cout):
-        name = ns_qualified_name(self.name, self.ns_context)
+        name = self.ns_qualified_name()
         full_name = name + self.template_param_names_str
 
         fprintln(cout, f"""
@@ -299,7 +314,7 @@ void serializer<{full_name}>::write(Output& buf, const {full_name}& obj) {{""")
 
 
     def serializer_read_impl(self, cout):
-        name = ns_qualified_name(self.name, self.ns_context)
+        name = self.ns_qualified_name()
 
         fprintln(cout, f"""
 {self.template_declaration}
@@ -341,7 +356,7 @@ template <typename Input>
 
 
     def serializer_skip_impl(self, cout):
-        name = ns_qualified_name(self.name, self.ns_context)
+        name = self.ns_qualified_name()
 
         fprintln(cout, f"""
 {self.template_declaration}
@@ -358,7 +373,7 @@ void serializer<{name}{self.template_param_names_str}>::skip(Input& buf) {{
         fprintln(cout, """ });\n}""")
 
 
-class NamespaceDef:
+class NamespaceDef(ASTBase):
     '''AST node representing a namespace scope.
 
     It has the same meaning as in C++ or other languages with similar facilities.
@@ -368,7 +383,7 @@ class NamespaceDef:
      - class definitions
      - enum definitions'''
     def __init__(self, name, members):
-        self.name = name
+        super().__init__(name)
         self.members = members
 
     def __str__(self):
@@ -527,10 +542,6 @@ def parse_file(file_name):
     return rt.parseFile(file_name, parseAll=True)
 
 
-def combine_ns(namespaces):
-    return "::".join(namespaces)
-
-
 def declare_methods(hout, name, template_param=""):
     fprintln(hout, f"""
 template <{template_param}>
@@ -554,10 +565,6 @@ struct serializer<const {name}> : public serializer<{name}>
 """)
 
 
-def ns_qualified_name(name, namespaces):
-    return name if not namespaces else combine_ns(namespaces) + "::" + name
-
-
 def template_params_str(template_params):
     if not template_params:
         return ""
@@ -566,7 +573,7 @@ def template_params_str(template_params):
 
 def handle_enum(enum, hout, cout):
     temp_def = template_params_str(enum.parent_template_params)
-    name = ns_qualified_name(enum.name, enum.ns_context)
+    name = enum.ns_qualified_name()
     declare_methods(hout, name, temp_def)
 
     enum.serializer_write_impl(cout)
@@ -1250,7 +1257,7 @@ def handle_class(cls, hout, cout):
     template_params = template_params_str(template_param_list + cls.parent_template_params)
     template_class_param = "<" + ",".join(map(lambda a: a.name, template_param_list)) + ">" if is_tpl else ""
 
-    name = ns_qualified_name(cls.name, cls.ns_context)
+    name = cls.ns_qualified_name()
     full_name = name + template_class_param
     # Handle sub-types: can be either enum or class
     for member in cls.members:
