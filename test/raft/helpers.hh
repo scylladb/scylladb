@@ -85,3 +85,54 @@ public:
         return *progress;
     }
 };
+
+using raft_routing_map = std::unordered_map<raft::server_id, raft::fsm*>;
+
+void
+communicate_impl(std::function<bool()> stop_pred, raft_routing_map& map) {
+    // To enable tracing, set:
+    // global_logger_registry().set_all_loggers_level(seastar::log_level::trace);
+    //
+    bool has_traffic;
+    do {
+        has_traffic = false;
+        for (auto e : map) {
+            raft::fsm& from = *e.second;
+            bool has_output;
+            for (auto output = from.get_output(); !output.empty(); output = from.get_output()) {
+                if (stop_pred()) {
+                    return;
+                }
+                for (auto&& m : output.messages) {
+                    has_traffic = true;
+                    auto it = map.find(m.first);
+                    if (it == map.end()) {
+                        // The node is not available, drop the message
+                        continue;
+                    }
+                    raft::fsm& to = *(it->second);
+                    std::visit([&from, &to](auto&& m) { to.step(from.id(), std::move(m)); },
+                        std::move(m.second));
+                    if (stop_pred()) {
+                        return;
+                    }
+                }
+            }
+        }
+    } while (has_traffic);
+}
+
+template <typename... Args>
+void communicate_until(std::function<bool()> stop_pred, Args&&... args) {
+    raft_routing_map map;
+    auto add_map_entry = [&map](raft::fsm& fsm) -> void {
+        map.emplace(fsm.id(), &fsm);
+    };
+    (add_map_entry(args), ...);
+    communicate_impl(stop_pred, map);
+}
+
+template <typename... Args>
+void communicate(Args&&... args) {
+    return communicate_until([]() { return false; }, std::forward<Args>(args)...);
+}
