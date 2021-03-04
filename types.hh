@@ -50,6 +50,7 @@
 #include "utils/fragmented_temporary_buffer.hh"
 #include "utils/exceptions.hh"
 #include "utils/managed_bytes.hh"
+#include "utils/bit_cast.hh"
 
 class tuple_type_impl;
 class big_decimal;
@@ -1165,7 +1166,7 @@ T read_simple(bytes_view& v) {
     }
     auto p = v.begin();
     v.remove_prefix(sizeof(T));
-    return net::ntoh(*reinterpret_cast<const net::packed<T>*>(p));
+    return net::ntoh(read_unaligned<T>(p));
 }
 
 template<typename T>
@@ -1174,7 +1175,7 @@ T read_simple_exactly(bytes_view v) {
         throw_with_backtrace<marshal_exception>(format("read_simple_exactly - size mismatch (expected {:d}, got {:d})", sizeof(T), v.size()));
     }
     auto p = v.begin();
-    return net::ntoh(*reinterpret_cast<const net::packed<T>*>(p));
+    return net::ntoh(read_unaligned<T>(p));
 }
 
 inline

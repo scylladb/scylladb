@@ -79,6 +79,7 @@
 #include "tracing/traced_file.hh"
 #include "kl/reader.hh"
 #include "mx/reader.hh"
+#include "utils/bit_cast.hh"
 
 thread_local disk_error_signal_type sstable_read_error;
 thread_local disk_error_signal_type sstable_write_error;
@@ -215,54 +216,35 @@ static void check_buf_size(temporary_buffer<char>& buf, size_t expected) {
     }
 }
 
-// Base parser, parses an integer type
 template <typename T>
-typename std::enable_if_t<std::is_integral<T>::value, void>
-read_integer(temporary_buffer<char>& buf, T& i) {
-    auto *nr = reinterpret_cast<const net::packed<T> *>(buf.get());
-    i = net::ntoh(*nr);
-}
-
-template <typename T>
-typename std::enable_if_t<std::is_integral<T>::value, future<>>
-parse(const schema&, sstable_version_types v, random_access_reader& in, T& i) {
+requires std::is_integral_v<T>
+future<> parse(const schema&, sstable_version_types v, random_access_reader& in, T& i) {
     return in.read_exactly(sizeof(T)).then([&i] (auto buf) {
         check_buf_size(buf, sizeof(T));
-
-        read_integer(buf, i);
+        i = net::ntoh(read_unaligned<T>(buf.get()));
         return make_ready_future<>();
     });
 }
 
-
 template <typename T>
-typename std::enable_if_t<std::is_enum<T>::value, future<>>
-parse(const schema& s, sstable_version_types v, random_access_reader& in, T& i) {
-    return parse(s, v, in, reinterpret_cast<typename std::underlying_type<T>::type&>(i));
+requires std::is_enum_v<T>
+future<> parse(const schema& s, sstable_version_types v, random_access_reader& in, T& i) {
+    return in.read_exactly(sizeof(T)).then([&i] (auto buf) {
+        check_buf_size(buf, sizeof(T));
+        i = static_cast<T>(net::ntoh(read_unaligned<std::underlying_type_t<T>>(buf.get())));
+        return make_ready_future<>();
+    });
 }
 
 future<> parse(const schema& s, sstable_version_types v, random_access_reader& in, bool& i) {
     return parse(s, v, in, reinterpret_cast<uint8_t&>(i));
 }
 
-template <typename To, typename From>
-static inline To convert(From f) {
-    static_assert(sizeof(To) == sizeof(From), "Sizes must match");
-    union {
-        To to;
-        From from;
-    } conv;
-
-    conv.from = f;
-    return conv.to;
-}
-
 future<> parse(const schema&, sstable_version_types, random_access_reader& in, double& d) {
     return in.read_exactly(sizeof(double)).then([&d] (auto buf) {
         check_buf_size(buf, sizeof(double));
-
-        auto *nr = reinterpret_cast<const net::packed<unsigned long> *>(buf.get());
-        d = convert<double>(net::ntoh(*nr));
+        unsigned long nr = read_unaligned<unsigned long>(buf.get());
+        d = bit_cast<double>(net::ntoh(nr));
         return make_ready_future<>();
     });
 }
@@ -372,9 +354,8 @@ parse(const schema&, sstable_version_types, random_access_reader& in, Size& len,
         return in.read_exactly(now * sizeof(Members)).then([&arr, len, now, done] (auto buf) {
             check_buf_size(buf, now * sizeof(Members));
 
-            auto *nr = reinterpret_cast<const net::packed<Members> *>(buf.get());
             for (size_t i = 0; i < now; ++i) {
-                arr.push_back(net::ntoh(nr[i]));
+                arr.push_back(net::ntoh(read_unaligned<Members>(buf.get() + i * sizeof(Members))));
             }
             *done += now;
             return make_ready_future<stop_iteration>(*done == len ? stop_iteration::yes : stop_iteration::no);
@@ -693,10 +674,9 @@ future<> parse(const schema& s, sstable_version_types v, random_access_reader& i
             check_buf_size(buf, length * type_size);
 
             return do_with(size_t(0), std::move(buf), [&eh, length] (size_t& j, auto& buf) mutable {
-                auto *nr = reinterpret_cast<const net::packed<uint64_t> *>(buf.get());
-                return do_until([&eh, length] { return eh.buckets.size() == length; }, [nr, &eh, &j] () mutable {
-                    auto offset = net::ntoh(nr[j++]);
-                    auto bucket = net::ntoh(nr[j++]);
+                return do_until([&eh, length] { return eh.buckets.size() == length; }, [&eh, &j, &buf] () mutable {
+                    auto offset = net::ntoh(read_unaligned<uint64_t>(buf.get() + (j++) * sizeof(uint64_t)));
+                    auto bucket = net::ntoh(read_unaligned<uint64_t>(buf.get() + (j++) * sizeof(uint64_t)));
                     if (eh.buckets.size() > 0) {
                         eh.bucket_offsets.push_back(offset);
                     }
@@ -714,14 +694,14 @@ void write(sstable_version_types v, file_writer& out, const utils::estimated_his
 
     write(v, out, len);
     struct element {
-        uint64_t offsets;
-        uint64_t buckets;
+        int64_t offsets;
+        int64_t buckets;
     };
     std::vector<element> elements;
     elements.reserve(eh.buckets.size());
 
-    auto *offsets_nr = reinterpret_cast<const net::packed<uint64_t> *>(eh.bucket_offsets.data());
-    auto *buckets_nr = reinterpret_cast<const net::packed<uint64_t> *>(eh.buckets.data());
+    const int64_t* offsets_nr = eh.bucket_offsets.data();
+    const int64_t* buckets_nr = eh.buckets.data();
     for (size_t i = 0; i < eh.buckets.size(); i++) {
         auto offsets = net::hton(offsets_nr[i == 0 ? 0 : i - 1]);
         auto buckets = net::hton(buckets_nr[i]);
@@ -813,9 +793,8 @@ future<> parse(const schema& s, sstable_version_types v, random_access_reader& i
             return do_until(eoarr, [&in, &c, &len, &offsets] () {
                 auto now = std::min(len - c.offsets.size(), 100000 / sizeof(uint64_t));
                 return in.read_exactly(now * sizeof(uint64_t)).then([&offsets, now] (auto buf) {
-                    uint64_t value;
                     for (size_t i = 0; i < now; ++i) {
-                        std::copy_n(buf.get() + i * sizeof(uint64_t), sizeof(uint64_t), reinterpret_cast<char*>(&value));
+                        uint64_t value = read_unaligned<uint64_t>(buf.get() + i * sizeof(uint64_t));
                         offsets.push_back(net::ntoh(value));
                     }
                 });

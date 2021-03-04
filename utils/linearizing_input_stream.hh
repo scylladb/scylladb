@@ -27,6 +27,7 @@
 #include <seastar/util/backtrace.hh>
 
 #include "utils/fragment_range.hh"
+#include "utils/bit_cast.hh"
 
 namespace utils {
 
@@ -112,7 +113,7 @@ public:
     requires std::is_trivial_v<Type>
     Type read_trivial() {
         auto [bv, linearized] = do_read(sizeof(Type));
-        auto ret = net::ntoh(*reinterpret_cast<const net::packed<Type>*>(bv.begin()));
+        auto ret = net::ntoh(::read_unaligned<net::packed<Type>>(bv.begin()));
         if (linearized) {
             _linearized_values.pop_back();
         }

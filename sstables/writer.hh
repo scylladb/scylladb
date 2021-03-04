@@ -31,6 +31,7 @@
 #include "version.hh"
 #include "counters.hh"
 #include "service/storage_service.hh"
+#include "utils/bit_cast.hh"
 
 namespace sstables {
 
@@ -262,10 +263,8 @@ template <typename T, typename W>
 requires Writer<W>
 inline typename std::enable_if_t<std::is_integral<T>::value, void>
 write(sstable_version_types v, W& out, T i) {
-    auto *nr = reinterpret_cast<const net::packed<T> *>(&i);
-    i = net::hton(*nr);
-    auto p = reinterpret_cast<const char*>(&i);
-    out.write(p, sizeof(T));
+    i = net::hton(i);
+    out.write(reinterpret_cast<const char*>(&i), sizeof(T));
 }
 
 template <typename T, typename W>
@@ -283,10 +282,8 @@ inline void write(sstable_version_types v, W& out, bool i) {
 }
 
 inline void write(sstable_version_types v, file_writer& out, double d) {
-    auto *nr = reinterpret_cast<const net::packed<unsigned long> *>(&d);
-    auto tmp = net::hton(*nr);
-    auto p = reinterpret_cast<const char*>(&tmp);
-    out.write(p, sizeof(unsigned long));
+    unsigned long tmp = net::hton(bit_cast<unsigned long>(d));
+    out.write(reinterpret_cast<const char*>(&tmp), sizeof(unsigned long));
 }
 
 
