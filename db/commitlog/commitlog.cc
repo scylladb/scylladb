@@ -1499,7 +1499,7 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
         });
     }
 
-    if (max_disk_size != 0 && totals.total_size_on_disk >= max_disk_size) {
+    if (!cfg.allow_going_over_size_limit && max_disk_size != 0 && totals.total_size_on_disk >= max_disk_size) {
         clogger.debug("Disk usage ({} MB) exceeds maximum ({} MB) - allocation will wait...", totals.total_size_on_disk/(1024*1024), max_disk_size/(1024*1024));
         auto f = cfg.reuse_segments ? _recycled_segments.not_empty() :  _disk_deletions.get_shared_future();
         return f.then([this] {
@@ -1746,7 +1746,7 @@ future<> db::commitlog::segment_manager::delete_segments(std::vector<sstring> fi
         return f.finally([&] {
             // We allow reuse of the segment if the current disk size is less than shard max.
             auto usage = totals.total_size_on_disk;
-            if (!_shutdown && cfg.reuse_segments) {
+            if (!_shutdown && cfg.reuse_segments && usage <= max_disk_size) {
                 descriptor d(next_id(), "Recycled-" + cfg.fname_prefix);
                 auto dst = this->filename(d);
 
