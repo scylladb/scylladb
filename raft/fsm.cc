@@ -161,6 +161,10 @@ void fsm::become_follower(server_id leader) {
 }
 
 void fsm::become_candidate() {
+    // When starting a campain we need to reset current leader otherwise
+    // disruptive server prevention will stall an election if quorum of nodes
+    // start election together since each one will ignore vote requests from others
+    _current_leader = {};
     _state = candidate{};
     _tracker = std::nullopt;
     _log_limiter_semaphore = std::nullopt;
