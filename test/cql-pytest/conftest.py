@@ -64,6 +64,19 @@ def cql(request):
     )
     return cluster.connect()
 
+# A function-scoped autouse=True fixture allows us to test after every test
+# that the CQL connection is still alive - and if not report the test which
+# crashed Scylla and stop running any more tests.
+@pytest.fixture(scope="function", autouse=True)
+def cql_test_connection(cql, request):
+    yield
+    try:
+        # We want to run a do-nothing CQL command. "use system" is the
+        # closest to do-nothing I could find...
+        cql.execute("use system")
+    except:
+        pytest.exit(f"Scylla appears to have crashed in test {request.node.parent.name}::{request.node.name}")
+
 # "test_keyspace" fixture: Creates and returns a temporary keyspace to be
 # used in tests that need a keyspace. The keyspace is created with RF=1,
 # and automatically deleted at the end. We use scope="session" so that all
