@@ -127,6 +127,36 @@ BOOST_AUTO_TEST_CASE(test_votes) {
     votes.register_vote(id4.id, true);
     votes.register_vote(id5.id, true);
     BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::LOST);
+    // Basic voting test with tree voters and one no-voter
+    votes = raft::votes(raft::configuration({id1, id2, id3, {id4.id, false}}));
+    votes.register_vote(id1.id, true);
+    votes.register_vote(id2.id, true);
+    BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::WON);
+    // Basic test that non-voting votes are ignored
+    votes = raft::votes(raft::configuration({id1, id2, id3, {id4.id, false}}));
+    votes.register_vote(id1.id, true);
+    votes.register_vote(id4.id, true);
+    BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::UNKNOWN);
+    votes.register_vote(id3.id, true);
+    BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::WON);
+    // Joint configuration with non voting members
+    votes = raft::votes(raft::configuration({id1}, {id2, id3, {id4.id, false}}));
+    BOOST_CHECK_EQUAL(votes.voters().size(), 3);
+    BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::UNKNOWN);
+    votes.register_vote(id2.id, true);
+    votes.register_vote(id3.id, true);
+    votes.register_vote(id4.id, true);
+    BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::UNKNOWN);
+    votes.register_vote(id1.id, true);
+    BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::WON);
+    // Same node is voting in one config and non voting in another
+    votes = raft::votes(raft::configuration({id1, id4}, {id2, id3, {id4.id, false}}));
+    votes.register_vote(id2.id, true);
+    votes.register_vote(id1.id, true);
+    votes.register_vote(id4.id, true);
+    BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::UNKNOWN);
+    votes.register_vote(id3.id, true);
+    BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::WON);
 }
 
 BOOST_AUTO_TEST_CASE(test_tracker) {
@@ -224,6 +254,27 @@ BOOST_AUTO_TEST_CASE(test_tracker) {
     BOOST_CHECK_EQUAL(tracker.committed(index_t{17}), index_t{18});
     pr(id1)->accepted(index_t{20});
     BOOST_CHECK_EQUAL(tracker.committed(index_t{18}), index_t{19});
+
+    // Check that non voting member is not counted for the quorum in simple config
+    cfg.enter_joint({id1, id2, {id3.id, false}});
+    cfg.leave_joint();
+    tracker.set_configuration(cfg, index_t{1});
+    pr(id1)->accepted(index_t{30});
+    pr(id2)->accepted(index_t{25});
+    pr(id3)->accepted(index_t{30});
+    BOOST_CHECK_EQUAL(tracker.committed(index_t{0}), index_t{25});
+
+    // Check that non voting member is not counted for the quorum in joint config
+    cfg.enter_joint({id4, id5});
+    tracker.set_configuration(cfg, index_t{1});
+    pr(id4)->accepted(index_t{30});
+    pr(id5)->accepted(index_t{30});
+    BOOST_CHECK_EQUAL(tracker.committed(index_t{0}), index_t{25});
+
+    // Check the case where the same node is in both config but different voting rights
+    cfg.leave_joint();
+    cfg.enter_joint({id1, id2, {id5.id, false}});
+    BOOST_CHECK_EQUAL(tracker.committed(index_t{0}), index_t{25});
 }
 
 BOOST_AUTO_TEST_CASE(test_log_last_conf_idx) {
