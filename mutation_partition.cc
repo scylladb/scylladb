@@ -1170,8 +1170,8 @@ row::apply(const column_definition& column, atomic_cell_or_collection&& value, c
 template<typename Func>
 void row::consume_with(Func&& func) {
     _cells.weed([func, this] (column_id id, cell_and_hash& cah) {
-        _size--;
         func(id, cah);
+        _size--;
         return true;
     });
 }
