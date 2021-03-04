@@ -28,8 +28,6 @@
 #include "seastar/core/scattered_message.hh"
 #include "redis/exceptions.hh"
 
-using namespace seastar;
-
 namespace redis {
 
 class redis_message final {
@@ -40,40 +38,40 @@ public:
     redis_message& operator=(const redis_message&) = delete;
     redis_message(redis_message&& o) noexcept : _message(std::move(o._message)) {}
     redis_message(lw_shared_ptr<scattered_message<char>> m) noexcept : _message(m) {}
-    static future<redis_message> ok() {
+    static seastar::future<redis_message> ok() {
         auto m = make_lw_shared<scattered_message<char>> ();
         m->append_static("+OK\r\n");
         return make_ready_future<redis_message>(m);
     }
-    static future<redis_message> pong() {
+    static seastar::future<redis_message> pong() {
         auto m = make_lw_shared<scattered_message<char>> ();
         m->append_static("+PONG\r\n");
         return make_ready_future<redis_message>(m);
     }
-    static future<redis_message> zero() {
+    static seastar::future<redis_message> zero() {
         auto m = make_lw_shared<scattered_message<char>> ();
         m->append_static(":0\r\n");
         return make_ready_future<redis_message>(m);
     }
-    static future<redis_message> one() {
+    static seastar::future<redis_message> one() {
         auto m = make_lw_shared<scattered_message<char>> ();
         m->append_static(":1\r\n");
         return make_ready_future<redis_message>(m);
     }
-    static future<redis_message> nil() {
+    static seastar::future<redis_message> nil() {
         auto m = make_lw_shared<scattered_message<char>> ();
         m->append_static("$-1\r\n");
         return make_ready_future<redis_message>(m);
     }
-    static future<redis_message> err() {
+    static seastar::future<redis_message> err() {
         return zero();
     }
-    static future<redis_message> number(size_t n) {
+    static seastar::future<redis_message> number(size_t n) {
         auto m = make_lw_shared<scattered_message<char>> ();
         m->append(sprint(":%zu\r\n", n));
         return make_ready_future<redis_message>(m);
     }
-    static future<redis_message> make_list_result(std::map<bytes, bytes>& list_result) {
+    static seastar::future<redis_message> make_list_result(std::map<bytes, bytes>& list_result) {
         auto m = make_lw_shared<scattered_message<char>> ();
         m->append(sprint("*%u\r\n", list_result.size() * 2));
         for (auto r : list_result) {
@@ -82,25 +80,25 @@ public:
         }
         return make_ready_future<redis_message>(m);
     }
-    static future<redis_message> make_strings_result(bytes result) {
+    static seastar::future<redis_message> make_strings_result(bytes result) {
         auto m = make_lw_shared<scattered_message<char>> ();
         write_bytes(m, result);
         return make_ready_future<redis_message>(m);
     }
-    static future<redis_message> unknown(const bytes& name) {
+    static seastar::future<redis_message> unknown(const bytes& name) {
         return from_exception(make_message("-ERR unknown command '%s'\r\n", to_sstring(name)));
     }
-    static future<redis_message> exception(const sstring& em) {
+    static seastar::future<redis_message> exception(const sstring& em) {
         auto m = make_lw_shared<scattered_message<char>> ();
         m->append(make_message("-ERR %s\r\n", em));
         return make_ready_future<redis_message>(m);
     }
-    static future<redis_message> exception(const redis_exception& e) {
+    static seastar::future<redis_message> exception(const redis_exception& e) {
         return exception(e.what_message());
     }
     inline lw_shared_ptr<scattered_message<char>> message() { return _message; }
 private:
-    static future<redis_message> from_exception(sstring data) {
+    static seastar::future<redis_message> from_exception(sstring data) {
          auto m = make_lw_shared<scattered_message<char>> (); 
          m->append(data);
          return make_ready_future<redis_message>(m);

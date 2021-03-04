@@ -23,9 +23,7 @@
 
 #include "seastar/core/future.hh"
 #include "seastar/core/shared_ptr.hh"
-#include "seastar/core/distributed.hh"
-
-using namespace seastar;
+#include "seastar/core/sharded.hh"
 
 namespace db {
 class config;
@@ -50,13 +48,13 @@ class storage_proxy;
 class database;
 
 class redis_service {
-    distributed<redis::query_processor> _query_processor;
-    shared_ptr<distributed<redis_transport::redis_server>> _server;
+    seastar::sharded<redis::query_processor> _query_processor;
+    seastar::shared_ptr<seastar::sharded<redis_transport::redis_server>> _server;
 private:
-    future<> listen(distributed<auth::service>& auth_service, db::config& cfg);
+    seastar::future<> listen(seastar::sharded<auth::service>& auth_service, db::config& cfg);
 public:
     redis_service();
     ~redis_service();
-    future<> init(distributed<service::storage_proxy>& proxy, distributed<database>& db, distributed<auth::service>& auth_service, db::config& cfg);
-    future<> stop();
+    seastar::future<> init(seastar::sharded<service::storage_proxy>& proxy, seastar::sharded<database>& db, seastar::sharded<auth::service>& auth_service, db::config& cfg);
+    seastar::future<> stop();
 };

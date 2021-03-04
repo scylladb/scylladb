@@ -27,8 +27,6 @@
 #include "gc_clock.hh"
 #include "query-request.hh"
 
-using namespace seastar;
-
 namespace service {
 class storage_proxy;
 class client_state;
@@ -50,11 +48,11 @@ struct strings_result {
     bool has_ttl() { return _ttl.has_value(); }
 };
 
-future<lw_shared_ptr<strings_result>> read_strings(service::storage_proxy&, const redis_options&, const bytes&, service_permit);
-future<lw_shared_ptr<strings_result>> query_strings(service::storage_proxy&, const redis_options&, const bytes&, service_permit, schema_ptr, query::partition_slice);
+seastar::future<seastar::lw_shared_ptr<strings_result>> read_strings(service::storage_proxy&, const redis_options&, const bytes&, service_permit);
+seastar::future<seastar::lw_shared_ptr<strings_result>> query_strings(service::storage_proxy&, const redis_options&, const bytes&, service_permit, schema_ptr, query::partition_slice);
 
-future<lw_shared_ptr<std::map<bytes, bytes>>> read_hashes(service::storage_proxy&, const redis_options&, const bytes&, service_permit);
-future<lw_shared_ptr<std::map<bytes, bytes>>> read_hashes(service::storage_proxy&, const redis_options&, const bytes&, const bytes&, service_permit);
-future<lw_shared_ptr<std::map<bytes, bytes>>> query_hashes(service::storage_proxy&, const redis_options&, const bytes&, service_permit, schema_ptr, query::partition_slice);
+seastar::future<seastar::lw_shared_ptr<std::map<bytes, bytes>>> read_hashes(service::storage_proxy&, const redis_options&, const bytes&, service_permit);
+seastar::future<seastar::lw_shared_ptr<std::map<bytes, bytes>>> read_hashes(service::storage_proxy&, const redis_options&, const bytes&, const bytes&, service_permit);
+seastar::future<seastar::lw_shared_ptr<std::map<bytes, bytes>>> query_hashes(service::storage_proxy&, const redis_options&, const bytes&, service_permit, schema_ptr, query::partition_slice);
 
 }

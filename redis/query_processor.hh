@@ -21,13 +21,10 @@
 
 #pragma once
 
-#include <seastar/core/distributed.hh>
+#include <seastar/core/sharded.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/gate.hh>
 #include <seastar/core/metrics_registration.hh>
-
-
-using namespace seastar;
 
 class database;
 class service_permit;
@@ -45,15 +42,15 @@ class redis_message;
 
 class query_processor {
     service::storage_proxy& _proxy;
-    distributed<database>& _db;
+    seastar::sharded<database>& _db;
     seastar::metrics::metric_groups _metrics;
     seastar::gate _pending_command_gate;
 public:
-    query_processor(service::storage_proxy& proxy, distributed<database>& db);
+    query_processor(service::storage_proxy& proxy, seastar::sharded<database>& db);
 
     ~query_processor();
 
-    distributed<database>& db() {
+    seastar::sharded<database>& db() {
         return _db;
     }
 
@@ -61,10 +58,10 @@ public:
         return _proxy;
     }
 
-    future<redis_message> process(request&&, redis_options&, service_permit);
+    seastar::future<redis_message> process(request&&, redis_options&, service_permit);
 
-    future<> start();
-    future<> stop();
+    seastar::future<> start();
+    seastar::future<> stop();
 };
 
 }
