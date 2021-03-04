@@ -57,10 +57,14 @@ class raft_services : public seastar::peering_sharded_service<raft_services> {
     // Shard-local failure detector instance shared among all raft groups
     shared_ptr<raft_gossip_failure_detector> _fd;
 
+    using ticker_type = seastar::timer<lowres_clock>;
     struct servers_value_type {
         std::unique_ptr<raft::server> server;
         raft_rpc* rpc;
+        ticker_type ticker;
     };
+    // Raft servers along with the corresponding timers to tick each instance.
+    // Currently ticking every 100ms.
     std::unordered_map<raft::server_id, servers_value_type> _servers;
     // inet_address:es for remote raft servers known to us
     std::unordered_map<raft::server_id, gms::inet_address> _server_addresses;
@@ -79,7 +83,8 @@ public:
     seastar::future<> uninit();
 
     raft_rpc& get_rpc(raft::server_id id);
-    // Start raft server instance and store in the map of raft servers.
+    // Start raft server instance, store in the map of raft servers and
+    // initialize the associated timer to tick the server.
     future<> add_server(raft::server_id id, create_server_result srv);
     unsigned shard_for_group(uint64_t group_id) const;
 

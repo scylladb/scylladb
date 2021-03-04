@@ -159,13 +159,19 @@ raft_services::create_server_result raft_services::create_schema_server(raft::se
 
 future<> raft_services::add_server(raft::server_id id, create_server_result srv) {
     auto srv_ref = std::ref(*srv.first);
+    // initialize the corresponding timer to tick the raft server instance
+    ticker_type t([srv_ref] {
+        srv_ref.get().tick();
+    });
     auto [it, inserted] = _servers.emplace(std::pair(id, servers_value_type{
         .server = std::move(srv.first),
         .rpc = srv.second,
+        .ticker = std::move(t)
     }));
     if (!inserted) {
         on_internal_error(rslog, format("Attempt to add the second instance of raft server with the same id={}", id));
     }
+    ticker_type& ticker_from_map = it->second.ticker;
     try {
         // start the server instance prior to arming the ticker timer.
         // By the time the tick() is executed the server should already be initialized.
@@ -176,6 +182,11 @@ future<> raft_services::add_server(raft::server_id id, create_server_result srv)
         _servers.erase(it);
         on_internal_error(rslog, std::current_exception());
     }
+
+    using namespace std::chrono_literals;
+    // TODO: should be configurable.
+    constexpr ticker_type::duration tick_interval = 100ms;
+    ticker_from_map.arm_periodic(tick_interval);
 }
 
 unsigned raft_services::shard_for_group(uint64_t group_id) const {
