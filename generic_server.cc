@@ -120,7 +120,7 @@ future<> server::do_accepts(int which, bool keepalive, socket_address server_add
                     _logger.info("exception while advertising new connection: {}", std::current_exception());
                 }
                 // Block while monitoring for lifetime/errors.
-                return static_pointer_cast<generic_server::connection>(conn)->process().finally([this, conn] {
+                return conn->process().finally([this, conn] {
                     return unadvertise_connection(conn);
                 }).handle_exception([this] (std::exception_ptr ep) {
                     if (is_broken_pipe_or_connection_reset(ep)) {
