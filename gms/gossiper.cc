@@ -1774,6 +1774,8 @@ future<> gossiper::do_shadow_round(std::unordered_set<gms::inet_address> nodes, 
                 }).handle_exception_type([node, &fall_back_to_syn_msg] (seastar::rpc::unknown_verb_error&) {
                     logger.warn("Node {} does not support get_endpoint_states verb", node);
                     fall_back_to_syn_msg = true;
+                }).handle_exception_type([node, &nodes_down] (seastar::rpc::timeout_error&) {
+                    logger.warn("The get_endpoint_states verb to node {} was timeout", node);
                 }).handle_exception_type([node, &nodes_down] (seastar::rpc::closed_error&) {
                     nodes_down++;
                     logger.warn("Node {} is down for get_endpoint_states verb", node);
