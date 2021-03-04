@@ -21,6 +21,8 @@
 
 #pragma once
 
+#include "log.hh"
+
 #include "seastarx.hh"
 
 #include <seastar/core/future.hh>
@@ -61,6 +63,7 @@ class server {
     friend class connection;
 
 protected:
+    logging::logger& _logger;
     bool _stopping = false;
     promise<> _all_connections_stopped;
     uint64_t _current_connections = 0;
@@ -68,11 +71,22 @@ protected:
     uint64_t _total_connections = 0;
     future<> _stopped = _all_connections_stopped.get_future();
     boost::intrusive::list<connection> _connections_list;
+    std::vector<server_socket> _listeners;
 
 public:
+    server(logging::logger& logger);
+
     virtual ~server();
 
+    future<> do_accepts(int which, bool keepalive, socket_address server_addr);
+
 protected:
+    virtual seastar::shared_ptr<connection> make_connection(socket_address server_addr, connected_socket&& fd, socket_address addr) = 0;
+
+    virtual future<> advertise_new_connection(shared_ptr<connection> conn);
+
+    virtual future<> unadvertise_connection(shared_ptr<connection> conn);
+
     void maybe_idle();
 };
 

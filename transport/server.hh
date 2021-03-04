@@ -148,7 +148,6 @@ private:
 
     static constexpr cql_protocol_version_type current_version = cql_serialization_format::latest_version;
 
-    std::vector<server_socket> _listeners;
     distributed<cql3::query_processor>& _query_processor;
     cql_server_config _config;
     size_t _max_request_size;
@@ -166,7 +165,6 @@ public:
             cql_server_config config,
             qos::service_level_controller& sl_controller);
     future<> listen(socket_address addr, std::shared_ptr<seastar::tls::credentials_builder> = {}, bool is_shard_aware = false, bool keepalive = false);
-    future<> do_accepts(int which, bool keepalive, socket_address server_addr);
     future<> stop();
 public:
     using response = cql_transport::response;
@@ -268,8 +266,9 @@ private:
     friend class type_codec;
 
 private:
-    future<> advertise_new_connection(shared_ptr<connection> conn);
-    future<> unadvertise_connection(shared_ptr<connection> conn);
+    shared_ptr<generic_server::connection> make_connection(socket_address server_addr, connected_socket&& fd, socket_address addr);
+    future<> advertise_new_connection(shared_ptr<generic_server::connection> conn) override;
+    future<> unadvertise_connection(shared_ptr<generic_server::connection> conn) override;
 
     const ::timeout_config& timeout_config() { return _config.timeout_config; }
 };

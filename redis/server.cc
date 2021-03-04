@@ -46,7 +46,8 @@ namespace redis_transport {
 static logging::logger logging("redis_server");
 
 redis_server::redis_server(seastar::sharded<service::storage_proxy>& proxy, seastar::sharded<redis::query_processor>& qp, auth::service& auth_service, redis_server_config config)
-    : _proxy(proxy)
+    : server(logging)
+    , _proxy(proxy)
     , _query_processor(qp)
     , _config(config)
     , _max_request_size(config._max_request_size)
@@ -104,38 +105,18 @@ future<> redis_server::listen(socket_address addr, std::shared_ptr<seastar::tls:
     });
 }
 
-future<> redis_server::do_accepts(int which, bool keepalive, socket_address server_addr) {
-    return repeat([this, which, keepalive, server_addr] {
-        ++_connections_being_accepted;
-        return _listeners[which].accept().then_wrapped([this, which, keepalive, server_addr] (future<accept_result> f_cs_sa) mutable {
-            --_connections_being_accepted;
-            if (_stopping) {
-                f_cs_sa.ignore_ready_future();
-                maybe_idle();
-                return stop_iteration::yes;
-            }
-            auto cs_sa = f_cs_sa.get0();
-            auto fd = std::move(cs_sa.connection);
-            auto addr = std::move(cs_sa.remote_address);
-            fd.set_nodelay(true);
-            fd.set_keepalive(keepalive);
-            auto conn = make_shared<connection>(*this, server_addr, std::move(fd), std::move(addr));
-            ++_stats._connects;
-            ++_stats._connections;
-            (void)static_pointer_cast<generic_server::connection>(conn)->process().then_wrapped([this, conn] (future<> f) {
-                --_stats._connections;
-                try {
-                    f.get();
-                } catch (...) {
-                    logging.debug("connection error: {}", std::current_exception());
-                }
-            });
-            return stop_iteration::no;
-        }).handle_exception([] (auto ep) {
-            logging.debug("accept failed: {}", ep);
-            return stop_iteration::no;
-        });
-    });
+shared_ptr<generic_server::connection>
+redis_server::make_connection(socket_address server_addr, connected_socket&& fd, socket_address addr) {
+    auto conn = make_shared<connection>(*this, server_addr, std::move(fd), std::move(addr));
+    ++_stats._connects;
+    ++_stats._connections;
+    return conn;
+}
+
+future<>
+redis_server::unadvertise_connection(shared_ptr<generic_server::connection> raw_conn) {
+    --_stats._connections;
+    return make_ready_future<>();
 }
 
 future<redis_server::result> redis_server::connection::process_request_one(redis::request&& request, redis::redis_options& opts, service_permit permit) {
