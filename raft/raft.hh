@@ -146,8 +146,9 @@ struct configuration {
 
     // Enter a joint configuration given a new set of servers.
     void enter_joint(server_address_set c_new) {
-        // @todo: validate that c_old & c_new are compatible.
-        assert(c_new.size());
+        if (c_new.empty()) {
+            throw std::invalid_argument("Attempt to transition to an empty Raft configuration");
+        }
         previous = std::move(current);
         current = std::move(c_new);
     }
