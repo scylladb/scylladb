@@ -61,7 +61,6 @@ struct redis_server_config {
 };
 
 class redis_server : public generic_server::server {
-    std::vector<server_socket> _listeners;
     seastar::sharded<service::storage_proxy>& _proxy;
     seastar::sharded<redis::query_processor>& _query_processor;
     redis_server_config _config;
@@ -75,7 +74,6 @@ class redis_server : public generic_server::server {
 public:
     redis_server(seastar::sharded<service::storage_proxy>& proxy, seastar::sharded<redis::query_processor>& qp, auth::service& auth_service, redis_server_config config);
     future<> listen(socket_address addr, std::shared_ptr<seastar::tls::credentials_builder> = {}, bool keepalive = false);
-    future<> do_accepts(int which, bool keepalive, socket_address server_addr);
     future<> stop();
 
     struct result {
@@ -114,6 +112,9 @@ private:
         future<result> process_request_one(redis::request&& request, redis::redis_options&, service_permit permit);
         future<result> process_request_internal();
     };
+
+    shared_ptr<generic_server::connection> make_connection(socket_address server_addr, connected_socket&& fd, socket_address addr);
+    future<> unadvertise_connection(shared_ptr<generic_server::connection> conn) override;
 
     const ::timeout_config& timeout_config() { return _config._timeout_config; }
 };

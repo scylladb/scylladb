@@ -135,16 +135,6 @@ sstring to_string(const event::schema_change::target_type t) {
     assert(false && "unreachable");
 }
 
-static bool is_broken_pipe_or_connection_reset(std::exception_ptr ep) {
-    try {
-        std::rethrow_exception(ep);
-    } catch (const std::system_error& e) {
-        return e.code().category() == std::system_category()
-            && (e.code().value() == EPIPE || e.code().value() == ECONNRESET);
-    } catch (...) {}
-    return false;
-}
-
 event::event_type parse_event_type(const sstring& value)
 {
     if (value == "TOPOLOGY_CHANGE") {
@@ -160,7 +150,8 @@ event::event_type parse_event_type(const sstring& value)
 
 cql_server::cql_server(distributed<cql3::query_processor>& qp, auth::service& auth_service,
         service::migration_notifier& mn, database& db, cql_server_config config)
-    : _query_processor(qp)
+    : server(clogger)
+    , _query_processor(qp)
     , _config(config)
     , _max_request_size(config.max_request_size)
     , _max_concurrent_requests(db.get_config().max_concurrent_requests_per_shard)
@@ -298,67 +289,34 @@ cql_server::listen(socket_address addr, std::shared_ptr<seastar::tls::credential
     });
 }
 
-future<>
-cql_server::do_accepts(int which, bool keepalive, socket_address server_addr) {
-    return repeat([this, which, keepalive, server_addr] {
-        ++_connections_being_accepted;
-        return _listeners[which].accept().then_wrapped([this, which, keepalive, server_addr] (future<accept_result> f_cs_sa) mutable {
-            --_connections_being_accepted;
-            if (_stopping) {
-                f_cs_sa.ignore_ready_future();
-                maybe_idle();
-                return stop_iteration::yes;
-            }
-            auto cs_sa = f_cs_sa.get0();
-            auto fd = std::move(cs_sa.connection);
-            auto addr = std::move(cs_sa.remote_address);
-            fd.set_nodelay(true);
-            fd.set_keepalive(keepalive);
-            auto conn = make_shared<connection>(*this, server_addr, std::move(fd), std::move(addr));
-            ++_stats.connects;
-            ++_stats.connections;
-            // Move the processing into the background.
-            (void)futurize_invoke([this, conn] {
-                return advertise_new_connection(conn); // Notify any listeners about new connection.
-            }).then_wrapped([this, conn] (future<> f) {
-                try {
-                    f.get();
-                } catch (...) {
-                    clogger.info("exception while advertising new connection: {}", std::current_exception());
-                }
-                // Block while monitoring for lifetime/errors.
-                return static_pointer_cast<generic_server::connection>(conn)->process().finally([this, conn] {
-                    --_stats.connections;
-                    return unadvertise_connection(conn);
-                }).handle_exception([] (std::exception_ptr ep) {
-                    if (is_broken_pipe_or_connection_reset(ep)) {
-                        // expected if another side closes a connection or we're shutting down
-                        return;
-                    }
-                    clogger.info("exception while processing connection: {}", ep);
-                });
-            });
-            return stop_iteration::no;
-        }).handle_exception([] (auto ep) {
-            clogger.debug("accept failed: {}", ep);
-            return stop_iteration::no;
-        });
-    });
+shared_ptr<generic_server::connection>
+cql_server::make_connection(socket_address server_addr, connected_socket&& fd, socket_address addr) {
+    auto conn = make_shared<connection>(*this, server_addr, std::move(fd), std::move(addr));
+    ++_stats.connects;
+    ++_stats.connections;
+    return conn;
 }
 
 future<>
-cql_server::advertise_new_connection(shared_ptr<connection> conn) {
-    client_data cd = conn->make_client_data();
-    clogger.trace("Advertising new connection from CQL client {}:{}", cd.ip, cd.port);
-    return notify_new_client(std::move(cd));
+cql_server::advertise_new_connection(shared_ptr<generic_server::connection> raw_conn) {
+    if (auto conn = dynamic_pointer_cast<connection>(raw_conn)) {
+        client_data cd = conn->make_client_data();
+        clogger.trace("Advertising new connection from CQL client {}:{}", cd.ip, cd.port);
+        return notify_new_client(std::move(cd));
+    }
+    return make_ready_future<>();
 }
 
 future<>
-cql_server::unadvertise_connection(shared_ptr<connection> conn) {
-    const auto ip = conn->get_client_state().get_client_address().addr();
-    const auto port = conn->get_client_state().get_client_port();
-    clogger.trace("Advertising disconnection of CQL client {}:{}", ip, port);
-    return notify_disconnected_client(ip, port, client_type::cql);
+cql_server::unadvertise_connection(shared_ptr<generic_server::connection> raw_conn) {
+    --_stats.connections;
+    if (auto conn = dynamic_pointer_cast<connection>(raw_conn)) {
+        const auto ip = conn->get_client_state().get_client_address().addr();
+        const auto port = conn->get_client_state().get_client_port();
+        clogger.trace("Advertising disconnection of CQL client {}:{}", ip, port);
+        return notify_disconnected_client(ip, port, client_type::cql);
+    }
+    return make_ready_future<>();
 }
 
 unsigned
