@@ -53,15 +53,15 @@ maximum_token() noexcept {
     return max_token;
 }
 
-int tri_compare(const token& t1, const token& t2) {
+std::strong_ordering tri_compare(const token& t1, const token& t2) {
     if (t1._kind < t2._kind) {
-            return -1;
+            return std::strong_ordering::less;
     } else if (t1._kind > t2._kind) {
-            return 1;
+            return std::strong_ordering::greater;
     } else if (t1._kind == token_kind::key) {
         return tri_compare_raw(long_token(t1), long_token(t2));
     }
-    return 0;
+    return std::strong_ordering::equal;
 }
 
 std::ostream& operator<<(std::ostream& out, const token& t) {
