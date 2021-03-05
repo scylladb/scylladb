@@ -22,10 +22,12 @@
 #pragma once
 
 #include <vector>
+#include <compare>
 #include <boost/test/unit_test.hpp>
 #include <seastar/util/variant_utils.hh>
 #include <variant>
 #include "test/lib/log.hh"
+#include "utils/collection-concepts.hh"
 
 template<typename Comparator, typename... T>
 class total_order_check {
@@ -33,12 +35,14 @@ class total_order_check {
     std::vector<std::vector<element>> _data;
     Comparator _cmp;
 private:
-    static int sgn(int x) {
+    static int sgn(std::strong_ordering x) {
         return (x > 0) - (x < 0);
     }
-
+    static int sgn(int x) {
+        return sgn(x <=> 0);
+    }
     // All in left are expect to compare with all in right with expected_order result
-    void check_order(const std::vector<element>& left, const std::vector<element>& right, int order) {
+    void check_order(const std::vector<element>& left, const std::vector<element>& right, int_or_strong_ordering auto order) {
         for (const element& left_e : left) {
             for (const element& right_e : right) {
                 seastar::visit(left_e, [&] (auto&& a) {
