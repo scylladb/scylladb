@@ -1264,16 +1264,15 @@ void paxos_response_handler::prune(utils::UUID ballot) {
             tracing::trace(tr_state, "prune: send prune of {} to {}", ballot, peer);
             return _proxy->_messaging.send_paxos_prune(peer, _timeout, _schema->version(), _key.key(), ballot, tracing::make_trace_info(tr_state));
         }
-    }).finally([h = shared_from_this()] {
+    }).then_wrapped([h = shared_from_this()] (future<> f) {
         h->_proxy->get_stats().cas_now_pruning--;
-    }).handle_exception([id = _id] (std::exception_ptr eptr) {
-       try {
-           std::rethrow_exception(eptr);
-       } catch(rpc::closed_error&) {
-       // ignore errors due to closed connection
-       } catch(...) {
-           paxos::paxos_state::logger.error("CAS[{}] prune: failed {}", id, std::current_exception());
-       }
+        try {
+            f.get();
+        } catch (rpc::closed_error&) {
+            // ignore errors due to closed connection
+        } catch (...) {
+            paxos::paxos_state::logger.error("CAS[{}] prune: failed {}", h->_id, std::current_exception());
+        }
     });
 }
 
