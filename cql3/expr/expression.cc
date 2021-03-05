@@ -635,7 +635,7 @@ bool is_satisfied_by(
 std::vector<bytes_opt> first_multicolumn_bound(
         const expression& restr, const query_options& options, statements::bound bnd) {
     auto found = find_atom(restr, [bnd] (const binary_operator& oper) {
-        return matches(oper.op, bnd) && std::holds_alternative<std::vector<column_value>>(oper.lhs);
+        return matches(oper.op, bnd) && is_multi_column(oper);
     });
     if (found) {
         return static_pointer_cast<tuples::value>(found->rhs->bind(options))->get_elements();

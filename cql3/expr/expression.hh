@@ -223,6 +223,10 @@ inline bool is_compare(oper_t op) {
     }
 }
 
+inline bool is_multi_column(const binary_operator& op) {
+    return holds_alternative<std::vector<column_value>>(op.lhs);
+}
+
 inline bool has_token(const expression& e) {
     return find_atom(e, [] (const binary_operator& o) { return std::holds_alternative<token>(o.lhs); });
 }
