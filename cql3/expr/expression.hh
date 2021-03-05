@@ -73,11 +73,18 @@ struct token {};
 
 enum class oper_t { EQ, NEQ, LT, LTE, GTE, GT, IN, CONTAINS, CONTAINS_KEY, IS_NOT, LIKE };
 
+/// Describes the nature of clustering-key comparisons.  Useful for implementing SCYLLA_CLUSTERING_BOUND.
+enum class comparison_order : char {
+    cql, ///< CQL order. (a,b)>(1,1) is equivalent to a>1 OR (a=1 AND b>1).
+    clustering, ///< Table's clustering order. (a,b)>(1,1) means any row past (1,1) in storage.
+};
+
 /// Operator restriction: LHS op RHS.
 struct binary_operator {
     std::variant<column_value, std::vector<column_value>, token> lhs;
     oper_t op;
     ::shared_ptr<term> rhs;
+    comparison_order order = comparison_order::cql;
 };
 
 /// A conjunction of restrictions.
@@ -221,6 +228,14 @@ inline bool has_token(const expression& e) {
 
 inline bool has_slice_or_needs_filtering(const expression& e) {
     return find_atom(e, [] (const binary_operator& o) { return is_slice(o.op) || needs_filtering(o.op); });
+}
+
+inline bool is_clustering_order(const binary_operator& op) {
+    return op.order == comparison_order::clustering;
+}
+
+inline auto find_clustering_order(const expression& e) {
+    return find_atom(e, is_clustering_order);
 }
 
 /// True iff binary_operator involves a collection.

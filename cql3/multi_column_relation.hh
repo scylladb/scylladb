@@ -60,7 +60,7 @@ namespace cql3 {
  */
 class multi_column_relation final : public relation {
 public:
-    using mode = restrictions::multi_column_restriction::slice::mode;
+    using mode = expr::comparison_order;
 private:
     std::vector<shared_ptr<column_identifier::raw>> _entities;
     shared_ptr<term::multi_column_raw> _values_or_marker;
@@ -70,7 +70,7 @@ private:
 public:
     multi_column_relation(std::vector<shared_ptr<column_identifier::raw>> entities,
         expr::oper_t relation_type, shared_ptr<term::multi_column_raw> values_or_marker,
-        std::vector<shared_ptr<term::multi_column_raw>> in_values, shared_ptr<tuples::in_raw> in_marker, mode m = mode::normal)
+        std::vector<shared_ptr<term::multi_column_raw>> in_values, shared_ptr<tuples::in_raw> in_marker, mode m = mode::cql)
         : relation(relation_type)
         , _entities(std::move(entities))
         , _values_or_marker(std::move(values_or_marker))
@@ -82,7 +82,7 @@ public:
     static shared_ptr<multi_column_relation> create_multi_column_relation(
         std::vector<shared_ptr<column_identifier::raw>> entities, expr::oper_t relation_type,
         shared_ptr<term::multi_column_raw> values_or_marker, std::vector<shared_ptr<term::multi_column_raw>> in_values,
-        shared_ptr<tuples::in_raw> in_marker, mode m = mode::normal) {
+        shared_ptr<tuples::in_raw> in_marker, mode m = mode::cql) {
         return ::make_shared<multi_column_relation>(std::move(entities), relation_type, std::move(values_or_marker),
             std::move(in_values), std::move(in_marker), m);
     }
@@ -107,7 +107,7 @@ public:
     static shared_ptr<multi_column_relation> create_scylla_clustering_bound_non_in_relation(std::vector<shared_ptr<column_identifier::raw>> entities,
                                                                     expr::oper_t relation_type, shared_ptr<term::multi_column_raw> values_or_marker) {
         assert(relation_type != expr::oper_t::IN);
-        return create_multi_column_relation(std::move(entities), relation_type, std::move(values_or_marker), {}, {}, mode::scylla_clustering_bound);
+        return create_multi_column_relation(std::move(entities), relation_type, std::move(values_or_marker), {}, {}, mode::clustering);
     }
 
     /**
