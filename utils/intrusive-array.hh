@@ -271,7 +271,7 @@ public:
         int i = 0;
 
         do {
-            int x = cmp(_data[i].object, val);
+            auto x = cmp(_data[i].object, val);
             if (x >= 0) {
                 match = (x == 0);
                 break;
