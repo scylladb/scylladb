@@ -998,6 +998,9 @@ operator<<(std::ostream& os, const mutation_partition::printer& p) {
         if (!row.marker().is_missing()) {
             os << indent << indent << indent << "marker: " << row.marker() << ",\n";
         }
+        if (row.deleted_at()) {
+            os << indent << indent << indent << "tombstone: " << row.deleted_at() << ",\n";
+        }
 
         position_in_partition pip(re.position());
         if (pip.get_clustering_key_prefix()) {
