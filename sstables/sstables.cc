@@ -2257,7 +2257,7 @@ const dht::decorated_key& sstable::get_last_decorated_key() const {
     return *_last;
 }
 
-int sstable::compare_by_first_key(const sstable& other) const {
+std::strong_ordering sstable::compare_by_first_key(const sstable& other) const {
     return get_first_decorated_key().tri_compare(*_schema, other.get_first_decorated_key());
 }
 

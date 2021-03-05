@@ -43,7 +43,7 @@ public:
     const ::schema& schema() const {
         return *_schema;
     }
-    friend int tri_compare(const compatible_ring_position_view& x, const compatible_ring_position_view& y) {
+    friend std::strong_ordering tri_compare(const compatible_ring_position_view& x, const compatible_ring_position_view& y) {
         return dht::ring_position_tri_compare(*x._schema, *x._rpv, *y._rpv);
     }
     friend bool operator<(const compatible_ring_position_view& x, const compatible_ring_position_view& y) {
@@ -83,7 +83,7 @@ public:
     const ::schema& schema() const {
         return *_schema;
     }
-    friend int tri_compare(const compatible_ring_position& x, const compatible_ring_position& y) {
+    friend std::strong_ordering tri_compare(const compatible_ring_position& x, const compatible_ring_position& y) {
         return dht::ring_position_tri_compare(*x._schema, *x._rp, *y._rp);
     }
     friend bool operator<(const compatible_ring_position& x, const compatible_ring_position& y) {
@@ -133,7 +133,7 @@ public:
         };
         return std::visit(rpv_accessor{}, *_crp_or_view);
     }
-    friend int tri_compare(const compatible_ring_position_or_view& x, const compatible_ring_position_or_view& y) {
+    friend std::strong_ordering tri_compare(const compatible_ring_position_or_view& x, const compatible_ring_position_or_view& y) {
         struct schema_accessor {
             const ::schema& operator()(const compatible_ring_position& crp) {
                 return crp.schema();

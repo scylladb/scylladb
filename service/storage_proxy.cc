@@ -2968,7 +2968,7 @@ class data_read_resolver : public abstract_read_resolver {
 
             bool operator()(const primary_key& a, const primary_key& b) const {
                 auto pk_result = a.partition.tri_compare(_schema, b.partition);
-                if (pk_result) {
+                if (pk_result != 0) {
                     return pk_result < 0;
                 }
                 return _ck_cmp(a, b);

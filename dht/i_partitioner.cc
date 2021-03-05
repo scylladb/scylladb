@@ -97,25 +97,25 @@ decorated_key::equal(const schema& s, const decorated_key& other) const {
     return false;
 }
 
-int
+std::strong_ordering
 decorated_key::tri_compare(const schema& s, const decorated_key& other) const {
     auto r = dht::tri_compare(_token, other._token);
     if (r != 0) {
-        return r < 0 ? -1 : 1;
+        return r;
     } else {
-        return _key.legacy_tri_compare(s, other._key);
+        return _key.legacy_tri_compare(s, other._key) <=> 0;
     }
 }
 
-int
+std::strong_ordering
 decorated_key::tri_compare(const schema& s, const ring_position& other) const {
     auto r = dht::tri_compare(_token, other.token());
     if (r != 0) {
-        return r < 0 ? -1 : 1;
+        return r;
     } else if (other.has_key()) {
-        return _key.legacy_tri_compare(s, *other.key());
+        return _key.legacy_tri_compare(s, *other.key()) <=> 0;
     }
-    return -other.relation_to_keys();
+    return 0 <=> other.relation_to_keys();
 }
 
 bool
@@ -279,7 +279,7 @@ split_range_to_single_shard(const schema& s, const partition_range& pr, shard_id
     });
 }
 
-int ring_position::tri_compare(const schema& s, const ring_position& o) const {
+std::strong_ordering ring_position::tri_compare(const schema& s, const ring_position& o) const {
     return ring_position_comparator(s)(*this, o);
 }
 
@@ -295,43 +295,43 @@ bool ring_position::less_compare(const schema& s, const ring_position& other) co
     return tri_compare(s, other) < 0;
 }
 
-int ring_position_tri_compare(const schema& s, ring_position_view lh, ring_position_view rh) {
+std::strong_ordering ring_position_tri_compare(const schema& s, ring_position_view lh, ring_position_view rh) {
     auto token_cmp = tri_compare(*lh._token, *rh._token);
     if (token_cmp != 0) {
-        return token_cmp < 0 ? -1 : 1;
+        return token_cmp;
     }
     if (lh._key && rh._key) {
         auto c = lh._key->legacy_tri_compare(s, *rh._key);
         if (c) {
-            return c;
+            return c <=> 0;
         }
-        return lh._weight - rh._weight;
+        return (lh._weight - rh._weight) <=> 0;
     }
     if (!lh._key && !rh._key) {
-        return lh._weight - rh._weight;
+        return lh._weight - rh._weight <=> 0;
     } else if (!lh._key) {
-        return lh._weight > 0 ? 1 : -1;
+        return lh._weight > 0 ? std::strong_ordering::greater : std::strong_ordering::less;
     } else {
-        return rh._weight > 0 ? -1 : 1;
+        return rh._weight > 0 ? std::strong_ordering::less : std::strong_ordering::greater;
     }
 }
 
-int ring_position_comparator_for_sstables::operator()(ring_position_view lh, sstables::decorated_key_view rh) const {
+std::strong_ordering ring_position_comparator_for_sstables::operator()(ring_position_view lh, sstables::decorated_key_view rh) const {
     auto token_cmp = tri_compare(*lh._token, rh.token());
     if (token_cmp != 0) {
-        return token_cmp < 0 ? -1 : 1;
+        return token_cmp;
     }
     if (lh._key) {
         auto rel = rh.key().tri_compare(s, *lh._key);
         if (rel) {
-            return -rel;
+            return 0 <=> rel;
         }
     }
-    return lh._weight;
+    return lh._weight <=> 0;
 }
 
-int ring_position_comparator_for_sstables::operator()(sstables::decorated_key_view a, ring_position_view b) const {
-    return -(*this)(b, a);
+std::strong_ordering ring_position_comparator_for_sstables::operator()(sstables::decorated_key_view a, ring_position_view b) const {
+    return 0 <=> (*this)(b, a);
 }
 
 dht::partition_range
