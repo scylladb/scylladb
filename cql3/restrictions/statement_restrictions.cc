@@ -288,6 +288,7 @@ void statement_restrictions::add_restriction(::shared_ptr<restriction> restricti
     } else {
         add_single_column_restriction(::static_pointer_cast<single_column_restriction>(restriction), for_view, allow_filtering);
     }
+    _where = _where.has_value() ? make_conjunction(std::move(*_where), restriction->expression) : restriction->expression;
 }
 
 void statement_restrictions::add_single_column_restriction(::shared_ptr<single_column_restriction> restriction, bool for_view, bool allow_filtering) {

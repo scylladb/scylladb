@@ -104,6 +104,8 @@ private:
 
     bool _has_queriable_regular_index = false, _has_queriable_pk_index = false, _has_queriable_ck_index = false;
 
+    std::optional<expr::expression> _where; ///< The entire WHERE clause.
+
 public:
     /**
      * Creates a new empty <code>StatementRestrictions</code>.
