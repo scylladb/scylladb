@@ -45,7 +45,7 @@ public:
             auto token = dht::token(k.token());
             auto rp = dht::ring_position(token, k.key().to_partition_key(s));
 
-            if (!rp_cmp(prev, rp)) {
+            if (rp_cmp(prev, rp) >= 0) {
                 BOOST_FAIL(format("Partitions have invalid order: {} >= {}", prev, rp));
             }
 
