@@ -1046,3 +1046,53 @@ BOOST_AUTO_TEST_CASE(test_empty_configuration) {
     BOOST_CHECK_EQUAL(leader.get_configuration().is_joint(), false);
 }
 
+BOOST_AUTO_TEST_CASE(test_confchange_a_to_b) {
+    // Test we can transition from a single-server configuration
+    // {A} to a single server configuration {B}
+
+    server_id A_id = id();
+
+    raft::log log(raft::snapshot{.idx = index_t{0}, .config = raft::configuration{A_id}});
+    auto A = create_follower(A_id, log);
+    election_timeout(A);
+    BOOST_CHECK(A.is_leader());
+    // Let's have a non-empty log at A
+    A.add_entry(log_entry::dummy{});
+
+    server_id B_id = id();
+
+    auto B = create_follower(B_id, log);
+
+    A.add_entry(raft::configuration({B_id}));
+
+    communicate(A, B);
+    BOOST_CHECK_EQUAL(A.get_current_term(), 1);
+    BOOST_CHECK(A.is_follower());
+    // A is not part of the current configuration
+    BOOST_CHECK(B.is_leader());
+    BOOST_CHECK_EQUAL(B.get_current_term(), 2);
+    BOOST_CHECK_EQUAL(B.get_configuration().is_joint(), false);
+    BOOST_CHECK_EQUAL(B.get_configuration().current.size(), 1);
+    BOOST_CHECK(B.get_configuration().current.contains(raft::server_address{B_id}));
+    // Let's try the same configuration change now, but let's
+    // restart the leader after persisting the joint
+    // configuration.
+    log = raft::log(raft::snapshot{.idx = B.log_last_idx(), .term = B.log_last_term(),
+        .config = B.get_configuration()});
+    // A somewhat awkward way to obtain B's log for restart
+    log.emplace_back(make_lw_shared<raft::log_entry>(B.add_entry(raft::configuration({A_id}))));
+    log.stable_to(log.last_idx());
+    raft::fsm B_1(B_id, B.get_current_term(), B_id, std::move(log), trivial_failure_detector, fsm_cfg);
+    BOOST_CHECK(B_1.is_follower());
+    election_timeout(B_1);
+    communicate(A, B_1);
+    BOOST_CHECK(B_1.is_follower());
+    election_timeout(A);
+    BOOST_CHECK(A.is_leader());
+    // B_1 must be quiet after an election timeout and doesn't
+    // disrupt the new configuration
+    election_timeout(B_1);
+    BOOST_CHECK(B_1.is_follower());
+    BOOST_CHECK_EQUAL(B_1.get_output().messages.size(), 0);
+}
+
