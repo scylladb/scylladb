@@ -105,6 +105,7 @@ private:
     bool _has_queriable_regular_index = false, _has_queriable_pk_index = false, _has_queriable_ck_index = false;
 
     std::optional<expr::expression> _where; ///< The entire WHERE clause.
+    std::vector<expr::expression> _clustering_prefix_restrictions; ///< Parts of _where defining the clustering slice.
 
 public:
     /**

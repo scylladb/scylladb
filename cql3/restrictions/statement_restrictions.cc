@@ -141,6 +141,79 @@ to_column_definition(const schema_ptr& schema, const ::shared_ptr<column_identif
 }
 #endif
 
+/// Extracts where_clause atoms with clustering-column LHS and copies them to a vector such that:
+/// 1. all elements must be simultaneously satisfied (as restrictions) for where_clause to be satisfied
+/// 2. each element is an atom or a conjunction of atoms
+/// 3. either all atoms (across all elements) are multi-column or they are all single-column
+/// 4. if single-column, then:
+///   4.1 all atoms from an element have the same LHS, which we call the element's LHS
+///   4.2 each element's LHS is different from any other element's LHS
+///   4.3 the list of each element's LHS, in order, forms a clustering-key prefix
+///   4.4 elements other than the last have only EQ or IN atoms
+///   4.5 the last element has only EQ, IN, or is_slice() atoms
+///
+/// These elements define the boundaries of any clustering slice that can possibly meet where_clause.
+///
+/// This vector can be calculated before binding expression markers, since LHS and operator are always known.
+static std::vector<expr::expression> extract_clustering_prefix_restrictions(
+        const expr::expression& where_clause, schema_ptr schema) {
+    using namespace expr;
+
+    /// Collects all clustering-column restrictions from an expression.  Presumes the expression only uses
+    /// conjunction to combine subexpressions.
+    struct visitor {
+        std::vector<expression> multi; ///< All multi-column restrictions.
+        /// All single-clustering-column restrictions, grouped by column.  Each value is either an atom or a
+        /// conjunction of atoms.
+        std::unordered_map<const column_definition*, expression> single;
+
+        void operator()(const conjunction& c) {
+            std::ranges::for_each(c.children, [this] (const expression& child) { std::visit(*this, child); });
+        }
+
+        void operator()(const binary_operator& b) {
+            if (std::holds_alternative<std::vector<column_value>>(b.lhs)) {
+                multi.push_back(b);
+            }
+            if (auto s = std::get_if<column_value>(&b.lhs)) {
+                if (s->col->is_clustering_key()) {
+                    const auto found = single.find(s->col);
+                    if (found == single.end()) {
+                        single[s->col] = b;
+                    } else {
+                        found->second = make_conjunction(std::move(found->second), b);
+                    }
+                }
+            }
+        }
+
+        void operator()(bool) {}
+    } v;
+    std::visit(v, where_clause);
+
+    if (!v.multi.empty()) {
+        return move(v.multi);
+    }
+
+    std::vector<expression> prefix;
+    for (const auto& col : schema->clustering_key_columns()) {
+        const auto found = v.single.find(&col);
+        if (found == v.single.end()) { // Any further restrictions are skipping the CK order.
+            break;
+        }
+        if (find_needs_filtering(found->second)) { // This column's restriction doesn't define a clear bound.
+            // TODO: if this is a conjunction of filtering and non-filtering atoms, we could split them and add the
+            // latter to the prefix.
+            break;
+        }
+        prefix.push_back(found->second);
+        if (has_slice(found->second)) {
+            break;
+        }
+    }
+    return prefix;
+}
+
 statement_restrictions::statement_restrictions(database& db,
         schema_ptr schema,
         statements::statement_type type,
@@ -186,6 +259,9 @@ statement_restrictions::statement_restrictions(database& db,
                 add_restriction(relation->to_restriction(db, schema, bound_names), for_view, allow_filtering);
             }
         }
+    }
+    if (_where.has_value()) {
+        _clustering_prefix_restrictions = extract_clustering_prefix_restrictions(*_where, _schema);
     }
     auto& cf = db.find_column_family(schema);
     auto& sim = cf.get_index_manager();
