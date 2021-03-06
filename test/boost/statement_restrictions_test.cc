@@ -126,7 +126,7 @@ SEASTAR_TEST_CASE(slice_one_column) {
         BOOST_CHECK_EQUAL(slice_parse("c='123'", e), std::vector{singular({T("123")})});
         BOOST_CHECK_EQUAL(slice_parse("c='a' and c='a'", e), std::vector{singular({T("a")})});
         BOOST_CHECK_EQUAL(slice_parse("c='a' and c='b'", e), query::clustering_row_ranges{});
-        BOOST_CHECK_EQUAL(slice_parse("c like '123'", e), std::vector{singular({})});
+        BOOST_CHECK_EQUAL(slice_parse("c like '123'", e), std::vector{open_ended});
 
         BOOST_CHECK_EQUAL(slice_parse("c in ('x','y','z')", e),
                           (std::vector{singular({T("x")}), singular({T("y")}), singular({T("z")})}));
@@ -153,7 +153,7 @@ SEASTAR_TEST_CASE(slice_two_columns) {
         BOOST_CHECK_EQUAL(slice_parse("c1=123", e), std::vector{singular({I(123)})});
         BOOST_CHECK_EQUAL(slice_parse("c1=123 and c2 like '321'", e), std::vector{singular({I(123)})});
         BOOST_CHECK_EQUAL(slice_parse("c1=123 and c1=123", e), std::vector{singular({I(123)})});
-        BOOST_CHECK_EQUAL(slice_parse("c2='abc'", e), std::vector{singular({})});
+        BOOST_CHECK_EQUAL(slice_parse("c2='abc'", e), std::vector{open_ended});
         BOOST_CHECK_EQUAL(slice_parse("c1=0 and c1=1 and c2='a'", e), query::clustering_row_ranges{});
         BOOST_CHECK_EQUAL(slice_parse("c1=0 and c2='a' and c1=0", e), std::vector{singular({I(0), T("a")})});
 
@@ -175,7 +175,7 @@ SEASTAR_TEST_CASE(slice_two_columns) {
         BOOST_CHECK_EQUAL(slice_parse("c1 in (1) and c1 in (2) and c2 in ('x')", e), query::clustering_row_ranges{});
         BOOST_CHECK_EQUAL(slice_parse("c1 in (1) and c2='x'", e), std::vector{singular({I(1), T("x")})});
         BOOST_CHECK_EQUAL(slice_parse("c1 in () and c2='x'", e), query::clustering_row_ranges{});
-        BOOST_CHECK_EQUAL(slice_parse("c2 in ('x','y')", e), std::vector{singular({})});
+        BOOST_CHECK_EQUAL(slice_parse("c2 in ('x','y')", e), std::vector{open_ended});
         BOOST_CHECK_EQUAL(slice_parse("c1 in (1,2,3)", e),
                           (std::vector{singular({I(1)}), singular({I(2)}), singular({I(3)})}));
         BOOST_CHECK_EQUAL(slice_parse("c1 in (1)", e), std::vector{singular({I(1)})});
