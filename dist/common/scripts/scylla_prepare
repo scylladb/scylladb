@@ -103,7 +103,9 @@ def verify_cpu():
 def configure_aio_slots():
     with open('/proc/sys/fs/aio-max-nr') as f:
         aio_max_nr = int(f.read())
-    required_aio_slots = cpu_count() * 11026
+    # (10000 + 1024 + 2) * ncpus for scylla,
+    # 65536 for other apps
+    required_aio_slots = cpu_count() * 11026 + 65536
     if aio_max_nr < required_aio_slots:
         with open('/proc/sys/fs/aio-max-nr', 'w') as f:
             f.write(str(required_aio_slots))
