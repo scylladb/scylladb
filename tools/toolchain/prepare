@@ -29,13 +29,13 @@ if [[ ! -f  /proc/sys/fs/binfmt_misc/qemu-aarch64 || ! -f /proc/sys/fs/binfmt_mi
     exit 1
 fi
 
-podman manifest create "$(<tools/toolchain/image)"
+buildah manifest create "$(<tools/toolchain/image)"
 
 
 for arch in "${archs[@]}"; do
     image_id_file="$(mktemp)"
     buildah bud --arch="$arch" --no-cache --pull -f tools/toolchain/Dockerfile --iidfile "$image_id_file"
-    podman manifest add --all "$(<tools/toolchain/image)" "containers-storage:$(<$image_id_file)"
+    buildah manifest add --all "$(<tools/toolchain/image)" "$(<$image_id_file)"
     rm "$image_id_file"
 done
 
