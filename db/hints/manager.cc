@@ -40,6 +40,7 @@
 #include "database.hh"
 #include "service_permit.hh"
 #include "utils/directories.hh"
+#include "utils/UUID_gen.hh"
 
 using namespace std::literals::chrono_literals;
 
