@@ -74,10 +74,14 @@ protected:
 public:
     server(logging::logger& logger);
 
+    future<> stop();
+
     future<> do_accepts(int which, bool keepalive, socket_address server_addr);
 
 protected:
     virtual seastar::shared_ptr<connection> make_connection(socket_address server_addr, connected_socket&& fd, socket_address addr) = 0;
+
+    virtual future<> on_stop();
 
     virtual future<> advertise_new_connection(shared_ptr<connection> conn);
 

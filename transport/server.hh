@@ -159,7 +159,6 @@ public:
             service::migration_notifier& mn, database& db,
             cql_server_config config);
     future<> listen(socket_address addr, std::shared_ptr<seastar::tls::credentials_builder> = {}, bool is_shard_aware = false, bool keepalive = false);
-    future<> stop();
 public:
     using response = cql_transport::response;
 private:
@@ -261,6 +260,7 @@ private:
 
 private:
     shared_ptr<generic_server::connection> make_connection(socket_address server_addr, connected_socket&& fd, socket_address addr);
+    future<> on_stop() override;
     future<> advertise_new_connection(shared_ptr<generic_server::connection> conn) override;
     future<> unadvertise_connection(shared_ptr<generic_server::connection> conn) override;
 
