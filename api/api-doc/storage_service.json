@@ -971,6 +971,14 @@
                      "paramType":"query"
                   },
                   {
+                     "name":"ignore_nodes",
+                     "description":"Which hosts are to ignore in this repair. Multiple hosts can be listed separated by commas.",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
                      "name":"trace",
                      "description":"If the value is the string 'true' with any capitalization, enable tracing of the repair.",
                      "required":false,

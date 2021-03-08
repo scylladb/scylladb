@@ -21,6 +21,7 @@
 
 #pragma once
 
+#include <unordered_set>
 #include <unordered_map>
 #include <exception>
 #include <absl/container/btree_set.h>
@@ -227,6 +228,7 @@ public:
     shard_id shard;
     std::vector<sstring> data_centers;
     std::vector<sstring> hosts;
+    std::unordered_set<gms::inet_address> ignore_nodes;
     streaming::stream_reason reason;
     std::unordered_map<dht::token_range, repair_neighbors> neighbors;
     uint64_t nr_ranges_finished = 0;
@@ -264,6 +266,7 @@ public:
             repair_uniq_id id_,
             const std::vector<sstring>& data_centers_,
             const std::vector<sstring>& hosts_,
+            const std::unordered_set<gms::inet_address>& ingore_nodes_,
             streaming::stream_reason reason_,
             std::optional<utils::UUID> ops_uuid);
     future<> do_streaming();
