@@ -44,12 +44,12 @@ constexpr std::string_view features::ROLES = "ROLES";
 constexpr std::string_view features::LA_SSTABLE = "LA_SSTABLE_FORMAT";
 constexpr std::string_view features::STREAM_WITH_RPC_STREAM = "STREAM_WITH_RPC_STREAM";
 constexpr std::string_view features::ROW_LEVEL_REPAIR = "ROW_LEVEL_REPAIR";
+constexpr std::string_view features::TRUNCATION_TABLE = "TRUNCATION_TABLE";
 
 // Up-to-date features
 constexpr std::string_view features::UDF = "UDF";
 constexpr std::string_view features::MC_SSTABLE = "MC_SSTABLE_FORMAT";
 constexpr std::string_view features::MD_SSTABLE = "MD_SSTABLE_FORMAT";
-constexpr std::string_view features::TRUNCATION_TABLE = "TRUNCATION_TABLE";
 constexpr std::string_view features::CORRECT_STATIC_COMPACT_IN_MC = "CORRECT_STATIC_COMPACT_IN_MC";
 constexpr std::string_view features::UNBOUNDED_RANGE_TOMBSTONES = "UNBOUNDED_RANGE_TOMBSTONES";
 constexpr std::string_view features::VIEW_VIRTUAL_COLUMNS = "VIEW_VIRTUAL_COLUMNS";
@@ -75,7 +75,6 @@ feature_service::feature_service(feature_config cfg) : _config(cfg)
         , _udf_feature(*this, features::UDF)
         , _mc_sstable_feature(*this, features::MC_SSTABLE)
         , _md_sstable_feature(*this, features::MD_SSTABLE)
-        , _truncation_table(*this, features::TRUNCATION_TABLE)
         , _correct_static_compact_in_mc(*this, features::CORRECT_STATIC_COMPACT_IN_MC)
         , _unbounded_range_tombstones_feature(*this, features::UNBOUNDED_RANGE_TOMBSTONES)
         , _view_virtual_columns(*this, features::VIEW_VIRTUAL_COLUMNS)
@@ -174,9 +173,9 @@ std::set<std::string_view> feature_service::known_feature_set() {
         gms::features::MATERIALIZED_VIEWS,
         gms::features::INDEXES,
         gms::features::ROW_LEVEL_REPAIR,
+        gms::features::TRUNCATION_TABLE,
 
         // Up-to-date features
-        gms::features::TRUNCATION_TABLE,
         gms::features::CORRECT_STATIC_COMPACT_IN_MC,
         gms::features::VIEW_VIRTUAL_COLUMNS,
         gms::features::DIGEST_INSENSITIVE_TO_EXPIRY,
@@ -260,7 +259,6 @@ void feature_service::enable(const std::set<std::string_view>& list) {
         std::ref(_udf_feature),
         std::ref(_mc_sstable_feature),
         std::ref(_md_sstable_feature),
-        std::ref(_truncation_table),
         std::ref(_correct_static_compact_in_mc),
         std::ref(_unbounded_range_tombstones_feature),
         std::ref(_view_virtual_columns),

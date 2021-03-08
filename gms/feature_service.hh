@@ -78,7 +78,6 @@ private:
     gms::feature _udf_feature;
     gms::feature _mc_sstable_feature;
     gms::feature _md_sstable_feature;
-    gms::feature _truncation_table;
     gms::feature _correct_static_compact_in_mc;
     gms::feature _unbounded_range_tombstones_feature;
     gms::feature _view_virtual_columns;
@@ -124,12 +123,6 @@ public:
         return _digest_for_null_values_feature;
     }
 
-    feature& cluster_supports_truncation_table() {
-        return _truncation_table;
-    }
-    const feature& cluster_supports_truncation_table() const {
-        return _truncation_table;
-    }
     const feature& cluster_supports_correct_static_compact_in_mc() const {
         return _correct_static_compact_in_mc;
     }
