@@ -342,19 +342,6 @@ system_distributed_keyspace::read_cdc_topology_description(
     });
 }
 
-future<>
-system_distributed_keyspace::expire_cdc_topology_description(
-        db_clock::time_point streams_ts,
-        db_clock::time_point expiration_time,
-        context ctx) {
-    return _qp.execute_internal(
-            format("UPDATE {}.{} SET expired = ? WHERE time = ?", NAME, CDC_TOPOLOGY_DESCRIPTION),
-            quorum_if_many(ctx.num_token_owners),
-            internal_distributed_query_state(),
-            { expiration_time, streams_ts },
-            false).discard_result();
-}
-
 static future<std::vector<mutation>> get_cdc_streams_descriptions_v2_mutation(
         const database& db,
         db_clock::time_point time,
@@ -418,19 +405,6 @@ system_distributed_keyspace::create_cdc_desc(
             quorum_if_many(ctx.num_token_owners),
             internal_distributed_query_state(),
             { CDC_TIMESTAMPS_KEY, time },
-            false).discard_result();
-}
-
-future<>
-system_distributed_keyspace::expire_cdc_desc(
-        db_clock::time_point streams_ts,
-        db_clock::time_point expiration_time,
-        context ctx) {
-    return _qp.execute_internal(
-            format("UPDATE {}.{} SET expired = ? WHERE time = ?", NAME, CDC_TIMESTAMPS),
-            quorum_if_many(ctx.num_token_owners),
-            internal_distributed_query_state(),
-            { expiration_time, streams_ts },
             false).discard_result();
 }
 

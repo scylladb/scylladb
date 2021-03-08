@@ -98,10 +98,8 @@ public:
 
     future<> insert_cdc_topology_description(db_clock::time_point streams_ts, const cdc::topology_description&, context);
     future<std::optional<cdc::topology_description>> read_cdc_topology_description(db_clock::time_point streams_ts, context);
-    future<> expire_cdc_topology_description(db_clock::time_point streams_ts, db_clock::time_point expiration_time, context);
 
     future<> create_cdc_desc(db_clock::time_point streams_ts, const cdc::topology_description&, context);
-    future<> expire_cdc_desc(db_clock::time_point streams_ts, db_clock::time_point expiration_time, context);
     future<bool> cdc_desc_exists(db_clock::time_point streams_ts, context);
 
     /* Get all generation timestamps appearing in the "cdc_streams_descriptions" table
