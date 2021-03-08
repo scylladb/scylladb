@@ -945,7 +945,7 @@ int main(int ac, char** av) {
             db.invoke_on_all([] (database& db) {
                 for (auto& x : db.get_column_families()) {
                     table& t = *(x.second);
-                    for (sstables::shared_sstable sst : *t.get_sstables()) {
+                    for (auto sstables = t.get_sstables(); sstables::shared_sstable sst : *sstables) {
                         if (sst->requires_view_building()) {
                             // FIXME: discarded future.
                             (void)view_update_generator.local().register_staging_sstable(std::move(sst), t.shared_from_this());

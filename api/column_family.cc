@@ -180,7 +180,7 @@ static future<json::json_return_type> get_cf_unleveled_sstables(http_context& ct
 
 static int64_t min_partition_size(column_family& cf) {
     int64_t res = INT64_MAX;
-    for (auto i: *cf.get_sstables() ) {
+    for (auto sstables = cf.get_sstables(); auto& i : *sstables) {
         res = std::min(res, i->get_stats_metadata().estimated_partition_size.min());
     }
     return (res == INT64_MAX) ? 0 : res;
@@ -188,7 +188,7 @@ static int64_t min_partition_size(column_family& cf) {
 
 static int64_t max_partition_size(column_family& cf) {
     int64_t res = 0;
-    for (auto i: *cf.get_sstables() ) {
+    for (auto sstables = cf.get_sstables(); auto& i : *sstables) {
         res = std::max(i->get_stats_metadata().estimated_partition_size.max(), res);
     }
     return res;
@@ -196,7 +196,7 @@ static int64_t max_partition_size(column_family& cf) {
 
 static integral_ratio_holder mean_partition_size(column_family& cf) {
     integral_ratio_holder res;
-    for (auto i: *cf.get_sstables() ) {
+    for (auto sstables = cf.get_sstables(); auto& i : *sstables) {
         auto c = i->get_stats_metadata().estimated_partition_size.count();
         res.sub += i->get_stats_metadata().estimated_partition_size.mean() * c;
         res.total += c;
@@ -274,7 +274,7 @@ public:
 
 static double get_compression_ratio(column_family& cf) {
     sum_ratio<double> result;
-    for (auto i : *cf.get_sstables()) {
+    for (auto sstables = cf.get_sstables(); auto& i : *sstables) {
         auto compression_ratio = i->get_compression_ratio();
         if (compression_ratio != sstables::metadata_collector::NO_COMPRESSION_RATIO) {
             result(compression_ratio);
@@ -424,7 +424,7 @@ void set_column_family(http_context& ctx, routes& r) {
     cf::get_estimated_row_size_histogram.set(r, [&ctx] (std::unique_ptr<request> req) {
         return map_reduce_cf(ctx, req->param["name"], utils::estimated_histogram(0), [](column_family& cf) {
             utils::estimated_histogram res(0);
-            for (auto i: *cf.get_sstables() ) {
+            for (auto sstables = cf.get_sstables(); auto& i : *sstables) {
                 res.merge(i->get_stats_metadata().estimated_partition_size);
             }
             return res;
@@ -436,7 +436,7 @@ void set_column_family(http_context& ctx, routes& r) {
     cf::get_estimated_row_count.set(r, [&ctx] (std::unique_ptr<request> req) {
         return map_reduce_cf(ctx, req->param["name"], int64_t(0), [](column_family& cf) {
             uint64_t res = 0;
-            for (auto i: *cf.get_sstables() ) {
+            for (auto sstables = cf.get_sstables(); auto& i : *sstables) {
                 res += i->get_stats_metadata().estimated_partition_size.count();
             }
             return res;
@@ -447,7 +447,7 @@ void set_column_family(http_context& ctx, routes& r) {
     cf::get_estimated_column_count_histogram.set(r, [&ctx] (std::unique_ptr<request> req) {
         return map_reduce_cf(ctx, req->param["name"], utils::estimated_histogram(0), [](column_family& cf) {
             utils::estimated_histogram res(0);
-            for (auto i: *cf.get_sstables() ) {
+            for (auto sstables = cf.get_sstables(); auto& i : *sstables) {
                 res.merge(i->get_stats_metadata().estimated_cells_count);
             }
             return res;
@@ -599,7 +599,8 @@ void set_column_family(http_context& ctx, routes& r) {
 
     cf::get_bloom_filter_false_positives.set(r, [&ctx] (std::unique_ptr<request> req) {
         return map_reduce_cf(ctx, req->param["name"], uint64_t(0), [] (column_family& cf) {
-            return std::accumulate(cf.get_sstables()->begin(), cf.get_sstables()->end(), uint64_t(0), [](uint64_t s, auto& sst) {
+            auto sstables = cf.get_sstables();
+            return std::accumulate(sstables->begin(), sstables->end(), uint64_t(0), [](uint64_t s, auto& sst) {
                 return s + sst->filter_get_false_positive();
             });
         }, std::plus<uint64_t>());
@@ -607,7 +608,8 @@ void set_column_family(http_context& ctx, routes& r) {
 
     cf::get_all_bloom_filter_false_positives.set(r, [&ctx] (std::unique_ptr<request> req) {
         return map_reduce_cf(ctx, uint64_t(0), [] (column_family& cf) {
-            return std::accumulate(cf.get_sstables()->begin(), cf.get_sstables()->end(), uint64_t(0), [](uint64_t s, auto& sst) {
+            auto sstables = cf.get_sstables();
+            return std::accumulate(sstables->begin(), sstables->end(), uint64_t(0), [](uint64_t s, auto& sst) {
                 return s + sst->filter_get_false_positive();
             });
         }, std::plus<uint64_t>());
@@ -615,7 +617,8 @@ void set_column_family(http_context& ctx, routes& r) {
 
     cf::get_recent_bloom_filter_false_positives.set(r, [&ctx] (std::unique_ptr<request> req) {
         return map_reduce_cf(ctx, req->param["name"], uint64_t(0), [] (column_family& cf) {
-            return std::accumulate(cf.get_sstables()->begin(), cf.get_sstables()->end(), uint64_t(0), [](uint64_t s, auto& sst) {
+            auto sstables = cf.get_sstables();
+            return std::accumulate(sstables->begin(), sstables->end(), uint64_t(0), [](uint64_t s, auto& sst) {
                 return s + sst->filter_get_recent_false_positive();
             });
         }, std::plus<uint64_t>());
@@ -623,7 +626,8 @@ void set_column_family(http_context& ctx, routes& r) {
 
     cf::get_all_recent_bloom_filter_false_positives.set(r, [&ctx] (std::unique_ptr<request> req) {
         return map_reduce_cf(ctx, uint64_t(0), [] (column_family& cf) {
-            return std::accumulate(cf.get_sstables()->begin(), cf.get_sstables()->end(), uint64_t(0), [](uint64_t s, auto& sst) {
+            auto sstables = cf.get_sstables();
+            return std::accumulate(sstables->begin(), sstables->end(), uint64_t(0), [](uint64_t s, auto& sst) {
                 return s + sst->filter_get_recent_false_positive();
             });
         }, std::plus<uint64_t>());
@@ -655,7 +659,8 @@ void set_column_family(http_context& ctx, routes& r) {
 
     cf::get_bloom_filter_disk_space_used.set(r, [&ctx] (std::unique_ptr<request> req) {
         return map_reduce_cf(ctx, req->param["name"], uint64_t(0), [] (column_family& cf) {
-            return std::accumulate(cf.get_sstables()->begin(), cf.get_sstables()->end(), uint64_t(0), [](uint64_t s, auto& sst) {
+            auto sstables = cf.get_sstables();
+            return std::accumulate(sstables->begin(), sstables->end(), uint64_t(0), [](uint64_t s, auto& sst) {
                 return s + sst->filter_size();
             });
         }, std::plus<uint64_t>());
@@ -663,7 +668,8 @@ void set_column_family(http_context& ctx, routes& r) {
 
     cf::get_all_bloom_filter_disk_space_used.set(r, [&ctx] (std::unique_ptr<request> req) {
         return map_reduce_cf(ctx, uint64_t(0), [] (column_family& cf) {
-            return std::accumulate(cf.get_sstables()->begin(), cf.get_sstables()->end(), uint64_t(0), [](uint64_t s, auto& sst) {
+            auto sstables = cf.get_sstables();
+            return std::accumulate(sstables->begin(), sstables->end(), uint64_t(0), [](uint64_t s, auto& sst) {
                 return s + sst->filter_size();
             });
         }, std::plus<uint64_t>());
@@ -671,7 +677,8 @@ void set_column_family(http_context& ctx, routes& r) {
 
     cf::get_bloom_filter_off_heap_memory_used.set(r, [&ctx] (std::unique_ptr<request> req) {
         return map_reduce_cf(ctx, req->param["name"], uint64_t(0), [] (column_family& cf) {
-            return std::accumulate(cf.get_sstables()->begin(), cf.get_sstables()->end(), uint64_t(0), [](uint64_t s, auto& sst) {
+            auto sstables = cf.get_sstables();
+            return std::accumulate(sstables->begin(), sstables->end(), uint64_t(0), [](uint64_t s, auto& sst) {
                 return s + sst->filter_memory_size();
             });
         }, std::plus<uint64_t>());
@@ -679,7 +686,8 @@ void set_column_family(http_context& ctx, routes& r) {
 
     cf::get_all_bloom_filter_off_heap_memory_used.set(r, [&ctx] (std::unique_ptr<request> req) {
         return map_reduce_cf(ctx, uint64_t(0), [] (column_family& cf) {
-            return std::accumulate(cf.get_sstables()->begin(), cf.get_sstables()->end(), uint64_t(0), [](uint64_t s, auto& sst) {
+            auto sstables = cf.get_sstables();
+            return std::accumulate(sstables->begin(), sstables->end(), uint64_t(0), [](uint64_t s, auto& sst) {
                 return s + sst->filter_memory_size();
             });
         }, std::plus<uint64_t>());
@@ -687,7 +695,8 @@ void set_column_family(http_context& ctx, routes& r) {
 
     cf::get_index_summary_off_heap_memory_used.set(r, [&ctx] (std::unique_ptr<request> req) {
         return map_reduce_cf(ctx, req->param["name"], uint64_t(0), [] (column_family& cf) {
-            return std::accumulate(cf.get_sstables()->begin(), cf.get_sstables()->end(), uint64_t(0), [](uint64_t s, auto& sst) {
+            auto sstables = cf.get_sstables();
+            return std::accumulate(sstables->begin(), sstables->end(), uint64_t(0), [](uint64_t s, auto& sst) {
                 return s + sst->get_summary().memory_footprint();
             });
         }, std::plus<uint64_t>());
@@ -695,7 +704,8 @@ void set_column_family(http_context& ctx, routes& r) {
 
     cf::get_all_index_summary_off_heap_memory_used.set(r, [&ctx] (std::unique_ptr<request> req) {
         return map_reduce_cf(ctx, uint64_t(0), [] (column_family& cf) {
-            return std::accumulate(cf.get_sstables()->begin(), cf.get_sstables()->end(), uint64_t(0), [](uint64_t s, auto& sst) {
+            auto sstables = cf.get_sstables();
+            return std::accumulate(sstables->begin(), sstables->end(), uint64_t(0), [](uint64_t s, auto& sst) {
                 return s + sst->get_summary().memory_footprint();
             });
         }, std::plus<uint64_t>());

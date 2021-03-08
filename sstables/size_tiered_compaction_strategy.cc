@@ -221,7 +221,7 @@ int64_t size_tiered_compaction_strategy::estimated_pending_compactions(column_fa
     std::vector<sstables::shared_sstable> sstables;
 
     sstables.reserve(cf.sstables_count());
-    for (auto& entry : *cf.get_sstables()) {
+    for (auto all_sstables = cf.get_sstables(); auto& entry : *all_sstables) {
         sstables.push_back(entry);
     }
 
