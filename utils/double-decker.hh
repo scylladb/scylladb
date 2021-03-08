@@ -38,7 +38,7 @@
 
 template <typename Key, typename T, typename Less, typename Compare, int NodeSize,
             bplus::key_search Search = bplus::key_search::binary, bplus::with_debug Debug = bplus::with_debug::no>
-SEASTAR_CONCEPT( requires Comparable<T, T, Compare> && std::is_nothrow_move_constructible_v<T> )
+requires Comparable<T, T, Compare> && std::is_nothrow_move_constructible_v<T>
 class double_decker {
 public:
     using inner_array = intrusive_array<T>;
@@ -124,7 +124,7 @@ public:
         }
 
         template <typename Func>
-        SEASTAR_CONCEPT(requires Disposer<Func, T>)
+        requires Disposer<Func, T>
         iterator erase_and_dispose(Less less, Func&& disp) noexcept {
             disp(&**this); // * to deref this, * to call operator*, & to get addr from ref
 
@@ -249,7 +249,7 @@ public:
     }
 
     template <typename K = Key>
-    SEASTAR_CONCEPT( requires Comparable<K, T, Compare> )
+    requires Comparable<K, T, Compare>
     const_iterator find(const K& key, Compare cmp) const {
         outer_const_iterator bkt = _tree.find(key);
         int idx = 0;
@@ -267,13 +267,13 @@ public:
     }
 
     template <typename K = Key>
-    SEASTAR_CONCEPT( requires Comparable<K, T, Compare> )
+    requires Comparable<K, T, Compare>
     iterator find(const K& k, Compare cmp) {
         return iterator(const_cast<const double_decker*>(this)->find(k, std::move(cmp)));
     }
 
     template <typename K = Key>
-    SEASTAR_CONCEPT( requires Comparable<K, T, Compare> )
+    requires Comparable<K, T, Compare>
     const_iterator lower_bound(const K& key, Compare cmp, bound_hint& hint) const {
         outer_const_iterator bkt = _tree.lower_bound(key, hint.key_match);
 
@@ -300,26 +300,26 @@ public:
     }
 
     template <typename K = Key>
-    SEASTAR_CONCEPT( requires Comparable<K, T, Compare> )
+    requires Comparable<K, T, Compare>
     iterator lower_bound(const K& key, Compare cmp, bound_hint& hint) {
         return iterator(const_cast<const double_decker*>(this)->lower_bound(key, std::move(cmp), hint));
     }
 
     template <typename K = Key>
-    SEASTAR_CONCEPT( requires Comparable<K, T, Compare> )
+    requires Comparable<K, T, Compare>
     const_iterator lower_bound(const K& key, Compare cmp) const {
         bound_hint hint;
         return lower_bound(key, cmp, hint);
     }
 
     template <typename K = Key>
-    SEASTAR_CONCEPT( requires Comparable<K, T, Compare> )
+    requires Comparable<K, T, Compare>
     iterator lower_bound(const K& key, Compare cmp) {
         return iterator(const_cast<const double_decker*>(this)->lower_bound(key, std::move(cmp)));
     }
 
     template <typename K = Key>
-    SEASTAR_CONCEPT( requires Comparable<K, T, Compare> )
+    requires Comparable<K, T, Compare>
     const_iterator upper_bound(const K& key, Compare cmp) const {
         bool key_match;
         outer_const_iterator bkt = _tree.lower_bound(key, key_match);
@@ -340,13 +340,13 @@ public:
     }
 
     template <typename K = Key>
-    SEASTAR_CONCEPT( requires Comparable<K, T, Compare> )
+    requires Comparable<K, T, Compare>
     iterator upper_bound(const K& key, Compare cmp) {
         return iterator(const_cast<const double_decker*>(this)->upper_bound(key, std::move(cmp)));
     }
 
     template <typename Func>
-    SEASTAR_CONCEPT(requires Disposer<Func, T>)
+    requires Disposer<Func, T>
     void clear_and_dispose(Func&& disp) noexcept {
         _tree.clear_and_dispose([&disp] (inner_array* arr) noexcept {
             arr->for_each(disp);
@@ -356,7 +356,7 @@ public:
     void clear() noexcept { clear_and_dispose(bplus::default_dispose<T>); }
 
     template <typename Func>
-    SEASTAR_CONCEPT(requires Disposer<Func, T>)
+    requires Disposer<Func, T>
     iterator erase_and_dispose(iterator begin, iterator end, Func&& disp) noexcept {
         bool same_bucket = begin._bucket == end._bucket;
 

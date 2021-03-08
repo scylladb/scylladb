@@ -134,7 +134,7 @@ void default_dispose(T* value) noexcept { }
  * Check test_key for more information.
  */
 template <typename Key>
-SEASTAR_CONCEPT(requires std::is_nothrow_copy_constructible_v<Key>)
+requires std::is_nothrow_copy_constructible_v<Key>
 Key copy_key(const Key& other) noexcept {
     return Key(other);
 }
@@ -200,12 +200,10 @@ template <typename Key, typename T, typename Less, size_t NodeSize, key_search S
  * leaf nodes will have N data pointers.
  */
 
-SEASTAR_CONCEPT(
-    template <typename T, typename Key>
-    concept CanGetKeyFromValue = requires (T val) {
-        { val.key() } -> std::same_as<Key>;
-    };
-)
+template <typename T, typename Key>
+concept CanGetKeyFromValue = requires (T val) {
+    { val.key() } -> std::same_as<Key>;
+};
 
 struct stats {
     unsigned long nodes;
@@ -217,10 +215,9 @@ struct stats {
 
 template <typename Key, typename T, typename Less, size_t NodeSize,
             key_search Search = key_search::binary, with_debug Debug = with_debug::no>
-SEASTAR_CONCEPT( requires LessNothrowComparable<Key, Key, Less> &&
-                        std::is_nothrow_move_constructible_v<Key> &&
-                        std::is_nothrow_move_constructible_v<T>
-)
+requires LessNothrowComparable<Key, Key, Less> &&
+        std::is_nothrow_move_constructible_v<Key> &&
+        std::is_nothrow_move_constructible_v<T>
 class tree {
 public:
     class iterator;
@@ -284,7 +281,7 @@ private:
     }
 
     template <typename K>
-    SEASTAR_CONCEPT(requires LessNothrowComparable<K, Key, Less>)
+    requires LessNothrowComparable<K, Key, Less>
     const_iterator get_bound(const K& k, bool upper, bool& match) const noexcept {
         match = false;
         if (empty()) {
@@ -367,7 +364,7 @@ public:
 
     // Returns result that is equal (both not less than each other)
     template <typename K = Key>
-    SEASTAR_CONCEPT(requires LessNothrowComparable<K, Key, Less>)
+    requires LessNothrowComparable<K, Key, Less>
     const_iterator find(const K& k) const noexcept {
         if (empty()) {
             return end();
@@ -384,7 +381,7 @@ public:
     }
 
     template <typename K = Key>
-    SEASTAR_CONCEPT(requires LessNothrowComparable<K, Key, Less>)
+    requires LessNothrowComparable<K, Key, Less>
     iterator find(const K& k) noexcept {
         return iterator(const_cast<const tree*>(this)->find(k));
     }
@@ -451,7 +448,7 @@ public:
     }
 
     template <typename Func>
-    SEASTAR_CONCEPT(requires Disposer<Func, T>)
+    requires Disposer<Func, T>
     iterator erase_and_dispose(const Key& k, Func&& disp) noexcept {
         maybe_init_empty_tree();
 
@@ -481,7 +478,7 @@ public:
     }
 
     template <typename Func>
-    SEASTAR_CONCEPT(requires Disposer<Func, T>)
+    requires Disposer<Func, T>
     iterator erase_and_dispose(iterator from, iterator to, Func&& disp) noexcept {
         /*
          * FIXME this is dog slow k*logN algo, need k+logN one
@@ -497,7 +494,7 @@ public:
     iterator erase(Args&&... args) noexcept { return erase_and_dispose(std::forward<Args>(args)..., default_dispose<T>); }
 
     template <typename Func>
-    SEASTAR_CONCEPT(requires Disposer<Func, T>)
+    requires Disposer<Func, T>
     void clear_and_dispose(Func&& disp) noexcept {
         if (_root != nullptr) {
             _root->clear(
@@ -770,7 +767,7 @@ public:
         }
 
         template <typename... Args>
-        SEASTAR_CONCEPT(requires CanGetKeyFromValue<T, Key>)
+        requires CanGetKeyFromValue<T, Key>
         iterator emplace_before(Less less, Args&&... args) {
             return emplace_before([] (data* d) -> Key { return d->value.key(); },
                     less, std::forward<Args>(args)...);
@@ -802,7 +799,7 @@ public:
 
     public:
         template <typename Func>
-        SEASTAR_CONCEPT(requires Disposer<Func, T>)
+        requires Disposer<Func, T>
         iterator erase_and_dispose(Func&& disp, Less less) noexcept {
             node* leaf = super::revalidate();
             iterator cur = next_after_erase(leaf);
@@ -1366,7 +1363,7 @@ class node final {
     }
 
     template <typename DFunc, typename NFunc>
-    SEASTAR_CONCEPT(requires Disposer<DFunc, data> && Disposer<NFunc, node>)
+    requires Disposer<DFunc, data> && Disposer<NFunc, node>
     void clear(DFunc&& ddisp, NFunc&& ndisp) noexcept {
         if (is_leaf()) {
             _flags &= ~(node::NODE_LEFTMOST | node::NODE_RIGHTMOST);
@@ -1927,7 +1924,7 @@ public:
     }
 
     template <typename Func>
-    SEASTAR_CONCEPT(requires Disposer<Func, T>)
+    requires Disposer<Func, T>
     static void destroy(data& d, Func&& disp) noexcept {
         disp(&d.value);
         d._leaf = nullptr;

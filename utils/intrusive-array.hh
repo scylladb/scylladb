@@ -28,17 +28,15 @@
 #include "utils/allocation_strategy.hh"
 #include "utils/collection-concepts.hh"
 
-SEASTAR_CONCEPT(
-    template <typename T>
-    concept BoundsKeeper = requires (T val, bool bit) {
-        { val.is_head() } noexcept -> std::same_as<bool>;
-        { val.set_head(bit) } noexcept -> std::same_as<void>;
-        { val.is_tail() } noexcept -> std::same_as<bool>;
-        { val.set_tail(bit) } noexcept -> std::same_as<void>;
-        { val.with_train() } noexcept -> std::same_as<bool>;
-        { val.set_train(bit) } noexcept -> std::same_as<void>;
-    };
-)
+template <typename T>
+concept BoundsKeeper = requires (T val, bool bit) {
+    { val.is_head() } noexcept -> std::same_as<bool>;
+    { val.set_head(bit) } noexcept -> std::same_as<void>;
+    { val.is_tail() } noexcept -> std::same_as<bool>;
+    { val.set_tail(bit) } noexcept -> std::same_as<void>;
+    { val.with_train() } noexcept -> std::same_as<bool>;
+    { val.set_train(bit) } noexcept -> std::same_as<void>;
+};
 
 /*
  * A plain array of T-s that grows and shrinks by constructing a new
@@ -52,7 +50,7 @@ SEASTAR_CONCEPT(
  * element. Respectively, the T must keep head/tail flags on itself.
  */
 template <typename T>
-SEASTAR_CONCEPT( requires BoundsKeeper<T> && std::is_nothrow_move_constructible_v<T> )
+requires BoundsKeeper<T> && std::is_nothrow_move_constructible_v<T>
 class intrusive_array {
     // Sanity constant to avoid infinite loops searching for tail
     static constexpr int max_len = std::numeric_limits<short int>::max();
@@ -268,7 +266,7 @@ public:
 
     // A helper for keeping the array sorted
     template <typename K, typename Compare>
-    SEASTAR_CONCEPT( requires Comparable<K, T, Compare> )
+    requires Comparable<K, T, Compare>
     const_iterator lower_bound(const K& val, Compare cmp, bool& match) const {
         int i = 0;
 
@@ -284,27 +282,27 @@ public:
     }
 
     template <typename K, typename Compare>
-    SEASTAR_CONCEPT( requires Comparable<K, T, Compare> )
+    requires Comparable<K, T, Compare>
     iterator lower_bound(const K& val, Compare cmp, bool& match) {
         return const_cast<iterator>(const_cast<const intrusive_array*>(this)->lower_bound(val, std::move(cmp), match));
     }
 
     template <typename K, typename Compare>
-    SEASTAR_CONCEPT( requires Comparable<K, T, Compare> )
+    requires Comparable<K, T, Compare>
     const_iterator lower_bound(const K& val, Compare cmp) const {
         bool match = false;
         return lower_bound(val, cmp, match);
     }
 
     template <typename K, typename Compare>
-    SEASTAR_CONCEPT( requires Comparable<K, T, Compare> )
+    requires Comparable<K, T, Compare>
     iterator lower_bound(const K& val, Compare cmp) {
         return const_cast<iterator>(const_cast<const intrusive_array*>(this)->lower_bound(val, std::move(cmp)));
     }
 
     // And its peer ... just to be used
     template <typename K, typename Compare>
-    SEASTAR_CONCEPT( requires Comparable<K, T, Compare> )
+    requires Comparable<K, T, Compare>
     const_iterator upper_bound(const K& val, Compare cmp) const {
         int i = 0;
 
@@ -318,13 +316,13 @@ public:
     }
 
     template <typename K, typename Compare>
-    SEASTAR_CONCEPT( requires Comparable<K, T, Compare> )
+    requires Comparable<K, T, Compare>
     iterator upper_bound(const K& val, Compare cmp) {
         return const_cast<iterator>(const_cast<const intrusive_array*>(this)->upper_bound(val, std::move(cmp)));
     }
 
     template <typename Func>
-    SEASTAR_CONCEPT(requires Disposer<Func, T>)
+    requires Disposer<Func, T>
     void for_each(Func&& fn) noexcept {
         bool tail = false;
 
