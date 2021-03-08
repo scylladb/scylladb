@@ -60,6 +60,7 @@ bool is_system_keyspace(std::string_view name) {
 
 static const std::unordered_set<std::string_view> internal_keyspaces = {
         db::system_distributed_keyspace::NAME,
+        db::system_distributed_keyspace::NAME_EVERYWHERE,
         db::system_keyspace::NAME,
         db::schema_tables::NAME,
         auth::meta::AUTH_KS,
