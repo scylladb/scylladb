@@ -207,7 +207,7 @@ future<> service::client_state::has_access(const sstring& ks, auth::command_desc
                     auth::permission::ALTER, auth::permission::DROP>();
 
             if (cdc_topology_description_forbidden_permissions.contains(cmd.permission)) {
-                if (ks == db::system_distributed_keyspace::NAME
+                if ((ks == db::system_distributed_keyspace::NAME || ks == db::system_distributed_keyspace::NAME_EVERYWHERE)
                         && (resource_view.table() == db::system_distributed_keyspace::CDC_DESC_V2
                         || resource_view.table() == db::system_distributed_keyspace::CDC_TOPOLOGY_DESCRIPTION
                         || resource_view.table() == db::system_distributed_keyspace::CDC_TIMESTAMPS)) {

@@ -107,7 +107,8 @@ static logging::logger diff_logger("schema_diff");
 
 static bool is_extra_durable(const sstring& ks_name, const sstring& cf_name) {
     return (is_system_keyspace(ks_name) && db::system_keyspace::is_extra_durable(cf_name))
-        || (ks_name == db::system_distributed_keyspace::NAME && db::system_distributed_keyspace::is_extra_durable(cf_name));
+        || ((ks_name == db::system_distributed_keyspace::NAME || ks_name == db::system_distributed_keyspace::NAME_EVERYWHERE)
+                && db::system_distributed_keyspace::is_extra_durable(cf_name));
 }
 
 

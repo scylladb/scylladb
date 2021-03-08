@@ -1099,7 +1099,8 @@ void keyspace::mark_as_populated() {
 
 
 static bool is_system_table(const schema& s) {
-    return s.ks_name() == db::system_keyspace::NAME || s.ks_name() == db::system_distributed_keyspace::NAME;
+    return s.ks_name() == db::system_keyspace::NAME || s.ks_name() == db::system_distributed_keyspace::NAME
+        || s.ks_name() == db::system_distributed_keyspace::NAME_EVERYWHERE;
 }
 
 column_family::config

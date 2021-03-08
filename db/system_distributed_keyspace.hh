@@ -52,6 +52,8 @@ namespace db {
 class system_distributed_keyspace {
 public:
     static constexpr auto NAME = "system_distributed";
+    static constexpr auto NAME_EVERYWHERE = "system_distributed_everywhere";
+
     static constexpr auto VIEW_BUILD_STATUS = "view_build_status";
     static constexpr auto SERVICE_LEVELS = "service_levels";
 
