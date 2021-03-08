@@ -73,7 +73,6 @@ class redis_server : public generic_server::server {
 
 public:
     redis_server(seastar::sharded<service::storage_proxy>& proxy, seastar::sharded<redis::query_processor>& qp, auth::service& auth_service, redis_server_config config);
-    future<> listen(socket_address addr, std::shared_ptr<seastar::tls::credentials_builder> = {}, bool keepalive = false);
 
     struct result {
         result(redis::redis_message&& m) : _data(make_foreign(std::make_unique<redis::redis_message>(std::move(m)))) {}

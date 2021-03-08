@@ -28,6 +28,7 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/gate.hh>
 #include <seastar/net/api.hh>
+#include <seastar/net/tls.hh>
 
 #include <boost/intrusive/list.hpp>
 
@@ -61,6 +62,7 @@ class server {
     friend class connection;
 
 protected:
+    sstring _server_name;
     logging::logger& _logger;
     bool _stopping = false;
     promise<> _all_connections_stopped;
@@ -72,9 +74,11 @@ protected:
     std::vector<server_socket> _listeners;
 
 public:
-    server(logging::logger& logger);
+    server(const sstring& server_name, logging::logger& logger);
 
     future<> stop();
+
+    future<> listen(socket_address addr, std::shared_ptr<seastar::tls::credentials_builder> creds, bool is_shard_aware, bool keepalive);
 
     future<> do_accepts(int which, bool keepalive, socket_address server_addr);
 

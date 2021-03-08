@@ -158,7 +158,6 @@ public:
     cql_server(distributed<cql3::query_processor>& qp, auth::service&,
             service::migration_notifier& mn, database& db,
             cql_server_config config);
-    future<> listen(socket_address addr, std::shared_ptr<seastar::tls::credentials_builder> = {}, bool is_shard_aware = false, bool keepalive = false);
 public:
     using response = cql_transport::response;
 private:

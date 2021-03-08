@@ -46,7 +46,7 @@ namespace redis_transport {
 static logging::logger logging("redis_server");
 
 redis_server::redis_server(seastar::sharded<service::storage_proxy>& proxy, seastar::sharded<redis::query_processor>& qp, auth::service& auth_service, redis_server_config config)
-    : server(logging)
+    : server("Redis", logging)
     , _proxy(proxy)
     , _query_processor(qp)
     , _config(config)
@@ -55,33 +55,6 @@ redis_server::redis_server(seastar::sharded<service::storage_proxy>& proxy, seas
     , _auth_service(auth_service)
     , _total_redis_db_count(config._total_redis_db_count)
 {
-}
-
-future<> redis_server::listen(socket_address addr, std::shared_ptr<seastar::tls::credentials_builder> creds, bool keepalive) {
-    auto f = make_ready_future<shared_ptr<seastar::tls::server_credentials>>(nullptr);
-    if (creds) {
-        f = creds->build_reloadable_server_credentials([](const std::unordered_set<sstring>& files, std::exception_ptr ep) {
-            if (ep) {
-                logging.warn("Exception loading {}: {}", files, ep);
-            } else {
-                logging.info("Reloaded {}", files);
-            }
-        });
-    }
-    return f.then([this, addr, keepalive](shared_ptr<seastar::tls::server_credentials> creds) {
-        listen_options lo;
-        lo.reuse_address = true;
-        server_socket ss;
-        try {
-            ss = creds
-                ? seastar::tls::listen(std::move(creds), addr, lo)
-                : seastar::listen(addr, lo);
-        } catch (...) {
-            throw std::runtime_error(sprint("Redis server error while listening on %s -> %s", addr, std::current_exception()));
-        }
-        _listeners.emplace_back(std::move(ss));
-        _stopped = when_all(std::move(_stopped), do_accepts(_listeners.size() - 1, keepalive, addr)).discard_result();
-    });
 }
 
 shared_ptr<generic_server::connection>
