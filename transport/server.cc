@@ -151,7 +151,7 @@ event::event_type parse_event_type(const sstring& value)
 
 cql_server::cql_server(distributed<cql3::query_processor>& qp, auth::service& auth_service,
         service::migration_notifier& mn, database& db, service::memory_limiter& ml, cql_server_config config, qos::service_level_controller& sl_controller)
-    : server(clogger)
+    : server("CQLServer", clogger)
     , _query_processor(qp)
     , _config(config)
     , _max_request_size(config.max_request_size)
@@ -239,37 +239,6 @@ cql_server::cql_server(distributed<cql3::query_processor>& qp, auth::service& au
 
 future<> cql_server::on_stop() {
     return _notifier->stop();
-}
-
-future<>
-cql_server::listen(socket_address addr, std::shared_ptr<seastar::tls::credentials_builder> creds, bool is_shard_aware, bool keepalive) {
-    auto f = make_ready_future<shared_ptr<seastar::tls::server_credentials>>(nullptr);
-    if (creds) {
-        f = creds->build_reloadable_server_credentials([](const std::unordered_set<sstring>& files, std::exception_ptr ep) {
-            if (ep) {
-                clogger.warn("Exception loading {}: {}", files, ep);
-            } else {
-                clogger.info("Reloaded {}", files);
-            }
-        });
-    }
-    return f.then([this, addr, is_shard_aware, keepalive](shared_ptr<seastar::tls::server_credentials> creds) {
-        listen_options lo;
-        lo.reuse_address = true;
-        if (is_shard_aware) {
-            lo.lba = server_socket::load_balancing_algorithm::port;
-        }
-        server_socket ss;
-        try {
-            ss = creds
-                ? seastar::tls::listen(std::move(creds), addr, lo)
-                : seastar::listen(addr, lo);
-        } catch (...) {
-            throw std::runtime_error(format("CQLServer error while listening on {} -> {}", addr, std::current_exception()));
-        }
-        _listeners.emplace_back(std::move(ss));
-        _stopped = when_all(std::move(_stopped), do_accepts(_listeners.size() - 1, keepalive, addr)).discard_result();
-    });
 }
 
 shared_ptr<generic_server::connection>

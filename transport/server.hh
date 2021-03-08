@@ -164,7 +164,6 @@ public:
             service::migration_notifier& mn, database& db, service::memory_limiter& ml,
             cql_server_config config,
             qos::service_level_controller& sl_controller);
-    future<> listen(socket_address addr, std::shared_ptr<seastar::tls::credentials_builder> = {}, bool is_shard_aware = false, bool keepalive = false);
 public:
     using response = cql_transport::response;
 private:
