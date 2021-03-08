@@ -56,19 +56,6 @@ public:
         mutation_reader::forwarding) const;
 };
 
-// default sstable_set, not specialized for anything
-class bag_sstable_set : public sstable_set_impl {
-    // erasing is slow, but select() is fast
-    std::vector<shared_sstable> _sstables;
-public:
-    virtual std::unique_ptr<sstable_set_impl> clone() const override;
-    virtual std::vector<shared_sstable> select(const dht::partition_range& range = query::full_partition_range) const override;
-    virtual void insert(shared_sstable sst) override;
-    virtual void erase(shared_sstable sst) override;
-    virtual std::unique_ptr<incremental_selector_impl> make_incremental_selector() const override;
-    class incremental_selector;
-};
-
 // specialized when sstables are partitioned in the token range space
 // e.g. leveled compaction strategy
 class partitioned_sstable_set : public sstable_set_impl {

@@ -152,40 +152,6 @@ sstable_set::make_incremental_selector() const {
     return incremental_selector(_impl->make_incremental_selector(), *_schema);
 }
 
-std::unique_ptr<sstable_set_impl> bag_sstable_set::clone() const {
-    return std::make_unique<bag_sstable_set>(*this);
-}
-
-std::vector<shared_sstable> bag_sstable_set::select(const dht::partition_range& range) const {
-    return _sstables;
-}
-
-void bag_sstable_set::insert(shared_sstable sst) {
-    _sstables.push_back(std::move(sst));
-}
-
-void bag_sstable_set::erase(shared_sstable sst) {
-    auto it = boost::range::find(_sstables, sst);
-    if (it != _sstables.end()){
-        _sstables.erase(it);
-    }
-}
-
-class bag_sstable_set::incremental_selector : public incremental_selector_impl {
-    const std::vector<shared_sstable>& _sstables;
-public:
-    incremental_selector(const std::vector<shared_sstable>& sstables)
-        : _sstables(sstables) {
-    }
-    virtual std::tuple<dht::partition_range, std::vector<shared_sstable>, dht::ring_position_view> select(const dht::ring_position_view&) override {
-        return std::make_tuple(dht::partition_range::make_open_ended_both_sides(), _sstables, dht::ring_position_view::max());
-    }
-};
-
-std::unique_ptr<incremental_selector_impl> bag_sstable_set::make_incremental_selector() const {
-    return std::make_unique<incremental_selector>(_sstables);
-}
-
 partitioned_sstable_set::interval_type partitioned_sstable_set::make_interval(const schema& s, const dht::partition_range& range) {
     return interval_type::closed(
             compatible_ring_position_or_view(s, dht::ring_position_view(range.start()->value())),
@@ -524,7 +490,8 @@ std::unique_ptr<incremental_selector_impl> partitioned_sstable_set::make_increme
 }
 
 std::unique_ptr<sstable_set_impl> compaction_strategy_impl::make_sstable_set(schema_ptr schema) const {
-    return std::make_unique<bag_sstable_set>();
+    // with use_level_metadata enabled, L0 sstables will not go to interval map, which suits well STCS.
+    return std::make_unique<partitioned_sstable_set>(schema, true);
 }
 
 std::unique_ptr<sstable_set_impl> leveled_compaction_strategy::make_sstable_set(schema_ptr schema) const {
