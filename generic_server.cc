@@ -100,6 +100,29 @@ server::~server()
 {
 }
 
+future<> server::stop() {
+    _stopping = true;
+    size_t nr = 0;
+    size_t nr_total = _listeners.size();
+    _logger.debug("abort accept nr_total={}", nr_total);
+    for (auto&& l : _listeners) {
+        l.abort_accept();
+        _logger.debug("abort accept {} out of {} done", ++nr, nr_total);
+    }
+    auto nr_conn = make_lw_shared<size_t>(0);
+    auto nr_conn_total = _connections_list.size();
+    _logger.debug("shutdown connection nr_total={}", nr_conn_total);
+    return parallel_for_each(_connections_list.begin(), _connections_list.end(), [this, nr_conn, nr_conn_total] (auto&& c) {
+        return c.shutdown().then([this, nr_conn, nr_conn_total] {
+            _logger.debug("shutdown connection {} out of {} done", ++(*nr_conn), nr_conn_total);
+        });
+    }).then([this] {
+        return on_stop();
+    }).then([this] {
+        return std::move(_stopped);
+    });
+}
+
 future<> server::do_accepts(int which, bool keepalive, socket_address server_addr) {
     return repeat([this, which, keepalive, server_addr] {
         ++_connections_being_accepted;
@@ -142,6 +165,11 @@ future<> server::do_accepts(int which, bool keepalive, socket_address server_add
             return stop_iteration::no;
         });
     });
+}
+
+future<>
+server::on_stop() {
+    return make_ready_future<>();
 }
 
 future<>
