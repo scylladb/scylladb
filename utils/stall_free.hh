@@ -34,7 +34,7 @@ namespace utils {
 // Similar to std::merge but it does not stall. Must run inside a seastar
 // thread. It merges items from list2 into list1. Items from list2 can only be copied.
 template<class T, class Compare>
-SEASTAR_CONCEPT(requires LessComparable<T, T, Compare>)
+requires LessComparable<T, T, Compare>
 void merge_to_gently(std::list<T>& list1, const std::list<T>& list2, Compare comp) {
     auto first1 = list1.begin();
     auto first2 = list2.begin();
