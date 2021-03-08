@@ -63,16 +63,14 @@ std::ostream& operator<<(std::ostream& os, const sstables::sstable_run& run) {
     return os;
 }
 
-sstable_set::sstable_set(std::unique_ptr<sstable_set_impl> impl, schema_ptr s, lw_shared_ptr<sstable_list> all)
+sstable_set::sstable_set(std::unique_ptr<sstable_set_impl> impl, schema_ptr s)
         : _impl(std::move(impl))
-        , _schema(std::move(s))
-        , _all(std::move(all)) {
+        , _schema(std::move(s)) {
 }
 
 sstable_set::sstable_set(const sstable_set& x)
         : _impl(x._impl->clone())
         , _schema(x._schema)
-        , _all(make_lw_shared<sstable_list>(*x._all))
         , _all_runs(x._all_runs) {
 }
 
@@ -103,17 +101,16 @@ sstable_set::select_sstable_runs(const std::vector<shared_sstable>& sstables) co
     }));
 }
 
+lw_shared_ptr<sstable_list>
+sstable_set::all() const {
+    return _impl->all();
+}
+
 void
 sstable_set::insert(shared_sstable sst) {
     _impl->insert(sst);
     try {
-        _all->insert(sst);
-        try {
-            _all_runs[sst->run_identifier()].insert(sst);
-        } catch (...) {
-            _all->erase(sst);
-            throw;
-        }
+        _all_runs[sst->run_identifier()].insert(sst);
     } catch (...) {
         _impl->erase(sst);
         throw;
@@ -123,7 +120,6 @@ sstable_set::insert(shared_sstable sst) {
 void
 sstable_set::erase(shared_sstable sst) {
     _impl->erase(sst);
-    _all->erase(sst);
     _all_runs[sst->run_identifier()].erase(sst);
 }
 
@@ -225,8 +221,9 @@ dht::partition_range partitioned_sstable_set::to_partition_range(const dht::ring
     return dht::partition_range::make(std::move(lower_bound), std::move(upper_bound));
 }
 
-partitioned_sstable_set::partitioned_sstable_set(schema_ptr schema, bool use_level_metadata)
+partitioned_sstable_set::partitioned_sstable_set(schema_ptr schema, lw_shared_ptr<sstable_list> all, bool use_level_metadata)
         : _schema(std::move(schema))
+        , _all(std::move(all))
         , _use_level_metadata(use_level_metadata) {
 }
 
@@ -247,16 +244,26 @@ std::vector<shared_sstable> partitioned_sstable_set::select(const dht::partition
     return r;
 }
 
+lw_shared_ptr<sstable_list> partitioned_sstable_set::all() const {
+    return _all;
+}
+
 void partitioned_sstable_set::insert(shared_sstable sst) {
-    if (store_as_unleveled(sst)) {
-        _unleveled_sstables.push_back(std::move(sst));
-    } else {
-        _leveled_sstables_change_cnt++;
-        _leveled_sstables.add({make_interval(*sst), value_set({sst})});
+    _all->insert(sst);
+    try {
+        if (store_as_unleveled(sst)) {
+            _unleveled_sstables.push_back(std::move(sst));
+        } else {
+            _leveled_sstables_change_cnt++;
+            _leveled_sstables.add({make_interval(*sst), value_set({sst})});
+        }
+    } catch (...) {
+        _all->erase(sst);
     }
 }
 
 void partitioned_sstable_set::erase(shared_sstable sst) {
+    _all->erase(sst);
     if (store_as_unleveled(sst)) {
         _unleveled_sstables.erase(std::remove(_unleveled_sstables.begin(), _unleveled_sstables.end(), sst), _unleveled_sstables.end());
     } else {
@@ -344,6 +351,10 @@ std::unique_ptr<sstable_set_impl> time_series_sstable_set::clone() const {
 
 std::vector<shared_sstable> time_series_sstable_set::select(const dht::partition_range& range) const {
     return boost::copy_range<std::vector<shared_sstable>>(*_sstables | boost::adaptors::map_values);
+}
+
+lw_shared_ptr<sstable_list> time_series_sstable_set::all() const {
+    return make_lw_shared<sstable_list>(boost::copy_range<sstable_list>(*_sstables | boost::adaptors::map_values));
 }
 
 // O(log n)
@@ -491,11 +502,11 @@ std::unique_ptr<incremental_selector_impl> partitioned_sstable_set::make_increme
 
 std::unique_ptr<sstable_set_impl> compaction_strategy_impl::make_sstable_set(schema_ptr schema) const {
     // with use_level_metadata enabled, L0 sstables will not go to interval map, which suits well STCS.
-    return std::make_unique<partitioned_sstable_set>(schema, true);
+    return std::make_unique<partitioned_sstable_set>(schema, make_lw_shared<sstable_list>(), true);
 }
 
 std::unique_ptr<sstable_set_impl> leveled_compaction_strategy::make_sstable_set(schema_ptr schema) const {
-    return std::make_unique<partitioned_sstable_set>(std::move(schema));
+    return std::make_unique<partitioned_sstable_set>(std::move(schema), make_lw_shared<sstable_list>());
 }
 
 std::unique_ptr<sstable_set_impl> time_window_compaction_strategy::make_sstable_set(schema_ptr schema) const {
@@ -503,15 +514,14 @@ std::unique_ptr<sstable_set_impl> time_window_compaction_strategy::make_sstable_
 }
 
 sstable_set make_partitioned_sstable_set(schema_ptr schema, lw_shared_ptr<sstable_list> all, bool use_level_metadata) {
-    return sstable_set(std::make_unique<partitioned_sstable_set>(schema, use_level_metadata), schema, std::move(all));
+    return sstable_set(std::make_unique<partitioned_sstable_set>(schema, std::move(all), use_level_metadata), schema);
 }
 
 sstable_set
 compaction_strategy::make_sstable_set(schema_ptr schema) const {
     return sstable_set(
             _compaction_strategy_impl->make_sstable_set(schema),
-            schema,
-            make_lw_shared<sstable_list>());
+            schema);
 }
 
 using sstable_reader_factory_type = std::function<flat_mutation_reader(shared_sstable&, const dht::partition_range& pr)>;

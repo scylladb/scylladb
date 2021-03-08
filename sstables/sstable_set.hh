@@ -52,13 +52,10 @@ public:
 class sstable_set : public enable_lw_shared_from_this<sstable_set> {
     std::unique_ptr<sstable_set_impl> _impl;
     schema_ptr _schema;
-    // used to support column_family::get_sstable(), which wants to return an sstable_list
-    // that has a reference somewhere
-    lw_shared_ptr<sstable_list> _all;
     std::unordered_map<utils::UUID, sstable_run> _all_runs;
 public:
     ~sstable_set();
-    sstable_set(std::unique_ptr<sstable_set_impl> impl, schema_ptr s, lw_shared_ptr<sstable_list> all);
+    sstable_set(std::unique_ptr<sstable_set_impl> impl, schema_ptr s);
     sstable_set(const sstable_set&);
     sstable_set(sstable_set&&) noexcept;
     sstable_set& operator=(const sstable_set&);
@@ -66,7 +63,8 @@ public:
     std::vector<shared_sstable> select(const dht::partition_range& range) const;
     // Return all runs which contain any of the input sstables.
     std::vector<sstable_run> select_sstable_runs(const std::vector<shared_sstable>& sstables) const;
-    lw_shared_ptr<sstable_list> all() const { return _all; }
+    // Return all sstables. It's not guaranteed that sstable_set will keep a reference to the returned list, so user should keep it.
+    lw_shared_ptr<sstable_list> all() const;
     void insert(shared_sstable sst);
     void erase(shared_sstable sst);
 
