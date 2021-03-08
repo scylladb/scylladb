@@ -237,27 +237,15 @@ future<> system_distributed_keyspace::remove_view(sstring ks_name, sstring view_
             false).discard_result();
 }
 
-/* We want to make sure that writes/reads to/from cdc_generations and cdc_streams
+/* We want to make sure that writes/reads to/from CDC management-related distributed tables
  * are consistent: a read following an acknowledged write to the same partition should contact
  * at least one of the replicas that the write contacted.
+ *
  * Normally we would achieve that by always using CL = QUORUM,
  * but there's one special case when that's impossible: a single-node cluster. In that case we'll
  * use CL = ONE for writing the data, which will do the right thing -- saving the data in the only
  * possible replica. Until another node joins, reads will also use CL = ONE, retrieving the data
  * from the only existing replica.
- *
- * There is one case where queries wouldn't see the read: if we extend the single-node cluster
- * with two nodes without bootstrapping (so the data won't be streamed to new replicas),
- * and the admin forgets to run repair. Then QUORUM reads might contact only the two new nodes
- * and miss the written entry.
- *
- * Fortunately (aside from the fact that nodes shouldn't be joined without bootstrapping),
- * after the second node joins, it will propose a new CDC generation, so the old entry
- * that was written with CL=ONE won't be used by the cluster anymore. All nodes other than
- * the first one use QUORUM to make the write.
- *
- * And even if the old entry was still needed for some reason, by the time the third node joins,
- * the second node would have already fixed our issue by running read repair on the old entry.
  */
 static db::consistency_level quorum_if_many(size_t num_token_owners) {
     return num_token_owners > 1 ? db::consistency_level::QUORUM : db::consistency_level::ONE;
