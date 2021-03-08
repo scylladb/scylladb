@@ -239,17 +239,17 @@ future<> cql_server::stop() {
     _stopping = true;
     size_t nr = 0;
     size_t nr_total = _listeners.size();
-    clogger.debug("cql_server: abort accept nr_total={}", nr_total);
+    clogger.debug("abort accept nr_total={}", nr_total);
     for (auto&& l : _listeners) {
         l.abort_accept();
-        clogger.debug("cql_server: abort accept {} out of {} done", ++nr, nr_total);
+        clogger.debug("abort accept {} out of {} done", ++nr, nr_total);
     }
     auto nr_conn = make_lw_shared<size_t>(0);
     auto nr_conn_total = _connections_list.size();
-    clogger.debug("cql_server: shutdown connection nr_total={}", nr_conn_total);
+    clogger.debug("shutdown connection nr_total={}", nr_conn_total);
     return parallel_for_each(_connections_list.begin(), _connections_list.end(), [nr_conn, nr_conn_total] (auto&& c) {
         return c.shutdown().then([nr_conn, nr_conn_total] {
-            clogger.debug("cql_server: shutdown connection {} out of {} done", ++(*nr_conn), nr_conn_total);
+            clogger.debug("shutdown connection {} out of {} done", ++(*nr_conn), nr_conn_total);
         });
     }).then([this] {
         return _notifier->stop();
