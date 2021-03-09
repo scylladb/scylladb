@@ -76,6 +76,16 @@ int rand() {
     return dist(gen);
 }
 
+// Raft uses UUID 0 as special case.
+// Convert local 0-based integer id to raft +1 UUID
+utils::UUID to_raft_uuid(size_t local_id) {
+    return utils::UUID{0, local_id + 1};
+}
+
+raft::server_id to_raft_id(size_t local_id) {
+    return raft::server_id{to_raft_uuid(local_id)};
+}
+
 class sm_value_impl {
 public:
     sm_value_impl() {};
@@ -379,8 +389,7 @@ future<std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>> cr
     std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>> rafts;
 
     for (size_t i = 0; i < states.size(); i++) {
-        auto uuid = utils::UUID(0, i + 1);   // Custom sequential debug id; 0 is invalid
-        states[i].address = raft::server_address{uuid};
+        states[i].address = raft::server_address{to_raft_id(i)};
         config.current.emplace(states[i].address);
     }
 
@@ -478,8 +487,7 @@ future<> wait_log(std::vector<std::pair<std::unique_ptr<raft::server>, state_mac
     // Wait for leader log to propagate
     auto leader_log_idx = rafts[leader].first->log_last_idx();
     for (size_t s = 0; s < rafts.size(); ++s) {
-        auto id = raft::server_id{utils::UUID(0, s + 1)};
-        if (s != leader && connected(id)) {
+        if (s != leader && connected(to_raft_id(s))) {
             co_await rafts[s].first->wait_log_idx(leader_log_idx);
         }
     }
@@ -584,18 +592,17 @@ future<int> run_test(test_case test, bool drop_replication = false) {
                 // Wait for leader log to propagate
                 auto leader_log_idx = rafts[leader].first->log_last_idx();
                 for (size_t s = 0; s < test.nodes; ++s) {
-                    auto id = raft::server_id{utils::UUID(0, s + 1)};
-                    if (s != leader && connected(id)) {
+                    if (s != leader && connected(to_raft_id(s))) {
                         co_await rafts[s].first->wait_log_idx(leader_log_idx);
                     }
                 }
                 // Make current leader a follower: disconnect, timeout, re-connect
-                connected.disconnect(raft::server_id{utils::UUID{0, leader + 1}});
+                connected.disconnect(to_raft_id(leader));
                 for (size_t s = 0; s < test.nodes; ++s) {
                     rafts[s].first->elapse_election();
                 }
                 co_await rafts[next_leader].first->elect_me_leader();
-                connected.connect(raft::server_id{utils::UUID{0, leader + 1}});
+                connected.connect(to_raft_id(leader));
                 tlogger.debug("confirmed leader on {}", next_leader);
                 leader = next_leader;
             }
@@ -622,7 +629,7 @@ future<int> run_test(test_case test, bool drop_replication = false) {
             for (size_t s = 0; s < test.nodes; ++s) {
                 if (partition_servers.find(s) == partition_servers.end()) {
                     // Disconnect servers not in main partition
-                    connected.disconnect(raft::server_id{utils::UUID{0, s + 1}});
+                    connected.disconnect(to_raft_id(s));
                 }
             }
             if (have_new_leader && new_leader.id != leader) {
