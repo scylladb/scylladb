@@ -27,7 +27,6 @@
 #include "bytes.hh"
 #include "utils/allocation_strategy.hh"
 #include "utils/fragment_range.hh"
-#include <seastar/core/unaligned.hh>
 #include <seastar/util/alloc_failure_injector.hh>
 #include <unordered_map>
 #include <type_traits>

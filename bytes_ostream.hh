@@ -24,7 +24,6 @@
 #include <boost/range/iterator_range.hpp>
 
 #include "bytes.hh"
-#include <seastar/core/unaligned.hh>
 #include "hashing.hh"
 #include <seastar/core/simple-stream.hh>
 /**
