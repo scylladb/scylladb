@@ -43,9 +43,13 @@
 
 namespace db {
 
-future<> snapshot_ctl::check_snapshot_not_exist(sstring ks_name, sstring name) {
+future<> snapshot_ctl::check_snapshot_not_exist(sstring ks_name, sstring name, std::optional<std::vector<sstring>> filter) {
     auto& ks = _db.local().find_keyspace(ks_name);
-    return parallel_for_each(ks.metadata()->cf_meta_data(), [this, ks_name = std::move(ks_name), name = std::move(name)] (auto& pair) {
+    return parallel_for_each(ks.metadata()->cf_meta_data(), [this, ks_name = std::move(ks_name), name = std::move(name), filter = std::move(filter)] (auto& pair) {
+        auto& cf_name = pair.first;
+        if (filter && std::find(filter->begin(), filter->end(), cf_name) == filter->end()) {
+            return make_ready_future<>();
+        }        
         auto& cf = _db.local().find_column_family(pair.second);
         return cf.snapshot_exists(name).then([ks_name = std::move(ks_name), name] (bool exists) {
             if (exists) {
@@ -111,7 +115,7 @@ future<> snapshot_ctl::take_column_family_snapshot(sstring ks_name, std::vector<
     }
 
     return run_snapshot_modify_operation([this, ks_name = std::move(ks_name), tables = std::move(tables), tag = std::move(tag)] {
-        return check_snapshot_not_exist(ks_name, tag).then([this, ks_name, tables = std::move(tables), tag] {
+        return check_snapshot_not_exist(ks_name, tag, tables).then([this, ks_name, tables, tag] {
             return do_with(std::vector<sstring>(std::move(tables)),[this, ks_name, tag](const std::vector<sstring>& tables) {
                 return do_for_each(tables, [ks_name, tag, this] (const sstring& table_name) {
                     if (table_name.find(".") != sstring::npos) {
