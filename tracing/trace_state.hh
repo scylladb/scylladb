@@ -226,6 +226,10 @@ public:
         return _records->my_span_id;
     }
 
+    uint64_t events_size() const {
+        return _records->events_recs.size();
+    }
+
 private:
     /**
      * Stop a foreground state and write pending records to I/O.
