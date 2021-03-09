@@ -910,8 +910,20 @@ SEASTAR_TEST_CASE(test_eviction_from_invalidated) {
 
         std::vector<sstring> tmp;
         auto alloc_size = logalloc::segment_size * 10;
-        while (tracker.region().occupancy().total_space() > alloc_size) {
-            tmp.push_back(uninitialized_string(alloc_size));
+        /*
+         * Now allocate huge chunks on the region until it gives up
+         * with bad_alloc. At that point the region must not have more
+         * memory than the chunk size, neither it must contain rows
+         * or partitions (except for dummy entries)
+         */
+        try {
+            while (true) {
+                tmp.push_back(uninitialized_string(alloc_size));
+            }
+        } catch (const std::bad_alloc&) {
+            BOOST_REQUIRE(tracker.region().occupancy().total_space() < alloc_size);
+            BOOST_REQUIRE(tracker.get_stats().partitions == 0);
+            BOOST_REQUIRE(tracker.get_stats().rows == 0);
         }
     });
 }
