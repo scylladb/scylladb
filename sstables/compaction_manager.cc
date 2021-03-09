@@ -674,7 +674,7 @@ future<> compaction_manager::rewrite_sstables(column_family* cf, sstables::compa
                 return with_scheduling_group(_scheduling_group, [this, &cf, descriptor = std::move(descriptor)] () mutable {
                     return cf.run_compaction(std::move(descriptor));
                 });
-            }).then_wrapped([this, task, compacting = std::move(compacting)] (future<> f) mutable {
+            }).then_wrapped([this, task, compacting] (future<> f) mutable {
                 task->compaction_running = false;
                 _stats.active_tasks--;
                 if (!can_proceed(task)) {
