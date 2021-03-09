@@ -40,6 +40,8 @@
 
 #pragma once
 
+#include <vector>
+
 #include <seastar/core/sharded.hh>
 #include <seastar/core/future.hh>
 #include "database.hh"
@@ -112,7 +114,7 @@ private:
     seastar::rwlock _lock;
     seastar::gate _ops;
 
-    future<> check_snapshot_not_exist(sstring ks_name, sstring name);
+    future<> check_snapshot_not_exist(sstring ks_name, sstring name, std::optional<std::vector<sstring>> filter = {});
 
     template <typename Func>
     std::result_of_t<Func()> run_snapshot_modify_operation(Func&&);
