@@ -187,8 +187,6 @@ public:
 
     future<> create_keyspace(std::string_view keyspace_name);
 
-    static tracing::trace_state_ptr maybe_trace_query(client_state& client_state, sstring_view op, sstring_view query);
-
     static sstring table_name(const schema&);
     static db::timeout_clock::time_point default_timeout();
     static void set_default_timeout(db::timeout_clock::duration timeout);

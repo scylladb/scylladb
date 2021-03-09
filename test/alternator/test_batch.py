@@ -318,3 +318,19 @@ def test_batch_unprocessed(test_table_s):
         test_table_s.name: {'Keys': [{'p': p}], 'ProjectionExpression': 'p, a', 'ConsistentRead': True}
     })
     assert 'UnprocessedKeys' in read_reply and read_reply['UnprocessedKeys'] == dict()
+
+# According to the DynamoDB document, a single BatchWriteItem operation is
+# limited to 25 update requests, up to 400 KB each, or 16 MB total (25*400
+# is only 10 MB, but the JSON format has additional overheads). If we write
+# less than those limits in a single BatchWriteItem operation, it should
+# work. Testing a large request exercises our code which calculates the
+# request signature, and parses a long request (issue #7213).
+def test_batch_write_item_large(test_table_sn):
+    p = random_string()
+    long_content = random_string(100)*500
+    write_reply = test_table_sn.meta.client.batch_write_item(RequestItems = {
+        test_table_sn.name: [{'PutRequest': {'Item': {'p': p, 'c': i, 'content': long_content}}} for i in range(25)],
+    })
+    assert 'UnprocessedItems' in write_reply and write_reply['UnprocessedItems'] == dict()
+    assert full_query(test_table_sn, KeyConditionExpression='p=:p', ExpressionAttributeValues={':p': p}
+        ) == [{'p': p, 'c': i, 'content': long_content} for i in range(25)]

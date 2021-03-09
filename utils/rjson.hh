@@ -141,6 +141,18 @@ std::optional<rjson::value> try_parse(std::string_view str);
 // Needs to be run in thread context
 rjson::value parse_yieldable(std::string_view str);
 
+// chunked_content holds a non-contiguous buffer of bytes - such as bytes
+// read by httpd::read_entire_stream(). We assume that chunked_content does
+// not contain any empty buffers (the vector can be empty, meaning empty
+// content - but individual buffers cannot).
+using chunked_content = std::vector<temporary_buffer<char>>;
+
+// Additional variants of parse() and parse_yieldable() that work on non-
+// contiguous chunked_content. The chunked_content is moved into the parsing
+// function so that we can start freeing chunks as soon as we parse them.
+rjson::value parse(chunked_content&&);
+rjson::value parse_yieldable(chunked_content&&);
+
 // Creates a JSON value (of JSON string type) out of internal string representations.
 // The string value is copied, so str's liveness does not need to be persisted.
 rjson::value from_string(const char* str, size_t size);

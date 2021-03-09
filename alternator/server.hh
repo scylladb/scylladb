@@ -33,6 +33,8 @@
 
 namespace alternator {
 
+using chunked_content = rjson::chunked_content;
+
 class server {
     static constexpr size_t content_length_limit = 16*MB;
     using alternator_callback = std::function<future<executor::request_return_type>(executor&, executor::client_state&,
@@ -55,7 +57,7 @@ class server {
 
     class json_parser {
         static constexpr size_t yieldable_parsing_threshold = 16*KB;
-        std::string_view _raw_document;
+        chunked_content _raw_document;
         rjson::value _parsed_document;
         std::exception_ptr _current_exception;
         semaphore _parsing_sem{1};
@@ -65,7 +67,10 @@ class server {
         future<> _run_parse_json_thread;
     public:
         json_parser();
-        future<rjson::value> parse(std::string_view content);
+        // Moving a chunked_content into parse() allows parse() to free each
+        // chunk as soon as it is parsed, so when chunks are relatively small,
+        // we don't need to store the sum of unparsed and parsed sizes.
+        future<rjson::value> parse(chunked_content&& content);
         future<> stop();
     };
     json_parser _json_parser;
@@ -78,7 +83,8 @@ public:
     future<> stop();
 private:
     void set_routes(seastar::httpd::routes& r);
-    future<> verify_signature(const seastar::httpd::request& r);
+    future<> verify_signature(const seastar::httpd::request&, const chunked_content&);
+    future<chunked_content> read_content_and_verify_signature(seastar::httpd::request&);
     future<executor::request_return_type> handle_api_request(std::unique_ptr<request>&& req);
 };
 

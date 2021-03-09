@@ -27,6 +27,66 @@ namespace rjson {
 
 allocator the_allocator;
 
+// chunked_content_stream is a wrapper of a chunked_content which
+// presents the Stream concept that the rapidjson library expects as input
+// for its parser (https://rapidjson.org/classrapidjson_1_1_stream.html).
+// This wrapper owns the chunked_content, so it can free each chunk as
+// soon as it's parsed.
+class chunked_content_stream {
+private:
+    chunked_content _content;
+    chunked_content::iterator _current_chunk;
+    // _count only needed for Tell(). 32 bits is enough, we don't allow
+    // more than 16 MB requests anyway.
+    unsigned _count;
+public:
+    typedef char Ch;
+    chunked_content_stream(chunked_content&& content)
+        : _content(std::move(content))
+        , _current_chunk(_content.begin())
+    {}
+    bool eof() const {
+        return _current_chunk == _content.end();
+    }
+    // Methods needed by rapidjson's Stream concept (see
+    // https://rapidjson.org/classrapidjson_1_1_stream.html):
+    char Peek() const {
+        if (eof()) {
+            // Rapidjson's Stream concept does not have the explicit notion of
+            // an "end of file". Instead, reading after the end of stream will
+            // return a null byte. This makes these streams appear like null-
+            // terminated C strings. It is good enough for reading JSON, which
+            // anyway can't include bare null characters.
+            return '\0';
+        } else {
+            return *_current_chunk->begin();
+        }
+    }
+    char Take() {
+        if (eof()) {
+            return '\0';
+        } else {
+            char ret = *_current_chunk->begin();
+            _current_chunk->trim_front(1);
+            ++_count;
+            if (_current_chunk->empty()) {
+                *_current_chunk = temporary_buffer<char>();
+                ++_current_chunk;
+            }
+            return ret;
+        }
+    }
+    size_t Tell() const {
+        return _count;
+    }
+    // Not used in input streams, but unfortunately we still need to implement
+    Ch* PutBegin() { RAPIDJSON_ASSERT(false); return 0; }
+    void Put(Ch) { RAPIDJSON_ASSERT(false); }
+    void Flush() { RAPIDJSON_ASSERT(false); }
+    size_t PutEnd(Ch*) { RAPIDJSON_ASSERT(false); return 0; }
+
+};
+
 /*
  * This wrapper class adds nested level checks to rapidjson's handlers.
  * Each rapidjson handler implements functions for accepting JSON values,
@@ -49,11 +109,11 @@ public:
     guarded_yieldable_json_handler(string_buffer& buf, size_t max_nested_level)
             : handler_base(buf), _max_nested_level(max_nested_level) {}
 
-    void Parse(const char* str, size_t length) {
-        rapidjson::MemoryStream ms(static_cast<const char*>(str), length * sizeof(typename encoding::Ch));
-        rapidjson::EncodedInputStream<encoding, rapidjson::MemoryStream> is(ms);
+    // Parse any stream fitting https://rapidjson.org/classrapidjson_1_1_stream.html
+    template<typename Stream>
+    void Parse(Stream& stream) {
         rapidjson::GenericReader<encoding, encoding, allocator> reader(&the_allocator);
-        reader.Parse(is, *this);
+        reader.Parse(stream, *this);
         if (reader.HasParseError()) {
             throw rjson::error(format("Parsing JSON failed: {}", rapidjson::GetParseError_En(reader.GetParseErrorCode())));
         }
@@ -69,6 +129,18 @@ public:
         // as protected instead of private, so that this class can access it.
         auto dummy_generator = [](handler_base&){return true;};
         handler_base::Populate(dummy_generator);
+    }
+    void Parse(const char* str, size_t length) {
+        rapidjson::MemoryStream ms(static_cast<const char*>(str), length * sizeof(typename encoding::Ch));
+        rapidjson::EncodedInputStream<encoding, rapidjson::MemoryStream> is(ms);
+        Parse(is);
+    }
+
+    void Parse(chunked_content&& content) {
+        // Note that content was moved into this function. The intention is
+        // that we free every chunk we are done with.
+        chunked_content_stream is(std::move(content));
+        Parse(is);
     }
 
     bool StartObject() {
@@ -156,6 +228,16 @@ rjson::value parse(std::string_view str) {
     return std::move(v);
 }
 
+rjson::value parse(chunked_content&& content) {
+    guarded_yieldable_json_handler<document, false> d(78);
+    d.Parse(std::move(content));
+    if (d.HasParseError()) {
+        throw rjson::error(format("Parsing JSON failed: {}", GetParseError_En(d.GetParseError())));
+    }
+    rjson::value& v = d;
+    return std::move(v);
+}
+
 std::optional<rjson::value> try_parse(std::string_view str) {
     guarded_yieldable_json_handler<document, false> d(78);
     try {
@@ -173,6 +255,16 @@ std::optional<rjson::value> try_parse(std::string_view str) {
 rjson::value parse_yieldable(std::string_view str) {
     guarded_yieldable_json_handler<document, true> d(78);
     d.Parse(str.data(), str.size());
+    if (d.HasParseError()) {
+        throw rjson::error(format("Parsing JSON failed: {}", GetParseError_En(d.GetParseError())));
+    }
+    rjson::value& v = d;
+    return std::move(v);
+}
+
+rjson::value parse_yieldable(chunked_content&& content) {
+    guarded_yieldable_json_handler<document, true> d(78);
+    d.Parse(std::move(content));
     if (d.HasParseError()) {
         throw rjson::error(format("Parsing JSON failed: {}", GetParseError_En(d.GetParseError())));
     }

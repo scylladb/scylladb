@@ -3909,22 +3909,6 @@ future<> executor::create_keyspace(std::string_view keyspace_name) {
     });
 }
 
-static tracing::trace_state_ptr create_tracing_session() {
-    tracing::trace_state_props_set props;
-    props.set<tracing::trace_state_props::full_tracing>();
-    return tracing::tracing::get_local_tracing_instance().create_session(tracing::trace_type::QUERY, props);
-}
-
-tracing::trace_state_ptr executor::maybe_trace_query(client_state& client_state, sstring_view op, sstring_view query) {
-    tracing::trace_state_ptr trace_state;
-    if (tracing::tracing::get_local_tracing_instance().trace_next_query()) {
-        trace_state = create_tracing_session();
-        tracing::add_query(trace_state, query);
-        tracing::begin(trace_state, format("Alternator {}", op), client_state.get_client_address());
-    }
-    return trace_state;
-}
-
 future<> executor::start() {
     // Currently, nothing to do on initialization. We delay the keyspace
     // creation (create_keyspace()) until a table is actually created.
