@@ -197,6 +197,10 @@ public:
         return _state_props.contains(trace_state_props::log_slow_query);
     }
 
+    bool ignore_events() const {
+        return _state_props.contains(trace_state_props::ignore_events);
+    }
+
     trace_state_props_set raw_props() const {
         return _state_props;
     }
@@ -684,7 +688,7 @@ inline void begin(const trace_state_ptr& p, A&&... a) {
  */
 template <typename... A>
 inline void trace(const trace_state_ptr& p, A&&... a) noexcept {
-    if (p) {
+    if (p && !p->ignore_events()) {
         p->trace(std::forward<A>(a)...);
     }
 }
@@ -692,12 +696,12 @@ inline void trace(const trace_state_ptr& p, A&&... a) noexcept {
 inline std::optional<trace_info> make_trace_info(const trace_state_ptr& state) {
     // We want to trace the remote replicas' operations only when a full tracing
     // is requested or when a slow query logging is enabled and the session is
-    // still active.
+    // still active and only if the session events tracing is not explicitly disabled.
     //
     // When only a slow query logging is enabled we don't really care what
     // happens on a remote replica after a Client has received a response for
     // his/her query.
-    if (state && (state->full_tracing() || (state->log_slow_query() && !state->is_in_state(trace_state::state::background)))) {
+    if (state && !state->ignore_events() && (state->full_tracing() || (state->log_slow_query() && !state->is_in_state(trace_state::state::background)))) {
         return trace_info{state->session_id(), state->type(), state->write_on_close(), state->raw_props(), state->slow_query_threshold_us(), state->slow_query_ttl_sec(), state->my_span_id()};
     }
 
