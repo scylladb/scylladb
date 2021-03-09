@@ -24,6 +24,7 @@
 #include "schema_registry.hh"
 #include "log.hh"
 #include "db/schema_tables.hh"
+#include "view_info.hh"
 
 static logging::logger slogger("schema_registry");
 
@@ -274,22 +275,43 @@ global_schema_ptr::global_schema_ptr(global_schema_ptr&& o) noexcept {
     assert(o._cpu_of_origin == current);
     _ptr = std::move(o._ptr);
     _cpu_of_origin = current;
+    _base_schema = std::move(o._base_schema);
 }
 
 schema_ptr global_schema_ptr::get() const {
     if (this_shard_id() == _cpu_of_origin) {
         return _ptr;
     } else {
-        // 'e' points to a foreign entry, but we know it won't be evicted
-        // because _ptr is preventing this.
-        const schema_registry_entry& e = *_ptr->registry_entry();
-        schema_ptr s = local_schema_registry().get_or_null(e.version());
-        if (!s) {
-            s = local_schema_registry().get_or_load(e.version(), [&e](table_schema_version) {
-                return e.frozen();
-            });
+        auto registered_schema = [](const schema_registry_entry& e) {
+            schema_ptr ret = local_schema_registry().get_or_null(e.version());
+            if (!ret) {
+                ret = local_schema_registry().get_or_load(e.version(), [&e](table_schema_version) {
+                    return e.frozen();
+                });
+            }
+            return ret;
+        };
+
+        schema_ptr registered_bs;
+        // the following code contains registry entry dereference of a foreign shard
+        // however, it is guarantied to succeed since we made sure in the constructor
+        // that _bs_schema and _ptr will have a registry on the foreign shard where this
+        // object originated so as long as this object lives the registry entries lives too
+        // and it is safe to reference them on foreign shards.
+        if (_base_schema) {
+            registered_bs = registered_schema(*_base_schema->registry_entry());
+            if (_base_schema->registry_entry()->is_synced()) {
+                registered_bs->registry_entry()->mark_synced();
+            }
         }
-        if (e.is_synced()) {
+        schema_ptr s = registered_schema(*_ptr->registry_entry());
+        if (s->is_view()) {
+            if (!s->view_info()->base_info()) {
+                // we know that registered_bs is valid here because we make sure of it in the constructors.
+                s->view_info()->set_base_info(s->view_info()->make_base_dependent_view_info(*registered_bs));
+            }
+        }
+        if (_ptr->registry_entry()->is_synced()) {
             s->registry_entry()->mark_synced();
         }
         return s;
@@ -297,16 +319,33 @@ schema_ptr global_schema_ptr::get() const {
 }
 
 global_schema_ptr::global_schema_ptr(const schema_ptr& ptr)
-    : _ptr([&ptr]() {
-        // _ptr must always have an associated registry entry,
-        // if ptr doesn't, we need to load it into the registry.
-        schema_registry_entry* e = ptr->registry_entry();
+        : _cpu_of_origin(this_shard_id()) {
+    // _ptr must always have an associated registry entry,
+    // if ptr doesn't, we need to load it into the registry.
+    auto ensure_registry_entry = [] (const schema_ptr& s) {
+        schema_registry_entry* e = s->registry_entry();
         if (e) {
-            return ptr;
-        }
-        return local_schema_registry().get_or_load(ptr->version(), [&ptr] (table_schema_version) {
-                return frozen_schema(ptr);
+            return s;
+        } else {
+            return local_schema_registry().get_or_load(s->version(), [&s] (table_schema_version) {
+                return frozen_schema(s);
             });
-        }())
-    , _cpu_of_origin(this_shard_id())
-{ }
+        }
+    };
+
+    schema_ptr s = ensure_registry_entry(ptr);
+    if (s->is_view()) {
+        if (s->view_info()->base_info()) {
+            _base_schema = ensure_registry_entry(s->view_info()->base_info()->base_schema());
+        } else if (ptr->view_info()->base_info()) {
+            _base_schema = ensure_registry_entry(ptr->view_info()->base_info()->base_schema());
+        } else {
+            on_internal_error(slogger, format("Tried to build a global schema for view {}.{} with an uninitialized base info", s->ks_name(), s->cf_name()));
+        }
+
+        if (!s->view_info()->base_info() || !s->view_info()->base_info()->base_schema()->registry_entry()) {
+            s->view_info()->set_base_info(s->view_info()->make_base_dependent_view_info(*_base_schema));
+        }
+    }
+    _ptr = s;
+}
