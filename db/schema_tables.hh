@@ -238,7 +238,9 @@ std::vector<mutation> make_update_view_mutations(lw_shared_ptr<keyspace_metadata
 
 std::vector<mutation> make_drop_view_mutations(lw_shared_ptr<keyspace_metadata> keyspace, view_ptr view, api::timestamp_type timestamp);
 
-future<> maybe_update_legacy_secondary_index_mv_schema(service::migration_manager& mm, database& db, view_ptr v);
+class preserve_version_tag {};
+using preserve_version = bool_class<preserve_version_tag>;
+view_ptr maybe_fix_legacy_secondary_index_mv_schema(database& db, const view_ptr& v, schema_ptr base_schema, preserve_version preserve_version);
 
 sstring serialize_kind(column_kind kind);
 column_kind deserialize_kind(sstring kind);
