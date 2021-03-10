@@ -544,6 +544,16 @@ int main(int ac, char** av) {
 
             startlog.info(startup_msg, scylla_version(), get_build_id());
 
+            // Set the default scheduling_group, i.e., the main scheduling
+            // group to a lower shares. Subsystems needs higher shares
+            // should set it explicitly. This prevents code that is supposed to
+            // run inside its own scheduling group leaking to main group and
+            // causing latency issues.
+            smp::invoke_on_all([] {
+                auto default_sg = default_scheduling_group();
+                default_sg.set_shares(200);
+            }).get();
+
             verify_rlimit(cfg->developer_mode());
             verify_adequate_memory_per_shard(cfg->developer_mode());
             if (cfg->partitioner() != "org.apache.cassandra.dht.Murmur3Partitioner") {
