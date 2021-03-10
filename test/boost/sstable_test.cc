@@ -39,7 +39,7 @@
 #include "partition_slice_builder.hh"
 #include "test/lib/test_services.hh"
 #include "cell_locking.hh"
-#include "sstables/data_consume_context.hh"
+#include "sstables/row.hh"
 
 using namespace sstables;
 
