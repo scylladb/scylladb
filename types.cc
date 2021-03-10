@@ -695,6 +695,66 @@ void write_collection_value(bytes_ostream& out, cql_serialization_format sf, ato
     }
 }
 
+void write_fragmented(managed_bytes_mutable_view& out, std::string_view val) {
+    while (val.size() > 0) {
+        size_t current_n = std::min(val.size(), out.current_fragment().size());
+        memcpy(out.current_fragment().data(), val.data(), current_n);
+        val.remove_prefix(current_n);
+        out.remove_prefix(current_n);
+    }
+}
+
+template<std::integral T>
+void write_simple(managed_bytes_mutable_view& out, std::type_identity_t<T> val) {
+    val = net::hton(val);
+    if (out.current_fragment().size() >= sizeof(T)) [[likely]] {
+        auto p = out.current_fragment().data();
+        out.remove_prefix(sizeof(T));
+        // FIXME use write_unaligned after it's merged.
+        write_unaligned<T>(p, val);
+    } else if (out.size_bytes() >= sizeof(T)) {
+        write_fragmented(out, std::string_view(reinterpret_cast<const char*>(&val), sizeof(T)));
+    } else {
+        on_internal_error(tlogger, format("write_simple: attempted write of size {} to buffer of size {}", sizeof(T), out.size_bytes()));
+    }
+}
+
+void write_collection_size(managed_bytes_mutable_view& out, int size, cql_serialization_format sf) {
+    if (sf.using_32_bits_for_collections()) {
+        write_simple<uint32_t>(out, uint32_t(size));
+    } else {
+        write_simple<uint16_t>(out, uint16_t(size));
+    }
+}
+
+void write_collection_value(managed_bytes_mutable_view& out, cql_serialization_format sf, bytes_view val) {
+    if (sf.using_32_bits_for_collections()) {
+        write_simple<int32_t>(out, int32_t(val.size()));
+    } else {
+        if (val.size() > std::numeric_limits<uint16_t>::max()) {
+            throw marshal_exception(
+                    format("Collection value exceeds the length limit for protocol v{:d}. Collection values are limited to {:d} bytes but {:d} bytes value provided",
+                            sf.protocol_version(), std::numeric_limits<uint16_t>::max(), val.size()));
+        }
+        write_simple<uint16_t>(out, uint16_t(val.size()));
+    }
+    write_fragmented(out, single_fragmented_view(val));
+}
+
+void write_collection_value(managed_bytes_mutable_view& out, cql_serialization_format sf, const managed_bytes_view& val) {
+    if (sf.using_32_bits_for_collections()) {
+        write_simple<int32_t>(out, int32_t(val.size_bytes()));
+    } else {
+        if (val.size_bytes() > std::numeric_limits<uint16_t>::max()) {
+            throw marshal_exception(
+                    format("Collection value exceeds the length limit for protocol v{:d}. Collection values are limited to {:d} bytes but {:d} bytes value provided",
+                            sf.protocol_version(), std::numeric_limits<uint16_t>::max(), val.size_bytes()));
+        }
+        write_simple<uint16_t>(out, uint16_t(val.size_bytes()));
+    }
+    write_fragmented(out, val);
+}
+
 shared_ptr<const abstract_type> abstract_type::underlying_type() const {
     struct visitor {
         shared_ptr<const abstract_type> operator()(const abstract_type& t) { return t.shared_from_this(); }
