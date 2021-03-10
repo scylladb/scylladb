@@ -152,3 +152,17 @@ raft::fsm* select_leader(Args&&... args) {
     return leader;
 }
 
+
+raft::server_id id() {
+    static int id = 0;
+    return raft::server_id{utils::UUID(0, ++id)};
+}
+
+raft::server_address_set address_set(std::initializer_list<raft::server_id> ids) {
+    raft::server_address_set set;
+    for (auto id : ids) {
+        set.emplace(raft::server_address{.id = id});
+    }
+    return set;
+}
+
