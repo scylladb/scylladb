@@ -147,11 +147,11 @@ lists::value::get(const query_options& options) {
     return cql3::raw_value::make_value(get_with_protocol_version(options.get_cql_serialization_format()));
 }
 
-bytes
+managed_bytes
 lists::value::get_with_protocol_version(cql_serialization_format sf) {
     // Can't use boost::indirect_iterator, because optional is not an iterator
     auto deref = [] (bytes_opt& x) { return *x; };
-    return collection_type_impl::pack(
+    return collection_type_impl::pack_fragmented(
             boost::make_transform_iterator(_elements.begin(), deref),
             boost::make_transform_iterator( _elements.end(), deref),
             _elements.size(), sf);
@@ -393,7 +393,7 @@ lists::do_append(shared_ptr<term> value,
             m.set_cell(prefix, column, params.make_dead_cell());
         } else {
             auto newv = list_value->get_with_protocol_version(cql_serialization_format::internal());
-            m.set_cell(prefix, column, params.make_cell(*column.type, std::move(newv)));
+            m.set_cell(prefix, column, params.make_cell(*column.type, newv));
         }
     }
 }

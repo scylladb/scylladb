@@ -177,15 +177,15 @@ maps::value::get(const query_options& options) {
     return cql3::raw_value::make_value(get_with_protocol_version(options.get_cql_serialization_format()));
 }
 
-bytes
+managed_bytes
 maps::value::get_with_protocol_version(cql_serialization_format sf) {
     //FIXME: share code with serialize_partially_deserialized_form
     size_t len = collection_value_len(sf) * map.size() * 2 + collection_size_len(sf);
     for (auto&& e : map) {
         len += e.first.size() + e.second.size();
     }
-    bytes b(bytes::initialized_later(), len);
-    bytes::iterator out = b.begin();
+    managed_bytes b(managed_bytes::initialized_later(), len);
+    managed_bytes_mutable_view out(b);
 
     write_collection_size(out, map.size(), sf);
     for (auto&& e : map) {

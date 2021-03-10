@@ -154,9 +154,9 @@ sets::value::get(const query_options& options) {
     return cql3::raw_value::make_value(get_with_protocol_version(options.get_cql_serialization_format()));
 }
 
-bytes
+managed_bytes
 sets::value::get_with_protocol_version(cql_serialization_format sf) {
-    return collection_type_impl::pack(_elements.begin(), _elements.end(),
+    return collection_type_impl::pack_fragmented(_elements.begin(), _elements.end(),
             _elements.size(), sf);
 }
 
