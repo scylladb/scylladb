@@ -91,7 +91,7 @@ protected:
 
     virtual future<> unadvertise_connection(shared_ptr<connection> conn);
 
-    void maybe_idle();
+    void maybe_stop();
 };
 
 }

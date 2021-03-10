@@ -43,7 +43,7 @@ connection::~connection()
 {
     --_server._current_connections;
     _server._connections_list.erase(_server._connections_list.iterator_to(*this));
-    _server.maybe_idle();
+    _server.maybe_stop();
 }
 
 static bool is_broken_pipe_or_connection_reset(std::exception_ptr ep) {
@@ -161,7 +161,7 @@ future<> server::do_accepts(int which, bool keepalive, socket_address server_add
             --_connections_being_accepted;
             if (_stopping) {
                 f_cs_sa.ignore_ready_future();
-                maybe_idle();
+                maybe_stop();
                 return stop_iteration::yes;
             }
             auto cs_sa = f_cs_sa.get0();
@@ -213,7 +213,8 @@ server::unadvertise_connection(shared_ptr<generic_server::connection> raw_conn) 
     return make_ready_future<>();
 }
 
-void server::maybe_idle() {
+// Signal that all connections are stopped if the server is stopping and can be stopped.
+void server::maybe_stop() {
     if (_stopping && !_connections_being_accepted && !_current_connections) {
         _all_connections_stopped.set_value();
     }
