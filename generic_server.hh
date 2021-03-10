@@ -36,6 +36,14 @@ namespace generic_server {
 
 class server;
 
+// A generic TCP connection.
+//
+// This class is used in tandem with the `server`class to implement a protocol
+// specific TCP connection.
+//
+// Protocol specific classes are expected to override the `process_request`
+// member function to perform request processing. This base class provides a
+// `_read_buf` and a `_write_buf` for reading requests and writing responses.
 class connection : public boost::intrusive::list_base_hook<> {
 protected:
     server& _server;
@@ -60,6 +68,19 @@ public:
     virtual future<> shutdown();
 };
 
+// A generic TCP socket server.
+//
+// This class can be used as a base for a protocol specific TCP socket server
+// that listens to incoming connections and processes requests coming over the
+// connection.
+//
+// The provides a `listen` member function that creates a TCP server socket and
+// registers it to the Seastar reactor. The class also provides a `stop` member
+// function that can be used to safely stop the server.
+//
+// Protocol specific classes that inherit `server` are expected to also inherit
+// a connection class from `connection` and override the `make_connection` member
+// function to create a protocol specific connection upon `accept`.
 class server {
     friend class connection;
 
