@@ -319,13 +319,6 @@ future<> server::verify_signature(const request& req, const chunked_content& con
     });
 }
 
-future<chunked_content> server::read_content_and_verify_signature(request& req) {
-    assert(req.content_stream);
-    chunked_content content = co_await httpd::read_entire_stream(*req.content_stream);
-    co_await verify_signature(req, content);
-    co_return std::move(content);
-}
-
 static tracing::trace_state_ptr create_tracing_session() {
     tracing::trace_state_props_set props;
     props.set<tracing::trace_state_props::full_tracing>();
