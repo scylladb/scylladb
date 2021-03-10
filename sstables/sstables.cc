@@ -77,8 +77,8 @@
 #include "sstables_manager.hh"
 #include <boost/algorithm/string/predicate.hpp>
 #include "tracing/traced_file.hh"
-#include "sstable_mutation_reader.hh"
 #include "kl/reader.hh"
+#include "mx/reader.hh"
 
 thread_local disk_error_signal_type sstable_read_error;
 thread_local disk_error_signal_type sstable_write_error;
@@ -2112,8 +2112,7 @@ sstable::make_reader(
         mutation_reader::forwarding fwd_mr,
         read_monitor& mon) {
     if (_version >= version_types::mc) {
-        return make_flat_mutation_reader<sstable_mutation_reader<data_consume_rows_context_m, mp_row_consumer_m>>(
-            shared_from_this(), std::move(schema), std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr, mon);
+        return mx::make_reader(shared_from_this(), std::move(schema), std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr, mon);
     }
     return kl::make_reader(shared_from_this(), std::move(schema), std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr, mon);
 }
