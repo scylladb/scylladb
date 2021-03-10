@@ -808,6 +808,8 @@ void fsm::install_snapshot_reply(server_id from, snapshot_reply&& reply) {
 bool fsm::apply_snapshot(snapshot snp, size_t trailing) {
     logger.trace("apply_snapshot[{}]: term: {}, idx: {}", _my_id, _current_term, snp.idx);
     const auto& current_snp = _log.get_snapshot();
+    // Uncommitted entries can not appear in the snapshot
+    assert(snp.idx <= _commit_idx || is_follower());
     if (snp.idx <= current_snp.idx) {
         logger.error("apply_snapshot[{}]: ignore outdated snapshot {}/{} current one is {}/{}",
                         _my_id, snp.id, snp.idx, current_snp.id, current_snp.idx);
