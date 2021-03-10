@@ -39,17 +39,7 @@
 
 namespace sstables {
 
-static
-position_in_partition_view get_slice_upper_bound(const schema& s, const query::partition_slice& slice, dht::ring_position_view key) {
-    const auto& ranges = slice.row_ranges(s, *key.key());
-    if (ranges.empty()) {
-        return position_in_partition_view::for_static_row();
-    }
-    if (slice.options.contains(query::partition_slice::option::reversed)) {
-        return position_in_partition_view::for_range_end(ranges.front());
-    }
-    return position_in_partition_view::for_range_end(ranges.back());
-}
+position_in_partition_view get_slice_upper_bound(const schema& s, const query::partition_slice& slice, dht::ring_position_view key);
 
 template<typename T>
 concept RowConsumer =
@@ -437,34 +427,5 @@ public:
         }
     }
 };
-
-void mp_row_consumer_reader::on_next_partition(dht::decorated_key key, tombstone tomb) {
-    _partition_finished = false;
-    _before_partition = false;
-    _end_of_stream = false;
-    _current_partition_key = std::move(key);
-    push_mutation_fragment(
-        mutation_fragment(*_schema, _permit, partition_start(*_current_partition_key, tomb)));
-    _sst->get_stats().on_partition_read();
-}
-
-flat_mutation_reader
-sstable::make_reader(
-        schema_ptr schema,
-        reader_permit permit,
-        const dht::partition_range& range,
-        const query::partition_slice& slice,
-        const io_priority_class& pc,
-        tracing::trace_state_ptr trace_state,
-        streamed_mutation::forwarding fwd,
-        mutation_reader::forwarding fwd_mr,
-        read_monitor& mon) {
-    if (_version >= version_types::mc) {
-        return make_flat_mutation_reader<sstable_mutation_reader<data_consume_rows_context_m, mp_row_consumer_m>>(
-            shared_from_this(), std::move(schema), std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr, mon);
-    }
-    return make_flat_mutation_reader<sstable_mutation_reader<data_consume_rows_context, mp_row_consumer_k_l>>(
-        shared_from_this(), std::move(schema), std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr, mon);
-}
 
 }
