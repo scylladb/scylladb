@@ -20,8 +20,10 @@
  */
 
 #include "reader.hh"
+#include "concrete_types.hh"
+#include "sstables/liveness_info.hh"
+#include "sstables/mutation_fragment_filter.hh"
 #include "sstables/sstable_mutation_reader.hh"
-#include "sstables/mp_row_consumer.hh"
 
 namespace sstables {
 namespace mx {

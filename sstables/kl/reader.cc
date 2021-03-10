@@ -22,7 +22,7 @@
 #include "sstables/kl/reader.hh"
 #include "sstables/kl/reader_impl.hh"
 #include "sstables/sstable_mutation_reader.hh"
-#include "sstables/mp_row_consumer.hh"
+#include "concrete_types.hh"
 
 namespace sstables {
 namespace kl {
