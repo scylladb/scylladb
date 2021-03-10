@@ -1805,12 +1805,16 @@ SEASTAR_TEST_CASE(test_mutation_diff_with_random_generator) {
                 BOOST_FAIL(format("Partitions don't match, got: {}\n...and: {}", mutation_partition::printer(s, mp1), mutation_partition::printer(s, mp2)));
             }
         };
-        for_each_mutation_pair([&] (auto&& m1, auto&& m2, are_equal eq) {
+        const auto now = gc_clock::now();
+        can_gc_fn never_gc = [] (tombstone) { return false; };
+        for_each_mutation_pair([&] (auto m1, auto m2, are_equal eq) {
             mutation_application_stats app_stats;
             auto s = m1.schema();
             if (s != m2.schema()) {
                 return;
             }
+            m1.partition().compact_for_compaction(*s, never_gc, now);
+            m2.partition().compact_for_compaction(*s, never_gc, now);
             auto m12 = m1;
             m12.apply(m2);
             auto m12_with_diff = m1;
