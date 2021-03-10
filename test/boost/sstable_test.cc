@@ -418,7 +418,7 @@ SEASTAR_TEST_CASE(uncompressed_rows_read_one) {
     return test_using_reusable_sst(uncompressed_schema(), uncompressed_dir(), 1, [] (auto sstp) {
         return do_with(test_row_consumer(1418656871665302), [sstp] (auto& c) {
             auto context = data_consume_rows<data_consume_rows_context>(*uncompressed_schema(), sstp, c, {0, 95}, 95);
-            auto fut = context.read();
+            auto fut = context->consume_input();
             return fut.then([sstp, &c, context = std::move(context)] {
                 BOOST_REQUIRE(c.count_row_start == 1);
                 BOOST_REQUIRE(c.count_cell == 3);
@@ -436,7 +436,7 @@ SEASTAR_TEST_CASE(compressed_rows_read_one) {
     return test_using_reusable_sst(std::move(s), "test/resource/sstables/compressed", 1, [] (auto sstp) {
         return do_with(test_row_consumer(1418654707438005), [sstp] (auto& c) {
             auto context = data_consume_rows<data_consume_rows_context>(*uncompressed_schema(), sstp, c, {0, 95}, 95);
-            auto fut = context.read();
+            auto fut = context->consume_input();
             return fut.then([sstp, &c, context = std::move(context)] {
                 BOOST_REQUIRE(c.count_row_start == 1);
                 BOOST_REQUIRE(c.count_cell == 3);
@@ -505,7 +505,7 @@ SEASTAR_TEST_CASE(uncompressed_rows_read_all) {
     return test_using_reusable_sst(uncompressed_schema(), uncompressed_dir(), 1, [] (auto sstp) {
         return do_with(count_row_consumer(), [sstp] (auto& c) {
             auto context = data_consume_rows<data_consume_rows_context>(*uncompressed_schema(), sstp, c);
-            auto fut = context.read();
+            auto fut = context->consume_input();
             return fut.then([sstp, &c, context = std::move(context)] {
                 BOOST_REQUIRE(c.count_row_start == 4);
                 BOOST_REQUIRE(c.count_row_end == 4);
@@ -523,7 +523,7 @@ SEASTAR_TEST_CASE(compressed_rows_read_all) {
     return test_using_reusable_sst(std::move(s), "test/resource/sstables/compressed", 1, [] (auto sstp) {
         return do_with(count_row_consumer(), [sstp] (auto& c) {
             auto context = data_consume_rows<data_consume_rows_context>(*uncompressed_schema(), sstp, c);
-            auto fut = context.read();
+            auto fut = context->consume_input();
             return fut.then([sstp, &c, context = std::move(context)] {
                 BOOST_REQUIRE(c.count_row_start == 4);
                 BOOST_REQUIRE(c.count_row_end == 4);
@@ -550,7 +550,7 @@ SEASTAR_TEST_CASE(pausable_uncompressed_rows_read_all) {
     return test_using_reusable_sst(uncompressed_schema(), uncompressed_dir(), 1, [] (auto sstp) {
         return do_with(pausable_count_row_consumer(), [sstp] (auto& c) {
             auto context = data_consume_rows<data_consume_rows_context>(*uncompressed_schema(), sstp, c);
-            auto fut = context.read();
+            auto fut = context->consume_input();
             return fut.then([sstp, &c, context = std::move(context)] () mutable {
                 // After one read, we only get one row
                 BOOST_REQUIRE(c.count_row_start == 1);
@@ -558,7 +558,7 @@ SEASTAR_TEST_CASE(pausable_uncompressed_rows_read_all) {
                 BOOST_REQUIRE(c.count_cell == 1*3);
                 BOOST_REQUIRE(c.count_deleted_cell == 0);
                 BOOST_REQUIRE(c.count_range_tombstone == 0);
-                auto fut = context.read();
+                auto fut = context->consume_input();
                 return fut.then([&c, context = std::move(context)] () mutable {
                     // After two reads
                     BOOST_REQUIRE(c.count_row_start == 2);
@@ -597,7 +597,7 @@ SEASTAR_TEST_CASE(read_set) {
     return test_using_reusable_sst(set_schema(), "test/resource/sstables/set", 1, [] (auto sstp) {
         return do_with(set_consumer(), [sstp] (auto& c) {
             auto context = data_consume_rows<data_consume_rows_context>(*uncompressed_schema(), sstp, c);
-            auto fut = context.read();
+            auto fut = context->consume_input();
             return fut.then([sstp, &c, context = std::move(context)] {
                 BOOST_REQUIRE(c.count_row_start == 1);
                 BOOST_REQUIRE(c.count_row_end == 1);
@@ -654,7 +654,7 @@ SEASTAR_TEST_CASE(ttl_read) {
     return test_using_reusable_sst(uncompressed_schema(), "test/resource/sstables/ttl", 1, [] (auto sstp) {
         return do_with(ttl_row_consumer(1430151018675502), [sstp] (auto& c) {
             auto context = data_consume_rows<data_consume_rows_context>(*uncompressed_schema(), sstp, c);
-            auto fut = context.read();
+            auto fut = context->consume_input();
             return fut.then([sstp, &c, context = std::move(context)] {
                 BOOST_REQUIRE(c.count_row_start == 1);
                 BOOST_REQUIRE(c.count_cell == 2);
@@ -693,7 +693,7 @@ SEASTAR_TEST_CASE(deleted_cell_read) {
     return test_using_reusable_sst(uncompressed_schema(), "test/resource/sstables/deleted_cell", 2, [] (auto sstp) {
         return do_with(deleted_cell_row_consumer(), [sstp] (auto& c) {
             auto context = data_consume_rows<data_consume_rows_context>(*uncompressed_schema(), sstp, c);
-            auto fut = context.read();
+            auto fut = context->consume_input();
             return fut.then([sstp, &c, context = std::move(context)] {
                 BOOST_REQUIRE(c.count_row_start == 1);
                 BOOST_REQUIRE(c.count_cell == 0);
