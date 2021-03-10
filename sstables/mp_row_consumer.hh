@@ -87,11 +87,6 @@ public:
     void on_next_partition(dht::decorated_key key, tombstone tomb);
 };
 
-struct new_mutation {
-    partition_key key;
-    tombstone tomb;
-};
-
 inline atomic_cell make_atomic_cell(const abstract_type& type,
                                     api::timestamp_type timestamp,
                                     bytes_view value,
