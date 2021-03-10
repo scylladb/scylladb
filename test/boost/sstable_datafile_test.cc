@@ -1209,7 +1209,7 @@ SEASTAR_TEST_CASE(compact) {
 static std::vector<sstables::shared_sstable> get_candidates_for_leveled_strategy(column_family& cf) {
     std::vector<sstables::shared_sstable> candidates;
     candidates.reserve(cf.sstables_count());
-    for (auto& entry : *cf.get_sstables()) {
+    for (auto sstables = cf.get_sstables(); auto& entry : *sstables) {
         candidates.push_back(entry);
     }
     return candidates;

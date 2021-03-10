@@ -449,7 +449,7 @@ int64_t date_tiered_manifest::get_estimated_tasks(column_family& cf) const {
     int64_t n = 0;
 
     sstables.reserve(cf.sstables_count());
-    for (auto& entry : *cf.get_sstables()) {
+    for (auto all_sstables = cf.get_sstables(); auto& entry : *all_sstables) {
         sstables.push_back(entry);
     }
     auto candidates = filter_old_sstables(sstables, _options.max_sstable_age, now);

@@ -132,7 +132,7 @@ void leveled_compaction_strategy::generate_last_compacted_keys(leveled_manifest&
 int64_t leveled_compaction_strategy::estimated_pending_compactions(column_family& cf) const {
     std::vector<sstables::shared_sstable> sstables;
     sstables.reserve(cf.sstables_count());
-    for (auto& entry : *cf.get_sstables()) {
+    for (auto all_sstables = cf.get_sstables(); auto& entry : *all_sstables) {
         sstables.push_back(entry);
     }
     leveled_manifest manifest = leveled_manifest::create(cf, sstables, _max_sstable_size_in_mb, _stcs_options);
