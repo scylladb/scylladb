@@ -85,7 +85,7 @@ private:
     void set_routes(seastar::httpd::routes& r);
     future<> verify_signature(const seastar::httpd::request&, const chunked_content&);
     future<chunked_content> read_content_and_verify_signature(seastar::httpd::request&);
-    future<executor::request_return_type> handle_api_request(std::unique_ptr<request>&& req);
+    future<executor::request_return_type> handle_api_request(std::unique_ptr<request> req);
 };
 
 }

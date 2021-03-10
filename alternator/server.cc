@@ -364,7 +364,7 @@ static tracing::trace_state_ptr maybe_trace_query(service::client_state& client_
     return trace_state;
 }
 
-future<executor::request_return_type> server::handle_api_request(std::unique_ptr<request>&& req) {
+future<executor::request_return_type> server::handle_api_request(std::unique_ptr<request> req) {
     _executor._stats.total_operations++;
     sstring target = req->get_header(TARGET);
     std::vector<std::string_view> split_target = split(target, '.');
@@ -380,40 +380,34 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
     if (_memory_limiter->waiters()) {
         ++_executor._stats.requests_blocked_memory;
     }
-    return units_fut.then([this, req = std::move(req), op = std::move(op)] (semaphore_units<> units) mutable {
-        return read_content_and_verify_signature(*req).then([this, op = std::move(op), req = std::move(req), units = std::move(units)] (chunked_content content) mutable {
-            if (slogger.is_enabled(log_level::trace)) {
-                std::string buf;
-                slogger.trace("Request: {} {} {}", op, truncated_content_view(content, buf), req->_headers);
-            }
-            auto callback_it = _callbacks.find(op);
-            if (callback_it == _callbacks.end()) {
-                _executor._stats.unsupported_operations++;
-                return make_ready_future<executor::request_return_type>(
-                    api_error::unknown_operation(format("Unsupported operation {}", op)));
-            }
-            if (_pending_requests.get_count() >= _max_concurrent_requests) {
-                _executor._stats.requests_shed++;
-                return make_ready_future<executor::request_return_type>(
-                    api_error::request_limit_exceeded(format("too many in-flight requests (configured via max_concurrent_requests_per_shard): {}", _pending_requests.get_count())));
-            }
-            return with_gate(_pending_requests, [this, callback_it = std::move(callback_it), op = std::move(op), content = std::move(content), req = std::move(req), units=std::move(units)] () mutable {
-                //FIXME: Client state can provide more context, e.g. client's endpoint address
-                // We use unique_ptr because client_state cannot be moved or copied
-                return do_with(std::make_unique<executor::client_state>(executor::client_state::internal_tag()),
-                    [this, callback_it = std::move(callback_it), op = std::move(op), content = std::move(content), req = std::move(req), units = std::move(units)] (std::unique_ptr<executor::client_state>& client_state) mutable {
-                    tracing::trace_state_ptr trace_state = maybe_trace_query(*client_state, op, content);
-                    tracing::trace(trace_state, op);
-                    return _json_parser.parse(std::move(content)).then([this, callback_it = std::move(callback_it), &client_state, trace_state,
-                            units = std::move(units), req = std::move(req)] (rjson::value json_request) mutable {
-                        return callback_it->second(_executor, *client_state, trace_state,
-                            make_service_permit(std::move(units)), std::move(json_request),
-                            std::move(req)).finally([trace_state] {});
-                    });
-                });
-            });
-        });
-    });
+    auto units = co_await std::move(units_fut);
+    assert(req->content_stream);
+    chunked_content content = co_await httpd::read_entire_stream(*req->content_stream);
+    co_await verify_signature(*req, content);
+
+    if (slogger.is_enabled(log_level::trace)) {
+        std::string buf;
+        slogger.trace("Request: {} {} {}", op, truncated_content_view(content, buf), req->_headers);
+    }
+    auto callback_it = _callbacks.find(op);
+    if (callback_it == _callbacks.end()) {
+        _executor._stats.unsupported_operations++;
+        co_return api_error::unknown_operation(format("Unsupported operation {}", op));
+    }
+    if (_pending_requests.get_count() >= _max_concurrent_requests) {
+        _executor._stats.requests_shed++;
+        co_return api_error::request_limit_exceeded(format("too many in-flight requests (configured via max_concurrent_requests_per_shard): {}", _pending_requests.get_count()));
+    }
+    _pending_requests.enter();
+    auto leave = defer([this] { _pending_requests.leave(); });
+    //FIXME: Client state can provide more context, e.g. client's endpoint address
+    // We use unique_ptr because client_state cannot be moved or copied
+    executor::client_state client_state{executor::client_state::internal_tag()};
+    tracing::trace_state_ptr trace_state = maybe_trace_query(client_state, op, content);
+    tracing::trace(trace_state, op);
+    rjson::value json_request = co_await _json_parser.parse(std::move(content));
+    co_return co_await callback_it->second(_executor, client_state, trace_state,
+            make_service_permit(std::move(units)), std::move(json_request), std::move(req));
 }
 
 void server::set_routes(routes& r) {
