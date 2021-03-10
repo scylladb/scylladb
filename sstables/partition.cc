@@ -35,34 +35,9 @@
 #include "clustering_ranges_walker.hh"
 #include "binary_search.hh"
 #include "../dht/i_partitioner.hh"
-#include "data_consume_context.hh"
 #include "mp_row_consumer.hh"
 
 namespace sstables {
-
-template
-data_consume_context<data_consume_rows_context>
-data_consume_rows<data_consume_rows_context>(const schema& s, shared_sstable, data_consume_rows_context::consumer&, sstable::disk_read_range, uint64_t);
-
-template
-data_consume_context<data_consume_rows_context>
-data_consume_single_partition<data_consume_rows_context>(const schema& s, shared_sstable, data_consume_rows_context::consumer&, sstable::disk_read_range);
-
-template
-data_consume_context<data_consume_rows_context>
-data_consume_rows<data_consume_rows_context>(const schema& s, shared_sstable, data_consume_rows_context::consumer&);
-
-template
-data_consume_context<data_consume_rows_context_m>
-data_consume_rows<data_consume_rows_context_m>(const schema& s, shared_sstable, data_consume_rows_context_m::consumer&, sstable::disk_read_range, uint64_t);
-
-template
-data_consume_context<data_consume_rows_context_m>
-data_consume_single_partition<data_consume_rows_context_m>(const schema& s, shared_sstable, data_consume_rows_context_m::consumer&, sstable::disk_read_range);
-
-template
-data_consume_context<data_consume_rows_context_m>
-data_consume_rows<data_consume_rows_context_m>(const schema& s, shared_sstable, data_consume_rows_context_m::consumer&);
 
 static
 position_in_partition_view get_slice_upper_bound(const schema& s, const query::partition_slice& slice, dht::ring_position_view key) {
@@ -129,7 +104,7 @@ class sstable_mutation_reader : public mp_row_consumer_reader {
     Consumer _consumer;
     bool _will_likely_slice = false;
     bool _read_enabled = true;
-    data_consume_context_opt<DataConsumeRowsContext> _context;
+    std::unique_ptr<DataConsumeRowsContext> _context;
     std::unique_ptr<index_reader> _index_reader;
     // We avoid unnecessary lookup for single partition reads thanks to this flag
     bool _single_partition_read = false;
@@ -176,6 +151,11 @@ public:
             }
         };
         close(_index_reader);
+        if (_context) {
+            auto f = _context->close();
+            //FIXME: discarded future.
+            (void)f.handle_exception([ctx = std::move(_context), sst = _sst](auto) {});
+        }
     }
 private:
     static bool will_likely_slice(const query::partition_slice& slice) {
@@ -207,7 +187,7 @@ private:
                 return make_ready_future<>();
             }
             assert(_index_reader->element_kind() == indexable_element::partition);
-            return _context->skip_to(_index_reader->element_kind(), start).then([this] {
+            return skip_to(_index_reader->element_kind(), start).then([this] {
                 _sst->get_stats().on_partition_seek();
             });
         });
@@ -227,7 +207,7 @@ private:
     }
     future<> read_from_datafile() {
         sstlog.trace("reader {}: read from data file", fmt::ptr(this));
-        return _context->read();
+        return _context->consume_input();
     }
     // Assumes that we're currently positioned at partition boundary.
     future<> read_partition() {
@@ -297,10 +277,10 @@ private:
             return get_index_reader().advance_to(*pos).then([this] {
                 index_reader& idx = *_index_reader;
                 auto index_position = idx.data_file_positions();
-                if (!_context->need_skip(index_position.start)) {
+                if (index_position.start <= _context->position()) {
                     return make_ready_future<>();
                 }
-                return _context->skip_to(idx.element_kind(), index_position.start).then([this, &idx] {
+                return skip_to(idx.element_kind(), index_position.start).then([this, &idx] {
                     _sst->get_stats().on_partition_seek();
                     set_range_tombstone_start_from_end_open_marker(_consumer, *_schema, idx);
                 });
@@ -351,6 +331,14 @@ private:
         }
         return initialize();
     }
+    future<> skip_to(indexable_element el, uint64_t begin) {
+        sstlog.trace("sstable_reader: {}: skip_to({} -> {}, el={})", fmt::ptr(_context.get()), _context->position(), begin, static_cast<int>(el));
+        if (begin <= _context->position()) {
+            return make_ready_future<>();
+        }
+        _context->reset(el);
+        return _context->skip_to(begin);
+    }
 public:
     void on_out_of_clustering_range() override {
         if (_fwd == streamed_mutation::forwarding::yes) {
@@ -378,6 +366,7 @@ public:
                     if (start != *end) {
                         _read_enabled = true;
                         _index_in_current_partition = true;
+                        _context->reset(indexable_element::partition);
                         return _context->fast_forward_to(start, *end);
                     }
                     _index_in_current_partition = false;
@@ -415,7 +404,7 @@ public:
                         return make_ready_future<>();
                     }
                     return advance_context(_consumer.maybe_skip()).then([this] {
-                        return _context->read();
+                        return _context->consume_input();
                     });
                 });
             }
