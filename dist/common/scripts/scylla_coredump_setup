@@ -87,7 +87,8 @@ WantedBy=multi-user.target
             run('sysctl -p /etc/sysctl.d/99-scylla-coredump.conf', shell=True, check=True)
 
         fp = tempfile.NamedTemporaryFile()
-        fp.write(b'kill -SEGV $$')
+        fp.write(b'ulimit -c unlimited\n')
+        fp.write(b'kill -SEGV $$\n')
         fp.flush()
         p = subprocess.Popen(['/bin/bash', fp.name], stdout=subprocess.PIPE)
         pid = p.pid
