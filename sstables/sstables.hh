@@ -69,7 +69,6 @@
 
 class sstable_assertions;
 class flat_mutation_reader;
-class row_consumer;
 
 namespace sstables {
 

@@ -40,8 +40,11 @@
 #include "test/lib/test_services.hh"
 #include "cell_locking.hh"
 #include "sstables/row.hh"
+#include "sstables/kl/reader_impl.hh"
 
 using namespace sstables;
+using row_consumer = sstables::kl::row_consumer;
+using data_consume_rows_context = sstables::kl::data_consume_rows_context;
 
 bytes as_bytes(const sstring& s) {
     return { reinterpret_cast<const int8_t*>(s.data()), s.size() };

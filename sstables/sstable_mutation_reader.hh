@@ -88,7 +88,7 @@ void set_range_tombstone_start_from_end_open_marker(Consumer& c, const schema& s
     }
 }
 
-template <typename DataConsumeRowsContext = data_consume_rows_context, typename Consumer = mp_row_consumer_k_l>
+template <typename DataConsumeRowsContext, typename Consumer>
 requires RowConsumer<Consumer>
 class sstable_mutation_reader : public mp_row_consumer_reader {
     Consumer _consumer;
