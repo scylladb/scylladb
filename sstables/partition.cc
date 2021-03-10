@@ -40,30 +40,6 @@
 
 namespace sstables {
 
-template
-data_consume_context<data_consume_rows_context>
-data_consume_rows<data_consume_rows_context>(const schema& s, shared_sstable, data_consume_rows_context::consumer&, sstable::disk_read_range, uint64_t);
-
-template
-data_consume_context<data_consume_rows_context>
-data_consume_single_partition<data_consume_rows_context>(const schema& s, shared_sstable, data_consume_rows_context::consumer&, sstable::disk_read_range);
-
-template
-data_consume_context<data_consume_rows_context>
-data_consume_rows<data_consume_rows_context>(const schema& s, shared_sstable, data_consume_rows_context::consumer&);
-
-template
-data_consume_context<data_consume_rows_context_m>
-data_consume_rows<data_consume_rows_context_m>(const schema& s, shared_sstable, data_consume_rows_context_m::consumer&, sstable::disk_read_range, uint64_t);
-
-template
-data_consume_context<data_consume_rows_context_m>
-data_consume_single_partition<data_consume_rows_context_m>(const schema& s, shared_sstable, data_consume_rows_context_m::consumer&, sstable::disk_read_range);
-
-template
-data_consume_context<data_consume_rows_context_m>
-data_consume_rows<data_consume_rows_context_m>(const schema& s, shared_sstable, data_consume_rows_context_m::consumer&);
-
 static
 position_in_partition_view get_slice_upper_bound(const schema& s, const query::partition_slice& slice, dht::ring_position_view key) {
     const auto& ranges = slice.row_ranges(s, *key.key());
