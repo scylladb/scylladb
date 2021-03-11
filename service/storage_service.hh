@@ -341,10 +341,6 @@ private:
 public:
     void enable_all_features();
 
-    /* Broadcasts the chosen tokens through gossip,
-     * together with a CDC streams timestamp (if we start a new CDC generation) and STATUS=NORMAL. */
-    void set_gossip_tokens(const std::unordered_set<dht::token>&, std::optional<db_clock::time_point>);
-
     void register_subscriber(endpoint_lifecycle_subscriber* subscriber);
 
     future<> unregister_subscriber(endpoint_lifecycle_subscriber* subscriber) noexcept;

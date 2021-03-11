@@ -401,6 +401,25 @@ void storage_service::maybe_start_sys_dist_ks() {
     _sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start).get();
 }
 
+/* Broadcasts the chosen tokens through gossip,
+ * together with a CDC generation timestamp and STATUS=NORMAL.
+ *
+ * Assumes that no other functions modify CDC_STREAMS_TIMESTAMP, TOKENS or STATUS
+ * in the gossiper's local application state while this function runs.
+ */
+// Runs inside seastar::async context
+static void set_gossip_tokens(gms::gossiper& g,
+        const std::unordered_set<dht::token>& tokens, std::optional<db_clock::time_point> cdc_streams_ts) {
+    assert(!tokens.empty());
+
+    // Order is important: both the CDC streams timestamp and tokens must be known when a node handles our status.
+    g.add_local_application_state({
+        { gms::application_state::TOKENS, gms::versioned_value::tokens(tokens) },
+        { gms::application_state::CDC_STREAMS_TIMESTAMP, gms::versioned_value::cdc_streams_timestamp(cdc_streams_ts) },
+        { gms::application_state::STATUS, gms::versioned_value::normal(tokens) }
+    }).get();
+}
+
 // Runs inside seastar::async context
 void storage_service::join_token_ring(int delay) {
     // This function only gets called on shard 0, but we want to set _joined
@@ -608,7 +627,7 @@ void storage_service::join_token_ring(int delay) {
     // At this point our local tokens and CDC streams timestamp are chosen (_bootstrap_tokens, _cdc_streams_ts) and will not be changed.
 
     // start participating in the ring.
-    set_gossip_tokens(_bootstrap_tokens, _cdc_streams_ts);
+    set_gossip_tokens(_gossiper, _bootstrap_tokens, _cdc_streams_ts);
     set_mode(mode::NORMAL, "node is now in normal status", true);
 
     if (get_token_metadata().sorted_tokens().empty()) {
@@ -1273,21 +1292,6 @@ std::unordered_set<locator::token> storage_service::get_tokens_for(inet_address 
     return ret;
 }
 
-// Runs inside seastar::async context
-// Assumes that no other functions modify CDC_STREAMS_TIMESTAMP, TOKENS or STATUS
-// in the gossiper's local application state while this function runs.
-void storage_service::set_gossip_tokens(
-        const std::unordered_set<dht::token>& tokens, std::optional<db_clock::time_point> cdc_streams_ts) {
-    assert(!tokens.empty());
-
-    // Order is important: both the CDC streams timestamp and tokens must be known when a node handles our status.
-    _gossiper.add_local_application_state({
-        { gms::application_state::TOKENS, versioned_value::tokens(tokens) },
-        { gms::application_state::CDC_STREAMS_TIMESTAMP, versioned_value::cdc_streams_timestamp(cdc_streams_ts) },
-        { gms::application_state::STATUS, versioned_value::normal(tokens) }
-    }).get();
-}
-
 void storage_service::register_subscriber(endpoint_lifecycle_subscriber* subscriber)
 {
     _lifecycle_subscribers.add(subscriber);
@@ -1760,7 +1764,7 @@ future<> storage_service::start_gossiping(bind_messaging_port do_bind) {
                 if (!cdc_gen_ts) {
                     cdc_log.warn("CDC generation timestamp missing when starting gossip");
                 }
-                ss.set_gossip_tokens(
+                set_gossip_tokens(ss._gossiper,
                         db::system_keyspace::get_local_tokens().get0(),
                         cdc_gen_ts);
                 ss._gossiper.force_newer_generation();
