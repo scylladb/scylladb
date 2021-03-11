@@ -64,7 +64,7 @@ enum class application_state {
     VIEW_BACKLOG,
     SHARD_COUNT,
     IGNORE_MSB_BITS,
-    CDC_STREAMS_TIMESTAMP,
+    CDC_GENERATION_ID,
     SNITCH_NAME,
     // pad to allow adding new states to existing cluster
     X10,

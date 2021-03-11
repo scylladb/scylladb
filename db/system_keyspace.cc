@@ -1675,13 +1675,13 @@ future<std::unordered_set<dht::token>> get_local_tokens() {
     });
 }
 
-future<> update_cdc_streams_timestamp(db_clock::time_point tp) {
+future<> update_cdc_generation_id(db_clock::time_point gen_id) {
     return qctx->execute_cql(format("INSERT INTO system.{} (key, streams_timestamp) VALUES (?, ?)",
-                v3::CDC_LOCAL), sstring(v3::CDC_LOCAL), tp)
+                v3::CDC_LOCAL), sstring(v3::CDC_LOCAL), gen_id)
             .discard_result().then([] { return force_blocking_flush(v3::CDC_LOCAL); });
 }
 
-future<std::optional<db_clock::time_point>> get_saved_cdc_streams_timestamp() {
+future<std::optional<db_clock::time_point>> get_cdc_generation_id() {
     return qctx->execute_cql(format("SELECT streams_timestamp FROM system.{} WHERE key = ?", v3::CDC_LOCAL), sstring(v3::CDC_LOCAL))
             .then([] (::shared_ptr<cql3::untyped_result_set> msg)-> std::optional<db_clock::time_point> {
         if (msg->empty() || !msg->one().has("streams_timestamp")) {
@@ -1694,11 +1694,11 @@ future<std::optional<db_clock::time_point>> get_saved_cdc_streams_timestamp() {
 
 static const sstring CDC_REWRITTEN_KEY = "rewritten";
 
-future<> cdc_set_rewritten(std::optional<db_clock::time_point> tp) {
-    if (tp) {
+future<> cdc_set_rewritten(std::optional<db_clock::time_point> gen_id) {
+    if (gen_id) {
         return qctx->execute_cql(
                 format("INSERT INTO system.{} (key, streams_timestamp) VALUES (?, ?)", v3::CDC_LOCAL),
-                CDC_REWRITTEN_KEY, *tp).discard_result();
+                CDC_REWRITTEN_KEY, *gen_id).discard_result();
     } else {
         // Insert just the row marker.
         return qctx->execute_cql(

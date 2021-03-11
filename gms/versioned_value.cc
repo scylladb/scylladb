@@ -74,7 +74,7 @@ sstring versioned_value::make_token_string(const std::unordered_set<dht::token>&
     return tokens.begin()->to_sstring();
 }
 
-sstring versioned_value::make_cdc_streams_timestamp_string(std::optional<db_clock::time_point> t) {
+sstring versioned_value::make_cdc_generation_id_string(std::optional<db_clock::time_point> t) {
     // We assume that the db_clock epoch is the same on all receiving nodes.
     if (!t) {
         return "";
@@ -95,7 +95,7 @@ std::unordered_set<dht::token> versioned_value::tokens_from_string(const sstring
     return ret;
 }
 
-std::optional<db_clock::time_point> versioned_value::cdc_streams_timestamp_from_string(const sstring& s) {
+std::optional<db_clock::time_point> versioned_value::cdc_generation_id_from_string(const sstring& s) {
     if (s.empty()) {
         return {};
     }

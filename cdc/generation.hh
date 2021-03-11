@@ -22,8 +22,7 @@
 
 /* This module contains classes and functions used to manage CDC generations:
  * sets of CDC stream identifiers used by the cluster to choose partition keys for CDC log writes.
- * Each CDC generation begins operating at a specific time point, called the generation's timestamp
- * (`cdc_streams_timpestamp` or `streams_timestamp` in the code).
+ * Each CDC generation begins operating at a specific time point, called the generation's timestamp.
  * The generation is used by all nodes in the cluster to pick CDC streams until superseded by a new generation.
  *
  * Functions from this module are used by the node joining procedure to introduce new CDC generations to the cluster

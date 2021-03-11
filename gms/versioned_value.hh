@@ -129,13 +129,13 @@ public:
 
     static sstring make_full_token_string(const std::unordered_set<dht::token>& tokens);
     static sstring make_token_string(const std::unordered_set<dht::token>& tokens);
-    static sstring make_cdc_streams_timestamp_string(std::optional<db_clock::time_point> t);
+    static sstring make_cdc_generation_id_string(std::optional<db_clock::time_point> t);
 
     // Reverse of `make_full_token_string`.
     static std::unordered_set<dht::token> tokens_from_string(const sstring&);
 
-    // Reverse of `make_cdc_streams_timestamp_string`.
-    static std::optional<db_clock::time_point> cdc_streams_timestamp_from_string(const sstring&);
+    // Reverse of `make_cdc_generation_id_string`.
+    static std::optional<db_clock::time_point> cdc_generation_id_from_string(const sstring&);
 
     static versioned_value clone_with_higher_version(const versioned_value& value) noexcept {
         return versioned_value(value.value);
@@ -184,8 +184,8 @@ public:
         return versioned_value(make_full_token_string(tokens));
     }
 
-    static versioned_value cdc_streams_timestamp(std::optional<db_clock::time_point> t) {
-        return versioned_value(make_cdc_streams_timestamp_string(t));
+    static versioned_value cdc_generation_id(std::optional<db_clock::time_point> t) {
+        return versioned_value(make_cdc_generation_id_string(t));
     }
 
     static versioned_value removing_nonlocal(const utils::UUID& host_id) {

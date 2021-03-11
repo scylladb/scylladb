@@ -630,15 +630,15 @@ future<> delete_paxos_decision(const schema& s, const partition_key& key, const 
 // CDC related functions
 
 /*
- * Save the CDC streams generation timestamp announced by this node in persistent storage.
+ * Save the CDC generation ID announced by this node in persistent storage.
  */
-future<> update_cdc_streams_timestamp(db_clock::time_point);
+future<> update_cdc_generation_id(db_clock::time_point);
 
 /*
- * Read the CDC streams generation timestamp announced by this node from persistent storage.
+ * Read the CDC generation ID announced by this node from persistent storage.
  * Used to initialize a restarting node.
  */
-future<std::optional<db_clock::time_point>> get_saved_cdc_streams_timestamp();
+future<std::optional<db_clock::time_point>> get_cdc_generation_id();
 
 future<bool> cdc_is_rewritten();
 future<> cdc_set_rewritten(std::optional<db_clock::time_point>);

@@ -336,7 +336,7 @@ private:
      * DO NOT use this variable after `join_token_ring` (i.e. after we call `generation_service::after_join`
      * and pass it the ownership of the timestamp.
      */
-    std::optional<db_clock::time_point> _cdc_streams_ts;
+    std::optional<db_clock::time_point> _cdc_gen_id;
 
 public:
     void enable_all_features();
