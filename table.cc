@@ -762,6 +762,46 @@ table::build_new_sstable_list(const sstables::sstable_set& current_sstables,
     co_return make_lw_shared<sstables::sstable_set>(std::move(new_sstable_list));
 }
 
+future<>
+table::update_sstable_lists_on_off_strategy_completion(const std::vector<sstables::shared_sstable>& old_maintenance_sstables,
+                                                       const std::vector<sstables::shared_sstable>& new_main_sstables) {
+    class sstable_lists_updater : public row_cache::external_updater_impl {
+        using sstables_t = std::vector<sstables::shared_sstable>;
+        table& _t;
+        const sstables_t& _old_maintenance;
+        const sstables_t& _new_main;
+        lw_shared_ptr<sstables::sstable_set> _new_maintenance_list;
+        lw_shared_ptr<sstables::sstable_set> _new_main_list;
+    public:
+        explicit sstable_lists_updater(table& t, const sstables_t& old_maintenance, const sstables_t& new_main)
+                : _t(t), _old_maintenance(old_maintenance), _new_main(new_main) {
+        }
+        virtual future<> prepare() override {
+            sstables_t empty;
+            // adding new sstables, created by off-strategy operation, to main set
+            _new_main_list = co_await _t.build_new_sstable_list(*_t._main_sstables, _t._compaction_strategy.make_sstable_set(_t._schema), _new_main, empty);
+            // removing old sstables, used as input by off-strategy, from the maintenance set
+            _new_maintenance_list = co_await _t.build_new_sstable_list(*_t._maintenance_sstables, std::move(*_t.make_maintenance_sstable_set()), empty, _old_maintenance);
+        }
+        virtual void execute() override {
+            _t._main_sstables = std::move(_new_main_list);
+            _t._maintenance_sstables = std::move(_new_maintenance_list);
+            _t.refresh_compound_sstable_set();
+        }
+        static std::unique_ptr<row_cache::external_updater_impl> make(table& t, const sstables_t& old_maintenance, const sstables_t& new_main) {
+            return std::make_unique<sstable_lists_updater>(t, old_maintenance, new_main);
+        }
+    };
+    auto updater = row_cache::external_updater(sstable_lists_updater::make(*this, old_maintenance_sstables, new_main_sstables));
+
+    // row_cache::invalidate() is only used to synchronize sstable list updates, to prevent race conditions from occurring,
+    // meaning nothing is actually invalidated.
+    dht::partition_range_vector empty_ranges = {};
+    co_await _cache.invalidate(std::move(updater), std::move(empty_ranges));
+    _cache.refresh_snapshot();
+    rebuild_statistics();
+}
+
 // Note: must run in a seastar thread
 void
 table::on_compaction_completion(sstables::compaction_completion_desc& desc) {
@@ -915,6 +955,69 @@ void table::do_trigger_compaction() {
 
 future<> table::run_compaction(sstables::compaction_descriptor descriptor) {
     return compact_sstables(std::move(descriptor));
+}
+
+future<> table::run_offstrategy_compaction() {
+    // This procedure will reshape sstables in maintenance set until it's ready for
+    // integration into main set.
+    // It may require N reshape rounds before the set satisfies the strategy invariant.
+    // This procedure also only updates maintenance set at the end, on success.
+    // Otherwise, some overlapping could be introduced in the set after each reshape
+    // round, progressively degrading read amplification until integration happens.
+    // The drawback of this approach is the 2x space requirement as the old sstables
+    // will only be deleted at the end. The impact of this space requirement is reduced
+    // by the fact that off-strategy is serialized across all tables, meaning that the
+    // actual requirement is the size of the largest table's maintenance set.
+
+    auto sem_unit = co_await seastar::get_units(_off_strategy_sem, 1);
+
+    tlogger.info("Starting off-strategy compaction for {}.{}, {} candidates were found",
+        _schema->ks_name(), _schema->cf_name(), _maintenance_sstables->all()->size());
+
+    const auto old_sstables = boost::copy_range<std::vector<sstables::shared_sstable>>(*_maintenance_sstables->all());
+    std::vector<sstables::shared_sstable> reshape_candidates = old_sstables;
+    std::vector<sstables::shared_sstable> new_unused_sstables, sstables_to_remove;
+
+    auto cleanup_new_unused_sstables_on_failure = defer([&new_unused_sstables] {
+        for (auto& sst : new_unused_sstables) {
+            sst->mark_for_deletion();
+        }
+    });
+
+    for (;;) {
+        auto& iop = service::get_local_streaming_priority(); // run reshape in maintenance mode
+        auto desc = _compaction_strategy.get_reshaping_job(reshape_candidates, _schema, iop, sstables::reshape_mode::strict);
+        if (desc.sstables.empty()) {
+            // at this moment reshape_candidates contains a set of sstables ready for integration into main set
+            co_await update_sstable_lists_on_off_strategy_completion(old_sstables, reshape_candidates);
+            break;
+        }
+
+        desc.creator = [this, &new_unused_sstables] (shard_id dummy) {
+            auto sst = make_sstable();
+            new_unused_sstables.push_back(sst);
+            return sst;
+        };
+        auto input = boost::copy_range<std::unordered_set<sstables::shared_sstable>>(desc.sstables);
+
+        auto ret = co_await sstables::compact_sstables(std::move(desc), *this);
+
+        // update list of reshape candidates without input but with output added to it
+        auto it = boost::remove_if(reshape_candidates, [&] (auto& s) { return input.contains(s); });
+        reshape_candidates.erase(it, reshape_candidates.end());
+        std::move(ret.new_sstables.begin(), ret.new_sstables.end(), std::back_inserter(reshape_candidates));
+        std::move(input.begin(), input.end(), std::back_inserter(sstables_to_remove));
+    }
+
+    cleanup_new_unused_sstables_on_failure.cancel();
+    // By marking input sstables for deletion instead, the ones which require view building will stay in the staging
+    // directory until they're moved to the main dir when the time comes. Also, that allows view building to resume
+    // on restart if there's a crash midway.
+    for (auto& sst : sstables_to_remove) {
+        sst->mark_for_deletion();
+    }
+
+    tlogger.info("Done with off-strategy compaction for {}.{}", _schema->ks_name(), _schema->cf_name());
 }
 
 void table::set_compaction_strategy(sstables::compaction_strategy_type strategy) {

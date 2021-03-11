@@ -450,6 +450,9 @@ private:
     // sstables deleted by compaction in parallel, a race condition which could
     // easily result in failure.
     seastar::named_semaphore _sstable_deletion_sem = {1, named_semaphore_exception_factory{"sstable deletion"}};
+    // This semaphore ensures that off-strategy compaction will be serialized and also
+    // protects against candidates being picked more than once.
+    seastar::named_semaphore _off_strategy_sem = {1, named_semaphore_exception_factory{"off-strategy compaction"}};
     mutable row_cache _cache; // Cache covers only sstables.
     std::optional<int64_t> _sstable_generation = {};
 
@@ -582,6 +585,10 @@ private:
                         sstables::sstable_set new_sstable_list,
                         const std::vector<sstables::shared_sstable>& new_sstables,
                         const std::vector<sstables::shared_sstable>& old_sstables);
+
+    future<>
+    update_sstable_lists_on_off_strategy_completion(const std::vector<sstables::shared_sstable>& old_maintenance_sstables,
+                                                    const std::vector<sstables::shared_sstable>& new_main_sstables);
 
     // Rebuild sstable set, delete input sstables right away, and update row cache and statistics.
     void on_compaction_completion(sstables::compaction_completion_desc& desc);
@@ -854,6 +861,7 @@ public:
     void trigger_compaction();
     void try_trigger_compaction() noexcept;
     future<> run_compaction(sstables::compaction_descriptor descriptor);
+    future<> run_offstrategy_compaction();
     void set_compaction_strategy(sstables::compaction_strategy_type strategy);
     const sstables::compaction_strategy& get_compaction_strategy() const {
         return _compaction_strategy;
