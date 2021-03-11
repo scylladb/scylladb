@@ -43,6 +43,7 @@ public:
     future<> send_append_entries_reply(raft::server_id id, const raft::append_reply& reply) override;
     future<> send_vote_request(raft::server_id id, const raft::vote_request& vote_request) override;
     future<> send_vote_reply(raft::server_id id, const raft::vote_reply& vote_reply) override;
+    future<> send_timeout_now(raft::server_id id, const raft::timeout_now& timeout_now) override;
     void add_server(raft::server_id id, raft::server_info info) override;
     void remove_server(raft::server_id id) override;
     future<> abort() override;
@@ -52,5 +53,6 @@ public:
     void append_entries_reply(raft::server_id from, raft::append_reply reply);
     void request_vote(raft::server_id from, raft::vote_request vote_request);
     void request_vote_reply(raft::server_id from, raft::vote_reply vote_reply);
+    void timeout_now_request(raft::server_id from, raft::timeout_now timeout_now);
     future<raft::snapshot_reply> apply_snapshot(raft::server_id from, raft::install_snapshot snp);
 };

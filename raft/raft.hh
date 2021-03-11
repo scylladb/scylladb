@@ -261,6 +261,9 @@ struct vote_request {
     term_t last_log_term;
     // True if this is prevote request
     bool is_prevote;
+    // If the flag is set the request will not be ignored even
+    // if there is an active leader. Used during leadership transfer.
+    bool force;
 };
 
 struct vote_reply {
@@ -286,7 +289,13 @@ struct snapshot_reply {
     bool success;
 };
 
-using rpc_message = std::variant<append_request, append_reply, vote_request, vote_reply, install_snapshot, snapshot_reply>;
+// 3.10 section from PhD Leadership transfer extension
+struct timeout_now {
+    // Current term on a leader
+    term_t current_term;
+};
+
+using rpc_message = std::variant<append_request, append_reply, vote_request, vote_reply, install_snapshot, snapshot_reply, timeout_now>;
 
 // we need something that can be truncated form both sides.
 // std::deque move constructor is not nothrow hence cannot be used
@@ -382,6 +391,11 @@ public:
     // received.
     virtual future<> send_vote_reply(server_id id, const vote_reply& vote_reply) = 0;
 
+    // Send a request to start leader election immediately
+    // resolves when message is sent. It does not mean it was
+    // received.
+    virtual future<> send_timeout_now(server_id, const timeout_now& timeout_now) = 0;
+
     // When a new server is learn this function is called with the
     // info about the server.
     virtual void add_server(server_id id, server_info info) = 0;
@@ -415,6 +429,8 @@ public:
     virtual void request_vote(server_id from, vote_request vote_request) = 0;
     // Handle response to RequestVote RPC
     virtual void request_vote_reply(server_id from, vote_reply vote_reply) = 0;
+
+    virtual void timeout_now_request(server_id from, timeout_now timeout_now) = 0;
 
     // Apply incoming snapshot, future resolves when application is complete
     virtual future<snapshot_reply> apply_snapshot(server_id from, install_snapshot snp) = 0;

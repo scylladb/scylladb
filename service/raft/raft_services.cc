@@ -94,6 +94,14 @@ void raft_services::init_rpc_verbs() {
             return make_ready_future<>();
         });
     });
+
+    _ms.register_raft_timeout_now([handle_raft_rpc] (const rpc::client_info& cinfo, rpc::opt_time_point timeout,
+            uint64_t group_id, raft::server_id from, raft::server_id dst, raft::timeout_now timeout_now) mutable {
+        return handle_raft_rpc(cinfo, group_id, from, dst, [from, timeout_now] (raft_rpc& rpc) mutable {
+            rpc.timeout_now_request(std::move(from), std::move(timeout_now));
+            return make_ready_future<>();
+        });
+    });
 }
 
 future<> raft_services::uninit_rpc_verbs() {
@@ -102,7 +110,8 @@ future<> raft_services::uninit_rpc_verbs() {
         _ms.unregister_raft_append_entries(),
         _ms.unregister_raft_append_entries_reply(),
         _ms.unregister_raft_vote_request(),
-        _ms.unregister_raft_vote_reply()
+        _ms.unregister_raft_vote_reply(),
+        _ms.unregister_raft_timeout_now()
     ).discard_result();
 }
 

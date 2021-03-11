@@ -57,6 +57,7 @@ public:
     void append_entries_reply(server_id from, append_reply reply) override;
     void request_vote(server_id from, vote_request vote_request) override;
     void request_vote_reply(server_id from, vote_reply vote_reply) override;
+    void timeout_now_request(server_id from, timeout_now timeout_now) override;
 
     // server interface
     future<> add_entry(command command, wait_type type);
@@ -110,6 +111,8 @@ private:
         uint64_t queue_entries_for_apply = 0;
         uint64_t applied_entries = 0;
         uint64_t snapshots_taken = 0;
+        uint64_t timeout_now_sent = 0;
+        uint64_t timeout_now_received = 0;
     } _stats;
 
     struct op_status {
@@ -263,6 +266,11 @@ void server_impl::request_vote_reply(server_id from, vote_reply vote_reply) {
     _fsm->step(from, std::move(vote_reply));
 }
 
+void server_impl::timeout_now_request(server_id from, timeout_now timeout_now) {
+    _stats.timeout_now_received++;
+    _fsm->step(from, std::move(timeout_now));
+}
+
 void server_impl::notify_waiters(std::map<index_t, op_status>& waiters,
         const std::vector<log_entry_ptr>& entries) {
     index_t commit_idx = entries.back()->idx;
@@ -321,6 +329,9 @@ future<> server_impl::send_message(server_id id, Message m) {
         } else if constexpr (std::is_same_v<T, vote_reply>) {
             _stats.vote_request_reply_sent++;
             return _rpc->send_vote_reply(id, m);
+        } else if constexpr (std::is_same_v<T, timeout_now>) {
+            _stats.timeout_now_sent++;
+            return _rpc->send_timeout_now(id, m);
         } else if constexpr (std::is_same_v<T, install_snapshot>) {
             _stats.install_snapshot_sent++;
             // Send in the background.
@@ -558,6 +569,8 @@ void server_impl::register_metrics() {
              sm::description("how many messages were received"), {server_id_label(_id), message_type("request_vote")}),
         sm::make_total_operations("messages_received", _stats.request_vote_reply_received,
              sm::description("how many messages were received"), {server_id_label(_id), message_type("request_vote_reply")}),
+        sm::make_total_operations("messages_received", _stats.timeout_now_received,
+             sm::description("how many messages were received"), {server_id_label(_id), message_type("timeout_now")}),
 
         sm::make_total_operations("messages_sent", _stats.append_entries_sent,
              sm::description("how many messages were send"), {server_id_label(_id), message_type("append_entries")}),
@@ -571,6 +584,8 @@ void server_impl::register_metrics() {
              sm::description("how many messages were sent"), {server_id_label(_id), message_type("install_snapshot")}),
         sm::make_total_operations("messages_sent", _stats.snapshot_reply_sent,
              sm::description("how many messages were sent"), {server_id_label(_id), message_type("snapshot_reply")}),
+        sm::make_total_operations("messages_sent", _stats.timeout_now_sent,
+             sm::description("how many messages were sent"), {server_id_label(_id), message_type("timeout_now")}),
 
         sm::make_total_operations("waiter_awaiken", _stats.waiters_awaiken,
              sm::description("how many waiters got result back"), {server_id_label(_id)}),

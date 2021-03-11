@@ -358,6 +358,13 @@ public:
         net[id]->_client->request_vote_reply(_id, std::move(vote_reply));
         return make_ready_future<>();
     }
+    virtual future<> send_timeout_now(raft::server_id id, const raft::timeout_now& timeout_now) {
+        if (!_connected(id) || !_connected(_id)) {
+            return make_ready_future<>();
+        }
+        net[id]->_client->timeout_now_request(_id, std::move(timeout_now));
+        return make_ready_future<>();
+    }
     virtual void add_server(raft::server_id id, bytes node_info) {}
     virtual void remove_server(raft::server_id id) {}
     virtual future<> abort() { return make_ready_future<>(); }

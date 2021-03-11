@@ -56,6 +56,11 @@ future<> raft_rpc::send_vote_reply(raft::server_id id, const raft::vote_reply& v
         netw::msg_addr(_raft_services.get_inet_address(id)), db::no_timeout, _group_id, _server_id, id, vote_reply);
 }
 
+future<> raft_rpc::send_timeout_now(raft::server_id id, const raft::timeout_now& timeout_now) {
+    return _messaging.send_raft_timeout_now(
+        netw::msg_addr(_raft_services.get_inet_address(id)), db::no_timeout, _group_id, _server_id, id, timeout_now);
+}
+
 void raft_rpc::add_server(raft::server_id id, raft::server_info info) {
     // Parse gms::inet_address from server_info
     auto in = ser::as_input_stream(bytes_view(info));
@@ -87,6 +92,10 @@ void raft_rpc::request_vote(raft::server_id from, raft::vote_request vote_reques
 
 void raft_rpc::request_vote_reply(raft::server_id from, raft::vote_reply vote_reply) {
     _client->request_vote_reply(from, vote_reply);
+}
+
+void raft_rpc::timeout_now_request(raft::server_id from, raft::timeout_now timeout_now) {
+    _client->timeout_now_request(from, timeout_now);
 }
 
 future<raft::snapshot_reply> raft_rpc::apply_snapshot(raft::server_id from, raft::install_snapshot snp) {

@@ -51,6 +51,12 @@ template<typename T>
 const log_entry& fsm::add_entry(T command) {
     // It's only possible to add entries on a leader.
     check_is_leader();
+    if(leader_state().stepdown) {
+        // A leader that is stepping down should not add new entries
+        // to its log (see 3.10), but it still does not know who the new
+        // leader will be.
+        throw not_a_leader({});
+    }
 
     if constexpr (std::is_same_v<T, configuration>) {
         if (_log.last_conf_idx() > _commit_idx ||
@@ -152,7 +158,7 @@ void fsm::become_follower(server_id leader) {
     }
 }
 
-void fsm::become_candidate(bool is_prevote) {
+void fsm::become_candidate(bool is_prevote, bool is_leadership_transfer) {
     // When starting a campain we need to reset current leader otherwise
     // disruptive server prevention will stall an election if quorum of nodes
     // start election together since each one will ignore vote requests from others
@@ -198,10 +204,11 @@ void fsm::become_candidate(bool is_prevote) {
             // Already signaled _sm_events in update_current_term()
             continue;
         }
-        logger.trace("{} [term: {}, index: {}, last log term: {}{}] sent vote request to {}",
-            _my_id, term, _log.last_idx(), _log.last_term(), is_prevote ? ", prevote" : "", server.id);
+        logger.trace("{} [term: {}, index: {}, last log term: {}{}{}] sent vote request to {}",
+            _my_id, term, _log.last_idx(), _log.last_term(), is_prevote ? ", prevote" : "",
+            is_leadership_transfer ? ", force" : "", server.id);
 
-        send_to(server.id, vote_request{term, _log.last_idx(), _log.last_term(), is_prevote});
+        send_to(server.id, vote_request{term, _log.last_idx(), _log.last_term(), is_prevote, is_leadership_transfer});
     }
     if (votes.tally_votes() == vote_result::WON) {
         // A single node cluster.
@@ -295,6 +302,7 @@ fsm_output fsm::get_output() {
 void fsm::advance_stable_idx(index_t idx) {
     _log.stable_to(idx);
     if (is_leader()) {
+        replicate();
         if (leader_state().tracker.leader_progress()) {
             // If this server is leader and is part of the current
             // configuration, update it's progress and optionally
@@ -302,7 +310,6 @@ void fsm::advance_stable_idx(index_t idx) {
             leader_state().tracker.leader_progress()->accepted(idx);
             maybe_commit();
         }
-        replicate();
     }
 }
 
@@ -367,10 +374,7 @@ void fsm::maybe_commit() {
             //
             // A leader that is removed from the configuration
             // steps down once the C_new entry is committed.
-            //
-            // @todo: when leadership transfer extension is
-            // implemented, send TimeoutNow to a member of C_new
-            become_follower(server_id{});
+            transfer_leadership();
         }
     }
 }
@@ -510,11 +514,18 @@ void fsm::append_entries_reply(server_id from, append_reply&& reply) {
 
         progress.become_pipeline();
 
+        // If a leader is stepping down, transfer the leadership
+        // to a first voting node that has fully replicated log.
+        if (leader_state().stepdown && !leader_state().timeout_now_sent &&
+                         progress.can_vote && progress.match_idx == _log.last_idx()) {
+            send_timeout_now(progress.id);
+        }
+
         // check if any new entry can be committed
         maybe_commit();
 
-        // We may have resigned leadership if committed a new
-        // configuration.
+        // We may have resigned leadership if a stepdown process completed
+        // while the leader is no longer part of the configuration.
         if (!is_leader()) {
             return;
         }
@@ -798,6 +809,28 @@ bool fsm::apply_snapshot(snapshot snp, size_t trailing) {
         leader_state().log_limiter_semaphore.signal(units);
     }
     return true;
+}
+
+void fsm::transfer_leadership() {
+    check_is_leader();
+    leader_state().stepdown = true;
+    // Stop new requests from commig in
+    leader_state().log_limiter_semaphore.consume(_config.max_log_size);
+    // If there is a fully up-to-date voting replica make it start an election
+    for (auto&& [_, p] : leader_state().tracker) {
+        if (p.id != _my_id && p.can_vote && p.match_idx == _log.last_idx()) {
+            send_timeout_now(p.id);
+            break;
+        }
+    }
+}
+
+void fsm::send_timeout_now(server_id id) {
+    send_to(id, timeout_now{_current_term});
+    leader_state().timeout_now_sent = true;
+    if (leader_state().tracker.leader_progress() == nullptr) {
+        become_follower({});
+    }
 }
 
 void fsm::stop() {
