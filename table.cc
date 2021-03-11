@@ -1353,7 +1353,11 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
     struct pruner {
         column_family& cf;
         db::replay_position rp;
-        std::vector<sstables::shared_sstable> remove;
+        struct removed_sstable {
+            sstables::shared_sstable sst;
+            ::enable_backlog_tracker enable_backlog_tracker;
+        };
+        std::vector<removed_sstable> remove;
 
         pruner(column_family& cf)
             : cf(cf) {}
@@ -1363,14 +1367,19 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
 
             auto pruned = make_lw_shared<sstables::sstable_set>(cf._compaction_strategy.make_sstable_set(cf._schema));
 
-            cf._sstables->for_each_sstable([&] (const sstables::shared_sstable& p) mutable {
-                if (p->max_data_age() <= gc_trunc) {
-                    rp = std::max(p->get_stats_metadata().position, rp);
-                    remove.emplace_back(p);
-                    return;
-                }
-                pruned->insert(p);
-            });
+            auto prune = [this, &gc_trunc] (lw_shared_ptr<sstables::sstable_set>& pruned,
+                                            lw_shared_ptr<sstables::sstable_set>& pruning,
+                                            ::enable_backlog_tracker enable_backlog_tracker) mutable {
+                pruning->for_each_sstable([&] (const sstables::shared_sstable& p) mutable {
+                    if (p->max_data_age() <= gc_trunc) {
+                        rp = std::max(p->get_stats_metadata().position, rp);
+                        remove.emplace_back(removed_sstable{p, enable_backlog_tracker});
+                        return;
+                    }
+                    pruned->insert(p);
+                });
+            };
+            prune(pruned, cf._sstables, enable_backlog_tracker::yes);
 
             cf._sstables = std::move(pruned);
         }
@@ -1382,9 +1391,11 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
     })).then([this, p]() mutable {
         rebuild_statistics();
 
-        return parallel_for_each(p->remove, [this](sstables::shared_sstable s) {
-            remove_sstable_from_backlog_tracker(_compaction_strategy.get_backlog_tracker(), s);
-            return sstables::delete_atomically({s});
+        return parallel_for_each(p->remove, [this](pruner::removed_sstable& r) {
+            if (r.enable_backlog_tracker) {
+                remove_sstable_from_backlog_tracker(_compaction_strategy.get_backlog_tracker(), r.sst);
+            }
+            return sstables::delete_atomically({r.sst});
         }).then([p] {
             return make_ready_future<db::replay_position>(p->rp);
         });
