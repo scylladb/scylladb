@@ -1902,10 +1902,14 @@ table::make_reader_excluding_sstables(schema_ptr s,
         readers.emplace_back(mt->make_flat_reader(s, permit, range, slice, pc, trace_state, fwd, fwd_mr));
     }
 
-    auto effective_sstables = ::make_lw_shared<sstables::sstable_set>(*_sstables);
-    for (auto& sst : excluded) {
-        effective_sstables->erase(sst);
-    }
+    auto excluded_ssts = boost::copy_range<std::unordered_set<sstables::shared_sstable>>(excluded);
+    auto effective_sstables = make_lw_shared(_compaction_strategy.make_sstable_set(_schema));
+    _sstables->for_each_sstable([&excluded_ssts, &effective_sstables] (const sstables::shared_sstable& sst) mutable {
+        if (excluded_ssts.contains(sst)) {
+            return;
+        }
+        effective_sstables->insert(sst);
+    });
 
     readers.emplace_back(make_sstable_reader(s, permit, std::move(effective_sstables), range, slice, pc, std::move(trace_state), fwd, fwd_mr));
     return make_combined_reader(s, std::move(permit), std::move(readers), fwd, fwd_mr);
