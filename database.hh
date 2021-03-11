@@ -428,6 +428,8 @@ private:
     sstables::compaction_strategy _compaction_strategy;
     // SSTable set which contains all non-maintenance sstables
     lw_shared_ptr<sstables::sstable_set> _main_sstables;
+    // Holds SSTables created by maintenance operations, which need reshaping before integration into the main set
+    lw_shared_ptr<sstables::sstable_set> _maintenance_sstables;
     // Compound set which manages all the SSTable sets (e.g. main, etc) and allow their operations to be combined
     lw_shared_ptr<sstables::sstable_set> _sstables;
     // sstables that have been compacted (so don't look up in query) but
@@ -543,6 +545,7 @@ private:
     do_add_sstable(lw_shared_ptr<sstables::sstable_set> sstables, sstables::shared_sstable sstable,
         enable_backlog_tracker backlog_tracker);
     void add_sstable(sstables::shared_sstable sstable);
+    void add_maintenance_sstable(sstables::shared_sstable sst);
     static void add_sstable_to_backlog_tracker(compaction_backlog_tracker& tracker, sstables::shared_sstable sstable);
     static void remove_sstable_from_backlog_tracker(compaction_backlog_tracker& tracker, sstables::shared_sstable sstable);
     void load_sstable(sstables::shared_sstable& sstable, bool reset_level = false);
@@ -598,6 +601,7 @@ private:
                                         streamed_mutation::forwarding fwd,
                                         mutation_reader::forwarding fwd_mr) const;
 
+    lw_shared_ptr<sstables::sstable_set> make_maintenance_sstable_set() const;
     lw_shared_ptr<sstables::sstable_set> make_compound_sstable_set();
     // Compound sstable set must be refreshed whenever any of its managed sets are changed
     void refresh_compound_sstable_set();

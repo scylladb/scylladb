@@ -114,7 +114,14 @@ table::make_sstable_reader(schema_ptr s,
 }
 
 lw_shared_ptr<sstables::sstable_set> table::make_compound_sstable_set() {
-    return make_lw_shared(sstables::make_compound_sstable_set(_schema, { _main_sstables }));
+    return make_lw_shared(sstables::make_compound_sstable_set(_schema, { _main_sstables, _maintenance_sstables }));
+}
+
+lw_shared_ptr<sstables::sstable_set> table::make_maintenance_sstable_set() const {
+    // Level metadata is not used because (level 0) maintenance sstables are disjoint and must be stored for efficient retrieval in the partitioned set
+    bool use_level_metadata = false;
+    return make_lw_shared<sstables::sstable_set>(
+            sstables::make_partitioned_sstable_set(_schema, make_lw_shared<sstable_list>(sstable_list{}), use_level_metadata));
 }
 
 void table::refresh_compound_sstable_set() {
@@ -392,6 +399,11 @@ void table::add_sstable(sstables::shared_sstable sstable) {
     refresh_compound_sstable_set();
 }
 
+void table::add_maintenance_sstable(sstables::shared_sstable sst) {
+    _maintenance_sstables = do_add_sstable(_maintenance_sstables, std::move(sst), enable_backlog_tracker::no);
+    refresh_compound_sstable_set();
+}
+
 future<>
 table::add_sstable_and_update_cache(sstables::shared_sstable sst) {
     return get_row_cache().invalidate(row_cache::external_updater([this, sst] () noexcept {
@@ -651,6 +663,7 @@ table::stop() {
                     return _sstable_deletion_gate.close().then([this] {
                         return get_row_cache().invalidate(row_cache::external_updater([this] {
                             _main_sstables = _compaction_strategy.make_sstable_set(_schema);
+                            _maintenance_sstables = make_maintenance_sstable_set();
                             _sstables = make_compound_sstable_set();
                             _sstables_staging.clear();
                         })).then([this] {
@@ -1045,6 +1058,7 @@ table::table(schema_ptr schema, config config, db::commitlog* cl, compaction_man
     , _memtables(_config.enable_disk_writes ? make_memtable_list() : make_memory_only_memtable_list())
     , _compaction_strategy(make_compaction_strategy(_schema->compaction_strategy(), _schema->compaction_strategy_options()))
     , _main_sstables(make_lw_shared<sstables::sstable_set>(_compaction_strategy.make_sstable_set(_schema)))
+    , _maintenance_sstables(make_maintenance_sstable_set())
     , _sstables(make_compound_sstable_set())
     , _cache(_schema, sstables_as_snapshot_source(), row_cache_tracker, is_continuous::yes)
     , _commitlog(cl)
@@ -1380,6 +1394,7 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
             auto gc_trunc = to_gc_clock(truncated_at);
 
             auto pruned = make_lw_shared<sstables::sstable_set>(cf._compaction_strategy.make_sstable_set(cf._schema));
+            auto maintenance_pruned = cf.make_maintenance_sstable_set();
 
             auto prune = [this, &gc_trunc] (lw_shared_ptr<sstables::sstable_set>& pruned,
                                             lw_shared_ptr<sstables::sstable_set>& pruning,
@@ -1394,8 +1409,10 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
                 });
             };
             prune(pruned, cf._main_sstables, enable_backlog_tracker::yes);
+            prune(maintenance_pruned, cf._maintenance_sstables, enable_backlog_tracker::no);
 
             cf._main_sstables = std::move(pruned);
+            cf._maintenance_sstables = std::move(maintenance_pruned);
             cf.refresh_compound_sstable_set();
         }
     };
@@ -1932,13 +1949,17 @@ table::make_reader_excluding_sstables(schema_ptr s,
 
 future<> table::move_sstables_from_staging(std::vector<sstables::shared_sstable> sstables) {
     return with_semaphore(_sstable_deletion_sem, 1, [this, sstables = std::move(sstables)] {
-        return do_with(std::set<sstring>({dir()}), std::move(sstables), [this] (std::set<sstring>& dirs_to_sync, std::vector<sstables::shared_sstable>& sstables) {
-            return do_for_each(sstables, [this, &dirs_to_sync] (sstables::shared_sstable sst) {
+        return do_with(std::set<sstring>({dir()}), std::move(sstables), _main_sstables->all(),
+                       [this] (std::set<sstring>& dirs_to_sync, std::vector<sstables::shared_sstable>& sstables, lw_shared_ptr<sstable_list>& main_sstables) {
+            return do_for_each(sstables, [this, &dirs_to_sync, &main_sstables] (sstables::shared_sstable sst) {
                 dirs_to_sync.emplace(sst->get_dir());
-                return sst->move_to_new_dir(dir(), sst->generation(), false).then_wrapped([this, sst, &dirs_to_sync] (future<> f) {
+                return sst->move_to_new_dir(dir(), sst->generation(), false).then_wrapped([this, sst, &dirs_to_sync, &main_sstables] (future<> f) {
                     if (!f.failed()) {
                         _sstables_staging.erase(sst->generation());
-                        add_sstable_to_backlog_tracker(_compaction_strategy.get_backlog_tracker(), sst);
+                        // Maintenance SSTables being moved from staging shouldn't be added to tracker because they're off-strategy
+                        if (main_sstables->contains(sst)) {
+                            add_sstable_to_backlog_tracker(_compaction_strategy.get_backlog_tracker(), sst);
+                        }
                         return make_ready_future<>();
                     } else {
                         auto ep = f.get_exception();
