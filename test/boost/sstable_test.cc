@@ -39,7 +39,7 @@
 #include "partition_slice_builder.hh"
 #include "test/lib/test_services.hh"
 #include "cell_locking.hh"
-#include "sstables/row.hh"
+#include "sstables/sstable_mutation_reader.hh"
 #include "sstables/kl/reader_impl.hh"
 
 using namespace sstables;
