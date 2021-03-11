@@ -1130,3 +1130,46 @@ BOOST_AUTO_TEST_CASE(test_confchange_ab_to_cd) {
 }
 
 
+BOOST_AUTO_TEST_CASE(test_confchange_abc_to_cde) {
+    // Check configuration changes when C_old and C_new have no
+    // common quorum, test leader change during configuration
+    // change
+    discrete_failure_detector fd;
+    server_id A_id = id(), B_id = id(), C_id = id(), D_id = id(), E_id = id();
+
+    raft::log log(raft::snapshot{.idx = index_t{0}, .config = raft::configuration{A_id, B_id, C_id}});
+    auto A = create_follower(A_id, log);
+    auto B = create_follower(B_id, log, fd);
+    auto C = create_follower(C_id, log, fd);
+    election_timeout(A);
+    communicate(A, B, C);
+    BOOST_CHECK(A.is_leader());
+
+    auto D = create_follower(D_id, log);
+    auto E = create_follower(E_id, log);
+
+    A.add_entry(raft::configuration({C_id, D_id, E_id}));
+    // Make sure C gets a new (joint) configuration entry.
+    // It is stable, but not committed, because we need D or E
+    // to commit it.
+    communicate(A, B, C);
+    // Leader change while committing a joint configuration
+    fd.mark_dead(A_id);
+    election_timeout(C);
+    BOOST_CHECK(C.is_candidate());
+    // Ticking for election_threshold at B is
+    // necessary for B to vote for C but not become
+    // candidate itself.
+    election_threshold(B);
+    communicate(B, C, D, E);
+    BOOST_CHECK(A.is_leader());
+    BOOST_CHECK_EQUAL(A.get_current_term(), 1);
+    BOOST_CHECK(B.is_follower());
+    BOOST_CHECK(C.is_leader());
+    BOOST_CHECK(D.is_follower());
+    BOOST_CHECK(E.is_follower());
+
+    BOOST_CHECK(C.get_current_term() >= 2);
+    BOOST_CHECK_EQUAL(C.get_configuration().is_joint(), false);
+    BOOST_CHECK_EQUAL(C.get_configuration().current.size(), 3);
+}
