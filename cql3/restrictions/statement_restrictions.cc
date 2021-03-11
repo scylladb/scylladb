@@ -34,6 +34,7 @@
 #include "multi_column_restriction.hh"
 #include "token_restriction.hh"
 #include "database.hh"
+#include "cartesian_product.hh"
 
 #include "cql3/constants.hh"
 #include "cql3/lists.hh"
@@ -141,6 +142,79 @@ to_column_definition(const schema_ptr& schema, const ::shared_ptr<column_identif
 }
 #endif
 
+/// Extracts where_clause atoms with clustering-column LHS and copies them to a vector such that:
+/// 1. all elements must be simultaneously satisfied (as restrictions) for where_clause to be satisfied
+/// 2. each element is an atom or a conjunction of atoms
+/// 3. either all atoms (across all elements) are multi-column or they are all single-column
+/// 4. if single-column, then:
+///   4.1 all atoms from an element have the same LHS, which we call the element's LHS
+///   4.2 each element's LHS is different from any other element's LHS
+///   4.3 the list of each element's LHS, in order, forms a clustering-key prefix
+///   4.4 elements other than the last have only EQ or IN atoms
+///   4.5 the last element has only EQ, IN, or is_slice() atoms
+///
+/// These elements define the boundaries of any clustering slice that can possibly meet where_clause.
+///
+/// This vector can be calculated before binding expression markers, since LHS and operator are always known.
+static std::vector<expr::expression> extract_clustering_prefix_restrictions(
+        const expr::expression& where_clause, schema_ptr schema) {
+    using namespace expr;
+
+    /// Collects all clustering-column restrictions from an expression.  Presumes the expression only uses
+    /// conjunction to combine subexpressions.
+    struct visitor {
+        std::vector<expression> multi; ///< All multi-column restrictions.
+        /// All single-clustering-column restrictions, grouped by column.  Each value is either an atom or a
+        /// conjunction of atoms.
+        std::unordered_map<const column_definition*, expression> single;
+
+        void operator()(const conjunction& c) {
+            std::ranges::for_each(c.children, [this] (const expression& child) { std::visit(*this, child); });
+        }
+
+        void operator()(const binary_operator& b) {
+            if (std::holds_alternative<std::vector<column_value>>(b.lhs)) {
+                multi.push_back(b);
+            }
+            if (auto s = std::get_if<column_value>(&b.lhs)) {
+                if (s->col->is_clustering_key()) {
+                    const auto found = single.find(s->col);
+                    if (found == single.end()) {
+                        single[s->col] = b;
+                    } else {
+                        found->second = make_conjunction(std::move(found->second), b);
+                    }
+                }
+            }
+        }
+
+        void operator()(bool) {}
+    } v;
+    std::visit(v, where_clause);
+
+    if (!v.multi.empty()) {
+        return move(v.multi);
+    }
+
+    std::vector<expression> prefix;
+    for (const auto& col : schema->clustering_key_columns()) {
+        const auto found = v.single.find(&col);
+        if (found == v.single.end()) { // Any further restrictions are skipping the CK order.
+            break;
+        }
+        if (find_needs_filtering(found->second)) { // This column's restriction doesn't define a clear bound.
+            // TODO: if this is a conjunction of filtering and non-filtering atoms, we could split them and add the
+            // latter to the prefix.
+            break;
+        }
+        prefix.push_back(found->second);
+        if (has_slice(found->second)) {
+            break;
+        }
+    }
+    return prefix;
+}
+
 statement_restrictions::statement_restrictions(database& db,
         schema_ptr schema,
         statements::statement_type type,
@@ -151,13 +225,6 @@ statement_restrictions::statement_restrictions(database& db,
         bool allow_filtering)
     : statement_restrictions(schema, allow_filtering)
 {
-    /*
-     * WHERE clause. For a given entity, rules are: - EQ relation conflicts with anything else (including a 2nd EQ)
-     * - Can't have more than one LT(E) relation (resp. GT(E) relation) - IN relation are restricted to row keys
-     * (for now) and conflicts with anything else (we could allow two IN for the same entity but that doesn't seem
-     * very useful) - The value_alias cannot be restricted in any way (we don't support wide rows with indexed value
-     * in CQL so far)
-     */
     if (!where_clause.empty()) {
         for (auto&& relation : where_clause) {
             if (relation->get_operator() == cql3::expr::oper_t::IS_NOT) {
@@ -186,6 +253,9 @@ statement_restrictions::statement_restrictions(database& db,
                 add_restriction(relation->to_restriction(db, schema, bound_names), for_view, allow_filtering);
             }
         }
+    }
+    if (_where.has_value()) {
+        _clustering_prefix_restrictions = extract_clustering_prefix_restrictions(*_where, _schema);
     }
     auto& cf = db.find_column_family(schema);
     auto& sim = cf.get_index_manager();
@@ -288,6 +358,7 @@ void statement_restrictions::add_restriction(::shared_ptr<restriction> restricti
     } else {
         add_single_column_restriction(::static_pointer_cast<single_column_restriction>(restriction), for_view, allow_filtering);
     }
+    _where = _where.has_value() ? make_conjunction(std::move(*_where), restriction->expression) : restriction->expression;
 }
 
 void statement_restrictions::add_single_column_restriction(::shared_ptr<single_column_restriction> restriction, bool for_view, bool allow_filtering) {
@@ -492,17 +563,497 @@ dht::partition_range_vector statement_restrictions::get_partition_key_ranges(con
     return _partition_key_restrictions->bounds_ranges(options);
 }
 
-std::vector<query::clustering_range> statement_restrictions::get_clustering_bounds(const query_options& options) const {
-    if (_clustering_columns_restrictions->empty()) {
-        return {query::clustering_range::make_open_ended_both_sides()};
-    }
-    if (_clustering_columns_restrictions->needs_filtering(*_schema)) {
-        if (auto single_ck_restrictions = dynamic_pointer_cast<single_column_clustering_key_restrictions>(_clustering_columns_restrictions)) {
-            return single_ck_restrictions->get_longest_prefix_restrictions()->bounds_ranges(options);
+namespace {
+
+using namespace expr;
+
+clustering_key_prefix::prefix_equal_tri_compare get_unreversed_tri_compare(const schema& schema) {
+    clustering_key_prefix::prefix_equal_tri_compare cmp(schema);
+    std::vector<data_type> types = cmp.prefix_type->types();
+    for (auto& t : types) {
+        if (t->is_reversed()) {
+            t = t->underlying_type();
         }
+    }
+    cmp.prefix_type = make_lw_shared<compound_type<allow_prefixes::yes>>(types);
+    return cmp;
+}
+
+/// True iff r1 start is strictly before r2 start.
+bool starts_before_start(
+        const query::clustering_range& r1,
+        const query::clustering_range& r2,
+        const clustering_key_prefix::prefix_equal_tri_compare& cmp) {
+    if (!r2.start()) {
+        return false; // r2 start is -inf, nothing is before that.
+    }
+    if (!r1.start()) {
+        return true; // r1 start is -inf, while r2 start is finite.
+    }
+    const auto diff = cmp(r1.start()->value(), r2.start()->value());
+    if (diff < 0) { // r1 start is strictly before r2 start.
+        return true;
+    }
+    if (diff > 0) { // r1 start is strictly after r2 start.
+        return false;
+    }
+    const auto len1 = r1.start()->value().representation().size();
+    const auto len2 = r2.start()->value().representation().size();
+    if (len1 == len2) { // The values truly are equal.
+        return r1.start()->is_inclusive() && !r2.start()->is_inclusive();
+    } else if (len1 < len2) { // r1 start is a prefix of r2 start.
+        // (a)>=(1) starts before (a,b)>=(1,1), but (a)>(1) doesn't.
+        return r1.start()->is_inclusive();
+    } else { // r2 start is a prefix of r1 start.
+        // (a,b)>=(1,1) starts before (a)>(1) but after (a)>=(1).
+        return r2.start()->is_inclusive();
+    }
+}
+
+/// True iff r1 start is before (or identical as) r2 end.
+bool starts_before_or_at_end(
+        const query::clustering_range& r1,
+        const query::clustering_range& r2,
+        const clustering_key_prefix::prefix_equal_tri_compare& cmp) {
+    if (!r1.start()) {
+        return true; // r1 start is -inf, must be before r2 end.
+    }
+    if (!r2.end()) {
+        return true; // r2 end is +inf, everything is before it.
+    }
+    const auto diff = cmp(r1.start()->value(), r2.end()->value());
+    if (diff < 0) { // r1 start is strictly before r2 end.
+        return true;
+    }
+    if (diff > 0) { // r1 start is strictly after r2 end.
+        return false;
+    }
+    const auto len1 = r1.start()->value().representation().size();
+    const auto len2 = r2.end()->value().representation().size();
+    if (len1 == len2) { // The values truly are equal.
+        return r1.start()->is_inclusive() && r2.end()->is_inclusive();
+    } else if (len1 < len2) { // r1 start is a prefix of r2 end.
+        // a>=(1) starts before (a,b)<=(1,1) ends, but (a)>(1) doesn't.
+        return r1.start()->is_inclusive();
+    } else { // r2 end is a prefix of r1 start.
+        // (a,b)>=(1,1) starts before (a)<=(1) ends but after (a)<(1) ends.
+        return r2.end()->is_inclusive();
+    }
+}
+
+/// True if r1 end is strictly before r2 end.
+bool ends_before_end(
+        const query::clustering_range& r1,
+        const query::clustering_range& r2,
+        const clustering_key_prefix::prefix_equal_tri_compare& cmp) {
+    if (!r1.end()) {
+        return false; // r1 end is +inf, which is after everything.
+    }
+    if (!r2.end()) {
+        return true; // r2 end is +inf, while r1 end is finite.
+    }
+    const auto diff = cmp(r1.end()->value(), r2.end()->value());
+    if (diff < 0) { // r1 end is strictly before r2 end.
+        return true;
+    }
+    if (diff > 0) { // r1 end is strictly after r2 end.
+        return false;
+    }
+    const auto len1 = r1.end()->value().representation().size();
+    const auto len2 = r2.end()->value().representation().size();
+    if (len1 == len2) { // The values truly are equal.
+        return !r1.end()->is_inclusive() && r2.end()->is_inclusive();
+    } else if (len1 < len2) { // r1 end is a prefix of r2 end.
+        // (a)<(1) ends before (a,b)<=(1,1), but (a)<=(1) doesn't.
+        return !r1.end()->is_inclusive();
+    } else { // r2 end is a prefix of r1 end.
+        // (a,b)<=(1,1) ends before (a)<=(1) but after (a)<(1).
+        return r2.end()->is_inclusive();
+    }
+}
+
+/// Correct clustering_range intersection.  See #8157.
+std::optional<query::clustering_range> intersection(
+        const query::clustering_range& r1,
+        const query::clustering_range& r2,
+        const clustering_key_prefix::prefix_equal_tri_compare& cmp) {
+    // Assume r1's start is to the left of r2's start.
+    if (starts_before_start(r2, r1, cmp)) {
+        return intersection(r2, r1, cmp);
+    }
+    if (!starts_before_or_at_end(r2, r1, cmp)) {
+        return {};
+    }
+    const auto& intersection_start = r2.start();
+    const auto& intersection_end = ends_before_end(r1, r2, cmp) ? r1.end() : r2.end();
+    if (intersection_start == intersection_end && intersection_end.has_value()) {
+        return query::clustering_range::make_singular(intersection_end->value());
+    }
+    return query::clustering_range(intersection_start, intersection_end);
+}
+
+struct range_less {
+    const class schema& s;
+    clustering_key_prefix::less_compare cmp = clustering_key_prefix::less_compare(s);
+    bool operator()(const query::clustering_range& x, const query::clustering_range& y) const {
+        if (!x.start() && !y.start()) {
+            return false;
+        }
+        if (!x.start()) {
+            return true;
+        }
+        if (!y.start()) {
+            return false;
+        }
+        return cmp(x.start()->value(), y.start()->value());
+    }
+};
+
+/// An expression visitor that translates multi-column atoms into clustering ranges.
+struct multi_column_range_accumulator {
+    const query_options& options;
+    const schema_ptr schema;
+    std::vector<query::clustering_range> ranges{query::clustering_range::make_open_ended_both_sides()};
+    const clustering_key_prefix::prefix_equal_tri_compare prefix3cmp = get_unreversed_tri_compare(*schema);
+
+    void operator()(const binary_operator& binop) {
+        if (is_compare(binop.op)) {
+            auto opt_values = dynamic_pointer_cast<tuples::value>(binop.rhs->bind(options))->get_elements();
+            auto& lhs = std::get<std::vector<column_value>>(binop.lhs);
+            std::vector<bytes> values(lhs.size());
+            for (size_t i = 0; i < lhs.size(); ++i) {
+                values[i] = *statements::request_validations::check_not_null(
+                        opt_values[i],
+                        "Invalid null value in condition for column %s", lhs.at(i).col->name_as_text());
+            }
+            intersect_all(to_range(binop.op, clustering_key_prefix(values)));
+        } else if (binop.op == oper_t::IN) {
+            if (auto dv = dynamic_pointer_cast<lists::delayed_value>(binop.rhs)) {
+                process_in_values(
+                        dv->get_elements() | transformed(
+                                [&] (const ::shared_ptr<term>& t) {
+                                    return static_pointer_cast<tuples::value>(t->bind(options))->get_elements();
+                                }));
+            } else if (auto mkr = dynamic_pointer_cast<tuples::in_marker>(binop.rhs)) {
+                // This is `(a,b) IN ?`.  RHS elements are themselves tuples, represented as vector<bytes_opt>.
+                process_in_values(
+                        static_pointer_cast<tuples::in_value>(mkr->bind(options))->get_split_values());
+            }
+            else {
+                on_internal_error(rlogger, format("multi_column_range_accumulator: unexpected atom {}", binop));
+            }
+        } else {
+            on_internal_error(rlogger, format("multi_column_range_accumulator: unexpected atom {}", binop));
+        }
+    }
+
+    void operator()(const conjunction& c) {
+        std::ranges::for_each(c.children, [this] (const expression& child) { std::visit(*this, child); });
+    }
+
+    void operator()(bool b) {
+        if (!b) {
+            ranges.clear();
+        }
+    }
+
+    /// Intersects each range with v.  If any intersection is empty, clears ranges.
+    void intersect_all(const query::clustering_range& v) {
+        for (auto& r : ranges) {
+            auto intrs = intersection(r, v, prefix3cmp);
+            if (!intrs) {
+                ranges.clear();
+                break;
+            }
+            r = *intrs;
+        }
+    }
+
+    template<std::ranges::range Range>
+    requires std::convertible_to<typename Range::value_type::value_type, bytes_opt>
+    void process_in_values(Range in_values) {
+        if (ranges.empty()) {
+            return; // Shortcircuit an easy case.
+        }
+        std::set<query::clustering_range, range_less> new_ranges(range_less{*schema});
+        for (const auto& current_tuple : in_values) {
+            // Each IN value is like a separate EQ restriction ANDed to the existing state.
+            auto current_range = to_range(
+                    oper_t::EQ, clustering_key_prefix::from_optional_exploded(*schema, current_tuple));
+            for (const auto& r : ranges) {
+                auto intrs = intersection(r, current_range, prefix3cmp);
+                if (intrs) {
+                    new_ranges.insert(*intrs);
+                }
+            }
+        }
+        ranges.assign(new_ranges.cbegin(), new_ranges.cend());
+    }
+};
+
+/// Calculates clustering bounds for the multi-column case.
+std::vector<query::clustering_range> get_multi_column_clustering_bounds(
+        const query_options& options,
+        schema_ptr schema,
+        const std::vector<expression>& multi_column_restrictions) {
+    multi_column_range_accumulator acc{options, schema};
+    for (const auto& restr : multi_column_restrictions) {
+        std::visit(acc, restr);
+    }
+    return acc.ranges;
+}
+
+/// Reverses the range if the type is reversed.  Why don't we have nonwrapping_interval::reverse()??
+query::clustering_range reverse_if_reqd(query::clustering_range r, const abstract_type& t) {
+    return t.is_reversed() ? query::clustering_range(r.end(), r.start()) : std::move(r);
+}
+
+void error_if_exceeds(size_t size, size_t limit) {
+    if (size > limit) {
+        throw std::runtime_error(
+                fmt::format("clustering-key cartesian product size {} is greater than maximum {}", size, limit));
+    }
+}
+
+constexpr bool inclusive = true;
+
+/// Calculates clustering bounds for the single-column case.
+std::vector<query::clustering_range> get_single_column_clustering_bounds(
+        const query_options& options,
+        schema_ptr schema,
+        const std::vector<expression>& single_column_restrictions) {
+    const size_t size_limit =
+            options.get_cql_config().restrictions.clustering_key_restrictions_max_cartesian_product_size;
+    size_t product_size = 1;
+    std::vector<std::vector<bytes>> prior_column_values; // Equality values of columns seen so far.
+    for (size_t i = 0; i < single_column_restrictions.size(); ++i) {
+        auto values = possible_lhs_values(
+                &schema->clustering_column_at(i), // This should be the LHS of restrictions[i].
+                single_column_restrictions[i],
+                options);
+        if (auto list = std::get_if<value_list>(&values)) {
+            if (list->empty()) { // Impossible condition -- no rows can possibly match.
+                return {};
+            }
+            prior_column_values.push_back(*list);
+            product_size *= list->size();
+            error_if_exceeds(product_size, size_limit);
+        } else if (auto last_range = std::get_if<nonwrapping_interval<bytes>>(&values)) {
+            // Must be the last column in the prefix, since it's neither EQ nor IN.
+            std::vector<query::clustering_range> ck_ranges;
+            if (prior_column_values.empty()) {
+                // This is the first and last range; just turn it into a clustering_key_prefix.
+                ck_ranges.push_back(
+                        reverse_if_reqd(
+                                last_range->transform([] (const bytes& val) { return clustering_key_prefix({val}); }),
+                                *schema->clustering_column_at(i).type));
+            } else {
+                // Prior clustering columns are equality-restricted (either via = or IN), producing one or more
+                // prior_column_values elements.  Now we will turn each such element into a CK range dictated by those
+                // equalities and this inequality represented by last_range.  Each CK range's upper/lower bound is
+                // formed by extending the Cartesian-product element with the corresponding last_range bound, if it
+                // exists; if it doesn't, the CK range bound is just the Cartesian-product element, inclusive.
+                //
+                // For example, the expression `c1=1 AND c2=2 AND c3>3` makes lower CK bound (1,2,3) exclusive and
+                // upper CK bound (1,2) inclusive.
+                ck_ranges.reserve(product_size);
+                const auto extra_lb = last_range->start(), extra_ub = last_range->end();
+                for (auto& b : cartesian_product(prior_column_values)) {
+                    auto new_lb = b, new_ub = b;
+                    if (extra_lb) {
+                        new_lb.push_back(extra_lb->value());
+                    }
+                    if (extra_ub) {
+                        new_ub.push_back(extra_ub->value());
+                    }
+                    query::clustering_range::bound new_start(new_lb, extra_lb ? extra_lb->is_inclusive() : inclusive);
+                    query::clustering_range::bound new_end  (new_ub, extra_ub ? extra_ub->is_inclusive() : inclusive);
+                    ck_ranges.push_back(reverse_if_reqd({new_start, new_end}, *schema->clustering_column_at(i).type));
+                }
+            }
+            sort(ck_ranges.begin(), ck_ranges.end(), range_less{*schema});
+            return ck_ranges;
+        }
+    }
+    // All prefix columns are restricted by EQ or IN.  The resulting CK ranges are just singular ranges of corresponding
+    // prior_column_values.
+    std::vector<query::clustering_range> ck_ranges(product_size);
+    cartesian_product cp(prior_column_values);
+    std::transform(cp.begin(), cp.end(), ck_ranges.begin(), std::bind_front(query::clustering_range::make_singular));
+    sort(ck_ranges.begin(), ck_ranges.end(), range_less{*schema});
+    return ck_ranges;
+}
+
+using opt_bound = std::optional<query::clustering_range::bound>;
+
+/// Makes a partial bound out of whole_bound's prefix.  If the partial bound is strictly shorter than the whole, it is
+/// exclusive.  Otherwise, it matches the whole_bound's inclusivity.
+opt_bound make_prefix_bound(
+        size_t prefix_len, const std::vector<bytes>& whole_bound, bool whole_bound_is_inclusive) {
+    if (whole_bound.empty()) {
+        return {};
+    }
+    // Couldn't get std::ranges::subrange(whole_bound, prefix_len) to compile :(
+    std::vector<bytes> partial_bound(
+            whole_bound.cbegin(), whole_bound.cbegin() + std::min(prefix_len, whole_bound.size()));
+    return query::clustering_range::bound(
+            clustering_key_prefix(move(partial_bound)),
+            prefix_len >= whole_bound.size() && whole_bound_is_inclusive);
+}
+
+/// Given a multi-column range in CQL order, breaks it into an equivalent union of clustering-order ranges.  Returns
+/// those ranges as vector elements.
+///
+/// A difference between CQL order and clustering order means that the right-hand side of a clustering-key comparison is
+/// not necessarily a single (lower or upper) bound on the clustering key in storage.  Eg, `WITH CLUSTERING ORDER BY (a
+/// ASC, b DESC)` indicates that "a less than 5" means "a comes before 5 in storage", but "b less than 5" means "b comes
+/// AFTER 5 in storage".  Therefore the CQL expression (a,b)<(5,5) cannot be executed by fetching a single range from
+/// the storage layer -- the right-hand side is not a single upper bound from the storage layer's perspective.
+///
+/// When translating the WHERE clause into clustering ranges to fetch, it's natural to first calculate the CQL-order
+/// ranges: comparisons define ranges, the AND operator intersects them, the IN operator makes a Cartesian product.  The
+/// result of this is a union of ranges in CQL order that define the clustering slice to fetch.  And if the clustering
+/// order is the same as the CQL order, these ranges can be sent to the storage proxy directly to fetch the correct
+/// result.  But if the two orders differ, there is some work to be done first.  This is simple enough for ranges that
+/// only vary a single column -- see reverse_if_reqd().  Multi-column ranges are more complicated; they are translated
+/// into an equivalent union of clustering-order ranges by get_equivalent_ranges().
+///
+/// Continuing the above example, we can translate the CQL expression (a,b)<(5,5) into a union of several ranges that
+/// are continuous in storage.  We begin by observing that (a,b)<(5,5) is the same as a<5 OR (a=5 AND b<5).  This is a
+/// union of two ranges: the range corresponding to a<5, plus the range corresponding to (a=5 AND b<5).  Note that both
+/// of these ranges are continuous in storage because they only vary a single column:
+///
+///  * a<5 is a range from -inf to clustering_key_prefix(5) exclusive
+///
+///  * (a=5 AND b<5) is a range from clustering_key_prefix(5,5) exclusive to clustering_key_prefix(5) inclusive; note
+///    the clustering order between those start/end bounds
+///
+/// Here is an illustration of those two ranges in storage, with rows represented vertically and clustering-ordered left
+/// to right:
+///
+///        a: 4 4 4 4 4 4 5 5 5 5 5 5 5 5 6 6 6 6 6
+///        b: 5 4 3 2 1 0 7 6 5 4 3 2 1 0 5 4 3 2 1
+/// 1st range ^^^^^^^^^^^       ^^^^^^^^^ 2nd range
+///
+/// For more examples of this range translation, please see the statement_restrictions unit tests.
+std::vector<query::clustering_range> get_equivalent_ranges(
+        const query::clustering_range& cql_order_range, const schema& schema) {
+    const auto& cql_lb = cql_order_range.start();
+    const auto& cql_ub = cql_order_range.end();
+    if (cql_lb == cql_ub && (!cql_lb || cql_lb->is_inclusive())) {
+        return {cql_order_range};
+    }
+    const auto cql_lb_bytes = cql_lb ? cql_lb->value().explode(schema) : std::vector<bytes>{};
+    const auto cql_ub_bytes = cql_ub ? cql_ub->value().explode(schema) : std::vector<bytes>{};
+    const bool cql_lb_is_inclusive = cql_lb ? cql_lb->is_inclusive() : false;
+    const bool cql_ub_is_inclusive = cql_ub ? cql_ub->is_inclusive() : false;
+
+    size_t common_prefix_len = 0;
+    // Skip equal values; they don't contribute to equivalent-range generation.
+    while (common_prefix_len < cql_lb_bytes.size() && common_prefix_len < cql_ub_bytes.size() &&
+           cql_lb_bytes[common_prefix_len] == cql_ub_bytes[common_prefix_len]) {
+        ++common_prefix_len;
+    }
+
+    std::vector<query::clustering_range> ranges;
+    // First range is special: it has both bounds.
+    opt_bound lb1 = make_prefix_bound(
+            common_prefix_len + 1, cql_lb_bytes, cql_lb_is_inclusive);
+    opt_bound ub1 = make_prefix_bound(
+            common_prefix_len + 1, cql_ub_bytes, cql_ub_is_inclusive);
+    auto range1 = schema.clustering_column_at(common_prefix_len).type->is_reversed() ?
+            query::clustering_range(ub1, lb1) : query::clustering_range(lb1, ub1);
+    ranges.push_back(std::move(range1));
+
+    for (size_t p = common_prefix_len + 2; p <= cql_lb_bytes.size(); ++p) {
+        opt_bound lb = make_prefix_bound(p, cql_lb_bytes, cql_lb_is_inclusive);
+        opt_bound ub = make_prefix_bound(p - 1, cql_lb_bytes, /*irrelevant:*/true);
+        if (ub) {
+            ub = query::clustering_range::bound(ub->value(), inclusive);
+        }
+        auto range = schema.clustering_column_at(p - 1).type->is_reversed() ?
+                query::clustering_range(ub, lb) : query::clustering_range(lb, ub);
+        ranges.push_back(std::move(range));
+    }
+
+    for (size_t p = common_prefix_len + 2; p <= cql_ub_bytes.size(); ++p) {
+        // Note the difference from the cql_lb_bytes case above!
+        opt_bound ub = make_prefix_bound(p, cql_ub_bytes, cql_ub_is_inclusive);
+        opt_bound lb = make_prefix_bound(p - 1, cql_ub_bytes, /*irrelevant:*/true);
+        if (lb) {
+            lb = query::clustering_range::bound(lb->value(), inclusive);
+        }
+        auto range = schema.clustering_column_at(p - 1).type->is_reversed() ?
+                query::clustering_range(ub, lb) : query::clustering_range(lb, ub);
+        ranges.push_back(std::move(range));
+    }
+
+    return ranges;
+}
+
+/// Extracts raw multi-column bounds from exprs; last one wins.
+query::clustering_range range_from_raw_bounds(
+        const std::vector<expression>& exprs, const query_options& options, const schema& schema) {
+    opt_bound lb, ub;
+    for (const auto& e : exprs) {
+        if (auto b = find_clustering_order(e)) {
+            const auto tup = dynamic_pointer_cast<tuples::value>(b->rhs->bind(options));
+            if (!tup) {
+                on_internal_error(rlogger, format("range_from_raw_bounds: unexpected atom {}", *b));
+            }
+            const auto r = to_range(
+                    b->op, clustering_key_prefix::from_optional_exploded(schema, tup->get_elements()));
+            if (r.start()) {
+                lb = r.start();
+            }
+            if (r.end()) {
+                ub = r.end();
+            }
+        }
+    }
+    return {lb, ub};
+}
+
+} // anonymous namespace
+
+std::vector<query::clustering_range> statement_restrictions::get_clustering_bounds(const query_options& options) const {
+    if (_clustering_prefix_restrictions.empty()) {
         return {query::clustering_range::make_open_ended_both_sides()};
     }
-    return _clustering_columns_restrictions->bounds_ranges(options);
+    if (count_if(_clustering_prefix_restrictions[0], expr::is_multi_column)) {
+        bool all_natural = true, all_reverse = true; ///< Whether column types are reversed or natural.
+        for (auto& r : _clustering_prefix_restrictions) { // TODO: move to constructor, do only once.
+            using namespace expr;
+            const auto& binop = std::get<binary_operator>(r);
+            if (is_clustering_order(binop)) {
+                return {range_from_raw_bounds(_clustering_prefix_restrictions, options, *_schema)};
+            }
+            for (auto& cv : std::get<std::vector<column_value>>(binop.lhs)) {
+                if (cv.col->type->is_reversed()) {
+                    all_natural = false;
+                } else {
+                    all_reverse = false;
+                }
+            }
+        }
+        auto bounds = get_multi_column_clustering_bounds(options, _schema, _clustering_prefix_restrictions);
+        if (!all_natural && !all_reverse) {
+            std::vector<query::clustering_range> bounds_in_clustering_order;
+            for (const auto& b : bounds) {
+                const auto eqv = get_equivalent_ranges(b, *_schema);
+                bounds_in_clustering_order.insert(bounds_in_clustering_order.end(), eqv.cbegin(), eqv.cend());
+            }
+            return bounds_in_clustering_order;
+        }
+        if (all_reverse) {
+            for (auto& crange : bounds) {
+                crange = query::clustering_range(crange.end(), crange.start());
+            }
+        }
+        return bounds;
+    } else {
+        return get_single_column_clustering_bounds(options, _schema, _clustering_prefix_restrictions);
+    }
 }
 
 namespace {

@@ -73,11 +73,18 @@ struct token {};
 
 enum class oper_t { EQ, NEQ, LT, LTE, GTE, GT, IN, CONTAINS, CONTAINS_KEY, IS_NOT, LIKE };
 
+/// Describes the nature of clustering-key comparisons.  Useful for implementing SCYLLA_CLUSTERING_BOUND.
+enum class comparison_order : char {
+    cql, ///< CQL order. (a,b)>(1,1) is equivalent to a>1 OR (a=1 AND b>1).
+    clustering, ///< Table's clustering order. (a,b)>(1,1) means any row past (1,1) in storage.
+};
+
 /// Operator restriction: LHS op RHS.
 struct binary_operator {
     std::variant<column_value, std::vector<column_value>, token> lhs;
     oper_t op;
     ::shared_ptr<term> rhs;
+    comparison_order order = comparison_order::cql;
 };
 
 /// A conjunction of restrictions.
@@ -131,6 +138,10 @@ extern value_set possible_lhs_values(const column_definition*, const expression&
 /// Turns value_set into a range, unless it's a multi-valued list (in which case this throws).
 extern nonwrapping_range<bytes> to_range(const value_set&);
 
+/// A range of all X such that X op val.
+template<typename T>
+nonwrapping_range<T> to_range(oper_t op, const T& val);
+
 /// True iff the index can support the entire expression.
 extern bool is_supported_by(const expression&, const secondary_index::index&);
 
@@ -182,7 +193,8 @@ inline const binary_operator* find(const expression& e, oper_t op) {
 }
 
 inline bool needs_filtering(oper_t op) {
-    return (op == oper_t::CONTAINS) || (op == oper_t::CONTAINS_KEY) || (op == oper_t::LIKE);
+    return (op == oper_t::CONTAINS) || (op == oper_t::CONTAINS_KEY) || (op == oper_t::LIKE) ||
+           (op == oper_t::IS_NOT) || (op == oper_t::NEQ) ;
 }
 
 inline auto find_needs_filtering(const expression& e) {
@@ -211,12 +223,24 @@ inline bool is_compare(oper_t op) {
     }
 }
 
+inline bool is_multi_column(const binary_operator& op) {
+    return holds_alternative<std::vector<column_value>>(op.lhs);
+}
+
 inline bool has_token(const expression& e) {
     return find_atom(e, [] (const binary_operator& o) { return std::holds_alternative<token>(o.lhs); });
 }
 
 inline bool has_slice_or_needs_filtering(const expression& e) {
     return find_atom(e, [] (const binary_operator& o) { return is_slice(o.op) || needs_filtering(o.op); });
+}
+
+inline bool is_clustering_order(const binary_operator& op) {
+    return op.order == comparison_order::clustering;
+}
+
+inline auto find_clustering_order(const expression& e) {
+    return find_atom(e, is_clustering_order);
 }
 
 /// True iff binary_operator involves a collection.

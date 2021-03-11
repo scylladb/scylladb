@@ -376,26 +376,8 @@ protected:
 };
 
 class multi_column_restriction::slice final : public multi_column_restriction {
-public:
-    /**
-     * SCYLLA_CLUSTERING_BOUND support.
-     * 
-     * "normal" -   clustering bounds are interpreted as value bounds, 
-     *              based on column ordering. For tables with mixed sort order
-     *              clustering, this means we need to do clever reconstruction
-     *              of bounds into single column restrictions and switch bounds.
-     * 
-     * "scylla_clustering_bound" - simply bypasses this. sstableloader will create
-     *                             these, where the (a, b, c) bounds of the expression
-     *                             is actually raw clustering bounds. For us, it just
-     *                             means we can skip transforming things.
-     */
-    enum class mode : char {
-        normal,
-        scylla_clustering_bound,
-    };
-private:
     using restriction_shared_ptr = ::shared_ptr<clustering_key_restrictions>;
+    using mode = expr::comparison_order;
     term_slice _slice;
     mode _mode;
 
@@ -405,13 +387,14 @@ private:
         , _mode(m)
     { }
 public:
-    slice(schema_ptr schema, std::vector<const column_definition*> defs, statements::bound bound, bool inclusive, shared_ptr<term> term, mode m = mode::normal)
+    slice(schema_ptr schema, std::vector<const column_definition*> defs, statements::bound bound, bool inclusive, shared_ptr<term> term, mode m = mode::cql)
         : slice(schema, defs, term_slice::new_instance(bound, inclusive, term), m)
     {
         expression = expr::binary_operator{
             std::vector<expr::column_value>(defs.cbegin(), defs.cend()),
             expr::pick_operator(bound, inclusive),
-            std::move(term)};
+            std::move(term),
+            m};
     }
 
     virtual bool is_supported_by(const secondary_index::index& index) const override {
@@ -424,7 +407,7 @@ public:
     }
 
     virtual std::vector<bounds_range_type> bounds_ranges(const query_options& options) const override {
-        if (_mode == mode::scylla_clustering_bound || !is_mixed_order()) {
+        if (_mode == mode::clustering || !is_mixed_order()) {
             return bounds_ranges_unified_order(options);
         } else {
             return bounds_ranges_mixed_order(options);
@@ -460,7 +443,7 @@ public:
                    get_columns_in_commons(other));
         auto other_slice = static_pointer_cast<slice>(other);
 
-        static auto mode2str = [](auto m) { return m == mode::normal ? "plain" : "SCYLLA_CLUSTERING_BOUND"; };
+        static auto mode2str = [](auto m) { return m == mode::cql ? "plain" : "SCYLLA_CLUSTERING_BOUND"; };
         check_true(other_slice->_mode == this->_mode, 
                     "Invalid combination of restrictions (%s / %s)",
                     mode2str(this->_mode), mode2str(other_slice->_mode)
@@ -509,7 +492,7 @@ private:
             auto end_prefix = clustering_key_prefix::from_optional_exploded(*_schema, end_components);
             end_bound = bounds_range_type::bound(std::move(end_prefix), _slice.is_inclusive(statements::bound::END));
         }
-        if (_mode == mode::normal && !is_asc_order()) {
+        if (_mode == mode::cql && !is_asc_order()) {
             std::swap(start_bound, end_bound);
         }
         auto range = bounds_range_type(start_bound, end_bound);
