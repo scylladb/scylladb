@@ -52,11 +52,23 @@ void election_timeout(raft::fsm& fsm) {
     }
 }
 
-struct failure_detector: public raft::failure_detector {
-    bool alive = true;
+
+struct trivial_failure_detector: public raft::failure_detector {
     bool is_alive(raft::server_id from) override {
-        return alive;
+        return true;
     }
+} trivial_failure_detector;
+
+class discrete_failure_detector: public raft::failure_detector {
+    bool _is_alive = true;
+    std::unordered_set<server_id> _dead;
+public:
+    bool is_alive(raft::server_id id) override {
+        return _is_alive && !_dead.contains(id);
+    }
+    void mark_dead(server_id id) { _dead.emplace(id); }
+    void mark_alive(server_id id) { _dead.erase(id); }
+    void mark_all_dead() { _is_alive = false; }
 };
 
 template <typename T> void add_entry(raft::log& log, T cmd) {
@@ -164,5 +176,9 @@ raft::server_address_set address_set(std::initializer_list<raft::server_id> ids)
         set.emplace(raft::server_address{.id = id});
     }
     return set;
+}
+
+raft::fsm create_follower(raft::server_id id, raft::log log, raft::failure_detector& fd = trivial_failure_detector) {
+    return raft::fsm(id, term_t{}, server_id{}, std::move(log), fd, fsm_cfg);
 }
 
