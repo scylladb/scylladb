@@ -106,6 +106,10 @@ sstable_set::all() const {
     return _impl->all();
 }
 
+void sstable_set::for_each_sstable(std::function<void(const shared_sstable&)> func) const {
+    return _impl->for_each_sstable(std::move(func));
+}
+
 void
 sstable_set::insert(shared_sstable sst) {
     _impl->insert(sst);
@@ -248,6 +252,12 @@ lw_shared_ptr<sstable_list> partitioned_sstable_set::all() const {
     return _all;
 }
 
+void partitioned_sstable_set::for_each_sstable(std::function<void(const shared_sstable&)> func) const {
+    for (auto& sst : *_all) {
+        func(sst);
+    }
+}
+
 void partitioned_sstable_set::insert(shared_sstable sst) {
     _all->insert(sst);
     try {
@@ -355,6 +365,12 @@ std::vector<shared_sstable> time_series_sstable_set::select(const dht::partition
 
 lw_shared_ptr<sstable_list> time_series_sstable_set::all() const {
     return make_lw_shared<sstable_list>(boost::copy_range<sstable_list>(*_sstables | boost::adaptors::map_values));
+}
+
+void time_series_sstable_set::for_each_sstable(std::function<void(const shared_sstable&)> func) const {
+    for (auto& entry : *_sstables) {
+        func(entry.second);
+    }
 }
 
 // O(log n)

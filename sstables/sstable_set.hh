@@ -65,6 +65,8 @@ public:
     std::vector<sstable_run> select_sstable_runs(const std::vector<shared_sstable>& sstables) const;
     // Return all sstables. It's not guaranteed that sstable_set will keep a reference to the returned list, so user should keep it.
     lw_shared_ptr<sstable_list> all() const;
+    // Prefer for_each_sstable() over all() for iteration purposes, as the latter may have to copy all sstables into a temporary
+    void for_each_sstable(std::function<void(const shared_sstable&)> func) const;
     void insert(shared_sstable sst);
     void erase(shared_sstable sst);
 
