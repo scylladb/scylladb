@@ -1096,3 +1096,37 @@ BOOST_AUTO_TEST_CASE(test_confchange_a_to_b) {
     BOOST_CHECK_EQUAL(B_1.get_output().messages.size(), 0);
 }
 
+
+BOOST_AUTO_TEST_CASE(test_confchange_ab_to_cd) {
+    // Similar to A -> B change, but with many nodes,
+    // so C_new has to campaign after configuration change.
+    server_id A_id = id(), B_id = id(), C_id = id(), D_id = id();
+
+    raft::log log(raft::snapshot{.idx = index_t{0}, .config = raft::configuration{A_id, B_id}});
+    auto A = create_follower(A_id, log);
+    auto B = create_follower(B_id, log);
+    election_timeout(A);
+    communicate(A, B);
+    BOOST_CHECK(A.is_leader());
+
+    auto C = create_follower(C_id, log);
+    auto D = create_follower(D_id, log);
+
+    A.add_entry(raft::configuration({C_id, D_id}));
+    communicate(A, B, C, D);
+
+    BOOST_CHECK_EQUAL(A.get_current_term(), 1);
+    // A and B are not part of the current configuration
+    BOOST_CHECK(A.is_follower());
+    BOOST_CHECK(B.is_follower());
+
+    election_timeout(C);
+    election_threshold(D);
+    communicate(A, B, C, D);
+    BOOST_CHECK_EQUAL(C.get_current_term(), 2);
+    BOOST_CHECK(C.is_leader());
+    BOOST_CHECK_EQUAL(C.get_configuration().is_joint(), false);
+    BOOST_CHECK_EQUAL(C.get_configuration().current.size(), 2);
+}
+
+
