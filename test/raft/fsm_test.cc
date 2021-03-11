@@ -19,45 +19,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#define BOOST_TEST_MODULE raft
-
-#include <boost/test/unit_test.hpp>
-#include "test/lib/log.hh"
-
-#include "raft/fsm.hh"
-
-using raft::term_t, raft::index_t, raft::server_id;
-using raft::log_entry;
-using seastar::make_lw_shared;
-
-void election_threshold(raft::fsm& fsm) {
-    for (int i = 0; i <= raft::ELECTION_TIMEOUT.count(); i++) {
-        fsm.tick();
-    }
-}
-
-void election_timeout(raft::fsm& fsm) {
-    for (int i = 0; i <= 2 * raft::ELECTION_TIMEOUT.count(); i++) {
-        fsm.tick();
-    }
-}
-
-struct failure_detector: public raft::failure_detector {
-    bool alive = true;
-    bool is_alive(raft::server_id from) override {
-        return alive;
-    }
-};
-
-template <typename T> void add_entry(raft::log& log, T cmd) {
-    log.emplace_back(make_lw_shared<log_entry>(log_entry{log.last_term(), log.next_idx(), cmd}));
-}
-
-raft::snapshot log_snapshot(raft::log& log, index_t idx) {
-    return raft::snapshot{.idx = idx, .term = log.last_term(), .config = log.get_snapshot().config};
-}
-
-raft::fsm_config fsm_cfg{.append_request_threshold = 1, .enable_prevoting = false};
+#include "test/raft/helpers.hh"
 
 BOOST_AUTO_TEST_CASE(test_votes) {
     auto id = []() -> raft::server_address { return raft::server_address{utils::make_random_uuid()}; };
