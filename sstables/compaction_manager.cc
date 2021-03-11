@@ -181,7 +181,7 @@ std::vector<sstables::shared_sstable> compaction_manager::get_candidates(const c
     auto& cs = cf.get_compaction_strategy();
 
     // Filter out sstables that are being compacted.
-    for (auto& sst : cf.non_staging_sstables()) {
+    for (auto& sst : cf.in_strategy_sstables()) {
         if (_compacting_sstables.contains(sst)) {
             continue;
         }

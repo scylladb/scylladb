@@ -1002,8 +1002,8 @@ std::vector<sstables::shared_sstable> table::select_sstables(const dht::partitio
     return _sstables->select(range);
 }
 
-std::vector<sstables::shared_sstable> table::non_staging_sstables() const {
-    auto sstables = get_sstables();
+std::vector<sstables::shared_sstable> table::in_strategy_sstables() const {
+    auto sstables = _main_sstables->all();
     return boost::copy_range<std::vector<sstables::shared_sstable>>(*sstables
             | boost::adaptors::filtered([this] (auto& sst) {
         return !_sstables_staging.contains(sst->generation());
