@@ -426,7 +426,9 @@ private:
     lw_shared_ptr<memtable_list> make_memtable_list();
 
     sstables::compaction_strategy _compaction_strategy;
-    // generation -> sstable. Ordered by key so we can easily get the most recent.
+    // SSTable set which contains all non-maintenance sstables
+    lw_shared_ptr<sstables::sstable_set> _main_sstables;
+    // Compound set which manages all the SSTable sets (e.g. main, etc) and allow their operations to be combined
     lw_shared_ptr<sstables::sstable_set> _sstables;
     // sstables that have been compacted (so don't look up in query) but
     // have not been deleted yet, so must not GC any tombstones in other sstables
@@ -595,6 +597,10 @@ private:
                                         tracing::trace_state_ptr trace_state,
                                         streamed_mutation::forwarding fwd,
                                         mutation_reader::forwarding fwd_mr) const;
+
+    lw_shared_ptr<sstables::sstable_set> make_compound_sstable_set();
+    // Compound sstable set must be refreshed whenever any of its managed sets are changed
+    void refresh_compound_sstable_set();
 
     snapshot_source sstables_as_snapshot_source();
     partition_presence_checker make_partition_presence_checker(lw_shared_ptr<sstables::sstable_set>);
