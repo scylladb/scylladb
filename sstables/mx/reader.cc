@@ -1,6 +1,5 @@
 /*
- * Copyright (C) 2015 ScyllaDB
- *
+ * Copyright (C) 2021 ScyllaDB
  */
 
 /*
@@ -20,129 +19,14 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#pragma once
+#include "reader.hh"
+#include "concrete_types.hh"
+#include "sstables/liveness_info.hh"
+#include "sstables/mutation_fragment_filter.hh"
+#include "sstables/sstable_mutation_reader.hh"
 
-#include <boost/dynamic_bitset.hpp>
-
-#include "bytes.hh"
-#include "key.hh"
-#include <seastar/core/temporary_buffer.hh>
-#include "consumer.hh"
-#include "sstables/types.hh"
-#include "tracing/trace_state.hh"
-#include "liveness_info.hh"
-#include <seastar/core/temporary_buffer.hh>
-#include <seastar/core/sstring.hh>
-#include <seastar/util/noncopyable_function.hh>
-#include "utils/chunked_vector.hh"
-#include "types.hh"
-#include "gc_clock.hh"
-#include "timestamp.hh"
-#include "column_translation.hh"
-
-#include "sstables.hh"
-#include "tombstone.hh"
-#include "m_format_read_helpers.hh"
-
-#include <variant>
-
-// sstables::data_consume_row feeds the contents of a single row into a
-// row_consumer object:
-//
-// * First, consume_row_start() is called, with some information about the
-//   whole row: The row's key, timestamp, etc.
-// * Next, consume_cell() is called once for every column.
-// * Finally, consume_row_end() is called. A consumer written for a single
-//   column will likely not want to do anything here.
-//
-// Important note: the row key, column name and column value, passed to the
-// consume_* functions, are passed as a "bytes_view" object, which points to
-// internal data held by the feeder. This internal data is only valid for the
-// duration of the single consume function it was passed to. If the object
-// wants to hold these strings longer, it must make a copy of the bytes_view's
-// contents. [Note, in reality, because our implementation reads the whole
-// row into one buffer, the byte_views remain valid until consume_row_end()
-// is called.]
-class row_consumer {
-    reader_permit _permit;
-    tracing::trace_state_ptr _trace_state;
-    const io_priority_class& _pc;
-
-public:
-    using proceed = data_consumer::proceed;
-
-    /*
-     * In k/l formats, RTs are represented as cohesive entries so
-     * setting/resetting RT start is not supported.
-     */
-    constexpr static bool is_setting_range_tombstone_start_supported = false;
-
-    row_consumer(reader_permit permit, tracing::trace_state_ptr trace_state, const io_priority_class& pc)
-        : _permit(std::move(permit))
-        , _trace_state(std::move(trace_state))
-        , _pc(pc) {
-    }
-
-    virtual ~row_consumer() = default;
-
-    // Consume the row's key and deletion_time. The latter determines if the
-    // row is a tombstone, and if so, when it has been deleted.
-    // Note that the key is in serialized form, and should be deserialized
-    // (according to the schema) before use.
-    // As explained above, the key object is only valid during this call, and
-    // if the implementation wishes to save it, it must copy the *contents*.
-    virtual proceed consume_row_start(sstables::key_view key, sstables::deletion_time deltime) = 0;
-
-    // Consume one cell (column name and value). Both are serialized, and need
-    // to be deserialized according to the schema.
-    // When a cell is set with an expiration time, "ttl" is the time to live
-    // (in seconds) originally set for this cell, and "expiration" is the
-    // absolute time (in seconds since the UNIX epoch) when this cell will
-    // expire. Typical cells, not set to expire, will get expiration = 0.
-    virtual proceed consume_cell(bytes_view col_name, bytes_view value,
-            int64_t timestamp,
-            int64_t ttl, int64_t expiration) = 0;
-
-    // Consume one counter cell. Column name and value are serialized, and need
-    // to be deserialized according to the schema.
-    virtual proceed consume_counter_cell(bytes_view col_name, bytes_view value,
-            int64_t timestamp) = 0;
-
-    // Consume a deleted cell (i.e., a cell tombstone).
-    virtual proceed consume_deleted_cell(bytes_view col_name, sstables::deletion_time deltime) = 0;
-
-    // Consume one row tombstone.
-    virtual proceed consume_shadowable_row_tombstone(bytes_view col_name, sstables::deletion_time deltime) = 0;
-
-    // Consume one range tombstone.
-    virtual proceed consume_range_tombstone(
-            bytes_view start_col, bytes_view end_col,
-            sstables::deletion_time deltime) = 0;
-
-    // Called at the end of the row, after all cells.
-    // Returns a flag saying whether the sstable consumer should stop now, or
-    // proceed consuming more data.
-    virtual proceed consume_row_end() = 0;
-
-    // Called when the reader is fast forwarded to given element.
-    virtual void reset(sstables::indexable_element) = 0;
-
-    virtual position_in_partition_view position() = 0;
-
-    // Under which priority class to place I/O coming from this consumer
-    const io_priority_class& io_priority() const {
-        return _pc;
-    }
-
-    // The permit for this read
-    reader_permit& permit() {
-        return _permit;
-    }
-
-    tracing::trace_state_ptr trace_state() const {
-        return _trace_state;
-    }
-};
+namespace sstables {
+namespace mx {
 
 class consumer_m {
     reader_permit _permit;
@@ -237,328 +121,6 @@ public:
 
     tracing::trace_state_ptr trace_state() const {
         return _trace_state;
-    }
-};
-
-namespace sstables {
-
-// data_consume_rows_context remembers the context that an ongoing
-// data_consume_rows() future is in.
-class data_consume_rows_context : public data_consumer::continuous_data_consumer<data_consume_rows_context> {
-private:
-    enum class state {
-        ROW_START,
-        DELETION_TIME,
-        DELETION_TIME_2,
-        DELETION_TIME_3,
-        ATOM_START,
-        ATOM_START_2,
-        ATOM_MASK,
-        ATOM_MASK_2,
-        COUNTER_CELL,
-        COUNTER_CELL_2,
-        EXPIRING_CELL,
-        EXPIRING_CELL_2,
-        EXPIRING_CELL_3,
-        CELL,
-        CELL_2,
-        CELL_VALUE_BYTES,
-        CELL_VALUE_BYTES_2,
-        RANGE_TOMBSTONE,
-        RANGE_TOMBSTONE_2,
-        RANGE_TOMBSTONE_3,
-        RANGE_TOMBSTONE_4,
-        STOP_THEN_ATOM_START,
-    } _state = state::ROW_START;
-
-    row_consumer& _consumer;
-    shared_sstable _sst;
-
-    temporary_buffer<char> _key;
-    temporary_buffer<char> _val;
-
-    // state for reading a cell
-    bool _deleted;
-    bool _counter;
-    uint32_t _ttl, _expiration;
-
-    bool _shadowable;
-public:
-    using consumer = row_consumer;
-    bool non_consuming() const {
-        return (((_state == state::DELETION_TIME_3)
-                || (_state == state::CELL_VALUE_BYTES_2)
-                || (_state == state::ATOM_START_2)
-                || (_state == state::ATOM_MASK_2)
-                || (_state == state::STOP_THEN_ATOM_START)
-                || (_state == state::COUNTER_CELL_2)
-                || (_state == state::RANGE_TOMBSTONE_4)
-                || (_state == state::EXPIRING_CELL_3)));
-    }
-
-    // process() feeds the given data into the state machine.
-    // The consumer may request at any point (e.g., after reading a whole
-    // row) to stop the processing, in which case we trim the buffer to
-    // leave only the unprocessed part. The caller must handle calling
-    // process() again, and/or refilling the buffer, as needed.
-    data_consumer::processing_result process_state(temporary_buffer<char>& data) {
-        try {
-            return do_process_state(data);
-        } catch (malformed_sstable_exception& exp) {
-            throw malformed_sstable_exception(exp.what(), _sst->get_filename());
-        }
-    }
-private:
-    data_consumer::processing_result do_process_state(temporary_buffer<char>& data) {
-#if 0
-        // Testing hack: call process() for tiny chunks separately, to verify
-        // that primitive types crossing input buffer are handled correctly.
-        constexpr size_t tiny_chunk = 1; // try various tiny sizes
-        if (data.size() > tiny_chunk) {
-            for (unsigned i = 0; i < data.size(); i += tiny_chunk) {
-                auto chunk_size = std::min(tiny_chunk, data.size() - i);
-                auto chunk = data.share(i, chunk_size);
-                if (process(chunk) == row_consumer::proceed::no) {
-                    data.trim_front(i + chunk_size - chunk.size());
-                    return row_consumer::proceed::no;
-                }
-            }
-            data.trim(0);
-            return row_consumer::proceed::yes;
-        }
-#endif
-        sstlog.trace("data_consume_row_context {}: state={}, size={}", fmt::ptr(this), static_cast<int>(_state), data.size());
-        switch (_state) {
-        case state::ROW_START:
-            if (read_short_length_bytes(data, _key) != read_status::ready) {
-                _state = state::DELETION_TIME;
-                break;
-            }
-        case state::DELETION_TIME:
-            if (read_32(data) != read_status::ready) {
-                _state = state::DELETION_TIME_2;
-                break;
-            }
-            // fallthrough
-        case state::DELETION_TIME_2:
-            if (read_64(data) != read_status::ready) {
-                _state = state::DELETION_TIME_3;
-                break;
-            }
-            // fallthrough
-        case state::DELETION_TIME_3: {
-            deletion_time del;
-            del.local_deletion_time = _u32;
-            del.marked_for_delete_at = _u64;
-            _sst->get_stats().on_row_read();
-            auto ret = _consumer.consume_row_start(key_view(to_bytes_view(_key)), del);
-            // after calling the consume function, we can release the
-            // buffers we held for it.
-            _key.release();
-            _state = state::ATOM_START;
-            if (ret == row_consumer::proceed::no) {
-                return row_consumer::proceed::no;
-            }
-        }
-        case state::ATOM_START:
-            if (read_short_length_bytes(data, _key) != read_status::ready) {
-                _state = state::ATOM_START_2;
-                break;
-            }
-        case state::ATOM_START_2:
-            if (_u16 == 0) {
-                // end of row marker
-                _state = state::ROW_START;
-                if (_consumer.consume_row_end() ==
-                        row_consumer::proceed::no) {
-                    return row_consumer::proceed::no;
-                }
-            } else {
-                _state = state::ATOM_MASK;
-            }
-            break;
-        case state::ATOM_MASK:
-            if (read_8(data) != read_status::ready) {
-                _state = state::ATOM_MASK_2;
-                break;
-            }
-            // fallthrough
-        case state::ATOM_MASK_2: {
-            auto const mask = column_mask(_u8);
-
-            if ((mask & (column_mask::range_tombstone | column_mask::shadowable)) != column_mask::none) {
-                _state = state::RANGE_TOMBSTONE;
-                _shadowable = (mask & column_mask::shadowable) != column_mask::none;
-            } else if ((mask & column_mask::counter) != column_mask::none) {
-                _deleted = false;
-                _counter = true;
-                _state = state::COUNTER_CELL;
-            } else if ((mask & column_mask::expiration) != column_mask::none) {
-                _deleted = false;
-                _counter = false;
-                _state = state::EXPIRING_CELL;
-            } else {
-                // FIXME: see ColumnSerializer.java:deserializeColumnBody
-                if ((mask & column_mask::counter_update) != column_mask::none) {
-                    throw malformed_sstable_exception("FIXME COUNTER_UPDATE_MASK");
-                }
-                _ttl = _expiration = 0;
-                _deleted = (mask & column_mask::deletion) != column_mask::none;
-                _counter = false;
-                _state = state::CELL;
-            }
-            break;
-        }
-        case state::COUNTER_CELL:
-            if (read_64(data) != read_status::ready) {
-                _state = state::COUNTER_CELL_2;
-                break;
-            }
-            // fallthrough
-        case state::COUNTER_CELL_2:
-            // _timestamp_of_last_deletion = _u64;
-            _state = state::CELL;
-            goto state_CELL;
-        case state::EXPIRING_CELL:
-            if (read_32(data) != read_status::ready) {
-                _state = state::EXPIRING_CELL_2;
-                break;
-            }
-            // fallthrough
-        case state::EXPIRING_CELL_2:
-            _ttl = _u32;
-            if (read_32(data) != read_status::ready) {
-                _state = state::EXPIRING_CELL_3;
-                break;
-            }
-            // fallthrough
-        case state::EXPIRING_CELL_3:
-            _expiration = _u32;
-            _state = state::CELL;
-        state_CELL:
-        case state::CELL: {
-            if (read_64(data) != read_status::ready) {
-                _state = state::CELL_2;
-                break;
-            }
-        }
-        case state::CELL_2:
-            if (read_32(data) != read_status::ready) {
-                _state = state::CELL_VALUE_BYTES;
-                break;
-            }
-        case state::CELL_VALUE_BYTES:
-            if (read_bytes(data, _u32, _val) != read_status::ready) {
-                _state = state::CELL_VALUE_BYTES_2;
-                break;
-            }
-        case state::CELL_VALUE_BYTES_2:
-        {
-            row_consumer::proceed ret;
-            if (_deleted) {
-                if (_val.size() != 4) {
-                    throw malformed_sstable_exception("deleted cell expects local_deletion_time value");
-                }
-                deletion_time del;
-                del.local_deletion_time = consume_be<uint32_t>(_val);
-                del.marked_for_delete_at = _u64;
-                ret = _consumer.consume_deleted_cell(to_bytes_view(_key), del);
-            } else if (_counter) {
-                ret = _consumer.consume_counter_cell(to_bytes_view(_key),
-                        to_bytes_view(_val), _u64);
-            } else {
-                ret = _consumer.consume_cell(to_bytes_view(_key),
-                        to_bytes_view(_val), _u64, _ttl, _expiration);
-            }
-            // after calling the consume function, we can release the
-            // buffers we held for it.
-            _key.release();
-            _val.release();
-            _state = state::ATOM_START;
-            if (ret == row_consumer::proceed::no) {
-                return row_consumer::proceed::no;
-            }
-            break;
-        }
-        case state::RANGE_TOMBSTONE:
-            if (read_short_length_bytes(data, _val) != read_status::ready) {
-                _state = state::RANGE_TOMBSTONE_2;
-                break;
-            }
-        case state::RANGE_TOMBSTONE_2:
-            if (read_32(data) != read_status::ready) {
-                _state = state::RANGE_TOMBSTONE_3;
-                break;
-            }
-        case state::RANGE_TOMBSTONE_3:
-            if (read_64(data) != read_status::ready) {
-                _state = state::RANGE_TOMBSTONE_4;
-                break;
-            }
-        case state::RANGE_TOMBSTONE_4:
-        {
-            deletion_time del;
-            del.local_deletion_time = _u32;
-            del.marked_for_delete_at = _u64;
-            auto ret = _shadowable
-                     ? _consumer.consume_shadowable_row_tombstone(to_bytes_view(_key), del)
-                     : _consumer.consume_range_tombstone(to_bytes_view(_key), to_bytes_view(_val), del);
-            _key.release();
-            _val.release();
-            _state = state::ATOM_START;
-            if (ret == row_consumer::proceed::no) {
-                return row_consumer::proceed::no;
-            }
-            break;
-        }
-        case state::STOP_THEN_ATOM_START:
-            _state = state::ATOM_START;
-            return row_consumer::proceed::no;
-        }
-
-        return row_consumer::proceed::yes;
-    }
-public:
-
-    data_consume_rows_context(const schema&,
-                              const shared_sstable sst,
-                              row_consumer& consumer,
-                              input_stream<char>&& input, uint64_t start, uint64_t maxlen)
-                : continuous_data_consumer(consumer.permit(), std::move(input), start, maxlen)
-                , _consumer(consumer)
-                , _sst(std::move(sst))
-    {}
-
-    void verify_end_state() {
-        // If reading a partial row (i.e., when we have a clustering row
-        // filter and using a promoted index), we may be in ATOM_START or ATOM_START_2
-        // state instead of ROW_START. In that case we did not read the
-        // end-of-row marker and consume_row_end() was never called.
-        if (_state == state::ATOM_START || _state == state::ATOM_START_2) {
-            _consumer.consume_row_end();
-            return;
-        }
-        if (_state != state::ROW_START || primitive_consumer::active()) {
-            throw malformed_sstable_exception("end of input, but not end of row");
-        }
-    }
-
-    void reset(indexable_element el) {
-        switch (el) {
-        case indexable_element::partition:
-            _state = state::ROW_START;
-            break;
-        case indexable_element::cell:
-            _state = state::ATOM_START;
-            break;
-        default:
-            assert(0);
-        }
-        _consumer.reset(el);
-    }
-
-    reader_permit& permit() {
-        return _consumer.permit();
     }
 };
 
@@ -1337,7 +899,7 @@ private:
             goto flags_label;
         }
 
-        return row_consumer::proceed::yes;
+        return data_consumer::proceed::yes;
     }
 public:
 
@@ -1396,62 +958,612 @@ public:
     }
 };
 
-// data_consume_rows() iterates over rows in the data file from
-// a particular range, feeding them into the consumer. The iteration is
-// done as efficiently as possible - reading only the data file (not the
-// summary or index files) and reading data in batches.
-//
-// The consumer object may request the iteration to stop before reaching
-// the end of the requested data range (e.g. stop after each sstable row).
-// A context object is returned which allows to resume this consumption:
-// This context's read() method requests that consumption begins, and
-// returns a future which will be resolved when it ends (because the
-// consumer asked to stop, or the data range ended). Only after the
-// returned future is resolved, may read() be called again to consume
-// more.
-// The caller must ensure (e.g., using do_with()) that the context object,
-// as well as the sstable, remains alive as long as a read() is in
-// progress (i.e., returned a future which hasn't completed yet).
-//
-// The "toread" range specifies the range we want to read initially.
-// However, the object returned by the read, a data_consume_context, also
-// provides a fast_forward_to(start,end) method which allows resetting
-// the reader to a new range. To allow that, we also have a "last_end"
-// byte which should be the last end to which fast_forward_to is
-// eventually allowed. If last_end==end, fast_forward_to is not allowed
-// at all, if last_end==file_size fast_forward_to is allowed until the
-// end of the file, and it can be something in between if we know that we
-// are planning to skip parts, but eventually read until last_end.
-// When last_end==end, we guarantee that the read will only read the
-// desired byte range from disk. However, when last_end > end, we may
-// read beyond end in anticipation of a small skip via fast_foward_to.
-// The amount of this excessive read is controlled by read ahead
-// hueristics which learn from the usefulness of previous read aheads.
-template <typename DataConsumeRowsContext>
-inline std::unique_ptr<DataConsumeRowsContext> data_consume_rows(const schema& s, shared_sstable sst, typename DataConsumeRowsContext::consumer& consumer, sstable::disk_read_range toread, uint64_t last_end) {
-    // Although we were only asked to read until toread.end, we'll not limit
-    // the underlying file input stream to this end, but rather to last_end.
-    // This potentially enables read-ahead beyond end, until last_end, which
-    // can be beneficial if the user wants to fast_forward_to() on the
-    // returned context, and may make small skips.
-    auto input = sst->data_stream(toread.start, last_end - toread.start, consumer.io_priority(),
-            consumer.permit(), consumer.trace_state(), sst->_partition_range_history);
-    return std::make_unique<DataConsumeRowsContext>(s, std::move(sst), consumer, std::move(input), toread.start, toread.end - toread.start);
+class mp_row_consumer_m : public consumer_m {
+    mp_row_consumer_reader* _reader;
+    schema_ptr _schema;
+    const query::partition_slice& _slice;
+    std::optional<mutation_fragment_filter> _mf_filter;
+
+    bool _is_mutation_end = true;
+    streamed_mutation::forwarding _fwd;
+    // For static-compact tables C* stores the only row in the static row but in our representation they're regular rows.
+    const bool _treat_static_row_as_regular;
+
+    std::optional<clustering_row> _in_progress_row;
+    std::optional<range_tombstone> _stored_tombstone;
+    static_row _in_progress_static_row;
+    bool _inside_static_row = false;
+
+    struct cell {
+        column_id id;
+        atomic_cell_or_collection val;
+    };
+    std::vector<cell> _cells;
+    collection_mutation_description _cm;
+
+    struct range_tombstone_start {
+        clustering_key_prefix ck;
+        bound_kind kind;
+        tombstone tomb;
+
+        position_in_partition_view position() const {
+            return position_in_partition_view(position_in_partition_view::range_tag_t{}, bound_view(ck, kind));
+        }
+    };
+
+    inline friend std::ostream& operator<<(std::ostream& o, const sstables::mx::mp_row_consumer_m::range_tombstone_start& rt_start) {
+        o << "{ clustering: " << rt_start.ck
+          << ", kind: " << rt_start.kind
+          << ", tombstone: " << rt_start.tomb << " }";
+        return o;
+    }
+
+    std::optional<range_tombstone_start> _opened_range_tombstone;
+
+    void consume_range_tombstone_start(clustering_key_prefix ck, bound_kind k, tombstone t) {
+        sstlog.trace("mp_row_consumer_m {}: consume_range_tombstone_start(ck={}, k={}, t={})", fmt::ptr(this), ck, k, t);
+        if (_opened_range_tombstone) {
+            throw sstables::malformed_sstable_exception(
+                    format("Range tombstones have to be disjoint: current opened range tombstone {}, new tombstone {}",
+                           *_opened_range_tombstone, t));
+        }
+        _opened_range_tombstone = {std::move(ck), k, std::move(t)};
+    }
+
+    proceed consume_range_tombstone_end(clustering_key_prefix ck, bound_kind k, tombstone t) {
+        sstlog.trace("mp_row_consumer_m {}: consume_range_tombstone_end(ck={}, k={}, t={})", fmt::ptr(this), ck, k, t);
+        if (!_opened_range_tombstone) {
+            throw sstables::malformed_sstable_exception(
+                    format("Closing range tombstone that wasn't opened: clustering {}, kind {}, tombstone {}",
+                           ck, k, t));
+        }
+        if (_opened_range_tombstone->tomb != t) {
+            throw sstables::malformed_sstable_exception(
+                    format("Range tombstone with ck {} and two different tombstones at ends: {}, {}",
+                           ck, _opened_range_tombstone->tomb, t));
+        }
+
+
+        auto rt = range_tombstone {std::move(_opened_range_tombstone->ck),
+                            _opened_range_tombstone->kind,
+                            std::move(ck),
+                            k,
+                            std::move(t)};
+        _opened_range_tombstone.reset();
+        return maybe_push_range_tombstone(std::move(rt));
+    }
+
+    const column_definition& get_column_definition(std::optional<column_id> column_id) const {
+        auto column_type = _inside_static_row ? column_kind::static_column : column_kind::regular_column;
+        return _schema->column_at(column_type, *column_id);
+    }
+
+    inline proceed maybe_push_range_tombstone(range_tombstone&& rt) {
+        const auto action = _mf_filter->apply(rt);
+        switch (action) {
+        case mutation_fragment_filter::result::emit:
+            _reader->push_mutation_fragment(mutation_fragment(*_schema, permit(), std::move(rt)));
+            break;
+        case mutation_fragment_filter::result::ignore:
+            if (_mf_filter->out_of_range()) {
+                _reader->on_out_of_clustering_range();
+                return proceed::no;
+            }
+            if (_mf_filter->is_current_range_changed()) {
+                return proceed::no;
+            }
+            break;
+        case mutation_fragment_filter::result::store_and_finish:
+            _stored_tombstone = std::move(rt);
+            _reader->on_out_of_clustering_range();
+            return proceed::no;
+        }
+
+        return proceed(!_reader->is_buffer_full() && !need_preempt());
+    }
+
+    inline void reset_for_new_partition() {
+        _is_mutation_end = true;
+        _in_progress_row.reset();
+        _stored_tombstone.reset();
+        _mf_filter.reset();
+        _opened_range_tombstone.reset();
+    }
+
+    void check_schema_mismatch(const column_translation::column_info& column_info, const column_definition& column_def) const {
+        if (column_info.schema_mismatch) {
+            throw malformed_sstable_exception(
+                    format("{} definition in serialization header does not match schema. Expected {} but got {}",
+                        column_def.name_as_text(),
+                        column_def.type->name(),
+                        column_info.type->name()));
+        }
+    }
+
+    void check_column_missing_in_current_schema(const column_translation::column_info& column_info,
+                                                api::timestamp_type timestamp) const {
+        if (!column_info.id) {
+            sstring name = sstring(to_sstring_view(*column_info.name));
+            auto it = _schema->dropped_columns().find(name);
+            if (it == _schema->dropped_columns().end() || timestamp > it->second.timestamp) {
+                throw malformed_sstable_exception(format("Column {} missing in current schema", name));
+            }
+        }
+    }
+
+public:
+
+    /*
+     * In m format, RTs are represented as separate start and end bounds,
+     * so setting/resetting RT start is needed so that we could skip using index.
+     * For this, the following methods need to be defined:
+     *
+     * void set_range_tombstone_start(clustering_key_prefix, bound_kind, tombstone);
+     * void reset_range_tombstone_start();
+     */
+    constexpr static bool is_setting_range_tombstone_start_supported = true;
+
+    mp_row_consumer_m(mp_row_consumer_reader* reader,
+                        const schema_ptr schema,
+                        reader_permit permit,
+                        const query::partition_slice& slice,
+                        const io_priority_class& pc,
+                        tracing::trace_state_ptr trace_state,
+                        streamed_mutation::forwarding fwd,
+                        const shared_sstable& sst)
+        : consumer_m(std::move(permit), std::move(trace_state), pc)
+        , _reader(reader)
+        , _schema(schema)
+        , _slice(slice)
+        , _fwd(fwd)
+        , _treat_static_row_as_regular(_schema->is_static_compact_table()
+            && (!sst->has_scylla_component() || sst->features().is_enabled(sstable_feature::CorrectStaticCompact))) // See #4139
+    {
+        _cells.reserve(std::max(_schema->static_columns_count(), _schema->regular_columns_count()));
+    }
+
+    mp_row_consumer_m(mp_row_consumer_reader* reader,
+                        const schema_ptr schema,
+                        reader_permit permit,
+                        const io_priority_class& pc,
+                        tracing::trace_state_ptr trace_state,
+                        streamed_mutation::forwarding fwd,
+                        const shared_sstable& sst)
+    : mp_row_consumer_m(reader, schema, std::move(permit), schema->full_slice(), pc, std::move(trace_state), fwd, sst)
+    { }
+
+    virtual ~mp_row_consumer_m() {}
+
+    // See the RowConsumer concept
+    void push_ready_fragments() {
+        auto maybe_push = [this] (auto&& mfopt) {
+            if (mfopt) {
+                assert(_mf_filter);
+                switch (_mf_filter->apply(*mfopt)) {
+                case mutation_fragment_filter::result::emit:
+                    _reader->push_mutation_fragment(mutation_fragment(*_schema, permit(), *std::exchange(mfopt, {})));
+                    break;
+                case mutation_fragment_filter::result::ignore:
+                    mfopt.reset();
+                    break;
+                case mutation_fragment_filter::result::store_and_finish:
+                    _reader->on_out_of_clustering_range();
+                    break;
+                }
+            }
+        };
+
+        maybe_push(_stored_tombstone);
+    }
+
+    std::optional<position_in_partition_view> maybe_skip() {
+        if (!_mf_filter) {
+            return {};
+        }
+        return _mf_filter->maybe_skip();
+    }
+
+    bool is_mutation_end() const {
+        return _is_mutation_end;
+    }
+
+    void setup_for_partition(const partition_key& pk) {
+        sstlog.trace("mp_row_consumer_m {}: setup_for_partition({})", fmt::ptr(this), pk);
+        _is_mutation_end = false;
+        _mf_filter.emplace(*_schema, _slice, pk, _fwd);
+    }
+
+    std::optional<position_in_partition_view> fast_forward_to(position_range r, db::timeout_clock::time_point) {
+        if (!_mf_filter) {
+            _reader->on_out_of_clustering_range();
+            return {};
+        }
+        auto skip = _mf_filter->fast_forward_to(std::move(r));
+        if (skip) {
+            position_in_partition::less_compare less(*_schema);
+            // No need to skip using index if stored fragments are after the start of the range
+            if (_in_progress_row && !less(_in_progress_row->position(), *skip)) {
+                return {};
+            }
+            if (_stored_tombstone && !less(_stored_tombstone->position(), *skip)) {
+                return {};
+            }
+        }
+        if (_mf_filter->out_of_range()) {
+            _reader->on_out_of_clustering_range();
+        }
+        return skip;
+    }
+
+    /*
+     * Sets the range tombstone start. Overwrites the currently set RT start if any.
+     * Used for skipping through wide partitions using index when the data block
+     * skipped to starts in the middle of an opened range tombstone.
+     */
+    void set_range_tombstone_start(clustering_key_prefix ck, bound_kind k, tombstone t) {
+        _opened_range_tombstone = {std::move(ck), k, std::move(t)};
+    }
+
+    /*
+     * Resets the previously set range tombstone start if any.
+     */
+    void reset_range_tombstone_start() {
+        _opened_range_tombstone.reset();
+    }
+
+    virtual proceed consume_partition_start(sstables::key_view key, sstables::deletion_time deltime) override {
+        sstlog.trace("mp_row_consumer_m {}: consume_partition_start(deltime=({}, {})), _is_mutation_end={}", fmt::ptr(this),
+            deltime.local_deletion_time, deltime.marked_for_delete_at, _is_mutation_end);
+        if (!_is_mutation_end) {
+            return proceed::yes;
+        }
+        auto pk = partition_key::from_exploded(key.explode(*_schema));
+        setup_for_partition(pk);
+        auto dk = dht::decorate_key(*_schema, pk);
+        _reader->on_next_partition(std::move(dk), tombstone(deltime));
+        return proceed(!_reader->is_buffer_full() && !need_preempt());
+    }
+
+    virtual consumer_m::row_processing_result consume_row_start(const std::vector<temporary_buffer<char>>& ecp) override {
+        auto key = clustering_key_prefix::from_range(ecp | boost::adaptors::transformed(
+            [] (const temporary_buffer<char>& b) { return to_bytes_view(b); }));
+
+        sstlog.trace("mp_row_consumer_m {}: consume_row_start({})", fmt::ptr(this), key);
+
+        // enagaged _in_progress_row means we have already split around this key.
+        if (_opened_range_tombstone && !_in_progress_row) {
+            // We have an opened range tombstone which means that the current row is spanned by that RT.
+            auto ck = key;
+            bool was_non_full_key = clustering_key::make_full(*_schema, ck);
+            auto end_kind = was_non_full_key ? bound_kind::excl_end : bound_kind::incl_end;
+            assert(!_stored_tombstone);
+            auto rt = range_tombstone(std::move(_opened_range_tombstone->ck),
+                _opened_range_tombstone->kind,
+                ck,
+                end_kind,
+                _opened_range_tombstone->tomb);
+            sstlog.trace("mp_row_consumer_m {}: push({})", fmt::ptr(this), rt);
+            _opened_range_tombstone->ck = std::move(ck);
+            _opened_range_tombstone->kind = was_non_full_key ? bound_kind::incl_start : bound_kind::excl_start;
+
+            if (maybe_push_range_tombstone(std::move(rt)) == proceed::no) {
+                _in_progress_row.emplace(std::move(key));
+                return consumer_m::row_processing_result::retry_later;
+            }
+        }
+
+        _in_progress_row.emplace(std::move(key));
+
+        switch (_mf_filter->apply(_in_progress_row->position())) {
+        case mutation_fragment_filter::result::emit:
+            sstlog.trace("mp_row_consumer_m {}: emit", fmt::ptr(this));
+            return consumer_m::row_processing_result::do_proceed;
+        case mutation_fragment_filter::result::ignore:
+            sstlog.trace("mp_row_consumer_m {}: ignore", fmt::ptr(this));
+            if (_mf_filter->out_of_range()) {
+                _reader->on_out_of_clustering_range();
+                // We actually want skip_later, which doesn't exist, but retry_later
+                // is ok because signalling out-of-range on the reader will cause it
+                // to either stop reading or skip to the next partition using index,
+                // not by ignoring fragments.
+                return consumer_m::row_processing_result::retry_later;
+            }
+            if (_mf_filter->is_current_range_changed()) {
+                return consumer_m::row_processing_result::retry_later;
+            } else {
+                _in_progress_row.reset();
+                return consumer_m::row_processing_result::skip_row;
+            }
+        case mutation_fragment_filter::result::store_and_finish:
+            sstlog.trace("mp_row_consumer_m {}: store_and_finish", fmt::ptr(this));
+            _reader->on_out_of_clustering_range();
+            return consumer_m::row_processing_result::retry_later;
+        }
+        abort();
+    }
+
+    virtual proceed consume_row_marker_and_tombstone(
+            const liveness_info& info, tombstone tomb, tombstone shadowable_tomb) override {
+        sstlog.trace("mp_row_consumer_m {}: consume_row_marker_and_tombstone({}, {}, {}), key={}",
+            fmt::ptr(this), info.to_row_marker(), tomb, shadowable_tomb, _in_progress_row->position());
+        _in_progress_row->apply(info.to_row_marker());
+        _in_progress_row->apply(tomb);
+        if (shadowable_tomb) {
+            _in_progress_row->apply(shadowable_tombstone{shadowable_tomb});
+        }
+        return proceed::yes;
+    }
+
+    virtual consumer_m::row_processing_result consume_static_row_start() override {
+        sstlog.trace("mp_row_consumer_m {}: consume_static_row_start()", fmt::ptr(this));
+        if (_treat_static_row_as_regular) {
+            return consume_row_start({});
+        }
+        _inside_static_row = true;
+        _in_progress_static_row = static_row();
+        return consumer_m::row_processing_result::do_proceed;
+    }
+
+    virtual proceed consume_column(const column_translation::column_info& column_info,
+                                   bytes_view cell_path,
+                                   bytes_view value,
+                                   api::timestamp_type timestamp,
+                                   gc_clock::duration ttl,
+                                   gc_clock::time_point local_deletion_time,
+                                   bool is_deleted) override {
+        const std::optional<column_id>& column_id = column_info.id;
+        sstlog.trace("mp_row_consumer_m {}: consume_column(id={}, path={}, value={}, ts={}, ttl={}, del_time={}, deleted={})", fmt::ptr(this),
+            column_id, fmt_hex(cell_path), fmt_hex(value), timestamp, ttl.count(), local_deletion_time.time_since_epoch().count(), is_deleted);
+        check_column_missing_in_current_schema(column_info, timestamp);
+        if (!column_id) {
+            return proceed::yes;
+        }
+        const column_definition& column_def = get_column_definition(column_id);
+        if (timestamp <= column_def.dropped_at()) {
+            return proceed::yes;
+        }
+        check_schema_mismatch(column_info, column_def);
+        if (column_def.is_multi_cell()) {
+            auto& value_type = visit(*column_def.type, make_visitor(
+                [] (const collection_type_impl& ctype) -> const abstract_type& { return *ctype.value_comparator(); },
+                [&] (const user_type_impl& utype) -> const abstract_type& {
+                    if (cell_path.size() != sizeof(int16_t)) {
+                        throw malformed_sstable_exception(format("wrong size of field index while reading UDT column: expected {}, got {}",
+                                    sizeof(int16_t), cell_path.size()));
+                    }
+
+                    auto field_idx = deserialize_field_index(cell_path);
+                    if (field_idx >= utype.size()) {
+                        throw malformed_sstable_exception(format("field index too big while reading UDT column: type has {} fields, got {}",
+                                    utype.size(), field_idx));
+                    }
+
+                    return *utype.type(field_idx);
+                },
+                [] (const abstract_type& o) -> const abstract_type& {
+                    throw malformed_sstable_exception(format("attempted to read multi-cell column, but expected type was {}", o.name()));
+                }
+            ));
+            auto ac = is_deleted ? atomic_cell::make_dead(timestamp, local_deletion_time)
+                                 : make_atomic_cell(value_type,
+                                                    timestamp,
+                                                    value,
+                                                    ttl,
+                                                    local_deletion_time,
+                                                    atomic_cell::collection_member::yes);
+            _cm.cells.emplace_back(to_bytes(cell_path), std::move(ac));
+        } else {
+            auto ac = is_deleted ? atomic_cell::make_dead(timestamp, local_deletion_time)
+                                 : make_atomic_cell(*column_def.type, timestamp, value, ttl, local_deletion_time,
+                                       atomic_cell::collection_member::no);
+            _cells.push_back({*column_id, atomic_cell_or_collection(std::move(ac))});
+        }
+        return proceed::yes;
+    }
+
+    virtual proceed consume_complex_column_start(const sstables::column_translation::column_info& column_info,
+                                                 tombstone tomb) override {
+        sstlog.trace("mp_row_consumer_m {}: consume_complex_column_start({}, {})", fmt::ptr(this), column_info.id, tomb);
+        _cm.tomb = tomb;
+        _cm.cells.clear();
+        return proceed::yes;
+    }
+
+    virtual proceed consume_complex_column_end(const sstables::column_translation::column_info& column_info) override {
+        const std::optional<column_id>& column_id = column_info.id;
+        sstlog.trace("mp_row_consumer_m {}: consume_complex_column_end({})", fmt::ptr(this), column_id);
+        if (_cm.tomb) {
+            check_column_missing_in_current_schema(column_info, _cm.tomb.timestamp);
+        }
+        if (column_id) {
+            const column_definition& column_def = get_column_definition(column_id);
+            if (!_cm.cells.empty() || (_cm.tomb && _cm.tomb.timestamp > column_def.dropped_at())) {
+                check_schema_mismatch(column_info, column_def);
+                _cells.push_back({column_def.id, _cm.serialize(*column_def.type)});
+            }
+        }
+        _cm.tomb = {};
+        _cm.cells.clear();
+        return proceed::yes;
+    }
+
+    virtual proceed consume_counter_column(const column_translation::column_info& column_info,
+                                           bytes_view value,
+                                           api::timestamp_type timestamp) override {
+        const std::optional<column_id>& column_id = column_info.id;
+        sstlog.trace("mp_row_consumer_m {}: consume_counter_column({}, {}, {})", fmt::ptr(this), column_id, fmt_hex(value), timestamp);
+        check_column_missing_in_current_schema(column_info, timestamp);
+        if (!column_id) {
+            return proceed::yes;
+        }
+        const column_definition& column_def = get_column_definition(column_id);
+        if (timestamp <= column_def.dropped_at()) {
+            return proceed::yes;
+        }
+        check_schema_mismatch(column_info, column_def);
+        auto ac = make_counter_cell(timestamp, value);
+        _cells.push_back({*column_id, atomic_cell_or_collection(std::move(ac))});
+        return proceed::yes;
+    }
+
+    virtual proceed consume_range_tombstone(const std::vector<temporary_buffer<char>>& ecp,
+                                            bound_kind kind,
+                                            tombstone tomb) override {
+        auto ck = clustering_key_prefix::from_range(ecp | boost::adaptors::transformed(
+            [] (const temporary_buffer<char>& b) { return to_bytes_view(b); }));
+        if (kind == bound_kind::incl_start || kind == bound_kind::excl_start) {
+            consume_range_tombstone_start(std::move(ck), kind, std::move(tomb));
+            return proceed(!_reader->is_buffer_full() && !need_preempt());
+        } else { // *_end kind
+            return consume_range_tombstone_end(std::move(ck), kind, std::move(tomb));
+        }
+    }
+
+    virtual proceed consume_range_tombstone(const std::vector<temporary_buffer<char>>& ecp,
+                                            sstables::bound_kind_m kind,
+                                            tombstone end_tombstone,
+                                            tombstone start_tombstone) override {
+        auto result = proceed::yes;
+        auto ck = clustering_key_prefix::from_range(ecp | boost::adaptors::transformed(
+            [] (const temporary_buffer<char>& b) { return to_bytes_view(b); }));
+        switch (kind) {
+        case bound_kind_m::incl_end_excl_start:
+            result = consume_range_tombstone_end(ck, bound_kind::incl_end, std::move(end_tombstone));
+            consume_range_tombstone_start(std::move(ck), bound_kind::excl_start, std::move(start_tombstone));
+            break;
+        case bound_kind_m::excl_end_incl_start:
+            result = consume_range_tombstone_end(ck, bound_kind::excl_end, std::move(end_tombstone));
+            consume_range_tombstone_start(std::move(ck), bound_kind::incl_start, std::move(start_tombstone));
+            break;
+        default:
+            assert(false && "Invalid boundary type");
+        }
+
+        return result;
+    }
+
+    virtual proceed consume_row_end() override {
+        auto fill_cells = [this] (column_kind kind, row& cells) {
+            for (auto &&c : _cells) {
+                cells.apply(_schema->column_at(kind, c.id), std::move(c.val));
+            }
+            _cells.clear();
+        };
+
+        if (_inside_static_row) {
+            fill_cells(column_kind::static_column, _in_progress_static_row.cells());
+            sstlog.trace("mp_row_consumer_m {}: consume_row_end(_in_progress_static_row={})", fmt::ptr(this), static_row::printer(*_schema, _in_progress_static_row));
+            _inside_static_row = false;
+            if (!_in_progress_static_row.empty()) {
+                auto action = _mf_filter->apply(_in_progress_static_row);
+                switch (action) {
+                case mutation_fragment_filter::result::emit:
+                    _reader->push_mutation_fragment(mutation_fragment(*_schema, permit(), std::move(_in_progress_static_row)));
+                    break;
+                case mutation_fragment_filter::result::ignore:
+                    break;
+                case mutation_fragment_filter::result::store_and_finish:
+                    // static row is always either emited or ignored.
+                    throw runtime_exception("We should never need to store static row");
+                }
+            }
+        } else {
+            if (!_cells.empty()) {
+                fill_cells(column_kind::regular_column, _in_progress_row->cells());
+            }
+            _reader->push_mutation_fragment(mutation_fragment(*_schema, permit(), *std::exchange(_in_progress_row, {})));
+        }
+
+        return proceed(!_reader->is_buffer_full() && !need_preempt());
+    }
+
+    virtual void on_end_of_stream() override {
+        sstlog.trace("mp_row_consumer_m {}: on_end_of_stream()", fmt::ptr(this));
+        if (_opened_range_tombstone) {
+            if (!_mf_filter || _mf_filter->out_of_range()) {
+                throw sstables::malformed_sstable_exception("Unclosed range tombstone.");
+            }
+            auto range_end = _mf_filter->uppermost_bound();
+            position_in_partition::less_compare less(*_schema);
+            auto start_pos = position_in_partition_view(position_in_partition_view::range_tag_t{},
+                                                        bound_view(_opened_range_tombstone->ck, _opened_range_tombstone->kind));
+            if (less(start_pos, range_end)) {
+                auto end_bound = range_end.is_clustering_row()
+                    ? position_in_partition_view::after_key(range_end.key()).as_end_bound_view()
+                    : range_end.as_end_bound_view();
+                auto rt = range_tombstone {std::move(_opened_range_tombstone->ck),
+                                           _opened_range_tombstone->kind,
+                                           end_bound.prefix(),
+                                           end_bound.kind(),
+                                           _opened_range_tombstone->tomb};
+                sstlog.trace("mp_row_consumer_m {}: on_end_of_stream(), emitting last tombstone: {}", fmt::ptr(this), rt);
+                _opened_range_tombstone.reset();
+                _reader->push_mutation_fragment(mutation_fragment(*_schema, permit(), std::move(rt)));
+            }
+        }
+        if (!_reader->_partition_finished) {
+            consume_partition_end();
+        }
+        _reader->_end_of_stream = true;
+    }
+
+    virtual proceed consume_partition_end() override {
+        sstlog.trace("mp_row_consumer_m {}: consume_partition_end()", fmt::ptr(this));
+        reset_for_new_partition();
+
+        if (_fwd == streamed_mutation::forwarding::yes) {
+            _reader->_end_of_stream = true;
+            return proceed::no;
+        }
+
+        _reader->_index_in_current_partition = false;
+        _reader->_partition_finished = true;
+        _reader->_before_partition = true;
+        _reader->push_mutation_fragment(mutation_fragment(*_schema, permit(), partition_end()));
+        return proceed(!_reader->is_buffer_full() && !need_preempt());
+    }
+
+    virtual void reset(sstables::indexable_element el) override {
+        sstlog.trace("mp_row_consumer_m {}: reset({})", fmt::ptr(this), static_cast<int>(el));
+        if (el == indexable_element::partition) {
+            reset_for_new_partition();
+        } else {
+            _in_progress_row.reset();
+            _is_mutation_end = false;
+        }
+    }
+
+    virtual position_in_partition_view position() override {
+        if (_inside_static_row) {
+            return position_in_partition_view(position_in_partition_view::static_row_tag_t{});
+        }
+        if (_stored_tombstone) {
+            return _stored_tombstone->position();
+        }
+        if (_in_progress_row) {
+            return _in_progress_row->position();
+        }
+        if (_is_mutation_end) {
+            return position_in_partition_view(position_in_partition_view::end_of_partition_tag_t{});
+        }
+        return position_in_partition_view(position_in_partition_view::partition_start_tag_t{});
+    }
+};
+
+flat_mutation_reader make_reader(
+        shared_sstable sstable,
+        schema_ptr schema,
+        reader_permit permit,
+        const dht::partition_range& range,
+        const query::partition_slice& slice,
+        const io_priority_class& pc,
+        tracing::trace_state_ptr trace_state,
+        streamed_mutation::forwarding fwd,
+        mutation_reader::forwarding fwd_mr,
+        read_monitor& monitor) {
+    return make_flat_mutation_reader<sstable_mutation_reader<data_consume_rows_context_m, mp_row_consumer_m>>(
+        std::move(sstable), std::move(schema), std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr, monitor);
 }
 
-template <typename DataConsumeRowsContext>
-inline std::unique_ptr<DataConsumeRowsContext> data_consume_single_partition(const schema& s, shared_sstable sst, typename DataConsumeRowsContext::consumer& consumer, sstable::disk_read_range toread) {
-    auto input = sst->data_stream(toread.start, toread.end - toread.start, consumer.io_priority(),
-            consumer.permit(), consumer.trace_state(), sst->_single_partition_history);
-    return std::make_unique<DataConsumeRowsContext>(s, std::move(sst), consumer, std::move(input), toread.start, toread.end - toread.start);
-}
-
-// Like data_consume_rows() with bounds, but iterates over whole range
-template <typename DataConsumeRowsContext>
-inline std::unique_ptr<DataConsumeRowsContext> data_consume_rows(const schema& s, shared_sstable sst, typename DataConsumeRowsContext::consumer& consumer) {
-        auto data_size = sst->data_size();
-        return data_consume_rows<DataConsumeRowsContext>(s, std::move(sst), consumer, {0, data_size}, data_size);
-}
-
-}
-//
+} // namespace mx
+} // namespace sstables

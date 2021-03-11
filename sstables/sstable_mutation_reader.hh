@@ -35,20 +35,124 @@
 #include "clustering_ranges_walker.hh"
 #include "binary_search.hh"
 #include "../dht/i_partitioner.hh"
-#include "mp_row_consumer.hh"
 
 namespace sstables {
 
-static
-position_in_partition_view get_slice_upper_bound(const schema& s, const query::partition_slice& slice, dht::ring_position_view key) {
-    const auto& ranges = slice.row_ranges(s, *key.key());
-    if (ranges.empty()) {
-        return position_in_partition_view::for_static_row();
+namespace kl {
+    class mp_row_consumer_k_l;
+}
+
+namespace mx {
+    class mp_row_consumer_m;
+}
+
+class mp_row_consumer_reader : public flat_mutation_reader::impl {
+    friend class sstables::kl::mp_row_consumer_k_l;
+    friend class sstables::mx::mp_row_consumer_m;
+protected:
+    shared_sstable _sst;
+
+    // Whether index lower bound is in current partition
+    bool _index_in_current_partition = false;
+
+    // True iff the consumer finished generating fragments for a partition and hasn't
+    // entered the new partition yet.
+    // Implies that partition_end was emitted for the last partition.
+    // Will cause the reader to skip to the next partition if !_before_partition.
+    bool _partition_finished = true;
+
+    // When set, the consumer is positioned right before a partition or at end of the data file.
+    // _index_in_current_partition applies to the partition which is about to be read.
+    bool _before_partition = true;
+
+    std::optional<dht::decorated_key> _current_partition_key;
+public:
+    mp_row_consumer_reader(schema_ptr s, reader_permit permit, shared_sstable sst)
+        : impl(std::move(s), std::move(permit))
+        , _sst(std::move(sst))
+    { }
+
+    // Called when all fragments relevant to the query range or fast forwarding window
+    // within the current partition have been pushed.
+    // If no skipping is required, this method may not be called before transitioning
+    // to the next partition.
+    virtual void on_out_of_clustering_range() = 0;
+
+    void on_next_partition(dht::decorated_key key, tombstone tomb);
+};
+
+inline atomic_cell make_atomic_cell(const abstract_type& type,
+                                    api::timestamp_type timestamp,
+                                    bytes_view value,
+                                    gc_clock::duration ttl,
+                                    gc_clock::time_point expiration,
+                                    atomic_cell::collection_member cm) {
+    if (ttl != gc_clock::duration::zero()) {
+        return atomic_cell::make_live(type, timestamp, value, expiration, ttl, cm);
+    } else {
+        return atomic_cell::make_live(type, timestamp, value, cm);
     }
-    if (slice.options.contains(query::partition_slice::option::reversed)) {
-        return position_in_partition_view::for_range_end(ranges.front());
-    }
-    return position_in_partition_view::for_range_end(ranges.back());
+}
+
+atomic_cell make_counter_cell(api::timestamp_type timestamp, bytes_view value);
+
+position_in_partition_view get_slice_upper_bound(const schema& s, const query::partition_slice& slice, dht::ring_position_view key);
+
+// data_consume_rows() iterates over rows in the data file from
+// a particular range, feeding them into the consumer. The iteration is
+// done as efficiently as possible - reading only the data file (not the
+// summary or index files) and reading data in batches.
+//
+// The consumer object may request the iteration to stop before reaching
+// the end of the requested data range (e.g. stop after each sstable row).
+// A context object is returned which allows to resume this consumption:
+// This context's read() method requests that consumption begins, and
+// returns a future which will be resolved when it ends (because the
+// consumer asked to stop, or the data range ended). Only after the
+// returned future is resolved, may read() be called again to consume
+// more.
+// The caller must ensure (e.g., using do_with()) that the context object,
+// as well as the sstable, remains alive as long as a read() is in
+// progress (i.e., returned a future which hasn't completed yet).
+//
+// The "toread" range specifies the range we want to read initially.
+// However, the object returned by the read, a data_consume_context, also
+// provides a fast_forward_to(start,end) method which allows resetting
+// the reader to a new range. To allow that, we also have a "last_end"
+// byte which should be the last end to which fast_forward_to is
+// eventually allowed. If last_end==end, fast_forward_to is not allowed
+// at all, if last_end==file_size fast_forward_to is allowed until the
+// end of the file, and it can be something in between if we know that we
+// are planning to skip parts, but eventually read until last_end.
+// When last_end==end, we guarantee that the read will only read the
+// desired byte range from disk. However, when last_end > end, we may
+// read beyond end in anticipation of a small skip via fast_foward_to.
+// The amount of this excessive read is controlled by read ahead
+// hueristics which learn from the usefulness of previous read aheads.
+template <typename DataConsumeRowsContext>
+inline std::unique_ptr<DataConsumeRowsContext> data_consume_rows(const schema& s, shared_sstable sst, typename DataConsumeRowsContext::consumer& consumer, sstable::disk_read_range toread, uint64_t last_end) {
+    // Although we were only asked to read until toread.end, we'll not limit
+    // the underlying file input stream to this end, but rather to last_end.
+    // This potentially enables read-ahead beyond end, until last_end, which
+    // can be beneficial if the user wants to fast_forward_to() on the
+    // returned context, and may make small skips.
+    auto input = sst->data_stream(toread.start, last_end - toread.start, consumer.io_priority(),
+            consumer.permit(), consumer.trace_state(), sst->_partition_range_history);
+    return std::make_unique<DataConsumeRowsContext>(s, std::move(sst), consumer, std::move(input), toread.start, toread.end - toread.start);
+}
+
+template <typename DataConsumeRowsContext>
+inline std::unique_ptr<DataConsumeRowsContext> data_consume_single_partition(const schema& s, shared_sstable sst, typename DataConsumeRowsContext::consumer& consumer, sstable::disk_read_range toread) {
+    auto input = sst->data_stream(toread.start, toread.end - toread.start, consumer.io_priority(),
+            consumer.permit(), consumer.trace_state(), sst->_single_partition_history);
+    return std::make_unique<DataConsumeRowsContext>(s, std::move(sst), consumer, std::move(input), toread.start, toread.end - toread.start);
+}
+
+// Like data_consume_rows() with bounds, but iterates over whole range
+template <typename DataConsumeRowsContext>
+inline std::unique_ptr<DataConsumeRowsContext> data_consume_rows(const schema& s, shared_sstable sst, typename DataConsumeRowsContext::consumer& consumer) {
+        auto data_size = sst->data_size();
+        return data_consume_rows<DataConsumeRowsContext>(s, std::move(sst), consumer, {0, data_size}, data_size);
 }
 
 template<typename T>
@@ -98,7 +202,7 @@ void set_range_tombstone_start_from_end_open_marker(Consumer& c, const schema& s
     }
 }
 
-template <typename DataConsumeRowsContext = data_consume_rows_context, typename Consumer = mp_row_consumer_k_l>
+template <typename DataConsumeRowsContext, typename Consumer>
 requires RowConsumer<Consumer>
 class sstable_mutation_reader : public mp_row_consumer_reader {
     Consumer _consumer;
@@ -437,34 +541,5 @@ public:
         }
     }
 };
-
-void mp_row_consumer_reader::on_next_partition(dht::decorated_key key, tombstone tomb) {
-    _partition_finished = false;
-    _before_partition = false;
-    _end_of_stream = false;
-    _current_partition_key = std::move(key);
-    push_mutation_fragment(
-        mutation_fragment(*_schema, _permit, partition_start(*_current_partition_key, tomb)));
-    _sst->get_stats().on_partition_read();
-}
-
-flat_mutation_reader
-sstable::make_reader(
-        schema_ptr schema,
-        reader_permit permit,
-        const dht::partition_range& range,
-        const query::partition_slice& slice,
-        const io_priority_class& pc,
-        tracing::trace_state_ptr trace_state,
-        streamed_mutation::forwarding fwd,
-        mutation_reader::forwarding fwd_mr,
-        read_monitor& mon) {
-    if (_version >= version_types::mc) {
-        return make_flat_mutation_reader<sstable_mutation_reader<data_consume_rows_context_m, mp_row_consumer_m>>(
-            shared_from_this(), std::move(schema), std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr, mon);
-    }
-    return make_flat_mutation_reader<sstable_mutation_reader<data_consume_rows_context, mp_row_consumer_k_l>>(
-        shared_from_this(), std::move(schema), std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr, mon);
-}
 
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018 ScyllaDB
+ * Copyright (C) 2021 ScyllaDB
  */
 
 /*
@@ -19,25 +19,8 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-/*
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements.  See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership.  The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+#include "sstable_mutation_reader.hh"
 
-#include "mp_row_consumer.hh"
 #include "column_translation.hh"
 #include "concrete_types.hh"
 
@@ -163,4 +146,27 @@ std::vector<column_translation::column_info> column_translation::state::build(
     return cols;
 }
 
+
+
+position_in_partition_view get_slice_upper_bound(const schema& s, const query::partition_slice& slice, dht::ring_position_view key) {
+    const auto& ranges = slice.row_ranges(s, *key.key());
+    if (ranges.empty()) {
+        return position_in_partition_view::for_static_row();
+    }
+    if (slice.options.contains(query::partition_slice::option::reversed)) {
+        return position_in_partition_view::for_range_end(ranges.front());
+    }
+    return position_in_partition_view::for_range_end(ranges.back());
 }
+
+void mp_row_consumer_reader::on_next_partition(dht::decorated_key key, tombstone tomb) {
+    _partition_finished = false;
+    _before_partition = false;
+    _end_of_stream = false;
+    _current_partition_key = std::move(key);
+    push_mutation_fragment(
+        mutation_fragment(*_schema, _permit, partition_start(*_current_partition_key, tomb)));
+    _sst->get_stats().on_partition_read();
+}
+
+} // namespace sstables

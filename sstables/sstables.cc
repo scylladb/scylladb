@@ -77,6 +77,8 @@
 #include "sstables_manager.hh"
 #include <boost/algorithm/string/predicate.hpp>
 #include "tracing/traced_file.hh"
+#include "kl/reader.hh"
+#include "mx/reader.hh"
 
 thread_local disk_error_signal_type sstable_read_error;
 thread_local disk_error_signal_type sstable_write_error;
@@ -2096,6 +2098,23 @@ future<> sstable::move_to_new_dir(sstring new_dir, int64_t new_generation, bool 
         }
         return when_all_succeed(sync_directory(old_dir), sync_directory(new_dir)).discard_result();
     });
+}
+
+flat_mutation_reader
+sstable::make_reader(
+        schema_ptr schema,
+        reader_permit permit,
+        const dht::partition_range& range,
+        const query::partition_slice& slice,
+        const io_priority_class& pc,
+        tracing::trace_state_ptr trace_state,
+        streamed_mutation::forwarding fwd,
+        mutation_reader::forwarding fwd_mr,
+        read_monitor& mon) {
+    if (_version >= version_types::mc) {
+        return mx::make_reader(shared_from_this(), std::move(schema), std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr, mon);
+    }
+    return kl::make_reader(shared_from_this(), std::move(schema), std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr, mon);
 }
 
 entry_descriptor entry_descriptor::make_descriptor(sstring sstdir, sstring fname) {
