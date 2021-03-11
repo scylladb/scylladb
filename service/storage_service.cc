@@ -1756,8 +1756,13 @@ future<> storage_service::start_gossiping(bind_messaging_port do_bind) {
         return seastar::async([&ss, do_bind] {
             if (!ss._initialized) {
                 slogger.warn("Starting gossip by operator request");
-                ss.set_gossip_tokens(db::system_keyspace::get_local_tokens().get0(),
-                        std::make_optional(cdc::get_local_streams_timestamp().get0()));
+                auto cdc_gen_ts = db::system_keyspace::get_saved_cdc_streams_timestamp().get0();
+                if (!cdc_gen_ts) {
+                    cdc_log.warn("CDC generation timestamp missing when starting gossip");
+                }
+                ss.set_gossip_tokens(
+                        db::system_keyspace::get_local_tokens().get0(),
+                        cdc_gen_ts);
                 ss._gossiper.force_newer_generation();
                 ss._gossiper.start_gossiping(utils::get_generation_number(), gms::bind_messaging_port(bool(do_bind))).then([&ss] {
                     ss._initialized = true;

@@ -298,17 +298,6 @@ bool should_propose_first_generation(const gms::inet_address& me, const gms::gos
     });
 }
 
-future<db_clock::time_point> get_local_streams_timestamp() {
-    return db::system_keyspace::get_saved_cdc_streams_timestamp().then([] (std::optional<db_clock::time_point> ts) {
-        if (!ts) {
-            auto err = format("get_local_streams_timestamp: tried to retrieve streams timestamp after bootstrapping, but it's not present");
-            cdc_log.error("{}", err);
-            throw std::runtime_error(err);
-        }
-        return *ts;
-    });
-}
-
 // non-static for testing
 size_t limit_of_streams_in_topology_description() {
     // Each stream takes 16B and we don't want to exceed 4MB so we can have

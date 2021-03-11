@@ -148,13 +148,6 @@ public:
  */
 bool should_propose_first_generation(const gms::inet_address& me, const gms::gossiper&);
 
-/*
- * Read this node's streams generation timestamp stored in the LOCAL table.
- * Assumes that the node has successfully bootstrapped, and we're not upgrading from a non-CDC version,
- * so the timestamp is present.
- */
-future<db_clock::time_point> get_local_streams_timestamp();
-
 /* Generate a new set of CDC streams and insert it into the distributed cdc_generation_descriptions table.
  * Returns the timestamp of this new generation
  *
