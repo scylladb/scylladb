@@ -362,7 +362,12 @@ future<db_clock::time_point> make_new_cdc_generation(
     co_return ts;
 }
 
-std::optional<db_clock::time_point> get_streams_timestamp_for(const gms::inet_address& endpoint, const gms::gossiper& g) {
+/* Retrieves CDC streams generation timestamp from the given endpoint's application state (broadcasted through gossip).
+ * We might be during a rolling upgrade, so the timestamp might not be there (if the other node didn't upgrade yet),
+ * but if the cluster already supports CDC, then every newly joining node will propose a new CDC generation,
+ * which means it will gossip the generation's timestamp.
+ */
+static std::optional<db_clock::time_point> get_streams_timestamp_for(const gms::inet_address& endpoint, const gms::gossiper& g) {
     auto streams_ts_string = g.get_application_state_value(endpoint, gms::application_state::CDC_STREAMS_TIMESTAMP);
     cdc_log.trace("endpoint={}, streams_ts_string={}", endpoint, streams_ts_string);
     return gms::versioned_value::cdc_streams_timestamp_from_string(streams_ts_string);
@@ -388,7 +393,15 @@ static future<> do_update_streams_description(
     cdc_log.info("CDC description table successfully updated with generation {}.", streams_ts);
 }
 
-future<> update_streams_description(
+/* Inform CDC users about a generation of streams (identified by the given timestamp)
+ * by inserting it into the cdc_streams table.
+ *
+ * Assumes that the cdc_generation_descriptions table contains this generation.
+ *
+ * Returning from this function does not mean that the table update was successful: the function
+ * might run an asynchronous task in the background.
+ */
+static future<> update_streams_description(
         db_clock::time_point streams_ts,
         shared_ptr<db::system_distributed_keyspace> sys_dist_ks,
         noncopyable_function<unsigned()> get_num_token_owners,

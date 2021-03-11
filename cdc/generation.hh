@@ -169,27 +169,6 @@ future<db_clock::time_point> make_new_cdc_generation(
         std::chrono::milliseconds ring_delay,
         bool add_delay);
 
-/* Retrieves CDC streams generation timestamp from the given endpoint's application state (broadcasted through gossip).
- * We might be during a rolling upgrade, so the timestamp might not be there (if the other node didn't upgrade yet),
- * but if the cluster already supports CDC, then every newly joining node will propose a new CDC generation,
- * which means it will gossip the generation's timestamp.
- */
-std::optional<db_clock::time_point> get_streams_timestamp_for(const gms::inet_address& endpoint, const gms::gossiper&);
-
-/* Inform CDC users about a generation of streams (identified by the given timestamp)
- * by inserting it into the cdc_streams table.
- *
- * Assumes that the cdc_generation_descriptions table contains this generation.
- *
- * Returning from this function does not mean that the table update was successful: the function
- * might run an asynchronous task in the background.
- */
-future<> update_streams_description(
-        db_clock::time_point,
-        shared_ptr<db::system_distributed_keyspace>,
-        noncopyable_function<unsigned()> get_num_token_owners,
-        abort_source&);
-
 /* Part of the upgrade procedure. Useful in case where the version of Scylla that we're upgrading from
  * used the "cdc_streams_descriptions" table. This procedure ensures that the new "cdc_streams_descriptions_v2"
  * table contains streams of all generations that were present in the old table and may still contain data
