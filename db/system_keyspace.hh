@@ -55,6 +55,7 @@
 #include <map>
 #include <seastar/core/distributed.hh>
 #include "service/paxos/paxos_state.hh"
+#include "cdc/generation_id.hh"
 
 namespace service {
 
@@ -632,16 +633,16 @@ future<> delete_paxos_decision(const schema& s, const partition_key& key, const 
 /*
  * Save the CDC generation ID announced by this node in persistent storage.
  */
-future<> update_cdc_generation_id(db_clock::time_point);
+future<> update_cdc_generation_id(cdc::generation_id);
 
 /*
  * Read the CDC generation ID announced by this node from persistent storage.
  * Used to initialize a restarting node.
  */
-future<std::optional<db_clock::time_point>> get_cdc_generation_id();
+future<std::optional<cdc::generation_id>> get_cdc_generation_id();
 
 future<bool> cdc_is_rewritten();
-future<> cdc_set_rewritten(std::optional<db_clock::time_point>);
+future<> cdc_set_rewritten(std::optional<cdc::generation_id>);
 
 } // namespace system_keyspace
 } // namespace db

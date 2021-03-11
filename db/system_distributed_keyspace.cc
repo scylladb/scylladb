@@ -292,26 +292,26 @@ static cdc::token_range_description get_token_range_description_from_value(const
 
 future<>
 system_distributed_keyspace::insert_cdc_topology_description(
-        db_clock::time_point time,
+        cdc::generation_id gen_id,
         const cdc::topology_description& description,
         context ctx) {
     return _qp.execute_internal(
             format("INSERT INTO {}.{} (time, description) VALUES (?,?)", NAME, CDC_TOPOLOGY_DESCRIPTION),
             quorum_if_many(ctx.num_token_owners),
             internal_distributed_query_state(),
-            { time, make_list_value(cdc_generation_description_type, prepare_cdc_generation_description(description)) },
+            { gen_id.ts, make_list_value(cdc_generation_description_type, prepare_cdc_generation_description(description)) },
             false).discard_result();
 }
 
 future<std::optional<cdc::topology_description>>
 system_distributed_keyspace::read_cdc_topology_description(
-        db_clock::time_point time,
+        cdc::generation_id gen_id,
         context ctx) {
     return _qp.execute_internal(
             format("SELECT description FROM {}.{} WHERE time = ?", NAME, CDC_TOPOLOGY_DESCRIPTION),
             quorum_if_many(ctx.num_token_owners),
             internal_distributed_query_state(),
-            { time },
+            { gen_id.ts },
             false
     ).then([] (::shared_ptr<cql3::untyped_result_set> cql_result) -> std::optional<cdc::topology_description> {
         if (cql_result->empty() || !cql_result->one().has("description")) {

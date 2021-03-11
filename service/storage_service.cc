@@ -409,7 +409,7 @@ void storage_service::maybe_start_sys_dist_ks() {
  */
 // Runs inside seastar::async context
 static void set_gossip_tokens(gms::gossiper& g,
-        const std::unordered_set<dht::token>& tokens, std::optional<db_clock::time_point> cdc_gen_id) {
+        const std::unordered_set<dht::token>& tokens, std::optional<cdc::generation_id> cdc_gen_id) {
     assert(!tokens.empty());
 
     // Order is important: both the CDC streams timestamp and tokens must be known when a node handles our status.

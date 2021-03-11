@@ -41,6 +41,7 @@
 #include "dht/token.hh"
 #include "locator/token_metadata.hh"
 #include "utils/chunked_vector.hh"
+#include "cdc/generation_id.hh"
 
 namespace seastar {
     class abort_source;
@@ -132,7 +133,7 @@ public:
 
 class no_generation_data_exception : public std::runtime_error {
 public:
-    no_generation_data_exception(db_clock::time_point generation_ts)
+    no_generation_data_exception(cdc::generation_id generation_ts)
         : std::runtime_error(format("could not find generation data for timestamp {}", generation_ts))
     {}
 };
@@ -159,7 +160,7 @@ bool should_propose_first_generation(const gms::inet_address& me, const gms::gos
  * (not guaranteed in the current implementation, but expected to be the common case;
  *  we assume that `ring_delay` is enough for other nodes to learn about the new generation).
  */
-future<db_clock::time_point> make_new_cdc_generation(
+future<cdc::generation_id> make_new_cdc_generation(
         const db::config& cfg,
         const std::unordered_set<dht::token>& bootstrap_tokens,
         const locator::token_metadata_ptr tmptr,

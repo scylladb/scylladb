@@ -74,12 +74,12 @@ sstring versioned_value::make_token_string(const std::unordered_set<dht::token>&
     return tokens.begin()->to_sstring();
 }
 
-sstring versioned_value::make_cdc_generation_id_string(std::optional<db_clock::time_point> t) {
+sstring versioned_value::make_cdc_generation_id_string(std::optional<cdc::generation_id> gen_id) {
     // We assume that the db_clock epoch is the same on all receiving nodes.
-    if (!t) {
+    if (!gen_id) {
         return "";
     }
-    return std::to_string(t->time_since_epoch().count());
+    return std::to_string(gen_id->ts.time_since_epoch().count());
 }
 
 std::unordered_set<dht::token> versioned_value::tokens_from_string(const sstring& s) {
@@ -95,11 +95,11 @@ std::unordered_set<dht::token> versioned_value::tokens_from_string(const sstring
     return ret;
 }
 
-std::optional<db_clock::time_point> versioned_value::cdc_generation_id_from_string(const sstring& s) {
+std::optional<cdc::generation_id> versioned_value::cdc_generation_id_from_string(const sstring& s) {
     if (s.empty()) {
         return {};
     }
-    return db_clock::time_point(db_clock::duration(std::stoll(s)));
+    return cdc::generation_id{db_clock::time_point{db_clock::duration(std::stoll(s))}};
 }
 
 }
