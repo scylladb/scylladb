@@ -9,8 +9,8 @@
 #
 # Scylla is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Affero General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
+# the Free Software Foundation, either args.version 3 of the License, or
+# (at your option) any later args.version.
 #
 # Scylla is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -26,6 +26,13 @@ import os
 import shutil
 import re
 from pathlib import Path
+import argparse
+
+arg_parser = argparse.ArgumentParser('Genrate files for debian packager')
+arg_parser.add_argument('-p', '--product')
+arg_parser.add_argument('-v', '--version')
+arg_parser.add_argument('-r', '--release')
+args = arg_parser.parse_args()
 
 class DebianFilesTemplate(string.Template):
     delimiter = '%'
@@ -38,20 +45,11 @@ with open(os.path.join(scriptdir, 'changelog.template')) as f:
 with open(os.path.join(scriptdir, 'control.template')) as f:
     control_template = f.read()
 
-with open('build/SCYLLA-PRODUCT-FILE') as f:
-    product = f.read().strip()
-
-with open('build/SCYLLA-VERSION-FILE') as f:
-    version = f.read().strip().replace('.rc', '~rc').replace('_', '-')
-
-with open('build/SCYLLA-RELEASE-FILE') as f:
-    release = f.read().strip()
-
 if os.path.exists('build/debian/debian'):
     shutil.rmtree('build/debian/debian')
 shutil.copytree('dist/debian/debian', 'build/debian/debian')
 
-if product != 'scylla':
+if args.product != 'scylla':
     for p in Path('build/debian/debian').glob('scylla-*'):
         # pat1: scylla-server.service
         #    -> scylla-enterprise-server.scylla-server.service
@@ -61,17 +59,17 @@ if product != 'scylla':
         #    -> scylla-enterprise-conf.install
 
         if m := re.match(r'^scylla(-[^.]+)\.service$', p.name):
-            p.rename(p.parent / f'{product}{m.group(1)}.{p.name}')
+            p.rename(p.parent / f'{args.product}{m.group(1)}.{p.name}')
         elif m := re.match(r'^scylla(-[^.]+\.scylla-[^.]+\.[^.]+)$', p.name):
-            p.rename(p.parent / f'{product}{m.group(1)}')
+            p.rename(p.parent / f'{args.product}{m.group(1)}')
         else:
-            p.rename(p.parent / p.name.replace('scylla', product, 1))
+            p.rename(p.parent / p.name.replace('scylla', args.product, 1))
 
 s = DebianFilesTemplate(changelog_template)
-changelog_applied = s.substitute(product=product, version=version, release=release, revision='1', codename='stable')
+changelog_applied = s.substitute(product=args.product, version=args.version, release=args.release, revision='1', codename='stable')
 
 s = DebianFilesTemplate(control_template)
-control_applied = s.substitute(product=product)
+control_applied = s.substitute(product=args.product)
 
 with open('build/debian/debian/changelog', 'w') as f:
     f.write(changelog_applied)

@@ -1,5 +1,11 @@
 #!/bin/sh
 
+modes="$@"
+if [ -z "${modes}" ]; then
+	echo "Usage: $0 mode ..." 1>&2
+	exit 1
+fi
+
 PRODUCT=scylla
 VERSION=4.5.dev
 
@@ -28,7 +34,9 @@ if [ -f build/SCYLLA-RELEASE-FILE ]; then
 fi
 
 echo "$SCYLLA_VERSION-$SCYLLA_RELEASE"
-mkdir -p build
-echo "$SCYLLA_VERSION" > build/SCYLLA-VERSION-FILE
-echo "$SCYLLA_RELEASE" > build/SCYLLA-RELEASE-FILE
+for m in ${modes}; do
+	mkdir -p build/$m
+	echo "$SCYLLA_VERSION" > build/$m/SCYLLA-VERSION-FILE
+	echo "$SCYLLA_RELEASE" > build/$m/SCYLLA-RELEASE-FILE
+done
 echo "$PRODUCT" > build/SCYLLA-PRODUCT-FILE

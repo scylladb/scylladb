@@ -728,10 +728,10 @@ if(scylla_version_gen_res)
     message(SEND_ERROR "Version file generation failed. Return code: ${scylla_version_gen_res}")
 endif()
 
-file(READ build/SCYLLA-VERSION-FILE scylla_version)
+file(READ build/${mode}/SCYLLA-VERSION-FILE scylla_version)
 string(STRIP "${scylla_version}" scylla_version)
 
-file(READ build/SCYLLA-RELEASE-FILE scylla_release)
+file(READ build/${mode}/SCYLLA-RELEASE-FILE scylla_release)
 string(STRIP "${scylla_release}" scylla_release)
 
 get_property(release_cdefs SOURCE "${CMAKE_SOURCE_DIR}/release.cc" PROPERTY COMPILE_DEFINITIONS)

@@ -1321,14 +1321,15 @@ default_modes = args.selected_modes or ['debug', 'release', 'dev']
 build_modes =  {m: modes[m] for m in selected_modes}
 build_artifacts = all_artifacts if not args.artifacts else args.artifacts
 
-status = subprocess.call("./SCYLLA-VERSION-GEN")
+status = subprocess.call([ "./SCYLLA-VERSION-GEN" ] + list(build_modes.keys()) )
 if status != 0:
     print('Version file generation failed')
     sys.exit(1)
 
-file = open(f'{outdir}/SCYLLA-VERSION-FILE', 'r')
+m = list(build_modes.keys())[0]
+file = open(f'{outdir}/{m}/SCYLLA-VERSION-FILE', 'r')
 scylla_version = file.read().strip()
-file = open(f'{outdir}/SCYLLA-RELEASE-FILE', 'r')
+file = open(f'{outdir}/{m}/SCYLLA-RELEASE-FILE', 'r')
 scylla_release = file.read().strip()
 file = open(f'{outdir}/SCYLLA-PRODUCT-FILE', 'r')
 scylla_product = file.read().strip()
@@ -1847,7 +1848,7 @@ with open(buildfile_tmp, 'w') as f:
         f.write(textwrap.dedent('''\
             build $builddir/{mode}/iotune: copy $builddir/{mode}/seastar/apps/iotune/iotune
             ''').format(**locals()))
-        f.write('build $builddir/{mode}/dist/tar/{scylla_product}-package.tar.gz: package $builddir/{mode}/scylla $builddir/{mode}/iotune $builddir/SCYLLA-RELEASE-FILE $builddir/SCYLLA-VERSION-FILE $builddir/debian/debian $builddir/node_exporter | always\n'.format(**locals()))
+        f.write('build $builddir/{mode}/dist/tar/{scylla_product}-package.tar.gz: package $builddir/{mode}/scylla $builddir/{mode}/iotune $builddir/{mode}/SCYLLA-RELEASE-FILE $builddir/{mode}/SCYLLA-VERSION-FILE $builddir/debian/debian $builddir/node_exporter | always\n'.format(**locals()))
         f.write('  mode = {mode}\n'.format(**locals()))
         f.write(f'build $builddir/dist/{mode}/redhat: rpmbuild $builddir/{mode}/dist/tar/{scylla_product}-package.tar.gz\n')
         f.write(f'  mode = {mode}\n')
@@ -1894,7 +1895,7 @@ with open(buildfile_tmp, 'w') as f:
         build dist-server: phony dist-server-tar dist-server-rpm dist-server-deb
 
         rule build-submodule-reloc
-          command = cd $reloc_dir && ./reloc/build_reloc.sh --version $$(<../../build/SCYLLA-PRODUCT-FILE)-$$(<../../build/SCYLLA-VERSION-FILE)-$$(<../../build/SCYLLA-RELEASE-FILE) --nodeps $args
+          command = cd $reloc_dir && ./reloc/build_reloc.sh --version $$(<../../build/SCYLLA-PRODUCT-FILE)-$$(<../../build/{mode}/SCYLLA-VERSION-FILE)-$$(<../../build/{mode}/SCYLLA-RELEASE-FILE) --nodeps $args
         rule build-submodule-rpm
           command = cd $dir && ./reloc/build_rpm.sh --reloc-pkg $artifact
         rule build-submodule-deb
@@ -2000,11 +2001,8 @@ with open(buildfile_tmp, 'w') as f:
         ''').format(unit_test_list="\\n".join(unit_test_list)))
     f.write(textwrap.dedent('''\
         build always: phony
-        rule scylla_version_gen
-            command = ./SCYLLA-VERSION-GEN
-        build $builddir/SCYLLA-RELEASE-FILE $builddir/SCYLLA-VERSION-FILE: scylla_version_gen
         rule debian_files_gen
-            command = ./dist/debian/debian_files_gen.py
+            command = ./dist/debian/debian_files_gen.py --version {scylla_version} --release {scylla_release} --product {scylla_product}
         build $builddir/debian/debian: debian_files_gen | always
         rule extract_node_exporter
             command = tar -C build -xvpf {node_exporter_filename} && rm -rfv build/node_exporter && mv -v build/{node_exporter_dirname} build/node_exporter
