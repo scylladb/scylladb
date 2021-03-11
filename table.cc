@@ -744,17 +744,16 @@ void table::rebuild_statistics() {
 }
 
 future<lw_shared_ptr<sstables::sstable_set>>
-table::build_new_sstable_list(const std::vector<sstables::shared_sstable>& new_sstables,
+table::build_new_sstable_list(const sstables::sstable_set& current_sstables,
+                              sstables::sstable_set new_sstable_list,
+                              const std::vector<sstables::shared_sstable>& new_sstables,
                               const std::vector<sstables::shared_sstable>& old_sstables) {
-    auto current_sstables = _main_sstables;
-    auto new_sstable_list = _compaction_strategy.make_sstable_set(_schema);
-
     std::unordered_set<sstables::shared_sstable> s(old_sstables.begin(), old_sstables.end());
 
     // this might seem dangerous, but "move" here just avoids constness,
     // making the two ranges compatible when compiling with boost 1.55.
     // Noone is actually moving anything...
-    for (auto all = current_sstables->all(); auto&& tab : boost::range::join(new_sstables, std::move(*all))) {
+    for (auto all = current_sstables.all(); auto&& tab : boost::range::join(new_sstables, std::move(*all))) {
         if (!s.contains(tab)) {
             new_sstable_list.insert(tab);
         }
@@ -812,7 +811,7 @@ table::on_compaction_completion(sstables::compaction_completion_desc& desc) {
     public:
         explicit sstable_list_updater(table& t, sstables::compaction_completion_desc& d) : _t(t), _desc(d) {}
         virtual future<> prepare() override {
-            _new_sstables = co_await _t.build_new_sstable_list(_desc.new_sstables, _desc.old_sstables);
+            _new_sstables = co_await _t.build_new_sstable_list(*_t._main_sstables, _t._compaction_strategy.make_sstable_set(_t._schema), _desc.new_sstables, _desc.old_sstables);
         }
         virtual void execute() override {
             _t._main_sstables = std::move(_new_sstables);

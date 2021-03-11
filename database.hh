@@ -578,8 +578,10 @@ private:
 
     // Builds new sstable set from existing one, with new sstables added to it and old sstables removed from it.
     future<lw_shared_ptr<sstables::sstable_set>>
-    build_new_sstable_list(const std::vector<sstables::shared_sstable>& new_sstables,
-                           const std::vector<sstables::shared_sstable>& old_sstables);
+    build_new_sstable_list(const sstables::sstable_set& current_sstables,
+                        sstables::sstable_set new_sstable_list,
+                        const std::vector<sstables::shared_sstable>& new_sstables,
+                        const std::vector<sstables::shared_sstable>& old_sstables);
 
     // Rebuild sstable set, delete input sstables right away, and update row cache and statistics.
     void on_compaction_completion(sstables::compaction_completion_desc& desc);
