@@ -706,12 +706,10 @@ void table::rebuild_statistics() {
     _stats.live_disk_space_used = 0;
     _stats.live_sstable_count = 0;
 
-    auto sstables = _sstables->all();
-    for (auto&& tab : boost::range::join(_sstables_compacted_but_not_deleted,
-                    // this might seem dangerous, but "move" here just avoids constness,
-                    // making the two ranges compatible when compiling with boost 1.55.
-                    // Noone is actually moving anything...
-                                         std::move(*sstables))) {
+    _sstables->for_each_sstable([this] (const sstables::shared_sstable& tab) {
+        update_stats_for_new_sstable(tab->bytes_on_disk());
+    });
+    for (auto& tab : _sstables_compacted_but_not_deleted) {
         update_stats_for_new_sstable(tab->bytes_on_disk());
     }
 }
@@ -899,10 +897,10 @@ void table::set_compaction_strategy(sstables::compaction_strategy_type strategy)
     _compaction_strategy.get_backlog_tracker().transfer_ongoing_charges(new_cs.get_backlog_tracker(), move_read_charges);
 
     auto new_sstables = new_cs.make_sstable_set(_schema);
-    for (auto sstables = _sstables->all(); auto&& s : *sstables) {
+    _sstables->for_each_sstable([&] (const sstables::shared_sstable& s) {
         add_sstable_to_backlog_tracker(new_cs.get_backlog_tracker(), s);
         new_sstables.insert(s);
-    }
+    });
 
     if (!move_read_charges) {
         _compaction_manager.stop_tracking_ongoing_compactions(this);
@@ -919,14 +917,14 @@ size_t table::sstables_count() const {
 
 std::vector<uint64_t> table::sstable_count_per_level() const {
     std::vector<uint64_t> count_per_level;
-    for (auto sstables = _sstables->all(); auto&& sst : *sstables) {
+    _sstables->for_each_sstable([&] (const sstables::shared_sstable& sst) {
         auto level = sst->get_sstable_level();
 
         if (level + 1 > count_per_level.size()) {
             count_per_level.resize(level + 1, 0UL);
         }
         count_per_level[level]++;
-    }
+    });
     return count_per_level;
 }
 
@@ -1359,14 +1357,14 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
 
             auto pruned = make_lw_shared<sstables::sstable_set>(cf._compaction_strategy.make_sstable_set(cf._schema));
 
-            for (auto sstables = cf._sstables->all(); auto& p : *sstables) {
+            cf._sstables->for_each_sstable([&] (const sstables::shared_sstable& p) mutable {
                 if (p->max_data_age() <= gc_trunc) {
                     rp = std::max(p->get_stats_metadata().position, rp);
                     remove.emplace_back(p);
-                    continue;
+                    return;
                 }
                 pruned->insert(p);
-            }
+            });
 
             cf._sstables = std::move(pruned);
         }
