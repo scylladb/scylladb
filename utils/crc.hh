@@ -172,6 +172,7 @@ public:
         static_assert(std::is_integral<T>::value, "T must be integral type.");
 #if defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
         switch (sizeof(T)) {
+        case 1: break;
         case 2: in = __builtin_bswap16(in); break;
         case 4: in = __builtin_bswap32(in); break;
         case 8: in = __builtin_bswap64(in); break;
@@ -196,6 +197,7 @@ public:
         static_assert(std::is_integral<T>::value, "T must be integral type.");
 #if defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
         switch (sizeof(T)) {
+        case 1: break;
         case 2: in = __builtin_bswap16(in); break;
         case 4: in = __builtin_bswap32(in); break;
         case 8: in = __builtin_bswap64(in); break;
