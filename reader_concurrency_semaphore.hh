@@ -81,6 +81,8 @@ public:
 
     struct permit_list;
 
+    class inactive_read_handle;
+
 private:
     struct entry {
         promise<reader_permit::resource_units> pr;
@@ -102,12 +104,13 @@ private:
         flat_mutation_reader reader;
         eviction_notify_handler notify_handler;
         timer<lowres_clock> ttl_timer;
+        inactive_read_handle* handle = nullptr;
 
         explicit inactive_read(flat_mutation_reader reader_) noexcept
             : reader(std::move(reader_))
         { }
-        inactive_read(inactive_read&&) = default;
         ~inactive_read();
+        void detach() noexcept;
     };
 
     using inactive_reads_type = bi::list<inactive_read, bi::constant_time_size<false>>;
@@ -115,23 +118,40 @@ private:
 public:
     class inactive_read_handle {
         reader_concurrency_semaphore* _sem = nullptr;
-        std::unique_ptr<inactive_read> _irp;
+        inactive_read* _irp = nullptr;
 
         friend class reader_concurrency_semaphore;
 
-        explicit inactive_read_handle(reader_concurrency_semaphore& sem, std::unique_ptr<inactive_read> irp) noexcept
-            : _sem(&sem), _irp(std::move(irp)) {
+    private:
+        void abandon() noexcept;
+
+        explicit inactive_read_handle(reader_concurrency_semaphore& sem, inactive_read& ir) noexcept
+            : _sem(&sem), _irp(&ir) {
+            _irp->handle = this;
         }
     public:
         inactive_read_handle() = default;
         inactive_read_handle(inactive_read_handle&& o) noexcept
             : _sem(std::exchange(o._sem, nullptr))
-            , _irp(std::move(o._irp)) {
+            , _irp(std::exchange(o._irp, nullptr)) {
+            if (_irp) {
+                _irp->handle = this;
+            }
         }
         inactive_read_handle& operator=(inactive_read_handle&& o) noexcept {
+            if (this == &o) {
+                return *this;
+            }
+            abandon();
             _sem = std::exchange(o._sem, nullptr);
-            _irp = std::move(o._irp);
+            _irp = std::exchange(o._irp, nullptr);
+            if (_irp) {
+                _irp->handle = this;
+            }
             return *this;
+        }
+        ~inactive_read_handle() {
+            abandon();
         }
         explicit operator bool() const noexcept {
             return bool(_irp);

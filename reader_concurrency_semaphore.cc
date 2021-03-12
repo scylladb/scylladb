@@ -340,6 +340,18 @@ void reader_concurrency_semaphore::expiry_handler::operator()(entry& e) noexcept
 }
 
 reader_concurrency_semaphore::inactive_read::~inactive_read() {
+    detach();
+}
+
+void reader_concurrency_semaphore::inactive_read::detach() noexcept {
+    if (handle) {
+        handle->_irp = nullptr;
+        handle = nullptr;
+    }
+}
+
+void reader_concurrency_semaphore::inactive_read_handle::abandon() noexcept {
+    delete std::exchange(_irp, nullptr);
 }
 
 void reader_concurrency_semaphore::signal(const resources& r) noexcept {
@@ -385,7 +397,7 @@ reader_concurrency_semaphore::inactive_read_handle reader_concurrency_semaphore:
         auto& ir = *irp;
         _inactive_reads.push_back(ir);
         ++_stats.inactive_reads;
-        return inactive_read_handle(*this, std::move(irp));
+        return inactive_read_handle(*this, *irp.release());
       } catch (...) {
         // It is okay to swallow the exception since
         // we're allowed to drop the reader upon registration
@@ -427,8 +439,7 @@ flat_mutation_reader_opt reader_concurrency_semaphore::unregister_inactive_read(
     }
 
     --_stats.inactive_reads;
-    auto irp = std::move(irh._irp);
-    irp->unlink();
+    std::unique_ptr<inactive_read> irp(irh._irp);
     return std::move(irp->reader);
 }
 
@@ -441,13 +452,11 @@ bool reader_concurrency_semaphore::try_evict_one_inactive_read(evict_reason reas
 }
 
 void reader_concurrency_semaphore::evict(inactive_read& ir, evict_reason reason) noexcept {
-    auto reader = std::move(ir.reader);
-    ir.unlink();
+    ir.detach();
+    std::unique_ptr<inactive_read> irp(&ir);
     try {
-        if (auto notify_handler = std::move(ir.notify_handler)) {
-            notify_handler(reason);
-            // The notify_handler may destroy the inactive_read.
-            // Do not use it after this point!
+        if (ir.notify_handler) {
+            ir.notify_handler(reason);
         }
     } catch (...) {
         rcslog.error("[semaphore {}] evict(): notify handler failed for inactive read evicted due to {}: {}", _name, reason, std::current_exception());
