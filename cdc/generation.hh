@@ -148,19 +148,21 @@ public:
  */
 bool should_propose_first_generation(const gms::inet_address& me, const gms::gossiper&);
 
-/* Generate a new set of CDC streams and insert it into the distributed cdc_generation_descriptions table.
- * Returns the timestamp of this new generation
+/* Generate a new set of CDC streams and insert it into the system_distributed_everywhere.cdc_generations table.
+ * Returns the timestamp of this new generation.
  *
  * Should be called when starting the node for the first time (i.e., joining the ring).
  *
- * Assumes that the system_distributed keyspace is initialized.
+ * Assumes that the system_distributed_everywhere keyspace is initialized.
  *
  * The caller of this function is expected to insert this timestamp into the gossiper as fast as possible,
  * so that other nodes learn about the generation before their clocks cross the timestmap
  * (not guaranteed in the current implementation, but expected to be the common case;
  *  we assume that `ring_delay` is enough for other nodes to learn about the new generation).
+ *
+ * Precondition: the CDC_GENERATIONS_V2 feature is enabled in the cluster.
  */
-future<cdc::generation_id_v1> make_new_cdc_generation(
+future<cdc::generation_id_v2> make_new_cdc_generation(
         const db::config& cfg,
         const std::unordered_set<dht::token>& bootstrap_tokens,
         const locator::token_metadata_ptr tmptr,

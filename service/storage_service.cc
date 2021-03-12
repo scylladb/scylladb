@@ -585,11 +585,10 @@ void storage_service::join_token_ring(int delay) {
     }
 
     if (!_cdc_gen_id) {
-        // If we didn't choose a CDC streams timestamp at this point, then either
+        // If we didn't choose a CDC generation ID at this point, then either
         // 1. we're replacing a node,
         // 2. we've already bootstrapped, but are upgrading from a non-CDC version,
-        // 3. we're starting for the first time, but we're skipping the streaming phase (seed node/auto_bootstrap=off)
-        //    and directly joining the token ring.
+        // 3. we're the first node, starting a fresh cluster.
 
         // In the replacing case we won't propose any CDC generation: we're not introducing any new tokens,
         // so the current generation used by the cluster is fine.
@@ -597,21 +596,35 @@ void storage_service::join_token_ring(int delay) {
         // In the case of an upgrading cluster, one of the nodes is responsible for proposing
         // the first CDC generation. We'll check if it's us.
 
-        // Finally, if we're simply a new node joining the ring but skipping bootstrapping
-        // (NEVER DO THAT except for the very first node),
-        // we'll propose a new generation just as normally bootstrapping nodes do.
+        // Finally, if we're the first node, we'll create the first generation.
 
         if (!db().local().is_replacing()
                 && (!db::system_keyspace::bootstrap_complete()
                     || cdc::should_propose_first_generation(get_broadcast_address(), _gossiper))) {
-            try {
-                _cdc_gen_id = cdc::make_new_cdc_generation(db().local().get_config(),
-                        _bootstrap_tokens, get_token_metadata_ptr(), _gossiper,
-                        _sys_dist_ks.local(), get_ring_delay(), !_for_testing && !is_first_node()).get0();
-            } catch (...) {
-                cdc_log.warn(
-                    "Could not create a new CDC generation: {}. This may make it impossible to use CDC. Use nodetool checkAndRepairCdcStreams to fix CDC generation",
-                    std::current_exception());
+            if (features().cluster_supports_cdc_generations_v2()) {
+                try {
+                    _cdc_gen_id = cdc::make_new_cdc_generation(db().local().get_config(),
+                            _bootstrap_tokens, get_token_metadata_ptr(), _gossiper,
+                            _sys_dist_ks.local(), get_ring_delay(), !_for_testing && !is_first_node()).get0();
+                } catch (...) {
+                    cdc_log.warn(
+                        "Could not create a new CDC generation: {}. This may make it impossible to use CDC or cause performance problems."
+                        " Use nodetool checkAndRepairCdcStreams to fix CDC.", std::current_exception());
+                }
+            } else {
+                // Entering this branch should be an extremely rare situation.
+                // We're not replacing and we're not the first node (the feature should be enabled in a single-node cluster).
+                // Hence we must be restarting. But since we don't have a generation ID saved in our local tables,
+                // then either we're upgrading from a non-CDC version, or the user has messed with the local tables (e.g. removed
+                // system.cdc_local sstables). The first case should not be possible if the user correctly follows upgrade procedure,
+                // as this branch was introduced in Scylla >= 4.5 and 4.3/4.4 clusters should have a CDC generation.
+                // (CAUTION: this reasoning must be updated when we backport to Enterprise). In the second case - too bad,
+                // the user will have to restart us again after finishing the upgrade.
+                cdc_log.error(
+                        "Attempted to create a new CDC generation on node start since it was missing, but failed"
+                        " due to a partially upgraded cluster (the CDC_GENERATIONS_V2 feature is not enabled)."
+                        " If you're upgrading from Scylla <= 4.2 to Scylla >= 4.5, rollback and do a proper upgrade (single"
+                        " minor version at a time). Otherwise finish the upgrade and then restart this node again.");
             }
         }
     }
@@ -664,6 +677,12 @@ void storage_service::bootstrap() {
     auto x = seastar::defer([this] { _is_bootstrap_mode = false; });
 
     if (!db().local().is_replacing()) {
+        if (!features().cluster_supports_cdc_generations_v2()) {
+            throw std::runtime_error(
+                    "bootstrap: we've detected a partially upgraded cluster: the CDC_GENERATIONS_V2 feature is not enabled."
+                    " Please finish the rolling upgrade procedure first and then try to bootstrap a new node again.");
+        }
+
         // Wait until we know tokens of existing node before announcing join status.
         _gossiper.wait_for_range_setup().get();
 

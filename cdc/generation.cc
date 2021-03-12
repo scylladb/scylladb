@@ -37,6 +37,7 @@
 #include "gms/application_state.hh"
 #include "gms/inet_address.hh"
 #include "gms/gossiper.hh"
+#include "gms/feature_service.hh"
 
 #include "cdc/generation.hh"
 #include "cdc/cdc_options.hh"
@@ -330,7 +331,7 @@ topology_description limit_number_of_streams_if_needed(topology_description&& de
     return topology_description(std::move(entries));
 }
 
-future<cdc::generation_id_v1> make_new_cdc_generation(
+future<cdc::generation_id_v2> make_new_cdc_generation(
         const db::config& cfg,
         const std::unordered_set<dht::token>& bootstrap_tokens,
         const locator::token_metadata_ptr tmptr,
@@ -353,12 +354,17 @@ future<cdc::generation_id_v1> make_new_cdc_generation(
     // each vnode if the total number of streams is too large.
     gen = limit_number_of_streams_if_needed(std::move(gen));
 
-    // Begin the race.
-    auto gen_id = cdc::generation_id_v1{db_clock::now() + (
-            (!add_delay || ring_delay == milliseconds(0)) ? milliseconds(0) : (
-                2 * ring_delay + duration_cast<milliseconds>(generation_leeway)))};
-    co_await sys_dist_ks.insert_cdc_topology_description(gen_id, std::move(gen), { tmptr->count_normal_token_owners() });
+    auto uuid = utils::make_random_uuid();
+    cdc_log.info("Inserting new generation data at UUID {}", uuid);
+    // This may take a while.
+    co_await sys_dist_ks.insert_cdc_generation(uuid, gen, { tmptr->count_normal_token_owners() });
 
+    // Begin the race.
+    auto ts = db_clock::now() + (
+            (!add_delay || ring_delay == milliseconds(0)) ? milliseconds(0) : (
+                2 * ring_delay + duration_cast<milliseconds>(generation_leeway)));
+
+    cdc::generation_id_v2 gen_id{ts, uuid};
     cdc_log.info("New CDC generation: {}", gen_id);
 
     co_return gen_id;
@@ -720,6 +726,14 @@ future<> generation_service::check_and_repair_cdc_streams() {
         throw std::runtime_error("check_and_repair_cdc_streams: node not initialized yet");
     }
 
+    if (!_feature_service.cluster_supports_cdc_generations_v2()) {
+        throw std::runtime_error(
+                "check_and_repair_cdc_streams: we've detected a partially upgraded cluster: the CDC_GENERATIONS_V2 feature is not enabled."
+                " Please finish the rolling upgrade procedure first and then try executing the command again."
+                " If you really must execute the command right now, execute it on one of the nodes that have not yet been upgraded"
+                " (the node trying to execute the command now is upgraded), but it is highly recommended to finish the upgrade first.");
+    }
+
     std::optional<cdc::generation_id> latest = _gen_id;
     const auto& endpoint_states = _gossiper.get_endpoint_states();
     for (const auto& [addr, state] : endpoint_states) {
@@ -739,7 +753,15 @@ future<> generation_service::check_and_repair_cdc_streams() {
 
     bool should_regenerate = false;
 
-    if (latest) {
+    if (!latest) {
+        cdc_log.warn("check_and_repair_cdc_streams: no generation observed in gossip");
+        should_regenerate = true;
+    } else if (std::holds_alternative<cdc::generation_id_v1>(*latest)) {
+        cdc_log.info(
+            "Cluster still using CDC generation storage format V1 (id: {}). Creating a new generation using V2.",
+            *latest);
+        should_regenerate = true;
+    } else {
         cdc_log.info("check_and_repair_cdc_streams: last generation observed in gossip: {}", *latest);
 
         static const auto timeout_msg = "Timeout while fetching CDC topology description";
@@ -791,9 +813,6 @@ future<> generation_service::check_and_repair_cdc_streams() {
                 }
             }
         }
-    } else {
-        cdc_log.warn("check_and_repair_cdc_streams: no generation observed in gossip");
-        should_regenerate = true;
     }
 
     if (!should_regenerate) {
@@ -803,10 +822,13 @@ future<> generation_service::check_and_repair_cdc_streams() {
         cdc_log.info("CDC generation {} does not need repair", latest);
         co_return;
     }
+
     const auto new_gen_id = co_await make_new_cdc_generation(_cfg,
             {}, std::move(tmptr), _gossiper, *sys_dist_ks,
             std::chrono::milliseconds(_cfg.ring_delay_ms()), true /* add delay */);
     // Need to artificially update our STATUS so other nodes handle the generation ID change
+    // FIXME: after 0e0282cd nodes do not require a STATUS update to react to CDC generation changes.
+    // The artificial STATUS update here should eventually be removed (in a few releases).
     auto status = _gossiper.get_application_state_ptr(
             utils::fb_utilities::get_broadcast_address(), gms::application_state::STATUS);
     if (!status) {
