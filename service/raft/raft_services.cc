@@ -137,7 +137,7 @@ seastar::future<> raft_services::uninit() {
 raft_rpc& raft_services::get_rpc(raft::server_id id) {
     auto it = _servers.find(id);
     if (it == _servers.end()) {
-        throw std::runtime_error(format("No raft server found with id = {}", id));
+        on_internal_error(rslog, format("No raft server found with id = {}", id));
     }
     return *it->second.rpc;
 }
@@ -183,13 +183,13 @@ unsigned raft_services::shard_for_group(uint64_t group_id) const {
         return 0; // schema raft server is always owned by shard 0
     }
     // We haven't settled yet on how to organize and manage (group_id -> shard_id) mapping
-    throw std::runtime_error(format("Could not map raft group id {} to a corresponding shard id", group_id));
+    on_internal_error(rslog, format("Could not map raft group id {} to a corresponding shard id", group_id));
 }
 
 gms::inet_address raft_services::get_inet_address(raft::server_id id) const {
     auto it = _server_addresses.find(id);
     if (it == _server_addresses.end()) {
-        throw std::runtime_error(format("Destination raft server not found with id {}", id));
+        on_internal_error(rslog, format("Destination raft server not found with id {}", id));
     }
     return it->second;
 }
@@ -201,7 +201,7 @@ void raft_services::update_address_mapping(raft::server_id id, gms::inet_address
         return;
     }
     if (addr_it->second != addr) {
-        throw std::runtime_error(
+        on_internal_error(rslog,
             format("update_address_mapping: expected to get inet_address {} for raft server id {} (got {})",
                 addr_it->second, id, addr));
     }
