@@ -22,8 +22,8 @@
 
 #include "test/perf/perf.hh"
 
-#include "cql3/error_collector.hh"
-#include "cql3/CqlParser.hpp"
+#include "cassandra/cql3/error_collector.hh"
+#include "cassandra/cql3/CqlParser.hpp"
 
 using namespace cql3;
 

@@ -39,15 +39,15 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 #include <chrono>
-#include "cql3/statements/prepared_statement.hh"
+#include "cassandra/cql3/statements/prepared_statement.hh"
 #include "tracing/trace_state.hh"
 #include "tracing/trace_keyspace_helper.hh"
 #include "service/storage_proxy.hh"
 #include "to_string.hh"
 #include "timestamp.hh"
 
-#include "cql3/values.hh"
-#include "cql3/query_options.hh"
+#include "cassandra/cql3/values.hh"
+#include "cassandra/cql3/query_options.hh"
 #include "utils/UUID_gen.hh"
 
 namespace tracing {

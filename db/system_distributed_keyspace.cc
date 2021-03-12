@@ -21,7 +21,7 @@
 
 #include "db/system_distributed_keyspace.hh"
 
-#include "cql3/untyped_result_set.hh"
+#include "cassandra/cql3/untyped_result_set.hh"
 #include "database.hh"
 #include "db/consistency_level_type.hh"
 #include "db/system_keyspace.hh"
@@ -31,7 +31,7 @@
 #include "types/tuple.hh"
 #include "types/set.hh"
 #include "cdc/generation.hh"
-#include "cql3/query_processor.hh"
+#include "cassandra/cql3/query_processor.hh"
 
 #include <seastar/core/seastar.hh>
 #include <seastar/core/shared_ptr.hh>

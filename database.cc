@@ -30,8 +30,8 @@
 #include "db/config.hh"
 #include "to_string.hh"
 #include "query-result-writer.hh"
-#include "cql3/column_identifier.hh"
-#include "cql3/functions/functions.hh"
+#include "cassandra/cql3/column_identifier.hh"
+#include "cassandra/cql3/functions/functions.hh"
 #include <seastar/core/seastar.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/reactor.hh>

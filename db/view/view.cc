@@ -54,8 +54,8 @@
 
 #include "database.hh"
 #include "clustering_bounds_comparator.hh"
-#include "cql3/statements/select_statement.hh"
-#include "cql3/util.hh"
+#include "cassandra/cql3/statements/select_statement.hh"
+#include "cassandra/cql3/util.hh"
 #include "db/view/view.hh"
 #include "db/view/view_builder.hh"
 #include "db/view/view_updating_consumer.hh"

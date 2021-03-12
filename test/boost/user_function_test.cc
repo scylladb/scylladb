@@ -24,7 +24,7 @@
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/cql_test_env.hh"
 #include "types/list.hh"
-#include "transport/messages/result_message.hh"
+#include "cassandra/transport/messages/result_message.hh"
 #include "types/map.hh"
 #include "types/set.hh"
 #include "types/tuple.hh"

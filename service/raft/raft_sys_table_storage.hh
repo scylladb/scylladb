@@ -22,8 +22,8 @@
 
 #include "raft/raft.hh"
 
-#include "cql3/query_processor.hh"
-#include "cql3/statements/modification_statement.hh"
+#include "cassandra/cql3/query_processor.hh"
+#include "cassandra/cql3/statements/modification_statement.hh"
 
 // Scylla-specific implementation of raft persistence module.
 //

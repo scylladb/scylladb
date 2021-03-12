@@ -22,7 +22,7 @@
 #include <seastar/testing/test_case.hh>
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/cql_assertions.hh"
-#include "transport/messages/result_message.hh"
+#include "cassandra/transport/messages/result_message.hh"
 
 SEASTAR_TEST_CASE(test_index_with_paging) {
     return do_with_cql_env_thread([] (auto& e) {

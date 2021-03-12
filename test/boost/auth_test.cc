@@ -43,7 +43,7 @@
 #include "auth/resource.hh"
 
 #include "db/config.hh"
-#include "cql3/query_processor.hh"
+#include "cassandra/cql3/query_processor.hh"
 
 SEASTAR_TEST_CASE(test_default_authenticator) {
     return do_with_cql_env([](cql_test_env& env) {

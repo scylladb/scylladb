@@ -20,7 +20,7 @@
  */
 
 #include "connection_notifier.hh"
-#include "cql3/constants.hh"
+#include "cassandra/cql3/constants.hh"
 #include "database.hh"
 
 #include <stdexcept>

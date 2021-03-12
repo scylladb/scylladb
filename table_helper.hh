@@ -22,7 +22,7 @@
 
 #pragma once
 
-#include "cql3/statements/prepared_statement.hh"
+#include "cassandra/cql3/statements/prepared_statement.hh"
 #include "service/migration_manager.hh"
 
 

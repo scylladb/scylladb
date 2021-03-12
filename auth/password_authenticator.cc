@@ -54,7 +54,7 @@
 #include "auth/common.hh"
 #include "auth/passwords.hh"
 #include "auth/roles-metadata.hh"
-#include "cql3/untyped_result_set.hh"
+#include "cassandra/cql3/untyped_result_set.hh"
 #include "log.hh"
 #include "service/migration_manager.hh"
 #include "utils/class_registrator.hh"

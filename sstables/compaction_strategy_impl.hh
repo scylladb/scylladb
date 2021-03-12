@@ -21,7 +21,7 @@
 
 #pragma once
 
-#include "cql3/statements/property_definitions.hh"
+#include "cassandra/cql3/statements/property_definitions.hh"
 #include "compaction_backlog_manager.hh"
 #include "compaction_strategy.hh"
 #include "database_fwd.hh"

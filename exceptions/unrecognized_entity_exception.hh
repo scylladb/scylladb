@@ -43,8 +43,8 @@
 
 #include "exceptions.hh"
 #include <seastar/core/shared_ptr.hh>
-#include "cql3/column_identifier.hh"
-#include "cql3/relation.hh"
+#include "cassandra/cql3/column_identifier.hh"
+#include "cassandra/cql3/relation.hh"
 
 namespace exceptions {
 

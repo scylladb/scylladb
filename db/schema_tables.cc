@@ -59,9 +59,9 @@
 #include "mutation_query.hh"
 #include "system_keyspace.hh"
 #include "system_distributed_keyspace.hh"
-#include "cql3/cql3_type.hh"
-#include "cql3/functions/functions.hh"
-#include "cql3/util.hh"
+#include "cassandra/cql3/cql3_type.hh"
+#include "cassandra/cql3/functions/functions.hh"
+#include "cassandra/cql3/util.hh"
 #include "types/list.hh"
 #include "types/set.hh"
 
@@ -97,7 +97,7 @@
 #include "serializer_impl.hh"
 #include "idl/mutation.dist.impl.hh"
 #include "db/system_keyspace.hh"
-#include "cql3/untyped_result_set.hh"
+#include "cassandra/cql3/untyped_result_set.hh"
 
 using namespace db::system_keyspace;
 using namespace std::chrono_literals;

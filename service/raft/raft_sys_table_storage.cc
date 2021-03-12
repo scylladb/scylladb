@@ -20,7 +20,7 @@
  */
 #include "service/raft/raft_sys_table_storage.hh"
 
-#include "cql3/untyped_result_set.hh"
+#include "cassandra/cql3/untyped_result_set.hh"
 #include "db/system_keyspace.hh"
 #include "utils/UUID.hh"
 
@@ -29,7 +29,7 @@
 #include "serializer_impl.hh"
 #include "idl/raft.dist.impl.hh"
 
-#include "cql3/statements/batch_statement.hh"
+#include "cassandra/cql3/statements/batch_statement.hh"
 
 #include <seastar/core/loop.hh>
 #include <seastar/core/coroutine.hh>

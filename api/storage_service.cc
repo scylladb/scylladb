@@ -44,8 +44,8 @@
 #include "database.hh"
 #include "db/extensions.hh"
 #include "db/snapshot-ctl.hh"
-#include "transport/controller.hh"
-#include "thrift/controller.hh"
+#include "cassandra/transport/controller.hh"
+#include "cassandra/thrift/controller.hh"
 #include "locator/token_metadata.hh"
 #include "cdc/generation_service.hh"
 

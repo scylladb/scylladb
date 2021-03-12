@@ -21,7 +21,7 @@
 
 #include <boost/algorithm/string/join.hpp>
 
-#include "cql3/cql3_type.hh"
+#include "cassandra/cql3/cql3_type.hh"
 #include "mutation.hh"
 #include "mutation_fragment.hh"
 #include "schema_builder.hh"

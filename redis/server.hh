@@ -30,7 +30,7 @@
 
 #include "auth/authenticator.hh"
 #include "auth/service.hh"
-#include "cql3/values.hh"
+#include "cassandra/cql3/values.hh"
 #include "service/client_state.hh"
 #include "service/storage_proxy.hh"
 #include "service_permit.hh"

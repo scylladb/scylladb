@@ -25,7 +25,7 @@
 #include "test/lib/cql_assertions.hh"
 
 #include "db/schema_tables.hh"
-#include "transport/messages/result_message.hh"
+#include "cassandra/transport/messages/result_message.hh"
 
 SEASTAR_TEST_CASE(test_column_mapping_persistence) {
     return do_with_cql_env_thread([] (cql_test_env& e) {

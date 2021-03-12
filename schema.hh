@@ -30,7 +30,7 @@
 #include <boost/lexical_cast.hpp>
 #include <boost/dynamic_bitset.hpp>
 
-#include "cql3/column_specification.hh"
+#include "cassandra/cql3/column_specification.hh"
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/util/backtrace.hh>
 #include "types.hh"

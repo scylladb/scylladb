@@ -22,11 +22,11 @@
 #include <boost/lexical_cast.hpp>
 #include <algorithm>
 #include <cinttypes>
-#include "cql3/cql3_type.hh"
-#include "cql3/lists.hh"
-#include "cql3/maps.hh"
-#include "cql3/sets.hh"
-#include "cql3/util.hh"
+#include "cassandra/cql3/cql3_type.hh"
+#include "cassandra/cql3/lists.hh"
+#include "cassandra/cql3/maps.hh"
+#include "cassandra/cql3/sets.hh"
+#include "cassandra/cql3/util.hh"
 #include "concrete_types.hh"
 #include <seastar/core/print.hh>
 #include <seastar/net/ip.hh>

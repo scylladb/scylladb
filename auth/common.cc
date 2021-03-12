@@ -23,8 +23,8 @@
 
 #include <seastar/core/shared_ptr.hh>
 
-#include "cql3/query_processor.hh"
-#include "cql3/statements/create_table_statement.hh"
+#include "cassandra/cql3/query_processor.hh"
+#include "cassandra/cql3/statements/create_table_statement.hh"
 #include "database.hh"
 #include "schema_builder.hh"
 #include "service/migration_manager.hh"

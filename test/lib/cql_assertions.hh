@@ -23,7 +23,7 @@
 #pragma once
 
 #include "test/lib/cql_test_env.hh"
-#include "transport/messages/result_message_base.hh"
+#include "cassandra/transport/messages/result_message_base.hh"
 #include "bytes.hh"
 #include <experimental/source_location>
 #include <seastar/core/shared_ptr.hh>

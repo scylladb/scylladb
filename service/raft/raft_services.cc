@@ -26,7 +26,7 @@
 
 #include "raft/raft.hh"
 #include "message/messaging_service.hh"
-#include "cql3/query_processor.hh"
+#include "cassandra/cql3/query_processor.hh"
 #include "gms/gossiper.hh"
 
 #include <seastar/core/smp.hh>

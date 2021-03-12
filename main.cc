@@ -25,7 +25,7 @@
 #include <seastar/core/reactor.hh>
 #include <seastar/core/app-template.hh>
 #include <seastar/core/distributed.hh>
-#include "transport/server.hh"
+#include "cassandra/transport/server.hh"
 #include <seastar/http/httpd.hh>
 #include "api/api_init.hh"
 #include "db/config.hh"
@@ -73,10 +73,10 @@
 #include "sstables/sstables.hh"
 #include "gms/feature_service.hh"
 #include "distributed_loader.hh"
-#include "cql3/cql_config.hh"
+#include "cassandra/cql3/cql_config.hh"
 #include "connection_notifier.hh"
-#include "transport/controller.hh"
-#include "thrift/controller.hh"
+#include "cassandra/transport/controller.hh"
+#include "cassandra/thrift/controller.hh"
 
 #include "alternator/server.hh"
 #include "redis/service.hh"

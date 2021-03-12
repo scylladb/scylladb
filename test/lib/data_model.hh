@@ -22,7 +22,7 @@
 #pragma once
 
 #include "mutation.hh"
-#include "cql3/cql3_type.hh"
+#include "cassandra/cql3/cql3_type.hh"
 #include "schema.hh"
 
 namespace tests::data_model {

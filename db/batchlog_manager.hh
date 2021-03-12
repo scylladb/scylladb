@@ -48,7 +48,7 @@
 #include <seastar/core/gate.hh>
 #include <seastar/core/metrics_registration.hh>
 
-#include "cql3/query_processor.hh"
+#include "cassandra/cql3/query_processor.hh"
 #include "gms/inet_address.hh"
 #include "db_clock.hh"
 

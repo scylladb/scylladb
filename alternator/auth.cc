@@ -32,8 +32,8 @@
 #include "auth/common.hh"
 #include "auth/password_authenticator.hh"
 #include "auth/roles-metadata.hh"
-#include "cql3/query_processor.hh"
-#include "cql3/untyped_result_set.hh"
+#include "cassandra/cql3/query_processor.hh"
+#include "cassandra/cql3/untyped_result_set.hh"
 
 namespace alternator {
 

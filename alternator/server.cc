@@ -30,7 +30,7 @@
 #include "utils/rjson.hh"
 #include "auth.hh"
 #include <cctype>
-#include "cql3/query_processor.hh"
+#include "cassandra/cql3/query_processor.hh"
 #include "service/storage_service.hh"
 #include "utils/overloaded_functor.hh"
 

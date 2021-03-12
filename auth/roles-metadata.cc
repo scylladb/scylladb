@@ -27,8 +27,8 @@
 #include <seastar/core/sstring.hh>
 
 #include "auth/common.hh"
-#include "cql3/query_processor.hh"
-#include "cql3/untyped_result_set.hh"
+#include "cassandra/cql3/query_processor.hh"
+#include "cassandra/cql3/untyped_result_set.hh"
 
 namespace auth {
 

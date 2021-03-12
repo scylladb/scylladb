@@ -55,7 +55,7 @@
 #include "tracing/trace_state.hh"
 
 #include "enum_set.hh"
-#include "transport/cql_protocol_extension.hh"
+#include "cassandra/transport/cql_protocol_extension.hh"
 
 namespace auth {
 class resource;

@@ -41,7 +41,7 @@
 
 #pragma once
 
-#include "cql3/statements/index_target.hh"
+#include "cassandra/cql3/statements/index_target.hh"
 
 #include <boost/algorithm/string/predicate.hpp>
 

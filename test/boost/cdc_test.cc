@@ -31,7 +31,7 @@
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/exception_utils.hh"
 #include "test/lib/log.hh"
-#include "transport/messages/result_message.hh"
+#include "cassandra/transport/messages/result_message.hh"
 
 #include "types.hh"
 #include "types/tuple.hh"

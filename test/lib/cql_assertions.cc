@@ -23,7 +23,7 @@
 #include <boost/test/unit_test.hpp>
 #include <boost/range/adaptor/transformed.hpp>
 #include "test/lib/cql_assertions.hh"
-#include "transport/messages/result_message.hh"
+#include "cassandra/transport/messages/result_message.hh"
 #include "to_string.hh"
 #include "bytes.hh"
 

@@ -22,13 +22,13 @@
 #include <seastar/testing/test_case.hh>
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/cql_assertions.hh"
-#include "transport/messages/result_message.hh"
+#include "cassandra/transport/messages/result_message.hh"
 #include "service/pager/paging_state.hh"
 #include "types/map.hh"
 #include "types/list.hh"
 #include "types/set.hh"
 #include "test/lib/exception_utils.hh"
-#include "cql3/statements/select_statement.hh"
+#include "cassandra/cql3/statements/select_statement.hh"
 #include "test/lib/select_statement_utils.hh"
 
 

@@ -26,10 +26,10 @@
 #include <boost/test/unit_test.hpp>
 #include <seastar/core/shared_ptr.hh>
 
-#include "cql3/CqlParser.hpp"
-#include "cql3/role_options.hh"
-#include "cql3/statements/raw/parsed_statement.hh"
-#include "cql3/util.hh"
+#include "cassandra/cql3/CqlParser.hpp"
+#include "cassandra/cql3/role_options.hh"
+#include "cassandra/cql3/statements/raw/parsed_statement.hh"
+#include "cassandra/cql3/util.hh"
 
 //
 // Test basic CQL string quoting

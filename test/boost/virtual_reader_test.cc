@@ -37,10 +37,10 @@
 #include "db/system_keyspace.hh"
 #include "db/view/view_builder.hh"
 #include <seastar/core/future-util.hh>
-#include "cql3/query_processor.hh"
-#include "cql3/untyped_result_set.hh"
+#include "cassandra/cql3/query_processor.hh"
+#include "cassandra/cql3/untyped_result_set.hh"
 #include "dht/i_partitioner.hh"
-#include "transport/messages/result_message.hh"
+#include "cassandra/transport/messages/result_message.hh"
 
 using namespace std::literals::chrono_literals;
 

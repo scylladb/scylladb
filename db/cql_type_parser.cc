@@ -43,8 +43,8 @@
 
 #include "database.hh"
 #include "service/storage_proxy.hh"
-#include "cql3/CqlParser.hpp"
-#include "cql3/util.hh"
+#include "cassandra/cql3/CqlParser.hpp"
+#include "cassandra/cql3/util.hh"
 #include "cql_type_parser.hh"
 #include "types.hh"
 #include "user_types_metadata.hh"

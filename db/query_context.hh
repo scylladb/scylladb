@@ -23,8 +23,8 @@
 #include <memory>
 #include <seastar/core/sharded.hh>
 #include <seastar/core/future.hh>
-#include "cql3/query_processor.hh"
-#include "cql3/query_options.hh"
+#include "cassandra/cql3/query_processor.hh"
+#include "cassandra/cql3/query_options.hh"
 #include "db/timeout_clock.hh"
 #include "exceptions/exceptions.hh"
 #include "timeout_config.hh"

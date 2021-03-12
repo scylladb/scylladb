@@ -25,7 +25,7 @@
 #include "error.hh"
 #include "rapidjson/writer.h"
 #include "concrete_types.hh"
-#include "cql3/type_json.hh"
+#include "cassandra/cql3/type_json.hh"
 
 static logging::logger slogger("alternator-serialization");
 

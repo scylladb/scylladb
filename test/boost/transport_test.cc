@@ -21,8 +21,8 @@
 
 #include <seastar/testing/thread_test_case.hh>
 
-#include "transport/request.hh"
-#include "transport/response.hh"
+#include "cassandra/transport/request.hh"
+#include "cassandra/transport/response.hh"
 
 #include "test/lib/random_utils.hh"
 

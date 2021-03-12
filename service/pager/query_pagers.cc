@@ -41,9 +41,9 @@
 
 #include "query_pagers.hh"
 #include "query_pager.hh"
-#include "cql3/selection/selection.hh"
-#include "cql3/query_options.hh"
-#include "cql3/restrictions/statement_restrictions.hh"
+#include "cassandra/cql3/selection/selection.hh"
+#include "cassandra/cql3/query_options.hh"
+#include "cassandra/cql3/restrictions/statement_restrictions.hh"
 #include "log.hh"
 #include "service/storage_proxy.hh"
 #include "to_string.hh"

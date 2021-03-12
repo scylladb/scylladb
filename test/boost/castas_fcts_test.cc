@@ -34,7 +34,7 @@
 #include "test/lib/exception_utils.hh"
 
 #include <seastar/core/future-util.hh>
-#include "transport/messages/result_message.hh"
+#include "cassandra/transport/messages/result_message.hh"
 
 #include "db/config.hh"
 

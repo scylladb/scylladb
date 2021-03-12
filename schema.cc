@@ -22,8 +22,8 @@
 #include <seastar/core/on_internal_error.hh>
 #include <map>
 #include "utils/UUID_gen.hh"
-#include "cql3/column_identifier.hh"
-#include "cql3/util.hh"
+#include "cassandra/cql3/column_identifier.hh"
+#include "cassandra/cql3/util.hh"
 #include "schema.hh"
 #include "schema_builder.hh"
 #include <boost/algorithm/cxx11/any_of.hpp>

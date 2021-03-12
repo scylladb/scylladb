@@ -66,7 +66,7 @@
 #include "idl/uuid.dist.impl.hh"
 #include "idl/frozen_schema.dist.impl.hh"
 #include "message/messaging_service.hh"
-#include "cql3/untyped_result_set.hh"
+#include "cassandra/cql3/untyped_result_set.hh"
 #include "service_permit.hh"
 
 static logging::logger blogger("batchlog_manager");

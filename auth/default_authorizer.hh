@@ -46,7 +46,7 @@
 #include <seastar/core/abort_source.hh>
 
 #include "auth/authorizer.hh"
-#include "cql3/query_processor.hh"
+#include "cassandra/cql3/query_processor.hh"
 #include "service/migration_manager.hh"
 
 namespace auth {

@@ -27,11 +27,11 @@
 #include <seastar/core/do_with.hh>
 #include "test/lib/cql_test_env.hh"
 #include "cdc/generation_service.hh"
-#include "cql3/functions/functions.hh"
-#include "cql3/query_processor.hh"
-#include "cql3/query_options.hh"
-#include "cql3/statements/batch_statement.hh"
-#include "cql3/cql_config.hh"
+#include "cassandra/cql3/functions/functions.hh"
+#include "cassandra/cql3/query_processor.hh"
+#include "cassandra/cql3/query_options.hh"
+#include "cassandra/cql3/statements/batch_statement.hh"
+#include "cassandra/cql3/cql_config.hh"
 #include <seastar/core/distributed.hh>
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/shared_ptr.hh>

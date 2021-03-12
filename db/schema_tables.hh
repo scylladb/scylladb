@@ -42,7 +42,7 @@
 
 #include "service/storage_proxy.hh"
 #include "mutation.hh"
-#include "cql3/functions/user_function.hh"
+#include "cassandra/cql3/functions/user_function.hh"
 #include "schema_fwd.hh"
 #include "schema_features.hh"
 #include "hashing.hh"

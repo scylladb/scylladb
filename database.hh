@@ -49,7 +49,7 @@
 #include "compound.hh"
 #include <seastar/core/future.hh>
 #include <seastar/core/gate.hh>
-#include "cql3/column_specification.hh"
+#include "cassandra/cql3/column_specification.hh"
 #include "db/commitlog/replay_position.hh"
 #include <limits>
 #include <cstddef>

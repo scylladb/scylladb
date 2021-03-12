@@ -48,8 +48,8 @@
 #include "query-result.hh"
 #include "query-request.hh"
 #include "service/query_state.hh"
-#include "cql3/selection/selection.hh"
-#include "cql3/query_options.hh"
+#include "cassandra/cql3/selection/selection.hh"
+#include "cassandra/cql3/query_options.hh"
 #include "query_pager.hh"
 
 namespace service {

@@ -42,8 +42,8 @@
 #pragma once
 
 #include "paging_state.hh"
-#include "cql3/result_set.hh"
-#include "cql3/selection/selection.hh"
+#include "cassandra/cql3/result_set.hh"
+#include "cassandra/cql3/selection/selection.hh"
 #include "service/storage_proxy.hh"
 #include "service/query_state.hh"
 

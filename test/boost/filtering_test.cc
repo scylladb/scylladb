@@ -34,7 +34,7 @@
 
 #include "seastar/core/future-util.hh"
 #include "seastar/core/sleep.hh"
-#include "transport/messages/result_message.hh"
+#include "cassandra/transport/messages/result_message.hh"
 #include "utils/big_decimal.hh"
 #include "types/list.hh"
 #include "types/set.hh"

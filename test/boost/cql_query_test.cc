@@ -38,14 +38,14 @@
 
 #include <seastar/core/future-util.hh>
 #include <seastar/core/sleep.hh>
-#include "transport/messages/result_message.hh"
+#include "cassandra/transport/messages/result_message.hh"
 #include "utils/big_decimal.hh"
 #include "types/user.hh"
 #include "types/map.hh"
 #include "types/list.hh"
 #include "types/set.hh"
 #include "db/config.hh"
-#include "cql3/cql_config.hh"
+#include "cassandra/cql3/cql_config.hh"
 #include "sstables/compaction_manager.hh"
 #include "test/lib/exception_utils.hh"
 #include "utils/rjson.hh"

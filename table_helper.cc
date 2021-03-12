@@ -21,9 +21,9 @@
  */
 
 #include "table_helper.hh"
-#include "cql3/query_processor.hh"
-#include "cql3/statements/create_table_statement.hh"
-#include "cql3/statements/modification_statement.hh"
+#include "cassandra/cql3/query_processor.hh"
+#include "cassandra/cql3/statements/create_table_statement.hh"
+#include "cassandra/cql3/statements/modification_statement.hh"
 #include "database.hh"
 
 future<> table_helper::setup_table(cql3::query_processor& qp) const {

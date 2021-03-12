@@ -27,7 +27,7 @@
 #include "service/raft/raft_sys_table_storage.hh"
 
 #include "test/lib/cql_test_env.hh"
-#include "cql3/query_processor.hh"
+#include "cassandra/cql3/query_processor.hh"
 
 namespace raft{
 

@@ -49,7 +49,7 @@
 #include "sstables.hh"
 #include "compaction.hh"
 #include "timestamp.hh"
-#include "cql3/statements/property_definitions.hh"
+#include "cassandra/cql3/statements/property_definitions.hh"
 #include "sstables/compaction_strategy_impl.hh"
 
 static constexpr double DEFAULT_MAX_SSTABLE_AGE_DAYS = 365;

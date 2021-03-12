@@ -41,7 +41,7 @@
 
 #include "secondary_index.hh"
 #include "index/target_parser.hh"
-#include "cql3/statements/index_target.hh"
+#include "cassandra/cql3/statements/index_target.hh"
 
 #include <regex>
 #include <boost/range/algorithm/find_if.hpp>

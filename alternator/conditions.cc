@@ -24,7 +24,7 @@
 #include <string_view>
 #include "alternator/conditions.hh"
 #include "alternator/error.hh"
-#include "cql3/constants.hh"
+#include "cassandra/cql3/constants.hh"
 #include <unordered_map>
 #include "utils/rjson.hh"
 #include "serialization.hh"

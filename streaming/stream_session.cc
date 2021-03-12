@@ -49,7 +49,7 @@
 #include "streaming/stream_plan.hh"
 #include <seastar/core/sleep.hh>
 #include <seastar/core/thread.hh>
-#include "cql3/query_processor.hh"
+#include "cassandra/cql3/query_processor.hh"
 #include "streaming/stream_state.hh"
 #include "streaming/stream_session_state.hh"
 #include "streaming/stream_exception.hh"

@@ -41,8 +41,8 @@
 
 #include "index/secondary_index_manager.hh"
 
-#include "cql3/statements/index_target.hh"
-#include "cql3/util.hh"
+#include "cassandra/cql3/statements/index_target.hh"
+#include "cassandra/cql3/util.hh"
 #include "index/target_parser.hh"
 #include "db/query_context.hh"
 #include "schema_builder.hh"

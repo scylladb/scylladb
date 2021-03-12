@@ -24,9 +24,9 @@
 
 #include <vector>
 
-#include "cql3/relation.hh"
-#include "cql3/restrictions/statement_restrictions.hh"
-#include "cql3/util.hh"
+#include "cassandra/cql3/relation.hh"
+#include "cassandra/cql3/restrictions/statement_restrictions.hh"
+#include "cassandra/cql3/util.hh"
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/cql_test_env.hh"
 
