@@ -1287,7 +1287,8 @@ compiler_test_src = '''
 int main() { return 0; }
 '''
 if not try_compile_and_link(compiler=args.cxx, source=compiler_test_src):
-    print('Wrong GCC version. Scylla needs GCC >= 10.1.1 to compile.')
+    try_compile_and_link(compiler=args.cxx, source=compiler_test_src, verbose=True)
+    print('Wrong compiler version or incorrect flags. Scylla needs GCC >= 10.1.1 with coroutines (-fcoroutines) or clang >= 10.0.0 to compile.')
     sys.exit(1)
 
 if not try_compile(compiler=args.cxx, source='#include <boost/version.hpp>'):
