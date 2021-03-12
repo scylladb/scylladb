@@ -112,6 +112,7 @@ private:
     std::unordered_map<column_family*, rwlock> _compaction_locks;
 
     semaphore _custom_job_sem{1};
+    seastar::named_semaphore _rewrite_sstables_sem = {1, named_semaphore_exception_factory{"rewrite sstables"}};
 
     std::function<void()> compaction_submission_callback();
     // all registered column families are submitted for compaction at a constant interval.
