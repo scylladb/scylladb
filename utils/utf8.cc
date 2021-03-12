@@ -538,11 +538,17 @@ internal::validate_partial(const uint8_t *data, size_t len) {
 }
 
 #else
+
+namespace internal {
+
 // No SIMD implementation for this arch, fallback to naive method
 partial_validation_results
 validate_partial(const uint8_t *data, size_t len) {
     return validate_partial_naive(data, len);
 }
+
+}
+
 #endif
 
 bool validate(const uint8_t* data, size_t len) {
