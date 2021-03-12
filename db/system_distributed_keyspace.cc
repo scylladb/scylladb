@@ -74,23 +74,6 @@ schema_ptr view_build_status() {
 }
 
 /* An internal table used by nodes to exchange CDC generation data. */
-schema_ptr cdc_generations() {
-    thread_local auto schema = [] {
-        auto id = generate_legacy_id(system_distributed_keyspace::NAME, system_distributed_keyspace::CDC_TOPOLOGY_DESCRIPTION);
-        return schema_builder(system_distributed_keyspace::NAME, system_distributed_keyspace::CDC_TOPOLOGY_DESCRIPTION, {id})
-                /* The timestamp of this CDC generation. */
-                .with_column("time", timestamp_type, column_kind::partition_key)
-                /* The description of this CDC generation (see `cdc::topology_description`). */
-                .with_column("description", cdc_generation_description_type)
-                /* Expiration time of this CDC generation (or null if not expired). */
-                .with_column("expired", timestamp_type)
-                .with_version(system_keyspace::generate_schema_version(id))
-                .build();
-    }();
-    return schema;
-}
-
-/* An internal table used by nodes to exchange CDC generation data. */
 schema_ptr cdc_generations_v2() {
     thread_local auto schema = [] {
         auto id = generate_legacy_id(system_distributed_keyspace::NAME_EVERYWHERE, system_distributed_keyspace::CDC_GENERATIONS_V2);
@@ -173,7 +156,6 @@ schema_ptr service_levels() {
 static std::vector<schema_ptr> all_tables() {
     return {
         view_build_status(),
-        cdc_generations(),
         cdc_generations_v2(),
         cdc_desc(),
         cdc_timestamps(),
