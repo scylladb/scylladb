@@ -38,7 +38,10 @@ using raft::term_t, raft::index_t, raft::server_id, raft::log_entry;
 using seastar::make_lw_shared;
 
 void election_threshold(raft::fsm& fsm) {
-    for (int i = 0; i <= raft::ELECTION_TIMEOUT.count(); i++) {
+    // Election threshold should be strictly less than
+    // minimal randomized election timeout to make tests
+    // stable, but enough to disable "stable leader" rule.
+    for (int i = 0; i < raft::ELECTION_TIMEOUT.count(); i++) {
         fsm.tick();
     }
 }
