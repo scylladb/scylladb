@@ -37,6 +37,7 @@
 #include "gms/application_state.hh"
 #include "gms/inet_address.hh"
 #include "gms/gossiper.hh"
+#include "gms/feature_service.hh"
 
 #include "cdc/generation.hh"
 #include "cdc/cdc_options.hh"
@@ -330,20 +331,49 @@ topology_description limit_number_of_streams_if_needed(topology_description&& de
     return topology_description(std::move(entries));
 }
 
-future<cdc::generation_id_v1> make_new_cdc_generation(
+future<cdc::generation_id> make_new_cdc_generation(
         const db::config& cfg,
         const std::unordered_set<dht::token>& bootstrap_tokens,
         const locator::token_metadata_ptr tmptr,
         const gms::gossiper& g,
         db::system_distributed_keyspace& sys_dist_ks,
         std::chrono::milliseconds ring_delay,
-        bool add_delay) {
+        bool add_delay,
+        bool cluster_supports_generations_v2) {
     using namespace std::chrono;
+    using namespace std::chrono_literals;
     auto gen = topology_description_generator(cfg, bootstrap_tokens, tmptr, g).generate();
+
+    // We need to call this as late in the procedure as possible.
+    // In the V2 format we can do this after inserting the generation data into the table;
+    // in the V1 format we must do it before (because the timestamp is the partition key in the V1 format).
+    auto new_generation_timestamp = [add_delay, ring_delay] {
+        auto ts = db_clock::now();
+        if (add_delay && ring_delay != 0ms) {
+            ts += 2 * ring_delay + duration_cast<milliseconds>(generation_leeway);
+        }
+        return ts;
+    };
+
+    if (cluster_supports_generations_v2) {
+        auto uuid = utils::make_random_uuid();
+        cdc_log.info("Inserting new generation data at UUID {}", uuid);
+        // This may take a while.
+        co_await sys_dist_ks.insert_cdc_generation(uuid, gen, { tmptr->count_normal_token_owners() });
+
+        // Begin the race.
+        cdc::generation_id_v2 gen_id{new_generation_timestamp(), uuid};
+
+        cdc_log.info("New CDC generation: {}", gen_id);
+        co_return gen_id;
+    }
+
+    // The CDC_GENERATIONS_V2 feature is not enabled: some nodes may still not understand the V2 format.
+    // We must create a generation in the old format.
 
     // If the cluster is large we may end up with a generation that contains
     // large number of streams. This is problematic because we store the
-    // generation in a single row. For a generation with large number of rows
+    // generation in a single row (V1 format). For a generation with large number of rows
     // this will lead to a row that can be as big as 32MB. This is much more
     // than the limit imposed by commitlog_segment_size_in_mb. If the size of
     // the row that describes a new generation grows above
@@ -353,14 +383,19 @@ future<cdc::generation_id_v1> make_new_cdc_generation(
     // each vnode if the total number of streams is too large.
     gen = limit_number_of_streams_if_needed(std::move(gen));
 
+    cdc_log.warn(
+        "Creating a new CDC generation in the old storage format due to a partially upgraded cluster:"
+        " the CDC_GENERATIONS_V2 feature is known by this node, but not enabled in the cluster."
+        " The old storage format forces us to create a suboptimal generation."
+        " It is recommended to finish the upgrade and then create a new generation either by bootstrapping"
+        " a new node or running the checkAndRepairCdcStreams nodetool command.");
+
     // Begin the race.
-    auto gen_id = cdc::generation_id_v1{db_clock::now() + (
-            (!add_delay || ring_delay == milliseconds(0)) ? milliseconds(0) : (
-                2 * ring_delay + duration_cast<milliseconds>(generation_leeway)))};
+    cdc::generation_id_v1 gen_id{new_generation_timestamp()};
+
     co_await sys_dist_ks.insert_cdc_topology_description(gen_id, std::move(gen), { tmptr->count_normal_token_owners() });
 
     cdc_log.info("New CDC generation: {}", gen_id);
-
     co_return gen_id;
 }
 
@@ -739,7 +774,16 @@ future<> generation_service::check_and_repair_cdc_streams() {
 
     bool should_regenerate = false;
 
-    if (latest) {
+    if (!latest) {
+        cdc_log.warn("check_and_repair_cdc_streams: no generation observed in gossip");
+        should_regenerate = true;
+    } else if (std::holds_alternative<cdc::generation_id_v1>(*latest)
+            && _feature_service.cluster_supports_cdc_generations_v2()) {
+        cdc_log.info(
+            "Cluster still using CDC generation storage format V1 (id: {}), even though it already understands the V2 format."
+            " Creating a new generation using V2.", *latest);
+        should_regenerate = true;
+    } else {
         cdc_log.info("check_and_repair_cdc_streams: last generation observed in gossip: {}", *latest);
 
         static const auto timeout_msg = "Timeout while fetching CDC topology description";
@@ -791,9 +835,6 @@ future<> generation_service::check_and_repair_cdc_streams() {
                 }
             }
         }
-    } else {
-        cdc_log.warn("check_and_repair_cdc_streams: no generation observed in gossip");
-        should_regenerate = true;
     }
 
     if (!should_regenerate) {
@@ -803,10 +844,16 @@ future<> generation_service::check_and_repair_cdc_streams() {
         cdc_log.info("CDC generation {} does not need repair", latest);
         co_return;
     }
+
     const auto new_gen_id = co_await make_new_cdc_generation(_cfg,
             {}, std::move(tmptr), _gossiper, *sys_dist_ks,
-            std::chrono::milliseconds(_cfg.ring_delay_ms()), true /* add delay */);
+            std::chrono::milliseconds(_cfg.ring_delay_ms()),
+            true /* add delay */,
+            _feature_service.cluster_supports_cdc_generations_v2());
+
     // Need to artificially update our STATUS so other nodes handle the generation ID change
+    // FIXME: after 0e0282cd nodes do not require a STATUS update to react to CDC generation changes.
+    // The artificial STATUS update here should eventually be removed (in a few releases).
     auto status = _gossiper.get_application_state_ptr(
             utils::fb_utilities::get_broadcast_address(), gms::application_state::STATUS);
     if (!status) {
