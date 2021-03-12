@@ -405,12 +405,16 @@ void table::add_maintenance_sstable(sstables::shared_sstable sst) {
 }
 
 future<>
-table::add_sstable_and_update_cache(sstables::shared_sstable sst) {
-    return get_row_cache().invalidate(row_cache::external_updater([this, sst] () noexcept {
+table::add_sstable_and_update_cache(sstables::shared_sstable sst, sstables::offstrategy offstrategy) {
+    return get_row_cache().invalidate(row_cache::external_updater([this, sst, offstrategy] () noexcept {
         // FIXME: this is not really noexcept, but we need to provide strong exception guarantees.
         // atomically load all opened sstables into column family.
-        add_sstable(sst);
-        trigger_compaction();
+        if (!offstrategy) {
+            add_sstable(sst);
+            trigger_compaction();
+        } else {
+            add_maintenance_sstable(sst);
+        }
     }), dht::partition_range::make({sst->get_first_decorated_key(), true}, {sst->get_last_decorated_key(), true}));
 }
 

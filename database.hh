@@ -512,7 +512,8 @@ private:
 
     bool _is_bootstrap_or_replace = false;
 public:
-    future<> add_sstable_and_update_cache(sstables::shared_sstable sst);
+    future<> add_sstable_and_update_cache(sstables::shared_sstable sst,
+                                          sstables::offstrategy offstrategy = sstables::offstrategy::no);
     future<> move_sstables_from_staging(std::vector<sstables::shared_sstable>);
     sstables::shared_sstable get_staging_sstable(uint64_t generation) {
         auto it = _sstables_staging.find(generation);
