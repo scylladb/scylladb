@@ -126,18 +126,21 @@ def ensure_tmp_dir_exists():
         os.makedirs(tempfile.tempdir)
 
 
-def try_compile_and_link(compiler, source='', flags=[]):
+def try_compile_and_link(compiler, source='', flags=[], verbose=False):
     ensure_tmp_dir_exists()
     with tempfile.NamedTemporaryFile() as sfile:
         ofile = tempfile.mktemp()
         try:
             sfile.file.write(bytes(source, 'utf-8'))
             sfile.file.flush()
-            # We can't write to /dev/null, since in some cases (-ftest-coverage) gcc will create an auxiliary
-            # output file based on the name of the output file, and "/dev/null.gcsa" is not a good name
-            return subprocess.call([compiler, '-x', 'c++', '-o', ofile, sfile.name] + args.user_cflags.split() + flags,
-                                   stdout=subprocess.DEVNULL,
-                                   stderr=subprocess.DEVNULL) == 0
+            ret = subprocess.run([compiler, '-x', 'c++', '-o', ofile, sfile.name] + args.user_cflags.split() + flags,
+                                 capture_output=True)
+            if verbose:
+                print(f"Compilation failed: {compiler} -x c++ -o {ofile} {sfile.name} {args.user_cflags} {flags}")
+                print(source)
+                print(ret.stdout.decode('utf-8'))
+                print(ret.stderr.decode('utf-8'))
+            return ret.returncode == 0
         finally:
             if os.path.exists(ofile):
                 os.unlink(ofile)
