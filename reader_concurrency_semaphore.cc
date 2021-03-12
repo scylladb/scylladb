@@ -440,13 +440,17 @@ bool reader_concurrency_semaphore::try_evict_one_inactive_read(evict_reason reas
     return true;
 }
 
-void reader_concurrency_semaphore::evict(inactive_read& ir, evict_reason reason) {
+void reader_concurrency_semaphore::evict(inactive_read& ir, evict_reason reason) noexcept {
     auto reader = std::move(ir.reader);
     ir.unlink();
-    if (auto notify_handler = std::move(ir.notify_handler)) {
-        notify_handler(reason);
-        // The notify_handler may destroy the inactive_read.
-        // Do not use it after this point!
+    try {
+        if (auto notify_handler = std::move(ir.notify_handler)) {
+            notify_handler(reason);
+            // The notify_handler may destroy the inactive_read.
+            // Do not use it after this point!
+        }
+    } catch (...) {
+        rcslog.error("[semaphore {}] evict(): notify handler failed for inactive read evicted due to {}: {}", _name, reason, std::current_exception());
     }
     switch (reason) {
         case evict_reason::permit:

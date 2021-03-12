@@ -152,7 +152,7 @@ private:
     std::unique_ptr<permit_list> _permit_list;
 
 private:
-    void evict(inactive_read&, evict_reason reason);
+    void evict(inactive_read&, evict_reason reason) noexcept;
 
     bool has_available_units(const resources& r) const;
 
