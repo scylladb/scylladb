@@ -167,7 +167,21 @@ def linker_flags(compiler):
             link_flags.append(threads_flag)
         return ' '.join(link_flags)
     else:
-        print('Note: neither lld nor gold found; using default system linker')
+        linker = ''
+        try:
+            subprocess.call(["gold", "-v"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            linker = 'gold'
+        except:
+            pass
+        try:
+            subprocess.call(["lld", "-v"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            linker = 'lld'
+        except:
+            pass
+        if linker:
+            print(f'Linker {linker} found, but the compilation attempt failed, defaulting to default system linker')
+        else:
+            print('Note: neither lld nor gold found; using default system linker')
         return ''
 
 
