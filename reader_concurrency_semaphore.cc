@@ -129,16 +129,34 @@ public:
         _semaphore.consume(_resources);
     }
 
+    void on_register_as_inactive() {
+        if (_state != reader_permit::state::admitted) {
+            _state = reader_permit::state::inactive;
+            _semaphore.consume(_resources);
+        }
+    }
+
+    void on_unregister_as_inactive() {
+        if (_state == reader_permit::state::inactive) {
+            _state = reader_permit::state::registered;
+            _semaphore.signal(_resources);
+        }
+    }
+
+    bool should_forward_cost() const {
+        return _state == reader_permit::state::admitted || _state == reader_permit::state::inactive;
+    }
+
     void consume(reader_resources res) {
         _resources += res;
-        if (_state == reader_permit::state::admitted) {
+        if (should_forward_cost()) {
             _semaphore.consume(res);
         }
     }
 
     void signal(reader_resources res) {
         _resources -= res;
-        if (_state == reader_permit::state::admitted) {
+        if (should_forward_cost()) {
             _semaphore.signal(res);
         }
     }
@@ -215,6 +233,9 @@ std::ostream& operator<<(std::ostream& os, reader_permit::state s) {
             break;
         case reader_permit::state::admitted:
             os << "admitted";
+            break;
+        case reader_permit::state::inactive:
+            os << "inactive";
             break;
     }
     return os;
@@ -313,6 +334,8 @@ static void do_dump_reader_permit_diagnostics(std::ostream& os, const reader_con
     fmt::print(os, "Semaphore {}: {}, dumping permit diagnostics:\n", semaphore.name(), problem);
     total += do_dump_reader_permit_diagnostics(os, permits, reader_permit::state::admitted, true);
     fmt::print(os, "\n");
+    total += do_dump_reader_permit_diagnostics(os, permits, reader_permit::state::inactive, false);
+    fmt::print(os, "\n");
     total += do_dump_reader_permit_diagnostics(os, permits, reader_permit::state::waiting, false);
     fmt::print(os, "\n");
     total += do_dump_reader_permit_diagnostics(os, permits, reader_permit::state::registered, false);
@@ -390,14 +413,20 @@ reader_concurrency_semaphore::~reader_concurrency_semaphore() {
 }
 
 reader_concurrency_semaphore::inactive_read_handle reader_concurrency_semaphore::register_inactive_read(flat_mutation_reader reader) noexcept {
+    auto& permit_impl = *reader.permit()._impl;
     // Implies _inactive_reads.empty(), we don't queue new readers before
     // evicting all inactive reads.
-    if (_wait_list.empty()) {
+    // FIXME: #4758, workaround for keeping tabs on un-admitted reads that are
+    // still registered as inactive. Without the below check, these can
+    // accumulate without limit. The real fix is #4758 -- that is to make all
+    // reads pass admission before getting started.
+    if (_wait_list.empty() && (permit_impl.get_state() == reader_permit::state::admitted || _resources >= permit_impl.resources())) {
       try {
         auto irp = std::make_unique<inactive_read>(std::move(reader));
         auto& ir = *irp;
         _inactive_reads.push_back(ir);
         ++_stats.inactive_reads;
+        permit_impl.on_register_as_inactive();
         return inactive_read_handle(*this, *irp.release());
       } catch (...) {
         // It is okay to swallow the exception since
@@ -441,6 +470,7 @@ flat_mutation_reader_opt reader_concurrency_semaphore::unregister_inactive_read(
 
     --_stats.inactive_reads;
     std::unique_ptr<inactive_read> irp(irh._irp);
+    irp->reader.permit()._impl->on_unregister_as_inactive();
     return std::move(irp->reader);
 }
 
