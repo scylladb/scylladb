@@ -99,7 +99,8 @@ sstable_set::select_sstable_runs(const std::vector<shared_sstable>& sstables) co
 
 std::vector<sstable_run>
 partitioned_sstable_set::select_sstable_runs(const std::vector<shared_sstable>& sstables) const {
-    auto run_ids = boost::copy_range<std::unordered_set<utils::UUID>>(sstables | boost::adaptors::transformed(std::mem_fn(&sstable::run_identifier)));
+    auto has_run = [this] (const shared_sstable& sst) { return _all_runs.contains(sst->run_identifier()); };
+    auto run_ids = boost::copy_range<std::unordered_set<utils::UUID>>(sstables | boost::adaptors::filtered(has_run) | boost::adaptors::transformed(std::mem_fn(&sstable::run_identifier)));
     return boost::copy_range<std::vector<sstable_run>>(run_ids | boost::adaptors::transformed([this] (utils::UUID run_id) {
         return _all_runs.at(run_id);
     }));
