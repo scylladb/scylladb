@@ -62,11 +62,13 @@ struct vote_request {
     raft::internal::tagged_uint64<raft::term_tag> current_term;
     raft::internal::tagged_uint64<raft::index_tag> last_log_idx;
     raft::internal::tagged_uint64<raft::term_tag> last_log_term;
+    bool is_prevote;
 };
 
 struct vote_reply {
     raft::internal::tagged_uint64<raft::term_tag> current_term;
     bool vote_granted;
+    bool is_prevote;
 };
 
 struct install_snapshot {

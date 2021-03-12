@@ -259,6 +259,8 @@ struct vote_request {
     index_t last_log_idx;
     // The term of the candidate's last log entry.
     term_t last_log_term;
+    // True if this is prevote request
+    bool is_prevote;
 };
 
 struct vote_reply {
@@ -266,6 +268,8 @@ struct vote_reply {
     term_t current_term;
     // True means the candidate received a vote.
     bool vote_granted;
+    // True if it is a reply to prevote request
+    bool is_prevote;
 };
 
 struct install_snapshot {
