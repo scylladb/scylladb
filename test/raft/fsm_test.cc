@@ -1173,3 +1173,44 @@ BOOST_AUTO_TEST_CASE(test_confchange_abc_to_cde) {
     BOOST_CHECK_EQUAL(C.get_configuration().is_joint(), false);
     BOOST_CHECK_EQUAL(C.get_configuration().current.size(), 3);
 }
+
+
+BOOST_AUTO_TEST_CASE(test_confchange_abcdef_to_abcgh) {
+    // Test configuration changes in presence of down nodes in C_old
+    discrete_failure_detector fd;
+    server_id A_id = id(), B_id = id(), C_id = id(), D_id = id(), E_id = id(),
+              F_id = id(), G_id = id(), H_id = id();
+
+    raft::log log(raft::snapshot{.idx = index_t{0},
+        .config = raft::configuration{A_id, B_id, C_id, D_id, E_id, F_id}});
+    auto A = create_follower(A_id, log, fd);
+    auto B = create_follower(B_id, log, fd);
+    auto C = create_follower(C_id, log, fd);
+    auto D = create_follower(D_id, log, fd);
+    auto E = create_follower(E_id, log, fd);
+    auto F = create_follower(F_id, log, fd);
+    election_timeout(D);
+    communicate(A, D, E, F);
+    BOOST_CHECK(D.is_leader());
+
+    auto G = create_follower(G_id, log);
+    auto H = create_follower(H_id, log);
+
+    D.add_entry(raft::configuration({A_id, B_id, C_id, G_id, H_id}));
+    // We can't transition to C_new in absence of C_old majority
+    communicate(B, C, D, G, H);
+    BOOST_CHECK(D.is_leader());
+    BOOST_CHECK(D.get_configuration().is_joint());
+    D.tick();
+    communicate(B, C, E, D, G, H);
+    BOOST_CHECK(D.is_follower());
+    auto leader = select_leader(A, B, C, G, H);
+    BOOST_CHECK_EQUAL(leader->get_configuration().is_joint(), false);
+    BOOST_CHECK_EQUAL(leader->get_configuration().current.size(), 5);
+
+    fd.mark_all_dead();
+    election_timeout(D);
+    election_timeout(A);
+    communicate(A, B, C, D, E, F, G, H);
+    BOOST_CHECK(leader->is_leader());
+}
