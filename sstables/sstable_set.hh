@@ -52,7 +52,6 @@ public:
 class sstable_set : public enable_lw_shared_from_this<sstable_set> {
     std::unique_ptr<sstable_set_impl> _impl;
     schema_ptr _schema;
-    std::unordered_map<utils::UUID, sstable_run> _all_runs;
 public:
     ~sstable_set();
     sstable_set(std::unique_ptr<sstable_set_impl> impl, schema_ptr s);
