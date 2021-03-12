@@ -197,10 +197,8 @@ public:
     /// stops being inactive and hence evictable, or to set the optional
     /// notify_handler and ttl.
     ///
-    /// An inactive read is an object implementing the `inactive_read`
-    /// interface.
-    /// The semaphore takes ownership of the created object and destroys it if
-    /// it is evicted.
+    /// The semaphore takes ownership of the passed in reader for the duration
+    /// of its inactivity and it may evict it to free up resources if necessary.
     inactive_read_handle register_inactive_read(flat_mutation_reader ir) noexcept;
 
     /// Set the inactive read eviction notification handler and optionally eviction ttl.
@@ -208,10 +206,10 @@ public:
     /// The semaphore may evict this read when there is a shortage of
     /// permits or after the given ttl expired.
     ///
-    /// The notification handler will be called when the inactive_read is evicted
+    /// The notification handler will be called when the inactive read is evicted
     /// passing with the reason it was evicted to the handler.
     ///
-    /// Note that the inactive_read might have already been evicted if
+    /// Note that the inactive read might have already been evicted if
     /// the caller may yield after the register_inactive_read returned the handle
     /// and before calling set_notify_handler. In this case, the caller must revalidate
     /// the inactive_read_handle before calling this function.
