@@ -1214,3 +1214,48 @@ BOOST_AUTO_TEST_CASE(test_confchange_abcdef_to_abcgh) {
     communicate(A, B, C, D, E, F, G, H);
     BOOST_CHECK(leader->is_leader());
 }
+
+BOOST_AUTO_TEST_CASE(test_confchange_abcde_abcdefg) {
+    // Check configuration changes work fine with many nodes down
+    discrete_failure_detector fd;
+    server_id A_id = id(), B_id = id(), C_id = id(), D_id = id(), E_id = id(),
+              F_id = id(), G_id = id();
+
+    raft::log log(raft::snapshot{.idx = index_t{0},
+        .config = raft::configuration{A_id, B_id, C_id, D_id, E_id}});
+    auto A = create_follower(A_id, log, fd);
+    auto B = create_follower(B_id, log, fd);
+    auto C = create_follower(C_id, log, fd);
+    auto D = create_follower(D_id, log, fd);
+    auto E = create_follower(E_id, log, fd);
+    election_timeout(A);
+    communicate(A, D, E);
+    BOOST_CHECK(A.is_leader());
+
+    auto F = create_follower(F_id, log);
+    auto G = create_follower(G_id, log);
+
+    // Wrap configuration entry into some traffic
+    A.add_entry(log_entry::dummy{});
+    A.add_entry(raft::configuration({A_id, B_id, C_id, D_id, E_id, F_id, G_id}));
+    A.add_entry(log_entry::dummy{});
+    // Without tick() A won't re-try communication with nodes it
+    // believes are down (B, C).
+    A.tick();
+    // 4 is enough to transition to the new configuration
+    communicate(A, B, C, G);
+    BOOST_CHECK(A.is_leader());
+    BOOST_CHECK_EQUAL(A.get_configuration().is_joint(), false);
+    BOOST_CHECK_EQUAL(A.get_configuration().current.size(), 7);
+    A.tick();
+    communicate(A, B, C, D, E, F, G);
+    BOOST_CHECK_EQUAL(A.log_last_idx(), B.log_last_idx());
+    BOOST_CHECK_EQUAL(A.log_last_idx(), C.log_last_idx());
+    BOOST_CHECK_EQUAL(A.log_last_idx(), D.log_last_idx());
+    BOOST_CHECK_EQUAL(A.log_last_idx(), E.log_last_idx());
+    BOOST_CHECK_EQUAL(A.log_last_idx(), F.log_last_idx());
+    BOOST_CHECK_EQUAL(A.log_last_idx(), G.log_last_idx());
+    BOOST_CHECK(A.is_leader());
+    BOOST_CHECK_EQUAL(A.get_configuration().is_joint(), false);
+    BOOST_CHECK_EQUAL(A.get_configuration().current.size(), 7);
+}
