@@ -2200,7 +2200,7 @@ future<> storage_service::rebuild(sstring source_dc) {
                     slogger.info("Streaming for rebuild successful");
                 }).handle_exception([] (auto ep) {
                     // This is used exclusively through JMX, so log the full trace but only throw a simple RTE
-                    slogger.warn("Error while rebuilding node: {}", std::current_exception());
+                    slogger.warn("Error while rebuilding node: {}", ep);
                     return make_exception_future<>(std::move(ep));
                 });
             });
