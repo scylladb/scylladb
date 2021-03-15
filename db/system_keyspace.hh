@@ -642,7 +642,7 @@ future<> update_cdc_generation_id(cdc::generation_id);
 future<std::optional<cdc::generation_id>> get_cdc_generation_id();
 
 future<bool> cdc_is_rewritten();
-future<> cdc_set_rewritten(std::optional<cdc::generation_id>);
+future<> cdc_set_rewritten(std::optional<cdc::generation_id_v1>);
 
 } // namespace system_keyspace
 } // namespace db

@@ -330,7 +330,7 @@ topology_description limit_number_of_streams_if_needed(topology_description&& de
     return topology_description(std::move(entries));
 }
 
-future<cdc::generation_id> make_new_cdc_generation(
+future<cdc::generation_id_v1> make_new_cdc_generation(
         const db::config& cfg,
         const std::unordered_set<dht::token>& bootstrap_tokens,
         const locator::token_metadata_ptr tmptr,
@@ -354,7 +354,7 @@ future<cdc::generation_id> make_new_cdc_generation(
     gen = limit_number_of_streams_if_needed(std::move(gen));
 
     // Begin the race.
-    auto gen_id = cdc::generation_id{db_clock::now() + (
+    auto gen_id = cdc::generation_id_v1{db_clock::now() + (
             (!add_delay || ring_delay == milliseconds(0)) ? milliseconds(0) : (
                 2 * ring_delay + duration_cast<milliseconds>(generation_leeway)))};
     co_await sys_dist_ks.insert_cdc_topology_description(gen_id, std::move(gen), { tmptr->count_normal_token_owners() });
@@ -386,7 +386,7 @@ static future<> do_update_streams_description(
 
     // We might race with another node also inserting the description, but that's ok. It's an idempotent operation.
 
-    auto topo = co_await sys_dist_ks.read_cdc_topology_description(gen_id, ctx);
+    auto topo = co_await sys_dist_ks.read_cdc_topology_description(std::get<cdc::generation_id_v1>(gen_id), ctx);
     if (!topo) {
         throw no_generation_data_exception(gen_id);
     }
@@ -467,7 +467,7 @@ struct time_and_ttl {
  * This is the long-running-in-the-background part of that function.
  * It returns the timestamp of the last rewritten generation (if any).
  */
-static future<std::optional<cdc::generation_id>> rewrite_streams_descriptions(
+static future<std::optional<cdc::generation_id_v1>> rewrite_streams_descriptions(
         std::vector<time_and_ttl> times_and_ttls,
         shared_ptr<db::system_distributed_keyspace> sys_dist_ks,
         noncopyable_function<unsigned()> get_num_token_owners,
@@ -512,7 +512,7 @@ static future<std::optional<cdc::generation_id>> rewrite_streams_descriptions(
     co_await max_concurrent_for_each(first, tss.end(), 10, [&] (db_clock::time_point ts) -> future<> {
         while (true) {
             try {
-                co_return co_await do_update_streams_description(cdc::generation_id{ts}, *sys_dist_ks, { get_num_token_owners() });
+                co_return co_await do_update_streams_description(cdc::generation_id_v1{ts}, *sys_dist_ks, { get_num_token_owners() });
             } catch (const no_generation_data_exception& e) {
                 cdc_log.error("Failed to rewrite streams for generation {}: {}. Giving up.", ts, e);
                 each_success = false;
@@ -531,7 +531,7 @@ static future<std::optional<cdc::generation_id>> rewrite_streams_descriptions(
     }
 
     if (first != tss.end()) {
-        co_return cdc::generation_id{*std::prev(tss.end())};
+        co_return cdc::generation_id_v1{*std::prev(tss.end())};
     }
 
     co_return std::nullopt;
@@ -737,7 +737,7 @@ future<> generation_service::check_and_repair_cdc_streams() {
         std::optional<topology_description> gen;
         try {
             gen = co_await sys_dist_ks->read_cdc_topology_description(
-                    *latest, { tmptr->count_normal_token_owners() });
+                    std::get<cdc::generation_id_v1>(*latest), { tmptr->count_normal_token_owners() });
         } catch (exceptions::request_timeout_exception& e) {
             cdc_log.error("{}: \"{}\". {}.", timeout_msg, e.what(), exception_translating_msg);
             throw exceptions::request_execution_exception(exceptions::exception_code::READ_TIMEOUT,
@@ -936,7 +936,7 @@ future<bool> generation_service::do_handle_cdc_generation(cdc::generation_id gen
 
     auto sys_dist_ks = get_sys_dist_ks();
     auto gen = co_await sys_dist_ks->read_cdc_topology_description(
-            gen_id, { _token_metadata.get()->count_normal_token_owners() });
+            std::get<cdc::generation_id_v1>(gen_id), { _token_metadata.get()->count_normal_token_owners() });
     if (!gen) {
         throw std::runtime_error(format(
             "Could not find CDC generation {} in distributed system tables (current time: {}),"
@@ -975,15 +975,27 @@ shared_ptr<db::system_distributed_keyspace> generation_service::get_sys_dist_ks(
 }
 
 std::ostream& operator<<(std::ostream& os, const generation_id& gen_id) {
-    return os << gen_id.ts;
+    std::visit(make_visitor(
+    [&os] (const generation_id_v1& id) { os << id.ts; },
+    [&os] (const generation_id_v2& id) { os << "(" << id.ts << ", " << id.id << ")"; }
+    ), gen_id);
+    return os;
 }
 
 bool operator==(const generation_id& a, const generation_id& b) {
-    return a.ts == b.ts;
+    return std::visit(make_visitor(
+    [] (const generation_id_v1& a, const generation_id_v1& b) { return a.ts == b.ts; },
+    [] (const generation_id_v2& a, const generation_id_v2& b) { return a.ts == b.ts && a.id == b.id; },
+    [] (const generation_id_v1& a, const generation_id_v2& b) { return false; },
+    [] (const generation_id_v2& a, const generation_id_v1& b) { return false; }
+    ), a, b);
 }
 
 db_clock::time_point get_ts(const generation_id& gen_id) {
-    return gen_id.ts;
+    return std::visit(make_visitor(
+    [] (const generation_id_v1& id) { return id.ts; },
+    [] (const generation_id_v2& id) { return id.ts; }
+    ), gen_id);
 }
 
 } // namespace cdc

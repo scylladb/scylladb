@@ -40,6 +40,7 @@
 
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>
+#include <charconv>
 
 namespace gms {
 
@@ -82,7 +83,16 @@ sstring versioned_value::make_cdc_generation_id_string(std::optional<cdc::genera
     if (!gen_id) {
         return "";
     }
-    return std::to_string(gen_id->ts.time_since_epoch().count());
+
+    return std::visit(make_visitor(
+    [] (const cdc::generation_id_v1& id) -> sstring {
+        return std::to_string(id.ts.time_since_epoch().count());
+    },
+    [] (const cdc::generation_id_v2& id) {
+        // v2;<timestamp>;<uuid>
+        return format("v2;{};{}", id.ts.time_since_epoch().count(), id.id);
+    }
+    ), *gen_id);
 }
 
 std::unordered_set<dht::token> versioned_value::tokens_from_string(const sstring& s) {
@@ -102,7 +112,37 @@ std::optional<cdc::generation_id> versioned_value::cdc_generation_id_from_string
     if (s.empty()) {
         return {};
     }
-    return cdc::generation_id{db_clock::time_point{db_clock::duration(std::stoll(s))}};
+
+    if (std::string_view(s).starts_with("v2;")) {
+        // v2;<timestamp>;<uuid>
+        constexpr auto invalid_format_template = "Invalid value of CDC generation ID string: {}. The format is \"v2;<timestamp>;<uuid>\".";
+        const char* const end = s.c_str() + s.size();
+
+        int64_t ts;
+        auto r = std::from_chars(s.c_str() + 3, end, ts);
+        if (r.ec != std::errc() || r.ptr == end || *r.ptr != ';') {
+            throw std::runtime_error(format(invalid_format_template, s));
+        }
+
+        ++r.ptr; // r.ptr now points to <uuid>
+        if (r.ptr == end) {
+            throw std::runtime_error(format(invalid_format_template, s));
+        }
+
+        try {
+            auto tp = db_clock::time_point{db_clock::duration{ts}};
+            auto id = utils::UUID{std::string_view{r.ptr, end}};
+            return cdc::generation_id_v2{tp, id};
+        } catch (...) {
+            throw std::runtime_error(format(invalid_format_template, s));
+        }
+    }
+
+    try {
+        return cdc::generation_id_v1{db_clock::time_point{db_clock::duration(std::stoll(s))}};
+    } catch (...) {
+        throw std::runtime_error(format("Invalid value of CDC generation ID string: {}. Should be <timestamp> (an unsigned integer).", s));
+    }
 }
 
 }
