@@ -21,3 +21,6 @@
 [submodule "scylla-python3"]
 	path = tools/python3
 	url = ../scylla-python3
+[submodule "scylla-gdb"]
+	path = tools/gdb
+	url = ../scylla-gdb

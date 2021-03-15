@@ -1859,6 +1859,7 @@ with open(buildfile_tmp, 'w') as f:
         f.write(f'build dist-jmx-{mode}: phony $builddir/{mode}/dist/tar/{scylla_product}-jmx-package.tar.gz dist-jmx-rpm dist-jmx-deb\n')
         f.write(f'build dist-tools-{mode}: phony $builddir/{mode}/dist/tar/{scylla_product}-tools-package.tar.gz dist-tools-rpm dist-tools-deb\n')
         f.write(f'build dist-python3-{mode}: phony dist-python3-tar dist-python3-rpm dist-python3-deb compat-python3-rpm compat-python3-deb\n')
+        f.write(f'build dist-gdb-{mode}: phony $builddir/{mode}/dist/tar/{scylla_product}-gdb-package.tar.gz dist-gdb-rpm dist-gdb-deb\n')
         f.write(f'build dist-unified-{mode}: phony $builddir/{mode}/dist/tar/{scylla_product}-unified-package-{scylla_version}.{scylla_release}.tar.gz\n')
         f.write(f'build $builddir/{mode}/dist/tar/{scylla_product}-unified-package-{scylla_version}.{scylla_release}.tar.gz: unified $builddir/{mode}/dist/tar/{scylla_product}-package.tar.gz $builddir/{mode}/dist/tar/{scylla_product}-python3-package.tar.gz $builddir/{mode}/dist/tar/{scylla_product}-jmx-package.tar.gz $builddir/{mode}/dist/tar/{scylla_product}-tools-package.tar.gz | always\n')
         f.write(f'  mode = {mode}\n')
@@ -1951,11 +1952,23 @@ with open(buildfile_tmp, 'w') as f:
           artifact = $builddir/{scylla_product}-python3-package.tar.gz
         build dist-python3-tar: phony {' '.join(['$builddir/{mode}/dist/tar/{scylla_product}-python3-package.tar.gz'.format(mode=mode, scylla_product=scylla_product) for mode in build_modes])}
         build dist-python3: phony dist-python3-tar dist-python3-rpm dist-python3-deb $builddir/release/{scylla_product}-python3-package.tar.gz compat-python3-rpm compat-python3-deb
-        build dist-deb: phony dist-server-deb dist-python3-deb dist-jmx-deb dist-tools-deb
-        build dist-rpm: phony dist-server-rpm dist-python3-rpm dist-jmx-rpm dist-tools-rpm
-        build dist-tar: phony dist-unified-tar dist-server-tar dist-python3-tar dist-jmx-tar dist-tools-tar
 
-        build dist: phony dist-unified dist-server dist-python3 dist-jmx dist-tools
+        build tools/gdb/build/{scylla_product}-gdb-package.tar.gz: build-submodule-reloc
+          reloc_dir = tools/gdb
+        build dist-gdb-rpm: build-submodule-rpm tools/gdb/build/{scylla_product}-gdb-package.tar.gz
+          dir = tools/gdb
+          artifact = $builddir/{scylla_product}-gdb-package.tar.gz
+        build dist-gdb-deb: build-submodule-deb tools/gdb/build/{scylla_product}-gdb-package.tar.gz
+          dir = tools/gdb
+          artifact = $builddir/{scylla_product}-gdb-package.tar.gz
+        build dist-gdb-tar: phony {' '.join(['$builddir/{mode}/dist/tar/{scylla_product}-gdb-package.tar.gz'.format(mode=mode, scylla_product=scylla_product) for mode in build_modes])}
+        build dist-gdb: phony dist-gdb-tar dist-gdb-rpm dist-gdb-deb
+
+        build dist-deb: phony dist-server-deb dist-python3-deb dist-jmx-deb dist-tools-deb dist-gdb-deb
+        build dist-rpm: phony dist-server-rpm dist-python3-rpm dist-jmx-rpm dist-tools-rpm dist-gdb-rpm
+        build dist-tar: phony dist-unified-tar dist-server-tar dist-python3-tar dist-jmx-tar dist-tools-tar dist-gdb-tar
+
+        build dist: phony dist-unified dist-server dist-python3 dist-jmx dist-tools dist-gdb
         '''))
 
     f.write(textwrap.dedent(f'''\
@@ -1968,8 +1981,9 @@ with open(buildfile_tmp, 'w') as f:
         build $builddir/{mode}/dist/tar/{scylla_product}-python3-package.tar.gz: copy tools/python3/build/{scylla_product}-python3-package.tar.gz
         build $builddir/{mode}/dist/tar/{scylla_product}-tools-package.tar.gz: copy tools/java/build/{scylla_product}-tools-package.tar.gz
         build $builddir/{mode}/dist/tar/{scylla_product}-jmx-package.tar.gz: copy tools/jmx/build/{scylla_product}-jmx-package.tar.gz
+        build $builddir/{mode}/dist/tar/{scylla_product}-gdb-package.tar.gz: copy tools/gdb/build/{scylla_product}-gdb-package.tar.gz
 
-        build dist-{mode}: phony dist-server-{mode} dist-python3-{mode} dist-tools-{mode} dist-jmx-{mode} dist-unified-{mode}
+        build dist-{mode}: phony dist-server-{mode} dist-python3-{mode} dist-tools-{mode} dist-jmx-{mode} dist-gdb-{mode} dist-unified-{mode}
         build dist-check-{mode}: dist-check
           mode = {mode}
             '''))
