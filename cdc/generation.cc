@@ -359,6 +359,8 @@ future<cdc::generation_id> make_new_cdc_generation(
                 2 * ring_delay + duration_cast<milliseconds>(generation_leeway)))};
     co_await sys_dist_ks.insert_cdc_topology_description(gen_id, std::move(gen), { tmptr->count_normal_token_owners() });
 
+    cdc_log.info("New CDC generation: {}", gen_id);
+
     co_return gen_id;
 }
 
