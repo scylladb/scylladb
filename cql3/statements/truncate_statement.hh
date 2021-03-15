@@ -48,6 +48,8 @@
 
 namespace cql3 {
 
+class query_processor;
+
 namespace statements {
 
 class truncate_statement : public raw::cf_statement, public cql_statement_no_metadata {
@@ -67,7 +69,7 @@ public:
     virtual void validate(service::storage_proxy&, const service::client_state& state) const override;
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>>
-    execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options) const override;
+    execute(query_processor& qp, service::query_state& state, const query_options& options) const override;
 };
 
 }

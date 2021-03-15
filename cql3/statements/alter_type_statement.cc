@@ -39,6 +39,7 @@
 
 #include "cql3/statements/alter_type_statement.hh"
 #include "cql3/statements/create_type_statement.hh"
+#include "cql3/query_processor.hh"
 #include "prepared_statement.hh"
 #include "schema_builder.hh"
 #include "service/migration_manager.hh"
@@ -78,7 +79,7 @@ const sstring& alter_type_statement::keyspace() const
     return _name.get_keyspace();
 }
 
-void alter_type_statement::do_announce_migration(database& db, ::keyspace& ks) const
+void alter_type_statement::do_announce_migration(database& db, service::migration_manager& mm, ::keyspace& ks) const
 {
     auto&& all_types = ks.metadata()->user_types().get_all_types();
     auto to_update = all_types.find(_name.get_user_type_name());
@@ -100,7 +101,7 @@ void alter_type_statement::do_announce_migration(database& db, ::keyspace& ks) c
 
     // Now, we need to announce the type update to basically change it for new tables using this type,
     // but we also need to find all existing user types and CF using it and change them.
-    service::get_local_migration_manager().announce_type_update(updated).get();
+    mm.announce_type_update(updated).get();
 
     for (auto&& schema : ks.metadata()->cf_meta_data() | boost::adaptors::map_values) {
         auto cfm = schema_builder(schema);
@@ -115,21 +116,21 @@ void alter_type_statement::do_announce_migration(database& db, ::keyspace& ks) c
         }
         if (modified) {
             if (schema->is_view()) {
-                service::get_local_migration_manager().announce_view_update(view_ptr(cfm.build())).get();
+                mm.announce_view_update(view_ptr(cfm.build())).get();
             } else {
-                service::get_local_migration_manager().announce_column_family_update(cfm.build(), false, {}).get();
+                mm.announce_column_family_update(cfm.build(), false, {}).get();
             }
         }
     }
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> alter_type_statement::announce_migration(service::storage_proxy& proxy) const
+future<shared_ptr<cql_transport::event::schema_change>> alter_type_statement::announce_migration(query_processor& qp) const
 {
-    return seastar::async([this, &proxy] {
-        auto&& db = proxy.get_db().local();
+    return seastar::async([this, &qp] {
+        database& db = qp.db();
         try {
             auto&& ks = db.find_keyspace(keyspace());
-            do_announce_migration(db, ks);
+            do_announce_migration(db, qp.get_migration_manager(), ks);
             using namespace cql_transport;
             return ::make_shared<event::schema_change>(
                     event::schema_change::change_type::UPDATED,

@@ -54,7 +54,7 @@ future<> table_helper::setup_table(cql3::query_processor& qp) const {
     // "CREATE TABLE" invocation on different Nodes.
     // The important thing is that it will converge eventually (some traces may
     // be lost in a process but that's ok).
-    return service::get_local_migration_manager().announce_new_column_family(b.build()).discard_result().handle_exception([this] (auto ep) {});;
+    return qp.get_migration_manager().announce_new_column_family(b.build()).discard_result().handle_exception([this] (auto ep) {});;
 }
 
 future<> table_helper::cache_table_info(cql3::query_processor& qp, service::query_state& qs) {
@@ -106,10 +106,10 @@ future<> table_helper::cache_table_info(cql3::query_processor& qp, service::quer
 }
 
 future<> table_helper::insert(cql3::query_processor& qp, service::query_state& qs, noncopyable_function<cql3::query_options ()> opt_maker) {
-    return cache_table_info(qp, qs).then([this, &qs, opt_maker = std::move(opt_maker)] () mutable {
-        return do_with(opt_maker(), [this, &qs] (auto& opts) {
+    return cache_table_info(qp, qs).then([this, &qp, &qs, opt_maker = std::move(opt_maker)] () mutable {
+        return do_with(opt_maker(), [this, &qp, &qs] (auto& opts) {
             opts.prepare(_prepared_stmt->bound_names);
-            return _insert_stmt->execute(service::get_storage_proxy().local(), qs, opts);
+            return _insert_stmt->execute(qp, qs, opts);
         });
     }).discard_result();
 }
@@ -131,7 +131,7 @@ future<> table_helper::setup_keyspace(cql3::query_processor& qp, const sstring& 
                 opts["replication_factor"] = replication_factor;
                 auto ksm = keyspace_metadata::new_keyspace(keyspace_name, "org.apache.cassandra.locator.SimpleStrategy", std::move(opts), true);
                 // We use min_timestamp so that default keyspace metadata will loose with any manual adjustments. See issue #2129.
-                service::get_local_migration_manager().announce_new_keyspace(ksm, api::min_timestamp).get();
+                qp.get_migration_manager().announce_new_keyspace(ksm, api::min_timestamp).get();
             }
 
             qs.get_client_state().set_keyspace(db, keyspace_name);

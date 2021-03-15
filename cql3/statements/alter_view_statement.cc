@@ -46,6 +46,7 @@
 #include "view_info.hh"
 #include "db/extensions.hh"
 #include "database.hh"
+#include "cql3/query_processor.hh"
 
 namespace cql3 {
 
@@ -76,9 +77,9 @@ void alter_view_statement::validate(service::storage_proxy&, const service::clie
     // validated in announce_migration()
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> alter_view_statement::announce_migration(service::storage_proxy& proxy) const
+future<shared_ptr<cql_transport::event::schema_change>> alter_view_statement::announce_migration(query_processor& qp) const
 {
-    auto&& db = proxy.get_db().local();
+    database& db = qp.db();
     schema_ptr schema = validation::validate_column_family(db, keyspace(), column_family());
     if (!schema->is_view()) {
         throw exceptions::invalid_request_exception("Cannot use ALTER MATERIALIZED VIEW on Table");
@@ -89,7 +90,7 @@ future<shared_ptr<cql_transport::event::schema_change>> alter_view_statement::an
     }
 
     auto schema_extensions = _properties->make_schema_extensions(db.extensions());
-    _properties->validate(proxy.get_db().local(), schema_extensions);
+    _properties->validate(db, schema_extensions);
 
     auto builder = schema_builder(schema);
     _properties->apply_to_builder(builder, std::move(schema_extensions));
@@ -108,7 +109,7 @@ future<shared_ptr<cql_transport::event::schema_change>> alter_view_statement::an
                 "the corresponding data in the parent table.");
     }
 
-    return service::get_local_migration_manager().announce_view_update(view_ptr(builder.build())).then([this] {
+    return qp.get_migration_manager().announce_view_update(view_ptr(builder.build())).then([this] {
         using namespace cql_transport;
 
         return ::make_shared<event::schema_change>(

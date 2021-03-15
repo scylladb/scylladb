@@ -44,6 +44,7 @@
 #include "service/migration_manager.hh"
 #include "db/system_keyspace.hh"
 #include "database.hh"
+#include "cql3/query_processor.hh"
 
 bool is_system_keyspace(std::string_view keyspace);
 
@@ -91,10 +92,11 @@ void cql3::statements::alter_keyspace_statement::validate(service::storage_proxy
     }
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> cql3::statements::alter_keyspace_statement::announce_migration(service::storage_proxy& proxy) const {
+future<shared_ptr<cql_transport::event::schema_change>> cql3::statements::alter_keyspace_statement::announce_migration(query_processor& qp) const {
+    service::storage_proxy& proxy = qp.proxy();
     auto old_ksm = proxy.get_db().local().find_keyspace(_name).metadata();
     const auto& tm = *proxy.get_token_metadata_ptr();
-    return service::get_local_migration_manager().announce_keyspace_update(_attrs->as_ks_metadata_update(old_ksm, tm)).then([this] {
+    return qp.get_migration_manager().announce_keyspace_update(_attrs->as_ks_metadata_update(old_ksm, tm)).then([this] {
         using namespace cql_transport;
         return ::make_shared<event::schema_change>(
                 event::schema_change::change_type::UPDATED,

@@ -202,7 +202,7 @@ future<> raft_sys_table_storage::do_store_log_entries(const std::vector<raft::lo
         cql3::attributes::none(),
         _qp.get_cql_stats());
 
-    co_await batch.execute(_qp.proxy(), _dummy_query_state, batch_options);
+    co_await batch.execute(_qp, _dummy_query_state, batch_options);
 }
 
 future<> raft_sys_table_storage::store_log_entries(const std::vector<raft::log_entry_ptr>& entries) {

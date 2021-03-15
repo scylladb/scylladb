@@ -49,6 +49,8 @@
 
 namespace cql3 {
 
+class query_processor;
+
 namespace statements {
 
 class alter_role_statement final : public authentication_statement {
@@ -69,7 +71,7 @@ public:
     virtual future<> check_access(service::storage_proxy& proxy, const service::client_state&) const override;
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>>
-    execute(service::storage_proxy&, service::query_state&, const query_options&) const override;
+    execute(query_processor&, service::query_state&, const query_options&) const override;
 };
 
 }

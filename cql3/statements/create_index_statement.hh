@@ -62,6 +62,8 @@
 
 namespace cql3 {
 
+class query_processor;
+
 namespace statements {
 
 /** A <code>CREATE INDEX</code> statement parsed from a CQL query. */
@@ -79,7 +81,7 @@ public:
 
     future<> check_access(service::storage_proxy& proxy, const service::client_state& state) const override;
     void validate(service::storage_proxy&, const service::client_state& state) const override;
-    future<::shared_ptr<cql_transport::event::schema_change>> announce_migration(service::storage_proxy&) const override;
+    future<::shared_ptr<cql_transport::event::schema_change>> announce_migration(query_processor&) const override;
 
     virtual std::unique_ptr<prepared_statement> prepare(database& db, cql_stats& stats) override;
 private:

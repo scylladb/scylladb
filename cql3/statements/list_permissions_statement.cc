@@ -106,7 +106,7 @@ future<> cql3::statements::list_permissions_statement::check_access(service::sto
 
 future<::shared_ptr<cql_transport::messages::result_message>>
 cql3::statements::list_permissions_statement::execute(
-        service::storage_proxy& proxy,
+        query_processor& qp,
         service::query_state& state,
         const query_options& options) const {
     static auto make_column = [](sstring name) {

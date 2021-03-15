@@ -44,6 +44,7 @@
 #include "database.hh"
 #include "service/migration_manager.hh"
 #include "transport/messages/result_message.hh"
+#include "cql3/query_processor.hh"
 
 #include <regex>
 
@@ -106,11 +107,11 @@ void create_keyspace_statement::validate(service::storage_proxy&, const service:
 #endif
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> create_keyspace_statement::announce_migration(service::storage_proxy& proxy) const
+future<shared_ptr<cql_transport::event::schema_change>> create_keyspace_statement::announce_migration(query_processor& qp) const
 {
-    return make_ready_future<>().then([this, p = proxy.shared_from_this()] {
+    return make_ready_future<>().then([this, p = qp.proxy().shared_from_this(), &mm = qp.get_migration_manager()] {
         const auto& tm = *p->get_token_metadata_ptr();
-        return service::get_local_migration_manager().announce_new_keyspace(_attrs->as_ks_metadata(_name, tm));
+        return mm.announce_new_keyspace(_attrs->as_ks_metadata(_name, tm));
     }).then_wrapped([this] (auto&& f) {
         try {
             f.get();
@@ -145,8 +146,9 @@ future<> cql3::statements::create_keyspace_statement::grant_permissions_to_creat
 }
 
 future<::shared_ptr<messages::result_message>>
-create_keyspace_statement::execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options) const {
-    return schema_altering_statement::execute(proxy, state, options).then([this, p = proxy.shared_from_this()] (::shared_ptr<messages::result_message> msg) {
+create_keyspace_statement::execute(query_processor& qp, service::query_state& state, const query_options& options) const {
+    service::storage_proxy& proxy = qp.proxy();
+    return schema_altering_statement::execute(qp, state, options).then([this, p = proxy.shared_from_this()] (::shared_ptr<messages::result_message> msg) {
         bool multidc = p->get_token_metadata_ptr()->get_topology().get_datacenter_endpoints().size() > 1;
         bool simple = _attrs->get_replication_strategy_class() == "SimpleStrategy";
 

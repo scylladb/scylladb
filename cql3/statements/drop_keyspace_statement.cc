@@ -41,7 +41,7 @@
 
 #include "cql3/statements/drop_keyspace_statement.hh"
 #include "cql3/statements/prepared_statement.hh"
-
+#include "cql3/query_processor.hh"
 #include "service/migration_manager.hh"
 #include "transport/event.hh"
 
@@ -74,10 +74,10 @@ const sstring& drop_keyspace_statement::keyspace() const
     return _keyspace;
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> drop_keyspace_statement::announce_migration(service::storage_proxy& proxy) const
+future<shared_ptr<cql_transport::event::schema_change>> drop_keyspace_statement::announce_migration(query_processor& qp) const
 {
-    return make_ready_future<>().then([this] {
-        return service::get_local_migration_manager().announce_keyspace_drop(_keyspace);
+    return make_ready_future<>().then([this, &mm = qp.get_migration_manager()] {
+        return mm.announce_keyspace_drop(_keyspace);
     }).then_wrapped([this] (auto&& f) {
         try {
             f.get();

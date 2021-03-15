@@ -837,7 +837,7 @@ public:
 
             auto s = schema_from_thrift(cf_def, cf_def.keyspace);
             return _query_state.get_client_state().has_keyspace_access(cf_def.keyspace, auth::permission::CREATE).then([this, s = std::move(s)] {
-                return service::get_local_migration_manager().announce_new_column_family(std::move(s)).then([this] {
+                return _query_processor.local().get_migration_manager().announce_new_column_family(std::move(s)).then([this] {
                     return std::string(_db.local().get_version().to_sstring());
                 });
             });
@@ -853,7 +853,7 @@ public:
                 if (!cf.views().empty()) {
                     throw make_exception<InvalidRequestException>("Cannot drop table with Materialized Views %s", column_family);
                 }
-                return service::get_local_migration_manager().announce_column_family_drop(current_keyspace(), column_family).then([this] {
+                return _query_processor.local().get_migration_manager().announce_column_family_drop(current_keyspace(), column_family).then([this] {
                     return std::string(_db.local().get_version().to_sstring());
                 });
             });
@@ -864,7 +864,7 @@ public:
         with_cob(std::move(cob), std::move(exn_cob), [&] {
             auto ksm = keyspace_from_thrift(ks_def);
             return _query_state.get_client_state().has_all_keyspaces_access(auth::permission::CREATE).then([this, ksm = std::move(ksm)] {
-                return service::get_local_migration_manager().announce_new_keyspace(std::move(ksm)).then([this] {
+                return _query_processor.local().get_migration_manager().announce_new_keyspace(std::move(ksm)).then([this] {
                     return std::string(_db.local().get_version().to_sstring());
                 });
             });
@@ -879,7 +879,7 @@ public:
             }
 
             return _query_state.get_client_state().has_keyspace_access(keyspace, auth::permission::DROP).then([this, keyspace] {
-                return service::get_local_migration_manager().announce_keyspace_drop(keyspace).then([this] {
+                return _query_processor.local().get_migration_manager().announce_keyspace_drop(keyspace).then([this] {
                     return std::string(_db.local().get_version().to_sstring());
                 });
             });
@@ -899,7 +899,7 @@ public:
 
             auto ksm = keyspace_from_thrift(ks_def);
             return _query_state.get_client_state().has_keyspace_access(ks_def.name, auth::permission::ALTER).then([this, ksm = std::move(ksm)] {
-                return service::get_local_migration_manager().announce_keyspace_update(std::move(ksm)).then([this] {
+                return _query_processor.local().get_migration_manager().announce_keyspace_update(std::move(ksm)).then([this] {
                     return std::string(_db.local().get_version().to_sstring());
                 });
             });
@@ -930,7 +930,7 @@ public:
                 fail(unimplemented::cause::MIXED_CF);
             }
             return _query_state.get_client_state().has_schema_access(*schema, auth::permission::ALTER).then([this, s = std::move(s)] {
-                return service::get_local_migration_manager().announce_column_family_update(std::move(s), true, {}).then([this] {
+                return _query_processor.local().get_migration_manager().announce_column_family_update(std::move(s), true, {}).then([this] {
                     return std::string(_db.local().get_version().to_sstring());
                 });
             });

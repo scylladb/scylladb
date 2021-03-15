@@ -49,6 +49,8 @@
 
 namespace cql3 {
 
+class query_processor;
+
 namespace statements {
 
 class list_permissions_statement : public authorization_statement {
@@ -68,7 +70,7 @@ public:
     future<> check_access(service::storage_proxy& proxy, const service::client_state&) const override;
 
     future<::shared_ptr<cql_transport::messages::result_message>>
-    execute(service::storage_proxy& , service::query_state& , const query_options&) const override;
+    execute(query_processor&, service::query_state& , const query_options&) const override;
 };
 
 }

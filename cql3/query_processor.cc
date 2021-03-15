@@ -84,11 +84,12 @@ public:
     }
 };
 
-query_processor::query_processor(service::storage_proxy& proxy, database& db, service::migration_notifier& mn, query_processor::memory_config mcfg, cql_config& cql_cfg)
+query_processor::query_processor(service::storage_proxy& proxy, database& db, service::migration_notifier& mn, service::migration_manager& mm, query_processor::memory_config mcfg, cql_config& cql_cfg)
         : _migration_subscriber{std::make_unique<migration_subscriber>(this)}
         , _proxy(proxy)
         , _db(db)
         , _mnotifier(mn)
+        , _mm(mm)
         , _cql_config(cql_cfg)
         , _internal_state(new internal_state())
         , _prepared_cache(prep_cache_log, mcfg.prepared_statment_cache_size)
@@ -527,7 +528,7 @@ query_processor::process_authorized_statement(const ::shared_ptr<cql_statement> 
 
     statement->validate(_proxy, client_state);
 
-    auto fut = statement->execute(_proxy, query_state, options);
+    auto fut = statement->execute(*this, query_state, options);
 
     return fut.then([statement] (auto msg) {
         if (msg) {
@@ -751,7 +752,7 @@ future<> query_processor::for_each_cql_result(
 
 future<::shared_ptr<untyped_result_set>>
 query_processor::execute_paged_internal(::shared_ptr<internal_query_state> state) {
-    return state->p->statement->execute(_proxy, *_internal_state, *state->opts).then(
+    return state->p->statement->execute(*this, *_internal_state, *state->opts).then(
             [state, this](::shared_ptr<cql_transport::messages::result_message> msg) mutable {
         class visitor : public result_message::visitor_base {
             ::shared_ptr<internal_query_state> _state;
@@ -825,7 +826,7 @@ query_processor::execute_with_params(
         const std::initializer_list<data_value>& values) {
     auto opts = make_internal_options(p, values, cl);
     return do_with(std::move(opts), [this, &query_state, p = std::move(p)](auto & opts) {
-        return p->statement->execute(_proxy, query_state, opts).then([](auto msg) {
+        return p->statement->execute(*this, query_state, opts).then([](auto msg) {
             return make_ready_future<::shared_ptr<untyped_result_set>>(::make_shared<untyped_result_set>(msg));
         });
     });
@@ -853,7 +854,7 @@ query_processor::execute_batch(
                 }
                 log.trace("execute_batch({}): {}", batch->get_statements().size(), oss.str());
             }
-            return batch->execute(_proxy, query_state, options);
+            return batch->execute(*this, query_state, options);
         });
     });
 }

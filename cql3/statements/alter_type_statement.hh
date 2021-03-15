@@ -45,7 +45,13 @@
 #include "cql3/cql3_type.hh"
 #include "cql3/ut_name.hh"
 
+namespace service {
+class migration_manager;
+}
+
 namespace cql3 {
+
+class query_processor;
 
 namespace statements {
 
@@ -63,14 +69,14 @@ public:
 
     virtual const sstring& keyspace() const override;
 
-    virtual future<shared_ptr<cql_transport::event::schema_change>> announce_migration(service::storage_proxy& proxy) const override;
+    virtual future<shared_ptr<cql_transport::event::schema_change>> announce_migration(query_processor& qp) const override;
 
     class add_or_alter;
     class renames;
 protected:
     virtual user_type make_updated_type(database& db, user_type to_update) const = 0;
 private:
-    void do_announce_migration(database& db, ::keyspace& ks) const;
+    void do_announce_migration(database& db, service::migration_manager& mm, ::keyspace& ks) const;
 };
 
 class alter_type_statement::add_or_alter : public alter_type_statement {

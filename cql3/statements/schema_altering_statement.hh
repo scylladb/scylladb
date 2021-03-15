@@ -53,6 +53,8 @@
 
 namespace cql3 {
 
+class query_processor;
+
 namespace statements {
 
 namespace messages = cql_transport::messages;
@@ -65,7 +67,7 @@ private:
     const bool _is_column_family_level;
 
     future<::shared_ptr<messages::result_message>>
-    execute0(service::storage_proxy& proxy, service::query_state& state, const query_options& options) const;
+    execute0(query_processor& qp, service::query_state& state, const query_options& options) const;
 protected:
     explicit schema_altering_statement(timeout_config_selector timeout_selector = &timeout_config::other_timeout);
 
@@ -87,10 +89,10 @@ protected:
 
     virtual void prepare_keyspace(const service::client_state& state) override;
 
-    virtual future<::shared_ptr<cql_transport::event::schema_change>> announce_migration(service::storage_proxy& proxy) const = 0;
+    virtual future<::shared_ptr<cql_transport::event::schema_change>> announce_migration(query_processor& qp) const = 0;
 
     virtual future<::shared_ptr<messages::result_message>>
-    execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options) const override;
+    execute(query_processor& qp, service::query_state& state, const query_options& options) const override;
 };
 
 }

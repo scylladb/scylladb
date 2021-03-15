@@ -58,6 +58,7 @@
 #include "utils/UUID_gen.hh"
 #include "partition_slice_builder.hh"
 #include "cas_request.hh"
+#include "cql3/query_processor.hh"
 
 bool is_system_keyspace(std::string_view name);
 
@@ -263,8 +264,9 @@ static thread_local inheriting_concrete_execution_stage<
         const query_options&> modify_stage{"cql3_modification", modification_statement_executor::get()};
 
 future<::shared_ptr<cql_transport::messages::result_message>>
-modification_statement::execute(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) const {
+modification_statement::execute(query_processor& qp, service::query_state& qs, const query_options& options) const {
     cql3::util::validate_timestamp(options, attrs);
+    service::storage_proxy& proxy = qp.proxy();
     return modify_stage(this, seastar::ref(proxy), seastar::ref(qs), seastar::cref(options));
 }
 
