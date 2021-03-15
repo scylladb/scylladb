@@ -121,7 +121,7 @@ def do_verify_package(pkg):
         res = 0 if pkg_files[pkg].exists() else 1
     elif is_debian_variant():
         res = run('dpkg -s {}'.format(pkg), shell=True, stdout=DEVNULL, stderr=DEVNULL).returncode
-    elif is_redhat_variant():
+    elif is_redhat_variant() or is_suse_variant():
         res = run('rpm -q {}'.format(pkg), shell=True, stdout=DEVNULL, stderr=DEVNULL).returncode
     elif is_gentoo():
         res = 0 if len(glob.glob('/var/db/pkg/*/{}-*'.format(pkg))) else 1
