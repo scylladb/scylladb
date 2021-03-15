@@ -718,58 +718,67 @@ future<> generation_service::check_and_repair_cdc_streams() {
         }
     }
 
-    bool should_regenerate = false;
-    std::optional<topology_description> gen;
-
-    static const auto timeout_msg = "Timeout while fetching CDC topology description";
-    static const auto topology_read_error_note = "Note: this is likely caused by"
-            " node(s) being down or unreachable. It is recommended to check the network and"
-            " restart/remove the failed node(s), then retry checkAndRepairCdcStreams command";
-    static const auto exception_translating_msg = "Translating the exception to `request_execution_exception`";
-    const auto tmptr = _token_metadata.get();
+    auto tmptr = _token_metadata.get();
     auto sys_dist_ks = get_sys_dist_ks();
-    try {
-        gen = co_await sys_dist_ks->read_cdc_topology_description(
-                *latest, { tmptr->count_normal_token_owners() });
-    } catch (exceptions::request_timeout_exception& e) {
-        cdc_log.error("{}: \"{}\". {}.", timeout_msg, e.what(), exception_translating_msg);
-        throw exceptions::request_execution_exception(exceptions::exception_code::READ_TIMEOUT,
-                format("{}. {}.", timeout_msg, topology_read_error_note));
-    } catch (exceptions::unavailable_exception& e) {
-        static const auto unavailable_msg = "Node(s) unavailable while fetching CDC topology description";
-        cdc_log.error("{}: \"{}\". {}.", unavailable_msg, e.what(), exception_translating_msg);
-        throw exceptions::request_execution_exception(exceptions::exception_code::UNAVAILABLE,
-                format("{}. {}.", unavailable_msg, topology_read_error_note));
-    } catch (...) {
-        const auto ep = std::current_exception();
-        if (is_timeout_exception(ep)) {
-            cdc_log.error("{}: \"{}\". {}.", timeout_msg, ep, exception_translating_msg);
+
+    bool should_regenerate = false;
+
+    if (latest) {
+        cdc_log.info("check_and_repair_cdc_streams: last generation observed in gossip: {}", *latest);
+
+        static const auto timeout_msg = "Timeout while fetching CDC topology description";
+        static const auto topology_read_error_note = "Note: this is likely caused by"
+                " node(s) being down or unreachable. It is recommended to check the network and"
+                " restart/remove the failed node(s), then retry checkAndRepairCdcStreams command";
+        static const auto exception_translating_msg = "Translating the exception to `request_execution_exception`";
+
+        std::optional<topology_description> gen;
+        try {
+            gen = co_await sys_dist_ks->read_cdc_topology_description(
+                    *latest, { tmptr->count_normal_token_owners() });
+        } catch (exceptions::request_timeout_exception& e) {
+            cdc_log.error("{}: \"{}\". {}.", timeout_msg, e.what(), exception_translating_msg);
             throw exceptions::request_execution_exception(exceptions::exception_code::READ_TIMEOUT,
                     format("{}. {}.", timeout_msg, topology_read_error_note));
+        } catch (exceptions::unavailable_exception& e) {
+            static const auto unavailable_msg = "Node(s) unavailable while fetching CDC topology description";
+            cdc_log.error("{}: \"{}\". {}.", unavailable_msg, e.what(), exception_translating_msg);
+            throw exceptions::request_execution_exception(exceptions::exception_code::UNAVAILABLE,
+                    format("{}. {}.", unavailable_msg, topology_read_error_note));
+        } catch (...) {
+            const auto ep = std::current_exception();
+            if (is_timeout_exception(ep)) {
+                cdc_log.error("{}: \"{}\". {}.", timeout_msg, ep, exception_translating_msg);
+                throw exceptions::request_execution_exception(exceptions::exception_code::READ_TIMEOUT,
+                        format("{}. {}.", timeout_msg, topology_read_error_note));
+            }
+            // On exotic errors proceed with regeneration
+            cdc_log.error("Exception while reading CDC topology description: \"{}\". Regenerating streams anyway.", ep);
+            should_regenerate = true;
         }
-        // On exotic errors proceed with regeneration
-        cdc_log.error("Exception while reading CDC topology description: \"{}\". Regenerating streams anyway.", ep);
-        should_regenerate = true;
-    }
 
-    if (!gen) {
-        cdc_log.error(
-            "Could not find CDC generation with timestamp {} in distributed system tables (current time: {}),"
-            " even though some node gossiped about it.",
-            latest, db_clock::now());
-        should_regenerate = true;
-    } else {
-        std::unordered_set<dht::token> gen_ends;
-        for (const auto& entry : gen->entries()) {
-            gen_ends.insert(entry.token_range_end);
-        }
-        for (const auto& metadata_token : tmptr->sorted_tokens()) {
-            if (!gen_ends.contains(metadata_token)) {
-                cdc_log.warn("CDC generation {} missing token {}. Regenerating.", latest, metadata_token);
-                should_regenerate = true;
-                break;
+        if (!gen) {
+            cdc_log.error(
+                "Could not find CDC generation with timestamp {} in distributed system tables (current time: {}),"
+                " even though some node gossiped about it.",
+                latest, db_clock::now());
+            should_regenerate = true;
+        } else {
+            std::unordered_set<dht::token> gen_ends;
+            for (const auto& entry : gen->entries()) {
+                gen_ends.insert(entry.token_range_end);
+            }
+            for (const auto& metadata_token : tmptr->sorted_tokens()) {
+                if (!gen_ends.contains(metadata_token)) {
+                    cdc_log.warn("CDC generation {} missing token {}. Regenerating.", latest, metadata_token);
+                    should_regenerate = true;
+                    break;
+                }
             }
         }
+    } else {
+        cdc_log.warn("check_and_repair_cdc_streams: no generation observed in gossip");
+        should_regenerate = true;
     }
 
     if (!should_regenerate) {
