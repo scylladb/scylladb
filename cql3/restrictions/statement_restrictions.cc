@@ -736,8 +736,9 @@ struct multi_column_range_accumulator {
                                 }));
             } else if (auto mkr = dynamic_pointer_cast<tuples::in_marker>(binop.rhs)) {
                 // This is `(a,b) IN ?`.  RHS elements are themselves tuples, represented as vector<bytes_opt>.
-                process_in_values(
-                        static_pointer_cast<tuples::in_value>(mkr->bind(options))->get_split_values());
+                const auto tup = static_pointer_cast<tuples::in_value>(mkr->bind(options));
+                statements::request_validations::check_not_null(tup, "Invalid null value for IN restriction");
+                process_in_values(tup->get_split_values());
             }
             else {
                 on_internal_error(rlogger, format("multi_column_range_accumulator: unexpected atom {}", binop));
