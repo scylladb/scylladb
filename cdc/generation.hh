@@ -160,7 +160,7 @@ bool should_propose_first_generation(const gms::inet_address& me, const gms::gos
  * (not guaranteed in the current implementation, but expected to be the common case;
  *  we assume that `ring_delay` is enough for other nodes to learn about the new generation).
  */
-future<cdc::generation_id> make_new_cdc_generation(
+future<cdc::generation_id_v1> make_new_cdc_generation(
         const db::config& cfg,
         const std::unordered_set<dht::token>& bootstrap_tokens,
         const locator::token_metadata_ptr tmptr,

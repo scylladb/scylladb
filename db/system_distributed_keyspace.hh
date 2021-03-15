@@ -101,8 +101,8 @@ public:
     future<> finish_view_build(sstring ks_name, sstring view_name) const;
     future<> remove_view(sstring ks_name, sstring view_name) const;
 
-    future<> insert_cdc_topology_description(cdc::generation_id, const cdc::topology_description&, context);
-    future<std::optional<cdc::topology_description>> read_cdc_topology_description(cdc::generation_id, context);
+    future<> insert_cdc_topology_description(cdc::generation_id_v1, const cdc::topology_description&, context);
+    future<std::optional<cdc::topology_description>> read_cdc_topology_description(cdc::generation_id_v1, context);
 
     future<> create_cdc_desc(db_clock::time_point, const cdc::topology_description&, context);
     future<bool> cdc_desc_exists(db_clock::time_point, context);

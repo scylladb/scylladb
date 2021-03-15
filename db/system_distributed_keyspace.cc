@@ -313,7 +313,7 @@ static cdc::token_range_description get_token_range_description_from_value(const
 
 future<>
 system_distributed_keyspace::insert_cdc_topology_description(
-        cdc::generation_id gen_id,
+        cdc::generation_id_v1 gen_id,
         const cdc::topology_description& description,
         context ctx) {
     return _qp.execute_internal(
@@ -326,7 +326,7 @@ system_distributed_keyspace::insert_cdc_topology_description(
 
 future<std::optional<cdc::topology_description>>
 system_distributed_keyspace::read_cdc_topology_description(
-        cdc::generation_id gen_id,
+        cdc::generation_id_v1 gen_id,
         context ctx) {
     return _qp.execute_internal(
             format("SELECT description FROM {}.{} WHERE time = ?", NAME, CDC_TOPOLOGY_DESCRIPTION),
