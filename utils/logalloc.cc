@@ -410,7 +410,9 @@ private:
     }
     void adjust_shares() {
         if (have_work()) {
-            _sg.set_shares(1 + (1000 * (free_memory_threshold - memory::stats().free_memory())) / free_memory_threshold);
+            auto shares = 1 + (1000 * (free_memory_threshold - memory::stats().free_memory())) / free_memory_threshold;
+            _sg.set_shares(shares);
+            llogger.trace("background_reclaimer::adjust_shares: {}", shares);
             if (_main_loop_wait) {
                 main_loop_wake();
             }
