@@ -2213,6 +2213,10 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
                 return std::move(m.fm);
             }));
 
+            // Coordinator is preferred as the leader - if it's not selected we can assume
+            // that the query was non-token-aware and bump relevant metric.
+            get_stats().writes_coordinator_outside_replica_set += fms.size();
+
             auto msg_addr = netw::messaging_service::msg_addr{ endpoint_and_mutations.first, 0 };
             tracing::trace(tr_state, "Enqueuing counter update to {}", msg_addr);
             f = _messaging.send_counter_mutation(msg_addr, timeout, std::move(fms), cl, tracing::make_trace_info(tr_state));
