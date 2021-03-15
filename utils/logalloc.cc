@@ -422,7 +422,7 @@ public:
     explicit background_reclaimer(scheduling_group sg, noncopyable_function<void (size_t target)> reclaim)
             : _sg(sg)
             , _reclaim(std::move(reclaim))
-            , _adjust_shares_timer(_sg, [this] { adjust_shares(); })
+            , _adjust_shares_timer(default_scheduling_group(), [this] { adjust_shares(); })
             , _done(with_scheduling_group(_sg, [this] { return main_loop(); })) {
         if (sg != default_scheduling_group()) {
             _adjust_shares_timer.arm_periodic(50ms);
