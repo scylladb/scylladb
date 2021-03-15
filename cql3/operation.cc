@@ -317,7 +317,7 @@ operation::set_counter_value_from_tuple_list::prepare(database& db, const sstrin
             counter_cell_builder ccb(list_value->_elements.size());
             for (auto& bo : list_value->_elements) {
                 // lexical etc cast fails should be enough type checking here.
-                auto tuple = value_cast<tuple_type_impl::native_type>(counter_tuple_type->deserialize(*bo));
+                auto tuple = value_cast<tuple_type_impl::native_type>(counter_tuple_type->deserialize(managed_bytes_view(*bo)));
                 auto shard = value_cast<int>(tuple[0]);
                 auto id = counter_id(value_cast<utils::UUID>(tuple[1]));
                 auto clock = value_cast<int64_t>(tuple[2]);

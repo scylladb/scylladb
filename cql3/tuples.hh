@@ -108,24 +108,21 @@ public:
      */
     class value : public multi_item_terminal {
     public:
-        std::vector<bytes_opt> _elements;
+        std::vector<managed_bytes_opt> _elements;
     public:
-        value(std::vector<bytes_opt> elements)
+        value(std::vector<managed_bytes_opt> elements)
                 : _elements(std::move(elements)) {
-        }
-        value(std::vector<bytes_view_opt> elements)
-            : value(to_bytes_opt_vec(std::move(elements))) {
         }
         static value from_serialized(const raw_value_view& buffer, const tuple_type_impl& type) {
           return buffer.with_value([&] (const FragmentedView auto& view) {
-              return value(type.split(view));
+              return value(type.split_fragmented(view));
           });
         }
         virtual cql3::raw_value get(const query_options& options) override {
             return cql3::raw_value::make_value(tuple_type_impl::build_value_fragmented(_elements));
         }
 
-        virtual const std::vector<bytes_opt>& get_elements() const override {
+        virtual const std::vector<managed_bytes_opt>& get_elements() const override {
             return _elements;
         }
         size_t size() const {
@@ -157,15 +154,15 @@ public:
             }
         }
     private:
-        std::vector<bytes_opt> bind_internal(const query_options& options) {
-            std::vector<bytes_opt> buffers;
+        std::vector<managed_bytes_opt> bind_internal(const query_options& options) {
+            std::vector<managed_bytes_opt> buffers;
             buffers.resize(_elements.size());
             for (size_t i = 0; i < _elements.size(); ++i) {
                 const auto& value = _elements[i]->bind_and_get(options);
                 if (value.is_unset_value()) {
                     throw exceptions::invalid_request_exception(format("Invalid unset value for tuple field number {:d}", i));
                 }
-                buffers[i] = to_bytes_opt(value);
+                buffers[i] = to_managed_bytes_opt(value);
                 // Inside tuples, we must force the serialization of collections to v3 whatever protocol
                 // version is in use since we're going to store directly that serialized value.
                 if (options.get_cql_serialization_format() != cql_serialization_format::internal()
@@ -174,7 +171,7 @@ public:
                         buffers[i] = static_pointer_cast<const collection_type_impl>(_type->type(i))->reserialize(
                                 options.get_cql_serialization_format(),
                                 cql_serialization_format::internal(),
-                                bytes_view(*buffers[i]));
+                                managed_bytes_view(*buffers[i]));
                     }
                 }
             }
@@ -198,20 +195,9 @@ public:
      */
     class in_value : public terminal {
     private:
-        std::vector<std::vector<bytes_opt>> _elements;
+        std::vector<std::vector<managed_bytes_opt>> _elements;
     public:
-        in_value(std::vector<std::vector<bytes_opt>> items) : _elements(std::move(items)) { }
-        in_value(std::vector<std::vector<bytes_view_opt>> items) {
-            _elements.reserve(items.size());
-            for (auto&& tuple : items) {
-                std::vector<bytes_opt> elems;
-                elems.reserve(tuple.size());
-                for (auto&& e : tuple) {
-                    elems.emplace_back(e ? bytes_opt(bytes(e->begin(), e->end())) : bytes_opt());
-                }
-                _elements.emplace_back(std::move(elems));
-            }
-        }
+        in_value(std::vector<std::vector<managed_bytes_opt>> items) : _elements(std::move(items)) { }
 
         static in_value from_serialized(const raw_value_view& value_view, const list_type_impl& type, const query_options& options);
 
@@ -219,13 +205,13 @@ public:
             throw exceptions::unsupported_operation_exception();
         }
 
-        std::vector<std::vector<bytes_opt>> get_split_values() const {
+        std::vector<std::vector<managed_bytes_opt>> get_split_values() const {
             return _elements;
         }
 
         virtual sstring to_string() const override {
             std::vector<sstring> tuples(_elements.size());
-            std::transform(_elements.begin(), _elements.end(), tuples.begin(), &tuples::tuple_to_string<bytes_opt>);
+            std::transform(_elements.begin(), _elements.end(), tuples.begin(), &tuples::tuple_to_string<managed_bytes_opt>);
             return tuple_to_string(tuples);
         }
     };

@@ -254,6 +254,7 @@ bool column_condition::applies_to(const data_value* cell_value, const query_opti
 
     assert(_op == expr::oper_t::IN);
 
+    // FIXME Use managed_bytes_opt
     std::vector<bytes_opt> in_values;
 
     if (_value) {
@@ -261,7 +262,13 @@ bool column_condition::applies_to(const data_value* cell_value, const query_opti
         if (!lval) {
             throw exceptions::invalid_request_exception("Invalid null value for IN condition");
         }
-        in_values = std::move(lval->get_elements());
+        for (const managed_bytes_opt& v : lval->get_elements()) {
+            if (v) {
+                in_values.push_back(to_bytes(*v));
+            } else {
+                in_values.push_back(std::nullopt);
+            }
+        }
     } else {
         for (auto&& v : _in_values) {
             in_values.emplace_back(to_bytes_opt(v->bind_and_get(options)));

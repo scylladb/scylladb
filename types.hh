@@ -1075,8 +1075,6 @@ to_bytes_opt(bytes_view_opt bv) {
     return std::nullopt;
 }
 
-std::vector<bytes_opt> to_bytes_opt_vec(const std::vector<bytes_view_opt>&);
-
 inline
 bytes_view_opt
 as_bytes_view_opt(const bytes_opt& bv) {
@@ -1216,7 +1214,6 @@ size_t collection_value_len(cql_serialization_format sf);
 void write_collection_size(bytes::iterator& out, int size, cql_serialization_format sf);
 void write_collection_size(managed_bytes_mutable_view&, int size, cql_serialization_format sf);
 void write_collection_value(bytes::iterator& out, cql_serialization_format sf, bytes_view val_bytes);
-void write_collection_value(bytes::iterator& out, cql_serialization_format sf, data_type type, const data_value& value);
 void write_collection_value(managed_bytes_mutable_view&, cql_serialization_format sf, bytes_view val_bytes);
 void write_collection_value(managed_bytes_mutable_view&, cql_serialization_format sf, const managed_bytes_view& val_bytes);
 

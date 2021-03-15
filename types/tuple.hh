@@ -153,6 +153,18 @@ public:
         }
         return elements;
     }
+    std::vector<managed_bytes_opt> split_fragmented(FragmentedView auto v) const {
+        std::vector<managed_bytes_opt> elements;
+        while (!v.empty()) {
+            auto fragmented_element_optional = read_tuple_element(v);
+            if (fragmented_element_optional) {
+                elements.push_back(managed_bytes(*fragmented_element_optional));
+            } else {
+                elements.push_back(std::nullopt);
+            }
+        }
+        return elements;
+    }
     template <typename RangeOf_bytes_opt>  // also accepts bytes_view_opt
     static bytes build_value(RangeOf_bytes_opt&& range) {
         auto item_size = [] (auto&& v) { return 4 + (v ? v->size() : 0); };
@@ -178,8 +190,9 @@ public:
         boost::range::for_each(range, put);
         return ret;
     }
-    template <typename RangeOf_bytes_opt>  // also accepts bytes_view_opt
-    static managed_bytes build_value_fragmented(RangeOf_bytes_opt&& range) {
+    template <typename Range> // range of managed_bytes_opt or managed_bytes_view_opt
+    requires requires (Range it) { {it.begin()->value()} -> std::convertible_to<managed_bytes_view>; }
+    static managed_bytes build_value_fragmented(Range&& range) {
         size_t size = 0;
         for (auto&& v : range) {
             size += 4 + (v ? v->size() : 0);
@@ -189,7 +202,7 @@ public:
         for (auto&& v : range) {
             if (v) {
                 write<int32_t>(out, v->size());
-                write_fragmented(out, single_fragmented_view(*v));
+                write_fragmented(out, managed_bytes_view(*v));
             } else {
                 write<int32_t>(out, -1);
             }

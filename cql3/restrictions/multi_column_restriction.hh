@@ -222,7 +222,7 @@ public:
     clustering_key_prefix composite_value(const query_options& options) const {
         auto t = static_pointer_cast<tuples::value>(_value->bind(options));
         auto values = t->get_elements();
-        std::vector<bytes> components;
+        std::vector<managed_bytes> components;
         for (unsigned i = 0; i < values.size(); i++) {
             auto component = statements::request_validations::check_not_null(values[i],
                 "Invalid null value in condition for column %s",
@@ -315,7 +315,7 @@ public:
     }
 #endif
 protected:
-    virtual std::vector<std::vector<bytes_opt>> split_values(const query_options& options) const = 0;
+    virtual std::vector<std::vector<managed_bytes_opt>> split_values(const query_options& options) const = 0;
 };
 
 /**
@@ -338,8 +338,8 @@ public:
     }
 
 protected:
-    virtual std::vector<std::vector<bytes_opt>> split_values(const query_options& options) const override {
-        std::vector<std::vector<bytes_opt>> buffers(_values.size());
+    virtual std::vector<std::vector<managed_bytes_opt>> split_values(const query_options& options) const override {
+        std::vector<std::vector<managed_bytes_opt>> buffers(_values.size());
         std::transform(_values.begin(), _values.end(), buffers.begin(), [&] (const ::shared_ptr<term>& value) {
             auto term = static_pointer_cast<multi_item_terminal>(value->bind(options));
             return term->get_elements();
@@ -367,7 +367,7 @@ public:
     }
 
 protected:
-    virtual std::vector<std::vector<bytes_opt>> split_values(const query_options& options) const override {
+    virtual std::vector<std::vector<managed_bytes_opt>> split_values(const query_options& options) const override {
         auto in_marker = static_pointer_cast<tuples::in_marker>(_marker);
         auto in_value = static_pointer_cast<tuples::in_value>(in_marker->bind(options));
         statements::request_validations::check_not_null(in_value, "Invalid null value for IN restriction");
@@ -462,7 +462,7 @@ public:
     }
 
 private:
-    std::vector<bytes_opt> read_bound_components(const query_options& options, statements::bound b) const {
+    std::vector<managed_bytes_opt> read_bound_components(const query_options& options, statements::bound b) const {
         if (!_slice.has_bound(b)) {
             return {};
         }
@@ -564,7 +564,7 @@ private:
      * @return a shared pointer to the just created restriction.
      */
     ::shared_ptr<restriction> make_single_column_restriction(std::optional<cql3::statements::bound> bound, bool inclusive,
-                                                             std::size_t column_pos,const bytes_opt& value) const {
+                                                             std::size_t column_pos, const managed_bytes_opt& value) const {
         ::shared_ptr<cql3::term> term = ::make_shared<cql3::constants::value>(cql3::raw_value::make_value(value));
         using namespace expr;
         if (!bound){
@@ -597,7 +597,7 @@ private:
      * @return the single column restriction set built according to the above parameters.
      */
     std::vector<restriction_shared_ptr> make_single_bound_restrictions(statements::bound bound, bool bound_inclusive,
-                                                                       std::vector<bytes_opt>& bound_values,
+                                                                       std::vector<managed_bytes_opt>& bound_values,
                                                                        std::size_t first_neq_component) const{
         std::vector<restriction_shared_ptr> ret;
         std::size_t num_of_restrictions = bound_values.size() - first_neq_component;

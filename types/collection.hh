@@ -85,7 +85,7 @@ public:
     data_value deserialize_value(bytes_view v, cql_serialization_format sf) const {
         return deserialize_impl(single_fragmented_view(v), sf);
     }
-    bytes_opt reserialize(cql_serialization_format from, cql_serialization_format to, bytes_view_opt v) const;
+    managed_bytes_opt reserialize(cql_serialization_format from, cql_serialization_format to, managed_bytes_view_opt v) const;
 };
 
 // a list or a set

@@ -37,6 +37,14 @@
 #include "types/set.hh"
 #include "utils/like_matcher.hh"
 
+static bytes_opt to_bytes_opt(const managed_bytes_opt& b) {
+    if (b) {
+        return to_bytes(*b);
+    } else {
+        return std::nullopt;
+    }
+}
+
 namespace cql3 {
 namespace expr {
 
@@ -185,6 +193,18 @@ bool equal(const bytes_opt& rhs, const column_value& lhs, const column_value_eva
     return get_value_comparator(lhs)->equal(*value, *rhs);
 }
 
+/// True iff lhs's value equals rhs.
+bool equal(const managed_bytes_opt& rhs, const column_value& lhs, const column_value_eval_bag& bag) {
+    if (!rhs) {
+        return false;
+    }
+    const auto value = get_value(lhs, bag);
+    if (!value) {
+        return false;
+    }
+    return get_value_comparator(lhs)->equal(managed_bytes_view(bytes_view(*value)), managed_bytes_view(*rhs));
+}
+
 /// Convenience overload for term.
 bool equal(term& rhs, const column_value& lhs, const column_value_eval_bag& bag) {
     return equal(to_bytes_opt(rhs.bind_and_get(bag.options)), lhs, bag);
@@ -202,7 +222,7 @@ bool equal(term& t, const std::vector<column_value>& columns, const column_value
                 format("tuple equality size mismatch: {} elements on left-hand side, {} on right",
                        columns.size(), rhs.size()));
     }
-    return boost::equal(rhs, columns, [&] (const bytes_opt& b, const column_value& lhs) {
+    return boost::equal(rhs, columns, [&] (const managed_bytes_opt& b, const column_value& lhs) {
         return equal(b, lhs, bag);
     });
 }
@@ -261,7 +281,7 @@ bool limits(const std::vector<column_value>& columns, const oper_t op, term& t,
     for (size_t i = 0; i < rhs.size(); ++i) {
         const auto cmp = get_value_comparator(columns[i])->compare(
                 // CQL dictates that columns[i] is a clustering column and non-null.
-                *get_value(columns[i], bag),
+                managed_bytes_view(*get_value(columns[i], bag)),
                 *rhs[i]);
         // If the components aren't equal, then we just learned the LHS/RHS order.
         if (cmp < 0) {
@@ -417,9 +437,9 @@ bool is_one_of(const column_value& col, term& rhs, const column_value_eval_bag& 
         const auto values = static_pointer_cast<lists::value>(mkr->bind(bag.options));
         statements::request_validations::check_not_null(
                 values, "Invalid null value for column %s", col.col->name_as_text());
-        return boost::algorithm::any_of(values->get_elements(), [&] (const bytes_opt& b) {
-                return equal(b, col, bag);
-            });
+        return boost::algorithm::any_of(values->get_elements(), [&] (const managed_bytes_opt& b) {
+            return equal(b, col, bag);
+        });
     }
     throw std::logic_error("unexpected term type in is_one_of(single column)");
 }
@@ -435,8 +455,8 @@ bool is_one_of(const std::vector<column_value>& cvs, term& rhs, const column_val
     } else if (auto mkr = dynamic_cast<tuples::in_marker*>(&rhs)) {
         // This is `(a,b) IN ?`.  RHS elements are themselves tuples, represented as vector<bytes_opt>.
         const auto marker_value = static_pointer_cast<tuples::in_value>(mkr->bind(bag.options));
-        return boost::algorithm::any_of(marker_value->get_split_values(), [&] (const std::vector<bytes_opt>& el) {
-                return boost::equal(cvs, el, [&] (const column_value& c, const bytes_opt& b) {
+        return boost::algorithm::any_of(marker_value->get_split_values(), [&] (const std::vector<managed_bytes_opt>& el) {
+                return boost::equal(cvs, el, [&] (const column_value& c, const managed_bytes_opt& b) {
                     return equal(b, c, bag);
                 });
             });
@@ -548,7 +568,7 @@ bool is_satisfied_by(const expression& restr, const column_value_eval_bag& bag) 
 bytes_opt get_kth(size_t k, const query_options& options, const ::shared_ptr<term>& t) {
     auto bound = t->bind(options);
     if (auto tup = dynamic_pointer_cast<tuples::value>(bound)) {
-        return tup->get_elements()[k];
+        return to_bytes_opt(tup->get_elements()[k]);
     } else {
         throw std::logic_error("non-tuple RHS for multi-column IN");
     }
@@ -566,6 +586,8 @@ const auto non_null = boost::adaptors::filtered([] (const bytes_opt& b) { return
 
 const auto deref = boost::adaptors::transformed([] (const bytes_opt& b) { return b.value(); });
 
+const auto to_bytes_opt_adapt = boost::adaptors::transformed([] (const managed_bytes_opt& b) { return to_bytes_opt(b); });
+
 /// Returns possible values from t, which must be RHS of IN.
 value_list get_IN_values(
         const ::shared_ptr<term>& t, const query_options& options, const serialized_compare& comparator,
@@ -576,6 +598,8 @@ value_list get_IN_values(
         const auto result_range = dv->get_elements()
                 | boost::adaptors::transformed([&] (const ::shared_ptr<term>& t) { return to_bytes_opt(t->bind_and_get(options)); })
                 | non_null | deref;
+        static_assert(std::same_as<decltype(*result_range.begin()), bytes>);
+        static_assert(std::same_as<decltype(*result_range.end()), bytes>);
         return to_sorted_vector(std::move(result_range), comparator);
     } else if (auto mkr = dynamic_pointer_cast<lists::marker>(t)) {
         // Case `a IN ?`.  Collect all list-element values.
@@ -584,7 +608,7 @@ value_list get_IN_values(
             throw exceptions::invalid_request_exception(format("Invalid unset value for column {}", column_name));
         }
         statements::request_validations::check_not_null(val, "Invalid null value for column %s", column_name);
-        return to_sorted_vector(static_pointer_cast<lists::value>(val)->get_elements() | non_null | deref, comparator);
+        return to_sorted_vector(static_pointer_cast<lists::value>(val)->get_elements() | to_bytes_opt_adapt | non_null | deref, comparator);
     }
     throw std::logic_error(format("get_IN_values(single column) on invalid term {}", *t));
 }
@@ -603,7 +627,7 @@ value_list get_IN_values(const ::shared_ptr<term>& t, size_t k, const query_opti
         const auto val = static_pointer_cast<tuples::in_value>(mkr->bind(options));
         const auto split_values = val->get_split_values(); // Need lvalue from which to make std::view.
         const auto result_range = split_values
-                | boost::adaptors::transformed([k] (const std::vector<bytes_opt>& v) { return v[k]; }) | non_null | deref;
+                | boost::adaptors::transformed([k] (const std::vector<managed_bytes_opt>& v) { return to_bytes_opt(v[k]); }) | non_null | deref;
         return to_sorted_vector(std::move(result_range), comparator);
     }
     throw std::logic_error(format("get_IN_values(multi-column) on invalid term {}", *t));
@@ -636,7 +660,7 @@ bool is_satisfied_by(
     return is_satisfied_by(restr, {options, row_data_from_mutation{key, ckey, cells, schema, now}});
 }
 
-std::vector<bytes_opt> first_multicolumn_bound(
+std::vector<managed_bytes_opt> first_multicolumn_bound(
         const expression& restr, const query_options& options, statements::bound bnd) {
     auto found = find_atom(restr, [bnd] (const binary_operator& oper) {
         return matches(oper.op, bnd) && is_multi_column(oper);
@@ -644,7 +668,7 @@ std::vector<bytes_opt> first_multicolumn_bound(
     if (found) {
         return static_pointer_cast<tuples::value>(found->rhs->bind(options))->get_elements();
     } else {
-        return std::vector<bytes_opt>{};
+        return std::vector<managed_bytes_opt>{};
     }
 }
 
@@ -712,7 +736,7 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
                             const auto column_index_on_lhs = std::distance(cvs.begin(), found);
                             if (is_compare(oper.op)) {
                                 // RHS must be a tuple due to upstream checks.
-                                bytes_opt val = get_tuple(*oper.rhs, options)->get_elements()[column_index_on_lhs];
+                                bytes_opt val = to_bytes_opt(get_tuple(*oper.rhs, options)->get_elements()[column_index_on_lhs]);
                                 if (!val) {
                                     return empty_value_set; // All NULL comparisons fail; no column values match.
                                 }

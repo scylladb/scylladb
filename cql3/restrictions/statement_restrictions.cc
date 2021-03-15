@@ -720,13 +720,13 @@ struct multi_column_range_accumulator {
         if (is_compare(binop.op)) {
             auto opt_values = dynamic_pointer_cast<tuples::value>(binop.rhs->bind(options))->get_elements();
             auto& lhs = std::get<std::vector<column_value>>(binop.lhs);
-            std::vector<bytes> values(lhs.size());
+            std::vector<managed_bytes> values(lhs.size());
             for (size_t i = 0; i < lhs.size(); ++i) {
                 values[i] = *statements::request_validations::check_not_null(
                         opt_values[i],
                         "Invalid null value in condition for column %s", lhs.at(i).col->name_as_text());
             }
-            intersect_all(to_range(binop.op, clustering_key_prefix(values)));
+            intersect_all(to_range(binop.op, clustering_key_prefix(std::move(values))));
         } else if (binop.op == oper_t::IN) {
             if (auto dv = dynamic_pointer_cast<lists::delayed_value>(binop.rhs)) {
                 process_in_values(
@@ -771,7 +771,7 @@ struct multi_column_range_accumulator {
     }
 
     template<std::ranges::range Range>
-    requires std::convertible_to<typename Range::value_type::value_type, bytes_opt>
+    requires std::convertible_to<typename Range::value_type::value_type, managed_bytes_opt>
     void process_in_values(Range in_values) {
         if (ranges.empty()) {
             return; // Shortcircuit an easy case.

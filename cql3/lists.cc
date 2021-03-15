@@ -130,11 +130,12 @@ lists::value::from_serialized(const raw_value_view& val, const list_type_impl& t
         // but compose does the validation (so we're fine).
         // FIXME: deserializeForNativeProtocol()?!
         auto l = val.deserialize<list_type_impl::native_type>(type, sf);
-        std::vector<bytes_opt> elements;
+        std::vector<managed_bytes_opt> elements;
         elements.reserve(l.size());
         for (auto&& element : l) {
             // elements can be null in lists that represent a set of IN values
-            elements.push_back(element.is_null() ? bytes_opt() : bytes_opt(type.get_elements_type()->decompose(element)));
+            // FIXME: decompose to managed_bytes
+            elements.push_back(element.is_null() ? managed_bytes_opt() : managed_bytes_opt(type.get_elements_type()->decompose(element)));
         }
         return value(std::move(elements));
     } catch (marshal_exception& e) {
@@ -150,7 +151,7 @@ lists::value::get(const query_options& options) {
 managed_bytes
 lists::value::get_with_protocol_version(cql_serialization_format sf) {
     // Can't use boost::indirect_iterator, because optional is not an iterator
-    auto deref = [] (bytes_opt& x) { return *x; };
+    auto deref = [] (managed_bytes_opt& x) { return *x; };
     return collection_type_impl::pack_fragmented(
             boost::make_transform_iterator(_elements.begin(), deref),
             boost::make_transform_iterator( _elements.end(), deref),
@@ -164,10 +165,10 @@ lists::value::equals(const list_type_impl& lt, const value& v) {
     }
     return std::equal(_elements.begin(), _elements.end(),
             v._elements.begin(),
-            [t = lt.get_elements_type()] (const bytes_opt& e1, const bytes_opt& e2) { return t->equal(*e1, *e2); });
+            [t = lt.get_elements_type()] (const managed_bytes_opt& e1, const managed_bytes_opt& e2) { return t->equal(*e1, *e2); });
 }
 
-const std::vector<bytes_opt>&
+const std::vector<managed_bytes_opt>&
 lists::value::get_elements() const {
     return _elements;
 }
@@ -200,7 +201,7 @@ lists::delayed_value::collect_marker_specification(variable_specifications& boun
 
 shared_ptr<terminal>
 lists::delayed_value::bind(const query_options& options) {
-    std::vector<bytes_opt> buffers;
+    std::vector<managed_bytes_opt> buffers;
     buffers.reserve(_elements.size());
     for (auto&& t : _elements) {
         auto bo = t->bind_and_get(options);
@@ -212,7 +213,7 @@ lists::delayed_value::bind(const query_options& options) {
             return constants::UNSET_VALUE;
         }
 
-        buffers.push_back(to_bytes(bo));
+        buffers.push_back(bo.with_value([] (const FragmentedView auto& v) { return managed_bytes(v); }));
     }
     return ::make_shared<value>(buffers);
 }

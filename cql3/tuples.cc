@@ -89,10 +89,11 @@ tuples::in_value::from_serialized(const raw_value_view& value_view, const list_t
         auto ttype = dynamic_pointer_cast<const tuple_type_impl>(type.get_elements_type());
         assert(ttype);
 
-        std::vector<std::vector<bytes_opt>> elements;
+        std::vector<std::vector<managed_bytes_opt>> elements;
         elements.reserve(l.size());
         for (auto&& e : l) {
-            elements.emplace_back(ttype->split(single_fragmented_view(ttype->decompose(e))));
+            // FIXME: Avoid useless copies.
+            elements.emplace_back(ttype->split_fragmented(single_fragmented_view(ttype->decompose(e))));
         }
         return tuples::in_value(elements);
     } catch (marshal_exception& e) {

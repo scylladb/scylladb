@@ -193,12 +193,18 @@ public:
     static TopLevel from_exploded(const schema& s, const std::vector<bytes>& v) {
         return from_exploded(v);
     }
+    static TopLevel from_exploded(const schema& s, const std::vector<managed_bytes>& v) {
+        return from_exploded(v);
+    }
     static TopLevel from_exploded_view(const std::vector<bytes_view>& v) {
         return from_exploded(v);
     }
 
     // We don't allow optional values, but provide this method as an efficient adaptor
     static TopLevel from_optional_exploded(const schema& s, const std::vector<bytes_opt>& v) {
+        return TopLevel::from_bytes(get_compound_type(s)->serialize_optionals(v));
+    }
+    static TopLevel from_optional_exploded(const schema& s, const std::vector<managed_bytes_opt>& v) {
         return TopLevel::from_bytes(get_compound_type(s)->serialize_optionals(v));
     }
 
@@ -793,6 +799,9 @@ public:
     }
 
     clustering_key_prefix(std::vector<bytes> v)
+        : prefix_compound_wrapper(compound::element_type::serialize_value(std::move(v)))
+    { }
+    clustering_key_prefix(std::vector<managed_bytes> v)
         : prefix_compound_wrapper(compound::element_type::serialize_value(std::move(v)))
     { }
 

@@ -115,15 +115,6 @@ sstring inet_addr_type_impl::to_sstring(const seastar::net::inet_address& addr) 
     return out.str();
 }
 
-std::vector<bytes_opt> to_bytes_opt_vec(const std::vector<bytes_view_opt>& v) {
-    std::vector<bytes_opt> r;
-    r.reserve(v.size());
-    for (auto& e: v) {
-        r.push_back(to_bytes_opt(e));
-    }
-    return r;
-}
-
 static const char* byte_type_name      = "org.apache.cassandra.db.marshal.ByteType";
 static const char* short_type_name     = "org.apache.cassandra.db.marshal.ShortType";
 static const char* int32_type_name     = "org.apache.cassandra.db.marshal.Int32Type";
@@ -1219,8 +1210,8 @@ static std::optional<data_type> update_user_type_aux(
 
 static void serialize(const abstract_type& t, const void* value, bytes::iterator& out, cql_serialization_format sf);
 
-bytes_opt
-collection_type_impl::reserialize(cql_serialization_format from, cql_serialization_format to, bytes_view_opt v) const {
+managed_bytes_opt
+collection_type_impl::reserialize(cql_serialization_format from, cql_serialization_format to, managed_bytes_view_opt v) const {
     if (!v) {
         return std::nullopt;
     }
@@ -1228,7 +1219,8 @@ collection_type_impl::reserialize(cql_serialization_format from, cql_serializati
     bytes ret(bytes::initialized_later(), val.serialized_size());  // FIXME: serialized_size want @to
     auto out = ret.begin();
     ::serialize(*this, get_value_ptr(val), out, to);
-    return ret;
+    // FIXME: serialize directly to managed_bytes.
+    return managed_bytes(ret);
 }
 
 set_type
