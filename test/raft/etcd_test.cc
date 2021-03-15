@@ -35,55 +35,7 @@
 
 // Port of etcd Raft implementation unit tests
 
-#define BOOST_TEST_MODULE raft
-
-#include <boost/test/unit_test.hpp>
-#include "test/lib/log.hh"
-#include "serializer_impl.hh"
-#include <limits>
-
-#include "raft/fsm.hh"
-
-using raft::term_t, raft::index_t, raft::server_id, raft::log_entry;
-
-void election_threshold(raft::fsm& fsm) {
-    for (int i = 0; i <= raft::ELECTION_TIMEOUT.count(); i++) {
-        fsm.tick();
-    }
-}
-
-void election_timeout(raft::fsm& fsm) {
-    for (int i = 0; i <= 2 * raft::ELECTION_TIMEOUT.count(); i++) {
-        fsm.tick();
-    }
-}
-
-struct failure_detector: public raft::failure_detector {
-    bool alive = true;
-    bool is_alive(raft::server_id from) override {
-        return alive;
-    }
-};
-
-template <typename T>
-raft::command create_command(T val) {
-    raft::command command;
-    ser::serialize(command, val);
-
-    return std::move(command);
-}
-
-raft::fsm_config fsm_cfg{.append_request_threshold = 1};
-
-class fsm_debug : public raft::fsm {
-public:
-    using raft::fsm::fsm;
-    const raft::follower_progress& get_progress(server_id id) {
-        raft::follower_progress* progress = leader_state().tracker.find(id);
-        return *progress;
-    }
-};
-
+#include "test/raft/helpers.hh"
 
 // TestProgressLeader
 BOOST_AUTO_TEST_CASE(test_progress_leader) {
