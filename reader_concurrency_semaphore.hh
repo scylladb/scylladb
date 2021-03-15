@@ -247,9 +247,7 @@ public:
     /// (if there was no reader to evict).
     bool try_evict_one_inactive_read(evict_reason = evict_reason::manual);
 
-    void clear_inactive_reads() {
-        _inactive_reads.clear();
-    }
+    void clear_inactive_reads();
 
     const stats& get_stats() const {
         return _stats;

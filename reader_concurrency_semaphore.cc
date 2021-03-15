@@ -386,6 +386,7 @@ reader_concurrency_semaphore::reader_concurrency_semaphore(no_limits, sstring na
 
 reader_concurrency_semaphore::~reader_concurrency_semaphore() {
     broken(std::make_exception_ptr(broken_semaphore{}));
+    clear_inactive_reads();
 }
 
 reader_concurrency_semaphore::inactive_read_handle reader_concurrency_semaphore::register_inactive_read(flat_mutation_reader reader) noexcept {
@@ -449,6 +450,13 @@ bool reader_concurrency_semaphore::try_evict_one_inactive_read(evict_reason reas
     }
     evict(_inactive_reads.front(), reason);
     return true;
+}
+
+void reader_concurrency_semaphore::clear_inactive_reads() {
+    while (!_inactive_reads.empty()) {
+        // Destroying the read unlinks it too.
+        std::unique_ptr<inactive_read> _(&*_inactive_reads.begin());
+    }
 }
 
 void reader_concurrency_semaphore::evict(inactive_read& ir, evict_reason reason) noexcept {
