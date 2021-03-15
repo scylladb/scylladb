@@ -409,16 +409,20 @@ private:
         llogger.debug("background_reclaimer::main_loop: exit");
     }
     void adjust_shares() {
-        if (_main_loop_wait && have_work()) {
-            _sg.set_shares(1 + (1000 * (free_memory_threshold - memory::stats().free_memory())) / free_memory_threshold);
-            main_loop_wake();
+        if (have_work()) {
+            auto shares = 1 + (1000 * (free_memory_threshold - memory::stats().free_memory())) / free_memory_threshold;
+            _sg.set_shares(shares);
+            llogger.trace("background_reclaimer::adjust_shares: {}", shares);
+            if (_main_loop_wait) {
+                main_loop_wake();
+            }
         }
     }
 public:
     explicit background_reclaimer(scheduling_group sg, noncopyable_function<void (size_t target)> reclaim)
             : _sg(sg)
             , _reclaim(std::move(reclaim))
-            , _adjust_shares_timer(_sg, [this] { adjust_shares(); })
+            , _adjust_shares_timer(default_scheduling_group(), [this] { adjust_shares(); })
             , _done(with_scheduling_group(_sg, [this] { return main_loop(); })) {
         if (sg != default_scheduling_group()) {
             _adjust_shares_timer.arm_periodic(50ms);

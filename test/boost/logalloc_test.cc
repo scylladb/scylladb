@@ -30,6 +30,7 @@
 #include <seastar/core/thread.hh>
 #include <seastar/core/timer.hh>
 #include <seastar/core/sleep.hh>
+#include <seastar/core/thread_cputime_clock.hh>
 #include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/util/defer.hh>
@@ -1532,8 +1533,11 @@ SEASTAR_THREAD_TEST_CASE(background_reclaim) {
     
         // Pretend to do some work. Sleeping would be too easy, as the background reclaim group would use
         // all that time.
-        auto deadline = std::chrono::steady_clock::now() + 100ms;
-        while (std::chrono::steady_clock::now() < deadline) {
+        //
+        // Use thread_cputime_clock to prevent overcommitted test machines from stealing CPU time
+        // and causing test failures.
+        auto deadline = thread_cputime_clock::now() + 100ms;
+        while (thread_cputime_clock::now() < deadline) {
             thread::maybe_yield();
         }
     }
