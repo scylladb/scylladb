@@ -37,5 +37,5 @@ future<> schema_raft_state_machine::load_snapshot(raft::snapshot_id id) {
 }
 
 future<> schema_raft_state_machine::abort() {
-    throw std::runtime_error("Not implemented");
+    return make_ready_future<>();
 }

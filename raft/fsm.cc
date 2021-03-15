@@ -249,8 +249,7 @@ fsm_output fsm::get_output() {
     }
 
     if (_observed._current_term != _current_term || _observed._voted_for != _voted_for) {
-        output.term = _current_term;
-        output.vote = _voted_for;
+        output.term_and_vote = {_current_term, _voted_for};
     }
 
     // see if there was a new snapshot that has to be handled
