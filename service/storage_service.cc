@@ -1961,9 +1961,9 @@ future<> storage_service::removenode(sstring host_id_string, std::list<gms::inet
 
 
                 // Step 5: Announce the node has left
+                ss._gossiper.advertise_token_removed(endpoint, host_id).get();
                 std::unordered_set<token> tmp(tokens.begin(), tokens.end());
                 ss.excise(std::move(tmp), endpoint);
-                ss._gossiper.advertise_token_removed(endpoint, host_id).get();
 
                 // Step 6: Finish
                 req.cmd = node_ops_cmd::removenode_done;
