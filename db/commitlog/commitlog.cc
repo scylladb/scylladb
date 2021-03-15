@@ -53,6 +53,7 @@
 #include <seastar/core/align.hh>
 #include <seastar/core/seastar.hh>
 #include <seastar/core/metrics.hh>
+#include <seastar/core/coroutine.hh>
 #include <seastar/core/future-util.hh>
 #include <seastar/core/file.hh>
 #include <seastar/core/rwlock.hh>
@@ -1392,83 +1393,81 @@ void db::commitlog::segment_manager::flush_segments(uint64_t size_to_remove) {
 future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager::allocate_segment_ex(descriptor d, sstring filename, open_flags flags) {
     file_open_options opt;
     opt.extent_allocation_size_hint = max_size;
-    auto fut = do_io_check(commit_error_handler, [this, filename, flags, opt] () mutable {
-        auto fut = open_file_dma(filename, flags, opt);
-        if (cfg.extensions && !cfg.extensions->commitlog_file_extensions().empty()) {
-            for (auto * ext : cfg.extensions->commitlog_file_extensions()) {
-                fut = with_file_close_on_failure(std::move(fut), [ext, filename = std::move(filename), flags](file f) mutable {
-                   return ext->wrap_file(std::move(filename), f, flags).then([f](file nf) mutable {
-                       return nf ? nf : std::move(f);
-                   });
-                });
-            }
-        }
-        return fut;
-    });
 
-    return with_file_close_on_failure(std::move(fut), [this, d = std::move(d), filename = std::move(filename), flags] (file f) mutable {
-        f = make_checked_file(commit_error_handler, f);
-        // xfs doesn't like files extended betond eof, so enlarge the file
-        auto fut = make_ready_future<>();
-        // If file is opened with O_DSYNC, we should explicitly write zeros
-        // instead of just truncate/fallocate. Otherwise we get crappy
-        // behaviour.
+    file f;
+    std::exception_ptr ep;
+
+    try {
+        f = co_await open_file_dma(filename, flags, opt);
+
         if ((flags & open_flags::dsync) != open_flags{}) {
-            auto fsiz = (flags & open_flags::create) == open_flags{}
-                ? f.size()
-                : make_ready_future<uint64_t>(0)
+            auto existing_size = (flags & open_flags::create) == open_flags{}
+                ? co_await f.size()
+                : 0
                 ;
 
             // would be super nice if we just could mmap(/dev/zero) and do sendto
             // instead of this, but for now we must do explicit buffer writes.
-            fut = fsiz.then([f, this, filename](uint64_t existing_size) mutable {
-                // if recycled (or from last run), we might have either truncated smaller or written it 
-                // (slightly) larger due to final zeroing of file
-                if (existing_size > max_size) {
-                    return f.truncate(max_size);
-                } else if (existing_size == max_size) {
-                    return make_ready_future<>();
-                }
-                
+
+            // if recycled (or from last run), we might have either truncated smaller or written it 
+            // (slightly) larger due to final zeroing of file
+            if (existing_size > max_size) {
+                co_await f.truncate(max_size);
+            } else if (existing_size < max_size) {
                 totals.total_size_on_disk += (max_size - existing_size);
 
                 clogger.trace("Pre-writing {} of {} KB to segment {}", (max_size - existing_size)/1024, max_size/1024, filename);
-                return f.allocate(existing_size, max_size - existing_size).then([this, existing_size, f]() mutable {
-                    static constexpr size_t buf_size = 4 * segment::alignment;
-                    size_t zerofill_size = max_size - align_down(existing_size, segment::alignment);
-                    return do_with(allocate_single_buffer(buf_size), zerofill_size, [this, f](temporary_buffer<char>& buf, uint64_t& rem) mutable {
-                        std::fill(buf.get_write(), buf.get_write() + buf.size(), 0);
-                        return repeat([this, f, &rem, &buf]() mutable {
-                            if (rem == 0) {
-                                return make_ready_future<stop_iteration>(stop_iteration::yes);
-                            }
-                            static constexpr size_t max_write = 128 * 1024;
-                            auto n = std::min(max_write / buf_size, 1 + rem / buf_size);
 
-                            std::vector<iovec> v;
-                            v.reserve(n);
-                            size_t m = 0;
-                            while (m < rem && n < max_write) {
-                                auto s = std::min(rem - m, buf_size);
-                                v.emplace_back(iovec{ buf.get_write(), s});
-                                m += s;
-                            }
-                            return f.dma_write(max_size - rem, std::move(v), service::get_local_commitlog_priority()).then([&rem](size_t s) mutable {
-                                rem -= s;
-                                return stop_iteration::no;
-                            });
-                        });
-                    });
-                });
-            });
+                co_await f.allocate(existing_size, max_size - existing_size);
+
+                static constexpr size_t buf_size = 4 * segment::alignment;
+                size_t zerofill_size = max_size - align_down(existing_size, segment::alignment);
+                auto rem = zerofill_size;
+
+                auto buf = allocate_single_buffer(buf_size);
+                while (rem != 0) {
+                    static constexpr size_t max_write = 128 * 1024;
+                    auto n = std::min(max_write / buf_size, 1 + rem / buf_size);
+
+                    std::vector<iovec> v;
+                    v.reserve(n);
+                    size_t m = 0;
+                    while (m < rem && n < max_write) {
+                        auto s = std::min(rem - m, buf_size);
+                        v.emplace_back(iovec{ buf.get_write(), s});
+                        m += s;
+                    }
+                    auto s = co_await f.dma_write(max_size - rem, std::move(v), service::get_local_commitlog_priority());
+                    rem -= s;
+                }
+
+                // sync metadata (size/written)
+                co_await f.flush();
+            }
         } else {
-            fut = f.truncate(max_size);
+            co_await f.truncate(max_size);
         }
-        return fut.then([this, d, f, filename] () mutable {
-            auto s = make_shared<segment>(shared_from_this(), std::move(d), std::move(f), max_size);
-            return make_ready_future<sseg_ptr>(s);
-        });
-    });
+
+        if (cfg.extensions && !cfg.extensions->commitlog_file_extensions().empty()) {
+            for (auto * ext : cfg.extensions->commitlog_file_extensions()) {
+                auto nf = co_await ext->wrap_file(std::move(filename), f, flags);
+                if (nf) {
+                    f = std::move(nf);
+                }
+            }
+        }
+    } catch (...) {
+        ep = std::current_exception();
+        commit_error_handler(ep);
+    }
+    if (ep && f) {
+        co_await f.close();
+    }
+    if (ep) {
+        std::rethrow_exception(ep);
+    }
+
+    co_return make_shared<segment>(shared_from_this(), std::move(d), std::move(f), max_size);
 }
 
 future<> db::commitlog::segment_manager::rename_file(sstring from, sstring to) const {
