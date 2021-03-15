@@ -469,6 +469,9 @@ public:
 static_assert(FragmentedView<managed_bytes_view>);
 static_assert(FragmentedMutableView<managed_bytes_mutable_view>);
 
+using managed_bytes_opt = std::optional<managed_bytes>;
+using managed_bytes_view_opt = std::optional<managed_bytes_view>;
+
 inline bytes to_bytes(const managed_bytes& v) {
     return linearized(managed_bytes_view(v));
 }
@@ -509,6 +512,9 @@ struct hash<managed_bytes> {
 };
 } // namespace std
 
+sstring to_hex(const managed_bytes& b);
+sstring to_hex(const managed_bytes_opt& b);
+
 // The operators below are used only by tests.
 
 inline bool operator==(const managed_bytes_view& a, const managed_bytes_view& b) {
@@ -524,3 +530,4 @@ inline std::ostream& operator<<(std::ostream& os, const managed_bytes_view& v) {
 inline std::ostream& operator<<(std::ostream& os, const managed_bytes& b) {
     return (os << managed_bytes_view(b));
 }
+std::ostream& operator<<(std::ostream& os, const managed_bytes_opt& b);

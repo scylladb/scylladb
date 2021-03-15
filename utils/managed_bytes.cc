@@ -35,3 +35,17 @@ managed_bytes::do_linearize_pure() const {
     return data;
 }
 
+sstring to_hex(const managed_bytes& b) {
+    return to_hex(managed_bytes_view(b));
+}
+
+sstring to_hex(const managed_bytes_opt& b) {
+    return !b ? "null" : to_hex(*b);
+}
+
+std::ostream& operator<<(std::ostream& os, const managed_bytes_opt& b) {
+    if (b) {
+        return os << *b;
+    }
+    return os << "null";
+}

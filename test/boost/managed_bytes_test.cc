@@ -389,3 +389,14 @@ BOOST_AUTO_TEST_CASE(test_appending_hash) {
     });
 }
 
+BOOST_AUTO_TEST_CASE(test_to_hex) {
+    fragmenting_allocation_strategy fragmenting_allocator(alloc_size);
+    with_allocator(fragmenting_allocator, [&] {
+        for (size_t size : sizes) {
+            auto b = tests::random::get_bytes(size);
+            managed_bytes m(b);
+            BOOST_CHECK_EQUAL(to_hex(b), to_hex(m));
+        }
+    });
+}
+

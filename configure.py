@@ -1124,6 +1124,7 @@ deps['test/boost/multishard_combining_reader_as_mutation_source_test'] += ['test
 
 deps['test/boost/bytes_ostream_test'] = [
     "test/boost/bytes_ostream_test.cc",
+    "bytes.cc",
     "utils/managed_bytes.cc",
     "utils/logalloc.cc",
     "utils/dynamic_bitset.cc",
