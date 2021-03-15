@@ -713,6 +713,11 @@ def emerge_install(pkg):
         pkg_error_exit(pkg)
     return run(f'emerge -uq {pkg}', shell=True, check=True)
 
+def zypper_install(pkg):
+    if is_offline():
+        pkg_error_exit(pkg)
+    return run(f'zypper install -y {pkg}', shell=True, check=True)
+
 def pkg_distro():
     if is_debian_variant():
         return 'debian'
@@ -733,6 +738,8 @@ def pkg_install(pkg):
         return apt_install(pkg)
     elif is_gentoo():
         return emerge_install(pkg)
+    elif is_suse_variant():
+        return zypper_install(pkg)
     else:
         pkg_error_exit(pkg)
 
