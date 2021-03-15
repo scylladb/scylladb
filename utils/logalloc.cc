@@ -409,9 +409,11 @@ private:
         llogger.debug("background_reclaimer::main_loop: exit");
     }
     void adjust_shares() {
-        if (_main_loop_wait && have_work()) {
+        if (have_work()) {
             _sg.set_shares(1 + (1000 * (free_memory_threshold - memory::stats().free_memory())) / free_memory_threshold);
-            main_loop_wake();
+            if (_main_loop_wait) {
+                main_loop_wake();
+            }
         }
     }
 public:
