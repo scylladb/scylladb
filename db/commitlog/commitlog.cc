@@ -1418,6 +1418,13 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
 
                 clogger.trace("Pre-writing {} of {} KB to segment {}", (max_size - existing_size)/1024, max_size/1024, filename);
 
+                // re-open without o_dsync for pre-alloc. The reason/rationale
+                // being that we want automatic (meta)data sync from O_DSYNC for when
+                // we do actual CL flushes, but here it would just result in
+                // data being committed before we've reached eof/finished writing.
+                // Again an argument for sendfile-like constructs I guess...
+                co_await f.close();
+                f = co_await open_file_dma(filename, flags & open_flags(~int(open_flags::dsync)), opt);
                 co_await f.allocate(existing_size, max_size - existing_size);
 
                 static constexpr size_t buf_size = 4 * segment::alignment;
@@ -1443,6 +1450,8 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
 
                 // sync metadata (size/written)
                 co_await f.flush();
+                co_await f.close();
+                f = co_await open_file_dma(filename, flags, opt);
             }
         } else {
             co_await f.truncate(max_size);

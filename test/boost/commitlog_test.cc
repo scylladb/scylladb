@@ -30,6 +30,7 @@
 #include <set>
 
 #include <seastar/testing/test_case.hh>
+#include <seastar/core/coroutine.hh>
 #include <seastar/core/future-util.hh>
 #include <seastar/core/do_with.hh>
 #include <seastar/core/scollectd_api.hh>
@@ -719,3 +720,31 @@ SEASTAR_TEST_CASE(test_commitlog_add_entries) {
     });
 }
 
+SEASTAR_TEST_CASE(test_commitlog_new_segment_odsync){
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 1;
+    cfg.use_o_dsync = true;
+
+    return cl_test(cfg, [](commitlog& log) -> future<> {
+        auto uuid = utils::UUID_gen::get_time_UUID();
+        rp_set set;
+        while (set.size() <= 1) {
+            sstring tmp = "hej bubba cow";
+            rp_handle h = co_await log.add_mutation(uuid, tmp.size(), db::commitlog::force_sync::no, [tmp](db::commitlog::output& dst) {
+                dst.write(tmp.data(), tmp.size());
+            });
+            set.put(std::move(h));
+        }
+
+        auto names = log.get_active_segment_names();
+        BOOST_REQUIRE(names.size() > 1);
+
+        // check that all the segments are pre-allocated.
+        for (auto& name : names) {
+            auto f = co_await seastar::open_file_dma(name, seastar::open_flags::ro);
+            auto s = co_await f.size();
+            co_await f.close();
+            BOOST_CHECK_EQUAL(s, 1024u*1024u);
+        }
+    });
+}
