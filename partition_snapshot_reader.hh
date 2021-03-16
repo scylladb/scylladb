@@ -137,6 +137,9 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
             , _digest_requested(digest_requested)
         { }
 
+        void reset_state(const query::clustering_range& ck_range) {
+        }
+
         template<typename Function>
         decltype(auto) with_reserve(Function&& fn) {
             return _read_section.with_reserve(std::forward<Function>(fn));
@@ -249,6 +252,8 @@ private:
         if (_current_ck_range == _ck_range_end) {
             _end_of_stream = true;
             push_mutation_fragment(mutation_fragment(*_schema, _permit, partition_end()));
+        } else {
+            _reader.reset_state(*_current_ck_range);
         }
         _no_more_rows_in_current_range = false;
     }
