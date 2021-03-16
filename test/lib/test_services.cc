@@ -64,7 +64,7 @@ public:
         service::get_storage_service().invoke_on_all([] (auto& ss) {
             ss.enable_all_features();
         }).get();
-        _cdc_generation_service.start(std::ref(_cfg), std::ref(_gossiper), std::ref(_sys_dist_ks), std::ref(_abort_source), std::ref(_token_metadata)).get();
+        _cdc_generation_service.start(std::ref(_cfg), std::ref(_gossiper), std::ref(_sys_dist_ks), std::ref(_abort_source), std::ref(_token_metadata), std::ref(_feature_service)).get();
     }
     ~impl() {
         _cdc_generation_service.stop().get();

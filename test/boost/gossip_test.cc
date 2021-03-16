@@ -106,7 +106,7 @@ SEASTAR_TEST_CASE(test_boot_shutdown){
             stop_database(db).get();
         });
 
-        cdc_generation_service.start(std::ref(*cfg), std::ref(gms::get_gossiper()), std::ref(sys_dist_ks), std::ref(abort_sources), std::ref(token_metadata)).get();
+        cdc_generation_service.start(std::ref(*cfg), std::ref(gms::get_gossiper()), std::ref(sys_dist_ks), std::ref(abort_sources), std::ref(token_metadata), std::ref(feature_service)).get();
         auto stop_cdc_generation_service = defer([&cdc_generation_service] {
             cdc_generation_service.stop().get();
         });
