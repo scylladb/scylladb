@@ -272,6 +272,7 @@ void partitioned_sstable_set::insert(shared_sstable sst) {
         }
     } catch (...) {
         _all->erase(sst);
+        throw;
     }
 }
 
