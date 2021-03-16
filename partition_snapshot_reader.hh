@@ -56,8 +56,6 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
     class lsa_partition_reader {
         const schema& _schema;
         reader_permit _permit;
-        rows_entry::tri_compare _cmp;
-        position_in_partition::equal_compare _eq;
         heap_compare _heap_cmp;
 
         partition_snapshot_ptr _snapshot;
@@ -88,11 +86,12 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
                 }
             }
 
+            rows_entry::tri_compare rows_cmp(_schema);
             for (auto&& v : _snapshot->versions()) {
                 mutation_partition::rows_type::const_iterator cr_end = v.partition().upper_bound(_schema, ck_range);
                 auto cr = [&] () -> mutation_partition::rows_type::const_iterator {
                     if (last_row) {
-                        return v.partition().clustered_rows().upper_bound(*last_row, _cmp);
+                        return v.partition().clustered_rows().upper_bound(*last_row, rows_cmp);
                     } else {
                         return v.partition().lower_bound(_schema, ck_range);
                     }
@@ -131,8 +130,6 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
                                       bool digest_requested)
             : _schema(s)
             , _permit(std::move(permit))
-            , _cmp(s)
-            , _eq(s)
             , _heap_cmp(s)
             , _snapshot(std::move(snp))
             , _region(region)
@@ -172,6 +169,7 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
                     refresh_state(ck_range, last_row, range_tombstones);
                     _change_mark = mark;
                 }
+                position_in_partition::equal_compare rows_eq(_schema);
                 while (has_more_rows()) {
                     const rows_entry& e = pop_clustering_row();
                     if (e.dummy()) {
@@ -181,7 +179,7 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
                         e.row().cells().prepare_hash(_schema, column_kind::regular_column);
                     }
                     auto result = mutation_fragment(mutation_fragment::clustering_row_tag_t(), _schema, _permit, _schema, e);
-                    while (has_more_rows() && _eq(peek_row().position(), result.as_clustering_row().position())) {
+                    while (has_more_rows() && rows_eq(peek_row().position(), result.as_clustering_row().position())) {
                         const rows_entry& e = pop_clustering_row();
                         if (_digest_requested) {
                             e.row().cells().prepare_hash(_schema, column_kind::regular_column);
