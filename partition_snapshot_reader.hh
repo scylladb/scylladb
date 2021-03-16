@@ -41,11 +41,11 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
     };
 
     class heap_compare {
-        rows_entry::compare _cmp;
+        position_in_partition::less_compare _less;
     public:
-        explicit heap_compare(const schema& s) : _cmp(s) { }
+        explicit heap_compare(const schema& s) : _less(s) { }
         bool operator()(const rows_position& a, const rows_position& b) {
-            return _cmp(*b._position, *a._position);
+            return _less(b._position->position(), a._position->position());
         }
     };
 
