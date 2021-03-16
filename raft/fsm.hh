@@ -80,7 +80,15 @@ struct candidate {
 struct leader {
     // A state for each follower
     tracker tracker;
-    leader(server_id id) : tracker(id) {}
+    // Will be set to point to the new leader before it's
+    // used to set semaphore exception.
+    const server_id& current_leader;
+    // Used to limit log size
+    seastar::semaphore log_limiter_semaphore;
+    leader(server_id id, size_t max_log_size, const server_id& leader_) : tracker(id), current_leader(leader_), log_limiter_semaphore(max_log_size) {}
+    ~leader() {
+        log_limiter_semaphore.broken(not_a_leader(current_leader));
+    }
 };
 
 // Raft protocol finite state machine
@@ -187,18 +195,6 @@ private:
 
     // Signaled when there is a IO event to process.
     seastar::condition_variable _sm_events;
-
-    struct log_limiter_semaphore_guard {
-        seastar::semaphore sem;
-        server_id& leader;
-        log_limiter_semaphore_guard(fsm* fsm) :
-             sem(fsm->_config.max_log_size), leader(fsm->_current_leader) {}
-        ~log_limiter_semaphore_guard() {
-            sem.broken(not_a_leader(leader));
-        }
-    };
-    // Exists on a leader only and used to limit log size
-    std::optional<log_limiter_semaphore_guard> _log_limiter_semaphore;
 
     // Called when one of the replicas advances its match index
     // so it may be the case that some entries are committed now.
@@ -462,8 +458,8 @@ void fsm::step(server_id from, Message&& msg) {
         }
     }
 
-    auto visitor = [this, from, msg = std::move(msg)](auto state) mutable {
-        using State = decltype(state);
+    auto visitor = [this, from, msg = std::move(msg)](const auto& state) mutable {
+        using State = std::remove_cvref_t<decltype(state)>;
 
         if constexpr (std::is_same_v<Message, append_request>) {
             // Got AppendEntries RPC from self

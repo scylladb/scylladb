@@ -39,7 +39,7 @@ fsm::fsm(server_id id, term_t current_term, server_id voted_for, log log,
 future<> fsm::wait_max_log_size() {
     check_is_leader();
 
-   return _log_limiter_semaphore->sem.wait();
+   return leader_state().log_limiter_semaphore.wait();
 }
 
 const configuration& fsm::get_configuration() const {
@@ -129,10 +129,9 @@ void fsm::reset_election_timeout() {
 
 void fsm::become_leader() {
     assert(!std::holds_alternative<leader>(_state));
-    _state = leader(_my_id);
+    _state.emplace<leader>(_my_id, _config.max_log_size, _current_leader);
     _current_leader = _my_id;
-    _log_limiter_semaphore.emplace(this);
-    _log_limiter_semaphore->sem.consume(_log.in_memory_size());
+    leader_state().log_limiter_semaphore.consume(_log.in_memory_size());
     _last_election_time = _clock.now();
     // a new leader needs to commit at lease one entry to make sure that
     // all existing entries in its log are committed as well. Also it should
@@ -148,7 +147,6 @@ void fsm::become_leader() {
 void fsm::become_follower(server_id leader) {
     _current_leader = leader;
     _state = follower{};
-    _log_limiter_semaphore = std::nullopt;
     if (_current_leader) {
         _last_election_time = _clock.now();
     }
@@ -163,7 +161,6 @@ void fsm::become_candidate(bool is_prevote) {
 
     reset_election_timeout();
 
-    _log_limiter_semaphore = std::nullopt;
     // 3.4 Leader election
     //
     // A possible outcome is that a candidate neither wins nor
@@ -794,7 +791,7 @@ bool fsm::apply_snapshot(snapshot snp, size_t trailing) {
     size_t units = _log.apply_snapshot(std::move(snp), trailing);
     if (is_leader()) {
         logger.trace("apply_snapshot[{}]: signal {} available units", _my_id, units);
-        _log_limiter_semaphore->sem.signal(units);
+        leader_state().log_limiter_semaphore.signal(units);
     }
     return true;
 }
