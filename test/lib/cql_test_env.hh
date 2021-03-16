@@ -123,6 +123,7 @@ public:
     virtual future<> require_keyspace_exists(const sstring& ks_name) = 0;
 
     virtual future<> require_table_exists(const sstring& ks_name, const sstring& cf_name) = 0;
+    virtual future<> require_table_exists(std::string_view qualified_name) = 0;
     virtual future<> require_table_does_not_exist(const sstring& ks_name, const sstring& cf_name) = 0;
 
     virtual future<> require_column_has_value(

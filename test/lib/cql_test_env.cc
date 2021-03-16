@@ -284,6 +284,13 @@ public:
         return make_ready_future<>();
     }
 
+    virtual future<> require_table_exists(std::string_view qualified_name) override {
+        auto dot_pos = qualified_name.find_first_of('.');
+        assert(dot_pos != std::string_view::npos && dot_pos != 0 && dot_pos != qualified_name.size() - 1);
+        assert(_db.local().has_schema(qualified_name.substr(0, dot_pos), qualified_name.substr(dot_pos + 1)));
+        return make_ready_future<>();
+    }
+
     virtual future<> require_table_does_not_exist(const sstring& ks_name, const sstring& table_name) override {
         auto& db = _db.local();
         assert(!db.has_schema(ks_name, table_name));
