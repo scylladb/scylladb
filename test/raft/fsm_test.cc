@@ -1259,3 +1259,43 @@ BOOST_AUTO_TEST_CASE(test_confchange_abcde_abcdefg) {
     BOOST_CHECK_EQUAL(A.get_configuration().is_joint(), false);
     BOOST_CHECK_EQUAL(A.get_configuration().current.size(), 7);
 }
+
+BOOST_AUTO_TEST_CASE(test_election_during_confchange) {
+    server_id A_id = id(), B_id = id(), C_id = id(), D_id = id(), E_id = id();
+
+    raft::log log(raft::snapshot{.idx = index_t{0}, .config = raft::configuration{A_id, B_id, C_id}});
+
+    // Joint config has reached old majority, the leader is
+    // from new majority
+    discrete_failure_detector fd;
+    auto A = create_follower(A_id, log, fd);
+    auto B = create_follower(B_id, log, fd);
+    auto C = create_follower(C_id, log, fd);
+    election_timeout(A);
+    communicate(A, B, C);
+    A.add_entry(raft::configuration({C_id, D_id, E_id}));
+    communicate(A, B, C);
+    fd.mark_dead(A_id);
+    auto D = create_follower(D_id, log, fd);
+    auto E = create_follower(E_id, log, fd);
+    election_timeout(C);
+    election_threshold(B);
+    communicate_until([&C]() { return C.is_leader(); }, B, C, D, E);
+    BOOST_CHECK_EQUAL(C.get_configuration().is_joint(), true);
+    fd.mark_alive(A.id());
+    communicate(D, A, B, E);
+    fd.mark_alive(C.id());
+    communicate_until([&C]() { return C.get_configuration().is_joint() == false; }, B, C, D, E);
+    communicate(C, D);
+    fd.mark_dead(C.id());
+    election_timeout(D);
+    // E may still be in joint. It must vote for D anyway. D is in C_new
+    // and will replicate C_new to E after becoming a leader
+    election_threshold(E);
+    A.tick();
+    communicate(A, D, E);
+    BOOST_CHECK(D.is_leader());
+    BOOST_CHECK(A.is_follower());
+    BOOST_CHECK_EQUAL(D.get_configuration().is_joint(), false);
+    BOOST_CHECK_EQUAL(D.get_configuration().current.size(), 3);
+}
