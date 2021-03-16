@@ -56,7 +56,7 @@ public:
 
 static_assert(Hasher<hasher>);
 
-template<typename T, typename Enable = void>
+template<typename T>
 struct appending_hash;
 
 template<typename H, typename T, typename... Args>
@@ -67,7 +67,8 @@ void feed_hash(H& h, const T& value, Args&&... args) noexcept {
 };
 
 template<typename T>
-struct appending_hash<T, std::enable_if_t<std::is_arithmetic<T>::value>> {
+requires std::is_arithmetic_v<T>
+struct appending_hash<T> {
     template<typename H>
     requires Hasher<H>
     void operator()(H& h, T value) const noexcept {
@@ -86,7 +87,8 @@ struct appending_hash<bool> {
 };
 
 template<typename T>
-struct appending_hash<T, std::enable_if_t<std::is_enum<T>::value>> {
+requires std::is_enum_v<T>
+struct appending_hash<T> {
     template<typename H>
     requires Hasher<H>
     void operator()(H& h, const T& value) const noexcept {
