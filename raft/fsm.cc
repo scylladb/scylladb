@@ -541,13 +541,13 @@ void fsm::append_entries_reply(server_id from, append_reply&& reply) {
         assert(progress.next_idx != progress.match_idx);
     }
 
-    logger.trace("append_entries_reply[{}->{}]: next_idx={}, match_idx={}",
-        _my_id, from, progress.next_idx, progress.match_idx);
-
     // We may have just applied a configuration that removes this
     // follower, so re-track it.
     opt_progress = leader_state().tracker.find(from);
     if (opt_progress != nullptr) {
+        logger.trace("append_entries_reply[{}->{}]: next_idx={}, match_idx={}",
+            _my_id, from, opt_progress->next_idx, opt_progress->match_idx);
+
         replicate_to(*opt_progress, false);
     }
 }
