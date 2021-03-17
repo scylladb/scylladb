@@ -674,6 +674,18 @@ SEASTAR_THREAD_TEST_CASE(scalar_in) {
         require_rows(e, stmt, {}, {LF({24.f, 25.f})}, {{F(24)}, {F(24)}, {F(25)}});
         require_rows(e, stmt, {}, {LF({25.f, data_value::make_null(float_type)})}, {{F(25)}});
         require_rows(e, stmt, {}, {LF({99.f, data_value::make_null(float_type)})}, {});
+
+        const auto in_null = [&] (const char* column) {
+            return e.execute_prepared(
+                    e.prepare(format("select * from t where {} in ? allow filtering", column)).get0(),
+                    {cql3::raw_value::make_null()})
+                    .get();
+        };
+        using ire = exceptions::invalid_request_exception;
+        using exception_predicate::message_contains;
+        BOOST_REQUIRE_EXCEPTION(in_null("p"), ire, message_contains("null value"));
+        BOOST_REQUIRE_EXCEPTION(in_null("c"), ire, message_contains("null value"));
+        BOOST_REQUIRE_EXCEPTION(in_null("r"), ire, message_contains("null value"));
     }).get();
 }
 
@@ -778,6 +790,10 @@ SEASTAR_THREAD_TEST_CASE(multi_col_in) {
         require_rows(e, stmt, {}, {bound_tuples({{13, 13}, {12, 22}})}, {{I(12), F(22)}});
         require_rows(e, stmt, {}, {bound_tuples({{12, 21}})}, {});
         require_rows(e, stmt, {}, {bound_tuples({{12, 21}, {12, 21}, {13, 21}, {14, 21}})}, {});
+        BOOST_REQUIRE_EXCEPTION(
+                e.execute_prepared(stmt, {cql3::raw_value::make_null()}).get(),
+                exceptions::invalid_request_exception,
+                exception_predicate::message_equals("Invalid null value for IN restriction"));
         stmt = e.prepare("select ck1 from t where (ck1,ck2) in (?) allow filtering").get0();
         auto tpl = [] (int32_t e1, float e2) {
             return make_tuple({int32_type, float_type}, {e1, e2});
