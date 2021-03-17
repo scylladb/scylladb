@@ -82,7 +82,7 @@ def test_gsi_identical(dynamodb):
 # One of the simplest forms of a non-trivial GSI: The base table has a hash
 # and sort key, and the index reverses those roles. Other attributes are just
 # copied.
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def test_table_gsi_1(dynamodb):
     table = create_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' },
@@ -203,7 +203,7 @@ def test_gsi_missing_attribute_definition(dynamodb):
 # hash key (which is the base's hash key). In the materialized-view-based
 # implementation, we need to remember the other part of the base key as a
 # clustering key.
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def test_table_gsi_1_hash_only(dynamodb):
     table = create_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' },
@@ -250,7 +250,7 @@ def test_gsi_key_not_in_index(test_table_gsi_1_hash_only):
 
 # A second scenario of GSI. Base table has just hash key, Index has a
 # different hash key - one of the non-key attributes from the base table.
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def test_table_gsi_2(dynamodb):
     table = create_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
@@ -382,7 +382,7 @@ def test_gsi_wrong_type_attribute_batch(test_table_gsi_2):
 # difficult to implement in Alternator because Scylla's materialized-views
 # implementation only allows one new key column in the view, and here
 # we need two (which, also, aren't actual columns, but map items).
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def test_table_gsi_3(dynamodb):
     table = create_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
@@ -453,7 +453,7 @@ def test_gsi_missing_attribute_3(test_table_gsi_3):
     assert not any([i['p'] == p for i in full_scan(test_table_gsi_3, ConsistentRead=False, IndexName='hello')])
 
 # A fourth scenario of GSI. Two GSIs on a single base table.
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def test_table_gsi_4(dynamodb):
     table = create_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
@@ -500,7 +500,7 @@ def test_gsi_4_describe(test_table_gsi_4):
     assert multiset([g['IndexName'] for g in gsis]) == multiset(['hello_a', 'hello_b'])
 
 # A scenario for GSI in which the table has both hash and sort key
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def test_table_gsi_5(dynamodb):
     table = create_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, { 'AttributeName': 'c', 'KeyType': 'RANGE' } ],
@@ -875,7 +875,7 @@ def test_gsi_very_long_name(dynamodb):
 # name. This assumes that materialized-view names are composed using the
 # index's name (which is currently what we do).
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def test_table_gsi_random_name(dynamodb):
     index_name = random_string()
     table = create_test_table(dynamodb,

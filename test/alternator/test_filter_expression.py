@@ -73,7 +73,7 @@ def random_item(p, i):
     if t == 0:
         item['j'] = item['i']
     return item
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def test_table_sn_with_data(test_table_sn):
     p = random_string()
     # TODO: because we use random items here, it may be difficult to reproduce

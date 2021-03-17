@@ -192,7 +192,7 @@ def expect_tracing_events(dynamodb, str, expected_events):
         assert event in events
 
 # A test table based on test_table_s, but with isolation level defined to 'always'
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def test_table_s_isolation_always(dynamodb):
     table = create_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, ],

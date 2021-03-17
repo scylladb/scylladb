@@ -263,7 +263,7 @@ def test_table_streams_off(dynamodb):
 # named columns.
 special_column_name1 = 'attrs'
 special_column_name2 = ':attrs'
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def test_table_special_column_name(dynamodb):
     table = create_test_table(dynamodb,
         KeySchema=[

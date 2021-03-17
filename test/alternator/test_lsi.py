@@ -128,7 +128,7 @@ def test_lsi_wrong(dynamodb):
 # A simple scenario for LSI. Base table has a partition key and a sort key,
 # index has the same partition key key but a different sort key - one of
 # the non-key attributes from the base table.
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def test_table_lsi_1(dynamodb):
     table = create_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, { 'AttributeName': 'c', 'KeyType': 'RANGE' } ],
@@ -169,7 +169,7 @@ def test_lsi_1(test_table_lsi_1):
 
 # A second scenario of LSI. Base table has both hash and sort keys,
 # a local index is created on each non-key parameter
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def test_table_lsi_4(dynamodb):
     table = create_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, { 'AttributeName': 'c', 'KeyType': 'RANGE' } ],
@@ -229,7 +229,7 @@ def test_lsi_describe(test_table_lsi_4):
     # TODO: check also ProvisionedThroughput, IndexArn
 
 # A table with selective projection - only keys are projected into the index
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def test_table_lsi_keys_only(dynamodb):
     table = create_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, { 'AttributeName': 'c', 'KeyType': 'RANGE' } ],
@@ -313,7 +313,7 @@ def test_lsi_consistent_read(test_table_lsi_1):
                        'b': {'AttributeValueList': [b2], 'ComparisonOperator': 'EQ'}})
 
 # A table with both gsi and lsi present
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def test_table_lsi_gsi(dynamodb):
     table = create_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, { 'AttributeName': 'c', 'KeyType': 'RANGE' } ],

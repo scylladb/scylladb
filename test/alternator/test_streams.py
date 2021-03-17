@@ -431,7 +431,7 @@ def test_get_records_nonexistent_iterator(dynamodbstreams):
 # It is still worthwhile to use a fixture rather than to create a table
 # explicitly - it is convenient, safe (the table gets deleted automatically)
 # and if in the future we can work around the DynamoDB problem, we can return
-# these fixtures to session scope.
+# these fixtures to module scope.
 
 def create_table_ss(dynamodb, dynamodbstreams, type):
     table = create_test_table(dynamodb,
@@ -1211,10 +1211,10 @@ def test_streams_1_new_and_old_images(test_table_ss_new_and_old_images, dynamodb
 
 # A fixture which creates a test table with a stream enabled, and returns a
 # bunch of interesting information collected from the CreateTable response.
-# This fixture is session-scoped - it can be shared by multiple tests below,
+# This fixture is module-scoped - it can be shared by multiple tests below,
 # because we are not going to actually use or change this stream, we will
 # just do multiple tests on its setup.
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def test_table_stream_with_result(dynamodb, dynamodbstreams):
     tablename = test_table_name()
     result = dynamodb.meta.client.create_table(TableName=tablename,

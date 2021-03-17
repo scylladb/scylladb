@@ -101,7 +101,7 @@ def test_tag_resource_overwrite(test_table):
     assert multiset(got['Tags']) == multiset(tags)
 
 PREDEFINED_TAGS = [{'Key': 'str1', 'Value': 'str2'}, {'Key': 'kkk', 'Value': 'vv'}, {'Key': 'keykey', 'Value': 'valvalvalval'}]
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def test_table_tags(dynamodb):
     # The feature of creating a table already with tags was only added to
     # DynamoDB in April 2019, and to the botocore library in version 1.12.136
