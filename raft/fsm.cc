@@ -418,7 +418,9 @@ void fsm::tick() {
 
     if (is_leader()) {
         tick_leader();
-    } else if (_current_leader && _failure_detector.is_alive(_current_leader)) {
+    } else if (_current_leader &&
+               (_log.get_configuration().is_joint() || _log.get_configuration().current.contains(server_address{_current_leader})) &&
+                _failure_detector.is_alive(_current_leader)) {
         // Ensure the follower doesn't disrupt a valid leader
         // simple because there were no AppendEntries RPCs recently.
         _last_election_time = _clock.now();
