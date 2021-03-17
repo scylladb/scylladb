@@ -175,6 +175,29 @@ private:
     void register_metrics();
     seastar::metrics::metric_groups _metrics;
 
+    // Server address set to be used by RPC module to maintain its address
+    // mappings.
+    // Doesn't really correspond to any configuration, neither
+    // committed, nor applied. This is just an artificial address set
+    // meant entirely for RPC purposes and is constructed from the last
+    // configuration entry in the log (prior to sending out the messages in the
+    // `io_fiber`) as follows:
+    // * If the config is non-joint, it's the current configuration.
+    // * If the config is joint, it's defined as a union of current and
+    //   previous configurations.
+    //   The motivation behind this is that server should have a collective
+    //   set of addresses from both leaving and joining nodes before
+    //   sending the messages, because it may send to both types of nodes.
+    // After the new address set is built the diff between the last rpc config
+    // observed by the `server_impl` instance and the one obtained from the last
+    // conf entry is calculated. The diff is used to maintain rpc state for
+    // joining and leaving servers.
+    server_address_set _current_rpc_config;
+    const server_address_set& get_rpc_config() const;
+    // Per-item updates to rpc config.
+    void add_to_rpc_config(server_address srv);
+    void remove_from_rpc_config(const server_address& srv);
+
     friend std::ostream& operator<<(std::ostream& os, const server_impl& s);
 };
 
@@ -646,6 +669,18 @@ void server_impl::elapse_election() {
 
 void server_impl::tick() {
     _fsm->tick();
+}
+
+const server_address_set& server_impl::get_rpc_config() const {
+    return _current_rpc_config;
+}
+
+void server_impl::add_to_rpc_config(server_address srv) {
+    _current_rpc_config.emplace(std::move(srv));
+}
+
+void server_impl::remove_from_rpc_config(const server_address& srv) {
+    _current_rpc_config.erase(srv);
 }
 
 std::unique_ptr<server> create_server(server_id uuid, std::unique_ptr<rpc> rpc,
