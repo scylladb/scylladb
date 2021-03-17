@@ -35,12 +35,16 @@ struct fsm_output {
     // Entries to apply.
     std::vector<log_entry_ptr> committed;
     std::optional<snapshot> snp;
+    // Latest configuration obtained from the log in case it has changed
+    // since last fsm output poll.
+    std::optional<server_address_set> rpc_configuration;
 
     // True if there is no new output
     bool empty() const {
         return !term_and_vote.has_value() &&
             log_entries.size() == 0 && messages.size() == 0 &&
-            committed.size() == 0 && !snp.has_value();
+            committed.size() == 0 && !snp.has_value() &&
+            !rpc_configuration.has_value();
     }
 };
 
@@ -167,10 +171,14 @@ class fsm {
         server_id _voted_for;
         index_t _commit_idx;
         snapshot _snapshot;
+        index_t _last_conf_idx;
+        term_t _last_term;
 
         bool is_equal(const fsm& fsm) const {
             return _current_term == fsm._current_term && _voted_for == fsm._voted_for &&
-                _commit_idx == fsm._commit_idx && _snapshot.id == fsm._log.get_snapshot().id;
+                _commit_idx == fsm._commit_idx && _snapshot.id == fsm._log.get_snapshot().id &&
+                _last_conf_idx == fsm._log.last_conf_idx() &&
+                _last_term == fsm._log.last_term();
         }
 
         void advance(const fsm& fsm) {
@@ -178,6 +186,8 @@ class fsm {
             _voted_for = fsm._voted_for;
             _commit_idx = fsm._commit_idx;
             _snapshot = fsm._log.get_snapshot();
+            _last_conf_idx = fsm._log.last_conf_idx();
+            _last_term = fsm._log.last_term();
         }
     } _observed;
 
