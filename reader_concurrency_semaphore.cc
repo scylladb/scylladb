@@ -381,16 +381,7 @@ void reader_concurrency_semaphore::inactive_read_handle::abandon() noexcept {
 
 void reader_concurrency_semaphore::signal(const resources& r) noexcept {
     _resources += r;
-    while (!_wait_list.empty() && has_available_units(_wait_list.front().res)) {
-        auto& x = _wait_list.front();
-        try {
-            x.permit.on_admission();
-            x.pr.set_value(reader_permit::resource_units(std::move(x.permit), x.res));
-        } catch (...) {
-            x.pr.set_exception(std::current_exception());
-        }
-        _wait_list.pop_front();
-    }
+    maybe_admit_waiters();
 }
 
 reader_concurrency_semaphore::reader_concurrency_semaphore(int count, ssize_t memory, sstring name, size_t max_queue_length,
@@ -611,6 +602,19 @@ future<reader_permit::resource_units> reader_concurrency_semaphore::do_wait_admi
     }
 
     return fut;
+}
+
+void reader_concurrency_semaphore::maybe_admit_waiters() noexcept {
+    while (!_wait_list.empty() && has_available_units(_wait_list.front().res)) {
+        auto& x = _wait_list.front();
+        try {
+            x.permit.on_admission();
+            x.pr.set_value(reader_permit::resource_units(std::move(x.permit), x.res));
+        } catch (...) {
+            x.pr.set_exception(std::current_exception());
+        }
+        _wait_list.pop_front();
+    }
 }
 
 void reader_concurrency_semaphore::on_permit_created(reader_permit::impl& permit) {
