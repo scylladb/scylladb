@@ -469,7 +469,8 @@ public:
     explicit deserialized_bytes_proxy(Stream stream)
         : _stream(std::move(stream)) { }
 
-    template<typename OtherStream, typename = std::enable_if_t<std::is_convertible_v<OtherStream, Stream>>>
+    template<typename OtherStream>
+    requires std::convertible_to<OtherStream, Stream>
     deserialized_bytes_proxy(deserialized_bytes_proxy<OtherStream> proxy)
         : _stream(std::move(proxy._stream)) { }
 
