@@ -294,13 +294,15 @@ fsm_output fsm::get_output() {
 
 void fsm::advance_stable_idx(index_t idx) {
     _log.stable_to(idx);
-    // If this server is leader and is part of the current
-    // configuration, update it's progress and optionally
-    // commit new entries.
-    if (is_leader() && leader_state().tracker.leader_progress()) {
-        leader_state().tracker.leader_progress()->accepted(idx);
+    if (is_leader()) {
+        if (leader_state().tracker.leader_progress()) {
+            // If this server is leader and is part of the current
+            // configuration, update it's progress and optionally
+            // commit new entries.
+            leader_state().tracker.leader_progress()->accepted(idx);
+            maybe_commit();
+        }
         replicate();
-        maybe_commit();
     }
 }
 
