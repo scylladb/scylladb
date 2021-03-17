@@ -36,6 +36,7 @@
 #include "database.hh"
 #include "hashers.hh"
 #include "locator/network_topology_strategy.hh"
+#include "utils/bit_cast.hh"
 
 #include <boost/algorithm/string/predicate.hpp>
 #include <boost/algorithm/string/split.hpp>
@@ -644,28 +645,19 @@ future<partition_checksum> partition_checksum::compute(flat_mutation_reader m, r
     }
 }
 
-static inline unaligned<uint64_t>& qword(std::array<uint8_t, 32>& b, int n) {
-    return *unaligned_cast<uint64_t>(b.data() + 8 * n);
-}
-static inline const unaligned<uint64_t>& qword(const std::array<uint8_t, 32>& b, int n) {
-    return *unaligned_cast<uint64_t>(b.data() + 8 * n);
-}
-
 void partition_checksum::add(const partition_checksum& other) {
      static_assert(std::tuple_size<decltype(_digest)>::value == 32, "digest size");
      // Hopefully the following trickery is faster than XOR'ing 32 separate bytes
-     qword(_digest, 0) = qword(_digest, 0) ^ qword(other._digest, 0);
-     qword(_digest, 1) = qword(_digest, 1) ^ qword(other._digest, 1);
-     qword(_digest, 2) = qword(_digest, 2) ^ qword(other._digest, 2);
-     qword(_digest, 3) = qword(_digest, 3) ^ qword(other._digest, 3);
+     for (int i = 0; i < 4; ++i) {
+         uint64_t a = read_unaligned<uint64_t>(_digest.data() + 8 * i);
+         uint64_t b = read_unaligned<uint64_t>(other._digest.data() + 8 * i);
+         write_unaligned(_digest.data() + 8 * i, a ^ b);
+     }
 }
 
 bool partition_checksum::operator==(const partition_checksum& other) const {
     static_assert(std::tuple_size<decltype(_digest)>::value == 32, "digest size");
-    return qword(_digest, 0) == qword(other._digest, 0) &&
-           qword(_digest, 1) == qword(other._digest, 1) &&
-           qword(_digest, 2) == qword(other._digest, 2) &&
-           qword(_digest, 3) == qword(other._digest, 3);
+    return _digest == other._digest;
 }
 
 const std::array<uint8_t, 32>& partition_checksum::digest() const {

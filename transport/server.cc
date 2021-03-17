@@ -67,6 +67,7 @@
 #include "types/user.hh"
 
 #include "transport/cql_protocol_extension.hh"
+#include "utils/bit_cast.hh"
 
 namespace cql_transport {
 
@@ -379,8 +380,8 @@ cql_server::connection::parse_frame(temporary_buffer<char> buf) const {
     switch (_version) {
     case 1:
     case 2: {
-        auto raw = reinterpret_cast<const cql_binary_frame_v1*>(buf.get());
-        auto cooked = net::ntoh(*raw);
+        cql_binary_frame_v1 raw = read_unaligned<cql_binary_frame_v1>(buf.get());
+        auto cooked = net::ntoh(raw);
         v3.version = cooked.version;
         v3.flags = cooked.flags;
         v3.opcode = cooked.opcode;
@@ -390,7 +391,8 @@ cql_server::connection::parse_frame(temporary_buffer<char> buf) const {
     }
     case 3:
     case 4: {
-        v3 = net::ntoh(*reinterpret_cast<const cql_binary_frame_v3*>(buf.get()));
+        cql_binary_frame_v3 raw = read_unaligned<cql_binary_frame_v3>(buf.get());
+        v3 = net::ntoh(raw);
         break;
     }
     default:

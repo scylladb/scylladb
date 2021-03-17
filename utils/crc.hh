@@ -105,12 +105,12 @@ public:
             --size;
         }
         if ((reinterpret_cast<uintptr_t>(in) & 3) && size >= 2) {
-            process_le(*reinterpret_cast<const uint16_t*>(in));
+            process_le(seastar::read_le<uint16_t>(reinterpret_cast<const char*>(in)));
             in += 2;
             size -= 2;
         }
         if ((reinterpret_cast<uintptr_t>(in) & 7) && size >= 4) {
-            process_le(*reinterpret_cast<const uint32_t*>(in));
+            process_le(seastar::read_le<uint32_t>(reinterpret_cast<const char*>(in)));
             in += 4;
             size -= 4;
         }
@@ -146,17 +146,17 @@ public:
         }
 
         while (size >= 8) {
-            process_le(*reinterpret_cast<const uint64_t*>(in));
+            process_le(seastar::read_le<uint64_t>(reinterpret_cast<const char*>(in)));
             in += 8;
             size -= 8;
         }
         if (size >= 4) {
-            process_le(*reinterpret_cast<const uint32_t*>(in));
+            process_le(seastar::read_le<uint32_t>(reinterpret_cast<const char*>(in)));
             in += 4;
             size -= 4;
         }
         if (size >= 2) {
-            process_le(*reinterpret_cast<const uint16_t*>(in));
+            process_le(seastar::read_le<uint16_t>(reinterpret_cast<const char*>(in)));
             in += 2;
             size -= 2;
         }

@@ -55,6 +55,7 @@
 #include "idl/token.dist.impl.hh"
 #include "idl/range.dist.impl.hh"
 #include "message/messaging_service.hh"
+#include "utils/bit_cast.hh"
 
 service::pager::paging_state::paging_state(partition_key pk,
         std::optional<clustering_key> ck,
@@ -94,7 +95,7 @@ lw_shared_ptr<service::pager::paging_state> service::pager::paging_state::deseri
         return nullptr;
     }
 
-    if (data.value().size() < sizeof(uint32_t) || le_to_cpu(*unaligned_cast<int32_t*>(data.value().begin())) != netw::messaging_service::current_version) {
+    if (data.value().size() < sizeof(uint32_t) || le_to_cpu(read_unaligned<int32_t>(data.value().begin())) != netw::messaging_service::current_version) {
         throw exceptions::protocol_exception("Invalid value for the paging state");
     }
 
@@ -114,6 +115,6 @@ lw_shared_ptr<service::pager::paging_state> service::pager::paging_state::deseri
 bytes_opt service::pager::paging_state::serialize() const {
     bytes b = ser::serialize_to_buffer<bytes>(*this, sizeof(uint32_t));
     // put serialization format id
-    *unaligned_cast<int32_t*>(b.begin()) = cpu_to_le(netw::messaging_service::current_version);
+    write_unaligned<int32_t>(b.begin(), cpu_to_le(netw::messaging_service::current_version));
     return {std::move(b)};
 }

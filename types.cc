@@ -175,7 +175,7 @@ integer_type_impl<T>::integer_type_impl(
 
 template <typename T> static bytes decompose_value(T v) {
     bytes b(bytes::initialized_later(), sizeof(v));
-    *reinterpret_cast<T*>(b.begin()) = (T)net::hton(v);
+    write_unaligned<T>(b.begin(), net::hton(v));
     return b;
 }
 
