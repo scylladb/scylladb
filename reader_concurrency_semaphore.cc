@@ -519,10 +519,6 @@ bool reader_concurrency_semaphore::has_available_units(const resources& r) const
     return (bool(_resources) && _resources >= r) || _resources.count == _initial_resources.count;
 }
 
-bool reader_concurrency_semaphore::may_proceed(const resources& r) const {
-    return _wait_list.empty() && has_available_units(r);
-}
-
 future<reader_permit::resource_units> reader_concurrency_semaphore::enqueue_waiter(reader_permit permit, resources r,
         db::timeout_clock::time_point timeout) {
     if (_wait_list.size() >= _max_queue_length) {

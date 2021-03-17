@@ -176,8 +176,6 @@ private:
 
     bool has_available_units(const resources& r) const;
 
-    bool may_proceed(const resources& r) const;
-
     // Add the permit to the wait queue and return the future which resolves when
     // the permit is admitted (popped from the queue).
     future<reader_permit::resource_units> enqueue_waiter(reader_permit permit, resources r, db::timeout_clock::time_point timeout);
