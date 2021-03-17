@@ -23,6 +23,7 @@
 #include <boost/signals2.hpp>
 #include <boost/signals2/dummy_mutex.hpp>
 #include <type_traits>
+#include <concepts>
 
 #include "utils/exceptions.hh"
 #include <seastar/core/future.hh>
@@ -53,8 +54,9 @@ extern thread_local io_error_handler sstable_write_error_handler;
 extern thread_local io_error_handler general_disk_error_handler;
 
 template<typename Func, typename... Args>
-std::enable_if_t<!is_future<std::result_of_t<Func(Args&&...)>>::value,
-		         std::result_of_t<Func(Args&&...)>>
+requires std::invocable<Func, Args&&...>
+        && (!is_future<std::invoke_result_t<Func, Args&&...>>::value)
+std::invoke_result_t<Func, Args&&...>
 do_io_check(const io_error_handler& error_handler, Func&& func, Args&&... args) {
     try {
         // calling function
@@ -65,8 +67,9 @@ do_io_check(const io_error_handler& error_handler, Func&& func, Args&&... args) 
     }
 }
 
-template<typename Func, typename... Args,
-         typename RetType = typename std::enable_if<is_future<std::result_of_t<Func(Args&&...)>>::value>::type>
+template<typename Func, typename... Args>
+requires std::invocable<Func, Args&&...>
+        && is_future<std::invoke_result_t<Func, Args&&...>>::value
 auto do_io_check(const io_error_handler& error_handler, Func&& func, Args&&... args) noexcept {
     return futurize_invoke(func, std::forward<Args>(args)...).handle_exception([&error_handler] (auto ep) {
         error_handler(ep);
