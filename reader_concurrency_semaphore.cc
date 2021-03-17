@@ -101,6 +101,7 @@ public:
                         _op_name_view,
                         _resources.count,
                         _resources.memory));
+            signal(_resources);
         }
     }
 
