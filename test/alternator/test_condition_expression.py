@@ -1626,26 +1626,18 @@ def test_condition_expression_with_permissive_write_isolation(scylla_only, dynam
 
 # Test that the forbid_rmw isolation level prevents read-modify-write requests
 # from working. These test cases make sense only for alternator, so they're skipped
-# when run on AWS
-def test_condition_expression_with_forbidden_rmw(scylla_only, dynamodb, test_table_s):
-    def do_test_with_forbidden_rmw(test_case, table, *args):
-        try:
-            set_write_isolation(table, 'f')
-            test_case(table, *args)
-            assert False, "Expected an exception when running {}".format(test_case.__name__)
-        except ClientError:
-            pass
-        finally:
-            clear_write_isolation(table)
+# when run on AWS (test_table_s_forbid_rmw implies scylla_only)
+def test_condition_expression_with_forbidden_rmw(dynamodb, test_table_s_forbid_rmw):
     for test_case in [test_update_condition_eq_success, test_update_condition_attribute_exists,
                       test_put_item_condition, test_update_condition_attribute_reference]:
-        do_test_with_forbidden_rmw(test_case, test_table_s)
+        with pytest.raises(ClientError):
+            test_case(test_table_s_forbid_rmw)
     # Ensure that regular writes (without rmw) work just fine
     s = random_string()
-    test_table_s.put_item(Item={'p': s, 'regular': 'write'})
-    assert test_table_s.get_item(Key={'p': s}, ConsistentRead=True)['Item'] == {'p': s, 'regular': 'write'}
-    test_table_s.update_item(Key={'p': s}, AttributeUpdates={'write': {'Value': 'regular', 'Action': 'PUT'}})
-    assert test_table_s.get_item(Key={'p': s}, ConsistentRead=True)['Item'] == {'p': s, 'regular': 'write', 'write': 'regular'}
+    test_table_s_forbid_rmw.put_item(Item={'p': s, 'regular': 'write'})
+    assert test_table_s_forbid_rmw.get_item(Key={'p': s}, ConsistentRead=True)['Item'] == {'p': s, 'regular': 'write'}
+    test_table_s_forbid_rmw.update_item(Key={'p': s}, AttributeUpdates={'write': {'Value': 'regular', 'Action': 'PUT'}})
+    assert test_table_s_forbid_rmw.get_item(Key={'p': s}, ConsistentRead=True)['Item'] == {'p': s, 'regular': 'write', 'write': 'regular'}
 
 # Reproducer for issue #6573: binary strings should be ordered as unsigned
 # bytes, i.e., byte 128 comes after 127, not before as with signed bytes.
