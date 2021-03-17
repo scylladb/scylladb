@@ -358,6 +358,16 @@ private:
     void add_query(sstring_view val);
 
     /**
+     * Store a custom session parameter.
+     * 
+     * Thus value will be stored in the params<string, string> map of a tracing session
+     * 
+     * @param key the parameter key
+     * @param val the parameter value
+     */
+    void add_session_param(sstring_view key, sstring_view val);
+
+    /**
      * Store a user provided timestamp.
      *
      * This value will eventually be stored in a params<string, string> map of a tracing session
@@ -475,6 +485,7 @@ private:
     friend void set_consistency_level(const trace_state_ptr& p, db::consistency_level val);
     friend void set_optional_serial_consistency_level(const trace_state_ptr& p, const std::optional<db::consistency_level>&val);
     friend void add_query(const trace_state_ptr& p, sstring_view val);
+    friend void add_session_param(const trace_state_ptr& p, sstring_view key, sstring_view val);
     friend void set_user_timestamp(const trace_state_ptr& p, api::timestamp_type val);
     friend void add_prepared_statement(const trace_state_ptr& p, prepared_checked_weak_ptr& prepared);
     friend void set_username(const trace_state_ptr& p, const std::optional<auth::authenticated_user>& user);
@@ -613,6 +624,12 @@ inline void set_optional_serial_consistency_level(const trace_state_ptr& p, cons
 inline void add_query(const trace_state_ptr& p, sstring_view val) {
     if (p) {
         p->add_query(std::move(val));
+    }
+}
+
+inline void add_session_param(const trace_state_ptr& p, sstring_view key, sstring_view val) {
+    if (p) {
+        p->add_session_param(std::move(key), std::move(val));
     }
 }
 
