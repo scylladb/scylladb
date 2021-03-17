@@ -546,16 +546,19 @@ future<reader_permit::resource_units> reader_concurrency_semaphore::enqueue_wait
 future<reader_permit::resource_units> reader_concurrency_semaphore::do_wait_admission(reader_permit permit, size_t memory,
         db::timeout_clock::time_point timeout) {
     auto r = resources(1, static_cast<ssize_t>(memory));
-    while (!may_proceed(r)) {
+
+    if (!_wait_list.empty()) {
+        return enqueue_waiter(std::move(permit), r, timeout);
+    }
+
+    while (!has_available_units(r)) {
         if (!try_evict_one_inactive_read(evict_reason::permit)) {
-            break;
+            return enqueue_waiter(std::move(permit), r, timeout);
         }
     }
-    if (may_proceed(r)) {
-        permit.on_admission();
-        return make_ready_future<reader_permit::resource_units>(reader_permit::resource_units(std::move(permit), r));
-    }
-    return enqueue_waiter(std::move(permit), r, timeout);
+
+    permit.on_admission();
+    return make_ready_future<reader_permit::resource_units>(reader_permit::resource_units(std::move(permit), r));
 }
 
 reader_permit reader_concurrency_semaphore::make_permit(const schema* const schema, const char* const op_name) {
