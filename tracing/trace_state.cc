@@ -135,6 +135,10 @@ void trace_state::add_query(sstring_view val) {
     _params_ptr->queries.emplace_back(std::move(val));
 }
 
+void trace_state::add_session_param(sstring_view key, sstring_view val) {
+    _records->session_rec.parameters.emplace(std::move(key), std::move(val));
+}
+
 void trace_state::set_user_timestamp(api::timestamp_type val) {
     _params_ptr->user_timestamp.emplace(val);
 }
