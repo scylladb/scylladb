@@ -27,6 +27,7 @@
 #include <seastar/net/byteorder.hh>
 #include <seastar/core/scattered_message.hh>
 #include <seastar/core/sleep.hh>
+#include <seastar/core/coroutine.hh>
 #include "log.hh"
 #include <thrift/server/TServer.h>
 #include <thrift/transport/TBufferTransports.h>
@@ -148,18 +149,17 @@ future<>
 thrift_server::connection::process_one_request() {
     _input->resetBuffer();
     _output->resetBuffer();
-    return read().then([this] {
-        ++_server._requests_served;
-        auto ret = _processor_promise.get_future();
-        // adapt from "continuation object style" to future/promise
-        auto complete = [this] (bool success) mutable {
-            // FIXME: look at success?
-            write().forward_to(std::move(_processor_promise));
-            _processor_promise = promise<>();
-        };
-        _processor->process(complete, _in_proto, _out_proto);
-        return ret;
-    });
+    co_await read();
+    ++_server._requests_served;
+    auto ret = _processor_promise.get_future();
+    // adapt from "continuation object style" to future/promise
+    auto complete = [this] (bool success) mutable {
+        // FIXME: look at success?
+        write().forward_to(std::move(_processor_promise));
+        _processor_promise = promise<>();
+    };
+    _processor->process(complete, _in_proto, _out_proto);
+    co_return co_await ret;
 }
 
 future<>
