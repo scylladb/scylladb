@@ -319,10 +319,11 @@ future<> server::verify_signature(const request& req, const chunked_content& con
     });
 }
 
-static tracing::trace_state_ptr create_tracing_session() {
+static tracing::trace_state_ptr create_tracing_session(tracing::tracing& tracing_instance) {
     tracing::trace_state_props_set props;
     props.set<tracing::trace_state_props::full_tracing>();
-    return tracing::tracing::get_local_tracing_instance().create_session(tracing::trace_type::QUERY, props);
+    props.set_if<tracing::trace_state_props::log_slow_query>(tracing_instance.slow_query_tracing_enabled());
+    return tracing_instance.create_session(tracing::trace_type::QUERY, props);
 }
 
 // truncated_content_view() prints a potentially long chunked_content for
@@ -348,9 +349,11 @@ static std::string_view truncated_content_view(const chunked_content& content, s
 
 static tracing::trace_state_ptr maybe_trace_query(service::client_state& client_state, sstring_view op, const chunked_content& query) {
     tracing::trace_state_ptr trace_state;
-    if (tracing::tracing::get_local_tracing_instance().trace_next_query()) {
-        trace_state = create_tracing_session();
+    tracing::tracing& tracing_instance = tracing::tracing::get_local_tracing_instance();
+    if (tracing_instance.trace_next_query() || tracing_instance.slow_query_tracing_enabled()) {
+        trace_state = create_tracing_session(tracing_instance);
         std::string buf;
+        tracing::add_session_param(trace_state, "alternator_op", op);
         tracing::add_query(trace_state, truncated_content_view(query, buf));
         tracing::begin(trace_state, format("Alternator {}", op), client_state.get_client_address());
     }
