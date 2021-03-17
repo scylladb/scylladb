@@ -90,7 +90,17 @@ public:
     static dht::ring_position to_ring_position(const compatible_ring_position_or_view& crp);
     static dht::partition_range to_partition_range(const interval_type& i);
     static dht::partition_range to_partition_range(const dht::ring_position_view& pos, const interval_type& i);
+
+    partitioned_sstable_set(const partitioned_sstable_set&) = delete;
     explicit partitioned_sstable_set(schema_ptr schema, lw_shared_ptr<sstable_list> all, bool use_level_metadata = true);
+    // For cloning the partitioned_sstable_set (makes a deep copy, including *_all)
+    explicit partitioned_sstable_set(
+        schema_ptr schema,
+        const std::vector<shared_sstable>& unleveled_sstables,
+        const interval_map_type& leveled_sstables,
+        const lw_shared_ptr<sstable_list>& all,
+        const std::unordered_map<utils::UUID, sstable_run>& all_runs,
+        bool use_level_metadata);
 
     virtual std::unique_ptr<sstable_set_impl> clone() const override;
     virtual std::vector<shared_sstable> select(const dht::partition_range& range) const override;

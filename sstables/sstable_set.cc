@@ -229,8 +229,18 @@ partitioned_sstable_set::partitioned_sstable_set(schema_ptr schema, lw_shared_pt
         , _use_level_metadata(use_level_metadata) {
 }
 
+partitioned_sstable_set::partitioned_sstable_set(schema_ptr schema, const std::vector<shared_sstable>& unleveled_sstables, const interval_map_type& leveled_sstables,
+        const lw_shared_ptr<sstable_list>& all, const std::unordered_map<utils::UUID, sstable_run>& all_runs, bool use_level_metadata)
+        : _schema(schema)
+        , _unleveled_sstables(unleveled_sstables)
+        , _leveled_sstables(leveled_sstables)
+        , _all(make_lw_shared<sstable_list>(*all))
+        , _all_runs(all_runs)
+        , _use_level_metadata(use_level_metadata) {
+}
+
 std::unique_ptr<sstable_set_impl> partitioned_sstable_set::clone() const {
-    return std::make_unique<partitioned_sstable_set>(*this);
+    return std::make_unique<partitioned_sstable_set>(_schema, _unleveled_sstables, _leveled_sstables, _all, _all_runs, _use_level_metadata);
 }
 
 std::vector<shared_sstable> partitioned_sstable_set::select(const dht::partition_range& range) const {
