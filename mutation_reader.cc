@@ -1743,12 +1743,13 @@ future<> shard_reader::do_fill_buffer(db::timeout_clock::time_point timeout) {
 
 future<> shard_reader::fill_buffer(db::timeout_clock::time_point timeout) {
     if (_read_ahead) {
-        return *std::exchange(_read_ahead, std::nullopt);
+        co_await *std::exchange(_read_ahead, std::nullopt);
+        co_return;
     }
     if (!is_buffer_empty()) {
-        return make_ready_future<>();
+        co_return;
     }
-    return do_fill_buffer(timeout);
+    co_await do_fill_buffer(timeout);
 }
 
 future<> shard_reader::next_partition() {
@@ -1773,17 +1774,17 @@ future<> shard_reader::fast_forward_to(const dht::partition_range& pr, db::timeo
     if (!_reader && !_read_ahead) {
         // No need to fast-forward uncreated readers, they will be passed the new
         // range when created.
-        return make_ready_future<>();
+        co_return;
     }
 
-    auto f = _read_ahead ? *std::exchange(_read_ahead, std::nullopt) : make_ready_future<>();
-    return f.then([this, &pr, timeout] {
-        _end_of_stream = false;
-        clear_buffer();
+    if (_read_ahead) {
+        co_await *std::exchange(_read_ahead, std::nullopt);
+    }
+    _end_of_stream = false;
+    clear_buffer();
 
-        return smp::submit_to(_shard, [this, &pr, timeout] {
-            return _reader->fast_forward_to(pr, timeout);
-        });
+    co_await smp::submit_to(_shard, [this, &pr, timeout] {
+        return _reader->fast_forward_to(pr, timeout);
     });
 }
 
