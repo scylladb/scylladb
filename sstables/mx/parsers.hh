@@ -25,6 +25,7 @@
 #include "sstables/types.hh"
 #include "sstables/column_translation.hh"
 #include "sstables/m_format_read_helpers.hh"
+#include "position_in_partition.hh"
 
 namespace sstables {
 namespace mc {
