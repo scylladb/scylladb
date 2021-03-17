@@ -25,6 +25,7 @@
 
 #include "compatible_ring_position.hh"
 #include "sstable_set.hh"
+#include "mutation_reader.hh"
 
 namespace sstables {
 
