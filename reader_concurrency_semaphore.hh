@@ -178,6 +178,10 @@ private:
 
     bool may_proceed(const resources& r) const;
 
+    // Add the permit to the wait queue and return the future which resolves when
+    // the permit is admitted (popped from the queue).
+    future<reader_permit::resource_units> enqueue_waiter(reader_permit permit, resources r, db::timeout_clock::time_point timeout);
+
     future<reader_permit::resource_units> do_wait_admission(reader_permit permit, size_t memory, db::timeout_clock::time_point timeout);
 
 public:

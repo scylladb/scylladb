@@ -523,7 +523,7 @@ bool reader_concurrency_semaphore::may_proceed(const resources& r) const {
     return _wait_list.empty() && has_available_units(r);
 }
 
-future<reader_permit::resource_units> reader_concurrency_semaphore::do_wait_admission(reader_permit permit, size_t memory,
+future<reader_permit::resource_units> reader_concurrency_semaphore::enqueue_waiter(reader_permit permit, resources r,
         db::timeout_clock::time_point timeout) {
     if (_wait_list.size() >= _max_queue_length) {
         _stats.total_reads_shed_due_to_overload++;
@@ -535,6 +535,16 @@ future<reader_permit::resource_units> reader_concurrency_semaphore::do_wait_admi
                 std::make_exception_ptr(std::runtime_error(
                         format("{}: restricted mutation reader queue overload", _name))));
     }
+
+    promise<reader_permit::resource_units> pr;
+    auto fut = pr.get_future();
+    permit.on_waiting();
+    _wait_list.push_back(entry(std::move(pr), std::move(permit), r), timeout);
+    return fut;
+}
+
+future<reader_permit::resource_units> reader_concurrency_semaphore::do_wait_admission(reader_permit permit, size_t memory,
+        db::timeout_clock::time_point timeout) {
     auto r = resources(1, static_cast<ssize_t>(memory));
     while (!may_proceed(r)) {
         if (!try_evict_one_inactive_read(evict_reason::permit)) {
@@ -545,11 +555,7 @@ future<reader_permit::resource_units> reader_concurrency_semaphore::do_wait_admi
         permit.on_admission();
         return make_ready_future<reader_permit::resource_units>(reader_permit::resource_units(std::move(permit), r));
     }
-    promise<reader_permit::resource_units> pr;
-    auto fut = pr.get_future();
-    permit.on_waiting();
-    _wait_list.push_back(entry(std::move(pr), std::move(permit), r), timeout);
-    return fut;
+    return enqueue_waiter(std::move(permit), r, timeout);
 }
 
 reader_permit reader_concurrency_semaphore::make_permit(const schema* const schema, const char* const op_name) {
