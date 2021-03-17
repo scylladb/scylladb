@@ -1612,16 +1612,17 @@ def test_update_condition_unused_entries_short_circuit(test_table_s):
 # These test cases make sense only for alternator, so they're skipped
 # when run on AWS
 def test_condition_expression_with_permissive_write_isolation(scylla_only, dynamodb, test_table_s):
-    def do_test_with_permissive_isolation_levels(test_case, table, *args):
-        try:
-            for isolation in ['a', 'o', 'u']:
-                set_write_isolation(table, isolation)
-                test_case(table, *args)
-        finally:
-            clear_write_isolation(table)
-    for test_case in [test_update_condition_eq_success, test_update_condition_attribute_exists,
-                      test_delete_item_condition, test_put_item_condition, test_update_condition_attribute_reference]:
-        do_test_with_permissive_isolation_levels(test_case, test_table_s)
+    try:
+        for isolation in ['a', 'o', 'u']:
+            set_write_isolation(test_table_s, isolation)
+            for test_case in [test_update_condition_eq_success,
+                              test_update_condition_attribute_exists,
+                              test_delete_item_condition,
+                              test_put_item_condition,
+                              test_update_condition_attribute_reference]:
+                test_case(test_table_s)
+    finally:
+        clear_write_isolation(test_table_s)
 
 # Test that the forbid_rmw isolation level prevents read-modify-write requests
 # from working. These test cases make sense only for alternator, so they're skipped
