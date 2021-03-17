@@ -216,6 +216,10 @@ public:
         return TopLevel::from_bytes(get_compound_type(s)->serialize_single(std::move(v)));
     }
 
+    static TopLevel from_single_value(const schema& s, managed_bytes v) {
+        return TopLevel::from_bytes(get_compound_type(s)->serialize_single(std::move(v)));
+    }
+
     template <typename T>
     static
     TopLevel from_singular(const schema& s, const T& v) {

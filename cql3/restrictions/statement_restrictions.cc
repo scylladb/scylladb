@@ -826,7 +826,7 @@ std::vector<query::clustering_range> get_single_column_clustering_bounds(
     const size_t size_limit =
             options.get_cql_config().restrictions.clustering_key_restrictions_max_cartesian_product_size;
     size_t product_size = 1;
-    std::vector<std::vector<bytes>> prior_column_values; // Equality values of columns seen so far.
+    std::vector<std::vector<managed_bytes>> prior_column_values; // Equality values of columns seen so far.
     for (size_t i = 0; i < single_column_restrictions.size(); ++i) {
         auto values = possible_lhs_values(
                 &schema->clustering_column_at(i), // This should be the LHS of restrictions[i].
@@ -839,14 +839,14 @@ std::vector<query::clustering_range> get_single_column_clustering_bounds(
             prior_column_values.push_back(*list);
             product_size *= list->size();
             error_if_exceeds(product_size, size_limit);
-        } else if (auto last_range = std::get_if<nonwrapping_interval<bytes>>(&values)) {
+        } else if (auto last_range = std::get_if<nonwrapping_interval<managed_bytes>>(&values)) {
             // Must be the last column in the prefix, since it's neither EQ nor IN.
             std::vector<query::clustering_range> ck_ranges;
             if (prior_column_values.empty()) {
                 // This is the first and last range; just turn it into a clustering_key_prefix.
                 ck_ranges.push_back(
                         reverse_if_reqd(
-                                last_range->transform([] (const bytes& val) { return clustering_key_prefix({val}); }),
+                                last_range->transform([] (const managed_bytes& val) { return clustering_key_prefix::from_range(std::array<managed_bytes, 1>{val}); }),
                                 *schema->clustering_column_at(i).type));
             } else {
                 // Prior clustering columns are equality-restricted (either via = or IN), producing one or more

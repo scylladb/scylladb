@@ -112,7 +112,7 @@ public:
                 return bytes_opt{};
             }
             assert(values.size() == 1);
-            return values.front();
+            return to_bytes(values.front());
         }
     }
 

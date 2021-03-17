@@ -869,6 +869,9 @@ public:
     bool operator()(const bytes& v1, const bytes& v2) const {
         return _type->less(v1, v2);
     }
+    bool operator()(const managed_bytes& v1, const managed_bytes& v2) const {
+        return _type->compare(v1, v2) < 0;
+    }
 };
 
 inline
@@ -882,6 +885,9 @@ class serialized_tri_compare {
 public:
     serialized_tri_compare(data_type type) : _type(type) {}
     int operator()(const bytes_view& v1, const bytes_view& v2) const {
+        return _type->compare(v1, v2);
+    }
+    int operator()(const managed_bytes_view& v1, const managed_bytes_view& v2) const {
         return _type->compare(v1, v2);
     }
 };

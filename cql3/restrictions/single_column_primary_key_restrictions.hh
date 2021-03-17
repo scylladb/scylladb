@@ -185,7 +185,7 @@ public:
     }
 
     std::vector<ValueType> values_as_keys(const query_options& options) const {
-        std::vector<std::vector<bytes_opt>> value_vector;
+        std::vector<std::vector<managed_bytes_opt>> value_vector;
         value_vector.reserve(_restrictions->size());
         for (auto&& e : restrictions()) {
             auto&& r = e.second;
@@ -194,7 +194,7 @@ public:
             if (values.empty()) {
                 return {};
             }
-            value_vector.emplace_back(std::vector<bytes_opt>(values.cbegin(), values.cend()));
+            value_vector.emplace_back(std::make_move_iterator(values.begin()), std::make_move_iterator(values.end()));
         }
 
         std::vector<ValueType> result;
@@ -215,7 +215,7 @@ private:
         // TODO: rewrite this to simply invoke possible_lhs_values on each clustering column, find the first
         // non-list, and take Cartesian product of that prefix.  No need for to_range() and std::get() here.
         if (_restrictions->is_all_eq()) {
-            std::vector<bytes> components;
+            std::vector<managed_bytes> components;
             components.reserve(_restrictions->size());
             for (auto&& e : restrictions()) {
                 const column_definition* def = e.first;
@@ -232,7 +232,7 @@ private:
             return {range_type::make_singular(ValueType::from_exploded(*_schema, std::move(components)))};
         }
 
-        std::vector<std::vector<bytes_opt>> vec_of_values;
+        std::vector<std::vector<managed_bytes_opt>> vec_of_values;
         for (auto&& e : restrictions()) {
             const column_definition* def = e.first;
             auto&& r = e.second;
@@ -251,9 +251,9 @@ private:
                 const auto b = expr::to_range(values);
                 if (cartesian_product_is_empty(vec_of_values)) {
                     // TODO: use b.transform().
-                    const auto make_bound = [&] (const std::optional<::range_bound<bytes>>& bytes_bound) {
+                    const auto make_bound = [&] (const std::optional<::range_bound<managed_bytes>>& bytes_bound) {
                         return bytes_bound ?
-                                std::optional(range_bound(ValueType::from_single_value(*_schema, bytes_bound->value()),
+                                std::optional(range_bound(ValueType::from_single_value(*_schema, std::move(bytes_bound->value())),
                                                           bytes_bound->is_inclusive())) :
                                 std::nullopt;
                     };
@@ -270,7 +270,7 @@ private:
                 ranges.reserve(size);
                 for (auto&& prefix : make_cartesian_product(vec_of_values)) {
                     // TODO: use ranges.transform().
-                    auto make_bound = [&prefix, this] (const std::optional<::range_bound<bytes>>& bytes_bound) {
+                    auto make_bound = [&prefix, this] (const std::optional<::range_bound<managed_bytes>>& bytes_bound) {
                         if (bytes_bound) {
                             prefix.emplace_back(bytes_bound->value());
                             auto val = ValueType::from_optional_exploded(*_schema, prefix);
@@ -293,7 +293,7 @@ private:
             if (values.empty()) {
                 return {};
             }
-            vec_of_values.emplace_back(std::vector<bytes_opt>(values.cbegin(), values.cend()));
+            vec_of_values.emplace_back(std::make_move_iterator(values.begin()), std::make_move_iterator(values.end()));
         }
 
         auto size = cartesian_product_size(vec_of_values);
