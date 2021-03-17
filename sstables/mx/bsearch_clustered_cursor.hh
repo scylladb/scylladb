@@ -23,6 +23,7 @@
 
 #include "sstables/index_entry.hh"
 #include "sstables/column_translation.hh"
+#include "sstables/promoted_index_blocks_reader.hh"
 #include "parsers.hh"
 #include "schema.hh"
 #include "utils/cached_file.hh"
@@ -32,6 +33,11 @@
 
 #include <optional>
 
+namespace sstables {
+
+extern logging::logger sstlog;
+
+}
 
 namespace sstables::mc {
 

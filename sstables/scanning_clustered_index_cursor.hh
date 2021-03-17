@@ -22,6 +22,7 @@
 #pragma once
 
 #include "sstables/index_entry.hh"
+#include "sstables/promoted_index_blocks_reader.hh"
 #include "schema.hh"
 
 namespace sstables {
