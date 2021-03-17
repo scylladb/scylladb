@@ -591,7 +591,7 @@ system_distributed_keyspace::create_cdc_desc(
         co_await _sp.mutate(
             { std::move(m) },
             quorum_if_many(ctx.num_token_owners),
-            db::timeout_clock::now() + 10s,
+            db::timeout_clock::now() + 30s,
             nullptr, // trace_state
             empty_service_permit(),
             false // raw_counters
