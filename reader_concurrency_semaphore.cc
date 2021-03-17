@@ -425,13 +425,13 @@ bool reader_concurrency_semaphore::try_evict_one_inactive_read() {
 }
 
 bool reader_concurrency_semaphore::has_available_units(const resources& r) const {
-    return bool(_resources) && _resources >= r;
+    // Special case: when there is no active reader (based on count) admit one
+    // regardless of availability of memory.
+    return (bool(_resources) && _resources >= r) || _resources.count == _initial_resources.count;
 }
 
 bool reader_concurrency_semaphore::may_proceed(const resources& r) const {
-    // Special case: when there is no active reader (based on count) admit one
-    // regardless of availability of memory.
-    return _wait_list.empty() && (has_available_units(r) || _resources.count == _initial_resources.count);
+    return _wait_list.empty() && has_available_units(r);
 }
 
 future<reader_permit::resource_units> reader_concurrency_semaphore::do_wait_admission(reader_permit permit, size_t memory,
