@@ -29,6 +29,7 @@
 
 #include "cql3/constants.hh"
 #include "cql3/lists.hh"
+#include "cql3/statements/request_validations.hh"
 #include "cql3/tuples.hh"
 #include "index/secondary_index_manager.hh"
 #include "types/list.hh"
@@ -418,6 +419,8 @@ bool is_one_of(const column_value& col, term& rhs, const column_value_eval_bag& 
     } else if (auto mkr = dynamic_cast<lists::marker*>(&rhs)) {
         // This is `a IN ?`.  RHS elements are values representable as bytes_opt.
         const auto values = static_pointer_cast<lists::value>(mkr->bind(bag.options));
+        statements::request_validations::check_not_null(
+                values, "Invalid null value for column %s", col.col->name_as_text());
         return boost::algorithm::any_of(values->get_elements(), [&] (const bytes_opt& b) {
                 return equal(b, col, bag);
             });
@@ -584,6 +587,7 @@ value_list get_IN_values(
         if (val == constants::UNSET_VALUE) {
             throw exceptions::invalid_request_exception(format("Invalid unset value for column {}", column_name));
         }
+        statements::request_validations::check_not_null(val, "Invalid null value for IN tuple");
         return to_sorted_vector(static_pointer_cast<lists::value>(val)->get_elements() | non_null | deref, comparator);
     }
     throw std::logic_error(format("get_IN_values(single column) on invalid term {}", *t));
