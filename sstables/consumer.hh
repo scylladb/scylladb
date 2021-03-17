@@ -491,6 +491,8 @@ protected:
     sstables::reader_position_tracker _stream_position;
     // remaining length of input to read (if <0, continue until end of file).
     uint64_t _remain;
+    std::optional<reader_permit::blocked_guard> _blocked_guard;
+    bool _first_invoke = true;
 public:
     using read_status = data_consumer::read_status;
 
@@ -501,11 +503,29 @@ public:
             , _remain(maxlen) {}
 
     future<> consume_input() {
+        // On first invoke we are guaranteed to go to the disk, so mark as
+        // blocked unconditionally. On succeeding invokes, we determine whether
+        // we need to block inside operator().
+        // One corner case this misses is when the last operator() consumed all
+        // data but didn't want more so the next invocation will block, we bet
+        // on this being rare.
+        if (_first_invoke) {
+            _first_invoke = false;
+            mark_blocked();
+        }
         return _input.consume(state_processor());
     }
 
     void verify_end_state() {
         state_processor().verify_end_state();
+    }
+
+    void mark_blocked() {
+        _blocked_guard.emplace(_permit);
+    }
+
+    void mark_unblocked() {
+        _blocked_guard.reset();
     }
 
     data_consumer::processing_result skip(temporary_buffer<char>& data, uint32_t len) {
@@ -548,6 +568,7 @@ public:
     // called by input_stream::consume():
     future<consumption_result_type>
     operator()(temporary_buffer<char> data) {
+        mark_unblocked();
         if (data.size() >= _remain) {
             // We received more data than we actually care about, so process
             // the beginning of the buffer, and return the rest to the stream
@@ -575,6 +596,7 @@ public:
                 _remain -= orig_data_size - data.size();
                 _stream_position.position -= data.size();
                 if (value == proceed::yes) {
+                    mark_blocked();
                     return make_ready_future<consumption_result_type>(continue_consuming{});
                 } else {
                     return make_ready_future<consumption_result_type>(stop_consuming<char>{std::move(data)});
@@ -592,6 +614,7 @@ public:
                 }
                 _stream_position.position += skip.get_value();
                 _remain -= skip.get_value();
+                mark_blocked();
                 return make_ready_future<consumption_result_type>(std::move(skip));
             });
         }
@@ -606,7 +629,8 @@ public:
         _remain = end - _stream_position.position;
 
         primitive_consumer::reset();
-        return _input.skip(n);
+        reader_permit::blocked_guard _{_permit};
+        co_await _input.skip(n);
     }
 
     future<> skip_to(size_t begin) {
