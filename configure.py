@@ -126,18 +126,21 @@ def ensure_tmp_dir_exists():
         os.makedirs(tempfile.tempdir)
 
 
-def try_compile_and_link(compiler, source='', flags=[]):
+def try_compile_and_link(compiler, source='', flags=[], verbose=False):
     ensure_tmp_dir_exists()
     with tempfile.NamedTemporaryFile() as sfile:
         ofile = tempfile.mktemp()
         try:
             sfile.file.write(bytes(source, 'utf-8'))
             sfile.file.flush()
-            # We can't write to /dev/null, since in some cases (-ftest-coverage) gcc will create an auxiliary
-            # output file based on the name of the output file, and "/dev/null.gcsa" is not a good name
-            return subprocess.call([compiler, '-x', 'c++', '-o', ofile, sfile.name] + args.user_cflags.split() + flags,
-                                   stdout=subprocess.DEVNULL,
-                                   stderr=subprocess.DEVNULL) == 0
+            ret = subprocess.run([compiler, '-x', 'c++', '-o', ofile, sfile.name] + args.user_cflags.split() + flags,
+                                 capture_output=True)
+            if verbose:
+                print(f"Compilation failed: {compiler} -x c++ -o {ofile} {sfile.name} {args.user_cflags} {flags}")
+                print(source)
+                print(ret.stdout.decode('utf-8'))
+                print(ret.stderr.decode('utf-8'))
+            return ret.returncode == 0
         finally:
             if os.path.exists(ofile):
                 os.unlink(ofile)
@@ -164,7 +167,21 @@ def linker_flags(compiler):
             link_flags.append(threads_flag)
         return ' '.join(link_flags)
     else:
-        print('Note: neither lld nor gold found; using default system linker')
+        linker = ''
+        try:
+            subprocess.call(["gold", "-v"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            linker = 'gold'
+        except:
+            pass
+        try:
+            subprocess.call(["lld", "-v"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            linker = 'lld'
+        except:
+            pass
+        if linker:
+            print(f'Linker {linker} found, but the compilation attempt failed, defaulting to default system linker')
+        else:
+            print('Note: neither lld nor gold found; using default system linker')
         return ''
 
 
@@ -1285,7 +1302,8 @@ compiler_test_src = '''
 int main() { return 0; }
 '''
 if not try_compile_and_link(compiler=args.cxx, source=compiler_test_src):
-    print('Wrong GCC version. Scylla needs GCC >= 10.1.1 to compile.')
+    try_compile_and_link(compiler=args.cxx, source=compiler_test_src, verbose=True)
+    print('Wrong compiler version or incorrect flags. Scylla needs GCC >= 10.1.1 with coroutines (-fcoroutines) or clang >= 10.0.0 to compile.')
     sys.exit(1)
 
 if not try_compile(compiler=args.cxx, source='#include <boost/version.hpp>'):
