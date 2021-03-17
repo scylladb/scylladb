@@ -35,18 +35,33 @@ from util import create_test_table, random_string, full_scan, full_query, multis
 # secondary indexes within a fraction of a second, under normal conditions"
 # and indeed, in practice, the tests here almost always succeed without a
 # retry.
+# However, it is worthwhile to differenciate between the case where the
+# result set is not *yet* complete (which is ok, and requires retry), and
+# the case that the result set has wrong data. In the latter case, the
+# test will surely fail and no amount of retry will help, so we should
+# fail quickly, to avoid xfailing tests being very slow.
 def assert_index_query(table, index_name, expected_items, **kwargs):
-    for i in range(3):
-        if multiset(expected_items) == multiset(full_query(table, IndexName=index_name, ConsistentRead=False, **kwargs)):
+    expected = multiset(expected_items)
+    for i in range(5):
+        got = multiset(full_query(table, IndexName=index_name, ConsistentRead=False, **kwargs))
+        if expected == got:
             return
+        elif got - expected:
+            # If we got any items that weren't expected, there's no point to retry.
+            pytest.fail("assert_index_query() found unexpected items: " + str(got - expected))
         print('assert_index_query retrying')
         time.sleep(1)
     assert multiset(expected_items) == multiset(full_query(table, IndexName=index_name, ConsistentRead=False, **kwargs))
 
 def assert_index_scan(table, index_name, expected_items, **kwargs):
-    for i in range(3):
-        if multiset(expected_items) == multiset(full_scan(table, IndexName=index_name, ConsistentRead=False, **kwargs)):
+    expected = multiset(expected_items)
+    for i in range(5):
+        got =  multiset(full_scan(table, IndexName=index_name, ConsistentRead=False, **kwargs))
+        if expected == got:
             return
+        elif got - expected:
+            # If we got any items that weren't expected, there's no point to retry.
+            pytest.fail("assert_index_scan() found unexpected items: " + str(got - expected))
         print('assert_index_scan retrying')
         time.sleep(1)
     assert multiset(expected_items) == multiset(full_scan(table, IndexName=index_name, ConsistentRead=False, **kwargs))
@@ -589,7 +604,7 @@ def test_gsi_2_describe_table_schema(test_table_gsi_2):
 # "ProjectionType:: KEYS_ONLY" works. We note that it projects both
 # the index's key, *and* the base table's key. So items which had different
 # base-table keys cannot suddenly become the same item in the index.
-@pytest.mark.xfail(reason="GSI not supported")
+@pytest.mark.xfail(reason="GSI projection not supported - issue #5036")
 def test_gsi_projection_keys_only(dynamodb):
     table = create_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
@@ -617,7 +632,7 @@ def test_gsi_projection_keys_only(dynamodb):
 # Test for "ProjectionType:: INCLUDE". The secondary table includes the
 # its own and the base's keys (as in KEYS_ONLY) plus the extra keys given
 # in NonKeyAttributes.
-@pytest.mark.xfail(reason="GSI not supported")
+@pytest.mark.xfail(reason="GSI projection not supported - issue #5036")
 def test_gsi_projection_include(dynamodb):
     table = create_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
@@ -652,7 +667,7 @@ def test_gsi_projection_include(dynamodb):
 # "Projection" is optional - and Boto3 allows it to be missing. But in
 # fact, it is not allowed to be missing: DynamoDB complains: "Unknown
 # ProjectionType: null".
-@pytest.mark.xfail(reason="GSI not supported")
+@pytest.mark.xfail(reason="GSI projection not supported - issue #5036")
 def test_gsi_missing_projection_type(dynamodb):
     with pytest.raises(ClientError, match='ValidationException.*ProjectionType'):
         create_test_table(dynamodb,
