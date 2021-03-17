@@ -171,7 +171,6 @@ private:
     // It shouldn't be impossible to actively serialize two callers if the need
     // ever arise.
     bool _loading_new_sstables = false;
-    friend class cql_transport::controller;
     sstring _operation_in_progress;
     bool _force_remove_completion = false;
     bool _ms_stopped = false;
@@ -263,6 +262,10 @@ public:
 
     gms::feature_service& features() { return _feature_service; }
     const gms::feature_service& features() const { return _feature_service; }
+
+    size_t service_memory_total() const {
+        return _service_memory_total;
+    }
 
     semaphore& service_memory_limiter() {
         return _service_memory_limiter;
