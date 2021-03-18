@@ -4073,6 +4073,29 @@ class scylla_gdb_func_sharded_local(gdb.Function):
         return sharded(obj).local()
 
 
+class scylla_gdb_func_variant_member(gdb.Function):
+    """Get the active member of an std::variant
+
+    Usage:
+    $variant_member($obj)
+
+    Where:
+    $obj - a variable, or an expression that evaluates to any `std::variant`
+    instance.
+
+    Example:
+    # $1 = (cql3::raw_value_view *) 0x6060365a7a50
+    (gdb) p &$variant_member($1->_data)
+    $2 = (cql3::null_value *) 0x6060365a7a50
+    """
+
+    def __init__(self):
+        super(scylla_gdb_func_variant_member, self).__init__('variant_member')
+
+    def invoke(self, obj):
+        return std_variant(obj).get()
+
+
 # Commands
 scylla()
 scylla_databases()
@@ -4124,3 +4147,4 @@ scylla_gdb_func_dereference_smart_ptr()
 scylla_gdb_func_downcast_vptr()
 scylla_gdb_func_collection_element()
 scylla_gdb_func_sharded_local()
+scylla_gdb_func_variant_member()
