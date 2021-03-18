@@ -28,6 +28,7 @@
 #include <seastar/core/scattered_message.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/coroutine.hh>
+#include <seastar/core/semaphore.hh>
 #include "log.hh"
 #include <thrift/server/TServer.h>
 #include <thrift/transport/TBufferTransports.h>
@@ -66,11 +67,13 @@ public:
 thrift_server::thrift_server(distributed<database>& db,
                              distributed<cql3::query_processor>& qp,
                              auth::service& auth_service,
+                             service::memory_limiter& ml,
                              thrift_server_config config)
         : _stats(new thrift_stats(*this))
-        , _handler_factory(create_handler_factory(db, qp, auth_service, config.timeout_config).release())
+        , _handler_factory(create_handler_factory(db, qp, auth_service, config.timeout_config, _current_permit).release())
         , _protocol_factory(new TBinaryProtocolFactoryT<TMemoryBuffer>())
         , _processor_factory(new CassandraAsyncProcessorFactory(_handler_factory))
+        , _memory_available(ml.get_semaphore())
         , _config(config) {
 }
 
@@ -158,8 +161,23 @@ thrift_server::connection::process_one_request() {
         write().forward_to(std::move(_processor_promise));
         _processor_promise = promise<>();
     };
+    // Heuristics copied from transport/server.cc
+    size_t mem_estimate = 8000 + 2 * _input->available_read();
+    auto units = co_await get_units(_server._memory_available, mem_estimate);
+    // NOTICE: this permit is put in the server under the assumption that no other
+    // connection will overwrite this permit *until* it's extracted by the code
+    // which handles the Thrift request (via calling obtain_permit()).
+    // This assumption is true because there are no preemption points between this
+    // insertion and the call to obtain_permit(), which was verified both by
+    // code inspection and confirmed empirically by running manual tests.
+    if (_server._current_permit.count() > 0) {
+        tlogger.debug("Current service permit is overwritten while its units are still held ({}). "
+                "This situation likely means that there's a bug in passing service permits to message handlers.",
+                _server._current_permit.count());
+    }
+    _server._current_permit = make_service_permit(std::move(units));
     _processor->process(complete, _in_proto, _out_proto);
-    co_return co_await ret;
+    co_return co_await std::move(ret);
 }
 
 future<>
@@ -287,6 +305,16 @@ thrift_server::current_connections() const {
 uint64_t
 thrift_server::requests_served() const {
     return _requests_served;
+}
+
+size_t
+thrift_server::max_request_size() const {
+    return _config.max_request_size;
+}
+
+const semaphore&
+thrift_server::memory_available() const {
+    return _memory_available;
 }
 
 thrift_stats::thrift_stats(thrift_server& server) {

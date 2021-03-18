@@ -1304,7 +1304,7 @@ int main(int ac, char** av) {
                 api::unset_transport_controller(ctx).get();
             });
 
-            ::thrift_controller thrift_ctl(db, auth_service, qp);
+            ::thrift_controller thrift_ctl(db, auth_service, qp, service_memory_limiter);
 
             ss.register_client_shutdown_hook("rpc server", [&thrift_ctl] {
                 thrift_ctl.stop().get();

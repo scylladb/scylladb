@@ -26,6 +26,7 @@
 #include <seastar/core/distributed.hh>
 #include "cql3/query_processor.hh"
 #include "timeout_config.hh"
+#include "service/memory_limiter.hh"
 #include <seastar/core/gate.hh>
 #include <memory>
 #include <cstdint>
@@ -76,6 +77,7 @@ class service;
 struct thrift_server_config {
     ::timeout_config timeout_config;
     uint64_t max_request_size;
+    std::function<semaphore& ()> get_service_memory_limiter_semaphore;
 };
 
 class thrift_server {
@@ -107,17 +109,19 @@ class thrift_server {
 private:
     std::vector<server_socket> _listeners;
     std::unique_ptr<thrift_stats> _stats;
+    service_permit _current_permit = empty_service_permit();
     thrift_std::shared_ptr<::cassandra::CassandraCobSvIfFactory> _handler_factory;
     std::unique_ptr<apache::thrift::protocol::TProtocolFactory> _protocol_factory;
     thrift_std::shared_ptr<apache::thrift::async::TAsyncProcessorFactory> _processor_factory;
     uint64_t _total_connections = 0;
     uint64_t _current_connections = 0;
     uint64_t _requests_served = 0;
+    semaphore& _memory_available;
     thrift_server_config _config;
     boost::intrusive::list<connection> _connections_list;
     seastar::gate _stop_gate;
 public:
-    thrift_server(distributed<database>& db, distributed<cql3::query_processor>& qp, auth::service&, thrift_server_config config);
+    thrift_server(distributed<database>& db, distributed<cql3::query_processor>& qp, auth::service&, service::memory_limiter& ml, thrift_server_config config);
     ~thrift_server();
     future<> listen(socket_address addr, bool keepalive);
     future<> stop();
@@ -125,6 +129,11 @@ public:
     uint64_t total_connections() const;
     uint64_t current_connections() const;
     uint64_t requests_served() const;
+    size_t max_request_size() const;
+    const semaphore& memory_available() const;
+
+private:
+    void maybe_retry_accept(int which, bool keepalive, std::exception_ptr ex);
 };
 
 #endif /* APPS_SEASTAR_THRIFT_SERVER_HH_ */
