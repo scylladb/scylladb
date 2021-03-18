@@ -246,30 +246,22 @@ void write_signed_vint(W& out, int64_t value) {
     return write_vint_impl(out, value);
 }
 
-template <typename T, typename W>
-requires Writer<W>
-typename std::enable_if_t<!std::is_integral_v<T>>
-write_vint(W& out, T t) = delete;
-
-template <typename T, typename W>
-requires Writer<W>
+template <std::integral T, Writer W>
 inline void write_vint(W& out, T value) {
-    static_assert(std::is_integral_v<T>, "Non-integral values can't be written using write_vint");
     return std::is_unsigned_v<T> ? write_unsigned_vint(out, value) : write_signed_vint(out, value);
 }
 
 
-template <typename T, typename W>
-requires Writer<W>
-inline typename std::enable_if_t<std::is_integral<T>::value, void>
+template <std::integral T, Writer W>
+void
 write(sstable_version_types v, W& out, T i) {
     i = net::hton(i);
     out.write(reinterpret_cast<const char*>(&i), sizeof(T));
 }
 
 template <typename T, typename W>
-requires Writer<W>
-inline typename std::enable_if_t<std::is_enum<T>::value, void>
+requires Writer<W> && std::is_enum_v<T>
+inline void
 write(sstable_version_types v, W& out, T i) {
     write(v, out, static_cast<typename std::underlying_type<T>::type>(i));
 }
@@ -327,9 +319,8 @@ inline void write(sstable_version_types v, W& out, const vint<T>& t) {
     write_vint(out, t.value);
 }
 
-template <class T, typename W>
-requires Writer<W>
-typename std::enable_if_t<!std::is_integral<T>::value && !std::is_enum<T>::value, void>
+template <self_describing T, Writer W>
+void
 write(sstable_version_types v, W& out, const T& t) {
     // describe_type() is not const correct, so cheat here:
     const_cast<T&>(t).describe_type(v, [v, &out] (auto&&... what) -> void {
@@ -337,9 +328,8 @@ write(sstable_version_types v, W& out, const T& t) {
     });
 }
 
-template <typename T, typename U>
+template <std::integral T, std::integral U>
 void check_truncate_and_assign(T& to, const U from) {
-    static_assert(std::is_integral<T>::value && std::is_integral<U>::value, "T and U must be integral");
     to = from;
     if (to != from) {
         throw std::overflow_error("assigning U to T caused an overflow");
@@ -379,15 +369,15 @@ inline void write(sstable_version_types ver, file_writer& out, const disk_data_v
 }
 
 template <typename Members>
-inline typename std::enable_if_t<!std::is_integral<Members>::value, void>
+inline void
 write(sstable_version_types v, file_writer& out, const utils::chunked_vector<Members>& arr) {
     for (auto& a : arr) {
         write(v, out, a);
     }
 }
 
-template <typename Members>
-inline typename std::enable_if_t<std::is_integral<Members>::value, void>
+template <std::integral Members>
+inline void
 write(sstable_version_types v, file_writer& out, const utils::chunked_vector<Members>& arr) {
     std::vector<Members> tmp;
     size_t per_loop = 100000 / sizeof(Members);
