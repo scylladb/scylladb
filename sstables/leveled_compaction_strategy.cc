@@ -178,7 +178,7 @@ leveled_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> input
 
     unsigned max_filled_level = 0;
 
-    size_t offstrategy_threshold = std::max(schema->min_compaction_threshold(), 4);
+    size_t offstrategy_threshold = (mode == reshape_mode::strict) ? std::max(schema->min_compaction_threshold(), 4) : std::max(schema->max_compaction_threshold(), 32);
     size_t max_sstables = std::max(schema->max_compaction_threshold(), int(offstrategy_threshold));
     auto tolerance = [mode] (unsigned level) -> unsigned {
         if (mode == reshape_mode::strict) {
