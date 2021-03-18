@@ -347,6 +347,20 @@ thrift_stats::thrift_stats(thrift_server& server) {
 
         sm::make_derive("served", [&server] { return server.requests_served(); },
                         sm::description("Rate of serving Thrift requests.")),
+        sm::make_gauge("serving", [&server] { return server.requests_serving(); },
+                        sm::description("Number of Thrift requests being currently served.")),
+        sm::make_gauge("requests_blocked_memory_current", [&server] { return server.memory_available().waiters(); },
+                        sm::description(
+                            seastar::format("Holds the number of Thrift requests that are currently blocked due to reaching the memory quota limit ({}B). "
+                                            "Non-zero value indicates that our bottleneck is memory and more specifically - the memory quota allocated for the \"Thrift transport\" component.", server.max_request_size()))),
+        sm::make_derive("requests_blocked_memory", [&server] { return server.requests_blocked_memory(); },
+                        sm::description(
+                            seastar::format("Holds an incrementing counter with the Thrift requests that ever blocked due to reaching the memory quota limit ({}B). "
+                                            "The first derivative of this value shows how often we block due to memory exhaustion in the \"Thrift transport\" component.", server.max_request_size()))),
+        sm::make_gauge("requests_memory_available", [&server] { return server.memory_available().current(); },
+                        sm::description(
+                            seastar::format("Holds the amount of available memory for admitting new Thrift requests (max is {}B)."
+                                            "Zero value indicates that our bottleneck is memory and more specifically - the memory quota allocated for the \"Thrift transport\" component.", server.max_request_size())))
     });
 }
 
