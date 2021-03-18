@@ -1442,7 +1442,11 @@ class scylla_memory(gdb.Command):
         sp = sharded(gdb.parse_and_eval('service::_the_storage_proxy')).local()
         global_sp_stats, per_sg_sp_stats = scylla_memory.summarize_storage_proxy_coordinator_stats(sp)
 
-        hm = std_optional(sp['_hints_manager']).get()
+        try:
+            # 4.4 compatibility
+            hm = std_optional(sp['_hints_manager']).get()
+        except gdb.error:
+            hm = sp['_hints_manager']
         view_hm = sp['_hints_for_views_manager']
 
         gdb.write('Coordinator:\n'
