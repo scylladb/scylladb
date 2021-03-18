@@ -76,9 +76,9 @@ public:
 
     class value : public terminal, collection_terminal {
     public:
-        std::map<bytes, bytes, serialized_compare> map;
+        std::map<managed_bytes, managed_bytes, serialized_compare> map;
 
-        value(std::map<bytes, bytes, serialized_compare> map)
+        value(std::map<managed_bytes, managed_bytes, serialized_compare> map)
             : map(std::move(map)) {
         }
         static value from_serialized(const raw_value_view& value, const map_type_impl& type, cql_serialization_format sf);

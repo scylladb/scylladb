@@ -51,7 +51,7 @@ sets::literal::prepare(database& db, const sstring& keyspace, lw_shared_ptr<colu
         // handle that case now. This branch works for frozen sets/maps only.
         if (dynamic_pointer_cast<const map_type_impl>(receiver->type)) {
             // use empty_type for comparator, set is empty anyway.
-            std::map<bytes, bytes, serialized_compare> m(empty_type->as_less_comparator());
+            std::map<managed_bytes, managed_bytes, serialized_compare> m(empty_type->as_less_comparator());
             return ::make_shared<maps::value>(std::move(m));
         }
     }
@@ -139,9 +139,9 @@ sets::value::from_serialized(const raw_value_view& val, const set_type_impl& typ
         // but compose does the validation (so we're fine).
         // FIXME: deserializeForNativeProtocol?!
         auto s = val.deserialize<set_type_impl::native_type>(type, sf);
-        std::set<bytes, serialized_compare> elements(type.get_elements_type()->as_less_comparator());
+        std::set<managed_bytes, serialized_compare> elements(type.get_elements_type()->as_less_comparator());
         for (auto&& element : s) {
-            elements.insert(elements.end(), type.get_elements_type()->decompose(element));
+            elements.insert(elements.end(), managed_bytes(type.get_elements_type()->decompose(element)));
         }
         return value(std::move(elements));
     } catch (marshal_exception& e) {
@@ -168,7 +168,7 @@ sets::value::equals(const set_type_impl& st, const value& v) {
     auto&& elements_type = st.get_elements_type();
     return std::equal(_elements.begin(), _elements.end(),
             v._elements.begin(),
-            [elements_type] (bytes_view v1, bytes_view v2) {
+            [elements_type] (managed_bytes_view v1, managed_bytes_view v2) {
                 return elements_type->equal(v1, v2);
             });
 }
@@ -200,7 +200,7 @@ sets::delayed_value::collect_marker_specification(variable_specifications& bound
 
 shared_ptr<terminal>
 sets::delayed_value::bind(const query_options& options) {
-    std::set<bytes, serialized_compare> buffers(_comparator);
+    std::set<managed_bytes, serialized_compare> buffers(_comparator);
     for (auto&& t : _elements) {
         auto b = t->bind_and_get(options);
 
@@ -216,7 +216,7 @@ sets::delayed_value::bind(const query_options& options) {
                     std::numeric_limits<uint16_t>::max(),
                     b.size_bytes()));
         }
-        buffers.insert(buffers.end(), to_bytes(b));
+        buffers.insert(buffers.end(), *to_managed_bytes_opt(b));
     }
     return ::make_shared<value>(std::move(buffers));
 }
@@ -293,16 +293,14 @@ sets::adder::do_add(mutation& m, const clustering_key_prefix& row_key, const upd
         collection_mutation_description mut;
 
         for (auto&& e : set_value->_elements) {
-            mut.cells.emplace_back(e, params.make_cell(*set_type.value_comparator(), bytes_view(), atomic_cell::collection_member::yes));
+            mut.cells.emplace_back(to_bytes(e), params.make_cell(*set_type.value_comparator(), bytes_view(), atomic_cell::collection_member::yes));
         }
 
         m.set_cell(row_key, column, mut.serialize(set_type));
     } else if (set_value != nullptr) {
         // for frozen sets, we're overwriting the whole cell
-        auto v = set_type_impl::serialize_partially_deserialized_form(
-                {set_value->_elements.begin(), set_value->_elements.end()},
-                cql_serialization_format::internal());
-        m.set_cell(row_key, column, params.make_cell(*column.type, v));
+        auto v = set_value->get_with_protocol_version(cql_serialization_format::internal());
+        m.set_cell(row_key, column, params.make_cell(*column.type, raw_value_view::make_value(v)));
     } else {
         m.set_cell(row_key, column, params.make_dead_cell());
     }
@@ -318,14 +316,11 @@ sets::discarder::execute(mutation& m, const clustering_key_prefix& row_key, cons
     }
 
     collection_mutation_description mut;
-    auto kill = [&] (bytes idx) {
-        mut.cells.push_back({std::move(idx), params.make_dead_cell()});
-    };
     auto svalue = dynamic_pointer_cast<sets::value>(value);
     assert(svalue);
     mut.cells.reserve(svalue->_elements.size());
     for (auto&& e : svalue->_elements) {
-        kill(e);
+        mut.cells.push_back({to_bytes(e), params.make_dead_cell()});
     }
     m.set_cell(row_key, column, mut.serialize(*column.type));
 }

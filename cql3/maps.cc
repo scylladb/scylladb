@@ -161,7 +161,7 @@ maps::value::from_serialized(const raw_value_view& fragmented_value, const map_t
         // but compose does the validation (so we're fine).
         // FIXME: deserialize_for_native_protocol?!
         auto m = fragmented_value.deserialize<map_type_impl::native_type>(type, sf);
-        std::map<bytes, bytes, serialized_compare> map(type.get_keys_type()->as_less_comparator());
+        std::map<managed_bytes, managed_bytes, serialized_compare> map(type.get_keys_type()->as_less_comparator());
         for (auto&& e : m) {
             map.emplace(type.get_keys_type()->decompose(e.first),
                         type.get_values_type()->decompose(e.second));
@@ -223,7 +223,7 @@ maps::delayed_value::collect_marker_specification(variable_specifications& bound
 
 shared_ptr<terminal>
 maps::delayed_value::bind(const query_options& options) {
-    std::map<bytes, bytes, serialized_compare> buffers(_comparator);
+    std::map<managed_bytes, managed_bytes, serialized_compare> buffers(_comparator);
     for (auto&& entry : _elements) {
         auto&& key = entry.first;
         auto&& value = entry.second;
@@ -248,7 +248,7 @@ maps::delayed_value::bind(const query_options& options) {
         if (value_bytes.is_unset_value()) {
             return constants::UNSET_VALUE;
         }
-        buffers.emplace(std::move(to_bytes(key_bytes)), std::move(to_bytes(value_bytes)));
+        buffers.emplace(*to_managed_bytes_opt(key_bytes), *to_managed_bytes_opt(value_bytes));
     }
     return ::make_shared<value>(std::move(buffers));
 }
@@ -346,7 +346,7 @@ maps::do_put(mutation& m, const clustering_key_prefix& prefix, const update_para
 
         auto ctype = static_cast<const map_type_impl*>(column.type.get());
         for (auto&& e : map_value->map) {
-            mut.cells.emplace_back(e.first, params.make_cell(*ctype->get_values_type(), e.second, atomic_cell::collection_member::yes));
+            mut.cells.emplace_back(to_bytes(e.first), params.make_cell(*ctype->get_values_type(), raw_value_view::make_value(e.second), atomic_cell::collection_member::yes));
         }
 
         m.set_cell(prefix, column, mut.serialize(*ctype));
@@ -355,9 +355,8 @@ maps::do_put(mutation& m, const clustering_key_prefix& prefix, const update_para
         if (!value) {
             m.set_cell(prefix, column, params.make_dead_cell());
         } else {
-            auto v = map_type_impl::serialize_partially_deserialized_form({map_value->map.begin(), map_value->map.end()},
-                    cql_serialization_format::internal());
-            m.set_cell(prefix, column, params.make_cell(*column.type, v));
+            auto v = map_value->get_with_protocol_version(cql_serialization_format::internal());
+            m.set_cell(prefix, column, params.make_cell(*column.type, raw_value_view::make_value(v)));
         }
     }
 }
