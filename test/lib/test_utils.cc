@@ -40,7 +40,7 @@ std::string format_msg(std::string_view test_function_name, bool ok, std::experi
 
 void do_check(bool condition, std::experimental::source_location sl, std::string_view msg) {
     if (condition) {
-        testlog.debug("{}", format_msg(__FUNCTION__, condition, sl, msg));
+        testlog.trace("{}", format_msg(__FUNCTION__, condition, sl, msg));
     } else {
         testlog.error("{}", format_msg(__FUNCTION__, condition, sl, msg));
     }
@@ -48,7 +48,7 @@ void do_check(bool condition, std::experimental::source_location sl, std::string
 
 void do_require(bool condition, std::experimental::source_location sl, std::string_view msg) {
     if (condition) {
-        testlog.debug("{}", format_msg(__FUNCTION__, condition, sl, msg));
+        testlog.trace("{}", format_msg(__FUNCTION__, condition, sl, msg));
     } else {
         throw_with_backtrace<std::runtime_error>(format_msg(__FUNCTION__, condition, sl, msg));
     }
