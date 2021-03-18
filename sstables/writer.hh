@@ -252,17 +252,16 @@ inline void write_vint(W& out, T value) {
 }
 
 
-template <typename T, typename W>
-requires Writer<W>
-inline typename std::enable_if_t<std::is_integral<T>::value, void>
+template <std::integral T, Writer W>
+void
 write(sstable_version_types v, W& out, T i) {
     i = net::hton(i);
     out.write(reinterpret_cast<const char*>(&i), sizeof(T));
 }
 
 template <typename T, typename W>
-requires Writer<W>
-inline typename std::enable_if_t<std::is_enum<T>::value, void>
+requires Writer<W> && std::is_enum_v<T>
+inline void
 write(sstable_version_types v, W& out, T i) {
     write(v, out, static_cast<typename std::underlying_type<T>::type>(i));
 }
@@ -320,9 +319,8 @@ inline void write(sstable_version_types v, W& out, const vint<T>& t) {
     write_vint(out, t.value);
 }
 
-template <class T, typename W>
-requires Writer<W>
-typename std::enable_if_t<!std::is_integral<T>::value && !std::is_enum<T>::value, void>
+template <self_describing T, Writer W>
+void
 write(sstable_version_types v, W& out, const T& t) {
     // describe_type() is not const correct, so cheat here:
     const_cast<T&>(t).describe_type(v, [v, &out] (auto&&... what) -> void {

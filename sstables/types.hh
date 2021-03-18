@@ -256,9 +256,8 @@ struct metadata {
 template <typename T>
 uint64_t serialized_size(sstable_version_types v, const T& object);
 
-template <class T, typename W>
-requires Writer<W>
-typename std::enable_if_t<!std::is_integral<T>::value && !std::is_enum<T>::value, void>
+template <self_describing T, Writer W>
+void
 write(sstable_version_types v, W& out, const T& t);
 
 // serialized_size() implementation for metadata class
