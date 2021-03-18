@@ -131,17 +131,17 @@ def find_tracing_session(dynamodb, str):
     # when looking for the other requests.
     global last_scan
     trace_sessions_table = dynamodb.Table('.scylla.alternator.system_traces.sessions')
-    delay = 0.2
+    start = time.time()
     if last_scan == None:
         # The trace tables have RF=2, even on a one-node test setup, and
         # thus fail reads with ConsistentRead=True (Quorum)...
         last_scan = full_scan(trace_sessions_table, ConsistentRead=False)
-    while delay < 10:
+    while time.time() - start < 30:
         for entry in last_scan:
             if str in entry['parameters']:
+                print(f'find_tracing_session time {time.time()-start}')
                 return entry['session_id']
-        time.sleep(delay)
-        delay = delay * 2
+        time.sleep(0.3)
         last_scan = full_scan(trace_sessions_table, ConsistentRead=False)
     pytest.fail("Couldn't find tracing session")
 
@@ -201,8 +201,8 @@ def test_table_s_isolation_always(dynamodb):
     yield table
     table.delete()
 
-# Because tracing is asynchronous and sometimes appears as much as one
-# second after the request, it is inefficient to have separate tests
+# Because tracing is asynchronous and usually appears as much as two
+# seconds after the request, it is inefficient to have separate tests
 # for separate request types - each of these tests will have a latency
 # of as much as one second. Instead, we write just one test for all the
 # different request types. This test enables tracing, runs a bunch of
