@@ -60,7 +60,7 @@ public:
 
     void become_probe();
     void become_pipeline();
-    void become_snapshot();
+    void become_snapshot(index_t snp_idx);
 
     void accepted(index_t idx) {
         // AppendEntries replies can arrive out of order.

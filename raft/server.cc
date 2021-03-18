@@ -413,15 +413,14 @@ future<> server_impl::io_fiber(index_t last_stable) {
 }
 
 void server_impl::send_snapshot(server_id dst, install_snapshot&& snp) {
-    index_t snp_idx = snp.snp.idx;
-    future<> f = _rpc->send_snapshot(dst, std::move(snp)).then_wrapped([this, dst, snp_idx] (future<> f) {
+    future<> f = _rpc->send_snapshot(dst, std::move(snp)).then_wrapped([this, dst] (future<> f) {
         _snapshot_transfers.erase(dst);
         if (f.failed()) {
             logger.error("[{}] Transferring snapshot to {} failed with: {}", _id, dst, f.get_exception());
-            _fsm->snapshot_status(dst, std::nullopt);
+            _fsm->snapshot_status(dst, false);
         } else {
             logger.trace("[{}] Transferred snapshot to {}", _id, dst);
-            _fsm->snapshot_status(dst, snp_idx);
+            _fsm->snapshot_status(dst, true);
         }
 
     });
