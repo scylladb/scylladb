@@ -267,8 +267,8 @@ future<> parse(const schema& s, sstable_version_types v, random_access_reader& i
 }
 
 // Intended to be used for a type that describes itself through describe_type().
-template <class T>
-typename std::enable_if_t<!std::is_integral<T>::value && !std::is_enum<T>::value, future<>>
+template <self_describing T>
+future<>
 parse(const schema& s, sstable_version_types v, random_access_reader& in, T& t) {
     return t.describe_type(v, [v, &s, &in] (auto&&... what) -> future<> {
         return parse(s, v, in, what...);
