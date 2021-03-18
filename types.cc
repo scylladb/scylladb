@@ -1625,10 +1625,10 @@ static void serialize_aux(const tuple_type_impl& type, const tuple_type_impl::na
     assert(elems.size() <= type.size());
 
     for (size_t i = 0; i < elems.size(); ++i) {
-        const data_type& t = type.type(i);
+        const abstract_type& t = type.type(i)->without_reversed();
         const data_value& v = elems[i];
-        if (!v.is_null() && t != v.type()) {
-            throw std::runtime_error(format("tuple element type mismatch: expected {}, got {}", t->name(), v.type()->name()));
+        if (!v.is_null() && t != *v.type()) {
+            throw std::runtime_error(format("tuple element type mismatch: expected {}, got {}", t.name(), v.type()->name()));
         }
 
         if (v.is_null()) {
