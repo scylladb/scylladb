@@ -369,15 +369,15 @@ inline void write(sstable_version_types ver, file_writer& out, const disk_data_v
 }
 
 template <typename Members>
-inline typename std::enable_if_t<!std::is_integral<Members>::value, void>
+inline void
 write(sstable_version_types v, file_writer& out, const utils::chunked_vector<Members>& arr) {
     for (auto& a : arr) {
         write(v, out, a);
     }
 }
 
-template <typename Members>
-inline typename std::enable_if_t<std::is_integral<Members>::value, void>
+template <std::integral Members>
+inline void
 write(sstable_version_types v, file_writer& out, const utils::chunked_vector<Members>& arr) {
     std::vector<Members> tmp;
     size_t per_loop = 100000 / sizeof(Members);
