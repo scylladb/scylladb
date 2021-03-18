@@ -116,6 +116,7 @@ private:
     uint64_t _total_connections = 0;
     uint64_t _current_connections = 0;
     uint64_t _requests_served = 0;
+    uint64_t _requests_serving = 0;
     uint64_t _requests_blocked_memory = 0;
     semaphore& _memory_available;
     thrift_server_config _config;
@@ -130,6 +131,7 @@ public:
     uint64_t total_connections() const;
     uint64_t current_connections() const;
     uint64_t requests_served() const;
+    uint64_t requests_serving() const;
     size_t max_request_size() const;
     const semaphore& memory_available() const;
     uint64_t requests_blocked_memory() const;

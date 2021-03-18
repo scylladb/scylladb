@@ -153,11 +153,15 @@ thrift_server::connection::process_one_request() {
     _input->resetBuffer();
     _output->resetBuffer();
     co_await read();
+    ++_server._requests_serving;
     ++_server._requests_served;
-    auto ret = _processor_promise.get_future();
+    auto ret = _processor_promise.get_future().handle_exception([&server = _server] (const std::exception_ptr&) {
+        server._requests_serving--;
+    });
     // adapt from "continuation object style" to future/promise
     auto complete = [this] (bool success) mutable {
         // FIXME: look at success?
+        _server._requests_serving--;
         write().forward_to(std::move(_processor_promise));
         _processor_promise = promise<>();
     };
@@ -309,6 +313,11 @@ thrift_server::current_connections() const {
 uint64_t
 thrift_server::requests_served() const {
     return _requests_served;
+}
+
+uint64_t
+thrift_server::requests_serving() const {
+    return _requests_serving;
 }
 
 size_t
