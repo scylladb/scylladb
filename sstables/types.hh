@@ -34,6 +34,7 @@
 #include <vector>
 #include <unordered_map>
 #include <type_traits>
+#include <concepts>
 #include "version.hh"
 #include "encoding_stats.hh"
 #include "utils/UUID.hh"
@@ -52,6 +53,17 @@ concept Writer =
     requires(T& wr, const char* data, size_t size) {
         { wr.write(data, size) } -> std::same_as<void>;
     };
+
+struct sample_describer_for_self_describing_concept {
+    // A describer can return any type, but we can't check any type in a concept.
+    // Pick "long" arbitrarily and check that describe_type returns long too in that case.
+    long operator()(auto&&...) const;
+};
+
+template <typename T>
+concept self_describing = requires (T& obj, sstable_version_types v, sample_describer_for_self_describing_concept d) {
+    { obj.describe_type(v, d) } -> std::same_as<long>;
+};
 
 struct commitlog_interval {
     db::replay_position start;
