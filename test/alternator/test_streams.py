@@ -140,7 +140,10 @@ def test_list_streams_alter(dynamodb, dynamodbstreams):
             wait_for_active_stream(dynamodbstreams, table)
 
 def test_list_streams_paged(dynamodb, dynamodbstreams):
-    for type in stream_types:
+    # There is no reason to run this test for all stream types - we have
+    # other tests for creating tables with all stream types, and for using
+    # them. This one is only about list_streams.
+    for type in stream_types[0:1]:
         with create_stream_test_table(dynamodb, StreamViewType=type) as table1:
             with create_stream_test_table(dynamodb, StreamViewType=type) as table2:
                 wait_for_active_stream(dynamodbstreams, table1)
