@@ -1322,6 +1322,34 @@ set_type_impl::serialize_partially_deserialized_form(
     return pack(v.begin(), v.end(), v.size(), sf);
 }
 
+template <FragmentedView View>
+std::vector<managed_bytes> partially_deserialize_listlike(View in, cql_serialization_format sf) {
+    auto nr = read_collection_size(in, sf);
+    std::vector<managed_bytes> elements;
+    elements.reserve(nr);
+    for (int i = 0; i != nr; ++i) {
+        elements.emplace_back(read_collection_value(in, sf));
+    }
+    return elements;
+}
+template std::vector<managed_bytes> partially_deserialize_listlike(managed_bytes_view in, cql_serialization_format sf);
+template std::vector<managed_bytes> partially_deserialize_listlike(fragmented_temporary_buffer::view in, cql_serialization_format sf);
+
+template <FragmentedView View>
+std::vector<std::pair<managed_bytes, managed_bytes>> partially_deserialize_map(View in, cql_serialization_format sf) {
+    auto nr = read_collection_size(in, sf);
+    std::vector<std::pair<managed_bytes, managed_bytes>> elements;
+    elements.reserve(nr);
+    for (int i = 0; i != nr; ++i) {
+        auto key = managed_bytes(read_collection_value(in, sf));
+        auto value = managed_bytes(read_collection_value(in, sf));
+        elements.emplace_back(std::move(key), std::move(value));
+    }
+    return elements;
+}
+template std::vector<std::pair<managed_bytes, managed_bytes>> partially_deserialize_map(managed_bytes_view in, cql_serialization_format sf);
+template std::vector<std::pair<managed_bytes, managed_bytes>> partially_deserialize_map(fragmented_temporary_buffer::view in, cql_serialization_format sf);
+
 list_type
 list_type_impl::get_instance(data_type elements, bool is_multi_cell) {
     return intern::get_instance(elements, is_multi_cell);

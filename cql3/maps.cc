@@ -162,11 +162,21 @@ maps::value::from_serialized(const raw_value_view& fragmented_value, const map_t
         // FIXME: deserialize_for_native_protocol?!
         auto m = fragmented_value.deserialize<map_type_impl::native_type>(type, sf);
         std::map<managed_bytes, managed_bytes, serialized_compare> map(type.get_keys_type()->as_less_comparator());
-        for (auto&& e : m) {
-            map.emplace(type.get_keys_type()->decompose(e.first),
-                        type.get_values_type()->decompose(e.second));
+        if (sf.collection_format_unchanged()) {
+            std::vector<std::pair<managed_bytes, managed_bytes>> tmp = fragmented_value.with_value([sf] (const FragmentedView auto& v) {
+                return partially_deserialize_map(v, sf);
+            });
+            for (auto&& key_value : tmp) {
+                map.insert(std::move(key_value));
+            }
+        } else [[unlikely]] {
+            auto m = fragmented_value.deserialize<map_type_impl::native_type>(type, sf);
+            for (auto&& e : m) {
+                map.emplace(type.get_keys_type()->decompose(e.first),
+                            type.get_values_type()->decompose(e.second));
+            }
         }
-        return maps::value { std::move(map) };
+        return maps::value(std::move(map));
     } catch (marshal_exception& e) {
         throw exceptions::invalid_request_exception(e.what());
     }

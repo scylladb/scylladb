@@ -135,13 +135,19 @@ sets::literal::to_string() const {
 sets::value
 sets::value::from_serialized(const raw_value_view& val, const set_type_impl& type, cql_serialization_format sf) {
     try {
-        // Collections have this small hack that validate cannot be called on a serialized object,
-        // but compose does the validation (so we're fine).
-        // FIXME: deserializeForNativeProtocol?!
-        auto s = val.deserialize<set_type_impl::native_type>(type, sf);
         std::set<managed_bytes, serialized_compare> elements(type.get_elements_type()->as_less_comparator());
-        for (auto&& element : s) {
-            elements.insert(elements.end(), managed_bytes(type.get_elements_type()->decompose(element)));
+        if (sf.collection_format_unchanged()) {
+            std::vector<managed_bytes> tmp = val.with_value([sf] (const FragmentedView auto& v) {
+                return partially_deserialize_listlike(v, sf);
+            });
+            for (auto&& element : tmp) {
+                elements.insert(std::move(element));
+            }
+        } else [[unlikely]] {
+            auto s = val.deserialize<set_type_impl::native_type>(type, sf);
+            for (auto&& element : s) {
+                elements.insert(elements.end(), managed_bytes(type.get_elements_type()->decompose(element)));
+            }
         }
         return value(std::move(elements));
     } catch (marshal_exception& e) {

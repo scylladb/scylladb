@@ -126,16 +126,22 @@ lists::literal::to_string() const {
 lists::value
 lists::value::from_serialized(const raw_value_view& val, const list_type_impl& type, cql_serialization_format sf) {
     try {
-        // Collections have this small hack that validate cannot be called on a serialized object,
-        // but compose does the validation (so we're fine).
-        // FIXME: deserializeForNativeProtocol()?!
-        auto l = val.deserialize<list_type_impl::native_type>(type, sf);
         std::vector<managed_bytes_opt> elements;
-        elements.reserve(l.size());
-        for (auto&& element : l) {
-            // elements can be null in lists that represent a set of IN values
-            // FIXME: decompose to managed_bytes
-            elements.push_back(element.is_null() ? managed_bytes_opt() : managed_bytes_opt(type.get_elements_type()->decompose(element)));
+        if (sf.collection_format_unchanged()) {
+            std::vector<managed_bytes> tmp = val.with_value([sf] (const FragmentedView auto& v) {
+                return partially_deserialize_listlike(v, sf);
+            });
+            elements.reserve(tmp.size());
+            for (auto&& element : tmp) {
+                elements.emplace_back(std::move(element));
+            }
+        } else [[unlikely]] {
+            auto l = val.deserialize<list_type_impl::native_type>(type, sf);
+            elements.reserve(l.size());
+            for (auto&& element : l) {
+                // elements can be null in lists that represent a set of IN values
+                elements.push_back(element.is_null() ? managed_bytes_opt() : managed_bytes_opt(type.get_elements_type()->decompose(element)));
+            }
         }
         return value(std::move(elements));
     } catch (marshal_exception& e) {
