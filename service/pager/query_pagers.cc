@@ -138,8 +138,8 @@ static bool has_clustering_keys(const schema& s, const query::read_command& cmd)
 
                     bool remove = !found
                             || (contains && !inclusive && (i->is_singular()
-                                || (reversed && i->start() && !cmp(i->start()->value(), lo))
-                                || (!reversed && i->end() && !cmp(i->end()->value(), lo))))
+                                || (reversed && i->start() && cmp(i->start()->value(), lo) == 0)
+                                || (!reversed && i->end() && cmp(i->end()->value(), lo) == 0)))
                             ;
 
                     if (remove) {

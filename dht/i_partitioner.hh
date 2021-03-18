@@ -49,6 +49,7 @@
 #include <random>
 #include <utility>
 #include <vector>
+#include <compare>
 #include "range.hh"
 #include <byteswap.h>
 #include "dht/token.hh"
@@ -110,8 +111,8 @@ public:
 
     // Trichotomic comparators defining total ordering on the union of
     // decorated_key and ring_position objects.
-    int tri_compare(const schema& s, const decorated_key& other) const;
-    int tri_compare(const schema& s, const ring_position& other) const;
+    std::strong_ordering tri_compare(const schema& s, const decorated_key& other) const;
+    std::strong_ordering tri_compare(const schema& s, const ring_position& other) const;
 
     const dht::token& token() const noexcept {
         return _token;
@@ -309,7 +310,7 @@ public:
     bool equal(const schema&, const ring_position&) const;
 
     // Trichotomic comparator defining a total ordering on ring_position objects
-    int tri_compare(const schema&, const ring_position&) const;
+    std::strong_ordering tri_compare(const schema&, const ring_position&) const;
 
     // "less" comparator corresponding to tri_compare()
     bool less_compare(const schema&, const ring_position&) const;
@@ -329,7 +330,7 @@ public:
 // Such range includes all keys k such that v1 <= k < v2, with order defined by ring_position_comparator.
 //
 class ring_position_view {
-    friend int ring_position_tri_compare(const schema& s, ring_position_view lh, ring_position_view rh);
+    friend std::strong_ordering ring_position_tri_compare(const schema& s, ring_position_view lh, ring_position_view rh);
     friend class ring_position_comparator;
     friend class ring_position_comparator_for_sstables;
     friend class ring_position_ext;
@@ -566,7 +567,7 @@ public:
     friend std::ostream& operator<<(std::ostream&, const ring_position_ext&);
 };
 
-int ring_position_tri_compare(const schema& s, ring_position_view lh, ring_position_view rh);
+std::strong_ordering ring_position_tri_compare(const schema& s, ring_position_view lh, ring_position_view rh);
 
 template <typename T>
 requires std::is_convertible<T, ring_position_view>::value
@@ -579,22 +580,22 @@ struct ring_position_comparator {
     const schema& s;
     ring_position_comparator(const schema& s_) : s(s_) {}
 
-    int operator()(ring_position_view lh, ring_position_view rh) const {
+    std::strong_ordering operator()(ring_position_view lh, ring_position_view rh) const {
         return ring_position_tri_compare(s, lh, rh);
     }
 
     template <typename T>
-    int operator()(const T& lh, ring_position_view rh) const {
+    std::strong_ordering operator()(const T& lh, ring_position_view rh) const {
         return ring_position_tri_compare(s, ring_position_view_to_compare(lh), rh);
     }
 
     template <typename T>
-    int operator()(ring_position_view lh, const T& rh) const {
+    std::strong_ordering operator()(ring_position_view lh, const T& rh) const {
         return ring_position_tri_compare(s, lh, ring_position_view_to_compare(rh));
     }
 
     template <typename T1, typename T2>
-    int operator()(const T1& lh, const T2& rh) const {
+    std::strong_ordering operator()(const T1& lh, const T2& rh) const {
         return ring_position_tri_compare(s, ring_position_view_to_compare(lh), ring_position_view_to_compare(rh));
     }
 };
@@ -602,8 +603,8 @@ struct ring_position_comparator {
 struct ring_position_comparator_for_sstables {
     const schema& s;
     ring_position_comparator_for_sstables(const schema& s_) : s(s_) {}
-    int operator()(ring_position_view, sstables::decorated_key_view) const;
-    int operator()(sstables::decorated_key_view, ring_position_view) const;
+    std::strong_ordering operator()(ring_position_view, sstables::decorated_key_view) const;
+    std::strong_ordering operator()(sstables::decorated_key_view, ring_position_view) const;
 };
 
 // "less" comparator giving the same order as ring_position_comparator

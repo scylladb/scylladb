@@ -360,7 +360,11 @@ struct repair_sync_boundary {
     public:
         tri_compare(const schema& s) : _pk_cmp(s), _position_cmp(s) { }
         int operator()(const repair_sync_boundary& a, const repair_sync_boundary& b) const {
-            int ret = _pk_cmp(a.pk, b.pk);
+            auto tmp = _pk_cmp(a.pk, b.pk);
+            auto ret = 0;
+            if (tmp != 0) {
+                ret = tmp < 0 ? -1 : 1;
+            }
             if (ret == 0) {
                 ret = _position_cmp(a.position, b.position);
             }

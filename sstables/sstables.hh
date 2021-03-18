@@ -311,8 +311,7 @@ public:
     const dht::decorated_key& get_last_decorated_key() const;
 
     // SSTable comparator using the first key (decorated key).
-    // Return values are those of a trichotomic comparison.
-    int compare_by_first_key(const sstable& other) const;
+    std::strong_ordering compare_by_first_key(const sstable& other) const;
 
     // SSTable comparator using the max timestamp.
     // Return values are those of a trichotomic comparison.

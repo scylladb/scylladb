@@ -2574,7 +2574,7 @@ void merge_container(
         Container a,
         Container b,
         OutputIt oit,
-        std::function<int(const typename Container::value_type&, const typename Container::value_type&)> tri_cmp,
+        std::function<std::strong_ordering (const typename Container::value_type&, const typename Container::value_type&)> tri_cmp,
         std::function<typename Container::value_type(typename Container::value_type, typename Container::value_type)> merge_func) {
     for (auto [v1, v2] : iterate_over_in_ordered_lockstep(a, b, tri_cmp)) {
         if (v1 && v2) {
@@ -2588,6 +2588,25 @@ void merge_container(
             }
         }
     }
+}
+
+// Temporary variant of merge_container() that accepts int as the return value of merge_func,
+// until we convert all users to std::strong_ordering.
+template <typename Container, typename OutputIt>
+void merge_container(
+        Container&& a,
+        Container&& b,
+        OutputIt oit,
+        std::function<int (const typename Container::value_type&, const typename Container::value_type&)> tri_cmp,
+        std::function<typename Container::value_type(typename Container::value_type, typename Container::value_type)> merge_func) {
+    return merge_container(
+            std::forward<Container>(a),
+            std::forward<Container>(b),
+            oit,
+            [tri_cmp] (const typename Container::value_type& a, const typename Container::value_type& b) {
+                return tri_cmp(a, b) <=> 0;
+            },
+            std::move(merge_func));
 }
 
 row_summary merge(const schema& schema, column_kind kind, row_summary a, row_summary b) {
