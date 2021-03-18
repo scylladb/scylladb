@@ -332,7 +332,7 @@ future<> parse(const schema& s, sstable_version_types v, random_access_reader& i
 // to do is to convert each member because they are all stored big endian.
 // We'll offer a specialization for that case below.
 template <typename Size, typename Members>
-typename std::enable_if_t<!std::is_integral<Members>::value, future<>>
+future<>
 parse(const schema& s, sstable_version_types v, random_access_reader& in, Size& len, utils::chunked_vector<Members>& arr) {
 
     auto count = make_lw_shared<size_t>(0);
@@ -345,8 +345,8 @@ parse(const schema& s, sstable_version_types v, random_access_reader& in, Size& 
     });
 }
 
-template <typename Size, typename Members>
-typename std::enable_if_t<std::is_integral<Members>::value, future<>>
+template <typename Size, std::integral Members>
+future<>
 parse(const schema&, sstable_version_types, random_access_reader& in, Size& len, utils::chunked_vector<Members>& arr) {
     auto done = make_lw_shared<size_t>(0);
     return repeat([&in, &len, &arr, done]  {
