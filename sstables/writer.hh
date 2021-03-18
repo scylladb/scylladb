@@ -246,15 +246,8 @@ void write_signed_vint(W& out, int64_t value) {
     return write_vint_impl(out, value);
 }
 
-template <typename T, typename W>
-requires Writer<W>
-typename std::enable_if_t<!std::is_integral_v<T>>
-write_vint(W& out, T t) = delete;
-
-template <typename T, typename W>
-requires Writer<W>
+template <std::integral T, Writer W>
 inline void write_vint(W& out, T value) {
-    static_assert(std::is_integral_v<T>, "Non-integral values can't be written using write_vint");
     return std::is_unsigned_v<T> ? write_unsigned_vint(out, value) : write_signed_vint(out, value);
 }
 
