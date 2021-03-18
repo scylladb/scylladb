@@ -79,10 +79,10 @@ Use `git push` to publish the patches.
 Indentify the git url and branch/tag identifier, and issue
 the command
 
-    git pull --log --no-ff <url> <branch/tag>
+    git pull --log --no-ff --no-rebase <url> <branch/tag>
 
 The `--log` flag generates a list of patches in the commit log,
-while `--no-ff` ensures a merge commit is created.
+while `--no-ff` and `--no-rebase` ensure a merge commit is created.
 
 Copy the cover letter subject and body to the merge commit's
 subject and body, respectively. Make sure the merge commit
