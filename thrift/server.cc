@@ -163,7 +163,11 @@ thrift_server::connection::process_one_request() {
     };
     // Heuristics copied from transport/server.cc
     size_t mem_estimate = 8000 + 2 * _input->available_read();
-    auto units = co_await get_units(_server._memory_available, mem_estimate);
+    auto fut = get_units(_server._memory_available, mem_estimate);
+    if (_server._memory_available.waiters()) {
+        ++_server._requests_blocked_memory;
+    }
+    auto units = co_await std::move(fut);
     // NOTICE: this permit is put in the server under the assumption that no other
     // connection will overwrite this permit *until* it's extracted by the code
     // which handles the Thrift request (via calling obtain_permit()).
@@ -315,6 +319,11 @@ thrift_server::max_request_size() const {
 const semaphore&
 thrift_server::memory_available() const {
     return _memory_available;
+}
+
+uint64_t
+thrift_server::requests_blocked_memory() const {
+    return _requests_blocked_memory;
 }
 
 thrift_stats::thrift_stats(thrift_server& server) {

@@ -116,6 +116,7 @@ private:
     uint64_t _total_connections = 0;
     uint64_t _current_connections = 0;
     uint64_t _requests_served = 0;
+    uint64_t _requests_blocked_memory = 0;
     semaphore& _memory_available;
     thrift_server_config _config;
     boost::intrusive::list<connection> _connections_list;
@@ -131,6 +132,7 @@ public:
     uint64_t requests_served() const;
     size_t max_request_size() const;
     const semaphore& memory_available() const;
+    uint64_t requests_blocked_memory() const;
 
 private:
     void maybe_retry_accept(int which, bool keepalive, std::exception_ptr ex);
