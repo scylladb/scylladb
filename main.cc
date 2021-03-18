@@ -77,6 +77,7 @@
 #include "connection_notifier.hh"
 #include "transport/controller.hh"
 #include "thrift/controller.hh"
+#include "service/memory_limiter.hh"
 
 #include "alternator/server.hh"
 #include "redis/service.hh"
@@ -487,6 +488,7 @@ int main(int ac, char** av) {
     sharded<cql3::query_processor> qp;
     sharded<semaphore> sst_dir_semaphore;
     sharded<raft_services> raft_srvs;
+    sharded<service::memory_limiter> service_memory_limiter;
 
     return app.run(ac, av, [&] () -> future<int> {
 
@@ -515,7 +517,7 @@ int main(int ac, char** av) {
 
         return seastar::async([cfg, ext, &db, &qp, &proxy, &mm, &mm_notifier, &ctx, &opts, &dirs,
                 &prometheus_server, &cf_cache_hitrate_calculator, &load_meter, &feature_service,
-                &token_metadata, &snapshot_ctl, &messaging, &sst_dir_semaphore, &raft_srvs] {
+                &token_metadata, &snapshot_ctl, &messaging, &sst_dir_semaphore, &raft_srvs, &service_memory_limiter] {
           try {
             // disable reactor stall detection during startup
             auto blocked_reactor_notify_ms = engine().get_blocked_reactor_notify_ms();
@@ -827,6 +829,12 @@ int main(int ac, char** av) {
             sst_dir_semaphore.start(cfg->initial_sstable_loading_concurrency()).get();
             auto stop_sst_dir_sem = defer_verbose_shutdown("sst_dir_semaphore", [&sst_dir_semaphore] {
                 sst_dir_semaphore.stop().get();
+            });
+
+            service_memory_limiter.start(memory::stats().total_memory()).get();
+            auto stop_mem_limiter = defer_verbose_shutdown("service_memory_limiter", [&service_memory_limiter] {
+                // Uncomment this once services release all the memory on stop
+                // service_memory_limiter.stop().get();
             });
 
             db.start(std::ref(*cfg), dbcfg, std::ref(mm_notifier), std::ref(feature_service), std::ref(token_metadata), std::ref(stop_signal.as_sharded_abort_source()), std::ref(sst_dir_semaphore)).get();
@@ -1250,7 +1258,7 @@ int main(int ac, char** av) {
                 db.revert_initial_system_read_concurrency_boost();
             }).get();
 
-            cql_transport::controller cql_server_ctl(db, auth_service, mm_notifier, gossiper.local(), qp);
+            cql_transport::controller cql_server_ctl(db, auth_service, mm_notifier, gossiper.local(), qp, service_memory_limiter);
 
             ss.register_client_shutdown_hook("native transport", [&cql_server_ctl] {
                 cql_server_ctl.stop().get();
@@ -1351,11 +1359,12 @@ int main(int ac, char** av) {
                 }
                 bool alternator_enforce_authorization = cfg->alternator_enforce_authorization();
                 with_scheduling_group(dbcfg.statement_scheduling_group,
-                        [addr, alternator_port, alternator_https_port, creds = std::move(creds), alternator_enforce_authorization, cfg] () mutable {
+                        [addr, alternator_port, alternator_https_port, creds = std::move(creds), alternator_enforce_authorization, cfg, &service_memory_limiter] () mutable {
                     return alternator_server.invoke_on_all(
-                            [addr, alternator_port, alternator_https_port, creds = std::move(creds), alternator_enforce_authorization, cfg] (alternator::server& server) mutable {
+                            [addr, alternator_port, alternator_https_port, creds = std::move(creds), alternator_enforce_authorization, cfg, &service_memory_limiter] (alternator::server& server) mutable {
                         auto& ss = service::get_local_storage_service();
-                        return server.init(addr, alternator_port, alternator_https_port, creds, alternator_enforce_authorization, &ss.service_memory_limiter(),
+                        return server.init(addr, alternator_port, alternator_https_port, creds, alternator_enforce_authorization,
+                                &service_memory_limiter.local().get_semaphore(),
                                 ss.db().local().get_config().max_concurrent_requests_per_shard);
                     }).then([addr, alternator_port, alternator_https_port] {
                         startlog.info("Alternator server listening on {}, HTTP port {}, HTTPS port {}",

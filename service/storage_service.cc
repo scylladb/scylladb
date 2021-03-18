@@ -106,8 +106,6 @@ storage_service::storage_service(abort_source& abort_source, distributed<databas
         , _gossiper(gossiper)
         , _mnotifier(mn)
         , _messaging(ms)
-        , _service_memory_total(config.available_memory / 10)
-        , _service_memory_limiter(_service_memory_total)
         , _for_testing(for_testing)
         , _node_ops_abort_thread(node_ops_abort_thread())
         , _shared_token_metadata(stm)
@@ -1485,10 +1483,8 @@ future<> storage_service::gossip_sharder() {
 future<> storage_service::stop() {
     // make sure nobody uses the semaphore
     node_ops_singal_abort(std::nullopt);
-    return _service_memory_limiter.wait(_service_memory_total).finally([this] {
-        _listeners.clear();
-        return _schema_version_publisher.join();
-    }).finally([this] {
+    _listeners.clear();
+    return _schema_version_publisher.join().finally([this] {
         return std::move(_node_ops_abort_thread);
     });
 }
