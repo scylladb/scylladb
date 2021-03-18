@@ -23,6 +23,7 @@
 
 #include <limits>
 #include <type_traits>
+#include <concepts>
 #include <seastar/core/future.hh>
 #include "gc_clock.hh"
 #include "timestamp.hh"
@@ -40,13 +41,8 @@ class random_access_reader;
 future<uint64_t> read_unsigned_vint(random_access_reader& in);
 future<int64_t> read_signed_vint(random_access_reader& in);
 
-template <typename T>
-typename std::enable_if_t<!std::is_integral_v<T>>
-read_vint(random_access_reader& in, T& t) = delete;
-
-template <typename T>
+template <std::integral T>
 inline future<> read_vint(random_access_reader& in, T& value) {
-    static_assert(std::is_integral_v<T>, "Non-integral values can't be read using read_vint");
     if constexpr(std::is_unsigned_v<T>) {
         return read_unsigned_vint(in).then([&value] (uint64_t res) {
             value = res;
