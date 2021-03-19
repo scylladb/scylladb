@@ -256,7 +256,7 @@ BOOST_AUTO_TEST_CASE(test_log_last_conf_idx) {
     BOOST_CHECK_EQUAL(log.last_conf_idx(), 3);
     // apply snapshot truncates the log and resets last_conf_idx()
     log.apply_snapshot(log_snapshot(log, log.last_idx()), 0);
-    BOOST_CHECK_EQUAL(log.last_conf_idx(), 0);
+    BOOST_CHECK_EQUAL(log.last_conf_idx(), log.get_snapshot().idx);
     // log::last_term() is maintained correctly by truncate_head/truncate_tail() (snapshotting)
     BOOST_CHECK_EQUAL(log.last_term(), log.get_snapshot().term);
     BOOST_CHECK(log.term_for(log.get_snapshot().idx).has_value());
@@ -285,7 +285,7 @@ BOOST_AUTO_TEST_CASE(test_log_last_conf_idx) {
     BOOST_CHECK_EQUAL(log.in_memory_size(), 3);
     log.apply_snapshot(log_snapshot(log, log.last_idx()), 3);
     BOOST_CHECK_EQUAL(log.in_memory_size(), 3);
-    BOOST_CHECK_EQUAL(log.last_conf_idx(), 0);
+    BOOST_CHECK_EQUAL(log.last_conf_idx(), log.get_snapshot().idx);
     add_entry(log, log_entry::dummy{});
     // Set trailing shorter than the length of the log
     log.apply_snapshot(log_snapshot(log, log.last_idx()), 1);
