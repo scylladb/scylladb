@@ -1497,14 +1497,14 @@ future<> messaging_service::send_hint_mutation(msg_addr id, clock_type::time_poi
         std::move(reply_to), shard, std::move(response_id), std::move(trace_info));
 }
 
-void messaging_service::register_raft_send_snapshot(std::function<future<> (const rpc::client_info&, rpc::opt_time_point, uint64_t group_id, raft::server_id from_id, raft::server_id dst_id, raft::install_snapshot)>&& func) {
+void messaging_service::register_raft_send_snapshot(std::function<future<raft::snapshot_reply> (const rpc::client_info&, rpc::opt_time_point, uint64_t group_id, raft::server_id from_id, raft::server_id dst_id, raft::install_snapshot)>&& func) {
    register_handler(this, netw::messaging_verb::RAFT_SEND_SNAPSHOT, std::move(func));
 }
 future<> messaging_service::unregister_raft_send_snapshot() {
    return unregister_handler(netw::messaging_verb::RAFT_SEND_SNAPSHOT);
 }
-future<> messaging_service::send_raft_send_snapshot(msg_addr id, clock_type::time_point timeout, uint64_t group_id, raft::server_id from_id, raft::server_id dst_id, const raft::install_snapshot& install_snapshot) {
-   return send_message_timeout<void>(this, messaging_verb::RAFT_SEND_SNAPSHOT, std::move(id), timeout, group_id, std::move(from_id), std::move(dst_id), install_snapshot);
+future<raft::snapshot_reply> messaging_service::send_raft_snapshot(msg_addr id, clock_type::time_point timeout, uint64_t group_id, raft::server_id from_id, raft::server_id dst_id, const raft::install_snapshot& install_snapshot) {
+   return send_message_timeout<raft::snapshot_reply>(this, messaging_verb::RAFT_SEND_SNAPSHOT, std::move(id), timeout, group_id, std::move(from_id), std::move(dst_id), install_snapshot);
 }
 
 void messaging_service::register_raft_append_entries(std::function<future<> (const rpc::client_info&, rpc::opt_time_point, uint64_t group_id, raft::server_id from_id, raft::server_id dst_id, raft::append_request)>&& func) {

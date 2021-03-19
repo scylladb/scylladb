@@ -62,8 +62,12 @@ void follower_progress::become_pipeline() {
     }
 }
 
-void follower_progress::become_snapshot() {
+void follower_progress::become_snapshot(index_t snp_idx) {
     state = state::SNAPSHOT;
+    // If snapshot transfer succeeds, start replicating from the
+    // next index, otherwise we will learn the follower's index
+    // again by sending a probe request.
+    next_idx = snp_idx + index_t{1};
 }
 
 bool follower_progress::can_send_to() {

@@ -246,6 +246,8 @@ private:
     void request_vote(server_id from, vote_request&& vote_request);
     void request_vote_reply(server_id from, vote_reply&& vote_reply);
 
+    void install_snapshot_reply(server_id from, snapshot_reply&& reply);
+
     // Called on a follower with a new known leader commit index.
     // Advances the follower's commit index up to all log-stable
     // entries, known to be committed.
@@ -350,8 +352,6 @@ public:
     // tick period.
     bool can_read();
 
-    void snapshot_status(server_id id, std::optional<index_t> idx);
-
     // This call will update the log to point to the new snapshot
     // and will truncate the log prefix up to (snp.idx - trailing)
     // entry. Returns false if the snapshot is older than existing one.
@@ -386,7 +386,8 @@ void fsm::step(server_id from, Message&& msg) {
         logger.trace("{} [term: {}] received a message with higher term from {} [term: {}]",
             _my_id, _current_term, from, msg.current_term);
 
-        if constexpr (std::is_same_v<Message, append_request>) {
+        if constexpr (std::is_same_v<Message, append_request> ||
+                      std::is_same_v<Message, install_snapshot>) {
             leader = from;
         } else {
             if constexpr (std::is_same_v<Message, vote_request>) {
@@ -425,7 +426,8 @@ void fsm::step(server_id from, Message&& msg) {
             append_reply reply{_current_term, _commit_idx, append_reply::rejected{msg.prev_log_idx, _log.last_idx()}};
             send_to(from, std::move(reply));
         } else if constexpr (std::is_same_v<Message, install_snapshot>) {
-            send_to(from, snapshot_reply{ .success = false });
+            send_to(from, snapshot_reply{.current_term = _current_term,
+                    .success = false});
         } else if constexpr (std::is_same_v<Message, vote_request>) {
             if (msg.is_prevote) {
                 send_to(from, vote_reply{_current_term, false, true});
@@ -486,7 +488,13 @@ void fsm::step(server_id from, Message&& msg) {
                 // snapshot can be installed only in follower
                 success = apply_snapshot(std::move(msg.snp), 0);
             }
-            send_to(from, snapshot_reply{ .success = success });
+            send_to(from, snapshot_reply{.current_term = _current_term,
+                    .success = success});
+        } else if constexpr (std::is_same_v<Message, snapshot_reply>) {
+            if constexpr (std::is_same_v<State, leader>) {
+                // Switch the follower to log transfer mode.
+                install_snapshot_reply(from, std::move(msg));
+            }
         }
     };
 

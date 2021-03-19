@@ -688,7 +688,7 @@ void fsm::replicate_to(follower_progress& progress, bool allow_empty) {
             const snapshot& snapshot = _log.get_snapshot();
             // We need to transfer the snapshot before we can
             // continue syncing the log.
-            progress.become_snapshot();
+            progress.become_snapshot(snapshot.idx);
             send_to(progress.id, install_snapshot{_current_term, snapshot});
             logger.trace("replicate_to[{}->{}]: send snapshot next={} snapshot={}",
                     _my_id, progress.id, progress.next_idx,  snapshot.idx);
@@ -765,19 +765,18 @@ bool fsm::can_read() {
     return false;
 }
 
-void fsm::snapshot_status(server_id id, std::optional<index_t> idx) {
-    follower_progress& progress = *leader_state().tracker.find(id);
+void fsm::install_snapshot_reply(server_id from, snapshot_reply&& reply) {
+    follower_progress& progress = *leader_state().tracker.find(from);
 
     if (progress.state != follower_progress::state::SNAPSHOT) {
-        logger.trace("snasphot_status[{}]: called not in snapshot state", _my_id);
+        logger.trace("install_snapshot_reply[{}]: called not in snapshot state", _my_id);
         return;
     }
 
     // No matter if snapshot transfer failed or not move back to probe state
     progress.become_probe();
 
-    if (idx) {
-        progress.next_idx = *idx + index_t(1);
+    if (reply.success) {
         // If snapshot was successfully transferred start replication immediately
         replicate_to(progress, false);
     }

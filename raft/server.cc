@@ -60,7 +60,7 @@ public:
 
     // server interface
     future<> add_entry(command command, wait_type type);
-    future<> apply_snapshot(server_id from, install_snapshot snp) override;
+    future<snapshot_reply> apply_snapshot(server_id from, install_snapshot snp) override;
     future<> set_configuration(server_address_set c_new) override;
     future<> start() override;
     future<> abort() override;
@@ -329,9 +329,11 @@ future<> server_impl::send_message(server_id id, Message m) {
         } else if constexpr (std::is_same_v<T, snapshot_reply>) {
             _stats.snapshot_reply_sent++;
             assert(_snapshot_application_done);
-            // send reply to install_snapshot here
+            // Send a reply to install_snapshot after
+            // snapshot application is done.
             _snapshot_application_done->set_value(std::move(m));
             _snapshot_application_done = std::nullopt;
+            // ... and do not wait for it here.
             return make_ready_future<>();
         } else {
             static_assert(!sizeof(T*), "not all message types are handled");
@@ -413,32 +415,27 @@ future<> server_impl::io_fiber(index_t last_stable) {
 }
 
 void server_impl::send_snapshot(server_id dst, install_snapshot&& snp) {
-    index_t snp_idx = snp.snp.idx;
-    future<> f = _rpc->send_snapshot(dst, std::move(snp)).then_wrapped([this, dst, snp_idx] (future<> f) {
+    future<> f = _rpc->send_snapshot(dst, std::move(snp)).then_wrapped([this, dst] (future<snapshot_reply> f) {
         _snapshot_transfers.erase(dst);
+        auto reply = raft::snapshot_reply{.current_term = _fsm->get_current_term(), .success = false};
         if (f.failed()) {
             logger.error("[{}] Transferring snapshot to {} failed with: {}", _id, dst, f.get_exception());
-            _fsm->snapshot_status(dst, std::nullopt);
         } else {
             logger.trace("[{}] Transferred snapshot to {}", _id, dst);
-            _fsm->snapshot_status(dst, snp_idx);
+            reply = f.get();
         }
-
+        _fsm->step(dst, std::move(reply));
     });
     auto res = _snapshot_transfers.emplace(dst, std::move(f));
     assert(res.second);
 }
 
-future<> server_impl::apply_snapshot(server_id from, install_snapshot snp) {
+future<snapshot_reply> server_impl::apply_snapshot(server_id from, install_snapshot snp) {
     _fsm->step(from, std::move(snp));
     // Only one snapshot can be received at a time
     assert(! _snapshot_application_done);
     _snapshot_application_done = promise<snapshot_reply>();
-    return _snapshot_application_done->get_future().then([] (snapshot_reply&& reply) {
-        if (!reply.success) {
-            throw std::runtime_error("Snapshot application failed");
-        }
-    });
+    return _snapshot_application_done->get_future();
 }
 
 future<> server_impl::applier_fiber() {
