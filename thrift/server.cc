@@ -220,12 +220,12 @@ thrift_server::listen(socket_address addr, bool keepalive) {
     listen_options lo;
     lo.reuse_address = true;
     _listeners.push_back(seastar::listen(addr, lo));
-    do_accepts(_listeners.size() - 1, keepalive);
+    do_accepts(_listeners.size() - 1, keepalive, 0);
     return make_ready_future<>();
 }
 
 void
-thrift_server::do_accepts(int which, bool keepalive) {
+thrift_server::do_accepts(int which, bool keepalive, int num_attempts) {
     if (_stop_gate.is_closed()) {
         return;
     }
@@ -249,8 +249,8 @@ thrift_server::do_accepts(int which, bool keepalive) {
                     });
                 });
             });
-            do_accepts(which, keepalive);
-        }).handle_exception([this, which, keepalive] (auto ex) {
+            do_accepts(which, keepalive, 0);
+        }).handle_exception([this, which, keepalive, num_attempts] (auto ex) {
             tlogger.debug("accept failed {}", ex);
             try {
                 std::rethrow_exception(std::move(ex));
@@ -258,12 +258,14 @@ thrift_server::do_accepts(int which, bool keepalive) {
                 return;
             } catch (...) {
                 // Done in the background.
-                (void)with_gate(_stop_gate, [this, which, keepalive] {
-                    return sleep(1ms).then([this, which, keepalive] {
+                (void)with_gate(_stop_gate, [this, which, keepalive, num_attempts] {
+                    int backoff = 2 << std::max(num_attempts, 10);
+                    tlogger.debug("sleeping for {}ms", backoff);
+                    return sleep(std::chrono::milliseconds(backoff)).then([this, which, keepalive, num_attempts] {
                         tlogger.debug("retrying accept after failure");
-                        do_accepts(which, keepalive);
+                        do_accepts(which, keepalive, num_attempts + 1);
                     });
-                 });
+                });
             }
         });
     });
