@@ -1299,3 +1299,27 @@ BOOST_AUTO_TEST_CASE(test_election_during_confchange) {
     BOOST_CHECK_EQUAL(D.get_configuration().is_joint(), false);
     BOOST_CHECK_EQUAL(D.get_configuration().current.size(), 3);
 }
+
+BOOST_AUTO_TEST_CASE(test_reply_from_removed_follower) {
+    // Messages from followers may be delayed. Check they don't
+    // upset the leader when they are delivered past configuration
+    // change
+
+    server_id A_id = id(), B_id = id();
+
+    raft::log log(raft::snapshot{.idx = index_t{0}, .config = raft::configuration{A_id, B_id}});
+    auto A = create_follower(A_id, log);
+    auto B = create_follower(B_id, log);
+    election_timeout(A);
+    communicate(A, B);
+    A.add_entry(raft::configuration({A_id}));
+    communicate(A, B);
+    BOOST_CHECK(A.is_leader());
+    BOOST_CHECK_EQUAL(A.get_configuration().is_joint(), false);
+    BOOST_CHECK_EQUAL(A.get_configuration().current.size(), 1);
+    auto idx = A.log_last_idx();
+    A.step(B.id(), raft::append_reply{A.get_current_term(), idx, raft::append_reply::accepted{idx}});
+    A.step(B.id(), raft::append_reply{A.get_current_term(), idx, raft::append_reply::rejected{idx}});
+    A.step(B.id(), raft::snapshot_reply{A.get_current_term(), true});
+    BOOST_CHECK(A.is_leader());
+}

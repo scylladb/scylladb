@@ -807,7 +807,12 @@ bool fsm::can_read() {
 }
 
 void fsm::install_snapshot_reply(server_id from, snapshot_reply&& reply) {
-    follower_progress& progress = *leader_state().tracker.find(from);
+    follower_progress* opt_progress= leader_state().tracker.find(from);
+    // The follower is removed from the configuration.
+    if (opt_progress == nullptr) {
+        return;
+    }
+    follower_progress& progress = *opt_progress;
 
     if (progress.state != follower_progress::state::SNAPSHOT) {
         logger.trace("install_snapshot_reply[{}]: called not in snapshot state", _my_id);
