@@ -989,7 +989,7 @@ process_query_internal(service::client_state& client_state, distributed<cql3::qu
     auto& options = *q_state->options;
     auto skip_metadata = options.skip_metadata();
 
-    if (init_trace) {
+    if (init_trace && trace_state) {
         tracing::set_page_size(trace_state, options.get_page_size());
         tracing::set_consistency_level(trace_state, options.get_consistency());
         tracing::set_optional_serial_consistency_level(trace_state, options.get_serial_consistency());
@@ -1021,8 +1021,10 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_pr
 
     auto query = sstring(in.read_long_string_view());
 
-    tracing::add_query(trace_state, query);
-    tracing::begin(trace_state, "Preparing CQL3 query", client_state.get_client_address());
+    if (trace_state) {
+        tracing::add_query(trace_state, query);
+        tracing::begin(trace_state, "Preparing CQL3 query", client_state.get_client_address());
+    }
 
     auto cpu_id = this_shard_id();
     auto cpus = boost::irange(0u, smp::count);
@@ -1079,7 +1081,7 @@ process_execute_internal(service::client_state& client_state, distributed<cql3::
     auto& options = *q_state->options;
     auto skip_metadata = options.skip_metadata();
 
-    if (init_trace) {
+    if (init_trace && trace_state) {
         tracing::set_page_size(trace_state, options.get_page_size());
         tracing::set_consistency_level(trace_state, options.get_consistency());
         tracing::set_optional_serial_consistency_level(trace_state, options.get_serial_consistency());
@@ -1194,7 +1196,7 @@ process_batch_internal(service::client_state& client_state, distributed<cql3::qu
         }
 
         ::shared_ptr<cql3::statements::modification_statement> modif_statement_ptr = static_pointer_cast<cql3::statements::modification_statement>(ps->statement);
-        if (init_trace) {
+        if (init_trace && trace_state) {
             tracing::add_table_name(trace_state, modif_statement_ptr->keyspace(), modif_statement_ptr->column_family());
             tracing::add_prepared_statement(trace_state, ps);
         }
@@ -1219,7 +1221,7 @@ process_batch_internal(service::client_state& client_state, distributed<cql3::qu
                                                                      qp.local().get_cql_config())), std::move(values)));
     auto& options = *q_state->options;
 
-    if (init_trace) {
+    if (init_trace && trace_state) {
         tracing::set_consistency_level(trace_state, options.get_consistency());
         tracing::set_optional_serial_consistency_level(trace_state, options.get_serial_consistency());
         tracing::add_prepared_query_options(trace_state, options);
