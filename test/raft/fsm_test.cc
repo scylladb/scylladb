@@ -889,3 +889,118 @@ BOOST_AUTO_TEST_CASE(test_confchange_replace_node) {
     BOOST_CHECK(fsm.get_configuration().current.size() == 3);
     BOOST_CHECK(!fsm.get_configuration().is_joint());
 }
+
+BOOST_AUTO_TEST_CASE(test_leader_stepdown) {
+    failure_detector fd;
+
+    server_id id1{utils::make_random_uuid()},
+              id2{utils::make_random_uuid()},
+              id3{utils::make_random_uuid()};
+
+    raft::configuration cfg({raft::server_address{id1.id}, raft::server_address{id2.id}, raft::server_address{id3.id, false}});
+    raft::log log(raft::snapshot{.config = cfg});
+
+    raft::fsm fsm(id1, term_t{1}, /* voted for */ server_id{}, std::move(log), fd, fsm_cfg);
+
+    // Check that we move to candidate state on timeout_now message
+    fsm.step(id2, raft::timeout_now{fsm.get_current_term()});
+    BOOST_CHECK(fsm.is_candidate());
+    auto output = fsm.get_output();
+    auto vote_request = std::get<raft::vote_request>(output.messages.back().second);
+    // Check that vote_request has `force` flag set.
+    BOOST_CHECK(vote_request.force);
+
+    // Turn to a leader
+    fsm.step(id2, raft::vote_reply{fsm.get_current_term(), true});
+    BOOST_CHECK(fsm.is_leader());
+
+    // make id2's match idx to be up-to-date
+    (void)fsm.get_output(); // Replication will not start until first get_output() call
+    output = fsm.get_output();
+    auto append = std::get<raft::append_request>(output.messages.back().second);
+    auto idx = append.entries.back()->idx;
+    fsm.step(id2, raft::append_reply{fsm.get_current_term(), index_t{}, raft::append_reply::accepted{idx}});
+
+    // start leadership transfer while there is a fully up-to-date follower
+    fsm.transfer_leadership();
+
+    // Check that timeout_now message is sent
+    output = fsm.get_output();
+    BOOST_CHECK_EQUAL(output.messages.size(), 1);
+    BOOST_CHECK(std::holds_alternative<raft::timeout_now>(output.messages.back().second));
+
+    // Turn to a leader again
+    // ... first turn to a follower
+    fsm.step(id2, raft::vote_request{fsm.get_current_term() + term_t{1}, index_t{10}, term_t{}, false, true});
+    BOOST_CHECK(fsm.is_follower());
+    (void)fsm.get_output();
+    // ... and now leader
+    election_timeout(fsm);
+    BOOST_CHECK(fsm.is_candidate());
+    output = fsm.get_output();
+    fsm.step(id2, raft::vote_reply{fsm.get_current_term(), true});
+    BOOST_CHECK(fsm.is_leader());
+    (void)fsm.get_output(); // causes dummy to be replicate
+    output = fsm.get_output();
+    append = std::get<raft::append_request>(output.messages.back().second);
+    idx = append.entries.back()->idx;
+
+    // start leadership transfer while there is no fully up-to-date follower
+    // (dummy entry appended by become_leader is not replicated yet)
+    fsm.transfer_leadership();
+
+    // check that no timeout_now message was sent
+    output = fsm.get_output();
+    BOOST_CHECK_EQUAL(output.messages.size(), 0);
+
+    // Now make non voting follower match the log and see that timeout_now is not sent
+    fsm.step(id3, raft::append_reply{fsm.get_current_term(), index_t{}, raft::append_reply::accepted{idx}});
+    output = fsm.get_output();
+    BOOST_CHECK_EQUAL(output.messages.size(), 0);
+
+    // Now make voting follower match the log and see that timeout_now is sent
+    fsm.step(id2, raft::append_reply{fsm.get_current_term(), index_t{}, raft::append_reply::accepted{idx}});
+    output = fsm.get_output();
+    BOOST_CHECK_EQUAL(output.messages.size(), 1);
+    BOOST_CHECK(std::holds_alternative<raft::timeout_now>(output.messages.back().second));
+
+    // Turn to a leader yet again
+    // ... first turn to a follower
+    fsm.step(id2, raft::vote_request{fsm.get_current_term() + term_t{1}, index_t{10}, term_t{}, false, true});
+    BOOST_CHECK(fsm.is_follower());
+    (void)fsm.get_output();
+    // ... and now leader
+    election_timeout(fsm);
+    BOOST_CHECK(fsm.is_candidate());
+    output = fsm.get_output();
+    fsm.step(id2, raft::vote_reply{fsm.get_current_term(), true});
+    BOOST_CHECK(fsm.is_leader());
+    // Commit dummy entry
+    (void)fsm.get_output(); // causes dummy to be replicate
+    output = fsm.get_output();
+    append = std::get<raft::append_request>(output.messages.back().second);
+    idx = append.entries.back()->idx;
+    fsm.step(id2, raft::append_reply{fsm.get_current_term(), idx, raft::append_reply::accepted{idx}});
+
+    // Drop the leader from the current config and see that stepdown message is sent
+    raft::configuration newcfg({raft::server_address{id2.id}, raft::server_address{id3.id, false}});
+    fsm.add_entry(newcfg);
+    (void)fsm.get_output(); // send it out
+    output = fsm.get_output();
+    append = std::get<raft::append_request>(output.messages.back().second);
+    idx = append.entries.back()->idx;
+    // Accept joint config entry on id2
+    fsm.step(id2, raft::append_reply{fsm.get_current_term(), idx, raft::append_reply::accepted{idx}});
+    // fms added new config to the log
+    (void)fsm.get_output(); // send it out
+    output = fsm.get_output();
+    append = std::get<raft::append_request>(output.messages.back().second);
+    idx = append.entries.back()->idx;
+    // Accept new config entry on id2
+    fsm.step(id2, raft::append_reply{fsm.get_current_term(), idx, raft::append_reply::accepted{idx}});
+
+    // And check that the deposed leader sent timeout_now
+    output = fsm.get_output();
+    BOOST_CHECK_EQUAL(output.messages.size(), 1);
+    BOOST_CHECK(std::holds_alternative<raft::timeout_now>(output.messages.back().second));
+}
