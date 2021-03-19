@@ -286,11 +286,6 @@ private:
         _records->session_rec.started_at = std::chrono::system_clock::now();
     }
 
-    template <typename Func>
-    void begin(const seastar::lazy_eval<Func>& lf, gms::inet_address client) {
-        begin(lf(), client);
-    }
-
     /**
      * Stores a batchlog endpoints.
      *

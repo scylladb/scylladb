@@ -1086,8 +1086,7 @@ process_execute_internal(service::client_state& client_state, distributed<cql3::
         tracing::add_query(trace_state, prepared->statement->raw_cql_statement);
         tracing::add_prepared_statement(trace_state, prepared);
 
-        tracing::begin(trace_state, seastar::value_of([&id] { return seastar::format("Execute CQL3 prepared query [{}]", id); }),
-                client_state.get_client_address());
+        tracing::begin(trace_state, "Execute CQL3 prepared query", client_state.get_client_address());
     }
 
     auto stmt = prepared->statement;
