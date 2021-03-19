@@ -238,6 +238,7 @@ void trace_state::build_parameters_map() {
         // corresponding query in the BATCH.
         for (size_t i = 0; i < psize; ++i) {
             build_parameters_map_for_one_prepared(_records, statements[i], vals.query_option_names[i], vals.query_option_values[i], param_key("param", i, psize));
+            params_map.emplace(param_key("query", qsize + i, qsize + psize), statements[i] ? statements[i]->statement->raw_cql_statement : "<missing>");
         }
     }
 }

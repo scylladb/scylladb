@@ -1083,7 +1083,6 @@ process_execute_internal(service::client_state& client_state, distributed<cql3::
         tracing::set_page_size(trace_state, options.get_page_size());
         tracing::set_consistency_level(trace_state, options.get_consistency());
         tracing::set_optional_serial_consistency_level(trace_state, options.get_serial_consistency());
-        tracing::add_query(trace_state, prepared->statement->raw_cql_statement);
         tracing::add_prepared_statement(trace_state, prepared);
 
         tracing::begin(trace_state, "Execute CQL3 prepared query", client_state.get_client_address());
