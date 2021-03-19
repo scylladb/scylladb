@@ -74,6 +74,7 @@ thrift_server::thrift_server(distributed<database>& db,
         , _protocol_factory(new TBinaryProtocolFactoryT<TMemoryBuffer>())
         , _processor_factory(new CassandraAsyncProcessorFactory(_handler_factory))
         , _memory_available(ml.get_semaphore())
+        , _max_concurrent_requests(db.local().get_config().max_concurrent_requests_per_shard)
         , _config(config) {
 }
 
@@ -153,6 +154,11 @@ thrift_server::connection::process_one_request() {
     _input->resetBuffer();
     _output->resetBuffer();
     co_await read();
+    if (_server._requests_serving >= _server._max_concurrent_requests) {
+        _server._requests_shed++;
+        tlogger.debug("message dropped due to overload");
+        co_return;
+    }
     ++_server._requests_serving;
     ++_server._requests_served;
     auto ret = _processor_promise.get_future().handle_exception([&server = _server] (const std::exception_ptr&) {
@@ -335,6 +341,11 @@ thrift_server::requests_blocked_memory() const {
     return _requests_blocked_memory;
 }
 
+uint64_t
+thrift_server::requests_shed() const {
+    return _requests_shed;
+}
+
 thrift_stats::thrift_stats(thrift_server& server) {
     namespace sm = seastar::metrics;
 
@@ -357,6 +368,9 @@ thrift_stats::thrift_stats(thrift_server& server) {
                         sm::description(
                             seastar::format("Holds an incrementing counter with the Thrift requests that ever blocked due to reaching the memory quota limit ({}B). "
                                             "The first derivative of this value shows how often we block due to memory exhaustion in the \"Thrift transport\" component.", server.max_request_size()))),
+        sm::make_derive("requests_shed", [&server] { return server.requests_shed(); },
+                        sm::description("Holds an incrementing counter with the requests that were shed due to exceeding the threshold configured via max_concurrent_requests_per_shard. "
+                                            "The first derivative of this value shows how often we shed requests due to exceeding the limit in the \"Thrift transport\" component.")),
         sm::make_gauge("requests_memory_available", [&server] { return server.memory_available().current(); },
                         sm::description(
                             seastar::format("Holds the amount of available memory for admitting new Thrift requests (max is {}B)."

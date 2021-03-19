@@ -31,6 +31,7 @@
 #include <memory>
 #include <cstdint>
 #include <boost/intrusive/list.hpp>
+#include "database.hh"
 
 class thrift_server;
 class thrift_stats;
@@ -119,6 +120,8 @@ private:
     uint64_t _requests_serving = 0;
     uint64_t _requests_blocked_memory = 0;
     semaphore& _memory_available;
+    utils::updateable_value<uint32_t> _max_concurrent_requests;
+    size_t _requests_shed;
     thrift_server_config _config;
     boost::intrusive::list<connection> _connections_list;
     seastar::gate _stop_gate;
@@ -135,6 +138,7 @@ public:
     size_t max_request_size() const;
     const semaphore& memory_available() const;
     uint64_t requests_blocked_memory() const;
+    uint64_t requests_shed() const;
 
 private:
     void maybe_retry_accept(int which, bool keepalive, std::exception_ptr ex);
