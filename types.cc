@@ -39,6 +39,7 @@
 #include <sstream>
 #include <string>
 #include <regex>
+#include <concepts>
 #include <boost/iterator/transform_iterator.hpp>
 #include <boost/range/adaptor/filtered.hpp>
 #include <boost/range/numeric.hpp>
@@ -69,7 +70,11 @@ void on_types_internal_error(std::exception_ptr ex) {
 }
 
 template<typename T>
-std::enable_if_t<std::is_same_v<typename T::duration, std::chrono::milliseconds>, sstring>
+requires requires {
+        typename T::duration;
+        requires std::same_as<typename T::duration, std::chrono::milliseconds>;
+    }
+sstring
 time_point_to_string(const T& tp)
 {
     int64_t count = tp.time_since_epoch().count();
