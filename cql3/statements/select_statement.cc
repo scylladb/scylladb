@@ -1146,7 +1146,11 @@ query::partition_slice indexed_table_select_statement::get_partition_slice_for_g
                 if (single_ck_restrictions) {
                     auto prefix_restrictions = single_ck_restrictions->get_longest_prefix_restrictions();
                     auto clustering_restrictions_from_base = ::make_shared<restrictions::single_column_clustering_key_restrictions>(_view_schema, *prefix_restrictions);
+                    const auto indexed_column = _view_schema->get_column_definition(to_bytes(_index.target_column()));
                     for (auto restriction_it : clustering_restrictions_from_base->restrictions()) {
+                        if (restriction_it.first == indexed_column) {
+                            continue; // In the index table, the indexed column is the partition (not clustering) key.
+                        }
                         clustering_restrictions->merge_with(restriction_it.second);
                     }
                 }

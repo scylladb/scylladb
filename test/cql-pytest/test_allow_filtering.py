@@ -280,7 +280,6 @@ def test_allow_filtering_index_in(cql, table2):
 # single partition. Analogous to CASSANDRA-8302, and also reproduced by
 # Cassandra's more elaborate test for this issue,
 # cassandra_tests/validation/entities/frozen_collections_test.py::testClusteringColumnFiltering
-@pytest.mark.xfail(reason="issue #7888")
 def test_contains_frozen_collection_ck(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, "a int, b frozen<map<int, int>>, c int, PRIMARY KEY (a,b,c)") as table:
         # The CREATE INDEX for c is necessary to reproduce this bug.
