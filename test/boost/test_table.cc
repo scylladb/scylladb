@@ -248,7 +248,7 @@ public:
         if (!a.start() || !b.start()) {
             return !a.start();
         }
-        if (auto res = _tri_cmp(a.start()->value(), b.start()->value())) {
+        if (auto res = _tri_cmp(a.start()->value(), b.start()->value()); res != 0) {
             return res < 0;
         }
         return a.start()->is_inclusive() < b.start()->is_inclusive();

@@ -28,6 +28,7 @@
 #include "hashing.hh"
 #include "database_fwd.hh"
 #include "schema_fwd.hh"
+#include <compare>
 
 //
 // This header defines type system for primary key holders.
@@ -84,8 +85,8 @@ public:
     struct tri_compare {
         typename TopLevelView::compound _t;
         tri_compare(const schema &s) : _t(get_compound_type(s)) {}
-        int operator()(const TopLevelView& k1, const TopLevelView& k2) const {
-            return _t->compare(k1.representation(), k2.representation());
+        std::strong_ordering operator()(const TopLevelView& k1, const TopLevelView& k2) const {
+            return _t->compare(k1.representation(), k2.representation()) <=> 0;
         }
     };
 
@@ -244,14 +245,14 @@ public:
     struct tri_compare {
         typename TopLevel::compound _t;
         tri_compare(const schema& s) : _t(get_compound_type(s)) {}
-        int operator()(const TopLevel& k1, const TopLevel& k2) const {
-            return _t->compare(k1.representation(), k2.representation());
+        std::strong_ordering operator()(const TopLevel& k1, const TopLevel& k2) const {
+            return _t->compare(k1.representation(), k2.representation()) <=> 0;
         }
-        int operator()(const TopLevelView& k1, const TopLevel& k2) const {
-            return _t->compare(k1.representation(), k2.representation());
+        std::strong_ordering operator()(const TopLevelView& k1, const TopLevel& k2) const {
+            return _t->compare(k1.representation(), k2.representation()) <=> 0;
         }
-        int operator()(const TopLevel& k1, const TopLevelView& k2) const {
-            return _t->compare(k1.representation(), k2.representation());
+        std::strong_ordering operator()(const TopLevel& k1, const TopLevelView& k2) const {
+            return _t->compare(k1.representation(), k2.representation()) <=> 0;
         }
     };
 
@@ -609,11 +610,11 @@ public:
             : prefix_type(TopLevel::get_compound_type(s))
         { }
 
-        int operator()(const TopLevel& k1, const TopLevel& k2) const {
+        std::strong_ordering operator()(const TopLevel& k1, const TopLevel& k2) const {
             return prefix_equality_tri_compare(prefix_type->types().begin(),
                 prefix_type->begin(k1.representation()), prefix_type->end(k1.representation()),
                 prefix_type->begin(k2.representation()), prefix_type->end(k2.representation()),
-                tri_compare);
+                tri_compare) <=> 0;
         }
     };
 };
@@ -641,7 +642,7 @@ public:
     const legacy_compound_view<c_type> legacy_form(const schema& s) const;
 
     // A trichotomic comparator for ordering compatible with Origin.
-    int legacy_tri_compare(const schema& s, partition_key_view o) const;
+    std::strong_ordering legacy_tri_compare(const schema& s, partition_key_view o) const;
 
     // Checks if keys are equal in a way which is compatible with Origin.
     bool legacy_equal(const schema& s, partition_key_view o) const {
@@ -653,7 +654,7 @@ public:
     }
 
     // A trichotomic comparator which orders keys according to their ordering on the ring.
-    int ring_order_tri_compare(const schema& s, partition_key_view o) const;
+    std::strong_ordering ring_order_tri_compare(const schema& s, partition_key_view o) const;
 
     friend std::ostream& operator<<(std::ostream& out, const partition_key_view& pk);
 };
@@ -717,7 +718,7 @@ public:
     }
 
     // A trichotomic comparator for ordering compatible with Origin.
-    int legacy_tri_compare(const schema& s, const partition_key& o) const {
+    std::strong_ordering legacy_tri_compare(const schema& s, const partition_key& o) const {
         return view().legacy_tri_compare(s, o);
     }
 
