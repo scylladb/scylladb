@@ -74,18 +74,18 @@ partition_key_view::legacy_form(const schema& s) const {
     return { *get_compound_type(s), _bytes };
 }
 
-int
+std::strong_ordering
 partition_key_view::legacy_tri_compare(const schema& s, partition_key_view o) const {
     auto cmp = legacy_compound_view<c_type>::tri_comparator(*get_compound_type(s));
-    return cmp(this->representation(), o.representation());
+    return cmp(this->representation(), o.representation()) <=> 0;
 }
 
-int
+std::strong_ordering
 partition_key_view::ring_order_tri_compare(const schema& s, partition_key_view k2) const {
     auto t1 = dht::get_token(s, *this);
     auto t2 = dht::get_token(s, k2);
     if (t1 != t2) {
-        return t1 < t2 ? -1 : 1;
+        return t1 < t2 ? std::strong_ordering::less : std::strong_ordering::greater;
     }
     return legacy_tri_compare(s, k2);
 }

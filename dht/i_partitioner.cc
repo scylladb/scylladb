@@ -302,8 +302,8 @@ std::strong_ordering ring_position_tri_compare(const schema& s, ring_position_vi
     }
     if (lh._key && rh._key) {
         auto c = lh._key->legacy_tri_compare(s, *rh._key);
-        if (c) {
-            return c <=> 0;
+        if (c != 0) {
+            return c;
         }
         return (lh._weight - rh._weight) <=> 0;
     }

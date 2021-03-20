@@ -79,11 +79,11 @@ public:
                 : pk_cmp(s)
                 , ck_cmp(s)
             { }
-            int tri_compare(const partition_key& pk1, const clustering_key& ck1,
+            std::strong_ordering tri_compare(const partition_key& pk1, const clustering_key& ck1,
                     const partition_key& pk2, const clustering_key& ck2) const {
 
-                int rc = pk_cmp(pk1, pk2);
-                return rc ? rc : ck_cmp(ck1, ck2);
+                std::strong_ordering rc = pk_cmp(pk1, pk2);
+                return rc != 0 ? rc : ck_cmp(ck1, ck2) <=> 0;
             }
             // Allow mixing std::pair<partition_key, clustering_key> and
             // std::pair<const partition_key&, const clustering_key&> during lookup
