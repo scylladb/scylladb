@@ -33,6 +33,7 @@
 #include <chrono>
 #include <set>
 #include <type_traits>
+#include <concepts>
 #include <optional>
 
 #include <boost/range/adaptor/map.hpp>
@@ -245,10 +246,9 @@ public:
     // \brief Inject exception
     // \param exception_factory function returning an exception pointer
     template <typename Func>
+    requires std::is_invocable_r_v<std::exception_ptr, Func>
     [[gnu::always_inline]]
-    std::enable_if_t<
-        std::is_invocable_r<std::exception_ptr, std::decay_t<Func>>::value, future<>
-    >
+    future<>
     inject(const std::string_view& name,
             Func&& exception_factory) {
 
@@ -349,12 +349,11 @@ public:
 
     // Inject exception
     template <typename Func>
+    requires std::is_invocable_r_v<std::exception_ptr, Func>
     [[gnu::always_inline]]
-    std::enable_if_t<
-        std::is_invocable_r<std::exception_ptr, std::decay_t<Func>>::value, future<>
-    >
+    future<>
     inject(const std::string_view& name,
-            std::function<std::exception_ptr()> exception_factory) {
+            Func&& exception_factory) {
         return make_ready_future<>();
     }
 
