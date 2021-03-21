@@ -26,6 +26,8 @@
 #include "bytes.hh"
 #include "hashing.hh"
 #include <seastar/core/simple-stream.hh>
+#include <concepts>
+
 /**
  * Utility for writing data into a buffer when its final size is not known up front.
  *
@@ -232,9 +234,9 @@ public:
     };
 
     // Returns a place holder for a value to be written later.
-    template <typename T>
+    template <std::integral T>
     inline
-    std::enable_if_t<std::is_fundamental<T>::value, place_holder<T>>
+    place_holder<T>
     write_place_holder() {
         return place_holder<T>{alloc(sizeof(T))};
     }
