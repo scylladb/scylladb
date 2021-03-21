@@ -81,6 +81,8 @@ public:
 
     struct permit_list;
 
+    class inactive_read_handle;
+
 private:
     struct entry {
         promise<reader_permit::resource_units> pr;
@@ -102,12 +104,13 @@ private:
         flat_mutation_reader reader;
         eviction_notify_handler notify_handler;
         timer<lowres_clock> ttl_timer;
+        inactive_read_handle* handle = nullptr;
 
         explicit inactive_read(flat_mutation_reader reader_) noexcept
             : reader(std::move(reader_))
         { }
-        inactive_read(inactive_read&&) = default;
         ~inactive_read();
+        void detach() noexcept;
     };
 
     using inactive_reads_type = bi::list<inactive_read, bi::constant_time_size<false>>;
@@ -115,23 +118,40 @@ private:
 public:
     class inactive_read_handle {
         reader_concurrency_semaphore* _sem = nullptr;
-        std::unique_ptr<inactive_read> _irp;
+        inactive_read* _irp = nullptr;
 
         friend class reader_concurrency_semaphore;
 
-        explicit inactive_read_handle(reader_concurrency_semaphore& sem, std::unique_ptr<inactive_read> irp) noexcept
-            : _sem(&sem), _irp(std::move(irp)) {
+    private:
+        void abandon() noexcept;
+
+        explicit inactive_read_handle(reader_concurrency_semaphore& sem, inactive_read& ir) noexcept
+            : _sem(&sem), _irp(&ir) {
+            _irp->handle = this;
         }
     public:
         inactive_read_handle() = default;
         inactive_read_handle(inactive_read_handle&& o) noexcept
             : _sem(std::exchange(o._sem, nullptr))
-            , _irp(std::move(o._irp)) {
+            , _irp(std::exchange(o._irp, nullptr)) {
+            if (_irp) {
+                _irp->handle = this;
+            }
         }
         inactive_read_handle& operator=(inactive_read_handle&& o) noexcept {
+            if (this == &o) {
+                return *this;
+            }
+            abandon();
             _sem = std::exchange(o._sem, nullptr);
-            _irp = std::move(o._irp);
+            _irp = std::exchange(o._irp, nullptr);
+            if (_irp) {
+                _irp->handle = this;
+            }
             return *this;
+        }
+        ~inactive_read_handle() {
+            abandon();
         }
         explicit operator bool() const noexcept {
             return bool(_irp);
@@ -152,7 +172,7 @@ private:
     std::unique_ptr<permit_list> _permit_list;
 
 private:
-    void evict(inactive_read&, evict_reason reason);
+    void evict(inactive_read&, evict_reason reason) noexcept;
 
     bool has_available_units(const resources& r) const;
 
@@ -197,10 +217,8 @@ public:
     /// stops being inactive and hence evictable, or to set the optional
     /// notify_handler and ttl.
     ///
-    /// An inactive read is an object implementing the `inactive_read`
-    /// interface.
-    /// The semaphore takes ownership of the created object and destroys it if
-    /// it is evicted.
+    /// The semaphore takes ownership of the passed in reader for the duration
+    /// of its inactivity and it may evict it to free up resources if necessary.
     inactive_read_handle register_inactive_read(flat_mutation_reader ir) noexcept;
 
     /// Set the inactive read eviction notification handler and optionally eviction ttl.
@@ -208,10 +226,10 @@ public:
     /// The semaphore may evict this read when there is a shortage of
     /// permits or after the given ttl expired.
     ///
-    /// The notification handler will be called when the inactive_read is evicted
+    /// The notification handler will be called when the inactive read is evicted
     /// passing with the reason it was evicted to the handler.
     ///
-    /// Note that the inactive_read might have already been evicted if
+    /// Note that the inactive read might have already been evicted if
     /// the caller may yield after the register_inactive_read returned the handle
     /// and before calling set_notify_handler. In this case, the caller must revalidate
     /// the inactive_read_handle before calling this function.
@@ -229,9 +247,7 @@ public:
     /// (if there was no reader to evict).
     bool try_evict_one_inactive_read(evict_reason = evict_reason::manual);
 
-    void clear_inactive_reads() {
-        _inactive_reads.clear();
-    }
+    void clear_inactive_reads();
 
     const stats& get_stats() const {
         return _stats;

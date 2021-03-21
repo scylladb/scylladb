@@ -252,6 +252,7 @@ static void insert_querier(
 
     auto irh = sem.register_inactive_read(querier_utils::get_reader(q));
     if (!irh) {
+        ++stats.resource_based_evictions;
         return;
     }
   try {

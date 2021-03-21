@@ -150,6 +150,7 @@ private:
 
 public:
     struct entry_info {
+        reader_permit permit;
         unsigned key;
         dht::partition_range original_range;
         query::partition_slice original_slice;
@@ -159,8 +160,8 @@ public:
         query::partition_slice expected_slice;
     };
 
-    test_querier_cache(const noncopyable_function<sstring(size_t)>& external_make_value, std::chrono::seconds entry_ttl = 24h)
-        : _sem(reader_concurrency_semaphore::no_limits{})
+    test_querier_cache(const noncopyable_function<sstring(size_t)>& external_make_value, std::chrono::seconds entry_ttl = 24h, ssize_t max_memory = std::numeric_limits<ssize_t>::max())
+        : _sem(std::numeric_limits<int>::max(), max_memory, "test_querier_cache")
         , _cache(entry_ttl)
         , _mutations(make_mutations(_s, external_make_value))
         , _mutation_source([this] (schema_ptr, reader_permit permit, const dht::partition_range& range) {
@@ -217,6 +218,7 @@ public:
                 gc_clock::now(), db::no_timeout, query::max_result_size(std::numeric_limits<uint64_t>::max())).get0();
         auto&& dk = dk_ck.first;
         auto&& ck = dk_ck.second;
+        auto permit = querier.permit();
         _cache.insert(cache_key, std::move(querier), nullptr);
 
         // Either no keys at all (nothing read) or at least partition key.
@@ -252,7 +254,7 @@ public:
             return expected_slice;
         }();
 
-        return {key, std::move(range), std::move(slice), row_limit, std::move(expected_range), std::move(expected_slice)};
+        return {std::move(permit), key, std::move(range), std::move(slice), row_limit, std::move(expected_range), std::move(expected_slice)};
     }
 
     entry_info produce_first_page_and_save_data_querier(unsigned key, const dht::partition_range& range,
@@ -577,6 +579,38 @@ sstring make_string_blob(size_t size) {
     return s;
 }
 
+SEASTAR_THREAD_TEST_CASE(test_memory_based_cache_eviction) {
+    auto cache_size = 1 << 20;
+    test_querier_cache t([] (size_t) {
+        const size_t blob_size = 1 << 10; // 1K
+        return make_string_blob(blob_size);
+    }, 24h, cache_size);
+
+    size_t i = 0;
+    auto entry = t.produce_first_page_and_save_data_querier(i++);
+    auto& sem = entry.permit.semaphore();
+    const auto entry_size = entry.permit.consumed_resources().memory;
+
+    // Fill the cache but don't overflow.
+    while (sem.available_resources().memory > entry_size) {
+        t.produce_first_page_and_save_data_querier(i++);
+    }
+
+    const auto pop_before = t.get_semaphore().get_stats().inactive_reads;
+
+    // Should overflow the limit and thus be evicted instantly.
+    entry = t.produce_first_page_and_save_data_querier(i++);
+
+    t.assert_cache_lookup_data_querier(entry.key, *t.get_schema(), entry.expected_range, entry.expected_slice)
+        .resource_based_evictions()
+        .misses()
+        .no_drops();
+
+    // Since the last insert should have evicted an existing entry, we should
+    // have the same number of registered inactive reads.
+    BOOST_REQUIRE_EQUAL(t.get_semaphore().get_stats().inactive_reads, pop_before);
+}
+
 SEASTAR_THREAD_TEST_CASE(test_resources_based_cache_eviction) {
     auto db_cfg_ptr = make_shared<db::config>();
     auto& db_cfg = *db_cfg_ptr;
@@ -724,7 +758,7 @@ SEASTAR_THREAD_TEST_CASE(test_immediate_evict_on_insert) {
     t.assert_cache_lookup_mutation_querier(entry.key, *t.get_schema(), entry.expected_range, entry.expected_slice)
         .misses()
         .no_drops()
-        .no_evictions();
+        .resource_based_evictions();
 
     resources.reset();
 
