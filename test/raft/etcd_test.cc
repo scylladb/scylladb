@@ -590,3 +590,45 @@ BOOST_AUTO_TEST_CASE(test_cannot_commit_without_new_term_entry) {
 // TODO TestCommitWithoutNewTermEntry tests the entries could be committed
 // when leader changes, no new proposal comes in.
 
+// TestDuelingCandidates
+BOOST_AUTO_TEST_CASE(test_dueling_candidates) {
+
+    server_id id1{utils::UUID(0, 1)}, id2{utils::UUID(0, 2)}, id3{utils::UUID(0, 3)};
+    raft::configuration cfg({id1, id2, id3});
+    raft::log log1{raft::snapshot{.config = cfg}};
+    raft::fsm fsm1(id1, term_t{}, server_id{}, std::move(log1), trivial_failure_detector, fsm_cfg);
+    raft::log log2{raft::snapshot{.config = cfg}};
+    raft::fsm fsm2(id2, term_t{}, server_id{}, std::move(log2), trivial_failure_detector, fsm_cfg);
+    raft::log log3{raft::snapshot{.config = cfg}};
+    raft::fsm fsm3(id3, term_t{}, server_id{}, std::move(log3), trivial_failure_detector, fsm_cfg);
+
+    // fsm1 and fsm3 don't see each other
+    make_candidate(fsm1);
+    make_candidate(fsm3);
+
+    communicate(fsm1, fsm2);
+    BOOST_CHECK(fsm1.is_leader());
+
+    BOOST_CHECK(fsm3.is_candidate());
+    // fsm1 doesn't see the vote request and fsm2 rejects vote
+    communicate(fsm3, fsm2);
+    // 3 stays as candidate since it receives a vote from 3 and a rejection from 2
+    BOOST_CHECK(fsm3.is_candidate());
+
+    // recover (now 1 and 3 see each other)
+
+    // candidate 3 now increases its term and tries to vote again
+    // we expect it to disrupt the leader 1 since it has a higher term
+    // 3 will be follower again since both 1 and 2 rejects its vote
+    // request since 3 does not have a long enough log
+    // NOTE: this is not the case, 1 rejects due to election timeout
+    election_timeout(fsm3);
+    communicate(fsm3, fsm1, fsm2);
+    // NOTE: in our implementation term does not get bumped to 2 and 1 stays leader
+    BOOST_CHECK(fsm1.log_last_idx() == 1);
+    BOOST_CHECK(fsm2.log_last_idx() == 1);
+    BOOST_CHECK(fsm3.log_last_idx() == 0);
+    BOOST_CHECK(fsm1.log_last_term() == 1);
+    BOOST_CHECK(fsm2.log_last_term() == 1);
+    BOOST_CHECK(fsm3.log_last_term() == 0);
+}
