@@ -881,7 +881,6 @@ def testSecondaryIndex(cql, test_keyspace):
 
 # Test for CASSANDRA-8302
 # Also reproduces Scylla issue #7888.
-@pytest.mark.xfail(reason="issue #7888")
 def testClusteringColumnFiltering(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b frozen<map<int, int>>, c int, d int, PRIMARY KEY (a,b,c))") as table:
         execute(cql, table, "CREATE INDEX c_index ON %s (c)")
