@@ -2283,7 +2283,7 @@ SEASTAR_TEST_CASE(tombstone_purge_test) {
         auto alpha = partition_key::from_exploded(*s, {to_bytes("alpha")});
         auto beta = partition_key::from_exploded(*s, {to_bytes("beta")});
 
-        auto ttl = 5;
+        auto ttl = 10;
 
         {
             auto mut1 = make_insert(alpha);
