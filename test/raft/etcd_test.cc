@@ -632,3 +632,49 @@ BOOST_AUTO_TEST_CASE(test_dueling_candidates) {
     BOOST_CHECK(fsm2.log_last_term() == 1);
     BOOST_CHECK(fsm3.log_last_term() == 0);
 }
+
+// TestDuelingPreCandidates
+BOOST_AUTO_TEST_CASE(test_dueling_pre_candidates) {
+
+    server_id id1{utils::UUID(0, 1)}, id2{utils::UUID(0, 2)}, id3{utils::UUID(0, 3)};
+    raft::configuration cfg({id1, id2, id3});
+    raft::log log1{raft::snapshot{.config = cfg}};
+    raft::fsm fsm1(id1, term_t{}, server_id{}, std::move(log1), trivial_failure_detector, fsm_cfg_pre);
+    raft::log log2{raft::snapshot{.config = cfg}};
+    raft::fsm fsm2(id2, term_t{}, server_id{}, std::move(log2), trivial_failure_detector, fsm_cfg_pre);
+    raft::log log3{raft::snapshot{.config = cfg}};
+    raft::fsm fsm3(id3, term_t{}, server_id{}, std::move(log3), trivial_failure_detector, fsm_cfg_pre);
+
+    // fsm1 and fsm3 don't see each other
+    make_candidate(fsm1);
+    make_candidate(fsm3);
+
+    communicate(fsm1, fsm2);
+    // 1 becomes leader since it receives votes from 1 and 2
+    BOOST_CHECK(fsm1.is_leader());
+
+    // 3 campaigns then reverts to follower when its PreVote is rejected
+    BOOST_CHECK(fsm3.is_candidate());
+    communicate(fsm3, fsm2);
+    BOOST_CHECK(fsm3.is_follower());
+
+    // network recovers, now 1 and 3 see each other (1 will reject prevote req)
+
+    // Candidate 3 now increases its term and tries to vote again.
+    // With PreVote, it does not disrupt the leader.
+    election_timeout(fsm3);
+    BOOST_CHECK(fsm3.is_candidate());
+    communicate(fsm3, fsm1, fsm2);
+    BOOST_CHECK(fsm1.log_last_idx() == 1); BOOST_CHECK(fsm1.log_last_term() == 1);
+    BOOST_CHECK(fsm2.log_last_idx() == 1); BOOST_CHECK(fsm2.log_last_term() == 1);
+    BOOST_CHECK(fsm3.log_last_idx() == 0); BOOST_CHECK(fsm3.log_last_term() == 0);
+    BOOST_CHECK(fsm1.get_current_term() == 1);
+    BOOST_CHECK(fsm2.get_current_term() == 1);
+    BOOST_CHECK(fsm3.get_current_term() == 1);
+}
+
+// TestCandidateConcede
+// TBD once we have heartbeat
+
+// TestSingleNodeCandidate (fsm test)
+
