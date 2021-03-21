@@ -529,3 +529,64 @@ BOOST_AUTO_TEST_CASE(test_single_node_commit) {
     output = fsm.get_output();
     BOOST_CHECK(output.committed.size() == 1);  // Entry 2 was committed  (3 total)
 }
+
+// TODO: rewrite with communicate and filter append message
+// TestCannotCommitWithoutNewTermEntry
+BOOST_AUTO_TEST_CASE(test_cannot_commit_without_new_term_entry) {
+
+    discrete_failure_detector fd;
+
+    server_id id1{utils::UUID(0, 1)}, id2{utils::UUID(0, 2)}, id3{utils::UUID(0, 3)},
+              id4{utils::UUID(0, 4)}, id5{utils::UUID(0, 5)};
+    raft::configuration cfg({id1, id2, id3, id4, id5});
+    raft::log log1{raft::snapshot{.config = cfg}};
+    fsm_debug fsm1(id1, term_t{}, server_id{}, std::move(log1), fd, fsm_cfg);
+    raft::log log2{raft::snapshot{.config = cfg}};
+    fsm_debug fsm2(id2, term_t{}, server_id{}, std::move(log2), fd, fsm_cfg);
+    raft::log log3{raft::snapshot{.config = cfg}};
+    fsm_debug fsm3(id3, term_t{}, server_id{}, std::move(log3), fd, fsm_cfg);
+    raft::log log4{raft::snapshot{.config = cfg}};
+    fsm_debug fsm4(id4, term_t{}, server_id{}, std::move(log4), fd, fsm_cfg);
+    raft::log log5{raft::snapshot{.config = cfg}};
+    fsm_debug fsm5(id5, term_t{}, server_id{}, std::move(log5), fd, fsm_cfg);
+
+    make_candidate(fsm1);
+    communicate(fsm1, fsm2, fsm3, fsm4, fsm5);
+    BOOST_CHECK(fsm1.is_leader());
+    communicate(fsm1, fsm2, fsm3, fsm4, fsm5);
+
+    // fsm1 now is "disconnected" from 3, 4, 5 (but not fsm2)
+
+    // add 2 entries to fsm1  (2, 3)
+    for (int i = 2; i < 4; ++i) {
+        raft::command cmd = create_command(i);
+        fsm1.add_entry(std::move(cmd));
+    }
+    // fsm2 gets these 2 entries, but 3, 4, 5 don't get append request
+    communicate(fsm1, fsm2);
+
+    // elect 2 as the new leader with term 2
+    // after append a ChangeTerm entry from the current term, all entries
+    // should be committed
+    fd.mark_dead(id1);
+    make_candidate(fsm2);
+    election_threshold(fsm3);
+    election_threshold(fsm4);
+    election_threshold(fsm5);
+    BOOST_CHECK(fsm2.is_candidate());
+    communicate(fsm2, fsm1, fsm3, fsm4, fsm5);
+    fd.mark_alive(id1);
+    BOOST_CHECK(fsm2.is_leader());
+    // add 1 entries to fsm2  (2, 3)
+    raft::command cmd = create_command(5);
+    fsm2.add_entry(std::move(cmd));
+    communicate(fsm2, fsm1, fsm3, fsm4, fsm5);
+    BOOST_CHECK(compare_log_entries(fsm2.get_log(), fsm1.get_log(), 1, 5));
+    BOOST_CHECK(compare_log_entries(fsm2.get_log(), fsm3.get_log(), 1, 5));
+    BOOST_CHECK(compare_log_entries(fsm2.get_log(), fsm4.get_log(), 1, 5));
+    BOOST_CHECK(compare_log_entries(fsm2.get_log(), fsm5.get_log(), 1, 5));
+}
+
+// TODO TestCommitWithoutNewTermEntry tests the entries could be committed
+// when leader changes, no new proposal comes in.
+
