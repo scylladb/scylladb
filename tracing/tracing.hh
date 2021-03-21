@@ -129,14 +129,15 @@ std::ostream& operator<<(std::ostream& os, const span_id& id);
 //
 // Otherwise this may break IDL's backward compatibility.
 enum class trace_state_props {
-    write_on_close, primary, log_slow_query, full_tracing
+    write_on_close, primary, log_slow_query, full_tracing, ignore_events
 };
 
 using trace_state_props_set = enum_set<super_enum<trace_state_props,
     trace_state_props::write_on_close,
     trace_state_props::primary,
     trace_state_props::log_slow_query,
-    trace_state_props::full_tracing>>;
+    trace_state_props::full_tracing,
+    trace_state_props::ignore_events>>;
 
 class trace_info {
 public:
@@ -392,7 +393,15 @@ private:
     // after the shutdown() call and prevents further write attempts to I/O
     // backend.
     bool _down = true;
+    // If _slow_query_logging_enabled is enabled, a query processor keeps all
+    // trace events related to the query until in the end it can decide
+    // if the query was slow to be saved.
     bool _slow_query_logging_enabled = false;
+    // If _ignore_trace_events is enabled, tracing::trace ignores all tracing
+    // events as well as creating trace_state descendants with trace_info to
+    // track tracing sessions only. This is used to implement lightweight
+    // slow query tracing.
+    bool _ignore_trace_events = false;
     std::unique_ptr<i_tracing_backend_helper> _tracing_backend_helper_ptr;
     sstring _thread_name;
     const backend_registry& _backend_registry;
@@ -588,6 +597,14 @@ public:
 
     bool slow_query_tracing_enabled() const {
         return _slow_query_logging_enabled;
+    }
+
+    void set_ignore_trace_events(bool enable = true) {
+        _ignore_trace_events = enable;
+    }
+
+    bool ignore_trace_events_enabled() const {
+        return _ignore_trace_events;
     }
 
     /**

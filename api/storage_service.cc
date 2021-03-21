@@ -801,6 +801,7 @@ void set_storage_service(http_context& ctx, routes& r) {
         res.enable = tracing::tracing::get_local_tracing_instance().slow_query_tracing_enabled();
         res.ttl = tracing::tracing::get_local_tracing_instance().slow_query_record_ttl().count() ;
         res.threshold = tracing::tracing::get_local_tracing_instance().slow_query_threshold().count();
+        res.fast = tracing::tracing::get_local_tracing_instance().ignore_trace_events_enabled();
         return res;
     });
 
@@ -808,8 +809,9 @@ void set_storage_service(http_context& ctx, routes& r) {
         auto enable = req->get_query_param("enable");
         auto ttl = req->get_query_param("ttl");
         auto threshold = req->get_query_param("threshold");
+        auto fast = req->get_query_param("fast");
         try {
-            return tracing::tracing::tracing_instance().invoke_on_all([enable, ttl, threshold] (auto& local_tracing) {
+            return tracing::tracing::tracing_instance().invoke_on_all([enable, ttl, threshold, fast] (auto& local_tracing) {
                 if (threshold != "") {
                     local_tracing.set_slow_query_threshold(std::chrono::microseconds(std::stol(threshold.c_str())));
                 }
@@ -818,6 +820,9 @@ void set_storage_service(http_context& ctx, routes& r) {
                 }
                 if (enable != "") {
                     local_tracing.set_slow_query_enabled(strcasecmp(enable.c_str(), "true") == 0);
+                }
+                if (fast != "") {
+                    local_tracing.set_ignore_trace_events(strcasecmp(fast.c_str(), "true") == 0);
                 }
             }).then([] {
                 return make_ready_future<json::json_return_type>(json_void());

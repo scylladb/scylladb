@@ -1898,6 +1898,14 @@
                      "allowMultiple":false,
                      "type":"long",
                      "paramType":"query"
+                  },
+                  {
+                     "name":"fast",
+                     "description":"Enables lightweight tracing mode: if true, tracing ignores all tracing events",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"boolean",
+                     "paramType":"query"
                   }
                ]
             },
@@ -2396,6 +2404,10 @@
             "threshold":{
                "type":"long",
                "description":"The slow query logging threshold in microseconds. Queries that takes longer, will be logged"
+            },
+            "fast":{
+               "type":"boolean",
+               "description":"Is lightweight tracing mode enabled. In that mode tracing ignore events and tracks only sessions."
             }
          }
       },
