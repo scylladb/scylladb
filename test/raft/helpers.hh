@@ -88,6 +88,7 @@ raft::command create_command(T val) {
 }
 
 raft::fsm_config fsm_cfg{.append_request_threshold = 1, .enable_prevoting = false};
+raft::fsm_config fsm_cfg_pre{.append_request_threshold = 1, .enable_prevoting = true};
 
 class fsm_debug : public raft::fsm {
 public:
