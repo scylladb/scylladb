@@ -121,13 +121,10 @@ public:
     ~thrift_server();
     future<> listen(socket_address addr, bool keepalive);
     future<> stop();
-    void do_accepts(int which, bool keepalive);
+    void do_accepts(int which, bool keepalive, int num_attempts);
     uint64_t total_connections() const;
     uint64_t current_connections() const;
     uint64_t requests_served() const;
-
-private:
-    void maybe_retry_accept(int which, bool keepalive, std::exception_ptr ex);
 };
 
 #endif /* APPS_SEASTAR_THRIFT_SERVER_HH_ */

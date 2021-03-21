@@ -220,12 +220,12 @@ thrift_server::listen(socket_address addr, bool keepalive) {
     listen_options lo;
     lo.reuse_address = true;
     _listeners.push_back(seastar::listen(addr, lo));
-    do_accepts(_listeners.size() - 1, keepalive);
+    do_accepts(_listeners.size() - 1, keepalive, 0);
     return make_ready_future<>();
 }
 
 void
-thrift_server::do_accepts(int which, bool keepalive) {
+thrift_server::do_accepts(int which, bool keepalive, int num_attempts) {
     if (_stop_gate.is_closed()) {
         return;
     }
@@ -249,45 +249,26 @@ thrift_server::do_accepts(int which, bool keepalive) {
                     });
                 });
             });
-            do_accepts(which, keepalive);
-        }).handle_exception([this, which, keepalive] (auto ex) {
+            do_accepts(which, keepalive, 0);
+        }).handle_exception([this, which, keepalive, num_attempts] (auto ex) {
             tlogger.debug("accept failed {}", ex);
-            this->maybe_retry_accept(which, keepalive, std::move(ex));
+            try {
+                std::rethrow_exception(std::move(ex));
+            } catch (const seastar::gate_closed_exception&) {
+                return;
+            } catch (...) {
+                // Done in the background.
+                (void)with_gate(_stop_gate, [this, which, keepalive, num_attempts] {
+                    int backoff = 2 << std::max(num_attempts, 10);
+                    tlogger.debug("sleeping for {}ms", backoff);
+                    return sleep(std::chrono::milliseconds(backoff)).then([this, which, keepalive, num_attempts] {
+                        tlogger.debug("retrying accept after failure");
+                        do_accepts(which, keepalive, num_attempts + 1);
+                    });
+                });
+            }
         });
     });
-}
-
-void thrift_server::maybe_retry_accept(int which, bool keepalive, std::exception_ptr ex) {
-    auto retry = [this, which, keepalive] {
-        tlogger.debug("retrying accept after failure");
-        do_accepts(which, keepalive);
-    };
-    auto retry_with_backoff = [&] {
-        // FIXME: Consider using exponential backoff
-        // Done in the background.
-        (void)sleep(1ms).then([retry = std::move(retry)] { retry(); });
-    };
-    try {
-        std::rethrow_exception(std::move(ex));
-    } catch (const std::system_error& e) {
-        switch (e.code().value()) {
-            // FIXME: Don't retry for other fatal errors
-            case EBADF:
-                break;
-            case ENFILE:
-            case EMFILE:
-            case ENOMEM:
-                retry_with_backoff();
-            default:
-                retry();
-        }
-    } catch (const std::bad_alloc&) {
-        retry_with_backoff();
-    } catch (const seastar::gate_closed_exception&) {
-        return;
-    } catch (...) {
-        retry();
-    }
 }
 
 uint64_t
