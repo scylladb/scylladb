@@ -494,3 +494,38 @@ BOOST_AUTO_TEST_CASE(test_log_replication_2) {
     BOOST_CHECK(output.committed.size() == 1);  // Entry 2 was committed
 }
 
+// TestSingleNodeCommit
+BOOST_AUTO_TEST_CASE(test_single_node_commit) {
+    raft::fsm_output output;
+    raft::log_entry_ptr lep;
+
+    server_id id1{utils::UUID(0, 1)};
+    raft::configuration cfg({id1});
+    raft::log log{raft::snapshot{.config = cfg}};
+    raft::fsm fsm(id1, term_t{}, server_id{}, std::move(log), trivial_failure_detector, fsm_cfg);
+
+    make_candidate(fsm);
+    BOOST_CHECK(fsm.is_leader());  // Single node skips candidate state
+    output = fsm.get_output();
+    BOOST_CHECK(output.log_entries.size() == 1);
+    lep = output.log_entries.back();
+    BOOST_REQUIRE_NO_THROW(auto dummy = std::get<raft::log_entry::dummy>(lep->data));
+    output = fsm.get_output();
+    BOOST_CHECK(output.committed.size() == 1);  // Dummy was committed
+
+    // Add 1st data entry
+    raft::command cmd = create_command(1);
+    fsm.add_entry(std::move(cmd));
+    output = fsm.get_output();
+    BOOST_CHECK(output.log_entries.size() == 1); // Entry added to local log
+    output = fsm.get_output();
+    BOOST_CHECK(output.committed.size() == 1);  // Entry 1 was committed
+
+    // Add 2nd data entry
+    cmd = create_command(2);
+    fsm.add_entry(std::move(cmd));
+    output = fsm.get_output();
+    BOOST_CHECK(output.log_entries.size() == 1); // Entry added to local log
+    output = fsm.get_output();
+    BOOST_CHECK(output.committed.size() == 1);  // Entry 2 was committed  (3 total)
+}
