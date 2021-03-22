@@ -172,6 +172,7 @@ def run_scylla_cmd(pid, dir):
         '-m', '1G',
         '--overprovisioned',
         '--unsafe-bypass-fsync', '1',
+        '--kernel-page-cache', '1',
         '--api-address', ip,
         '--rpc-address', ip,
         '--listen-address', ip,
