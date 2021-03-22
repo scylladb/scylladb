@@ -268,23 +268,19 @@ void partitioned_sstable_set::for_each_sstable(std::function<void(const shared_s
 
 void partitioned_sstable_set::insert(shared_sstable sst) {
     _all->insert(sst);
-    try {
-        _all_runs[sst->run_identifier()].insert(sst);
-        try {
-            if (store_as_unleveled(sst)) {
-                _unleveled_sstables.push_back(sst);
-            } else {
-                _leveled_sstables_change_cnt++;
-                _leveled_sstables.add({make_interval(*sst), value_set({sst})});
-            }
-        } catch (...) {
-            _all_runs[sst->run_identifier()].erase(sst);
-            throw;
-        }
-    } catch (...) {
-        _all->erase(sst);
-        throw;
+    auto undo_all_insert = defer([&] () { _all->erase(sst); });
+
+    _all_runs[sst->run_identifier()].insert(sst);
+    auto undo_all_runs_insert = defer([&] () { _all_runs[sst->run_identifier()].erase(sst); });
+
+    if (store_as_unleveled(sst)) {
+        _unleveled_sstables.push_back(sst);
+    } else {
+        _leveled_sstables_change_cnt++;
+        _leveled_sstables.add({make_interval(*sst), value_set({sst})});
     }
+    undo_all_insert.cancel();
+    undo_all_runs_insert.cancel();
 }
 
 void partitioned_sstable_set::erase(shared_sstable sst) {
