@@ -81,6 +81,9 @@
 #include "db/schema_tables.hh"
 #include "index/built_indexes_virtual_reader.hh"
 #include "utils/generation-number.hh"
+#include "db/virtual_table.hh"
+#include "service/storage_service.hh"
+#include "gms/gossiper.hh"
 
 #include "idl/frozen_mutation.dist.hh"
 #include "serializer_impl.hh"
@@ -1751,6 +1754,75 @@ future<> set_bootstrap_state(bootstrap_state state) {
     });
 }
 
+class nodetool_status_table : public memtable_filling_virtual_table {
+public:
+    nodetool_status_table() : memtable_filling_virtual_table(build_schema()) {}
+
+    static schema_ptr build_schema() {
+        auto id = generate_legacy_id(NAME, "status");
+        return schema_builder(NAME, "status", std::make_optional(id))
+            .with_column("peer", inet_addr_type, column_kind::partition_key)
+            .with_column("dc", utf8_type)
+            .with_column("up", boolean_type)
+            .with_column("status", utf8_type)
+            .with_column("load", utf8_type)
+            .with_column("tokens", int32_type)
+            .with_column("owns", float_type)
+            .with_column("host_id", uuid_type)
+            .with_version(generate_schema_version(id))
+            .build();
+    }
+
+    future<> execute(std::function<void(mutation)> mutation_sink, db::timeout_clock::time_point timeout) override {
+        auto& ss = service::get_local_storage_service();
+        return ss.get_ownership().then([&] (std::map<gms::inet_address, float> ownership) {
+            const locator::token_metadata& tm = ss.get_token_metadata();
+            gms::gossiper& gs = gms::get_local_gossiper();
+
+            for (auto&& e : gs.endpoint_state_map) {
+                auto endpoint = e.first;
+
+                mutation m(schema(), partition_key::from_single_value(*schema(), data_value(endpoint).serialize_nonnull()));
+                row& cr = m.partition().clustered_row(*schema(), clustering_key::make_empty()).cells();
+
+                set_cell(cr, "up", gs.is_alive(endpoint));
+                set_cell(cr, "status", gs.get_gossip_status(endpoint));
+                set_cell(cr, "load", gs.get_application_state_value(endpoint, gms::application_state::LOAD));
+
+                std::optional<utils::UUID> hostid = tm.get_host_id_if_known(endpoint);
+                if (hostid) {
+                    set_cell(cr, "host_id", hostid);
+                }
+
+                if (tm.get_topology().has_endpoint(endpoint)) {
+                    sstring dc = tm.get_topology().get_location(endpoint).dc;
+                    set_cell(cr, "dc", dc);
+                }
+
+                if (ownership.contains(endpoint)) {
+                    set_cell(cr, "owns", ownership[endpoint]);
+                }
+
+                set_cell(cr, "tokens", int32_t(tm.get_tokens(endpoint).size()));
+
+                mutation_sink(std::move(m));
+            }
+        });
+    }
+};
+
+// Map from table's schema ID to table itself. Helps avoiding accidental duplication.
+static thread_local std::map<utils::UUID, std::unique_ptr<virtual_table>> virtual_tables;
+
+void register_virtual_tables() {
+    auto add_table = [] (std::unique_ptr<virtual_table>&& tbl) {
+        virtual_tables[tbl->schema()->id()] = std::move(tbl);
+    };
+
+    // Add built-in virtual tables here.
+    add_table(std::make_unique<nodetool_status_table>());
+}
+
 std::vector<schema_ptr> all_tables() {
     std::vector<schema_ptr> r;
     auto schema_tables = db::schema_tables::all_tables(schema_features::full());
@@ -1774,18 +1846,22 @@ std::vector<schema_ptr> all_tables() {
                     legacy::columns(), legacy::triggers(), legacy::usertypes(),
                     legacy::functions(), legacy::aggregates(), });
 
+    for (auto&& [id, vt] : virtual_tables) {
+        r.push_back(vt->schema());
+    }
+
     return r;
 }
 
-static void maybe_add_virtual_reader(schema_ptr s, database& db) {
-    if (s.get() == size_estimates().get()) {
-        db.find_column_family(s).set_virtual_reader(mutation_source(db::size_estimates::virtual_reader(db)));
-    }
-    if (s.get() == v3::views_builds_in_progress().get()) {
-        db.find_column_family(s).set_virtual_reader(mutation_source(db::view::build_progress_virtual_reader(db)));
-    }
-    if (s.get() == built_indexes().get()) {
-        db.find_column_family(s).set_virtual_reader(mutation_source(db::index::built_indexes_virtual_reader(db)));
+static void install_virtual_readers(database& db) {
+    db.find_column_family(size_estimates()).set_virtual_reader(mutation_source(db::size_estimates::virtual_reader(db)));
+    db.find_column_family(v3::views_builds_in_progress()).set_virtual_reader(mutation_source(db::view::build_progress_virtual_reader(db)));
+    db.find_column_family(built_indexes()).set_virtual_reader(mutation_source(db::index::built_indexes_virtual_reader(db)));
+
+    for (auto&& [id, vt] : virtual_tables) {
+        auto&& cf = db.find_column_family(vt->schema());
+        cf.set_virtual_reader(vt->as_mutation_source());
+        vt->set_database(db);
     }
 }
 
@@ -1795,6 +1871,8 @@ static bool maybe_write_in_user_memory(schema_ptr s, database& db) {
 }
 
 future<> make(database& db) {
+    register_virtual_tables();
+
     auto enable_cache = db.get_config().enable_cache();
     bool durable = db.get_config().data_file_directories().size() > 0;
     for (auto&& table : all_tables()) {
@@ -1816,8 +1894,9 @@ future<> make(database& db) {
             cfg.memtable_to_cache_scheduling_group = default_scheduling_group();
         }
         db.add_column_family(ks, table, std::move(cfg));
-        maybe_add_virtual_reader(table, db);
     }
+
+    install_virtual_readers(db);
 }
 
 future<utils::UUID> get_local_host_id() {
