@@ -189,10 +189,8 @@ leveled_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> input
     };
 
     if (level_info[0].size() > offstrategy_threshold) {
-        level_info[0].resize(std::min(level_info[0].size(), max_sstables));
-        compaction_descriptor desc(std::move(level_info[0]), std::optional<sstables::sstable_set>(), iop);
-        desc.options = compaction_options::make_reshape();
-        return desc;
+        size_tiered_compaction_strategy stcs(_stcs_options);
+        return stcs.get_reshaping_job(std::move(level_info[0]), schema, iop, mode);
     }
 
     for (unsigned level = leveled_manifest::MAX_LEVELS - 1; level > 0; --level) {
