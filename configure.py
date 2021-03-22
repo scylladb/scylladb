@@ -556,6 +556,8 @@ arg_parser.add_argument('--verbose', dest='verbose', action='store_true',
 arg_parser.add_argument('--test-repeat', dest='test_repeat', action='store', type=str, default='1',
                          help='Set number of times to repeat each unittest.')
 arg_parser.add_argument('--test-timeout', dest='test_timeout', action='store', type=str, default='7200')
+arg_parser.add_argument('--clang-inline-threshold', action='store', type=int, dest='clang_inline_threshold', default=-1,
+                        help="LLVM-specific inline threshold compilation parameter")
 args = arg_parser.parse_args()
 
 defines = ['XXH_PRIVATE_API',
@@ -1210,7 +1212,9 @@ warnings = [w
 warnings = ' '.join(warnings + ['-Wno-error=deprecated-declarations'])
 
 def clang_inline_threshold():
-    if platform.machine() == 'aarch64':
+    if args.clang_inline_threshold != -1:
+        return args.clang_inline_threshold
+    elif platform.machine() == 'aarch64':
         # we see miscompiles with 1200 and above with format("{}", uuid)
         return 600
     else:
