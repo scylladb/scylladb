@@ -386,6 +386,8 @@ private:
     future<replacement_info> prepare_replacement_info(std::unordered_set<gms::inet_address> initial_contact_nodes,
             const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features, bind_messaging_port do_bind = bind_messaging_port::yes);
 
+    void run_replace_ops();
+
 public:
     future<bool> is_initialized();
 
@@ -806,6 +808,7 @@ public:
      */
     future<> removenode(sstring host_id_string, std::list<gms::inet_address> ignore_nodes);
     future<node_ops_cmd_response> node_ops_cmd_handler(gms::inet_address coordinator, node_ops_cmd_request req);
+    void node_ops_cmd_check(gms::inet_address coordinator, const node_ops_cmd_request& req);
 
     future<sstring> get_operation_mode();
 
