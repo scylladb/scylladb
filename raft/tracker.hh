@@ -38,6 +38,8 @@ public:
     index_t match_idx = index_t(0);
     // Index that we know to be committed by the follower
     index_t commit_idx = index_t(0);
+    // True if the follower is voting one
+    bool can_vote = true;
 
     enum class state {
         // In this state only one append entry is send until matching index is found

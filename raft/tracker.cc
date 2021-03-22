@@ -121,6 +121,7 @@ void tracker::set_configuration(const configuration& configuration, index_t next
             } else {
                 newp = this->progress::emplace(s.id, follower_progress{s.id, next_idx}).first;
             }
+            newp->second.can_vote = s.can_vote;
             if (s.id == _my_id) {
                 // The leader is part of the current
                 // configuration.

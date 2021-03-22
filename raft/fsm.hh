@@ -80,7 +80,19 @@ struct candidate {
 struct leader {
     // A state for each follower
     tracker tracker;
-    leader(server_id id) : tracker(id) {}
+    // Will be set to point to the new leader before it's
+    // used to set semaphore exception.
+    const server_id& current_leader;
+    // Used to limit log size
+    seastar::semaphore log_limiter_semaphore;
+    // True if the leader is in the process of transferring the leadership
+    bool stepdown = false;
+    // True it timeout_now was already sent to one of the followers
+    bool timeout_now_sent = false;
+    leader(server_id id, size_t max_log_size, const server_id& leader_) : tracker(id), current_leader(leader_), log_limiter_semaphore(max_log_size) {}
+    ~leader() {
+        log_limiter_semaphore.broken(not_a_leader(current_leader));
+    }
 };
 
 // Raft protocol finite state machine
@@ -188,18 +200,6 @@ private:
     // Signaled when there is a IO event to process.
     seastar::condition_variable _sm_events;
 
-    struct log_limiter_semaphore_guard {
-        seastar::semaphore sem;
-        server_id& leader;
-        log_limiter_semaphore_guard(fsm* fsm) :
-             sem(fsm->_config.max_log_size), leader(fsm->_current_leader) {}
-        ~log_limiter_semaphore_guard() {
-            sem.broken(not_a_leader(leader));
-        }
-    };
-    // Exists on a leader only and used to limit log size
-    std::optional<log_limiter_semaphore_guard> _log_limiter_semaphore;
-
     // Called when one of the replicas advances its match index
     // so it may be the case that some entries are committed now.
     // Signals _sm_events. May resign leadership if we committed
@@ -229,7 +229,7 @@ private:
 
     void become_leader();
 
-    void become_candidate(bool is_prevote);
+    void become_candidate(bool is_prevote, bool is_leadership_transfer = false);
 
     void become_follower(server_id leader);
 
@@ -268,6 +268,7 @@ private:
         return std::get<candidate>(_state);
     }
 
+    void send_timeout_now(server_id);
 protected: // For testing
     leader& leader_state() {
         return std::get<leader>(_state);
@@ -333,6 +334,15 @@ public:
     template <typename Message>
     void step(server_id from, Message&& msg);
 
+    // This function can be called on a leader only.
+    // When called it makes the leader to stop accepting
+    // new requests and waits for one of the voting followers
+    // to be fully up-to-date. When such follower appears it
+    // sends timeout_now rpc to it and makes it initiate new election.
+    // Can be used for leader stepdown if new configuration does not contain
+    // current leader.
+    void transfer_leadership();
+
     void stop();
 
     // @sa can_read()
@@ -364,6 +374,7 @@ public:
     friend std::ostream& operator<<(std::ostream& os, const fsm& f);
 };
 
+
 template <typename Message>
 void fsm::step(server_id from, Message&& msg) {
     static_assert(std::is_rvalue_reference<decltype(msg)>::value, "must be rvalue");
@@ -391,12 +402,14 @@ void fsm::step(server_id from, Message&& msg) {
             leader = from;
         } else {
             if constexpr (std::is_same_v<Message, vote_request>) {
-                if (_current_leader != server_id{} && election_elapsed() < ELECTION_TIMEOUT) {
+                if (_current_leader != server_id{} && election_elapsed() < ELECTION_TIMEOUT && !msg.force) {
                     // 4.2.3 Disruptive servers
                     // If a server receives a RequestVote request
                     // within the minimum election timeout of
                     // hearing from a current leader, it does not
                     // update its term or grant its vote.
+                    // Unless `force` flag is set which indicates that the current leader
+                    // wants to stepdown.
                     logger.trace("{} [term: {}] not granting a vote within a minimum election timeout, elapsed {} (current leader = {})",
                         _my_id, _current_term, election_elapsed(), _current_leader);
                     return;
@@ -462,8 +475,8 @@ void fsm::step(server_id from, Message&& msg) {
         }
     }
 
-    auto visitor = [this, from, msg = std::move(msg)](auto state) mutable {
-        using State = decltype(state);
+    auto visitor = [this, from, msg = std::move(msg)](const auto& state) mutable {
+        using State = std::remove_cvref_t<decltype(state)>;
 
         if constexpr (std::is_same_v<Message, append_request>) {
             // Got AppendEntries RPC from self
@@ -494,6 +507,13 @@ void fsm::step(server_id from, Message&& msg) {
             if constexpr (std::is_same_v<State, leader>) {
                 // Switch the follower to log transfer mode.
                 install_snapshot_reply(from, std::move(msg));
+            }
+        } else if constexpr (std::is_same_v<Message, timeout_now>) {
+            if constexpr (std::is_same_v<State, follower>) {
+                // Leadership transfers never use pre-vote; we know we are not
+                // recovering from a partition so there is no need for the
+                // extra round trip.
+                become_candidate(false, true);
             }
         }
     };

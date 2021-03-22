@@ -63,6 +63,7 @@ struct vote_request {
     raft::internal::tagged_uint64<raft::index_tag> last_log_idx;
     raft::internal::tagged_uint64<raft::term_tag> last_log_term;
     bool is_prevote;
+    bool force;
 };
 
 struct vote_reply {
@@ -109,6 +110,10 @@ struct append_request {
     raft::internal::tagged_uint64<raft::term_tag> prev_log_term;
     raft::internal::tagged_uint64<raft::index_tag> leader_commit_idx;
     std::vector<lw_shared_ptr<const raft::log_entry>> entries;
+};
+
+struct timeout_now {
+    raft::internal::tagged_uint64<raft::term_tag> current_term;
 };
 
 } // namespace raft

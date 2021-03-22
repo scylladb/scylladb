@@ -576,6 +576,7 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::RAFT_APPEND_ENTRIES_REPLY:
     case messaging_verb::RAFT_VOTE_REQUEST:
     case messaging_verb::RAFT_VOTE_REPLY:
+    case messaging_verb::RAFT_TIMEOUT_NOW:
         return 2;
     case messaging_verb::MUTATION_DONE:
     case messaging_verb::MUTATION_FAILED:
@@ -1547,6 +1548,15 @@ future<> messaging_service::send_raft_vote_reply(msg_addr id, clock_type::time_p
    return send_message_oneway_timeout(this, timeout, messaging_verb::RAFT_VOTE_REPLY, std::move(id), group_id, std::move(from_id), std::move(dst_id), vote_reply);
 }
 
+void messaging_service::register_raft_timeout_now(std::function<future<> (const rpc::client_info&, rpc::opt_time_point, uint64_t group_id, raft::server_id from_id, raft::server_id dst_id, raft::timeout_now)>&& func) {
+   register_handler(this, netw::messaging_verb::RAFT_TIMEOUT_NOW, std::move(func));
+}
+future<> messaging_service::unregister_raft_timeout_now() {
+   return unregister_handler(netw::messaging_verb::RAFT_TIMEOUT_NOW);
+}
+future<> messaging_service::send_raft_timeout_now(msg_addr id, clock_type::time_point timeout, uint64_t group_id, raft::server_id from_id, raft::server_id dst_id, const raft::timeout_now& timeout_now) {
+   return send_message_oneway_timeout(this, timeout, messaging_verb::RAFT_TIMEOUT_NOW, std::move(id), group_id, std::move(from_id), std::move(dst_id), timeout_now);
+}
 void init_messaging_service(sharded<messaging_service>& ms,
                 messaging_service::config mscfg, netw::messaging_service::scheduling_config scfg,
                 sstring ms_trust_store, sstring ms_cert, sstring ms_key, sstring ms_tls_prio, bool ms_client_auth) {

@@ -150,7 +150,8 @@ enum class messaging_verb : int32_t {
     RAFT_APPEND_ENTRIES_REPLY = 48,
     RAFT_VOTE_REQUEST = 49,
     RAFT_VOTE_REPLY = 50,
-    LAST = 51,
+    RAFT_TIMEOUT_NOW = 51,
+    LAST = 52,
 };
 
 } // namespace netw
@@ -573,6 +574,10 @@ public:
     void register_raft_vote_reply(std::function<future<> (const rpc::client_info&, rpc::opt_time_point, uint64_t group_id, raft::server_id from_id, raft::server_id dst_id, raft::vote_reply)>&& func);
     future<> unregister_raft_vote_reply();
     future<> send_raft_vote_reply(msg_addr id, clock_type::time_point timeout, uint64_t group_id, raft::server_id from_id, raft::server_id dst_id, const raft::vote_reply& vote_reply);
+
+    void register_raft_timeout_now(std::function<future<> (const rpc::client_info&, rpc::opt_time_point, uint64_t group_id, raft::server_id from_id, raft::server_id dst_id, raft::timeout_now)>&& func);
+    future<> unregister_raft_timeout_now();
+    future<> send_raft_timeout_now(msg_addr id, clock_type::time_point timeout, uint64_t group_id, raft::server_id from_id, raft::server_id dst_id, const raft::timeout_now& timeout_now);
 
     void foreach_server_connection_stats(std::function<void(const rpc::client_info&, const rpc::stats&)>&& f) const;
 private:
