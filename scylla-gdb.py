@@ -3865,6 +3865,8 @@ class scylla_gdb_func_dereference_smart_ptr(gdb.Function):
             ptr = gdb.parse_and_eval(expr)
 
         typ = ptr.type.strip_typedefs()
+        if typ.name.startswith('seastar::shared_ptr<'):
+            return ptr['_p'].dereference()
         if typ.name.startswith('seastar::lw_shared_ptr<'):
             return seastar_lw_shared_ptr(ptr).get().dereference()
         elif typ.name.startswith('seastar::foreign_ptr<'):
