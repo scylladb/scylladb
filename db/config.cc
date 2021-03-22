@@ -564,7 +564,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "RPC address to broadcast to drivers and other Scylla nodes. This cannot be set to 0.0.0.0. If blank, it is set to the value of the rpc_address or rpc_interface. If rpc_address or rpc_interfaceis set to 0.0.0.0, this property must be set.\n")
     , rpc_port(this, "rpc_port", "thrift_port", value_status::Used, 9160,
         "Thrift port for client connections.")
-    , start_rpc(this, "start_rpc", value_status::Used, true,
+    , start_rpc(this, "start_rpc", value_status::Used, false,
         "Starts the Thrift RPC server")
     , rpc_keepalive(this, "rpc_keepalive", value_status::Used, true,
         "Enable or disable keepalive on client connections (RPC or native).")
