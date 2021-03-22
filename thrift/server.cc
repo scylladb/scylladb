@@ -257,6 +257,9 @@ thrift_server::do_accepts(int which, bool keepalive, int num_attempts) {
             } catch (const seastar::gate_closed_exception&) {
                 return;
             } catch (...) {
+                if (_stop_gate.is_closed()) {
+                    return;
+                }
                 // Done in the background.
                 (void)with_gate(_stop_gate, [this, which, keepalive, num_attempts] {
                     int backoff = 2 << std::max(num_attempts, 10);
