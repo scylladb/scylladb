@@ -744,3 +744,108 @@ BOOST_AUTO_TEST_CASE(test_old_messages) {
     BOOST_CHECK(compare_log_entries(res1, fsm2.get_log(), 1, 4));
     BOOST_CHECK(compare_log_entries(res1, fsm3.get_log(), 1, 4));
 }
+
+void handle_proposal(int nodes, std::vector<int> accepting_int) {
+    std::unordered_set<raft::server_id> accepting;
+    raft::fsm_output output1;
+    raft::append_request areq;
+    raft::log_entry_ptr lep;
+
+    for (auto id: accepting_int) {
+        accepting.insert({utils::UUID(0, id)});
+    }
+
+    server_address_set ids;     // ids of leader 1 .. #nodes
+    for (int i = 1; i < nodes + 1; ++i) {
+        ids.insert({utils::UUID(0, i)});
+    }
+
+    raft::configuration cfg(ids);
+    raft::log log1{raft::snapshot{.config = cfg}};
+    raft::fsm fsm1({utils::UUID(0, 1)}, term_t{}, server_id{}, std::move(log1),
+            trivial_failure_detector, fsm_cfg);
+
+    // promote 1 to become leader (i.e. gets votes)
+    election_timeout(fsm1);
+    output1 = fsm1.get_output();
+    BOOST_CHECK(output1.messages.size() >= nodes - 1);
+    BOOST_CHECK(output1.term_and_vote);
+    for (int i = 2; i < nodes + 1; ++i) {
+        fsm1.step({utils::UUID(0, i)}, raft::vote_reply{output1.term_and_vote->first, true, false});
+    }
+    BOOST_CHECK(fsm1.is_leader());
+    output1 = fsm1.get_output();
+    lep = output1.log_entries.back();
+    BOOST_REQUIRE_NO_THROW(auto dummy = std::get<raft::log_entry::dummy>(lep->data));
+    output1 = fsm1.get_output();
+
+    // fsm1 dummy, send, gets specified number of replies (would commit if quorum)
+    BOOST_CHECK(output1.messages.size() == nodes - 1);
+    for (auto& [id, msg] : output1.messages) {
+        BOOST_REQUIRE_NO_THROW(areq = std::get<raft::append_request>(msg));
+        const raft::log_entry_ptr le = areq.entries.back();
+        BOOST_CHECK(le->idx == 1);   // Dummy is 1st entry in log
+        BOOST_REQUIRE_NO_THROW(std::get<raft::log_entry::dummy>(le->data));
+        if (accepting.contains(id)) { // Only gets votes from specified nodes
+            fsm1.step(id, raft::append_reply{areq.current_term, index_t{1},
+                    raft::append_reply::accepted{index_t{1}}});
+        }
+    }
+    output1 = fsm1.get_output();
+    // Dummy can only be committed if there were quorum votes (fsm1 counts for quorum)
+    auto commit_dummy = (accepting.size() + 1) >= (nodes/2 + 1);
+    BOOST_CHECK(output1.committed.size() == commit_dummy);
+
+    // Add entry to leader fsm1
+    raft::command cmd = create_command(1);
+    raft::log_entry le = fsm1.add_entry(std::move(cmd));
+    output1 = fsm1.get_output();
+    BOOST_CHECK(output1.log_entries.size() == 1);
+
+    // entry propagates
+    output1 = fsm1.get_output();
+    // Send append to nodes who accepted dummy
+    BOOST_CHECK(output1.messages.size() == accepting.size());
+    for (auto& [id, msg] : output1.messages) {
+        BOOST_REQUIRE_NO_THROW(areq = std::get<raft::append_request>(msg));
+        const raft::log_entry_ptr le = areq.entries.back();
+        BOOST_CHECK(le->idx == 2);   // Entry is 2nd entry in log (after dummy)
+        BOOST_REQUIRE_NO_THROW(std::get<raft::command>(le->data));
+        // Only followers who accepted dummy should get 2nd append request
+        BOOST_CHECK(accepting.contains(id));
+        fsm1.step(id, raft::append_reply{areq.current_term, index_t{2},
+                raft::append_reply::accepted{index_t{2}}});
+    }
+    output1 = fsm1.get_output();
+    // Entry can only be committed if there were quorum votes (fsm1 counts for quorum)
+    auto commit_entry = (accepting.size() + 1) >= (nodes/2 + 1);
+    BOOST_CHECK(output1.committed.size() == commit_entry);
+
+    // TODO: using communicate_until() propagate log to followers an check it matches
+};
+
+// TestProposal
+// Checks follower logs with 3, 4, 5, and accepts
+BOOST_AUTO_TEST_CASE(test_proposal_1) {
+
+    handle_proposal(3, {2, 3});  // 3 nodes, 2  responsive followers
+}
+
+BOOST_AUTO_TEST_CASE(test_proposal_2) {
+    handle_proposal(3, {2});     // 3 nodes, 1  responsive follower
+}
+
+BOOST_AUTO_TEST_CASE(test_proposal_3) {
+    handle_proposal(3, {});      // 3 nodes, no responsive followers
+}
+
+BOOST_AUTO_TEST_CASE(test_proposal_4) {
+    handle_proposal(4, {4});     // 4 nodes, 1  responsive follower
+}
+
+BOOST_AUTO_TEST_CASE(test_proposal_5) {
+    handle_proposal(5, {4, 5});  // 5 nodes, 2  responsive followers
+}
+
+// TestProposalByProxy
+// TBD when we support add_entry() on follower
