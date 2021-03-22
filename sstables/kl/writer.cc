@@ -315,8 +315,8 @@ void sstable_writer_k_l::write_collection(file_writer& out, const composite& clu
 void sstable_writer_k_l::write_clustered_row(file_writer& out, const schema& schema, const clustering_row& clustered_row) {
     auto clustering_key = composite::from_clustering_element(schema, clustered_row.key());
 
-    maybe_write_row_marker(out, schema, clustered_row.marker(), clustering_key);
     maybe_write_row_tombstone(out, clustering_key, clustered_row);
+    maybe_write_row_marker(out, schema, clustered_row.marker(), clustering_key);
 
     _collector.update_min_max_components(clustered_row.key());
 
