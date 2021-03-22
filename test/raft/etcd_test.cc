@@ -678,3 +678,15 @@ BOOST_AUTO_TEST_CASE(test_dueling_pre_candidates) {
 
 // TestSingleNodeCandidate (fsm test)
 
+// TestSingleNodePreCandidate
+BOOST_AUTO_TEST_CASE(test_single_node_pre_candidate) {
+    raft::fsm_output output1;
+
+    server_id id1{utils::UUID(0, 1)};
+    raft::configuration cfg({id1});
+    raft::log log1{raft::snapshot{.config = cfg}};
+    raft::fsm fsm1(id1, term_t{}, server_id{}, std::move(log1), trivial_failure_detector, fsm_cfg_pre);
+
+    make_candidate(fsm1);
+    BOOST_CHECK(fsm1.is_leader());
+}
