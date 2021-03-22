@@ -690,3 +690,57 @@ BOOST_AUTO_TEST_CASE(test_single_node_pre_candidate) {
     make_candidate(fsm1);
     BOOST_CHECK(fsm1.is_leader());
 }
+
+// TestOldMessages
+BOOST_AUTO_TEST_CASE(test_old_messages) {
+
+    discrete_failure_detector fd;
+    server_id id1{utils::UUID(0, 1)}, id2{utils::UUID(0, 2)}, id3{utils::UUID(0, 3)};
+    raft::configuration cfg({id1, id2, id3});
+    raft::log log1{raft::snapshot{.config = cfg}};
+    fsm_debug fsm1(id1, term_t{}, server_id{}, std::move(log1), fd, fsm_cfg);
+    raft::log log2{raft::snapshot{.config = cfg}};
+    fsm_debug fsm2(id2, term_t{}, server_id{}, std::move(log2), fd, fsm_cfg);
+    raft::log log3{raft::snapshot{.config = cfg}};
+    fsm_debug fsm3(id3, term_t{}, server_id{}, std::move(log3), fd, fsm_cfg);
+
+    make_candidate(fsm1);
+    communicate(fsm1, fsm2, fsm3);  // Term 1
+    BOOST_CHECK(fsm1.is_leader());
+    fd.mark_dead(id1);
+    election_threshold(fsm3);
+    make_candidate(fsm2);
+    BOOST_CHECK(fsm2.is_candidate());
+    communicate(fsm2, fsm1, fsm3);  // Term 2
+    fd.mark_alive(id1);
+    BOOST_CHECK(fsm2.is_leader());
+    fd.mark_dead(id2);
+    election_threshold(fsm3);
+    make_candidate(fsm1);
+    communicate(fsm1, fsm2, fsm3);  // Term 3
+    BOOST_CHECK(fsm1.is_leader());
+    fd.mark_alive(id2);
+    BOOST_CHECK(fsm1.get_current_term() == 3);
+
+    // pretend [id2's] an old leader trying to make progress; this entry is expected to be ignored.
+    fsm1.step(id2, raft::append_request{term_t{2}, id2, index_t{2}, term_t{2}});
+
+    raft::command cmd = create_command(4);
+    fsm1.add_entry(std::move(cmd));
+    communicate(fsm2, fsm1, fsm3);  // Term 3
+
+    // Check entries 1, 2, 3 are respective terms; 4 is term 3 and command(4)
+    auto res1 = fsm1.get_log();
+    for (size_t i = 1; i < 5; ++i) {
+        BOOST_CHECK(res1[i]->idx == i);
+        if (i < 4) {
+            BOOST_CHECK(res1[i]->term == i);
+            BOOST_REQUIRE_NO_THROW(std::get<raft::log_entry::dummy>(res1[i]->data));
+        } else {
+            BOOST_CHECK(res1[i]->term == 3);
+            BOOST_REQUIRE_NO_THROW(std::get<raft::command>(res1[i]->data));
+        }
+    }
+    BOOST_CHECK(compare_log_entries(res1, fsm2.get_log(), 1, 4));
+    BOOST_CHECK(compare_log_entries(res1, fsm3.get_log(), 1, 4));
+}
