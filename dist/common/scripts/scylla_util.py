@@ -811,6 +811,12 @@ class systemd_unit:
     def reload(cls):
         run('systemctl daemon-reload', shell=True, check=True)
 
+    @classmethod
+    def available(cls, unit):
+        res = run('systemctl cat {}'.format(unit), shell=True, check=True, stdout=DEVNULL, stderr=DEVNULL)
+        return True if res.returncode == 0 else False
+
+
 class sysconfig_parser:
     def __load(self):
         f = io.StringIO('[global]\n{}'.format(self._data))

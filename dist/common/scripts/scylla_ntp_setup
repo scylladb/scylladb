@@ -40,24 +40,29 @@ if __name__ == '__main__':
                         help='specify subdomain of pool.ntp.org (ex: centos, fedora or amazon)')
     args = parser.parse_args()
 
-    if shutil.which('ntpd'):
-        pkg_uninstall('ntp')
-    if not shutil.which('chronyd'):
-        pkg_install('chrony')
-    if is_debian_variant():
-        confpath = '/etc/chrony/chrony.conf'
-        chronyd = 'chrony.service'
+    # use systemd-timesyncd
+    if systemd_unit.available('systemd-timesyncd'):
+        run('timedatectl set-ntp true', shell=True, check=True)
+    # use chrony
     else:
-        confpath = '/etc/chrony.conf'
-        chronyd = 'chronyd.service'
-    with open(confpath) as f:
-        conf = f.read()
-    if args.subdomain:
-        conf2 = re.sub(r'pool\s+([0-9]+)\.(\S+)\.pool\.ntp\.org', 'pool \\1.{}.pool.ntp.org'.format(args.subdomain), conf, flags=re.MULTILINE)
-        with open(confpath, 'w') as f:
-            f.write(conf2)
-        conf = conf2
-    chronyd = systemd_unit(chronyd)
-    chronyd.enable()
-    chronyd.restart()
-    run('chronyc -a makestep', shell=True, check=True)
+        if shutil.which('ntpd'):
+            pkg_uninstall('ntp')
+        if not shutil.which('chronyd'):
+            pkg_install('chrony')
+        if is_debian_variant():
+            confpath = '/etc/chrony/chrony.conf'
+            chronyd = 'chrony.service'
+        else:
+            confpath = '/etc/chrony.conf'
+            chronyd = 'chronyd.service'
+        with open(confpath) as f:
+            conf = f.read()
+        if args.subdomain:
+            conf2 = re.sub(r'pool\s+([0-9]+)\.(\S+)\.pool\.ntp\.org', 'pool \\1.{}.pool.ntp.org'.format(args.subdomain), conf, flags=re.MULTILINE)
+            with open(confpath, 'w') as f:
+                f.write(conf2)
+            conf = conf2
+        chronyd = systemd_unit(chronyd)
+        chronyd.enable()
+        chronyd.restart()
+        run('chronyc -a makestep', shell=True, check=True)
