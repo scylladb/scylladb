@@ -5404,8 +5404,8 @@ SEASTAR_TEST_CASE(sstable_scrub_test) {
 
             table->add_sstable_and_update_cache(sst).get();
 
-            BOOST_REQUIRE(table->non_staging_sstables().size() == 1);
-            BOOST_REQUIRE(table->non_staging_sstables().front() == sst);
+            BOOST_REQUIRE(table->in_strategy_sstables().size() == 1);
+            BOOST_REQUIRE(table->in_strategy_sstables().front() == sst);
 
             auto verify_fragments = [&] (sstables::shared_sstable sst, const std::vector<mutation_fragment>& mfs) {
                 auto r = assert_that(sst->as_mutation_source().make_reader(schema, tests::make_permit()));
@@ -5426,7 +5426,7 @@ SEASTAR_TEST_CASE(sstable_scrub_test) {
             // We expect the scrub with skip_corrupted=false to stop on the first invalid fragment.
             compaction_manager.perform_sstable_scrub(table.get(), false).get();
 
-            BOOST_REQUIRE(table->non_staging_sstables().size() == 1);
+            BOOST_REQUIRE(table->in_strategy_sstables().size() == 1);
             verify_fragments(sst, corrupt_fragments);
 
             testlog.info("Scrub with --skip-corrupted=true");
@@ -5434,9 +5434,9 @@ SEASTAR_TEST_CASE(sstable_scrub_test) {
             // We expect the scrub with skip_corrupted=true to get rid of all invalid data.
             compaction_manager.perform_sstable_scrub(table.get(), true).get();
 
-            BOOST_REQUIRE(table->non_staging_sstables().size() == 1);
-            BOOST_REQUIRE(table->non_staging_sstables().front() != sst);
-            verify_fragments(table->non_staging_sstables().front(), scrubbed_fragments);
+            BOOST_REQUIRE(table->in_strategy_sstables().size() == 1);
+            BOOST_REQUIRE(table->in_strategy_sstables().front() != sst);
+            verify_fragments(table->in_strategy_sstables().front(), scrubbed_fragments);
         });
     }, test_cfg);
 }
@@ -6893,5 +6893,151 @@ SEASTAR_TEST_CASE(test_sstable_origin) {
         }
 
         return make_ready_future<>();
+    });
+}
+
+SEASTAR_TEST_CASE(compound_sstable_set_basic_test) {
+    return test_env::do_with([] (test_env& env) {
+        auto s = make_shared_schema({}, some_keyspace, some_column_family,
+            {{"p1", utf8_type}}, {}, {}, {}, utf8_type);
+        auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::size_tiered, s->compaction_strategy_options());
+
+        lw_shared_ptr<sstables::sstable_set> set1 = make_lw_shared(cs.make_sstable_set(s));
+        lw_shared_ptr<sstables::sstable_set> set2 = make_lw_shared(cs.make_sstable_set(s));
+        lw_shared_ptr<sstables::sstable_set> compound = make_lw_shared(sstables::make_compound_sstable_set(s, {set1, set2}));
+
+        auto key_and_token_pair = token_generation_for_current_shard(2);
+        set1->insert(sstable_for_overlapping_test(env, s, 1, key_and_token_pair[0].first, key_and_token_pair[1].first, 0));
+        set2->insert(sstable_for_overlapping_test(env, s, 2, key_and_token_pair[0].first, key_and_token_pair[1].first, 0));
+        set2->insert(sstable_for_overlapping_test(env, s, 3, key_and_token_pair[0].first, key_and_token_pair[1].first, 0));
+
+        BOOST_REQUIRE(boost::accumulate(*compound->all() | boost::adaptors::transformed([] (const sstables::shared_sstable& sst) { return sst->generation(); }), unsigned(0)) == 6);
+        {
+            unsigned found = 0;
+            for (auto sstables = compound->all(); auto& sst : *sstables) {
+                found++;
+            }
+            size_t compound_size = compound->all()->size();
+            BOOST_REQUIRE(compound_size == 3);
+            BOOST_REQUIRE(compound_size == found);
+        }
+
+        set2 = make_lw_shared(cs.make_sstable_set(s));
+        compound = make_lw_shared(sstables::make_compound_sstable_set(s, {set1, set2}));
+        {
+            unsigned found = 0;
+            for (auto sstables = compound->all(); auto& sst : *sstables) {
+                found++;
+            }
+            size_t compound_size = compound->all()->size();
+            BOOST_REQUIRE(compound_size == 1);
+            BOOST_REQUIRE(compound_size == found);
+        }
+
+        return make_ready_future<>();
+    });
+}
+
+SEASTAR_TEST_CASE(compound_sstable_set_incremental_selector_test) {
+    return test_env::do_with([] (test_env& env) {
+        auto s = make_shared_schema({}, some_keyspace, some_column_family,
+                                    {{"p1", utf8_type}}, {}, {}, {}, utf8_type);
+        auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::leveled, s->compaction_strategy_options());
+        auto key_and_token_pair = token_generation_for_current_shard(8);
+        auto decorated_keys = boost::copy_range<std::vector<dht::decorated_key>>(
+                key_and_token_pair | boost::adaptors::transformed([&s] (const std::pair<sstring, dht::token>& key_and_token) {
+                    auto value = bytes(reinterpret_cast<const signed char*>(key_and_token.first.data()), key_and_token.first.size());
+                    auto pk = sstables::key::from_bytes(value).to_partition_key(*s);
+                    return dht::decorate_key(*s, std::move(pk));
+                }));
+
+        auto check = [] (sstable_set::incremental_selector& selector, const dht::decorated_key& key, std::unordered_set<int64_t> expected_gens) {
+            auto sstables = selector.select(key).sstables;
+            BOOST_REQUIRE_EQUAL(sstables.size(), expected_gens.size());
+            for (auto& sst : sstables) {
+                BOOST_REQUIRE(expected_gens.contains(sst->generation()));
+            }
+        };
+
+        {
+            auto set1 = make_lw_shared<sstable_set>(cs.make_sstable_set(s));
+            auto set2 = make_lw_shared<sstable_set>(cs.make_sstable_set(s));
+            set1->insert(sstable_for_overlapping_test(env, s, 1, key_and_token_pair[0].first, key_and_token_pair[1].first, 1));
+            set2->insert(sstable_for_overlapping_test(env, s, 2, key_and_token_pair[0].first, key_and_token_pair[1].first, 1));
+            set1->insert(sstable_for_overlapping_test(env, s, 3, key_and_token_pair[3].first, key_and_token_pair[4].first, 1));
+            set2->insert(sstable_for_overlapping_test(env, s, 4, key_and_token_pair[4].first, key_and_token_pair[4].first, 1));
+            set1->insert(sstable_for_overlapping_test(env, s, 5, key_and_token_pair[4].first, key_and_token_pair[5].first, 1));
+
+            sstable_set compound = sstables::make_compound_sstable_set(s, { set1, set2 });
+            sstable_set::incremental_selector sel = compound.make_incremental_selector();
+            check(sel, decorated_keys[0], {1, 2});
+            check(sel, decorated_keys[1], {1, 2});
+            check(sel, decorated_keys[2], {});
+            check(sel, decorated_keys[3], {3});
+            check(sel, decorated_keys[4], {3, 4, 5});
+            check(sel, decorated_keys[5], {5});
+            check(sel, decorated_keys[6], {});
+            check(sel, decorated_keys[7], {});
+        }
+
+        {
+            auto set1 = make_lw_shared<sstable_set>(cs.make_sstable_set(s));
+            auto set2 = make_lw_shared<sstable_set>(cs.make_sstable_set(s));
+            set1->insert(sstable_for_overlapping_test(env, s, 0, key_and_token_pair[0].first, key_and_token_pair[1].first, 0));
+            set2->insert(sstable_for_overlapping_test(env, s, 1, key_and_token_pair[0].first, key_and_token_pair[1].first, 1));
+            set1->insert(sstable_for_overlapping_test(env, s, 2, key_and_token_pair[0].first, key_and_token_pair[1].first, 1));
+            set2->insert(sstable_for_overlapping_test(env, s, 3, key_and_token_pair[3].first, key_and_token_pair[4].first, 1));
+            set1->insert(sstable_for_overlapping_test(env, s, 4, key_and_token_pair[4].first, key_and_token_pair[4].first, 1));
+            set2->insert(sstable_for_overlapping_test(env, s, 5, key_and_token_pair[4].first, key_and_token_pair[5].first, 1));
+
+            sstable_set compound = sstables::make_compound_sstable_set(s, { set1, set2 });
+            sstable_set::incremental_selector sel = compound.make_incremental_selector();
+            check(sel, decorated_keys[0], {0, 1, 2});
+            check(sel, decorated_keys[1], {0, 1, 2});
+            check(sel, decorated_keys[2], {0});
+            check(sel, decorated_keys[3], {0, 3});
+            check(sel, decorated_keys[4], {0, 3, 4, 5});
+            check(sel, decorated_keys[5], {0, 5});
+            check(sel, decorated_keys[6], {0});
+            check(sel, decorated_keys[7], {0});
+        }
+
+        return make_ready_future<>();
+    });
+}
+
+SEASTAR_TEST_CASE(test_offstrategy_sstable_compaction) {
+    return test_env::do_with_async([tmp = tmpdir()] (test_env& env) {
+        storage_service_for_tests ssft;
+        simple_schema ss;
+        auto s = ss.schema();
+
+        auto pk = ss.make_pkey(make_local_key(s));
+        auto mut = mutation(s, pk);
+        ss.add_row(mut, ss.make_ckey(0), "val");
+
+        auto sst_gen = [&env, s, path = tmp.path().string(), gen = make_lw_shared<unsigned>(1)] () mutable {
+            return env.make_sstable(s, path, (*gen)++, la, big);
+        };
+
+        auto cm = make_lw_shared<compaction_manager>();
+        column_family::config cfg = column_family_test_config(env.manager());
+        cfg.datadir = tmp.path().string();
+        cfg.enable_disk_writes = true;
+        cfg.enable_cache = false;
+        auto tracker = make_lw_shared<cache_tracker>();
+        cell_locker_stats cl_stats;
+        auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), *cm, cl_stats, *tracker);
+        cf->mark_ready_for_writes();
+        cf->start();
+
+        for (auto i = 0; i < cf->schema()->max_compaction_threshold(); i++) {
+            auto sst = make_sstable_containing(sst_gen, {mut});
+            cf->add_sstable_and_update_cache(std::move(sst), sstables::offstrategy::yes).get();
+        }
+        cf->run_offstrategy_compaction().get();
+
+        // Make sure we release reference to all sstables, allowing them to be deleted before dir is destroyed
+        cf->stop().get();
     });
 }

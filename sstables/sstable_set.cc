@@ -830,6 +830,133 @@ time_series_sstable_set::create_single_key_sstable_reader(
             make_min_position_reader_queue(std::move(create_reader), std::move(filter)));
 }
 
+compound_sstable_set::compound_sstable_set(schema_ptr schema, std::vector<lw_shared_ptr<sstable_set>> sets)
+    : _schema(std::move(schema))
+    , _sets(std::move(sets)) {
+}
+
+std::unique_ptr<sstable_set_impl> compound_sstable_set::clone() const {
+    std::vector<lw_shared_ptr<sstable_set>> cloned_sets;
+    cloned_sets.reserve(_sets.size());
+    for (auto& set : _sets) {
+        // implicit clone by using sstable_set's copy ctor.
+        cloned_sets.push_back(make_lw_shared(std::move(*set)));
+    }
+    return std::make_unique<compound_sstable_set>(_schema, std::move(cloned_sets));
+}
+
+std::vector<shared_sstable> compound_sstable_set::select(const dht::partition_range& range) const {
+    std::vector<shared_sstable> ret;
+    for (auto& set : _sets) {
+        auto ssts = set->select(range);
+        if (ret.empty()) {
+            ret = std::move(ssts);
+        } else {
+            ret.reserve(ret.size() + ssts.size());
+            std::move(ssts.begin(), ssts.end(), std::back_inserter(ret));
+        }
+    }
+    return ret;
+}
+
+std::vector<sstable_run> compound_sstable_set::select_sstable_runs(const std::vector<shared_sstable>& sstables) const {
+    std::vector<sstable_run> ret;
+    for (auto& set : _sets) {
+        auto runs = set->select_sstable_runs(sstables);
+        if (ret.empty()) {
+            ret = std::move(runs);
+        } else {
+            ret.reserve(ret.size() + runs.size());
+            std::move(runs.begin(), runs.end(), std::back_inserter(ret));
+        }
+    }
+    return ret;
+}
+
+lw_shared_ptr<sstable_list> compound_sstable_set::all() const {
+    auto ret = make_lw_shared<sstable_list>();
+    for (auto& set : _sets) {
+        auto ssts = set->all();
+        if (ssts->empty()) {
+            continue;
+        }
+        // optimize for common case where primary set contains sstables, but secondary one is empty for most of the time.
+        if (ret->empty()) {
+            ret = std::move(ssts);
+        } else {
+            // copy list if we need to extend it as a list referenced by a sstable_set cannot be modified.
+            ret = make_lw_shared<sstable_list>(*ret);
+            ret->reserve(ret->size() + ssts->size());
+            ret->insert(ssts->begin(), ssts->end());
+        }
+    }
+    return ret;
+}
+
+void compound_sstable_set::for_each_sstable(std::function<void(const shared_sstable&)> func) const {
+    for (auto& set : _sets) {
+        set->for_each_sstable([&func] (const shared_sstable& sst) {
+            func(sst);
+        });
+    }
+}
+
+void compound_sstable_set::insert(shared_sstable sst) {
+    throw_with_backtrace<std::bad_function_call>();
+}
+void compound_sstable_set::erase(shared_sstable sst) {
+    throw_with_backtrace<std::bad_function_call>();
+}
+
+class compound_sstable_set::incremental_selector : public incremental_selector_impl {
+    const schema& _schema;
+    const std::vector<lw_shared_ptr<sstable_set>>& _sets;
+    std::vector<sstable_set::incremental_selector> _selectors;
+private:
+    std::vector<sstable_set::incremental_selector> make_selectors(const std::vector<lw_shared_ptr<sstable_set>>& sets) {
+        return boost::copy_range<std::vector<sstable_set::incremental_selector>>(_sets | boost::adaptors::transformed([] (const auto& set) {
+            return set->make_incremental_selector();
+        }));
+    }
+public:
+    incremental_selector(const schema& schema, const std::vector<lw_shared_ptr<sstable_set>>& sets)
+            : _schema(schema)
+            , _sets(sets)
+            , _selectors(make_selectors(sets)) {
+    }
+
+    virtual std::tuple<dht::partition_range, std::vector<shared_sstable>, dht::ring_position_view> select(const dht::ring_position_view& pos) override {
+        // Return all sstables selected on the requested position from all selectors.
+        std::vector<shared_sstable> sstables;
+        // Return the lowest next position from all selectors, such that this function will be called again to select the
+        // lowest next position from the selector which previously returned it.
+        dht::ring_position_view lowest_next_position = dht::ring_position_view::max();
+        // Always return minimum singular range, such that incremental_selector::select() will always call this function,
+        // which in turn will call the selectors to decide on whether or not any select should be actually performed.
+        const dht::partition_range current_range = dht::partition_range::make_singular(dht::ring_position::min());
+        auto cmp = dht::ring_position_comparator(_schema);
+
+        for (auto& selector : _selectors) {
+            auto ret = selector.select(pos);
+            sstables.reserve(sstables.size() + ret.sstables.size());
+            std::copy(ret.sstables.begin(), ret.sstables.end(), std::back_inserter(sstables));
+            if (cmp(ret.next_position, lowest_next_position) < 0) {
+                lowest_next_position = ret.next_position;
+            }
+        }
+
+        return std::make_tuple(std::move(current_range), std::move(sstables), lowest_next_position);
+    }
+};
+
+std::unique_ptr<incremental_selector_impl> compound_sstable_set::make_incremental_selector() const {
+    return std::make_unique<incremental_selector>(*_schema, _sets);
+}
+
+sstable_set make_compound_sstable_set(schema_ptr schema, std::vector<lw_shared_ptr<sstable_set>> sets) {
+    return sstable_set(std::make_unique<compound_sstable_set>(schema, std::move(sets)), schema);
+}
+
 flat_mutation_reader
 sstable_set::create_single_key_sstable_reader(
         column_family* cf,

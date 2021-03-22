@@ -46,13 +46,15 @@ public:
     column_family_test(lw_shared_ptr<column_family> cf) : _cf(cf) {}
 
     void add_sstable(sstables::shared_sstable sstable) {
-        _cf->_sstables->insert(std::move(sstable));
+        _cf->_main_sstables->insert(std::move(sstable));
+        _cf->refresh_compound_sstable_set();
     }
 
     // NOTE: must run in a thread
     void rebuild_sstable_list(const std::vector<sstables::shared_sstable>& new_sstables,
             const std::vector<sstables::shared_sstable>& sstables_to_remove) {
-        _cf->_sstables = _cf->build_new_sstable_list(new_sstables, sstables_to_remove).get0();
+        _cf->_main_sstables = _cf->build_new_sstable_list(*_cf->_main_sstables, _cf->_compaction_strategy.make_sstable_set(_cf->schema()), new_sstables, sstables_to_remove).get0();
+        _cf->refresh_compound_sstable_set();
     }
 
     static void update_sstables_known_generation(column_family& cf, unsigned generation) {

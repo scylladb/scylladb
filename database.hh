@@ -339,6 +339,8 @@ using column_family_stats = table_stats;
 
 class database_sstable_write_monitor;
 
+using enable_backlog_tracker = bool_class<class enable_backlog_tracker_tag>;
+
 struct table_stats {
     /** Number of times flush has resulted in the memtable being switched out. */
     int64_t memtable_switch_count = 0;
@@ -424,7 +426,11 @@ private:
     lw_shared_ptr<memtable_list> make_memtable_list();
 
     sstables::compaction_strategy _compaction_strategy;
-    // generation -> sstable. Ordered by key so we can easily get the most recent.
+    // SSTable set which contains all non-maintenance sstables
+    lw_shared_ptr<sstables::sstable_set> _main_sstables;
+    // Holds SSTables created by maintenance operations, which need reshaping before integration into the main set
+    lw_shared_ptr<sstables::sstable_set> _maintenance_sstables;
+    // Compound set which manages all the SSTable sets (e.g. main, etc) and allow their operations to be combined
     lw_shared_ptr<sstables::sstable_set> _sstables;
     // sstables that have been compacted (so don't look up in query) but
     // have not been deleted yet, so must not GC any tombstones in other sstables
@@ -444,6 +450,9 @@ private:
     // sstables deleted by compaction in parallel, a race condition which could
     // easily result in failure.
     seastar::named_semaphore _sstable_deletion_sem = {1, named_semaphore_exception_factory{"sstable deletion"}};
+    // This semaphore ensures that off-strategy compaction will be serialized and also
+    // protects against candidates being picked more than once.
+    seastar::named_semaphore _off_strategy_sem = {1, named_semaphore_exception_factory{"off-strategy compaction"}};
     mutable row_cache _cache; // Cache covers only sstables.
     std::optional<int64_t> _sstable_generation = {};
 
@@ -503,7 +512,8 @@ private:
 
     bool _is_bootstrap_or_replace = false;
 public:
-    future<> add_sstable_and_update_cache(sstables::shared_sstable sst);
+    future<> add_sstable_and_update_cache(sstables::shared_sstable sst,
+                                          sstables::offstrategy offstrategy = sstables::offstrategy::no);
     future<> move_sstables_from_staging(std::vector<sstables::shared_sstable>);
     sstables::shared_sstable get_staging_sstable(uint64_t generation) {
         auto it = _sstables_staging.find(generation);
@@ -535,7 +545,11 @@ private:
     // Cache must be synchronized atomically with this, otherwise write atomicity may not be respected.
     // Doesn't trigger compaction.
     // Strong exception guarantees.
+    lw_shared_ptr<sstables::sstable_set>
+    do_add_sstable(lw_shared_ptr<sstables::sstable_set> sstables, sstables::shared_sstable sstable,
+        enable_backlog_tracker backlog_tracker);
     void add_sstable(sstables::shared_sstable sstable);
+    void add_maintenance_sstable(sstables::shared_sstable sst);
     static void add_sstable_to_backlog_tracker(compaction_backlog_tracker& tracker, sstables::shared_sstable sstable);
     static void remove_sstable_from_backlog_tracker(compaction_backlog_tracker& tracker, sstables::shared_sstable sstable);
     void load_sstable(sstables::shared_sstable& sstable, bool reset_level = false);
@@ -568,8 +582,14 @@ private:
 
     // Builds new sstable set from existing one, with new sstables added to it and old sstables removed from it.
     future<lw_shared_ptr<sstables::sstable_set>>
-    build_new_sstable_list(const std::vector<sstables::shared_sstable>& new_sstables,
-                           const std::vector<sstables::shared_sstable>& old_sstables);
+    build_new_sstable_list(const sstables::sstable_set& current_sstables,
+                        sstables::sstable_set new_sstable_list,
+                        const std::vector<sstables::shared_sstable>& new_sstables,
+                        const std::vector<sstables::shared_sstable>& old_sstables);
+
+    future<>
+    update_sstable_lists_on_off_strategy_completion(const std::vector<sstables::shared_sstable>& old_maintenance_sstables,
+                                                    const std::vector<sstables::shared_sstable>& new_main_sstables);
 
     // Rebuild sstable set, delete input sstables right away, and update row cache and statistics.
     void on_compaction_completion(sstables::compaction_completion_desc& desc);
@@ -590,6 +610,11 @@ private:
                                         tracing::trace_state_ptr trace_state,
                                         streamed_mutation::forwarding fwd,
                                         mutation_reader::forwarding fwd_mr) const;
+
+    lw_shared_ptr<sstables::sstable_set> make_maintenance_sstable_set() const;
+    lw_shared_ptr<sstables::sstable_set> make_compound_sstable_set();
+    // Compound sstable set must be refreshed whenever any of its managed sets are changed
+    void refresh_compound_sstable_set();
 
     snapshot_source sstables_as_snapshot_source();
     partition_presence_checker make_partition_presence_checker(lw_shared_ptr<sstables::sstable_set>);
@@ -827,7 +852,8 @@ public:
     lw_shared_ptr<const sstable_list> get_sstables_including_compacted_undeleted() const;
     const std::vector<sstables::shared_sstable>& compacted_undeleted_sstables() const;
     std::vector<sstables::shared_sstable> select_sstables(const dht::partition_range& range) const;
-    std::vector<sstables::shared_sstable> non_staging_sstables() const;
+    // Return all sstables but those that are off-strategy like the ones in maintenance set and staging dir.
+    std::vector<sstables::shared_sstable> in_strategy_sstables() const;
     size_t sstables_count() const;
     std::vector<uint64_t> sstable_count_per_level() const;
     int64_t get_unleveled_sstables() const;
@@ -836,6 +862,7 @@ public:
     void trigger_compaction();
     void try_trigger_compaction() noexcept;
     future<> run_compaction(sstables::compaction_descriptor descriptor);
+    future<> run_offstrategy_compaction();
     void set_compaction_strategy(sstables::compaction_strategy_type strategy);
     const sstables::compaction_strategy& get_compaction_strategy() const {
         return _compaction_strategy;

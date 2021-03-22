@@ -181,7 +181,7 @@ std::vector<sstables::shared_sstable> compaction_manager::get_candidates(const c
     auto& cs = cf.get_compaction_strategy();
 
     // Filter out sstables that are being compacted.
-    for (auto& sst : cf.non_staging_sstables()) {
+    for (auto& sst : cf.in_strategy_sstables()) {
         if (_compacting_sstables.contains(sst)) {
             continue;
         }
@@ -613,6 +613,51 @@ void compaction_manager::submit(column_family* cf) {
         });
     }).finally([this, task] {
         _tasks.remove(task);
+    });
+}
+
+void compaction_manager::submit_offstrategy(column_family* cf) {
+    auto task = make_lw_shared<compaction_manager::task>();
+    task->compacting_cf = cf;
+    task->type = sstables::compaction_type::Reshape;
+    _tasks.push_back(task);
+    _stats.pending_tasks++;
+
+    task->compaction_done = repeat([this, task, cf] () mutable {
+        if (!can_proceed(task)) {
+            _stats.pending_tasks--;
+            return make_ready_future<stop_iteration>(stop_iteration::yes);
+        }
+        return with_semaphore(_custom_job_sem, 1, [this, task, cf] () mutable {
+            return with_lock(_compaction_locks[cf].for_read(), [this, task, cf] () mutable {
+                _stats.pending_tasks--;
+                if (!can_proceed(task)) {
+                    return make_ready_future<stop_iteration>(stop_iteration::yes);
+                }
+                _stats.active_tasks++;
+                task->compaction_running = true;
+
+                return cf->run_offstrategy_compaction().then_wrapped([this, task] (future<> f) mutable {
+                    _stats.active_tasks--;
+                    task->compaction_running = false;
+                    try {
+                        f.get();
+                        _stats.completed_tasks++;
+                    } catch (sstables::compaction_stop_exception& e) {
+                        cmlog.info("off-strategy compaction was abruptly stopped, reason: {}", e.what());
+                    } catch (...) {
+                        _stats.errors++;
+                        _stats.pending_tasks++;
+                        cmlog.error("off-strategy compaction failed due to {}, retrying...", std::current_exception());
+                        return put_task_to_sleep(task).then([] {
+                            return make_ready_future<stop_iteration>(stop_iteration::no);
+                        });
+                    }
+                    _tasks.remove(task);
+                    return make_ready_future<stop_iteration>(stop_iteration::yes);
+                });
+            });
+        });
     });
 }
 

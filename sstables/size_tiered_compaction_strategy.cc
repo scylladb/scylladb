@@ -253,7 +253,14 @@ size_tiered_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> i
 
     for (auto& bucket : get_buckets(input)) {
         if (bucket.size() >= offstrategy_threshold) {
-            bucket.resize(std::min(max_sstables, bucket.size()));
+            // reshape job can work on #max_sstables sstables at once, so by reshaping sstables with the smallest tokens first,
+            // token contiguity is preserved iff sstables are disjoint.
+            if (bucket.size() > max_sstables) {
+                std::partial_sort(bucket.begin(), bucket.begin() + max_sstables, bucket.end(), [&schema](const sstables::shared_sstable& a, const sstables::shared_sstable& b) {
+                    return a->get_first_decorated_key().tri_compare(*schema, b->get_first_decorated_key()) <= 0;
+                });
+                bucket.resize(max_sstables);
+            }
             compaction_descriptor desc(std::move(bucket), std::optional<sstables::sstable_set>(), iop);
             desc.options = compaction_options::make_reshape();
             return desc;

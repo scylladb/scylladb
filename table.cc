@@ -113,6 +113,21 @@ table::make_sstable_reader(schema_ptr s,
     return make_restricted_flat_reader(std::move(ms), std::move(s), std::move(permit), pr, slice, pc, std::move(trace_state), fwd, fwd_mr);
 }
 
+lw_shared_ptr<sstables::sstable_set> table::make_compound_sstable_set() {
+    return make_lw_shared(sstables::make_compound_sstable_set(_schema, { _main_sstables, _maintenance_sstables }));
+}
+
+lw_shared_ptr<sstables::sstable_set> table::make_maintenance_sstable_set() const {
+    // Level metadata is not used because (level 0) maintenance sstables are disjoint and must be stored for efficient retrieval in the partitioned set
+    bool use_level_metadata = false;
+    return make_lw_shared<sstables::sstable_set>(
+            sstables::make_partitioned_sstable_set(_schema, make_lw_shared<sstable_list>(sstable_list{}), use_level_metadata));
+}
+
+void table::refresh_compound_sstable_set() {
+    _sstables = make_compound_sstable_set();
+}
+
 // Exposed for testing, not performance critical.
 future<table::const_mutation_partition_ptr>
 table::find_partition(schema_ptr s, reader_permit permit, const dht::decorated_key& key) const {
@@ -343,6 +358,7 @@ void table::notify_bootstrap_or_replace_start() {
 
 void table::notify_bootstrap_or_replace_end() {
     _is_bootstrap_or_replace = false;
+    _compaction_manager.submit_offstrategy(this);
 }
 
 void table::update_stats_for_new_sstable(uint64_t disk_space_used_by_sstable) noexcept {
@@ -359,31 +375,47 @@ inline void table::remove_sstable_from_backlog_tracker(compaction_backlog_tracke
     tracker.remove_sstable(std::move(sstable));
 }
 
-void table::add_sstable(sstables::shared_sstable sstable) {
+lw_shared_ptr<sstables::sstable_set>
+table::do_add_sstable(lw_shared_ptr<sstables::sstable_set> sstables, sstables::shared_sstable sstable,
+        enable_backlog_tracker backlog_tracker) {
     if (belongs_to_other_shard(sstable->get_shards_for_this_sstable())) {
         on_internal_error(tlogger, format("Attempted to load the shared SSTable {} at table", sstable->get_filename()));
     }
     // allow in-progress reads to continue using old list
-    auto new_sstables = make_lw_shared<sstables::sstable_set>(*_sstables);
+    auto new_sstables = make_lw_shared<sstables::sstable_set>(*sstables);
     new_sstables->insert(sstable);
     if (sstable->requires_view_building()) {
         _sstables_staging.emplace(sstable->generation(), sstable);
-    } else {
+    } else if (backlog_tracker) {
         add_sstable_to_backlog_tracker(_compaction_strategy.get_backlog_tracker(), sstable);
     }
-    // update _stables last in case either updating
+    // update sstable set last in case either updating
     // staging sstables or backlog tracker throws
-    _sstables = std::move(new_sstables);
     update_stats_for_new_sstable(sstable->bytes_on_disk());
+    return new_sstables;
+}
+
+void table::add_sstable(sstables::shared_sstable sstable) {
+    _main_sstables = do_add_sstable(_main_sstables, std::move(sstable), enable_backlog_tracker::yes);
+    refresh_compound_sstable_set();
+}
+
+void table::add_maintenance_sstable(sstables::shared_sstable sst) {
+    _maintenance_sstables = do_add_sstable(_maintenance_sstables, std::move(sst), enable_backlog_tracker::no);
+    refresh_compound_sstable_set();
 }
 
 future<>
-table::add_sstable_and_update_cache(sstables::shared_sstable sst) {
-    return get_row_cache().invalidate(row_cache::external_updater([this, sst] () noexcept {
+table::add_sstable_and_update_cache(sstables::shared_sstable sst, sstables::offstrategy offstrategy) {
+    return get_row_cache().invalidate(row_cache::external_updater([this, sst, offstrategy] () noexcept {
         // FIXME: this is not really noexcept, but we need to provide strong exception guarantees.
         // atomically load all opened sstables into column family.
-        add_sstable(sst);
-        trigger_compaction();
+        if (!offstrategy) {
+            add_sstable(sst);
+            trigger_compaction();
+        } else {
+            add_maintenance_sstable(sst);
+        }
     }), dht::partition_range::make({sst->get_first_decorated_key(), true}, {sst->get_last_decorated_key(), true}));
 }
 
@@ -635,7 +667,9 @@ table::stop() {
                 return _compaction_manager.remove(this).then([this] {
                     return _sstable_deletion_gate.close().then([this] {
                         return get_row_cache().invalidate(row_cache::external_updater([this] {
-                            _sstables = _compaction_strategy.make_sstable_set(_schema);
+                            _main_sstables = _compaction_strategy.make_sstable_set(_schema);
+                            _maintenance_sstables = make_maintenance_sstable_set();
+                            _sstables = make_compound_sstable_set();
                             _sstables_staging.clear();
                         })).then([this] {
                             _cache.refresh_snapshot();
@@ -715,23 +749,62 @@ void table::rebuild_statistics() {
 }
 
 future<lw_shared_ptr<sstables::sstable_set>>
-table::build_new_sstable_list(const std::vector<sstables::shared_sstable>& new_sstables,
+table::build_new_sstable_list(const sstables::sstable_set& current_sstables,
+                              sstables::sstable_set new_sstable_list,
+                              const std::vector<sstables::shared_sstable>& new_sstables,
                               const std::vector<sstables::shared_sstable>& old_sstables) {
-    auto current_sstables = _sstables;
-    auto new_sstable_list = _compaction_strategy.make_sstable_set(_schema);
-
     std::unordered_set<sstables::shared_sstable> s(old_sstables.begin(), old_sstables.end());
 
     // this might seem dangerous, but "move" here just avoids constness,
     // making the two ranges compatible when compiling with boost 1.55.
     // Noone is actually moving anything...
-    for (auto all = current_sstables->all(); auto&& tab : boost::range::join(new_sstables, std::move(*all))) {
+    for (auto all = current_sstables.all(); auto&& tab : boost::range::join(new_sstables, std::move(*all))) {
         if (!s.contains(tab)) {
             new_sstable_list.insert(tab);
         }
         co_await make_ready_future<>(); // yield if needed.
     }
     co_return make_lw_shared<sstables::sstable_set>(std::move(new_sstable_list));
+}
+
+future<>
+table::update_sstable_lists_on_off_strategy_completion(const std::vector<sstables::shared_sstable>& old_maintenance_sstables,
+                                                       const std::vector<sstables::shared_sstable>& new_main_sstables) {
+    class sstable_lists_updater : public row_cache::external_updater_impl {
+        using sstables_t = std::vector<sstables::shared_sstable>;
+        table& _t;
+        const sstables_t& _old_maintenance;
+        const sstables_t& _new_main;
+        lw_shared_ptr<sstables::sstable_set> _new_maintenance_list;
+        lw_shared_ptr<sstables::sstable_set> _new_main_list;
+    public:
+        explicit sstable_lists_updater(table& t, const sstables_t& old_maintenance, const sstables_t& new_main)
+                : _t(t), _old_maintenance(old_maintenance), _new_main(new_main) {
+        }
+        virtual future<> prepare() override {
+            sstables_t empty;
+            // adding new sstables, created by off-strategy operation, to main set
+            _new_main_list = co_await _t.build_new_sstable_list(*_t._main_sstables, _t._compaction_strategy.make_sstable_set(_t._schema), _new_main, empty);
+            // removing old sstables, used as input by off-strategy, from the maintenance set
+            _new_maintenance_list = co_await _t.build_new_sstable_list(*_t._maintenance_sstables, std::move(*_t.make_maintenance_sstable_set()), empty, _old_maintenance);
+        }
+        virtual void execute() override {
+            _t._main_sstables = std::move(_new_main_list);
+            _t._maintenance_sstables = std::move(_new_maintenance_list);
+            _t.refresh_compound_sstable_set();
+        }
+        static std::unique_ptr<row_cache::external_updater_impl> make(table& t, const sstables_t& old_maintenance, const sstables_t& new_main) {
+            return std::make_unique<sstable_lists_updater>(t, old_maintenance, new_main);
+        }
+    };
+    auto updater = row_cache::external_updater(sstable_lists_updater::make(*this, old_maintenance_sstables, new_main_sstables));
+
+    // row_cache::invalidate() is only used to synchronize sstable list updates, to prevent race conditions from occurring,
+    // meaning nothing is actually invalidated.
+    dht::partition_range_vector empty_ranges = {};
+    co_await _cache.invalidate(std::move(updater), std::move(empty_ranges));
+    _cache.refresh_snapshot();
+    rebuild_statistics();
 }
 
 // Note: must run in a seastar thread
@@ -783,10 +856,11 @@ table::on_compaction_completion(sstables::compaction_completion_desc& desc) {
     public:
         explicit sstable_list_updater(table& t, sstables::compaction_completion_desc& d) : _t(t), _desc(d) {}
         virtual future<> prepare() override {
-            _new_sstables = co_await _t.build_new_sstable_list(_desc.new_sstables, _desc.old_sstables);
+            _new_sstables = co_await _t.build_new_sstable_list(*_t._main_sstables, _t._compaction_strategy.make_sstable_set(_t._schema), _desc.new_sstables, _desc.old_sstables);
         }
         virtual void execute() override {
-            _t._sstables = std::move(_new_sstables);
+            _t._main_sstables = std::move(_new_sstables);
+            _t.refresh_compound_sstable_set();
         }
         static std::unique_ptr<row_cache::external_updater_impl> make(table& t, sstables::compaction_completion_desc& d) {
             return std::make_unique<sstable_list_updater>(t, d);
@@ -888,6 +962,69 @@ future<> table::run_compaction(sstables::compaction_descriptor descriptor) {
     return compact_sstables(std::move(descriptor));
 }
 
+future<> table::run_offstrategy_compaction() {
+    // This procedure will reshape sstables in maintenance set until it's ready for
+    // integration into main set.
+    // It may require N reshape rounds before the set satisfies the strategy invariant.
+    // This procedure also only updates maintenance set at the end, on success.
+    // Otherwise, some overlapping could be introduced in the set after each reshape
+    // round, progressively degrading read amplification until integration happens.
+    // The drawback of this approach is the 2x space requirement as the old sstables
+    // will only be deleted at the end. The impact of this space requirement is reduced
+    // by the fact that off-strategy is serialized across all tables, meaning that the
+    // actual requirement is the size of the largest table's maintenance set.
+
+    auto sem_unit = co_await seastar::get_units(_off_strategy_sem, 1);
+
+    tlogger.info("Starting off-strategy compaction for {}.{}, {} candidates were found",
+        _schema->ks_name(), _schema->cf_name(), _maintenance_sstables->all()->size());
+
+    const auto old_sstables = boost::copy_range<std::vector<sstables::shared_sstable>>(*_maintenance_sstables->all());
+    std::vector<sstables::shared_sstable> reshape_candidates = old_sstables;
+    std::vector<sstables::shared_sstable> new_unused_sstables, sstables_to_remove;
+
+    auto cleanup_new_unused_sstables_on_failure = defer([&new_unused_sstables] {
+        for (auto& sst : new_unused_sstables) {
+            sst->mark_for_deletion();
+        }
+    });
+
+    for (;;) {
+        auto& iop = service::get_local_streaming_priority(); // run reshape in maintenance mode
+        auto desc = _compaction_strategy.get_reshaping_job(reshape_candidates, _schema, iop, sstables::reshape_mode::strict);
+        if (desc.sstables.empty()) {
+            // at this moment reshape_candidates contains a set of sstables ready for integration into main set
+            co_await update_sstable_lists_on_off_strategy_completion(old_sstables, reshape_candidates);
+            break;
+        }
+
+        desc.creator = [this, &new_unused_sstables] (shard_id dummy) {
+            auto sst = make_sstable();
+            new_unused_sstables.push_back(sst);
+            return sst;
+        };
+        auto input = boost::copy_range<std::unordered_set<sstables::shared_sstable>>(desc.sstables);
+
+        auto ret = co_await sstables::compact_sstables(std::move(desc), *this);
+
+        // update list of reshape candidates without input but with output added to it
+        auto it = boost::remove_if(reshape_candidates, [&] (auto& s) { return input.contains(s); });
+        reshape_candidates.erase(it, reshape_candidates.end());
+        std::move(ret.new_sstables.begin(), ret.new_sstables.end(), std::back_inserter(reshape_candidates));
+        std::move(input.begin(), input.end(), std::back_inserter(sstables_to_remove));
+    }
+
+    cleanup_new_unused_sstables_on_failure.cancel();
+    // By marking input sstables for deletion instead, the ones which require view building will stay in the staging
+    // directory until they're moved to the main dir when the time comes. Also, that allows view building to resume
+    // on restart if there's a crash midway.
+    for (auto& sst : sstables_to_remove) {
+        sst->mark_for_deletion();
+    }
+
+    tlogger.info("Done with off-strategy compaction for {}.{}", _schema->ks_name(), _schema->cf_name());
+}
+
 void table::set_compaction_strategy(sstables::compaction_strategy_type strategy) {
     tlogger.debug("Setting compaction strategy of {}.{} to {}", _schema->ks_name(), _schema->cf_name(), sstables::compaction_strategy::name(strategy));
     auto new_cs = make_compaction_strategy(strategy, _schema->compaction_strategy_options());
@@ -897,7 +1034,7 @@ void table::set_compaction_strategy(sstables::compaction_strategy_type strategy)
     _compaction_strategy.get_backlog_tracker().transfer_ongoing_charges(new_cs.get_backlog_tracker(), move_read_charges);
 
     auto new_sstables = new_cs.make_sstable_set(_schema);
-    _sstables->for_each_sstable([&] (const sstables::shared_sstable& s) {
+    _main_sstables->for_each_sstable([&] (const sstables::shared_sstable& s) {
         add_sstable_to_backlog_tracker(new_cs.get_backlog_tracker(), s);
         new_sstables.insert(s);
     });
@@ -908,7 +1045,8 @@ void table::set_compaction_strategy(sstables::compaction_strategy_type strategy)
 
     // now exception safe:
     _compaction_strategy = std::move(new_cs);
-    _sstables = std::move(new_sstables);
+    _main_sstables = std::move(new_sstables);
+    refresh_compound_sstable_set();
 }
 
 size_t table::sstables_count() const {
@@ -959,7 +1097,8 @@ future<std::unordered_set<sstring>> table::get_sstables_by_partition_key(const s
 }
 
 const sstables::sstable_set& table::get_sstable_set() const {
-    return *_sstables;
+    // main sstables is enough for the outside world. sstables in other set like maintenance is not needed even for expiration purposes in compaction
+    return *_main_sstables;
 }
 
 lw_shared_ptr<const sstable_list> table::get_sstables() const {
@@ -970,8 +1109,8 @@ std::vector<sstables::shared_sstable> table::select_sstables(const dht::partitio
     return _sstables->select(range);
 }
 
-std::vector<sstables::shared_sstable> table::non_staging_sstables() const {
-    auto sstables = get_sstables();
+std::vector<sstables::shared_sstable> table::in_strategy_sstables() const {
+    auto sstables = _main_sstables->all();
     return boost::copy_range<std::vector<sstables::shared_sstable>>(*sstables
             | boost::adaptors::filtered([this] (auto& sst) {
         return !_sstables_staging.contains(sst->generation());
@@ -1025,7 +1164,9 @@ table::table(schema_ptr schema, config config, db::commitlog* cl, compaction_man
                         )
     , _memtables(_config.enable_disk_writes ? make_memtable_list() : make_memory_only_memtable_list())
     , _compaction_strategy(make_compaction_strategy(_schema->compaction_strategy(), _schema->compaction_strategy_options()))
-    , _sstables(make_lw_shared<sstables::sstable_set>(_compaction_strategy.make_sstable_set(_schema)))
+    , _main_sstables(make_lw_shared<sstables::sstable_set>(_compaction_strategy.make_sstable_set(_schema)))
+    , _maintenance_sstables(make_maintenance_sstable_set())
+    , _sstables(make_compound_sstable_set())
     , _cache(_schema, sstables_as_snapshot_source(), row_cache_tracker, is_continuous::yes)
     , _commitlog(cl)
     , _durable_writes(true)
@@ -1347,7 +1488,11 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
     struct pruner {
         column_family& cf;
         db::replay_position rp;
-        std::vector<sstables::shared_sstable> remove;
+        struct removed_sstable {
+            sstables::shared_sstable sst;
+            ::enable_backlog_tracker enable_backlog_tracker;
+        };
+        std::vector<removed_sstable> remove;
 
         pruner(column_family& cf)
             : cf(cf) {}
@@ -1356,17 +1501,26 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
             auto gc_trunc = to_gc_clock(truncated_at);
 
             auto pruned = make_lw_shared<sstables::sstable_set>(cf._compaction_strategy.make_sstable_set(cf._schema));
+            auto maintenance_pruned = cf.make_maintenance_sstable_set();
 
-            cf._sstables->for_each_sstable([&] (const sstables::shared_sstable& p) mutable {
-                if (p->max_data_age() <= gc_trunc) {
-                    rp = std::max(p->get_stats_metadata().position, rp);
-                    remove.emplace_back(p);
-                    return;
-                }
-                pruned->insert(p);
-            });
+            auto prune = [this, &gc_trunc] (lw_shared_ptr<sstables::sstable_set>& pruned,
+                                            lw_shared_ptr<sstables::sstable_set>& pruning,
+                                            ::enable_backlog_tracker enable_backlog_tracker) mutable {
+                pruning->for_each_sstable([&] (const sstables::shared_sstable& p) mutable {
+                    if (p->max_data_age() <= gc_trunc) {
+                        rp = std::max(p->get_stats_metadata().position, rp);
+                        remove.emplace_back(removed_sstable{p, enable_backlog_tracker});
+                        return;
+                    }
+                    pruned->insert(p);
+                });
+            };
+            prune(pruned, cf._main_sstables, enable_backlog_tracker::yes);
+            prune(maintenance_pruned, cf._maintenance_sstables, enable_backlog_tracker::no);
 
-            cf._sstables = std::move(pruned);
+            cf._main_sstables = std::move(pruned);
+            cf._maintenance_sstables = std::move(maintenance_pruned);
+            cf.refresh_compound_sstable_set();
         }
     };
     auto p = make_lw_shared<pruner>(*this);
@@ -1376,9 +1530,11 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
     })).then([this, p]() mutable {
         rebuild_statistics();
 
-        return parallel_for_each(p->remove, [this](sstables::shared_sstable s) {
-            remove_sstable_from_backlog_tracker(_compaction_strategy.get_backlog_tracker(), s);
-            return sstables::delete_atomically({s});
+        return parallel_for_each(p->remove, [this](pruner::removed_sstable& r) {
+            if (r.enable_backlog_tracker) {
+                remove_sstable_from_backlog_tracker(_compaction_strategy.get_backlog_tracker(), r.sst);
+            }
+            return sstables::delete_atomically({r.sst});
         }).then([p] {
             return make_ready_future<db::replay_position>(p->rp);
         });
@@ -1885,10 +2041,14 @@ table::make_reader_excluding_sstables(schema_ptr s,
         readers.emplace_back(mt->make_flat_reader(s, permit, range, slice, pc, trace_state, fwd, fwd_mr));
     }
 
-    auto effective_sstables = ::make_lw_shared<sstables::sstable_set>(*_sstables);
-    for (auto& sst : excluded) {
-        effective_sstables->erase(sst);
-    }
+    auto excluded_ssts = boost::copy_range<std::unordered_set<sstables::shared_sstable>>(excluded);
+    auto effective_sstables = make_lw_shared(_compaction_strategy.make_sstable_set(_schema));
+    _sstables->for_each_sstable([&excluded_ssts, &effective_sstables] (const sstables::shared_sstable& sst) mutable {
+        if (excluded_ssts.contains(sst)) {
+            return;
+        }
+        effective_sstables->insert(sst);
+    });
 
     readers.emplace_back(make_sstable_reader(s, permit, std::move(effective_sstables), range, slice, pc, std::move(trace_state), fwd, fwd_mr));
     return make_combined_reader(s, std::move(permit), std::move(readers), fwd, fwd_mr);
@@ -1896,13 +2056,17 @@ table::make_reader_excluding_sstables(schema_ptr s,
 
 future<> table::move_sstables_from_staging(std::vector<sstables::shared_sstable> sstables) {
     return with_semaphore(_sstable_deletion_sem, 1, [this, sstables = std::move(sstables)] {
-        return do_with(std::set<sstring>({dir()}), std::move(sstables), [this] (std::set<sstring>& dirs_to_sync, std::vector<sstables::shared_sstable>& sstables) {
-            return do_for_each(sstables, [this, &dirs_to_sync] (sstables::shared_sstable sst) {
+        return do_with(std::set<sstring>({dir()}), std::move(sstables), _main_sstables->all(),
+                       [this] (std::set<sstring>& dirs_to_sync, std::vector<sstables::shared_sstable>& sstables, lw_shared_ptr<sstable_list>& main_sstables) {
+            return do_for_each(sstables, [this, &dirs_to_sync, &main_sstables] (sstables::shared_sstable sst) {
                 dirs_to_sync.emplace(sst->get_dir());
-                return sst->move_to_new_dir(dir(), sst->generation(), false).then_wrapped([this, sst, &dirs_to_sync] (future<> f) {
+                return sst->move_to_new_dir(dir(), sst->generation(), false).then_wrapped([this, sst, &dirs_to_sync, &main_sstables] (future<> f) {
                     if (!f.failed()) {
                         _sstables_staging.erase(sst->generation());
-                        add_sstable_to_backlog_tracker(_compaction_strategy.get_backlog_tracker(), sst);
+                        // Maintenance SSTables being moved from staging shouldn't be added to tracker because they're off-strategy
+                        if (main_sstables->contains(sst)) {
+                            add_sstable_to_backlog_tracker(_compaction_strategy.get_backlog_tracker(), sst);
+                        }
                         return make_ready_future<>();
                     } else {
                         auto ep = f.get_exception();
