@@ -136,3 +136,19 @@ template <typename... Args>
 void communicate(Args&&... args) {
     return communicate_until([]() { return false; }, std::forward<Args>(args)...);
 }
+
+template <typename... Args>
+raft::fsm* select_leader(Args&&... args) {
+    raft::fsm* leader = nullptr;
+    auto assign_leader = [&leader](raft::fsm& fsm) {
+        if (fsm.is_leader()) {
+            leader = &fsm;
+            return false;
+        }
+        return true;
+    };
+    (assign_leader(args) && ...);
+    BOOST_CHECK(leader);
+    return leader;
+}
+
