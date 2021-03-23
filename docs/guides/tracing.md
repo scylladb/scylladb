@@ -187,6 +187,82 @@ CREATE TABLE system_traces.node_slow_log (
 * `table_names`: a list of tables used for this query, where applicable
 * `username`: a user name used for authentication with this query
 
+### Lightweight (fast) slow queries logging mode
+
+#### The motivation
+
+Natural desire is to run database with slow query tracing mode always enabled.
+But the implementation can't detect early if the request will be slow before
+it got processed so it has to record all the tracing events before making
+a decision. Recording all the tracing events with all of its parameters during
+the request execution implies sufficient overhead. This lightweight mode or
+fast slow queries tracing mode offers a solution to this problem allowing
+low-overhead slow queries tracing.
+
+#### The solution
+
+The "fast slow query logging" is a ScyllaDB feature mode that is going to
+ease the debugging related to the long requests even further. It minimizes
+the tracing session related overhead to its minimum allowing it to be always
+enabled.
+
+In a nutshell, this mode tracks only CQL statement and related request
+parameters. It effectively omits all the tracing events during the processing.
+
+When enabled, it will work in the same way `slow query tracing` does besides
+that it will omit recording all the tracing events. So that it will not
+populate data to the `system_traces.events` table but it will populate
+trace session records for slow queries to all the rest: `system_traces.sessions`,
+`system_traces.node_slow_log`, etc.
+
+Other tracing modes work as usual with that mode enabled.
+
+#### How to enable and configure
+
+By default fast slow query logging is disabled.
+
+There is a REST API that allows configuring and querying the current
+configuration of this feature.
+
+To request current state of the tracing run:
+
+    $ curl http://<node address>:10000/storage_service/slow_query
+
+    {"enable": false, "ttl": 86400, "threshold": 500000, "fast": false}
+
+To enable fast slow query tracing run:
+
+    $ curl --request POST --header "Content-Type: application/json" --header "Accept: application/json" "http://<node address>:10000/storage_service/slow_query?enable=true&fast=true"
+
+Normal slow query tracing can be enabled with:
+
+    $ curl --request POST --header "Content-Type: application/json" --header "Accept: application/json" "http://<node address>:10000/storage_service/slow_query?enable=true&fast=false"
+
+#### Implementation details
+
+Implementation introduces `tracing._ignore_trace_events` flag inside
+of the global sharded `tracing` service to track current tracing state.
+REST API calls `tracing.set_ignore_trace_events()` to modify its value.
+
+`tracing.create_session` verifies if the `trace_state` is not a `full_tracing`
+request and `tracing._ignore_trace_events` is enabled than we can commit
+into omitting all the unnecessary data during tracing session. 
+
+Tracing session tracks tracing state by the means of `trace_state_props::ignore_events`
+that is kept in `trace_state._state_props`. In its turn `tracing::make_trace_info`
+does not create `trace_info` objects to prevent tracing of sub-events
+if tracing session has `trace_state_props::ignore_events` mode enabled.
+
+#### Performance
+
+We have found out that the fast slow queries tracing implies about 10 times
+less overhead on the requests processing than the normal slow query tracing
+in the best case hot path (100% cache hit rate prepared statements reads
+of a single row on 100% util shard).
+
+In real production workloads we expect the effects to be almost completely
+invisible.
+
 ### How to get query traces?
 Each query tracing session gets a unique ID - `session_id`, which serves as a partition key for `system_traces.sessions` and `system_traces.events` tables.
 
