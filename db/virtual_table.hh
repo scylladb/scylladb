@@ -22,6 +22,7 @@
 #pragma once
 
 #include "mutation_reader.hh"
+#include "memtable.hh"
 #include "schema.hh"
 #include "database_fwd.hh"
 
@@ -54,5 +55,17 @@ public:
 
     void set_database(database& db) { _db = &db; }
 };
+
+// Produces results by filling a memtable on each read.
+// Use when the amount of data is not significant relative to shard's memory size.
+class memtable_filling_virtual_table : public virtual_table {
+public:
+    using virtual_table::virtual_table;
+
+    virtual future<> execute(std::function<void(mutation)> mutation_sink, db::timeout_clock::time_point timeout) { return make_ready_future<>(); }
+
+    mutation_source as_mutation_source() override;
+};
+
 
 }
