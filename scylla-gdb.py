@@ -151,6 +151,41 @@ class intrusive_set:
             yield n
 
 
+class intrusive_btree:
+    def __init__(self, ref):
+        container_type = ref.type.strip_typedefs()
+        self.tree = ref
+        self.leaf_node_flag = gdb.parse_and_eval('intrusive_b::node_base::NODE_LEAF')
+        self.key_type = container_type.template_argument(0)
+
+    def __visit_node_base(self, base, kids):
+        for i in range(0, base['num_keys']):
+            if kids:
+                for r in self.__visit_node(kids[i]):
+                    yield r
+
+            yield base['keys'][i].cast(self.key_type.pointer()).dereference()
+
+        if kids:
+            for r in self.__visit_node(kids[base['num_keys']]):
+                yield r
+
+    def __visit_node(self, node):
+        base = node['_base']
+        kids = node['_kids'] if not base['flags'] & self.leaf_node_flag else None
+
+        for r in self.__visit_node_base(base, kids):
+            yield r
+
+    def __iter__(self):
+        if self.tree['_root']:
+            for r in self.__visit_node(self.tree['_root']):
+                yield r
+        else:
+            for r in self.__visit_node_base(self.tree['_inline'], None):
+                yield r
+
+
 class double_decker:
     def __init__(self, ref):
         self.tree = ref['_tree']
@@ -598,7 +633,11 @@ class mutation_partition_printer(gdb.printing.PrettyPrinter):
         self.val = val
 
     def __rows(self):
-        return intrusive_set_external_comparator(self.val['_rows'])
+        try:
+            return intrusive_btree(self.val['_rows'])
+        except gdb.error:
+            # Compatibility, rows were stored in intrusive set
+            return intrusive_set_external_comparator(self.val['_rows'])
 
     def to_string(self):
         rows = list(str(r) for r in self.__rows())
