@@ -151,6 +151,19 @@ class intrusive_set:
             yield n
 
 
+class compact_radix_tree:
+    def __init__(self, ref):
+        self.root = ref['_root']['_v']
+
+    def to_string(self):
+        if self.root['_base_layout'] == 0:
+            return '<empty>'
+
+        # Compiler optimizes-away lots of critical stuff, so
+        # for now just show where the tree is
+        return 'compact radix tree @ 0x%x' % self.root
+
+
 class intrusive_btree:
     def __init__(self, ref):
         container_type = ref.type.strip_typedefs()
@@ -657,7 +670,7 @@ class row_printer(gdb.printing.PrettyPrinter):
     def __init__(self, val):
         self.val = val
 
-    def to_string(self):
+    def __to_string_legacy(self):
         if self.val['_type'] == gdb.parse_and_eval('row::storage_type::vector'):
             cells = str(self.val['_storage']['vector'])
         elif self.val['_type'] == gdb.parse_and_eval('row::storage_type::set'):
@@ -665,6 +678,12 @@ class row_printer(gdb.printing.PrettyPrinter):
         else:
             raise Exception('Unsupported storage type: ' + self.val['_type'])
         return '{type=%s, cells=%s}' % (self.val['_type'], cells)
+
+    def to_string(self):
+        try:
+            return '{cells=[%s]}' % compact_radix_tree(self.val['_cells']).to_string()
+        except gdb.error:
+            return self.__to_string_legacy()
 
     def display_hint(self):
         return 'row'
