@@ -1393,6 +1393,7 @@ void db::commitlog::segment_manager::flush_segments(uint64_t size_to_remove) {
 future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager::allocate_segment_ex(descriptor d, sstring filename, open_flags flags) {
     file_open_options opt;
     opt.extent_allocation_size_hint = max_size;
+    opt.append_is_unlikely = true;
 
     file f;
     std::exception_ptr ep;
