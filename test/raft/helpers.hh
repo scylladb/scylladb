@@ -92,6 +92,9 @@ raft::fsm_config fsm_cfg{.append_request_threshold = 1, .enable_prevoting = fals
 class fsm_debug : public raft::fsm {
 public:
     using raft::fsm::fsm;
+    void become_follower(server_id leader) {
+        raft::fsm::become_follower(leader);
+    }
     const raft::follower_progress& get_progress(server_id id) {
         raft::follower_progress* progress = leader_state().tracker.find(id);
         return *progress;
