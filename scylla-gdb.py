@@ -597,8 +597,11 @@ class mutation_partition_printer(gdb.printing.PrettyPrinter):
     def __init__(self, val):
         self.val = val
 
+    def __rows(self):
+        return intrusive_set_external_comparator(self.val['_rows'])
+
     def to_string(self):
-        rows = list(str(r) for r in intrusive_set_external_comparator(self.val['_rows']))
+        rows = list(str(r) for r in self.__rows())
         range_tombstones = list(str(r) for r in intrusive_set(self.val['_row_tombstones']['_tombstones']))
         return '{_tombstone=%s, _static_row=%s (cont=%s), _row_tombstones=[%s], _rows=[%s]}' % (
             self.val['_tombstone'],
