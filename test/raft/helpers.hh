@@ -52,6 +52,13 @@ void election_timeout(raft::fsm& fsm) {
     }
 }
 
+void make_candidate(raft::fsm& fsm) {
+    assert(fsm.is_follower());
+    // NOTE: single node skips candidate state
+    while (fsm.is_follower()) {
+        fsm.tick();
+    }
+}
 
 struct trivial_failure_detector: public raft::failure_detector {
     bool is_alive(raft::server_id from) override {
