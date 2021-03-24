@@ -112,6 +112,25 @@ public:
     }
 };
 
+// NOTE: it doesn't compare data contents, just the data type
+bool compare_log_entry(raft::log_entry_ptr le1, raft::log_entry_ptr le2) {
+    if (le1->term != le2->term || le1->idx != le2->idx || le1->data.index() != le2->data.index()) {
+        return false;
+    }
+    return true;
+}
+
+bool compare_log_entries(raft::log& log1, raft::log& log2, size_t from, size_t to) {
+    assert(to <= log1.last_idx());
+    assert(to <= log2.last_idx());
+    for (size_t i = from; i <= to; ++i) {
+        if (!compare_log_entry(log1[i], log2[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
 using raft_routing_map = std::unordered_map<raft::server_id, raft::fsm*>;
 
 void
