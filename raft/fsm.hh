@@ -286,6 +286,10 @@ protected: // For testing
         return std::get<leader>(_state);
     }
 
+    log& get_log() {
+        return _log;
+    }
+
 public:
     explicit fsm(server_id id, term_t current_term, server_id voted_for, log log,
             failure_detector& failure_detector, fsm_config conf);

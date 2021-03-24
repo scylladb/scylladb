@@ -100,6 +100,9 @@ public:
         raft::follower_progress* progress = leader_state().tracker.find(id);
         return *progress;
     }
+    raft::log& get_log() {
+        return raft::fsm::get_log();
+    }
 };
 
 using raft_routing_map = std::unordered_map<raft::server_id, raft::fsm*>;
