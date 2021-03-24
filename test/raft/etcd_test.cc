@@ -38,6 +38,7 @@
 #include "test/raft/helpers.hh"
 
 // TestProgressLeader
+// Checks a leader's own progress is updated correctly as entries are added.
 BOOST_AUTO_TEST_CASE(test_progress_leader) {
 
     server_id id1{utils::UUID(0, 1)}, id2{utils::UUID(0, 2)};
@@ -45,7 +46,7 @@ BOOST_AUTO_TEST_CASE(test_progress_leader) {
     raft::configuration cfg({id1, id2});                 // 2 nodes
     raft::log log{raft::snapshot{.config = cfg}};
 
-    raft::fsm fsm(id1, term_t{}, server_id{}, std::move(log), trivial_failure_detector, fsm_cfg);
+    fsm_debug fsm(id1, term_t{}, server_id{}, std::move(log), trivial_failure_detector, fsm_cfg);
 
     election_timeout(fsm);
     BOOST_CHECK(fsm.is_candidate());
@@ -55,7 +56,19 @@ BOOST_AUTO_TEST_CASE(test_progress_leader) {
     fsm.step(id2, raft::vote_reply{output.term_and_vote->first, true});
     BOOST_CHECK(fsm.is_leader());
 
-    for (int i = 0; i < 30; ++i) {
+    // Dummy entry local
+    output = fsm.get_output();
+    BOOST_CHECK(output.log_entries.size() == 1);
+    BOOST_CHECK(std::holds_alternative<raft::log_entry::dummy>(output.log_entries[0]->data));
+
+    const raft::follower_progress& fprogress = fsm.get_progress(id1);
+
+    for (int i = 0; i < 5; ++i) {
+        // NOTE: in etcd leader's own progress seems to be PIPELINE
+        BOOST_CHECK(fprogress.state == raft::follower_progress::state::PROBE);
+        BOOST_CHECK(fprogress.match_idx == i + 1);
+        BOOST_CHECK(fprogress.next_idx == i + 2);
+
         raft::command cmd = create_command(i + 1);
         raft::log_entry le = fsm.add_entry(std::move(cmd));
 
