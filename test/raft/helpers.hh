@@ -34,7 +34,7 @@
 
 #include "raft/fsm.hh"
 
-using raft::term_t, raft::index_t, raft::server_id, raft::log_entry;
+using raft::term_t, raft::index_t, raft::server_id, raft::log_entry, raft::server_address_set;
 using seastar::make_lw_shared;
 
 void election_threshold(raft::fsm& fsm) {
@@ -52,6 +52,13 @@ void election_timeout(raft::fsm& fsm) {
     }
 }
 
+void make_candidate(raft::fsm& fsm) {
+    assert(fsm.is_follower());
+    // NOTE: single node skips candidate state
+    while (fsm.is_follower()) {
+        fsm.tick();
+    }
+}
 
 struct trivial_failure_detector: public raft::failure_detector {
     bool is_alive(raft::server_id from) override {
@@ -88,15 +95,41 @@ raft::command create_command(T val) {
 }
 
 raft::fsm_config fsm_cfg{.append_request_threshold = 1, .enable_prevoting = false};
+raft::fsm_config fsm_cfg_pre{.append_request_threshold = 1, .enable_prevoting = true};
 
 class fsm_debug : public raft::fsm {
 public:
     using raft::fsm::fsm;
+    void become_follower(server_id leader) {
+        raft::fsm::become_follower(leader);
+    }
     const raft::follower_progress& get_progress(server_id id) {
         raft::follower_progress* progress = leader_state().tracker.find(id);
         return *progress;
     }
+    raft::log& get_log() {
+        return raft::fsm::get_log();
+    }
 };
+
+// NOTE: it doesn't compare data contents, just the data type
+bool compare_log_entry(raft::log_entry_ptr le1, raft::log_entry_ptr le2) {
+    if (le1->term != le2->term || le1->idx != le2->idx || le1->data.index() != le2->data.index()) {
+        return false;
+    }
+    return true;
+}
+
+bool compare_log_entries(raft::log& log1, raft::log& log2, size_t from, size_t to) {
+    assert(to <= log1.last_idx());
+    assert(to <= log2.last_idx());
+    for (size_t i = from; i <= to; ++i) {
+        if (!compare_log_entry(log1[i], log2[i])) {
+            return false;
+        }
+    }
+    return true;
+}
 
 using raft_routing_map = std::unordered_map<raft::server_id, raft::fsm*>;
 

@@ -238,8 +238,6 @@ private:
 
     void become_candidate(bool is_prevote, bool is_leadership_transfer = false);
 
-    void become_follower(server_id leader);
-
     // Controls whether the follower has been responsive recently,
     // so it makes sense to send more data to it.
     bool can_send_to(const follower_progress& progress);
@@ -277,12 +275,19 @@ private:
 
     void send_timeout_now(server_id);
 protected: // For testing
+
+    void become_follower(server_id leader);
+
     leader& leader_state() {
         return std::get<leader>(_state);
     }
 
     const leader& leader_state() const {
         return std::get<leader>(_state);
+    }
+
+    log& get_log() {
+        return _log;
     }
 
 public:
