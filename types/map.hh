@@ -53,7 +53,7 @@ public:
     virtual bool is_compatible_with_frozen(const collection_type_impl& previous) const override;
     virtual bool is_value_compatible_with_frozen(const collection_type_impl& previous) const override;
     static int32_t compare_maps(data_type keys_comparator, data_type values_comparator,
-                        bytes_view o1, bytes_view o2);
+                        managed_bytes_view o1, managed_bytes_view o2);
     using abstract_type::deserialize;
     using collection_type_impl::deserialize;
     template <FragmentedView View> data_value deserialize(View v, cql_serialization_format sf) const;

@@ -334,7 +334,8 @@ static sstring to_json_string_aux(const set_type_impl& t, bytes_view bv) {
     bool first = true;
     auto sf = cql_serialization_format::internal();
     out << '[';
-    std::for_each(llpdi::begin(bv, sf), llpdi::end(bv, sf), [&first, &out, &t] (bytes_view e) {
+    managed_bytes_view mbv(bv);
+    std::for_each(llpdi::begin(mbv, sf), llpdi::end(mbv, sf), [&first, &out, &t] (const managed_bytes_view& e) {
         if (first) {
             first = false;
         } else {
@@ -352,7 +353,8 @@ static sstring to_json_string_aux(const list_type_impl& t, bytes_view bv) {
     bool first = true;
     auto sf = cql_serialization_format::internal();
     out << '[';
-    std::for_each(llpdi::begin(bv, sf), llpdi::end(bv, sf), [&first, &out, &t] (bytes_view e) {
+    managed_bytes_view mbv(bv);
+    std::for_each(llpdi::begin(mbv, sf), llpdi::end(mbv, sf), [&first, &out, &t] (const managed_bytes_view& e) {
         if (first) {
             first = false;
         } else {

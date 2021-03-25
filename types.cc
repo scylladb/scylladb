@@ -150,7 +150,7 @@ static const char* empty_type_name     = "org.apache.cassandra.db.marshal.EmptyT
 template<typename T>
 struct simple_type_traits {
     static constexpr size_t serialized_size = sizeof(T);
-    static T read_nonempty(bytes_view v) {
+    static T read_nonempty(managed_bytes_view v) {
         return read_simple_exactly<T>(v);
     }
 };
@@ -158,7 +158,7 @@ struct simple_type_traits {
 template<>
 struct simple_type_traits<bool> {
     static constexpr size_t serialized_size = 1;
-    static bool read_nonempty(bytes_view v) {
+    static bool read_nonempty(managed_bytes_view v) {
         return read_simple_exactly<int8_t>(v) != 0;
     }
 };
@@ -166,7 +166,7 @@ struct simple_type_traits<bool> {
 template<>
 struct simple_type_traits<db_clock::time_point> {
     static constexpr size_t serialized_size = sizeof(uint64_t);
-    static db_clock::time_point read_nonempty(bytes_view v) {
+    static db_clock::time_point read_nonempty(managed_bytes_view v) {
         return db_clock::time_point(db_clock::duration(read_simple_exactly<int64_t>(v)));
     }
 };
@@ -438,7 +438,7 @@ template <> struct int_of_size<float> :
 template <typename T>
 struct float_type_traits {
     static constexpr size_t serialized_size = sizeof(typename int_of_size<T>::itype);
-    static double read_nonempty(bytes_view v) {
+    static double read_nonempty(managed_bytes_view v) {
         union {
             T d;
             typename int_of_size<T>::itype i;
@@ -1032,7 +1032,7 @@ map_type_impl::is_value_compatible_with_frozen(const collection_type_impl& previ
 }
 
 int32_t
-map_type_impl::compare_maps(data_type keys, data_type values, bytes_view o1, bytes_view o2) {
+map_type_impl::compare_maps(data_type keys, data_type values, managed_bytes_view o1, managed_bytes_view o2) {
     if (o1.empty()) {
         return o2.empty() ? 0 : -1;
     } else if (o2.empty()) {
@@ -2043,7 +2043,7 @@ template data_value abstract_type::deserialize_impl<>(single_fragmented_view) co
 template data_value abstract_type::deserialize_impl<>(ser::buffer_view<bytes_ostream::fragment_iterator>) const;
 template data_value abstract_type::deserialize_impl<>(managed_bytes_view) const;
 
-int32_t compare_aux(const tuple_type_impl& t, bytes_view v1, bytes_view v2) {
+int32_t compare_aux(const tuple_type_impl& t, const managed_bytes_view& v1, const managed_bytes_view& v2) {
     // This is a slight modification of lexicographical_tri_compare:
     // when the only difference between the tuples is that one of them has additional trailing nulls,
     // we consider them equal. For example, in the following CQL scenario:
@@ -2097,8 +2097,8 @@ int32_t compare_aux(const tuple_type_impl& t, bytes_view v1, bytes_view v2) {
 
 namespace {
 struct compare_visitor {
-    bytes_view v1;
-    bytes_view v2;
+    managed_bytes_view v1;
+    managed_bytes_view v2;
     template <typename T> int32_t operator()(const simple_type_impl<T>&) {
         if (v1.empty()) {
             return v2.empty() ? 0 : -1;
@@ -2125,14 +2125,18 @@ struct compare_visitor {
         if (v2.empty()) {
             return 1;
         }
-        return utils::timeuuid_tri_compare(v1, v2);
+        return with_linearized(v1, [&] (bytes_view v1) {
+            return with_linearized(v2, [&] (bytes_view v2) {
+                return utils::timeuuid_tri_compare(v1, v2);
+            });
+        });
     }
     int32_t operator()(const listlike_collection_type_impl& l) {
         using llpdi = listlike_partial_deserializing_iterator;
         auto sf = cql_serialization_format::internal();
         return lexicographical_tri_compare(llpdi::begin(v1, sf), llpdi::end(v1, sf), llpdi::begin(v2, sf),
                 llpdi::end(v2, sf),
-                [&] (bytes_view o1, bytes_view o2) { return l.get_elements_type()->compare(o1, o2); });
+                [&] (const managed_bytes_view& o1, const managed_bytes_view& o2) { return l.get_elements_type()->compare(o1, o2); });
     }
     int32_t operator()(const map_type_impl& m) {
         return map_type_impl::compare_maps(m.get_keys_type(), m.get_values_type(), v1, v2);
@@ -2153,7 +2157,11 @@ struct compare_visitor {
         }
 
         if (c1 == 1) {
-            return utils::uuid_tri_compare_timeuuid(v1, v2);
+            return with_linearized(v1, [&] (bytes_view v1) {
+                return with_linearized(v2, [&] (bytes_view v2) {
+                    return utils::uuid_tri_compare_timeuuid(v1, v2);
+                });
+            });
         }
         return compare_unsigned(v1, v2);
     }
@@ -2218,20 +2226,15 @@ struct compare_visitor {
 }
 
 int32_t abstract_type::compare(bytes_view v1, bytes_view v2) const {
+    return compare(managed_bytes_view(v1), managed_bytes_view(v2));
+}
+
+int32_t abstract_type::compare(managed_bytes_view v1, managed_bytes_view v2) const {
     try {
         return visit(*this, compare_visitor{v1, v2});
     } catch (const marshal_exception&) {
         on_types_internal_error(std::current_exception());
     }
-}
-
-int32_t abstract_type::compare(managed_bytes_view v1, managed_bytes_view v2) const {
-    // FIXME: don't linearize
-    return with_linearized(v1, [&] (bytes_view v1) {
-        return with_linearized(v2, [&] (bytes_view v2) {
-            return compare(v1, v2);
-        });
-    });
 }
 
 bool abstract_type::equal(bytes_view v1, bytes_view v2) const {
@@ -2244,11 +2247,11 @@ bool abstract_type::equal(bytes_view v1, bytes_view v2) const {
 }
 
 bool abstract_type::equal(managed_bytes_view v1, managed_bytes_view v2) const {
-    // FIXME: don't linearize
-    return with_linearized(v1, [&] (bytes_view v1) {
-        return with_linearized(v2, [&] (bytes_view v2) {
-            return equal(v1, v2);
-        });
+    return ::visit(*this, [&](const auto& t) {
+        if (is_byte_order_equal_visitor{}(t)) {
+            return compare_unsigned(v1, v2) == 0;
+        }
+        return compare_visitor{v1, v2}(t) == 0;
     });
 }
 
