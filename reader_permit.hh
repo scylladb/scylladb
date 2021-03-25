@@ -21,6 +21,7 @@
 
 #pragma once
 
+#include <seastar/util/optimized_optional.hh>
 #include "seastarx.hh"
 
 #include "db/timeout_clock.hh"
@@ -105,11 +106,16 @@ private:
     shared_ptr<impl> _impl;
 
 private:
+    reader_permit() = default;
     explicit reader_permit(reader_concurrency_semaphore& semaphore, const schema* const schema, std::string_view op_name);
     explicit reader_permit(reader_concurrency_semaphore& semaphore, const schema* const schema, sstring&& op_name);
 
     void on_waiting();
     void on_admission();
+
+    operator bool() const { return bool(_impl); }
+
+    friend class optimized_optional<reader_permit>;
 
 public:
     ~reader_permit();
@@ -140,6 +146,8 @@ public:
 
     sstring description() const;
 };
+
+using reader_permit_opt = optimized_optional<reader_permit>;
 
 class reader_permit::resource_units {
     reader_permit _permit;
