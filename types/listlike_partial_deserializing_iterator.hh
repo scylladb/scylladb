@@ -29,10 +29,19 @@ int read_collection_size(bytes_view& in, cql_serialization_format sf);
 bytes_view read_collection_value(bytes_view& in, cql_serialization_format sf);
 
 template <FragmentedView View>
-int read_collection_size(View& in, cql_serialization_format);
+int read_collection_size(View& in, cql_serialization_format sf) {
+    if (sf.using_32_bits_for_collections()) {
+        return read_simple<int32_t>(in);
+    } else {
+        return read_simple<uint16_t>(in);
+    }
+}
 
 template <FragmentedView View>
-View read_collection_value(View& in, cql_serialization_format);
+View read_collection_value(View& in, cql_serialization_format sf) {
+    auto size = sf.using_32_bits_for_collections() ? read_simple<int32_t>(in) : read_simple<uint16_t>(in);
+    return read_simple_bytes(in, size);
+}
 
 // iterator that takes a set or list in serialized form, and emits
 // each element, still in serialized form
