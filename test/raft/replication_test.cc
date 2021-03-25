@@ -192,8 +192,7 @@ private:
 public:
     sm_value value;
     state_machine(raft::server_id id, apply_fn apply, sm_value value_, size_t apply_entries,
-            lw_shared_ptr<snapshots> snapshots,
-            lw_shared_ptr<persisted_snapshots> persisted_snapshots) :
+            lw_shared_ptr<snapshots> snapshots):
         _id(id), _apply(std::move(apply)), _apply_entries(apply_entries), _snapshots(snapshots),
         value(std::move(value_)) {}
     future<> apply(const std::vector<raft::command_cref> commands) override {
@@ -384,7 +383,7 @@ create_raft_server(raft::server_id uuid, state_machine::apply_fn apply, initial_
     sm_value val = (type == sm_type::HASH) ? sm_value(std::make_unique<hasher_int>()) : sm_value(std::make_unique<sum_sm>());
 
     auto sm = std::make_unique<state_machine>(uuid, std::move(apply), std::move(val),
-            apply_entries, snapshots, persisted_snapshots);
+            apply_entries, snapshots);
     auto& rsm = *sm;
     auto mrpc = std::make_unique<rpc>(uuid, connected, snapshots, packet_drops);
     auto mpersistence = std::make_unique<persistence>(uuid, state, snapshots, persisted_snapshots);
