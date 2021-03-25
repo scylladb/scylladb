@@ -132,11 +132,10 @@ public:
         // Next call will start from the next mutation_fragment in the stream.
         future<> consume_pausable(Consumer consumer, db::timeout_clock::time_point timeout) {
             return repeat([this, consumer = std::move(consumer), timeout] () mutable {
-                if (is_end_of_stream() && is_buffer_empty()) {
-                    return make_ready_future<stop_iteration>(stop_iteration::yes);
-                }
-
                 if (is_buffer_empty()) {
+                    if (is_end_of_stream()) {
+                        return make_ready_future<stop_iteration>(stop_iteration::yes);
+                    }
                     return fill_buffer(timeout).then([] {
                         return make_ready_future<stop_iteration>(stop_iteration::no);
                     });
