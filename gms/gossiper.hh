@@ -572,6 +572,10 @@ public:
     bool is_seed(const inet_address& endpoint) const;
     bool is_shutdown(const inet_address& endpoint) const;
     bool is_normal(const inet_address& endpoint) const;
+    // Check if a node is in NORMAL or SHUTDOWN status which means the node is
+    // part of the token ring from the gossip point of view and operates in
+    // normal status or was in normal status but is shutdown.
+    bool is_normal_ring_member(const inet_address& endpoint) const;
     bool is_cql_ready(const inet_address& endpoint) const;
     bool is_silent_shutdown_state(const endpoint_state& ep_state) const;
     void mark_as_shutdown(const inet_address& endpoint);
