@@ -2097,10 +2097,10 @@ void storage_service::flush_column_families() {
 
 future<> storage_service::drain() {
     return run_with_api_lock(sstring("drain"), [] (storage_service& ss) {
-            if (ss._operation_mode == mode::DRAINED) {
-                slogger.warn("Cannot drain node (did it already happen?)");
-                return make_ready_future<>();
-            }
+        if (ss._operation_mode == mode::DRAINED) {
+            slogger.warn("Cannot drain node (did it already happen?)");
+            return make_ready_future<>();
+        }
 
         ss.set_mode(mode::DRAINING, "starting drain process", true);
         return ss.do_drain(false).then([&ss] {
@@ -2111,33 +2111,31 @@ future<> storage_service::drain() {
 }
 
 future<> storage_service::do_drain(bool on_shutdown) {
-    return seastar::async([&ss = *this, on_shutdown] {
-            ss.stop_transport().get();
+    return seastar::async([this, on_shutdown] {
+        stop_transport().get();
 
-            tracing::tracing::tracing_instance().invoke_on_all(&tracing::tracing::shutdown).get();
+        tracing::tracing::tracing_instance().invoke_on_all(&tracing::tracing::shutdown).get();
 
-            if (!on_shutdown) {
-
+        if (!on_shutdown) {
             // Interrupt on going compaction and shutdown to prevent further compaction
-            ss.db().invoke_on_all([] (auto& db) {
+            db().invoke_on_all([] (auto& db) {
                 return db.get_compaction_manager().drain();
             }).get();
+        }
 
-            }
+        set_mode(mode::DRAINING, "flushing column families", false);
+        flush_column_families();
 
-            ss.set_mode(mode::DRAINING, "flushing column families", false);
-            ss.flush_column_families();
+        db::get_batchlog_manager().invoke_on_all([] (auto& bm) {
+            return bm.stop();
+        }).get();
 
-            db::get_batchlog_manager().invoke_on_all([] (auto& bm) {
-                return bm.stop();
-            }).get();
+        set_mode(mode::DRAINING, "shutting down migration manager", false);
+        service::get_migration_manager().invoke_on_all(&service::migration_manager::stop).get();
 
-            ss.set_mode(mode::DRAINING, "shutting down migration manager", false);
-            service::get_migration_manager().invoke_on_all(&service::migration_manager::stop).get();
-
-            ss.db().invoke_on_all([] (auto& db) {
-                return db.commitlog()->shutdown();
-            }).get();
+        db().invoke_on_all([] (auto& db) {
+            return db.commitlog()->shutdown();
+        }).get();
     });
 }
 
