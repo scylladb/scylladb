@@ -92,10 +92,12 @@ class reader_permit {
 
 public:
     class resource_units;
+    class used_guard;
 
     enum class state {
         waiting, // waiting for admission
-        active,
+        active_unused,
+        active_used,
         inactive,
         evicted,
     };
@@ -112,6 +114,10 @@ private:
 
     void on_waiting();
     void on_admission();
+
+    void mark_used() noexcept;
+
+    void mark_unused() noexcept;
 
     operator bool() const { return bool(_impl); }
 
@@ -167,6 +173,30 @@ public:
     void reset(reader_resources res = {});
     reader_permit permit() const { return _permit; }
     reader_resources resources() const { return _resources; }
+};
+
+/// Mark a permit as used.
+///
+/// Conceptually, a permit is considered used, when at least one reader
+/// associated with it has an ongoing foreground operation initiated by
+/// its consumer. E.g. a pending `fill_buffer()` call.
+/// This class is an RAII used marker meant to be used by keeping it alive
+/// until the reader is used.
+class reader_permit::used_guard {
+    reader_permit_opt _permit;
+public:
+    explicit used_guard(reader_permit permit) noexcept : _permit(std::move(permit)) {
+        _permit->mark_used();
+    }
+    used_guard(used_guard&&) noexcept = default;
+    used_guard(const used_guard&) = delete;
+    ~used_guard() {
+        if (_permit) {
+            _permit->mark_unused();
+        }
+    }
+    used_guard& operator=(used_guard&&) = delete;
+    used_guard& operator=(const used_guard&) = delete;
 };
 
 template <typename Char>

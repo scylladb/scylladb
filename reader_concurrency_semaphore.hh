@@ -84,6 +84,8 @@ public:
         uint64_t total_permits = 0;
         // Current number of permits.
         uint64_t current_permits = 0;
+        // Current number of used permits.
+        uint64_t used_permits = 0;
     };
 
     struct permit_list;
@@ -196,6 +198,9 @@ private:
 
     void on_permit_created(reader_permit::impl&);
     void on_permit_destroyed(reader_permit::impl&) noexcept;
+
+    void on_permit_used() noexcept;
+    void on_permit_unused() noexcept;
 
     std::runtime_error stopped_exception();
 
