@@ -139,7 +139,13 @@ public:
     }
 
     void on_unregister_as_inactive() {
+        assert(_state == reader_permit::state::inactive);
         _state = reader_permit::state::active;
+    }
+
+    void on_evicted() {
+        assert(_state == reader_permit::state::inactive);
+        _state = reader_permit::state::evicted;
     }
 
     void consume(reader_resources res) {
@@ -234,6 +240,9 @@ std::ostream& operator<<(std::ostream& os, reader_permit::state s) {
             break;
         case reader_permit::state::inactive:
             os << "inactive";
+            break;
+        case reader_permit::state::evicted:
+            os << "evicted";
             break;
     }
     return os;
@@ -416,6 +425,7 @@ reader_concurrency_semaphore::~reader_concurrency_semaphore() {
 
 reader_concurrency_semaphore::inactive_read_handle reader_concurrency_semaphore::register_inactive_read(flat_mutation_reader reader) noexcept {
     auto& permit_impl = *reader.permit()._impl;
+    permit_impl.on_register_as_inactive();
     // Implies _inactive_reads.empty(), we don't queue new readers before
     // evicting all inactive reads.
     // Checking the _wait_list covers the count resources only, so check memory
@@ -426,7 +436,6 @@ reader_concurrency_semaphore::inactive_read_handle reader_concurrency_semaphore:
         auto& ir = *irp;
         _inactive_reads.push_back(ir);
         ++_stats.inactive_reads;
-        permit_impl.on_register_as_inactive();
         return inactive_read_handle(*this, *irp.release());
       } catch (...) {
         // It is okay to swallow the exception since
@@ -437,6 +446,7 @@ reader_concurrency_semaphore::inactive_read_handle reader_concurrency_semaphore:
         rcslog.warn("Registering inactive read failed: {}. Ignored as if it was evicted.", std::current_exception());
       }
     } else {
+        permit_impl.on_evicted();
         ++_stats.permit_based_evictions;
     }
     close_reader(std::move(reader));
@@ -515,6 +525,7 @@ future<> reader_concurrency_semaphore::stop() noexcept {
 flat_mutation_reader reader_concurrency_semaphore::detach_inactive_reader(inactive_read& ir, evict_reason reason) noexcept {
     auto reader = std::move(ir.reader);
     ir.detach();
+    reader.permit()._impl->on_evicted();
     std::unique_ptr<inactive_read> irp(&ir);
     try {
         if (ir.notify_handler) {
