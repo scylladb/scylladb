@@ -673,25 +673,28 @@ std::vector<managed_bytes_opt> first_multicolumn_bound(
 }
 
 template<typename T>
-nonwrapping_range<T> to_range(oper_t op, const T& val) {
+nonwrapping_range<std::remove_cvref_t<T>> to_range(oper_t op, T&& val) {
+    using U = std::remove_cvref_t<T>;
     static constexpr bool inclusive = true, exclusive = false;
     switch (op) {
     case oper_t::EQ:
-        return nonwrapping_range<T>::make_singular(val);
+        return nonwrapping_range<U>::make_singular(std::forward<T>(val));
     case oper_t::GT:
-        return nonwrapping_range<T>::make_starting_with(interval_bound(val, exclusive));
+        return nonwrapping_range<U>::make_starting_with(interval_bound(std::forward<T>(val), exclusive));
     case oper_t::GTE:
-        return nonwrapping_range<T>::make_starting_with(interval_bound(val, inclusive));
+        return nonwrapping_range<U>::make_starting_with(interval_bound(std::forward<T>(val), inclusive));
     case oper_t::LT:
-        return nonwrapping_range<T>::make_ending_with(interval_bound(val, exclusive));
+        return nonwrapping_range<U>::make_ending_with(interval_bound(std::forward<T>(val), exclusive));
     case oper_t::LTE:
-        return nonwrapping_range<T>::make_ending_with(interval_bound(val, inclusive));
+        return nonwrapping_range<U>::make_ending_with(interval_bound(std::forward<T>(val), inclusive));
     default:
         throw std::logic_error(format("to_range: unknown comparison operator {}", op));
     }
 }
 
-template nonwrapping_range<clustering_key_prefix> to_range(oper_t, const clustering_key_prefix&);
+nonwrapping_range<clustering_key_prefix> to_range(oper_t op, const clustering_key_prefix& val) {
+    return to_range<const clustering_key_prefix&>(op, val);
+}
 
 value_set possible_lhs_values(const column_definition* cdef, const expression& expr, const query_options& options) {
     const auto type = cdef ? get_value_comparator(cdef) : long_type.get();
