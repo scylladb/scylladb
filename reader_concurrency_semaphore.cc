@@ -574,11 +574,9 @@ class tracking_file_impl : public file_impl {
 
 public:
     tracking_file_impl(file file, reader_permit permit)
-        : _tracked_file(std::move(file))
+        : file_impl(*get_file_impl(file))
+        , _tracked_file(std::move(file))
         , _permit(std::move(permit)) {
-        _memory_dma_alignment = _tracked_file.memory_dma_alignment();
-        _disk_read_dma_alignment = _tracked_file.disk_read_dma_alignment();
-        _disk_write_dma_alignment = _tracked_file.disk_write_dma_alignment();
     }
 
     tracking_file_impl(const tracking_file_impl&) = delete;

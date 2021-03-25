@@ -27,10 +27,7 @@
 namespace sstables {
 
 integrity_checked_file_impl::integrity_checked_file_impl(sstring fname, file f)
-        : _fname(std::move(fname)), _file(f) {
-    _memory_dma_alignment = f.memory_dma_alignment();
-    _disk_read_dma_alignment = f.disk_read_dma_alignment();
-    _disk_write_dma_alignment = f.disk_write_dma_alignment();
+        : file_impl(*get_file_impl(f)), _fname(std::move(fname)), _file(f) {
 }
 
 static bytes data_sample(const int8_t* buf, size_t buf_len, size_t sample_off, size_t sample_len) {

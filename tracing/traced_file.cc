@@ -53,10 +53,7 @@ public:
 };
 
 traced_file_impl::traced_file_impl(file f, tracing::trace_state_ptr trace_state, sstring trace_prefix)
-        : _f(std::move(f)), _trace_state(std::move(trace_state)), _trace_prefix(std::move(trace_prefix)) {
-    _memory_dma_alignment = _f.memory_dma_alignment();
-    _disk_read_dma_alignment = _f.disk_read_dma_alignment();
-    _disk_write_dma_alignment = _f.disk_write_dma_alignment();
+        : file_impl(*get_file_impl(f)), _f(std::move(f)), _trace_state(std::move(trace_state)), _trace_prefix(std::move(trace_prefix)) {
 }
 
 future<size_t>

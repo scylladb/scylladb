@@ -31,10 +31,7 @@ class checked_file_impl : public file_impl {
 public:
 
     checked_file_impl(const io_error_handler& error_handler, file f)
-            : _error_handler(error_handler), _file(f) {
-        _memory_dma_alignment = f.memory_dma_alignment();
-        _disk_read_dma_alignment = f.disk_read_dma_alignment();
-        _disk_write_dma_alignment = f.disk_write_dma_alignment();
+            : file_impl(*get_file_impl(f)),  _error_handler(error_handler), _file(f) {
     }
 
     virtual future<size_t> write_dma(uint64_t pos, const void* buffer, size_t len, const io_priority_class& pc) override {
