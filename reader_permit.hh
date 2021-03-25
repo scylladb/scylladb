@@ -81,12 +81,9 @@ class reader_concurrency_semaphore;
 
 /// A permit for a specific read.
 ///
-/// Used to track the read's resource consumption and wait for admission to read
-/// from the disk.
-/// Use `consume_memory()` to register memory usage. Use `wait_admission()` to
-/// wait for admission, before reading from the disk. Both methods return a
-/// `resource_units` RAII object that should be held onto while the respective
-/// resources are in use.
+/// Used to track the read's resource consumption. Use `consume_memory()` to
+/// register memory usage, which returns a `resource_units` RAII object that
+/// should be held onto while the respective resources are in use.
 class reader_permit {
     friend class reader_concurrency_semaphore;
 

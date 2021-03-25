@@ -790,6 +790,10 @@ bool reader_concurrency_semaphore::has_available_units(const resources& r) const
     return (bool(_resources) && _resources >= r) || _resources.count == _initial_resources.count;
 }
 
+bool reader_concurrency_semaphore::all_used_permits_are_stalled() const {
+    return _permit_list->stats.used_permits == _permit_list->stats.blocked_permits;
+}
+
 std::exception_ptr reader_concurrency_semaphore::check_queue_size(std::string_view queue_name) {
     if ((_wait_list.size() + _ready_list.size()) >= _max_queue_length) {
         _stats.total_reads_shed_due_to_overload++;
@@ -827,27 +831,31 @@ future<> reader_concurrency_semaphore::do_wait_admission(reader_permit permit, d
     if (!_execution_loop_future) {
         _execution_loop_future.emplace(execution_loop());
     }
-    auto first = _wait_list.empty() && _ready_list.empty();
+    if (!_wait_list.empty() || !_ready_list.empty()) {
+        return enqueue_waiter(std::move(permit), timeout, std::move(func));
+    }
 
-    if (first && has_available_units(permit.base_resources())) {
-        permit.on_admission();
-        if (func) {
-            return with_ready_permit(std::move(permit), std::move(func));
+    if (!has_available_units(permit.base_resources())) {
+        auto fut = enqueue_waiter(std::move(permit), timeout, std::move(func));
+        if (!_inactive_reads.empty()) {
+            evict_readers_in_background();
         }
-        return make_ready_future<>();
+        return fut;
     }
 
-    auto fut = enqueue_waiter(std::move(permit), timeout, std::move(func));
-
-    if (first && !_inactive_reads.empty()) {
-        evict_readers_in_background();
+    if (!all_used_permits_are_stalled()) {
+        return enqueue_waiter(std::move(permit), timeout, std::move(func));
     }
 
-    return fut;
+    permit.on_admission();
+    if (func) {
+        return with_ready_permit(std::move(permit), std::move(func));
+    }
+    return make_ready_future<>();
 }
 
 void reader_concurrency_semaphore::maybe_admit_waiters() noexcept {
-    while (!_wait_list.empty() && _ready_list.empty() && has_available_units(_wait_list.front().permit.base_resources())) {
+    while (!_wait_list.empty() && _ready_list.empty() && has_available_units(_wait_list.front().permit.base_resources()) && all_used_permits_are_stalled()) {
         auto& x = _wait_list.front();
         try {
             x.permit.on_admission();
@@ -888,11 +896,13 @@ void reader_concurrency_semaphore::on_permit_unused() noexcept {
     assert(_permit_list->stats.used_permits);
     --_permit_list->stats.used_permits;
     assert(_permit_list->stats.used_permits >= _permit_list->stats.blocked_permits);
+    maybe_admit_waiters();
 }
 
 void reader_concurrency_semaphore::on_permit_blocked() noexcept {
     ++_permit_list->stats.blocked_permits;
     assert(_permit_list->stats.used_permits >= _permit_list->stats.blocked_permits);
+    maybe_admit_waiters();
 }
 
 void reader_concurrency_semaphore::on_permit_unblocked() noexcept {

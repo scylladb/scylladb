@@ -832,26 +832,15 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering) {
             return less(a.decorated_key(), b.decorated_key());
         });
 
-        auto permit = sem.obtain_permit_nowait(schema.get(), get_name(), new_reader_base_cost, db::no_timeout).get0();
+        auto permit = sem.obtain_permit(schema.get(), get_name(), new_reader_base_cost, db::no_timeout).get0();
 
         auto mt = make_lw_shared<memtable>(schema);
         for (const auto& mut : muts) {
             mt->apply(mut);
         }
 
-        auto ms = mutation_source([mt] (
-                    schema_ptr s,
-                    reader_permit permit,
-                    const dht::partition_range& pr,
-                    const query::partition_slice& ps,
-                    const io_priority_class& pc,
-                    tracing::trace_state_ptr ts,
-                    streamed_mutation::forwarding fwd_ms,
-                    mutation_reader::forwarding fwd_mr) {
-            return make_restricted_flat_reader(mt->as_data_source(), s, std::move(permit), pr, ps, pc, std::move(ts), fwd_ms, fwd_mr);
-        });
         auto p = make_manually_paused_evictable_reader(
-                std::move(ms),
+                mt->as_data_source(),
                 schema,
                 permit,
                 query::full_partition_range,

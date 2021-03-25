@@ -117,7 +117,7 @@ table::make_sstable_reader(schema_ptr s,
         }
     }();
 
-    return make_restricted_flat_reader(std::move(ms), std::move(s), std::move(permit), pr, slice, pc, std::move(trace_state), fwd, fwd_mr);
+    return ms.make_reader(std::move(s), std::move(permit), pr, slice, pc, std::move(trace_state), fwd, fwd_mr);
 }
 
 lw_shared_ptr<sstables::sstable_set> table::make_compound_sstable_set() {

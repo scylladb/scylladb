@@ -103,7 +103,7 @@ public:
         return *_contexts[shard]->semaphore;
     }
     virtual future<reader_permit> obtain_reader_permit(schema_ptr schema, const char* const description, db::timeout_clock::time_point timeout) override {
-        return semaphore().obtain_permit_nowait(schema.get(), description, 128 * 1024, timeout);
+        return semaphore().obtain_permit(schema.get(), description, 128 * 1024, timeout);
     }
 };
 

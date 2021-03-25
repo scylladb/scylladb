@@ -83,7 +83,7 @@ future<> view_update_generator::start() {
                                 tracing::trace_state_ptr ts,
                                 streamed_mutation::forwarding fwd_ms,
                                 mutation_reader::forwarding fwd_mr) {
-                        return make_restricted_range_sstable_reader(std::move(ssts), s, std::move(permit), pr, ps, pc, std::move(ts), fwd_ms, fwd_mr);
+                        return ssts->make_range_sstable_reader(s, std::move(permit), pr, ps, pc, std::move(ts), fwd_ms, fwd_mr);
                     });
                     auto [staging_sstable_reader, staging_sstable_reader_handle] = make_manually_paused_evictable_reader(
                             std::move(ms),

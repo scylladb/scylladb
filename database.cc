@@ -1420,13 +1420,22 @@ database::query(schema_ptr s, const query::read_command& cmd, query::result_opti
         querier_opt = _querier_cache.lookup_data_querier(cmd.query_uuid, *s, ranges.front(), cmd.slice, trace_state);
     }
 
-    auto permit = querier_opt ? querier_opt->permit() : semaphore.make_permit(s.get(), "data-query");
+    auto read_func = [&, this] (reader_permit permit) {
+        reader_permit::used_guard ug{permit};
+        return cf.query(std::move(s), std::move(permit), cmd, class_config, opts, ranges, trace_state, get_result_memory_limiter(),
+                timeout, &querier_opt).then([&result, ug = std::move(ug)] (lw_shared_ptr<query::result> res) {
+            result = std::move(res);
+        });
+    };
 
     try {
         auto op = cf.read_in_progress();
 
-        result = co_await _data_query_stage(&cf, std::move(s), std::move(permit), seastar::cref(cmd), class_config, opts, seastar::cref(ranges),
-                std::move(trace_state), seastar::ref(get_result_memory_limiter()), timeout, &querier_opt);
+        if (querier_opt) {
+            co_await semaphore.with_ready_permit(querier_opt->permit(), read_func);
+        } else {
+            co_await semaphore.with_permit(s.get(), "data-query", cf.estimate_read_memory_cost(), timeout, read_func);
+        }
 
         if (cmd.query_uuid != utils::UUID{} && querier_opt) {
             _querier_cache.insert(cmd.query_uuid, std::move(*querier_opt), std::move(trace_state));
@@ -1466,13 +1475,22 @@ database::query_mutations(schema_ptr s, const query::read_command& cmd, const dh
         querier_opt = _querier_cache.lookup_mutation_querier(cmd.query_uuid, *s, range, cmd.slice, trace_state);
     }
 
-    auto permit = querier_opt ? querier_opt->permit() : semaphore.make_permit(s.get(), "mutation-query");
+    auto read_func = [&, this] (reader_permit permit) {
+        reader_permit::used_guard ug{permit};
+        return cf.mutation_query(std::move(s), std::move(permit), cmd, class_config, range,
+                std::move(trace_state), std::move(accounter), timeout, &querier_opt).then([&result, ug = std::move(ug)] (reconcilable_result res) {
+            result = std::move(res);
+        });
+    };
 
     try {
         auto op = cf.read_in_progress();
 
-        result = co_await _mutation_query_stage(&cf, std::move(s), std::move(permit), seastar::cref(cmd), class_config, seastar::cref(range),
-            std::move(trace_state), std::move(accounter), timeout, &querier_opt);
+        if (querier_opt) {
+            co_await semaphore.with_ready_permit(querier_opt->permit(), read_func);
+        } else {
+            co_await semaphore.with_permit(s.get(), "mutation-query", cf.estimate_read_memory_cost(), timeout, read_func);
+        }
 
         if (cmd.query_uuid != utils::UUID{} && querier_opt) {
             _querier_cache.insert(cmd.query_uuid, std::move(*querier_opt), std::move(trace_state));
@@ -1595,7 +1613,7 @@ reader_concurrency_semaphore& database::get_reader_concurrency_semaphore() {
 }
 
 future<reader_permit> database::obtain_reader_permit(table& tbl, const char* const op_name, db::timeout_clock::time_point timeout) {
-    return get_reader_concurrency_semaphore().obtain_permit_nowait(tbl.schema().get(), op_name, tbl.estimate_read_memory_cost(), timeout);
+    return get_reader_concurrency_semaphore().obtain_permit(tbl.schema().get(), op_name, tbl.estimate_read_memory_cost(), timeout);
 }
 
 future<reader_permit> database::obtain_reader_permit(schema_ptr schema, const char* const op_name, db::timeout_clock::time_point timeout) {

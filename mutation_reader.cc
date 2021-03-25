@@ -1264,6 +1264,7 @@ future<flat_mutation_reader> evictable_reader::resume_or_create_reader(db::timeo
     if (auto reader_opt = try_resume()) {
         co_return std::move(*reader_opt);
     }
+    co_await _permit.maybe_wait_readmission(timeout);
     co_return recreate_reader();
 }
 

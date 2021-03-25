@@ -89,7 +89,7 @@ mutation_source memtable_filling_virtual_table::as_mutation_source() {
             };
 
             return execute(mutation_sink, timeout).then([this, mt, s, units, &range, &slice, &pc, &trace_state, &fwd, &fwd_mr] () {
-                auto rd = make_restricted_flat_reader(mt->as_data_source(), s, units->units.permit(), range, slice, pc, trace_state, fwd, fwd_mr);
+                auto rd = mt->as_data_source().make_reader(s, units->units.permit(), range, slice, pc, trace_state, fwd, fwd_mr);
 
                 if (!_shard_aware) {
                     rd = make_filtering_reader(std::move(rd), [this] (const dht::decorated_key& dk) -> bool {
