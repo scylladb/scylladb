@@ -141,6 +141,10 @@ public:
                     });
                 }
 
+                if constexpr (std::is_same_v<future<stop_iteration>, decltype(consumer(pop_mutation_fragment()))>) {
+                    return consumer(pop_mutation_fragment());
+                }
+
                 return futurize_invoke([&consumer, mf = pop_mutation_fragment()] () mutable {
                     return consumer(std::move(mf));
                 });
