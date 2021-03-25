@@ -86,6 +86,8 @@ public:
         uint64_t current_permits = 0;
         // Current number of used permits.
         uint64_t used_permits = 0;
+        // Current number of blocked permits.
+        uint64_t blocked_permits = 0;
     };
 
     struct permit_list;
@@ -201,6 +203,9 @@ private:
 
     void on_permit_used() noexcept;
     void on_permit_unused() noexcept;
+
+    void on_permit_blocked() noexcept;
+    void on_permit_unblocked() noexcept;
 
     std::runtime_error stopped_exception();
 
