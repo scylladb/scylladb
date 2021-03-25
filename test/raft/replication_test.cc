@@ -149,27 +149,6 @@ public:
     }
 };
 
-class sum_sm : public sm_value_impl {
-    int64_t _sum ;
-public:
-    sum_sm(int64_t sum = 0) : _sum(sum) {}
-    void update(int val) noexcept override {
-        _sum += val;
-    }
-    static sm_value value_for(int max) {
-        return sm_value(std::make_unique<sum_sm>(((max - 1) * max)/2));
-    }
-    int64_t get_value() noexcept override {
-        return _sum;
-    }
-    std::unique_ptr<sm_value_impl> copy() const override {
-        return std::make_unique<sum_sm>(_sum);
-    }
-    bool eq(sm_value_impl* o) noexcept override {
-        return true;
-    }
-};
-
 struct snapshot_value {
     sm_value value;
     raft::index_t idx;
@@ -371,16 +350,11 @@ public:
 
 std::unordered_map<raft::server_id, rpc*> rpc::net;
 
-enum class sm_type {
-    HASH,
-    SUM
-};
-
 std::pair<std::unique_ptr<raft::server>, state_machine*>
 create_raft_server(raft::server_id uuid, state_machine::apply_fn apply, initial_state state,
-        size_t apply_entries, sm_type type, connected connected, lw_shared_ptr<snapshots> snapshots,
+        size_t apply_entries, connected connected, lw_shared_ptr<snapshots> snapshots,
         lw_shared_ptr<persisted_snapshots> persisted_snapshots, bool packet_drops) {
-    sm_value val = (type == sm_type::HASH) ? sm_value(std::make_unique<hasher_int>()) : sm_value(std::make_unique<sum_sm>());
+    sm_value val = sm_value(std::make_unique<hasher_int>());
 
     auto sm = std::make_unique<state_machine>(uuid, std::move(apply), std::move(val),
             apply_entries, snapshots);
@@ -395,7 +369,7 @@ create_raft_server(raft::server_id uuid, state_machine::apply_fn apply, initial_
     return std::make_pair(std::move(raft), &rsm);
 }
 
-future<std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>> create_cluster(std::vector<initial_state> states, state_machine::apply_fn apply, size_t apply_entries, sm_type type,
+future<std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>> create_cluster(std::vector<initial_state> states, state_machine::apply_fn apply, size_t apply_entries,
         connected connected, lw_shared_ptr<snapshots> snapshots,
         lw_shared_ptr<persisted_snapshots> persisted_snapshots, bool packet_drops) {
     raft::configuration config;
@@ -411,7 +385,7 @@ future<std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>> cr
         states[i].snapshot.config = config;
         (*snapshots)[s.id] = states[i].snp_value;
         auto& raft = *rafts.emplace_back(create_raft_server(s.id, apply, states[i], apply_entries,
-                    type, connected, snapshots, persisted_snapshots, packet_drops)).first;
+                    connected, snapshots, persisted_snapshots, packet_drops)).first;
         co_await raft.start();
     }
 
@@ -483,7 +457,6 @@ struct initial_snapshot {
 };
 
 struct test_case {
-    const sm_type type = sm_type::HASH;
     const size_t nodes;
     const size_t total_values = 100;
     uint64_t initial_term = 1;
@@ -540,7 +513,7 @@ future<> run_test(test_case test, bool packet_drops) {
     }
 
     auto sm_value_for = [&] (int max) {
-        return test.type == sm_type::HASH ? hasher_int::value_for(max) : sum_sm::value_for(max);
+        return hasher_int::value_for(max);
     };
 
     // Server initial logs, etc
@@ -567,8 +540,8 @@ future<> run_test(test_case test, bool packet_drops) {
     auto persisted_snaps = make_lw_shared<persisted_snapshots>();
     connected connected{};
 
-    auto rafts = co_await create_cluster(states, apply_changes, test.total_values, test.type,
-            connected, snaps, persisted_snaps, packet_drops);
+    auto rafts = co_await create_cluster(states, apply_changes, test.total_values, connected,
+            snaps, persisted_snaps, packet_drops);
 
     // Tickers for servers
     std::vector<seastar::timer<lowres_clock>> tickers(test.nodes);
@@ -851,7 +824,7 @@ RAFT_TEST_CASE(take_snapshot, (test_case{
 
 // 2 nodes doing simple replication/snapshoting while leader's log size is limited
 RAFT_TEST_CASE(backpressure, (test_case{
-         .type = sm_type::SUM, .nodes = 2,
+         .nodes = 2,
          .config = {{.snapshot_threshold = 10, .snapshot_trailing = 5, .max_log_size = 20}, {.snapshot_threshold = 20, .snapshot_trailing = 10}},
          .updates = {entries{100}}}));
 
