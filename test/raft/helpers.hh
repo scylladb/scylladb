@@ -34,7 +34,7 @@
 
 #include "raft/fsm.hh"
 
-using raft::term_t, raft::index_t, raft::server_id, raft::log_entry;
+using raft::term_t, raft::index_t, raft::server_id, raft::log_entry, raft::server_address_set;
 using seastar::make_lw_shared;
 
 void election_threshold(raft::fsm& fsm) {
