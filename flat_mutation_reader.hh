@@ -131,8 +131,7 @@ public:
         // Stops when consumer returns stop_iteration::yes or end of stream is reached.
         // Next call will start from the next mutation_fragment in the stream.
         future<> consume_pausable(Consumer consumer, db::timeout_clock::time_point timeout) {
-            return do_with(std::move(consumer), [this, timeout] (Consumer& consumer) {
-                return repeat([this, &consumer, timeout] {
+                return repeat([this, consumer = std::move(consumer), timeout] () mutable {
                     if (is_end_of_stream() && is_buffer_empty()) {
                         return make_ready_future<stop_iteration>(stop_iteration::yes);
                     }
@@ -147,7 +146,6 @@ public:
                         return consumer(std::move(mf));
                     });
                 });
-            });
         }
 
         template<typename Consumer, typename Filter>
