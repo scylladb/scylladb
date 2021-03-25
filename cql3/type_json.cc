@@ -29,6 +29,7 @@
 #include "types/tuple.hh"
 #include "types/user.hh"
 #include "types/listlike_partial_deserializing_iterator.hh"
+#include "utils/managed_bytes.hh"
 
 static inline bool is_control_char(char c) {
     return c >= 0 && c <= 0x1F;
@@ -475,4 +476,8 @@ struct to_json_string_visitor {
 
 sstring to_json_string(const abstract_type& t, bytes_view bv) {
     return visit(t, to_json_string_visitor{bv});
+}
+
+sstring to_json_string(const abstract_type& t, const managed_bytes_view& mbv) {
+    return visit(t, to_json_string_visitor{linearized(mbv)});
 }

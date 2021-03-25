@@ -75,3 +75,4 @@ constexpr size_t max_udt_fields = std::numeric_limits<int16_t>::max();
 // Refer to collection_mutation.hh for a detailed description on how the serialized indices are used inside mutations.
 bytes serialize_field_index(size_t);
 size_t deserialize_field_index(const bytes_view&);
+size_t deserialize_field_index(managed_bytes_view);

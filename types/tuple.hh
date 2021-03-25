@@ -30,31 +30,31 @@
 struct tuple_deserializing_iterator {
 public:
     using iterator_category = std::input_iterator_tag;
-    using value_type = const bytes_view_opt;
+    using value_type = const managed_bytes_view_opt;
     using difference_type = std::ptrdiff_t;
-    using pointer = const bytes_view_opt*;
-    using reference = const bytes_view_opt&;
+    using pointer = const managed_bytes_view_opt*;
+    using reference = const managed_bytes_view_opt&;
 private:
-    bytes_view _v;
-    bytes_view_opt _current;
+    managed_bytes_view _v;
+    managed_bytes_view_opt _current;
 public:
     struct end_tag {};
-    tuple_deserializing_iterator(bytes_view v) : _v(v) {
+    tuple_deserializing_iterator(managed_bytes_view v) : _v(v) {
         parse();
     }
-    tuple_deserializing_iterator(end_tag, bytes_view v) : _v(v) {
+    tuple_deserializing_iterator(end_tag, managed_bytes_view v) : _v(v) {
         _v.remove_prefix(_v.size());
     }
-    static tuple_deserializing_iterator start(bytes_view v) {
+    static tuple_deserializing_iterator start(managed_bytes_view v) {
         return tuple_deserializing_iterator(v);
     }
-    static tuple_deserializing_iterator finish(bytes_view v) {
+    static tuple_deserializing_iterator finish(managed_bytes_view v) {
         return tuple_deserializing_iterator(end_tag(), v);
     }
-    const bytes_view_opt& operator*() const {
+    const managed_bytes_view_opt& operator*() const {
         return _current;
     }
-    const bytes_view_opt* operator->() const {
+    const managed_bytes_view_opt* operator->() const {
         return &_current;
     }
     tuple_deserializing_iterator& operator++() {
@@ -106,7 +106,7 @@ class tuple_type_impl : public concrete_type<std::vector<data_value>> {
     using intern = type_interning_helper<tuple_type_impl, std::vector<data_type>>;
 protected:
     std::vector<data_type> _types;
-    static boost::iterator_range<tuple_deserializing_iterator> make_range(bytes_view v) {
+    static boost::iterator_range<tuple_deserializing_iterator> make_range(managed_bytes_view v) {
         return { tuple_deserializing_iterator::start(v), tuple_deserializing_iterator::finish(v) };
     }
     tuple_type_impl(kind k, sstring name, std::vector<data_type> types, bool freeze_inner);
@@ -135,7 +135,7 @@ public:
         }
         return elements;
     }
-    template <typename RangeOf_bytes_opt>  // also accepts bytes_view_opt
+    template <typename RangeOf_bytes_opt>  // also accepts managed_bytes_view_opt
     static bytes build_value(RangeOf_bytes_opt&& range) {
         auto item_size = [] (auto&& v) { return 4 + (v ? v->size() : 0); };
         auto size = boost::accumulate(range | boost::adaptors::transformed(item_size), 0);
@@ -143,8 +143,16 @@ public:
         auto out = ret.begin();
         auto put = [&out] (auto&& v) {
             if (v) {
-                write(out, int32_t(v->size()));
-                out = std::copy(v->begin(), v->end(), out);
+                using val_type = std::remove_cvref_t<decltype(*v)>;
+                if constexpr (FragmentedView<val_type>) {
+                    int32_t size = v->size_bytes();
+                    write(out, size);
+                    read_fragmented(*v, size, out);
+                    out += size;
+                } else {
+                    write(out, int32_t(v->size()));
+                    out = std::copy(v->begin(), v->end(), out);
+                }
             } else {
                 write(out, int32_t(-1));
             }

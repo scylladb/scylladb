@@ -53,6 +53,8 @@
 #include "utils/date.h"
 #include "utils/utf8.hh"
 #include "utils/ascii.hh"
+#include "utils/fragment_range.hh"
+#include "utils/managed_bytes.hh"
 #include "mutation_partition.hh"
 
 #include "types/user.hh"
@@ -3148,6 +3150,11 @@ bytes serialize_field_index(size_t idx) {
 size_t deserialize_field_index(const bytes_view& b) {
     assert(b.size() == sizeof(int16_t));
     return read_be<int16_t>(reinterpret_cast<const char*>(b.data()));
+}
+
+size_t deserialize_field_index(managed_bytes_view b) {
+    assert(b.size_bytes() == sizeof(int16_t));
+    return be_to_cpu(read_simple_native<int16_t>(b));
 }
 
 thread_local const shared_ptr<const abstract_type> byte_type(make_shared<byte_type_impl>());
