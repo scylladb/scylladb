@@ -22,121 +22,124 @@
 #include "test/raft/helpers.hh"
 
 BOOST_AUTO_TEST_CASE(test_votes) {
-    auto id = []() -> raft::server_address { return raft::server_address{utils::make_random_uuid()}; };
     auto id1 = id();
 
     raft::votes votes(raft::configuration({id1}));
     BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::UNKNOWN);
     BOOST_CHECK_EQUAL(votes.voters().size(), 1);
     // Try a vote from an unknown server, it should be ignored.
-    votes.register_vote(id().id, true);
-    votes.register_vote(id1.id, false);
+    votes.register_vote(id(), true);
+    votes.register_vote(id1, false);
     // Quorum votes against the decision
     BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::LOST);
     // Another vote from the same server is ignored
-    votes.register_vote(id1.id, true);
-    votes.register_vote(id1.id, true);
+    votes.register_vote(id1, true);
+    votes.register_vote(id1, true);
     BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::LOST);
     auto id2 = id();
     votes = raft::votes(raft::configuration({id1, id2}));
     BOOST_CHECK_EQUAL(votes.voters().size(), 2);
-    votes.register_vote(id1.id, true);
+    votes.register_vote(id1, true);
     // We need a quorum of participants to win an election
     BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::UNKNOWN);
-    votes.register_vote(id2.id, false);
+    votes.register_vote(id2, false);
     // At this point it's clear we don't have enough votes
     BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::LOST);
     auto id3 = id();
     // Joint configuration
-    votes = raft::votes(raft::configuration({id1}, {id2, id3}));
+    votes = raft::votes(raft::configuration(address_set({id1}), address_set({id2, id3})));
     BOOST_CHECK_EQUAL(votes.voters().size(), 3);
     BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::UNKNOWN);
-    votes.register_vote(id2.id, true);
-    votes.register_vote(id3.id, true);
+    votes.register_vote(id2, true);
+    votes.register_vote(id3, true);
     BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::UNKNOWN);
-    votes.register_vote(id1.id, false);
+    votes.register_vote(id1, false);
     BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::LOST);
-    votes = raft::votes(raft::configuration({id1}, {id2, id3}));
-    votes.register_vote(id2.id, true);
-    votes.register_vote(id3.id, true);
-    votes.register_vote(id1.id, true);
+    votes = raft::votes(raft::configuration(address_set({id1}), address_set({id2, id3})));
+    votes.register_vote(id2, true);
+    votes.register_vote(id3, true);
+    votes.register_vote(id1, true);
     BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::WON);
-    votes = raft::votes(raft::configuration({id1, id2, id3}, {id1}));
+    votes = raft::votes(raft::configuration(address_set({id1, id2, id3}), address_set({id1})));
     BOOST_CHECK_EQUAL(votes.voters().size(), 3);
-    votes.register_vote(id1.id, true);
+    votes.register_vote(id1, true);
     BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::UNKNOWN);
     // This gives us a majority in both new and old
     // configurations.
-    votes.register_vote(id2.id, true);
+    votes.register_vote(id2, true);
     BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::WON);
     // Basic voting test for 4 nodes
     auto id4 = id();
     votes = raft::votes(raft::configuration({id1, id2, id3, id4}));
-    votes.register_vote(id1.id, true);
-    votes.register_vote(id2.id, true);
+    votes.register_vote(id1, true);
+    votes.register_vote(id2, true);
     BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::UNKNOWN);
-    votes.register_vote(id3.id, false);
+    votes.register_vote(id3, false);
     BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::UNKNOWN);
-    votes.register_vote(id4.id, false);
+    votes.register_vote(id4, false);
     BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::LOST);
     auto id5 = id();
     // Basic voting test for 5 nodes
-    votes = raft::votes(raft::configuration({id1, id2, id3, id4, id5}, {id1, id2, id3}));
-    votes.register_vote(id1.id, false);
-    votes.register_vote(id2.id, false);
+    votes = raft::votes(raft::configuration(address_set({id1, id2, id3, id4, id5}),
+            address_set({id1, id2, id3})));
+    votes.register_vote(id1, false);
+    votes.register_vote(id2, false);
     BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::LOST);
-    votes.register_vote(id3.id, true);
-    votes.register_vote(id4.id, true);
-    votes.register_vote(id5.id, true);
+    votes.register_vote(id3, true);
+    votes.register_vote(id4, true);
+    votes.register_vote(id5, true);
     BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::LOST);
     // Basic voting test with tree voters and one no-voter
-    votes = raft::votes(raft::configuration({id1, id2, id3, {id4.id, false}}));
-    votes.register_vote(id1.id, true);
-    votes.register_vote(id2.id, true);
+    votes = raft::votes(raft::configuration({{.id = id1},
+            {.id = id2}, {.id = id3}, {id4, false}}));
+    votes.register_vote(id1, true);
+    votes.register_vote(id2, true);
     BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::WON);
     // Basic test that non-voting votes are ignored
-    votes = raft::votes(raft::configuration({id1, id2, id3, {id4.id, false}}));
-    votes.register_vote(id1.id, true);
-    votes.register_vote(id4.id, true);
+    votes = raft::votes(raft::configuration({{.id = id1},
+            {.id = id2}, {.id = id3}, {id4, false}}));
+    votes.register_vote(id1, true);
+    votes.register_vote(id4, true);
     BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::UNKNOWN);
-    votes.register_vote(id3.id, true);
+    votes.register_vote(id3, true);
     BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::WON);
     // Joint configuration with non voting members
-    votes = raft::votes(raft::configuration({id1}, {id2, id3, {id4.id, false}}));
+    votes = raft::votes(raft::configuration({{.id = id1}},
+            {{.id = id2}, {.id = id3}, {id4, false}}));
     BOOST_CHECK_EQUAL(votes.voters().size(), 3);
     BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::UNKNOWN);
-    votes.register_vote(id2.id, true);
-    votes.register_vote(id3.id, true);
-    votes.register_vote(id4.id, true);
+    votes.register_vote(id2, true);
+    votes.register_vote(id3, true);
+    votes.register_vote(id4, true);
     BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::UNKNOWN);
-    votes.register_vote(id1.id, true);
+    votes.register_vote(id1, true);
     BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::WON);
     // Same node is voting in one config and non voting in another
-    votes = raft::votes(raft::configuration({id1, id4}, {id2, id3, {id4.id, false}}));
-    votes.register_vote(id2.id, true);
-    votes.register_vote(id1.id, true);
-    votes.register_vote(id4.id, true);
+    votes = raft::votes(raft::configuration({{.id = id1}, {.id = id4}},
+            {{.id = id2}, {.id = id3}, {id4.id, false}}));
+    votes.register_vote(id2, true);
+    votes.register_vote(id1, true);
+    votes.register_vote(id4, true);
     BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::UNKNOWN);
-    votes.register_vote(id3.id, true);
+    votes.register_vote(id3, true);
     BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::WON);
 }
 
 BOOST_AUTO_TEST_CASE(test_tracker) {
-    auto id = []() -> raft::server_address { return raft::server_address{utils::make_random_uuid()}; };
     auto id1 = id();
-    raft::tracker tracker(id1.id);
+    raft::tracker tracker(id1);
     raft::configuration cfg({id1});
     tracker.set_configuration(cfg, index_t{1});
-    BOOST_CHECK_NE(tracker.find(id1.id), nullptr);
+    BOOST_CHECK_NE(tracker.find(id1), nullptr);
     // The node with id set during construction is assumed to be
     // the leader, since otherwise we wouldn't create a tracker
     // in the first place.
-    BOOST_CHECK_EQUAL(tracker.find(id1.id), tracker.leader_progress());
+    BOOST_CHECK_EQUAL(tracker.find(id1), tracker.leader_progress());
     BOOST_CHECK_EQUAL(tracker.committed(index_t{0}), index_t{0});
     // Avoid keeping a reference, follower_progress address may
     // change with configuration change
-    auto pr = [&tracker](raft::server_address address) -> raft::follower_progress* {
-        return tracker.find(address.id);
+    auto pr = [&tracker](raft::server_id id) -> raft::follower_progress* {
+        return tracker.find(id);
     };
     BOOST_CHECK_EQUAL(pr(id1)->match_idx, index_t{0});
     BOOST_CHECK_EQUAL(pr(id1)->next_idx, index_t{1});
@@ -160,7 +163,7 @@ BOOST_AUTO_TEST_CASE(test_tracker) {
 
     // Enter joint configuration {A,B,C}
     auto id2 = id(), id3 = id();
-    cfg.enter_joint({id1, id2, id3});
+    cfg.enter_joint(address_set({id1, id2, id3}));
     tracker.set_configuration(cfg, index_t{1});
     BOOST_CHECK_EQUAL(tracker.committed(index_t{10}), index_t{10});
     pr(id2)->accepted(index_t{11});
@@ -178,7 +181,7 @@ BOOST_AUTO_TEST_CASE(test_tracker) {
     BOOST_CHECK_EQUAL(tracker.committed(index_t{13}), index_t{13});
 
     auto id4 = id(), id5 = id();
-    cfg.enter_joint({id3, id4, id5});
+    cfg.enter_joint(address_set({id3, id4, id5}));
     tracker.set_configuration(cfg, index_t{1});
     BOOST_CHECK_EQUAL(tracker.committed(index_t{13}), index_t{13});
     pr(id1)->accepted(index_t{15});
@@ -198,9 +201,9 @@ BOOST_AUTO_TEST_CASE(test_tracker) {
     // Leaving joint configuration commits more entries
     BOOST_CHECK_EQUAL(tracker.committed(index_t{15}), index_t{17});
     //
-    cfg.enter_joint({id1});
+    cfg.enter_joint(address_set({id1}));
     cfg.leave_joint();
-    cfg.enter_joint({id2});
+    cfg.enter_joint(address_set({id2}));
     tracker.set_configuration(cfg, index_t{1});
     // Sic: we're in a weird state. The joint commit index
     // is actually 1, since id2 is at position 1. But in
@@ -218,7 +221,7 @@ BOOST_AUTO_TEST_CASE(test_tracker) {
     BOOST_CHECK_EQUAL(tracker.committed(index_t{18}), index_t{19});
 
     // Check that non voting member is not counted for the quorum in simple config
-    cfg.enter_joint({id1, id2, {id3.id, false}});
+    cfg.enter_joint({{.id = id1}, {.id = id2}, {id3.id, false}});
     cfg.leave_joint();
     tracker.set_configuration(cfg, index_t{1});
     pr(id1)->accepted(index_t{30});
@@ -227,7 +230,7 @@ BOOST_AUTO_TEST_CASE(test_tracker) {
     BOOST_CHECK_EQUAL(tracker.committed(index_t{0}), index_t{25});
 
     // Check that non voting member is not counted for the quorum in joint config
-    cfg.enter_joint({id4, id5});
+    cfg.enter_joint({{.id = id4}, {.id = id5}});
     tracker.set_configuration(cfg, index_t{1});
     pr(id4)->accepted(index_t{30});
     pr(id5)->accepted(index_t{30});
@@ -235,14 +238,14 @@ BOOST_AUTO_TEST_CASE(test_tracker) {
 
     // Check the case where the same node is in both config but different voting rights
     cfg.leave_joint();
-    cfg.enter_joint({id1, id2, {id5.id, false}});
+    cfg.enter_joint({{.id = id1}, {.id = id2}, {id5, false}});
     BOOST_CHECK_EQUAL(tracker.committed(index_t{0}), index_t{25});
 }
 
 BOOST_AUTO_TEST_CASE(test_log_last_conf_idx) {
     // last_conf_idx, prev_conf_idx are initialized correctly,
     // and maintained during truncate head/truncate tail
-    server_id id1{utils::make_random_uuid()};
+    server_id id1 = id();
     raft::configuration cfg({id1});
     raft::log log{raft::snapshot{.config = cfg}};
     BOOST_CHECK_EQUAL(log.last_conf_idx(), 0);
@@ -253,7 +256,7 @@ BOOST_AUTO_TEST_CASE(test_log_last_conf_idx) {
     BOOST_CHECK_EQUAL(log.last_conf_idx(), 3);
     // apply snapshot truncates the log and resets last_conf_idx()
     log.apply_snapshot(log_snapshot(log, log.last_idx()), 0);
-    BOOST_CHECK_EQUAL(log.last_conf_idx(), 0);
+    BOOST_CHECK_EQUAL(log.last_conf_idx(), log.get_snapshot().idx);
     // log::last_term() is maintained correctly by truncate_head/truncate_tail() (snapshotting)
     BOOST_CHECK_EQUAL(log.last_term(), log.get_snapshot().term);
     BOOST_CHECK(log.term_for(log.get_snapshot().idx).has_value());
@@ -282,7 +285,7 @@ BOOST_AUTO_TEST_CASE(test_log_last_conf_idx) {
     BOOST_CHECK_EQUAL(log.in_memory_size(), 3);
     log.apply_snapshot(log_snapshot(log, log.last_idx()), 3);
     BOOST_CHECK_EQUAL(log.in_memory_size(), 3);
-    BOOST_CHECK_EQUAL(log.last_conf_idx(), 0);
+    BOOST_CHECK_EQUAL(log.last_conf_idx(), log.get_snapshot().idx);
     add_entry(log, log_entry::dummy{});
     // Set trailing shorter than the length of the log
     log.apply_snapshot(log_snapshot(log, log.last_idx()), 1);
@@ -291,11 +294,10 @@ BOOST_AUTO_TEST_CASE(test_log_last_conf_idx) {
 
 void test_election_single_node_helper(raft::fsm_config fcfg) {
 
-    failure_detector fd;
-    server_id id1{utils::make_random_uuid()};
+    server_id id1 = id();
     raft::configuration cfg({id1});
     raft::log log{raft::snapshot{.config = cfg}};
-    raft::fsm fsm(id1, term_t{}, server_id{}, std::move(log), fd, fcfg);
+    raft::fsm fsm(id1, term_t{}, server_id{}, std::move(log), trivial_failure_detector, fcfg);
 
     BOOST_CHECK(fsm.is_follower());
 
@@ -311,7 +313,10 @@ void test_election_single_node_helper(raft::fsm_config fcfg) {
     BOOST_CHECK(output.term_and_vote->second);
     BOOST_CHECK(output.messages.empty());
     // A new leader applies one dummy entry
-    BOOST_CHECK(output.log_entries.size() == 1 && std::holds_alternative<raft::log_entry::dummy>(output.log_entries[0]->data));
+    BOOST_CHECK_EQUAL(output.log_entries.size(), 1);
+    if (output.log_entries.size()) {
+        BOOST_CHECK(std::holds_alternative<raft::log_entry::dummy>(output.log_entries[0]->data));
+    }
     BOOST_CHECK(output.committed.empty());
     // The leader does not become candidate simply because
     // a timeout has elapsed, i.e. there are no spurious
@@ -322,8 +327,11 @@ void test_election_single_node_helper(raft::fsm_config fcfg) {
     BOOST_CHECK(!output.term_and_vote);
     BOOST_CHECK(output.messages.empty());
     BOOST_CHECK(output.log_entries.empty());
-    // Dummy entry is now commited
-    BOOST_CHECK(output.committed.size() == 1 && std::holds_alternative<raft::log_entry::dummy>(output.committed[0]->data));
+    // Dummy entry is now committed
+    BOOST_CHECK_EQUAL(output.committed.size(), 1);
+    if (output.committed.size()) {
+        BOOST_CHECK(std::holds_alternative<raft::log_entry::dummy>(output.committed[0]->data));
+    }
 }
 
 BOOST_AUTO_TEST_CASE(test_election_single_node) {
@@ -333,12 +341,11 @@ BOOST_AUTO_TEST_CASE(test_election_single_node) {
 // does not lead to RPC
 BOOST_AUTO_TEST_CASE(test_single_node_is_quiet) {
 
-    failure_detector fd;
-    server_id id1{utils::make_random_uuid()};
+    server_id id1 = id();
     raft::configuration cfg({id1});
     raft::log log{raft::snapshot{.config = cfg}};
 
-    raft::fsm fsm(id1, term_t{}, server_id{}, std::move(log), fd, fsm_cfg);
+    auto fsm = create_follower(id1, std::move(log));
 
     election_timeout(fsm);
 
@@ -358,14 +365,14 @@ BOOST_AUTO_TEST_CASE(test_single_node_is_quiet) {
 
 BOOST_AUTO_TEST_CASE(test_election_two_nodes) {
 
-    failure_detector fd;
+    discrete_failure_detector fd;
 
-    server_id id1{utils::make_random_uuid()}, id2{utils::make_random_uuid()};
+    server_id id1 = id(), id2 = id();
 
     raft::configuration cfg({id1, id2});
     raft::log log{raft::snapshot{.config = cfg}};
 
-    raft::fsm fsm(id1, term_t{}, server_id{}, std::move(log), fd, fsm_cfg);
+    auto fsm = create_follower(id1, std::move(log), fd);
 
     // Initial state is follower
     BOOST_CHECK(fsm.is_follower());
@@ -393,7 +400,7 @@ BOOST_AUTO_TEST_CASE(test_election_two_nodes) {
     BOOST_CHECK(fsm.is_leader());
     // Any message with a newer term after election timeout
     // -> immediately convert to follower
-    fd.alive = false;
+    fd.mark_all_dead();
     election_threshold(fsm);
     // Use current_term + 2 to switch fsm to follower
     // even if it itself switched to a candidate
@@ -428,17 +435,14 @@ BOOST_AUTO_TEST_CASE(test_election_two_nodes) {
 
 BOOST_AUTO_TEST_CASE(test_election_four_nodes) {
 
-    failure_detector fd;
+    discrete_failure_detector fd;
 
-    server_id id1{utils::make_random_uuid()},
-              id2{utils::make_random_uuid()},
-              id3{utils::make_random_uuid()},
-              id4{utils::make_random_uuid()};
+    server_id id1 = id(), id2 = id(), id3 = id(), id4 = id();
 
     raft::configuration cfg({id1, id2, id3, id4});
     raft::log log{raft::snapshot{.config = cfg}};
 
-    raft::fsm fsm(id1, term_t{}, server_id{}, std::move(log), fd, fsm_cfg);
+    auto fsm = create_follower(id1, std::move(log), fd);
 
     // Initial state is follower
     BOOST_CHECK(fsm.is_follower());
@@ -458,7 +462,7 @@ BOOST_AUTO_TEST_CASE(test_election_four_nodes) {
     BOOST_CHECK(!reply.vote_granted);
 
     // Run out of steam for this term. Start a new one.
-    fd.alive = false;
+    fd.mark_all_dead();
     election_timeout(fsm);
     BOOST_CHECK(fsm.is_candidate());
 
@@ -484,14 +488,12 @@ BOOST_AUTO_TEST_CASE(test_election_two_nodes_prevote) {
     auto fcfg = fsm_cfg;
     fcfg.enable_prevoting = true;
 
-    failure_detector fd;
-
-    server_id id1{utils::make_random_uuid()}, id2{utils::make_random_uuid()};
+    server_id id1 = id(), id2 = id();
 
     raft::configuration cfg({id1, id2});
     raft::log log{raft::snapshot{.config = cfg}};
 
-    raft::fsm fsm(id1, term_t{}, server_id{}, std::move(log), fd, fcfg);
+    raft::fsm fsm(id1, term_t{}, server_id{}, std::move(log), trivial_failure_detector, fcfg);
 
     // Initial state is follower
     BOOST_CHECK(fsm.is_follower());
@@ -550,12 +552,9 @@ BOOST_AUTO_TEST_CASE(test_election_four_nodes_prevote) {
     auto fcfg = fsm_cfg;
     fcfg.enable_prevoting = true;
 
-    failure_detector fd;
+    discrete_failure_detector fd;
 
-    server_id id1{utils::make_random_uuid()},
-              id2{utils::make_random_uuid()},
-              id3{utils::make_random_uuid()},
-              id4{utils::make_random_uuid()};
+    server_id id1 = id(), id2 = id(), id3 = id(), id4 = id();
 
     raft::configuration cfg({id1, id2, id3, id4});
     raft::log log{raft::snapshot{.config = cfg}};
@@ -580,7 +579,7 @@ BOOST_AUTO_TEST_CASE(test_election_four_nodes_prevote) {
     BOOST_CHECK(!reply.vote_granted && reply.is_prevote);
 
     // Run out of steam for this term. Start a new one.
-    fd.alive = false;
+    fd.mark_all_dead();
     election_timeout(fsm);
     BOOST_CHECK(fsm.is_candidate() && fsm.is_prevote_candidate());
 
@@ -609,11 +608,7 @@ BOOST_AUTO_TEST_CASE(test_election_four_nodes_prevote) {
 
 BOOST_AUTO_TEST_CASE(test_log_matching_rule) {
 
-    failure_detector fd;
-
-    server_id id1{utils::make_random_uuid()},
-              id2{utils::make_random_uuid()},
-              id3{utils::make_random_uuid()};
+    server_id id1 = id(), id2 = id(), id3 = id();
 
     raft::configuration cfg({id1, id2, id3});
     raft::log log(raft::snapshot{.idx = index_t{999}, .config = cfg});
@@ -621,7 +616,7 @@ BOOST_AUTO_TEST_CASE(test_log_matching_rule) {
     log.emplace_back(seastar::make_lw_shared<raft::log_entry>(raft::log_entry{term_t{10}, index_t{1000}}));
     log.stable_to(log.last_idx());
 
-    raft::fsm fsm(id1, term_t{10}, server_id{}, std::move(log), fd, fsm_cfg);
+    raft::fsm fsm(id1, term_t{10}, server_id{}, std::move(log), trivial_failure_detector, fsm_cfg);
 
     // Initial state is follower
     BOOST_CHECK(fsm.is_follower());
@@ -656,16 +651,12 @@ BOOST_AUTO_TEST_CASE(test_log_matching_rule) {
 
 BOOST_AUTO_TEST_CASE(test_confchange_add_node) {
 
-    failure_detector fd;
-
-    server_id id1{utils::make_random_uuid()},
-              id2{utils::make_random_uuid()},
-              id3{utils::make_random_uuid()};
+    server_id id1 = id(), id2 = id(), id3 = id();
 
     raft::configuration cfg({id1, id2});
     raft::log log(raft::snapshot{.idx = index_t{100}, .config = cfg});
 
-    raft::fsm fsm(id1, term_t{1}, /* voted for */ server_id{}, std::move(log), fd, fsm_cfg);
+    auto fsm = create_follower(id1, std::move(log));
 
     // Initial state is follower
     BOOST_CHECK(fsm.is_follower());
@@ -680,7 +671,10 @@ BOOST_AUTO_TEST_CASE(test_confchange_add_node) {
 
     output = fsm.get_output();
     // A new leader applies one dummy entry
-    BOOST_CHECK(output.log_entries.size() == 1 && std::holds_alternative<raft::log_entry::dummy>(output.log_entries[0]->data));
+    BOOST_CHECK_EQUAL(output.log_entries.size(), 1);
+    if (output.log_entries.size()) {
+        BOOST_CHECK(std::holds_alternative<raft::log_entry::dummy>(output.log_entries[0]->data));
+    }
     BOOST_CHECK(output.committed.empty());
 
     raft::configuration newcfg({id1, id2, id3});
@@ -690,19 +684,19 @@ BOOST_AUTO_TEST_CASE(test_confchange_add_node) {
     BOOST_CHECK_THROW(fsm.add_entry(newcfg), raft::conf_change_in_progress);
     // Entered joint configuration immediately.
     BOOST_CHECK(fsm.get_configuration().is_joint());
-    BOOST_CHECK(fsm.get_configuration().previous.size() == 2);
-    BOOST_CHECK(fsm.get_configuration().current.size() == 3);
+    BOOST_CHECK_EQUAL(fsm.get_configuration().previous.size(), 2);
+    BOOST_CHECK_EQUAL(fsm.get_configuration().current.size(), 3);
     output = fsm.get_output();
     // The output contains a log entry to be committed.
     // Once it's committed, it will be replicated.
     // The output must contain messages both for id2 and id3
-    BOOST_CHECK(output.log_entries.size() == 1);
+    BOOST_CHECK_EQUAL(output.log_entries.size(), 1);
     // Calling get_output() again indicates the previous output
     // is handled, i.e. the log entry is committed, so now
     // the leader will replicate the confchange
     output = fsm.get_output();
     // Append entry for id2
-    BOOST_CHECK(output.messages.size() == 1);
+    BOOST_CHECK_EQUAL(output.messages.size(), 1);
     auto msg = std::get<raft::append_request>(output.messages.back().second);
     auto idx = msg.entries.back().get()->idx;
     // In order to accept a configuration change
@@ -721,7 +715,7 @@ BOOST_AUTO_TEST_CASE(test_confchange_add_node) {
     BOOST_CHECK_THROW(fsm.add_entry(newcfg), raft::conf_change_in_progress);
     output = fsm.get_output();
     // A log entry for the final configuration
-    BOOST_CHECK(output.log_entries.size() == 1);
+    BOOST_CHECK_EQUAL(output.log_entries.size(), 1);
     output = fsm.get_output();
     // AppendEntries messages for the final configuration
     BOOST_CHECK(output.messages.size() >= 1);
@@ -729,7 +723,7 @@ BOOST_AUTO_TEST_CASE(test_confchange_add_node) {
     idx = msg.entries.back().get()->idx;
     // Ack AppendEntries for the final configuration
     fsm.step(id2, raft::append_reply{msg.current_term, idx, raft::append_reply::accepted{idx}});
-    BOOST_CHECK(fsm.get_configuration().current.size() == 3);
+    BOOST_CHECK_EQUAL(fsm.get_configuration().current.size(), 3);
     fsm.step(id3, raft::append_reply{msg.current_term, idx, raft::append_reply::accepted{idx}});
     // Check that we can start a new confchange
     raft::configuration newcfg2({id1, id2});
@@ -738,16 +732,12 @@ BOOST_AUTO_TEST_CASE(test_confchange_add_node) {
 
 BOOST_AUTO_TEST_CASE(test_confchange_remove_node) {
 
-    failure_detector fd;
-
-    server_id id1{utils::make_random_uuid()},
-              id2{utils::make_random_uuid()},
-              id3{utils::make_random_uuid()};
+    server_id id1 = id(), id2 = id(), id3 = id();
 
     raft::configuration cfg({id1, id2, id3});
     raft::log log(raft::snapshot{.idx = index_t{100}, .config = cfg});
 
-    raft::fsm fsm(id1, term_t{1}, /* voted for */ server_id{}, std::move(log), fd, fsm_cfg);
+    auto fsm = create_follower(id1, std::move(log));
 
     // Initial state is follower
     BOOST_CHECK(fsm.is_follower());
@@ -757,33 +747,41 @@ BOOST_AUTO_TEST_CASE(test_confchange_remove_node) {
     BOOST_CHECK(fsm.is_candidate());
     auto output = fsm.get_output();
     // Vote requests to id2 and id3
-    BOOST_CHECK(output.messages.size() == 2);
-    BOOST_CHECK(std::holds_alternative<raft::vote_request>(output.messages[0].second));
-    BOOST_CHECK(std::holds_alternative<raft::vote_request>(output.messages[1].second));
+    BOOST_CHECK_EQUAL(output.messages.size(), 2);
+    if (output.messages.size() > 0) {
+        BOOST_CHECK(std::holds_alternative<raft::vote_request>(output.messages[0].second));
+    }
+    if (output.messages.size() > 1) {
+        BOOST_CHECK(std::holds_alternative<raft::vote_request>(output.messages[1].second));
+    }
 
     BOOST_CHECK(output.term_and_vote);
     fsm.step(id2, raft::vote_reply{output.term_and_vote->first, true});
     BOOST_CHECK(fsm.is_leader());
     output = fsm.get_output();
-    BOOST_CHECK(output.log_entries.size() == 1);
-    BOOST_CHECK(std::holds_alternative<raft::log_entry::dummy>(output.log_entries[0]->data));
+    BOOST_CHECK_EQUAL(output.log_entries.size(), 1);
+    if (output.log_entries.size()) {
+        BOOST_CHECK(std::holds_alternative<raft::log_entry::dummy>(output.log_entries[0]->data));
+    }
 
     raft::configuration newcfg({id1, id2});
     // Suggest a confchange.
     fsm.add_entry(newcfg);
     // Entered joint configuration immediately.
     BOOST_CHECK(fsm.get_configuration().is_joint());
-    BOOST_CHECK(fsm.get_configuration().current.size() == 2);
-    BOOST_CHECK(fsm.get_configuration().previous.size() == 3);
+    BOOST_CHECK_EQUAL(fsm.get_configuration().current.size(), 2);
+    BOOST_CHECK_EQUAL(fsm.get_configuration().previous.size(), 3);
     output = fsm.get_output();
     // The output contains a log entry to be committed.
     // Once it's committed, it will be replicated.
-    BOOST_CHECK(output.log_entries.size() == 1);
-    BOOST_CHECK(std::holds_alternative<raft::configuration>(output.log_entries[0]->data));
-    BOOST_CHECK(output.messages.size() == 2); // Configuration change sent to id2 and id3
+    BOOST_CHECK_EQUAL(output.log_entries.size(), 1);
+    if (output.log_entries.size()) {
+        BOOST_CHECK(std::holds_alternative<raft::configuration>(output.log_entries[0]->data));
+    }
+    BOOST_CHECK_EQUAL(output.messages.size(), 2); // Configuration change sent to id2 and id3
     raft::append_request msg;
     BOOST_REQUIRE_NO_THROW(msg = std::get<raft::append_request>(output.messages[0].second));
-    BOOST_CHECK(msg.entries.size() == 1);
+    BOOST_CHECK_EQUAL(msg.entries.size(), 1);
     auto idx = msg.entries.back().get()->idx;
     // In order to accept a configuration change
     // we need one ACK, since there is a quorum overlap.
@@ -794,50 +792,51 @@ BOOST_AUTO_TEST_CASE(test_confchange_remove_node) {
     BOOST_CHECK(output.messages.size() >= 1);
 
     BOOST_REQUIRE_NO_THROW(msg = std::get<raft::append_request>(output.messages[0].second));
-    BOOST_CHECK(msg.entries.size() == 1);
-    BOOST_CHECK(std::holds_alternative<raft::configuration>(msg.entries[0]->data));
+    BOOST_CHECK_EQUAL(msg.entries.size(), 1);
+    if (msg.entries.size()) {
+        BOOST_CHECK(std::holds_alternative<raft::configuration>(msg.entries[0]->data));
+    }
     idx = msg.entries.back().get()->idx;
-    BOOST_CHECK(idx == 102);
+    BOOST_CHECK_EQUAL(idx, 102);
     // Ack AppendEntries for the joint configuration
     fsm.step(id2, raft::append_reply{msg.current_term, idx, raft::append_reply::accepted{idx}});
 
     output = fsm.get_output();
     // A log entry for the final configuration
-    BOOST_CHECK(output.log_entries.size() == 1);
-    BOOST_CHECK(std::holds_alternative<raft::configuration>(output.log_entries[0]->data));
+    BOOST_CHECK_EQUAL(output.log_entries.size(), 1);
+    if (output.log_entries.size()) {
+        BOOST_CHECK(std::holds_alternative<raft::configuration>(output.log_entries[0]->data));
+    }
 
-    BOOST_CHECK(fsm.get_configuration().current.size() == 2);
+    BOOST_CHECK_EQUAL(fsm.get_configuration().current.size(), 2);
     BOOST_CHECK(!fsm.get_configuration().is_joint());
 
     output = fsm.get_output();
-    BOOST_CHECK(output.messages.size() == 1);
+    BOOST_CHECK_EQUAL(output.messages.size(), 1);
     BOOST_REQUIRE_NO_THROW(msg = std::get<raft::append_request>(output.messages[0].second));
-    BOOST_CHECK(msg.entries.size() == 1);
-    BOOST_CHECK(std::holds_alternative<raft::configuration>(msg.entries[0]->data));
+    BOOST_CHECK_EQUAL(msg.entries.size(), 1);
+    if (msg.entries.size()) {
+        BOOST_CHECK(std::holds_alternative<raft::configuration>(msg.entries[0]->data));
+    }
     idx = msg.entries.back().get()->idx;
-    BOOST_CHECK(idx == 103);
+    BOOST_CHECK_EQUAL(idx, 103);
     // Ack AppendEntries for the final configuration
     fsm.step(id2, raft::append_reply{msg.current_term, idx, raft::append_reply::accepted{idx}});
 
     // Check that we can start a new confchange
     raft::configuration newcfg2({id1, id2, id3});
     fsm.add_entry(newcfg);
-    BOOST_CHECK(fsm.get_configuration().current.size() == 2);
+    BOOST_CHECK_EQUAL(fsm.get_configuration().current.size(), 2);
 }
 
 BOOST_AUTO_TEST_CASE(test_confchange_replace_node) {
 
-    failure_detector fd;
-
-    server_id id1{utils::make_random_uuid()},
-              id2{utils::make_random_uuid()},
-              id3{utils::make_random_uuid()},
-              id4{utils::make_random_uuid()};
+    server_id id1 = id(), id2 = id(), id3 = id(), id4 = id();
 
     raft::configuration cfg({id1, id2, id3});
     raft::log log(raft::snapshot{.idx = index_t{100}, .config = cfg});
 
-    raft::fsm fsm(id1, term_t{1}, /* voted for */ server_id{}, std::move(log), fd, fsm_cfg);
+    auto fsm = create_follower(id1, std::move(log));
 
     // Initial state is follower
     BOOST_CHECK(fsm.is_follower());
@@ -850,7 +849,10 @@ BOOST_AUTO_TEST_CASE(test_confchange_replace_node) {
     fsm.step(id2, raft::vote_reply{output.term_and_vote->first, true});
     BOOST_CHECK(fsm.is_leader());
     output = fsm.get_output();
-    BOOST_CHECK(output.log_entries.size() == 1 && std::holds_alternative<raft::log_entry::dummy>(output.log_entries[0]->data));
+    BOOST_CHECK_EQUAL(output.log_entries.size(), 1);
+    if (output.log_entries.size()) {
+        BOOST_CHECK(std::holds_alternative<raft::log_entry::dummy>(output.log_entries[0]->data));
+    }
     BOOST_CHECK(output.committed.empty());
 
     raft::configuration newcfg({id1, id2, id4});
@@ -858,15 +860,19 @@ BOOST_AUTO_TEST_CASE(test_confchange_replace_node) {
     fsm.add_entry(newcfg);
     // Entered joint configuration immediately.
     BOOST_CHECK(fsm.get_configuration().is_joint());
-    BOOST_CHECK(fsm.get_configuration().current.size() == 3);
-    BOOST_CHECK(fsm.get_configuration().previous.size() == 3);
+    BOOST_CHECK_EQUAL(fsm.get_configuration().current.size(), 3);
+    BOOST_CHECK_EQUAL(fsm.get_configuration().previous.size(), 3);
     output = fsm.get_output();
-    BOOST_CHECK(output.messages.size() == 2);
+    BOOST_CHECK_EQUAL(output.messages.size(), 2);
     raft::append_request msg;
-    BOOST_REQUIRE_NO_THROW(msg = std::get<raft::append_request>(output.messages[0].second));
-    BOOST_CHECK(std::holds_alternative<raft::log_entry::dummy>(msg.entries[0]->data));
-    BOOST_REQUIRE_NO_THROW(msg = std::get<raft::append_request>(output.messages[1].second));
-    BOOST_CHECK(std::holds_alternative<raft::log_entry::dummy>(msg.entries[0]->data));
+    if (output.messages.size() > 0) {
+        BOOST_REQUIRE_NO_THROW(msg = std::get<raft::append_request>(output.messages[0].second));
+        BOOST_CHECK(std::holds_alternative<raft::log_entry::dummy>(msg.entries[0]->data));
+    }
+    if (output.messages.size() > 1) {
+        BOOST_REQUIRE_NO_THROW(msg = std::get<raft::append_request>(output.messages[1].second));
+        BOOST_CHECK(std::holds_alternative<raft::log_entry::dummy>(msg.entries[0]->data));
+    }
 
     output = fsm.get_output();
     BOOST_REQUIRE_NO_THROW(msg = std::get<raft::append_request>(output.messages[0].second));
@@ -877,8 +883,10 @@ BOOST_AUTO_TEST_CASE(test_confchange_replace_node) {
     BOOST_CHECK(!fsm.get_configuration().is_joint());
     // Joint config to log
     output = fsm.get_output();
-    BOOST_CHECK(output.log_entries.size() == 1);
-    BOOST_CHECK(std::holds_alternative<raft::configuration>(output.log_entries[0]->data));
+    BOOST_CHECK_EQUAL(output.log_entries.size(), 1);
+    if (output.log_entries.size()) {
+        BOOST_CHECK(std::holds_alternative<raft::configuration>(output.log_entries[0]->data));
+    }
     output = fsm.get_output();
     // AppendEntries messages for the final configuration
     BOOST_CHECK(output.messages.size() >= 1);
@@ -886,21 +894,19 @@ BOOST_AUTO_TEST_CASE(test_confchange_replace_node) {
     idx = msg.entries.back().get()->idx;
     // Ack AppendEntries for the final configuration
     fsm.step(id2, raft::append_reply{msg.current_term, idx, raft::append_reply::accepted{idx}});
-    BOOST_CHECK(fsm.get_configuration().current.size() == 3);
+    BOOST_CHECK_EQUAL(fsm.get_configuration().current.size(), 3);
     BOOST_CHECK(!fsm.get_configuration().is_joint());
 }
 
-BOOST_AUTO_TEST_CASE(test_leader_stepdown) {
-    failure_detector fd;
 
-    server_id id1{utils::make_random_uuid()},
-              id2{utils::make_random_uuid()},
-              id3{utils::make_random_uuid()};
+BOOST_AUTO_TEST_CASE(test_leader_stepdown) {
+
+    server_id id1 = id(), id2 = id(), id3 = id();
 
     raft::configuration cfg({raft::server_address{id1.id}, raft::server_address{id2.id}, raft::server_address{id3.id, false}});
     raft::log log(raft::snapshot{.config = cfg});
 
-    raft::fsm fsm(id1, term_t{1}, /* voted for */ server_id{}, std::move(log), fd, fsm_cfg);
+    raft::fsm fsm(id1, term_t{1}, /* voted for */ server_id{}, std::move(log), trivial_failure_detector, fsm_cfg);
 
     // Check that we move to candidate state on timeout_now message
     fsm.step(id2, raft::timeout_now{fsm.get_current_term()});
@@ -1003,4 +1009,317 @@ BOOST_AUTO_TEST_CASE(test_leader_stepdown) {
     output = fsm.get_output();
     BOOST_CHECK_EQUAL(output.messages.size(), 1);
     BOOST_CHECK(std::holds_alternative<raft::timeout_now>(output.messages.back().second));
+}
+
+BOOST_AUTO_TEST_CASE(test_empty_configuration) {
+    // When a server is joining an existing cluster, its configuration is empty.
+    // The leader sends its configuration over in AppendEntries or
+    // ApplySnapshot RPC. Test this scenario.
+
+    server_id id1 = id();
+
+    raft::configuration cfg({});
+    raft::log log(raft::snapshot{.idx = index_t{0}, .config = cfg});
+    auto follower = create_follower(id1, std::move(log));
+    // Initial state is follower
+    BOOST_CHECK(follower.is_follower());
+    election_timeout(follower);
+    BOOST_CHECK(follower.is_follower());
+    auto output = follower.get_output();
+    BOOST_CHECK_EQUAL(output.log_entries.size(), 0);
+    BOOST_CHECK_EQUAL(output.messages.size(), 0);
+    BOOST_CHECK_EQUAL(follower.get_current_term(), 0);
+    BOOST_CHECK_THROW(follower.get_configuration(), raft::not_a_leader);
+
+    server_id id2 = id();
+    auto log2 = raft::log(raft::snapshot{.idx = index_t{0}, .config = raft::configuration({id2})});
+    auto leader = create_follower(id2, std::move(log2));
+    election_timeout(leader);
+    BOOST_CHECK(leader.is_leader());
+    // Transitioning to an empty configuration is not supported.
+    BOOST_CHECK_THROW(leader.add_entry(raft::configuration({})), std::invalid_argument);
+    leader.add_entry(raft::configuration({id1, id2}));
+
+    communicate(leader, follower);
+    BOOST_CHECK_EQUAL(follower.get_current_term(), 1);
+    BOOST_CHECK_EQUAL(follower.in_memory_log_size(), leader.in_memory_log_size());
+    BOOST_CHECK_EQUAL(leader.get_configuration().is_joint(), false);
+}
+
+BOOST_AUTO_TEST_CASE(test_confchange_a_to_b) {
+    // Test we can transition from a single-server configuration
+    // {A} to a single server configuration {B}
+
+    server_id A_id = id();
+
+    raft::log log(raft::snapshot{.idx = index_t{0}, .config = raft::configuration{A_id}});
+    auto A = create_follower(A_id, log);
+    election_timeout(A);
+    BOOST_CHECK(A.is_leader());
+    // Let's have a non-empty log at A
+    A.add_entry(log_entry::dummy{});
+
+    server_id B_id = id();
+
+    auto B = create_follower(B_id, log);
+
+    A.add_entry(raft::configuration({B_id}));
+
+    communicate(A, B);
+    BOOST_CHECK_EQUAL(A.get_current_term(), 1);
+    BOOST_CHECK(A.is_follower());
+    // A is not part of the current configuration
+    BOOST_CHECK(B.is_leader());
+    BOOST_CHECK_EQUAL(B.get_current_term(), 2);
+    BOOST_CHECK_EQUAL(B.get_configuration().is_joint(), false);
+    BOOST_CHECK_EQUAL(B.get_configuration().current.size(), 1);
+    BOOST_CHECK(B.get_configuration().current.contains(raft::server_address{B_id}));
+    // Let's try the same configuration change now, but let's
+    // restart the leader after persisting the joint
+    // configuration.
+    log = raft::log(raft::snapshot{.idx = B.log_last_idx(), .term = B.log_last_term(),
+        .config = B.get_configuration()});
+    // A somewhat awkward way to obtain B's log for restart
+    log.emplace_back(make_lw_shared<raft::log_entry>(B.add_entry(raft::configuration({A_id}))));
+    log.stable_to(log.last_idx());
+    raft::fsm B_1(B_id, B.get_current_term(), B_id, std::move(log), trivial_failure_detector, fsm_cfg);
+    BOOST_CHECK(B_1.is_follower());
+    election_timeout(B_1);
+    communicate(A, B_1);
+    BOOST_CHECK(B_1.is_follower());
+    election_timeout(A);
+    BOOST_CHECK(A.is_leader());
+    // B_1 must be quiet after an election timeout and doesn't
+    // disrupt the new configuration
+    election_timeout(B_1);
+    BOOST_CHECK(B_1.is_follower());
+    BOOST_CHECK_EQUAL(B_1.get_output().messages.size(), 0);
+}
+
+
+BOOST_AUTO_TEST_CASE(test_confchange_ab_to_cd) {
+    // Similar to A -> B change, but with many nodes,
+    // so C_new has to campaign after configuration change.
+    server_id A_id = id(), B_id = id(), C_id = id(), D_id = id();
+
+    raft::log log(raft::snapshot{.idx = index_t{0}, .config = raft::configuration{A_id, B_id}});
+    auto A = create_follower(A_id, log);
+    auto B = create_follower(B_id, log);
+    election_timeout(A);
+    communicate(A, B);
+    BOOST_CHECK(A.is_leader());
+
+    auto C = create_follower(C_id, log);
+    auto D = create_follower(D_id, log);
+
+    A.add_entry(raft::configuration({C_id, D_id}));
+    communicate(A, B, C, D);
+
+    BOOST_CHECK_EQUAL(A.get_current_term(), 1);
+    // A and B are not part of the current configuration
+    BOOST_CHECK(A.is_follower());
+    BOOST_CHECK(B.is_follower());
+
+    election_timeout(C);
+    election_threshold(D);
+    communicate(A, B, C, D);
+    BOOST_CHECK_EQUAL(C.get_current_term(), 2);
+    BOOST_CHECK(C.is_leader());
+    BOOST_CHECK_EQUAL(C.get_configuration().is_joint(), false);
+    BOOST_CHECK_EQUAL(C.get_configuration().current.size(), 2);
+}
+
+
+BOOST_AUTO_TEST_CASE(test_confchange_abc_to_cde) {
+    // Check configuration changes when C_old and C_new have no
+    // common quorum, test leader change during configuration
+    // change
+    discrete_failure_detector fd;
+    server_id A_id = id(), B_id = id(), C_id = id(), D_id = id(), E_id = id();
+
+    raft::log log(raft::snapshot{.idx = index_t{0}, .config = raft::configuration{A_id, B_id, C_id}});
+    auto A = create_follower(A_id, log);
+    auto B = create_follower(B_id, log, fd);
+    auto C = create_follower(C_id, log, fd);
+    election_timeout(A);
+    communicate(A, B, C);
+    BOOST_CHECK(A.is_leader());
+
+    auto D = create_follower(D_id, log);
+    auto E = create_follower(E_id, log);
+
+    A.add_entry(raft::configuration({C_id, D_id, E_id}));
+    // Make sure C gets a new (joint) configuration entry.
+    // It is stable, but not committed, because we need D or E
+    // to commit it.
+    communicate(A, B, C);
+    // Leader change while committing a joint configuration
+    fd.mark_dead(A_id);
+    election_timeout(C);
+    BOOST_CHECK(C.is_candidate());
+    // Ticking for election_threshold at B is
+    // necessary for B to vote for C but not become
+    // candidate itself.
+    election_threshold(B);
+    communicate(B, C, D, E);
+    BOOST_CHECK(A.is_leader());
+    BOOST_CHECK_EQUAL(A.get_current_term(), 1);
+    BOOST_CHECK(B.is_follower());
+    BOOST_CHECK(C.is_leader());
+    BOOST_CHECK(D.is_follower());
+    BOOST_CHECK(E.is_follower());
+
+    BOOST_CHECK(C.get_current_term() >= 2);
+    BOOST_CHECK_EQUAL(C.get_configuration().is_joint(), false);
+    BOOST_CHECK_EQUAL(C.get_configuration().current.size(), 3);
+}
+
+
+BOOST_AUTO_TEST_CASE(test_confchange_abcdef_to_abcgh) {
+    // Test configuration changes in presence of down nodes in C_old
+    discrete_failure_detector fd;
+    server_id A_id = id(), B_id = id(), C_id = id(), D_id = id(), E_id = id(),
+              F_id = id(), G_id = id(), H_id = id();
+
+    raft::log log(raft::snapshot{.idx = index_t{0},
+        .config = raft::configuration{A_id, B_id, C_id, D_id, E_id, F_id}});
+    auto A = create_follower(A_id, log, fd);
+    auto B = create_follower(B_id, log, fd);
+    auto C = create_follower(C_id, log, fd);
+    auto D = create_follower(D_id, log, fd);
+    auto E = create_follower(E_id, log, fd);
+    auto F = create_follower(F_id, log, fd);
+    election_timeout(D);
+    communicate(A, D, E, F);
+    BOOST_CHECK(D.is_leader());
+
+    auto G = create_follower(G_id, log);
+    auto H = create_follower(H_id, log);
+
+    D.add_entry(raft::configuration({A_id, B_id, C_id, G_id, H_id}));
+    // We can't transition to C_new in absence of C_old majority
+    communicate(B, C, D, G, H);
+    BOOST_CHECK(D.is_leader());
+    BOOST_CHECK(D.get_configuration().is_joint());
+    D.tick();
+    communicate(B, C, E, D, G, H);
+    BOOST_CHECK(D.is_follower());
+    auto leader = select_leader(A, B, C, G, H);
+    BOOST_CHECK_EQUAL(leader->get_configuration().is_joint(), false);
+    BOOST_CHECK_EQUAL(leader->get_configuration().current.size(), 5);
+
+    fd.mark_all_dead();
+    election_timeout(D);
+    election_timeout(A);
+    communicate(A, B, C, D, E, F, G, H);
+    BOOST_CHECK(leader->is_leader());
+}
+
+BOOST_AUTO_TEST_CASE(test_confchange_abcde_abcdefg) {
+    // Check configuration changes work fine with many nodes down
+    discrete_failure_detector fd;
+    server_id A_id = id(), B_id = id(), C_id = id(), D_id = id(), E_id = id(),
+              F_id = id(), G_id = id();
+
+    raft::log log(raft::snapshot{.idx = index_t{0},
+        .config = raft::configuration{A_id, B_id, C_id, D_id, E_id}});
+    auto A = create_follower(A_id, log, fd);
+    auto B = create_follower(B_id, log, fd);
+    auto C = create_follower(C_id, log, fd);
+    auto D = create_follower(D_id, log, fd);
+    auto E = create_follower(E_id, log, fd);
+    election_timeout(A);
+    communicate(A, D, E);
+    BOOST_CHECK(A.is_leader());
+
+    auto F = create_follower(F_id, log);
+    auto G = create_follower(G_id, log);
+
+    // Wrap configuration entry into some traffic
+    A.add_entry(log_entry::dummy{});
+    A.add_entry(raft::configuration({A_id, B_id, C_id, D_id, E_id, F_id, G_id}));
+    A.add_entry(log_entry::dummy{});
+    // Without tick() A won't re-try communication with nodes it
+    // believes are down (B, C).
+    A.tick();
+    // 4 is enough to transition to the new configuration
+    communicate(A, B, C, G);
+    BOOST_CHECK(A.is_leader());
+    BOOST_CHECK_EQUAL(A.get_configuration().is_joint(), false);
+    BOOST_CHECK_EQUAL(A.get_configuration().current.size(), 7);
+    A.tick();
+    communicate(A, B, C, D, E, F, G);
+    BOOST_CHECK_EQUAL(A.log_last_idx(), B.log_last_idx());
+    BOOST_CHECK_EQUAL(A.log_last_idx(), C.log_last_idx());
+    BOOST_CHECK_EQUAL(A.log_last_idx(), D.log_last_idx());
+    BOOST_CHECK_EQUAL(A.log_last_idx(), E.log_last_idx());
+    BOOST_CHECK_EQUAL(A.log_last_idx(), F.log_last_idx());
+    BOOST_CHECK_EQUAL(A.log_last_idx(), G.log_last_idx());
+    BOOST_CHECK(A.is_leader());
+    BOOST_CHECK_EQUAL(A.get_configuration().is_joint(), false);
+    BOOST_CHECK_EQUAL(A.get_configuration().current.size(), 7);
+}
+
+BOOST_AUTO_TEST_CASE(test_election_during_confchange) {
+    server_id A_id = id(), B_id = id(), C_id = id(), D_id = id(), E_id = id();
+
+    raft::log log(raft::snapshot{.idx = index_t{0}, .config = raft::configuration{A_id, B_id, C_id}});
+
+    // Joint config has reached old majority, the leader is
+    // from new majority
+    discrete_failure_detector fd;
+    auto A = create_follower(A_id, log, fd);
+    auto B = create_follower(B_id, log, fd);
+    auto C = create_follower(C_id, log, fd);
+    election_timeout(A);
+    communicate(A, B, C);
+    A.add_entry(raft::configuration({C_id, D_id, E_id}));
+    communicate(A, B, C);
+    fd.mark_dead(A_id);
+    auto D = create_follower(D_id, log, fd);
+    auto E = create_follower(E_id, log, fd);
+    election_timeout(C);
+    election_threshold(B);
+    communicate_until([&C]() { return C.is_leader(); }, B, C, D, E);
+    BOOST_CHECK_EQUAL(C.get_configuration().is_joint(), true);
+    fd.mark_alive(A.id());
+    communicate(D, A, B, E);
+    fd.mark_alive(C.id());
+    communicate_until([&C]() { return C.get_configuration().is_joint() == false; }, B, C, D, E);
+    communicate(C, D);
+    fd.mark_dead(C.id());
+    election_timeout(D);
+    // E may still be in joint. It must vote for D anyway. D is in C_new
+    // and will replicate C_new to E after becoming a leader
+    election_threshold(E);
+    A.tick();
+    communicate(A, D, E);
+    BOOST_CHECK(D.is_leader());
+    BOOST_CHECK(A.is_follower());
+    BOOST_CHECK_EQUAL(D.get_configuration().is_joint(), false);
+    BOOST_CHECK_EQUAL(D.get_configuration().current.size(), 3);
+}
+
+BOOST_AUTO_TEST_CASE(test_reply_from_removed_follower) {
+    // Messages from followers may be delayed. Check they don't
+    // upset the leader when they are delivered past configuration
+    // change
+
+    server_id A_id = id(), B_id = id();
+
+    raft::log log(raft::snapshot{.idx = index_t{0}, .config = raft::configuration{A_id, B_id}});
+    auto A = create_follower(A_id, log);
+    auto B = create_follower(B_id, log);
+    election_timeout(A);
+    communicate(A, B);
+    A.add_entry(raft::configuration({A_id}));
+    communicate(A, B);
+    BOOST_CHECK(A.is_leader());
+    BOOST_CHECK_EQUAL(A.get_configuration().is_joint(), false);
+    BOOST_CHECK_EQUAL(A.get_configuration().current.size(), 1);
+    auto idx = A.log_last_idx();
+    A.step(B.id(), raft::append_reply{A.get_current_term(), idx, raft::append_reply::accepted{idx}});
+    A.step(B.id(), raft::append_reply{A.get_current_term(), idx, raft::append_reply::rejected{idx}});
+    A.step(B.id(), raft::snapshot_reply{A.get_current_term(), true});
+    BOOST_CHECK(A.is_leader());
 }

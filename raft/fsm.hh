@@ -35,6 +35,13 @@ struct fsm_output {
     // Entries to apply.
     std::vector<log_entry_ptr> committed;
     std::optional<snapshot> snp;
+
+    // True if there is no new output
+    bool empty() const {
+        return !term_and_vote.has_value() &&
+            log_entries.size() == 0 && messages.size() == 0 &&
+            committed.size() == 0 && !snp.has_value();
+    }
 };
 
 struct fsm_config {
@@ -370,6 +377,8 @@ public:
     size_t in_memory_log_size() const {
         return _log.in_memory_size();
     };
+
+    server_id id() const { return _my_id; }
 
     friend std::ostream& operator<<(std::ostream& os, const fsm& f);
 };

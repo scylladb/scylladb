@@ -114,7 +114,7 @@ public:
     // return the index of the last entry in the snapshot.
     index_t last_idx() const;
     index_t last_conf_idx() const {
-        return _last_conf_idx;
+        return _last_conf_idx ? _last_conf_idx : _snapshot.idx;
     }
     index_t stable_idx() const {
         return _stable_idx;

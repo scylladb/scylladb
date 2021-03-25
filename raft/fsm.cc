@@ -28,9 +28,10 @@ fsm::fsm(server_id id, term_t current_term, server_id voted_for, log log,
         failure_detector& failure_detector, fsm_config config) :
         _my_id(id), _current_term(current_term), _voted_for(voted_for),
         _log(std::move(log)), _failure_detector(failure_detector), _config(config) {
-
+    // The snapshot can not contain uncommitted entries
+    _commit_idx = _log.get_snapshot().idx;
     _observed.advance(*this);
-    logger.trace("{}: starting log length {}", _my_id, _log.last_idx());
+    logger.trace("{}: starting, current term {}, log length {}", _my_id, _current_term, _log.last_idx());
     reset_election_timeout();
 
     assert(!bool(_current_leader));
@@ -69,6 +70,9 @@ const log_entry& fsm::add_entry(T command) {
             // start another membership change once a majority of
             // the old cluster has moved to operating under the
             // rules of C_new.
+            logger.trace("A{}configuration change at index {} is not yet committed (commit_idx: {})",
+                _log.get_configuration().is_joint() ? " joint " : " ",
+                _log.last_conf_idx(), _commit_idx);
             throw conf_change_in_progress();
         }
         // 4.3. Arbitrary configuration changes using joint consensus
@@ -147,6 +151,8 @@ void fsm::become_leader() {
     // set_configuration() begins replicating from the last entry
     // in the log.
     leader_state().tracker.set_configuration(_log.get_configuration(), _log.last_idx());
+    logger.trace("fsm::become_leader() {} stable index: {} last index: {}",
+        _my_id, _log.stable_idx(), _log.last_idx());
     replicate();
 }
 
@@ -300,7 +306,9 @@ fsm_output fsm::get_output() {
 }
 
 void fsm::advance_stable_idx(index_t idx) {
+    index_t prev_stable_idx = _log.stable_idx();
     _log.stable_to(idx);
+    logger.trace("advance_stable_idx[{}]: prev_stable_idx={}, idx={}", _my_id, prev_stable_idx, idx);
     if (is_leader()) {
         replicate();
         if (leader_state().tracker.leader_progress()) {
@@ -344,6 +352,7 @@ void fsm::maybe_commit() {
     _sm_events.signal();
 
     if (committed_conf_change) {
+        logger.trace("maybe_commit[{}]: committed conf change at idx {}", _my_id, _log.last_conf_idx());
         if (_log.get_configuration().is_joint()) {
             // 4.3. Arbitrary configuration changes using joint consensus
             //
@@ -370,10 +379,18 @@ void fsm::maybe_commit() {
             // it happen without an extra FSM step.
             maybe_commit();
         } else if (leader_state().tracker.leader_progress() == nullptr) {
+            logger.trace("maybe_commit[{}]: stepping down as leader", _my_id);
             // 4.2.2 Removing the current leader
+            //
+            // The leader temporarily manages a configuration
+            // in which it is not a member.
             //
             // A leader that is removed from the configuration
             // steps down once the C_new entry is committed.
+            //
+            // If the leader stepped down before this point,
+            // it might still time out and become leader
+            // again, delaying progress.
             transfer_leadership();
         }
     }
@@ -422,17 +439,29 @@ void fsm::tick_leader() {
 void fsm::tick() {
     _clock.advance();
 
+    auto has_stable_leader = [this]() {
+        // We may have received a C_new which does not contain the
+        // current leader.  If the configuration is joint, the
+        // leader will drive down the transition to C_new even if
+        // it is not part of it. But if it is C_new already, it
+        // has likely have stepped down.  Since the failure
+        // detector may still report the leader node as alive and
+        // healthy, we must not apply the stable leader rule
+        // in this case.
+        const configuration& conf = _log.get_configuration();
+        return _current_leader && (conf.is_joint() || conf.current.contains(server_address{_current_leader})) &&
+            _failure_detector.is_alive(_current_leader);
+    };
+
     if (is_leader()) {
         tick_leader();
-    } else if (_current_leader &&
-               (_log.get_configuration().is_joint() || _log.get_configuration().current.contains(server_address{_current_leader})) &&
-                _failure_detector.is_alive(_current_leader)) {
+    } else if (has_stable_leader()) {
         // Ensure the follower doesn't disrupt a valid leader
-        // simple because there were no AppendEntries RPCs recently.
+        // simply because there were no AppendEntries RPCs recently.
         _last_election_time = _clock.now();
     } else if (is_past_election_timeout()) {
-        logger.trace("tick[{}]: becoming a candidate, last election: {}, now: {}", _my_id,
-            _last_election_time, _clock.now());
+        logger.trace("tick[{}]: becoming a candidate at term {}, last election: {}, now: {}", _my_id,
+            _current_term, _last_election_time, _clock.now());
         become_candidate(_config.enable_prevoting);
     }
 }
@@ -584,7 +613,7 @@ void fsm::request_vote(server_id from, vote_request&& request) {
     // ...and we believe the candidate is up to date.
     if (can_vote && _log.is_up_to_date(request.last_log_idx, request.last_log_term)) {
 
-        logger.trace("{} [term: {}, index: {}, log_term: {}, voted_for: {}] "
+        logger.trace("{} [term: {}, index: {}, last log term: {}, voted_for: {}] "
             "voted for {} [log_term: {}, log_index: {}]",
             _my_id, _current_term, _log.last_idx(), _log.last_term(), _voted_for,
             from, request.last_log_term, request.last_log_idx);
@@ -778,7 +807,12 @@ bool fsm::can_read() {
 }
 
 void fsm::install_snapshot_reply(server_id from, snapshot_reply&& reply) {
-    follower_progress& progress = *leader_state().tracker.find(from);
+    follower_progress* opt_progress= leader_state().tracker.find(from);
+    // The follower is removed from the configuration.
+    if (opt_progress == nullptr) {
+        return;
+    }
+    follower_progress& progress = *opt_progress;
 
     if (progress.state != follower_progress::state::SNAPSHOT) {
         logger.trace("install_snapshot_reply[{}]: called not in snapshot state", _my_id);
@@ -797,7 +831,10 @@ void fsm::install_snapshot_reply(server_id from, snapshot_reply&& reply) {
 }
 
 bool fsm::apply_snapshot(snapshot snp, size_t trailing) {
+    logger.trace("apply_snapshot[{}]: term: {}, idx: {}", _my_id, _current_term, snp.idx);
     const auto& current_snp = _log.get_snapshot();
+    // Uncommitted entries can not appear in the snapshot
+    assert(snp.idx <= _commit_idx || is_follower());
     if (snp.idx <= current_snp.idx) {
         logger.error("apply_snapshot[{}]: ignore outdated snapshot {}/{} current one is {}/{}",
                         _my_id, snp.id, snp.idx, current_snp.id, current_snp.idx);

@@ -38,7 +38,10 @@ using raft::term_t, raft::index_t, raft::server_id, raft::log_entry;
 using seastar::make_lw_shared;
 
 void election_threshold(raft::fsm& fsm) {
-    for (int i = 0; i <= raft::ELECTION_TIMEOUT.count(); i++) {
+    // Election threshold should be strictly less than
+    // minimal randomized election timeout to make tests
+    // stable, but enough to disable "stable leader" rule.
+    for (int i = 0; i < raft::ELECTION_TIMEOUT.count(); i++) {
         fsm.tick();
     }
 }
@@ -49,11 +52,23 @@ void election_timeout(raft::fsm& fsm) {
     }
 }
 
-struct failure_detector: public raft::failure_detector {
-    bool alive = true;
+
+struct trivial_failure_detector: public raft::failure_detector {
     bool is_alive(raft::server_id from) override {
-        return alive;
+        return true;
     }
+} trivial_failure_detector;
+
+class discrete_failure_detector: public raft::failure_detector {
+    bool _is_alive = true;
+    std::unordered_set<server_id> _dead;
+public:
+    bool is_alive(raft::server_id id) override {
+        return _is_alive && !_dead.contains(id);
+    }
+    void mark_dead(server_id id) { _dead.emplace(id); }
+    void mark_alive(server_id id) { _dead.erase(id); }
+    void mark_all_dead() { _is_alive = false; }
 };
 
 template <typename T> void add_entry(raft::log& log, T cmd) {
@@ -82,3 +97,88 @@ public:
         return *progress;
     }
 };
+
+using raft_routing_map = std::unordered_map<raft::server_id, raft::fsm*>;
+
+void
+communicate_impl(std::function<bool()> stop_pred, raft_routing_map& map) {
+    // To enable tracing, set:
+    // global_logger_registry().set_all_loggers_level(seastar::log_level::trace);
+    //
+    bool has_traffic;
+    do {
+        has_traffic = false;
+        for (auto e : map) {
+            raft::fsm& from = *e.second;
+            bool has_output;
+            for (auto output = from.get_output(); !output.empty(); output = from.get_output()) {
+                if (stop_pred()) {
+                    return;
+                }
+                for (auto&& m : output.messages) {
+                    has_traffic = true;
+                    auto it = map.find(m.first);
+                    if (it == map.end()) {
+                        // The node is not available, drop the message
+                        continue;
+                    }
+                    raft::fsm& to = *(it->second);
+                    std::visit([&from, &to](auto&& m) { to.step(from.id(), std::move(m)); },
+                        std::move(m.second));
+                    if (stop_pred()) {
+                        return;
+                    }
+                }
+            }
+        }
+    } while (has_traffic);
+}
+
+template <typename... Args>
+void communicate_until(std::function<bool()> stop_pred, Args&&... args) {
+    raft_routing_map map;
+    auto add_map_entry = [&map](raft::fsm& fsm) -> void {
+        map.emplace(fsm.id(), &fsm);
+    };
+    (add_map_entry(args), ...);
+    communicate_impl(stop_pred, map);
+}
+
+template <typename... Args>
+void communicate(Args&&... args) {
+    return communicate_until([]() { return false; }, std::forward<Args>(args)...);
+}
+
+template <typename... Args>
+raft::fsm* select_leader(Args&&... args) {
+    raft::fsm* leader = nullptr;
+    auto assign_leader = [&leader](raft::fsm& fsm) {
+        if (fsm.is_leader()) {
+            leader = &fsm;
+            return false;
+        }
+        return true;
+    };
+    (assign_leader(args) && ...);
+    BOOST_CHECK(leader);
+    return leader;
+}
+
+
+raft::server_id id() {
+    static int id = 0;
+    return raft::server_id{utils::UUID(0, ++id)};
+}
+
+raft::server_address_set address_set(std::initializer_list<raft::server_id> ids) {
+    raft::server_address_set set;
+    for (auto id : ids) {
+        set.emplace(raft::server_address{.id = id});
+    }
+    return set;
+}
+
+raft::fsm create_follower(raft::server_id id, raft::log log, raft::failure_detector& fd = trivial_failure_detector) {
+    return raft::fsm(id, term_t{}, server_id{}, std::move(log), fd, fsm_cfg);
+}
+
