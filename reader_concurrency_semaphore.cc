@@ -607,6 +607,12 @@ void reader_concurrency_semaphore::broken(std::exception_ptr ex) {
     }
 }
 
+std::string reader_concurrency_semaphore::dump_diagnostics() const {
+    std::ostringstream os;
+    do_dump_reader_permit_diagnostics(os, *this, *_permit_list, "user request");
+    return os.str();
+}
+
 // A file that tracks the memory usage of buffers resulting from read
 // operations.
 class tracking_file_impl : public file_impl {
