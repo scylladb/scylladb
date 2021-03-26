@@ -309,7 +309,7 @@ range_tombstone_list::reverter range_tombstone_list::apply_reversibly(const sche
     return rev;
 }
 
-boost::iterator_range<range_tombstone_list::const_iterator>
+range_tombstone_list::iterator_range
 range_tombstone_list::slice(const schema& s, const query::clustering_range& r) const {
     auto bv_range = bound_view::from_range(r);
     struct order_by_end {
@@ -329,7 +329,7 @@ range_tombstone_list::slice(const schema& s, const query::clustering_range& r) c
         _tombstones.upper_bound(bv_range.second, order_by_start{s}));
 }
 
-boost::iterator_range<range_tombstone_list::const_iterator>
+range_tombstone_list::iterator_range
 range_tombstone_list::slice(const schema& s, position_in_partition_view start, position_in_partition_view end) const {
     struct order_by_end {
         position_in_partition::less_compare less;
@@ -347,6 +347,26 @@ range_tombstone_list::slice(const schema& s, position_in_partition_view start, p
         _tombstones.upper_bound(start, order_by_end{s}), // end_position() is exclusive, hence upper_bound()
         _tombstones.lower_bound(end, order_by_start{s}));
 }
+
+range_tombstone_list::iterator_range
+range_tombstone_list::upper_slice(const schema& s, position_in_partition_view after, bound_view end) const {
+    struct pos_order_by_start {
+        position_in_partition::less_compare less;
+        pos_order_by_start(const schema& s) : less(s) {}
+        bool operator()(position_in_partition_view v, const range_tombstone& rt) const { return less(v, rt.position()); }
+        bool operator()(const range_tombstone& rt, position_in_partition_view v) const { return less(rt.position(), v); }
+    };
+    struct bv_order_by_start {
+        bound_view::compare less;
+        bv_order_by_start(const schema& s) : less(s) {}
+        bool operator()(bound_view v, const range_tombstone& rt) const { return less(v, rt.start_bound()); }
+        bool operator()(const range_tombstone& rt, bound_view v) const { return less(rt.start_bound(), v); }
+    };
+    return boost::make_iterator_range(
+        _tombstones.upper_bound(after, pos_order_by_start{s}),
+        _tombstones.upper_bound(end, bv_order_by_start{s}));
+}
+
 
 range_tombstone_list::iterator
 range_tombstone_list::erase(const_iterator a, const_iterator b) {
