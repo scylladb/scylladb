@@ -716,6 +716,9 @@ int main(int ac, char** av) {
             tracing::backend_registry tracing_backend_registry;
             tracing::register_tracing_keyspace_backend(tracing_backend_registry);
             tracing::tracing::create_tracing(tracing_backend_registry, "trace_keyspace_helper").get();
+            auto stop_tracing = defer_verbose_shutdown("tracing", [] {
+                tracing::tracing::tracing_instance().stop().get();
+            });
             supervisor::notify("creating snitch");
             i_endpoint_snitch::create_snitch(cfg->endpoint_snitch()).get();
             // #293 - do not stop anything

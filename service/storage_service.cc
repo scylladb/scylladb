@@ -1331,7 +1331,6 @@ future<> storage_service::drain_on_shutdown() {
                 return tr.shutdown();
             }).get();
 
-            tracing::tracing::tracing_instance().stop().get();
             slogger.info("Drain on shutdown: tracing is stopped");
 
             get_storage_proxy().invoke_on_all([] (storage_proxy& local_proxy) mutable {
