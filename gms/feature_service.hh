@@ -76,9 +76,7 @@ public:
 
 private:
     gms::feature _udf_feature;
-    gms::feature _mc_sstable_feature;
     gms::feature _md_sstable_feature;
-    gms::feature _unbounded_range_tombstones_feature;
     gms::feature _view_virtual_columns;
     gms::feature _digest_insensitive_to_expiry;
     gms::feature _computed_columns;
@@ -99,10 +97,6 @@ public:
         return bool(_udf_feature);
     }
 
-    const feature& cluster_supports_mc_sstable() const {
-        return _mc_sstable_feature;
-    }
-
     const feature& cluster_supports_md_sstable() const {
         return _md_sstable_feature;
     }
@@ -121,10 +115,6 @@ public:
 
     const feature& cluster_supports_digest_for_null_values() const {
         return _digest_for_null_values_feature;
-    }
-
-    const feature& cluster_supports_unbounded_range_tombstones() const {
-        return _unbounded_range_tombstones_feature;
     }
 
     const feature& cluster_supports_view_virtual_columns() const {

@@ -1119,32 +1119,6 @@ SEASTAR_TEST_CASE(test_range_deletion_scenarios_with_compact_storage) {
     });
 }
 
-SEASTAR_TEST_CASE(test_invalid_range_deletion) {
-    cql_test_config cfg;
-    cfg.disabled_features.insert(sstring(gms::features::UNBOUNDED_RANGE_TOMBSTONES));
-    return do_with_cql_env_thread([] (cql_test_env& e) {
-        cquery_nofail(e, "create table cf (p int, c1 int, c2 int, c3 int, primary key (p, c1, c2, c3));");
-        const auto q = [&] (const char* stmt) { return e.execute_cql(stmt).get(); };
-        using ire = exceptions::invalid_request_exception;
-        const auto expected = exception_predicate::message_contains("specify both bounds");
-        cquery_nofail(e, "delete from cf where p = 1");
-        cquery_nofail(e, "delete from cf where p = 1 and c1 = 2");
-        BOOST_REQUIRE_EXCEPTION(q("delete from cf where p = 1 and c1 < 2"), ire, expected);
-        BOOST_REQUIRE_EXCEPTION(q("delete from cf where p = 1 and c1 >= 0"), ire, expected);
-        cquery_nofail(e, "delete from cf where p = 1 and c1 < 2 and c1 >= 0");
-        // TODO: enable when supported:
-        // cquery_nofail(e, "delete from cf where p = 1 and c1 = 2 and c1 < 2");
-        BOOST_REQUIRE_EXCEPTION(q("delete from cf where p = 1 and c1 = 2 and c2 >= 0"), ire, expected);
-        cquery_nofail(e, "delete from cf where p = 1 and c1 = 2 and c2 >= 0 and c2 < 2");
-        BOOST_REQUIRE_EXCEPTION(q("delete from cf where p = 1 and (c1)>(0)"), ire, expected);
-        BOOST_REQUIRE_EXCEPTION(q("delete from cf where p = 1 and (c1,c2)>(0,0)"), ire, expected);
-        BOOST_REQUIRE_EXCEPTION(q("delete from cf where p = 1 and (c1,c2,c3)<=(5,5,5)"), ire, expected);
-        cquery_nofail(e, "delete from cf where p = 1 and (c1,c2)>(0,0) and (c1,c2)<=(5,5)");
-        cquery_nofail(e, "delete from cf where p = 1 and (c1,c2)>(0,0) and (c1)<=(5)");
-        cquery_nofail(e, "delete from cf where p = 1 and (c1,c2)=(1,1)");
-    }, cfg);
-}
-
 SEASTAR_TEST_CASE(test_map_insert_update) {
     return do_with_cql_env([] (cql_test_env& e) {
         auto make_my_map_type = [] { return map_type_impl::get_instance(int32_type, int32_type, true); };

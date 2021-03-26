@@ -46,12 +46,12 @@ constexpr std::string_view features::STREAM_WITH_RPC_STREAM = "STREAM_WITH_RPC_S
 constexpr std::string_view features::ROW_LEVEL_REPAIR = "ROW_LEVEL_REPAIR";
 constexpr std::string_view features::TRUNCATION_TABLE = "TRUNCATION_TABLE";
 constexpr std::string_view features::CORRECT_STATIC_COMPACT_IN_MC = "CORRECT_STATIC_COMPACT_IN_MC";
+constexpr std::string_view features::UNBOUNDED_RANGE_TOMBSTONES = "UNBOUNDED_RANGE_TOMBSTONES";
+constexpr std::string_view features::MC_SSTABLE = "MC_SSTABLE_FORMAT";
 
 // Up-to-date features
 constexpr std::string_view features::UDF = "UDF";
-constexpr std::string_view features::MC_SSTABLE = "MC_SSTABLE_FORMAT";
 constexpr std::string_view features::MD_SSTABLE = "MD_SSTABLE_FORMAT";
-constexpr std::string_view features::UNBOUNDED_RANGE_TOMBSTONES = "UNBOUNDED_RANGE_TOMBSTONES";
 constexpr std::string_view features::VIEW_VIRTUAL_COLUMNS = "VIEW_VIRTUAL_COLUMNS";
 constexpr std::string_view features::DIGEST_INSENSITIVE_TO_EXPIRY = "DIGEST_INSENSITIVE_TO_EXPIRY";
 constexpr std::string_view features::COMPUTED_COLUMNS = "COMPUTED_COLUMNS";
@@ -74,9 +74,7 @@ feature_config::feature_config() {
 
 feature_service::feature_service(feature_config cfg) : _config(cfg)
         , _udf_feature(*this, features::UDF)
-        , _mc_sstable_feature(*this, features::MC_SSTABLE)
         , _md_sstable_feature(*this, features::MD_SSTABLE)
-        , _unbounded_range_tombstones_feature(*this, features::UNBOUNDED_RANGE_TOMBSTONES)
         , _view_virtual_columns(*this, features::VIEW_VIRTUAL_COLUMNS)
         , _digest_insensitive_to_expiry(*this, features::DIGEST_INSENSITIVE_TO_EXPIRY)
         , _computed_columns(*this, features::COMPUTED_COLUMNS)
@@ -95,8 +93,6 @@ feature_service::feature_service(feature_config cfg) : _config(cfg)
 
 feature_config feature_config_from_db_config(db::config& cfg, std::set<sstring> disabled) {
     feature_config fcfg;
-
-    fcfg._masked_features.insert(sstring(gms::features::UNBOUNDED_RANGE_TOMBSTONES));
 
     fcfg._disabled_features = std::move(disabled);
 
@@ -168,18 +164,18 @@ std::set<std::string_view> feature_service::known_feature_set() {
         gms::features::ROW_LEVEL_REPAIR,
         gms::features::TRUNCATION_TABLE,
         gms::features::CORRECT_STATIC_COMPACT_IN_MC,
+        gms::features::UNBOUNDED_RANGE_TOMBSTONES,
+        gms::features::MC_SSTABLE,
 
         // Up-to-date features
         gms::features::VIEW_VIRTUAL_COLUMNS,
         gms::features::DIGEST_INSENSITIVE_TO_EXPIRY,
         gms::features::COMPUTED_COLUMNS,
         gms::features::NONFROZEN_UDTS,
-        gms::features::UNBOUNDED_RANGE_TOMBSTONES,
         gms::features::HINTED_HANDOFF_SEPARATE_CONNECTION,
         gms::features::PER_TABLE_PARTITIONERS,
         gms::features::PER_TABLE_CACHING,
         gms::features::LWT,
-        gms::features::MC_SSTABLE,
         gms::features::MD_SSTABLE,
         gms::features::UDF,
         gms::features::CDC,
@@ -251,9 +247,7 @@ db::schema_features feature_service::cluster_schema_features() const {
 void feature_service::enable(const std::set<std::string_view>& list) {
     for (gms::feature& f : {
         std::ref(_udf_feature),
-        std::ref(_mc_sstable_feature),
         std::ref(_md_sstable_feature),
-        std::ref(_unbounded_range_tombstones_feature),
         std::ref(_view_virtual_columns),
         std::ref(_digest_insensitive_to_expiry),
         std::ref(_computed_columns),
