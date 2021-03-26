@@ -1071,6 +1071,15 @@ int main(int ac, char** av) {
                 return local_proxy.start_hints_manager(gms::get_local_gossiper().shared_from_this(), ss.shared_from_this());
             }).get();
 
+            auto drain_proxy = defer_verbose_shutdown("drain storage proxy", [&proxy] {
+                proxy.invoke_on_all([] (service::storage_proxy& local_proxy) mutable {
+                    auto& ss = service::get_local_storage_service();
+                    return ss.unregister_subscriber(&local_proxy).finally([&local_proxy] {
+                        return local_proxy.drain_on_shutdown();
+                    });
+                }).get();
+            });
+
             supervisor::notify("starting messaging service");
             auto max_memory_repair = db.local().get_available_memory() * 0.1;
             repair_service rs(gossiper, max_memory_repair);

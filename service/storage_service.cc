@@ -1333,14 +1333,6 @@ future<> storage_service::drain_on_shutdown() {
 
             slogger.info("Drain on shutdown: tracing is stopped");
 
-            get_storage_proxy().invoke_on_all([] (storage_proxy& local_proxy) mutable {
-                auto& ss = service::get_local_storage_service();
-              return ss.unregister_subscriber(&local_proxy).finally([&local_proxy] {
-                return local_proxy.drain_on_shutdown();
-              });
-            }).get();
-            slogger.info("Drain on shutdown: hints manager is stopped");
-
             ss.flush_column_families();
             slogger.info("Drain on shutdown: flush column_families done");
 
