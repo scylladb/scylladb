@@ -1294,8 +1294,6 @@ future<> storage_service::unregister_subscriber(endpoint_lifecycle_subscriber* s
     return _lifecycle_subscribers.remove(subscriber);
 }
 
-static std::optional<future<>> drain_in_progress;
-
 future<> storage_service::stop_transport() {
     return seastar::async([this] {
         slogger.info("Stop transport: starts");
@@ -1318,35 +1316,12 @@ future<> storage_service::stop_transport() {
 
 future<> storage_service::drain_on_shutdown() {
     return run_with_no_api_lock([] (storage_service& ss) {
-        if (drain_in_progress) {
-            return std::move(*drain_in_progress);
+        if (ss._operation_mode == mode::DRAINING || ss._operation_mode == mode::DRAINED) {
+            return ss._drain_finished.get_future();
         }
-        return seastar::async([&ss] {
-            slogger.info("Drain on shutdown: starts");
 
-            ss.stop_transport().get();
-            slogger.info("Drain on shutdown: stop_transport done");
-
-            tracing::tracing::tracing_instance().invoke_on_all([] (auto& tr) {
-                return tr.shutdown();
-            }).get();
-
-            slogger.info("Drain on shutdown: tracing is stopped");
-
-            ss.flush_column_families();
-            slogger.info("Drain on shutdown: flush column_families done");
-
-            db::get_batchlog_manager().invoke_on_all(&db::batchlog_manager::stop).get();
-            slogger.info("Drain on shutdown: stop batchlog manager done");
-
-            service::get_migration_manager().invoke_on_all(&service::migration_manager::stop).get();
-            slogger.info("Drain on shutdown: stop migration manager done");
-
-            ss.db().invoke_on_all([] (auto& db) {
-                return db.commitlog()->shutdown();
-            }).get();
-            slogger.info("Drain on shutdown: shutdown commitlog done");
-
+        slogger.info("Drain on shutdown: starts");
+        return ss.do_drain(true).then([] {
             slogger.info("Drain on shutdown: done");
         });
     });
@@ -2122,24 +2097,33 @@ void storage_service::flush_column_families() {
 
 future<> storage_service::drain() {
     return run_with_api_lock(sstring("drain"), [] (storage_service& ss) {
-        return seastar::async([&ss] {
             if (ss._operation_mode == mode::DRAINED) {
                 slogger.warn("Cannot drain node (did it already happen?)");
-                return;
+                return make_ready_future<>();
             }
 
-            promise<> p;
-            drain_in_progress = p.get_future();
+        ss.set_mode(mode::DRAINING, "starting drain process", true);
+        return ss.do_drain(false).then([&ss] {
+            ss._drain_finished.set_value();
+            ss.set_mode(mode::DRAINED, true);
+        });
+    });
+}
 
-            ss.set_mode(mode::DRAINING, "starting drain process", true);
+future<> storage_service::do_drain(bool on_shutdown) {
+    return seastar::async([&ss = *this, on_shutdown] {
             ss.stop_transport().get();
 
             tracing::tracing::tracing_instance().invoke_on_all(&tracing::tracing::shutdown).get();
+
+            if (!on_shutdown) {
 
             // Interrupt on going compaction and shutdown to prevent further compaction
             ss.db().invoke_on_all([] (auto& db) {
                 return db.get_compaction_manager().drain();
             }).get();
+
+            }
 
             ss.set_mode(mode::DRAINING, "flushing column families", false);
             ss.flush_column_families();
@@ -2154,10 +2138,6 @@ future<> storage_service::drain() {
             ss.db().invoke_on_all([] (auto& db) {
                 return db.commitlog()->shutdown();
             }).get();
-
-            ss.set_mode(mode::DRAINED, true);
-            p.set_value();
-        });
     });
 }
 
