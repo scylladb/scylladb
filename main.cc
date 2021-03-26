@@ -1138,6 +1138,13 @@ int main(int ac, char** av) {
 
             sys_dist_ks.start(std::ref(qp), std::ref(mm), std::ref(proxy)).get();
 
+            // Register storage_service to migration_notifier so we can update
+            // pending ranges when keyspace is chagned
+            mm_notifier.local().register_listener(&ss);
+            auto stop_mm_listener = defer_verbose_shutdown("storage service notifications", [&mm_notifier, &ss] {
+                mm_notifier.local().unregister_listener(&ss).get();
+            });
+
             with_scheduling_group(maintenance_scheduling_group, [&] {
                 return ss.init_server();
             }).get();

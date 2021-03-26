@@ -1353,8 +1353,6 @@ future<> storage_service::drain_on_shutdown() {
             }).get();
             slogger.info("Drain on shutdown: shutdown commitlog done");
 
-            ss._mnotifier.local().unregister_listener(&ss).get();
-
             slogger.info("Drain on shutdown: done");
         });
     });
@@ -1373,10 +1371,6 @@ future<> storage_service::init_server(bind_messaging_port do_bind) {
 
     return seastar::async([this, do_bind] {
         _initialized = true;
-
-        // Register storage_service to migration_notifier so we can update
-        // pending ranges when keyspace is chagned
-        _mnotifier.local().register_listener(this);
 
         std::unordered_set<inet_address> loaded_endpoints;
         if (get_property_load_ring_state()) {
