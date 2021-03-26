@@ -421,6 +421,10 @@ class std_vector:
         return int(self.ref['_M_impl']['_M_end_of_storage']) - int(self.ref['_M_impl']['_M_start'])
 
 
+def std_priority_queue(ref):
+    return std_vector(ref['c'])
+
+
 class std_deque:
     # should reflect the value of _GLIBCXX_DEQUE_BUF_SIZE
     DEQUE_BUF_SIZE = 512
