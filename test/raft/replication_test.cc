@@ -709,7 +709,9 @@ RAFT_TEST_CASE(simple_3_pre_chg, (test_case{
          .initial_states = {{.le = {{1,0},{1,1},{1,2},{1,3},{1,4},{1,5},{1,6}}}},
          .updates = {entries{12},new_leader{1},entries{12}},}));
 
-// 2 nodes, leader empoty, follower has 3 spurious entries
+// 3 nodes, leader empty, follower has 3 spurious entries
+// node 1 was leader but did not propagate entries, node 0 becomes leader in new term
+// NOTE: on first leader election term is bumped to 3
 RAFT_TEST_CASE(replace_log_leaders_log_empty, (test_case{
          .nodes = 3, .initial_term = 2,
          .initial_states = {{}, {{{2,10},{2,20},{2,30}}}},
