@@ -1315,16 +1315,9 @@ future<> storage_service::stop_transport() {
 }
 
 future<> storage_service::drain_on_shutdown() {
-    return run_with_no_api_lock([] (storage_service& ss) {
-        if (ss._operation_mode == mode::DRAINING || ss._operation_mode == mode::DRAINED) {
-            return ss._drain_finished.get_future();
-        }
-
-        slogger.info("Drain on shutdown: starts");
-        return ss.do_drain(true).then([] {
-            slogger.info("Drain on shutdown: done");
-        });
-    });
+    assert(this_shard_id() == 0);
+    return (_operation_mode == mode::DRAINING || _operation_mode == mode::DRAINED) ?
+        _drain_finished.get_future() : do_drain(true);
 }
 
 future<> storage_service::init_messaging_service_part() {
