@@ -1347,6 +1347,9 @@ future<> storage_service::drain_on_shutdown() {
             db::get_batchlog_manager().invoke_on_all(&db::batchlog_manager::stop).get();
             slogger.info("Drain on shutdown: stop batchlog manager done");
 
+            service::get_migration_manager().invoke_on_all(&service::migration_manager::stop).get();
+            slogger.info("Drain on shutdown: stop migration manager done");
+
             ss.db().invoke_on_all([] (auto& db) {
                 return db.commitlog()->shutdown();
             }).get();
@@ -2154,7 +2157,7 @@ future<> storage_service::drain() {
             }).get();
 
             ss.set_mode(mode::DRAINING, "shutting down migration manager", false);
-            service::get_migration_manager().stop().get();
+            service::get_migration_manager().invoke_on_all(&service::migration_manager::stop).get();
 
             ss.db().invoke_on_all([] (auto& db) {
                 return db.commitlog()->shutdown();
