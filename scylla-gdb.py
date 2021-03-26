@@ -1295,6 +1295,14 @@ class seastar_shared_ptr():
         return self.ref['_p']
 
 
+class std_shared_ptr():
+    def __init__(self, ref):
+        self.ref = ref
+
+    def get(self):
+        return self.ref['_M_ptr']
+
+
 def has_enable_lw_shared_from_this(type):
     for f in type.fields():
         if f.is_base_class and 'enable_lw_shared_from_this' in f.name:
