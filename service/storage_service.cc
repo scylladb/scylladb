@@ -1344,6 +1344,9 @@ future<> storage_service::drain_on_shutdown() {
             ss.flush_column_families();
             slogger.info("Drain on shutdown: flush column_families done");
 
+            db::get_batchlog_manager().invoke_on_all(&db::batchlog_manager::stop).get();
+            slogger.info("Drain on shutdown: stop batchlog manager done");
+
             ss.db().invoke_on_all([] (auto& db) {
                 return db.commitlog()->shutdown();
             }).get();
