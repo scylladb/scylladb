@@ -2137,11 +2137,7 @@ future<> storage_service::drain() {
             drain_in_progress = p.get_future();
 
             ss.set_mode(mode::DRAINING, "starting drain process", true);
-            ss.shutdown_client_servers();
-            gms::stop_gossiping().get();
-
-            ss.set_mode(mode::DRAINING, "shutting down messaging_service", false);
-            ss.do_stop_ms().get();
+            ss.stop_transport().get();
 
             tracing::tracing::tracing_instance().invoke_on_all(&tracing::tracing::shutdown).get();
 
