@@ -91,66 +91,23 @@ raft::server_id to_raft_id(size_t local_id) {
     return raft::server_id{to_raft_uuid(local_id)};
 }
 
-class sm_value_impl {
-public:
-    sm_value_impl() {};
-    virtual ~sm_value_impl() {}
-    virtual void update(int val) noexcept = 0;
-    virtual int64_t get_value() noexcept = 0;
-    virtual std::unique_ptr<sm_value_impl> copy() const = 0;
-    virtual bool eq(sm_value_impl* o) noexcept {
-        return get_value() == o->get_value();
-    }
-};
-
-class sm_value {
-    std::unique_ptr<sm_value_impl> _impl;
-public:
-    sm_value() {}
-    sm_value(std::unique_ptr<sm_value_impl> impl) : _impl(std::move(impl)) {}
-    sm_value(sm_value&& o) : _impl(std::move(o._impl)) {}
-    sm_value(const sm_value& o) : _impl(o._impl ? o._impl->copy() : nullptr) {}
-
-    void update(int val) {
-        _impl->update(val);
-    }
-    int64_t get_value() {
-        return _impl->get_value();
-    }
-    bool operator==(const sm_value& o) const noexcept {
-        return _impl->eq(&*o._impl);
-    }
-    sm_value& operator=(const sm_value& o) {
-        if (o._impl) {
-            _impl = o._impl->copy();
-        }
-        return *this;
-    }
-};
-
-class hasher_int : public xx_hasher, public sm_value_impl {
+class hasher_int : public xx_hasher {
 public:
     using xx_hasher::xx_hasher;
-    void update(int val) noexcept override {
+    void update(int val) noexcept {
         xx_hasher::update(reinterpret_cast<const char *>(&val), sizeof(val));
     }
-    static sm_value value_for(int max) {
+    static hasher_int hash_range(int max) {
         hasher_int h;
         for (int i = 0; i < max; ++i) {
             h.update(i);
         }
-        return sm_value(std::make_unique<hasher_int>(std::move(h)));
-    }
-    int64_t get_value() noexcept override {
-        return int64_t(finalize_uint64());
-    }
-    std::unique_ptr<sm_value_impl> copy() const override {
-        return std::make_unique<hasher_int>(*this);
+        return h;
     }
 };
 
 struct snapshot_value {
-    sm_value value;
+    hasher_int hasher;
     raft::index_t idx;
 };
 
@@ -160,7 +117,7 @@ using persisted_snapshots = std::unordered_map<raft::server_id, std::pair<raft::
 
 class state_machine : public raft::state_machine {
 public:
-    using apply_fn = std::function<void(raft::server_id id, const std::vector<raft::command_cref>& commands, sm_value& value)>;
+    using apply_fn = std::function<void(raft::server_id id, const std::vector<raft::command_cref>& commands, lw_shared_ptr<hasher_int> hasher)>;
 private:
     raft::server_id _id;
     apply_fn _apply;
@@ -169,13 +126,13 @@ private:
     promise<> _done;
     lw_shared_ptr<snapshots> _snapshots;
 public:
-    sm_value value;
-    state_machine(raft::server_id id, apply_fn apply, sm_value value_, size_t apply_entries,
+    lw_shared_ptr<hasher_int> hasher;
+    state_machine(raft::server_id id, apply_fn apply, size_t apply_entries,
             lw_shared_ptr<snapshots> snapshots):
         _id(id), _apply(std::move(apply)), _apply_entries(apply_entries), _snapshots(snapshots),
-        value(std::move(value_)) {}
+        hasher(make_lw_shared<hasher_int>()) {}
     future<> apply(const std::vector<raft::command_cref> commands) override {
-        _apply(_id, commands, value);
+        _apply(_id, commands, hasher);
         _seen += commands.size();
         if (_seen >= _apply_entries) {
             _done.set_value();
@@ -185,8 +142,8 @@ public:
     }
 
     future<raft::snapshot_id> take_snapshot() override {
-        (*_snapshots)[_id].value = value;
-        tlogger.debug("sm[{}] takes snapshot {}", _id, (*_snapshots)[_id].value.get_value());
+        (*_snapshots)[_id].hasher = *hasher;
+        tlogger.debug("sm[{}] takes snapshot {}", _id, (*_snapshots)[_id].hasher.finalize_uint64());
         (*_snapshots)[_id].idx = raft::index_t{_seen};
         return make_ready_future<raft::snapshot_id>(raft::snapshot_id{utils::make_random_uuid()});
     }
@@ -194,8 +151,8 @@ public:
         (*_snapshots).erase(_id);
     }
     future<> load_snapshot(raft::snapshot_id id) override {
-        value = (*_snapshots)[_id].value;
-        tlogger.debug("sm[{}] loads snapshot {}", _id, (*_snapshots)[_id].value.get_value());
+        hasher = make_lw_shared<hasher_int>((*_snapshots)[_id].hasher);
+        tlogger.debug("sm[{}] loads snapshot {}", _id, (*_snapshots)[_id].hasher.finalize_uint64());
         _seen = (*_snapshots)[_id].idx;
         if (_seen >= _apply_entries) {
             _done.set_value();
@@ -237,7 +194,7 @@ public:
     }
     virtual future<> store_snapshot(const raft::snapshot& snap, size_t preserve_log_entries) {
         (*_persisted_snapshots)[_id] = std::make_pair(snap, (*_snapshots)[_id]);
-        tlogger.debug("sm[{}] persists snapshot {}", _id, (*_snapshots)[_id].value.get_value());
+        tlogger.debug("sm[{}] persists snapshot {}", _id, (*_snapshots)[_id].hasher.finalize_uint64());
         return make_ready_future<>();
     }
     future<raft::snapshot> load_snapshot() override {
@@ -354,10 +311,8 @@ std::pair<std::unique_ptr<raft::server>, state_machine*>
 create_raft_server(raft::server_id uuid, state_machine::apply_fn apply, initial_state state,
         size_t apply_entries, connected connected, lw_shared_ptr<snapshots> snapshots,
         lw_shared_ptr<persisted_snapshots> persisted_snapshots, bool packet_drops) {
-    sm_value val = sm_value(std::make_unique<hasher_int>());
 
-    auto sm = std::make_unique<state_machine>(uuid, std::move(apply), std::move(val),
-            apply_entries, snapshots);
+    auto sm = std::make_unique<state_machine>(uuid, std::move(apply), apply_entries, snapshots);
     auto& rsm = *sm;
     auto mrpc = std::make_unique<rpc>(uuid, connected, snapshots, packet_drops);
     auto mpersistence = std::make_unique<persistence>(uuid, state, snapshots, persisted_snapshots);
@@ -424,13 +379,14 @@ std::vector<raft::command> create_commands(std::vector<T> list) {
     return commands;
 }
 
-void apply_changes(raft::server_id id, const std::vector<raft::command_cref>& commands, sm_value& value) {
+void apply_changes(raft::server_id id, const std::vector<raft::command_cref>& commands,
+        lw_shared_ptr<hasher_int> hasher) {
     tlogger.debug("sm::apply_changes[{}] got {} entries", id, commands.size());
 
     for (auto&& d : commands) {
         auto is = ser::as_input_stream(d);
         int n = ser::deserialize(is, boost::type<int>());
-        value.update(n);      // running hash (values and snapshots)
+        hasher->update(n);      // running hash (values and snapshots)
         tlogger.debug("{}: apply_changes {}", id, n);
     }
 };
@@ -512,16 +468,12 @@ future<> run_test(test_case test, bool packet_drops) {
         leader_snap_skipped = test.initial_snapshots[leader].snap.idx;  // Count existing leader entries
     }
 
-    auto sm_value_for = [&] (int max) {
-        return hasher_int::value_for(max);
-    };
-
     // Server initial logs, etc
     for (size_t i = 0; i < states.size(); ++i) {
         size_t start_idx = 1;
         if (i < test.initial_snapshots.size()) {
             states[i].snapshot = test.initial_snapshots[i].snap;
-            states[i].snp_value.value = sm_value_for(test.initial_snapshots[i].snap.idx);
+            states[i].snp_value.hasher = hasher_int::hash_range(test.initial_snapshots[i].snap.idx);
             states[i].snp_value.idx = test.initial_snapshots[i].snap.idx;
             start_idx = states[i].snapshot.idx + 1;
         }
@@ -675,9 +627,9 @@ future<> run_test(test_case test, bool packet_drops) {
     }
 
     BOOST_TEST_MESSAGE("Verifying hashes match expected (snapshot and apply calls)");
-    auto expected = sm_value_for(test.total_values).get_value();
+    auto expected = hasher_int::hash_range(test.total_values).finalize_uint64();
     for (size_t i = 0; i < rafts.size(); ++i) {
-        auto digest = rafts[i].second->value.get_value();
+        auto digest = rafts[i].second->hasher->finalize_uint64();
         BOOST_CHECK_MESSAGE(digest == expected,
                 format("Digest doesn't match for server [{}]: {} != {}", i, digest, expected));
     }
@@ -686,10 +638,10 @@ future<> run_test(test_case test, bool packet_drops) {
     // TODO: check that snapshot is taken when it should be
     for (auto& s : (*persisted_snaps)) {
         auto& [snp, val] = s.second;
-        auto& digest = val.value;
-        auto expected = sm_value_for(val.idx);
+        auto digest = val.hasher.finalize_uint64();
+        auto expected = hasher_int::hash_range(val.idx).finalize_uint64();
         BOOST_CHECK_MESSAGE(digest == expected,
-                format("Persisted snapshot {} doesn't match {} != {}", snp.id, digest.get_value(), expected.get_value()));
+                format("Persisted snapshot {} doesn't match {} != {}", snp.id, digest, expected));
    }
 
     co_return;
