@@ -80,6 +80,48 @@ class intrusive_list:
         return len(list(self))
 
 
+class intrusive_slist:
+    size_t = gdb.lookup_type('size_t')
+
+    def __init__(self, list_ref):
+        list_type = list_ref.type.strip_typedefs()
+        self.node_type = list_type.template_argument(0)
+        rps = list_ref['data_']['root_plus_size_']
+        self.root = rps['header_holder_']
+
+        # Workaround for the fact that gdb seems to think that a slist entry
+        # has only one template argument, while it has several more. Cause not known.
+        for field in self.node_type.fields():
+            if str(field.type).startswith("boost::intrusive::slist_member_hook"):
+                self.link_offset = int(field.bitpos / 8)
+                return
+
+        if not member_hook:
+            member_hook = get_template_arg_with_prefix(list_type, "struct boost::intrusive::member_hook")
+        if member_hook:
+            self.link_offset = member_hook.template_argument(2).cast(self.size_t)
+        else:
+            self.link_offset = get_base_class_offset(self.node_type, "boost::intrusive::slist_base_hook")
+            if self.link_offset is None:
+                raise Exception("Class does not extend slist_base_hook: " + str(self.node_type))
+
+    def __iter__(self):
+        hook = self.root['next_']
+        while hook != self.root.address:
+            node_ptr = hook.cast(self.size_t) - self.link_offset
+            yield node_ptr.cast(self.node_type.pointer()).dereference()
+            hook = hook['next_']
+
+    def __nonzero__(self):
+        return self.root['next_'] != self.root.address
+
+    def __bool__(self):
+        return self.__nonzero__()
+
+    def __len__(self):
+        return len(list(self))
+
+
 class std_optional:
     def __init__(self, ref):
         self.ref = ref
