@@ -112,8 +112,10 @@ private:
 private:
     reader_permit() = default;
     reader_permit(shared_ptr<impl>);
-    explicit reader_permit(reader_concurrency_semaphore& semaphore, const schema* const schema, std::string_view op_name);
-    explicit reader_permit(reader_concurrency_semaphore& semaphore, const schema* const schema, sstring&& op_name);
+    explicit reader_permit(reader_concurrency_semaphore& semaphore, const schema* const schema, std::string_view op_name,
+            reader_resources base_resources);
+    explicit reader_permit(reader_concurrency_semaphore& semaphore, const schema* const schema, sstring&& op_name,
+            reader_resources base_resources);
 
     void on_waiting();
     void on_admission();
@@ -147,6 +149,8 @@ public:
 
     future<resource_units> wait_admission(size_t memory, db::timeout_clock::time_point timeout);
 
+    future<> maybe_wait_readmission(db::timeout_clock::time_point timeout);
+
     void consume(reader_resources res);
 
     void signal(reader_resources res);
@@ -156,6 +160,8 @@ public:
     resource_units consume_resources(reader_resources res);
 
     reader_resources consumed_resources() const;
+
+    reader_resources base_resources() const;
 
     sstring description() const;
 };

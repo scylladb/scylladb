@@ -96,11 +96,10 @@ public:
 
 private:
     struct entry {
-        promise<reader_permit::resource_units> pr;
+        promise<> pr;
         reader_permit permit;
-        resources res;
-        entry(promise<reader_permit::resource_units>&& pr, reader_permit permit, resources r)
-            : pr(std::move(pr)), permit(std::move(permit)), res(r) {}
+        entry(promise<>&& pr, reader_permit permit)
+            : pr(std::move(pr)), permit(std::move(permit)) {}
     };
 
     class expiry_handler {
@@ -193,9 +192,9 @@ private:
 
     // Add the permit to the wait queue and return the future which resolves when
     // the permit is admitted (popped from the queue).
-    future<reader_permit::resource_units> enqueue_waiter(reader_permit permit, resources r, db::timeout_clock::time_point timeout);
+    future<> enqueue_waiter(reader_permit permit, db::timeout_clock::time_point timeout);
     void evict_readers_in_background();
-    future<reader_permit::resource_units> do_wait_admission(reader_permit permit, size_t memory, db::timeout_clock::time_point timeout);
+    future<> do_wait_admission(reader_permit permit, db::timeout_clock::time_point timeout);
     void maybe_admit_waiters() noexcept;
 
     void on_permit_created(reader_permit::impl&);

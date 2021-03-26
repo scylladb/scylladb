@@ -79,6 +79,8 @@ class reader_permit::impl
     const schema* _schema;
     sstring _op_name;
     std::string_view _op_name_view;
+    reader_resources _base_resources;
+    bool _base_resources_consumed = false;
     reader_resources _resources;
     reader_permit::state _state = reader_permit::state::active_unused;
     uint64_t _used_branches = 0;
@@ -122,22 +124,28 @@ private:
 public:
     struct value_tag {};
 
-    impl(reader_concurrency_semaphore& semaphore, const schema* const schema, const std::string_view& op_name)
+    impl(reader_concurrency_semaphore& semaphore, const schema* const schema, const std::string_view& op_name, reader_resources base_resources)
         : _semaphore(semaphore)
         , _schema(schema)
         , _op_name_view(op_name)
+        , _base_resources(base_resources)
     {
         _semaphore.on_permit_created(*this);
     }
-    impl(reader_concurrency_semaphore& semaphore, const schema* const schema, sstring&& op_name)
+    impl(reader_concurrency_semaphore& semaphore, const schema* const schema, sstring&& op_name, reader_resources base_resources)
         : _semaphore(semaphore)
         , _schema(schema)
         , _op_name(std::move(op_name))
         , _op_name_view(_op_name)
+        , _base_resources(base_resources)
     {
         _semaphore.on_permit_created(*this);
     }
     ~impl() {
+        if (_base_resources_consumed) {
+            signal(_base_resources);
+        }
+
         if (_resources) {
             on_internal_error_noexcept(rcslog, format("reader_permit::impl::~impl(): permit {} detected a leak of {{count={}, memory={}}} resources",
                         description(),
@@ -190,6 +198,8 @@ public:
     void on_admission() {
         assert(_state != reader_permit::state::active_blocked);
         on_permit_active();
+        consume(_base_resources);
+        _base_resources_consumed = true;
     }
 
     void on_register_as_inactive() {
@@ -205,6 +215,10 @@ public:
     void on_evicted() {
         assert(_state == reader_permit::state::inactive);
         _state = reader_permit::state::evicted;
+        if (_base_resources_consumed) {
+            signal(_base_resources);
+            _base_resources_consumed = false;
+        }
     }
 
     void consume(reader_resources res) {
@@ -219,6 +233,10 @@ public:
 
     reader_resources resources() const {
         return _resources;
+    }
+
+    reader_resources base_resources() const {
+        return _base_resources;
     }
 
     sstring description() const {
@@ -271,6 +289,32 @@ public:
             on_permit_unblocked();
         }
     }
+
+    future<> maybe_wait_readmission(db::timeout_clock::time_point timeout) {
+        if (_state != reader_permit::state::evicted) {
+            return make_ready_future<>();
+        }
+        return _semaphore.do_wait_admission(shared_from_this(), timeout);
+    }
+
+    // Support method for old-style admission, which passes a new base resources
+    // each time the permit is admitted.
+    void set_base_resources(reader_resources base_resources) {
+        assert(!_base_resources_consumed);
+        _base_resources = base_resources;
+    }
+
+    // Support method for old-style admission, which passes a new base resources
+    // each time the permit is admitted and after admission it stores the base
+    // resources externally.
+    reader_permit::resource_units base_resources_as_resource_units() {
+        auto res_units = reader_permit::resource_units(reader_permit(shared_from_this()), _base_resources);
+        if (_base_resources_consumed) {
+            signal(_base_resources);
+            _base_resources_consumed = false;
+        }
+        return res_units;
+    }
 };
 
 struct reader_concurrency_semaphore::permit_list {
@@ -284,13 +328,15 @@ reader_permit::reader_permit(shared_ptr<impl> impl) : _impl(std::move(impl))
 {
 }
 
-reader_permit::reader_permit(reader_concurrency_semaphore& semaphore, const schema* const schema, std::string_view op_name)
-    : _impl(::seastar::make_shared<reader_permit::impl>(semaphore, schema, op_name))
+reader_permit::reader_permit(reader_concurrency_semaphore& semaphore, const schema* const schema, std::string_view op_name,
+        reader_resources base_resources)
+    : _impl(::seastar::make_shared<reader_permit::impl>(semaphore, schema, op_name, base_resources))
 {
 }
 
-reader_permit::reader_permit(reader_concurrency_semaphore& semaphore, const schema* const schema, sstring&& op_name)
-    : _impl(::seastar::make_shared<reader_permit::impl>(semaphore, schema, std::move(op_name)))
+reader_permit::reader_permit(reader_concurrency_semaphore& semaphore, const schema* const schema, sstring&& op_name,
+        reader_resources base_resources)
+    : _impl(::seastar::make_shared<reader_permit::impl>(semaphore, schema, std::move(op_name), base_resources))
 {
 }
 
@@ -310,7 +356,14 @@ reader_concurrency_semaphore& reader_permit::semaphore() {
 }
 
 future<reader_permit::resource_units> reader_permit::wait_admission(size_t memory, db::timeout_clock::time_point timeout) {
-    return _impl->semaphore().do_wait_admission(*this, memory, timeout);
+    _impl->set_base_resources(reader_resources(1, static_cast<ssize_t>(memory)));
+    return _impl->semaphore().do_wait_admission(*this, timeout).then([this] {
+        return _impl->base_resources_as_resource_units();
+    });
+}
+
+future<> reader_permit::maybe_wait_readmission(db::timeout_clock::time_point timeout) {
+    return _impl->maybe_wait_readmission(timeout);
 }
 
 void reader_permit::consume(reader_resources res) {
@@ -331,6 +384,10 @@ reader_permit::resource_units reader_permit::consume_resources(reader_resources 
 
 reader_resources reader_permit::consumed_resources() const {
     return _impl->resources();
+}
+
+reader_resources reader_permit::base_resources() const {
+    return _impl->base_resources();
 }
 
 sstring reader_permit::description() const {
@@ -695,23 +752,20 @@ bool reader_concurrency_semaphore::has_available_units(const resources& r) const
     return (bool(_resources) && _resources >= r) || _resources.count == _initial_resources.count;
 }
 
-future<reader_permit::resource_units> reader_concurrency_semaphore::enqueue_waiter(reader_permit permit, resources r,
-        db::timeout_clock::time_point timeout) {
+future<> reader_concurrency_semaphore::enqueue_waiter(reader_permit permit, db::timeout_clock::time_point timeout) {
     if (_wait_list.size() >= _max_queue_length) {
         _stats.total_reads_shed_due_to_overload++;
         if (_prethrow_action) {
             _prethrow_action();
         }
         maybe_dump_reader_permit_diagnostics(*this, *_permit_list, "wait queue overloaded");
-        return make_exception_future<reader_permit::resource_units>(
-                std::make_exception_ptr(std::runtime_error(
-                        format("{}: restricted mutation reader queue overload", _name))));
+        return make_exception_future<>(std::make_exception_ptr(std::runtime_error(format("{}: restricted mutation reader queue overload", _name))));
     }
 
-    promise<reader_permit::resource_units> pr;
+    promise<> pr;
     auto fut = pr.get_future();
     permit.on_waiting();
-    _wait_list.push_back(entry(std::move(pr), std::move(permit), r), timeout);
+    _wait_list.push_back(entry(std::move(pr), std::move(permit)), timeout);
     return fut;
 }
 
@@ -725,17 +779,15 @@ void reader_concurrency_semaphore::evict_readers_in_background() {
     });
  }
 
-future<reader_permit::resource_units> reader_concurrency_semaphore::do_wait_admission(reader_permit permit, size_t memory,
-        db::timeout_clock::time_point timeout) {
-    auto r = resources(1, static_cast<ssize_t>(memory));
+future<> reader_concurrency_semaphore::do_wait_admission(reader_permit permit, db::timeout_clock::time_point timeout) {
     auto first = _wait_list.empty();
 
-    if (first && has_available_units(r)) {
+    if (first && has_available_units(permit.base_resources())) {
         permit.on_admission();
-        return make_ready_future<reader_permit::resource_units>(reader_permit::resource_units(std::move(permit), r));
+        return make_ready_future<>();
     }
 
-    auto fut = enqueue_waiter(std::move(permit), r, timeout);
+    auto fut = enqueue_waiter(std::move(permit), timeout);
 
     if (first && !_inactive_reads.empty()) {
         evict_readers_in_background();
@@ -745,11 +797,11 @@ future<reader_permit::resource_units> reader_concurrency_semaphore::do_wait_admi
 }
 
 void reader_concurrency_semaphore::maybe_admit_waiters() noexcept {
-    while (!_wait_list.empty() && has_available_units(_wait_list.front().res)) {
+    while (!_wait_list.empty() && has_available_units(_wait_list.front().permit.base_resources())) {
         auto& x = _wait_list.front();
         try {
             x.permit.on_admission();
-            x.pr.set_value(reader_permit::resource_units(std::move(x.permit), x.res));
+            x.pr.set_value();
         } catch (...) {
             x.pr.set_exception(std::current_exception());
         }
@@ -795,11 +847,11 @@ void reader_concurrency_semaphore::on_permit_unblocked() noexcept {
 }
 
 reader_permit reader_concurrency_semaphore::make_permit(const schema* const schema, const char* const op_name) {
-    return reader_permit(*this, schema, std::string_view(op_name));
+    return reader_permit(*this, schema, std::string_view(op_name), {});
 }
 
 reader_permit reader_concurrency_semaphore::make_permit(const schema* const schema, sstring&& op_name) {
-    return reader_permit(*this, schema, std::move(op_name));
+    return reader_permit(*this, schema, std::move(op_name), {});
 }
 
 void reader_concurrency_semaphore::broken(std::exception_ptr ex) {
