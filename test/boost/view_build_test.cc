@@ -769,9 +769,9 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering) {
         }
 
     public:
-        consumer_verifier(schema_ptr schema, reader_permit permit, const partition_size_map& partition_rows, std::vector<mutation>& collected_muts)
+        consumer_verifier(schema_ptr schema, reader_concurrency_semaphore& sem, const partition_size_map& partition_rows, std::vector<mutation>& collected_muts)
             : _schema(std::move(schema))
-            , _permit(std::move(permit))
+            , _permit(sem.make_permit(_schema.get(), "consumer_verifier"))
             , _partition_rows(partition_rows)
             , _collected_muts(collected_muts)
             , _rl(std::make_unique<row_locker>(_schema))
@@ -859,7 +859,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering) {
         std::vector<mutation> collected_muts;
 
         staging_reader.consume_in_thread(db::view::view_updating_consumer(schema, permit, as, staging_reader_handle,
-                    consumer_verifier(schema, permit, partition_rows, collected_muts)), db::no_timeout);
+                    consumer_verifier(schema, sem, partition_rows, collected_muts)), db::no_timeout);
 
         BOOST_REQUIRE_EQUAL(muts.size(), collected_muts.size());
         for (size_t i = 0; i < muts.size(); ++i) {
