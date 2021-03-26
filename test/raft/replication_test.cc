@@ -818,5 +818,8 @@ SEASTAR_THREAD_TEST_CASE(test_take_snapshot_and_stream) {
 // TODO: add pre-vote case
 RAFT_TEST_CASE(etcd_test_leader_cycle, (test_case{
          .nodes = 3,
-         .updates = {new_leader{1},new_leader{2},new_leader{0}}}));
+         .updates = {new_leader{1},new_leader{2},new_leader{0},
+                     new_leader{2},new_leader{1},new_leader{0},
+                     new_leader{1},new_leader{0},new_leader{2},
+                     new_leader{0},new_leader{1},new_leader{2}}}));
 
