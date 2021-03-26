@@ -2034,6 +2034,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_reading_empty_table) {
     }
 
     test_reader_lifecycle_policy::operations_gate operations_gate;
+    test_reader_lifecycle_policy::semaphore_registry semaphore_registry;
 
     do_with_cql_env([&] (cql_test_env& env) -> future<> {
         std::vector<std::atomic<bool>> shards_touched(smp::count);
@@ -2050,7 +2051,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_reading_empty_table) {
         };
 
         assert_that(make_multishard_combining_reader(
-                    seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory), operations_gate),
+                    seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory), operations_gate, semaphore_registry),
                     s.schema(),
                     tests::make_permit(),
                     query::full_partition_range,
@@ -2252,7 +2253,8 @@ struct multishard_reader_for_read_ahead {
     std::unique_ptr<dht::partition_range> pr;
 };
 
-multishard_reader_for_read_ahead prepare_multishard_reader_for_read_ahead_test(simple_schema& s, test_reader_lifecycle_policy::operations_gate& operations_gate) {
+multishard_reader_for_read_ahead prepare_multishard_reader_for_read_ahead_test(simple_schema& s, test_reader_lifecycle_policy::operations_gate& operations_gate,
+        test_reader_lifecycle_policy::semaphore_registry& semaphore_registry) {
     auto remote_controls = std::vector<foreign_ptr<std::unique_ptr<puppet_reader::control>>>();
     remote_controls.reserve(smp::count);
     for (unsigned i = 0; i < smp::count; ++i) {
@@ -2309,7 +2311,7 @@ multishard_reader_for_read_ahead prepare_multishard_reader_for_read_ahead_test(s
                 dht::ring_position::ending_at(pkeys_by_tokens.rbegin()->first)));
 
     auto sharder = std::make_unique<dummy_sharder>(s.schema()->get_sharder(), std::move(pkeys_by_tokens));
-    auto reader = make_multishard_combining_reader_for_tests(*sharder, seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory), operations_gate),
+    auto reader = make_multishard_combining_reader_for_tests(*sharder, seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory), operations_gate, semaphore_registry),
             s.schema(), tests::make_permit(), *pr, s.schema()->full_slice(), service::get_local_sstable_query_read_priority());
 
     return {std::move(reader), std::move(sharder), std::move(remote_controls), std::move(pr)};
@@ -2324,6 +2326,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_custom_shard_number) {
 
     auto no_shards = smp::count - 1;
     test_reader_lifecycle_policy::operations_gate operations_gate;
+    test_reader_lifecycle_policy::semaphore_registry semaphore_registry;
 
     do_with_cql_env([&] (cql_test_env& env) -> future<> {
         std::vector<std::atomic<bool>> shards_touched(smp::count);
@@ -2342,7 +2345,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_custom_shard_number) {
 
         assert_that(make_multishard_combining_reader_for_tests(
                 *sharder,
-                seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory), operations_gate),
+                seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory), operations_gate, semaphore_registry),
                 s.schema(),
                 tests::make_permit(),
                 query::full_partition_range,
@@ -2367,6 +2370,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_only_reads_from_needed
     }
 
     test_reader_lifecycle_policy::operations_gate operations_gate;
+    test_reader_lifecycle_policy::semaphore_registry semaphore_registry;
 
     do_with_cql_env([&] (cql_test_env& env) -> future<> {
         std::vector<std::atomic<bool>> shards_touched(smp::count);
@@ -2410,7 +2414,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_only_reads_from_needed
                 inclusive_end ? "inclusive" : "exclusive");
 
         assert_that(make_multishard_combining_reader(
-                seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory), operations_gate),
+                seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory), operations_gate, semaphore_registry),
                 s.schema(),
                 tests::make_permit(),
                 pr,
@@ -2458,11 +2462,12 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_destroyed_with_pending
     }
 
     test_reader_lifecycle_policy::operations_gate operations_gate;
+    test_reader_lifecycle_policy::semaphore_registry semaphore_registry;
 
     do_with_cql_env([&] (cql_test_env& env) -> future<> {
         auto s = simple_schema();
 
-        auto reader_sharder_remote_controls__ = prepare_multishard_reader_for_read_ahead_test(s, operations_gate);
+        auto reader_sharder_remote_controls__ = prepare_multishard_reader_for_read_ahead_test(s, operations_gate, semaphore_registry);
         auto&& reader = reader_sharder_remote_controls__.reader;
         auto&& sharder = reader_sharder_remote_controls__.sharder;
         auto&& remote_controls = reader_sharder_remote_controls__.remote_controls;
@@ -2514,11 +2519,12 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_fast_forwarded_with_pe
     }
 
     test_reader_lifecycle_policy::operations_gate operations_gate;
+    test_reader_lifecycle_policy::semaphore_registry semaphore_registry;
 
     do_with_cql_env([&] (cql_test_env& env) -> future<> {
         auto s = simple_schema();
 
-        auto reader_sharder_remote_controls_pr = prepare_multishard_reader_for_read_ahead_test(s, operations_gate);
+        auto reader_sharder_remote_controls_pr = prepare_multishard_reader_for_read_ahead_test(s, operations_gate, semaphore_registry);
         auto&& reader = reader_sharder_remote_controls_pr.reader;
         auto&& sharder = reader_sharder_remote_controls_pr.sharder;
         auto&& remote_controls = reader_sharder_remote_controls_pr.remote_controls;
@@ -2587,6 +2593,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_fast_forwarded_with_pe
 
 SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_next_partition) {
     test_reader_lifecycle_policy::operations_gate operations_gate;
+    test_reader_lifecycle_policy::semaphore_registry semaphore_registry;
 
     do_with_cql_env([&] (cql_test_env& env) -> future<> {
         env.execute_cql("CREATE KEYSPACE multishard_combining_reader_next_partition_ks"
@@ -2639,7 +2646,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_next_partition) {
             return reader;
         };
         auto reader = make_multishard_combining_reader(
-                seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory), operations_gate),
+                seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory), operations_gate, semaphore_registry),
                 schema,
                 tests::make_permit(),
                 query::full_partition_range,
@@ -2748,8 +2755,9 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_non_strictly_monotonic
     }
 
     test_reader_lifecycle_policy::operations_gate operations_gate;
+    test_reader_lifecycle_policy::semaphore_registry semaphore_registry;
 
-    do_with_cql_env([=, &operations_gate, s = std::move(s)] (cql_test_env& env) mutable -> future<> {
+    do_with_cql_env([=, &operations_gate, &semaphore_registry, s = std::move(s)] (cql_test_env& env) mutable -> future<> {
         auto factory = [=, gs = global_simple_schema(s)] (
                 schema_ptr,
                 const dht::partition_range& range,
@@ -2774,7 +2782,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_non_strictly_monotonic
         BOOST_REQUIRE(mut_opt);
 
         assert_that(make_multishard_combining_reader(
-                    seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory), operations_gate, true),
+                    seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory), operations_gate, semaphore_registry, true),
                     s.schema(),
                     tests::make_permit(),
                     query::full_partition_range,
@@ -2797,6 +2805,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_streaming_reader) {
     }
 
     test_reader_lifecycle_policy::operations_gate operations_gate;
+    test_reader_lifecycle_policy::semaphore_registry semaphore_registry;
 
     do_with_cql_env([&] (cql_test_env& env) -> future<> {
         env.execute_cql("CREATE KEYSPACE multishard_streaming_reader_ks WITH REPLICATION = {'class' : 'SimpleStrategy', 'replication_factor' : 1};").get();
@@ -2840,7 +2849,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_streaming_reader) {
                     streamed_mutation::forwarding::no, fwd_mr);
         };
         auto reference_reader = make_filtering_reader(
-                make_multishard_combining_reader(seastar::make_shared<test_reader_lifecycle_policy>(std::move(reader_factory), operations_gate),
+                make_multishard_combining_reader(seastar::make_shared<test_reader_lifecycle_policy>(std::move(reader_factory), operations_gate, semaphore_registry),
                     schema, tests::make_permit(), partition_range, schema->full_slice(), service::get_local_sstable_query_read_priority()),
                 [&remote_partitioner] (const dht::decorated_key& pkey) {
                     return remote_partitioner.shard_of(pkey.token()) == 0;
