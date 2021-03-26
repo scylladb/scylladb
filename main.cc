@@ -716,6 +716,9 @@ int main(int ac, char** av) {
             tracing::backend_registry tracing_backend_registry;
             tracing::register_tracing_keyspace_backend(tracing_backend_registry);
             tracing::tracing::create_tracing(tracing_backend_registry, "trace_keyspace_helper").get();
+            auto stop_tracing = defer_verbose_shutdown("tracing", [] {
+                tracing::tracing::tracing_instance().stop().get();
+            });
             supervisor::notify("creating snitch");
             i_endpoint_snitch::create_snitch(cfg->endpoint_snitch()).get();
             // #293 - do not stop anything
@@ -1068,6 +1071,15 @@ int main(int ac, char** av) {
                 return local_proxy.start_hints_manager(gms::get_local_gossiper().shared_from_this(), ss.shared_from_this());
             }).get();
 
+            auto drain_proxy = defer_verbose_shutdown("drain storage proxy", [&proxy] {
+                proxy.invoke_on_all([] (service::storage_proxy& local_proxy) mutable {
+                    auto& ss = service::get_local_storage_service();
+                    return ss.unregister_subscriber(&local_proxy).finally([&local_proxy] {
+                        return local_proxy.drain_on_shutdown();
+                    });
+                }).get();
+            });
+
             supervisor::notify("starting messaging service");
             auto max_memory_repair = db.local().get_available_memory() * 0.1;
             repair_service rs(gossiper, max_memory_repair);
@@ -1137,6 +1149,16 @@ int main(int ac, char** av) {
             });
 
             sys_dist_ks.start(std::ref(qp), std::ref(mm), std::ref(proxy)).get();
+            auto stop_sdks = defer_verbose_shutdown("system distributed keyspace", [] {
+                sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::stop).get();
+            });
+
+            // Register storage_service to migration_notifier so we can update
+            // pending ranges when keyspace is chagned
+            mm_notifier.local().register_listener(&ss);
+            auto stop_mm_listener = defer_verbose_shutdown("storage service notifications", [&mm_notifier, &ss] {
+                mm_notifier.local().unregister_listener(&ss).get();
+            });
 
             with_scheduling_group(maintenance_scheduling_group, [&] {
                 return ss.init_server();

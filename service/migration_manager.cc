@@ -71,6 +71,10 @@ migration_manager::migration_manager(migration_notifier& notifier, gms::feature_
 
 future<> migration_manager::stop()
 {
+    if (_as.abort_requested()) {
+        return make_ready_future<>();
+    }
+
     mlogger.info("stopping migration service");
     _as.request_abort();
 

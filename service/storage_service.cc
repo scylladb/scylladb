@@ -1294,8 +1294,6 @@ future<> storage_service::unregister_subscriber(endpoint_lifecycle_subscriber* s
     return _lifecycle_subscribers.remove(subscriber);
 }
 
-static std::optional<future<>> drain_in_progress;
-
 future<> storage_service::stop_transport() {
     return seastar::async([this] {
         slogger.info("Stop transport: starts");
@@ -1317,47 +1315,9 @@ future<> storage_service::stop_transport() {
 }
 
 future<> storage_service::drain_on_shutdown() {
-    return run_with_no_api_lock([] (storage_service& ss) {
-        if (drain_in_progress) {
-            return std::move(*drain_in_progress);
-        }
-        return seastar::async([&ss] {
-            slogger.info("Drain on shutdown: starts");
-
-            ss.stop_transport().get();
-            slogger.info("Drain on shutdown: stop_transport done");
-
-            tracing::tracing::tracing_instance().invoke_on_all([] (auto& tr) {
-                return tr.shutdown();
-            }).get();
-
-            tracing::tracing::tracing_instance().stop().get();
-            slogger.info("Drain on shutdown: tracing is stopped");
-
-            ss._sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::stop).get();
-            slogger.info("Drain on shutdown: system distributed keyspace stopped");
-
-            get_storage_proxy().invoke_on_all([] (storage_proxy& local_proxy) mutable {
-                auto& ss = service::get_local_storage_service();
-              return ss.unregister_subscriber(&local_proxy).finally([&local_proxy] {
-                return local_proxy.drain_on_shutdown();
-              });
-            }).get();
-            slogger.info("Drain on shutdown: hints manager is stopped");
-
-            ss.flush_column_families();
-            slogger.info("Drain on shutdown: flush column_families done");
-
-            ss.db().invoke_on_all([] (auto& db) {
-                return db.commitlog()->shutdown();
-            }).get();
-            slogger.info("Drain on shutdown: shutdown commitlog done");
-
-            ss._mnotifier.local().unregister_listener(&ss).get();
-
-            slogger.info("Drain on shutdown: done");
-        });
-    });
+    assert(this_shard_id() == 0);
+    return (_operation_mode == mode::DRAINING || _operation_mode == mode::DRAINED) ?
+        _drain_finished.get_future() : do_drain(true);
 }
 
 future<> storage_service::init_messaging_service_part() {
@@ -1373,10 +1333,6 @@ future<> storage_service::init_server(bind_messaging_port do_bind) {
 
     return seastar::async([this, do_bind] {
         _initialized = true;
-
-        // Register storage_service to migration_notifier so we can update
-        // pending ranges when keyspace is chagned
-        _mnotifier.local().register_listener(this);
 
         std::unordered_set<inet_address> loaded_endpoints;
         if (get_property_load_ring_state()) {
@@ -2134,44 +2090,45 @@ void storage_service::flush_column_families() {
 
 future<> storage_service::drain() {
     return run_with_api_lock(sstring("drain"), [] (storage_service& ss) {
-        return seastar::async([&ss] {
-            if (ss._operation_mode == mode::DRAINED) {
-                slogger.warn("Cannot drain node (did it already happen?)");
-                return;
-            }
+        if (ss._operation_mode == mode::DRAINED) {
+            slogger.warn("Cannot drain node (did it already happen?)");
+            return make_ready_future<>();
+        }
 
-            promise<> p;
-            drain_in_progress = p.get_future();
+        ss.set_mode(mode::DRAINING, "starting drain process", true);
+        return ss.do_drain(false).then([&ss] {
+            ss._drain_finished.set_value();
+            ss.set_mode(mode::DRAINED, true);
+        });
+    });
+}
 
-            ss.set_mode(mode::DRAINING, "starting drain process", true);
-            ss.shutdown_client_servers();
-            gms::stop_gossiping().get();
+future<> storage_service::do_drain(bool on_shutdown) {
+    return seastar::async([this, on_shutdown] {
+        stop_transport().get();
 
-            ss.set_mode(mode::DRAINING, "shutting down messaging_service", false);
-            ss.do_stop_ms().get();
+        tracing::tracing::tracing_instance().invoke_on_all(&tracing::tracing::shutdown).get();
 
+        if (!on_shutdown) {
             // Interrupt on going compaction and shutdown to prevent further compaction
-            ss.db().invoke_on_all([] (auto& db) {
+            db().invoke_on_all([] (auto& db) {
                 return db.get_compaction_manager().drain();
             }).get();
+        }
 
-            ss.set_mode(mode::DRAINING, "flushing column families", false);
-            ss.flush_column_families();
+        set_mode(mode::DRAINING, "flushing column families", false);
+        flush_column_families();
 
-            db::get_batchlog_manager().invoke_on_all([] (auto& bm) {
-                return bm.stop();
-            }).get();
+        db::get_batchlog_manager().invoke_on_all([] (auto& bm) {
+            return bm.stop();
+        }).get();
 
-            ss.set_mode(mode::DRAINING, "shutting down migration manager", false);
-            service::get_migration_manager().stop().get();
+        set_mode(mode::DRAINING, "shutting down migration manager", false);
+        service::get_migration_manager().invoke_on_all(&service::migration_manager::stop).get();
 
-            ss.db().invoke_on_all([] (auto& db) {
-                return db.commitlog()->shutdown();
-            }).get();
-
-            ss.set_mode(mode::DRAINED, true);
-            p.set_value();
-        });
+        db().invoke_on_all([] (auto& db) {
+            return db.commitlog()->shutdown();
+        }).get();
     });
 }
 

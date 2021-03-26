@@ -823,6 +823,8 @@ public:
     future<std::unordered_map<sstring, sstring>> view_build_statuses(sstring keyspace, sstring view_name) const;
 
 private:
+    promise<> _drain_finished;
+    future<> do_drain(bool on_shutdown);
     /**
      * Seed data to the endpoints that will be responsible for it at the future
      *
