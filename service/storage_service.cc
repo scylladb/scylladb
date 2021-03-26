@@ -2140,6 +2140,8 @@ future<> storage_service::drain() {
             ss.set_mode(mode::DRAINING, "shutting down messaging_service", false);
             ss.do_stop_ms().get();
 
+            tracing::tracing::tracing_instance().invoke_on_all(&tracing::tracing::shutdown).get();
+
             // Interrupt on going compaction and shutdown to prevent further compaction
             ss.db().invoke_on_all([] (auto& db) {
                 return db.get_compaction_manager().drain();
