@@ -1334,9 +1334,6 @@ future<> storage_service::drain_on_shutdown() {
             tracing::tracing::tracing_instance().stop().get();
             slogger.info("Drain on shutdown: tracing is stopped");
 
-            ss._sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::stop).get();
-            slogger.info("Drain on shutdown: system distributed keyspace stopped");
-
             get_storage_proxy().invoke_on_all([] (storage_proxy& local_proxy) mutable {
                 auto& ss = service::get_local_storage_service();
               return ss.unregister_subscriber(&local_proxy).finally([&local_proxy] {

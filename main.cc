@@ -1137,6 +1137,9 @@ int main(int ac, char** av) {
             });
 
             sys_dist_ks.start(std::ref(qp), std::ref(mm), std::ref(proxy)).get();
+            auto stop_sdks = defer_verbose_shutdown("system distributed keyspace", [] {
+                sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::stop).get();
+            });
 
             // Register storage_service to migration_notifier so we can update
             // pending ranges when keyspace is chagned
