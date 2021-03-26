@@ -2668,6 +2668,11 @@ def get_local_task_queues():
     for tq_ptr in static_vector(gdb.parse_and_eval('\'seastar\'::local_engine._task_queues')):
         yield std_unique_ptr(tq_ptr).dereference()
 
+def get_local_io_queues():
+    """ Return a list of io queues for the local reactor. """
+    for dev, ioq in list_unordered_map(gdb.parse_and_eval('\'seastar\'::local_engine._io_queues'), cache=False):
+        yield dev, std_unique_ptr(ioq).dereference()
+
 
 def get_local_tasks(tq_id = None):
     """ Return a list of task pointers for the local reactor. """
@@ -2789,6 +2794,93 @@ class scylla_task_queues(gdb.Command):
                     float(tq['_shares']),
                     len(circular_buffer(tq['_q']))))
 
+
+class scylla_io_queues(gdb.Command):
+    """ Print a summary of the reactor's IO queues.
+
+    Example:
+    Dev 0:
+        Class:                  |shares:         |ptr:            
+        --------------------------------------------------------
+        "default"               |1               |0x6000002c6500  
+        "commitlog"             |1000            |0x6000003ad940  
+        "memtable_flush"        |1000            |0x6000005cb300  
+        "streaming"             |200             |0x0             
+        "query"                 |1000            |0x600000718580  
+        "compaction"            |1000            |0x6000030ef0c0  
+
+        Max request size:    2147483647
+        Max capacity:        Ticket(weight: 4194303, size: 4194303)
+        Capacity tail:       Ticket(weight: 73168384, size: 100561888)
+        Capacity head:       Ticket(weight: 77360511, size: 104242143)
+
+        Resources executing: Ticket(weight: 2176, size: 514048)
+        Resources queued:    Ticket(weight: 384, size: 98304)
+        Handles: (1)
+            Class 0x6000005d7278:
+                Ticket(weight: 128, size: 32768)
+                Ticket(weight: 128, size: 32768)
+                Ticket(weight: 128, size: 32768)
+        Pending in sink: (0)
+
+
+    """
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla io-queues', gdb.COMMAND_USER, gdb.COMPLETE_NONE, True)
+
+    class ticket:
+        def __init__(self, ref):
+            self.ref = ref
+
+        def __str__(self):
+            return f"Ticket(weight: {self.ref['_weight']}, size: {self.ref['_size']})"
+
+    @staticmethod
+    def _print_io_priority_class(pclass_ptr, names_from_ptrs, indent = '\t\t'):
+        pclass = seastar_lw_shared_ptr(pclass_ptr).get().dereference()
+        gdb.write("{}Class {}:\n".format(indent, names_from_ptrs.get(pclass.address, pclass.address)))
+        slist = intrusive_slist(pclass['_queue'])
+        for entry in slist:
+            gdb.write("{}\t{}\n".format(indent, scylla_io_queues.ticket(entry['_ticket'])))
+
+    def invoke(self, arg, for_tty):
+        for dev, ioq in get_local_io_queues():
+            gdb.write("Dev {}:\n".format(dev))
+
+            names = std_array(ioq['_registered_names'])
+            shares = std_array(ioq['_registered_shares'])
+            pclasses = std_vector(ioq['_priority_classes'])
+
+            names_from_ptrs = {}
+
+            gdb.write("\t{:24}|{:16}|{:46}\n".format("Class:", "shares:", "ptr:"))
+            gdb.write("\t" + '-'*64 + "\n")
+            for i, pclass in enumerate(pclasses):
+                pclass_ptr = std_unique_ptr(pclass).get()
+                names_from_ptrs[pclass_ptr] = names[i]
+                gdb.write("\t{:24}|{:16}|({:30}){:16}\n".format(str(names[i]), str(shares[i]), str(pclass_ptr.type), str(pclass_ptr)))
+            gdb.write("\n")
+
+            group = std_shared_ptr(ioq['_group']).get().dereference()
+            gdb.write("\tMax request size:    {}\n".format(group['_maximum_request_size']))
+            gdb.write("\tMax capacity:        {}\n".format(self.ticket(group['_fg']['_maximum_capacity'])))
+            gdb.write("\tCapacity tail:       {}\n".format(self.ticket(std_atomic(group['_fg']['_capacity_tail']).get())))
+            gdb.write("\tCapacity head:       {}\n".format(self.ticket(std_atomic(group['_fg']['_capacity_head']).get())))
+            gdb.write("\n")
+
+            queue = ioq['_fq']
+            gdb.write("\tResources executing: {}\n".format(self.ticket(queue['_resources_executing'])))
+            gdb.write("\tResources queued:    {}\n".format(self.ticket(queue['_resources_queued'])))
+            handles = std_priority_queue(queue['_handles'])
+            gdb.write("\tHandles: ({})\n".format(len(handles)))
+            for pclass_ptr in handles:
+                pass
+                self._print_io_priority_class(pclass_ptr, names_from_ptrs)
+
+            pending = circular_buffer(ioq['_sink']['_pending_io'])
+            gdb.write("\tPending in sink: ({})\n".format(len(pending)))
+            for op in pending:
+                gdb.write("Completion {}\n".format(op['_completion']))
 
 
 
@@ -4243,6 +4335,7 @@ scylla_threads()
 scylla_task_stats()
 scylla_tasks()
 scylla_task_queues()
+scylla_io_queues()
 scylla_fiber()
 scylla_find()
 scylla_task_histogram()
