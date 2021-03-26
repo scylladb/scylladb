@@ -91,6 +91,11 @@ raft::server_id to_raft_id(size_t local_id) {
     return raft::server_id{to_raft_uuid(local_id)};
 }
 
+// NOTE: can_vote = true
+raft::server_address to_server_address(size_t local_id) {
+    return raft::server_address{raft::server_id{to_raft_uuid(local_id)}};
+}
+
 class hasher_int : public xx_hasher {
 public:
     using xx_hasher::xx_hasher;
