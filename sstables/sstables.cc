@@ -1737,8 +1737,9 @@ future<> sstable::generate_summary(const io_priority_class& pc) {
     };
 
     return new_sstable_component_file(_read_error_handler, component_type::Index, open_flags::ro).then([this, &pc] (file index_file) {
-        return do_with(std::move(index_file), [this, &pc] (file index_file) {
-            return index_file.size().then([this, &pc, index_file] (auto index_size) {
+        return do_with(std::move(index_file), std::make_unique<reader_concurrency_semaphore>(reader_concurrency_semaphore::no_limits{}),
+                [this, &pc] (file index_file, std::unique_ptr<reader_concurrency_semaphore>& sem) {
+            return index_file.size().then([this, &pc, index_file, &sem] (auto index_size) {
                 // an upper bound. Surely to be less than this.
                 auto estimated_partitions = std::max<uint64_t>(index_size / sizeof(uint64_t), 1);
                 prepare_summary(_components->summary, estimated_partitions, _schema->min_index_interval());
@@ -1748,8 +1749,7 @@ future<> sstable::generate_summary(const io_priority_class& pc) {
                 options.io_priority_class = pc;
                 return do_with(summary_generator(_schema->get_partitioner(), _components->summary,
                                 _manager.config().sstable_summary_ratio()),
-                        [this, &pc, options = std::move(options), index_file, index_size] (summary_generator& s) mutable {
-                    auto sem = std::make_unique<reader_concurrency_semaphore>(reader_concurrency_semaphore::no_limits{});
+                        [this, &pc, options = std::move(options), index_file, index_size, &sem] (summary_generator& s) mutable {
                     auto ctx = make_lw_shared<index_consume_entry_context<summary_generator>>(
                             sem->make_permit(_schema.get(), "generate-summary"), s, trust_promoted_index::yes, *_schema, index_file, std::move(options), 0, index_size,
                             (_version >= sstable_version_types::mc
@@ -1757,7 +1757,7 @@ future<> sstable::generate_summary(const io_priority_class& pc) {
                                 : std::optional<column_values_fixed_lengths>{}));
                     return ctx->consume_input().finally([ctx] {
                         return ctx->close();
-                    }).then([this, ctx, &s, sem = std::move(sem)] {
+                    }).then([this, ctx, &s] {
                         return seal_summary(_components->summary, std::move(s.first_key), std::move(s.last_key), s.state());
                     });
                 });

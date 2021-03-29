@@ -52,6 +52,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_as_mutation_source) {
     // It has to be a container that does not invalidate pointers
     std::list<dummy_sharder> keep_alive_sharder;
     test_reader_lifecycle_policy::operations_gate operations_gate;
+    test_reader_lifecycle_policy::semaphore_registry semaphore_registry;
 
     do_with_cql_env([&] (cql_test_env& env) -> future<> {
         auto make_populate = [&] (bool evict_paused_readers, bool single_fragment_buffer) {
@@ -108,7 +109,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_as_mutation_source) {
                             return reader;
                     };
 
-                    auto lifecycle_policy = seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory), operations_gate, evict_paused_readers);
+                    auto lifecycle_policy = seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory), operations_gate, semaphore_registry, evict_paused_readers);
                     auto mr = make_multishard_combining_reader_for_tests(keep_alive_sharder.back(), std::move(lifecycle_policy), s,
                             tests::make_permit(), range, slice, pc, trace_state, fwd_mr);
                     if (fwd_sm == streamed_mutation::forwarding::yes) {
