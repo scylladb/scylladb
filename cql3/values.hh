@@ -108,19 +108,6 @@ public:
         return std::get<fragmented_temporary_buffer::view>(_data);
     }
 
-    bool operator==(const raw_value_view& other) const {
-        if (_data.index() != other._data.index()) {
-            return false;
-        }
-        if (is_value() && **this != *other) {
-            return false;
-        }
-        return true;
-    }
-    bool operator!=(const raw_value_view& other) const {
-        return !(*this == other);
-    }
-
     template <typename Func>
     requires std::invocable<Func, const managed_bytes_view&> && std::invocable<Func, const fragmented_temporary_buffer::view&>
     decltype(auto) with_value(Func f) const {
