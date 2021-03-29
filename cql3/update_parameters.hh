@@ -173,6 +173,20 @@ public:
         });
     };
 
+    atomic_cell make_cell(const abstract_type& type, const managed_bytes_view& value, atomic_cell::collection_member cm = atomic_cell::collection_member::no) const {
+        auto ttl = _ttl;
+
+        if (ttl.count() <= 0) {
+            ttl = _schema->default_time_to_live();
+        }
+
+        if (ttl.count() > 0) {
+            return atomic_cell::make_live(type, _timestamp, value, _local_deletion_time + ttl, ttl, cm);
+        } else {
+            return atomic_cell::make_live(type, _timestamp, value, cm);
+        }
+    };
+
     atomic_cell make_cell(const abstract_type& type, const bytes_view& value, atomic_cell::collection_member cm = atomic_cell::collection_member::no) const {
         auto ttl = _ttl;
 
