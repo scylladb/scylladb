@@ -166,9 +166,13 @@ but was recently dropped in Cassandra (version 4.0) and is likely to be
 dropped by Scylla in the future as well, so it is not recommended for new
 applications.
 
-By default scylla listens to the Thrift protocol on port 9160, which can be
-configured via the `rpc_port` configuration option. Again, this confusing name
-was used for backward-compatibility with Cassandra's configuration files.
+By default, Scylla does not enable the Thrift server. In order to use it,
+it must be explicitly enabled by setting the `start_rpc` configuration option
+to true.
+
+When Thrift is enabled, by default scylla listens to the Thrift protocol on port 9160,
+which can be configured via the `rpc_port` configuration option. Again, this confusing
+name was used for backward-compatibility with Cassandra's configuration files.
 Cassandra used the term "rpc" because Apache Thrift is a remote procedure
 call (RPC) framework. In Scylla, this name is especially confusing, because
 as mentioned above, Scylla's internal communication protocol is based on
