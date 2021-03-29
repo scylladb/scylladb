@@ -471,6 +471,27 @@ future<> wait_log(std::vector<std::pair<std::unique_ptr<raft::server>, state_mac
     }
 }
 
+void elapse_elections(std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>& rafts) {
+    for (size_t s = 0; s < rafts.size(); ++s) {
+        rafts[s].first->elapse_election();
+    }
+}
+
+future<size_t> elect_new_leader(std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>& rafts,
+        lw_shared_ptr<connected> connected, size_t leader, size_t new_leader) {
+    BOOST_CHECK_MESSAGE(new_leader < rafts.size(),
+            format("Wrong next leader value {}", new_leader));
+    if (new_leader != leader) {
+        // Make current leader a follower: disconnect, timeout, re-connect
+        connected->disconnect(to_raft_id(leader));
+        elapse_elections(rafts);
+        co_await rafts[new_leader].first->elect_me_leader();
+        tlogger.debug("confirmed leader on {}", new_leader);
+        connected->connect(to_raft_id(leader));
+    }
+    co_return new_leader;
+}
+
 void pause_tickers(std::vector<seastar::timer<lowres_clock>>& tickers) {
     for (auto& ticker: tickers) {
         ticker.cancel();
@@ -562,20 +583,7 @@ future<> run_test(test_case test, bool packet_drops) {
             co_await wait_log(rafts, connected, leader);
             pause_tickers(tickers);
             unsigned next_leader = std::get<new_leader>(update);
-            if (next_leader != leader) {
-                BOOST_CHECK_MESSAGE(next_leader < rafts.size(),
-                        format("Wrong next leader value {}", next_leader));
-                co_await wait_log(rafts, connected, leader);
-                // Make current leader a follower: disconnect, timeout, re-connect
-                connected->disconnect(to_raft_id(leader));
-                for (size_t s = 0; s < test.nodes; ++s) {
-                    rafts[s].first->elapse_election();
-                }
-                co_await rafts[next_leader].first->elect_me_leader();
-                connected->connect(to_raft_id(leader));
-                tlogger.debug("confirmed leader on {}", next_leader);
-                leader = next_leader;
-            }
+            leader = co_await elect_new_leader(rafts, connected, leader, next_leader);
             restart_tickers(tickers);
         } else if (std::holds_alternative<partition>(update)) {
             co_await wait_log(rafts, connected, leader);
@@ -604,12 +612,7 @@ future<> run_test(test_case test, bool packet_drops) {
             }
             if (have_new_leader && new_leader.id != leader) {
                 // New leader specified, elect it
-                for (size_t s = 0; s < test.nodes; ++s) {
-                    rafts[s].first->elapse_election();
-                }
-                co_await rafts[new_leader.id].first->elect_me_leader();
-                tlogger.debug("confirmed leader on {}", new_leader.id);
-                leader = new_leader.id;
+                leader = co_await elect_new_leader(rafts, connected, leader, new_leader.id);
             } else if (partition_servers.find(leader) == partition_servers.end() && p.size() > 0) {
                 // Old leader disconnected and not specified new, free election
                 for (size_t s = 0; s < test.nodes; ++s) {
