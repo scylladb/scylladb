@@ -22,6 +22,7 @@
 #pragma once
 
 #include "types.hh"
+#include "types/collection.hh"
 #include "bytes.hh"
 
 #include <optional>
@@ -78,6 +79,9 @@ public:
     static raw_value_view make_value(fragmented_temporary_buffer::view view) {
         return raw_value_view{view};
     }
+    static raw_value_view make_value(bytes_view view) {
+        return raw_value_view{fragmented_temporary_buffer::view(view)};
+    }
     static raw_value_view make_temporary(raw_value&& value);
     bool is_null() const {
         return std::holds_alternative<null_value>(_data);
@@ -115,6 +119,56 @@ public:
     }
     bool operator!=(const raw_value_view& other) const {
         return !(*this == other);
+    }
+
+    template <typename Func>
+    requires std::invocable<Func, const managed_bytes_view&> && std::invocable<Func, const fragmented_temporary_buffer::view&>
+    decltype(auto) with_value(Func f) const {
+        return f(std::get<fragmented_temporary_buffer::view>(_data));
+    }
+
+    template <typename Func>
+    requires std::invocable<Func, bytes_view>
+    decltype(auto) with_linearized(Func f) const {
+        return with_value([&] (const FragmentedView auto& v) {
+            return ::with_linearized(v, std::forward<Func>(f));
+        });
+    }
+
+    size_t size_bytes() const {
+        return with_value([&] (const FragmentedView auto& v) {
+            return v.size_bytes();
+        });
+    }
+
+    template <typename ValueType>
+    ValueType deserialize(const abstract_type& t) const {
+        return value_cast<ValueType>(with_value([&] (const FragmentedView auto& v) { return t.deserialize(v); }));
+    }
+
+    template <typename ValueType>
+    ValueType deserialize(const collection_type_impl& t, cql_serialization_format sf) const {
+        return value_cast<ValueType>(with_value([&] (const FragmentedView auto& v) { return t.deserialize(v, sf); }));
+    }
+
+    void validate(const abstract_type& t, cql_serialization_format sf) const {
+        return with_value([&] (const FragmentedView auto& v) { return t.validate(v, sf); });
+    }
+
+    template <typename ValueType>
+    ValueType validate_and_deserialize(const collection_type_impl& t, cql_serialization_format sf) const {
+        return with_value([&] (const FragmentedView auto& v) {
+            t.validate(v, sf);
+            return value_cast<ValueType>(t.deserialize(v, sf));
+        });
+    }
+
+    template <typename ValueType>
+    ValueType validate_and_deserialize(const abstract_type& t, cql_serialization_format sf) const {
+        return with_value([&] (const FragmentedView auto& v) {
+            t.validate(v, sf);
+            return value_cast<ValueType>(t.deserialize(v));
+        });
     }
 
     friend std::ostream& operator<<(std::ostream& os, const raw_value_view& value);
@@ -188,6 +242,9 @@ public:
         auto b = std::get_if<bytes>(&_data);
         assert(b);
         return std::move(*b);
+    }
+    bytes to_bytes() && {
+        return std::move(std::get<bytes>(_data));
     }
     raw_value_view to_view() const;
 };
