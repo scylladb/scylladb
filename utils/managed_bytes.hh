@@ -134,7 +134,8 @@ public:
 
     explicit managed_bytes(const bytes& b) : managed_bytes(static_cast<bytes_view>(b)) {}
 
-    explicit managed_bytes(managed_bytes_view v);
+    template <FragmentedView View>
+    explicit managed_bytes(View v);
 
     managed_bytes(initialized_later, size_type size) {
         memory::on_alloc_point();
@@ -479,7 +480,8 @@ inline bytes to_bytes(managed_bytes_view v) {
     return linearized(v);
 }
 
-inline managed_bytes::managed_bytes(managed_bytes_view v) : managed_bytes(initialized_later(), v.size_bytes()) {
+template<FragmentedView View>
+inline managed_bytes::managed_bytes(View v) : managed_bytes(initialized_later(), v.size_bytes()) {
     managed_bytes_mutable_view self(*this);
     write_fragmented(self, v);
 }
