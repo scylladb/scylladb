@@ -106,6 +106,7 @@ private:
 
     std::optional<expr::expression> _where; ///< The entire WHERE clause.
     std::vector<expr::expression> _clustering_prefix_restrictions; ///< Parts of _where defining the clustering slice.
+    std::vector<expr::expression> _partition_range_restrictions; ///< Parts of _where defining the partition range.
 
 public:
     /**

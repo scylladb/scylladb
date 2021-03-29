@@ -142,6 +142,50 @@ to_column_definition(const schema_ptr& schema, const ::shared_ptr<column_identif
 }
 #endif
 
+/// Every token, or if no tokens, an EQ/IN of every single PK column.
+static std::vector<expr::expression> extract_partition_range(
+        const expr::expression& where_clause, schema_ptr schema) {
+    using namespace expr;
+    struct {
+        std::optional<expression> tokens;
+        std::unordered_map<const column_definition*, expression> single_column;
+
+        void operator()(const conjunction& c) {
+            std::ranges::for_each(c.children, [this] (const expression& child) { std::visit(*this, child); });
+        }
+
+        void operator()(const binary_operator& b) {
+            if (std::holds_alternative<token>(b.lhs)) {
+                if (tokens) {
+                    tokens = make_conjunction(std::move(*tokens), b);
+                } else {
+                    tokens = b;
+                }
+            }
+            if (auto s = std::get_if<column_value>(&b.lhs)) {
+                if (s->col->is_partition_key() && (b.op == oper_t::EQ || b.op == oper_t::IN)) {
+                    const auto found = single_column.find(s->col);
+                    if (found == single_column.end()) {
+                        single_column[s->col] = b;
+                    } else {
+                        found->second = make_conjunction(std::move(found->second), b);
+                    }
+                }
+            }
+        }
+
+        void operator()(bool) {}
+    } v;
+    std::visit(v, where_clause);
+    if (v.tokens) {
+        return {std::move(*v.tokens)};
+    }
+    if (v.single_column.size() == schema->partition_key_size()) {
+        return boost::copy_range<std::vector<expression>>(v.single_column | boost::adaptors::map_values);
+    }
+    return {};
+}
+
 /// Extracts where_clause atoms with clustering-column LHS and copies them to a vector such that:
 /// 1. all elements must be simultaneously satisfied (as restrictions) for where_clause to be satisfied
 /// 2. each element is an atom or a conjunction of atoms
@@ -256,6 +300,7 @@ statement_restrictions::statement_restrictions(database& db,
     }
     if (_where.has_value()) {
         _clustering_prefix_restrictions = extract_clustering_prefix_restrictions(*_where, _schema);
+        _partition_range_restrictions = extract_partition_range(*_where, _schema);
     }
     auto& cf = db.find_column_family(schema);
     auto& sim = cf.get_index_manager();
