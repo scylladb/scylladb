@@ -29,6 +29,8 @@ class service_permit {
     service_permit(seastar::semaphore_units<>&& u) : _permit(seastar::make_lw_shared<seastar::semaphore_units<>>(std::move(u))) {}
     friend service_permit make_service_permit(seastar::semaphore_units<>&& permit);
     friend service_permit empty_service_permit();
+public:
+    size_t count() const { return _permit ? _permit->count() : 0; };
 };
 
 inline service_permit make_service_permit(seastar::semaphore_units<>&& permit) {

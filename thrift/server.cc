@@ -27,6 +27,8 @@
 #include <seastar/net/byteorder.hh>
 #include <seastar/core/scattered_message.hh>
 #include <seastar/core/sleep.hh>
+#include <seastar/core/coroutine.hh>
+#include <seastar/core/semaphore.hh>
 #include "log.hh"
 #include <thrift/server/TServer.h>
 #include <thrift/transport/TBufferTransports.h>
@@ -65,11 +67,14 @@ public:
 thrift_server::thrift_server(distributed<database>& db,
                              distributed<cql3::query_processor>& qp,
                              auth::service& auth_service,
+                             service::memory_limiter& ml,
                              thrift_server_config config)
         : _stats(new thrift_stats(*this))
-        , _handler_factory(create_handler_factory(db, qp, auth_service, config.timeout_config).release())
+        , _handler_factory(create_handler_factory(db, qp, auth_service, config.timeout_config, _current_permit).release())
         , _protocol_factory(new TBinaryProtocolFactoryT<TMemoryBuffer>())
         , _processor_factory(new CassandraAsyncProcessorFactory(_handler_factory))
+        , _memory_available(ml.get_semaphore())
+        , _max_concurrent_requests(db.local().get_config().max_concurrent_requests_per_shard)
         , _config(config) {
 }
 
@@ -148,18 +153,45 @@ future<>
 thrift_server::connection::process_one_request() {
     _input->resetBuffer();
     _output->resetBuffer();
-    return read().then([this] {
-        ++_server._requests_served;
-        auto ret = _processor_promise.get_future();
-        // adapt from "continuation object style" to future/promise
-        auto complete = [this] (bool success) mutable {
-            // FIXME: look at success?
-            write().forward_to(std::move(_processor_promise));
-            _processor_promise = promise<>();
-        };
-        _processor->process(complete, _in_proto, _out_proto);
-        return ret;
+    co_await read();
+    if (_server._requests_serving >= _server._max_concurrent_requests) {
+        _server._requests_shed++;
+        tlogger.debug("message dropped due to overload");
+        co_return;
+    }
+    ++_server._requests_serving;
+    ++_server._requests_served;
+    auto ret = _processor_promise.get_future().handle_exception([&server = _server] (const std::exception_ptr&) {
+        server._requests_serving--;
     });
+    // adapt from "continuation object style" to future/promise
+    auto complete = [this] (bool success) mutable {
+        // FIXME: look at success?
+        _server._requests_serving--;
+        write().forward_to(std::move(_processor_promise));
+        _processor_promise = promise<>();
+    };
+    // Heuristics copied from transport/server.cc
+    size_t mem_estimate = 8000 + 2 * _input->available_read();
+    auto fut = get_units(_server._memory_available, mem_estimate);
+    if (_server._memory_available.waiters()) {
+        ++_server._requests_blocked_memory;
+    }
+    auto units = co_await std::move(fut);
+    // NOTICE: this permit is put in the server under the assumption that no other
+    // connection will overwrite this permit *until* it's extracted by the code
+    // which handles the Thrift request (via calling obtain_permit()).
+    // This assumption is true because there are no preemption points between this
+    // insertion and the call to obtain_permit(), which was verified both by
+    // code inspection and confirmed empirically by running manual tests.
+    if (_server._current_permit.count() > 0) {
+        tlogger.debug("Current service permit is overwritten while its units are still held ({}). "
+                "This situation likely means that there's a bug in passing service permits to message handlers.",
+                _server._current_permit.count());
+    }
+    _server._current_permit = make_service_permit(std::move(units));
+    _processor->process(complete, _in_proto, _out_proto);
+    co_return co_await std::move(ret);
 }
 
 future<>
@@ -289,6 +321,31 @@ thrift_server::requests_served() const {
     return _requests_served;
 }
 
+uint64_t
+thrift_server::requests_serving() const {
+    return _requests_serving;
+}
+
+size_t
+thrift_server::max_request_size() const {
+    return _config.max_request_size;
+}
+
+const semaphore&
+thrift_server::memory_available() const {
+    return _memory_available;
+}
+
+uint64_t
+thrift_server::requests_blocked_memory() const {
+    return _requests_blocked_memory;
+}
+
+uint64_t
+thrift_server::requests_shed() const {
+    return _requests_shed;
+}
+
 thrift_stats::thrift_stats(thrift_server& server) {
     namespace sm = seastar::metrics;
 
@@ -301,6 +358,23 @@ thrift_stats::thrift_stats(thrift_server& server) {
 
         sm::make_derive("served", [&server] { return server.requests_served(); },
                         sm::description("Rate of serving Thrift requests.")),
+        sm::make_gauge("serving", [&server] { return server.requests_serving(); },
+                        sm::description("Number of Thrift requests being currently served.")),
+        sm::make_gauge("requests_blocked_memory_current", [&server] { return server.memory_available().waiters(); },
+                        sm::description(
+                            seastar::format("Holds the number of Thrift requests that are currently blocked due to reaching the memory quota limit ({}B). "
+                                            "Non-zero value indicates that our bottleneck is memory and more specifically - the memory quota allocated for the \"Thrift transport\" component.", server.max_request_size()))),
+        sm::make_derive("requests_blocked_memory", [&server] { return server.requests_blocked_memory(); },
+                        sm::description(
+                            seastar::format("Holds an incrementing counter with the Thrift requests that ever blocked due to reaching the memory quota limit ({}B). "
+                                            "The first derivative of this value shows how often we block due to memory exhaustion in the \"Thrift transport\" component.", server.max_request_size()))),
+        sm::make_derive("requests_shed", [&server] { return server.requests_shed(); },
+                        sm::description("Holds an incrementing counter with the requests that were shed due to exceeding the threshold configured via max_concurrent_requests_per_shard. "
+                                            "The first derivative of this value shows how often we shed requests due to exceeding the limit in the \"Thrift transport\" component.")),
+        sm::make_gauge("requests_memory_available", [&server] { return server.memory_available().current(); },
+                        sm::description(
+                            seastar::format("Holds the amount of available memory for admitting new Thrift requests (max is {}B)."
+                                            "Zero value indicates that our bottleneck is memory and more specifically - the memory quota allocated for the \"Thrift transport\" component.", server.max_request_size())))
     });
 }
 

@@ -21,6 +21,7 @@
 
 #pragma once
 
+#include "seastarx.hh"
 #include <seastar/core/semaphore.hh>
 
 namespace service {
