@@ -35,6 +35,7 @@ from subprocess import run, DEVNULL
 
 import distro
 from scylla_sysconfdir import SYSCONFDIR
+from scylla_product import PRODUCT
 
 
 def scriptsdir_p():

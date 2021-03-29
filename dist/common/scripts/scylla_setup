@@ -113,9 +113,9 @@ def interactive_choose_swap_size():
             print(f'"{s}" is not valid number, input again')
 
 pkg_files = {
-        'scylla-jmx': scylladir_p() / 'jmx/scylla-jmx',
-        'scylla-tools': scylladir_p() / 'share/cassandra/bin/cqlsh',
-        'scylla-node-exporter': scylladir_p() / 'node_exporter/node_exporter'
+        f'{PRODUCT}-jmx': scylladir_p() / 'jmx/scylla-jmx',
+        f'{PRODUCT}-tools': scylladir_p() / 'share/cassandra/bin/cqlsh',
+        f'{PRODUCT}-node-exporter': scylladir_p() / 'node_exporter/node_exporter'
         }
 def do_verify_package(pkg):
     if is_offline():
@@ -353,9 +353,9 @@ if __name__ == '__main__':
         verify_package = interactive_ask_service('Do you want to verify the ScyllaDB packages are installed?', 'Yes - runs a script to confirm that ScyllaDB is installed. No - skips the installation check.', verify_package)
         args.no_verify_package = not verify_package
         if verify_package:
-            do_verify_package_and_exit('scylla-jmx')
-            do_verify_package_and_exit('scylla-tools')
-            do_verify_package_and_exit('scylla-node-exporter')
+            do_verify_package_and_exit(f'{PRODUCT}-jmx')
+            do_verify_package_and_exit(f'{PRODUCT}-tools')
+            do_verify_package_and_exit(f'{PRODUCT}-node-exporter')
 
     enable_service = interactive_ask_service('Do you want the Scylla server service to automatically start when the Scylla node boots?', 'Yes - Scylla server service automatically starts on Scylla node boot. No - skips this step. Note you will have to start the Scylla Server service manually.', enable_service)
     args.no_enable_service = not enable_service
@@ -508,7 +508,7 @@ if __name__ == '__main__':
         if io_setup:
             run_setup_script('IO configuration', 'scylla_io_setup')
 
-    if do_verify_package('scylla-node-exporter'):
+    if do_verify_package(f'{PRODUCT}-node-exporter'):
         node_exporter = interactive_ask_service('Do you want to enable node exporter to export Prometheus data from the node? Note that the Scylla monitoring stack uses this data', 'Yes - enable node exporter. No - skip this  step.', node_exporter)
     args.no_node_exporter = not node_exporter
     if node_exporter:
