@@ -175,6 +175,29 @@ private:
     void register_metrics();
     seastar::metrics::metric_groups _metrics;
 
+    // Server address set to be used by RPC module to maintain its address
+    // mappings.
+    // Doesn't really correspond to any configuration, neither
+    // committed, nor applied. This is just an artificial address set
+    // meant entirely for RPC purposes and is constructed from the last
+    // configuration entry in the log (prior to sending out the messages in the
+    // `io_fiber`) as follows:
+    // * If the config is non-joint, it's the current configuration.
+    // * If the config is joint, it's defined as a union of current and
+    //   previous configurations.
+    //   The motivation behind this is that server should have a collective
+    //   set of addresses from both leaving and joining nodes before
+    //   sending the messages, because it may send to both types of nodes.
+    // After the new address set is built the diff between the last rpc config
+    // observed by the `server_impl` instance and the one obtained from the last
+    // conf entry is calculated. The diff is used to maintain rpc state for
+    // joining and leaving servers.
+    server_address_set _current_rpc_config;
+    const server_address_set& get_rpc_config() const;
+    // Per-item updates to rpc config.
+    void add_to_rpc_config(server_address srv);
+    void remove_from_rpc_config(const server_address& srv);
+
     friend std::ostream& operator<<(std::ostream& os, const server_impl& s);
 };
 
@@ -197,6 +220,7 @@ future<> server_impl::start() {
     auto snp_id = snapshot.id;
     auto log_entries = co_await _persistence->load_log();
     auto log = raft::log(std::move(snapshot), std::move(log_entries));
+    raft::configuration rpc_config = log.get_configuration();
     index_t stable_idx = log.stable_idx();
     _fsm = std::make_unique<fsm>(_id, term, vote, std::move(log), *_failure_detector,
                                  fsm_config {
@@ -208,6 +232,12 @@ future<> server_impl::start() {
     if (snp_id) {
         co_await _state_machine->load_snapshot(snp_id);
         _last_loaded_snapshot_id = snp_id;
+        // Update RPC address map from the latest configuration (either from
+        // the log or the snapshot)
+        for (const auto& addr: rpc_config.current) {
+            add_to_rpc_config(addr);
+            _rpc->add_server(addr.id, addr.info);
+        }
     }
 
     // start fiber to persist entries added to in-memory log
@@ -353,6 +383,21 @@ future<> server_impl::send_message(server_id id, Message m) {
     }, std::move(m));
 }
 
+static configuration_diff diff_address_sets(const server_address_set& prev, const server_address_set& current) {
+    configuration_diff result;
+    for (const auto& s : current) {
+        if (!prev.contains(s)) {
+            result.joining.insert(s);
+        }
+    }
+    for (const auto& s : prev) {
+        if (!current.contains(s)) {
+            result.leaving.insert(s);
+        }
+    }
+    return result;
+}
+
 future<> server_impl::io_fiber(index_t last_stable) {
     logger.trace("[{}] io_fiber start", _id);
     try {
@@ -403,11 +448,35 @@ future<> server_impl::io_fiber(index_t last_stable) {
                 _stats.persisted_log_entries += entries.size();
             }
 
+            // Update RPC server address mappings. Add servers which are joining
+            // the cluster according to the new configuration (obtained from the
+            // last_conf_idx).
+            //
+            // It should be done prior to sending the messages since the RPC
+            // module needs to know who should it send the messages to (actual
+            // network addresses of the joining servers).
+            configuration_diff rpc_diff;
+            if (batch.rpc_configuration) {
+                const server_address_set& current_rpc_config = get_rpc_config();
+                rpc_diff = diff_address_sets(get_rpc_config(), *batch.rpc_configuration);
+                for (const auto& addr: rpc_diff.joining) {
+                    add_to_rpc_config(addr);
+                    _rpc->add_server(addr.id, addr.info);
+                }
+            }
+
             if (batch.messages.size()) {
                 // After entries are persisted we can send messages.
                 co_await seastar::parallel_for_each(std::move(batch.messages), [this] (std::pair<server_id, rpc_message>& message) {
                     return send_message(message.first, std::move(message.second));
                 });
+            }
+
+            if (batch.rpc_configuration) {
+                for (const auto& addr: rpc_diff.leaving) {
+                    remove_from_rpc_config(addr);
+                    _rpc->remove_server(addr.id);
+                }
             }
 
             // Process committed entries.
@@ -646,6 +715,18 @@ void server_impl::elapse_election() {
 
 void server_impl::tick() {
     _fsm->tick();
+}
+
+const server_address_set& server_impl::get_rpc_config() const {
+    return _current_rpc_config;
+}
+
+void server_impl::add_to_rpc_config(server_address srv) {
+    _current_rpc_config.emplace(std::move(srv));
+}
+
+void server_impl::remove_from_rpc_config(const server_address& srv) {
+    _current_rpc_config.erase(srv);
 }
 
 std::unique_ptr<server> create_server(server_id uuid, std::unique_ptr<rpc> rpc,

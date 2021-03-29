@@ -137,7 +137,7 @@ struct configuration {
 
         // leaving
         for (const auto& s : current) {
-            if (c_new.count(s) == 0) {
+            if (!c_new.contains(s)) {
                 diff.leaving.insert(s);
             }
         }

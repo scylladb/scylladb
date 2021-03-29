@@ -27,6 +27,7 @@
 #include "gms/inet_address.hh"
 #include "raft/raft.hh"
 #include "raft/server.hh"
+#include "service/raft/raft_address_map.hh"
 
 namespace cql3 {
 
@@ -67,7 +68,7 @@ class raft_services : public seastar::peering_sharded_service<raft_services> {
     // Currently ticking every 100ms.
     std::unordered_map<raft::server_id, servers_value_type> _servers;
     // inet_address:es for remote raft servers known to us
-    std::unordered_map<raft::server_id, gms::inet_address> _server_addresses;
+    raft_address_map<> _srv_address_mappings;
 
     void init_rpc_verbs();
     seastar::future<> uninit_rpc_verbs();
@@ -93,7 +94,7 @@ public:
     // Update inet_address mapping for a raft server with a given id.
     // In case a mapping exists for a given id, it should be equal to the supplied `addr`
     // otherwise the function will throw.
-    void update_address_mapping(raft::server_id id, gms::inet_address addr);
+    void update_address_mapping(raft::server_id id, gms::inet_address addr, bool expiring);
     // Remove inet_address mapping for a raft server
     void remove_address_mapping(raft::server_id);
 };

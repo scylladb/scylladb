@@ -66,8 +66,7 @@ void raft_rpc::add_server(raft::server_id id, raft::server_info info) {
     auto in = ser::as_input_stream(bytes_view(info));
     // Entries explicitly managed via `rpc::add_server` and `rpc::remove_server` should never expire
     // while entries learnt upon receiving an rpc message should be expirable.
-    // TODO: support expiration policies for `raft_services::update_address_mapping`
-    _raft_services.update_address_mapping(id, ser::deserialize(in, boost::type<gms::inet_address>()));
+    _raft_services.update_address_mapping(id, ser::deserialize(in, boost::type<gms::inet_address>()), false);
 }
 
 void raft_rpc::remove_server(raft::server_id id) {

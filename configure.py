@@ -432,6 +432,7 @@ scylla_tests = set([
     'test/boost/radix_tree_test',
     'test/boost/double_decker_test',
     'test/boost/stall_free_test',
+    'test/boost/raft_address_map_test',
     'test/boost/raft_sys_table_storage_test',
     'test/boost/sstable_set_test',
     'test/manual/ec2_snitch_test',
