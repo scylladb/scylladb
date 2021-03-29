@@ -155,6 +155,20 @@ public:
         });
     }
 
+    friend managed_bytes_opt to_managed_bytes_opt(const cql3::raw_value_view& view) {
+        if (view.is_value()) {
+            return view.with_value([] (const FragmentedView auto& v) { return managed_bytes(v); });
+        }
+        return managed_bytes_opt();
+    }
+
+    friend managed_bytes_opt to_managed_bytes_opt(cql3::raw_value_view&& view) {
+        if (view._temporary_storage) {
+            return std::move(*view._temporary_storage);
+        }
+        return to_managed_bytes_opt(view);
+    }
+
     friend std::ostream& operator<<(std::ostream& os, const raw_value_view& value);
     friend class raw_value;
 };
@@ -182,6 +196,9 @@ class raw_value {
     raw_value(managed_bytes&& data)
         : _data{std::move(data)}
     {}
+    raw_value(const managed_bytes& data)
+        : _data{data}
+    {}
 public:
     static raw_value make_null() {
         return raw_value{std::move(null_value{})};
@@ -190,8 +207,17 @@ public:
         return raw_value{std::move(unset_value{})};
     }
     static raw_value make_value(const raw_value_view& view);
-    static raw_value make_value(managed_bytes&& bytes) {
-        return raw_value{std::move(bytes)};
+    static raw_value make_value(managed_bytes&& mb) {
+        return raw_value{std::move(mb)};
+    }
+    static raw_value make_value(const managed_bytes& mb) {
+        return raw_value{mb};
+    }
+    static raw_value make_value(const managed_bytes_opt& mbo) {
+        if (mbo) {
+            return make_value(*mbo);
+        }
+        return make_null();
     }
     static raw_value make_value(bytes&& bytes) {
         return raw_value{std::move(bytes)};
