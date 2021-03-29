@@ -466,6 +466,7 @@ scylla_tests = set([
     'test/boost/vint_serialization_test',
     'test/boost/virtual_reader_test',
     'test/boost/virtual_table_mutation_source_test',
+    'test/boost/virtual_table_test',
     'test/boost/bptree_test',
     'test/boost/btree_test',
     'test/boost/radix_tree_test',
