@@ -30,7 +30,6 @@ class sstable_writer_k_l : public sstable_writer::writer_impl {
     std::unique_ptr<file_writer> _writer;
     shard_id _shard; // Specifies which shard new sstable will belong to.
     write_monitor* _monitor;
-    bool _correctly_serialize_non_compound_range_tombstones;
     utils::UUID _run_identifier;
 
     std::unique_ptr<file_writer> _index;
@@ -109,7 +108,6 @@ public:
     sstable_writer_k_l(sstable_writer_k_l&& o) : writer_impl(o._sst, o._schema, o._pc, o._cfg), _backup(o._backup),
         _leave_unsealed(o._leave_unsealed), _compression_enabled(o._compression_enabled), _writer(std::move(o._writer)),
         _shard(o._shard), _monitor(o._monitor),
-        _correctly_serialize_non_compound_range_tombstones(o._correctly_serialize_non_compound_range_tombstones),
         _run_identifier(o._run_identifier),
         _index(std::move(o._index)),
         _max_sstable_size(o._max_sstable_size), _tombstone_written(o._tombstone_written),

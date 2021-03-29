@@ -1233,52 +1233,6 @@ SEASTAR_TEST_CASE(test_promoted_index_is_absent_for_schemas_without_clustering_k
     });
 }
 
-SEASTAR_TEST_CASE(test_can_write_and_read_non_compound_range_tombstone_as_compound) {
-    return seastar::async([] {
-     test_env::do_with_async([] (test_env& env) {
-      for (const auto version : all_sstable_versions) {
-        storage_service_for_tests ssft;
-        auto dir = tmpdir();
-        schema_builder builder("ks", "cf");
-        builder.with_column("p", utf8_type, column_kind::partition_key);
-        builder.with_column("c", int32_type, column_kind::clustering_key);
-        builder.with_column("v", int32_type);
-        auto s = builder.build(schema_builder::compact_storage::yes);
-
-        auto dk = dht::decorate_key(*s, partition_key::from_exploded(*s, {to_bytes(make_local_key(s))}));
-        mutation m(s, dk);
-
-        m.partition().apply_row_tombstone(*s, range_tombstone(
-                clustering_key_prefix::from_exploded(*s, {int32_type->decompose(1)}),
-                bound_kind::incl_start,
-                clustering_key_prefix::from_exploded(*s, {int32_type->decompose(2)}),
-                bound_kind::incl_end,
-                {1, gc_clock::now()}));
-
-        auto mt = make_lw_shared<memtable>(s);
-        mt->apply(m);
-
-        auto sst = env.make_sstable(s,
-                                          dir.path().string(),
-                                          1 /* generation */,
-                                          version,
-                                          sstables::sstable::format_types::big);
-        sstable_writer_config cfg = env.manager().configure_writer();
-        cfg.correctly_serialize_non_compound_range_tombstones = false;
-        sst->write_components(mt->make_flat_reader(s, tests::make_permit()), 1, s, cfg, mt->get_encoding_stats()).get();
-        sst->load().get();
-
-        {
-            auto slice = partition_slice_builder(*s).build();
-            assert_that(sst->as_mutation_source().make_reader(s, tests::make_permit(), dht::partition_range::make_singular(dk), slice))
-                    .produces(m)
-                    .produces_end_of_stream();
-        }
-      }
-     }).get();
-    });
-}
-
 SEASTAR_TEST_CASE(test_writing_combined_stream_with_tombstones_at_the_same_position) {
     return seastar::async([] {
      test_env::do_with_async([] (test_env& env) {
@@ -1679,40 +1633,37 @@ SEASTAR_TEST_CASE(test_static_compact_tables_are_read) {
     return test_env::do_with_async([] (test_env& env) {
         storage_service_for_tests ssft;
         for (const auto version : all_sstable_versions) {
-            for (auto correctly_serialize : {false, true}) {
-                auto s = schema_builder("ks", "test")
-                    .with_column("pk", int32_type, column_kind::partition_key)
-                    .with_column("v1", int32_type)
-                    .with_column("v2", int32_type)
-                    .build(schema_builder::compact_storage::yes);
+            auto s = schema_builder("ks", "test")
+                .with_column("pk", int32_type, column_kind::partition_key)
+                .with_column("v1", int32_type)
+                .with_column("v2", int32_type)
+                .build(schema_builder::compact_storage::yes);
 
-                auto pk1 = partition_key::from_exploded(*s, {int32_type->decompose(1)});
-                auto dk1 = dht::decorate_key(*s, pk1);
-                mutation m1(s, dk1);
-                m1.set_clustered_cell(clustering_key::make_empty(), *s->get_column_definition("v1"),
-                    atomic_cell::make_live(*int32_type, 1511270919978349, int32_type->decompose(4), {}));
+            auto pk1 = partition_key::from_exploded(*s, {int32_type->decompose(1)});
+            auto dk1 = dht::decorate_key(*s, pk1);
+            mutation m1(s, dk1);
+            m1.set_clustered_cell(clustering_key::make_empty(), *s->get_column_definition("v1"),
+                atomic_cell::make_live(*int32_type, 1511270919978349, int32_type->decompose(4), {}));
 
-                auto pk2 = partition_key::from_exploded(*s, {int32_type->decompose(2)});
-                auto dk2 = dht::decorate_key(*s, pk2);
-                mutation m2(s, dk2);
-                m2.set_clustered_cell(clustering_key::make_empty(), *s->get_column_definition("v1"),
-                    atomic_cell::make_live(*int32_type, 1511270919978348, int32_type->decompose(5), {}));
-                m2.set_clustered_cell(clustering_key::make_empty(), *s->get_column_definition("v2"),
-                    atomic_cell::make_live(*int32_type, 1511270919978347, int32_type->decompose(6), {}));
+            auto pk2 = partition_key::from_exploded(*s, {int32_type->decompose(2)});
+            auto dk2 = dht::decorate_key(*s, pk2);
+            mutation m2(s, dk2);
+            m2.set_clustered_cell(clustering_key::make_empty(), *s->get_column_definition("v1"),
+                atomic_cell::make_live(*int32_type, 1511270919978348, int32_type->decompose(5), {}));
+            m2.set_clustered_cell(clustering_key::make_empty(), *s->get_column_definition("v2"),
+                atomic_cell::make_live(*int32_type, 1511270919978347, int32_type->decompose(6), {}));
 
-                std::vector<mutation> muts = {m1, m2};
-                boost::sort(muts, mutation_decorated_key_less_comparator{});
+            std::vector<mutation> muts = {m1, m2};
+            boost::sort(muts, mutation_decorated_key_less_comparator{});
 
-                tmpdir dir;
-                sstable_writer_config cfg = env.manager().configure_writer();
-                cfg.correctly_serialize_static_compact_in_mc = correctly_serialize;
-                auto ms = make_sstable_mutation_source(env, s, dir.path().string(), muts, cfg, version);
+            tmpdir dir;
+            sstable_writer_config cfg = env.manager().configure_writer();
+            auto ms = make_sstable_mutation_source(env, s, dir.path().string(), muts, cfg, version);
 
-                assert_that(ms.make_reader(s, tests::make_permit()))
-                    .produces(muts[0])
-                    .produces(muts[1])
-                    .produces_end_of_stream();
-            }
+            assert_that(ms.make_reader(s, tests::make_permit()))
+                .produces(muts[0])
+                .produces(muts[1])
+                .produces_end_of_stream();
         }
     });
 }
