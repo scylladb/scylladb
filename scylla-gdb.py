@@ -80,6 +80,48 @@ class intrusive_list:
         return len(list(self))
 
 
+class intrusive_slist:
+    size_t = gdb.lookup_type('size_t')
+
+    def __init__(self, list_ref):
+        list_type = list_ref.type.strip_typedefs()
+        self.node_type = list_type.template_argument(0)
+        rps = list_ref['data_']['root_plus_size_']
+        self.root = rps['header_holder_']
+
+        # Workaround for the fact that gdb seems to think that a slist entry
+        # has only one template argument, while it has several more. Cause not known.
+        for field in self.node_type.fields():
+            if str(field.type).startswith("boost::intrusive::slist_member_hook"):
+                self.link_offset = int(field.bitpos / 8)
+                return
+
+        if not member_hook:
+            member_hook = get_template_arg_with_prefix(list_type, "struct boost::intrusive::member_hook")
+        if member_hook:
+            self.link_offset = member_hook.template_argument(2).cast(self.size_t)
+        else:
+            self.link_offset = get_base_class_offset(self.node_type, "boost::intrusive::slist_base_hook")
+            if self.link_offset is None:
+                raise Exception("Class does not extend slist_base_hook: " + str(self.node_type))
+
+    def __iter__(self):
+        hook = self.root['next_']
+        while hook != self.root.address:
+            node_ptr = hook.cast(self.size_t) - self.link_offset
+            yield node_ptr.cast(self.node_type.pointer()).dereference()
+            hook = hook['next_']
+
+    def __nonzero__(self):
+        return self.root['next_'] != self.root.address
+
+    def __bool__(self):
+        return self.__nonzero__()
+
+    def __len__(self):
+        return len(list(self))
+
+
 class std_optional:
     def __init__(self, ref):
         self.ref = ref
@@ -377,6 +419,10 @@ class std_vector:
 
     def external_memory_footprint(self):
         return int(self.ref['_M_impl']['_M_end_of_storage']) - int(self.ref['_M_impl']['_M_start'])
+
+
+def std_priority_queue(ref):
+    return std_vector(ref['c'])
 
 
 class std_deque:
@@ -1251,6 +1297,22 @@ class seastar_shared_ptr():
 
     def get(self):
         return self.ref['_p']
+
+
+class std_shared_ptr():
+    def __init__(self, ref):
+        self.ref = ref
+
+    def get(self):
+        return self.ref['_M_ptr']
+
+
+class std_atomic():
+    def __init__(self, ref):
+        self.ref = ref
+
+    def get(self):
+        return self.ref['_M_i']
 
 
 def has_enable_lw_shared_from_this(type):
@@ -2606,6 +2668,11 @@ def get_local_task_queues():
     for tq_ptr in static_vector(gdb.parse_and_eval('\'seastar\'::local_engine._task_queues')):
         yield std_unique_ptr(tq_ptr).dereference()
 
+def get_local_io_queues():
+    """ Return a list of io queues for the local reactor. """
+    for dev, ioq in list_unordered_map(gdb.parse_and_eval('\'seastar\'::local_engine._io_queues'), cache=False):
+        yield dev, std_unique_ptr(ioq).dereference()
+
 
 def get_local_tasks(tq_id = None):
     """ Return a list of task pointers for the local reactor. """
@@ -2727,6 +2794,93 @@ class scylla_task_queues(gdb.Command):
                     float(tq['_shares']),
                     len(circular_buffer(tq['_q']))))
 
+
+class scylla_io_queues(gdb.Command):
+    """ Print a summary of the reactor's IO queues.
+
+    Example:
+    Dev 0:
+        Class:                  |shares:         |ptr:            
+        --------------------------------------------------------
+        "default"               |1               |0x6000002c6500  
+        "commitlog"             |1000            |0x6000003ad940  
+        "memtable_flush"        |1000            |0x6000005cb300  
+        "streaming"             |200             |0x0             
+        "query"                 |1000            |0x600000718580  
+        "compaction"            |1000            |0x6000030ef0c0  
+
+        Max request size:    2147483647
+        Max capacity:        Ticket(weight: 4194303, size: 4194303)
+        Capacity tail:       Ticket(weight: 73168384, size: 100561888)
+        Capacity head:       Ticket(weight: 77360511, size: 104242143)
+
+        Resources executing: Ticket(weight: 2176, size: 514048)
+        Resources queued:    Ticket(weight: 384, size: 98304)
+        Handles: (1)
+            Class 0x6000005d7278:
+                Ticket(weight: 128, size: 32768)
+                Ticket(weight: 128, size: 32768)
+                Ticket(weight: 128, size: 32768)
+        Pending in sink: (0)
+
+
+    """
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla io-queues', gdb.COMMAND_USER, gdb.COMPLETE_NONE, True)
+
+    class ticket:
+        def __init__(self, ref):
+            self.ref = ref
+
+        def __str__(self):
+            return f"Ticket(weight: {self.ref['_weight']}, size: {self.ref['_size']})"
+
+    @staticmethod
+    def _print_io_priority_class(pclass_ptr, names_from_ptrs, indent = '\t\t'):
+        pclass = seastar_lw_shared_ptr(pclass_ptr).get().dereference()
+        gdb.write("{}Class {}:\n".format(indent, names_from_ptrs.get(pclass.address, pclass.address)))
+        slist = intrusive_slist(pclass['_queue'])
+        for entry in slist:
+            gdb.write("{}\t{}\n".format(indent, scylla_io_queues.ticket(entry['_ticket'])))
+
+    def invoke(self, arg, for_tty):
+        for dev, ioq in get_local_io_queues():
+            gdb.write("Dev {}:\n".format(dev))
+
+            names = std_array(ioq['_registered_names'])
+            shares = std_array(ioq['_registered_shares'])
+            pclasses = std_vector(ioq['_priority_classes'])
+
+            names_from_ptrs = {}
+
+            gdb.write("\t{:24}|{:16}|{:46}\n".format("Class:", "shares:", "ptr:"))
+            gdb.write("\t" + '-'*64 + "\n")
+            for i, pclass in enumerate(pclasses):
+                pclass_ptr = std_unique_ptr(pclass).get()
+                names_from_ptrs[pclass_ptr] = names[i]
+                gdb.write("\t{:24}|{:16}|({:30}){:16}\n".format(str(names[i]), str(shares[i]), str(pclass_ptr.type), str(pclass_ptr)))
+            gdb.write("\n")
+
+            group = std_shared_ptr(ioq['_group']).get().dereference()
+            gdb.write("\tMax request size:    {}\n".format(group['_maximum_request_size']))
+            gdb.write("\tMax capacity:        {}\n".format(self.ticket(group['_fg']['_maximum_capacity'])))
+            gdb.write("\tCapacity tail:       {}\n".format(self.ticket(std_atomic(group['_fg']['_capacity_tail']).get())))
+            gdb.write("\tCapacity head:       {}\n".format(self.ticket(std_atomic(group['_fg']['_capacity_head']).get())))
+            gdb.write("\n")
+
+            queue = ioq['_fq']
+            gdb.write("\tResources executing: {}\n".format(self.ticket(queue['_resources_executing'])))
+            gdb.write("\tResources queued:    {}\n".format(self.ticket(queue['_resources_queued'])))
+            handles = std_priority_queue(queue['_handles'])
+            gdb.write("\tHandles: ({})\n".format(len(handles)))
+            for pclass_ptr in handles:
+                pass
+                self._print_io_priority_class(pclass_ptr, names_from_ptrs)
+
+            pending = circular_buffer(ioq['_sink']['_pending_io'])
+            gdb.write("\tPending in sink: ({})\n".format(len(pending)))
+            for op in pending:
+                gdb.write("Completion {}\n".format(op['_completion']))
 
 
 
@@ -4181,6 +4335,7 @@ scylla_threads()
 scylla_task_stats()
 scylla_tasks()
 scylla_task_queues()
+scylla_io_queues()
 scylla_fiber()
 scylla_find()
 scylla_task_histogram()
