@@ -306,12 +306,14 @@ class memtable {
     std::vector<dht::decorated_key> _dkeys;
     lw_shared_ptr<::memtable> _single_row;
     lw_shared_ptr<::memtable> _multi_row;
+    lw_shared_ptr<::memtable> _large_partition;
     std::optional<dht::partition_range> _partition_range;
 public:
     memtable()
         : _dkeys(_schema.make_pkeys(partition_count))
         , _single_row(make_lw_shared<::memtable>(_schema.schema()))
         , _multi_row(make_lw_shared<::memtable>(_schema.schema()))
+        , _large_partition(make_lw_shared<::memtable>(_schema.schema()))
     {
         boost::for_each(
             _dkeys
@@ -337,12 +339,27 @@ public:
                 _multi_row->apply(m);
             }
         );
+        boost::for_each(
+            _dkeys
+            | boost::adaptors::transformed([&] (auto& dkey) {
+                auto m = mutation(_schema.schema(), dkey);
+                // Make sure the partition fills buffers in flat mutation reader multiple times
+                for (auto i = 0u; i < 8 * 1024; i++) {
+                    m.apply(_schema.make_row(_schema.make_ckey(i), "value"));
+                }
+                return m;
+            }),
+            [&] (mutation m) {
+                _large_partition->apply(m);
+            }
+        );
     }
 protected:
     schema_ptr schema() const { return _schema.schema(); }
 
     ::memtable& single_row_mt() { return *_single_row; }
     ::memtable& multi_row_mt() { return *_multi_row; }
+    ::memtable& large_partition_mt() { return *_large_partition; }
 
     const dht::partition_range& single_partition_range() {
         auto& dk = _dkeys[_dkeys.size() / 2];
@@ -379,6 +396,11 @@ PERF_TEST_F(memtable, one_partition_many_rows)
     return consume_all(multi_row_mt().make_flat_reader(schema(), tests::make_permit(), single_partition_range()));
 }
 
+PERF_TEST_F(memtable, one_large_partition)
+{
+    return consume_all(large_partition_mt().make_flat_reader(schema(), tests::make_permit(), single_partition_range()));
+}
+
 PERF_TEST_F(memtable, many_partitions_one_row)
 {
     return consume_all(single_row_mt().make_flat_reader(schema(), tests::make_permit(), multi_partition_range(25)));
@@ -387,6 +409,11 @@ PERF_TEST_F(memtable, many_partitions_one_row)
 PERF_TEST_F(memtable, many_partitions_many_rows)
 {
     return consume_all(multi_row_mt().make_flat_reader(schema(), tests::make_permit(), multi_partition_range(25)));
+}
+
+PERF_TEST_F(memtable, many_large_partitions)
+{
+    return consume_all(large_partition_mt().make_flat_reader(schema(), tests::make_permit(), multi_partition_range(25)));
 }
 
 }
