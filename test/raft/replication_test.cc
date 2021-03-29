@@ -528,13 +528,7 @@ future<> run_test(test_case test, bool packet_drops) {
             if (next_leader != leader) {
                 BOOST_CHECK_MESSAGE(next_leader < rafts.size(),
                         format("Wrong next leader value {}", next_leader));
-                // Wait for leader log to propagate
-                auto leader_log_idx = rafts[leader].first->log_last_idx();
-                for (size_t s = 0; s < test.nodes; ++s) {
-                    if (s != leader && connected(to_raft_id(s))) {
-                        co_await rafts[s].first->wait_log_idx(leader_log_idx);
-                    }
-                }
+                co_await wait_log(rafts, connected, leader);
                 // Make current leader a follower: disconnect, timeout, re-connect
                 connected.disconnect(to_raft_id(leader));
                 for (size_t s = 0; s < test.nodes; ++s) {
