@@ -131,22 +131,23 @@ public:
         // Stops when consumer returns stop_iteration::yes or end of stream is reached.
         // Next call will start from the next mutation_fragment in the stream.
         future<> consume_pausable(Consumer consumer, db::timeout_clock::time_point timeout) {
-            return do_with(std::move(consumer), [this, timeout] (Consumer& consumer) {
-                return repeat([this, &consumer, timeout] {
-                    if (is_end_of_stream() && is_buffer_empty()) {
+            return repeat([this, consumer = std::move(consumer), timeout] () mutable {
+                if (is_buffer_empty()) {
+                    if (is_end_of_stream()) {
                         return make_ready_future<stop_iteration>(stop_iteration::yes);
                     }
-
-                    if (is_buffer_empty()) {
-                        return fill_buffer(timeout).then([] {
-                            return make_ready_future<stop_iteration>(stop_iteration::no);
-                        });
-                    }
-
-                    return futurize_invoke([&consumer, mf = pop_mutation_fragment()] () mutable {
-                        return consumer(std::move(mf));
+                    return fill_buffer(timeout).then([] {
+                        return make_ready_future<stop_iteration>(stop_iteration::no);
                     });
-                });
+                }
+
+                if constexpr (std::is_same_v<future<stop_iteration>, decltype(consumer(pop_mutation_fragment()))>) {
+                    return consumer(pop_mutation_fragment());
+                } else {
+                    auto result = stop_iteration::no;
+                    while ((result = consumer(pop_mutation_fragment())) != stop_iteration::yes && !is_buffer_empty() && !need_preempt()) {}
+                    return make_ready_future<stop_iteration>(result);
+                }
             });
         }
 
