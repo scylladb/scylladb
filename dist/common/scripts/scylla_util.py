@@ -403,6 +403,8 @@ class aws_instance:
             if not self.__device_exists(self.__xenify(dev)):
                 continue
             self._disks[t] += [self.__xenify(dev)]
+        if not 'ebs' in self._disks:
+            self._disks['ebs'] = []
 
     def __mac_address(self, nic='eth0'):
         with open('/sys/class/net/{}/address'.format(nic)) as f:
