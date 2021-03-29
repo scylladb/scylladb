@@ -24,10 +24,11 @@
 namespace cql3 {
 
 std::ostream& operator<<(std::ostream& os, const raw_value_view& value) {
-    seastar::visit(value._data, [&] (fragmented_temporary_buffer::view v) {
+    seastar::visit(value._data, [&] (FragmentedView auto v) {
         os << "{ value: ";
-        using boost::range::for_each;
-        for_each(v, [&os] (bytes_view bv) { os << bv; });
+        for (bytes_view frag : fragment_range(v)) {
+            os << frag;
+        }
         os << " }";
     }, [&] (null_value) {
         os << "{ null }";
@@ -39,32 +40,33 @@ std::ostream& operator<<(std::ostream& os, const raw_value_view& value) {
 
 raw_value_view raw_value::to_view() const {
     switch (_data.index()) {
-    case 0:  return raw_value_view::make_value(fragmented_temporary_buffer::view(bytes_view{std::get<bytes>(_data)}));
-    case 1:  return raw_value_view::make_null();
+    case 0:  return raw_value_view::make_value(managed_bytes_view(bytes_view(std::get<bytes>(_data))));
+    case 1:  return raw_value_view::make_value(managed_bytes_view(std::get<managed_bytes>(_data)));
+    case 2:  return raw_value_view::make_null();
     default: return raw_value_view::make_unset_value();
     }
 }
 
 raw_value raw_value::make_value(const raw_value_view& view) {
-    if (view.is_null()) {
-        return make_null();
+    switch (view._data.index()) {
+    case 0:  return raw_value::make_value(managed_bytes(std::get<fragmented_temporary_buffer::view>(view._data)));
+    case 1:  return raw_value::make_value(managed_bytes(std::get<managed_bytes_view>(view._data)));
+    case 2:  return raw_value::make_null();
+    default: return raw_value::make_unset_value();
     }
-    if (view.is_unset_value()) {
-        return make_unset_value();
-    }
-    return make_value(linearized(*view));
 }
 
 raw_value_view raw_value_view::make_temporary(raw_value&& value) {
-    if (!value) {
-        return raw_value_view::make_null();
+    switch (value._data.index()) {
+    case 0:  return raw_value_view(managed_bytes(std::get<bytes>(value._data)));
+    case 1:  return raw_value_view(std::move(std::get<managed_bytes>(value._data)));
+    default: return raw_value_view::make_null();
     }
-    return raw_value_view(std::move(value).extract_value());
 }
 
-raw_value_view::raw_value_view(bytes&& tmp) {
-    _temporary_storage = make_lw_shared<bytes>(std::move(tmp));
-    _data = fragmented_temporary_buffer::view(bytes_view(*_temporary_storage));
+raw_value_view::raw_value_view(managed_bytes&& tmp) {
+    _temporary_storage = make_lw_shared<managed_bytes>(std::move(tmp));
+    _data = managed_bytes_view(*_temporary_storage);
 }
 
 }
