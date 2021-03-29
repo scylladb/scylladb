@@ -1741,41 +1741,64 @@ future<> db::commitlog::segment_manager::delete_file(const sstring& filename) {
 }
 
 future<> db::commitlog::segment_manager::delete_segments(std::vector<sstring> files) {
-    auto i = files.begin();
-    auto e = files.end();
+    if (files.empty()) {
+        co_return;
+    }
 
-    co_await parallel_for_each(i, e, [this](auto& filename) -> future<> {
-        auto exts = cfg.extensions;
-        if (exts && !exts->commitlog_file_extensions().empty()) {
-            for (auto& ext : exts->commitlog_file_extensions()) {
-                co_await ext->before_delete(filename);
-            }
-        }
+    clogger.debug("Delete segments {}", files);
+
+    while (!files.empty()) {
+        auto filename = std::move(files.back());
+        files.pop_back();
+
         try {
-            // We allow reuse of the segment if the current disk size is less than shard max.
-            auto usage = totals.total_size_on_disk;
-            if (!_shutdown && cfg.reuse_segments && usage <= max_disk_size) {
-                descriptor d(next_id(), "Recycled-" + cfg.fname_prefix);
-                auto dst = this->filename(d);
+            auto exts = cfg.extensions;
+            if (exts && !exts->commitlog_file_extensions().empty()) {
+                for (auto& ext : exts->commitlog_file_extensions()) {
+                    co_await ext->before_delete(filename);
+                }
+            }
 
-                clogger.debug("Recycling segment file {}", filename);
-                // must rename the file since we must ensure the
-                // data is not replayed. Changing the name will
-                // cause header ID to be invalid in the file -> ignored
-                try {
-                    co_await rename_file(filename, dst);                
-                    auto b = _recycled_segments.push(std::move(dst));
-                    assert(b); // we set this to max_size_t so...
-                    co_return;
-                } catch (...) {
-                    // fallthrough
-                } 
+            // We allow reuse of the segment if the current disk size is less than shard max.
+            if (!_shutdown && cfg.reuse_segments) {
+                auto usage = totals.total_size_on_disk;
+                auto recycle = usage <= max_disk_size;
+
+                // if total size is not a multiple of segment size, we need
+                // to check if we are the overlap segment, and noone else
+                // can be recycled. If so, let this one live so allocation
+                // can proceed. We assume/hope a future delete will kill
+                // files down to under the threshold, but we should expect
+                // to stomp around nearest multiple of segment size, not 
+                // the actual limit.
+                if (!recycle && _recycled_segments.empty() && files.empty()) {
+                    auto size = co_await seastar::file_size(filename);
+                    recycle = (usage - size) <= max_disk_size;
+                }
+
+                if (recycle) {
+                    descriptor d(next_id(), "Recycled-" + cfg.fname_prefix);
+                    auto dst = this->filename(d);
+
+                    clogger.debug("Recycling segment file {}", filename);
+                    // must rename the file since we must ensure the
+                    // data is not replayed. Changing the name will
+                    // cause header ID to be invalid in the file -> ignored
+                    try {
+                        co_await rename_file(filename, dst);
+                        auto b = _recycled_segments.push(std::move(dst));
+                        assert(b); // we set this to max_size_t so...
+                        continue;
+                    } catch (...) {
+                        // fallthrough
+                    }
+                }
             }
             co_await delete_file(filename);
         } catch (...) {
             clogger.error("Could not delete segment {}: {}", filename, std::current_exception());
         }
-    });
+    }
 }
 
 future<> db::commitlog::segment_manager::do_pending_deletes() {
