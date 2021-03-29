@@ -58,10 +58,6 @@ public:
     static bytes pack(Iterator start, Iterator finish, int elements, cql_serialization_format sf);
 
     template <typename Iterator>
-    requires requires (Iterator it) { {*it} -> std::convertible_to<bytes_view>; }
-    static managed_bytes pack_fragmented(Iterator start, Iterator finish, int elements, cql_serialization_format sf);
-
-    template <typename Iterator>
     requires requires (Iterator it) { {*it} -> std::convertible_to<managed_bytes_view>; }
     static managed_bytes pack_fragmented(Iterator start, Iterator finish, int elements, cql_serialization_format sf);
 
@@ -128,25 +124,6 @@ collection_type_impl::pack(Iterator start, Iterator finish, int elements, cql_se
     write_collection_size(i, elements, sf);
     while (start != finish) {
         write_collection_value(i, sf, *start++);
-    }
-    return out;
-}
-
-// TODO: remove after all collections types in cql3/ are converted to managed_bytes
-template <typename Iterator>
-requires requires (Iterator it) { {*it} -> std::convertible_to<bytes_view>; }
-managed_bytes
-collection_type_impl::pack_fragmented(Iterator start, Iterator finish, int elements, cql_serialization_format sf) {
-    size_t len = collection_size_len(sf);
-    size_t psz = collection_value_len(sf);
-    for (auto j = start; j != finish; j++) {
-        len += j->size() + psz;
-    }
-    managed_bytes out(managed_bytes::initialized_later(), len);
-    managed_bytes_mutable_view v(out);
-    write_collection_size(v, elements, sf);
-    while (start != finish) {
-        write_collection_value(v, sf, *start++);
     }
     return out;
 }
