@@ -1511,7 +1511,9 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
     if (!cfg.allow_going_over_size_limit && max_disk_size != 0 && totals.total_size_on_disk >= max_disk_size) {
         clogger.debug("Disk usage ({} MB) exceeds maximum ({} MB) - allocation will wait...", totals.total_size_on_disk/(1024*1024), max_disk_size/(1024*1024));
         auto f = cfg.reuse_segments ? _recycled_segments.not_empty() :  _disk_deletions.get_shared_future();
-        return f.then([this] {
+        return f.handle_exception([this](auto ep) {
+            clogger.warn("Exception while waiting for segments {}. Will retry allocation...", ep);
+        }).then([this] {
             return allocate_segment();
         });
     }
@@ -1747,6 +1749,8 @@ future<> db::commitlog::segment_manager::delete_segments(std::vector<sstring> fi
 
     clogger.debug("Delete segments {}", files);
 
+    std::exception_ptr recycle_error;
+
     while (!files.empty()) {
         auto filename = std::move(files.back());
         files.pop_back();
@@ -1790,6 +1794,7 @@ future<> db::commitlog::segment_manager::delete_segments(std::vector<sstring> fi
                         assert(b); // we set this to max_size_t so...
                         continue;
                     } catch (...) {
+                        recycle_error = std::current_exception();
                         // fallthrough
                     }
                 }
@@ -1798,6 +1803,18 @@ future<> db::commitlog::segment_manager::delete_segments(std::vector<sstring> fi
         } catch (...) {
             clogger.error("Could not delete segment {}: {}", filename, std::current_exception());
         }
+    }
+
+    // #8376 - if we had an error in recycling (disk rename?), and no elements
+    // are available, we could have waiters hoping they will get segements.
+    // abort the queue (wakes up any existing waiters - futures), and let them
+    // retry. Since we did deletions instead, disk footprint should allow
+    // for new allocs at least. Or more likely, everything is broken, but
+    // we will at least make more noise.
+    if (recycle_error && _recycled_segments.empty()) {
+        _recycled_segments.abort(recycle_error);
+        // and ensure next lap(s) still has a queue
+        _recycled_segments = queue<sstring>(std::numeric_limits<size_t>::max());
     }
 }
 
