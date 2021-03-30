@@ -24,6 +24,8 @@ import os
 import sys
 import tempfile
 import tarfile
+import shutil
+import glob
 from scylla_util import *
 import argparse
 
@@ -61,6 +63,9 @@ if __name__ == '__main__':
             f.write(data)
         with tarfile.open('/var/tmp/node_exporter-{version}.linux-amd64.tar.gz'.format(version=VERSION)) as tf:
             tf.extractall(INSTALL_DIR)
+        shutil.chown(f'{INSTALL_DIR}/node_exporter-{VERSION}.linux-amd64', 'root', 'root')
+        for f in glob.glob(f'{INSTALL_DIR}/node_exporter-{VERSION}.linux-amd64/*'):
+            shutil.chown(f, 'root', 'root')
         os.remove('/var/tmp/node_exporter-{version}.linux-amd64.tar.gz'.format(version=VERSION))
         if node_exporter_p.exists():
             node_exporter_p.unlink()
