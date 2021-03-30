@@ -35,6 +35,7 @@
 #include "database.hh"
 #include <seastar/util/bool_class.hh>
 #include <seastar/core/metrics_registration.hh>
+#include <seastar/core/coroutine.hh>
 #include <list>
 #include <vector>
 #include <algorithm>
@@ -788,6 +789,7 @@ public:
             seastar::sharded<db::view::view_update_generator>& view_update_generator,
             column_family& cf,
             schema_ptr s,
+            reader_permit permit,
             dht::token_range range,
             row_level_diff_detect_algorithm algo,
             size_t max_row_buf_size,
@@ -805,7 +807,7 @@ public:
             , _view_update_generator(view_update_generator)
             , _cf(cf)
             , _schema(s)
-            , _permit(_cf.streaming_read_concurrency_semaphore().make_permit(_schema.get(), "repair-meta"))
+            , _permit(std::move(permit))
             , _range(range)
             , _cmp(repair_sync_boundary::tri_compare(*_schema))
             , _algo(algo)
@@ -931,6 +933,19 @@ public:
                 reason] (schema_ptr s) {
             auto& db = repair.get_db();
             auto& cf = db.local().find_column_family(s->id());
+          return db.local().obtain_reader_permit(cf, "repair-meta", db::no_timeout).then([s = std::move(s),
+                    &db,
+                    &cf,
+                    &repair,
+                    from,
+                    repair_meta_id,
+                    range,
+                    algo,
+                    max_row_buf_size,
+                    seed,
+                    master_node_shard_config,
+                    schema_version,
+                    reason] (reader_permit permit) mutable {
             node_repair_meta_id id{from, repair_meta_id};
             auto rm = make_lw_shared<repair_meta>(db,
                     repair.get_messaging().container(),
@@ -938,6 +953,7 @@ public:
                     repair.get_view_update_generator(),
                     cf,
                     s,
+                    std::move(permit),
                     range,
                     algo,
                     max_row_buf_size,
@@ -956,6 +972,7 @@ public:
             } else {
                 rlogger.debug("insert_repair_meta: Inserted repair_meta_id {} for node {}", id.repair_meta_id, id.ip);
             }
+          });
         });
     }
 
@@ -2827,12 +2844,15 @@ public:
             auto schema_version = s->version();
             bool table_dropped = false;
 
+            auto permit = _ri.db.local().obtain_reader_permit(_cf, "repair-meta", db::no_timeout).get0();
+
             repair_meta master(_ri.db,
                     _ri.messaging,
                     _ri.sys_dist_ks,
                     _ri.view_update_generator,
                     _cf,
                     s,
+                    std::move(permit),
                     _range,
                     algorithm,
                     max_row_buf_size,
