@@ -358,9 +358,11 @@ private:
     bool cannot_hint(const Range& targets, db::write_type type) const;
     bool hints_enabled(db::write_type type) const noexcept;
     db::hints::manager& hints_manager_for(db::write_type type);
+    bool is_likely_to_respond_in_time(const gms::inet_address& ep, clock_type::time_point timeout);
     std::vector<gms::inet_address> get_live_endpoints(keyspace& ks, const dht::token& token) const;
+    std::vector<gms::inet_address> get_live_endpoints_for_read(keyspace& ks, const dht::token& token, clock_type::time_point timeout);
     static void sort_endpoints_by_proximity(std::vector<gms::inet_address>& eps);
-    std::vector<gms::inet_address> get_live_sorted_endpoints(keyspace& ks, const dht::token& token) const;
+    std::vector<gms::inet_address> get_live_sorted_endpoints_for_read(keyspace& ks, const dht::token& token, clock_type::time_point timeout);
     db::read_repair_decision new_read_repair_decision(const schema& s);
     ::shared_ptr<abstract_read_executor> get_read_executor(lw_shared_ptr<query::read_command> cmd,
             schema_ptr schema,
@@ -370,7 +372,8 @@ private:
             tracing::trace_state_ptr trace_state,
             const std::vector<gms::inet_address>& preferred_endpoints,
             bool& is_bounced_read,
-            service_permit permit);
+            service_permit permit,
+            clock_type::time_point timeout);
     future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>> query_result_local(schema_ptr, lw_shared_ptr<query::read_command> cmd, const dht::partition_range& pr,
                                                                            query::result_options opts,
                                                                            tracing::trace_state_ptr trace_state,
