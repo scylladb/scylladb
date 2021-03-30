@@ -1535,7 +1535,8 @@ storage_proxy_stats::stats::stats()
         , digest_read_errors(COORDINATOR_STATS_CATEGORY, "read_errors", "number of digest read requests that failed", "digest")
         , mutation_data_read_attempts(COORDINATOR_STATS_CATEGORY, "reads", "number of mutation data read requests", "mutation_data")
         , mutation_data_read_completed(COORDINATOR_STATS_CATEGORY, "completed_reads", "number of mutation data read requests that completed", "mutation_data")
-        , mutation_data_read_errors(COORDINATOR_STATS_CATEGORY, "read_errors", "number of mutation data read requests that failed", "mutation_data") { }
+        , mutation_data_read_errors(COORDINATOR_STATS_CATEGORY, "read_errors", "number of mutation data read requests that failed", "mutation_data")
+        , read_requests_speculatively_refused(COORDINATOR_STATS_CATEGORY, "read_requests_speculatively_refused", "number of requests which were destined for this endpoint, but speculatively refused", "data") { }
 
 void storage_proxy_stats::stats::register_split_metrics_local() {
     write_stats::register_split_metrics_local();
@@ -4670,6 +4671,7 @@ bool storage_proxy::is_likely_alive(const gms::inet_address& ep, clock_type::tim
         int fail_chance = std::min<long>((time_without_response.count() - time_left.count()) * granularity / time_left.count(), granularity - 1);
         int roll = dice(_urandom);
         if (roll < fail_chance) {
+            ++get_stats().read_requests_speculatively_refused.get_ep_stat(ep);
             slogger.debug("Overload protection: speculatively disqualifying {} as a candidate for a read request with {}ms left until timeout, "
                     "since it hasn't responded for at least {}ms", ep, time_left.count(), time_without_response.count());
             return false;
