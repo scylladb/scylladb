@@ -633,11 +633,11 @@ future<page_consume_result<ResultBuilder>> read_page(
             mutation_reader::forwarding fwd_mr) {
         return make_multishard_combining_reader(ctx, std::move(s), std::move(permit), pr, ps, pc, std::move(trace_state), fwd_mr);
     });
-    auto reader = make_flat_multi_range_reader(s, ctx->permit(), std::move(ms), ranges,
-            cmd.slice, service::get_local_sstable_query_read_priority(), trace_state, mutation_reader::forwarding::no);
-
     auto compaction_state = make_lw_shared<compact_for_result_state<ResultBuilder>>(*s, cmd.timestamp, cmd.slice, cmd.get_row_limit(),
             cmd.partition_limit);
+
+    auto reader = make_flat_multi_range_reader(s, ctx->permit(), std::move(ms), ranges,
+            cmd.slice, service::get_local_sstable_query_read_priority(), trace_state, mutation_reader::forwarding::no);
 
     auto [ckey, result] = co_await query::consume_page(reader, compaction_state, cmd.slice, std::move(result_builder), cmd.get_row_limit(),
             cmd.partition_limit, cmd.timestamp, timeout, *cmd.max_result_size);
