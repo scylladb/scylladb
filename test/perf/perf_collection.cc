@@ -65,10 +65,10 @@ public:
 
     struct tri_compare {
         key_tri_compare _cmp;
-        int operator()(const per_key_t a, const per_key_t b) const noexcept { return _cmp(a, b); }
-        int operator()(const perf_intrusive_key& a, const perf_intrusive_key& b) const noexcept { return _cmp(a._k, b._k); }
-        int operator()(const per_key_t a, const perf_intrusive_key& b) const noexcept { return _cmp(a, b._k); }
-        int operator()(const perf_intrusive_key& a, const per_key_t b) const noexcept { return _cmp(a._k, b); }
+        std::strong_ordering operator()(const per_key_t a, const per_key_t b) const noexcept { return _cmp(a, b) <=> 0; }
+        std::strong_ordering operator()(const perf_intrusive_key& a, const perf_intrusive_key& b) const noexcept { return _cmp(a._k, b._k) <=> 0; }
+        std::strong_ordering operator()(const per_key_t a, const perf_intrusive_key& b) const noexcept { return _cmp(a, b._k) <=> 0; }
+        std::strong_ordering operator()(const perf_intrusive_key& a, const per_key_t b) const noexcept { return _cmp(a._k, b) <=> 0; }
     };
 };
 

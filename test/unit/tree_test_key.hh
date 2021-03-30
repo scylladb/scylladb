@@ -120,6 +120,6 @@ struct test_key_compare {
 };
 
 struct test_key_tri_compare {
-    int operator()(const tree_test_key_base& a, const tree_test_key_base& b) const noexcept { return a.compare(b); }
-    int operator()(const int a, const tree_test_key_base& b) const noexcept { return -b.compare(a); }
+    std::strong_ordering operator()(const tree_test_key_base& a, const tree_test_key_base& b) const noexcept { return a.compare(b) <=> 0; }
+    std::strong_ordering operator()(const int a, const tree_test_key_base& b) const noexcept { return -b.compare(a) <=> 0; }
 };

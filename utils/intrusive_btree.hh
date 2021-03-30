@@ -325,8 +325,8 @@ private:
     }
 
     template <typename K>
-    int find_in_inline(const K& k, const Compare& cmp) const {
-        return _inline.empty() ? 1 : cmp(k, *(_inline.keys[0]->to_key<Key, Hook>()));
+    std::strong_ordering find_in_inline(const K& k, const Compare& cmp) const {
+        return _inline.empty() ? std::strong_ordering::greater : cmp(k, *(_inline.keys[0]->to_key<Key, Hook>()));
     }
 
     void break_inline() {
@@ -416,7 +416,7 @@ public:
     requires KeyPointer<Pointer, Key>
     std::pair<iterator, bool> insert_before_hint(iterator hint, Pointer kptr, Compare cmp) {
         seastar::memory::on_alloc_point();
-        int x = -1;
+        auto x = std::strong_ordering::less;
 
         if (hint != end()) {
             x = cmp(*kptr, *hint);
@@ -426,7 +426,7 @@ public:
         }
 
         if (x < 0) {
-            x = 1;
+            x = std::strong_ordering::greater;
 
             if (hint != begin()) {
                 auto prev = std::prev(hint);
@@ -1077,7 +1077,7 @@ struct searcher<K, Key, Hook, Compare, key_search::linear> {
             if (i + 1 < node.num_keys) {
                 __builtin_prefetch(node.keys[i + 1]->to_key<Key, Hook>());
             }
-            int x = cmp(k, *node.keys[i]->to_key<Key, Hook>());
+            auto x = cmp(k, *node.keys[i]->to_key<Key, Hook>());
             if (x <= 0) {
                 match = x == 0;
                 break;
@@ -1095,7 +1095,7 @@ struct searcher<K, Key, Hook, Compare, key_search::binary> {
 
         while (s <= e) {
             key_index i = (s + e) / 2;
-            int x = cmp(k, *node.keys[i]->to_key<Key, Hook>());
+            auto x = cmp(k, *node.keys[i]->to_key<Key, Hook>());
             if (x < 0) {
                 e = i - 1;
             } else if (x > 0) {
