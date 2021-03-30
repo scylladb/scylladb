@@ -6299,13 +6299,11 @@ SEASTAR_TEST_CASE(test_may_have_partition_tombstones) {
 
             {
                 auto sst = make_sstable_containing(sst_gen, {mut1, mut2});
-                sst->load().get();
                 BOOST_REQUIRE(!sst->may_have_partition_tombstones());
             }
 
             mut2.partition().apply(ss.new_tombstone());
             auto sst = make_sstable_containing(sst_gen, {mut1, mut2});
-            sst->load().get();
             BOOST_REQUIRE(sst->may_have_partition_tombstones());
         }
     });
