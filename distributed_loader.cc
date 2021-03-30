@@ -258,7 +258,7 @@ future<> run_resharding_jobs(sharded<sstables::sstable_directory>& dir, std::vec
 
     return do_with(std::move(reshard_jobs), [&dir, &db, ks_name, table_name, creator = std::move(creator), total_size] (std::vector<reshard_shard_descriptor>& reshard_jobs) {
         auto start = std::chrono::steady_clock::now();
-        dblog.info("{}", fmt::format("Resharding {} ", sstables::pretty_printed_data_size(total_size)));
+        dblog.info("{}", fmt::format("Resharding {} for {}.{}", sstables::pretty_printed_data_size(total_size), ks_name, table_name));
 
         return dir.invoke_on_all([&dir, &db, &reshard_jobs, ks_name, table_name, creator] (sstables::sstable_directory& d) mutable {
             auto& table = db.local().find_column_family(ks_name, table_name);
@@ -269,9 +269,9 @@ future<> run_resharding_jobs(sharded<sstables::sstable_directory>& dir, std::vec
             return d.reshard(std::move(info_vec), cm, table, max_threshold, creator, iop).then([&d, &dir] {
                 return d.move_foreign_sstables(dir);
             });
-        }).then([start, total_size] {
+        }).then([start, total_size, ks_name, table_name] {
             auto duration = std::chrono::duration_cast<std::chrono::duration<float>>(std::chrono::steady_clock::now() - start);
-            dblog.info("{}", fmt::format("Resharded {} in {:.2f} seconds, {}", sstables::pretty_printed_data_size(total_size), duration.count(), sstables::pretty_printed_throughput(total_size, duration)));
+            dblog.info("{}", fmt::format("Resharded {} for {}.{} in {:.2f} seconds, {}", sstables::pretty_printed_data_size(total_size), ks_name, table_name, duration.count(), sstables::pretty_printed_throughput(total_size, duration)));
             return make_ready_future<>();
         });
     });
