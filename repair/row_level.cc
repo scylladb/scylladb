@@ -458,14 +458,14 @@ public:
         if (local_reader) {
             auto ms = mutation_source([&cf] (
                         schema_ptr s,
-                        reader_permit,
+                        reader_permit permit,
                         const dht::partition_range& pr,
                         const query::partition_slice& ps,
                         const io_priority_class& pc,
                         tracing::trace_state_ptr,
                         streamed_mutation::forwarding,
                         mutation_reader::forwarding fwd_mr) {
-                return cf.make_streaming_reader(std::move(s), pr, ps, fwd_mr);
+                return cf.make_streaming_reader(std::move(s), std::move(permit), pr, ps, fwd_mr);
             });
             std::tie(_reader, _reader_handle) = make_manually_paused_evictable_reader(
                     std::move(ms),

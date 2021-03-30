@@ -236,9 +236,8 @@ sstables::shared_sstable table::make_streaming_sstable_for_write(std::optional<s
 }
 
 flat_mutation_reader
-table::make_streaming_reader(schema_ptr s,
+table::make_streaming_reader(schema_ptr s, reader_permit permit,
                            const dht::partition_range_vector& ranges) const {
-    auto permit = _config.streaming_read_concurrency_semaphore->make_permit(s.get(), "stream-ranges");
     auto& slice = s->full_slice();
     auto& pc = service::get_local_streaming_priority();
 
@@ -256,9 +255,8 @@ table::make_streaming_reader(schema_ptr s,
     return make_flat_multi_range_reader(s, std::move(permit), std::move(source), ranges, slice, pc, nullptr, mutation_reader::forwarding::no);
 }
 
-flat_mutation_reader table::make_streaming_reader(schema_ptr schema, const dht::partition_range& range,
+flat_mutation_reader table::make_streaming_reader(schema_ptr schema, reader_permit permit, const dht::partition_range& range,
         const query::partition_slice& slice, mutation_reader::forwarding fwd_mr) const {
-    auto permit = _config.streaming_read_concurrency_semaphore->make_permit(schema.get(), "stream-range");
     const auto& pc = service::get_local_streaming_priority();
     auto trace_state = tracing::trace_state_ptr();
     const auto fwd = streamed_mutation::forwarding::no;
@@ -272,9 +270,8 @@ flat_mutation_reader table::make_streaming_reader(schema_ptr schema, const dht::
     return make_combined_reader(std::move(schema), std::move(permit), std::move(readers), fwd, fwd_mr);
 }
 
-flat_mutation_reader table::make_streaming_reader(schema_ptr schema, const dht::partition_range& range,
+flat_mutation_reader table::make_streaming_reader(schema_ptr schema, reader_permit permit, const dht::partition_range& range,
         lw_shared_ptr<sstables::sstable_set> sstables) const {
-    auto permit = _config.streaming_read_concurrency_semaphore->make_permit(schema.get(), "load-and-stream");
     auto& slice = schema->full_slice();
     const auto& pc = service::get_local_streaming_priority();
     auto trace_state = tracing::trace_state_ptr();

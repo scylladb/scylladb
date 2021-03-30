@@ -87,20 +87,20 @@ struct send_info {
     dht::token_range_vector ranges;
     dht::partition_range_vector prs;
     flat_mutation_reader reader;
-    send_info(database& db_, netw::messaging_service& ms_, utils::UUID plan_id_, utils::UUID cf_id_,
+    send_info(database& db_, netw::messaging_service& ms_, utils::UUID plan_id_, table& tbl_, reader_permit permit_,
               dht::token_range_vector ranges_, netw::messaging_service::msg_addr id_,
               uint32_t dst_cpu_id_, stream_reason reason_)
         : db(db_)
         , ms(ms_)
         , plan_id(plan_id_)
-        , cf_id(cf_id_)
+        , cf_id(tbl_.schema()->id())
         , id(id_)
         , dst_cpu_id(dst_cpu_id_)
         , reason(reason_)
-        , cf(db.find_column_family(cf_id))
+        , cf(tbl_)
         , ranges(std::move(ranges_))
         , prs(dht::to_partition_ranges(ranges))
-        , reader(cf.make_streaming_reader(cf.schema(), prs)) {
+        , reader(cf.make_streaming_reader(cf.schema(), std::move(permit_), prs)) {
     }
     future<bool> has_relevant_range_on_this_shard() {
         return do_with(false, ranges.begin(), [this] (bool& found_relevant_range, dht::token_range_vector::iterator& ranges_it) {
@@ -221,8 +221,10 @@ future<> stream_transfer_task::execute() {
     sslog.debug("[Stream #{}] stream_transfer_task: cf_id={}", plan_id, cf_id);
     sort_and_merge_ranges();
     auto reason = session->get_reason();
-    return session->get_db().invoke_on_all([plan_id, cf_id, id, dst_cpu_id, ranges=this->_ranges, reason] (database& db) {
-        auto si = make_lw_shared<send_info>(db, stream_session::ms(), plan_id, cf_id, std::move(ranges), id, dst_cpu_id, reason);
+    return session->get_db().invoke_on_all([plan_id, cf_id, id, dst_cpu_id, ranges=this->_ranges, reason] (database& db) mutable {
+        auto& tbl = db.find_column_family(cf_id);
+      return db.obtain_reader_permit(tbl, "stream-transfer-task", db::no_timeout).then([&db, &tbl, plan_id, cf_id, id, dst_cpu_id, ranges=std::move(ranges), reason] (reader_permit permit) mutable {
+        auto si = make_lw_shared<send_info>(db, stream_session::ms(), plan_id, tbl, std::move(permit), std::move(ranges), id, dst_cpu_id, reason);
         return si->has_relevant_range_on_this_shard().then([si, plan_id, cf_id] (bool has_relevant_range_on_this_shard) {
             if (!has_relevant_range_on_this_shard) {
                 sslog.debug("[Stream #{}] stream_transfer_task: cf_id={}: ignore ranges on shard={}",
@@ -233,6 +235,7 @@ future<> stream_transfer_task::execute() {
         }).finally([si] {
             return si->reader.close();
         });
+      });
     }).then([this, plan_id, cf_id, id] {
         sslog.debug("[Stream #{}] SEND STREAM_MUTATION_DONE to {}, cf_id={}", plan_id, id, cf_id);
         return session->ms().send_stream_mutation_done(id, plan_id, _ranges,
