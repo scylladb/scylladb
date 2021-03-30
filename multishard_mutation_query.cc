@@ -593,9 +593,6 @@ future<> read_context::save_readers(flat_mutation_reader::tracked_buffer unconsu
 namespace {
 
 template <typename ResultType>
-using consume_result = std::tuple<std::optional<clustering_key_prefix>, ResultType>;
-
-template <typename ResultType>
 using compact_for_result_state = compact_for_query_state<ResultType::only_live>;
 
 template <typename ResultBuilder>
@@ -605,12 +602,13 @@ struct page_consume_result {
     flat_mutation_reader::tracked_buffer unconsumed_fragments;
     lw_shared_ptr<compact_for_result_state<ResultBuilder>> compaction_state;
 
-    page_consume_result(consume_result<typename ResultBuilder::result_type>&& result, flat_mutation_reader::tracked_buffer&& unconsumed_fragments,
-            lw_shared_ptr<compact_for_result_state<ResultBuilder>>&& compaction_state)
-        : last_ckey(std::get<std::optional<clustering_key_prefix>>(std::move(result)))
-        , result(std::get<typename ResultBuilder::result_type>(std::move(result)))
+    page_consume_result(std::optional<clustering_key_prefix>&& ckey, typename ResultBuilder::result_type&& result, flat_mutation_reader::tracked_buffer&& unconsumed_fragments,
+            lw_shared_ptr<compact_for_result_state<ResultBuilder>>&& compaction_state) noexcept
+        : last_ckey(std::move(ckey))
+        , result(std::move(result))
         , unconsumed_fragments(std::move(unconsumed_fragments))
         , compaction_state(std::move(compaction_state)) {
+        static_assert(std::is_nothrow_move_constructible_v<typename ResultBuilder::result_type>);
     }
 };
 
@@ -641,9 +639,9 @@ future<page_consume_result<ResultBuilder>> read_page(
     auto compaction_state = make_lw_shared<compact_for_result_state<ResultBuilder>>(*s, cmd.timestamp, cmd.slice, cmd.get_row_limit(),
             cmd.partition_limit);
 
-    auto result = co_await query::consume_page(reader, compaction_state, cmd.slice, std::move(result_builder), cmd.get_row_limit(),
+    auto [ckey, result] = co_await query::consume_page(reader, compaction_state, cmd.slice, std::move(result_builder), cmd.get_row_limit(),
             cmd.partition_limit, cmd.timestamp, timeout, *cmd.max_result_size);
-    co_return page_consume_result<ResultBuilder>(std::move(result), reader.detach_buffer(), std::move(compaction_state));
+    co_return page_consume_result<ResultBuilder>(std::move(ckey), std::move(result), reader.detach_buffer(), std::move(compaction_state));
 }
 
 template <typename ResultBuilder>
