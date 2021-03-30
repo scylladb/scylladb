@@ -73,7 +73,7 @@ future<> view_update_generator::start() {
                         ssts->insert(sst);
                     }
 
-                    auto permit = _db.get_reader_concurrency_semaphore().make_permit(s.get(), "view_update_generator");
+                    auto permit = _db.obtain_reader_permit(*t, "view_update_generator", db::no_timeout).get0();
                     auto ms = mutation_source([this, ssts] (
                                 schema_ptr s,
                                 reader_permit permit,
