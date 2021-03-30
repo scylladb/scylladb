@@ -224,7 +224,7 @@ private:
     void maybe_commit();
     // Check if the randomized election timeout has expired.
     bool is_past_election_timeout() const {
-        return _clock.now() - _last_election_time >= _randomized_election_timeout;
+        return election_elapsed() >= _randomized_election_timeout;
     }
 
     // A helper to send any kind of RPC message.
