@@ -1564,6 +1564,14 @@ reader_concurrency_semaphore& database::get_reader_concurrency_semaphore() {
     }
 }
 
+future<reader_permit> database::obtain_reader_permit(table& tbl, const char* const op_name, db::timeout_clock::time_point timeout) {
+    return get_reader_concurrency_semaphore().obtain_permit_nowait(tbl.schema().get(), op_name, tbl.estimate_read_memory_cost(), timeout);
+}
+
+future<reader_permit> database::obtain_reader_permit(schema_ptr schema, const char* const op_name, db::timeout_clock::time_point timeout) {
+    return obtain_reader_permit(find_column_family(std::move(schema)), op_name, timeout);
+}
+
 std::ostream& operator<<(std::ostream& out, const column_family& cf) {
     return fmt_print(out, "{{column_family: {}/{}}}", cf._schema->ks_name(), cf._schema->cf_name());
 }
