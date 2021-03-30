@@ -446,22 +446,7 @@ bool manager::end_point_hints_manager::sender::can_send() noexcept {
             return true;
         } else {
             if (!_state.contains(state::ep_state_left_the_ring)) {
-                auto ep_gossip_state_val = _gossiper.get_gossip_status(end_point_key());
-                // If node has been removed from the ring it's going to be removed from the gossiper::endpoint_state
-                // map as well.
-                //
-                // However if it is still in the map then there are 3 possible STATE values for the node when it's in a DN/UN
-                // state:
-                //    - NORMAL
-                //    - SHUTDOWN
-                //    - "" - when node is in a DN state but was DOWN since the local node started up. In this case
-                //      gossiper::endpoint_state[node][STATUS] value is going to be not set at all.
-                _state.set_if<state::ep_state_left_the_ring>(
-                    !ep_state_ptr ||
-                    (ep_gossip_state_val != gms::versioned_value::STATUS_NORMAL &&
-                    ep_gossip_state_val != gms::versioned_value::SHUTDOWN &&
-                    ep_gossip_state_val != gms::versioned_value::STATUS_UNKNOWN)
-                );
+                _state.set_if<state::ep_state_left_the_ring>(!_shard_manager.local_db().get_token_metadata().is_member(end_point_key()));
             }
             // send the hints out if the destination Node is part of the ring - we will send to all new replicas in this case
             return _state.contains(state::ep_state_left_the_ring);
