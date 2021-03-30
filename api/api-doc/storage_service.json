@@ -1963,7 +1963,7 @@
                   },
                   {
                      "name":"fast",
-                     "description":"Enables lightweight tracing mode: if true, tracing ignores all tracing events",
+                     "description":"Lightweight tracing mode: if true, slow queries tracing records only session headers",
                      "required":false,
                      "allowMultiple":false,
                      "type":"boolean",
