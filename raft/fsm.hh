@@ -21,6 +21,7 @@
 #pragma once
 
 #include <seastar/core/condition-variable.hh>
+#include <seastar/core/on_internal_error.hh>
 #include "raft.hh"
 #include "tracker.hh"
 #include "log.hh"
@@ -408,8 +409,9 @@ public:
 template <typename Message>
 void fsm::step(server_id from, const leader& s, Message&& msg) {
     if constexpr (std::is_same_v<Message, append_request>) {
-        // Got AppendEntries RPC from self
-        append_entries(from, std::move(msg));
+        // We are here if we got AppendEntries RPC with our term
+        // but this is impossible since we are the leader and
+        // locally applied entries do not go via the RPC. Just ignore it.
     } else if constexpr (std::is_same_v<Message, append_reply>) {
         append_entries_reply(from, std::move(msg));
     } else if constexpr (std::is_same_v<Message, vote_request>) {
@@ -437,7 +439,6 @@ void fsm::step(server_id from, const candidate& c, Message&& msg) {
 template <typename Message>
 void fsm::step(server_id from, const follower& c, Message&& msg) {
     if constexpr (std::is_same_v<Message, append_request>) {
-        // Got AppendEntries RPC from self
         append_entries(from, std::move(msg));
     } else if constexpr (std::is_same_v<Message, vote_request>) {
         request_vote(from, std::move(msg));
@@ -548,7 +549,9 @@ void fsm::step(server_id from, Message&& msg) {
                 // leader becomes idle.
                 _current_leader = from;
             }
-            assert(_current_leader == from);
+            if (_current_leader != from) {
+                on_internal_error_noexcept(logger, "Got append request or install snpaphot from unexpected leader");
+            }
         }
     }
 
