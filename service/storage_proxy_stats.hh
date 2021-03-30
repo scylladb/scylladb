@@ -202,6 +202,11 @@ struct stats : public write_stats {
     split_stats mutation_data_read_completed;
     split_stats mutation_data_read_errors;
 
+    // number of requests which were destined for this endpoint, but speculatively
+    // directed to other replicas or dropped, because this endpoint was not likely
+    // to respond within deadline
+    split_stats read_requests_speculatively_refused;
+
 public:
     stats();
     void register_stats();
