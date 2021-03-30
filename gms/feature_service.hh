@@ -78,9 +78,6 @@ private:
     gms::feature _udf_feature;
     gms::feature _mc_sstable_feature;
     gms::feature _md_sstable_feature;
-    gms::feature _row_level_repair_feature;
-    gms::feature _truncation_table;
-    gms::feature _correct_static_compact_in_mc;
     gms::feature _unbounded_range_tombstones_feature;
     gms::feature _view_virtual_columns;
     gms::feature _digest_insensitive_to_expiry;
@@ -125,18 +122,6 @@ public:
         return _digest_for_null_values_feature;
     }
 
-    bool cluster_supports_row_level_repair() const {
-        return bool(_row_level_repair_feature);
-    }
-    feature& cluster_supports_truncation_table() {
-        return _truncation_table;
-    }
-    const feature& cluster_supports_truncation_table() const {
-        return _truncation_table;
-    }
-    const feature& cluster_supports_correct_static_compact_in_mc() const {
-        return _correct_static_compact_in_mc;
-    }
     const feature& cluster_supports_unbounded_range_tombstones() const {
         return _unbounded_range_tombstones_feature;
     }

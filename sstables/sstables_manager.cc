@@ -61,9 +61,6 @@ sstable_writer_config sstables_manager::configure_writer(sstring origin) const {
             : mutation_fragment_stream_validation_level::token;
     cfg.summary_byte_cost = summary_byte_cost(_db_config.sstable_summary_ratio());
 
-    cfg.correctly_serialize_non_compound_range_tombstones = true;
-    cfg.correctly_serialize_static_compact_in_mc =
-            bool(_features.cluster_supports_correct_static_compact_in_mc());
     cfg.origin = std::move(origin);
 
     return cfg;

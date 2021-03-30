@@ -425,15 +425,10 @@ sstable_schema make_sstable_schema(const schema& s, const encoding_stats& enc_st
         }
     };
 
-    if (cfg.correctly_serialize_static_compact_in_mc) {
-        for (const auto& column : s.v3().all_columns()) {
-            add_column(column);
-        }
-    } else {
-        for (const auto& column : s.all_columns()) {
-            add_column(column);
-        }
+    for (const auto& column : s.v3().all_columns()) {
+        add_column(column);
     }
+
 
     // For static and regular columns, we write all simple columns first followed by collections
     // These containers have columns partitioned by atomicity
@@ -766,7 +761,7 @@ public:
         , _tmp_bufs(_sst.sstable_buffer_size)
         , _sst_schema(make_sstable_schema(s, _enc_stats, _cfg))
         , _run_identifier(cfg.run_identifier)
-        , _write_regular_as_static(cfg.correctly_serialize_static_compact_in_mc && s.is_static_compact_table())
+        , _write_regular_as_static(s.is_static_compact_table())
         , _large_data_stats({{
                 {
                     large_data_type::partition_size,
@@ -1500,12 +1495,6 @@ void writer::consume_end_of_stream() {
     _sst.write_statistics(_pc);
     _sst.write_compression(_pc);
     auto features = sstable_enabled_features::all();
-    if (!_cfg.correctly_serialize_non_compound_range_tombstones) {
-        features.disable(sstable_feature::NonCompoundRangeTombstones);
-    }
-    if (!_cfg.correctly_serialize_static_compact_in_mc) {
-        features.disable(sstable_feature::CorrectStaticCompact);
-    }
     run_identifier identifier{_run_identifier};
     std::optional<scylla_metadata::large_data_stats> ld_stats(std::move(_large_data_stats));
     _sst.write_scylla_metadata(_pc, _shard, std::move(features), std::move(identifier), std::move(ld_stats), _cfg.origin);

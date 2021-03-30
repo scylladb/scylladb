@@ -253,7 +253,6 @@ public:
     lw_shared_ptr<streaming::stream_plan> _sp_in;
     lw_shared_ptr<streaming::stream_plan> _sp_out;
     repair_stats _stats;
-    bool _row_level_repair;
     uint64_t _sub_ranges_nr = 0;
     std::unordered_set<sstring> dropped_tables;
     std::optional<utils::UUID> _ops_uuid;
@@ -280,9 +279,6 @@ public:
     repair_neighbors get_repair_neighbors(const dht::token_range& range);
     void update_statistics(const repair_stats& stats) {
         _stats.add(stats);
-    }
-    bool row_level_repair() {
-        return _row_level_repair;
     }
     const std::vector<sstring>& table_names() {
         return cfs;

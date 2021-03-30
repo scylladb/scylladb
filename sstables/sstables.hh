@@ -117,8 +117,6 @@ struct sstable_writer_config {
     std::optional<db::replay_position> replay_position;
     std::optional<int> sstable_level;
     write_monitor* monitor = &default_write_monitor();
-    bool correctly_serialize_non_compound_range_tombstones;
-    bool correctly_serialize_static_compact_in_mc;
     utils::UUID run_identifier = utils::make_random_uuid();
     size_t summary_byte_cost;
     sstring origin;

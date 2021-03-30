@@ -50,12 +50,7 @@ void sstable_writer_k_l::write_range_tombstone_bound(file_writer& out,
         const composite& clustering_element,
         const std::vector<bytes_view>& column_names,
         composite::eoc marker) {
-    if (!_correctly_serialize_non_compound_range_tombstones && !clustering_element.is_compound()) {
-        auto vals = clustering_element.values();
-        write_compound_non_dense_column_name(_version, out, composite::serialize_value(vals, true), column_names, marker);
-    } else {
-        write_column_name(_version, out, s, clustering_element, column_names, marker);
-    }
+    write_column_name(_version, out, s, clustering_element, column_names, marker);
 }
 
 static void output_promoted_index_entry(bytes_ostream& promoted_index,
@@ -462,7 +457,6 @@ sstable_writer_k_l::sstable_writer_k_l(sstable& sst, const schema& s, uint64_t e
     , _leave_unsealed(cfg.leave_unsealed)
     , _shard(shard)
     , _monitor(cfg.monitor)
-    , _correctly_serialize_non_compound_range_tombstones(cfg.correctly_serialize_non_compound_range_tombstones)
     , _run_identifier(cfg.run_identifier)
     , _max_sstable_size(cfg.max_sstable_size)
     , _tombstone_written(false)
@@ -654,9 +648,6 @@ void sstable_writer_k_l::consume_end_of_stream()
     _sst.write_statistics(_pc);
     _sst.write_compression(_pc);
     auto features = all_features();
-    if (!_correctly_serialize_non_compound_range_tombstones) {
-        features.disable(sstable_feature::NonCompoundRangeTombstones);
-    }
     run_identifier identifier{_run_identifier};
     _sst.write_scylla_metadata(_pc, _shard, std::move(features), std::move(identifier), {}, "");
 
