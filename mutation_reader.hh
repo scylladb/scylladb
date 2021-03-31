@@ -479,7 +479,7 @@ public:
     /// all the readers being cleaned up is up to the implementation.
     ///
     /// This method will be called from a destructor so it cannot throw.
-    virtual void destroy_reader(shard_id shard, future<stopped_reader> reader) noexcept = 0;
+    virtual future<> destroy_reader(shard_id shard, future<stopped_reader> reader) noexcept = 0;
 
     /// Get the relevant semaphore for this read.
     ///

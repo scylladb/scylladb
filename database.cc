@@ -2259,9 +2259,8 @@ flat_mutation_reader make_multishard_streaming_reader(distributed<database>& db,
 
             return cf.make_streaming_reader(std::move(schema), *_contexts[shard].range, slice, fwd_mr);
         }
-        virtual void destroy_reader(shard_id shard, future<stopped_reader> reader_fut) noexcept override {
-            // Move to the background.
-            (void)reader_fut.then([this, zis = shared_from_this(), shard] (stopped_reader&& reader) mutable {
+        virtual future<> destroy_reader(shard_id shard, future<stopped_reader> reader_fut) noexcept override {
+            return reader_fut.then([this, zis = shared_from_this(), shard] (stopped_reader&& reader) mutable {
                 return smp::submit_to(shard, [ctx = std::move(_contexts[shard]), handle = std::move(reader.handle)] () mutable {
                     ctx.semaphore->unregister_inactive_read(std::move(*handle));
                 });

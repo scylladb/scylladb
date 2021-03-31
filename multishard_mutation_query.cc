@@ -247,7 +247,7 @@ public:
             tracing::trace_state_ptr trace_state,
             mutation_reader::forwarding fwd_mr) override;
 
-    virtual void destroy_reader(shard_id shard, future<stopped_reader> reader_fut) noexcept override;
+    virtual future<> destroy_reader(shard_id shard, future<stopped_reader> reader_fut) noexcept override;
 
     virtual reader_concurrency_semaphore& semaphore() override {
         const auto shard = this_shard_id();
@@ -323,9 +323,9 @@ flat_mutation_reader read_context::create_reader(
             std::move(trace_state), streamed_mutation::forwarding::no, fwd_mr);
 }
 
-void read_context::destroy_reader(shard_id shard, future<stopped_reader> reader_fut) noexcept {
+future<> read_context::destroy_reader(shard_id shard, future<stopped_reader> reader_fut) noexcept {
     // Future is waited on indirectly in `stop()` (via `_dismantling_gate`).
-    (void)with_gate(_dismantling_gate, [this, shard, reader_fut = std::move(reader_fut)] () mutable {
+    return with_gate(_dismantling_gate, [this, shard, reader_fut = std::move(reader_fut)] () mutable {
         return reader_fut.then_wrapped([this, shard] (future<stopped_reader>&& reader_fut) {
             auto& rm = _readers[shard];
 

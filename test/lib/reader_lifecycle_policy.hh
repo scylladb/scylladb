@@ -143,9 +143,9 @@ public:
         _contexts[shard]->op = _operation_gate.enter();
         return _factory_function(std::move(schema), *_contexts[shard]->range, *_contexts[shard]->slice, pc, std::move(trace_state), fwd_mr);
     }
-    virtual void destroy_reader(shard_id shard, future<stopped_reader> reader) noexcept override {
-        // Move to the background, waited via _operation_gate
-        (void)reader.then([shard, this] (stopped_reader&& reader) {
+    virtual future<> destroy_reader(shard_id shard, future<stopped_reader> reader) noexcept override {
+        // waited via _operation_gate
+        return reader.then([shard, this] (stopped_reader&& reader) {
             return smp::submit_to(shard, [handle = std::move(reader.handle), ctx = &*_contexts[shard]] () mutable {
                 ctx->semaphore->unregister_inactive_read(std::move(*handle));
                 ctx->semaphore->broken(std::make_exception_ptr(broken_semaphore{}));

@@ -1666,7 +1666,8 @@ void shard_reader::stop() noexcept {
 
     auto f = _read_ahead ? *std::exchange(_read_ahead, std::nullopt) : make_ready_future<>();
 
-    _lifecycle_policy->destroy_reader(_shard, f.then([this] {
+    // TODO: return future upstream as part of close()
+    (void)_lifecycle_policy->destroy_reader(_shard, f.then([this] {
         return smp::submit_to(_shard, [this] {
             auto ret = std::tuple(
                     make_foreign(std::make_unique<reader_concurrency_semaphore::inactive_read_handle>(std::move(*_reader).inactive_read_handle())),
