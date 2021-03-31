@@ -1627,7 +1627,7 @@ future<> stop_database(sharded<database>& db);
 //
 // Shard readers are created via `table::make_streaming_reader()`.
 // Range generator must generate disjoint, monotonically increasing ranges.
-flat_mutation_reader make_multishard_streaming_reader(distributed<database>& db, schema_ptr schema,
+flat_mutation_reader make_multishard_streaming_reader(distributed<database>& db, schema_ptr schema, reader_permit permit,
         std::function<std::optional<dht::partition_range>()> range_generator);
 
 bool is_internal_keyspace(std::string_view name);

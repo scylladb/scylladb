@@ -2293,7 +2293,7 @@ std::ostream& operator<<(std::ostream& os, const keyspace_metadata& m) {
 template <typename T>
 using foreign_unique_ptr = foreign_ptr<std::unique_ptr<T>>;
 
-flat_mutation_reader make_multishard_streaming_reader(distributed<database>& db, schema_ptr schema,
+flat_mutation_reader make_multishard_streaming_reader(distributed<database>& db, schema_ptr schema, reader_permit permit,
         std::function<std::optional<dht::partition_range>()> range_generator) {
     class streaming_reader_lifecycle_policy
             : public reader_lifecycle_policy
@@ -2357,7 +2357,7 @@ flat_mutation_reader make_multishard_streaming_reader(distributed<database>& db,
     });
     auto&& full_slice = schema->full_slice();
     auto& cf = db.local().find_column_family(schema);
-    return make_flat_multi_range_reader(schema, cf.streaming_read_concurrency_semaphore().make_permit(schema.get(), "multishard-streaming-reader"), std::move(ms),
+    return make_flat_multi_range_reader(schema, std::move(permit), std::move(ms),
             std::move(range_generator), std::move(full_slice), service::get_local_streaming_priority(), {}, mutation_reader::forwarding::no);
 }
 
