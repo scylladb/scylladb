@@ -123,7 +123,18 @@ public:
     const std::vector<data_type>& all_types() const {
         return _types;
     }
-    std::vector<bytes_view_opt> split(bytes_view v) const;
+    std::vector<bytes_opt> split(FragmentedView auto v) const {
+        std::vector<bytes_opt> elements;
+        while (!v.empty()) {
+            auto fragmented_element_optional = read_tuple_element(v);
+            if (fragmented_element_optional) {
+                elements.push_back(linearized(*fragmented_element_optional));
+            } else {
+                elements.push_back(std::nullopt);
+            }
+        }
+        return elements;
+    }
     template <typename RangeOf_bytes_opt>  // also accepts bytes_view_opt
     static bytes build_value(RangeOf_bytes_opt&& range) {
         auto item_size = [] (auto&& v) { return 4 + (v ? v->size() : 0); };

@@ -97,7 +97,7 @@ public:
         if (!value) {
             return std::nullopt;
         }
-        auto&& buffers = _type->split(*value);
+        auto&& buffers = _type->split(single_fragmented_view(*value));
         bytes_opt ret;
         if (_field < buffers.size() && buffers[_field]) {
             ret = to_bytes(*buffers[_field]);

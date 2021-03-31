@@ -2250,11 +2250,6 @@ bool abstract_type::equal(managed_bytes_view v1, managed_bytes_view v2) const {
     });
 }
 
-std::vector<bytes_view_opt>
-tuple_type_impl::split(bytes_view v) const {
-    return { tuple_deserializing_iterator::start(v), tuple_deserializing_iterator::finish(v) };
-}
-
 // Count number of ':' which are not preceded by '\'.
 static std::size_t count_segments(sstring_view v) {
     std::size_t segment_count = 1;

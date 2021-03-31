@@ -92,7 +92,7 @@ tuples::in_value::from_serialized(const fragmented_temporary_buffer::view& value
         std::vector<std::vector<bytes_opt>> elements;
         elements.reserve(l.size());
         for (auto&& e : l) {
-            elements.emplace_back(to_bytes_opt_vec(ttype->split(ttype->decompose(e))));
+            elements.emplace_back(ttype->split(single_fragmented_view(ttype->decompose(e))));
         }
         return tuples::in_value(elements);
     } catch (marshal_exception& e) {
