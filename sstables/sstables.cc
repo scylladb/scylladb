@@ -43,6 +43,7 @@
 #include "writer.hh"
 #include "m_format_read_helpers.hh"
 #include "sstables.hh"
+#include "metadata_collector.hh"
 #include "progress_monitor.hh"
 #include "compress.hh"
 #include "unimplemented.hh"

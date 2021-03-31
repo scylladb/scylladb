@@ -43,7 +43,6 @@
 #include "schema_fwd.hh"
 #include "utils/i_filter.hh"
 #include <seastar/core/stream.hh>
-#include "metadata_collector.hh"
 #include "encoding_stats.hh"
 #include "filter.hh"
 #include "exceptions.hh"
@@ -82,6 +81,7 @@ extern logging::logger sstlog;
 class key;
 class sstable_writer;
 class sstables_manager;
+class metadata_collector;
 
 template<typename T>
 concept ConsumeRowsContext =

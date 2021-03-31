@@ -35,6 +35,7 @@
 #include "schema_builder.hh"
 #include "database.hh"
 #include "sstables/leveled_manifest.hh"
+#include "sstables/metadata_collector.hh"
 #include <memory>
 #include "test/boost/sstable_test.hh"
 #include <seastar/core/seastar.hh>
