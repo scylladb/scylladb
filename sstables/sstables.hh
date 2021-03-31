@@ -815,7 +815,6 @@ public:
     friend class sstable_writer;
     friend class mc::writer;
     friend class index_reader;
-    friend class sstable_writer;
     friend class compaction;
     friend class sstables_manager;
     template <typename DataConsumeRowsContext>
