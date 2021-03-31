@@ -81,7 +81,6 @@ namespace fs = std::filesystem;
 extern logging::logger sstlog;
 class key;
 class sstable_writer;
-class sstable_writer_k_l;
 class sstables_manager;
 
 template<typename T>
@@ -814,7 +813,6 @@ public:
 
     friend class components_writer;
     friend class sstable_writer;
-    friend class sstable_writer_k_l;
     friend class mc::writer;
     friend class index_reader;
     friend class sstable_writer;
