@@ -1744,15 +1744,14 @@ future<> db::commitlog::segment_manager::delete_segments(std::vector<sstring> fi
     auto i = files.begin();
     auto e = files.end();
 
-    return parallel_for_each(i, e, [this](auto& filename) {
-        auto f = make_ready_future();
+    co_await parallel_for_each(i, e, [this](auto& filename) -> future<> {
         auto exts = cfg.extensions;
         if (exts && !exts->commitlog_file_extensions().empty()) {
-            f = parallel_for_each(exts->commitlog_file_extensions(), [&](auto& ext) {
-                return ext->before_delete(filename);
-            });
+            for (auto& ext : exts->commitlog_file_extensions()) {
+                co_await ext->before_delete(filename);
+            }
         }
-        return f.finally([&] {
+        try {
             // We allow reuse of the segment if the current disk size is less than shard max.
             auto usage = totals.total_size_on_disk;
             if (!_shutdown && cfg.reuse_segments && usage <= max_disk_size) {
@@ -1763,19 +1762,20 @@ future<> db::commitlog::segment_manager::delete_segments(std::vector<sstring> fi
                 // must rename the file since we must ensure the
                 // data is not replayed. Changing the name will
                 // cause header ID to be invalid in the file -> ignored
-                return rename_file(filename, dst).then([this, dst]() mutable {
+                try {
+                    co_await rename_file(filename, dst);                
                     auto b = _recycled_segments.push(std::move(dst));
                     assert(b); // we set this to max_size_t so...
-                    return make_ready_future<>();
-                }).handle_exception([this, filename](auto&&) {
-                    return delete_file(filename);
-                });
+                    co_return;
+                } catch (...) {
+                    // fallthrough
+                } 
             }
-            return delete_file(filename);
-        }).handle_exception([&filename](auto ep) {
-            clogger.error("Could not delete segment {}: {}", filename, ep);
-        });
-    }).finally([files = std::move(files)] {});
+            co_await delete_file(filename);
+        } catch (...) {
+            clogger.error("Could not delete segment {}: {}", filename, std::current_exception());
+        }
+    });
 }
 
 future<> db::commitlog::segment_manager::do_pending_deletes() {
