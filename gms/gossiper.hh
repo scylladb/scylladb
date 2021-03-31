@@ -129,7 +129,7 @@ private:
     future<> handle_syn_msg(msg_addr from, gossip_digest_syn syn_msg);
     future<> handle_ack_msg(msg_addr from, gossip_digest_ack ack_msg);
     future<> handle_ack2_msg(gossip_digest_ack2 msg);
-    future<> handle_echo_msg();
+    future<> handle_echo_msg(inet_address from, std::optional<int64_t> generation_number_opt);
     future<> handle_shutdown_msg(inet_address from);
     future<> do_send_ack_msg(msg_addr from, gossip_digest_syn syn_msg);
     future<> do_send_ack2_msg(msg_addr from, utils::chunked_vector<gossip_digest> ack_msg_digest);
@@ -146,8 +146,15 @@ private:
     std::unordered_map<gms::inet_address, syn_msg_pending> _syn_handlers;
     std::unordered_map<gms::inet_address, ack_msg_pending> _ack_handlers;
     bool _advertise_myself = true;
+    // Map ip address and generation number
+    std::unordered_map<gms::inet_address, int32_t> _advertise_to_nodes;
 public:
     future<> advertise_myself();
+    // Get current generation number for the given nodes
+    future<std::unordered_map<gms::inet_address, int32_t>>
+    get_generation_for_nodes(std::list<gms::inet_address> nodes);
+    // Only respond echo message listed in nodes with the generation number
+    future<> advertise_to_nodes(std::unordered_map<gms::inet_address, int32_t> advertise_to_nodes = {});
     const sstring& get_cluster_name() const noexcept;
     const sstring& get_partitioner_name() const noexcept;
     inet_address get_broadcast_address() const noexcept {

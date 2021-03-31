@@ -408,8 +408,31 @@ future<> gossiper::handle_ack2_msg(gossip_digest_ack2 msg) {
     return apply_state_locally(std::move(remote_ep_state_map)).finally([mp = std::move(mp)] {});
 }
 
-future<> gossiper::handle_echo_msg() {
+future<> gossiper::handle_echo_msg(gms::inet_address from, std::optional<int64_t> generation_number_opt) {
+    bool respond = true;
     if (!_advertise_myself) {
+        respond = false;
+    } else {
+        if (!_advertise_to_nodes.empty()) {
+            auto it = _advertise_to_nodes.find(from);
+            if (it == _advertise_to_nodes.end()) {
+                respond = false;
+            } else {
+                auto es = get_endpoint_state_for_endpoint_ptr(from);
+                if (es) {
+                    int64_t saved_generation_number = it->second;
+                    int64_t current_generation_number = generation_number_opt ?
+                            generation_number_opt.value() : es->get_heart_beat_state().get_generation();
+                    respond = saved_generation_number == current_generation_number;
+                    logger.debug("handle_echo_msg: from={}, saved_generation_number={}, current_generation_number={}",
+                            from, saved_generation_number, current_generation_number);
+                } else {
+                    respond = false;
+                }
+            }
+        }
+    }
+    if (!respond) {
         return make_exception_future(std::runtime_error("Not ready to respond gossip echo message"));
     }
     return make_ready_future<>();
@@ -482,8 +505,9 @@ future<> gossiper::init_messaging_service_handler(bind_messaging_port do_bind) {
         });
         return messaging_service::no_wait();
     });
-    _messaging.register_gossip_echo([] {
-        return gms::get_local_gossiper().handle_echo_msg();
+    _messaging.register_gossip_echo([] (const rpc::client_info& cinfo, rpc::optional<int64_t> generation_number_opt) {
+        auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
+        return gms::get_local_gossiper().handle_echo_msg(from, generation_number_opt);
     });
     _messaging.register_gossip_shutdown([] (inet_address from) {
         // In a new fiber.
@@ -1419,9 +1443,10 @@ void gossiper::mark_alive(inet_address addr, endpoint_state& local_state) {
 
     local_state.mark_dead();
     msg_addr id = get_msg_addr(addr);
-    logger.trace("Sending a EchoMessage to {}", id);
+    int64_t generation = endpoint_state_map[get_broadcast_address()].get_heart_beat_state().get_generation();
+    logger.debug("Sending a EchoMessage to {}, with generation_number={}", id, generation);
     // Do it in the background.
-    (void)_messaging.send_gossip_echo(id).then([this, addr] {
+    (void)_messaging.send_gossip_echo(id, generation).then([this, addr] {
         logger.trace("Got EchoMessage Reply");
         return seastar::async([this, addr] {
             // After sending echo message, the Node might not be in the
@@ -1771,6 +1796,29 @@ future<> gossiper::start_gossiping(int generation_nbr, std::map<application_stat
             _scheduled_gossip_task.arm(INTERVAL);
             return make_ready_future<>();
         });
+    });
+}
+
+future<std::unordered_map<gms::inet_address, int32_t>>
+gossiper::get_generation_for_nodes(std::list<gms::inet_address> nodes) {
+    std::unordered_map<gms::inet_address, int32_t> ret;
+    for (const auto& node : nodes) {
+        auto es = get_endpoint_state_for_endpoint_ptr(node);
+        if (es) {
+            auto current_generation_number = es->get_heart_beat_state().get_generation();
+            ret.emplace(node, current_generation_number);
+        } else {
+            return make_exception_future<std::unordered_map<gms::inet_address, int32_t>>(
+                    std::runtime_error(format("Can not find generation number for node={}", node)));
+        }
+    }
+    return make_ready_future<std::unordered_map<gms::inet_address, int32_t>>(std::move(ret));
+}
+
+future<> gossiper::advertise_to_nodes(std::unordered_map<gms::inet_address, int32_t> advertise_to_nodes) {
+    return container().invoke_on_all([advertise_to_nodes] (auto& g) {
+        g._advertise_to_nodes = advertise_to_nodes;
+        g._advertise_myself = true;
     });
 }
 
