@@ -383,6 +383,10 @@ EOS
 else
     install -m755 -d "$rdata"/saved_caches
     install -d -m755 "$rsystemd"/scylla-server.service.d
+
+    cat << EOS > "$rprefix"/scripts/scylla_sysconfdir.py
+SYSCONFDIR="$prefix/$sysconfdir"
+EOS
     if [ -d /var/log/journal ]; then
         cat << EOS > "$rsystemd"/scylla-server.service.d/nonroot.conf
 [Service]
@@ -411,9 +415,6 @@ StandardOutput=
 StandardOutput=file:$rprefix/scylla-server.log
 StandardError=
 StandardError=inherit
-EOS
-        cat << EOS > "$rprefix"/scripts/scylla_sysconfdir.py
-SYSCONFDIR="$sysconfdir"
 EOS
     fi
 
