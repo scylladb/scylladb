@@ -76,14 +76,18 @@ private:
     template<typename RangeOfSerializedComponents, FragmentedMutableView Out>
     static void serialize_value(RangeOfSerializedComponents&& values, Out out) {
         for (auto&& val : values) {
-            assert(val.size() <= std::numeric_limits<size_type>::max());
-            write<size_type>(out, size_type(val.size()));
             using val_type = std::remove_cvref_t<decltype(val)>;
             if constexpr (FragmentedView<val_type>) {
+                assert(val.size_bytes() <= std::numeric_limits<size_type>::max());
+                write<size_type>(out, size_type(val.size_bytes()));
                 write_fragmented(out, val);
             } else if constexpr (std::same_as<val_type, managed_bytes>) {
+                assert(val.size() <= std::numeric_limits<size_type>::max());
+                write<size_type>(out, size_type(val.size()));
                 write_fragmented(out, managed_bytes_view(val));
             } else {
+                assert(val.size() <= std::numeric_limits<size_type>::max());
+                write<size_type>(out, size_type(val.size()));
                 write_fragmented(out, single_fragmented_view(val));
             }
         }
@@ -92,7 +96,12 @@ private:
     static size_t serialized_size(RangeOfSerializedComponents&& values) {
         size_t len = 0;
         for (auto&& val : values) {
-            len += sizeof(size_type) + val.size();
+            using val_type = std::remove_cvref_t<decltype(val)>;
+            if constexpr (FragmentedView<val_type>) {
+                len += sizeof(size_type) + val.size_bytes();
+            } else {
+                len += sizeof(size_type) + val.size();
+            }
         }
         return len;
     }
