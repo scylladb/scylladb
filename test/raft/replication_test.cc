@@ -69,6 +69,8 @@ static seastar::logger tlogger("test");
 
 lowres_clock::duration tick_delta = 1ms;
 
+auto dummy_command = std::numeric_limits<int>::min();
+
 std::mt19937 random_generator() {
     auto& gen = seastar::testing::local_random_engine;
     return std::mt19937(gen());
@@ -122,7 +124,7 @@ using persisted_snapshots = std::unordered_map<raft::server_id, std::pair<raft::
 
 class state_machine : public raft::state_machine {
 public:
-    using apply_fn = std::function<void(raft::server_id id, const std::vector<raft::command_cref>& commands, lw_shared_ptr<hasher_int> hasher)>;
+    using apply_fn = std::function<size_t(raft::server_id id, const std::vector<raft::command_cref>& commands, lw_shared_ptr<hasher_int> hasher)>;
 private:
     raft::server_id _id;
     apply_fn _apply;
@@ -137,9 +139,9 @@ public:
         _id(id), _apply(std::move(apply)), _apply_entries(apply_entries), _snapshots(snapshots),
         hasher(make_lw_shared<hasher_int>()) {}
     future<> apply(const std::vector<raft::command_cref> commands) override {
-        _apply(_id, commands, hasher);
-        _seen += commands.size();
-        if (_seen >= _apply_entries) {
+        auto n = _apply(_id, commands, hasher);
+        _seen += n;
+        if (n && _seen == _apply_entries) {
             _done.set_value();
         }
         tlogger.debug("sm::apply[{}] got {}/{} entries", _id, _seen, _apply_entries);
@@ -419,16 +421,21 @@ std::vector<raft::command> create_commands(std::vector<T> list) {
     return commands;
 }
 
-void apply_changes(raft::server_id id, const std::vector<raft::command_cref>& commands,
+size_t apply_changes(raft::server_id id, const std::vector<raft::command_cref>& commands,
         lw_shared_ptr<hasher_int> hasher) {
+    size_t entries = 0;
     tlogger.debug("sm::apply_changes[{}] got {} entries", id, commands.size());
 
     for (auto&& d : commands) {
         auto is = ser::as_input_stream(d);
         int n = ser::deserialize(is, boost::type<int>());
-        hasher->update(n);      // running hash (values and snapshots)
-        tlogger.debug("{}: apply_changes {}", id, n);
+        if (n != dummy_command) {
+            entries++;
+            hasher->update(n);      // running hash (values and snapshots)
+            tlogger.debug("{}: apply_changes {}", id, n);
+        }
     }
+    return entries;
 };
 
 // Updates can be
