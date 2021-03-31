@@ -1606,7 +1606,6 @@ private:
     const io_priority_class& _pc;
     tracing::global_trace_state_ptr _trace_state;
     const mutation_reader::forwarding _fwd_mr;
-    bool _stopped = false;
     std::optional<future<>> _read_ahead;
     foreign_ptr<std::unique_ptr<evictable_reader>> _reader;
 
@@ -1664,8 +1663,6 @@ void shard_reader::stop() noexcept {
     if (!_reader && !_read_ahead) {
         return;
     }
-
-    _stopped = true;
 
     auto f = _read_ahead ? *std::exchange(_read_ahead, std::nullopt) : make_ready_future<>();
 
