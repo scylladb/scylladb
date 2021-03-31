@@ -32,10 +32,10 @@ sstable_writer::sstable_writer(sstable& sst, const schema& s, uint64_t estimated
     }
     _impl = mc::make_writer(sst, s, estimated_partitions, cfg, enc_stats, pc, shard);
     if (cfg.replay_position) {
-        get_metadata_collector().set_replay_position(cfg.replay_position.value());
+        _impl->_collector.set_replay_position(cfg.replay_position.value());
     }
     if (cfg.sstable_level) {
-        get_metadata_collector().set_sstable_level(cfg.sstable_level.value());
+        _impl->_collector.set_sstable_level(cfg.sstable_level.value());
     }
 }
 
@@ -82,10 +82,6 @@ void sstable_writer::consume_end_of_stream() {
         _impl->_sst.get_stats().on_capped_local_deletion_time();
     }
     return _impl->consume_end_of_stream();
-}
-
-metadata_collector& sstable_writer::get_metadata_collector() {
-    return _impl->_collector;
 }
 
 sstable_writer::sstable_writer(sstable_writer&& o) = default;
