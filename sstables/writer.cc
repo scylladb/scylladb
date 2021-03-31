@@ -20,6 +20,7 @@
  */
 
 #include "sstables.hh"
+#include "sstable_writer.hh"
 #include "writer.hh"
 #include "mx/writer.hh"
 
