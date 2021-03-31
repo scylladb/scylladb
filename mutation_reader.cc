@@ -1627,8 +1627,6 @@ public:
     shard_reader(const shard_reader&) = delete;
     shard_reader& operator=(const shard_reader&) = delete;
 
-    void stop() noexcept;
-
     const mutation_fragment& peek_buffer() const {
         return buffer().front();
     }
@@ -1645,12 +1643,6 @@ public:
         return _read_ahead.has_value();
     }
 };
-
-// FIXME: get rid of stop once we make sure
-// shard_reader is always closed before destruction
-void shard_reader::stop() noexcept {
-    (void)close();
-}
 
 future<> shard_reader::close() noexcept {
     // Nothing to do if there was no reader created, nor is there a background
