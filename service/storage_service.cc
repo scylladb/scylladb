@@ -2343,10 +2343,10 @@ void storage_service::excise(std::unordered_set<token> tokens, inet_address endp
     tmptr->remove_endpoint(endpoint);
     tmptr->remove_bootstrap_tokens(tokens);
 
-    notify_left(endpoint);
-
     update_pending_ranges(tmptr, format("excise {}", endpoint)).get();
     replicate_to_all_cores(std::move(tmptr)).get();
+
+    notify_left(endpoint);
 }
 
 void storage_service::excise(std::unordered_set<token> tokens, inet_address endpoint, int64_t expire_time) {
