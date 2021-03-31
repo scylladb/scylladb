@@ -716,7 +716,7 @@ int main(int ac, char** av) {
             tracing::backend_registry tracing_backend_registry;
             tracing::register_tracing_keyspace_backend(tracing_backend_registry);
             tracing::tracing::create_tracing(tracing_backend_registry, "trace_keyspace_helper").get();
-            auto stop_tracing = defer_verbose_shutdown("tracing", [] {
+            auto destroy_tracing = defer_verbose_shutdown("tracing instance", [] {
                 tracing::tracing::tracing_instance().stop().get();
             });
             supervisor::notify("creating snitch");
@@ -1172,13 +1172,9 @@ int main(int ac, char** av) {
 
             supervisor::notify("starting tracing");
             tracing::tracing::start_tracing(qp).get();
-            /*
-             * FIXME -- tracing is stopped inside drain_on_shutdown, which
-             * is deferred later on. If the start aborts before it, the
-             * tracing will remain started and will continue referencing
-             * the query processor. Nowadays the latter is not stopped
-             * either, but when it will, this place shold be fixed too.
-             */
+            auto stop_tracing = defer_verbose_shutdown("tracing", [] {
+                tracing::tracing::stop_tracing().get();
+            });
 
             startlog.info("SSTable data integrity checker is {}.",
                     cfg->enable_sstable_data_integrity_check() ? "enabled" : "disabled");

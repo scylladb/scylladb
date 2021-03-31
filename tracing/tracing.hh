@@ -443,6 +443,7 @@ public:
 
     static future<> create_tracing(const backend_registry& br, sstring tracing_backend_helper_class_name);
     static future<> start_tracing(sharded<cql3::query_processor>& qp);
+    static future<> stop_tracing();
     tracing(const backend_registry& br, sstring tracing_backend_helper_class_name);
 
     // Initialize a tracing backend (e.g. tracing_keyspace or logstash)
