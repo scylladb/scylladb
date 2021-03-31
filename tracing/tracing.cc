@@ -108,6 +108,13 @@ future<> tracing::start_tracing(sharded<cql3::query_processor>& qp) {
     });
 }
 
+future<> tracing::stop_tracing() {
+    return tracing_instance().invoke_on_all([] (tracing& local_tracing) {
+        // It might have been shut down while draining
+        return local_tracing._down ? make_ready_future<>() : local_tracing.shutdown();
+    });
+}
+
 trace_state_ptr tracing::create_session(trace_type type, trace_state_props_set props) noexcept {
     if (!started()) {
         return nullptr;
