@@ -389,14 +389,19 @@ struct log_entry {
     int value;
 };
 
+template <typename T>
+raft::command create_command(T value) {
+    raft::command command;
+    ser::serialize(command, value);
+    return command;
+}
+
 std::vector<raft::log_entry> create_log(std::vector<log_entry> list, unsigned start_idx) {
     std::vector<raft::log_entry> log;
 
     unsigned i = start_idx;
     for (auto e : list) {
-        raft::command command;
-        ser::serialize(command, e.value);
-        log.push_back(raft::log_entry{raft::term_t(e.term), raft::index_t(i++), std::move(command)});
+        log.push_back(raft::log_entry{raft::term_t(e.term), raft::index_t(i++), create_command(e.value)});
     }
 
     return log;
@@ -408,9 +413,7 @@ std::vector<raft::command> create_commands(std::vector<T> list) {
     commands.reserve(list.size());
 
     for (auto e : list) {
-        raft::command command;
-        ser::serialize(command, e);
-        commands.push_back(std::move(command));
+        commands.push_back(create_command(e));
     }
 
     return commands;
