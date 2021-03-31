@@ -155,15 +155,12 @@ user_types::value::value(std::vector<bytes_view_opt> elements)
 }
 
 user_types::value user_types::value::from_serialized(const fragmented_temporary_buffer::view& v, const user_type_impl& type) {
-    return with_linearized(v, [&] (bytes_view val) {
-        auto elements = type.split(val);
-        if (elements.size() > type.size()) {
-            throw exceptions::invalid_request_exception(
-                    format("User Defined Type value contained too many fields (expected {}, got {})", type.size(), elements.size()));
-        }
-
-        return value(elements);
-    });
+    auto elements = type.split(v);
+    if (elements.size() > type.size()) {
+        throw exceptions::invalid_request_exception(
+                format("User Defined Type value contained too many fields (expected {}, got {})", type.size(), elements.size()));
+    }
+    return value(elements);
 }
 
 cql3::raw_value user_types::value::get(const query_options&) {

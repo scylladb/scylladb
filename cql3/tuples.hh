@@ -117,9 +117,7 @@ public:
             : value(to_bytes_opt_vec(std::move(elements))) {
         }
         static value from_serialized(const fragmented_temporary_buffer::view& buffer, const tuple_type_impl& type) {
-          return with_linearized(buffer, [&] (bytes_view view) {
-              return value(type.split(view));
-          });
+            return value(type.split(buffer));
         }
         virtual cql3::raw_value get(const query_options& options) override {
             return cql3::raw_value::make_value(tuple_type_impl::build_value(_elements));

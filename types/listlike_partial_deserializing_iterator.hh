@@ -22,35 +22,45 @@
 #pragma once
 
 #include <iterator>
-#include "bytes.hh"
 #include "cql_serialization_format.hh"
+#include "utils/fragment_range.hh"
+#include "utils/managed_bytes.hh"
 
 int read_collection_size(bytes_view& in, cql_serialization_format sf);
 bytes_view read_collection_value(bytes_view& in, cql_serialization_format sf);
 
 template <FragmentedView View>
-int read_collection_size(View& in, cql_serialization_format);
+int read_collection_size(View& in, cql_serialization_format sf) {
+    if (sf.using_32_bits_for_collections()) {
+        return read_simple<int32_t>(in);
+    } else {
+        return read_simple<uint16_t>(in);
+    }
+}
 
 template <FragmentedView View>
-View read_collection_value(View& in, cql_serialization_format);
+View read_collection_value(View& in, cql_serialization_format sf) {
+    auto size = sf.using_32_bits_for_collections() ? read_simple<int32_t>(in) : read_simple<uint16_t>(in);
+    return read_simple_bytes(in, size);
+}
 
 // iterator that takes a set or list in serialized form, and emits
 // each element, still in serialized form
 class listlike_partial_deserializing_iterator {
 public:
     using iterator_category = std::input_iterator_tag;
-    using value_type = bytes_view;
+    using value_type = managed_bytes_view;
     using difference_type = std::ptrdiff_t;
-    using pointer = bytes_view*;
-    using reference = bytes_view&;
+    using pointer = managed_bytes_view*;
+    using reference = managed_bytes_view&;
 private:
-    bytes_view* _in;
+    managed_bytes_view* _in;
     int _remain;
-    bytes_view _cur;
+    managed_bytes_view _cur;
     cql_serialization_format _sf;
 private:
     struct end_tag {};
-    listlike_partial_deserializing_iterator(bytes_view& in, cql_serialization_format sf)
+    listlike_partial_deserializing_iterator(managed_bytes_view& in, cql_serialization_format sf)
             : _in(&in), _sf(sf) {
         _remain = read_collection_size(*_in, _sf);
         parse();
@@ -59,7 +69,7 @@ private:
             : _remain(0), _sf(cql_serialization_format::internal()) {  // _sf is bogus, but doesn't matter
     }
 public:
-    bytes_view operator*() const { return _cur; }
+    managed_bytes_view operator*() const { return _cur; }
     listlike_partial_deserializing_iterator& operator++() {
         --_remain;
         parse();
@@ -75,10 +85,10 @@ public:
     bool operator!=(const listlike_partial_deserializing_iterator& x) const {
         return _remain != x._remain;
     }
-    static listlike_partial_deserializing_iterator begin(bytes_view& in, cql_serialization_format sf) {
+    static listlike_partial_deserializing_iterator begin(managed_bytes_view& in, cql_serialization_format sf) {
         return { in, sf };
     }
-    static listlike_partial_deserializing_iterator end(bytes_view in, cql_serialization_format sf) {
+    static listlike_partial_deserializing_iterator end(managed_bytes_view in, cql_serialization_format sf) {
         return { end_tag() };
     }
 private:

@@ -714,6 +714,7 @@ inline bool operator!=(const data_value& x, const data_value& y)
 }
 
 using bytes_view_opt = std::optional<bytes_view>;
+using managed_bytes_view_opt = std::optional<managed_bytes_view>;
 
 static inline
 bool optional_less_compare(data_type t, bytes_view_opt e1, bytes_view_opt e2) {
@@ -749,7 +750,7 @@ int tri_compare(data_type t, managed_bytes_view e1, managed_bytes_view e2) {
 
 inline
 int
-tri_compare_opt(data_type t, bytes_view_opt v1, bytes_view_opt v2) {
+tri_compare_opt(data_type t, managed_bytes_view_opt v1, managed_bytes_view_opt v2) {
     if (!v1 || !v2) {
         return int(bool(v1)) - int(bool(v2));
     } else {
