@@ -33,6 +33,7 @@
 #include "reader_permit.hh"
 #include "utils/fragmented_temporary_buffer.hh"
 #include "utils/overloaded_functor.hh"
+#include "utils/small_vector.hh"
 
 #include <variant>
 
@@ -120,7 +121,7 @@ private:
 
     // state for READING_BYTES prestate
     size_t _read_bytes_len = 0;
-    std::vector<temporary_buffer<char>> _read_bytes;
+    utils::small_vector<temporary_buffer<char>, 1> _read_bytes;
     temporary_buffer<char>* _read_bytes_where_contiguous; // which buffer to set, _key, _val, _cell_path or _pk?
     fragmented_temporary_buffer* _read_bytes_where;
     inline read_status read_partial_int(temporary_buffer<char>& data, prestate next_state) {
@@ -144,7 +145,7 @@ private:
                 data.trim_front(len);
                 return read_status::ready;
             } else {
-                _read_bytes = std::vector<temporary_buffer<char>>();
+                _read_bytes.clear();
                 _read_bytes.push_back(make_tracked_temporary_buffer(temporary_buffer<char>(len), _permit));
                 std::copy(data.begin(), data.end(), _read_bytes.front().get_write());
                 _read_bytes_len = len;
@@ -218,7 +219,7 @@ public:
             return read_status::ready;
         } else {
             // copy what we have so far, read the rest later
-            _read_bytes = std::vector<temporary_buffer<char>>();
+            _read_bytes.clear();
             _read_bytes.push_back(make_tracked_temporary_buffer(temporary_buffer<char>(len), _permit));
             std::copy(data.begin(), data.end(),_read_bytes.front().get_write());
             _read_bytes_len = len;
@@ -230,15 +231,16 @@ public:
         }
     }
     inline read_status read_bytes(temporary_buffer<char>& data, uint32_t len, fragmented_temporary_buffer& where) {
-        _read_bytes = std::vector<temporary_buffer<char>>();
         if (data.size() >= len) {
-            _read_bytes.push_back(data.share(0, len));
+            std::vector<temporary_buffer<char>> fragments;
+            fragments.push_back(data.share(0,len));
+            where = fragmented_temporary_buffer(std::move(fragments), len);
             data.trim_front(len);
-            where = fragmented_temporary_buffer(std::move(_read_bytes), len);
             return read_status::ready;
         } else {
             // copy what we have so far, read the rest later
-            _read_bytes.push_back(make_tracked_temporary_buffer(data.share(), _permit));
+            _read_bytes.clear();
+            _read_bytes.push_back(data.share());
             _read_bytes_len = len;
             _read_bytes_where = &where;
             _pos = data.size();
@@ -281,7 +283,7 @@ public:
                 data.trim_front(len);
                 return read_bytes_contiguous(data, static_cast<uint32_t>(_u64), where);
             } else {
-                _read_bytes = std::vector<temporary_buffer<char>>();
+                _read_bytes.clear();
                 _read_bytes.push_back(make_tracked_temporary_buffer(temporary_buffer<char>(len), _permit));
                 std::copy(data.begin(), data.end(),_read_bytes.front().get_write());
                 _read_bytes_len = len;
@@ -306,7 +308,7 @@ public:
                 data.trim_front(len);
                 return read_bytes(data, static_cast<uint32_t>(_u64), where);
             } else {
-                _read_bytes = std::vector<temporary_buffer<char>>();
+                _read_bytes.clear();
                 _read_bytes.push_back(make_tracked_temporary_buffer(temporary_buffer<char>(len), _permit));
                 std::copy(data.begin(), data.end(),_read_bytes.front().get_write());
                 _read_bytes_len = len;
@@ -416,11 +418,12 @@ public:
         }
         case prestate::READING_BYTES: {
             auto n = std::min(_read_bytes_len - _pos, data.size());
-            _read_bytes.push_back(make_tracked_temporary_buffer(data.share(0, n), _permit));
+            _read_bytes.push_back(data.share(0, n));
             data.trim_front(n);
             _pos += n;
             if (_pos == _read_bytes_len) {
-                *_read_bytes_where = fragmented_temporary_buffer(std::move(_read_bytes), _read_bytes_len);
+                std::vector<temporary_buffer<char>> fragments(std::make_move_iterator(_read_bytes.begin()), std::make_move_iterator(_read_bytes.end()));
+                *_read_bytes_where = fragmented_temporary_buffer(std::move(fragments), _read_bytes_len);
                 _prestate = prestate::NONE;
                 return read_status::ready;
             }
