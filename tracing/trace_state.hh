@@ -98,10 +98,6 @@ private:
     std::chrono::microseconds _slow_query_threshold;
     trace_state_props_set _state_props;
     state _state = state::inactive;
-    std::chrono::system_clock::rep _started_at;
-    gms::inet_address _client;
-    sstring _request;
-    int _pending_trace_events = 0;
     shared_ptr<tracing> _local_tracing_ptr;
 
     struct params_values;
@@ -500,7 +496,6 @@ private:
     friend void add_table_name(const trace_state_ptr& p, const sstring& ks_name, const sstring& cf_name);
     friend void add_prepared_query_options(const trace_state_ptr& state, const cql3::query_options& prepared_options_ptr);
     friend void stop_foreground(const trace_state_ptr& state) noexcept;
-    friend void stop_foreground_prepared(const trace_state_ptr& state, const cql3::query_options* prepared_options_ptr) noexcept;
 };
 
 class trace_state_ptr final {
