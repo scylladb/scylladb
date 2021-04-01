@@ -113,14 +113,14 @@ extern bool is_satisfied_by(
 
 /// Finds the first binary_operator in restr that represents a bound and returns its RHS as a tuple.  If no
 /// such binary_operator exists, returns an empty vector.  The search is depth first.
-extern std::vector<bytes_opt> first_multicolumn_bound(const expression&, const query_options&, statements::bound);
+extern std::vector<managed_bytes_opt> first_multicolumn_bound(const expression&, const query_options&, statements::bound);
 
 /// A set of discrete values.
-using value_list = std::vector<bytes>; // Sorted and deduped using value comparator.
+using value_list = std::vector<managed_bytes>; // Sorted and deduped using value comparator.
 
 /// General set of values.  Empty set and single-element sets are always value_list.  nonwrapping_range is
 /// never singular and never has start > end.  Universal set is a nonwrapping_range with both bounds null.
-using value_set = std::variant<value_list, nonwrapping_range<bytes>>;
+using value_set = std::variant<value_list, nonwrapping_range<managed_bytes>>;
 
 /// A set of all column values that would satisfy an expression.  If column is null, a set of all token values
 /// that satisfy.
@@ -136,11 +136,10 @@ using value_set = std::variant<value_list, nonwrapping_range<bytes>>;
 extern value_set possible_lhs_values(const column_definition*, const expression&, const query_options&);
 
 /// Turns value_set into a range, unless it's a multi-valued list (in which case this throws).
-extern nonwrapping_range<bytes> to_range(const value_set&);
+extern nonwrapping_range<managed_bytes> to_range(const value_set&);
 
 /// A range of all X such that X op val.
-template<typename T>
-nonwrapping_range<T> to_range(oper_t op, const T& val);
+nonwrapping_range<clustering_key_prefix> to_range(oper_t op, const clustering_key_prefix& val);
 
 /// True iff the index can support the entire expression.
 extern bool is_supported_by(const expression&, const secondary_index::index&);

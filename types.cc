@@ -115,15 +115,6 @@ sstring inet_addr_type_impl::to_sstring(const seastar::net::inet_address& addr) 
     return out.str();
 }
 
-std::vector<bytes_opt> to_bytes_opt_vec(const std::vector<bytes_view_opt>& v) {
-    std::vector<bytes_opt> r;
-    r.reserve(v.size());
-    for (auto& e: v) {
-        r.push_back(to_bytes_opt(e));
-    }
-    return r;
-}
-
 static const char* byte_type_name      = "org.apache.cassandra.db.marshal.ByteType";
 static const char* short_type_name     = "org.apache.cassandra.db.marshal.ShortType";
 static const char* int32_type_name     = "org.apache.cassandra.db.marshal.Int32Type";
@@ -695,6 +686,66 @@ void write_collection_value(bytes_ostream& out, cql_serialization_format sf, ato
     }
 }
 
+void write_fragmented(managed_bytes_mutable_view& out, std::string_view val) {
+    while (val.size() > 0) {
+        size_t current_n = std::min(val.size(), out.current_fragment().size());
+        memcpy(out.current_fragment().data(), val.data(), current_n);
+        val.remove_prefix(current_n);
+        out.remove_prefix(current_n);
+    }
+}
+
+template<std::integral T>
+void write_simple(managed_bytes_mutable_view& out, std::type_identity_t<T> val) {
+    val = net::hton(val);
+    if (out.current_fragment().size() >= sizeof(T)) [[likely]] {
+        auto p = out.current_fragment().data();
+        out.remove_prefix(sizeof(T));
+        // FIXME use write_unaligned after it's merged.
+        write_unaligned<T>(p, val);
+    } else if (out.size_bytes() >= sizeof(T)) {
+        write_fragmented(out, std::string_view(reinterpret_cast<const char*>(&val), sizeof(T)));
+    } else {
+        on_internal_error(tlogger, format("write_simple: attempted write of size {} to buffer of size {}", sizeof(T), out.size_bytes()));
+    }
+}
+
+void write_collection_size(managed_bytes_mutable_view& out, int size, cql_serialization_format sf) {
+    if (sf.using_32_bits_for_collections()) {
+        write_simple<uint32_t>(out, uint32_t(size));
+    } else {
+        write_simple<uint16_t>(out, uint16_t(size));
+    }
+}
+
+void write_collection_value(managed_bytes_mutable_view& out, cql_serialization_format sf, bytes_view val) {
+    if (sf.using_32_bits_for_collections()) {
+        write_simple<int32_t>(out, int32_t(val.size()));
+    } else {
+        if (val.size() > std::numeric_limits<uint16_t>::max()) {
+            throw marshal_exception(
+                    format("Collection value exceeds the length limit for protocol v{:d}. Collection values are limited to {:d} bytes but {:d} bytes value provided",
+                            sf.protocol_version(), std::numeric_limits<uint16_t>::max(), val.size()));
+        }
+        write_simple<uint16_t>(out, uint16_t(val.size()));
+    }
+    write_fragmented(out, single_fragmented_view(val));
+}
+
+void write_collection_value(managed_bytes_mutable_view& out, cql_serialization_format sf, const managed_bytes_view& val) {
+    if (sf.using_32_bits_for_collections()) {
+        write_simple<int32_t>(out, int32_t(val.size_bytes()));
+    } else {
+        if (val.size_bytes() > std::numeric_limits<uint16_t>::max()) {
+            throw marshal_exception(
+                    format("Collection value exceeds the length limit for protocol v{:d}. Collection values are limited to {:d} bytes but {:d} bytes value provided",
+                            sf.protocol_version(), std::numeric_limits<uint16_t>::max(), val.size_bytes()));
+        }
+        write_simple<uint16_t>(out, uint16_t(val.size_bytes()));
+    }
+    write_fragmented(out, val);
+}
+
 shared_ptr<const abstract_type> abstract_type::underlying_type() const {
     struct visitor {
         shared_ptr<const abstract_type> operator()(const abstract_type& t) { return t.shared_from_this(); }
@@ -1159,8 +1210,8 @@ static std::optional<data_type> update_user_type_aux(
 
 static void serialize(const abstract_type& t, const void* value, bytes::iterator& out, cql_serialization_format sf);
 
-bytes_opt
-collection_type_impl::reserialize(cql_serialization_format from, cql_serialization_format to, bytes_view_opt v) const {
+managed_bytes_opt
+collection_type_impl::reserialize(cql_serialization_format from, cql_serialization_format to, managed_bytes_view_opt v) const {
     if (!v) {
         return std::nullopt;
     }
@@ -1168,7 +1219,8 @@ collection_type_impl::reserialize(cql_serialization_format from, cql_serializati
     bytes ret(bytes::initialized_later(), val.serialized_size());  // FIXME: serialized_size want @to
     auto out = ret.begin();
     ::serialize(*this, get_value_ptr(val), out, to);
-    return ret;
+    // FIXME: serialize directly to managed_bytes.
+    return managed_bytes(ret);
 }
 
 set_type
@@ -1269,6 +1321,34 @@ set_type_impl::serialize_partially_deserialized_form(
         const std::vector<bytes_view>& v, cql_serialization_format sf) {
     return pack(v.begin(), v.end(), v.size(), sf);
 }
+
+template <FragmentedView View>
+std::vector<managed_bytes> partially_deserialize_listlike(View in, cql_serialization_format sf) {
+    auto nr = read_collection_size(in, sf);
+    std::vector<managed_bytes> elements;
+    elements.reserve(nr);
+    for (int i = 0; i != nr; ++i) {
+        elements.emplace_back(read_collection_value(in, sf));
+    }
+    return elements;
+}
+template std::vector<managed_bytes> partially_deserialize_listlike(managed_bytes_view in, cql_serialization_format sf);
+template std::vector<managed_bytes> partially_deserialize_listlike(fragmented_temporary_buffer::view in, cql_serialization_format sf);
+
+template <FragmentedView View>
+std::vector<std::pair<managed_bytes, managed_bytes>> partially_deserialize_map(View in, cql_serialization_format sf) {
+    auto nr = read_collection_size(in, sf);
+    std::vector<std::pair<managed_bytes, managed_bytes>> elements;
+    elements.reserve(nr);
+    for (int i = 0; i != nr; ++i) {
+        auto key = managed_bytes(read_collection_value(in, sf));
+        auto value = managed_bytes(read_collection_value(in, sf));
+        elements.emplace_back(std::move(key), std::move(value));
+    }
+    return elements;
+}
+template std::vector<std::pair<managed_bytes, managed_bytes>> partially_deserialize_map(managed_bytes_view in, cql_serialization_format sf);
+template std::vector<std::pair<managed_bytes, managed_bytes>> partially_deserialize_map(fragmented_temporary_buffer::view in, cql_serialization_format sf);
 
 list_type
 list_type_impl::get_instance(data_type elements, bool is_multi_cell) {

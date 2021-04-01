@@ -125,6 +125,14 @@ public:
             return *bo;
         }));
     }
+    managed_bytes serialize_optionals(const std::vector<managed_bytes_opt>& values) const {
+        return serialize_value(values | boost::adaptors::transformed([] (const managed_bytes_opt& bo) -> managed_bytes_view {
+            if (!bo) {
+                throw std::logic_error("attempted to create key component from empty optional");
+            }
+            return managed_bytes_view(*bo);
+        }));
+    }
     managed_bytes serialize_value_deep(const std::vector<data_value>& values) const {
         // TODO: Optimize
         std::vector<bytes> partial;

@@ -73,14 +73,14 @@ public:
 
     class value : public terminal, collection_terminal {
     public:
-        std::set<bytes, serialized_compare> _elements;
+        std::set<managed_bytes, serialized_compare> _elements;
     public:
-        value(std::set<bytes, serialized_compare> elements)
+        value(std::set<managed_bytes, serialized_compare> elements)
                 : _elements(std::move(elements)) {
         }
-        static value from_serialized(const fragmented_temporary_buffer::view& v, const set_type_impl& type, cql_serialization_format sf);
+        static value from_serialized(const raw_value_view& v, const set_type_impl& type, cql_serialization_format sf);
         virtual cql3::raw_value get(const query_options& options) override;
-        virtual bytes get_with_protocol_version(cql_serialization_format sf) override;
+        virtual managed_bytes get_with_protocol_version(cql_serialization_format sf) override;
         bool equals(const set_type_impl& st, const value& v);
         virtual sstring to_string() const override;
     };

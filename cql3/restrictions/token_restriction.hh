@@ -97,9 +97,10 @@ public:
             return {};
         }
         const auto bounds = expr::to_range(values);
-        const auto start_token = bounds.start() ? dht::token::from_bytes(bounds.start()->value())
+        const auto start_token = bounds.start() ? bounds.start()->value().with_linearized([] (bytes_view bv) { return dht::token::from_bytes(bv); })
                 : dht::minimum_token();
-        auto end_token = bounds.end() ? dht::token::from_bytes(bounds.end()->value()) : dht::maximum_token();
+        auto end_token = bounds.end() ? bounds.end()->value().with_linearized([] (bytes_view bv) { return dht::token::from_bytes(bv); })
+                : dht::maximum_token();
         const bool include_start = bounds.start() && bounds.start()->is_inclusive();
         const auto include_end = bounds.end() && bounds.end()->is_inclusive();
 

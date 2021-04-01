@@ -260,8 +260,7 @@ uint64_t select_statement::do_get_limit(const query_options& options, ::shared_p
         return default_limit;
     }
     try {
-        int32_type->validate(*val, options.get_cql_serialization_format());
-        auto l = value_cast<int32_t>(int32_type->deserialize(*val));
+        auto l = val.validate_and_deserialize<int32_t>(*int32_type, options.get_cql_serialization_format());
         if (l <= 0) {
             throw exceptions::invalid_request_exception("LIMIT must be strictly positive");
         }

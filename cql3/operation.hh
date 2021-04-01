@@ -87,22 +87,6 @@ public:
 
     virtual ~operation() {}
 
-    static atomic_cell make_dead_cell(const update_parameters& params) {
-        return params.make_dead_cell();
-    }
-
-    static atomic_cell make_cell(const abstract_type& type, bytes_view value, const update_parameters& params) {
-        return params.make_cell(type, fragmented_temporary_buffer::view(value));
-    }
-
-    static atomic_cell make_cell(const abstract_type& type, const fragmented_temporary_buffer::view& value, const update_parameters& params) {
-        return params.make_cell(type, value);
-    }
-
-    static atomic_cell make_counter_update_cell(int64_t delta, const update_parameters& params) {
-        return params.make_counter_update_cell(delta);
-    }
-
     virtual bool is_raw_counter_shard_write() const {
         return false;
     }

@@ -176,7 +176,7 @@ bool column_condition::applies_to(const data_value* cell_value, const query_opti
             const std::vector<std::pair<data_value, data_value>>& map = map_type.from_value(*cell_value);
             if (column.type->is_map()) {
                 // We're working with a map *type*, not only map *representation*.
-                with_linearized(*key, [&map, &map_type, &cell_value] (bytes_view key) {
+                key.with_linearized([&map, &map_type, &cell_value] (bytes_view key) {
                     auto end = map.end();
                     const auto& map_key_type = *map_type.get_keys_type();
                     auto less = [&map_key_type](const std::pair<data_value, data_value>& value, bytes_view key) {
@@ -254,6 +254,7 @@ bool column_condition::applies_to(const data_value* cell_value, const query_opti
 
     assert(_op == expr::oper_t::IN);
 
+    // FIXME Use managed_bytes_opt
     std::vector<bytes_opt> in_values;
 
     if (_value) {
@@ -261,7 +262,13 @@ bool column_condition::applies_to(const data_value* cell_value, const query_opti
         if (!lval) {
             throw exceptions::invalid_request_exception("Invalid null value for IN condition");
         }
-        in_values = std::move(lval->get_elements());
+        for (const managed_bytes_opt& v : lval->get_elements()) {
+            if (v) {
+                in_values.push_back(to_bytes(*v));
+            } else {
+                in_values.push_back(std::nullopt);
+            }
+        }
     } else {
         for (auto&& v : _in_values) {
             in_values.emplace_back(to_bytes_opt(v->bind_and_get(options)));

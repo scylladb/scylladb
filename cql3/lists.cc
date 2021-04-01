@@ -124,17 +124,24 @@ lists::literal::to_string() const {
 }
 
 lists::value
-lists::value::from_serialized(const fragmented_temporary_buffer::view& val, const list_type_impl& type, cql_serialization_format sf) {
+lists::value::from_serialized(const raw_value_view& val, const list_type_impl& type, cql_serialization_format sf) {
     try {
-        // Collections have this small hack that validate cannot be called on a serialized object,
-        // but compose does the validation (so we're fine).
-        // FIXME: deserializeForNativeProtocol()?!
-        auto l = value_cast<list_type_impl::native_type>(type.deserialize(val, sf));
-        std::vector<bytes_opt> elements;
-        elements.reserve(l.size());
-        for (auto&& element : l) {
-            // elements can be null in lists that represent a set of IN values
-            elements.push_back(element.is_null() ? bytes_opt() : bytes_opt(type.get_elements_type()->decompose(element)));
+        std::vector<managed_bytes_opt> elements;
+        if (sf.collection_format_unchanged()) {
+            std::vector<managed_bytes> tmp = val.with_value([sf] (const FragmentedView auto& v) {
+                return partially_deserialize_listlike(v, sf);
+            });
+            elements.reserve(tmp.size());
+            for (auto&& element : tmp) {
+                elements.emplace_back(std::move(element));
+            }
+        } else [[unlikely]] {
+            auto l = val.deserialize<list_type_impl::native_type>(type, sf);
+            elements.reserve(l.size());
+            for (auto&& element : l) {
+                // elements can be null in lists that represent a set of IN values
+                elements.push_back(element.is_null() ? managed_bytes_opt() : managed_bytes_opt(type.get_elements_type()->decompose(element)));
+            }
         }
         return value(std::move(elements));
     } catch (marshal_exception& e) {
@@ -147,11 +154,11 @@ lists::value::get(const query_options& options) {
     return cql3::raw_value::make_value(get_with_protocol_version(options.get_cql_serialization_format()));
 }
 
-bytes
+managed_bytes
 lists::value::get_with_protocol_version(cql_serialization_format sf) {
     // Can't use boost::indirect_iterator, because optional is not an iterator
-    auto deref = [] (bytes_opt& x) { return *x; };
-    return collection_type_impl::pack(
+    auto deref = [] (managed_bytes_opt& x) { return *x; };
+    return collection_type_impl::pack_fragmented(
             boost::make_transform_iterator(_elements.begin(), deref),
             boost::make_transform_iterator( _elements.end(), deref),
             _elements.size(), sf);
@@ -164,10 +171,10 @@ lists::value::equals(const list_type_impl& lt, const value& v) {
     }
     return std::equal(_elements.begin(), _elements.end(),
             v._elements.begin(),
-            [t = lt.get_elements_type()] (const bytes_opt& e1, const bytes_opt& e2) { return t->equal(*e1, *e2); });
+            [t = lt.get_elements_type()] (const managed_bytes_opt& e1, const managed_bytes_opt& e2) { return t->equal(*e1, *e2); });
 }
 
-const std::vector<bytes_opt>&
+const std::vector<managed_bytes_opt>&
 lists::value::get_elements() const {
     return _elements;
 }
@@ -200,7 +207,7 @@ lists::delayed_value::collect_marker_specification(variable_specifications& boun
 
 shared_ptr<terminal>
 lists::delayed_value::bind(const query_options& options) {
-    std::vector<bytes_opt> buffers;
+    std::vector<managed_bytes_opt> buffers;
     buffers.reserve(_elements.size());
     for (auto&& t : _elements) {
         auto bo = t->bind_and_get(options);
@@ -212,7 +219,7 @@ lists::delayed_value::bind(const query_options& options) {
             return constants::UNSET_VALUE;
         }
 
-        buffers.push_back(std::move(to_bytes(*bo)));
+        buffers.push_back(bo.with_value([] (const FragmentedView auto& v) { return managed_bytes(v); }));
     }
     return ::make_shared<value>(buffers);
 }
@@ -227,8 +234,8 @@ lists::marker::bind(const query_options& options) {
         return constants::UNSET_VALUE;
     } else {
         try {
-            ltype.validate(*value, options.get_cql_serialization_format());
-            return make_shared<lists::value>(value::from_serialized(*value, ltype, options.get_cql_serialization_format()));
+            value.validate(ltype, options.get_cql_serialization_format());
+            return make_shared<lists::value>(value::from_serialized(value, ltype, options.get_cql_serialization_format()));
         } catch (marshal_exception& e) {
             throw exceptions::invalid_request_exception(
                     format("Exception while binding column {:s}: {:s}", _receiver->name->to_cql_string(), e.what()));
@@ -285,7 +292,7 @@ lists::setter_by_index::execute(mutation& m, const clustering_key_prefix& prefix
         return;
     }
 
-    auto idx = value_cast<int32_t>(data_type_for<int32_t>()->deserialize(*index));
+    auto idx = index.deserialize<int32_t>(*int32_type);
     auto&& existing_list_opt = params.get_prefetched_list(m.key(), prefix, column);
     if (!existing_list_opt) {
         throw exceptions::invalid_request_exception("Attempted to set an element on a list which is null");
@@ -306,7 +313,7 @@ lists::setter_by_index::execute(mutation& m, const clustering_key_prefix& prefix
         mut.cells.emplace_back(std::move(eidx), params.make_dead_cell());
     } else {
         mut.cells.emplace_back(std::move(eidx),
-                params.make_cell(*ltype->value_comparator(), *value, atomic_cell::collection_member::yes));
+                params.make_cell(*ltype->value_comparator(), value, atomic_cell::collection_member::yes));
     }
 
     m.set_cell(prefix, column, mut.serialize(*ltype));
@@ -335,9 +342,9 @@ lists::setter_by_uuid::execute(mutation& m, const clustering_key_prefix& prefix,
     mut.cells.reserve(1);
 
     if (!value) {
-        mut.cells.emplace_back(to_bytes(*index), params.make_dead_cell());
+        mut.cells.emplace_back(to_bytes(index), params.make_dead_cell());
     } else {
-        mut.cells.emplace_back(to_bytes(*index), params.make_cell(*ltype->value_comparator(), *value, atomic_cell::collection_member::yes));
+        mut.cells.emplace_back(to_bytes(index), params.make_cell(*ltype->value_comparator(), value, atomic_cell::collection_member::yes));
     }
 
     m.set_cell(prefix, column, mut.serialize(*ltype));
@@ -393,7 +400,7 @@ lists::do_append(shared_ptr<term> value,
             m.set_cell(prefix, column, params.make_dead_cell());
         } else {
             auto newv = list_value->get_with_protocol_version(cql_serialization_format::internal());
-            m.set_cell(prefix, column, params.make_cell(*column.type, std::move(newv)));
+            m.set_cell(prefix, column, params.make_cell(*column.type, newv));
         }
     }
 }
@@ -520,7 +527,8 @@ lists::discarder_by_index::execute(mutation& m, const clustering_key_prefix& pre
     assert(cvalue);
 
     auto&& existing_list_opt = params.get_prefetched_list(m.key(), prefix, column);
-    int32_t idx = read_simple_exactly<int32_t>(*cvalue->_bytes);
+    int32_t idx = cvalue->_bytes.to_view().deserialize<int32_t>(*int32_type);
+
     if (!existing_list_opt) {
         throw exceptions::invalid_request_exception("Attempted to delete an element from a list which is null");
     }

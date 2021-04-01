@@ -81,18 +81,19 @@ tuples::literal::prepare(database& db, const sstring& keyspace, const std::vecto
 }
 
 tuples::in_value
-tuples::in_value::from_serialized(const fragmented_temporary_buffer::view& value_view, const list_type_impl& type, const query_options& options) {
+tuples::in_value::from_serialized(const raw_value_view& value_view, const list_type_impl& type, const query_options& options) {
     try {
         // Collections have this small hack that validate cannot be called on a serialized object,
         // but the deserialization does the validation (so we're fine).
-        auto l = value_cast<list_type_impl::native_type>(type.deserialize(value_view, options.get_cql_serialization_format()));
+        auto l = value_view.deserialize<list_type_impl::native_type>(type, options.get_cql_serialization_format());
         auto ttype = dynamic_pointer_cast<const tuple_type_impl>(type.get_elements_type());
         assert(ttype);
 
-        std::vector<std::vector<bytes_opt>> elements;
+        std::vector<std::vector<managed_bytes_opt>> elements;
         elements.reserve(l.size());
         for (auto&& e : l) {
-            elements.emplace_back(ttype->split(single_fragmented_view(ttype->decompose(e))));
+            // FIXME: Avoid useless copies.
+            elements.emplace_back(ttype->split_fragmented(single_fragmented_view(ttype->decompose(e))));
         }
         return tuples::in_value(elements);
     } catch (marshal_exception& e) {
@@ -140,16 +141,14 @@ shared_ptr<terminal> tuples::in_marker::bind(const query_options& options) {
         auto& type = static_cast<const list_type_impl&>(*_receiver->type);
         auto& elem_type = static_cast<const tuple_type_impl&>(*type.get_elements_type());
         try {
-            type.validate(*value, options.get_cql_serialization_format());
-            auto l = value_cast<list_type_impl::native_type>(type.deserialize(*value, options.get_cql_serialization_format()));
-
+            auto l = value.validate_and_deserialize<list_type_impl::native_type>(type, options.get_cql_serialization_format());
             for (auto&& element : l) {
                 elem_type.validate(elem_type.decompose(element), options.get_cql_serialization_format());
             }
         } catch (marshal_exception& e) {
             throw exceptions::invalid_request_exception(e.what());
         }
-        return make_shared<tuples::in_value>(tuples::in_value::from_serialized(*value, type, options));
+        return make_shared<tuples::in_value>(tuples::in_value::from_serialized(value, type, options));
     }
 }
 

@@ -410,3 +410,23 @@ void write_native(Out& out, std::type_identity_t<T> v) {
         write_fragmented(out, single_fragmented_view(bytes_view(p, sizeof(v))));
     }
 }
+
+inline sstring::iterator fragment_to_hex(sstring::iterator out, bytes_view frag) {
+    static constexpr char digits[] = "0123456789abcdef";
+    for (auto byte : frag) {
+        uint8_t x = static_cast<uint8_t>(byte);
+        *out++ = digits[x >> 4];
+        *out++ = digits[x & 0xf];
+    }
+    return out;
+}
+
+template<FragmentedView View>
+sstring to_hex(const View& b) {
+    sstring out = uninitialized_string(b.size_bytes() * 2);
+    auto it = out.begin();
+    for (auto frag : fragment_range(b)) {
+        it = fragment_to_hex(it, frag);
+    }
+    return out;
+}

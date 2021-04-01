@@ -869,6 +869,9 @@ public:
     bool operator()(const bytes& v1, const bytes& v2) const {
         return _type->less(v1, v2);
     }
+    bool operator()(const managed_bytes& v1, const managed_bytes& v2) const {
+        return _type->compare(v1, v2) < 0;
+    }
 };
 
 inline
@@ -882,6 +885,9 @@ class serialized_tri_compare {
 public:
     serialized_tri_compare(data_type type) : _type(type) {}
     int operator()(const bytes_view& v1, const bytes_view& v2) const {
+        return _type->compare(v1, v2);
+    }
+    int operator()(const managed_bytes_view& v1, const managed_bytes_view& v2) const {
         return _type->compare(v1, v2);
     }
 };
@@ -1075,8 +1081,6 @@ to_bytes_opt(bytes_view_opt bv) {
     return std::nullopt;
 }
 
-std::vector<bytes_opt> to_bytes_opt_vec(const std::vector<bytes_view_opt>&);
-
 inline
 bytes_view_opt
 as_bytes_view_opt(const bytes_opt& bv) {
@@ -1214,8 +1218,17 @@ inline sstring read_simple_short_string(bytes_view& v) {
 size_t collection_size_len(cql_serialization_format sf);
 size_t collection_value_len(cql_serialization_format sf);
 void write_collection_size(bytes::iterator& out, int size, cql_serialization_format sf);
+void write_collection_size(managed_bytes_mutable_view&, int size, cql_serialization_format sf);
 void write_collection_value(bytes::iterator& out, cql_serialization_format sf, bytes_view val_bytes);
-void write_collection_value(bytes::iterator& out, cql_serialization_format sf, data_type type, const data_value& value);
+void write_collection_value(managed_bytes_mutable_view&, cql_serialization_format sf, bytes_view val_bytes);
+void write_collection_value(managed_bytes_mutable_view&, cql_serialization_format sf, const managed_bytes_view& val_bytes);
+
+// Splits a serialized collection into a vector of elements, but does not recursively deserialize the elements.
+// Does not perform validation.
+template <FragmentedView View>
+std::vector<managed_bytes> partially_deserialize_listlike(View in, cql_serialization_format sf);
+template <FragmentedView View>
+std::vector<std::pair<managed_bytes, managed_bytes>> partially_deserialize_map(View in, cql_serialization_format sf);
 
 using user_type = shared_ptr<const user_type_impl>;
 using tuple_type = shared_ptr<const tuple_type_impl>;

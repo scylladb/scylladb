@@ -146,28 +146,27 @@ sstring user_types::literal::to_string() const {
     return format("{{{}}}", ::join(", ", _entries | boost::adaptors::transformed(kv_to_str)));
 }
 
-user_types::value::value(std::vector<bytes_opt> elements)
+user_types::value::value(std::vector<managed_bytes_opt> elements)
         : _elements(std::move(elements)) {
 }
 
-user_types::value::value(std::vector<bytes_view_opt> elements)
-    : value(to_bytes_opt_vec(std::move(elements))) {
-}
+user_types::value user_types::value::from_serialized(const raw_value_view& v, const user_type_impl& type) {
+    return v.with_value([&] (const FragmentedView auto& val) {
+        std::vector<managed_bytes_opt> elements = type.split_fragmented(val);
+        if (elements.size() > type.size()) {
+            throw exceptions::invalid_request_exception(
+                    format("User Defined Type value contained too many fields (expected {}, got {})", type.size(), elements.size()));
+        }
 
-user_types::value user_types::value::from_serialized(const fragmented_temporary_buffer::view& v, const user_type_impl& type) {
-    auto elements = type.split(v);
-    if (elements.size() > type.size()) {
-        throw exceptions::invalid_request_exception(
-                format("User Defined Type value contained too many fields (expected {}, got {})", type.size(), elements.size()));
-    }
-    return value(elements);
+        return value(std::move(elements));
+    });
 }
 
 cql3::raw_value user_types::value::get(const query_options&) {
-    return cql3::raw_value::make_value(tuple_type_impl::build_value(_elements));
+    return cql3::raw_value::make_value(tuple_type_impl::build_value_fragmented(_elements));
 }
 
-const std::vector<bytes_opt>& user_types::value::get_elements() const {
+const std::vector<managed_bytes_opt>& user_types::value::get_elements() const {
     return _elements;
 }
 
@@ -188,14 +187,14 @@ void user_types::delayed_value::collect_marker_specification(variable_specificat
     }
 }
 
-std::vector<bytes_opt> user_types::delayed_value::bind_internal(const query_options& options) {
+std::vector<managed_bytes_opt> user_types::delayed_value::bind_internal(const query_options& options) {
     auto sf = options.get_cql_serialization_format();
 
     // user_types::literal::prepare makes sure that every field gets a corresponding value.
     // For missing fields the values become nullopts.
     assert(_type->size() == _values.size());
 
-    std::vector<bytes_opt> buffers;
+    std::vector<managed_bytes_opt> buffers;
     for (size_t i = 0; i < _type->size(); ++i) {
         const auto& value = _values[i]->bind_and_get(options);
         if (!_type->is_multi_cell() && value.is_unset_value()) {
@@ -203,13 +202,13 @@ std::vector<bytes_opt> user_types::delayed_value::bind_internal(const query_opti
                         _type->field_name_as_string(i), _type->get_name_as_string()));
         }
 
-        buffers.push_back(to_bytes_opt(value));
+        buffers.push_back(to_managed_bytes_opt(value));
 
         // Inside UDT values, we must force the serialization of collections to v3 whatever protocol
         // version is in use since we're going to store directly that serialized value.
         if (!sf.collection_format_unchanged() && _type->field_type(i)->is_collection() && buffers.back()) {
             auto&& ctype = static_pointer_cast<const collection_type_impl>(_type->field_type(i));
-            buffers.back() = ctype->reserialize(sf, cql_serialization_format::latest(), bytes_view(*buffers.back()));
+            buffers.back() = ctype->reserialize(sf, cql_serialization_format::latest(), managed_bytes_view(*buffers.back()));
         }
     }
     return buffers;
@@ -220,7 +219,7 @@ shared_ptr<terminal> user_types::delayed_value::bind(const query_options& option
 }
 
 cql3::raw_value_view user_types::delayed_value::bind_and_get(const query_options& options) {
-    return cql3::raw_value_view::make_temporary(cql3::raw_value::make_value(user_type_impl::build_value(bind_internal(options))));
+    return cql3::raw_value_view::make_temporary(cql3::raw_value::make_value(user_type_impl::build_value_fragmented(bind_internal(options))));
 }
 
 shared_ptr<terminal> user_types::marker::bind(const query_options& options) {
@@ -231,7 +230,7 @@ shared_ptr<terminal> user_types::marker::bind(const query_options& options) {
     if (value.is_unset_value()) {
         return constants::UNSET_VALUE;
     }
-    return make_shared<user_types::value>(value::from_serialized(*value, static_cast<const user_type_impl&>(*_receiver->type)));
+    return make_shared<user_types::value>(value::from_serialized(value, static_cast<const user_type_impl&>(*_receiver->type)));
 }
 
 void user_types::setter::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) {
@@ -285,9 +284,9 @@ void user_types::setter::execute(mutation& m, const clustering_key_prefix& row_k
         m.set_cell(row_key, column, mut.serialize(type));
     } else {
         if (value) {
-            m.set_cell(row_key, column, make_cell(type, *value->get(params._options), params));
+            m.set_cell(row_key, column, params.make_cell(type, value->get(params._options).to_view()));
         } else {
-            m.set_cell(row_key, column, make_dead_cell(params));
+            m.set_cell(row_key, column, params.make_dead_cell());
         }
     }
 }
@@ -304,8 +303,8 @@ void user_types::setter_by_field::execute(mutation& m, const clustering_key_pref
 
     collection_mutation_description mut;
     mut.cells.emplace_back(serialize_field_index(_field_idx), value
-                ? params.make_cell(*type.type(_field_idx), *value, atomic_cell::collection_member::yes)
-                : make_dead_cell(params));
+                ? params.make_cell(*type.type(_field_idx), value, atomic_cell::collection_member::yes)
+                : params.make_dead_cell());
 
     m.set_cell(row_key, column, mut.serialize(type));
 }
@@ -314,7 +313,7 @@ void user_types::deleter_by_field::execute(mutation& m, const clustering_key_pre
     assert(column.type->is_user_type() && column.type->is_multi_cell());
 
     collection_mutation_description mut;
-    mut.cells.emplace_back(serialize_field_index(_field_idx), make_dead_cell(params));
+    mut.cells.emplace_back(serialize_field_index(_field_idx), params.make_dead_cell());
 
     m.set_cell(row_key, column, mut.serialize(*column.type));
 }

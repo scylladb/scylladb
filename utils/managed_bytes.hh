@@ -134,7 +134,8 @@ public:
 
     explicit managed_bytes(const bytes& b) : managed_bytes(static_cast<bytes_view>(b)) {}
 
-    explicit managed_bytes(managed_bytes_view v);
+    template <FragmentedView View>
+    explicit managed_bytes(View v);
 
     managed_bytes(initialized_later, size_type size) {
         memory::on_alloc_point();
@@ -469,6 +470,9 @@ public:
 static_assert(FragmentedView<managed_bytes_view>);
 static_assert(FragmentedMutableView<managed_bytes_mutable_view>);
 
+using managed_bytes_opt = std::optional<managed_bytes>;
+using managed_bytes_view_opt = std::optional<managed_bytes_view>;
+
 inline bytes to_bytes(const managed_bytes& v) {
     return linearized(managed_bytes_view(v));
 }
@@ -476,7 +480,8 @@ inline bytes to_bytes(managed_bytes_view v) {
     return linearized(v);
 }
 
-inline managed_bytes::managed_bytes(managed_bytes_view v) : managed_bytes(initialized_later(), v.size_bytes()) {
+template<FragmentedView View>
+inline managed_bytes::managed_bytes(View v) : managed_bytes(initialized_later(), v.size_bytes()) {
     managed_bytes_mutable_view self(*this);
     write_fragmented(self, v);
 }
@@ -509,6 +514,9 @@ struct hash<managed_bytes> {
 };
 } // namespace std
 
+sstring to_hex(const managed_bytes& b);
+sstring to_hex(const managed_bytes_opt& b);
+
 // The operators below are used only by tests.
 
 inline bool operator==(const managed_bytes_view& a, const managed_bytes_view& b) {
@@ -524,3 +532,4 @@ inline std::ostream& operator<<(std::ostream& os, const managed_bytes_view& v) {
 inline std::ostream& operator<<(std::ostream& os, const managed_bytes& b) {
     return (os << managed_bytes_view(b));
 }
+std::ostream& operator<<(std::ostream& os, const managed_bytes_opt& b);

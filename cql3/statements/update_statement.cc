@@ -179,9 +179,7 @@ void update_statement::add_update_for_key(mutation& m, const query::clustering_r
 }
 
 modification_statement::json_cache_opt insert_prepared_json_statement::maybe_prepare_json_cache(const query_options& options) const {
-    sstring json_string = with_linearized(_term->bind_and_get(options).data().value(), [&] (bytes_view value) {
-        return utf8_type->to_string(bytes(value));
-    });
+    sstring json_string = utf8_type->to_string(to_bytes(_term->bind_and_get(options)));
     return json_helpers::parse(std::move(json_string), s->all_columns(), options.get_cql_serialization_format());
 }
 
@@ -207,7 +205,7 @@ insert_prepared_json_statement::execute_set_value(mutation& m, const clustering_
             if (type.is_collection()) {
                 throw std::runtime_error(format("insert_prepared_json_statement::execute_set_value: unhandled collection type {}", type.name()));
             }
-            m.set_cell(prefix, column, operation::make_dead_cell(params));
+            m.set_cell(prefix, column, params.make_dead_cell());
         }
         ));
         return;
@@ -217,25 +215,25 @@ insert_prepared_json_statement::execute_set_value(mutation& m, const clustering_
     visit(*column.type, make_visitor(
     [&] (const list_type_impl& ltype) {
         lists::setter::execute(m, prefix, params, column,
-                ::make_shared<lists::value>(lists::value::from_serialized(fragmented_temporary_buffer::view(*value), ltype, sf)));
+                ::make_shared<lists::value>(lists::value::from_serialized(raw_value_view::make_value(*value), ltype, sf)));
     },
     [&] (const set_type_impl& stype) {
         sets::setter::execute(m, prefix, params, column,
-                ::make_shared<sets::value>(sets::value::from_serialized(fragmented_temporary_buffer::view(*value), stype, sf)));
+                ::make_shared<sets::value>(sets::value::from_serialized(raw_value_view::make_value(*value), stype, sf)));
     },
     [&] (const map_type_impl& mtype) {
         maps::setter::execute(m, prefix, params, column,
-                ::make_shared<maps::value>(maps::value::from_serialized(fragmented_temporary_buffer::view(*value), mtype, sf)));
+                ::make_shared<maps::value>(maps::value::from_serialized(raw_value_view::make_value(*value), mtype, sf)));
     },
     [&] (const user_type_impl& utype) {
         user_types::setter::execute(m, prefix, params, column,
-                ::make_shared<user_types::value>(user_types::value::from_serialized(fragmented_temporary_buffer::view(*value), utype)));
+                ::make_shared<user_types::value>(user_types::value::from_serialized(raw_value_view::make_value(*value), utype)));
     },
     [&] (const abstract_type& type) {
         if (type.is_collection()) {
             throw std::runtime_error(format("insert_prepared_json_statement::execute_set_value: unhandled collection type {}", type.name()));
         }
-        constants::setter::execute(m, prefix, params, column, raw_value_view::make_value(fragmented_temporary_buffer::view(*value)));
+        constants::setter::execute(m, prefix, params, column, raw_value_view::make_value(*value));
     }
     ));
 }

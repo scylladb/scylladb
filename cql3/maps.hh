@@ -76,14 +76,14 @@ public:
 
     class value : public terminal, collection_terminal {
     public:
-        std::map<bytes, bytes, serialized_compare> map;
+        std::map<managed_bytes, managed_bytes, serialized_compare> map;
 
-        value(std::map<bytes, bytes, serialized_compare> map)
+        value(std::map<managed_bytes, managed_bytes, serialized_compare> map)
             : map(std::move(map)) {
         }
-        static value from_serialized(const fragmented_temporary_buffer::view& value, const map_type_impl& type, cql_serialization_format sf);
+        static value from_serialized(const raw_value_view& value, const map_type_impl& type, cql_serialization_format sf);
         virtual cql3::raw_value get(const query_options& options) override;
-        virtual bytes get_with_protocol_version(cql_serialization_format sf);
+        virtual managed_bytes get_with_protocol_version(cql_serialization_format sf);
         bool equals(const map_type_impl& mt, const value& v);
         virtual sstring to_string() const;
     };

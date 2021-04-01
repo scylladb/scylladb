@@ -26,6 +26,22 @@
 
 #include "test/lib/random_utils.hh"
 
+namespace cql3 {
+
+bool operator==(const cql3::raw_value_view& a, const cql3::raw_value_view& b) {
+    if (a.is_value()) {
+        return b.is_value() && b.with_value([&] (const FragmentedView auto& v2) {
+            return a.with_value([&] (const FragmentedView auto& v1) {
+                return equal_unsigned(v1, v2);
+            });
+        });
+    } else {
+        return a.is_null() == b.is_null();
+    }
+}
+
+} // namespace cql3
+
 SEASTAR_THREAD_TEST_CASE(test_response_request_reader) {
     auto stream_id = tests::random::get_int<int16_t>();
     auto opcode = tests::random::get_int<uint8_t>(uint8_t(cql_transport::cql_binary_opcode::AUTH_SUCCESS));
@@ -99,7 +115,7 @@ SEASTAR_THREAD_TEST_CASE(test_response_request_reader) {
 
     BOOST_CHECK(req.read_value_view(version).is_null());
     BOOST_CHECK(req.read_value_view(version).is_unset_value());
-    BOOST_CHECK_EQUAL(linearized(*req.read_value_view(version)), value);
+    BOOST_CHECK_EQUAL(to_bytes(req.read_value_view(version)), value);
 
     std::vector<sstring_view> names;
     std::vector<cql3::raw_value_view> values;

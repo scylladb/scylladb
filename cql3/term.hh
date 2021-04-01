@@ -192,14 +192,14 @@ public:
 
 class multi_item_terminal : public terminal {
 public:
-    virtual const std::vector<bytes_opt>& get_elements() const = 0;
+    virtual const std::vector<managed_bytes_opt>& get_elements() const = 0;
 };
 
 class collection_terminal {
 public:
     virtual ~collection_terminal() {}
     /** Gets the value of the collection when serialized with the given protocol version format */
-    virtual bytes get_with_protocol_version(cql_serialization_format sf) = 0;
+    virtual managed_bytes get_with_protocol_version(cql_serialization_format sf) = 0;
 };
 
 /**

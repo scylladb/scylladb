@@ -73,15 +73,15 @@ public:
     };
 
     class value : public multi_item_terminal {
-        std::vector<bytes_opt> _elements;
+        std::vector<managed_bytes_opt> _elements;
     public:
-        explicit value(std::vector<bytes_opt>);
-        explicit value(std::vector<bytes_view_opt>);
+        explicit value(std::vector<managed_bytes_opt>);
+        explicit value(std::vector<managed_bytes_view_opt>);
 
-        static value from_serialized(const fragmented_temporary_buffer::view&, const user_type_impl&);
+        static value from_serialized(const raw_value_view&, const user_type_impl&);
 
         virtual cql3::raw_value get(const query_options&) override;
-        virtual const std::vector<bytes_opt>& get_elements() const override;
+        virtual const std::vector<managed_bytes_opt>& get_elements() const override;
         virtual sstring to_string() const override;
     };
 
@@ -94,7 +94,7 @@ public:
         virtual bool contains_bind_marker() const override;
         virtual void collect_marker_specification(variable_specifications& bound_names) const;
     private:
-        std::vector<bytes_opt> bind_internal(const query_options& options);
+        std::vector<managed_bytes_opt> bind_internal(const query_options& options);
     public:
         virtual shared_ptr<terminal> bind(const query_options& options) override;
         virtual cql3::raw_value_view bind_and_get(const query_options& options) override;
