@@ -2338,13 +2338,14 @@ void storage_service::excise(std::unordered_set<token> tokens, inet_address endp
     slogger.info("Removing tokens {} for {}", tokens, endpoint);
     // FIXME: HintedHandOffManager.instance.deleteHintsForEndpoint(endpoint);
     remove_endpoint(endpoint);
-    auto tmlock = get_token_metadata_lock().get0();
+    auto tmlock = std::make_optional(get_token_metadata_lock().get0());
     auto tmptr = get_mutable_token_metadata_ptr().get0();
     tmptr->remove_endpoint(endpoint);
     tmptr->remove_bootstrap_tokens(tokens);
 
     update_pending_ranges(tmptr, format("excise {}", endpoint)).get();
     replicate_to_all_cores(std::move(tmptr)).get();
+    tmlock.reset();
 
     notify_left(endpoint);
 }
