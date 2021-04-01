@@ -235,7 +235,7 @@ public:
             bool send_one_file(const sstring& fname);
 
             /// \brief Checks if we can still send hints.
-            /// \return TRUE if the destination Node is either ALIVE or has left the NORMAL state (e.g. has been decommissioned).
+            /// \return TRUE if the destination Node is either ALIVE or has left the ring (e.g. after decommission or removenode).
             bool can_send() noexcept;
 
             /// \brief Restore a mutation object from the hints file entry.
