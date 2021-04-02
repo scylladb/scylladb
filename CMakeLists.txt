@@ -524,6 +524,7 @@ set(scylla_sources
     repair/sink_source_for_repair.cc
     repair/repair.cc
     repair/reader.cc
+    repair/writer.cc
     repair/row.cc
     repair/row_level.cc
     row_cache.cc
