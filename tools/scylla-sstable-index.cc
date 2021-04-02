@@ -167,7 +167,8 @@ Note: UDT is not supported for now.
 
             db::config dbcfg;
             gms::feature_service feature_service(gms::feature_config_from_db_config(dbcfg));
-            sstables::sstables_manager sst_man(large_data_handler, dbcfg, feature_service);
+            cache_tracker tracker;
+            sstables::sstables_manager sst_man(large_data_handler, dbcfg, feature_service, tracker);
             auto close_sst_man = deferred_close(sst_man);
 
             auto ed = sstables::entry_descriptor::make_descriptor(dir_path.c_str(), sst_filename.c_str());

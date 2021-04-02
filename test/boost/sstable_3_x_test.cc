@@ -5282,7 +5282,8 @@ static void test_sstable_write_large_row_f(schema_ptr s, memtable& mt, const par
     };
 
     large_row_handler handler(threshold, std::numeric_limits<uint64_t>::max(), f);
-    sstables_manager manager(handler, test_db_config, test_feature_service);
+    cache_tracker tracker;
+    sstables_manager manager(handler, test_db_config, test_feature_service, tracker);
     auto stop_manager = defer([&] { manager.close().get(); });
     tmpdir dir;
     auto sst = manager.make_sstable(
@@ -5338,7 +5339,8 @@ static void test_sstable_log_too_many_rows_f(int rows, uint64_t threshold, bool 
     };
 
     large_row_handler handler(std::numeric_limits<uint64_t>::max(), threshold, f);
-    sstables_manager manager(handler, test_db_config, test_feature_service);
+    cache_tracker tracker;
+    sstables_manager manager(handler, test_db_config, test_feature_service, tracker);
     auto close_manager = defer([&] { manager.close().get(); });
     tmpdir dir;
     auto sst = manager.make_sstable(sc, dir.path().string(), 1, version, sstables::sstable::format_types::big);

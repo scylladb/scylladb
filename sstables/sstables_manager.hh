@@ -33,6 +33,7 @@
 #include "sstables/sstables.hh"
 #include "sstables/version.hh"
 #include "sstables/component_type.hh"
+#include "db/cache_tracker.hh"
 
 #include <boost/intrusive/list.hpp>
 
@@ -72,8 +73,9 @@ private:
     list_type _undergoing_close;
     bool _closing = false;
     promise<> _done;
+    cache_tracker& _cache_tracker;
 public:
-    explicit sstables_manager(db::large_data_handler& large_data_handler, const db::config& dbcfg, gms::feature_service& feat);
+    explicit sstables_manager(db::large_data_handler& large_data_handler, const db::config& dbcfg, gms::feature_service& feat, cache_tracker&);
     ~sstables_manager();
 
     // Constructs a shared sstable
@@ -88,6 +90,7 @@ public:
 
     sstable_writer_config configure_writer(sstring origin) const;
     const db::config& config() const { return _db_config; }
+    cache_tracker& get_cache_tracker() { return _cache_tracker; }
 
     void set_format(sstable_version_types format) { _format = format; }
     sstables::sstable::version_types get_highest_supported_format() const { return _format; }

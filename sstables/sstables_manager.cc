@@ -31,8 +31,8 @@ namespace sstables {
 logging::logger smlogger("sstables_manager");
 
 sstables_manager::sstables_manager(
-    db::large_data_handler& large_data_handler, const db::config& dbcfg, gms::feature_service& feat)
-    : _large_data_handler(large_data_handler), _db_config(dbcfg), _features(feat) {
+    db::large_data_handler& large_data_handler, const db::config& dbcfg, gms::feature_service& feat, cache_tracker& ct)
+    : _large_data_handler(large_data_handler), _db_config(dbcfg), _features(feat), _cache_tracker(ct) {
 }
 
 sstables_manager::~sstables_manager() {
