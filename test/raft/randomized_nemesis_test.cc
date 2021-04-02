@@ -23,6 +23,7 @@
 #include <seastar/core/timed_out_error.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/gate.hh>
+#include <seastar/core/queue.hh>
 #include <seastar/util/defer.hh>
 
 #include "raft/server.hh"
@@ -809,6 +810,90 @@ private:
 
             std::pop_heap(_events.begin(), _events.end(), cmp);
             _events.pop_back();
+        }
+    }
+};
+
+// A queue of messages that have arrived at a given Raft server and are waiting to be processed
+// by that server (which may be a long computation, hence returning a `future<>`).
+// Its purpose is to serve as a ``bridge'' between `network` and a server's `rpc` instance.
+// The `network`'s delivery function will `push()` a message onto this queue and `receive_fiber()`
+// will eventually forward the message to `rpc` by calling `rpc::receive()`.
+// `push()` may fail if the queue is full, meaning that the queue expects the caller (`network`
+// in our case) to retry later.
+template <typename State>
+class delivery_queue {
+    struct delivery {
+        raft::server_id src;
+        typename rpc<State>::message_t payload;
+    };
+
+    struct aborted_exception {};
+
+    seastar::queue<delivery> _queue;
+    rpc<State>& _rpc;
+
+    std::optional<future<>> _receive_fiber;
+
+public:
+    delivery_queue(rpc<State>& rpc)
+        : _queue(std::numeric_limits<size_t>::max()), _rpc(rpc) {
+    }
+
+    ~delivery_queue() {
+        assert(!_receive_fiber);
+    }
+
+    void push(raft::server_id src, const typename rpc<State>::message_t& p) {
+        assert(_receive_fiber);
+        bool pushed = _queue.push(delivery{src, p});
+        // The queue is practically unbounded...
+        assert(pushed);
+
+        // If the queue is growing then the test infrastructure must have some kind of a liveness problem
+        // (which may eventually cause OOM). Let's warn the user.
+        if (_queue.size() > 100) {
+            tlogger.warn("delivery_queue: large queue size ({})", _queue.size());
+        }
+    }
+
+    // Start the receiving fiber.
+    // Can be executed at most once. When restarting a ``crashed'' server, create a new queue.
+    void start() {
+        assert(!_receive_fiber);
+        _receive_fiber = receive_fiber();
+    }
+
+    // Stop the receiving fiber (if it's running). The returned future resolves
+    // when the fiber finishes. Must be called before destruction (unless the fiber was never started).
+    future<> abort() {
+        _queue.abort(std::make_exception_ptr(aborted_exception{}));
+        if (_receive_fiber) {
+            try {
+                co_await *std::exchange(_receive_fiber, std::nullopt);
+            } catch (const aborted_exception&) {}
+        }
+    }
+
+private:
+    future<> receive_fiber() {
+        // TODO: configurable
+        static const size_t _max_receive_concurrency = 20;
+
+        std::vector<delivery> batch;
+        while (true) {
+            // TODO: there is most definitely a better way to do this, but let's assume this is good enough (for now...)
+            // Unfortunately seastar does not yet have a multi-consumer queue implementation.
+            batch.push_back(co_await _queue.pop_eventually());
+            while (!_queue.empty() && batch.size() < _max_receive_concurrency) {
+                batch.push_back(_queue.pop());
+            }
+
+            co_await parallel_for_each(batch, [&] (delivery& m) {
+                return _rpc.receive(m.src, std::move(m.payload));
+            });
+
+            batch.clear();
         }
     }
 };
