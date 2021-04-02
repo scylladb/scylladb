@@ -898,6 +898,162 @@ private:
     }
 };
 
+// Contains a `raft::server` and other facilities needed for it and the underlying
+// modules (persistence, rpc, etc.) to run, and to communicate with the external environment.
+template <PureStateMachine M>
+class raft_server {
+    raft::server_id _id;
+
+    std::unique_ptr<snapshots_t<typename M::state_t>> _snapshots;
+    std::unique_ptr<delivery_queue<typename M::state_t>> _queue;
+    std::unique_ptr<raft::server> _server;
+
+    // The following objects are owned by _server:
+    impure_state_machine<M>& _sm;
+    rpc<typename M::state_t>& _rpc;
+
+    bool _started = false;
+    bool _stopped = false;
+
+    // Used to ensure that when `abort()` returns there are
+    // no more in-progress methods running on this object.
+    seastar::gate _gate;
+
+public:
+    // Create a `raft::server` with the given `id` and all other facilities required
+    // by the server (the state machine, RPC instance and so on). The server will use
+    // `send_rpc` to send RPC messages to other servers and `fd` for failure detection.
+    //
+    // If this is the first server in the cluster, pass `first_server = true`; this will
+    // cause the server to be created with a non-empty singleton configuration containing itself.
+    // Otherwise, pass `first_server = false`; that server, in order to function, must be then added
+    // by the existing cluster through a configuration change.
+    //
+    // The created server is not started yet; use `start` for that.
+    static std::unique_ptr<raft_server> create(
+            raft::server_id id,
+            shared_ptr<failure_detector> fd,
+            bool first_server,
+            typename rpc<typename M::state_t>::send_message_t send_rpc) {
+        using state_t = typename M::state_t;
+
+        auto snapshots = std::make_unique<snapshots_t<state_t>>();
+        auto sm = std::make_unique<impure_state_machine<M>>(*snapshots);
+        auto rpc_ = std::make_unique<rpc<state_t>>(*snapshots, std::move(send_rpc));
+        auto persistence_ = std::make_unique<persistence<state_t, M::init>>(*snapshots, first_server ? std::optional{id} : std::nullopt);
+        auto queue = std::make_unique<delivery_queue<state_t>>(*rpc_);
+
+        auto& sm_ref = *sm;
+        auto& rpc_ref = *rpc_;
+
+        auto server = raft::create_server(
+                id, std::move(rpc_), std::move(sm), std::move(persistence_), std::move(fd),
+                raft::server::configuration{});
+
+        return std::make_unique<raft_server>(initializer{
+            ._id = id,
+            ._snapshots = std::move(snapshots),
+            ._queue = std::move(queue),
+            ._server = std::move(server),
+            ._sm = sm_ref,
+            ._rpc = rpc_ref
+        });
+    }
+
+    ~raft_server() {
+        assert(!_started || _stopped);
+    }
+
+    raft_server(const raft_server&&) = delete;
+    raft_server(raft_server&&) = delete;
+
+    // Start the server. Can be called at most once.
+    //
+    // TODO: implement server ``crashes'' and ``restarts''.
+    // A crashed server needs a new delivery queue to be created in order to restart but must
+    // reuse the previous `persistence`. Perhaps the delivery queue should be created in `start`?
+    future<> start() {
+        assert(!_started);
+        _started = true;
+
+        co_await _server->start();
+        _queue->start();
+    }
+
+    // Stop the given server. Must be called before the server is destroyed
+    // (unless it was never started in the first place).
+    future<> abort() {
+        auto f = _gate.close();
+        // Abort everything before waiting on the gate close future
+        // so currently running operations finish earlier.
+        if (_started) {
+            co_await _queue->abort();
+            co_await _server->abort();
+        }
+        co_await std::move(f);
+        _stopped = true;
+    }
+
+    void tick() {
+        assert(_started);
+        _rpc.tick();
+        _server->tick();
+    }
+
+    future<call_result_t<M>> call(
+            typename M::input_t input,
+            raft::logical_clock::time_point timeout,
+            logical_timer& timer) {
+        assert(_started);
+        return with_gate(_gate, [this, input = std::move(input), timeout, &timer] {
+            return ::call(std::move(input), timeout, timer, *_server, _sm);
+        });
+    }
+
+    future<> set_configuration(raft::server_address_set c) {
+        assert(_started);
+        return with_gate(_gate, [this, c = std::move(c)] {
+            return _server->set_configuration(std::move(c));
+        });
+    }
+
+    bool is_leader() const {
+        return _server->is_leader();
+    }
+
+    raft::server_id id() const {
+        return _id;
+    }
+
+    void deliver(raft::server_id src, const typename rpc<typename M::state_t>::message_t& m) {
+        assert(_started);
+        _queue->push(src, m);
+    }
+
+private:
+    struct initializer {
+        raft::server_id _id;
+
+        std::unique_ptr<snapshots_t<typename M::state_t>> _snapshots;
+        std::unique_ptr<delivery_queue<typename M::state_t>> _queue;
+        std::unique_ptr<raft::server> _server;
+
+        impure_state_machine<M>& _sm;
+        rpc<typename M::state_t>& _rpc;
+    };
+
+    raft_server(initializer i)
+        : _id(i._id)
+        , _snapshots(std::move(i._snapshots))
+        , _queue(std::move(i._queue))
+        , _server(std::move(i._server))
+        , _sm(i._sm)
+        , _rpc(i._rpc) {
+    }
+
+    friend std::unique_ptr<raft_server> std::make_unique<raft_server, raft_server::initializer>(initializer&&);
+};
+
 SEASTAR_TEST_CASE(dummy_test) {
     return seastar::make_ready_future<>();
 }
