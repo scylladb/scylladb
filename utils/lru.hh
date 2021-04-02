@@ -46,6 +46,10 @@ public:
     void unlink_from_lru() {
         _lru_link.unlink();
     }
+
+    void swap(evictable& o) noexcept {
+        _lru_link.swap_nodes(o._lru_link);
+    }
 };
 
 class lru {

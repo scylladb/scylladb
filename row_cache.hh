@@ -155,7 +155,6 @@ public:
 // Tracks accesses and performs eviction of cache entries.
 class cache_tracker final {
 public:
-    using lru_type = rows_entry::lru_type;
     friend class row_cache;
     friend class cache::read_context;
     friend class cache::autoupdating_underlying_reader;
@@ -198,7 +197,7 @@ private:
     stats _stats{};
     seastar::metrics::metric_groups _metrics;
     logalloc::region _region;
-    lru_type _lru;
+    lru _lru;
     mutation_cleaner _garbage;
     mutation_cleaner _memtable_cleaner;
 private:
@@ -239,6 +238,7 @@ public:
     uint64_t partitions() const noexcept { return _stats.partitions; }
     const stats& get_stats() const noexcept { return _stats; }
     void set_compaction_scheduling_group(seastar::scheduling_group);
+    lru& get_lru() { return _lru; }
 };
 
 inline
@@ -251,7 +251,7 @@ inline
 void cache_tracker::insert(rows_entry& entry) noexcept {
     ++_stats.row_insertions;
     ++_stats.rows;
-    _lru.push_front(entry);
+    _lru.add(entry);
 }
 
 inline

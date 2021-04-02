@@ -72,7 +72,7 @@ public:
         std::cout << "\n";
 
         std::cout << prefix() << "sizeof(rows_entry) = " << sizeof(rows_entry) << "\n";
-        std::cout << prefix() << "sizeof(lru_link_type) = " << sizeof(rows_entry::lru_link_type) << "\n";
+        std::cout << prefix() << "sizeof(evictable) = " << sizeof(evictable) << "\n";
         std::cout << prefix() << "sizeof(deletable_row) = " << sizeof(deletable_row) << "\n";
         std::cout << prefix() << "sizeof(row) = " << sizeof(row) << "\n";
         std::cout << prefix() << "radix_tree::inner_node::node_sizes = ";
