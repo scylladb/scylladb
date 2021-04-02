@@ -35,6 +35,8 @@
 using namespace seastar;
 using namespace std::chrono_literals;
 
+seastar::logger tlogger("randomized_nemesis_test");
+
 // A direct translaction of a mathematical definition of a state machine
 // (see e.g. Wikipedia) as a C++ concept. Implementations of this concept
 // do not store the state, they only define the types, the transition function
@@ -720,6 +722,125 @@ public:
         static const raft::logical_clock::duration _convict_threshold = 50_t;
 
         return _clock.now() < _last_heard[id] + _convict_threshold;
+    }
+};
+
+// `network` is a simple priority queue of `event`s, where an `event` is a message associated
+// with its planned delivery time. The queue uses a logical clock to decide when to deliver messages.
+// It delives all messages whose associated times are smaller than the ``current time'', the latter
+// determined by the number of `tick()` calls.
+//
+// Note: the actual delivery happens through a function that is passed in the `network` constructor.
+// The function may return `false` (for whatever reason) denoting that it failed to deliver the message.
+// In this case network will backup this message and retry the delivery on every later `tick` until
+// it succeeds.
+template <typename Payload>
+class network {
+public:
+    // When the time comes to deliver a message we use this function.
+    // However, based on the implementation, delivery may not be possible at the moment we try
+    // it (for example when delivery is implemented as pushing onto another queue which is currently
+    // full); this is represented by the returned boolean: delivery was successful if and only if
+    // the function returns true; if it wasn't successful, we are supposed to retry later.
+    using deliver_t = std::function<bool(raft::server_id src, raft::server_id dst, const Payload&)>;
+
+private:
+    struct message {
+        raft::server_id src;
+        raft::server_id dst;
+
+        // shared ptr to implement duplication of messages
+        lw_shared_ptr<Payload> payload;
+    };
+
+    struct event {
+        raft::logical_clock::time_point time;
+        message msg;
+    };
+
+    deliver_t _deliver;
+
+    // A min-heap of event occurences compared by their time points.
+    std::vector<event> _events;
+
+    // Comparator for the `_events` min-heap.
+    static bool cmp(const event& o1, const event& o2) {
+        return o1.time > o2.time;
+    }
+
+    // A FIFO queue of backed up messages, i.e. messages that couldn't have been delivered
+    // at their scheduled times according to the delivery function. We retry those messages
+    // on each tick.
+    // We use a list to be able to remove messages from the middle in O(1) (when we retry
+    // only some messages in `_delayed` may successfully be delivered, possibly from the middle
+    // of the queue).
+    // Note: using this list should rarely be necessary; delivery failure usually means that something's
+    // wrong with the testing infrastructure (e.g. it can't keep up with processing incoming
+    // messages). When we e.g. simulate node crashes, messages to these nodes should be dropped,
+    // which should be represented by the delivery function returning `true` (but silently
+    // dropping the ``delivered'' message).
+    std::list<message> _delayed;
+
+    // A pair (dst, [src1, src2, ...]) in this set denotes that `dst`
+    // does not receive messages from src1, src2, ...
+    std::unordered_map<raft::server_id, std::unordered_set<raft::server_id>> _grudges;
+
+    raft::logical_clock _clock;
+
+public:
+    network(deliver_t f)
+        : _deliver(std::move(f)) {}
+
+    void send(raft::server_id src, raft::server_id dst, Payload payload) {
+        // Predict the delivery time in advance.
+        // Our prediction may be wrong if a grudge exists at this expected moment of delivery.
+        // Messages may also be reordered.
+        // TODO: scale with number of msgs already in transit and payload size?
+        // TODO: randomize the delivery time
+        auto delivery_time = _clock.now() + 5_t;
+
+        _events.push_back(event{delivery_time, message{src, dst, make_lw_shared<Payload>(std::move(payload))}});
+        std::push_heap(_events.begin(), _events.end(), cmp);
+    }
+
+    void tick() {
+        _clock.advance();
+        deliver();
+    }
+
+private:
+    void deliver() {
+        // Retry all delayed messages first.
+        for (auto it = _delayed.begin(); it != _delayed.end();) {
+            if (_deliver(it->src, it->dst, *it->payload)) {
+                it = _delayed.erase(it);
+            } else {
+                // Delayed again.
+                ++it;
+            }
+        }
+
+        // Deliver every message whose time has come.
+        while (!_events.empty() && _events.front().time <= _clock.now()) {
+            auto& [_, m] = _events.front();
+            if (!_grudges[m.dst].contains(m.src)) {
+                if (!_deliver(m.src, m.dst, *m.payload)) {
+                    // Cannot deliver at this moment. Backup the message to be retried on the next `deliver()` call.
+                    _delayed.push_back(std::move(m));
+
+                    // _delayed should rarely be needed, if _delayed is growing then the test infrastructure
+                    // must have some kind of a liveness problem (which may eventually cause OOM). Let's warn the user.
+                    if (_delayed.size() > 100) {
+                        tlogger.warn("network: large number of delayed messages ({})", _delayed.size());
+                    }
+                }
+            } else {
+                // A grudge means that we drop the message.
+            }
+
+            std::pop_heap(_events.begin(), _events.end(), cmp);
+            _events.pop_back();
+        }
     }
 };
 
