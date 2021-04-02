@@ -942,9 +942,9 @@ public:
     // Each regular and static column in the base schema has a corresponding column in the log schema with the same name.
     // Given a reference to such a column from the base schema, this function sets the corresponding column
     // in the log to the given value for the given row.
-    void set_value(const clustering_key& log_ck, const column_definition& base_cdef, bytes value) {
+    void set_value(const clustering_key& log_ck, const column_definition& base_cdef, const managed_bytes_view& value) {
         auto& log_cdef = *_log_schema.get_column_definition(log_data_column_name_bytes(base_cdef.name()));
-        _log_mut.set_cell(log_ck, log_cdef, atomic_cell::make_live(*base_cdef.type, _ts, std::move(value), _ttl));
+        _log_mut.set_cell(log_ck, log_cdef, atomic_cell::make_live(*base_cdef.type, _ts, value, _ttl));
     }
 
     // Each regular and static column in the base schema has a corresponding column in the log schema
@@ -1068,7 +1068,7 @@ struct process_row_visitor {
 
         // delta
         if (_generate_delta_values) {
-            _builder.set_value(_log_ck, cdef, value);
+            _builder.set_value(_log_ck, cdef, bytes_view(value));
         }
 
         // images
@@ -1226,7 +1226,7 @@ struct process_row_visitor {
             }
 
             if (added_cells) {
-                _builder.set_value(_log_ck, cdef, *added_cells);
+                _builder.set_value(_log_ck, cdef, bytes_view(*added_cells));
             }
         }
 
@@ -1519,7 +1519,7 @@ public:
 
         auto process_cell = [&, this] (const column_definition& cdef) {
             if (auto current = get_col_from_row_state(row_state, cdef)) {
-                _builder->set_value(image_ck, cdef, std::move(*current));
+                _builder->set_value(image_ck, cdef, bytes_view(*current));
             }
         };
 
