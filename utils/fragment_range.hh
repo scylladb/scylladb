@@ -278,6 +278,13 @@ decltype(auto) with_simplified(const View& v, Function&& fn)
     }
 }
 
+template<FragmentedView View>
+void skip_empty_fragments(View& v) {
+    while (!v.empty() && v.current_fragment().empty()) {
+        v.remove_current();
+    }
+}
+
 template<FragmentedView V1, FragmentedView V2>
 int compare_unsigned(V1 v1, V2 v2) {
     while (!v1.empty() && !v2.empty()) {
@@ -287,6 +294,8 @@ int compare_unsigned(V1 v1, V2 v2) {
         }
         v1.remove_prefix(n);
         v2.remove_prefix(n);
+        skip_empty_fragments(v1);
+        skip_empty_fragments(v2);
     }
     return v1.size_bytes() - v2.size_bytes();
 }
@@ -306,6 +315,8 @@ void write_fragmented(Dest& dest, Src src) {
         memcpy(dest.current_fragment().data(), src.current_fragment().data(), n);
         dest.remove_prefix(n);
         src.remove_prefix(n);
+        skip_empty_fragments(dest);
+        skip_empty_fragments(src);
     }
 }
 
@@ -319,6 +330,8 @@ void copy_fragmented_view(Dest dest, Src src) {
         memcpy(dest.current_fragment().data(), src.current_fragment().data(), n);
         dest.remove_prefix(n);
         src.remove_prefix(n);
+        skip_empty_fragments(dest);
+        skip_empty_fragments(src);
     }
 }
 
