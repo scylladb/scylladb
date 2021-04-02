@@ -523,6 +523,7 @@ set(scylla_sources
     repair/hash.cc
     repair/sink_source_for_repair.cc
     repair/repair.cc
+    repair/row.cc
     repair/row_level.cc
     row_cache.cc
     schema.cc

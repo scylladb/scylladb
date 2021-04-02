@@ -54,6 +54,7 @@
 #include "service/migration_manager.hh"
 #include "repair/hash.hh"
 #include "repair/sink_source_for_repair.hh"
+#include "repair/row.hh"
 
 extern logging::logger rlogger;
 
@@ -186,77 +187,6 @@ static uint64_t get_random_seed() {
     static thread_local std::uniform_int_distribution<uint64_t> random_dist{};
     return random_dist(random_engine);
 }
-
-using is_dirty_on_master = bool_class<class is_dirty_on_master_tag>;
-
-class repair_row {
-    std::optional<frozen_mutation_fragment> _fm;
-    lw_shared_ptr<const decorated_key_with_hash> _dk_with_hash;
-    std::optional<repair_sync_boundary> _boundary;
-    std::optional<repair_hash> _hash;
-    is_dirty_on_master _dirty_on_master;
-    lw_shared_ptr<mutation_fragment> _mf;
-public:
-    repair_row() = default;
-    repair_row(std::optional<frozen_mutation_fragment> fm,
-            std::optional<position_in_partition> pos,
-            lw_shared_ptr<const decorated_key_with_hash> dk_with_hash,
-            std::optional<repair_hash> hash,
-            is_dirty_on_master dirty_on_master,
-            lw_shared_ptr<mutation_fragment> mf = {})
-            : _fm(std::move(fm))
-            , _dk_with_hash(std::move(dk_with_hash))
-            , _boundary(pos ? std::optional<repair_sync_boundary>(repair_sync_boundary{_dk_with_hash->dk, std::move(*pos)}) : std::nullopt)
-            , _hash(std::move(hash))
-            , _dirty_on_master(dirty_on_master)
-            , _mf(std::move(mf)) {
-    }
-    lw_shared_ptr<mutation_fragment>& get_mutation_fragment_ptr () {
-        return _mf;
-    }
-    mutation_fragment& get_mutation_fragment() {
-        if (!_mf) {
-            throw std::runtime_error("empty mutation_fragment");
-        }
-        return *_mf;
-    }
-    frozen_mutation_fragment& get_frozen_mutation() {
-        if (!_fm) {
-            throw std::runtime_error("empty frozen_mutation_fragment");
-        }
-        return *_fm;
-    }
-    const frozen_mutation_fragment& get_frozen_mutation() const {
-        if (!_fm) {
-            throw std::runtime_error("empty frozen_mutation_fragment");
-        }
-        return *_fm;
-    }
-    const lw_shared_ptr<const decorated_key_with_hash>& get_dk_with_hash() const {
-        return _dk_with_hash;
-    }
-    size_t size() const {
-        if (!_fm) {
-            throw std::runtime_error("empty size due to empty frozen_mutation_fragment");
-        }
-        return _fm->representation().size();
-    }
-    const repair_sync_boundary& boundary() const {
-        if (!_boundary) {
-            throw std::runtime_error("empty repair_sync_boundary");
-        }
-        return *_boundary;
-    }
-    const repair_hash& hash() const {
-        if (!_hash) {
-            throw std::runtime_error("empty hash");
-        }
-        return *_hash;
-    }
-    is_dirty_on_master dirty_on_master() const {
-        return _dirty_on_master;
-    }
-};
 
 class repair_reader {
 public:
