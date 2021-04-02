@@ -856,7 +856,7 @@ class log_mutation_builder {
     const column_definition& _ttl_col;
 
     // The base mutation's partition key
-    std::vector<bytes> _base_pk;
+    std::vector<managed_bytes> _base_pk;
 
     // The cdc$time value of created rows
     const bytes _tuuid;
@@ -877,7 +877,7 @@ public:
         : _base_schema(base_schema), _log_schema(*log_mut.schema()),
           _op_col(*_log_schema.get_column_definition(log_meta_column_name_bytes("operation"))),
           _ttl_col(*_log_schema.get_column_definition(log_meta_column_name_bytes("ttl"))),
-          _base_pk(base_pk.explode(_base_schema)),
+          _base_pk(base_pk.explode_fragmented()),
           _tuuid(timeuuid_type->decompose(generate_timeuuid(ts))),
           _ts(ts),
           _ttl(_base_schema.cdc_options().ttl()
@@ -920,7 +920,7 @@ public:
     // This takes a base schema clustering key prefix and sets these columns
     // according to the prefix' values for the given log row.
     void set_clustering_columns(const clustering_key& log_ck, const clustering_key_prefix& base_ckey) {
-        set_key_columns(log_ck, _base_schema.clustering_key_columns(), base_ckey.explode(_log_schema));
+        set_key_columns(log_ck, _base_schema.clustering_key_columns(), base_ckey.explode_fragmented());
     }
 
     // Sets the `cdc$operation` column for the given row.
@@ -971,14 +971,14 @@ public:
         }
     }
 private:
-    void set_key_columns(const clustering_key& log_ck, schema::const_iterator_range_type columns, const std::vector<bytes>& key) {
+    void set_key_columns(const clustering_key& log_ck, schema::const_iterator_range_type columns, const std::vector<managed_bytes>& key) {
         size_t pos = 0;
         for (auto& column : columns) {
             if (pos >= key.size()) {
                 break;
             }
             auto& cdef = *_log_schema.get_column_definition(log_data_column_name_bytes(column.name()));
-            _log_mut.set_cell(log_ck, cdef, atomic_cell::make_live(*column.type, _ts, bytes_view(key[pos]), _ttl));
+            _log_mut.set_cell(log_ck, cdef, atomic_cell::make_live(*column.type, _ts, managed_bytes_view(key[pos]), _ttl));
             ++pos;
         }
     }
