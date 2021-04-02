@@ -52,6 +52,7 @@
 #include "mutation_source_metadata.hh"
 #include "utils/stall_free.hh"
 #include "service/migration_manager.hh"
+#include "repair/sink_source_for_repair.hh"
 
 extern logging::logger rlogger;
 
@@ -102,75 +103,6 @@ struct repair_node_state {
     repair_state state = repair_state::unknown;
     explicit repair_node_state(gms::inet_address n) : node(n) { }
 };
-
-// Wraps sink and source objects for repair master or repair follower nodes.
-// For repair master, it stores sink and source pair for each of the followers.
-// For repair follower, it stores one sink and source pair for repair master.
-template<class SinkType, class SourceType>
-class sink_source_for_repair {
-    uint32_t _repair_meta_id;
-    using get_sink_source_fn_type = std::function<future<std::tuple<rpc::sink<SinkType>, rpc::source<SourceType>>> (uint32_t repair_meta_id, netw::messaging_service::msg_addr addr)>;
-    using sink_type  = std::reference_wrapper<rpc::sink<SinkType>>;
-    using source_type = std::reference_wrapper<rpc::source<SourceType>>;
-    // The vectors below store sink and source object for peer nodes.
-    std::vector<std::optional<rpc::sink<SinkType>>> _sinks;
-    std::vector<std::optional<rpc::source<SourceType>>> _sources;
-    std::vector<bool> _sources_closed;
-    get_sink_source_fn_type _fn;
-public:
-    sink_source_for_repair(uint32_t repair_meta_id, size_t nr_peer_nodes, get_sink_source_fn_type fn)
-        : _repair_meta_id(repair_meta_id)
-        , _sinks(nr_peer_nodes)
-        , _sources(nr_peer_nodes)
-        , _sources_closed(nr_peer_nodes, false)
-        , _fn(std::move(fn)) {
-    }
-    void mark_source_closed(unsigned node_idx) {
-        _sources_closed[node_idx] = true;
-    }
-    future<std::tuple<sink_type, source_type>> get_sink_source(gms::inet_address remote_node, unsigned node_idx) {
-        using value_type = std::tuple<sink_type, source_type>;
-        if (_sinks[node_idx] && _sources[node_idx]) {
-            return make_ready_future<value_type>(value_type(_sinks[node_idx].value(), _sources[node_idx].value()));
-        }
-        if (_sinks[node_idx] || _sources[node_idx]) {
-            return make_exception_future<value_type>(std::runtime_error(format("sink or source is missing for node {}", remote_node)));
-        }
-        return _fn(_repair_meta_id, netw::messaging_service::msg_addr(remote_node)).then_unpack([this, node_idx] (rpc::sink<SinkType> sink, rpc::source<SourceType> source) mutable {
-            _sinks[node_idx].emplace(std::move(sink));
-            _sources[node_idx].emplace(std::move(source));
-            return make_ready_future<value_type>(value_type(_sinks[node_idx].value(), _sources[node_idx].value()));
-        });
-    }
-    future<> close() {
-        return parallel_for_each(boost::irange(unsigned(0), unsigned(_sources.size())), [this] (unsigned node_idx) mutable {
-            std::optional<rpc::sink<SinkType>>& sink_opt = _sinks[node_idx];
-            auto f = sink_opt ? sink_opt->close() : make_ready_future<>();
-            return f.finally([this, node_idx] {
-                std::optional<rpc::source<SourceType>>& source_opt = _sources[node_idx];
-                if (source_opt && !_sources_closed[node_idx]) {
-                    return repeat([&source_opt] () mutable {
-                        // Keep reading source until end of stream
-                        return (*source_opt)().then([] (std::optional<std::tuple<SourceType>> opt) mutable {
-                            if (opt) {
-                                return make_ready_future<stop_iteration>(stop_iteration::no);
-                            } else {
-                                return make_ready_future<stop_iteration>(stop_iteration::yes);
-                            }
-                        }).handle_exception([] (std::exception_ptr ep) {
-                            return make_ready_future<stop_iteration>(stop_iteration::yes);
-                        });
-                    });
-                }
-                return make_ready_future<>();
-            });
-        });
-    }
-};
-
-using sink_source_for_get_full_row_hashes = sink_source_for_repair<repair_stream_cmd, repair_hash_with_cmd>;
-using sink_source_for_get_row_diff = sink_source_for_repair<repair_hash_with_cmd, repair_row_on_wire_with_cmd>;
-using sink_source_for_put_row_diff = sink_source_for_repair<repair_row_on_wire_with_cmd, repair_stream_cmd>;
 
 struct row_level_repair_metrics {
     seastar::metrics::metric_groups _metrics;

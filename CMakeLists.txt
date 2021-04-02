@@ -520,6 +520,7 @@ set(scylla_sources
     redis/server.cc
     redis/service.cc
     redis/stats.cc
+    repair/sink_source_for_repair.cc
     repair/repair.cc
     repair/row_level.cc
     row_cache.cc
