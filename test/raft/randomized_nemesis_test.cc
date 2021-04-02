@@ -33,6 +33,7 @@
 #include "idl/uuid.dist.impl.hh"
 
 using namespace seastar;
+using namespace std::chrono_literals;
 
 // A direct translaction of a mathematical definition of a state machine
 // (see e.g. Wikipedia) as a C++ concept. Implementations of this concept
@@ -650,6 +651,80 @@ public:
         // We assume that our methods won't be called after `abort()`.
         // TODO: is this assumption correct?
         co_return;
+    }
+};
+
+// A failure detector using heartbeats for deciding whether to convict a server
+// as failed. We convict a server if we don't receive a heartbeat for a long enough time.
+// `failure_detector` assumes a message-passing method given by a `send_heartbeat_t` function
+// through the constructor for sending heartbeats and assumes that `receive_heartbeat` is called
+// whenever another server sends a message to us.
+// To decide who to send heartbeats to we use the ``current knowledge'' of servers in the network
+// which is updated through `add_server` and `remove_server` functions.
+class failure_detector : public raft::failure_detector {
+public:
+    using send_heartbeat_t = std::function<void(raft::server_id dst)>;
+
+private:
+    raft::logical_clock _clock;
+
+    // The set of known servers, used to broadcast heartbeats.
+    std::unordered_set<raft::server_id> _known;
+
+    // The last time we received a heartbeat from a server.
+    std::unordered_map<raft::server_id, raft::logical_clock::time_point> _last_heard;
+
+    // The last time we sent a heartbeat.
+    raft::logical_clock::time_point _last_beat;
+
+    send_heartbeat_t _send_heartbeat;
+
+public:
+    failure_detector(send_heartbeat_t f)
+        : _send_heartbeat(std::move(f))
+    {
+        send_heartbeats();
+        assert(_last_beat == _clock.now());
+    }
+
+    void receive_heartbeat(raft::server_id src) {
+        assert(_known.contains(src));
+        _last_heard[src] = std::max(_clock.now(), _last_heard[src]);
+    }
+
+    void tick() {
+        _clock.advance();
+
+        // TODO: make it adjustable
+        static const raft::logical_clock::duration _heartbeat_period = 10_t;
+
+        if (_last_beat + _heartbeat_period <= _clock.now()) {
+            send_heartbeats();
+        }
+    }
+
+    void send_heartbeats() {
+        for (auto& dst : _known) {
+            _send_heartbeat(dst);
+        }
+        _last_beat = _clock.now();
+    }
+
+    // We expect a server to be added through this function before we receive a heartbeat from it.
+    void add_server(raft::server_id id) {
+        _known.insert(id);
+    }
+
+    void remove_server(raft::server_id id) {
+        _known.erase(id);
+        _last_heard.erase(id);
+    }
+
+    bool is_alive(raft::server_id id) override {
+        // TODO: make it adjustable
+        static const raft::logical_clock::duration _convict_threshold = 50_t;
+
+        return _clock.now() < _last_heard[id] + _convict_threshold;
     }
 };
 
