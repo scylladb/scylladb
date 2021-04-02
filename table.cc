@@ -644,7 +644,7 @@ table::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old, sstable_write_
 
         auto f = consumer(old->make_flush_reader(
                     old->schema(),
-                    compaction_concurrency_semaphore().make_permit(old->schema().get(), "try_flush_memtable_to_sstable()"),
+                    compaction_concurrency_semaphore().make_tracking_only_permit(old->schema().get(), "try_flush_memtable_to_sstable()"),
                     service::get_local_memtable_flush_priority()));
 
         // Switch back to default scheduling group for post-flush actions, to avoid them being staved by the memtable flush
@@ -1940,7 +1940,7 @@ write_memtable_to_sstable(memtable& mt, sstables::shared_sstable sst, sstables::
             std::make_unique<reader_concurrency_semaphore>(reader_concurrency_semaphore::no_limits{}, "write_memtable_to_sstable"),
             cfg,
             [&mt, sst] (auto& monitor, auto& semaphore, auto& cfg) {
-        return write_memtable_to_sstable(semaphore->make_permit(mt.schema().get(), "mt_to_sst"), mt, std::move(sst), monitor, cfg)
+        return write_memtable_to_sstable(semaphore->make_tracking_only_permit(mt.schema().get(), "mt_to_sst"), mt, std::move(sst), monitor, cfg)
         .finally([&semaphore] {
                 return semaphore->stop();
         });
@@ -2272,7 +2272,7 @@ future<row_locker::lock_holder> table::do_push_view_replica_updates(schema_ptr s
     auto cr_ranges = co_await db::view::calculate_affected_clustering_ranges(*base, m.decorated_key(), m.partition(), views);
     if (cr_ranges.empty()) {
         tracing::trace(tr_state, "View updates do not require read-before-write");
-        co_await generate_and_propagate_view_updates(base, sem.make_permit(s.get(), "push-view-updates-1"), std::move(views), std::move(m), { }, std::move(tr_state), now);
+        co_await generate_and_propagate_view_updates(base, sem.make_tracking_only_permit(s.get(), "push-view-updates-1"), std::move(views), std::move(m), { }, std::move(tr_state), now);
         // In this case we are not doing a read-before-write, just a
         // write, so no lock is needed.
         co_return row_locker::lock_holder();
@@ -2297,7 +2297,7 @@ future<row_locker::lock_holder> table::do_push_view_replica_updates(schema_ptr s
     co_await utils::get_local_injector().inject("table_push_view_replica_updates_timeout", timeout);
     auto lock = co_await std::move(lockf);
     auto pk = dht::partition_range::make_singular(m.decorated_key());
-    auto permit = sem.make_permit(base.get(), "push-view-updates-2");
+    auto permit = sem.make_tracking_only_permit(base.get(), "push-view-updates-2");
     auto reader = source.make_reader(base, permit, pk, slice, io_priority, tr_state, streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
     co_await this->generate_and_propagate_view_updates(base, std::move(permit), std::move(views), std::move(m), std::move(reader), tr_state, now);
     tracing::trace(tr_state, "View updates for {}.{} were generated and propagated", base->ks_name(), base->cf_name());

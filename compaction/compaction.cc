@@ -539,7 +539,7 @@ protected:
         : _cf(cf)
         , _sstable_creator(std::move(descriptor.creator))
         , _schema(cf.schema())
-        , _permit(_cf.compaction_concurrency_semaphore().make_permit(_cf.schema().get(), "compaction"))
+        , _permit(_cf.compaction_concurrency_semaphore().make_tracking_only_permit(_cf.schema().get(), "compaction"))
         , _sstables(std::move(descriptor.sstables))
         , _max_sstable_size(descriptor.max_sstable_bytes)
         , _sstable_level(descriptor.level)
@@ -1704,7 +1704,7 @@ static future<compaction_info> validate_sstables(sstables::compaction_descriptor
 
     clogger.info("Validating {}", sstables_list_msg);
 
-    auto permit = cf.compaction_concurrency_semaphore().make_permit(schema.get(), "Validation");
+    auto permit = cf.compaction_concurrency_semaphore().make_tracking_only_permit(schema.get(), "Validation");
     auto reader = sstables->make_local_shard_sstable_reader(schema, permit, query::full_partition_range, schema->full_slice(), descriptor.io_priority,
             tracing::trace_state_ptr(), ::streamed_mutation::forwarding::no, ::mutation_reader::forwarding::no, default_read_monitor_generator());
 

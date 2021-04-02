@@ -223,7 +223,7 @@ public:
             tracing::trace_state_ptr trace_state)
             : _db(db)
             , _schema(std::move(s))
-            , _permit(_db.local().get_reader_concurrency_semaphore().make_permit(_schema.get(), "multishard-mutation-query"))
+            , _permit(_db.local().get_reader_concurrency_semaphore().make_tracking_only_permit(_schema.get(), "multishard-mutation-query"))
             , _cmd(cmd)
             , _ranges(ranges)
             , _trace_state(std::move(trace_state))

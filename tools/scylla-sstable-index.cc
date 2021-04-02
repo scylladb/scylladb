@@ -177,7 +177,7 @@ Note: UDT is not supported for now.
             sst->load().get();
 
             {
-                sstables::index_reader idx_reader(sst, rcs_sem.make_permit(primary_key_schema.get(), "idx"), default_priority_class(), {});
+                sstables::index_reader idx_reader(sst, rcs_sem.make_tracking_only_permit(primary_key_schema.get(), "idx"), default_priority_class(), {});
 
                 list_partitions(*primary_key_schema, idx_reader);
 

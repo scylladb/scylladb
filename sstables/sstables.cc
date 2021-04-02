@@ -1790,7 +1790,7 @@ future<> sstable::generate_summary(const io_priority_class& pc) {
 
         auto s = summary_generator(_schema->get_partitioner(), _components->summary, _manager.config().sstable_summary_ratio());
             auto ctx = make_lw_shared<index_consume_entry_context<summary_generator>>(
-                    sem.make_permit(_schema.get(), "generate-summary"), s, trust_promoted_index::yes, *_schema, index_file, std::move(options), 0, index_size,
+                    sem.make_tracking_only_permit(_schema.get(), "generate-summary"), s, trust_promoted_index::yes, *_schema, index_file, std::move(options), 0, index_size,
                     (_version >= sstable_version_types::mc
                         ? std::make_optional(get_clustering_values_fixed_lengths(get_serialization_header()))
                         : std::optional<column_values_fixed_lengths>{}));
@@ -2701,7 +2701,7 @@ future<bool> sstable::has_partition_key(const utils::hashed_key& hk, const dht::
     std::exception_ptr ex;
     auto sem = reader_concurrency_semaphore(reader_concurrency_semaphore::no_limits{}, "sstables::has_partition_key()");
     try {
-        auto lh_index_ptr = std::make_unique<sstables::index_reader>(s, sem.make_permit(_schema.get(), s->get_filename()), default_priority_class(), tracing::trace_state_ptr());
+        auto lh_index_ptr = std::make_unique<sstables::index_reader>(s, sem.make_tracking_only_permit(_schema.get(), s->get_filename()), default_priority_class(), tracing::trace_state_ptr());
         present = co_await lh_index_ptr->advance_lower_and_check_if_present(dk);
     } catch (...) {
         ex = std::current_exception();
