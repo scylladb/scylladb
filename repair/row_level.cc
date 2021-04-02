@@ -55,6 +55,7 @@
 #include "repair/hash.hh"
 #include "repair/sink_source_for_repair.hh"
 #include "repair/row.hh"
+#include "repair/reader.hh"
 
 extern logging::logger rlogger;
 
@@ -187,119 +188,6 @@ static uint64_t get_random_seed() {
     static thread_local std::uniform_int_distribution<uint64_t> random_dist{};
     return random_dist(random_engine);
 }
-
-class repair_reader {
-public:
-using is_local_reader = bool_class<class is_local_reader_tag>;
-
-private:
-    schema_ptr _schema;
-    reader_permit _permit;
-    dht::partition_range _range;
-    // Used to find the range that repair master will work on
-    dht::selective_token_range_sharder _sharder;
-    // Seed for the repair row hashing
-    uint64_t _seed;
-    // Pin the table while the reader is alive.
-    // Only needed for local readers, the multishard reader takes care
-    // of pinning tables on used shards.
-    std::optional<utils::phased_barrier::operation> _local_read_op;
-    // Local reader or multishard reader to read the range
-    flat_mutation_reader _reader;
-    std::optional<evictable_reader_handle> _reader_handle;
-    // Current partition read from disk
-    lw_shared_ptr<const decorated_key_with_hash> _current_dk;
-    uint64_t _reads_issued = 0;
-    uint64_t _reads_finished = 0;
-
-public:
-    repair_reader(
-            seastar::sharded<database>& db,
-            column_family& cf,
-            schema_ptr s,
-            reader_permit permit,
-            dht::token_range range,
-            const dht::sharder& remote_sharder,
-            unsigned remote_shard,
-            uint64_t seed,
-            is_local_reader local_reader)
-            : _schema(s)
-            , _permit(std::move(permit))
-            , _range(dht::to_partition_range(range))
-            , _sharder(remote_sharder, range, remote_shard)
-            , _seed(seed)
-            , _local_read_op(local_reader ? std::optional(cf.read_in_progress()) : std::nullopt)
-            , _reader(nullptr) {
-        if (local_reader) {
-            auto ms = mutation_source([&cf] (
-                        schema_ptr s,
-                        reader_permit,
-                        const dht::partition_range& pr,
-                        const query::partition_slice& ps,
-                        const io_priority_class& pc,
-                        tracing::trace_state_ptr,
-                        streamed_mutation::forwarding,
-                        mutation_reader::forwarding fwd_mr) {
-                return cf.make_streaming_reader(std::move(s), pr, ps, fwd_mr);
-            });
-            std::tie(_reader, _reader_handle) = make_manually_paused_evictable_reader(
-                    std::move(ms),
-                    _schema,
-                    _permit,
-                    _range,
-                    _schema->full_slice(),
-                    service::get_local_streaming_priority(),
-                    {},
-                    mutation_reader::forwarding::no);
-        } else {
-            _reader = make_multishard_streaming_reader(db, _schema, [this] {
-                auto shard_range = _sharder.next();
-                if (shard_range) {
-                    return std::optional<dht::partition_range>(dht::to_partition_range(*shard_range));
-                }
-                return std::optional<dht::partition_range>();
-            });
-        }
-    }
-
-    future<mutation_fragment_opt>
-    read_mutation_fragment() {
-        ++_reads_issued;
-        return _reader(db::no_timeout).then([this] (mutation_fragment_opt mfopt) {
-            ++_reads_finished;
-            return mfopt;
-        });
-    }
-
-    void on_end_of_stream() {
-        _reader = make_empty_flat_reader(_schema, _permit);
-        _reader_handle.reset();
-    }
-
-    lw_shared_ptr<const decorated_key_with_hash>& get_current_dk() {
-        return _current_dk;
-    }
-
-    void set_current_dk(const dht::decorated_key& key) {
-        _current_dk = make_lw_shared<const decorated_key_with_hash>(*_schema, key, _seed);
-    }
-
-    void clear_current_dk() {
-        _current_dk = {};
-    }
-
-    void check_current_dk() {
-        if (!_current_dk) {
-            throw std::runtime_error("Current partition_key is unknown");
-        }
-    }
-
-    void pause() {
-        if (_reader_handle) {
-            _reader_handle->pause();
-        }
-    }
-};
 
 class repair_writer : public enable_lw_shared_from_this<repair_writer> {
     schema_ptr _schema;
