@@ -823,14 +823,13 @@ static managed_bytes_opt get_preimage_col_value(const column_definition& cdef, c
                 auto v = pirow->get_view(cdef.name_as_text());
                 auto f = cql_serialization_format::internal();
                 auto n = read_collection_size(v, f);
-                std::vector<bytes> tmp;
+                std::vector<managed_bytes> tmp;
                 tmp.reserve(n);
                 while (n--) {
-                    tmp.emplace_back(read_collection_value(v, f).linearize()); // key
+                    tmp.emplace_back(read_collection_value(v, f)); // key
                     read_collection_value(v, f); // value. ignore.
                 }
-                // FIXME: get rid of this copy in the next commit.
-                return managed_bytes(set_type_impl::serialize_partially_deserialized_form({tmp.begin(), tmp.end()}, f));
+                return set_type_impl::serialize_partially_deserialized_form_fragmented({tmp.begin(), tmp.end()}, f);
             },
             [&] (const abstract_type& o) -> managed_bytes {
                 return pirow->get_blob_fragmented(cdef.name_as_text());

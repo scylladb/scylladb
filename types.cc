@@ -1322,6 +1322,12 @@ set_type_impl::serialize_partially_deserialized_form(
     return pack(v.begin(), v.end(), v.size(), sf);
 }
 
+managed_bytes
+set_type_impl::serialize_partially_deserialized_form_fragmented(
+        const std::vector<managed_bytes_view>& v, cql_serialization_format sf) {
+    return pack_fragmented(v.begin(), v.end(), v.size(), sf);
+}
+
 template <FragmentedView View>
 std::vector<managed_bytes> partially_deserialize_listlike(View in, cql_serialization_format sf) {
     auto nr = read_collection_size(in, sf);
