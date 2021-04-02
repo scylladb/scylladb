@@ -1698,7 +1698,7 @@ future<> shard_reader::do_fill_buffer(db::timeout_clock::time_point timeout) {
     };
 
     if (!_reader) {
-        fill_buf_fut = smp::submit_to(_shard, [this, gs = global_schema_ptr(_schema), timeout] {
+        fill_buf_fut = smp::submit_to(_shard, [this, gs = global_schema_ptr(_schema), timeout] () -> future<reader_and_buffer_fill_result> {
             auto ms = mutation_source([lifecycle_policy = _lifecycle_policy.get()] (
                         schema_ptr s,
                         reader_permit permit,
@@ -1711,15 +1711,22 @@ future<> shard_reader::do_fill_buffer(db::timeout_clock::time_point timeout) {
                 return lifecycle_policy->create_reader(std::move(s), std::move(permit), pr, ps, pc, std::move(ts), fwd_mr);
             });
             auto s = gs.get();
+            auto permit = co_await _lifecycle_policy->obtain_reader_permit(s, "shard-reader", timeout);
             auto rreader = make_foreign(std::make_unique<evictable_reader>(evictable_reader::auto_pause::yes, std::move(ms),
-                        s, _lifecycle_policy->semaphore().make_permit(s.get(), "shard-reader"), *_pr, _ps, _pc, _trace_state, _fwd_mr));
-            tracing::trace(_trace_state, "Creating shard reader on shard: {}", this_shard_id());
-            reader_permit::used_guard ug{rreader->permit()};
-            auto f = rreader->fill_buffer(timeout);
-            return f.then([rreader = std::move(rreader), ug = std::move(ug)] () mutable {
+                        s, std::move(permit), *_pr, _ps, _pc, _trace_state, _fwd_mr));
+
+            std::exception_ptr ex;
+            try {
+                tracing::trace(_trace_state, "Creating shard reader on shard: {}", this_shard_id());
+                reader_permit::used_guard ug{rreader->permit()};
+                co_await rreader->fill_buffer(timeout);
                 auto res = remote_fill_buffer_result(rreader->detach_buffer(), rreader->is_end_of_stream());
-                return make_ready_future<reader_and_buffer_fill_result>(reader_and_buffer_fill_result{std::move(rreader), std::move(res)});
-            });
+                co_return reader_and_buffer_fill_result{std::move(rreader), std::move(res)};
+            } catch (...) {
+                ex = std::current_exception();
+            }
+            co_await rreader->close();
+            std::rethrow_exception(std::move(ex));
         }).then([this, timeout] (reader_and_buffer_fill_result res) {
             _reader = std::move(res.reader);
             return std::move(res.result);
