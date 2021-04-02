@@ -32,6 +32,7 @@
 #include <seastar/core/condition-variable.hh>
 #include <seastar/core/gate.hh>
 
+#include "repair/hash.hh"
 #include "database_fwd.hh"
 #include "frozen_mutation.hh"
 #include "utils/UUID.hh"
@@ -373,33 +374,6 @@ struct repair_sync_boundary {
     }
 };
 
-// Hash of a repair row
-class repair_hash {
-public:
-    uint64_t hash = 0;
-    repair_hash() = default;
-    explicit repair_hash(uint64_t h) : hash(h) {
-    }
-    void clear() {
-        hash = 0;
-    }
-    void add(const repair_hash& other) {
-        hash ^= other.hash;
-    }
-    bool operator==(const repair_hash& x) const {
-        return x.hash == hash;
-    }
-    bool operator!=(const repair_hash& x) const {
-        return x.hash != hash;
-    }
-    bool operator<(const repair_hash& x) const {
-        return x.hash < hash;
-    }
-    friend std::ostream& operator<<(std::ostream& os, const repair_hash& x) {
-        return os << x.hash;
-    }
-};
-
 using repair_hash_set = absl::btree_set<repair_hash>;
 
 enum class repair_row_level_start_status: uint8_t {
@@ -521,11 +495,6 @@ struct hash<partition_checksum> {
         std::copy_n(sum.digest().begin(), std::min(sizeof(size_t), sizeof(sum.digest())), reinterpret_cast<uint8_t*>(&h));
         return h;
     }
-};
-
-template<>
-struct hash<repair_hash> {
-    size_t operator()(repair_hash h) const { return h.hash; }
 };
 
 template<>
