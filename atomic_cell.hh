@@ -380,6 +380,13 @@ public:
             return make_live(type, timestamp, value, gc_clock::now() + *ttl, *ttl, cm);
         }
     }
+    static atomic_cell make_live(const abstract_type& type, api::timestamp_type timestamp, const managed_bytes_view& value, ttl_opt ttl, collection_member cm = collection_member::no) {
+        if (!ttl) {
+            return make_live(type, timestamp, value, cm);
+        } else {
+            return make_live(type, timestamp, value, gc_clock::now() + *ttl, *ttl, cm);
+        }
+    }
     static atomic_cell make_live_uninitialized(const abstract_type& type, api::timestamp_type timestamp, size_t size);
     friend class atomic_cell_or_collection;
     friend std::ostream& operator<<(std::ostream& os, const atomic_cell& ac);
