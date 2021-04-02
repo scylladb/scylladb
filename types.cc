@@ -1191,8 +1191,24 @@ map_type_impl::serialize_partially_deserialized_form(
         write_collection_value(out, sf, e.second);
     }
     return b;
+}
 
+managed_bytes
+map_type_impl::serialize_partially_deserialized_form_fragmented(
+        const std::vector<std::pair<managed_bytes_view, managed_bytes_view>>& v, cql_serialization_format sf) {
+    size_t len = collection_value_len(sf) * v.size() * 2 + collection_size_len(sf);
+    for (auto&& e : v) {
+        len += e.first.size() + e.second.size();
+    }
+    managed_bytes b(managed_bytes::initialized_later(), len);
+    managed_bytes_mutable_view out = b;
 
+    write_collection_size(out, v.size(), sf);
+    for (auto&& e : v) {
+        write_collection_value(out, sf, e.first);
+        write_collection_value(out, sf, e.second);
+    }
+    return b;
 }
 
 static std::optional<data_type> update_user_type_aux(

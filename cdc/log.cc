@@ -601,12 +601,12 @@ public:
     using pointer = const T*;
     using reference = const T&;
 private:
-    bytes_view _v, _next;
+    managed_bytes_view _v, _next;
     size_t _rem = 0;
     T _current;
 public:
-    collection_iterator(bytes_view_opt v = {}) 
-        : _v(v.value_or(bytes_view{}))
+    collection_iterator(managed_bytes_view_opt v = {})
+        : _v(v.value_or(managed_bytes_view{}))
         , _rem(_v.empty() ? 0 : read_collection_size(_v, cql_serialization_format::internal()))
     {
         if (_rem != 0) {
@@ -649,20 +649,12 @@ private:
 };
 
 template<>
-void collection_iterator<std::pair<bytes_view, bytes_view>>::parse() {
+void collection_iterator<std::pair<managed_bytes_view, managed_bytes_view>>::parse() {
     assert(_rem > 0);
     _next = _v;
     auto k = read_collection_value(_next, cql_serialization_format::internal());
     auto v = read_collection_value(_next, cql_serialization_format::internal());
     _current = std::make_pair(k, v);
-}
-
-template<>
-void collection_iterator<bytes_view>::parse() {
-    assert(_rem > 0);
-    _next = _v;
-    auto k = read_collection_value(_next, cql_serialization_format::internal());
-    _current = k;
 }
 
 template<>
@@ -720,12 +712,13 @@ private:
 };
 
 template<>
-bool maybe_back_insert_iterator<std::vector<std::pair<bytes_view, bytes_view>>, bytes_view>::compare(const bytes_view& t, const value_type& v) {
+bool maybe_back_insert_iterator<std::vector<std::pair<managed_bytes_view, managed_bytes_view>>, managed_bytes_view>::compare(
+        const managed_bytes_view& t, const value_type& v) {
     return _type.compare(t, v.first);
 }
 
 template<>
-bool maybe_back_insert_iterator<std::vector<bytes_view>, bytes_view>::compare(const bytes_view& t, const value_type& v) {
+bool maybe_back_insert_iterator<std::vector<managed_bytes_view>, managed_bytes_view>::compare(const managed_bytes_view& t, const value_type& v) {
     return _type.compare(t, v);
 }
 
@@ -734,45 +727,45 @@ auto make_maybe_back_inserter(Container& c, const abstract_type& type, collectio
     return maybe_back_insert_iterator<Container, T>(c, type, s);
 }
 
-static size_t collection_size(const bytes_opt& bo) {
+static size_t collection_size(const managed_bytes_opt& bo) {
     if (bo) {
-        bytes_view bv(*bo);
-        return read_collection_size(bv, cql_serialization_format::internal());
+        managed_bytes_view mbv(*bo);
+        return read_collection_size(mbv, cql_serialization_format::internal());
     }
     return 0;
 }
 template<typename Func>
-static void udt_for_each(const bytes_opt& bo, Func&& f) {
+static void udt_for_each(const managed_bytes_opt& bo, Func&& f) {
     if (bo) {
-        bytes_view bv(*bo);
-        std::for_each(tuple_deserializing_iterator::start(bv), tuple_deserializing_iterator::finish(bv), std::forward<Func>(f));
+        managed_bytes_view mbv(*bo);
+        std::for_each(tuple_deserializing_iterator::start(mbv), tuple_deserializing_iterator::finish(mbv), std::forward<Func>(f));
     }
 }
-static bytes merge(const collection_type_impl& ctype, const bytes_opt& prev, const bytes_opt& next, const bytes_opt& deleted) {
-    std::vector<std::pair<bytes_view, bytes_view>> res;
+static managed_bytes merge(const collection_type_impl& ctype, const managed_bytes_opt& prev, const managed_bytes_opt& next, const managed_bytes_opt& deleted) {
+    std::vector<std::pair<managed_bytes_view, managed_bytes_view>> res;
     res.reserve(collection_size(prev) + collection_size(next));
     auto type = ctype.name_comparator();
-    auto cmp = [&type = *type](const std::pair<bytes_view, bytes_view>& p1, const std::pair<bytes_view, bytes_view>& p2) {
+    auto cmp = [&type = *type](const std::pair<managed_bytes_view, managed_bytes_view>& p1, const std::pair<managed_bytes_view, managed_bytes_view>& p2) {
         return type.compare(p1.first, p2.first) < 0;
     };
-    collection_iterator<std::pair<bytes_view, bytes_view>> e, i(prev), j(next);
+    collection_iterator<std::pair<managed_bytes_view, managed_bytes_view>> e, i(prev), j(next);
     // note order: set_union, when finding doubles, use value from first1 (j here). So
     // since this is next, it has prio
-    std::set_union(j, e, i, e, make_maybe_back_inserter(res, *type, collection_iterator<bytes_view>(deleted)), cmp);
-    return map_type_impl::serialize_partially_deserialized_form(res, cql_serialization_format::internal());
+    std::set_union(j, e, i, e, make_maybe_back_inserter(res, *type, collection_iterator<managed_bytes_view>(deleted)), cmp);
+    return map_type_impl::serialize_partially_deserialized_form_fragmented(res, cql_serialization_format::internal());
 }
-static bytes merge(const set_type_impl& ctype, const bytes_opt& prev, const bytes_opt& next, const bytes_opt& deleted) {
-    std::vector<bytes_view> res;
+static managed_bytes merge(const set_type_impl& ctype, const managed_bytes_opt& prev, const managed_bytes_opt& next, const managed_bytes_opt& deleted) {
+    std::vector<managed_bytes_view> res;
     res.reserve(collection_size(prev) + collection_size(next));
     auto type = ctype.name_comparator();
-    auto cmp = [&type = *type](bytes_view k1, bytes_view k2) {
+    auto cmp = [&type = *type](managed_bytes_view k1, managed_bytes_view k2) {
         return type.compare(k1, k2) < 0;
     };
-    collection_iterator<bytes_view> e, i(prev), j(next), d(deleted);
+    collection_iterator<managed_bytes_view> e, i(prev), j(next), d(deleted);
     std::set_union(j, e, i, e, make_maybe_back_inserter(res, *type, d), cmp);
-    return set_type_impl::serialize_partially_deserialized_form(res, cql_serialization_format::internal());
+    return set_type_impl::serialize_partially_deserialized_form_fragmented(res, cql_serialization_format::internal());
 }
-static bytes merge(const user_type_impl& type, const bytes_opt& prev, const bytes_opt& next, const bytes_opt& deleted) {
+static managed_bytes merge(const user_type_impl& type, const managed_bytes_opt& prev, const managed_bytes_opt& next, const managed_bytes_opt& deleted) {
     std::vector<managed_bytes_view_opt> res(type.size());
     udt_for_each(prev, [&res, i = res.begin()](managed_bytes_view_opt k) mutable {
         *i++ = k;
@@ -788,9 +781,9 @@ static bytes merge(const user_type_impl& type, const bytes_opt& prev, const byte
         auto index = deserialize_field_index(k);
         res[index] = std::nullopt;
     });
-    return type.build_value(res);
+    return type.build_value_fragmented(res);
 }
-static bytes merge(const abstract_type& type, const bytes_opt& prev, const bytes_opt& next, const bytes_opt& deleted) {
+static managed_bytes merge(const abstract_type& type, const managed_bytes_opt& prev, const managed_bytes_opt& next, const managed_bytes_opt& deleted) {
     throw std::runtime_error(format("cdc merge: unknown type {}", type.name()));
 }
 
@@ -1233,19 +1226,18 @@ struct process_row_visitor {
         // images
         if (_enable_updating_state) {
             // FIXME: get rid of these conversions in the next commits.
-            auto to_bytes_opt = [] (const managed_bytes_opt& mb) -> bytes_opt { return mb ? std::optional(to_bytes(*mb)) : std::nullopt; };
             auto to_managed_bytes_opt = [] (const bytes_opt& b) -> managed_bytes_opt { return b ? std::optional(managed_bytes(*b)) : std::nullopt; };
             // A column delete overwrites any data we gathered until now.
-            bytes_opt prev = is_column_delete ? std::nullopt : to_bytes_opt(get_col_from_row_state(_row_state, cdef));
+            managed_bytes_opt prev = is_column_delete ? std::nullopt : get_col_from_row_state(_row_state, cdef);
 
-            bytes_opt next;
+            managed_bytes_opt next;
             if (added_cells || (deleted_elements && prev)) {
-                next = visit(*cdef.type, [&] (const auto& type) -> bytes {
-                    return merge(type, prev, added_cells, deleted_elements);
+                next = visit(*cdef.type, [&] (const auto& type) -> managed_bytes {
+                    return merge(type, prev, to_managed_bytes_opt(added_cells), to_managed_bytes_opt(deleted_elements));
                 });
             }
 
-            update_row_state(cdef, to_managed_bytes_opt(next));
+            update_row_state(cdef, std::move(next));
         }
     }
 
