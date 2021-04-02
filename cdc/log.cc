@@ -794,10 +794,10 @@ static bytes merge(const abstract_type& type, const bytes_opt& prev, const bytes
     throw std::runtime_error(format("cdc merge: unknown type {}", type.name()));
 }
 
-using cell_map = std::unordered_map<const column_definition*, bytes_opt>;
+using cell_map = std::unordered_map<const column_definition*, managed_bytes_opt>;
 using row_states_map = std::unordered_map<clustering_key, cell_map, clustering_key::hashing, clustering_key::equality>;
 
-static bytes_opt get_col_from_row_state(const cell_map* state, const column_definition& cdef) {
+static managed_bytes_opt get_col_from_row_state(const cell_map* state, const column_definition& cdef) {
     if (state) {
         if (auto it = state->find(&cdef); it != state->end()) {
             return it->second;
@@ -1052,7 +1052,7 @@ struct process_row_visitor {
           _generate_delta_values(generate_delta_values)
     {}
 
-    void update_row_state(const column_definition& cdef, bytes_opt value) {
+    void update_row_state(const column_definition& cdef, managed_bytes_opt value) {
         if (!_row_state) {
             // static row always has a valid state, so this must be a clustering row missing
             assert(_base_ck);
@@ -1073,7 +1073,7 @@ struct process_row_visitor {
 
         // images
         if (_enable_updating_state) {
-            update_row_state(cdef, std::move(value));
+            update_row_state(cdef, managed_bytes(value));
         }
     }
 
@@ -1232,8 +1232,11 @@ struct process_row_visitor {
 
         // images
         if (_enable_updating_state) {
+            // FIXME: get rid of these conversions in the next commits.
+            auto to_bytes_opt = [] (const managed_bytes_opt& mb) -> bytes_opt { return mb ? std::optional(to_bytes(*mb)) : std::nullopt; };
+            auto to_managed_bytes_opt = [] (const bytes_opt& b) -> managed_bytes_opt { return b ? std::optional(managed_bytes(*b)) : std::nullopt; };
             // A column delete overwrites any data we gathered until now.
-            bytes_opt prev = is_column_delete ? std::nullopt : get_col_from_row_state(_row_state, cdef);
+            bytes_opt prev = is_column_delete ? std::nullopt : to_bytes_opt(get_col_from_row_state(_row_state, cdef));
 
             bytes_opt next;
             if (added_cells || (deleted_elements && prev)) {
@@ -1242,7 +1245,7 @@ struct process_row_visitor {
                 });
             }
 
-            update_row_state(cdef, std::move(next));
+            update_row_state(cdef, to_managed_bytes_opt(next));
         }
     }
 
@@ -1519,7 +1522,7 @@ public:
 
         auto process_cell = [&, this] (const column_definition& cdef) {
             if (auto current = get_col_from_row_state(row_state, cdef)) {
-                _builder->set_value(image_ck, cdef, bytes_view(*current));
+                _builder->set_value(image_ck, cdef, *current);
             }
         };
 
@@ -1675,7 +1678,7 @@ public:
             const auto& row = preimage_set->front();
             for (auto& c : _schema->static_columns()) {
                 if (auto maybe_cell_view = get_preimage_col_value(c, &row)) {
-                    _static_row_state[&c] = *maybe_cell_view;
+                    _static_row_state[&c] = managed_bytes(*maybe_cell_view);
                 }
             }
         }
@@ -1708,7 +1711,7 @@ public:
             cell_map cells;
             for (auto& c : _schema->regular_columns()) {
                 if (auto maybe_cell_view = get_preimage_col_value(c, &row)) {
-                    cells[&c] = *maybe_cell_view;
+                    cells[&c] = managed_bytes(*maybe_cell_view);
                 }
             }
 
