@@ -543,6 +543,116 @@ public:
     }
 };
 
+template <typename State, State init_state>
+class persistence : public raft::persistence {
+    snapshots_t<State>& _snapshots;
+
+    std::pair<raft::snapshot, State> _stored_snapshot;
+    std::pair<raft::term_t, raft::server_id> _stored_term_and_vote;
+
+    // Invariants:
+    // 1. for each entry except the first, the raft index is equal to the raft index of the previous entry plus one.
+    // 2. the index of the first entry is <= _stored_snapshot.first.idx + 1.
+    // 3. the index of the last entry is >= _stored_snapshot.first.idx.
+    // Informally, the last two invariants say that the stored log intersects or ``touches'' the snapshot ``on the right side''.
+    raft::log_entries _stored_entries;
+
+    // Returns an iterator to the entry in `_stored_entries` whose raft index is `idx` if the entry exists.
+    // If all entries in `_stored_entries` have greater indexes, returns the first one.
+    // If all entries have smaller indexes, returns end().
+    raft::log_entries::iterator find(raft::index_t idx) {
+        // The correctness of this depends on the `_stored_entries` invariant.
+        auto b = _stored_entries.begin();
+        if (b == _stored_entries.end() || (*b)->idx >= idx) {
+            return b;
+        }
+        return b + std::min((idx - (*b)->idx).get_value(), _stored_entries.size());
+    }
+
+public:
+    // If this is the first server of a cluster, it must be initialized with a singleton configuration
+    // containing opnly this server's ID which must be also provided here as `init_config_id`.
+    // Otherwise it must be initialized with an empty configuration (it will be added to the cluster
+    // through a configuration change) and `init_config_id` must be `nullopt`.
+    persistence(snapshots_t<State>& snaps, std::optional<raft::server_id> init_config_id)
+        : _snapshots(snaps)
+        , _stored_snapshot(
+                raft::snapshot{
+                    .config = init_config_id ? raft::configuration{*init_config_id} : raft::configuration{}
+                },
+                init_state)
+        , _stored_term_and_vote(raft::term_t{1}, raft::server_id{})
+    {}
+
+    virtual future<> store_term_and_vote(raft::term_t term, raft::server_id vote) override {
+        _stored_term_and_vote = std::pair{term, vote};
+        co_return;
+    }
+
+    virtual future<std::pair<raft::term_t, raft::server_id>> load_term_and_vote() override {
+        co_return _stored_term_and_vote;
+    }
+
+    virtual future<> store_snapshot(const raft::snapshot& snap, size_t preserve_log_entries) override {
+        // The snapshot's index cannot be smaller than the index of the first stored entry minus one;
+        // that would create a ``gap'' in the log.
+        assert(_stored_entries.empty() || snap.idx + 1 >= _stored_entries.front()->idx);
+
+        auto it = _snapshots.find(snap.id);
+        assert(it != _snapshots.end());
+        _stored_snapshot = {snap, it->second};
+
+        auto first_to_remain = snap.idx + 1 >= preserve_log_entries ? raft::index_t{snap.idx + 1 - preserve_log_entries} : raft::index_t{0};
+        _stored_entries.erase(_stored_entries.begin(), find(first_to_remain));
+
+        co_return;
+    }
+
+    virtual future<raft::snapshot> load_snapshot() override {
+        auto [snap, state] = _stored_snapshot;
+        _snapshots[snap.id] = std::move(state);
+        co_return snap;
+    }
+
+    virtual future<> store_log_entries(const std::vector<raft::log_entry_ptr>& entries) override {
+        if (entries.empty()) {
+            co_return;
+        }
+
+        // The raft server is supposed to provide entries in strictly increasing order,
+        // hence the following assertions.
+        if (_stored_entries.empty()) {
+            assert(entries.front()->idx == _stored_snapshot.first.idx + 1);
+        } else {
+            assert(entries.front()->idx == _stored_entries.back()->idx + 1);
+        }
+
+        _stored_entries.push_back(entries[0]);
+        for (size_t i = 1; i < entries.size(); ++i) {
+            assert(entries[i]->idx == entries[i-1]->idx + 1);
+            _stored_entries.push_back(entries[i]);
+        }
+
+        co_return;
+    }
+
+    virtual future<raft::log_entries> load_log() override {
+        co_return _stored_entries;
+    }
+
+    virtual future<> truncate_log(raft::index_t idx) override {
+        _stored_entries.erase(find(idx), _stored_entries.end());
+        co_return;
+    }
+
+    virtual future<> abort() override {
+        // There are no yields anywhere in our methods so no need to wait for anything.
+        // We assume that our methods won't be called after `abort()`.
+        // TODO: is this assumption correct?
+        co_return;
+    }
+};
+
 SEASTAR_TEST_CASE(dummy_test) {
     return seastar::make_ready_future<>();
 }
