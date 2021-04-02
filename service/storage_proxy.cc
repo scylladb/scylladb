@@ -3646,6 +3646,11 @@ public:
     virtual future<foreign_ptr<lw_shared_ptr<query::result>>> execute(storage_proxy::clock_type::time_point timeout) {
         digest_resolver_ptr digest_resolver = ::make_shared<digest_read_resolver>(_schema, _cl, _block_for,
                 db::is_datacenter_local(_cl) ? db::count_local_endpoints(_targets): _targets.size(), timeout);
+        if (timeout <= storage_proxy::clock_type::now()) {
+            return make_exception_future<foreign_ptr<lw_shared_ptr<query::result>>>(
+                exceptions::overloaded_exception(format("Request timed out before being sent to replicas"))
+            );
+        }
         auto exec = shared_from_this();
 
         // Waited on indirectly.
