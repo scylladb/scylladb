@@ -359,6 +359,184 @@ future<call_result_t<M>> call(
     }
 }
 
+// Allows a Raft server to communicate with other servers.
+// The implementation is mostly boilerplate. It assumes that there exists a method of message passing
+// given by a `send_message_t` function (passed in the constructor) for sending and by the `receive`
+// function for receiving messages.
+//
+// We also keep a reference to a `snapshots_t` set to be shared with the `impure_state_machine`
+// on the same server. We access this set when we receive or send a snapshot message.
+template <typename State>
+class rpc : public raft::rpc {
+    using reply_id_t = uint32_t;
+
+    struct snapshot_message {
+        raft::install_snapshot ins;
+        State snapshot_payload;
+        reply_id_t reply_id;
+    };
+
+    struct snapshot_reply_message {
+        raft::snapshot_reply reply;
+        reply_id_t reply_id;
+    };
+
+public:
+    using message_t = std::variant<
+        snapshot_message,
+        snapshot_reply_message,
+        raft::append_request,
+        raft::append_reply,
+        raft::vote_request,
+        raft::vote_reply,
+        raft::timeout_now>;
+
+    using send_message_t = std::function<void(raft::server_id dst, message_t)>;
+
+private:
+    snapshots_t<State>& _snapshots;
+
+    logical_timer _timer;
+
+    send_message_t _send;
+
+    // Before we send a snapshot apply request we create a promise-future pair,
+    // allocate a new ID, and put the promise here under that ID. We then send the ID
+    // together with the request and wait on the future.
+    // When (if) a reply returns, we take the ID from the reply (which is the same
+    // as the ID in the corresponding request), take the promise under that ID
+    // and push the reply through that promise.
+    std::unordered_map<reply_id_t, promise<raft::snapshot_reply>> _reply_promises;
+    reply_id_t _counter = 0;
+
+    // Used to ensure that when `abort()` returns there are
+    // no more in-progress methods running on this object.
+    seastar::gate _gate;
+
+public:
+    rpc(snapshots_t<State>& snaps, send_message_t send)
+        : _snapshots(snaps), _send(std::move(send)) {
+    }
+
+    // Message is delivered to us
+    future<> receive(raft::server_id src, message_t payload) {
+        assert(_client);
+        auto& c = *_client;
+
+        co_await std::visit(make_visitor(
+        [&] (snapshot_message m) -> future<> {
+            _snapshots.emplace(m.ins.snp.id, std::move(m.snapshot_payload));
+
+            co_await with_gate(_gate, [&] () -> future<> {
+                auto reply = co_await c.apply_snapshot(src, std::move(m.ins));
+
+                _send(src, snapshot_reply_message{
+                    .reply = std::move(reply),
+                    .reply_id = m.reply_id
+                });
+            });
+        },
+        [this] (snapshot_reply_message m) -> future<> {
+            auto it = _reply_promises.find(m.reply_id);
+            if (it != _reply_promises.end()) {
+                it->second.set_value(std::move(m.reply));
+            }
+            co_return;
+        },
+        [&] (raft::append_request m) -> future<> {
+            c.append_entries(src, std::move(m));
+            co_return;
+        },
+        [&] (raft::append_reply m) -> future<> {
+            c.append_entries_reply(src, std::move(m));
+            co_return;
+        },
+        [&] (raft::vote_request m) -> future<> {
+            c.request_vote(src, std::move(m));
+            co_return;
+        },
+        [&] (raft::vote_reply m) -> future<> {
+            c.request_vote_reply(src, std::move(m));
+            co_return;
+        },
+        [&] (raft::timeout_now m) -> future<> {
+            c.timeout_now_request(src, std::move(m));
+            co_return;
+        }
+        ), std::move(payload));
+    }
+
+    // This is the only function of `raft::rpc` which actually expects a response.
+    virtual future<raft::snapshot_reply> send_snapshot(raft::server_id dst, const raft::install_snapshot& ins) override {
+        auto it = _snapshots.find(ins.snp.id);
+        assert(it != _snapshots.end());
+
+        auto id = _counter++;
+        auto f = _reply_promises[id].get_future();
+        auto guard = defer([this, id] { _reply_promises.erase(id); });
+
+        _send(dst, snapshot_message{
+            .ins = ins,
+            .snapshot_payload = it->second,
+            .reply_id = id
+        });
+
+        // The message receival function on the other side, when it receives the snapshot message,
+        // will apply the snapshot and send `id` back to us in the snapshot reply message (see `receive`,
+        // `snapshot_message` case). When we receive the reply, we shall find `id` in `_reply_promises`
+        // and push the reply through the promise, which will resolve `f` (see `receive`, `snapshot_reply_message`
+        // case).
+
+        co_return co_await with_gate(_gate,
+                [&, guard = std::move(guard), f = std::move(f)] () mutable -> future<raft::snapshot_reply> {
+            // TODO configurable
+            static const raft::logical_clock::duration send_snapshot_timeout = 20_t;
+
+            co_return co_await _timer.with_timeout(_timer.now() + send_snapshot_timeout, std::move(f));
+            // co_await ensures that `guard` is destroyed before we leave `_gate`
+        });
+    }
+
+    virtual future<> send_append_entries(raft::server_id dst, const raft::append_request& m) override {
+        _send(dst, m);
+        co_return;
+    }
+
+    virtual future<> send_append_entries_reply(raft::server_id dst, const raft::append_reply& m) override {
+        _send(dst, m);
+        co_return;
+    }
+
+    virtual future<> send_vote_request(raft::server_id dst, const raft::vote_request& m) override {
+        _send(dst, m);
+        co_return;
+    }
+
+    virtual future<> send_vote_reply(raft::server_id dst, const raft::vote_reply& m) override {
+        _send(dst, m);
+        co_return;
+    }
+
+    virtual future<> send_timeout_now(raft::server_id dst, const raft::timeout_now& m) override {
+        _send(dst, m);
+        co_return;
+    }
+
+    virtual void add_server(raft::server_id, raft::server_info) override {
+    }
+
+    virtual void remove_server(raft::server_id) override {
+    }
+
+    virtual future<> abort() override {
+        return _gate.close();
+    }
+
+    void tick() {
+        _timer.tick();
+    }
+};
+
 SEASTAR_TEST_CASE(dummy_test) {
     return seastar::make_ready_future<>();
 }
