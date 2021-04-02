@@ -23,6 +23,7 @@
 #include <seastar/core/timed_out_error.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/gate.hh>
+#include <seastar/core/queue.hh>
 #include <seastar/util/defer.hh>
 
 #include "raft/server.hh"
@@ -840,6 +841,70 @@ private:
 
             std::pop_heap(_events.begin(), _events.end(), cmp);
             _events.pop_back();
+        }
+    }
+};
+
+// A queue of messages that have arrived at a given Raft server and are waiting to be processed
+// by that server (which may be a long computation, hence returning a `future<>`).
+// Its purpose is to serve as a ``bridge'' between `network` and a server's `rpc` instance.
+// The `network`'s delivery function will `push()` a message onto this queue and `receive_fiber()`
+// will eventually forward the message to `rpc` by calling `rpc::receive()`.
+// `push()` may fail if the queue is full, meaning that the queue expects the caller (`network`
+// in our case) to retry later.
+template <typename State>
+class delivery_queue {
+    struct delivery {
+        raft::server_id src;
+        typename rpc<State>::message_t payload;
+    };
+
+    struct aborted_exception {};
+
+    seastar::queue<delivery> _queue;
+    rpc<State>& _rpc;
+
+    std::optional<future<>> _receive_fiber;
+
+public:
+    delivery_queue(rpc<State>& rpc)
+        : _queue(100), _rpc(rpc) {
+    }
+
+    ~delivery_queue() {
+        assert(!_receive_fiber);
+    }
+
+    bool push(raft::server_id src, const typename rpc<State>::message_t& p) {
+        assert(_receive_fiber);
+        return _queue.push(delivery{src, p});
+    }
+
+    // Start the receiving fiber.
+    // Can be executed at most once. When restarting a ``crashed'' server, create a new queue.
+    void start() {
+        assert(!_receive_fiber);
+        _receive_fiber = receive_fiber();
+    }
+
+    // Stop the receiving fiber (if it's running). The returned future resolves
+    // when the fiber finishes. Must be called before destruction (unless the fiber was never started).
+    future<> abort() && {
+        _queue.abort(std::make_exception_ptr(aborted_exception{}));
+        if (_receive_fiber) {
+            try {
+                co_await *std::exchange(_receive_fiber, std::nullopt);
+            } catch (const aborted_exception&) {}
+        }
+    }
+
+private:
+    future<> receive_fiber() {
+        // TODO: we wait for one receival to finish before starting the next.
+        // We should deliver with some concurrency instead.
+        while (true) {
+            auto m = co_await _queue.pop_eventually();
+            co_await _rpc.receive(m.src, std::move(m.payload));
         }
     }
 };
