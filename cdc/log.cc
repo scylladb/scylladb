@@ -811,12 +811,12 @@ static cell_map* get_row_state(row_states_map& row_states, const clustering_key&
     return it == row_states.end() ? nullptr : &it->second;
 }
 
-static bytes_opt get_preimage_col_value(const column_definition& cdef, const cql3::untyped_result_set_row *pirow) {
+static managed_bytes_opt get_preimage_col_value(const column_definition& cdef, const cql3::untyped_result_set_row *pirow) {
     if (!pirow || !pirow->has(cdef.name_as_text())) {
         return std::nullopt;
     }
     return cdef.is_atomic()
-        ? pirow->get_blob(cdef.name_as_text())
+        ? pirow->get_blob_fragmented(cdef.name_as_text())
         : visit(*cdef.type, make_visitor(
             // flatten set
             [&] (const set_type_impl& type) {
@@ -829,10 +829,11 @@ static bytes_opt get_preimage_col_value(const column_definition& cdef, const cql
                     tmp.emplace_back(read_collection_value(v, f).linearize()); // key
                     read_collection_value(v, f); // value. ignore.
                 }
-                return set_type_impl::serialize_partially_deserialized_form({tmp.begin(), tmp.end()}, f);
+                // FIXME: get rid of this copy in the next commit.
+                return managed_bytes(set_type_impl::serialize_partially_deserialized_form({tmp.begin(), tmp.end()}, f));
             },
-            [&] (const abstract_type& o) -> bytes {
-                return pirow->get_blob(cdef.name_as_text());
+            [&] (const abstract_type& o) -> managed_bytes {
+                return pirow->get_blob_fragmented(cdef.name_as_text());
             }
         ));
 }
@@ -1678,7 +1679,7 @@ public:
             const auto& row = preimage_set->front();
             for (auto& c : _schema->static_columns()) {
                 if (auto maybe_cell_view = get_preimage_col_value(c, &row)) {
-                    _static_row_state[&c] = managed_bytes(*maybe_cell_view);
+                    _static_row_state[&c] = std::move(*maybe_cell_view);
                 }
             }
         }
@@ -1711,7 +1712,7 @@ public:
             cell_map cells;
             for (auto& c : _schema->regular_columns()) {
                 if (auto maybe_cell_view = get_preimage_col_value(c, &row)) {
-                    cells[&c] = managed_bytes(*maybe_cell_view);
+                    cells[&c] = std::move(*maybe_cell_view);
                 }
             }
 

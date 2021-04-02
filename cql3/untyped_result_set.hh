@@ -96,6 +96,9 @@ public:
     bytes get_blob(std::string_view name) const {
         return get_view(name).linearize();
     }
+    managed_bytes get_blob_fragmented(std::string_view name) const {
+        return managed_bytes(get_view(name));
+    }
     template<typename T>
     T get_as(std::string_view name) const {
         return value_cast<T>(data_type_for<T>()->deserialize(get_view(name)));
