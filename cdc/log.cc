@@ -984,8 +984,8 @@ private:
     }
 };
 
-static bytes get_bytes(const atomic_cell_view& acv) {
-    return to_bytes(acv.value());
+static managed_bytes get_managed_bytes(const atomic_cell_view& acv) {
+    return managed_bytes(acv.value());
 }
 
 static bytes_view get_bytes_view(const atomic_cell_view& acv, std::forward_list<bytes>& buf) {
@@ -1064,16 +1064,16 @@ struct process_row_visitor {
 
     void live_atomic_cell(const column_definition& cdef, const atomic_cell_view& cell) {
         _ttl_column = get_ttl(cell);
-        bytes value = get_bytes(cell);
+        managed_bytes value = get_managed_bytes(cell);
 
         // delta
         if (_generate_delta_values) {
-            _builder.set_value(_log_ck, cdef, bytes_view(value));
+            _builder.set_value(_log_ck, cdef, value);
         }
 
         // images
         if (_enable_updating_state) {
-            update_row_state(cdef, managed_bytes(value));
+            update_row_state(cdef, std::move(value));
         }
     }
 
