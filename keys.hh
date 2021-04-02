@@ -252,6 +252,14 @@ public:
         return result;
     }
 
+    std::vector<managed_bytes> explode_fragmented() const {
+        std::vector<managed_bytes> result;
+        for (managed_bytes_view c : components()) {
+            result.emplace_back(managed_bytes(c));
+        }
+        return result;
+    }
+
     struct tri_compare {
         typename TopLevel::compound _t;
         tri_compare(const schema& s) : _t(get_compound_type(s)) {}
