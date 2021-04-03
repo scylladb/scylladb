@@ -253,14 +253,16 @@ public:
     using component = std::pair<bytes, eoc>;
     using component_view = std::pair<bytes_view, eoc>;
 private:
-    template<typename Value, typename = std::enable_if_t<!std::is_same<const data_value, std::decay_t<Value>>::value>>
+    template<typename Value>
+    requires (!std::same_as<const data_value, std::decay_t<Value>>)
     static size_t size(const Value& val) {
         return val.size();
     }
     static size_t size(const data_value& val) {
         return val.serialized_size();
     }
-    template<typename Value, typename CharOutputIterator, typename = std::enable_if_t<!std::is_same<data_value, std::decay_t<Value>>::value>>
+    template<typename Value, typename CharOutputIterator>
+    requires (!std::same_as<const data_value, std::decay_t<Value>>)
     static void write_value(Value&& val, CharOutputIterator& out) {
         out = std::copy(val.begin(), val.end(), out);
     }
