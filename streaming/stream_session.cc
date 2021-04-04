@@ -55,6 +55,7 @@
 #include "streaming/stream_exception.hh"
 #include "service/storage_proxy.hh"
 #include "service/priority_manager.hh"
+#include "service/migration_manager.hh"
 #include "query-request.hh"
 #include "schema_registry.hh"
 #include "mutation_writer/multishard_writer.hh"

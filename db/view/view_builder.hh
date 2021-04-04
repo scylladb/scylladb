@@ -22,7 +22,6 @@
 #pragma once
 
 #include "database.hh"
-#include "db/system_distributed_keyspace.hh"
 #include "dht/i_partitioner.hh"
 #include "keys.hh"
 #include "query-request.hh"
@@ -43,6 +42,12 @@
 #include <optional>
 #include <unordered_map>
 #include <vector>
+
+namespace db {
+
+class system_distributed_keyspace;
+
+}
 
 namespace db::system_keyspace {
 

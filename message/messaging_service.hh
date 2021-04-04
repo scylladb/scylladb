@@ -74,6 +74,7 @@ class update_backlog;
 class frozen_mutation;
 class frozen_schema;
 class partition_checksum;
+class canonical_mutation;
 
 namespace dht {
     class token;

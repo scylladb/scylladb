@@ -51,6 +51,7 @@
 #include "repair/row_level.hh"
 #include "mutation_source_metadata.hh"
 #include "utils/stall_free.hh"
+#include "service/migration_manager.hh"
 
 extern logging::logger rlogger;
 

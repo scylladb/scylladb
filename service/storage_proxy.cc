@@ -93,6 +93,7 @@
 #include "cdc/cdc_options.hh"
 #include "utils/histogram_metrics_helper.hh"
 #include "service/paxos/prepare_summary.hh"
+#include "service/migration_manager.hh"
 #include "service/paxos/proposal.hh"
 #include "locator/token_metadata.hh"
 #include "seastar/core/coroutine.hh"
