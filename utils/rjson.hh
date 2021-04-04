@@ -248,12 +248,11 @@ void set(rjson::value& base, rjson::string_ref_type name, rjson::string_ref_type
  * Will typically require an existing rapidjson::internal::TypeHelper<...>
  * to exist for the type written. 
  * 
- * (Note: order is important. Need to be after set(..., rjson::value), 
- *  otherwise the enable_if must be expanded)
+ * (Note: order is important. Need to be after set(..., rjson::value)).
  */
 template<typename T>
-std::enable_if_t<!std::is_constructible_v<string_ref_type, T>> 
-set(rjson::value& base, rjson::string_ref_type name, T&& member) {
+requires (!std::is_constructible_v<string_ref_type, T>)
+void set(rjson::value& base, rjson::string_ref_type name, T&& member) {
     extern allocator the_allocator;
 
     rjson::value v;
