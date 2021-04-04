@@ -22,6 +22,7 @@
 #pragma once
 #include <seastar/core/sstring.hh>
 #include <boost/lexical_cast.hpp>
+#include <map>
 #include "exceptions/exceptions.hh"
 #include "utils/rjson.hh"
 #include "seastarx.hh"
@@ -83,8 +84,7 @@ public:
         return caching_options("NONE", "NONE", false);
     }
 
-    template<typename Map>
-    static caching_options from_map(const Map & map) {
+    static caching_options from_map(const std::map<sstring, sstring>& map) {
         sstring k = default_key;
         sstring r = default_row;
         bool e = true;
