@@ -21,10 +21,15 @@
 
 #pragma once
 
-#include "db/system_distributed_keyspace.hh"
 #include "streaming/stream_reason.hh"
 #include <boost/range/adaptor/map.hpp>
 #include <boost/algorithm/cxx11/any_of.hpp>
+
+namespace db {
+
+class system_distributed_keyspace;
+
+}
 
 namespace db::view {
 

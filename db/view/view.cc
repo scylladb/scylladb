@@ -61,6 +61,7 @@
 #include "db/view/view_updating_consumer.hh"
 #include "db/system_keyspace_view_types.hh"
 #include "db/system_keyspace.hh"
+#include "db/system_distributed_keyspace.hh"
 #include "frozen_mutation.hh"
 #include "gms/inet_address.hh"
 #include "keys.hh"

@@ -42,6 +42,7 @@
 #include <seastar/core/distributed.hh>
 #include "locator/snitch_base.hh"
 #include "db/system_keyspace.hh"
+#include "db/system_distributed_keyspace.hh"
 #include "utils/UUID.hh"
 #include "gms/inet_address.hh"
 #include "log.hh"

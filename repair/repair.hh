@@ -30,6 +30,7 @@
 #include <seastar/core/sharded.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/condition-variable.hh>
+#include <seastar/core/gate.hh>
 
 #include "database_fwd.hh"
 #include "frozen_mutation.hh"

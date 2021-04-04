@@ -23,11 +23,16 @@
 
 #include <vector>
 #include "gms/inet_address.hh"
-#include "db/system_distributed_keyspace.hh"
 #include "repair/repair.hh"
 #include <seastar/core/distributed.hh>
 
 class row_level_repair_gossip_helper;
+
+namespace db {
+
+class system_distributed_keyspace;
+
+}
 
 namespace gms {
     class gossiper;
