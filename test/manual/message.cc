@@ -111,7 +111,7 @@ public:
             return messaging_service::no_wait();
         });
 
-        ms.register_gossip_echo([] {
+        ms.register_gossip_echo([] (const rpc::client_info& cinfo, rpc::optional<int64_t> gen_opt) {
             fmt::print("Server got gossip echo msg\n");
             throw std::runtime_error("I'm throwing runtime_error exception");
             return make_ready_future<>();
@@ -149,7 +149,8 @@ public:
     future<> test_echo() {
         fmt::print("=== {} ===\n", __func__);
         auto id = get_msg_addr();
-        return ms.send_gossip_echo(id).then_wrapped([] (auto&& f) {
+        int64_t gen = 0x1;
+        return ms.send_gossip_echo(id, gen).then_wrapped([] (auto&& f) {
             try {
                 f.get();
                 return make_ready_future<>();

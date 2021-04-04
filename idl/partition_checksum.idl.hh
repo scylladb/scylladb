@@ -110,6 +110,12 @@ enum class node_ops_cmd : uint32_t {
      removenode_sync_data,
      removenode_abort,
      removenode_done,
+     replace_prepare,
+     replace_prepare_mark_alive,
+     replace_prepare_pending_ranges,
+     replace_heartbeat,
+     replace_abort,
+     replace_done,
 };
 
 struct node_ops_cmd_request {
@@ -117,6 +123,8 @@ struct node_ops_cmd_request {
     utils::UUID ops_uuid;
     std::list<gms::inet_address> ignore_nodes;
     std::list<gms::inet_address> leaving_nodes;
+    // Map existing nodes to replacing nodes
+    std::unordered_map<gms::inet_address, gms::inet_address> replace_nodes;
 };
 
 struct node_ops_cmd_response {

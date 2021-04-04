@@ -408,9 +408,9 @@ public:
     future<node_ops_cmd_response> send_node_ops_cmd(msg_addr id, node_ops_cmd_request);
 
     // Wrapper for GOSSIP_ECHO verb
-    void register_gossip_echo(std::function<future<> ()>&& func);
+    void register_gossip_echo(std::function<future<> (const rpc::client_info& cinfo, rpc::optional<int64_t> generation_number)>&& func);
     future<> unregister_gossip_echo();
-    future<> send_gossip_echo(msg_addr id);
+    future<> send_gossip_echo(msg_addr id, int64_t generation_number);
 
     // Wrapper for GOSSIP_SHUTDOWN
     void register_gossip_shutdown(std::function<rpc::no_wait_type (inet_address from)>&& func);
