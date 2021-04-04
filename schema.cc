@@ -456,6 +456,9 @@ schema::schema(const schema& o)
     rebuild();
     if (o.is_view()) {
         _view_info = std::make_unique<::view_info>(*this, o.view_info()->raw());
+        if (o.view_info()->base_info()) {
+            _view_info->set_base_info(o.view_info()->base_info());
+        }
     }
 }
 

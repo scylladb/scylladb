@@ -662,11 +662,22 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
             });
     }).then([&proxy, &mm, this] {
         return do_parse_schema_tables(proxy, db::schema_tables::VIEWS, [this, &proxy, &mm] (schema_result_value_type &v) {
-            return create_views_from_schema_partition(proxy, v.second).then([this, &mm] (std::vector<view_ptr> views) {
-                return parallel_for_each(views.begin(), views.end(), [this, &mm] (auto&& v) {
-                    return this->add_column_family_and_make_directory(v).then([this, &mm, v] {
-                        return maybe_update_legacy_secondary_index_mv_schema(mm.local(), *this, v);
-                    });
+            return create_views_from_schema_partition(proxy, v.second).then([this, &mm, &proxy] (std::vector<view_ptr> views) {
+                return parallel_for_each(views.begin(), views.end(), [this, &mm, &proxy] (auto&& v) {
+                    // TODO: Remove once computed columns are guaranteed to be featured in the whole cluster.
+                    // we fix here the schema in place in oreder to avoid races (write commands comming from other coordinators).
+                    view_ptr fixed_v = maybe_fix_legacy_secondary_index_mv_schema(*this, v, nullptr, preserve_version::yes);
+                    view_ptr v_to_add = fixed_v ? fixed_v : v;
+                    future<> f = this->add_column_family_and_make_directory(v_to_add);
+                    if (bool(fixed_v)) {
+                        v_to_add = fixed_v;
+                        auto&& keyspace = find_keyspace(v->ks_name()).metadata();
+                        auto mutations = db::schema_tables::make_update_view_mutations(keyspace, view_ptr(v), fixed_v, api::new_timestamp(), true);
+                        f = f.then([this, &proxy, mutations = std::move(mutations)] {
+                            return db::schema_tables::merge_schema(proxy, _feat, std::move(mutations));
+                        });
+                    }
+                    return f;
                 });
             });
         });
