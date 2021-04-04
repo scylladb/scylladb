@@ -564,13 +564,18 @@ void fsm::append_entries_reply(server_id from, append_reply&& reply) {
         if (leader_state().stepdown && !leader_state().timeout_now_sent &&
                          progress.can_vote && progress.match_idx == _log.last_idx()) {
             send_timeout_now(progress.id);
+            // We may have resigned leadership if a stepdown process completed
+            // while the leader is no longer part of the configuration.
+            if (!is_leader()) {
+                return;
+            }
         }
 
         // check if any new entry can be committed
         maybe_commit();
 
-        // We may have resigned leadership if a stepdown process completed
-        // while the leader is no longer part of the configuration.
+        // The call to maybe_commit() may initiate and immediately complete stepdown process
+        // so the comment above the provios is_leader() check applies here too. 
         if (!is_leader()) {
             return;
         }
