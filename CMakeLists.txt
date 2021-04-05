@@ -314,6 +314,7 @@ set(scylla_sources
     auth/standard_role_manager.cc
     auth/transitional.cc
     bytes.cc
+    caching_options.cc
     canonical_mutation.cc
     cdc/cdc_partitioner.cc
     cdc/generation.cc
