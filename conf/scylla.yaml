@@ -81,10 +81,12 @@ seed_provider:
           # Ex: "<ip1>,<ip2>,<ip3>"
           - seeds: "127.0.0.1"
 
-# Address or interface to bind to and tell other Scylla nodes to connect to.
+# Address to bind to and tell other Scylla nodes to connect to.
 # You _must_ change this if you want multiple nodes to be able to communicate!
 #
-# Setting listen_address to 0.0.0.0 is always wrong.
+# If you leave broadcast_address (below) empty, then setting listen_address
+# to 0.0.0.0 is wrong as other nodes will not know how to reach this node.
+# If you set broadcast_address, then you can set listen_address to 0.0.0.0.
 listen_address: localhost
 
 # Address to broadcast to other Scylla nodes
