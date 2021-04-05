@@ -24,6 +24,7 @@
 
 #include <seastar/core/sleep.hh>
 #include "seastar/include/seastar/testing/perf_tests.hh"
+#include <seastar/util/closeable.hh>
 
 #include "test/lib/simple_schema.hh"
 #include "test/lib/reader_permit.hh"
@@ -146,7 +147,7 @@ std::vector<std::vector<mutation>> combined::create_overlapping_partitions_disjo
 
 future<> combined::consume_all(flat_mutation_reader mr) const
 {
-    return do_with(std::move(mr), [] (auto& mr) {
+    return with_closeable(std::move(mr), [] (auto& mr) {
         perf_tests::start_measuring_time();
         return mr.consume_pausable([] (mutation_fragment mf) {
             perf_tests::do_not_optimize(mf);
@@ -270,6 +271,8 @@ future<size_t> clustering_combined::consume_all(flat_mutation_reader mr) const
         }, db::no_timeout).then([&num_mfs] {
             perf_tests::stop_measuring_time();
             return num_mfs;
+        }).finally([&mr] {
+            return mr.close();
         });
     });
 }
@@ -377,7 +380,7 @@ protected:
     }
 
     future<> consume_all(flat_mutation_reader mr) const {
-        return do_with(std::move(mr), [] (auto& mr) {
+        return with_closeable(std::move(mr), [] (auto& mr) {
             return mr.consume_pausable([] (mutation_fragment mf) {
                 perf_tests::do_not_optimize(mf);
                 return stop_iteration::no;

@@ -84,6 +84,7 @@ void run_test(const sstring& name, schema_ptr s, MutationGenerator&& gen) {
         // going away after memtable was merged to cache.
         auto rd = std::make_unique<flat_mutation_reader>(
             make_combined_reader(s, tests::make_permit(), cache.make_reader(s, tests::make_permit()), mt->make_flat_reader(s, tests::make_permit())));
+        auto close_rd = defer([&rd] { rd->close().get(); });
         rd->set_max_buffer_size(1);
         rd->fill_buffer(db::no_timeout).get();
 
@@ -99,6 +100,9 @@ void run_test(const sstring& name, schema_ptr s, MutationGenerator&& gen) {
         }, db::no_timeout).get();
 
         mt = {};
+
+        close_rd.cancel();
+        rd->close().get();
         rd = {};
 
         slm.stop();

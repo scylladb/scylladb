@@ -40,6 +40,7 @@
 #include <seastar/core/memory.hh>
 #include <seastar/core/units.hh>
 #include <seastar/testing/test_runner.hh>
+#include <seastar/util/closeable.hh>
 #include "sstables/compaction_manager.hh"
 #include "transport/messages/result_message.hh"
 #include "sstables/shared_index_lists.hh"
@@ -774,6 +775,7 @@ static test_result scan_rows_with_stride(column_family& cf, int n_rows, int n_re
         default_priority_class(),
         nullptr,
         n_skip ? streamed_mutation::forwarding::yes : streamed_mutation::forwarding::no);
+    auto close_rd = deferred_close(rd);
 
     metrics_snapshot before;
     assert_partition_start(rd);
@@ -814,6 +816,7 @@ static test_result scan_with_stride_partitions(column_family& cf, int n, int n_r
     auto pr = n_skip ? dht::partition_range::make_ending_with(dht::partition_range::bound(keys[0], false)) // covering none
                      : query::full_partition_range;
     auto rd = cf.make_reader(cf.schema(), tests::make_permit(), pr, cf.schema()->full_slice());
+    auto close_rd = deferred_close(rd);
 
     metrics_snapshot before;
 
@@ -841,6 +844,7 @@ static test_result slice_rows(column_family& cf, int offset = 0, int n_read = 1)
         default_priority_class(),
         nullptr,
         streamed_mutation::forwarding::yes);
+    auto close_rd = deferred_close(rd);
 
     metrics_snapshot before;
     assert_partition_start(rd);
@@ -866,6 +870,8 @@ static test_result slice_rows_by_ck(column_family& cf, int offset = 0, int n_rea
         .build();
     auto pr = dht::partition_range::make_singular(make_pkey(*cf.schema(), 0));
     auto rd = cf.make_reader(cf.schema(), tests::make_permit(), pr, slice);
+    auto close_rd = deferred_close(rd);
+
     return test_reading_all(rd);
 }
 
@@ -880,6 +886,7 @@ static test_result select_spread_rows(column_family& cf, int stride = 0, int n_r
         tests::make_permit(),
         query::full_partition_range,
         slice);
+    auto close_rd = deferred_close(rd);
 
     return test_reading_all(rd);
 }
@@ -893,12 +900,15 @@ static test_result test_slicing_using_restrictions(column_family& cf, int_range 
     auto pr = dht::partition_range::make_singular(make_pkey(*cf.schema(), 0));
     auto rd = cf.make_reader(cf.schema(), tests::make_permit(), pr, slice, default_priority_class(), nullptr,
                              streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
+    auto close_rd = deferred_close(rd);
+
     return test_reading_all(rd);
 }
 
 static test_result slice_rows_single_key(column_family& cf, int offset = 0, int n_read = 1) {
     auto pr = dht::partition_range::make_singular(make_pkey(*cf.schema(), 0));
     auto rd = cf.make_reader(cf.schema(), tests::make_permit(), pr, cf.schema()->full_slice(), default_priority_class(), nullptr, streamed_mutation::forwarding::yes, mutation_reader::forwarding::no);
+    auto close_rd = deferred_close(rd);
 
     metrics_snapshot before;
     assert_partition_start(rd);
@@ -918,6 +928,7 @@ static test_result slice_partitions(column_family& cf, const std::vector<dht::de
     );
 
     auto rd = cf.make_reader(cf.schema(), tests::make_permit(), pr, cf.schema()->full_slice());
+    auto close_rd = deferred_close(rd);
     metrics_snapshot before;
 
     uint64_t fragments = consume_all_with_next_partition(rd);
@@ -1026,6 +1037,7 @@ static test_result test_forwarding_with_restriction(column_family& cf, clustered
         default_priority_class(),
         nullptr,
         streamed_mutation::forwarding::yes, mutation_reader::forwarding::no);
+    auto close_rd = deferred_close(rd);
 
     uint64_t fragments = 0;
     metrics_snapshot before;
