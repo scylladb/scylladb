@@ -226,12 +226,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , cluster_name(this, "cluster_name", value_status::Used, "",
         "The name of the cluster; used to prevent machines in one logical cluster from joining another. All nodes participating in a cluster must have the same value.")
     , listen_address(this, "listen_address", value_status::Used, "localhost",
-        "The IP address or hostname that Scylla binds to for connecting to other Scylla nodes. Set this parameter or listen_interface, not both. You must change the default setting for multiple nodes to communicate:\n"
-        "\n"
-        "Generally set to empty. If the node is properly configured (host name, name resolution, and so on), Scylla uses InetAddress.getLocalHost() to get the local address from the system.\n"
-        "For a single node cluster, you can use the default setting (localhost).\n"
-        "If Scylla can't find the correct address, you must specify the IP address or host name.\n"
-        "Never specify 0.0.0.0; it is always wrong.")
+        "The IP address or hostname that Scylla binds to for connecting to other Scylla nodes. You must change the default setting for multiple nodes to communicate. Do not set to 0.0.0.0, unless you have set broadcast_address to an address that other nodes can use to reach this node.")
     , listen_interface(this, "listen_interface", value_status::Unused, "eth0",
         "The interface that Scylla binds to for connecting to other Scylla nodes. Interfaces must correspond to a single address, IP aliasing is not supported. See listen_address.")
     , listen_interface_prefer_ipv6(this, "listen_interface_prefer_ipv6", value_status::Used, false,
