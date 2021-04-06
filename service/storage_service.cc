@@ -1543,6 +1543,12 @@ storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> 
             throw std::runtime_error(format("Cannot replace_address {} because it doesn't exist in gossip", replace_address));
         }
 
+        // Reject to replace a node that has left the ring
+        auto status = _gossiper.get_gossip_status(replace_address);
+        if (status == gms::versioned_value::STATUS_LEFT || status == gms::versioned_value::REMOVED_TOKEN) {
+            throw std::runtime_error(format("Cannot replace_address {} because it has left the ring, status={}", replace_address, status));
+        }
+
         auto tokens = get_tokens_for(replace_address);
         if (tokens.empty()) {
             throw std::runtime_error(format("Could not find tokens for {} to replace", replace_address));
