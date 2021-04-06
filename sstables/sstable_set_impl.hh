@@ -167,6 +167,19 @@ public:
     virtual void insert(shared_sstable sst) override;
     virtual void erase(shared_sstable sst) override;
     virtual std::unique_ptr<incremental_selector_impl> make_incremental_selector() const override;
+
+    virtual flat_mutation_reader create_single_key_sstable_reader(
+            column_family*,
+            schema_ptr,
+            reader_permit,
+            utils::estimated_histogram&,
+            const dht::partition_range&,
+            const query::partition_slice&,
+            const io_priority_class&,
+            tracing::trace_state_ptr,
+            streamed_mutation::forwarding,
+            mutation_reader::forwarding) const override;
+
     class incremental_selector;
 };
 
