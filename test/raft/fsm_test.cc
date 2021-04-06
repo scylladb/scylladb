@@ -1323,3 +1323,36 @@ BOOST_AUTO_TEST_CASE(test_reply_from_removed_follower) {
     A.step(B.id(), raft::snapshot_reply{A.get_current_term(), true});
     BOOST_CHECK(A.is_leader());
 }
+
+BOOST_AUTO_TEST_CASE(test_leader_ignores_messages_with_current_term) {
+    // Check that the leader properly handles InstallSnapshot/AppendRequest/VoteRequest
+    // messages carrying its own term.
+    discrete_failure_detector fd;
+    server_id A_id = id(), B_id = id();
+
+    raft::log log(raft::snapshot{.idx = index_t{0},
+        .config = raft::configuration{A_id, B_id}});
+    auto A = create_follower(A_id, log, fd);
+    auto B = create_follower(B_id, log, fd);
+    election_timeout(A);
+    communicate(A, B);
+    BOOST_CHECK(A.is_leader());
+    // Check that InstallSnapshot with current term gets negative reply
+    A.step(B.id(), raft::install_snapshot{A.get_current_term()});
+    auto output = A.get_output();
+    BOOST_CHECK_EQUAL(output.messages.size(), 1);
+    raft::snapshot_reply msg;
+    BOOST_REQUIRE_NO_THROW(msg = std::get<raft::snapshot_reply>(output.messages[0].second));
+    BOOST_CHECK(!msg.success);
+    // Check that AppendRequest with current term is ignired by the leader
+    A.step(B.id(), raft::append_request{A.get_current_term()});
+    output = A.get_output();
+    BOOST_CHECK_EQUAL(output.messages.size(), 0);
+    // Check that VoteRequest with current term is not granted
+    A.step(B.id(), raft::vote_request{A.get_current_term(), index_t{}, term_t{}, false, false});
+    output = A.get_output();
+    BOOST_CHECK_EQUAL(output.messages.size(), 1);
+    raft::vote_reply msg1;
+    BOOST_REQUIRE_NO_THROW(msg1 = std::get<raft::vote_reply>(output.messages[0].second));
+    BOOST_CHECK(!msg1.vote_granted);
+}
