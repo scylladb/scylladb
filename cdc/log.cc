@@ -846,7 +846,7 @@ static bytes_opt get_preimage_col_value(const column_definition& cdef, const cql
  * with unspecified nondeterministic ordering.
  */
 utils::UUID generate_timeuuid(api::timestamp_type t) {
-    return utils::UUID_gen::get_random_time_UUID_from_micros(t);
+    return utils::UUID_gen::get_random_time_UUID_from_micros(std::chrono::microseconds{t});
 }
 
 class log_mutation_builder {

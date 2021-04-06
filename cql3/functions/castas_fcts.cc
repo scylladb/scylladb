@@ -138,10 +138,6 @@ static data_value castas_fctn_from_decimal_to_string(data_value from) {
     return value_cast<big_decimal>(from).to_string();
 }
 
-db_clock::time_point millis_to_time_point(const int64_t millis) {
-    return db_clock::time_point{std::chrono::milliseconds(millis)};
-}
-
 simple_date_native_type time_point_to_date(const db_clock::time_point& tp) {
     const auto epoch = boost::posix_time::from_time_t(0);
     auto timestamp = tp.time_since_epoch().count();
@@ -175,7 +171,7 @@ static data_value castas_fctn_from_timeuuid_to_timestamp(data_value from) {
 
 static data_value castas_fctn_from_timeuuid_to_date(data_value from) {
     const auto val_from = value_cast<utils::UUID>(from);
-    return time_point_to_date(millis_to_time_point(utils::UUID_gen::unix_timestamp(val_from)));
+    return time_point_to_date(db_clock::time_point{utils::UUID_gen::unix_timestamp(val_from)});
 }
 
 static data_value castas_fctn_from_dv_to_string(data_value from) {

@@ -1875,7 +1875,7 @@ public:
                     unique_cells.reserve(num_cells);
                     auto ctype = static_pointer_cast<const collection_type_impl>(col.type);
                     for (auto i = 0; i < num_cells; ++i) {
-                        auto uuid = utils::UUID_gen::min_time_UUID(uuid_ts_dist(_gen)).serialize();
+                        auto uuid = utils::UUID_gen::min_time_UUID(std::chrono::milliseconds{uuid_ts_dist(_gen)}).serialize();
                         if (unique_cells.emplace(uuid).second) {
                             m.cells.emplace_back(
                                 bytes(reinterpret_cast<const int8_t*>(uuid.data()), uuid.size()),

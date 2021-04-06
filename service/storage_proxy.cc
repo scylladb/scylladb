@@ -814,7 +814,7 @@ paxos_response_handler::begin_and_repair_paxos(client_state& cs, unsigned& conte
             // Note that ballotMicros is not guaranteed to be unique if two proposal are being handled
             // concurrently by the same coordinator. But we still need ballots to be unique for each
             // proposal so we have to use getRandomTimeUUIDFromMicros.
-            utils::UUID ballot = utils::UUID_gen::get_random_time_UUID_from_micros(ballot_micros);
+            utils::UUID ballot = utils::UUID_gen::get_random_time_UUID_from_micros(std::chrono::microseconds{ballot_micros});
 
             paxos::paxos_state::logger.debug("CAS[{}] Preparing {}", _id, ballot);
             tracing::trace(tr_state, "Preparing {}", ballot);
@@ -990,7 +990,7 @@ future<paxos::prepare_summary> paxos_response_handler::prepare_ballot(utils::UUI
                         request_tracker.set_value(std::move(summary));
                         return;
                     } else if constexpr (std::is_same_v<T, paxos::promise>) {
-                        utils::UUID mrc_ballot = utils::UUID_gen::min_time_UUID(0);
+                        utils::UUID mrc_ballot = utils::UUID_gen::min_time_UUID();
 
                         paxos::paxos_state::logger.trace("CAS[{}] prepare_ballot: got a response {} from {}", _id, response, peer);
                         tracing::trace(tr_state, "prepare_ballot: got a response {} from /{}", response, peer);

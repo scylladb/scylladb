@@ -89,7 +89,7 @@ BOOST_AUTO_TEST_CASE(test_get_time_uuid) {
     uuid = utils::UUID_gen::get_time_UUID(tp);
     BOOST_CHECK(uuid.is_timestamp());
 
-    auto millis = duration_cast<milliseconds>(tp.time_since_epoch()).count();
+    auto millis = duration_cast<milliseconds>(tp.time_since_epoch());
     uuid = utils::UUID_gen::get_time_UUID(millis);
     BOOST_CHECK(uuid.is_timestamp());
 
@@ -131,7 +131,7 @@ BOOST_AUTO_TEST_CASE(test_timeuuid_msb_is_monotonic) {
         int step = 1; /* + (random() % 169) ; */
         auto prev = first;
         for (int64_t i = 1; i < 3697; i += step) {
-            auto next =  UUID(UUID_gen::create_time(uuid.timestamp() + (i * *scale)), 0).serialize();
+            auto next =  UUID(UUID_gen::create_time(UUID_gen::decimicroseconds{uuid.timestamp() + (i * *scale)}), 0).serialize();
             bool t1 = utils::timeuuid_tri_compare(next, prev) > 0;
             bool t2 = utils::timeuuid_tri_compare(next, first) > 0;
             if (!t1 || !t2) {
@@ -157,7 +157,7 @@ BOOST_AUTO_TEST_CASE(test_timeuuid_tri_compare_legacy) {
         int step = 1; /* + (random() % 169) ; */
         auto prev = first;
         for (int64_t i = 1; i < 3697; i += step) {
-            auto next =  UUID(UUID_gen::create_time(uuid.timestamp() + (i * *scale)), 0).serialize();
+            auto next =  UUID(UUID_gen::create_time(UUID_gen::decimicroseconds{uuid.timestamp() + (i * *scale)}), 0).serialize();
             bool t1 = utils::timeuuid_tri_compare(next, prev) == timeuuid_legacy_tri_compare(next, prev);
             bool t2 = utils::timeuuid_tri_compare(next, first) == timeuuid_legacy_tri_compare(next, first);
             if (!t1 || !t2) {
@@ -179,7 +179,7 @@ BOOST_AUTO_TEST_CASE(test_timeuuid_submicro_is_monotonic) {
     int64_t micros = UUID_gen::micros_timestamp(current_timeuuid);
     int maxsubmicro = (1 << 17) - 1;
     int step = 1 + (random() % 169);
-    auto prev = UUID_gen::get_time_UUID_bytes_from_micros_and_submicros(micros, 0);
+    auto prev = UUID_gen::get_time_UUID_bytes_from_micros_and_submicros(std::chrono::microseconds{micros}, 0);
     auto prev_timeuuid = UUID_gen::get_UUID(prev.data());
     // Check prev_timeuuid node identifier is set. It uses
     // a spoof MAC address, not the same as a standard UUID.
@@ -197,13 +197,13 @@ BOOST_AUTO_TEST_CASE(test_timeuuid_submicro_is_monotonic) {
     };
     for (int i = 1; i <= maxsubmicro; i += step) {
         auto uuid = UUID_gen::get_time_UUID_bytes_from_micros_and_submicros(
-                micros, i);
+                std::chrono::microseconds{micros}, i);
         check_is_valid_timeuuid(UUID_gen::get_UUID(uuid.data()));
         // UUID submicro part grows monotonically
         BOOST_CHECK(utils::timeuuid_tri_compare({uuid.data(), 16}, {prev.data(), 16}) > 0);
         prev = uuid;
     }
-    BOOST_CHECK_EXCEPTION(UUID_gen::get_time_UUID_bytes_from_micros_and_submicros(micros, 2 * maxsubmicro),
+    BOOST_CHECK_EXCEPTION(UUID_gen::get_time_UUID_bytes_from_micros_and_submicros(std::chrono::microseconds{micros}, 2 * maxsubmicro),
         utils::timeuuid_submicro_out_of_range, [](auto& x) -> bool { return true; });
 }
 
@@ -211,7 +211,7 @@ BOOST_AUTO_TEST_CASE(test_min_time_uuid) {
     using namespace std::chrono;
 
     auto tp = system_clock::now();
-    auto millis = duration_cast<milliseconds>(tp.time_since_epoch()).count();
+    auto millis = duration_cast<milliseconds>(tp.time_since_epoch());
     auto uuid = utils::UUID_gen::min_time_UUID(millis);
     BOOST_CHECK(uuid.is_timestamp());
 
@@ -223,7 +223,7 @@ BOOST_AUTO_TEST_CASE(test_max_time_uuid) {
     using namespace std::chrono;
 
     auto tp = system_clock::now();
-    auto millis = duration_cast<milliseconds>(tp.time_since_epoch()).count();
+    auto millis = duration_cast<milliseconds>(tp.time_since_epoch());
     auto uuid = utils::UUID_gen::max_time_UUID(millis);
     BOOST_CHECK(uuid.is_timestamp());
 

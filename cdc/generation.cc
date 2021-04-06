@@ -432,7 +432,7 @@ future<> update_streams_description(
 }
 
 static db_clock::time_point as_timepoint(const utils::UUID& uuid) {
-    return db_clock::time_point{std::chrono::milliseconds(utils::UUID_gen::get_adjusted_timestamp(uuid))};
+    return db_clock::time_point(utils::UUID_gen::unix_timestamp(uuid));
 }
 
 static future<std::vector<db_clock::time_point>> get_cdc_desc_v1_timestamps(

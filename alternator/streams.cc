@@ -89,7 +89,7 @@ struct rapidjson::internal::TypeHelper<ValueType, utils::UUID>
 {};
 
 static db_clock::time_point as_timepoint(const utils::UUID& uuid) {
-    return db_clock::time_point{std::chrono::milliseconds(utils::UUID_gen::get_adjusted_timestamp(uuid))};
+    return db_clock::time_point{utils::UUID_gen::unix_timestamp(uuid)};
 }
 
 /**
@@ -295,7 +295,8 @@ sequence_number::sequence_number(std::string_view v)
         // view directly.
         uint128_t tmp{std::string(v)};
         // see above
-        return utils::UUID_gen::get_time_UUID_raw(uint64_t(tmp >> 64), uint64_t(tmp & std::numeric_limits<uint64_t>::max()));
+        return utils::UUID_gen::get_time_UUID_raw(utils::UUID_gen::decimicroseconds{uint64_t(tmp >> 64)},
+            uint64_t(tmp & std::numeric_limits<uint64_t>::max()));
     }())
 {}
 
@@ -595,9 +596,9 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
                 last.emplace(ts, id);
                 rjson::set(shard, "ShardId", *last);
                 auto range = rjson::empty_object();
-                rjson::set(range, "StartingSequenceNumber", sequence_number(utils::UUID_gen::min_time_UUID(ts.time_since_epoch().count())));
+                rjson::set(range, "StartingSequenceNumber", sequence_number(utils::UUID_gen::min_time_UUID(ts.time_since_epoch())));
                 if (expired) {
-                    rjson::set(range, "EndingSequenceNumber", sequence_number(utils::UUID_gen::min_time_UUID(expired->time_since_epoch().count())));
+                    rjson::set(range, "EndingSequenceNumber", sequence_number(utils::UUID_gen::min_time_UUID(expired->time_since_epoch())));
                 }
 
                 rjson::set(shard, "SequenceNumberRange", std::move(range));
@@ -761,7 +762,7 @@ future<executor::request_return_type> executor::get_shard_iterator(client_state&
             inclusive_of_threshold = true;
             break;
         case shard_iterator_type::LATEST:
-            threshold = utils::UUID_gen::min_time_UUID((db_clock::now() - confidence_interval(db)).time_since_epoch().count());
+            threshold = utils::UUID_gen::min_time_UUID((db_clock::now() - confidence_interval(db)).time_since_epoch());
             inclusive_of_threshold = true;
             break;
     }
@@ -833,7 +834,7 @@ future<executor::request_return_type> executor::get_records(client_state& client
     dht::partition_range_vector partition_ranges{ dht::partition_range::make_singular(dht::decorate_key(*schema, pk)) };
 
     auto high_ts = db_clock::now() - confidence_interval(db);
-    auto high_uuid = utils::UUID_gen::min_time_UUID(high_ts.time_since_epoch().count());
+    auto high_uuid = utils::UUID_gen::min_time_UUID(high_ts.time_since_epoch());
     auto lo = clustering_key_prefix::from_exploded(*schema, { iter.threshold.serialize() });
     auto hi = clustering_key_prefix::from_exploded(*schema, { high_uuid.serialize() });
 
@@ -1035,7 +1036,7 @@ future<executor::request_return_type> executor::get_records(client_state& client
                 // a search from it until high_ts and found nothing, so we
                 // can also start the next search from high_ts.
                 // TODO: but why? It's simpler just to leave the iterator be.
-                shard_iterator next_iter(iter.table, iter.shard, utils::UUID_gen::min_time_UUID(high_ts.time_since_epoch().count()), true);
+                shard_iterator next_iter(iter.table, iter.shard, utils::UUID_gen::min_time_UUID(high_ts.time_since_epoch()), true);
                 rjson::set(ret, "NextShardIterator", iter);
             }
             _stats.api_operations.get_records_latency.add(std::chrono::steady_clock::now() - start_time);

@@ -64,9 +64,18 @@ struct timeuuid_submicro_out_of_range: public std::out_of_range {
  */
 class UUID_gen
 {
+public:
+    // UUID timestamp time component is represented in intervals
+    // of 1/10 of a microsecond since the beginning of GMT epoch.
+    using decimicroseconds = std::chrono::duration<int64_t, std::ratio<1, 10'000'000>>;
+    using milliseconds = std::chrono::milliseconds;
 private:
     // A grand day! millis at 00:00:00.000 15 Oct 1582.
-    static constexpr int64_t START_EPOCH = -12219292800000L;
+    static constexpr decimicroseconds START_EPOCH = decimicroseconds{-122192928000000000L};
+    // UUID time must fit in 60 bits
+    static constexpr milliseconds UUID_UNIXTIME_MAX = duration_cast<milliseconds>(
+        decimicroseconds{0x0fffffffffffffffL} + START_EPOCH);
+
     // A random mac address for use in timeuuids
     // where we can not use clockseq to randomize the physical
     // node, and prefer using a random address to a physical one
@@ -91,10 +100,11 @@ private:
     static constexpr int64_t MIN_CLOCK_SEQ_AND_NODE = 0x8080808080808080L;
     static constexpr int64_t MAX_CLOCK_SEQ_AND_NODE = 0x7f7f7f7f7f7f7f7fL;
 
-    // placement of this singleton is important.  It needs to be instantiated *AFTER* the other statics.
-    static thread_local const std::unique_ptr<UUID_gen> instance;
+    // An instance of UUID_gen uses clock_seq_and_node so should
+    // be constructed after it.
+    static thread_local UUID_gen _instance;
 
-    uint64_t last_nanos = 0;
+    decimicroseconds _last_used_time = decimicroseconds{0};
 
     UUID_gen()
     {
@@ -102,13 +112,30 @@ private:
         assert(clock_seq_and_node != 0);
     }
 
+    // Return decimicrosecond time based on the system time,
+    // in milliseconds. If the current millisecond hasn't change
+    // from the previous call, increment the previously used
+    // value by one decimicrosecond.
+    // NOTE: In the original Java code this function was
+    // "synchronized". This isn't needed since in Scylla we do not
+    // need monotonicity between time UUIDs created at different
+    // shards and UUID code uses thread local state on each shard.
+    int64_t create_time_safe() {
+        using std::chrono::system_clock;
+        auto millis = duration_cast<milliseconds>(system_clock::now().time_since_epoch());
+        decimicroseconds when = from_unix_timestamp(millis);
+        if (when > _last_used_time) {
+            _last_used_time = when;
+        } else {
+            when = ++_last_used_time;
+        }
+        return create_time(when);
+    }
+
 public:
     // We have only 17 timeuuid bits available to store this
     // value.
     static constexpr int SUBMICRO_LIMIT = (1<<17);
-    // UUID timestamp time component is represented in intervals
-    // of 1/10 of a microsecond since the beginning of GMT epoch.
-    using decimicroseconds = std::chrono::duration<int64_t, std::ratio<1, 10'000'000>>;
     /**
      * Creates a type 1 UUID (time-based UUID).
      *
@@ -116,19 +143,7 @@ public:
      */
     static UUID get_time_UUID()
     {
-        auto uuid = UUID(instance->create_time_safe(), clock_seq_and_node);
-        assert(uuid.is_timestamp());
-        return uuid;
-    }
-
-    /**
-     * Creates a type 1 UUID (time-based UUID) with the timestamp of @param when, in milliseconds.
-     *
-     * @return a UUID instance
-     */
-    static UUID get_time_UUID(int64_t when)
-    {
-        auto uuid = UUID(create_time(from_unix_timestamp(when)), clock_seq_and_node);
+        auto uuid = UUID(_instance.create_time_safe(), clock_seq_and_node);
         assert(uuid.is_timestamp());
         return uuid;
     }
@@ -140,25 +155,26 @@ public:
      */
     static UUID get_time_UUID(std::chrono::system_clock::time_point tp)
     {
-        using namespace std::chrono;
-        // "nanos" needs to be in 100ns intervals since the adoption of the Gregorian calendar in the West.
-        uint64_t nanos = duration_cast<nanoseconds>(tp.time_since_epoch()).count() / 100;
-        nanos -= (10000ULL * START_EPOCH);
-        auto uuid = UUID(create_time(nanos), clock_seq_and_node);
+        auto uuid = UUID(create_time(from_unix_timestamp(tp.time_since_epoch())), clock_seq_and_node);
         assert(uuid.is_timestamp());
         return uuid;
     }
 
-    static UUID get_time_UUID(int64_t when, int64_t clock_seq_and_node)
+    /**
+     * Creates a type 1 UUID (time-based UUID) with the timestamp of @param when, in milliseconds.
+     *
+     * @return a UUID instance
+     */
+    static UUID get_time_UUID(milliseconds when, int64_t clock_seq_and_node = UUID_gen::clock_seq_and_node)
     {
         auto uuid = UUID(create_time(from_unix_timestamp(when)), clock_seq_and_node);
         assert(uuid.is_timestamp());
         return uuid;
     }
 
-    static UUID get_time_UUID_raw(int64_t nanos, int64_t clock_seq_and_node)
+    static UUID get_time_UUID_raw(decimicroseconds when, int64_t clock_seq_and_node)
     {
-        auto uuid = UUID(create_time(nanos), clock_seq_and_node);
+        auto uuid = UUID(create_time(when), clock_seq_and_node);
         assert(uuid.is_timestamp());
         return uuid;
     }
@@ -174,14 +190,11 @@ public:
      * @return a new UUID 'id' such that micros_timestamp(id) == when_in_micros. The UUID returned
      * by different calls will be unique even if when_in_micros is not.
      */
-    static UUID get_random_time_UUID_from_micros(int64_t when_in_micros) {
+    static UUID get_random_time_UUID_from_micros(std::chrono::microseconds when_in_micros) {
         static thread_local std::mt19937_64 rand_gen(std::random_device().operator()());
         static thread_local std::uniform_int_distribution<int64_t> rand_dist(std::numeric_limits<int64_t>::min());
 
-        int64_t when_in_millis = when_in_micros / 1000;
-        int64_t nanos = (when_in_micros - (when_in_millis * 1000)) * 10;
-
-        auto uuid = UUID(create_time(from_unix_timestamp(when_in_millis) + nanos), rand_dist(rand_gen));
+        auto uuid = UUID(create_time(from_unix_timestamp(when_in_micros)), rand_dist(rand_gen));
         assert(uuid.is_timestamp());
         return uuid;
     }
@@ -197,14 +210,14 @@ public:
     // \throws timeuuid_submicro_out_of_range
     //
     static std::array<int8_t, 16>
-    get_time_UUID_bytes_from_micros_and_submicros(int64_t when_in_micros, int submicros) {
+    get_time_UUID_bytes_from_micros_and_submicros(std::chrono::microseconds when_in_micros, int submicros) {
         std::array<int8_t, 16> uuid_bytes;
 
         if (submicros < 0 || submicros >= SUBMICRO_LIMIT) {
             throw timeuuid_submicro_out_of_range("timeuuid submicro component does not fit into available bits");
         }
 
-        auto dmc = from_unix_timestamp(std::chrono::microseconds(when_in_micros));
+        auto dmc = from_unix_timestamp(when_in_micros);
         // We have roughly 3 extra bits we will use to increase
         // sub-microsecond component range from clockseq's 2^14 to 2^17.
         int64_t msb = create_time(dmc + decimicroseconds((submicros >> 14) & 0b111));
@@ -281,9 +294,21 @@ public:
      *
      * @return a type 1 UUID represented as a byte[]
      */
-    static std::array<int8_t, 16> get_time_UUID_bytes()
-    {
-        return create_time_UUID_bytes(instance->create_time_safe());
+    static std::array<int8_t, 16> get_time_UUID_bytes() {
+
+        uint64_t msb = _instance.create_time_safe();
+        uint64_t lsb = clock_seq_and_node;
+        std::array<int8_t, 16> uuid_bytes;
+
+        for (int i = 0; i < 8; i++) {
+            uuid_bytes[i] = (int8_t) (msb >> 8 * (7 - i));
+        }
+
+        for (int i = 8; i < 16; i++) {
+            uuid_bytes[i] = (int8_t) (lsb >> 8 * (7 - (i - 8)));
+        }
+
+        return uuid_bytes;
     }
 
     /**
@@ -292,7 +317,7 @@ public:
      * <b>Warning:</b> this method should only be used for querying as this
      * doesn't at all guarantee the uniqueness of the resulting UUID.
      */
-    static UUID min_time_UUID(int64_t timestamp)
+    static UUID min_time_UUID(milliseconds timestamp = milliseconds{0})
     {
         auto uuid = UUID(create_time(from_unix_timestamp(timestamp)), MIN_CLOCK_SEQ_AND_NODE);
         assert(uuid.is_timestamp());
@@ -305,13 +330,13 @@ public:
      * <b>Warning:</b> this method should only be used for querying as this
      * doesn't at all guarantee the uniqueness of the resulting UUID.
      */
-    static UUID max_time_UUID(int64_t timestamp)
+    static UUID max_time_UUID(milliseconds timestamp)
     {
         // unix timestamp are milliseconds precision, uuid timestamp are 100's
         // nanoseconds precision. If we ask for the biggest uuid have unix
         // timestamp 1ms, then we should not extend 100's nanoseconds
         // precision by taking 10000, but rather 19999.
-        int64_t uuid_tstamp = from_unix_timestamp(timestamp + 1) - 1;
+        decimicroseconds uuid_tstamp = from_unix_timestamp(timestamp + milliseconds(1)) - decimicroseconds(1);
         auto uuid = UUID(create_time(uuid_tstamp), MAX_CLOCK_SEQ_AND_NODE);
         assert(uuid.is_timestamp());
         return uuid;
@@ -321,9 +346,9 @@ public:
      * @param uuid
      * @return milliseconds since Unix epoch
      */
-    static int64_t unix_timestamp(UUID uuid)
+    static milliseconds unix_timestamp(UUID uuid)
     {
-        return (uuid.timestamp() / 10000) + START_EPOCH;
+        return duration_cast<milliseconds>(decimicroseconds(uuid.timestamp()) + START_EPOCH);
     }
 
     /**
@@ -342,109 +367,20 @@ public:
      */
     static int64_t micros_timestamp(UUID uuid)
     {
-        return (uuid.timestamp() / 10) + START_EPOCH * 1000;
+        return (uuid.timestamp() + START_EPOCH.count())/10;
     }
 
-private:
+    template <std::intmax_t N, std::intmax_t D>
+    static bool is_valid_unix_timestamp(std::chrono::duration<int64_t, std::ratio<N, D>> d) {
+        return duration_cast<milliseconds>(d) < UUID_UNIXTIME_MAX;
+    }
+
     template <std::intmax_t N, std::intmax_t D>
     static decimicroseconds from_unix_timestamp(std::chrono::duration<int64_t, std::ratio<N, D>> d) {
-        return d - std::chrono::milliseconds(START_EPOCH);
-    }
-    /**
-     * @param timestamp milliseconds since Unix epoch
-     * @return
-     */
-    static int64_t from_unix_timestamp(int64_t timestamp) {
-        return (timestamp - START_EPOCH) * 10000;
-    }
-
-public:
-    /**
-     * Converts a 100-nanoseconds precision timestamp into the 16 byte representation
-     * of a type 1 UUID (a time-based UUID).
-     *
-     * To specify a 100-nanoseconds precision timestamp, one should provide a milliseconds timestamp and
-     * a number 0 <= n < 10000 such that n*100 is the number of nanoseconds within that millisecond.
-     *
-     * <p><i><b>Warning:</b> This method is not guaranteed to return unique UUIDs; Multiple
-     * invocations using identical timestamps will result in identical UUIDs.</i></p>
-     *
-     * @return a type 1 UUID represented as a byte[]
-     */
-    static std::array<int8_t, 16> get_time_UUID_bytes(int64_t time_millis, int nanos)
-    {
-#if 0
-        if (nanos >= 10000)
-            throw new IllegalArgumentException();
-#endif
-        return create_time_UUID_bytes(instance->create_time_unsafe(time_millis, nanos));
-    }
-
-private:
-    static std::array<int8_t, 16> create_time_UUID_bytes(uint64_t msb)
-    {
-        uint64_t lsb = clock_seq_and_node;
-        std::array<int8_t, 16> uuid_bytes;
-
-        for (int i = 0; i < 8; i++)
-            uuid_bytes[i] = (int8_t) (msb >> 8 * (7 - i));
-
-        for (int i = 8; i < 16; i++)
-            uuid_bytes[i] = (int8_t) (lsb >> 8 * (7 - (i - 8)));
-
-        return uuid_bytes;
-    }
-
-public:
-    /**
-     * Returns a milliseconds-since-epoch value for a type-1 UUID.
-     *
-     * @param uuid a type-1 (time-based) UUID
-     * @return the number of milliseconds since the unix epoch
-     * @throws IllegalArgumentException if the UUID is not version 1
-     */
-    static int64_t get_adjusted_timestamp(UUID uuid)
-    {
-#if 0
-        if (uuid.version() != 1)
-            throw new IllegalArgumentException("incompatible with uuid version: "+uuid.version());
-#endif
-        return (uuid.timestamp() / 10000) + START_EPOCH;
-    }
-
-    static uint64_t make_nanos_since(int64_t millis) {
-        return (static_cast<uint64_t>(millis) - static_cast<uint64_t>(START_EPOCH)) * 10000;
-    }
-
-    // nanos_since must fit in 60 bits
-    static bool is_valid_nanos_since(uint64_t nanos_since) {
-        return !(0xf000000000000000UL & nanos_since);
-    }
-
-private:
-
-    // needs to return two different values for the same when.
-    // we can generate at most 10k UUIDs per ms.
-    // NOTE: In the original Java code this function was "synchronized". This isn't
-    // needed if we assume our code will run on just one CPU.
-    int64_t create_time_safe()
-    {
-        using namespace std::chrono;
-        int64_t millis = duration_cast<milliseconds>(
-                system_clock::now().time_since_epoch()).count();
-        uint64_t nanos_since = make_nanos_since(millis);
-        if (nanos_since > last_nanos)
-            last_nanos = nanos_since;
-        else
-            nanos_since = ++last_nanos;
-
-        return create_time(nanos_since);
-    }
-
-    int64_t create_time_unsafe(int64_t when, int nanos)
-    {
-        uint64_t nanos_since = make_nanos_since(when) + static_cast<uint64_t>(static_cast<int64_t>(nanos));
-        return create_time(nanos_since);
+        // Avoid 64-bit representation overflow when adding
+        // timeuuid epoch to nanosecond resolution time.
+        auto dmc = duration_cast<decimicroseconds>(d);
+        return dmc - START_EPOCH;
     }
 
     // std::chrono typeaware wrapper around create_time().
@@ -452,20 +388,14 @@ private:
     // the start of GMT epoch).
     template <std::intmax_t N, std::intmax_t D>
     static int64_t create_time(std::chrono::duration<int64_t, std::ratio<N, D>> d) {
-        return create_time(duration_cast<decimicroseconds>(d).count());
-    }
-
-public:
-
-    static int64_t create_time(uint64_t nanos_since)
-    {
-        uint64_t msb = 0L;
-        assert(is_valid_nanos_since(nanos_since));
-        msb |= (0x00000000ffffffffL & nanos_since) << 32;
-        msb |= (0x0000ffff00000000UL & nanos_since) >> 16;
-        msb |= (0x0fff000000000000UL & nanos_since) >> 48;
-        msb |= 0x0000000000001000L; // sets the version to 1.
-        return msb;
+        auto dmc = duration_cast<decimicroseconds>(d);
+        uint64_t msb = dmc.count();
+        // timeuuid time must fit in 60 bits
+        assert(!(0xf000000000000000UL & msb));
+        return ((0x00000000ffffffffL & msb) << 32 |
+               (0x0000ffff00000000UL & msb) >> 16 |
+               (0x0fff000000000000UL & msb) >> 48 |
+                0x0000000000001000L); // sets the version to 1.
     }
 };
 

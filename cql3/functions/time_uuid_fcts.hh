@@ -62,12 +62,11 @@ make_now_fct() {
     });
 }
 
-static int64_t get_valid_timestamp(const data_value& ts_obj) {
+static std::chrono::milliseconds get_valid_timestamp(const data_value& ts_obj) {
     auto ts = value_cast<db_clock::time_point>(ts_obj);
-    int64_t ms = ts.time_since_epoch().count();
-    auto nanos_since = utils::UUID_gen::make_nanos_since(ms);
-    if (!utils::UUID_gen::is_valid_nanos_since(nanos_since)) {
-        throw exceptions::server_exception(format("{}: timestamp is out of range. Must be in milliseconds since epoch", ms));
+    auto ms = ts.time_since_epoch();
+    if (!utils::UUID_gen::is_valid_unix_timestamp(ms)) {
+        throw exceptions::server_exception(format("{}: timestamp is out of range. Must be in milliseconds since epoch", ms.count()));
     }
     return ms;
 }
@@ -144,7 +143,7 @@ make_unix_timestamp_of_fct() {
         if (!bb) {
             return {};
         }
-        return {long_type->decompose(UUID_gen::unix_timestamp(get_valid_timeuuid(*bb)))};
+        return {long_type->decompose(UUID_gen::unix_timestamp(get_valid_timeuuid(*bb)).count())};
     });
 }
 
@@ -264,12 +263,12 @@ make_timeuuidtounixtimestamp_fct() {
         if (!bb) {
             return {};
         }
-        return {long_type->decompose(UUID_gen::unix_timestamp(get_valid_timeuuid(*bb)))};
+        return {long_type->decompose(UUID_gen::unix_timestamp(get_valid_timeuuid(*bb)).count())};
     });
 }
 
 inline bytes time_point_to_long(const data_value& v) {
-    return serialized(get_valid_timestamp(v));
+    return serialized(get_valid_timestamp(v).count());
 }
 
 inline

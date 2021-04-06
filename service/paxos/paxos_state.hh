@@ -100,7 +100,7 @@ private:
         return _paxos_table_lock.with_locked_key(key, timeout, std::move(func));
     }
 
-    utils::UUID _promised_ballot = utils::UUID_gen::min_time_UUID(0);
+    utils::UUID _promised_ballot = utils::UUID_gen::min_time_UUID();
     std::optional<proposal> _accepted_proposal;
     std::optional<proposal> _most_recent_commit;
 

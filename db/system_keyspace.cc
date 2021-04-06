@@ -2090,7 +2090,7 @@ future<service::paxos::paxos_state> load_paxos_state(partition_key_view key, sch
         }
         auto& row = results->one();
         auto promised = row.has("promise")
-                        ? row.get_as<utils::UUID>("promise") : utils::UUID_gen::min_time_UUID(0);
+                        ? row.get_as<utils::UUID>("promise") : utils::UUID_gen::min_time_UUID();
 
         std::optional<service::paxos::proposal> accepted;
         if (row.has("proposal")) {

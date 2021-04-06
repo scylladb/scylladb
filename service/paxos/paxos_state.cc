@@ -188,7 +188,7 @@ future<> paxos_state::learn(schema_ptr schema, proposal decision, clock_type::ti
 
         table& cf = get_local_storage_proxy().get_db().local().find_column_family(schema);
         db_clock::time_point t = cf.get_truncation_record();
-        auto truncated_at = std::chrono::duration_cast<std::chrono::milliseconds>(t.time_since_epoch()).count();
+        auto truncated_at = std::chrono::duration_cast<std::chrono::milliseconds>(t.time_since_epoch());
         // When saving a decision, also delete the last accepted proposal. This is just an
         // optimization to save space.
         // Even though there is no guarantee we will see decisions in the right order,
