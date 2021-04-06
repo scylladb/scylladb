@@ -528,6 +528,7 @@ set(scylla_sources
     repair/row.cc
     repair/row_level.cc
     repair/row_level_repair.cc
+    repair/repair_meta.cc
     row_cache.cc
     schema.cc
     schema_mutations.cc

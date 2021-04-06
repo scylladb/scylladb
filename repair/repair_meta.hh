@@ -413,3 +413,8 @@ public:
     // RPC handler
     future<> put_row_diff_handler(repair_rows_on_wire rows, gms::inet_address from);
 };
+
+extern lw_shared_ptr<repair_meta> get_repair_meta(gms::inet_address from, uint32_t repair_meta_id);
+extern future<> insert_repair_meta(const gms::inet_address& from, uint32_t src_cpu_id, uint32_t repair_meta_id, dht::token_range range, row_level_diff_detect_algorithm algo, uint64_t max_row_buf_size, uint64_t seed, shard_config master_node_shard_config, table_schema_version schema_version, streaming::stream_reason reason);extern future<> remove_repair_meta(const gms::inet_address& from, uint32_t repair_meta_id, sstring ks_name, sstring cf_name, dht::token_range range);
+extern future<> remove_repair_meta(gms::inet_address from);
+extern future<> remove_repair_meta();
