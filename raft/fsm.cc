@@ -413,7 +413,7 @@ void fsm::maybe_commit() {
 }
 
 void fsm::tick_leader() {
-    if (_clock.now() - _last_election_time >= ELECTION_TIMEOUT) {
+    if (election_elapsed() >= ELECTION_TIMEOUT) {
         // 6.2 Routing requests to the leader
         // A leader in Raft steps down if an election timeout
         // elapses without a successful round of heartbeats to a majority
