@@ -49,6 +49,29 @@ def run_cassandra_cmd(pid, dir):
     env = { 'CASSANDRA_CONF': confdir,
             'CASSANDRA_LOG_DIR': logsdir,
             'CASSANDRA_INCLUDE': '' }
+    # On JVM 11, Cassandra requires a bunch of configuration options in
+    # conf/jvm11-server.options, or it fails loading classes because of JPMS.
+    # The following options were copied from Cassandra's jvm11-server.options.
+    # Note that Cassandra's cassandra.in.sh script requires that the "-"
+    # appears as the first character of each line:
+    with open(os.path.join(confdir, 'jvm11-server.options'), 'w') as f:
+        print('-Djdk.attach.allowAttachSelf=true\n'
+              '--add-exports java.base/jdk.internal.misc=ALL-UNNAMED\n'
+              '--add-exports java.base/jdk.internal.ref=ALL-UNNAMED\n'
+              '--add-exports java.base/sun.nio.ch=ALL-UNNAMED\n'
+              '--add-exports java.management.rmi/com.sun.jmx.remote.internal.rmi=ALL-UNNAMED\n'
+              '--add-exports java.rmi/sun.rmi.registry=ALL-UNNAMED\n'
+              '--add-exports java.rmi/sun.rmi.server=ALL-UNNAMED\n'
+              '--add-exports java.sql/java.sql=ALL-UNNAMED\n'
+              '--add-opens java.base/java.lang.module=ALL-UNNAMED\n'
+              '--add-opens java.base/jdk.internal.loader=ALL-UNNAMED\n'
+              '--add-opens java.base/jdk.internal.ref=ALL-UNNAMED\n'
+              '--add-opens java.base/jdk.internal.reflect=ALL-UNNAMED\n'
+              '--add-opens java.base/jdk.internal.math=ALL-UNNAMED\n'
+              '--add-opens java.base/jdk.internal.module=ALL-UNNAMED\n'
+              '--add-opens java.base/jdk.internal.util.jar=ALL-UNNAMED\n'
+              '--add-opens jdk.management/com.sun.management.internal=ALL-UNNAMED\n',
+              file=f)
     return ([cassandra, '-f'], env)
 
 print('Cassandra is: ' + cassandra + '.')
