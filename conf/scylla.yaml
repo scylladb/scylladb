@@ -217,12 +217,12 @@ api_port: 10000
 # IP for the REST API server
 api_address: 127.0.0.1
 
-# Log WARN on any batch size exceeding this value. 5kb per batch by default.
+# Log WARN on any batch size exceeding this value. 128 kiB per batch by default.
 # Caution should be taken on increasing the size of this threshold as it can lead to node instability.
-batch_size_warn_threshold_in_kb: 5
+batch_size_warn_threshold_in_kb: 128
 
-# Fail any multiple-partition batch exceeding this value. 50kb (10x warn threshold) by default.
-batch_size_fail_threshold_in_kb: 50
+# Fail any multiple-partition batch exceeding this value. 1 MiB (8x warn threshold) by default.
+batch_size_fail_threshold_in_kb: 1024
 
 # Authentication backend, identifying users
 # Out of the box, Scylla provides org.apache.cassandra.auth.{AllowAllAuthenticator,
