@@ -424,10 +424,10 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , auto_bootstrap(this, "auto_bootstrap", value_status::Used, true,
         "This setting has been removed from default configuration. It makes new (non-seed) nodes automatically migrate the right data to themselves. Do not set this to false unless you really know what you are doing.\n"
         "Related information: Initializing a multiple node cluster (single data center) and Initializing a multiple node cluster (multiple data centers).")
-    , batch_size_warn_threshold_in_kb(this, "batch_size_warn_threshold_in_kb", value_status::Used, 5,
+    , batch_size_warn_threshold_in_kb(this, "batch_size_warn_threshold_in_kb", value_status::Used, 128,
         "Log WARN on any batch size exceeding this value in kilobytes. Caution should be taken on increasing the size of this threshold as it can lead to node instability.")
-    , batch_size_fail_threshold_in_kb(this, "batch_size_fail_threshold_in_kb", value_status::Used, 50,
-        "Fail any multiple-partition batch exceeding this value. 50kb (10x warn threshold) by default.")
+    , batch_size_fail_threshold_in_kb(this, "batch_size_fail_threshold_in_kb", value_status::Used, 1024,
+        "Fail any multiple-partition batch exceeding this value. 1 MiB (8x warn threshold) by default.")
     , broadcast_address(this, "broadcast_address", value_status::Used, {/* listen_address */},
         "The IP address a node tells other nodes in the cluster to contact it by. It allows public and private address to be different. For example, use the broadcast_address parameter in topologies where not all nodes have access to other nodes by their private IP addresses.\n"
         "If your Scylla cluster is deployed across multiple Amazon EC2 regions and you use the EC2MultiRegionSnitch , set the broadcast_address to public IP address of the node and the listen_address to the private IP.")
