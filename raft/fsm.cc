@@ -884,9 +884,11 @@ void fsm::transfer_leadership() {
 }
 
 void fsm::send_timeout_now(server_id id) {
+    logger.trace("send_timeout_now[{}] send timeout_now to {}", _my_id, id);
     send_to(id, timeout_now{_current_term});
     leader_state().timeout_now_sent = true;
     if (leader_state().tracker.leader_progress() == nullptr) {
+        logger.trace("send_timeout_now[{}] become follower", _my_id);
         become_follower({});
     }
 }
