@@ -1410,3 +1410,37 @@ BOOST_AUTO_TEST_CASE(test_leader_ignores_messages_with_current_term) {
     BOOST_REQUIRE_NO_THROW(msg1 = std::get<raft::vote_reply>(output.messages[0].second));
     BOOST_CHECK(!msg1.vote_granted);
 }
+
+BOOST_AUTO_TEST_CASE(test_leader_check_quorum) {
+    discrete_failure_detector fd;
+    server_id A_id = id(), B_id = id(), C_id = id(), D_id = id();
+
+    // 4 nodes 3 voting 1 non voting (quorum is 2)
+    raft::server_address_set nodes{raft::server_address{A_id}, raft::server_address{B_id},
+            raft::server_address{C_id}, raft::server_address{D_id, false}};
+
+    raft::log log(raft::snapshot{.idx = index_t{0}, .config = raft::configuration(nodes)});
+    auto A = create_follower(A_id, log, fd);
+    auto B = create_follower(B_id, log, fd);
+    auto C = create_follower(C_id, log, fd);
+    auto D = create_follower(D_id, log, fd);
+    election_timeout(A);
+    communicate(A, B, C, D);
+    BOOST_CHECK(A.is_leader());
+    // Just because timeout passes the leader does not stepdown if quorum of nodes is alive
+    election_timeout(A);
+    BOOST_CHECK(A.is_leader());
+    // One of voting members dies but the leader is still not steepping down because there is
+    // a quorum of nodes that are still alive
+    fd.mark_dead(C_id);
+    election_timeout(A);
+    BOOST_CHECK(A.is_leader());
+    // Non voting member dies and the leader is still not stepping down (there two voting members still)
+    fd.mark_dead(D_id);
+    election_timeout(A);
+    BOOST_CHECK(A.is_leader());
+    // One more voting members dies and the leader becomes a follower now
+    fd.mark_dead(B_id);
+    election_timeout(A);
+    BOOST_CHECK(!A.is_leader());
+}
