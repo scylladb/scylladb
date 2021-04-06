@@ -422,11 +422,12 @@ void fsm::tick_leader() {
         return become_follower(server_id{});
     }
 
-    size_t active = 1; // +1 for self
+    auto active =  leader_state().tracker.get_activity_tracker();
+    active(_my_id); // +1 for self
     for (auto& [id, progress] : leader_state().tracker) {
         if (progress.id != _my_id) {
             if (_failure_detector.is_alive(progress.id)) {
-                active++;
+                active(progress.id);
             }
             if (progress.state == follower_progress::state::PROBE) {
                 // allow one probe to be resent per follower per time tick
@@ -445,7 +446,7 @@ void fsm::tick_leader() {
             }
         }
     }
-    if (active >= leader_state().tracker.size()/2 + 1) {
+    if (active) {
         // Advance last election time if we heard from
         // the quorum during this tick.
         _last_election_time = _clock.now();
