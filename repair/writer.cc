@@ -30,8 +30,12 @@
 
 extern logging::logger rlogger;
 
-extern distributed<db::system_distributed_keyspace>* _sys_dist_ks;
-extern distributed<db::view::view_update_generator>* _view_update_generator;
+namespace repair {
+    inline distributed<db::system_distributed_keyspace> *_sys_dist_ks;
+    inline distributed<db::view::view_update_generator> *_view_update_generator;
+}
+
+using namespace repair;
 
 repair_writer::repair_writer(
     schema_ptr schema,

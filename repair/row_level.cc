@@ -66,11 +66,15 @@ struct shard_config {
     unsigned ignore_msb;
 };
 
-static bool inject_rpc_stream_error = false;
+namespace repair {
+    inline bool inject_rpc_stream_error = false;
 
-distributed<db::system_distributed_keyspace>* _sys_dist_ks;
-distributed<db::view::view_update_generator>* _view_update_generator;
-sharded<netw::messaging_service>* _messaging;
+    inline distributed<db::system_distributed_keyspace> *_sys_dist_ks;
+    inline distributed<db::view::view_update_generator> *_view_update_generator;
+    inline sharded<netw::messaging_service> *_messaging;
+}
+
+using namespace repair;
 
 enum class repair_state : uint16_t {
     unknown,
@@ -141,7 +145,9 @@ struct row_level_repair_metrics {
     }
 };
 
-static thread_local row_level_repair_metrics _metrics;
+namespace repair {
+    inline thread_local row_level_repair_metrics _metrics;
+}
 
 static const std::vector<row_level_diff_detect_algorithm>& suportted_diff_detect_algorithms() {
     static std::vector<row_level_diff_detect_algorithm> _algorithms = {
