@@ -186,6 +186,14 @@ void trace_state::add_prepared_query_options(const cql3::query_options& prepared
     }
 }
 
+static sstring param_key(const char *key, size_t index, size_t size) {
+    if (size > 1) {
+        return format("{}[{:d}]", key, index);
+    } else {
+        return sstring(key);
+    }
+}
+
 void trace_state::build_parameters_map() {
     if (!_params_ptr) {
         return;
@@ -211,14 +219,10 @@ void trace_state::build_parameters_map() {
     }
 
     auto& queries = vals.queries;
-    if (!queries.empty()) {
-        if (queries.size() == 1) {
-            params_map.emplace("query", queries[0]);
-        } else {
-            // BATCH
-            for (size_t i = 0; i < queries.size(); ++i) {
-                params_map.emplace(format("query[{:d}]", i), queries[i]);
-            }
+    const size_t qsize = queries.size();
+    if (qsize) {
+        for (size_t i = 0; i < qsize; ++i) {
+            params_map.emplace(param_key("query", i, qsize), queries[i]);
         }
     }
 
@@ -226,19 +230,14 @@ void trace_state::build_parameters_map() {
         params_map.emplace("user_timestamp", seastar::format("{:d}", *vals.user_timestamp));
     }
 
-    auto& prepared_statements = vals.prepared_statements;
-
-    if (!prepared_statements.empty()) {
+    auto& statements = vals.prepared_statements;
+    const size_t psize = statements.size();
+    if (psize) {
         // Parameter's key in the map will be "param[X]" for a single query CQL command and "param[Y][X] for a multiple
         // queries CQL command, where X is an index of the parameter in a corresponding query and Y is an index of the
         // corresponding query in the BATCH.
-        if (prepared_statements.size() == 1) {
-            build_parameters_map_for_one_prepared(_records, prepared_statements[0], vals.query_option_names[0], vals.query_option_values[0], "param");
-        } else {
-            // BATCH
-            for (size_t i = 0; i < prepared_statements.size(); ++i) {
-                build_parameters_map_for_one_prepared(_records, prepared_statements[i], vals.query_option_names[i], vals.query_option_values[i], format("param[{:d}]", i));
-            }
+        for (size_t i = 0; i < psize; ++i) {
+            build_parameters_map_for_one_prepared(_records, statements[i], vals.query_option_names[i], vals.query_option_values[i], param_key("param", i, psize));
         }
     }
 }
