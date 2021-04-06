@@ -527,6 +527,7 @@ set(scylla_sources
     repair/writer.cc
     repair/row.cc
     repair/row_level.cc
+    repair/row_level_repair.cc
     row_cache.cc
     schema.cc
     schema_mutations.cc

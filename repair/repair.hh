@@ -456,6 +456,11 @@ enum class row_level_diff_detect_algorithm : uint8_t {
     send_full_set_rpc_stream,
 };
 
+inline bool is_rpc_stream_supported(row_level_diff_detect_algorithm algo) {
+    // send_full_set is the only algorithm that does not support rpc stream
+    return algo != row_level_diff_detect_algorithm::send_full_set;
+}
+
 std::ostream& operator<<(std::ostream& out, row_level_diff_detect_algorithm algo);
 
 enum class node_ops_cmd : uint32_t {
