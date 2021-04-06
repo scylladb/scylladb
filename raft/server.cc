@@ -141,8 +141,9 @@ private:
     // Called to commit entries (on a leader or otherwise).
     void notify_waiters(std::map<index_t, op_status>& waiters, const std::vector<log_entry_ptr>& entries);
 
-    // Drop waiter that we lost track of, can happen due to a snapshot transfer.
-    void drop_waiters(std::map<index_t, op_status>& waiters, index_t idx);
+    // Drop waiter that we lost track of, can happen due to a snapshot transfer,
+    // or a leader removed from cluster while some entries added on it are uncommitted.
+    void drop_waiters(std::optional<index_t> idx = {});
 
     // This fiber processes FSM output by doing the following steps in order:
     //  - persist the current term and vote
@@ -330,17 +331,21 @@ void server_impl::notify_waiters(std::map<index_t, op_status>& waiters,
     }
 }
 
-void server_impl::drop_waiters(std::map<index_t, op_status>& waiters, index_t idx) {
-    while (waiters.size() != 0) {
-        auto it = waiters.begin();
-        if (it->first > idx) {
-            break;
+void server_impl::drop_waiters(std::optional<index_t> idx) {
+    auto drop = [&] (std::map<index_t, op_status>& waiters) {
+        while (waiters.size() != 0) {
+            auto it = waiters.begin();
+            if (idx && it->first > *idx) {
+                break;
+            }
+            auto [entry_idx, status] = std::move(*it);
+            waiters.erase(it);
+            status.done.set_exception(commit_status_unknown());
+            _stats.waiters_dropped++;
         }
-        auto [entry_idx, status] = std::move(*it);
-        waiters.erase(it);
-        status.done.set_exception(commit_status_unknown());
-        _stats.waiters_dropped++;
-    }
+    };
+    drop(_awaited_commits);
+    drop(_awaited_applies);
 }
 
 template <typename Message>
@@ -426,7 +431,7 @@ future<> server_impl::io_fiber(index_t last_stable) {
                     logger.trace("[{}] io_fiber applying snapshot {}", _id, batch.snp->id);
                     co_await _state_machine->load_snapshot(batch.snp->id);
                     _state_machine->drop_snapshot(_last_loaded_snapshot_id);
-                    drop_waiters(_awaited_commits, batch.snp->idx);
+                    drop_waiters(batch.snp->idx);
                     _last_loaded_snapshot_id = batch.snp->id;
                     _stats.sm_load_snapshot++;
                 }
@@ -484,6 +489,12 @@ future<> server_impl::io_fiber(index_t last_stable) {
                 notify_waiters(_awaited_commits, batch.committed);
                 _stats.queue_entries_for_apply += batch.committed.size();
                 co_await _apply_entries.writer.write(std::move(batch.committed));
+            }
+
+            if (!_fsm->is_leader() && !_current_rpc_config.contains(server_address{_id})) {
+                // If the node is no longer part of a config and no longer the leader
+                // it will never know the status of entries it submitted
+                drop_waiters();
             }
         }
     } catch (seastar::broken_condition_variable&) {
