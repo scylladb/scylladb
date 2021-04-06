@@ -2449,6 +2449,14 @@ std::vector<sstring> db::commitlog::get_active_segment_names() const {
     return _segment_manager->get_active_names();
 }
 
+uint64_t db::commitlog::disk_limit() const {
+    return _segment_manager->max_disk_size;
+}
+
+uint64_t db::commitlog::disk_footprint() const {
+    return _segment_manager->totals.total_size_on_disk;
+}
+
 uint64_t db::commitlog::get_total_size() const {
     return _segment_manager->totals.active_size_on_disk + _segment_manager->totals.buffer_list_bytes;
 }
