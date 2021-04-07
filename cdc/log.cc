@@ -953,7 +953,7 @@ public:
     // by prefixing the original name with ``cdc$deleted_elements_''.
     // Given a reference to such a column from the base schema, this function sets the corresponding column
     // in the log to the given set of keys for the given row.
-    void set_deleted_elements(const clustering_key& log_ck, const column_definition& base_cdef, bytes deleted_elements) {
+    void set_deleted_elements(const clustering_key& log_ck, const column_definition& base_cdef, const managed_bytes& deleted_elements) {
         auto& log_cdef = *_log_schema.get_column_definition(log_data_column_deleted_elements_name_bytes(base_cdef.name()));
         _log_mut.set_cell(log_ck, log_cdef, atomic_cell::make_live(*log_cdef.type, _ts, deleted_elements, _ttl));
     }
@@ -1087,7 +1087,7 @@ struct process_row_visitor {
         // See `set_visitor`, `udt_visitior`, and `map_or_list_visitor` below.
         struct collection_visitor {
             bool _is_column_delete = false;
-            std::vector<bytes_view> _deleted_keys;
+            std::vector<managed_bytes_view> _deleted_keys;
 
             ttl_opt& _ttl_column;
 
@@ -1106,7 +1106,7 @@ struct process_row_visitor {
 
 
         // cdc$deleted_col, cdc$deleted_elements_col, col
-        using result_t = std::tuple<bool, std::vector<bytes_view>, bytes_opt>;
+        using result_t = std::tuple<bool, std::vector<managed_bytes_view>, bytes_opt>;
         auto result = visit(*cdef.type, make_visitor(
             [&] (const set_type_impl&) -> result_t {
                 _touched_parts.set<stats::part_type::SET>();
@@ -1203,9 +1203,9 @@ struct process_row_visitor {
 
         // FIXME: we're doing redundant work: first we serialize the set of deleted keys into a blob,
         // then we deserialize again when merging images below
-        bytes_opt deleted_elements = std::nullopt;
+        managed_bytes_opt deleted_elements = std::nullopt;
         if (!deleted_keys.empty()) {
-            deleted_elements = set_type_impl::serialize_partially_deserialized_form(deleted_keys, cql_serialization_format::internal());
+            deleted_elements = set_type_impl::serialize_partially_deserialized_form_fragmented(deleted_keys, cql_serialization_format::internal());
         }
 
         // delta
@@ -1233,7 +1233,7 @@ struct process_row_visitor {
             managed_bytes_opt next;
             if (added_cells || (deleted_elements && prev)) {
                 next = visit(*cdef.type, [&] (const auto& type) -> managed_bytes {
-                    return merge(type, prev, to_managed_bytes_opt(added_cells), to_managed_bytes_opt(deleted_elements));
+                    return merge(type, prev, to_managed_bytes_opt(added_cells), deleted_elements);
                 });
             }
 
