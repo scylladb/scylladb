@@ -104,12 +104,19 @@ struct configuration {
     configuration(std::initializer_list<server_id> ids) {
         current.reserve(ids.size());
         for (auto&& id : ids) {
+            if (id == server_id{}) {
+                throw std::invalid_argument("raft::configuration: id zero is not supported");
+            }
             current.emplace(server_address{std::move(id)});
         }
     }
 
     configuration(server_address_set current_arg = {}, server_address_set previous_arg = {})
-        : current(std::move(current_arg)), previous(std::move(previous_arg)) {}
+        : current(std::move(current_arg)), previous(std::move(previous_arg)) {
+            if (current.count(server_address{server_id()}) || previous.count(server_address{server_id()})) {
+                throw std::invalid_argument("raft::configuration: id zero is not supported");
+            }
+        }
 
     // Return true if the previous configuration is still
     // in use

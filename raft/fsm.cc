@@ -28,6 +28,9 @@ fsm::fsm(server_id id, term_t current_term, server_id voted_for, log log,
         failure_detector& failure_detector, fsm_config config) :
         _my_id(id), _current_term(current_term), _voted_for(voted_for),
         _log(std::move(log)), _failure_detector(failure_detector), _config(config) {
+    if (id == raft::server_id{}) {
+        throw std::invalid_argument("raft::fsm: raft instance cannot have id zero");
+    }
     // The snapshot can not contain uncommitted entries
     _commit_idx = _log.get_snapshot().idx;
     _observed.advance(*this);
