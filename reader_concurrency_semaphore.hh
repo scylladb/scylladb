@@ -23,6 +23,7 @@
 
 #include <boost/intrusive/list.hpp>
 #include <seastar/core/future.hh>
+#include <seastar/core/gate.hh>
 #include "reader_permit.hh"
 #include "flat_mutation_reader.hh"
 
@@ -171,8 +172,10 @@ private:
     stats _stats;
     std::unique_ptr<permit_list> _permit_list;
     bool _stopped = false;
+    gate _close_readers_gate;
 
 private:
+    [[nodiscard]] flat_mutation_reader detach_inactive_reader(inactive_read&, evict_reason reason) noexcept;
     void evict(inactive_read&, evict_reason reason) noexcept;
 
     bool has_available_units(const resources& r) const;
@@ -180,7 +183,7 @@ private:
     // Add the permit to the wait queue and return the future which resolves when
     // the permit is admitted (popped from the queue).
     future<reader_permit::resource_units> enqueue_waiter(reader_permit permit, resources r, db::timeout_clock::time_point timeout);
-
+    void evict_readers_in_background();
     future<reader_permit::resource_units> do_wait_admission(reader_permit permit, size_t memory, db::timeout_clock::time_point timeout);
 
     std::runtime_error stopped_exception();

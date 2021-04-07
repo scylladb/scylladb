@@ -510,11 +510,13 @@ future<> reader_concurrency_semaphore::stop() noexcept {
     assert(!_stopped);
     _stopped = true;
     clear_inactive_reads();
+    co_await _close_readers_gate.close();
     broken(std::make_exception_ptr(stopped_exception()));
     co_return;
 }
 
-void reader_concurrency_semaphore::evict(inactive_read& ir, evict_reason reason) noexcept {
+flat_mutation_reader reader_concurrency_semaphore::detach_inactive_reader(inactive_read& ir, evict_reason reason) noexcept {
+    auto reader = std::move(ir.reader);
     ir.detach();
     std::unique_ptr<inactive_read> irp(&ir);
     try {
@@ -535,6 +537,12 @@ void reader_concurrency_semaphore::evict(inactive_read& ir, evict_reason reason)
             break;
     }
     --_stats.inactive_reads;
+    return std::move(reader);
+}
+
+void reader_concurrency_semaphore::evict(inactive_read& ir, evict_reason reason) noexcept {
+    auto&& reader = detach_inactive_reader(ir, reason);
+    // FIXME: close reader
 }
 
 bool reader_concurrency_semaphore::has_available_units(const resources& r) const {
@@ -563,22 +571,33 @@ future<reader_permit::resource_units> reader_concurrency_semaphore::enqueue_wait
     return fut;
 }
 
+void reader_concurrency_semaphore::evict_readers_in_background() {
+    // Evict inactive readers in the background while wait list isn't empty
+    // This is safe since stop() closes _gate;
+    (void)with_gate(_close_readers_gate, [this] {
+        return do_until([this] { return _wait_list.empty() || _inactive_reads.empty(); }, [this] {
+            return detach_inactive_reader(_inactive_reads.front(), evict_reason::permit).close();
+        });
+    });
+ }
+
 future<reader_permit::resource_units> reader_concurrency_semaphore::do_wait_admission(reader_permit permit, size_t memory,
         db::timeout_clock::time_point timeout) {
     auto r = resources(1, static_cast<ssize_t>(memory));
+    auto first = _wait_list.empty();
 
-    if (!_wait_list.empty()) {
-        return enqueue_waiter(std::move(permit), r, timeout);
+    if (first && has_available_units(r)) {
+        permit.on_admission();
+        return make_ready_future<reader_permit::resource_units>(reader_permit::resource_units(std::move(permit), r));
     }
 
-    while (!has_available_units(r)) {
-        if (!try_evict_one_inactive_read(evict_reason::permit)) {
-            return enqueue_waiter(std::move(permit), r, timeout);
-        }
+    auto fut = enqueue_waiter(std::move(permit), r, timeout);
+
+    if (first && !_inactive_reads.empty()) {
+        evict_readers_in_background();
     }
 
-    permit.on_admission();
-    return make_ready_future<reader_permit::resource_units>(reader_permit::resource_units(std::move(permit), r));
+    return fut;
 }
 
 reader_permit reader_concurrency_semaphore::make_permit(const schema* const schema, const char* const op_name) {
