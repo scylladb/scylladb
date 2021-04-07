@@ -336,6 +336,16 @@ public:
      */
     uint64_t max_active_flushes() const;
 
+    /**
+     * Return disk footprint
+     */
+    uint64_t disk_footprint() const;
+
+    /**
+     * Return configured disk footprint limit
+     */
+    uint64_t disk_limit() const;
+
     future<> clear();
 
     const config& active_config() const;
