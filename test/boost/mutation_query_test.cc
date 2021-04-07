@@ -542,6 +542,14 @@ SEASTAR_TEST_CASE(test_partition_limit) {
     });
 }
 
+static void data_query(schema_ptr s, const mutation_source& source, const dht::partition_range& range, const query::partition_slice& slice,
+        query::result::builder& builder) {
+    auto querier = query::data_querier(source, s, tests::make_permit(), range, slice, service::get_local_sstable_query_read_priority(), {});
+    auto qrb = query_result_builder(*s, builder);
+    querier.consume_page(std::move(qrb), std::numeric_limits<uint32_t>::max(), std::numeric_limits<uint32_t>::max(), gc_clock::now(), db::no_timeout,
+            query::max_result_size(std::numeric_limits<uint64_t>::max())).get();
+}
+
 SEASTAR_THREAD_TEST_CASE(test_result_size_calculation) {
     random_mutation_generator gen(random_mutation_generator::generate_counters::no);
     std::vector<mutation> mutations = gen(1);
@@ -553,13 +561,11 @@ SEASTAR_THREAD_TEST_CASE(test_result_size_calculation) {
 
     query::result::builder digest_only_builder(slice, query::result_options{query::result_request::only_digest, query::digest_algorithm::xxHash},
             l.new_digest_read(query::max_result_size(query::result_memory_limiter::maximum_result_size), query::short_read::yes).get0());
-    data_query(s, source, query::full_partition_range, slice, std::numeric_limits<uint32_t>::max(), std::numeric_limits<uint32_t>::max(),
-            gc_clock::now(), digest_only_builder, db::no_timeout, tests::make_query_class_config()).get0();
+    data_query(s, source, query::full_partition_range, slice, digest_only_builder);
 
     query::result::builder result_and_digest_builder(slice, query::result_options{query::result_request::result_and_digest, query::digest_algorithm::xxHash},
             l.new_data_read(query::max_result_size(query::result_memory_limiter::maximum_result_size), query::short_read::yes).get0());
-    data_query(s, source, query::full_partition_range, slice, std::numeric_limits<uint32_t>::max(), std::numeric_limits<uint32_t>::max(),
-            gc_clock::now(), result_and_digest_builder, db::no_timeout, tests::make_query_class_config()).get0();
+    data_query(s, source, query::full_partition_range, slice, result_and_digest_builder);
 
     BOOST_REQUIRE_EQUAL(digest_only_builder.memory_accounter().used_memory(), result_and_digest_builder.memory_accounter().used_memory());
 }
