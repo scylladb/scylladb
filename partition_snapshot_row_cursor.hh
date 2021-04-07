@@ -189,6 +189,7 @@ class partition_snapshot_row_cursor final {
             first = false;
         }
         boost::range::make_heap(_heap, heap_less);
+        _change_mark = _snp.get_change_mark();
     }
 
     // Advances the cursor to the next row.
@@ -246,7 +247,6 @@ public:
     // Otherwise returns false and the cursor is left not pointing at a row and invalid.
     bool maybe_advance_to(position_in_partition_view pos) {
         prepare_heap(pos);
-        _change_mark = _snp.get_change_mark();
         return recreate_current_row();
     }
 
@@ -323,7 +323,6 @@ public:
     // When throws, the cursor is invalidated and its position is not changed.
     bool advance_to(position_in_partition_view lower_bound) {
         prepare_heap(lower_bound);
-        _change_mark = _snp.get_change_mark();
         bool found = no_clustering_row_between(_schema, lower_bound, _heap[0].it->position());
         recreate_current_row();
         return found;
