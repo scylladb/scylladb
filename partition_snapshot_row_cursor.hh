@@ -274,10 +274,10 @@ public:
         // insertions for non-latest versions, so we don't have to update them.
         if (_current_row[0].version_no != 0) {
             rows_entry::tri_compare cmp(_schema);
-            position_in_partition::equal_compare eq(_schema);
             position_in_version::less_compare heap_less(_schema);
             auto& rows = _snp.version()->partition().clustered_rows();
-            auto it = rows.lower_bound(_position, cmp);
+            bool match;
+            auto it = rows.lower_bound(_position, match, cmp);
             _latest_it = it;
             auto heap_i = boost::find_if(_heap, [](auto&& v) { return v.version_no == 0; });
             if (it == rows.end()) {
@@ -285,7 +285,7 @@ public:
                     _heap.erase(heap_i);
                     boost::range::make_heap(_heap, heap_less);
                 }
-            } else if (eq(_position, it->position())) {
+            } else if (match) {
                 _current_row.insert(_current_row.begin(), position_in_version{it, rows.end(), 0});
                 if (heap_i != _heap.end()) {
                     _heap.erase(heap_i);
