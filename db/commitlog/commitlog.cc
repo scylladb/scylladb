@@ -1511,7 +1511,9 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
     if (!cfg.allow_going_over_size_limit && max_disk_size != 0 && totals.total_size_on_disk >= max_disk_size) {
         clogger.debug("Disk usage ({} MB) exceeds maximum ({} MB) - allocation will wait...", totals.total_size_on_disk/(1024*1024), max_disk_size/(1024*1024));
         auto f = cfg.reuse_segments ? _recycled_segments.not_empty() :  _disk_deletions.get_shared_future();
-        return f.then([this] {
+        return f.handle_exception([this](auto ep) {
+            clogger.warn("Exception while waiting for segments {}. Will retry allocation...", ep);
+        }).then([this] {
             return allocate_segment();
         });
     }
@@ -1741,41 +1743,79 @@ future<> db::commitlog::segment_manager::delete_file(const sstring& filename) {
 }
 
 future<> db::commitlog::segment_manager::delete_segments(std::vector<sstring> files) {
-    auto i = files.begin();
-    auto e = files.end();
+    if (files.empty()) {
+        co_return;
+    }
 
-    return parallel_for_each(i, e, [this](auto& filename) {
-        auto f = make_ready_future();
-        auto exts = cfg.extensions;
-        if (exts && !exts->commitlog_file_extensions().empty()) {
-            f = parallel_for_each(exts->commitlog_file_extensions(), [&](auto& ext) {
-                return ext->before_delete(filename);
-            });
-        }
-        return f.finally([&] {
-            // We allow reuse of the segment if the current disk size is less than shard max.
-            auto usage = totals.total_size_on_disk;
-            if (!_shutdown && cfg.reuse_segments && usage <= max_disk_size) {
-                descriptor d(next_id(), "Recycled-" + cfg.fname_prefix);
-                auto dst = this->filename(d);
+    clogger.debug("Delete segments {}", files);
 
-                clogger.debug("Recycling segment file {}", filename);
-                // must rename the file since we must ensure the
-                // data is not replayed. Changing the name will
-                // cause header ID to be invalid in the file -> ignored
-                return rename_file(filename, dst).then([this, dst]() mutable {
-                    auto b = _recycled_segments.push(std::move(dst));
-                    assert(b); // we set this to max_size_t so...
-                    return make_ready_future<>();
-                }).handle_exception([this, filename](auto&&) {
-                    return delete_file(filename);
-                });
+    std::exception_ptr recycle_error;
+
+    while (!files.empty()) {
+        auto filename = std::move(files.back());
+        files.pop_back();
+
+        try {
+            auto exts = cfg.extensions;
+            if (exts && !exts->commitlog_file_extensions().empty()) {
+                for (auto& ext : exts->commitlog_file_extensions()) {
+                    co_await ext->before_delete(filename);
+                }
             }
-            return delete_file(filename);
-        }).handle_exception([&filename](auto ep) {
-            clogger.error("Could not delete segment {}: {}", filename, ep);
-        });
-    }).finally([files = std::move(files)] {});
+
+            // We allow reuse of the segment if the current disk size is less than shard max.
+            if (!_shutdown && cfg.reuse_segments) {
+                auto usage = totals.total_size_on_disk;
+                auto recycle = usage <= max_disk_size;
+
+                // if total size is not a multiple of segment size, we need
+                // to check if we are the overlap segment, and noone else
+                // can be recycled. If so, let this one live so allocation
+                // can proceed. We assume/hope a future delete will kill
+                // files down to under the threshold, but we should expect
+                // to stomp around nearest multiple of segment size, not 
+                // the actual limit.
+                if (!recycle && _recycled_segments.empty() && files.empty()) {
+                    auto size = co_await seastar::file_size(filename);
+                    recycle = (usage - size) <= max_disk_size;
+                }
+
+                if (recycle) {
+                    descriptor d(next_id(), "Recycled-" + cfg.fname_prefix);
+                    auto dst = this->filename(d);
+
+                    clogger.debug("Recycling segment file {}", filename);
+                    // must rename the file since we must ensure the
+                    // data is not replayed. Changing the name will
+                    // cause header ID to be invalid in the file -> ignored
+                    try {
+                        co_await rename_file(filename, dst);
+                        auto b = _recycled_segments.push(std::move(dst));
+                        assert(b); // we set this to max_size_t so...
+                        continue;
+                    } catch (...) {
+                        recycle_error = std::current_exception();
+                        // fallthrough
+                    }
+                }
+            }
+            co_await delete_file(filename);
+        } catch (...) {
+            clogger.error("Could not delete segment {}: {}", filename, std::current_exception());
+        }
+    }
+
+    // #8376 - if we had an error in recycling (disk rename?), and no elements
+    // are available, we could have waiters hoping they will get segements.
+    // abort the queue (wakes up any existing waiters - futures), and let them
+    // retry. Since we did deletions instead, disk footprint should allow
+    // for new allocs at least. Or more likely, everything is broken, but
+    // we will at least make more noise.
+    if (recycle_error && _recycled_segments.empty()) {
+        _recycled_segments.abort(recycle_error);
+        // and ensure next lap(s) still has a queue
+        _recycled_segments = queue<sstring>(std::numeric_limits<size_t>::max());
+    }
 }
 
 future<> db::commitlog::segment_manager::do_pending_deletes() {
@@ -2447,6 +2487,14 @@ db::commitlog::read_log_file(const sstring& filename, const sstring& pfx, seasta
 
 std::vector<sstring> db::commitlog::get_active_segment_names() const {
     return _segment_manager->get_active_names();
+}
+
+uint64_t db::commitlog::disk_limit() const {
+    return _segment_manager->max_disk_size;
+}
+
+uint64_t db::commitlog::disk_footprint() const {
+    return _segment_manager->totals.total_size_on_disk;
 }
 
 uint64_t db::commitlog::get_total_size() const {
