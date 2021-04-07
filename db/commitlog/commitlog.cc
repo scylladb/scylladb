@@ -1137,7 +1137,7 @@ db::commitlog::segment_manager::segment_manager(config c)
 
         return cfg;
     }())
-    , max_size(std::min<size_t>(std::numeric_limits<position_type>::max(), std::max<size_t>(cfg.commitlog_segment_size_in_mb, 1) * 1024 * 1024))
+    , max_size(std::min<size_t>(std::numeric_limits<position_type>::max() / (1024 * 1024), std::max<size_t>(cfg.commitlog_segment_size_in_mb, 1)) * 1024 * 1024)
     , max_mutation_size(max_size >> 1)
     , max_disk_size(size_t(std::ceil(cfg.commitlog_total_space_in_mb / double(smp::count))) * 1024 * 1024)
     // our threshold for trying to force a flush. needs heristics, for now max - segment_size/2.
@@ -1446,6 +1446,9 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
                         m += s;
                     }
                     auto s = co_await f.dma_write(max_size - rem, std::move(v), service::get_local_commitlog_priority());
+                    if (!s) [[unlikely]] {
+                        on_internal_error(clogger, format("dma_write returned 0: max_size={} rem={} iovec.n={}", max_size, rem, n));
+                    }
                     rem -= s;
                 }
 
