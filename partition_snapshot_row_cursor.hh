@@ -128,8 +128,8 @@ class partition_snapshot_row_cursor final {
     const schema& _schema;
     partition_snapshot& _snp;
     utils::small_vector<position_in_version, 2> _heap;
-    utils::small_vector<mutation_partition::rows_type::iterator, 2> _iterators;
     utils::small_vector<position_in_version, 2> _current_row;
+    std::optional<mutation_partition::rows_type::iterator> _latest_it;
     bool _continuous{};
     bool _dummy{};
     const bool _unique_owner;
@@ -166,7 +166,7 @@ class partition_snapshot_row_cursor final {
         position_in_version::less_compare heap_less(_schema);
         _heap.clear();
         _current_row.clear();
-        _iterators.clear();
+        _latest_it.reset();
         int version_no = 0;
         bool unique_owner = _unique_owner;
         bool first = true;
@@ -175,7 +175,9 @@ class partition_snapshot_row_cursor final {
             auto& rows = v.partition().clustered_rows();
             auto pos = rows.lower_bound(lower_bound, cmp);
             auto end = rows.end();
-            _iterators.push_back(pos);
+            if (first) {
+                _latest_it = pos;
+            }
             if (pos != end) {
                 _heap.push_back({pos, end, version_no, unique_owner});
             }
@@ -193,7 +195,8 @@ public:
     { }
 
     mutation_partition::rows_type::iterator get_iterator_in_latest_version() const {
-        return _iterators[0];
+        assert(_latest_it);
+        return *_latest_it;
     }
 
     // Returns true iff the iterators obtained since the cursor was last made valid
@@ -242,7 +245,8 @@ public:
             position_in_partition::equal_compare eq(_schema);
             position_in_version::less_compare heap_less(_schema);
             auto& rows = _snp.version()->partition().clustered_rows();
-            auto it = _iterators[0] = rows.lower_bound(_position, cmp);
+            auto it = rows.lower_bound(_position, cmp);
+            _latest_it = it;
             auto heap_i = boost::find_if(_heap, [](auto&& v) { return v.version_no == 0; });
             if (it == rows.end()) {
                 if (heap_i != _heap.end()) {
@@ -308,7 +312,9 @@ public:
         assert(iterators_valid());
         for (auto&& curr : _current_row) {
             ++curr.it;
-            _iterators[curr.version_no] = curr.it;
+            if (curr.version_no == 0) {
+                _latest_it = curr.it;
+            }
             if (curr.it != curr.end) {
                 _heap.push_back(curr);
                 boost::range::push_heap(_heap, heap_less);
@@ -336,7 +342,9 @@ public:
             } else {
                 ++curr.it;
             }
-            _iterators[curr.version_no] = curr.it;
+            if (curr.version_no == 0) {
+                _latest_it = curr.it;
+            }
             if (curr.it != curr.end) {
                 _heap.push_back(curr);
                 boost::range::push_heap(_heap, heap_less);
@@ -514,20 +522,16 @@ public:
             first = false;
             out << "{v=" << v.version_no << ", pos=" << v.it->position() << ", cont=" << v.it->continuous() << "}";
         }
-        out << "], iterators=[\n  ";
-        first = true;
-        auto v = cur._snp.versions().begin();
-        for (auto&& i : cur._iterators) {
-            if (!first) {
-                out << ",\n  ";
-            }
-            first = false;
-            if (i == v->partition().clustered_rows().end()) {
+        out << "], latest_iterator=[";
+        if (cur._latest_it) {
+            mutation_partition::rows_type::iterator i = *cur._latest_it;
+            if (!i) {
                 out << "end";
             } else {
                 out << i->position();
             }
-            ++v;
+        } else {
+            out << "<none>";
         }
         return out << "]}";
     };
