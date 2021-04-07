@@ -1826,6 +1826,10 @@ future<> table::populate_views(
     }
 }
 
+size_t table::estimate_read_memory_cost() const {
+    return new_reader_base_cost;
+}
+
 void table::set_hit_rate(gms::inet_address addr, cache_temperature rate) {
     auto& e = _cluster_cache_hit_rates[addr];
     e.rate = rate;

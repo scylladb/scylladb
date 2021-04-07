@@ -998,6 +998,8 @@ public:
         return *_config.compaction_concurrency_semaphore;
     }
 
+    size_t estimate_read_memory_cost() const;
+
 private:
     future<row_locker::lock_holder> do_push_view_replica_updates(schema_ptr s, mutation m, db::timeout_clock::time_point timeout, mutation_source source,
             tracing::trace_state_ptr tr_state, reader_concurrency_semaphore& sem, const io_priority_class& io_priority, query::partition_slice::option_set custom_opts) const;
