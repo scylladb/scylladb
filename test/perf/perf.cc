@@ -20,6 +20,8 @@
  */
 
 #include "perf.hh"
+#include <seastar/core/reactor.hh>
+#include <seastar/core/memory.hh>
 #include "seastarx.hh"
 
 void scheduling_latency_measurer::schedule_tick() {
@@ -48,3 +50,18 @@ std::ostream& operator<<(std::ostream& out, const scheduling_latency_measurer& s
         to_ms(slm.max().count()));
 }
 
+
+executor_shard_stats
+executor_shard_stats_snapshot() {
+    return executor_shard_stats{
+        .allocations = memory::stats().mallocs(),
+        .tasks_executed = engine().get_sched_stats().tasks_processed,
+    };
+}
+
+std::ostream&
+operator<<(std::ostream& os, const perf_result& result) {
+    fmt::print(os, "{:.2f} tps ({:.0} allocs/op, {:.0} tasks/op)",
+            result.throughput, result.mallocs_per_op, result.tasks_per_op);
+    return os;
+}
