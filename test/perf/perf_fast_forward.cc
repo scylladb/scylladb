@@ -35,6 +35,7 @@
 #include "db/config.hh"
 #include "partition_slice_builder.hh"
 #include <seastar/core/reactor.hh>
+#include <seastar/core/memory.hh>
 #include <seastar/core/units.hh>
 #include <seastar/testing/test_runner.hh>
 #include "sstables/compaction_manager.hh"
@@ -62,12 +63,16 @@ struct metrics_snapshot {
     steady_clock_type::duration busy_time;
     steady_clock_type::duration idle_time;
     reactor::io_stats io;
+    reactor::sched_stats sched;
+    memory::statistics mem;
     sstables::shared_index_lists::stats index;
     cache_tracker::stats cache;
 
-    metrics_snapshot() {
+    metrics_snapshot()
+            : mem(memory::stats()) {
         reactor& r = *local_engine;
         io = r.get_io_stats();
+        sched = r.get_sched_stats();
         busy_time = r.total_busy_time();
         idle_time = r.total_idle_time();
         hr_clock = std::chrono::high_resolution_clock::now();
@@ -198,6 +203,8 @@ using stats_values = std::tuple<
     uint64_t, // c_hit
     uint64_t, // c_miss
     uint64_t, // c_blk
+    uint64_t, // allocations
+    uint64_t, // tasks
     float // cpu
 >;
 
@@ -228,6 +235,8 @@ std::array<sstring, std::tuple_size<stats_values>::value> stats_formats =
     "{:.0f}",
     "{:.0f}",
     "{:.1f}", // average aio
+    "{}",
+    "{}",
     "{}",
     "{}",
     "{}",
@@ -626,6 +635,9 @@ public:
     uint64_t cache_misses() const { return after.cache.partition_misses - before.cache.partition_misses; }
     uint64_t cache_insertions() const { return after.cache.partition_insertions - before.cache.partition_insertions; }
 
+    uint64_t allocations() const { return after.mem.mallocs() - before.mem.mallocs(); }
+    uint64_t tasks() const { return after.sched.tasks_processed - before.sched.tasks_processed; }
+
     float cpu_utilization() const {
         auto busy_delta = after.busy_time.count() - before.busy_time.count();
         auto idle_delta = after.idle_time.count() - before.idle_time.count();
@@ -652,6 +664,8 @@ public:
             {"c hit",    "{:>8}"},
             {"c miss",   "{:>8}"},
             {"c blk",    "{:>8}"},
+            {"allocs",   "{:>9}"},
+            {"tasks",    "{:>7}"},
             {"cpu",      "{:>6}"}
         };
     }
@@ -682,6 +696,8 @@ public:
             cache_hits(),
             cache_misses(),
             cache_insertions(),
+            allocations(),
+            tasks(),
             cpu_utilization() * 100
         };
     }
