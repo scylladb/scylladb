@@ -223,5 +223,15 @@ one_session_records::one_session_records()
 std::ostream& operator<<(std::ostream& os, const span_id& id) {
     return os << id.get_id();
 }
+
+sstring session_record::get_username_string() const {
+    static const char *unauthorized = "<unauthenticated request>";
+
+    if (user) {
+        return fmt::format("{}", *user);
+    } else {
+        return sstring(unauthorized);
+    }
+}
 }
 

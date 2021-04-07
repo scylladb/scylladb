@@ -177,7 +177,7 @@ public:
         return _cql_stats;
     }
 
-    statements::prepared_statement::checked_weak_ptr get_prepared(const std::optional<auth::authenticated_user>& user, const prepared_cache_key_type& key) {
+    statements::prepared_statement::checked_weak_ptr get_prepared(const lw_shared_ptr<auth::authenticated_user>& user, const prepared_cache_key_type& key) {
         if (user) {
             auto it = _authorized_prepared_cache.find(*user, key);
             if (it != _authorized_prepared_cache.end()) {

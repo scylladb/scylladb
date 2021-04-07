@@ -506,7 +506,7 @@ future<foreign_ptr<std::unique_ptr<cql_server::response>>>
                 break;
         }
 
-        tracing::set_username(trace_state, client_state.user());
+        tracing::set_user(trace_state, client_state.user());
 
         auto wrap_in_foreign = [] (future<std::unique_ptr<cql_server::response>> f) {
             return f.then([] (std::unique_ptr<cql_server::response> p) {
@@ -683,7 +683,7 @@ client_data cql_server::connection::make_client_data() const {
     cd.protocol_version = _version;
     cd.driver_name = _client_state.get_driver_name();
     cd.driver_version = _client_state.get_driver_version();
-    if (const auto user_ptr = _client_state.user(); user_ptr) {
+    if (const auto& user_ptr = _client_state.user(); user_ptr) {
         cd.username = user_ptr->name;
     }
     return cd;

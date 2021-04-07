@@ -69,13 +69,13 @@ static void create_user_if_not_exists(cql_test_env& env, std::string_view user_n
 // `f` is invoked.
 static void with_user(cql_test_env& env, std::string_view user_name, noncopyable_function<void ()> f) {
     auto& cs = env.local_client_state();
-    std::optional<auth::authenticated_user> old_user = cs.user();
+    auto old_user = *cs.user();
 
     create_user_if_not_exists(env, user_name);
     cs.set_login(auth::authenticated_user(sstring(user_name)));
 
-    const auto reset = defer([&cs, old_user = std::move(old_user)] {
-        cs.set_login(std::move(*old_user));
+    const auto reset = defer([&cs, old_user] {
+        cs.set_login(old_user);
     });
 
     f();

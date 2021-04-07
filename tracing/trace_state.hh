@@ -380,9 +380,9 @@ private:
      */
     void add_prepared_statement(prepared_checked_weak_ptr& prepared);
 
-    void set_username(const std::optional<auth::authenticated_user>& user) {
+    void set_user(lw_shared_ptr<auth::authenticated_user> user) {
         if (user) {
-            _records->session_rec.username = format("{}", *user);
+            _records->session_rec.user = std::move(user);
         }
     }
 
@@ -467,7 +467,7 @@ private:
     friend void add_session_param(const trace_state_ptr& p, sstring_view key, sstring_view val);
     friend void set_user_timestamp(const trace_state_ptr& p, api::timestamp_type val);
     friend void add_prepared_statement(const trace_state_ptr& p, prepared_checked_weak_ptr& prepared);
-    friend void set_username(const trace_state_ptr& p, const std::optional<auth::authenticated_user>& user);
+    friend void set_user(const trace_state_ptr& p, lw_shared_ptr<auth::authenticated_user> user);
     friend void add_table_name(const trace_state_ptr& p, const sstring& ks_name, const sstring& cf_name);
     friend void add_prepared_query_options(const trace_state_ptr& state, const cql3::query_options& prepared_options_ptr);
     friend void stop_foreground(const trace_state_ptr& state) noexcept;
@@ -624,9 +624,9 @@ inline void add_prepared_statement(const trace_state_ptr& p, prepared_checked_we
     }
 }
 
-inline void set_username(const trace_state_ptr& p, const std::optional<auth::authenticated_user>& user) {
+inline void set_user(const trace_state_ptr& p, lw_shared_ptr<auth::authenticated_user> user) {
     if (p) {
-        p->set_username(user);
+        p->set_user(std::move(user));
     }
 }
 
