@@ -55,6 +55,7 @@
 #include <map>
 #include <seastar/core/distributed.hh>
 #include "service/paxos/paxos_state.hh"
+#include "cdc/generation_id.hh"
 
 namespace service {
 
@@ -193,11 +194,6 @@ future<> update_tokens(const std::unordered_set<dht::token>& tokens);
  * Record tokens being used by another node in the PEERS table.
  */
 future<> update_tokens(gms::inet_address ep, const std::unordered_set<dht::token>& tokens);
-
-/*
- * Save the CDC streams generation timestamp announced by this node in persistent storage.
- */
-future<> update_cdc_streams_timestamp(db_clock::time_point);
 
 future<> update_preferred_ip(gms::inet_address ep, gms::inet_address preferred_ip);
 future<std::unordered_map<gms::inet_address, gms::inet_address>> get_preferred_ips();
@@ -514,12 +510,6 @@ enum class bootstrap_state {
      */
     future<std::unordered_set<dht::token>> get_local_tokens();
 
-    /*
-     * Read the CDC streams generation timestamp announced by this node from persistent storage.
-     * Used to initialize a restarting node.
-     */
-    future<std::optional<db_clock::time_point>> get_saved_cdc_streams_timestamp();
-
     future<std::unordered_map<gms::inet_address, sstring>> load_peer_features();
 
 future<int> increment_and_get_generation();
@@ -638,8 +628,21 @@ future<> save_paxos_proposal(const schema& s, const service::paxos::proposal& pr
 future<> save_paxos_decision(const schema& s, const service::paxos::proposal& decision, db::timeout_clock::time_point timeout);
 future<> delete_paxos_decision(const schema& s, const partition_key& key, const utils::UUID& ballot, db::timeout_clock::time_point timeout);
 
+// CDC related functions
+
+/*
+ * Save the CDC generation ID announced by this node in persistent storage.
+ */
+future<> update_cdc_generation_id(cdc::generation_id);
+
+/*
+ * Read the CDC generation ID announced by this node from persistent storage.
+ * Used to initialize a restarting node.
+ */
+future<std::optional<cdc::generation_id>> get_cdc_generation_id();
+
 future<bool> cdc_is_rewritten();
-future<> cdc_set_rewritten(std::optional<db_clock::time_point>);
+future<> cdc_set_rewritten(std::optional<cdc::generation_id>);
 
 } // namespace system_keyspace
 } // namespace db

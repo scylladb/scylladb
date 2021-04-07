@@ -66,6 +66,7 @@
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/lowres_clock.hh>
 #include "locator/snitch_base.hh"
+#include "cdc/generation_id.hh"
 
 class node_ops_cmd_request;
 class node_ops_cmd_response;
@@ -336,14 +337,10 @@ private:
      * DO NOT use this variable after `join_token_ring` (i.e. after we call `generation_service::after_join`
      * and pass it the ownership of the timestamp.
      */
-    std::optional<db_clock::time_point> _cdc_streams_ts;
+    std::optional<cdc::generation_id> _cdc_gen_id;
 
 public:
     void enable_all_features();
-
-    /* Broadcasts the chosen tokens through gossip,
-     * together with a CDC streams timestamp (if we start a new CDC generation) and STATUS=NORMAL. */
-    void set_gossip_tokens(const std::unordered_set<dht::token>&, std::optional<db_clock::time_point>);
 
     void register_subscriber(endpoint_lifecycle_subscriber* subscriber);
 
@@ -375,7 +372,7 @@ private:
     void shutdown_client_servers();
 
     // Tokens and the CDC streams timestamp of the replaced node.
-    using replacement_info = std::pair<std::unordered_set<token>, std::optional<db_clock::time_point>>;
+    using replacement_info = std::unordered_set<token>;
     future<replacement_info> prepare_replacement_info(std::unordered_set<gms::inet_address> initial_contact_nodes,
             const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features, bind_messaging_port do_bind = bind_messaging_port::yes);
 

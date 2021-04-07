@@ -298,17 +298,6 @@ bool should_propose_first_generation(const gms::inet_address& me, const gms::gos
     });
 }
 
-future<db_clock::time_point> get_local_streams_timestamp() {
-    return db::system_keyspace::get_saved_cdc_streams_timestamp().then([] (std::optional<db_clock::time_point> ts) {
-        if (!ts) {
-            auto err = format("get_local_streams_timestamp: tried to retrieve streams timestamp after bootstrapping, but it's not present");
-            cdc_log.error("{}", err);
-            throw std::runtime_error(err);
-        }
-        return *ts;
-    });
-}
-
 // non-static for testing
 size_t limit_of_streams_in_topology_description() {
     // Each stream takes 16B and we don't want to exceed 4MB so we can have
@@ -341,7 +330,7 @@ topology_description limit_number_of_streams_if_needed(topology_description&& de
     return topology_description(std::move(entries));
 }
 
-future<db_clock::time_point> make_new_cdc_generation(
+future<cdc::generation_id> make_new_cdc_generation(
         const db::config& cfg,
         const std::unordered_set<dht::token>& bootstrap_tokens,
         const locator::token_metadata_ptr tmptr,
@@ -365,69 +354,84 @@ future<db_clock::time_point> make_new_cdc_generation(
     gen = limit_number_of_streams_if_needed(std::move(gen));
 
     // Begin the race.
-    auto ts = db_clock::now() + (
+    auto gen_id = cdc::generation_id{db_clock::now() + (
             (!add_delay || ring_delay == milliseconds(0)) ? milliseconds(0) : (
-                2 * ring_delay + duration_cast<milliseconds>(generation_leeway)));
-    co_await sys_dist_ks.insert_cdc_topology_description(ts, std::move(gen), { tmptr->count_normal_token_owners() });
+                2 * ring_delay + duration_cast<milliseconds>(generation_leeway)))};
+    co_await sys_dist_ks.insert_cdc_topology_description(gen_id, std::move(gen), { tmptr->count_normal_token_owners() });
 
-    co_return ts;
+    cdc_log.info("New CDC generation: {}", gen_id);
+
+    co_return gen_id;
 }
 
-std::optional<db_clock::time_point> get_streams_timestamp_for(const gms::inet_address& endpoint, const gms::gossiper& g) {
-    auto streams_ts_string = g.get_application_state_value(endpoint, gms::application_state::CDC_STREAMS_TIMESTAMP);
-    cdc_log.trace("endpoint={}, streams_ts_string={}", endpoint, streams_ts_string);
-    return gms::versioned_value::cdc_streams_timestamp_from_string(streams_ts_string);
+/* Retrieves CDC streams generation timestamp from the given endpoint's application state (broadcasted through gossip).
+ * We might be during a rolling upgrade, so the timestamp might not be there (if the other node didn't upgrade yet),
+ * but if the cluster already supports CDC, then every newly joining node will propose a new CDC generation,
+ * which means it will gossip the generation's timestamp.
+ */
+static std::optional<cdc::generation_id> get_generation_id_for(const gms::inet_address& endpoint, const gms::gossiper& g) {
+    auto gen_id_string = g.get_application_state_value(endpoint, gms::application_state::CDC_GENERATION_ID);
+    cdc_log.trace("endpoint={}, gen_id_string={}", endpoint, gen_id_string);
+    return gms::versioned_value::cdc_generation_id_from_string(gen_id_string);
 }
 
 static future<> do_update_streams_description(
-        db_clock::time_point streams_ts,
+        cdc::generation_id gen_id,
         db::system_distributed_keyspace& sys_dist_ks,
         db::system_distributed_keyspace::context ctx) {
-    if (co_await sys_dist_ks.cdc_desc_exists(streams_ts, ctx)) {
-        cdc_log.info("Generation {}: streams description table already updated.", streams_ts);
+    if (co_await sys_dist_ks.cdc_desc_exists(get_ts(gen_id), ctx)) {
+        cdc_log.info("Generation {}: streams description table already updated.", gen_id);
         co_return;
     }
 
     // We might race with another node also inserting the description, but that's ok. It's an idempotent operation.
 
-    auto topo = co_await sys_dist_ks.read_cdc_topology_description(streams_ts, ctx);
+    auto topo = co_await sys_dist_ks.read_cdc_topology_description(gen_id, ctx);
     if (!topo) {
-        throw no_generation_data_exception(streams_ts);
+        throw no_generation_data_exception(gen_id);
     }
 
-    co_await sys_dist_ks.create_cdc_desc(streams_ts, *topo, ctx);
-    cdc_log.info("CDC description table successfully updated with generation {}.", streams_ts);
+    co_await sys_dist_ks.create_cdc_desc(get_ts(gen_id), *topo, ctx);
+    cdc_log.info("CDC description table successfully updated with generation {}.", gen_id);
 }
 
-future<> update_streams_description(
-        db_clock::time_point streams_ts,
+/* Inform CDC users about a generation of streams (identified by the given timestamp)
+ * by inserting it into the cdc_streams table.
+ *
+ * Assumes that the cdc_generation_descriptions table contains this generation.
+ *
+ * Returning from this function does not mean that the table update was successful: the function
+ * might run an asynchronous task in the background.
+ */
+static future<> update_streams_description(
+        cdc::generation_id gen_id,
         shared_ptr<db::system_distributed_keyspace> sys_dist_ks,
         noncopyable_function<unsigned()> get_num_token_owners,
         abort_source& abort_src) {
     try {
-        co_await do_update_streams_description(streams_ts, *sys_dist_ks, { get_num_token_owners() });
+        co_await do_update_streams_description(gen_id, *sys_dist_ks, { get_num_token_owners() });
     } catch (...) {
         cdc_log.warn(
             "Could not update CDC description table with generation {}: {}. Will retry in the background.",
-            streams_ts, std::current_exception());
+            gen_id, std::current_exception());
 
         // It is safe to discard this future: we keep system distributed keyspace alive.
-        (void)(([] (db_clock::time_point streams_ts,
+        (void)(([] (cdc::generation_id gen_id,
                     shared_ptr<db::system_distributed_keyspace> sys_dist_ks,
                     noncopyable_function<unsigned()> get_num_token_owners,
                     abort_source& abort_src) -> future<> {
             while (true) {
                 co_await sleep_abortable(std::chrono::seconds(60), abort_src);
                 try {
-                    co_await do_update_streams_description(streams_ts, *sys_dist_ks, { get_num_token_owners() });
+                    co_await do_update_streams_description(gen_id, *sys_dist_ks, { get_num_token_owners() });
                     co_return;
                 } catch (...) {
                     cdc_log.warn(
                         "Could not update CDC description table with generation {}: {}. Will try again.",
-                        streams_ts, std::current_exception());
+                        gen_id, std::current_exception());
                 }
             }
-        })(streams_ts, std::move(sys_dist_ks), std::move(get_num_token_owners), abort_src));
+        })(gen_id, std::move(sys_dist_ks), std::move(get_num_token_owners), abort_src));
     }
 }
 
@@ -463,7 +467,7 @@ struct time_and_ttl {
  * This is the long-running-in-the-background part of that function.
  * It returns the timestamp of the last rewritten generation (if any).
  */
-static future<std::optional<db_clock::time_point>> rewrite_streams_descriptions(
+static future<std::optional<cdc::generation_id>> rewrite_streams_descriptions(
         std::vector<time_and_ttl> times_and_ttls,
         shared_ptr<db::system_distributed_keyspace> sys_dist_ks,
         noncopyable_function<unsigned()> get_num_token_owners,
@@ -508,7 +512,7 @@ static future<std::optional<db_clock::time_point>> rewrite_streams_descriptions(
     co_await max_concurrent_for_each(first, tss.end(), 10, [&] (db_clock::time_point ts) -> future<> {
         while (true) {
             try {
-                co_return co_await do_update_streams_description(ts, *sys_dist_ks, { get_num_token_owners() });
+                co_return co_await do_update_streams_description(cdc::generation_id{ts}, *sys_dist_ks, { get_num_token_owners() });
             } catch (const no_generation_data_exception& e) {
                 cdc_log.error("Failed to rewrite streams for generation {}: {}. Giving up.", ts, e);
                 each_success = false;
@@ -527,7 +531,7 @@ static future<std::optional<db_clock::time_point>> rewrite_streams_descriptions(
     }
 
     if (first != tss.end()) {
-        co_return *std::prev(tss.end());
+        co_return cdc::generation_id{*std::prev(tss.end())};
     }
 
     co_return std::nullopt;
@@ -660,11 +664,11 @@ generation_service::~generation_service() {
     assert(_stopped);
 }
 
-future<> generation_service::after_join(std::optional<db_clock::time_point>&& startup_gen_ts) {
+future<> generation_service::after_join(std::optional<cdc::generation_id>&& startup_gen_id) {
     assert_shard_zero(__PRETTY_FUNCTION__);
     assert(db::system_keyspace::bootstrap_complete());
 
-    _gen_ts = std::move(startup_gen_ts);
+    _gen_id = std::move(startup_gen_id);
     _gossiper.register_(shared_from_this());
 
     _joined = true;
@@ -676,25 +680,25 @@ future<> generation_service::after_join(std::optional<db_clock::time_point>&& st
 void generation_service::on_join(gms::inet_address ep, gms::endpoint_state ep_state) {
     assert_shard_zero(__PRETTY_FUNCTION__);
 
-    auto val = ep_state.get_application_state_ptr(gms::application_state::CDC_STREAMS_TIMESTAMP);
+    auto val = ep_state.get_application_state_ptr(gms::application_state::CDC_GENERATION_ID);
     if (!val) {
         return;
     }
 
-    on_change(ep, gms::application_state::CDC_STREAMS_TIMESTAMP, *val);
+    on_change(ep, gms::application_state::CDC_GENERATION_ID, *val);
 }
 
 void generation_service::on_change(gms::inet_address ep, gms::application_state app_state, const gms::versioned_value& v) {
     assert_shard_zero(__PRETTY_FUNCTION__);
 
-    if (app_state != gms::application_state::CDC_STREAMS_TIMESTAMP) {
+    if (app_state != gms::application_state::CDC_GENERATION_ID) {
         return;
     }
 
-    auto ts = gms::versioned_value::cdc_streams_timestamp_from_string(v.value);
-    cdc_log.debug("Endpoint: {}, CDC generation timestamp change: {}", ep, ts);
+    auto gen_id = gms::versioned_value::cdc_generation_id_from_string(v.value);
+    cdc_log.debug("Endpoint: {}, CDC generation ID change: {}", ep, gen_id);
 
-    handle_cdc_generation(ts).get();
+    handle_cdc_generation(gen_id).get();
 }
 
 future<> generation_service::check_and_repair_cdc_streams() {
@@ -702,7 +706,7 @@ future<> generation_service::check_and_repair_cdc_streams() {
         throw std::runtime_error("check_and_repair_cdc_streams: node not initialized yet");
     }
 
-    auto latest = _gen_ts;
+    std::optional<cdc::generation_id> latest = _gen_id;
     const auto& endpoint_states = _gossiper.get_endpoint_states();
     for (const auto& [addr, state] : endpoint_states) {
         if (!_gossiper.is_normal(addr))  {
@@ -710,77 +714,86 @@ future<> generation_service::check_and_repair_cdc_streams() {
                     " ({} is in state {})", addr, _gossiper.get_gossip_status(state)));
         }
 
-        const auto ts = get_streams_timestamp_for(addr, _gossiper);
-        if (!latest || (ts && *ts > *latest)) {
-            latest = ts;
+        const auto gen_id = get_generation_id_for(addr, _gossiper);
+        if (!latest || (gen_id && get_ts(*gen_id) > get_ts(*latest))) {
+            latest = gen_id;
         }
     }
+
+    auto tmptr = _token_metadata.get();
+    auto sys_dist_ks = get_sys_dist_ks();
 
     bool should_regenerate = false;
-    std::optional<topology_description> gen;
 
-    static const auto timeout_msg = "Timeout while fetching CDC topology description";
-    static const auto topology_read_error_note = "Note: this is likely caused by"
-            " node(s) being down or unreachable. It is recommended to check the network and"
-            " restart/remove the failed node(s), then retry checkAndRepairCdcStreams command";
-    static const auto exception_translating_msg = "Translating the exception to `request_execution_exception`";
-    const auto tmptr = _token_metadata.get();
-    auto sys_dist_ks = get_sys_dist_ks();
-    try {
-        gen = co_await sys_dist_ks->read_cdc_topology_description(
-                *latest, { tmptr->count_normal_token_owners() });
-    } catch (exceptions::request_timeout_exception& e) {
-        cdc_log.error("{}: \"{}\". {}.", timeout_msg, e.what(), exception_translating_msg);
-        throw exceptions::request_execution_exception(exceptions::exception_code::READ_TIMEOUT,
-                format("{}. {}.", timeout_msg, topology_read_error_note));
-    } catch (exceptions::unavailable_exception& e) {
-        static const auto unavailable_msg = "Node(s) unavailable while fetching CDC topology description";
-        cdc_log.error("{}: \"{}\". {}.", unavailable_msg, e.what(), exception_translating_msg);
-        throw exceptions::request_execution_exception(exceptions::exception_code::UNAVAILABLE,
-                format("{}. {}.", unavailable_msg, topology_read_error_note));
-    } catch (...) {
-        const auto ep = std::current_exception();
-        if (is_timeout_exception(ep)) {
-            cdc_log.error("{}: \"{}\". {}.", timeout_msg, ep, exception_translating_msg);
+    if (latest) {
+        cdc_log.info("check_and_repair_cdc_streams: last generation observed in gossip: {}", *latest);
+
+        static const auto timeout_msg = "Timeout while fetching CDC topology description";
+        static const auto topology_read_error_note = "Note: this is likely caused by"
+                " node(s) being down or unreachable. It is recommended to check the network and"
+                " restart/remove the failed node(s), then retry checkAndRepairCdcStreams command";
+        static const auto exception_translating_msg = "Translating the exception to `request_execution_exception`";
+
+        std::optional<topology_description> gen;
+        try {
+            gen = co_await sys_dist_ks->read_cdc_topology_description(
+                    *latest, { tmptr->count_normal_token_owners() });
+        } catch (exceptions::request_timeout_exception& e) {
+            cdc_log.error("{}: \"{}\". {}.", timeout_msg, e.what(), exception_translating_msg);
             throw exceptions::request_execution_exception(exceptions::exception_code::READ_TIMEOUT,
                     format("{}. {}.", timeout_msg, topology_read_error_note));
+        } catch (exceptions::unavailable_exception& e) {
+            static const auto unavailable_msg = "Node(s) unavailable while fetching CDC topology description";
+            cdc_log.error("{}: \"{}\". {}.", unavailable_msg, e.what(), exception_translating_msg);
+            throw exceptions::request_execution_exception(exceptions::exception_code::UNAVAILABLE,
+                    format("{}. {}.", unavailable_msg, topology_read_error_note));
+        } catch (...) {
+            const auto ep = std::current_exception();
+            if (is_timeout_exception(ep)) {
+                cdc_log.error("{}: \"{}\". {}.", timeout_msg, ep, exception_translating_msg);
+                throw exceptions::request_execution_exception(exceptions::exception_code::READ_TIMEOUT,
+                        format("{}. {}.", timeout_msg, topology_read_error_note));
+            }
+            // On exotic errors proceed with regeneration
+            cdc_log.error("Exception while reading CDC topology description: \"{}\". Regenerating streams anyway.", ep);
+            should_regenerate = true;
         }
-        // On exotic errors proceed with regeneration
-        cdc_log.error("Exception while reading CDC topology description: \"{}\". Regenerating streams anyway.", ep);
-        should_regenerate = true;
-    }
 
-    if (!gen) {
-        cdc_log.error(
-            "Could not find CDC generation with timestamp {} in distributed system tables (current time: {}),"
-            " even though some node gossiped about it.",
-            latest, db_clock::now());
-        should_regenerate = true;
-    } else {
-        std::unordered_set<dht::token> gen_ends;
-        for (const auto& entry : gen->entries()) {
-            gen_ends.insert(entry.token_range_end);
-        }
-        for (const auto& metadata_token : tmptr->sorted_tokens()) {
-            if (!gen_ends.contains(metadata_token)) {
-                cdc_log.warn("CDC generation {} missing token {}. Regenerating.", latest, metadata_token);
-                should_regenerate = true;
-                break;
+        if (!gen) {
+            cdc_log.error(
+                "Could not find CDC generation with timestamp {} in distributed system tables (current time: {}),"
+                " even though some node gossiped about it.",
+                latest, db_clock::now());
+            should_regenerate = true;
+        } else {
+            std::unordered_set<dht::token> gen_ends;
+            for (const auto& entry : gen->entries()) {
+                gen_ends.insert(entry.token_range_end);
+            }
+            for (const auto& metadata_token : tmptr->sorted_tokens()) {
+                if (!gen_ends.contains(metadata_token)) {
+                    cdc_log.warn("CDC generation {} missing token {}. Regenerating.", latest, metadata_token);
+                    should_regenerate = true;
+                    break;
+                }
             }
         }
+    } else {
+        cdc_log.warn("check_and_repair_cdc_streams: no generation observed in gossip");
+        should_regenerate = true;
     }
 
     if (!should_regenerate) {
-        if (latest != _gen_ts) {
+        if (latest != _gen_id) {
             co_await do_handle_cdc_generation(*latest);
         }
         cdc_log.info("CDC generation {} does not need repair", latest);
         co_return;
     }
-    const auto new_gen_ts = co_await make_new_cdc_generation(_cfg,
+    const auto new_gen_id = co_await make_new_cdc_generation(_cfg,
             {}, std::move(tmptr), _gossiper, *sys_dist_ks,
             std::chrono::milliseconds(_cfg.ring_delay_ms()), true /* add delay */);
-    // Need to artificially update our STATUS so other nodes handle the timestamp change
+    // Need to artificially update our STATUS so other nodes handle the generation ID change
     auto status = _gossiper.get_application_state_ptr(
             utils::fb_utilities::get_broadcast_address(), gms::application_state::STATUS);
     if (!status) {
@@ -788,20 +801,20 @@ future<> generation_service::check_and_repair_cdc_streams() {
         cdc_log.error("Aborting CDC generation repair due to missing STATUS");
         co_return;
     }
-    // Update _gen_ts first, so that do_handle_cdc_generation (which will get called due to the status update)
+    // Update _gen_id first, so that do_handle_cdc_generation (which will get called due to the status update)
     // won't try to update the gossiper, which would result in a deadlock inside add_local_application_state
-    _gen_ts = new_gen_ts;
+    _gen_id = new_gen_id;
     co_await _gossiper.add_local_application_state({
-            { gms::application_state::CDC_STREAMS_TIMESTAMP, gms::versioned_value::cdc_streams_timestamp(new_gen_ts) },
+            { gms::application_state::CDC_GENERATION_ID, gms::versioned_value::cdc_generation_id(new_gen_id) },
             { gms::application_state::STATUS, *status }
     });
-    co_await db::system_keyspace::update_cdc_streams_timestamp(new_gen_ts);
+    co_await db::system_keyspace::update_cdc_generation_id(new_gen_id);
 }
 
-future<> generation_service::handle_cdc_generation(std::optional<db_clock::time_point> ts) {
+future<> generation_service::handle_cdc_generation(std::optional<cdc::generation_id> gen_id) {
     assert_shard_zero(__PRETTY_FUNCTION__);
 
-    if (!ts) {
+    if (!gen_id) {
         co_return;
     }
 
@@ -816,7 +829,7 @@ future<> generation_service::handle_cdc_generation(std::optional<db_clock::time_
         co_return;
     }
 
-    if (co_await container().map_reduce(and_reducer(), [ts = *ts] (generation_service& svc) {
+    if (co_await container().map_reduce(and_reducer(), [ts = get_ts(*gen_id)] (generation_service& svc) {
         return !svc._cdc_metadata.prepare(ts);
     })) {
         co_return;
@@ -824,64 +837,64 @@ future<> generation_service::handle_cdc_generation(std::optional<db_clock::time_
 
     bool using_this_gen = false;
     try {
-        using_this_gen = co_await do_handle_cdc_generation_intercept_nonfatal_errors(*ts);
+        using_this_gen = co_await do_handle_cdc_generation_intercept_nonfatal_errors(*gen_id);
     } catch (generation_handling_nonfatal_exception& e) {
-        cdc_log.warn(could_not_retrieve_msg_template, ts, e.what(), "retrying in the background");
-        async_handle_cdc_generation(*ts);
+        cdc_log.warn(could_not_retrieve_msg_template, gen_id, e.what(), "retrying in the background");
+        async_handle_cdc_generation(*gen_id);
         co_return;
     } catch (...) {
-        cdc_log.error(could_not_retrieve_msg_template, ts, std::current_exception(), "not retrying");
+        cdc_log.error(could_not_retrieve_msg_template, gen_id, std::current_exception(), "not retrying");
         co_return; // Exotic ("fatal") exception => do not retry
     }
 
     if (using_this_gen) {
-        cdc_log.info("Starting to use generation {}", *ts);
-        co_await update_streams_description(*ts, get_sys_dist_ks(),
+        cdc_log.info("Starting to use generation {}", *gen_id);
+        co_await update_streams_description(*gen_id, get_sys_dist_ks(),
                 [tmptr = _token_metadata.get()] { return tmptr->count_normal_token_owners(); },
                 _abort_src);
     }
 }
 
-void generation_service::async_handle_cdc_generation(db_clock::time_point ts) {
+void generation_service::async_handle_cdc_generation(cdc::generation_id gen_id) {
     assert_shard_zero(__PRETTY_FUNCTION__);
 
-    (void)(([] (db_clock::time_point ts, shared_ptr<generation_service> svc) -> future<> {
+    (void)(([] (cdc::generation_id gen_id, shared_ptr<generation_service> svc) -> future<> {
         while (true) {
             co_await sleep_abortable(std::chrono::seconds(5), svc->_abort_src);
 
             try {
-                bool using_this_gen = co_await svc->do_handle_cdc_generation_intercept_nonfatal_errors(ts);
+                bool using_this_gen = co_await svc->do_handle_cdc_generation_intercept_nonfatal_errors(gen_id);
                 if (using_this_gen) {
-                    cdc_log.info("Starting to use generation {}", ts);
-                    co_await update_streams_description(ts, svc->get_sys_dist_ks(),
+                    cdc_log.info("Starting to use generation {}", gen_id);
+                    co_await update_streams_description(gen_id, svc->get_sys_dist_ks(),
                             [tmptr = svc->_token_metadata.get()] { return tmptr->count_normal_token_owners(); },
                             svc->_abort_src);
                 }
                 co_return;
             } catch (generation_handling_nonfatal_exception& e) {
-                cdc_log.warn(could_not_retrieve_msg_template, ts, e.what(), "continuing to retry in the background");
+                cdc_log.warn(could_not_retrieve_msg_template, gen_id, e.what(), "continuing to retry in the background");
             } catch (...) {
-                cdc_log.error(could_not_retrieve_msg_template, ts, std::current_exception(), "not retrying anymore");
+                cdc_log.error(could_not_retrieve_msg_template, gen_id, std::current_exception(), "not retrying anymore");
                 co_return; // Exotic ("fatal") exception => do not retry
             }
 
-            if (co_await svc->container().map_reduce(and_reducer(), [ts] (generation_service& svc) {
+            if (co_await svc->container().map_reduce(and_reducer(), [ts = get_ts(gen_id)] (generation_service& svc) {
                 return svc._cdc_metadata.known_or_obsolete(ts);
             })) {
                 co_return;
             }
         }
-    })(ts, shared_from_this()));
+    })(gen_id, shared_from_this()));
 }
 
 future<> generation_service::scan_cdc_generations() {
     assert_shard_zero(__PRETTY_FUNCTION__);
 
-    std::optional<db_clock::time_point> latest;
+    std::optional<cdc::generation_id> latest;
     for (const auto& ep: _gossiper.get_endpoint_states()) {
-        auto ts = get_streams_timestamp_for(ep.first, _gossiper);
-        if (!latest || (ts && *ts > *latest)) {
-            latest = ts;
+        auto gen_id = get_generation_id_for(ep.first, _gossiper);
+        if (!latest || (gen_id && get_ts(*gen_id) > get_ts(*latest))) {
+            latest = gen_id;
         }
     }
 
@@ -893,54 +906,59 @@ future<> generation_service::scan_cdc_generations() {
     }
 }
 
-future<bool> generation_service::do_handle_cdc_generation_intercept_nonfatal_errors(db_clock::time_point ts) {
+future<bool> generation_service::do_handle_cdc_generation_intercept_nonfatal_errors(cdc::generation_id gen_id) {
     assert_shard_zero(__PRETTY_FUNCTION__);
 
-    try {
-        co_return co_await do_handle_cdc_generation(ts);
-    } catch (exceptions::request_timeout_exception& e) {
-        throw generation_handling_nonfatal_exception(e.what());
-    } catch (exceptions::unavailable_exception& e) {
-        throw generation_handling_nonfatal_exception(e.what());
-    } catch (exceptions::read_failure_exception& e) {
-        throw generation_handling_nonfatal_exception(e.what());
-    } catch (...) {
-        const auto ep = std::current_exception();
-        if (is_timeout_exception(ep)) {
-            throw generation_handling_nonfatal_exception(format("{}", ep));
+    // Use futurize_invoke to catch all exceptions from do_handle_cdc_generation.
+    return futurize_invoke([this, gen_id] {
+        return do_handle_cdc_generation(gen_id);
+    }).handle_exception([] (std::exception_ptr ep) -> future<bool> {
+        try {
+            std::rethrow_exception(ep);
+        } catch (exceptions::request_timeout_exception& e) {
+            throw generation_handling_nonfatal_exception(e.what());
+        } catch (exceptions::unavailable_exception& e) {
+            throw generation_handling_nonfatal_exception(e.what());
+        } catch (exceptions::read_failure_exception& e) {
+            throw generation_handling_nonfatal_exception(e.what());
+        } catch (...) {
+            const auto ep = std::current_exception();
+            if (is_timeout_exception(ep)) {
+                throw generation_handling_nonfatal_exception(format("{}", ep));
+            }
+            throw;
         }
-        throw;
-    }
+    });
 }
 
-future<bool> generation_service::do_handle_cdc_generation(db_clock::time_point ts) {
+future<bool> generation_service::do_handle_cdc_generation(cdc::generation_id gen_id) {
     assert_shard_zero(__PRETTY_FUNCTION__);
 
     auto sys_dist_ks = get_sys_dist_ks();
     auto gen = co_await sys_dist_ks->read_cdc_topology_description(
-            ts, { _token_metadata.get()->count_normal_token_owners() });
+            gen_id, { _token_metadata.get()->count_normal_token_owners() });
     if (!gen) {
         throw std::runtime_error(format(
-            "Could not find CDC generation with timestamp {} in distributed system tables (current time: {}),"
+            "Could not find CDC generation {} in distributed system tables (current time: {}),"
             " even though some node gossiped about it.",
-            ts, db_clock::now()));
+            gen_id, db_clock::now()));
     }
 
-    // If we're not gossiping our own generation timestamp (because we've upgraded from a non-CDC/old version,
-    // or we somehow lost it due to a byzantine failure), start gossiping someone else's timestamp.
-    // This is to avoid the upgrade check on every restart (see `should_propose_first_cdc_generation`).
-    // And if we notice that `ts` is higher than our timestamp, we will start gossiping it instead,
-    // so if the node that initially gossiped `ts` leaves the cluster while `ts` is still the latest generation,
-    // the cluster will remember.
-    if (!_gen_ts || *_gen_ts < ts) {
-        _gen_ts = ts;
-        co_await db::system_keyspace::update_cdc_streams_timestamp(ts);
+    // We always gossip about the generation with the greatest timestamp. Specific nodes may remember older generations,
+    // but eventually they forget when their clocks move past the latest generation's timestamp.
+    // The cluster as a whole is only interested in the last generation so restarting nodes may learn what it is.
+    // We assume that generation changes don't happen ``too often'' so every node can learn about a generation
+    // before it is superseded by a newer one which causes nodes to start gossiping the about the newer one.
+    // The assumption follows from the requirement of bootstrapping nodes sequentially.
+    if (!_gen_id || get_ts(*_gen_id) < get_ts(gen_id)) {
+        _gen_id = gen_id;
+        co_await db::system_keyspace::update_cdc_generation_id(gen_id);
         co_await _gossiper.add_local_application_state(
-                gms::application_state::CDC_STREAMS_TIMESTAMP, gms::versioned_value::cdc_streams_timestamp(ts));
+                gms::application_state::CDC_GENERATION_ID, gms::versioned_value::cdc_generation_id(gen_id));
     }
 
     // Return `true` iff the generation was inserted on any of our shards.
-    co_return co_await container().map_reduce(or_reducer(), [ts, &gen] (generation_service& svc) {
+    co_return co_await container().map_reduce(or_reducer(), [ts = get_ts(gen_id), &gen] (generation_service& svc) {
         auto gen_ = *gen;
         return svc._cdc_metadata.insert(ts, std::move(gen_));
     });
@@ -954,6 +972,18 @@ shared_ptr<db::system_distributed_keyspace> generation_service::get_sys_dist_ks(
     }
 
     return _sys_dist_ks.local_shared();
+}
+
+std::ostream& operator<<(std::ostream& os, const generation_id& gen_id) {
+    return os << gen_id.ts;
+}
+
+bool operator==(const generation_id& a, const generation_id& b) {
+    return a.ts == b.ts;
+}
+
+db_clock::time_point get_ts(const generation_id& gen_id) {
+    return gen_id.ts;
 }
 
 } // namespace cdc

@@ -141,7 +141,7 @@ Next, the node starts gossiping the timestamp of the new generation together wit
 ```
         _gossiper.add_local_application_state({
             { gms::application_state::TOKENS, versioned_value::tokens(_bootstrap_tokens) },
-            { gms::application_state::CDC_STREAMS_TIMESTAMP, versioned_value::cdc_streams_timestamp(_cdc_streams_ts) },
+            { gms::application_state::CDC_GENERATION_ID, versioned_value::cdc_generation_id(_cdc_gen_id) },
             { gms::application_state::STATUS, versioned_value::bootstrapping(_bootstrap_tokens) },
         }).get();
 ```

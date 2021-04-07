@@ -22,8 +22,7 @@
 
 /* This module contains classes and functions used to manage CDC generations:
  * sets of CDC stream identifiers used by the cluster to choose partition keys for CDC log writes.
- * Each CDC generation begins operating at a specific time point, called the generation's timestamp
- * (`cdc_streams_timpestamp` or `streams_timestamp` in the code).
+ * Each CDC generation begins operating at a specific time point, called the generation's timestamp.
  * The generation is used by all nodes in the cluster to pick CDC streams until superseded by a new generation.
  *
  * Functions from this module are used by the node joining procedure to introduce new CDC generations to the cluster
@@ -42,6 +41,7 @@
 #include "dht/token.hh"
 #include "locator/token_metadata.hh"
 #include "utils/chunked_vector.hh"
+#include "cdc/generation_id.hh"
 
 namespace seastar {
     class abort_source;
@@ -133,7 +133,7 @@ public:
 
 class no_generation_data_exception : public std::runtime_error {
 public:
-    no_generation_data_exception(db_clock::time_point generation_ts)
+    no_generation_data_exception(cdc::generation_id generation_ts)
         : std::runtime_error(format("could not find generation data for timestamp {}", generation_ts))
     {}
 };
@@ -148,13 +148,6 @@ public:
  */
 bool should_propose_first_generation(const gms::inet_address& me, const gms::gossiper&);
 
-/*
- * Read this node's streams generation timestamp stored in the LOCAL table.
- * Assumes that the node has successfully bootstrapped, and we're not upgrading from a non-CDC version,
- * so the timestamp is present.
- */
-future<db_clock::time_point> get_local_streams_timestamp();
-
 /* Generate a new set of CDC streams and insert it into the distributed cdc_generation_descriptions table.
  * Returns the timestamp of this new generation
  *
@@ -167,7 +160,7 @@ future<db_clock::time_point> get_local_streams_timestamp();
  * (not guaranteed in the current implementation, but expected to be the common case;
  *  we assume that `ring_delay` is enough for other nodes to learn about the new generation).
  */
-future<db_clock::time_point> make_new_cdc_generation(
+future<cdc::generation_id> make_new_cdc_generation(
         const db::config& cfg,
         const std::unordered_set<dht::token>& bootstrap_tokens,
         const locator::token_metadata_ptr tmptr,
@@ -175,27 +168,6 @@ future<db_clock::time_point> make_new_cdc_generation(
         db::system_distributed_keyspace& sys_dist_ks,
         std::chrono::milliseconds ring_delay,
         bool add_delay);
-
-/* Retrieves CDC streams generation timestamp from the given endpoint's application state (broadcasted through gossip).
- * We might be during a rolling upgrade, so the timestamp might not be there (if the other node didn't upgrade yet),
- * but if the cluster already supports CDC, then every newly joining node will propose a new CDC generation,
- * which means it will gossip the generation's timestamp.
- */
-std::optional<db_clock::time_point> get_streams_timestamp_for(const gms::inet_address& endpoint, const gms::gossiper&);
-
-/* Inform CDC users about a generation of streams (identified by the given timestamp)
- * by inserting it into the cdc_streams table.
- *
- * Assumes that the cdc_generation_descriptions table contains this generation.
- *
- * Returning from this function does not mean that the table update was successful: the function
- * might run an asynchronous task in the background.
- */
-future<> update_streams_description(
-        db_clock::time_point,
-        shared_ptr<db::system_distributed_keyspace>,
-        noncopyable_function<unsigned()> get_num_token_owners,
-        abort_source&);
 
 /* Part of the upgrade procedure. Useful in case where the version of Scylla that we're upgrading from
  * used the "cdc_streams_descriptions" table. This procedure ensures that the new "cdc_streams_descriptions_v2"

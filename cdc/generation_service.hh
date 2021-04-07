@@ -23,6 +23,7 @@
 #pragma once
 
 #include "cdc/metadata.hh"
+#include "cdc/generation_id.hh"
 #include "gms/i_endpoint_state_change_subscriber.hh"
 
 namespace db {
@@ -56,7 +57,7 @@ class generation_service : public peering_sharded_service<generation_service>
     cdc::metadata _cdc_metadata;
 
     /* The latest known generation timestamp and the timestamp that we're currently gossiping
-     * (as CDC_STREAMS_TIMESTAMP application state).
+     * (as CDC_GENERATION_ID application state).
      *
      * Only shard 0 manages this, hence it will be std::nullopt on all shards other than 0.
      * This timestamp is also persisted in the system.cdc_local table.
@@ -67,7 +68,7 @@ class generation_service : public peering_sharded_service<generation_service>
      * different node. In any case, eventually - after one of the nodes gossips the first timestamp
      * - we'll catch on and this variable will be updated with that generation.
      */
-    std::optional<db_clock::time_point> _gen_ts;
+    std::optional<cdc::generation_id> _gen_id;
 public:
     generation_service(const db::config&, gms::gossiper&,
             sharded<db::system_distributed_keyspace>&, abort_source&, const locator::shared_token_metadata&);
@@ -77,7 +78,7 @@ public:
 
     /* After the node bootstraps and creates a new CDC generation, or restarts and loads the last
      * known generation timestamp from persistent storage, this function should be called with
-     * that generation timestamp moved in as the `startup_gen_ts` parameter.
+     * that generation timestamp moved in as the `startup_gen_id` parameter.
      * This passes the responsibility of managing generations from the node startup code to this service;
      * until then, the service remains dormant.
      * At the time of writing this comment, the startup code is in `storage_service::join_token_ring`, hence
@@ -85,7 +86,7 @@ public:
      * Precondition: the node has completed bootstrapping and system_distributed_keyspace is initialized.
      * Must be called on shard 0 - that's where the generation management happens.
      */
-    future<> after_join(std::optional<db_clock::time_point>&& startup_gen_ts);
+    future<> after_join(std::optional<cdc::generation_id>&& startup_gen_id);
 
     cdc::metadata& get_cdc_metadata() {
         return _cdc_metadata;
@@ -106,20 +107,20 @@ private:
     /* Retrieve the CDC generation which starts at the given timestamp (from a distributed table created for this purpose)
      * and start using it for CDC log writes if it's not obsolete.
      */
-    future<> handle_cdc_generation(std::optional<db_clock::time_point>);
+    future<> handle_cdc_generation(std::optional<cdc::generation_id>);
 
     /* If `handle_cdc_generation` fails, it schedules an asynchronous retry in the background
      * using `async_handle_cdc_generation`.
      */
-    void async_handle_cdc_generation(db_clock::time_point);
+    void async_handle_cdc_generation(cdc::generation_id);
 
     /* Wrapper around `do_handle_cdc_generation` which intercepts timeout/unavailability exceptions.
      * Returns: do_handle_cdc_generation(ts). */
-    future<bool> do_handle_cdc_generation_intercept_nonfatal_errors(db_clock::time_point);
+    future<bool> do_handle_cdc_generation_intercept_nonfatal_errors(cdc::generation_id);
 
     /* Returns `true` iff we started using the generation (it was not obsolete or already known),
      * which means that this node might write some CDC log entries using streams from this generation. */
-    future<bool> do_handle_cdc_generation(db_clock::time_point);
+    future<bool> do_handle_cdc_generation(cdc::generation_id);
 
     /* Scan CDC generation timestamps gossiped by other nodes and retrieve the latest one.
      * This function should be called once at the end of the node startup procedure
