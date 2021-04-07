@@ -379,9 +379,10 @@ void querier_cache::set_entry_ttl(std::chrono::seconds entry_ttl) {
 }
 
 future<bool> querier_cache::evict_one() noexcept {
-    auto maybe_evict_from_index = [this] (index& idx) -> future<bool> {
+    for (auto ip : {&_data_querier_index, &_mutation_querier_index, &_shard_mutation_querier_index}) {
+        auto& idx = *ip;
         if (idx.empty()) {
-            co_return false;
+            continue;
         }
         auto it = idx.begin();
         it->second->permit().semaphore().unregister_inactive_read(querier_utils::get_inactive_read_handle(*it->second));
@@ -389,30 +390,25 @@ future<bool> querier_cache::evict_one() noexcept {
         ++_stats.resource_based_evictions;
         --_stats.population;
         co_return true;
-    };
-
-    co_return co_await maybe_evict_from_index(_data_querier_index) ||
-              co_await maybe_evict_from_index(_mutation_querier_index) ||
-              co_await maybe_evict_from_index(_shard_mutation_querier_index);
+    }
+    co_return false;
 }
 
 future<> querier_cache::evict_all_for_table(const utils::UUID& schema_id) noexcept {
-    auto evict_from_index = [this, schema_id] (index& idx) -> future<> {
+    for (auto ip : {&_data_querier_index, &_mutation_querier_index, &_shard_mutation_querier_index}) {
+        auto& idx = *ip;
         for (auto it = idx.begin(); it != idx.end();) {
             if (it->second->schema().id() == schema_id) {
                 it->second->permit().semaphore().unregister_inactive_read(querier_utils::get_inactive_read_handle(*it->second));
                 it = idx.erase(it);
                 --_stats.population;
+                // FIXME: close the unregistered reader
             } else {
                 ++it;
             }
         }
-        return make_ready_future<>();
-    };
-
-    return when_all_succeed(evict_from_index(_data_querier_index),
-            evict_from_index(_mutation_querier_index),
-            evict_from_index(_shard_mutation_querier_index)).discard_result();
+    }
+    co_return;
 }
 
 querier_cache_context::querier_cache_context(querier_cache& cache, utils::UUID key, query::is_first_page is_first_page)
