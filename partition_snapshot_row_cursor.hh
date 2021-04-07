@@ -137,7 +137,11 @@ class partition_snapshot_row_cursor final {
     partition_snapshot::change_mark _change_mark;
 
     // Removes the next row from _heap and puts it into _current_row
-    void recreate_current_row() {
+    bool recreate_current_row() {
+        _current_row.clear();
+        if (_heap.empty()) {
+            return false;
+        }
         position_in_version::less_compare heap_less(_schema);
         position_in_partition::equal_compare eq(_schema);
         _continuous = false;
@@ -158,6 +162,7 @@ class partition_snapshot_row_cursor final {
         }
 
         _position = position_in_partition(_current_row[0].it->position());
+        return true;
     }
 
     void prepare_heap(position_in_partition_view lower_bound) {
@@ -165,7 +170,6 @@ class partition_snapshot_row_cursor final {
         rows_entry::tri_compare cmp(_schema);
         position_in_version::less_compare heap_less(_schema);
         _heap.clear();
-        _current_row.clear();
         _latest_it.reset();
         int version_no = 0;
         bool unique_owner = _unique_owner;
@@ -210,12 +214,7 @@ class partition_snapshot_row_cursor final {
                 boost::range::push_heap(_heap, heap_less);
             }
         }
-        _current_row.clear();
-        if (_heap.empty()) {
-            return false;
-        }
-        recreate_current_row();
-        return true;
+        return recreate_current_row();
     }
 
 public:
@@ -248,11 +247,7 @@ public:
     bool maybe_advance_to(position_in_partition_view pos) {
         prepare_heap(pos);
         _change_mark = _snp.get_change_mark();
-        if (_heap.empty()) {
-            return false;
-        }
-        recreate_current_row();
-        return true;
+        return recreate_current_row();
     }
 
     // Brings back the cursor to validity.
