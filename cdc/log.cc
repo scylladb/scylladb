@@ -1670,7 +1670,7 @@ public:
         // clustering rows
         for (const auto& row : *preimage_set) {
             // Construct the clustering key for this row
-            std::vector<bytes> ck_parts;
+            std::vector<managed_bytes> ck_parts;
             ck_parts.reserve(_schema->clustering_key_size());
             for (auto& c : _schema->clustering_key_columns()) {
                 auto v = row.get_view_opt(c.name_as_text());
@@ -1683,7 +1683,7 @@ public:
                     // as there will be no clustering row data to load into the state.
                     return;
                 }
-                ck_parts.emplace_back(v->linearize());
+                ck_parts.emplace_back(managed_bytes(*v));
             }
             auto ck = clustering_key::from_exploded(std::move(ck_parts));
 
