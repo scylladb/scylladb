@@ -1444,3 +1444,10 @@ BOOST_AUTO_TEST_CASE(test_leader_check_quorum) {
     election_timeout(A);
     BOOST_CHECK(!A.is_leader());
 }
+
+BOOST_AUTO_TEST_CASE(test_zero) {
+    server_id id{};
+    BOOST_CHECK_THROW(raft::configuration cfg({id}), std::invalid_argument);
+    BOOST_CHECK_THROW(raft::configuration cfg(raft::server_address_set{raft::server_address{id}}), std::invalid_argument);
+    BOOST_CHECK_THROW(create_follower(id, raft::log(raft::snapshot{})), std::invalid_argument);
+}
