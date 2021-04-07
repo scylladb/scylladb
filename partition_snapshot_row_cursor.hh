@@ -186,6 +186,38 @@ class partition_snapshot_row_cursor final {
         }
         boost::range::make_heap(_heap, heap_less);
     }
+
+    // Advances the cursor to the next row.
+    // The @keep denotes whether the entries should be kept in partition version.
+    // If there is no next row, returns false and the cursor is no longer pointing at a row.
+    // Can be only called on a valid cursor pointing at a row.
+    // When throws, the cursor is invalidated and its position is not changed.
+    bool advance(bool keep) {
+        memory::on_alloc_point();
+        position_in_version::less_compare heap_less(_schema);
+        assert(iterators_valid());
+        for (auto&& curr : _current_row) {
+            if (!keep && curr.unique_owner) {
+                curr.it = curr.it.erase_and_dispose(current_deleter<rows_entry>());
+            } else {
+                ++curr.it;
+            }
+            if (curr.version_no == 0) {
+                _latest_it = curr.it;
+            }
+            if (curr.it != curr.end) {
+                _heap.push_back(curr);
+                boost::range::push_heap(_heap, heap_less);
+            }
+        }
+        _current_row.clear();
+        if (_heap.empty()) {
+            return false;
+        }
+        recreate_current_row();
+        return true;
+    }
+
 public:
     partition_snapshot_row_cursor(const schema& s, partition_snapshot& snp, bool unique_owner = false)
         : _schema(s)
@@ -302,61 +334,9 @@ public:
         return found;
     }
 
-    // Advances the cursor to the next row.
-    // If there is no next row, returns false and the cursor is no longer pointing at a row.
-    // Can be only called on a valid cursor pointing at a row.
-    // When throws, the cursor is invalidated and its position is not changed.
-    bool next() {
-        memory::on_alloc_point();
-        position_in_version::less_compare heap_less(_schema);
-        assert(iterators_valid());
-        for (auto&& curr : _current_row) {
-            ++curr.it;
-            if (curr.version_no == 0) {
-                _latest_it = curr.it;
-            }
-            if (curr.it != curr.end) {
-                _heap.push_back(curr);
-                boost::range::push_heap(_heap, heap_less);
-            }
-        }
-        _current_row.clear();
-        if (_heap.empty()) {
-            return false;
-        }
-        recreate_current_row();
-        return true;
-    }
+    bool next() { return advance(true); }
 
-    // Advances the cursor to the next row, erasing entries under the cursor which
-    // are owned by the cursor.
-    // If there is no next row, returns false and the cursor is no longer pointing at a row.
-    // Can be only called on a valid cursor pointing at a row.
-    // When throws, the cursor is invalidated and its position is not changed.
-    bool erase_and_advance() {
-        memory::on_alloc_point();
-        position_in_version::less_compare heap_less(_schema);
-        for (auto&& curr : _current_row) {
-            if (curr.unique_owner) {
-                curr.it = curr.it.erase_and_dispose(current_deleter<rows_entry>());
-            } else {
-                ++curr.it;
-            }
-            if (curr.version_no == 0) {
-                _latest_it = curr.it;
-            }
-            if (curr.it != curr.end) {
-                _heap.push_back(curr);
-                boost::range::push_heap(_heap, heap_less);
-            }
-        }
-        _current_row.clear();
-        if (_heap.empty()) {
-            return false;
-        }
-        recreate_current_row();
-        return true;
-    }
+    bool erase_and_advance() { return advance(false); }
 
     // Can be called when cursor is pointing at a row.
     bool continuous() const { return _continuous; }
