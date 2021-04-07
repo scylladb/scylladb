@@ -209,21 +209,6 @@ future<reconcilable_result> mutation_query(
     tracing::trace_state_ptr trace_ptr = nullptr,
     query::querier_cache_context cache_ctx = { });
 
-future<> data_query(
-    schema_ptr s,
-    const mutation_source& source,
-    const dht::partition_range& range,
-    const query::partition_slice& slice,
-    uint64_t row_limit,
-    uint32_t partition_limit,
-    gc_clock::time_point query_time,
-    query::result::builder& builder,
-    db::timeout_clock::time_point timeout,
-    query::query_class_config class_config,
-    tracing::trace_state_ptr trace_ptr = nullptr,
-    query::querier_cache_context cache_ctx = { });
-
-
 class mutation_query_stage {
     inheriting_concrete_execution_stage<future<reconcilable_result>,
         schema_ptr,

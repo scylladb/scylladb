@@ -1964,41 +1964,6 @@ stop_iteration query_result_builder::consume_end_of_partition() {
 void query_result_builder::consume_end_of_stream() {
 }
 
-future<> data_query(
-        schema_ptr s,
-        const mutation_source& source,
-        const dht::partition_range& range,
-        const query::partition_slice& slice,
-        uint64_t row_limit,
-        uint32_t partition_limit,
-        gc_clock::time_point query_time,
-        query::result::builder& builder,
-        db::timeout_clock::time_point timeout,
-        query::query_class_config class_config,
-        tracing::trace_state_ptr trace_ptr,
-        query::querier_cache_context cache_ctx)
-{
-    if (row_limit == 0 || slice.partition_row_limit() == 0 || partition_limit == 0) {
-        return make_ready_future<>();
-    }
-
-    auto querier_opt = cache_ctx.lookup_data_querier(*s, range, slice, trace_ptr);
-    auto q = querier_opt
-            ? std::move(*querier_opt)
-            : query::data_querier(source, s, class_config.semaphore.make_permit(s.get(), "data-query"), range, slice,
-                    service::get_local_sstable_query_read_priority(), trace_ptr);
-
-    return do_with(std::move(q), [=, &builder, trace_ptr = std::move(trace_ptr), cache_ctx = std::move(cache_ctx)] (query::data_querier& q) mutable {
-        auto qrb = query_result_builder(*s, builder);
-        return q.consume_page(std::move(qrb), row_limit, partition_limit, query_time, timeout, class_config.max_memory_for_unlimited_query).then(
-                [=, &builder, &q, trace_ptr = std::move(trace_ptr), cache_ctx = std::move(cache_ctx)] () mutable {
-            if (q.are_limits_reached() || builder.is_short_read()) {
-                cache_ctx.insert(std::move(q), std::move(trace_ptr));
-            }
-        });
-    });
-}
-
 stop_iteration query::result_memory_accounter::check_local_limit() const {
     if (_total_used_memory > _maximum_result_size.hard_limit) {
         if (_short_read_allowed) {
