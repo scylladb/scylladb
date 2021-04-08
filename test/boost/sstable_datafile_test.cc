@@ -7120,3 +7120,76 @@ SEASTAR_TEST_CASE(single_key_reader_through_compound_set_test) {
         BOOST_REQUIRE(cf_stats.clustering_filter_count > 0);
     });
 }
+
+// Regression test for #8432
+SEASTAR_TEST_CASE(test_twcs_single_key_reader_filtering) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto builder = schema_builder("tests", "twcs_single_key_reader_filtering")
+                .with_column("pk", int32_type, column_kind::partition_key)
+                .with_column("ck", int32_type, column_kind::clustering_key)
+                .with_column("v", int32_type);
+        builder.set_compaction_strategy(sstables::compaction_strategy_type::time_window);
+        auto s = builder.build();
+
+        auto tmp = tmpdir();
+        auto sst_gen = [&env, s, &tmp, gen = make_lw_shared<unsigned>(1)]() {
+            return env.make_sstable(s, tmp.path().string(), (*gen)++, sstables::sstable::version_types::md, big);
+        };
+
+        auto make_row = [&] (int32_t pk, int32_t ck) {
+            mutation m(s, partition_key::from_single_value(*s, int32_type->decompose(pk)));
+            m.set_clustered_cell(clustering_key::from_single_value(*s, int32_type->decompose(ck)), to_bytes("v"), int32_t(0), api::new_timestamp());
+            return m;
+        };
+
+        auto sst1 = make_sstable_containing(sst_gen, {make_row(0, 0)});
+        auto sst2 = make_sstable_containing(sst_gen, {make_row(0, 1)});
+        auto sst3 = make_sstable_containing(sst_gen, {make_row(0, 2)});
+        auto dkey = sst1->get_first_decorated_key();
+
+        auto cm = make_lw_shared<compaction_manager>();
+        column_family::config cfg = column_family_test_config(env.manager());
+        ::cf_stats cf_stats{0};
+        cfg.cf_stats = &cf_stats;
+        cfg.datadir = tmp.path().string();
+        auto tracker = make_lw_shared<cache_tracker>();
+        cell_locker_stats cl_stats;
+        column_family cf(s, cfg, column_family::no_commitlog(), *cm, cl_stats, *tracker);
+        cf.mark_ready_for_writes();
+        cf.start();
+
+        auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::time_window, {});
+
+        auto set = cs.make_sstable_set(s);
+        set.insert(std::move(sst1));
+        set.insert(std::move(sst2));
+        set.insert(std::move(sst3));
+
+        reader_permit permit = tests::make_permit();
+        utils::estimated_histogram eh;
+        auto pr = dht::partition_range::make_singular(dkey);
+
+        auto slice = partition_slice_builder(*s)
+                    .with_range(query::clustering_range {
+                        query::clustering_range::bound { clustering_key_prefix::from_single_value(*s, int32_type->decompose(0)) },
+                        query::clustering_range::bound { clustering_key_prefix::from_single_value(*s, int32_type->decompose(1)) },
+                    }).build();
+
+        auto reader = set.create_single_key_sstable_reader(
+                &cf, s, permit, eh, pr, slice, default_priority_class(),
+                tracing::trace_state_ptr(), ::streamed_mutation::forwarding::no,
+                ::mutation_reader::forwarding::no);
+
+        auto checked_by_ck = cf_stats.sstables_checked_by_clustering_filter;
+        auto surviving_after_ck = cf_stats.surviving_sstables_after_clustering_filter;
+
+        // consume all fragments
+        while (reader(db::no_timeout).get());
+
+        // sst1 and sst2 should have been checked by the CK filter before we started reading (when we created the reader).
+        // sst3 should have been checked by the CK filter during fragment consumption and shouldn't have passed.
+        // With the bug in #8432, sst3 wouldn't even be checked by the CK filter since it would pass right after checking the PK filter.
+        BOOST_REQUIRE_EQUAL(cf_stats.sstables_checked_by_clustering_filter - checked_by_ck, 1);
+        BOOST_REQUIRE_EQUAL(cf_stats.surviving_sstables_after_clustering_filter - surviving_after_ck, 0);
+    });
+}

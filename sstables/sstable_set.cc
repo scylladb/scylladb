@@ -809,8 +809,8 @@ time_series_sstable_set::create_single_key_sstable_reader(
     // the queue is exhausted. We use that fact to gather statistics.
     auto filter = [pk_filter = std::move(pk_filter), ck_filter = std::move(ck_filter), &stats]
         (const sstable& sst) {
-            if (pk_filter(sst)) {
-                return true;
+            if (!pk_filter(sst)) {
+                return false;
             }
 
             ++stats.sstables_checked_by_clustering_filter;
