@@ -82,6 +82,19 @@ void check_tombstone_slice(const schema& s, const utils::chunked_vector<range_to
     assert_that(s, actual).is_equal_to(expected_list);
 }
 
+// Reads the rest of the partition into a mutation_partition object.
+// There must be at least one entry ahead of the cursor.
+// The cursor must be pointing at a row and valid.
+// The cursor will not be pointing at a row after this.
+static mutation_partition read_partition_from(const schema& schema, partition_snapshot_row_cursor& cur) {
+    mutation_partition p(schema.shared_from_this());
+    do {
+        p.clustered_row(schema, cur.position(), is_dummy(cur.dummy()), is_continuous(cur.continuous()))
+            .apply(schema, cur.row(false).as_deletable_row());
+    } while (cur.next());
+    return p;
+}
+
 SEASTAR_TEST_CASE(test_range_tombstone_slicing) {
     return seastar::async([] {
         logalloc::region r;
@@ -480,7 +493,7 @@ SEASTAR_TEST_CASE(test_eviction_with_active_reader) {
             {
                 logalloc::reclaim_lock rl(ms.region());
                 cursor.maybe_refresh();
-                auto mp = cursor.read_partition();
+                auto mp = read_partition_from(s, cursor);
                 assert_that(table.schema(), mp).is_equal_to(s, (m1 + m2).partition());
             }
         }
@@ -547,7 +560,7 @@ SEASTAR_TEST_CASE(test_apply_to_incomplete_respects_continuity) {
 static mutation_partition read_using_cursor(partition_snapshot& snap) {
     partition_snapshot_row_cursor cur(*snap.schema(), snap);
     cur.maybe_refresh();
-    auto mp = cur.read_partition();
+    auto mp = read_partition_from(*snap.schema(), cur);
     for (auto&& rt : snap.range_tombstones()) {
         mp.apply_delete(*snap.schema(), rt);
     }
