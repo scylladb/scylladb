@@ -320,7 +320,7 @@ public:
                                       table_name = std::move(table_name)] (database& db) mutable {
           auto& cf = db.find_column_family(ks_name, table_name);
           auto schema = cf.schema();
-          auto permit = db.get_reader_concurrency_semaphore().make_permit(schema.get(), "require_column_has_value()");
+          auto permit = db.get_reader_concurrency_semaphore().make_tracking_only_permit(schema.get(), "require_column_has_value()");
           return cf.find_partition_slow(schema, permit, pkey)
                   .then([schema, ckey, column_name, exp] (column_family::const_mutation_partition_ptr p) {
             assert(p != nullptr);
@@ -784,7 +784,7 @@ future<> do_with_cql_env_thread(std::function<void(cql_test_env&)> func, cql_tes
 }
 
 reader_permit make_reader_permit(cql_test_env& env) {
-    return env.local_db().get_reader_concurrency_semaphore().make_permit(nullptr, "test");
+    return env.local_db().get_reader_concurrency_semaphore().make_tracking_only_permit(nullptr, "test");
 }
 
 namespace debug {

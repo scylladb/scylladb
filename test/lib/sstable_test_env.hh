@@ -82,7 +82,7 @@ public:
 
     test_env_sstables_manager& manager() { return *_mgr; }
     reader_concurrency_semaphore& semaphore() { return *_semaphore; }
-    reader_permit make_reader_permit(const schema* const s = nullptr, const char* n = "test") { return _semaphore->make_permit(s, n); }
+    reader_permit make_reader_permit(const schema* const s = nullptr, const char* n = "test") { return _semaphore->make_tracking_only_permit(s, n); }
 
     future<> working_sst(schema_ptr schema, sstring dir, unsigned long generation) {
         return reusable_sst(std::move(schema), dir, generation).then([] (auto ptr) { return make_ready_future<>(); });

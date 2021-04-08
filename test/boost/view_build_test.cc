@@ -439,7 +439,7 @@ SEASTAR_TEST_CASE(test_view_update_generator) {
             sstables::sstable_writer_config sst_cfg = e.db().local().get_user_sstables_manager().configure_writer("test");
             auto& pc = service::get_local_streaming_priority();
 
-            auto permit = e.local_db().get_reader_concurrency_semaphore().make_permit(s.get(), "test");
+            auto permit = e.local_db().get_reader_concurrency_semaphore().make_tracking_only_permit(s.get(), "test");
             sst->write_components(flat_mutation_reader_from_mutations(std::move(permit), {m}), 1ul, s, sst_cfg, {}, pc).get();
             sst->open_data().get();
             t->add_sstable_and_update_cache(sst).get();
@@ -549,7 +549,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_deadlock) {
         sstables::sstable_writer_config sst_cfg = e.local_db().get_user_sstables_manager().configure_writer("test");
         auto& pc = service::get_local_streaming_priority();
 
-        auto permit = e.local_db().get_reader_concurrency_semaphore().make_permit(s.get(), "test");
+        auto permit = e.local_db().get_reader_concurrency_semaphore().make_tracking_only_permit(s.get(), "test");
         sst->write_components(flat_mutation_reader_from_mutations(std::move(permit), {m}), 1ul, s, sst_cfg, {}, pc).get();
         sst->open_data().get();
         t->add_sstable_and_update_cache(sst).get();
@@ -626,7 +626,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_register_semaphore_unit_leak
             sstables::sstable_writer_config sst_cfg = e.local_db().get_user_sstables_manager().configure_writer("test");
             auto& pc = service::get_local_streaming_priority();
 
-            auto permit = e.local_db().get_reader_concurrency_semaphore().make_permit(s.get(), "test");
+            auto permit = e.local_db().get_reader_concurrency_semaphore().make_tracking_only_permit(s.get(), "test");
             sst->write_components(flat_mutation_reader_from_mutations(std::move(permit), {m}), 1ul, s, sst_cfg, {}, pc).get();
             sst->open_data().get();
             t->add_sstable_and_update_cache(sst).get();
@@ -702,7 +702,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering) {
 
     class consumer_verifier {
         schema_ptr _schema;
-        reader_permit _permit;
+        reader_concurrency_semaphore& _semaphore;
         const partition_size_map& _partition_rows;
         std::vector<mutation>& _collected_muts;
         std::unique_ptr<row_locker> _rl;
@@ -727,7 +727,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering) {
         void check(mutation mut) {
             // First we check that we would be able to create a reader, even
             // though the staging reader consumed all resources.
-            auto res_units = _permit.wait_admission(new_reader_base_cost, db::timeout_clock::now()).get0();
+            auto permit = _semaphore.obtain_permit(_schema.get(), "consumer_verifier", new_reader_base_cost, db::timeout_clock::now()).get0();
 
             const size_t current_rows = rows_in_mut(mut);
             const auto total_rows = _partition_rows.at(mut.decorated_key());
@@ -773,7 +773,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering) {
     public:
         consumer_verifier(schema_ptr schema, reader_concurrency_semaphore& sem, const partition_size_map& partition_rows, std::vector<mutation>& collected_muts, bool& ok)
             : _schema(std::move(schema))
-            , _permit(sem.make_permit(_schema.get(), "consumer_verifier"))
+            , _semaphore(sem)
             , _partition_rows(partition_rows)
             , _collected_muts(collected_muts)
             , _rl(std::make_unique<row_locker>(_schema))
@@ -832,7 +832,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering) {
             return less(a.decorated_key(), b.decorated_key());
         });
 
-        auto permit = sem.make_permit(schema.get(), get_name());
+        auto permit = sem.obtain_permit_nowait(schema.get(), get_name(), new_reader_base_cost, db::no_timeout).get0();
 
         auto mt = make_lw_shared<memtable>(schema);
         for (const auto& mut : muts) {

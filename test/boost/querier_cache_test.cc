@@ -116,7 +116,7 @@ private:
     Querier make_querier(const dht::partition_range& range) {
         return Querier(_mutation_source,
             _s.schema(),
-            _sem.make_permit(_s.schema().get(), "make-querier"),
+            _sem.make_tracking_only_permit(_s.schema().get(), "make-querier"),
             range,
             _s.schema()->full_slice(),
             service::get_local_sstable_query_read_priority(),
@@ -757,16 +757,13 @@ SEASTAR_THREAD_TEST_CASE(test_immediate_evict_on_insert) {
     test_querier_cache t;
 
     auto& sem = t.get_semaphore();
-    auto permit1 = sem.make_permit(t.get_schema().get(), get_name());
-    auto permit2 = sem.make_permit(t.get_schema().get(), get_name());
-
-    permit1.wait_admission(0, db::no_timeout).get();
+    auto permit1 = sem.obtain_permit(t.get_schema().get(), get_name(), 0, db::no_timeout).get0();
 
     auto resources = permit1.consume_resources(reader_resources(sem.available_resources().count, 0));
 
     BOOST_CHECK_EQUAL(sem.available_resources().count, 0);
 
-    auto fut = permit2.wait_admission(1, db::no_timeout);
+    auto fut = sem.obtain_permit(t.get_schema().get(), get_name(), 1, db::no_timeout);
 
     BOOST_CHECK_EQUAL(sem.waiters(), 1);
 
@@ -792,8 +789,8 @@ SEASTAR_THREAD_TEST_CASE(test_unique_inactive_read_handle) {
         .with_column("v", int32_type)
         .build();
 
-    auto sem1_h1 = sem1.register_inactive_read(make_empty_flat_reader(schema, sem1.make_permit(schema.get(), get_name())));
-    auto sem2_h1 = sem2.register_inactive_read(make_empty_flat_reader(schema, sem2.make_permit(schema.get(), get_name())));
+    auto sem1_h1 = sem1.register_inactive_read(make_empty_flat_reader(schema, sem1.make_tracking_only_permit(schema.get(), get_name())));
+    auto sem2_h1 = sem2.register_inactive_read(make_empty_flat_reader(schema, sem2.make_tracking_only_permit(schema.get(), get_name())));
 
     // Sanity check that lookup still works with empty handle.
     BOOST_REQUIRE(!sem1.unregister_inactive_read(reader_concurrency_semaphore::inactive_read_handle{}));

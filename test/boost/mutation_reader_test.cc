@@ -1025,7 +1025,7 @@ public:
         });
 
         _reader.close().get();
-        _reader = make_restricted_flat_reader(std::move(ms), schema, semaphore.make_permit(schema.get(), "reader-wrapper"));
+        _reader = make_restricted_flat_reader(std::move(ms), schema, semaphore.make_tracking_only_permit(schema.get(), "reader-wrapper"));
     }
 
     reader_wrapper(
@@ -2625,7 +2625,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_streaming_reader) {
         auto& local_partitioner = schema->get_sharder();
         auto remote_partitioner = dht::sharder(local_partitioner.shard_count() - 1, local_partitioner.sharding_ignore_msb());
 
-        auto tested_reader = make_multishard_streaming_reader(env.db(), schema, tests::make_permit(),
+        auto tested_reader = make_multishard_streaming_reader(env.db(), schema, make_reader_permit(env),
                 [sharder = dht::selective_token_range_sharder(remote_partitioner, token_range, 0)] () mutable -> std::optional<dht::partition_range> {
             if (auto next = sharder.next()) {
                 return dht::to_partition_range(*next);
@@ -3191,7 +3191,7 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_trim_range_tombstones) {
     reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::no_limits{}, get_name());
     auto stop_sem = deferred_stop(semaphore);
     simple_schema s;
-    auto permit = semaphore.make_permit(s.schema().get(), get_name());
+    auto permit = semaphore.make_tracking_only_permit(s.schema().get(), get_name());
 
     const auto pkey = s.make_pkey();
     size_t max_buffer_size = 512;
@@ -3285,7 +3285,7 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_self_validation) {
     reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::no_limits{}, get_name());
     auto stop_sem = deferred_stop(semaphore);
     simple_schema s;
-    auto permit = semaphore.make_permit(s.schema().get(), get_name());
+    auto permit = semaphore.make_tracking_only_permit(s.schema().get(), get_name());
 
     auto pkeys = s.make_pkeys(4);
     std::ranges::sort(pkeys, dht::decorated_key::less_comparator(s.schema()));
@@ -3643,7 +3643,7 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_recreate_before_fast_forward_to) 
     reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::no_limits{}, get_name());
     auto stop_sem = deferred_stop(semaphore);
     simple_schema s;
-    auto permit = semaphore.make_permit(s.schema().get(), get_name());
+    auto permit = semaphore.make_tracking_only_permit(s.schema().get(), get_name());
     auto pkeys = s.make_pkeys(6);
     boost::sort(pkeys, dht::decorated_key::less_comparator(s.schema()));
 
@@ -3694,7 +3694,7 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_drop_flags) {
     reader_concurrency_semaphore semaphore(1, 0, get_name());
     auto stop_sem = deferred_stop(semaphore);
     simple_schema s;
-    auto permit = semaphore.make_permit(s.schema().get(), get_name());
+    auto permit = semaphore.make_tracking_only_permit(s.schema().get(), get_name());
 
     auto pkeys = s.make_pkeys(2);
     std::sort(pkeys.begin(), pkeys.end(), [&s] (const auto& pk1, const auto& pk2) {
