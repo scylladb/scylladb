@@ -822,6 +822,7 @@ public:
 
         bool operator==(const iterator_base& o) const noexcept { return is_end() ? o.is_end() : _hook == o._hook; }
         bool operator!=(const iterator_base& o) const noexcept { return !(*this == o); }
+        operator bool() const noexcept { return !is_end(); }
     };
 
     using iterator_base_const = iterator_base<true>;
@@ -900,7 +901,7 @@ public:
             iterator cur;
 
             if (nb->is_inline()) {
-                cur._idx = 0;
+                cur._idx = super::npos;
                 cur._tree = tree::from_inline(nb);
                 nb->num_keys = 0;
             } else {
