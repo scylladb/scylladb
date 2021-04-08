@@ -110,7 +110,6 @@ class partition_snapshot_row_cursor final {
     friend class partition_snapshot_row_weakref;
     struct position_in_version {
         mutation_partition::rows_type::iterator it;
-        mutation_partition::rows_type::iterator end;
         int version_no;
         bool unique_owner;
 
@@ -178,12 +177,11 @@ class partition_snapshot_row_cursor final {
             unique_owner = unique_owner && (first || !v.is_referenced());
             auto& rows = v.partition().clustered_rows();
             auto pos = rows.lower_bound(lower_bound, cmp);
-            auto end = rows.end();
             if (first) {
                 _latest_it = pos;
             }
-            if (pos != end) {
-                _heap.push_back({pos, end, version_no, unique_owner});
+            if (pos) {
+                _heap.push_back({pos, version_no, unique_owner});
             }
             ++version_no;
             first = false;
@@ -210,7 +208,7 @@ class partition_snapshot_row_cursor final {
             if (curr.version_no == 0) {
                 _latest_it = curr.it;
             }
-            if (curr.it != curr.end) {
+            if (curr.it) {
                 _heap.push_back(curr);
                 boost::range::push_heap(_heap, heap_less);
             }
@@ -277,13 +275,13 @@ public:
             auto it = rows.lower_bound(_position, match, cmp);
             _latest_it = it;
             auto heap_i = boost::find_if(_heap, [](auto&& v) { return v.version_no == 0; });
-            if (it == rows.end()) {
+            if (!it) {
                 if (heap_i != _heap.end()) {
                     _heap.erase(heap_i);
                     boost::range::make_heap(_heap, heap_less);
                 }
             } else if (match) {
-                _current_row.insert(_current_row.begin(), position_in_version{it, rows.end(), 0});
+                _current_row.insert(_current_row.begin(), position_in_version{it, 0});
                 if (heap_i != _heap.end()) {
                     _heap.erase(heap_i);
                     boost::range::make_heap(_heap, heap_less);
@@ -293,7 +291,7 @@ public:
                     heap_i->it = it;
                     boost::range::make_heap(_heap, heap_less);
                 } else {
-                    _heap.push_back({it, rows.end(), 0});
+                    _heap.push_back({it, 0});
                     boost::range::push_heap(_heap, heap_less);
                 }
             }
@@ -404,7 +402,7 @@ public:
             // Copy row from older version because rows in evictable versions must
             // hold values which are independently complete to be consistent on eviction.
             auto e = current_allocator().construct<rows_entry>(_schema, *_current_row[0].it);
-            e->set_continuous(latest_i != rows.end() && latest_i->continuous());
+            e->set_continuous(latest_i && latest_i->continuous());
             _snp.tracker()->insert(*e);
             rows.insert_before(latest_i, *e);
             return {*e, true};
@@ -440,7 +438,7 @@ public:
         auto&& rows = _snp.version()->partition().clustered_rows();
         auto latest_i = get_iterator_in_latest_version();
         auto e = current_allocator().construct<rows_entry>(_schema, pos, is_dummy(!pos.is_clustering_row()),
-            is_continuous(latest_i != rows.end() && latest_i->continuous()));
+            is_continuous(latest_i && latest_i->continuous()));
         _snp.tracker()->insert(*e);
         rows.insert_before(latest_i, *e);
         return ensure_result{*e, true};
