@@ -218,6 +218,8 @@ class partition_snapshot_row_cursor final {
         return recreate_current_row();
     }
 
+    bool is_in_latest_version() const noexcept { return _current_row[0].version_no == 0; }
+
 public:
     partition_snapshot_row_cursor(const schema& s, partition_snapshot& snp, bool unique_owner = false)
         : _schema(s)
@@ -458,8 +460,6 @@ public:
         return _position;
     }
 
-    bool is_in_latest_version() const;
-
     // Reads the rest of the partition into a mutation_partition object.
     // There must be at least one entry ahead of the cursor.
     // The cursor must be pointing at a row and valid.
@@ -510,11 +510,6 @@ public:
         return out << "]}";
     };
 };
-
-inline
-bool partition_snapshot_row_cursor::is_in_latest_version() const {
-    return _current_row[0].version_no == 0;
-}
 
 inline
 partition_snapshot_row_weakref::partition_snapshot_row_weakref(const partition_snapshot_row_cursor& c)
