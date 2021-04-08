@@ -96,6 +96,11 @@ class tracker: private progress {
     // include itself; it replicates log entries but does not
     // count itself in majorities.
     follower_progress *_leader_progress = nullptr;
+    // Hide size() function we inherited from progress since
+    // it is never right to use it directly in case of joint config
+    size_t size() const {
+        assert(false);
+    }
 public:
     using progress::begin, progress::end, progress::cbegin, progress::cend, progress::size;
 
@@ -120,6 +125,33 @@ public:
     // Calculate the current commit index based on the current
     // simple or joint quorum.
     index_t committed(index_t prev_commit_idx);
+
+    class activity_tracker {
+        tracker& _tracker;
+        size_t _cur = 0;
+        size_t _prev = 0;
+        activity_tracker(tracker& t) : _tracker(t) {}
+    public:
+        void operator()(server_id id) {
+            _cur += _tracker._current_voters.contains(id);
+            _prev += _tracker._previous_voters.contains(id);
+        }
+
+        operator bool() const {
+            bool active = _cur >= _tracker._current_voters.size()/2 + 1;
+            if (!_tracker._previous_voters.empty()) {
+                active &= _prev >= _tracker._previous_voters.size()/2 + 1;
+            }
+            return active;
+        }
+        friend tracker;
+    };
+
+    activity_tracker get_activity_tracker() {
+        return activity_tracker(*this);
+    }
+
+    friend activity_tracker;
 };
 
 // Possible leader election outcomes.

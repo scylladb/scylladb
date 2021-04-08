@@ -413,7 +413,7 @@ void fsm::maybe_commit() {
 }
 
 void fsm::tick_leader() {
-    if (_clock.now() - _last_election_time >= ELECTION_TIMEOUT) {
+    if (election_elapsed() >= ELECTION_TIMEOUT) {
         // 6.2 Routing requests to the leader
         // A leader in Raft steps down if an election timeout
         // elapses without a successful round of heartbeats to a majority
@@ -422,11 +422,12 @@ void fsm::tick_leader() {
         return become_follower(server_id{});
     }
 
-    size_t active = 1; // +1 for self
+    auto active =  leader_state().tracker.get_activity_tracker();
+    active(_my_id); // +1 for self
     for (auto& [id, progress] : leader_state().tracker) {
         if (progress.id != _my_id) {
             if (_failure_detector.is_alive(progress.id)) {
-                active++;
+                active(progress.id);
             }
             if (progress.state == follower_progress::state::PROBE) {
                 // allow one probe to be resent per follower per time tick
@@ -445,7 +446,7 @@ void fsm::tick_leader() {
             }
         }
     }
-    if (active >= leader_state().tracker.size()/2 + 1) {
+    if (active) {
         // Advance last election time if we heard from
         // the quorum during this tick.
         _last_election_time = _clock.now();
@@ -564,13 +565,18 @@ void fsm::append_entries_reply(server_id from, append_reply&& reply) {
         if (leader_state().stepdown && !leader_state().timeout_now_sent &&
                          progress.can_vote && progress.match_idx == _log.last_idx()) {
             send_timeout_now(progress.id);
+            // We may have resigned leadership if a stepdown process completed
+            // while the leader is no longer part of the configuration.
+            if (!is_leader()) {
+                return;
+            }
         }
 
         // check if any new entry can be committed
         maybe_commit();
 
-        // We may have resigned leadership if a stepdown process completed
-        // while the leader is no longer part of the configuration.
+        // The call to maybe_commit() may initiate and immediately complete stepdown process
+        // so the comment above the provios is_leader() check applies here too. 
         if (!is_leader()) {
             return;
         }
@@ -879,9 +885,11 @@ void fsm::transfer_leadership() {
 }
 
 void fsm::send_timeout_now(server_id id) {
+    logger.trace("send_timeout_now[{}] send timeout_now to {}", _my_id, id);
     send_to(id, timeout_now{_current_term});
     leader_state().timeout_now_sent = true;
     if (leader_state().tracker.leader_progress() == nullptr) {
+        logger.trace("send_timeout_now[{}] become follower", _my_id);
         become_follower({});
     }
 }

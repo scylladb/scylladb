@@ -1009,6 +1009,60 @@ BOOST_AUTO_TEST_CASE(test_leader_stepdown) {
     output = fsm.get_output();
     BOOST_CHECK_EQUAL(output.messages.size(), 1);
     BOOST_CHECK(std::holds_alternative<raft::timeout_now>(output.messages.back().second));
+
+
+    /// Check that leader stepdown works when the leader is removed from the config and there are entries above C_new in its log
+    raft::configuration cfg2({raft::server_address{id1.id}, raft::server_address{id2.id}, raft::server_address{id3.id}});
+    raft::log log2(raft::snapshot{.config = cfg});
+
+    raft::fsm fsm2(id1, term_t{1}, /* voted for */ server_id{}, std::move(log2), trivial_failure_detector, fsm_cfg);
+
+
+    election_timeout(fsm2);
+    // Turn to a leader
+    fsm2.step(id2, raft::vote_reply{fsm2.get_current_term(), true});
+    BOOST_CHECK(fsm2.is_leader());
+    (void)fsm2.get_output(); // send out dummy entry
+    output = fsm2.get_output();
+    append = std::get<raft::append_request>(output.messages.back().second);
+    idx = append.entries.back()->idx;
+    // Accept the dummy on id2
+    fsm2.step(id2, raft::append_reply{fsm2.get_current_term(), idx, raft::append_reply::accepted{idx}});
+    // Accept the dummy on id3
+    fsm2.step(id3, raft::append_reply{fsm2.get_current_term(), idx, raft::append_reply::accepted{idx}});
+
+    // Drop the leader from the current config and see that stepdown message is sent
+    raft::configuration newcfg2({raft::server_address{id2.id}, raft::server_address{id3.id}});
+    fsm2.add_entry(newcfg2);
+    (void)fsm2.get_output(); // send it out
+    output = fsm2.get_output();
+    append = std::get<raft::append_request>(output.messages.back().second);
+    idx = append.entries.back()->idx;
+    // Accept joint config entry on id2
+    fsm2.step(id2, raft::append_reply{fsm2.get_current_term(), idx, raft::append_reply::accepted{idx}});
+    // Accept joint config entry on id3
+    fsm2.step(id3, raft::append_reply{fsm2.get_current_term(), idx, raft::append_reply::accepted{idx}});
+    // fms added new config to the log
+    (void)fsm2.get_output(); // send it out
+    fsm2.add_entry(raft::command{}); // add one more command that will be not replicated yet
+    output = fsm2.get_output();
+    append = std::get<raft::append_request>(output.messages.back().second);
+    idx = append.entries.back()->idx;
+    // Accept new config entry on id2
+    fsm2.step(id2, raft::append_reply{fsm2.get_current_term(), idx, raft::append_reply::accepted{idx}});
+    // Accept new config entry on id3
+    fsm2.step(id3, raft::append_reply{fsm2.get_current_term(), idx, raft::append_reply::accepted{idx}});
+    // C_new is now commited
+    output = fsm2.get_output(); // this sends out the entry submitted after C_new
+    append = std::get<raft::append_request>(output.messages.back().second);
+    idx = append.entries.back()->idx;
+    // Accept the entry
+    fsm2.step(id2, raft::append_reply{fsm2.get_current_term(), idx, raft::append_reply::accepted{idx}});
+    // And check that the deposed leader sent timeout_now
+    output = fsm2.get_output();
+    BOOST_CHECK_EQUAL(output.messages.size(), 1);
+    BOOST_CHECK(std::holds_alternative<raft::timeout_now>(output.messages.back().second));
+    /// End test
 }
 
 BOOST_AUTO_TEST_CASE(test_empty_configuration) {
@@ -1355,4 +1409,38 @@ BOOST_AUTO_TEST_CASE(test_leader_ignores_messages_with_current_term) {
     raft::vote_reply msg1;
     BOOST_REQUIRE_NO_THROW(msg1 = std::get<raft::vote_reply>(output.messages[0].second));
     BOOST_CHECK(!msg1.vote_granted);
+}
+
+BOOST_AUTO_TEST_CASE(test_leader_check_quorum) {
+    discrete_failure_detector fd;
+    server_id A_id = id(), B_id = id(), C_id = id(), D_id = id();
+
+    // 4 nodes 3 voting 1 non voting (quorum is 2)
+    raft::server_address_set nodes{raft::server_address{A_id}, raft::server_address{B_id},
+            raft::server_address{C_id}, raft::server_address{D_id, false}};
+
+    raft::log log(raft::snapshot{.idx = index_t{0}, .config = raft::configuration(nodes)});
+    auto A = create_follower(A_id, log, fd);
+    auto B = create_follower(B_id, log, fd);
+    auto C = create_follower(C_id, log, fd);
+    auto D = create_follower(D_id, log, fd);
+    election_timeout(A);
+    communicate(A, B, C, D);
+    BOOST_CHECK(A.is_leader());
+    // Just because timeout passes the leader does not stepdown if quorum of nodes is alive
+    election_timeout(A);
+    BOOST_CHECK(A.is_leader());
+    // One of voting members dies but the leader is still not steepping down because there is
+    // a quorum of nodes that are still alive
+    fd.mark_dead(C_id);
+    election_timeout(A);
+    BOOST_CHECK(A.is_leader());
+    // Non voting member dies and the leader is still not stepping down (there two voting members still)
+    fd.mark_dead(D_id);
+    election_timeout(A);
+    BOOST_CHECK(A.is_leader());
+    // One more voting members dies and the leader becomes a follower now
+    fd.mark_dead(B_id);
+    election_timeout(A);
+    BOOST_CHECK(!A.is_leader());
 }
