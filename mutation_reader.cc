@@ -2275,9 +2275,9 @@ position_reader_queue::~position_reader_queue() {}
 // are not implemented and throw an error; the reader is only used for single partition queries.
 //
 // Assumes that:
-// - the queue contains at least one reader,
 // - there are no static rows,
-// - the returned fragments do not contain partition tombstones.
+// - the returned fragments do not contain partition tombstones,
+// - the merged readers return fragments from the same partition (but some or even all of them may be empty).
 class clustering_order_reader_merger {
     const schema_ptr _schema;
     const reader_permit _permit;
@@ -2389,12 +2389,17 @@ class clustering_order_reader_merger {
             if (!mf) {
                 // The reader returned end-of-stream before returning end-of-partition
                 // (otherwise we would have removed it in a previous peek). This means that
-                // we are in forwarding mode and the reader won't return any more fragments in the current range.
+                // either the reader was empty from the beginning (not even returning a `partition_start`)
+                // or we are in forwarding mode and the reader won't return any more fragments in the current range.
                 // If the reader's upper bound is smaller then the end of the current range then it won't
                 // return any more fragments in later ranges as well (subsequent fast-forward-to ranges
                 // are non-overlapping and strictly increasing), so we can remove it now.
-                // Otherwise it may start returning fragments later, so we save it for the moment
-                // in _halted_readers and will bring it back when we get fast-forwarded.
+                // Otherwise, if it previously returned a `partition_start`, it may start returning more fragments
+                // later (after we fast-forward) so we save it for the moment in _halted_readers and will bring it
+                // back when we get fast-forwarded.
+                // We also save the reader if it was empty from the beginning (no `partition_start`) since
+                // it makes the code simpler (to check for this here we would need additional state); it is a bit wasteful
+                // but completely empty readers should be rare.
                 if (_cmp(it->upper_bound, _pr_end) < 0) {
                     _all_readers.erase(it);
                 } else {
@@ -2524,19 +2529,6 @@ public:
                         : position_in_partition_view::after_all_clustered_rows())
         , _should_emit_partition_end(fwd_sm == streamed_mutation::forwarding::no)
     {
-        // The first call to `_reader_queue::pop` uses `after_all_clustered_rows`
-        // so we obtain at least one reader; we will return this reader's `partition_start`
-        // as the first fragment.
-        auto rs = _reader_queue->pop(position_in_partition_view::after_all_clustered_rows());
-        for (auto& r: rs) {
-            _all_readers.push_front(std::move(r));
-            _unpeeked_readers.push_back(_all_readers.begin());
-        }
-
-        if (rs.empty()) {
-            // No readers, no partition.
-            _should_emit_partition_end = false;
-        }
     }
 
     // We assume that operator() is called sequentially and that the caller doesn't use the batch
@@ -2553,8 +2545,22 @@ public:
             return peek_readers(timeout).then([this, timeout] { return (*this)(timeout); });
         }
 
-        auto next_peeked_pos = _peeked_readers.empty() ? _pr_end : _peeked_readers.front()->reader.peek_buffer().position();
-        // There might be queued readers containing fragments with positions <= next_peeked_pos:
+        // Before we return a batch of fragments using currently opened readers we must check the queue
+        // for potential new readers that must be opened. There are three cases which determine how ``far''
+        // should we look:
+        // - If there are some peeked readers in the heap, we must check for new readers
+        //   whose `min_position`s are <= the position of the first peeked reader; there is no need
+        //   to check for ``later'' readers (yet).
+        // - Otherwise, if we already fetched a partition start fragment, we need to look no further
+        //   than the end of the current position range (_pr_end).
+        // - Otherwise we need to look for any reader (by calling the queue with `after_all_clustered_rows`),
+        //   even for readers whose `min_position`s may be outside the current position range since they
+        //   may be the only readers which have a `partition_start` fragment which we need to return
+        //   before end-of-stream.
+        auto next_peeked_pos =
+            _peeked_readers.empty()
+                ? (_partition_start_fetched ? _pr_end : position_in_partition_view::after_all_clustered_rows())
+                : _peeked_readers.front()->reader.peek_buffer().position();
         if (!_reader_queue->empty(next_peeked_pos)) {
             auto rs = _reader_queue->pop(next_peeked_pos);
             for (auto& r: rs) {
@@ -2568,8 +2574,11 @@ public:
             // We are either in forwarding mode and waiting for a fast-forward,
             // or we've exhausted all the readers.
             if (_should_emit_partition_end) {
-                // Not forwarding, so all readers must be exhausted. Return the last fragment.
-                _current_batch.push_back(mutation_fragment(*_schema, _permit, partition_end()));
+                // Not forwarding, so all readers must be exhausted.
+                // Return a partition end fragment unless all readers have been empty from the beginning.
+                if (_partition_start_fetched) {
+                    _current_batch.push_back(mutation_fragment(*_schema, _permit, partition_end()));
+                }
                 _should_emit_partition_end = false;
             }
             return make_ready_future<mutation_fragment_batch>(_current_batch);
