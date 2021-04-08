@@ -656,7 +656,10 @@ inline
 void cache_flat_mutation_reader::add_to_buffer(const partition_snapshot_row_cursor& row) {
     if (!row.dummy()) {
         _read_context->cache().on_row_hit();
-        add_clustering_row_to_buffer(mutation_fragment(*_schema, _permit, row.row(_read_context->digest_requested())));
+        if (_read_context->digest_requested()) {
+            row.latest_row().cells().prepare_hash(*_schema, column_kind::regular_column);
+        }
+        add_clustering_row_to_buffer(mutation_fragment(*_schema, _permit, row.row()));
     } else {
         position_in_partition::less_compare less(*_schema);
         if (less(_lower_bound, row.position())) {

@@ -344,17 +344,19 @@ public:
     const clustering_key& key() const { return _position.key(); }
 
     // Can be called only when cursor is valid and pointing at a row.
-    clustering_row row(bool digest_requested) const {
+    clustering_row row() const {
         auto it = _current_row.begin();
         auto row = it->it;
-        if (digest_requested) {
-            row->row().cells().prepare_hash(_schema, column_kind::regular_column);
-        }
         auto cr = clustering_row(_schema, *row);
         for (++it; it != _current_row.end(); ++it) {
             cr.apply(_schema, *it->it);
         }
         return cr;
+    }
+
+    // Can be called only when cursor is valid and pointing at a row.
+    deletable_row& latest_row() const noexcept {
+        return _current_row[0].it->row();
     }
 
     // Can be called only when cursor is valid and pointing at a row.

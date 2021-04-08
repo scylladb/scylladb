@@ -90,7 +90,7 @@ static mutation_partition read_partition_from(const schema& schema, partition_sn
     mutation_partition p(schema.shared_from_this());
     do {
         p.clustered_row(schema, cur.position(), is_dummy(cur.dummy()), is_continuous(cur.continuous()))
-            .apply(schema, cur.row(false).as_deletable_row());
+            .apply(schema, cur.row().as_deletable_row());
     } while (cur.next());
     return p;
 }
