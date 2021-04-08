@@ -81,7 +81,6 @@ fedora_packages=(
     ethtool
     hwloc
     glibc-langpack-en
-    lld
     xxhash-devel
     makeself
     libzstd-static libzstd-devel
@@ -93,6 +92,12 @@ fedora_packages=(
     dpkg-dev
     curl
 )
+
+# lld is not available on s390x, see
+# https://src.fedoraproject.org/rpms/lld/c/aa6e69df60747496f8f22121ae8cc605c9d3498a?branch=rawhide
+if [ "$(uname -m)" != "s390x" ]; then
+    fedora_packages+=(lld)
+fi
 
 fedora_python3_packages=(
     python3-pyyaml
