@@ -482,12 +482,23 @@ future<size_t> elect_new_leader(std::vector<std::pair<std::unique_ptr<raft::serv
     BOOST_CHECK_MESSAGE(new_leader < rafts.size(),
             format("Wrong next leader value {}", new_leader));
     if (new_leader != leader) {
-        // Make current leader a follower: disconnect, timeout, re-connect
-        connected->disconnect(to_raft_id(leader));
-        elapse_elections(rafts);
-        co_await rafts[new_leader].first->elect_me_leader();
-        tlogger.debug("confirmed leader on {}", new_leader);
-        connected->connect(to_raft_id(leader));
+        do {
+            // Disconnect current leader from everyone
+            connected->disconnect(to_raft_id(leader));
+            // Make move all nodes past election threshold, also making old leader follower
+            elapse_elections(rafts);
+            // Consume leader output messages since a stray append might make new leader step down
+            co_await later();                 // yield
+            rafts[new_leader].first->wait_until_candidate();
+            // Re-connect old leader
+            connected->connect(to_raft_id(leader));
+            // Disconnect old leader from all nodes except new leader
+            connected->disconnect(to_raft_id(leader), to_raft_id(new_leader));
+            co_await rafts[new_leader].first->wait_election_done();
+            // Re-connect old leader to other nodes
+            connected->connect(to_raft_id(leader));
+        } while (!rafts[new_leader].first->is_leader());
+        tlogger.debug("confirmed leader on {}", to_raft_id(new_leader));
     }
     co_return new_leader;
 }
@@ -563,7 +574,8 @@ future<> run_test(test_case test, bool packet_drops) {
     }
 
     BOOST_TEST_MESSAGE("Electing first leader " << leader);
-    co_await rafts[leader].first->elect_me_leader();
+    rafts[leader].first->wait_until_candidate();
+    co_await rafts[leader].first->wait_election_done();
     BOOST_TEST_MESSAGE("Processing updates");
     // Process all updates in order
     size_t next_val = leader_snap_skipped + leader_initial_entries;
@@ -851,9 +863,10 @@ SEASTAR_THREAD_TEST_CASE(test_take_snapshot_and_stream) {
 // starting from a clean slate (as they do in TestLeaderElection)
 // TODO: add pre-vote case
 RAFT_TEST_CASE(etcd_test_leader_cycle, (test_case{
-         .nodes = 3,
-         .updates = {new_leader{1},new_leader{2},new_leader{0},
-                     new_leader{2},new_leader{1},new_leader{0},
-                     new_leader{1},new_leader{0},new_leader{2},
-                     new_leader{0},new_leader{1},new_leader{2}}}));
+         .nodes = 2,
+         .updates = {new_leader{1},new_leader{0},
+                     new_leader{1},new_leader{0},
+                     new_leader{1},new_leader{0},
+                     new_leader{1},new_leader{0}
+                     }}));
 
