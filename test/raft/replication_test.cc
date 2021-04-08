@@ -217,52 +217,84 @@ public:
     virtual future<> abort() { return make_ready_future<>(); }
 };
 
+struct connection {
+   raft::server_id from;
+   raft::server_id to;
+   bool operator==(const connection &o) const {
+       return from == o.from && to == o.to;
+   }
+};
+
+struct hash_connection {
+    std::size_t operator() (const connection &c) const {
+        return std::hash<utils::UUID>()(c.from.id);
+    }
+};
+
 struct connected {
-    // Usually a test wants to disconnect a leader or very few nodes
-    // so it makes sense to just track those
-    lw_shared_ptr<std::unordered_set<raft::server_id>> _disconnected;
-    // Default copy constructor for other users
-    connected() {
-        _disconnected = make_lw_shared<std::unordered_set<raft::server_id>>();
+    // Map of from->to disconnections
+    std::unordered_set<connection, hash_connection> disconnected;
+    size_t n;
+    connected(size_t n) : n(n) { }
+    // Cut connectivity of two servers both ways
+    void cut(raft::server_id id1, raft::server_id id2) {
+        disconnected.insert({id1, id2});
+        disconnected.insert({id2, id1});
     }
-    void disconnect(raft::server_id id) {
-        _disconnected->insert(id);
+    // Isolate a server
+    void disconnect(raft::server_id id, std::optional<raft::server_id> except = std::nullopt) {
+        for (size_t other = 0; other < n; ++other) {
+            auto other_id = to_raft_id(other);
+            // Disconnect if not the same, and the other id is not an exception
+            // disconnect(0, except=1)
+            if (id != other_id && !(except.has_value() && other_id == *except)) {
+                cut(id, other_id);
+            }
+        }
     }
+    // Re-connect a node to all other nodes
     void connect(raft::server_id id) {
-        _disconnected->erase(id);
+        for (auto it = disconnected.begin(); it != disconnected.end(); ) {
+            if (id == it->from || id == it->to) {
+                it = disconnected.erase(it);
+            } else {
+                ++it;
+            }
+        }
     }
     void connect_all() {
-        _disconnected->clear();
+        disconnected.clear();
     }
-    bool operator()(raft::server_id id) {
-        return _disconnected->find(id) == _disconnected->end();
+    bool operator()(raft::server_id id1, raft::server_id id2) {
+        // It's connected if both ways are not disconnected
+        return !disconnected.contains({id1, id2}) && !disconnected.contains({id1, id2});
     }
 };
 
 class failure_detector : public raft::failure_detector {
     raft::server_id _id;
-    connected _connected;
+    lw_shared_ptr<connected> _connected;
 public:
-    failure_detector(raft::server_id id, connected connected) : _id(id), _connected(connected) {}
+    failure_detector(raft::server_id id, lw_shared_ptr<connected> connected) : _id(id), _connected(connected) {}
     bool is_alive(raft::server_id server) override {
-        return _connected(server) && _connected(_id);
+        return (*_connected)(server, _id);
     }
 };
 
 class rpc : public raft::rpc {
     static std::unordered_map<raft::server_id, rpc*> net;
     raft::server_id _id;
-    connected _connected;
+    lw_shared_ptr<connected> _connected;
     lw_shared_ptr<snapshots> _snapshots;
     bool _packet_drops;
 public:
-    rpc(raft::server_id id, connected connected, lw_shared_ptr<snapshots> snapshots,
+    rpc(raft::server_id id, lw_shared_ptr<connected> connected, lw_shared_ptr<snapshots> snapshots,
             bool packet_drops) : _id(id), _connected(connected), _snapshots(snapshots),
             _packet_drops(packet_drops) {
         net[_id] = this;
     }
     virtual future<raft::snapshot_reply> send_snapshot(raft::server_id id, const raft::install_snapshot& snap) {
-        if (!_connected(id) || !_connected(_id)) {
+        if (!(*_connected)(id, _id)) {
             return make_ready_future<raft::snapshot_reply>(raft::snapshot_reply{
                     .current_term = snap.current_term,
                     .success = false});
@@ -271,35 +303,35 @@ public:
         return net[id]->_client->apply_snapshot(_id, std::move(snap));
     }
     virtual future<> send_append_entries(raft::server_id id, const raft::append_request& append_request) {
-        if (!_connected(id) || !_connected(_id) || (_packet_drops && !(rand() % 5))) {
+        if (!(*_connected)(id, _id) || (_packet_drops && !(rand() % 5))) {
             return make_ready_future<>();
         }
         net[id]->_client->append_entries(_id, append_request);
         return make_ready_future<>();
     }
     virtual future<> send_append_entries_reply(raft::server_id id, const raft::append_reply& reply) {
-        if (!_connected(id) || !_connected(_id) || (_packet_drops && !(rand() % 5))) {
+        if (!(*_connected)(id, _id) || (_packet_drops && !(rand() % 5))) {
             return make_ready_future<>();
         }
         net[id]->_client->append_entries_reply(_id, std::move(reply));
         return make_ready_future<>();
     }
     virtual future<> send_vote_request(raft::server_id id, const raft::vote_request& vote_request) {
-        if (!_connected(id) || !_connected(_id)) {
+        if (!(*_connected)(id, _id)) {
             return make_ready_future<>();
         }
         net[id]->_client->request_vote(_id, std::move(vote_request));
         return make_ready_future<>();
     }
     virtual future<> send_vote_reply(raft::server_id id, const raft::vote_reply& vote_reply) {
-        if (!_connected(id) || !_connected(_id)) {
+        if (!(*_connected)(id, _id)) {
             return make_ready_future<>();
         }
         net[id]->_client->request_vote_reply(_id, std::move(vote_reply));
         return make_ready_future<>();
     }
     virtual future<> send_timeout_now(raft::server_id id, const raft::timeout_now& timeout_now) {
-        if (!_connected(id) || !_connected(_id)) {
+        if (!(*_connected)(id, _id)) {
             return make_ready_future<>();
         }
         net[id]->_client->timeout_now_request(_id, std::move(timeout_now));
@@ -314,7 +346,7 @@ std::unordered_map<raft::server_id, rpc*> rpc::net;
 
 std::pair<std::unique_ptr<raft::server>, state_machine*>
 create_raft_server(raft::server_id uuid, state_machine::apply_fn apply, initial_state state,
-        size_t apply_entries, connected connected, lw_shared_ptr<snapshots> snapshots,
+        size_t apply_entries, lw_shared_ptr<connected> connected, lw_shared_ptr<snapshots> snapshots,
         lw_shared_ptr<persisted_snapshots> persisted_snapshots, bool packet_drops) {
 
     auto sm = std::make_unique<state_machine>(uuid, std::move(apply), apply_entries, snapshots);
@@ -330,7 +362,7 @@ create_raft_server(raft::server_id uuid, state_machine::apply_fn apply, initial_
 }
 
 future<std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>> create_cluster(std::vector<initial_state> states, state_machine::apply_fn apply, size_t apply_entries,
-        connected connected, lw_shared_ptr<snapshots> snapshots,
+        lw_shared_ptr<connected> connected, lw_shared_ptr<snapshots> snapshots,
         lw_shared_ptr<persisted_snapshots> persisted_snapshots, bool packet_drops) {
     raft::configuration config;
     std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>> rafts;
@@ -429,11 +461,11 @@ struct test_case {
 };
 
 future<> wait_log(std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>& rafts,
-        connected& connected, size_t leader) {
+        lw_shared_ptr<connected> connected, size_t leader) {
     // Wait for leader log to propagate
     auto leader_log_idx = rafts[leader].first->log_last_idx();
     for (size_t s = 0; s < rafts.size(); ++s) {
-        if (s != leader && connected(to_raft_id(s))) {
+        if (s != leader && (*connected)(to_raft_id(s), to_raft_id(leader))) {
             co_await rafts[s].first->wait_log_idx(leader_log_idx);
         }
     }
@@ -495,7 +527,7 @@ future<> run_test(test_case test, bool packet_drops) {
 
     auto snaps = make_lw_shared<snapshots>();
     auto persisted_snaps = make_lw_shared<persisted_snapshots>();
-    connected connected{};
+    auto connected = make_lw_shared<struct connected>(test.nodes);
 
     auto rafts = co_await create_cluster(states, apply_changes, test.total_values, connected,
             snaps, persisted_snaps, packet_drops);
@@ -535,12 +567,12 @@ future<> run_test(test_case test, bool packet_drops) {
                         format("Wrong next leader value {}", next_leader));
                 co_await wait_log(rafts, connected, leader);
                 // Make current leader a follower: disconnect, timeout, re-connect
-                connected.disconnect(to_raft_id(leader));
+                connected->disconnect(to_raft_id(leader));
                 for (size_t s = 0; s < test.nodes; ++s) {
                     rafts[s].first->elapse_election();
                 }
                 co_await rafts[next_leader].first->elect_me_leader();
-                connected.connect(to_raft_id(leader));
+                connected->connect(to_raft_id(leader));
                 tlogger.debug("confirmed leader on {}", next_leader);
                 leader = next_leader;
             }
@@ -549,7 +581,7 @@ future<> run_test(test_case test, bool packet_drops) {
             co_await wait_log(rafts, connected, leader);
             pause_tickers(tickers);
             auto p = std::get<partition>(update);
-            connected.connect_all();
+            connected->connect_all();
             std::unordered_set<size_t> partition_servers;
             struct leader new_leader;
             bool have_new_leader = false;
@@ -567,7 +599,7 @@ future<> run_test(test_case test, bool packet_drops) {
             for (size_t s = 0; s < test.nodes; ++s) {
                 if (partition_servers.find(s) == partition_servers.end()) {
                     // Disconnect servers not in main partition
-                    connected.disconnect(to_raft_id(s));
+                    connected->disconnect(to_raft_id(s));
                 }
             }
             if (have_new_leader && new_leader.id != leader) {
@@ -602,7 +634,7 @@ future<> run_test(test_case test, bool packet_drops) {
         }
     }
 
-    connected.connect_all();
+    connected->connect_all();
 
     BOOST_TEST_MESSAGE("Appending remaining values");
     if (next_val < test.total_values) {
