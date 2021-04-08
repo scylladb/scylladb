@@ -3829,10 +3829,25 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_recreate_before_fast_forward_to) 
 }
 
 struct mutation_bounds {
-    mutation m;
+    std::optional<mutation> m;
     position_in_partition lower;
     position_in_partition upper;
 };
+
+static reader_bounds make_reader_bounds(
+        schema_ptr s, reader_permit permit, mutation_bounds mb, streamed_mutation::forwarding fwd,
+        const query::partition_slice* slice = nullptr) {
+    if (!slice) {
+        slice = &s->full_slice();
+    }
+
+    return reader_bounds {
+        .r = mb.m ? flat_mutation_reader_from_mutations(permit, {std::move(*mb.m)}, *slice, fwd)
+                  : make_empty_flat_reader(s, permit),
+        .lower = std::move(mb.lower),
+        .upper = std::move(mb.upper)
+    };
+}
 
 struct clustering_order_merger_test_generator {
     struct scenario {
@@ -3843,13 +3858,13 @@ struct clustering_order_merger_test_generator {
     schema_ptr _s;
     partition_key _pk;
 
-    clustering_order_merger_test_generator()
-        : _s(make_schema()), _pk(partition_key::from_single_value(*_s, int32_type->decompose(0)))
+    clustering_order_merger_test_generator(std::optional<sstring> pk = std::nullopt)
+        : _s(make_schema()), _pk(partition_key::from_single_value(*_s, utf8_type->decompose(pk ? *pk : make_local_key(make_schema()))))
     {}
 
     static schema_ptr make_schema() {
         return schema_builder("ks", "t")
-            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_column("pk", utf8_type, column_kind::partition_key)
             .with_column("ck", int32_type, column_kind::clustering_key)
             .with_column("v", int32_type, column_kind::regular_column)
             .build();
@@ -3882,6 +3897,13 @@ struct clustering_order_merger_test_generator {
         std::vector<mutation_bounds> readers_data;
 
         auto num_readers = tests::random::get_int(1, 10, engine);
+        auto num_empty_readers = tests::random::get_int(1, num_readers, engine);
+        while (num_empty_readers--) {
+            auto lower = -tests::random::get_int(0, 5, engine);
+            auto upper = tests::random::get_int(0, 5, engine);
+            readers_data.push_back(mutation_bounds{std::nullopt, mk_pos_for(lower), mk_pos_for(upper)});
+            num_readers--;
+        }
         while (num_readers--) {
             auto len = tests::random::get_int(0, 15, engine);
             auto ks = tests::random::random_subset<int>(100, len, engine);
@@ -3929,16 +3951,17 @@ struct clustering_order_merger_test_generator {
 SEASTAR_THREAD_TEST_CASE(test_clustering_order_merger_in_memory) {
     clustering_order_merger_test_generator g;
 
-    auto make_authority = [] (mutation mut, streamed_mutation::forwarding fwd) {
-        return flat_mutation_reader_from_mutations(tests::make_permit(), {std::move(mut)}, fwd);
+    auto make_authority = [s = g._s] (std::optional<mutation> mut, streamed_mutation::forwarding fwd) {
+        if (mut) {
+            return flat_mutation_reader_from_mutations(tests::make_permit(), {std::move(*mut)}, fwd);
+        }
+        return make_empty_flat_reader(s, tests::make_permit());
     };
 
     auto make_tested = [s = g._s] (std::vector<mutation_bounds> ms, streamed_mutation::forwarding fwd) {
         auto rs = boost::copy_range<std::vector<reader_bounds>>(std::move(ms)
-                | boost::adaptors::transformed([fwd] (auto&& mb) {
-                    return reader_bounds{
-                        flat_mutation_reader_from_mutations(tests::make_permit(), {std::move(mb.m)}, fwd),
-                        std::move(mb.lower), std::move(mb.upper)};
+                | boost::adaptors::transformed([s, fwd] (auto&& mb) {
+                    return make_reader_bounds(s, tests::make_permit(), std::move(mb), fwd);
                 }));
         auto q = std::make_unique<simple_position_reader_queue>(*s, std::move(rs));
         return make_clustering_combined_reader(s, tests::make_permit(), fwd, std::move(q));
@@ -3951,7 +3974,15 @@ SEASTAR_THREAD_TEST_CASE(test_clustering_order_merger_in_memory) {
     for (int run = 0; run < 1000; ++run) {
         auto scenario = g.generate_scenario(engine);
         auto merged = std::accumulate(scenario.readers_data.begin(), scenario.readers_data.end(),
-                mutation(g._s, g._pk), [] (mutation curr, const mutation_bounds& mb) { return std::move(curr) + mb.m; });
+                std::optional<mutation>{}, [&g] (std::optional<mutation> curr, const mutation_bounds& mb) {
+                    if (mb.m) {
+                        if (!curr) {
+                            curr = mutation(g._s, g._pk);
+                        }
+                        *curr += *mb.m;
+                    }
+                    return curr;
+                });
 
         {
             auto fwd = streamed_mutation::forwarding::no;
@@ -3974,10 +4005,15 @@ SEASTAR_THREAD_TEST_CASE(test_clustering_order_merger_in_memory) {
 SEASTAR_THREAD_TEST_CASE(test_clustering_order_merger_sstable_set) {
   sstables::test_env::do_with_async([] (sstables::test_env& env) {
     storage_service_for_tests ssft;
-    clustering_order_merger_test_generator g;
 
-    auto make_authority = [] (mutation mut, streamed_mutation::forwarding fwd) {
-        return flat_mutation_reader_from_mutations(tests::make_permit(), {std::move(mut)}, fwd);
+    auto pkeys = make_local_keys(2, clustering_order_merger_test_generator::make_schema());
+    clustering_order_merger_test_generator g(pkeys[0]);
+
+    auto make_authority = [s = g._s] (std::optional<mutation> mut, streamed_mutation::forwarding fwd) {
+        if (mut) {
+            return flat_mutation_reader_from_mutations(tests::make_permit(), {std::move(*mut)}, fwd);
+        }
+        return make_empty_flat_reader(s, tests::make_permit());
     };
 
     auto make_tested = [s = g._s, pr = dht::partition_range::make_singular(dht::ring_position(g.decorated_pk()))]
@@ -4002,18 +4038,35 @@ SEASTAR_THREAD_TEST_CASE(test_clustering_order_merger_sstable_set) {
 
         auto tmp = tmpdir();
         time_series_sstable_set sst_set(g._s);
-        mutation merged(g._s, g._pk);
+        std::optional<mutation> merged;
         std::unordered_set<int64_t> included_gens;
         int64_t gen = 0;
         for (auto& mb: scenario.readers_data) {
-            sst_set.insert(make_sstable_containing([s = g._s, &env, &tmp, gen = ++gen] () {
+            auto sst_factory = [s = g._s, &env, &tmp, gen = ++gen] () {
                 return env.make_sstable(std::move(s), tmp.path().string(), gen,
                     sstables::sstable::version_types::md, sstables::sstable::format_types::big);
-            }, {mb.m}));
+            };
+
+            if (mb.m) {
+                sst_set.insert(make_sstable_containing(std::move(sst_factory), {*mb.m}));
+            } else {
+                // We want to have an sstable that won't return any fragments when we query it
+                // for our partition (not even `partition_start`). For that we create an sstable
+                // with a different partition.
+                auto pk = partition_key::from_single_value(*g._s, utf8_type->decompose(pkeys[1]));
+                assert(pk != g._pk);
+
+                sst_set.insert(make_sstable_containing(std::move(sst_factory), {mutation(g._s, pk)}));
+            }
 
             if (dist(engine)) {
                 included_gens.insert(gen);
-                merged += mb.m;
+                if (mb.m) {
+                    if (!merged) {
+                        merged = mutation(g._s, g._pk);
+                    }
+                    *merged += *mb.m;
+                }
             }
         }
 
@@ -4220,9 +4273,7 @@ SEASTAR_THREAD_TEST_CASE(clustering_combined_reader_mutation_source_test) {
             for (auto& [k, ms]: good) {
                 auto rs = boost::copy_range<std::vector<reader_bounds>>(std::move(ms)
                         | boost::adaptors::transformed([&] (auto&& mb) {
-                            return reader_bounds{
-                                flat_mutation_reader_from_mutations(permit, {std::move(mb.m)}, slice, fwd_sm),
-                                std::move(mb.lower), std::move(mb.upper)};
+                            return make_reader_bounds(s, permit, std::move(mb), fwd_sm, &slice);
                         }));
                 std::sort(rs.begin(), rs.end(), [less = position_in_partition::less_compare(*s)]
                         (const reader_bounds& a, const reader_bounds& b) { return less(a.lower, b.lower); });
@@ -4241,4 +4292,24 @@ SEASTAR_THREAD_TEST_CASE(clustering_combined_reader_mutation_source_test) {
     };
 
     run_mutation_source_tests(std::move(populate));
+}
+
+// Regression test for #8445.
+SEASTAR_THREAD_TEST_CASE(test_clustering_combining_of_empty_readers) {
+    auto s = clustering_order_merger_test_generator::make_schema();
+
+    std::vector<reader_bounds> rs;
+    rs.push_back({
+        .r = make_empty_flat_reader(s, tests::make_permit()),
+        .lower = position_in_partition::before_all_clustered_rows(),
+        .upper = position_in_partition::after_all_clustered_rows()
+    });
+    auto r = make_clustering_combined_reader(
+            s, tests::make_permit(), streamed_mutation::forwarding::no,
+            std::make_unique<simple_position_reader_queue>(*s, std::move(rs)));
+
+    auto mf = r(db::no_timeout).get0();
+    if (mf) {
+        BOOST_FAIL(format("reader combined of empty readers returned fragment {}", mutation_fragment::printer(*s, *mf)));
+    }
 }
