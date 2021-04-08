@@ -371,6 +371,15 @@ public:
         }
     }
 
+    // Can be called only when cursor is valid and pointing at a row.
+    template <typename Consumer>
+    requires std::is_invocable_v<Consumer, const deletable_row&>
+    void consume_row(Consumer&& consumer) const {
+        for (const position_in_version& v : _current_row) {
+            consumer(v.it->row());
+        }
+    }
+
     // Returns memory footprint of row entries under the cursor.
     // Can be called only when cursor is valid and pointing at a row.
     size_t memory_usage() const {
