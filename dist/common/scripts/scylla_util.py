@@ -802,7 +802,7 @@ class systemd_unit:
         return run('systemctl {} disable {}'.format(self.ctlparam, self._unit), shell=True, check=True)
 
     def is_active(self):
-        return run('systemctl {} is-active {}'.format(self.ctlparam, self._unit), shell=True, capture_output=True, encoding='utf-8').stdout.strip()
+        return True if run('systemctl {} is-active {}'.format(self.ctlparam, self._unit), shell=True, capture_output=True, encoding='utf-8').stdout.strip() == 'active' else False
 
     def mask(self):
         return run('systemctl {} mask {}'.format(self.ctlparam, self._unit), shell=True, check=True)
