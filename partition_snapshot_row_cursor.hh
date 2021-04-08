@@ -339,7 +339,7 @@ public:
     bool dummy() const { return _dummy; }
 
     // Can be called only when cursor is valid and pointing at a row, and !dummy().
-    const clustering_key& key() const { return _current_row[0].it->key(); }
+    const clustering_key& key() const { return _position.key(); }
 
     // Can be called only when cursor is valid and pointing at a row.
     clustering_row row(bool digest_requested) const {
