@@ -6838,7 +6838,6 @@ SEASTAR_TEST_CASE(test_twcs_single_key_reader_filtering) {
 
         auto sst1 = make_sstable_containing(sst_gen, {make_row(0, 0)});
         auto sst2 = make_sstable_containing(sst_gen, {make_row(0, 1)});
-        auto sst3 = make_sstable_containing(sst_gen, {make_row(0, 2)});
         auto dkey = sst1->get_first_decorated_key();
 
         auto cm = make_lw_shared<compaction_manager>();
@@ -6857,7 +6856,6 @@ SEASTAR_TEST_CASE(test_twcs_single_key_reader_filtering) {
         auto set = cs.make_sstable_set(s);
         set.insert(std::move(sst1));
         set.insert(std::move(sst2));
-        set.insert(std::move(sst3));
 
         reader_permit permit = tests::make_permit();
         utils::estimated_histogram eh;
@@ -6880,10 +6878,11 @@ SEASTAR_TEST_CASE(test_twcs_single_key_reader_filtering) {
         // consume all fragments
         while (reader(db::no_timeout).get());
 
-        // sst1 and sst2 should have been checked by the CK filter before we started reading (when we created the reader).
-        // sst3 should have been checked by the CK filter during fragment consumption and shouldn't have passed.
-        // With the bug in #8432, sst3 wouldn't even be checked by the CK filter since it would pass right after checking the PK filter.
-        BOOST_REQUIRE_EQUAL(cf_stats.sstables_checked_by_clustering_filter - checked_by_ck, 1);
-        BOOST_REQUIRE_EQUAL(cf_stats.surviving_sstables_after_clustering_filter - surviving_after_ck, 0);
+        // At least sst2 should be checked by the CK filter during fragment consumption and should pass.
+        // With the bug in #8432, sst2 wouldn't even be checked by the CK filter since it would pass right after checking the PK filter.
+        BOOST_REQUIRE_GE(cf_stats.sstables_checked_by_clustering_filter - checked_by_ck, 1);
+        BOOST_REQUIRE_EQUAL(
+                cf_stats.surviving_sstables_after_clustering_filter - surviving_after_ck,
+                cf_stats.sstables_checked_by_clustering_filter - checked_by_ck);
     });
 }
