@@ -360,6 +360,7 @@ public:
     // Can be called only when cursor is valid and pointing at a row.
     // Monotonic exception guarantees.
     template <typename Consumer>
+    requires std::is_invocable_v<Consumer, deletable_row>
     void consume_row(Consumer&& consumer) {
         for (position_in_version& v : _current_row) {
             if (v.unique_owner) {
