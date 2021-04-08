@@ -267,7 +267,7 @@ public:
         // Refresh latest version's iterator in case there was an insertion
         // before it and after cursor's position. There cannot be any
         // insertions for non-latest versions, so we don't have to update them.
-        if (_current_row[0].version_no != 0) {
+        if (!is_in_latest_version()) {
             rows_entry::tri_compare cmp(_schema);
             position_in_version::less_compare heap_less(_schema);
             auto& rows = _snp.version()->partition().clustered_rows();
