@@ -2327,11 +2327,15 @@ void for_each_schema_change(std::function<void(schema_ptr, const std::vector<mut
     test_mutated_schemas();
 }
 
-static void compare_readers(const schema& s, flat_mutation_reader& authority, flat_reader_assertions& tested) {
+// Returns true iff the readers were non-empty.
+static bool compare_readers(const schema& s, flat_mutation_reader& authority, flat_reader_assertions& tested) {
+    bool empty = true;
     while (auto expected = authority(db::no_timeout).get()) {
         tested.produces(s, *expected);
+        empty = false;
     }
     tested.produces_end_of_stream();
+    return !empty;
 }
 
 void compare_readers(const schema& s, flat_mutation_reader authority, flat_mutation_reader tested) {
@@ -2339,12 +2343,14 @@ void compare_readers(const schema& s, flat_mutation_reader authority, flat_mutat
     compare_readers(s, authority, assertions);
 }
 
+// Assumes that the readers return fragments from (at most) a single (and the same) partition.
 void compare_readers(const schema& s, flat_mutation_reader authority, flat_mutation_reader tested, const std::vector<position_range>& fwd_ranges) {
     auto assertions = assert_that(std::move(tested));
-    compare_readers(s, authority, assertions);
-    for (auto& r: fwd_ranges) {
-        authority.fast_forward_to(r, db::no_timeout).get();
-        assertions.fast_forward_to(r);
-        compare_readers(s, authority, assertions);
+    if (compare_readers(s, authority, assertions)) {
+        for (auto& r: fwd_ranges) {
+            authority.fast_forward_to(r, db::no_timeout).get();
+            assertions.fast_forward_to(r);
+            compare_readers(s, authority, assertions);
+        }
     }
 }
