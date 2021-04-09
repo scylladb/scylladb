@@ -359,7 +359,7 @@ struct repair_sync_boundary {
         std::strong_ordering operator()(const repair_sync_boundary& a, const repair_sync_boundary& b) const {
             auto ret = _pk_cmp(a.pk, b.pk);
             if (ret == 0) {
-                ret = _position_cmp(a.position, b.position) <=> 0;
+                ret = _position_cmp(a.position, b.position);
             }
             return ret;
         }

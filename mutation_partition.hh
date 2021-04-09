@@ -986,22 +986,22 @@ public:
         explicit tri_compare(const schema& s) : _c(s) {}
 
         std::strong_ordering operator()(const rows_entry& e1, const rows_entry& e2) const {
-            return _c(e1.position(), e2.position()) <=> 0;
+            return _c(e1.position(), e2.position());
         }
         std::strong_ordering operator()(const clustering_key& key, const rows_entry& e) const {
-            return _c(position_in_partition_view::for_key(key), e.position()) <=> 0;
+            return _c(position_in_partition_view::for_key(key), e.position());
         }
         std::strong_ordering operator()(const rows_entry& e, const clustering_key& key) const {
-            return _c(e.position(), position_in_partition_view::for_key(key)) <=> 0;
+            return _c(e.position(), position_in_partition_view::for_key(key));
         }
         std::strong_ordering operator()(const rows_entry& e, position_in_partition_view p) const {
-            return _c(e.position(), p) <=> 0;
+            return _c(e.position(), p);
         }
         std::strong_ordering operator()(position_in_partition_view p, const rows_entry& e) const {
-            return _c(p, e.position()) <=> 0;
+            return _c(p, e.position());
         }
         std::strong_ordering operator()(position_in_partition_view p1, position_in_partition_view p2) const {
-            return _c(p1, p2) <=> 0;
+            return _c(p1, p2);
         }
     };
     struct compare {
