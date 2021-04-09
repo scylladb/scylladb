@@ -343,12 +343,10 @@ public:
 
     // Can be called only when cursor is valid and pointing at a row.
     clustering_row row() const {
-        auto it = _current_row.begin();
-        auto row = it->it;
-        auto cr = clustering_row(_schema, *row);
-        for (++it; it != _current_row.end(); ++it) {
-            cr.apply(_schema, *it->it);
-        }
+        clustering_row cr(key());
+        consume_row([&] (const deletable_row& row) {
+            cr.apply(_schema, row);
+        });
         return cr;
     }
 
