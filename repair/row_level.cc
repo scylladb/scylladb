@@ -567,7 +567,7 @@ public:
     };
 
     static sstables::offstrategy is_offstrategy_supported(streaming::stream_reason reason) {
-        std::unordered_set<streaming::stream_reason> operations_supported = {
+        static const std::unordered_set<streaming::stream_reason> operations_supported = {
             streaming::stream_reason::bootstrap,
             streaming::stream_reason::replace,
         };
