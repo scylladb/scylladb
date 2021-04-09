@@ -2074,65 +2074,6 @@ query_mutation(mutation&& m, const query::partition_slice& slice, uint64_t row_l
     return builder.build();
 }
 
-future<reconcilable_result>
-static do_mutation_query(schema_ptr s,
-               mutation_source source,
-               const dht::partition_range& range,
-               const query::partition_slice& slice,
-               uint64_t row_limit,
-               uint32_t partition_limit,
-               gc_clock::time_point query_time,
-               db::timeout_clock::time_point timeout,
-               query::query_class_config class_config,
-               query::result_memory_accounter&& accounter,
-               tracing::trace_state_ptr trace_ptr,
-               query::querier_cache_context cache_ctx)
-{
-    if (row_limit == 0 || slice.partition_row_limit() == 0 || partition_limit == 0) {
-        return make_ready_future<reconcilable_result>(reconcilable_result());
-    }
-
-    auto querier_opt = cache_ctx.lookup_mutation_querier(*s, range, slice, trace_ptr);
-    auto q = querier_opt
-            ? std::move(*querier_opt)
-            : query::mutation_querier(source, s, class_config.semaphore.make_permit(s.get(), "mutation-query"), range, slice,
-                    service::get_local_sstable_query_read_priority(), trace_ptr);
-
-    return do_with(std::move(q), [=, &slice, accounter = std::move(accounter), trace_ptr = std::move(trace_ptr), cache_ctx = std::move(cache_ctx)] (
-                query::mutation_querier& q) mutable {
-        auto rrb = reconcilable_result_builder(*s, slice, std::move(accounter));
-        return q.consume_page(std::move(rrb), row_limit, partition_limit, query_time, timeout, class_config.max_memory_for_unlimited_query).then(
-                [=, &q, trace_ptr = std::move(trace_ptr), cache_ctx = std::move(cache_ctx)] (reconcilable_result r) mutable {
-            if (q.are_limits_reached() || r.is_short_read()) {
-                cache_ctx.insert(std::move(q), std::move(trace_ptr));
-            }
-            return r;
-        });
-    });
-}
-
-mutation_query_stage::mutation_query_stage()
-    : _execution_stage("mutation_query", do_mutation_query)
-{}
-
-future<reconcilable_result>
-mutation_query(schema_ptr s,
-               mutation_source source,
-               const dht::partition_range& range,
-               const query::partition_slice& slice,
-               uint64_t row_limit,
-               uint32_t partition_limit,
-               gc_clock::time_point query_time,
-               db::timeout_clock::time_point timeout,
-               query::query_class_config class_config,
-               query::result_memory_accounter&& accounter,
-               tracing::trace_state_ptr trace_ptr,
-               query::querier_cache_context cache_ctx)
-{
-    return do_mutation_query(std::move(s), std::move(source), seastar::cref(range), seastar::cref(slice),
-            row_limit, partition_limit, query_time, timeout, class_config, std::move(accounter), std::move(trace_ptr), std::move(cache_ctx));
-}
-
 class counter_write_query_result_builder {
     const schema& _schema;
     mutation_opt _mutation;

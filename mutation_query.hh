@@ -184,52 +184,6 @@ query::result query_mutation(
         gc_clock::time_point now = gc_clock::now(),
         query::result_options opts = query::result_options::only_result());
 
-// Performs a query on given data source returning data in reconcilable form.
-//
-// Reads at most row_limit rows. If less rows are returned, the data source
-// didn't have more live data satisfying the query.
-//
-// Any cells which have expired according to query_time are returned as
-// deleted cells and do not count towards live data. The mutations are
-// compact, meaning that any cell which is covered by higher-level tombstone
-// is absent in the results.
-//
-// 'source' doesn't have to survive deferring.
-future<reconcilable_result> mutation_query(
-    schema_ptr,
-    mutation_source source,
-    const dht::partition_range& range,
-    const query::partition_slice& slice,
-    uint64_t row_limit,
-    uint32_t partition_limit,
-    gc_clock::time_point query_time,
-    db::timeout_clock::time_point timeout,
-    query::query_class_config class_config,
-    query::result_memory_accounter&& accounter,
-    tracing::trace_state_ptr trace_ptr = nullptr,
-    query::querier_cache_context cache_ctx = { });
-
-class mutation_query_stage {
-    inheriting_concrete_execution_stage<future<reconcilable_result>,
-        schema_ptr,
-        mutation_source,
-        const dht::partition_range&,
-        const query::partition_slice&,
-        uint32_t,
-        uint32_t,
-        gc_clock::time_point,
-        db::timeout_clock::time_point,
-        query::query_class_config,
-        query::result_memory_accounter&&,
-        tracing::trace_state_ptr,
-        query::querier_cache_context> _execution_stage;
-public:
-    explicit mutation_query_stage();
-    template <typename... Args>
-    future<reconcilable_result> operator()(Args&&... args) { return _execution_stage(std::forward<Args>(args)...); }
-    inheriting_execution_stage::stats get_stats() const { return _execution_stage.get_stats(); }
-};
-
 // Performs a query for counter updates.
 future<mutation_opt> counter_write_query(schema_ptr, const mutation_source&, reader_permit permit,
                                          const dht::decorated_key& dk,
