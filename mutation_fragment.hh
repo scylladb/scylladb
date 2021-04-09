@@ -97,6 +97,9 @@ public:
     void apply(const schema& s, const rows_entry& r) {
         _row.apply(s, deletable_row(s, r.row()));
     }
+    void apply(const schema& s, const deletable_row& r) {
+        _row.apply(s, deletable_row(s, r));
+    }
 
     position_in_partition_view position() const;
 

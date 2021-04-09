@@ -110,7 +110,6 @@ class partition_snapshot_row_cursor final {
     friend class partition_snapshot_row_weakref;
     struct position_in_version {
         mutation_partition::rows_type::iterator it;
-        mutation_partition::rows_type::iterator end;
         int version_no;
         bool unique_owner;
 
@@ -128,8 +127,8 @@ class partition_snapshot_row_cursor final {
     const schema& _schema;
     partition_snapshot& _snp;
     utils::small_vector<position_in_version, 2> _heap;
-    utils::small_vector<mutation_partition::rows_type::iterator, 2> _iterators;
     utils::small_vector<position_in_version, 2> _current_row;
+    std::optional<mutation_partition::rows_type::iterator> _latest_it;
     bool _continuous{};
     bool _dummy{};
     const bool _unique_owner;
@@ -137,7 +136,11 @@ class partition_snapshot_row_cursor final {
     partition_snapshot::change_mark _change_mark;
 
     // Removes the next row from _heap and puts it into _current_row
-    void recreate_current_row() {
+    bool recreate_current_row() {
+        _current_row.clear();
+        if (_heap.empty()) {
+            return false;
+        }
         position_in_version::less_compare heap_less(_schema);
         position_in_partition::equal_compare eq(_schema);
         _continuous = false;
@@ -158,6 +161,7 @@ class partition_snapshot_row_cursor final {
         }
 
         _position = position_in_partition(_current_row[0].it->position());
+        return true;
     }
 
     void prepare_heap(position_in_partition_view lower_bound) {
@@ -165,8 +169,7 @@ class partition_snapshot_row_cursor final {
         rows_entry::tri_compare cmp(_schema);
         position_in_version::less_compare heap_less(_schema);
         _heap.clear();
-        _current_row.clear();
-        _iterators.clear();
+        _latest_it.reset();
         int version_no = 0;
         bool unique_owner = _unique_owner;
         bool first = true;
@@ -174,16 +177,47 @@ class partition_snapshot_row_cursor final {
             unique_owner = unique_owner && (first || !v.is_referenced());
             auto& rows = v.partition().clustered_rows();
             auto pos = rows.lower_bound(lower_bound, cmp);
-            auto end = rows.end();
-            _iterators.push_back(pos);
-            if (pos != end) {
-                _heap.push_back({pos, end, version_no, unique_owner});
+            if (first) {
+                _latest_it = pos;
+            }
+            if (pos) {
+                _heap.push_back({pos, version_no, unique_owner});
             }
             ++version_no;
             first = false;
         }
         boost::range::make_heap(_heap, heap_less);
+        _change_mark = _snp.get_change_mark();
     }
+
+    // Advances the cursor to the next row.
+    // The @keep denotes whether the entries should be kept in partition version.
+    // If there is no next row, returns false and the cursor is no longer pointing at a row.
+    // Can be only called on a valid cursor pointing at a row.
+    // When throws, the cursor is invalidated and its position is not changed.
+    bool advance(bool keep) {
+        memory::on_alloc_point();
+        position_in_version::less_compare heap_less(_schema);
+        assert(iterators_valid());
+        for (auto&& curr : _current_row) {
+            if (!keep && curr.unique_owner) {
+                curr.it = curr.it.erase_and_dispose(current_deleter<rows_entry>());
+            } else {
+                ++curr.it;
+            }
+            if (curr.version_no == 0) {
+                _latest_it = curr.it;
+            }
+            if (curr.it) {
+                _heap.push_back(curr);
+                boost::range::push_heap(_heap, heap_less);
+            }
+        }
+        return recreate_current_row();
+    }
+
+    bool is_in_latest_version() const noexcept { return _current_row[0].version_no == 0; }
+
 public:
     partition_snapshot_row_cursor(const schema& s, partition_snapshot& snp, bool unique_owner = false)
         : _schema(s)
@@ -193,7 +227,8 @@ public:
     { }
 
     mutation_partition::rows_type::iterator get_iterator_in_latest_version() const {
-        return _iterators[0];
+        assert(_latest_it);
+        return *_latest_it;
     }
 
     // Returns true iff the iterators obtained since the cursor was last made valid
@@ -212,12 +247,7 @@ public:
     // Otherwise returns false and the cursor is left not pointing at a row and invalid.
     bool maybe_advance_to(position_in_partition_view pos) {
         prepare_heap(pos);
-        _change_mark = _snp.get_change_mark();
-        if (_heap.empty()) {
-            return false;
-        }
-        recreate_current_row();
-        return true;
+        return recreate_current_row();
     }
 
     // Brings back the cursor to validity.
@@ -237,20 +267,21 @@ public:
         // Refresh latest version's iterator in case there was an insertion
         // before it and after cursor's position. There cannot be any
         // insertions for non-latest versions, so we don't have to update them.
-        if (_current_row[0].version_no != 0) {
+        if (!is_in_latest_version()) {
             rows_entry::tri_compare cmp(_schema);
-            position_in_partition::equal_compare eq(_schema);
             position_in_version::less_compare heap_less(_schema);
             auto& rows = _snp.version()->partition().clustered_rows();
-            auto it = _iterators[0] = rows.lower_bound(_position, cmp);
+            bool match;
+            auto it = rows.lower_bound(_position, match, cmp);
+            _latest_it = it;
             auto heap_i = boost::find_if(_heap, [](auto&& v) { return v.version_no == 0; });
-            if (it == rows.end()) {
+            if (!it) {
                 if (heap_i != _heap.end()) {
                     _heap.erase(heap_i);
                     boost::range::make_heap(_heap, heap_less);
                 }
-            } else if (eq(_position, it->position())) {
-                _current_row.insert(_current_row.begin(), position_in_version{it, rows.end(), 0});
+            } else if (match) {
+                _current_row.insert(_current_row.begin(), position_in_version{it, 0});
                 if (heap_i != _heap.end()) {
                     _heap.erase(heap_i);
                     boost::range::make_heap(_heap, heap_less);
@@ -260,7 +291,7 @@ public:
                     heap_i->it = it;
                     boost::range::make_heap(_heap, heap_less);
                 } else {
-                    _heap.push_back({it, rows.end(), 0});
+                    _heap.push_back({it, 0});
                     boost::range::push_heap(_heap, heap_less);
                 }
             }
@@ -292,63 +323,14 @@ public:
     // When throws, the cursor is invalidated and its position is not changed.
     bool advance_to(position_in_partition_view lower_bound) {
         prepare_heap(lower_bound);
-        _change_mark = _snp.get_change_mark();
         bool found = no_clustering_row_between(_schema, lower_bound, _heap[0].it->position());
         recreate_current_row();
         return found;
     }
 
-    // Advances the cursor to the next row.
-    // If there is no next row, returns false and the cursor is no longer pointing at a row.
-    // Can be only called on a valid cursor pointing at a row.
-    // When throws, the cursor is invalidated and its position is not changed.
-    bool next() {
-        memory::on_alloc_point();
-        position_in_version::less_compare heap_less(_schema);
-        assert(iterators_valid());
-        for (auto&& curr : _current_row) {
-            ++curr.it;
-            _iterators[curr.version_no] = curr.it;
-            if (curr.it != curr.end) {
-                _heap.push_back(curr);
-                boost::range::push_heap(_heap, heap_less);
-            }
-        }
-        _current_row.clear();
-        if (_heap.empty()) {
-            return false;
-        }
-        recreate_current_row();
-        return true;
-    }
+    bool next() { return advance(true); }
 
-    // Advances the cursor to the next row, erasing entries under the cursor which
-    // are owned by the cursor.
-    // If there is no next row, returns false and the cursor is no longer pointing at a row.
-    // Can be only called on a valid cursor pointing at a row.
-    // When throws, the cursor is invalidated and its position is not changed.
-    bool erase_and_advance() {
-        memory::on_alloc_point();
-        position_in_version::less_compare heap_less(_schema);
-        for (auto&& curr : _current_row) {
-            if (curr.unique_owner) {
-                curr.it = curr.it.erase_and_dispose(current_deleter<rows_entry>());
-            } else {
-                ++curr.it;
-            }
-            _iterators[curr.version_no] = curr.it;
-            if (curr.it != curr.end) {
-                _heap.push_back(curr);
-                boost::range::push_heap(_heap, heap_less);
-            }
-        }
-        _current_row.clear();
-        if (_heap.empty()) {
-            return false;
-        }
-        recreate_current_row();
-        return true;
-    }
+    bool erase_and_advance() { return advance(false); }
 
     // Can be called when cursor is pointing at a row.
     bool continuous() const { return _continuous; }
@@ -357,25 +339,26 @@ public:
     bool dummy() const { return _dummy; }
 
     // Can be called only when cursor is valid and pointing at a row, and !dummy().
-    const clustering_key& key() const { return _current_row[0].it->key(); }
+    const clustering_key& key() const { return _position.key(); }
 
     // Can be called only when cursor is valid and pointing at a row.
-    clustering_row row(bool digest_requested) const {
-        auto it = _current_row.begin();
-        auto row = it->it;
-        if (digest_requested) {
-            row->row().cells().prepare_hash(_schema, column_kind::regular_column);
-        }
-        auto cr = clustering_row(_schema, *row);
-        for (++it; it != _current_row.end(); ++it) {
-            cr.apply(_schema, *it->it);
-        }
+    clustering_row row() const {
+        clustering_row cr(key());
+        consume_row([&] (const deletable_row& row) {
+            cr.apply(_schema, row);
+        });
         return cr;
+    }
+
+    // Can be called only when cursor is valid and pointing at a row.
+    deletable_row& latest_row() const noexcept {
+        return _current_row[0].it->row();
     }
 
     // Can be called only when cursor is valid and pointing at a row.
     // Monotonic exception guarantees.
     template <typename Consumer>
+    requires std::is_invocable_v<Consumer, deletable_row>
     void consume_row(Consumer&& consumer) {
         for (position_in_version& v : _current_row) {
             if (v.unique_owner) {
@@ -383,6 +366,15 @@ public:
             } else {
                 consumer(deletable_row(_schema, v.it->row()));
             }
+        }
+    }
+
+    // Can be called only when cursor is valid and pointing at a row.
+    template <typename Consumer>
+    requires std::is_invocable_v<Consumer, const deletable_row&>
+    void consume_row(Consumer&& consumer) const {
+        for (const position_in_version& v : _current_row) {
+            consumer(v.it->row());
         }
     }
 
@@ -418,7 +410,7 @@ public:
             // Copy row from older version because rows in evictable versions must
             // hold values which are independently complete to be consistent on eviction.
             auto e = current_allocator().construct<rows_entry>(_schema, *_current_row[0].it);
-            e->set_continuous(latest_i != rows.end() && latest_i->continuous());
+            e->set_continuous(latest_i && latest_i->continuous());
             _snp.tracker()->insert(*e);
             rows.insert_before(latest_i, *e);
             return {*e, true};
@@ -454,7 +446,7 @@ public:
         auto&& rows = _snp.version()->partition().clustered_rows();
         auto latest_i = get_iterator_in_latest_version();
         auto e = current_allocator().construct<rows_entry>(_schema, pos, is_dummy(!pos.is_clustering_row()),
-            is_continuous(latest_i != rows.end() && latest_i->continuous()));
+            is_continuous(latest_i && latest_i->continuous()));
         _snp.tracker()->insert(*e);
         rows.insert_before(latest_i, *e);
         return ensure_result{*e, true};
@@ -474,21 +466,6 @@ public:
     // Can be called when cursor is pointing at a row, even when invalid.
     const position_in_partition& position() const {
         return _position;
-    }
-
-    bool is_in_latest_version() const;
-
-    // Reads the rest of the partition into a mutation_partition object.
-    // There must be at least one entry ahead of the cursor.
-    // The cursor must be pointing at a row and valid.
-    // The cursor will not be pointing at a row after this.
-    mutation_partition read_partition() {
-        mutation_partition p(_schema.shared_from_this());
-        do {
-            p.clustered_row(_schema, position(), is_dummy(dummy()), is_continuous(continuous()))
-                .apply(_schema, row(false).as_deletable_row());
-        } while (next());
-        return p;
     }
 
     friend std::ostream& operator<<(std::ostream& out, const partition_snapshot_row_cursor& cur) {
@@ -514,29 +491,20 @@ public:
             first = false;
             out << "{v=" << v.version_no << ", pos=" << v.it->position() << ", cont=" << v.it->continuous() << "}";
         }
-        out << "], iterators=[\n  ";
-        first = true;
-        auto v = cur._snp.versions().begin();
-        for (auto&& i : cur._iterators) {
-            if (!first) {
-                out << ",\n  ";
-            }
-            first = false;
-            if (i == v->partition().clustered_rows().end()) {
+        out << "], latest_iterator=[";
+        if (cur._latest_it) {
+            mutation_partition::rows_type::iterator i = *cur._latest_it;
+            if (!i) {
                 out << "end";
             } else {
                 out << i->position();
             }
-            ++v;
+        } else {
+            out << "<none>";
         }
         return out << "]}";
     };
 };
-
-inline
-bool partition_snapshot_row_cursor::is_in_latest_version() const {
-    return _current_row[0].version_no == 0;
-}
 
 inline
 partition_snapshot_row_weakref::partition_snapshot_row_weakref(const partition_snapshot_row_cursor& c)
