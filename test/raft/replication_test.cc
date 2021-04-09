@@ -456,7 +456,7 @@ struct test_case {
     const size_t nodes;
     const size_t total_values = 100;
     uint64_t initial_term = 1;
-    const std::optional<uint64_t> initial_leader;
+    const size_t initial_leader = 0;
     const std::vector<struct initial_log> initial_states;
     const std::vector<struct initial_snapshot> initial_snapshots;
     const std::vector<raft::server::configuration> config;
@@ -546,12 +546,7 @@ void restart_tickers(std::vector<seastar::timer<lowres_clock>>& tickers) {
 future<> run_test(test_case test, bool packet_drops) {
     std::vector<initial_state> states(test.nodes);       // Server initial states
 
-    size_t leader;
-    if (test.initial_leader) {
-        leader = *test.initial_leader;
-    } else {
-        leader = 0;
-    }
+    size_t leader = test.initial_leader;
 
     states[leader].term = raft::term_t{test.initial_term};
 
