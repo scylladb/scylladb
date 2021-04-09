@@ -3584,10 +3584,6 @@ struct clustering_order_merger_test_generator {
         return m;
     }
 
-    dht::decorated_key decorated_pk() const {
-        return dht::decorate_key(*_s, _pk);
-    }
-
     scenario generate_scenario(std::mt19937& engine) const {
         std::set<int> all_ks;
         std::vector<mutation_bounds> readers_data;
@@ -3705,14 +3701,12 @@ SEASTAR_THREAD_TEST_CASE(test_clustering_order_merger_sstable_set) {
     auto pkeys = make_local_keys(2, clustering_order_merger_test_generator::make_schema());
     clustering_order_merger_test_generator g(pkeys[0]);
 
-    auto make_authority = [s = g._s] (std::optional<mutation> mut, streamed_mutation::forwarding fwd) {
-        if (mut) {
-            return flat_mutation_reader_from_mutations(tests::make_permit(), {std::move(*mut)}, fwd);
-        }
-        return make_empty_flat_reader(s, tests::make_permit());
+    auto make_authority = [s = g._s] (mutation mut, streamed_mutation::forwarding fwd) {
+        return flat_mutation_reader_from_mutations(tests::make_permit(), {std::move(mut)}, fwd);
     };
 
-    auto make_tested = [s = g._s, pos = dht::ring_position(g.decorated_pk())]
+    auto pos = dht::ring_position(dht::decorate_key(*g._s, g._pk));
+    auto make_tested = [s = g._s, pk = g._pk, &pos]
             (const time_series_sstable_set& sst_set,
                 const std::unordered_set<int64_t>& included_gens, streamed_mutation::forwarding fwd) {
         auto q = sst_set.make_min_position_reader_queue(
@@ -3720,7 +3714,8 @@ SEASTAR_THREAD_TEST_CASE(test_clustering_order_merger_sstable_set) {
                 return sst.read_row_flat(s, tests::make_permit(), pos,
                             s->full_slice(), seastar::default_priority_class(), nullptr, fwd);
             },
-            [included_gens] (const sstable& sst) { return included_gens.contains(sst.generation()); });
+            [included_gens] (const sstable& sst) { return included_gens.contains(sst.generation()); },
+            pk, s, tests::make_permit(), fwd);
         return make_clustering_combined_reader(s, tests::make_permit(), fwd, std::move(q));
     };
 
@@ -3734,7 +3729,7 @@ SEASTAR_THREAD_TEST_CASE(test_clustering_order_merger_sstable_set) {
 
         auto tmp = tmpdir();
         time_series_sstable_set sst_set(g._s);
-        std::optional<mutation> merged;
+        mutation merged(g._s, g._pk);
         std::unordered_set<int64_t> included_gens;
         int64_t gen = 0;
         for (auto& mb: scenario.readers_data) {
@@ -3758,20 +3753,9 @@ SEASTAR_THREAD_TEST_CASE(test_clustering_order_merger_sstable_set) {
             if (dist(engine)) {
                 included_gens.insert(gen);
                 if (mb.m) {
-                    if (!merged) {
-                        merged = mutation(g._s, g._pk);
-                    }
-                    *merged += *mb.m;
+                    merged += *mb.m;
                 }
             }
-        }
-
-        if (included_gens.empty()) {
-            for (auto fwd: {streamed_mutation::forwarding::no, streamed_mutation::forwarding::yes}) {
-                assert_that(make_tested(sst_set, included_gens, fwd)).produces_end_of_stream();
-            }
-
-            continue;
         }
 
         {
@@ -3780,7 +3764,8 @@ SEASTAR_THREAD_TEST_CASE(test_clustering_order_merger_sstable_set) {
         }
 
         auto fwd = streamed_mutation::forwarding::yes;
-        compare_readers(*g._s, make_authority(std::move(merged), fwd), make_tested(sst_set, included_gens, fwd), scenario.fwd_ranges);
+        compare_readers(*g._s, make_authority(std::move(merged), fwd),
+                make_tested(sst_set, included_gens, fwd), scenario.fwd_ranges);
     }
 
   }).get();
