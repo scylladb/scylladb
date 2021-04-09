@@ -24,6 +24,7 @@
 
 #include "bytes.hh"
 #include <seastar/net/byteorder.hh>
+#include <concepts>
 
 class data_input {
 public:
@@ -90,8 +91,8 @@ public:
     }
 private:
     template<typename T> size_t ssize(const T &) const;
-    template<typename T>
-    inline std::enable_if_t<std::is_fundamental<T>::value, T> peek_primitive() const {
+    template<std::integral T>
+    inline T peek_primitive() const {
         ensure(sizeof(T));
         T t;
         std::copy_n(_view.begin(), sizeof(T), reinterpret_cast<char *>(&t));
