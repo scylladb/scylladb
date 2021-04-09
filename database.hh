@@ -1310,7 +1310,16 @@ private:
         db::timeout_clock::time_point,
         query::querier_cache_context> _data_query_stage;
 
-    mutation_query_stage _mutation_query_stage;
+    inheriting_concrete_execution_stage<future<reconcilable_result>,
+        table*,
+        schema_ptr,
+        const query::read_command&,
+        query::query_class_config,
+        const dht::partition_range&,
+        tracing::trace_state_ptr,
+        query::result_memory_accounter,
+        db::timeout_clock::time_point,
+        query::querier_cache_context> _mutation_query_stage;
 
     inheriting_concrete_execution_stage<
             future<>,
