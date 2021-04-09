@@ -1917,6 +1917,10 @@ table::query(schema_ptr s,
         query::result_memory_limiter& memory_limiter,
         db::timeout_clock::time_point timeout,
         query::querier_cache_context cache_ctx) {
+    if (cmd.get_row_limit() == 0 || cmd.slice.partition_row_limit() == 0 || cmd.partition_limit == 0) {
+        co_return make_lw_shared<query::result>();
+    }
+
     _async_gate.enter();
     utils::latency_counter lc;
     _stats.reads.set_latency(lc);
@@ -1933,12 +1937,23 @@ table::query(schema_ptr s,
     auto accounter = co_await (opts.request == query::result_request::only_digest
              ? memory_limiter.new_digest_read(*cmd.max_result_size, short_read_allowed) : memory_limiter.new_data_read(*cmd.max_result_size, short_read_allowed));
 
-    query_state qs(std::move(s), cmd, opts, partition_ranges, std::move(accounter));
+    query_state qs(s, cmd, opts, partition_ranges, std::move(accounter));
 
     while (!qs.done()) {
         auto&& range = *qs.current_partition_range++;
-        co_await data_query(qs.schema, as_mutation_source(), range, qs.cmd.slice, qs.remaining_rows(),
-                qs.remaining_partitions(), qs.cmd.timestamp, qs.builder, timeout, class_config, trace_state, cache_ctx);
+
+        auto querier_opt = cache_ctx.lookup_data_querier(*s, range, qs.cmd.slice, trace_state);
+        auto q = querier_opt
+                ? std::move(*querier_opt)
+                : query::data_querier(as_mutation_source(), s, class_config.semaphore.make_permit(s.get(), "data-query"), range, qs.cmd.slice,
+                        service::get_local_sstable_query_read_priority(), trace_state);
+
+        co_await q.consume_page(query_result_builder(*s, qs.builder), qs.remaining_rows(), qs.remaining_partitions(), qs.cmd.timestamp, timeout,
+                class_config.max_memory_for_unlimited_query);
+
+        if (q.are_limits_reached() || qs.builder.is_short_read()) {
+            cache_ctx.insert(std::move(q), std::move(trace_state));
+        }
     }
 
     co_return make_lw_shared<query::result>(qs.builder.build());
