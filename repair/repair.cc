@@ -307,6 +307,29 @@ static std::vector<gms::inet_address> get_neighbors(database& db,
 #endif
 }
 
+static future<std::vector<gms::inet_address>> get_hosts_participating_in_repair(database& db,
+        const sstring& ksname,
+        const dht::token_range_vector& ranges,
+        const std::vector<sstring>& data_centers,
+        const std::vector<sstring>& hosts,
+        const std::unordered_set<gms::inet_address>& ignore_nodes) {
+
+    std::unordered_set<gms::inet_address> participating_hosts;
+
+    // Repair coordinator must participate in repair, but it is never
+    // returned by get_neighbors - add it here
+    participating_hosts.insert(utils::fb_utilities::get_broadcast_address());
+
+    co_await do_for_each(ranges, [&] (const dht::token_range& range) {
+        const auto nbs = get_neighbors(db, ksname, range, data_centers, hosts, ignore_nodes);
+        for (const auto& nb : nbs) {
+            participating_hosts.insert(nb);
+        }
+    });
+
+    co_return std::vector<gms::inet_address>(participating_hosts.begin(), participating_hosts.end());
+}
+
 static tracker* _the_tracker = nullptr;
 
 tracker& repair_tracker() {
