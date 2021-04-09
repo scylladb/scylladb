@@ -136,7 +136,9 @@ public:
 
     std::unique_ptr<position_reader_queue> make_min_position_reader_queue(
         std::function<flat_mutation_reader(sstable&)> create_reader,
-        std::function<bool(const sstable&)> filter) const;
+        std::function<bool(const sstable&)> filter,
+        partition_key pk, schema_ptr schema, reader_permit permit,
+        streamed_mutation::forwarding fwd_sm) const;
 
     virtual flat_mutation_reader create_single_key_sstable_reader(
         column_family*,
