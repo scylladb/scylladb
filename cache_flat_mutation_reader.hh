@@ -245,7 +245,7 @@ future<> cache_flat_mutation_reader::ensure_underlying(db::timeout_clock::time_p
     if (_underlying) {
         return make_ready_future<>();
     }
-    return _read_context->ensure_underlying(timeout).then([this, timeout] {
+    return _read_context->ensure_underlying(timeout).then([this] {
         flat_mutation_reader& ctx_underlying = _read_context->underlying().underlying();
         if (ctx_underlying.schema() != _schema) {
             _underlying_holder = make_delegating_reader(ctx_underlying);
