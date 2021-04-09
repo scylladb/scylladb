@@ -356,12 +356,8 @@ struct repair_sync_boundary {
         position_in_partition::tri_compare _position_cmp;
     public:
         tri_compare(const schema& s) : _pk_cmp(s), _position_cmp(s) { }
-        int operator()(const repair_sync_boundary& a, const repair_sync_boundary& b) const {
-            auto tmp = _pk_cmp(a.pk, b.pk);
-            auto ret = 0;
-            if (tmp != 0) {
-                ret = tmp < 0 ? -1 : 1;
-            }
+        std::strong_ordering operator()(const repair_sync_boundary& a, const repair_sync_boundary& b) const {
+            auto ret = _pk_cmp(a.pk, b.pk);
             if (ret == 0) {
                 ret = _position_cmp(a.position, b.position);
             }

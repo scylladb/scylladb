@@ -940,7 +940,7 @@ static void apply_tracked_tombstones(range_tombstone_accumulator& tracker, clust
 
 future<stop_iteration> view_update_builder::on_results() {
     if (_update && !_update->is_end_of_partition() && _existing && !_existing->is_end_of_partition()) {
-        int cmp = position_in_partition::tri_compare(*_schema)(_update->position(), _existing->position());
+        auto cmp = position_in_partition::tri_compare(*_schema)(_update->position(), _existing->position());
         if (cmp < 0) {
             // We have an update where there was nothing before
             if (_update->is_range_tombstone()) {

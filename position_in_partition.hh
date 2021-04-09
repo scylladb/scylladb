@@ -448,27 +448,27 @@ public:
         bound_view::tri_compare _cmp;
     private:
         template<typename T, typename U>
-        int compare(const T& a, const U& b) const {
+        std::strong_ordering compare(const T& a, const U& b) const {
             if (a._type != b._type) {
-                return composite_tri_compare::rank(a._type) - composite_tri_compare::rank(b._type);
+                return composite_tri_compare::rank(a._type) <=> composite_tri_compare::rank(b._type);
             }
             if (!a._ck) {
-                return 0;
+                return std::strong_ordering::equal;
             }
-            return _cmp(*a._ck, int8_t(a._bound_weight), *b._ck, int8_t(b._bound_weight));
+            return _cmp(*a._ck, int8_t(a._bound_weight), *b._ck, int8_t(b._bound_weight)) <=> 0;
         }
     public:
         tri_compare(const schema& s) : _cmp(s) { }
-        int operator()(const position_in_partition& a, const position_in_partition& b) const {
+        std::strong_ordering operator()(const position_in_partition& a, const position_in_partition& b) const {
             return compare(a, b);
         }
-        int operator()(const position_in_partition_view& a, const position_in_partition_view& b) const {
+        std::strong_ordering operator()(const position_in_partition_view& a, const position_in_partition_view& b) const {
             return compare(a, b);
         }
-        int operator()(const position_in_partition& a, const position_in_partition_view& b) const {
+        std::strong_ordering operator()(const position_in_partition& a, const position_in_partition_view& b) const {
             return compare(a, b);
         }
-        int operator()(const position_in_partition_view& a, const position_in_partition& b) const {
+        std::strong_ordering operator()(const position_in_partition_view& a, const position_in_partition& b) const {
             return compare(a, b);
         }
     };
