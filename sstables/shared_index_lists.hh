@@ -39,13 +39,14 @@ public:
         uint64_t hits = 0; // Number of times entry was found ready
         uint64_t misses = 0; // Number of times entry was not found
         uint64_t blocks = 0; // Number of times entry was not ready (>= misses)
+        uint64_t evictions = 0; // Number of times entry was evicted
     } _shard_stats;
 
     struct stats_updater {
         static void inc_hits() noexcept { ++_shard_stats.hits; }
         static void inc_misses() noexcept { ++_shard_stats.misses; }
         static void inc_blocks() noexcept { ++_shard_stats.blocks; }
-        static void inc_evictions() noexcept {}
+        static void inc_evictions() noexcept { ++_shard_stats.evictions; }
     };
 
     using loading_shared_lists_type = utils::loading_shared_values<key_type, index_list, std::hash<key_type>, std::equal_to<key_type>, stats_updater>;

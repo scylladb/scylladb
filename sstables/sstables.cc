@@ -2846,6 +2846,8 @@ future<> init_metrics() {
             sm::description("Index page requests which initiated a read from disk")),
         sm::make_derive("index_page_blocks", [] { return shared_index_lists::shard_stats().blocks; },
             sm::description("Index page requests which needed to wait due to page not being loaded yet")),
+        sm::make_derive("index_page_evictions", [] { return shared_index_lists::shard_stats().evictions; },
+            sm::description("Index pages which got evicted from memory")),
 
         sm::make_derive("index_page_cache_hits", [] { return index_page_cache_metrics.page_hits; },
             sm::description("Index page cache requests which were served from cache")),
