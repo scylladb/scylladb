@@ -702,7 +702,10 @@ SEASTAR_THREAD_TEST_CASE(test_resources_based_cache_eviction) {
                 nullptr,
                 db::no_timeout).get();
 
-        BOOST_CHECK_EQUAL(db.get_querier_cache_stats().resource_based_evictions, 1);
+        // The second read might be evicted too if it consumes more
+        // memory than the first and hence triggers memory control when
+        // saved in the querier cache.
+        BOOST_CHECK_GE(db.get_querier_cache_stats().resource_based_evictions, 1);
 
         // We want to read the entire partition so that the querier
         // is not saved at the end and thus ensure it is destroyed.

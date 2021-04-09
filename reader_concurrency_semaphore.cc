@@ -77,7 +77,7 @@ class reader_permit::impl : public boost::intrusive::list_base_hook<boost::intru
     sstring _op_name;
     std::string_view _op_name_view;
     reader_resources _resources;
-    reader_permit::state _state = reader_permit::state::registered;
+    reader_permit::state _state = reader_permit::state::active;
 
 public:
     struct value_tag {};
@@ -126,40 +126,25 @@ public:
     }
 
     void on_admission() {
-        _state = reader_permit::state::admitted;
-        _semaphore.consume(_resources);
+        _state = reader_permit::state::active;
     }
 
     void on_register_as_inactive() {
-        if (_state != reader_permit::state::admitted) {
-            _state = reader_permit::state::inactive;
-            _semaphore.consume(_resources);
-        }
+        _state = reader_permit::state::inactive;
     }
 
     void on_unregister_as_inactive() {
-        if (_state == reader_permit::state::inactive) {
-            _state = reader_permit::state::registered;
-            _semaphore.signal(_resources);
-        }
-    }
-
-    bool should_forward_cost() const {
-        return _state == reader_permit::state::admitted || _state == reader_permit::state::inactive;
+        _state = reader_permit::state::active;
     }
 
     void consume(reader_resources res) {
         _resources += res;
-        if (should_forward_cost()) {
-            _semaphore.consume(res);
-        }
+        _semaphore.consume(res);
     }
 
     void signal(reader_resources res) {
         _resources -= res;
-        if (should_forward_cost()) {
-            _semaphore.signal(res);
-        }
+        _semaphore.signal(res);
     }
 
     reader_resources resources() const {
@@ -226,14 +211,11 @@ reader_resources reader_permit::consumed_resources() const {
 
 std::ostream& operator<<(std::ostream& os, reader_permit::state s) {
     switch (s) {
-        case reader_permit::state::registered:
-            os << "registered";
-            break;
         case reader_permit::state::waiting:
             os << "waiting";
             break;
-        case reader_permit::state::admitted:
-            os << "admitted";
+        case reader_permit::state::active:
+            os << "active";
             break;
         case reader_permit::state::inactive:
             os << "inactive";
@@ -273,7 +255,7 @@ struct permit_group_key_hash {
 
 using permit_groups = std::unordered_map<permit_group_key, permit_stats, permit_group_key_hash>;
 
-static permit_stats do_dump_reader_permit_diagnostics(std::ostream& os, const permit_groups& permits, reader_permit::state state, bool sort_by_memory) {
+static permit_stats do_dump_reader_permit_diagnostics(std::ostream& os, const permit_groups& permits, reader_permit::state state) {
     struct permit_summary {
         const schema* s;
         std::string_view op_name;
@@ -289,25 +271,17 @@ static permit_stats do_dump_reader_permit_diagnostics(std::ostream& os, const pe
         }
     }
 
-    std::ranges::sort(permit_summaries, [sort_by_memory] (const permit_summary& a, const permit_summary& b) {
-        if (sort_by_memory) {
-            return a.memory < b.memory;
-        } else {
-            return a.count < b.count;
-        }
+    std::ranges::sort(permit_summaries, [] (const permit_summary& a, const permit_summary& b) {
+        return a.memory < b.memory;
     });
 
     permit_stats total;
 
-    auto print_line = [&os, sort_by_memory] (auto col1, auto col2, auto col3) {
-        if (sort_by_memory) {
-            fmt::print(os, "{}\t{}\t{}\n", col2, col1, col3);
-        } else {
-            fmt::print(os, "{}\t{}\t{}\n", col1, col2, col3);
-        }
+    auto print_line = [&os] (auto col1, auto col2, auto col3) {
+        fmt::print(os, "{}\t{}\t{}\n", col2, col1, col3);
     };
 
-    fmt::print(os, "Permits with state {}, sorted by {}\n", state, sort_by_memory ? "memory" : "count");
+    fmt::print(os, "Permits with state {}\n", state);
     print_line("count", "memory", "name");
     for (const auto& summary : permit_summaries) {
         total.count += summary.count;
@@ -333,13 +307,11 @@ static void do_dump_reader_permit_diagnostics(std::ostream& os, const reader_con
     permit_stats total;
 
     fmt::print(os, "Semaphore {}: {}, dumping permit diagnostics:\n", semaphore.name(), problem);
-    total += do_dump_reader_permit_diagnostics(os, permits, reader_permit::state::admitted, true);
+    total += do_dump_reader_permit_diagnostics(os, permits, reader_permit::state::active);
     fmt::print(os, "\n");
-    total += do_dump_reader_permit_diagnostics(os, permits, reader_permit::state::inactive, false);
+    total += do_dump_reader_permit_diagnostics(os, permits, reader_permit::state::inactive);
     fmt::print(os, "\n");
-    total += do_dump_reader_permit_diagnostics(os, permits, reader_permit::state::waiting, false);
-    fmt::print(os, "\n");
-    total += do_dump_reader_permit_diagnostics(os, permits, reader_permit::state::registered, false);
+    total += do_dump_reader_permit_diagnostics(os, permits, reader_permit::state::waiting);
     fmt::print(os, "\n");
     fmt::print(os, "Total: permits: {}, memory: {}\n", total.count, utils::to_hr_size(total.memory));
 }
@@ -417,11 +389,9 @@ reader_concurrency_semaphore::inactive_read_handle reader_concurrency_semaphore:
     auto& permit_impl = *reader.permit()._impl;
     // Implies _inactive_reads.empty(), we don't queue new readers before
     // evicting all inactive reads.
-    // FIXME: #4758, workaround for keeping tabs on un-admitted reads that are
-    // still registered as inactive. Without the below check, these can
-    // accumulate without limit. The real fix is #4758 -- that is to make all
-    // reads pass admission before getting started.
-    if (_wait_list.empty() && (permit_impl.get_state() == reader_permit::state::admitted || _resources >= permit_impl.resources())) {
+    // Checking the _wait_list covers the count resources only, so check memory
+    // separately.
+    if (_wait_list.empty() && _resources.memory > 0) {
       try {
         auto irp = std::make_unique<inactive_read>(std::move(reader));
         auto& ir = *irp;
