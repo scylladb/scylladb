@@ -871,21 +871,24 @@ std::vector<sstable_run> compound_sstable_set::select_sstable_runs(const std::ve
 }
 
 lw_shared_ptr<sstable_list> compound_sstable_set::all() const {
+    auto sets = _sets;
+    auto it = std::partition(sets.begin(), sets.end(), [] (const auto& set) { return set->all()->size() > 0; });
+    auto non_empty_set_count = std::distance(sets.begin(), it);
+
+    if (!non_empty_set_count) {
+        return make_lw_shared<sstable_list>();
+    }
+    // optimize for common case where primary set contains sstables, but secondary one is empty for most of the time.
+    if (non_empty_set_count == 1) {
+        const auto& non_empty_set = *std::begin(sets);
+        return non_empty_set->all();
+    }
+
     auto ret = make_lw_shared<sstable_list>();
-    for (auto& set : _sets) {
+    for (auto& set : boost::make_iterator_range(sets.begin(), it)) {
         auto ssts = set->all();
-        if (ssts->empty()) {
-            continue;
-        }
-        // optimize for common case where primary set contains sstables, but secondary one is empty for most of the time.
-        if (ret->empty()) {
-            ret = std::move(ssts);
-        } else {
-            // copy list if we need to extend it as a list referenced by a sstable_set cannot be modified.
-            ret = make_lw_shared<sstable_list>(*ret);
-            ret->reserve(ret->size() + ssts->size());
-            ret->insert(ssts->begin(), ssts->end());
-        }
+        ret->reserve(ret->size() + ssts->size());
+        ret->insert(ssts->begin(), ssts->end());
     }
     return ret;
 }
