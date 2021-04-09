@@ -543,7 +543,7 @@ void restart_tickers(std::vector<seastar::timer<lowres_clock>>& tickers) {
 }
 
 // Run test case (name, nodes, leader, initial logs, updates)
-future<> run_test(test_case test, bool packet_drops) {
+future<> run_test(test_case test, bool prevote, bool packet_drops) {
     std::vector<initial_state> states(test.nodes);       // Server initial states
 
     size_t leader = test.initial_leader;
@@ -576,6 +576,8 @@ future<> run_test(test_case test, bool packet_drops) {
         }
         if (i < test.config.size()) {
             states[i].server_config = test.config[i];
+        } else {
+            states[i].server_config = { .enable_prevoting = prevote };
         }
     }
 
@@ -699,13 +701,19 @@ future<> run_test(test_case test, bool packet_drops) {
     co_return;
 }
 
-void replication_test(struct test_case test, bool packet_drops) {
-    run_test(std::move(test), packet_drops).get();
+void replication_test(struct test_case test, bool prevote, bool packet_drops) {
+    run_test(std::move(test), prevote, packet_drops).get();
 }
 
 #define RAFT_TEST_CASE(test_name, test_body)  \
-    SEASTAR_THREAD_TEST_CASE(test_name) { replication_test(test_body, false); }  \
-    SEASTAR_THREAD_TEST_CASE(test_name ## _drops) { replication_test(test_body, true); }
+    SEASTAR_THREAD_TEST_CASE(test_name) { \
+        replication_test(test_body, false, false); }  \
+    SEASTAR_THREAD_TEST_CASE(test_name ## _drops) { \
+        replication_test(test_body, false, true); } \
+    SEASTAR_THREAD_TEST_CASE(test_name ## _prevote) { \
+        replication_test(test_body, true, false); }  \
+    SEASTAR_THREAD_TEST_CASE(test_name ## _prevote_drops) { \
+        replication_test(test_body, true, true); }
 
 // 1 nodes, simple replication, empty, no updates
 RAFT_TEST_CASE(simple_replication, (test_case{
@@ -861,7 +869,7 @@ SEASTAR_THREAD_TEST_CASE(test_take_snapshot_and_stream) {
         {.nodes = 3,
          .config = {{.snapshot_threshold = 10, .snapshot_trailing = 5}},
          .updates = {entries{5}, partition{0,1}, entries{10}, partition{0, 2}, entries{20}}}
-    , false);
+    , false, false);
 }
 
 // verifies that each node in a cluster can campaign
