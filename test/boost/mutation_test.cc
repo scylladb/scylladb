@@ -2229,31 +2229,31 @@ class clustering_fragment_summary::tri_cmp {
     position_in_partition::tri_compare _pos_tri_cmp;
     bound_view::tri_compare _bv_cmp;
 
-    int rt_tri_cmp(const range_tombstone& a, const range_tombstone& b) const {
+    std::strong_ordering rt_tri_cmp(const range_tombstone& a, const range_tombstone& b) const {
         auto start_bound_cmp = _pos_tri_cmp(a.position(), b.position());
-        if (start_bound_cmp) {
-            return start_bound_cmp;
+        if (start_bound_cmp != 0) {
+            return start_bound_cmp <=> 0;
         }
         // Range tombstones can have the same start position. In this case use
         // the end bound to decide who's "less".
-        return _bv_cmp(a.end_bound(), b.end_bound());
+        return _bv_cmp(a.end_bound(), b.end_bound()) <=> 0;
     }
 
 public:
     explicit tri_cmp(const schema& schema) : _pos_tri_cmp(schema), _bv_cmp(schema) { }
 
-    int operator()(const clustering_fragment_summary& a, const clustering_fragment_summary& b) const {
+    std::strong_ordering operator()(const clustering_fragment_summary& a, const clustering_fragment_summary& b) const {
         if (const auto res = _pos_tri_cmp(a.position(), b.position()); res != 0) {
-            return res;
+            return res <=> 0;
         }
         if (a.is_range_tombstone() && b.is_range_tombstone()) {
             return rt_tri_cmp(a.as_range_tombstone(), b.as_range_tombstone());
         }
         // Sort range tombstones before clustering rows
         if (a.is_range_tombstone() || b.is_range_tombstone()) {
-            return int(b.is_range_tombstone()) - int(a.is_range_tombstone());
+            return int(b.is_range_tombstone()) <=> int(a.is_range_tombstone());
         }
-        return 0; // two clustering rows
+        return std::strong_ordering::equal; // two clustering rows
     }
 };
 
