@@ -570,6 +570,7 @@ public:
         static const std::unordered_set<streaming::stream_reason> operations_supported = {
             streaming::stream_reason::bootstrap,
             streaming::stream_reason::replace,
+            streaming::stream_reason::removenode,
         };
         return sstables::offstrategy(operations_supported.contains(reason));
     }
