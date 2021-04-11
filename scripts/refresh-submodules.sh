@@ -24,6 +24,10 @@
 
 set -euo pipefail
 
+# The following is the default list of submodules to refresh. To only refreh
+# some of them, pass the list of modules to refresh as arguments. For example,
+# "scripts/refresh-submodules.sh seastar tools/java" only refreshes the
+# two submodules seastar and tools/java.
 submodules=(
     seastar
     tools/jmx
@@ -31,7 +35,7 @@ submodules=(
     tools/python3
 )
 
-for submodule in "${submodules[@]}"; do
+for submodule in "${@:-${submodules[@]}}"; do
     GIT_DIR="$submodule/.git" git pull --ff-only origin master
     SUMMARY=$(git submodule summary $submodule)
     if grep '^ *<' <<< "$SUMMARY"; then
