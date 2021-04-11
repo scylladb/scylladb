@@ -84,7 +84,8 @@ private:
     server_id _id;
     server::configuration _config;
 
-    seastar::pipe<std::vector<log_entry_ptr>> _apply_entries = seastar::pipe<std::vector<log_entry_ptr>>(10);
+    struct stop_apply_fiber{}; // exception to send when apply fiber is needs to be stopepd
+    queue<std::vector<log_entry_ptr>> _apply_entries = queue<std::vector<log_entry_ptr>>(10);
 
     struct stats {
         uint64_t add_command = 0;
@@ -488,7 +489,7 @@ future<> server_impl::io_fiber(index_t last_stable) {
             if (batch.committed.size()) {
                 notify_waiters(_awaited_commits, batch.committed);
                 _stats.queue_entries_for_apply += batch.committed.size();
-                co_await _apply_entries.writer.write(std::move(batch.committed));
+                co_await _apply_entries.push_eventually(std::move(batch.committed));
             }
 
             if (!_fsm->is_leader() && !_current_rpc_config.contains(server_address{_id})) {
@@ -499,6 +500,8 @@ future<> server_impl::io_fiber(index_t last_stable) {
         }
     } catch (seastar::broken_condition_variable&) {
         // Log fiber is stopped explicitly.
+    } catch (stop_apply_fiber&) {
+        // Log fiber is stopped explicitly
     } catch (...) {
         logger.error("[{}] io fiber stopped because of the error: {}", _id, std::current_exception());
     }
@@ -535,21 +538,17 @@ future<> server_impl::applier_fiber() {
 
     try {
         while (true) {
-            auto opt_batch = co_await _apply_entries.reader.read();
-            if (!opt_batch) {
-                // EOF
-                break;
-            }
+            auto batch = co_await _apply_entries.pop_eventually();
 
-            applied_since_snapshot += opt_batch->size();
+            applied_since_snapshot += batch.size();
 
             std::vector<command_cref> commands;
-            commands.reserve(opt_batch->size());
+            commands.reserve(batch.size());
 
-            index_t last_idx = opt_batch->back()->idx;
+            index_t last_idx = batch.back()->idx;
 
             boost::range::copy(
-                    *opt_batch |
+                    batch |
                     boost::adaptors::filtered([] (log_entry_ptr& entry) { return std::holds_alternative<command>(entry->data); }) |
                     boost::adaptors::transformed([] (log_entry_ptr& entry) { return std::cref(std::get<command>(entry->data)); }),
                     std::back_inserter(commands));
@@ -557,7 +556,7 @@ future<> server_impl::applier_fiber() {
             auto size = commands.size();
             co_await _state_machine->apply(std::move(commands));
             _stats.applied_entries += size;
-            notify_waiters(_awaited_applies, *opt_batch);
+            notify_waiters(_awaited_applies, batch);
 
             if (applied_since_snapshot >= _config.snapshot_threshold) {
                 snapshot snp;
@@ -571,6 +570,8 @@ future<> server_impl::applier_fiber() {
                 _stats.snapshots_taken++;
             }
         }
+    } catch(stop_apply_fiber& ex) {
+        // the fiber is aborted
     } catch (...) {
         logger.error("[{}] applier fiber stopped because of the error: {}", _id, std::current_exception());
     }
@@ -593,10 +594,8 @@ future<> server_impl::read_barrier() {
 future<> server_impl::abort() {
     logger.trace("abort() called");
     _fsm->stop();
-    {
-        // there is not explicit close for the pipe!
-        auto tmp = std::move(_apply_entries.writer);
-    }
+    _apply_entries.abort(std::make_exception_ptr(stop_apply_fiber()));
+
     for (auto& ac: _awaited_commits) {
         ac.second.done.set_exception(stopped_error());
     }
