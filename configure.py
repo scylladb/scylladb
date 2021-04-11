@@ -1419,6 +1419,9 @@ def semicolon_separated(*flags):
     f = ' '.join(flags)
     return re.sub(' +', ';', f)
 
+def real_relpath(path, start):
+    return os.path.relpath(os.path.realpath(path), os.path.realpath(start))
+
 def configure_seastar(build_dir, mode):
     seastar_build_dir = os.path.join(build_dir, mode, 'seastar')
 
@@ -1450,7 +1453,7 @@ def configure_seastar(build_dir, mode):
     if args.seastar_debug_allocations:
         seastar_cmake_args += ['-DSeastar_DEBUG_ALLOCATIONS=ON']
 
-    seastar_cmd = ['cmake', '-G', 'Ninja', os.path.relpath(args.seastar_path, seastar_build_dir)] + seastar_cmake_args
+    seastar_cmd = ['cmake', '-G', 'Ninja', real_relpath(args.seastar_path, seastar_build_dir)] + seastar_cmake_args
     cmake_dir = seastar_build_dir
     if dpdk:
         # need to cook first
@@ -1499,7 +1502,7 @@ def configure_abseil(build_dir, mode):
         '-DCMAKE_CXX_FLAGS_{}={}'.format(cmake_mode.upper(), abseil_cflags),
     ]
 
-    abseil_cmd = ['cmake', '-G', 'Ninja', os.path.relpath('abseil', abseil_build_dir)] + abseil_cmake_args
+    abseil_cmd = ['cmake', '-G', 'Ninja', real_relpath('abseil', abseil_build_dir)] + abseil_cmake_args
 
     os.makedirs(abseil_build_dir, exist_ok=True)
     subprocess.check_call(abseil_cmd, shell=False, cwd=abseil_build_dir)
