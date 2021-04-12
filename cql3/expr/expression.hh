@@ -25,6 +25,7 @@
 #include <ostream>
 #include <seastar/core/shared_ptr.hh>
 #include <variant>
+#include <concepts>
 
 #include "bytes.hh"
 #include "cql3/query_options.hh"
@@ -67,6 +68,19 @@ struct column_value {
     column_value(const column_definition* col, ::shared_ptr<term> sub) : col(col), sub(sub) {}
 };
 
+/// A tuple of column selectors. Usually used for range constraints on clustering keys.
+struct column_value_tuple {
+    std::vector<column_value> elements;
+    explicit column_value_tuple(std::vector<column_value>);
+    template <typename Range>
+            requires requires (Range r) {
+                { r.begin() } -> std::input_iterator;
+                { r.end() } -> std::input_iterator;
+                { *r.begin() } -> std::convertible_to<column_value>;
+            }
+    explicit column_value_tuple(Range r);
+};
+
 /// Represents token function on LHS of an operator relation.  No need to list column definitions
 /// here -- token takes exactly the partition key as its argument.
 struct token {};
@@ -81,7 +95,7 @@ enum class comparison_order : char {
 
 /// Operator restriction: LHS op RHS.
 struct binary_operator {
-    std::variant<column_value, std::vector<column_value>, token> lhs;
+    std::variant<column_value, column_value_tuple, token> lhs;
     oper_t op;
     ::shared_ptr<term> rhs;
     comparison_order order = comparison_order::cql;
@@ -223,7 +237,7 @@ inline bool is_compare(oper_t op) {
 }
 
 inline bool is_multi_column(const binary_operator& op) {
-    return holds_alternative<std::vector<column_value>>(op.lhs);
+    return holds_alternative<column_value_tuple>(op.lhs);
 }
 
 inline bool has_token(const expression& e) {
@@ -254,6 +268,22 @@ inline oper_t pick_operator(statements::bound b, bool inclusive) {
             (inclusive ? oper_t::GTE : oper_t::GT) :
             (inclusive ? oper_t::LTE : oper_t::LT);
 }
+
+inline
+column_value_tuple::column_value_tuple(std::vector<column_value> e)
+        : elements(std::move(e)) {
+}
+
+template <typename Range>
+        requires requires (Range r) {
+            { r.begin() } -> std::input_iterator;
+            { r.end() } -> std::input_iterator;
+            { *r.begin() } -> std::convertible_to<column_value>;
+        }
+column_value_tuple::column_value_tuple(Range r)
+        : column_value_tuple(std::vector<column_value>(r.begin(), r.end())) {
+}
+
 
 } // namespace expr
 

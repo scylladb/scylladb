@@ -190,7 +190,7 @@ public:
     {
         using namespace expr;
         expression = binary_operator{
-            std::vector<column_value>(_column_defs.cbegin(), _column_defs.cend()), oper_t::EQ, _value};
+            column_value_tuple(_column_defs), oper_t::EQ, _value};
     }
 
     virtual bool is_supported_by(const secondary_index::index& index) const override {
@@ -332,7 +332,7 @@ public:
     {
         using namespace expr;
         expression = binary_operator{
-            std::vector<column_value>(_column_defs.cbegin(), _column_defs.cend()),
+            column_value_tuple(_column_defs),
             oper_t::IN,
             ::make_shared<lists::delayed_value>(_values)};
     }
@@ -361,7 +361,7 @@ public:
         : IN(schema, std::move(defs)), _marker(marker) {
         using namespace expr;
         expression = binary_operator{
-            std::vector<column_value>(_column_defs.cbegin(), _column_defs.cend()),
+            column_value_tuple(_column_defs),
             oper_t::IN,
             std::move(marker)};
     }
@@ -391,7 +391,7 @@ public:
         : slice(schema, defs, term_slice::new_instance(bound, inclusive, term), m)
     {
         expression = expr::binary_operator{
-            std::vector<expr::column_value>(defs.cbegin(), defs.cend()),
+            expr::column_value_tuple(defs),
             expr::pick_operator(bound, inclusive),
             std::move(term),
             m};
