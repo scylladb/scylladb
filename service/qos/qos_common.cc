@@ -41,4 +41,22 @@ service_level_options service_level_options::replace_defaults(const service_leve
     return ret;
 }
 
+service_level_options service_level_options::merge_with(const service_level_options& other) const {
+    service_level_options ret = *this;
+    std::visit(overloaded_functor {
+        [&] (const unset_marker& um) {
+            ret.timeout = other.timeout;
+        },
+        [&] (const delete_marker& dm) {
+            ret.timeout = other.timeout;
+        },
+        [&] (const lowres_clock::duration& d) {
+            if (auto* other_timeout = std::get_if<lowres_clock::duration>(&other.timeout)) {
+                ret.timeout = std::min(d, *other_timeout);
+            }
+        },
+    }, ret.timeout);
+    return ret;
+}
+
 }

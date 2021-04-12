@@ -49,6 +49,9 @@ struct service_level_options {
     timeout_type timeout = unset_marker{};
 
     service_level_options replace_defaults(const service_level_options& other) const;
+    // Merges the values of two service level options. The semantics depends
+    // on the type of the parameter - e.g. for timeouts, a min value is preferred.
+    service_level_options merge_with(const service_level_options& other) const;
 
     bool operator==(const service_level_options& other) const = default;
     bool operator!=(const service_level_options& other) const = default;
