@@ -975,7 +975,7 @@ class clustered_ds {
 public:
     virtual int n_rows(const table_config&) = 0;
 
-    clustering_key make_ck(const schema& s, int ck) {
+    virtual clustering_key make_ck(const schema& s, int ck) {
         return clustering_key::from_single_value(s, serialized(ck));
     }
 };
@@ -994,6 +994,20 @@ public:
 
     int n_rows(const table_config& cfg) override {
         return cfg.n_rows;
+    }
+};
+
+class scylla_bench_ds : public clustered_ds, public dataset {
+public:
+    scylla_bench_ds(std::string name, std::string desc) : dataset(name, desc,
+        "create table {} (pk bigint, ck bigint, v blob, primary key (pk, ck))") {}
+
+    int n_rows(const table_config& cfg) override {
+        return cfg.n_rows;
+    }
+
+    clustering_key make_ck(const schema &s, int ck) override {
+        return clustering_key::from_single_value(s, serialized<int64_t>(ck));
     }
 };
 
@@ -1016,6 +1030,56 @@ public:
             ++ck;
             return m;
         };
+    }
+};
+
+class scylla_bench_large_part_ds1 : public scylla_bench_ds {
+public:
+    scylla_bench_large_part_ds1() : scylla_bench_ds("sb-large-part-ds1", "One large partition with many small rows, scylla-bench schema") {}
+
+    generator_fn make_generator(schema_ptr s, const table_config& cfg) override {
+        auto value = serialized(make_blob(cfg.value_size));
+        auto& value_cdef = *s->get_column_definition("v");
+        auto pk = partition_key::from_single_value(*s, serialized<int64_t>(0));
+        return [this, s, ck = 0, n_ck = n_rows(cfg), &value_cdef, value, pk] () mutable -> std::optional<mutation> {
+            if (ck == n_ck) {
+                return std::nullopt;
+            }
+            auto ts = api::new_timestamp();
+            mutation m(s, pk);
+            auto& row = m.partition().clustered_row(*s, make_ck(*s, ck));
+            row.cells().apply(value_cdef, atomic_cell::make_live(*value_cdef.type, ts, value));
+            ++ck;
+            return m;
+        };
+    }
+};
+
+class scylla_bench_small_part_ds1 : public multipart_ds, public scylla_bench_ds {
+public:
+    scylla_bench_small_part_ds1()
+        : scylla_bench_ds("sb-small-part", "Many small partitions, scylla-bench schema")
+    { }
+
+    generator_fn make_generator(schema_ptr s, const table_config& cfg) override {
+        auto value = serialized(make_blob(cfg.value_size));
+        auto& value_cdef = *s->get_column_definition("v");
+        auto ck = make_ck(*s, 0);
+        return [s, ck = std::move(ck), pk = 0, n_pk = n_partitions(cfg), &value_cdef, value] () mutable -> std::optional<mutation> {
+            if (pk == n_pk) {
+                return std::nullopt;
+            }
+            auto ts = api::new_timestamp();
+            mutation m(s, partition_key::from_single_value(*s, serialized<int64_t>(pk)));
+            auto& row = m.partition().clustered_row(*s, ck);
+            row.cells().apply(value_cdef, atomic_cell::make_live(*value_cdef.type, ts, value));
+            ++pk;
+            return m;
+        };
+    }
+
+    int n_partitions(const table_config& cfg) override {
+        return cfg.n_rows;
     }
 };
 
@@ -1648,6 +1712,8 @@ auto make_datasets() {
     };
     add(std::make_unique<small_part_ds1>());
     add(std::make_unique<large_part_ds1>());
+    add(std::make_unique<scylla_bench_large_part_ds1>());
+    add(std::make_unique<scylla_bench_small_part_ds1>());
     return dsets;
 }
 
