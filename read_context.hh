@@ -142,6 +142,7 @@ class read_context final : public enable_lw_shared_from_this<read_context> {
     mutation_source_opt _underlying_snapshot;
     dht::partition_range _sm_range;
     std::optional<dht::decorated_key> _key;
+    bool _partition_exists;
     row_cache::phase_type _phase;
 public:
     read_context(row_cache& cache,
@@ -190,22 +191,34 @@ public:
     autoupdating_underlying_reader& underlying() { return _underlying; }
     row_cache::phase_type phase() const { return _phase; }
     const dht::decorated_key& key() const { return *_key; }
+    bool partition_exists() const { return _partition_exists; }
     void on_underlying_created() { ++_underlying_created; }
     bool digest_requested() const { return _slice.options.contains<query::partition_slice::option::with_digest>(); }
 public:
     future<> ensure_underlying(db::timeout_clock::time_point timeout) {
         if (_underlying_snapshot) {
-            return create_underlying(true, timeout);
+            return create_underlying(timeout).then([this, timeout] {
+                return _underlying.underlying()(timeout).then([this] (mutation_fragment_opt&& mfopt) {
+                    _partition_exists = bool(mfopt);
+                });
+            });
         }
+        // We know that partition exists because all the callers of
+        // enter_partition(const dht::decorated_key&, row_cache::phase_type)
+        // check that and there's no other way of setting _underlying_snapshot
+        // to empty. Except for calling create_underlying.
+        _partition_exists = true;
         return make_ready_future<>();
     }
 public:
-    future<> create_underlying(bool skip_first_fragment, db::timeout_clock::time_point timeout);
+    future<> create_underlying(db::timeout_clock::time_point timeout);
     void enter_partition(const dht::decorated_key& dk, mutation_source& snapshot, row_cache::phase_type phase) {
         _phase = phase;
         _underlying_snapshot = snapshot;
         _key = dk;
     }
+    // Precondition: each caller needs to make sure that partition with |dk| key
+    //               exists in underlying before calling this function.
     void enter_partition(const dht::decorated_key& dk, row_cache::phase_type phase) {
         _phase = phase;
         _underlying_snapshot = {};
