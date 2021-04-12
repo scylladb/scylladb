@@ -971,6 +971,102 @@ make_flat_mutation_reader_from_fragments(schema_ptr schema, reader_permit permit
     return make_flat_mutation_reader_from_fragments(std::move(schema), std::move(permit), std::move(filtered), pr);
 }
 
+flat_mutation_reader
+make_slicing_filtering_reader(flat_mutation_reader rd, const dht::partition_range& pr, const query::partition_slice& slice) {
+    class reader : public flat_mutation_reader::impl {
+        flat_mutation_reader _rd;
+        const dht::partition_range* _pr;
+        const query::partition_slice* _slice;
+        dht::ring_position_comparator _cmp;
+        std::optional<clustering_ranges_walker> _ranges_walker;
+
+    public:
+        reader(flat_mutation_reader rd, const dht::partition_range& pr, const query::partition_slice& slice)
+            : flat_mutation_reader::impl(rd.schema(), rd.permit())
+            , _rd(std::move(rd))
+            , _pr(&pr)
+            , _slice(&slice)
+            , _cmp(*_schema) {
+        }
+
+        virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override {
+            return do_until([this] { return is_buffer_full() || is_end_of_stream(); }, [this, timeout] {
+                return _rd.fill_buffer(timeout).then([this] {
+                    auto f = make_ready_future<>();
+                    bool exit_loop = false;
+                    
+                    while (!_rd.is_buffer_empty() && !exit_loop) {
+                        auto mf = _rd.pop_mutation_fragment();
+                        switch (mf.mutation_fragment_kind()) {
+                        case mutation_fragment::kind::partition_start: {
+                            auto& dk = mf.as_partition_start().key();
+                            if (!_pr->contains(dk, _cmp)) {
+                                f = _rd.next_partition();
+                                exit_loop = true;
+                                break;
+                            } else {
+                                _ranges_walker.emplace(*_schema, _slice->row_ranges(*_schema, dk.key()), false);
+                            }
+                            // fall-through
+                        }
+
+                        case mutation_fragment::kind::static_row: // fall-through
+                        case mutation_fragment::kind::partition_end: // fall-through
+                            push_mutation_fragment(std::move(mf));
+                            break;
+
+                        case mutation_fragment::kind::clustering_row:
+                            if (_ranges_walker->advance_to(mf.position())) {
+                                push_mutation_fragment(std::move(mf));
+                            }
+                            break;
+
+                        case mutation_fragment::kind::range_tombstone:
+                            auto&& rt = mf.as_range_tombstone();
+                            if (_ranges_walker->advance_to(rt.position(), rt.end_position())) {
+                                push_mutation_fragment(std::move(mf));
+                            }
+                            break;
+                        }
+                    }
+                    
+                    return f.then([this] {
+                        _end_of_stream = _rd.is_end_of_stream();
+                    });
+                });
+            });
+        }
+
+        virtual future<> next_partition() override {
+            clear_buffer_to_next_partition();
+            if (is_buffer_empty()) {
+                _end_of_stream = false;
+                return _rd.next_partition();
+            }
+
+            return make_ready_future<>();
+        }
+
+        virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {
+            clear_buffer();
+            _end_of_stream = false;
+            return _rd.fast_forward_to(pr, timeout);
+        }
+
+        virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) override {
+            forward_buffer_to(pr.start());
+            _end_of_stream = false;
+            return _rd.fast_forward_to(std::move(pr), timeout);
+        }
+
+        virtual future<> close() noexcept override {
+            return _rd.close();
+        }
+    };
+
+    return make_flat_mutation_reader<reader>(std::move(rd), pr, slice);
+}
+
 /*
  * This reader takes a get_next_fragment generator that produces mutation_fragment_opt which is returned by
  * generating_reader.
