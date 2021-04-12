@@ -72,7 +72,9 @@ void reader_permit::resource_units::reset(reader_resources res) {
     _resources = res;
 }
 
-class reader_permit::impl : public boost::intrusive::list_base_hook<boost::intrusive::link_mode<boost::intrusive::auto_unlink>> {
+class reader_permit::impl
+        : public boost::intrusive::list_base_hook<boost::intrusive::link_mode<boost::intrusive::auto_unlink>>
+        , public enable_shared_from_this<reader_permit::impl> {
     reader_concurrency_semaphore& _semaphore;
     const schema* _schema;
     sstring _op_name;
@@ -277,6 +279,10 @@ struct reader_concurrency_semaphore::permit_list {
     list_type permits;
     permit_stats stats;
 };
+
+reader_permit::reader_permit(shared_ptr<impl> impl) : _impl(std::move(impl))
+{
+}
 
 reader_permit::reader_permit(reader_concurrency_semaphore& semaphore, const schema* const schema, std::string_view op_name)
     : _impl(::seastar::make_shared<reader_permit::impl>(semaphore, schema, op_name))
