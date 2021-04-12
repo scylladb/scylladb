@@ -136,6 +136,9 @@ flat_mutation_reader make_filtering_reader(flat_mutation_reader rd, MutationFilt
     return make_flat_mutation_reader<filtering_reader<MutationFilter>>(std::move(rd), std::forward<MutationFilter>(filter));
 }
 
+/// Create a wrapper that filters fragments according to partition range and slice.
+flat_mutation_reader make_slicing_filtering_reader(flat_mutation_reader, const dht::partition_range&, const query::partition_slice&);
+
 /// A partition_presence_checker quickly returns whether a key is known not to exist
 /// in a data source (it may return false positives, but not false negatives).
 enum class partition_presence_checker_result {
