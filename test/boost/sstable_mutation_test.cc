@@ -24,6 +24,8 @@
 #include <seastar/net/inet_address.hh>
 #include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
+#include <seastar/util/closeable.hh>
+
 #include "test/boost/sstable_test.hh"
 #include "sstables/key.hh"
 #include <seastar/core/do_with.hh>
@@ -583,7 +585,7 @@ SEASTAR_THREAD_TEST_CASE(tombstone_in_tombstone) {
   test_env::do_with_async([] (test_env& env) {
     ka_sst(env, tombstone_overlap_schema(), "test/resource/sstables/tombstone_overlap", 1).then([] (auto sstp) {
         auto s = tombstone_overlap_schema();
-        return do_with(sstp->make_reader(s, tests::make_permit(), query::full_partition_range, s->full_slice()), [sstp, s] (auto& reader) {
+        return with_closeable(sstp->make_reader(s, tests::make_permit(), query::full_partition_range, s->full_slice()), [sstp, s] (auto& reader) {
             return repeat([sstp, s, &reader] {
                 return read_mutation_from_flat_mutation_reader(reader, db::no_timeout).then([s] (mutation_opt mut) {
                     if (!mut) {
@@ -648,7 +650,7 @@ SEASTAR_THREAD_TEST_CASE(range_tombstone_reading) {
   test_env::do_with_async([] (test_env& env) {
     ka_sst(env, tombstone_overlap_schema(), "test/resource/sstables/tombstone_overlap", 4).then([] (auto sstp) {
         auto s = tombstone_overlap_schema();
-        return do_with(sstp->make_reader(s, tests::make_permit(), query::full_partition_range, s->full_slice()), [sstp, s] (auto& reader) {
+        return with_closeable(sstp->make_reader(s, tests::make_permit(), query::full_partition_range, s->full_slice()), [sstp, s] (auto& reader) {
             return repeat([sstp, s, &reader] {
                 return read_mutation_from_flat_mutation_reader(reader, db::no_timeout).then([s] (mutation_opt mut) {
                     if (!mut) {
@@ -727,7 +729,7 @@ SEASTAR_THREAD_TEST_CASE(tombstone_in_tombstone2) {
   test_env::do_with_async([] (test_env& env) {
     ka_sst(env, tombstone_overlap_schema2(), "test/resource/sstables/tombstone_overlap", 3).then([] (auto sstp) {
         auto s = tombstone_overlap_schema2();
-        return do_with(sstp->make_reader(s, tests::make_permit(), query::full_partition_range, s->full_slice()), [sstp, s] (auto& reader) {
+        return with_closeable(sstp->make_reader(s, tests::make_permit(), query::full_partition_range, s->full_slice()), [sstp, s] (auto& reader) {
             return repeat([sstp, s, &reader] {
                 return read_mutation_from_flat_mutation_reader(reader, db::no_timeout).then([s] (mutation_opt mut) {
                     if (!mut) {
