@@ -32,9 +32,6 @@ backend_registry::backend_registry()
         : _impl(std::make_unique<nonstatic_class_registry<i_tracing_backend_helper, tracing&>>()) {
 }
 
-backend_registry::~backend_registry() = default;
-
-
 void
 backend_registry::register_backend_creator(sstring name, std::function<std::unique_ptr<i_tracing_backend_helper> (tracing&)> creator) {
     _impl->register_class(std::move(name), std::move(creator));
