@@ -179,12 +179,13 @@ public:
     future<service_levels_info> get_distributed_service_level(sstring service_level_name);
 
     /**
-     * Returns the service level **in effect** for a user having the given
+     * Returns the service level options **in effect** for a user having the given
      * collection of roles.
      * @param roles - the collection of roles to consider
-     * @return the name of the service level in effect.
+     * @return the effective service level options - they may in particular be a combination
+     *         of options from multiple service levels
      */
-    future<sstring> find_service_level(auth::role_set roles);
+    future<std::optional<service_level_options>> find_service_level(auth::role_set roles);
 
     /**
      * Gets the service level data by name.
