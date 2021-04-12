@@ -195,7 +195,9 @@ public:
 public:
     future<> ensure_underlying(db::timeout_clock::time_point timeout) {
         if (_underlying_snapshot) {
-            return create_underlying(true, timeout);
+            return create_underlying(false, timeout).then([this, timeout] {
+                return _underlying.underlying()(timeout).discard_result();
+            });
         }
         return make_ready_future<>();
     }
