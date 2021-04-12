@@ -2023,6 +2023,9 @@ with open(buildfile_tmp, 'w') as f:
         rule extract_node_exporter
             command = tar -C build -xvpf {node_exporter_filename} && rm -rfv build/node_exporter && mv -v build/{node_exporter_dirname} build/node_exporter
         build $builddir/node_exporter: extract_node_exporter | always
+        rule print_help
+             command = ./scripts/build-help.sh
+        build help: print_help | always
         ''').format(**globals()))
 
 os.rename(buildfile_tmp, buildfile)
