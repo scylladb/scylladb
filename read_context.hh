@@ -195,14 +195,14 @@ public:
 public:
     future<> ensure_underlying(db::timeout_clock::time_point timeout) {
         if (_underlying_snapshot) {
-            return create_underlying(false, timeout).then([this, timeout] {
+            return create_underlying(timeout).then([this, timeout] {
                 return _underlying.underlying()(timeout).discard_result();
             });
         }
         return make_ready_future<>();
     }
 public:
-    future<> create_underlying(bool skip_first_fragment, db::timeout_clock::time_point timeout);
+    future<> create_underlying(db::timeout_clock::time_point timeout);
     void enter_partition(const dht::decorated_key& dk, mutation_source& snapshot, row_cache::phase_type phase) {
         _phase = phase;
         _underlying_snapshot = snapshot;
