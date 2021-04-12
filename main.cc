@@ -35,6 +35,7 @@
 #include "service/migration_manager.hh"
 #include "service/load_meter.hh"
 #include "service/view_update_backlog_broker.hh"
+#include "service/qos/service_level_controller.hh"
 #include "streaming/stream_session.hh"
 #include "db/system_keyspace.hh"
 #include "db/system_distributed_keyspace.hh"
@@ -87,6 +88,7 @@
 #include "alternator/tags_extension.hh"
 #include "alternator/rmw_operation.hh"
 #include "db/paxos_grace_seconds_extension.hh"
+#include "service/qos/standard_service_level_distributed_data_accessor.hh"
 
 #include "service/raft/raft_services.hh"
 
@@ -795,6 +797,16 @@ int main(int ac, char** av) {
                 mscfg.tcp_nodelay = netw::messaging_service::tcp_nodelay_what::local;
             }
 
+            static sharded<auth::service> auth_service;
+            static sharded<qos::service_level_controller> sl_controller;
+
+            //starting service level controller
+            qos::service_level_options default_service_level_configuration;
+            sl_controller.start(std::ref(auth_service), default_service_level_configuration).get();
+            sl_controller.invoke_on_all(&qos::service_level_controller::start).get();
+            //This starts the update loop - but no real update happens until the data accessor is not initialized.
+            sl_controller.local().update_from_distributed_data(std::chrono::seconds(10));
+
             netw::messaging_service::scheduling_config scfg;
             scfg.statement_tenants = { {dbcfg.statement_scheduling_group, "$user"}, {default_scheduling_group(), "$system"} };
             scfg.streaming = dbcfg.streaming_scheduling_group;
@@ -806,7 +818,6 @@ int main(int ac, char** av) {
                 netw::uninit_messaging_service(messaging).get();
             });
 
-            static sharded<auth::service> auth_service;
             static sharded<db::system_distributed_keyspace> sys_dist_ks;
             static sharded<db::view::view_update_generator> view_update_generator;
             static sharded<cql3::cql_config> cql_config;
@@ -934,7 +945,7 @@ int main(int ac, char** av) {
             supervisor::notify("starting query processor");
             cql3::query_processor::memory_config qp_mcfg = {memory::stats().total_memory() / 256, memory::stats().total_memory() / 2560};
             debug::the_query_processor = &qp;
-            qp.start(std::ref(proxy), std::ref(db), std::ref(mm_notifier), std::ref(mm), qp_mcfg, std::ref(cql_config)).get();
+            qp.start(std::ref(proxy), std::ref(db), std::ref(mm_notifier), std::ref(mm), qp_mcfg, std::ref(cql_config), std::ref(sl_controller)).get();
             // #293 - do not stop anything
             // engine().at_exit([&qp] { return qp.stop(); });
             supervisor::notify("initializing batchlog manager");
@@ -1170,6 +1181,11 @@ int main(int ac, char** av) {
                 return ss.join_cluster();
             }).get();
 
+            sl_controller.invoke_on_all([] (qos::service_level_controller& controller) {
+                controller.set_distributed_data_accessor(::static_pointer_cast<qos::service_level_controller::service_level_distributed_data_accessor>(
+                        ::make_shared<qos::standard_service_level_distributed_data_accessor>(sys_dist_ks.local())));
+            }).get();
+
             supervisor::notify("starting tracing");
             tracing::tracing::start_tracing(qp).get();
             auto stop_tracing = defer_verbose_shutdown("tracing", [] {
@@ -1276,7 +1292,7 @@ int main(int ac, char** av) {
                 db.revert_initial_system_read_concurrency_boost();
             }).get();
 
-            cql_transport::controller cql_server_ctl(db, auth_service, mm_notifier, gossiper.local(), qp, service_memory_limiter);
+            cql_transport::controller cql_server_ctl(db, auth_service, mm_notifier, gossiper.local(), qp, service_memory_limiter, sl_controller);
 
             ss.register_client_shutdown_hook("native transport", [&cql_server_ctl] {
                 cql_server_ctl.stop().get();
@@ -1427,6 +1443,10 @@ int main(int ac, char** av) {
 
             auto stop_repair = defer_verbose_shutdown("repair", [] {
                 repair_shutdown(service::get_local_storage_service().db()).get();
+            });
+
+            auto stop_sl_controller = defer_verbose_shutdown("service level controller", [] {
+                sl_controller.stop().get();
             });
 
             auto stop_view_update_generator = defer_verbose_shutdown("view update generator", [] {

@@ -54,6 +54,7 @@
 #include <regex>
 #include "gms/feature.hh"
 #include "db/query_context.hh"
+#include "service/qos/qos_common.hh"
 
 using namespace std::literals::chrono_literals;
 
@@ -4880,4 +4881,82 @@ SEASTAR_THREAD_TEST_CASE(test_query_unselected_columns) {
             assert_that(e.execute_cql("SELECT pk, ck FROM tbl", std::move(qo)).get0()).is_rows().with_size(num_rows);
         }
     }, std::move(cfg), thread_attributes{.sched_group = statement_sched_group}).get();
+}
+
+SEASTAR_TEST_CASE(test_user_based_sla_queries) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        // test create service level with defaults
+        e.execute_cql("CREATE SERVICE_LEVEL sl_1;").get();
+        auto msg = e.execute_cql("LIST SERVICE_LEVEL sl_1;").get0();
+        assert_that(msg).is_rows().with_rows({
+            {utf8_type->decompose("sl_1")},
+        });
+        e.execute_cql("CREATE SERVICE_LEVEL sl_2;").get();
+        //drop service levels
+        e.execute_cql("DROP SERVICE_LEVEL sl_1;").get();
+        msg = e.execute_cql("LIST ALL SERVICE_LEVELS;").get0();
+        assert_that(msg).is_rows().with_rows({
+            {utf8_type->decompose("sl_2")},
+        });
+
+        // validate exceptions (illegal requests)
+        BOOST_REQUIRE_THROW(e.execute_cql("DROP SERVICE_LEVEL sl_1;").get(), qos::nonexistant_service_level_exception);
+        e.execute_cql("DROP SERVICE_LEVEL IF EXISTS sl_1;").get();
+
+        BOOST_REQUIRE_THROW(e.execute_cql("CREATE SERVICE_LEVEL sl_2;").get(), exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("CREATE SERVICE_LEVEL sl_2;").get(), exceptions::invalid_request_exception);
+        e.execute_cql("CREATE SERVICE_LEVEL IF NOT EXISTS sl_2;").get();
+
+        // test attach role
+        e.execute_cql("ATTACH SERVICE_LEVEL sl_2 TO tester").get();
+        msg = e.execute_cql("LIST ATTACHED SERVICE_LEVEL OF tester;").get0();
+        assert_that(msg).is_rows().with_rows({
+            {utf8_type->decompose("tester"), utf8_type->decompose("sl_2")},
+        });
+        msg = e.execute_cql("LIST ALL ATTACHED SERVICE_LEVELS;").get0();
+        assert_that(msg).is_rows().with_rows({
+            {utf8_type->decompose("tester"), utf8_type->decompose("sl_2")},
+        });
+
+        // test attachment illegal request
+        BOOST_REQUIRE_THROW(e.execute_cql("ATTACH SERVICE_LEVEL sl_2 TO tester2;").get(), auth::nonexistant_role);
+        BOOST_REQUIRE_THROW(e.execute_cql("ATTACH SERVICE_LEVEL sl_1 TO tester;").get(), qos::nonexistant_service_level_exception);
+        BOOST_CHECK(true);
+        // tests detaching service levels
+        e.execute_cql("CREATE ROLE tester2;").get();
+        e.execute_cql("CREATE SERVICE_LEVEL sl_1;").get();
+        e.execute_cql("ATTACH SERVICE_LEVEL sl_1 TO tester2;").get();
+        e.execute_cql("DETACH SERVICE_LEVEL FROM tester;").get();
+        msg = e.execute_cql("LIST ATTACHED SERVICE_LEVEL OF tester2;").get0();
+        assert_that(msg).is_rows().with_rows({
+            {utf8_type->decompose("tester2"), utf8_type->decompose("sl_1")},
+        });
+        BOOST_CHECK(true);
+        msg = e.execute_cql("LIST ATTACHED SERVICE_LEVEL OF tester;").get0();
+        assert_that(msg).is_rows().with_rows({
+        });
+        BOOST_CHECK(true);
+        msg = e.execute_cql("LIST ALL ATTACHED SERVICE_LEVELS;").get0();
+        assert_that(msg).is_rows().with_rows({
+            {utf8_type->decompose("tester2"), utf8_type->decompose("sl_1")},
+        });
+        BOOST_CHECK(true);
+        //test implicit detach when removing role
+        e.execute_cql("DROP ROLE tester2;").get();
+        msg = e.execute_cql("LIST ALL ATTACHED SERVICE_LEVELS;").get0();
+        assert_that(msg).is_rows().with_rows({
+        });
+        BOOST_CHECK(true);
+        e.execute_cql("ATTACH SERVICE_LEVEL sl_1 TO tester;").get();
+        msg = e.execute_cql("LIST ALL ATTACHED SERVICE_LEVELS;").get0();
+        assert_that(msg).is_rows().with_rows({
+            {utf8_type->decompose("tester"), utf8_type->decompose("sl_1")},
+        });
+        BOOST_CHECK(true);
+        //test implicit detach when removing service level
+        e.execute_cql("DROP SERVICE_LEVEL sl_1;").get();
+        msg = e.execute_cql("LIST ALL ATTACHED SERVICE_LEVELS;").get0();
+        assert_that(msg).is_rows().with_rows({
+        });
+    });
 }

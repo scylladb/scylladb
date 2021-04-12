@@ -24,6 +24,7 @@
 #include "bytes.hh"
 #include "schema_fwd.hh"
 #include "service/migration_manager.hh"
+#include "service/qos/qos_common.hh"
 #include "utils/UUID.hh"
 #include "cdc/generation_id.hh"
 
@@ -52,6 +53,7 @@ class system_distributed_keyspace {
 public:
     static constexpr auto NAME = "system_distributed";
     static constexpr auto VIEW_BUILD_STATUS = "view_build_status";
+    static constexpr auto SERVICE_LEVELS = "service_levels";
 
     /* Nodes use this table to communicate new CDC stream generations to other nodes. */
     static constexpr auto CDC_TOPOLOGY_DESCRIPTION = "cdc_generation_descriptions";
@@ -111,6 +113,10 @@ public:
 
     future<db_clock::time_point> cdc_current_generation_timestamp(context);
 
+    future<qos::service_levels_info> get_service_levels() const;
+    future<qos::service_levels_info> get_service_level(sstring service_level_name) const;
+    future<> set_service_level(sstring service_level_name, qos::service_level_options slo) const;
+    future<> drop_service_level(sstring service_level_name) const;
 };
 
 }
