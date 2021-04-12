@@ -59,6 +59,8 @@ public:
     template <FragmentedView View> data_value deserialize(View v, cql_serialization_format sf) const;
     static bytes serialize_partially_deserialized_form(const std::vector<std::pair<bytes_view, bytes_view>>& v,
             cql_serialization_format sf);
+    static managed_bytes serialize_partially_deserialized_form_fragmented(const std::vector<std::pair<managed_bytes_view, managed_bytes_view>>& v,
+            cql_serialization_format sf);
 };
 
 data_value make_map_value(data_type tuple_type, map_type_impl::native_type value);
