@@ -30,106 +30,140 @@
 #include <seastar/util/alloc_failure_injector.hh>
 #include <unordered_map>
 #include <type_traits>
+#include "utils/bit_cast.hh"
 
 template <mutable_view is_mutable_view>
 class managed_bytes_basic_view;
 using managed_bytes_view = managed_bytes_basic_view<mutable_view::no>;
 using managed_bytes_mutable_view = managed_bytes_basic_view<mutable_view::yes>;
 
+// The layout of blob_storage::storage is as follows:
+// If this is the last blob_storage in the list, there is only data.
+// If this is not the last blob_storage in the list, the first bytes of `storage`
+// contain a ref_type pointing to the next fragment, and all the following bytes
+// are data.
+// A blob_storage can learn whether it's the last by looking at the least significant
+// bit of the size field in *backref.
 struct blob_storage {
-    struct [[gnu::packed]] ref_type {
-        blob_storage* ptr;
-
-        ref_type() {}
-        ref_type(blob_storage* ptr) : ptr(ptr) {}
-        operator blob_storage*() const { return ptr; }
-        blob_storage* operator->() const { return ptr; }
-        blob_storage& operator*() const { return *ptr; }
-    };
     using size_type = uint32_t;
     using char_type = bytes_view::value_type;
 
-    ref_type* backref;
-    size_type size;
-    size_type frag_size;
-    ref_type next;
-    char_type data[];
+    struct [[gnu::packed]] ref_type {
+        blob_storage* ptr = nullptr;
+        size_type x = 0; // The least significant bit marks whether the fragment pointed to by ptr is not last. (1 = not last, 0 = last)
+                         // The other 31 bits are the size of the fragment pointed to by ptr.
+        ref_type() = default;
+        void reset(blob_storage* p, size_type frag_size, bool has_next) {
+            x = (frag_size << 1) + has_next;
+            ptr = p;
+        }
+        size_type frag_size() const { return x >> 1; }
+        bool has_next() const { return x & 1; }
+        ref_type& next() const { return reinterpret_cast<ref_type&>(ptr->storage); };
+        char_type* data() const { return &ptr->storage[has_next() ? sizeof(ref_type) : 0]; }
+        size_t full_size() const { return static_cast<size_t>(frag_size()) + sizeof(blob_storage) + (has_next() ? sizeof(ref_type) : 0); }
+    };
 
-    blob_storage(ref_type* backref, size_type size, size_type frag_size) noexcept
-        : backref(backref)
-        , size(size)
-        , frag_size(frag_size)
-        , next(nullptr)
-    {
-        *backref = this;
-    }
+    ref_type* backref;
+    char_type storage[];
 
     blob_storage(blob_storage&& o) noexcept
         : backref(o.backref)
-        , size(o.size)
-        , frag_size(o.frag_size)
-        , next(o.next)
     {
-        *backref = this;
-        o.next = nullptr;
-        if (next) {
-            next->backref = &next;
+        backref->ptr = this;
+        size_type frag_size = backref->frag_size();
+        if (backref->has_next()) {
+            // We are not the last fragment, so we need to update our successor in the list.
+            memcpy(storage, o.storage, sizeof(ref_type) + frag_size);
+            ref_type& next_ref = *reinterpret_cast<ref_type*>(storage);
+            next_ref.ptr->backref = &next_ref;
+        } else {
+            // We are the last fragment.
+            memcpy(storage, o.storage, frag_size);
         }
-        memcpy(data, o.data, frag_size);
     }
 } __attribute__((packed));
 
 // A managed version of "bytes" (can be used with LSA).
 class managed_bytes {
-    static constexpr size_t max_inline_size = 15;
-    struct small_blob {
-        bytes_view::value_type data[max_inline_size];
-        int8_t size; // -1 -> use blob_storage
-    };
-    union u {
-        u() {}
-        ~u() {}
-        blob_storage::ref_type ptr;
-        small_blob small;
-    } _u;
-    static_assert(sizeof(small_blob) > sizeof(blob_storage*), "inline size too small");
+    // The layout of _storage is as follows:
+    // If the value stored in managed_bytes fits inline (it's smaller than sizeof(_storage)),
+    // then the last byte of _storage contains the size of this value shifted by 1, and the first
+    // bytes of _storage contain the value.
+    // If the value does not fit in line, it's allocated externally. In that case,
+    // the beginning of _storage contains a blob_storage::ref_type pointing to the first
+    // fragment, and the end of _storage contains a processed size of this value. The size is shifted
+    // by 1, the least significant bit is set to 1, and the result is stored in big endian at the last
+    // bytes.
+    // This scheme allows to differentiate between external and internal storage by looking at the least
+    // significant bit of the last byte of _storage. If that bit is 0, the storage is internal,
+    // otherwise it's external.
+    char _storage[16];
+    static_assert(sizeof(_storage) >= sizeof(blob_storage::ref_type) + sizeof(blob_storage::size_type), "inline size too small");
+    static constexpr size_t max_inline_size = sizeof(_storage) - 1;
 private:
     bool external() const {
-        return _u.small.size < 0;
+        return _storage[sizeof(_storage) - 1] & 1;
     }
-    size_t max_seg(allocation_strategy& alctr) {
-        return alctr.preferred_max_contiguous_allocation() - sizeof(blob_storage);
+    size_t internal_size() const {
+        return _storage[sizeof(_storage) - 1] >> 1;
     }
-    void free_chain(blob_storage* p) noexcept {
+    size_t external_size() const {
+        blob_storage::size_type raw = read_unaligned<blob_storage::size_type>(&_storage[sizeof(_storage) - sizeof(blob_storage::size_type)]);
+        return net::ntoh(raw) >> 1;
+    }
+    char* internal_size_slot() {
+        return &_storage[sizeof(_storage) - 1];
+    }
+    char* external_size_slot() {
+        return &_storage[sizeof(_storage) - sizeof(blob_storage::size_type)];
+    }
+    blob_storage::ref_type& first_fragment() {
+        return *reinterpret_cast<blob_storage::ref_type*>(_storage);
+    }
+    const blob_storage::ref_type& first_fragment() const {
+        return *reinterpret_cast<const blob_storage::ref_type*>(_storage);
+    }
+    size_t max_alloc(allocation_strategy& alctr) {
+        return alctr.preferred_max_contiguous_allocation();
+    }
+    void free_chain(blob_storage::ref_type& p) noexcept {
         auto& alctr = current_allocator();
-        while (p) {
-            auto n = p->next;
-            alctr.destroy(p);
+        while (p.has_next()) {
+            blob_storage::ref_type n = p.next();
+            alctr.destroy(p.ptr);
             p = n;
+            // `ptr` can be null iff an allocation failed during construction.
+            if (p.ptr) {
+                p.ptr->backref = &p;
+            }
+        }
+        // `ptr` can be null iff an allocation failed during construction.
+        if (p.ptr) {
+            alctr.destroy(p.ptr);
         }
     }
     bytes_view::value_type& value_at_index(blob_storage::size_type index) {
         if (!external()) {
-            return _u.small.data[index];
+            return reinterpret_cast<bytes_view::value_type&>(_storage[index]);
         }
-        blob_storage* a = _u.ptr;
-        while (index >= a->frag_size) {
-            index -= a->frag_size;
-            a = a->next;
+        const blob_storage::ref_type* a = &first_fragment();
+        while (index >= a->frag_size()) {
+            index -= a->frag_size();
+            a = &a->next();
         }
-        return a->data[index];
+        return a->data()[index];
     }
     std::unique_ptr<bytes_view::value_type[]> do_linearize_pure() const;
 
 public:
-    using size_type = blob_storage::size_type;
     struct initialized_later {};
 
     managed_bytes() {
-        _u.small.size = 0;
+        *internal_size_slot() = 0;
     }
 
-    managed_bytes(const blob_storage::char_type* ptr, size_type size)
+    managed_bytes(const blob_storage::char_type* ptr, blob_storage::size_type size)
         : managed_bytes(bytes_view(ptr, size)) {}
 
     explicit managed_bytes(const bytes& b) : managed_bytes(static_cast<bytes_view>(b)) {}
@@ -137,30 +171,35 @@ public:
     template <FragmentedView View>
     explicit managed_bytes(View v);
 
-    managed_bytes(initialized_later, size_type size) {
+    managed_bytes(initialized_later, blob_storage::size_type size) {
         memory::on_alloc_point();
         if (size <= max_inline_size) {
-            _u.small.size = size;
+            *internal_size_slot() = size << 1;
         } else {
-            _u.small.size = -1;
+            if (size >= size_t(2) * 1024 * 1024 * 1024) {
+                throw std::bad_alloc();
+            }
+            write_unaligned<blob_storage::blob_storage::size_type>(external_size_slot(), net::hton((size << 1) | 1));
             auto& alctr = current_allocator();
-            auto maxseg = max_seg(alctr);
-            auto now = std::min(size_t(size), maxseg);
-            void* p = alctr.alloc(&get_standard_migrator<blob_storage>(),
-                sizeof(blob_storage) + now, alignof(blob_storage));
-            auto first = new (p) blob_storage(&_u.ptr, size, now);
-            auto last = first;
-            size -= now;
+            size_t maxalloc = max_alloc(alctr);
+            blob_storage::ref_type* last = &first_fragment();
+            new (last) blob_storage::ref_type();
             try {
-                while (size) {
-                    auto now = std::min(size_t(size), maxseg);
-                    void* p = alctr.alloc(&get_standard_migrator<blob_storage>(),
-                        sizeof(blob_storage) + now, alignof(blob_storage));
-                    last = new (p) blob_storage(&last->next, 0, now);
-                    size -= now;
+                while (size > maxalloc - sizeof(blob_storage)) {
+                    auto frag_size = maxalloc - sizeof(blob_storage) - sizeof(blob_storage::ref_type);
+                    auto p = static_cast<blob_storage*>(alctr.alloc(&get_standard_migrator<blob_storage>(), maxalloc, alignof(blob_storage)));
+                    p->backref = last;
+                    new (p->storage) blob_storage::ref_type();
+                    last->reset(p, frag_size, true);
+                    last = reinterpret_cast<blob_storage::ref_type*>(p->storage);
+                    size -= frag_size;
                 }
+                size_t alloc_size = sizeof(blob_storage) + size;
+                auto p = static_cast<blob_storage*>(alctr.alloc(&get_standard_migrator<blob_storage>(), alloc_size, alignof(blob_storage)));
+                p->backref = last;
+                last->reset(p, size, false);
             } catch (...) {
-                free_chain(first);
+                free_chain(first_fragment());
                 throw;
             }
         }
@@ -168,77 +207,36 @@ public:
 
     explicit managed_bytes(bytes_view v) : managed_bytes(initialized_later(), v.size()) {
         if (!external()) {
-            // Workaround for https://github.com/scylladb/scylla/issues/4086
-            #pragma GCC diagnostic push
-            #pragma GCC diagnostic ignored "-Warray-bounds"
-            std::copy(v.begin(), v.end(), _u.small.data);
-            #pragma GCC diagnostic pop
+            std::copy(v.begin(), v.end(), _storage);
             return;
         }
-        auto p = v.data();
-        auto s = v.size();
-        auto b = _u.ptr;
+        const bytes_view::value_type* p = v.data();
+        size_t s = v.size();
+        blob_storage::ref_type* b = &first_fragment();
         while (s) {
-            memcpy(b->data, p, b->frag_size);
-            p += b->frag_size;
-            s -= b->frag_size;
-            b = b->next;
+            memcpy(b->data(), p, b->frag_size());
+            p += b->frag_size();
+            s -= b->frag_size();
+            b = &b->next();
         }
-        assert(!b);
     }
 
     managed_bytes(std::initializer_list<bytes::value_type> b) : managed_bytes(b.begin(), b.size()) {}
 
     ~managed_bytes() noexcept {
         if (external()) {
-            free_chain(_u.ptr);
+            free_chain(first_fragment());
         }
     }
 
-    managed_bytes(const managed_bytes& o) : managed_bytes(initialized_later(), o.size()) {
-        if (!o.external()) {
-            _u.small = o._u.small;
-            return;
-        }
-        auto s = size();
-        const blob_storage::ref_type* next_src = &o._u.ptr;
-        blob_storage* blob_src = nullptr;
-        size_type size_src = 0;
-        size_type offs_src = 0;
-        blob_storage::ref_type* next_dst = &_u.ptr;
-        blob_storage* blob_dst = nullptr;
-        size_type size_dst = 0;
-        size_type offs_dst = 0;
-        while (s) {
-            if (!size_src) {
-                blob_src = *next_src;
-                next_src = &blob_src->next;
-                size_src = blob_src->frag_size;
-                offs_src = 0;
-            }
-            if (!size_dst) {
-                blob_dst = *next_dst;
-                next_dst = &blob_dst->next;
-                size_dst = blob_dst->frag_size;
-                offs_dst = 0;
-            }
-            auto now = std::min(size_src, size_dst);
-            memcpy(blob_dst->data + offs_dst, blob_src->data + offs_src, now);
-            s -= now;
-            offs_src += now; size_src -= now;
-            offs_dst += now; size_dst -= now;
-        }
-        assert(size_src == 0 && size_dst == 0);
-    }
+    managed_bytes(const managed_bytes& o);
 
-    managed_bytes(managed_bytes&& o) noexcept
-        : _u(o._u)
-    {
+    managed_bytes(managed_bytes&& o) noexcept {
+        std::memcpy(_storage, o._storage, sizeof(_storage));
+        *o.internal_size_slot() = 0;
         if (external()) {
-            // _u.ptr cannot be null
-            _u.ptr->backref = &_u.ptr;
+            first_fragment().ptr->backref = &first_fragment();
         }
-        o._u.small.size = 0;
     }
 
     managed_bytes& operator=(managed_bytes&& o) noexcept {
@@ -258,83 +256,43 @@ public:
         return *this;
     }
 
-    bool operator==(const managed_bytes& o) const {
-        if (size() != o.size()) {
-            return false;
-        }
-        if (!external()) {
-            return std::equal(_u.small.data, _u.small.data + _u.small.size, o._u.small.data);
-        } else {
-            auto a = _u.ptr;
-            auto a_data = a->data;
-            auto a_remain = a->frag_size;
-            a = a->next;
-            auto b = o._u.ptr;
-            auto b_data = b->data;
-            auto b_remain = b->frag_size;
-            b = b->next;
-            while (a_remain || b_remain) {
-                auto now = std::min(a_remain, b_remain);
-                if (bytes_view(a_data, now) != bytes_view(b_data, now)) {
-                    return false;
-                }
-                a_data += now;
-                a_remain -= now;
-                if (!a_remain && a) {
-                    a_data = a->data;
-                    a_remain = a->frag_size;
-                    a = a->next;
-                }
-                b_data += now;
-                b_remain -= now;
-                if (!b_remain && b) {
-                    b_data = b->data;
-                    b_remain = b->frag_size;
-                    b = b->next;
-                }
-            }
-            return true;
-        }
-    }
-
-    bool operator!=(const managed_bytes& o) const {
-        return !(*this == o);
-    }
+    bool operator==(const managed_bytes& o) const;
 
     bool is_fragmented() const {
-        return external() && _u.ptr->next;
+        return external() && first_fragment().has_next();
     }
 
-    bytes_view::value_type& operator[](size_type index) {
+    bytes_view::value_type& operator[](blob_storage::size_type index) {
         return value_at_index(index);
     }
 
-    const bytes_view::value_type& operator[](size_type index) const {
+    const bytes_view::value_type& operator[](blob_storage::size_type index) const {
         return const_cast<const bytes_view::value_type&>(
                 const_cast<managed_bytes*>(this)->value_at_index(index));
     }
 
-    size_type size() const {
+    blob_storage::size_type size() const {
         if (external()) {
-            return _u.ptr->size;
+            return external_size();
         } else {
-            return _u.small.size;
+            return internal_size();
         }
     }
 
     bool empty() const {
-        return _u.small.size == 0;
+        return _storage[sizeof(_storage) - 1] == 0;
     }
 
     // Returns the amount of external memory used.
     size_t external_memory_usage() const {
         if (external()) {
             size_t mem = 0;
-            blob_storage* blob = _u.ptr;
-            while (blob) {
-                mem += blob->frag_size + sizeof(blob_storage);
-                blob = blob->next;
+            const blob_storage::ref_type* blob = &first_fragment();
+            while (blob->has_next()) {
+                mem += blob->frag_size() + sizeof(blob_storage) + sizeof(blob_storage::ref_type);
+                blob = &blob->next();
             }
+            mem += blob->frag_size() + sizeof(blob_storage);
             return mem;
         }
         return 0;
@@ -346,7 +304,7 @@ public:
     // managed_bytes if all data was allocated in one big fragment.
     size_t minimal_external_memory_usage() const {
         if (external()) {
-            return sizeof(blob_storage) + _u.ptr->size;
+            return sizeof(blob_storage) + external_size();
         } else {
             return 0;
         }
@@ -357,17 +315,17 @@ public:
         const bytes_view::value_type* start = nullptr;
         size_t size = 0;
         if (!external()) {
-            start = _u.small.data;
-            size = _u.small.size;
-        } else if (!_u.ptr->next) {
-            start = _u.ptr->data;
-            size = _u.ptr->size;
+            start = reinterpret_cast<const bytes_view::value_type*>(_storage);
+            size = internal_size();
+        } else if (!first_fragment().has_next()) {
+            start = reinterpret_cast<const bytes_view::value_type*>(first_fragment().data());
+            size = first_fragment().frag_size();
         }
         if (start) {
             return func(bytes_view(start, size));
         } else {
             auto data = do_linearize_pure();
-            return func(bytes_view(data.get(), _u.ptr->size));
+            return func(bytes_view(data.get(), external_size()));
         }
     }
 
@@ -379,7 +337,7 @@ public:
 inline
 size_t
 size_for_allocation_strategy(const blob_storage& bs) {
-    return sizeof(bs) + bs.frag_size;
+    return bs.backref->full_size();
 }
 
 template <mutable_view is_mutable>
@@ -390,20 +348,20 @@ public:
     using value_type = typename fragment_type::value_type;
 private:
     fragment_type _current_fragment = {};
-    blob_storage* _next_fragments = nullptr;
+    const blob_storage::ref_type* _next_fragments = nullptr;
     size_t _size = 0;
 public:
     managed_bytes_basic_view() = default;
     managed_bytes_basic_view(const managed_bytes_basic_view&) = default;
     managed_bytes_basic_view(owning_type& mb) {
-        if (mb._u.small.size != -1) {
-            _current_fragment = fragment_type(mb._u.small.data, mb._u.small.size);
-            _size = mb._u.small.size;
+        using byte_type = std::conditional_t<is_mutable == mutable_view::yes, value_type, const value_type>;
+        if (!mb.external()) {
+            _current_fragment = fragment_type(reinterpret_cast<byte_type*>(mb._storage), mb.internal_size());
+            _size = _current_fragment.size();
         } else {
-            auto p = mb._u.ptr;
-            _current_fragment = fragment_type(p->data, p->frag_size);
-            _next_fragments = p->next;
-            _size = p->size;
+            _size = mb.external_size();
+            _next_fragments = &mb.first_fragment();
+            _current_fragment = fragment_type(reinterpret_cast<byte_type*>(_next_fragments->data()), _next_fragments->frag_size());
         }
     }
     managed_bytes_basic_view(fragment_type bv)
@@ -425,8 +383,8 @@ public:
     void remove_current() {
         _size -= _current_fragment.size();
         if (_size) {
-            _current_fragment = fragment_type(_next_fragments->data, _next_fragments->frag_size);
-            _next_fragments = _next_fragments->next;
+            _next_fragments = &_next_fragments->next();
+            _current_fragment = fragment_type(reinterpret_cast<value_type*>(_next_fragments->data()), _next_fragments->frag_size());
             _current_fragment = _current_fragment.substr(0, _size);
         } else {
             _current_fragment = fragment_type();
@@ -484,6 +442,26 @@ template<FragmentedView View>
 inline managed_bytes::managed_bytes(View v) : managed_bytes(initialized_later(), v.size_bytes()) {
     managed_bytes_mutable_view self(*this);
     write_fragmented(self, v);
+}
+
+inline managed_bytes::managed_bytes(const managed_bytes& o) : managed_bytes(initialized_later(), o.size()) {
+    if (!o.external()) {
+        memcpy(_storage, o._storage, sizeof(_storage));
+        return;
+    }
+    auto self = managed_bytes_mutable_view(*this);
+    write_fragmented(self, managed_bytes_view(o));
+}
+
+inline bool managed_bytes::operator==(const managed_bytes& o) const {
+    if (size() != o.size()) {
+        return false;
+    }
+    if (!external()) {
+        return std::equal(_storage, _storage + internal_size(), o._storage);
+    } else {
+        return compare_unsigned(managed_bytes_view(*this), managed_bytes_view(o)) == 0;
+    }
 }
 
 template<>

@@ -25,12 +25,16 @@
 
 std::unique_ptr<bytes_view::value_type[]>
 managed_bytes::do_linearize_pure() const {
-    auto b = _u.ptr;
-    auto data = std::unique_ptr<bytes_view::value_type[]>(new bytes_view::value_type[b->size]);
-    auto e = data.get();
-    while (b) {
-        e = std::copy_n(b->data, b->frag_size, e);
-        b = b->next;
+    size_t s = external_size();
+    auto data = std::unique_ptr<bytes_view::value_type[]>(new bytes_view::value_type[s]);
+    const blob_storage::ref_type* b = &first_fragment();
+    bytes_view::value_type* out = data.get();
+    while (s) {
+        size_t frag_size = b->frag_size();
+        memcpy(out, b->data(), frag_size);
+        out += frag_size;
+        s -= frag_size;
+        b = &b->next();
     }
     return data;
 }
