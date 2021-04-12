@@ -723,7 +723,7 @@ row_cache::make_reader(schema_ptr s,
             auto&& pos = ctx->range().start()->value();
             partitions_type::bound_hint hint;
             auto i = _partitions.lower_bound(pos, cmp, hint);
-            if (i != _partitions.end() && hint.match) {
+            if (hint.match) {
                 cache_entry& e = *i;
                 upgrade_entry(e);
                 on_partition_hit();
