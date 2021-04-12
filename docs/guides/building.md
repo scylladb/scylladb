@@ -114,7 +114,7 @@ To build packages, run:
 Alternatively, to build packages for a specific build mode, run:
 
 ```console
-./tools/toolchain/dbuild ninja dist-<mode>
+./tools/toolchain/dbuild ninja <mode>-dist
 ```
 
 To verify the packages, run:
