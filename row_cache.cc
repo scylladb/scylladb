@@ -332,7 +332,7 @@ public:
     }
 };
 
-future<> read_context::create_underlying(bool skip_first_fragment, db::timeout_clock::time_point timeout) {
+future<> read_context::create_underlying(db::timeout_clock::time_point timeout) {
     if (_range_query) {
         // FIXME: Singular-range mutation readers don't support fast_forward_to(), so need to use a wide range
         // here in case the same reader will need to be fast forwarded later.
@@ -340,13 +340,8 @@ future<> read_context::create_underlying(bool skip_first_fragment, db::timeout_c
     } else {
         _sm_range = dht::partition_range::make_singular({dht::ring_position(*_key)});
     }
-    return _underlying.fast_forward_to(std::move(_sm_range), *_underlying_snapshot, _phase, timeout).then([this, skip_first_fragment, timeout] {
+    return _underlying.fast_forward_to(std::move(_sm_range), *_underlying_snapshot, _phase, timeout).then([this] {
         _underlying_snapshot = {};
-        if (skip_first_fragment) {
-            return _underlying.underlying()(timeout).then([](auto &&mf) {});
-        } else {
-            return make_ready_future<>();
-        }
     });
 }
 
@@ -366,7 +361,7 @@ private:
         auto src_and_phase = _cache.snapshot_of(_read_context->range().start()->value());
         auto phase = src_and_phase.phase;
         _read_context->enter_partition(_read_context->range().start()->value().as_decorated_key(), src_and_phase.snapshot, phase);
-        return _read_context->create_underlying(false, timeout).then([this, phase, timeout] {
+        return _read_context->create_underlying(timeout).then([this, phase, timeout] {
           return _read_context->underlying().underlying()(timeout).then([this, phase] (auto&& mfopt) {
             if (!mfopt) {
                 if (phase == _cache.phase_of(_read_context->range().start()->value())) {
@@ -728,7 +723,7 @@ row_cache::make_reader(schema_ptr s,
             auto&& pos = ctx->range().start()->value();
             partitions_type::bound_hint hint;
             auto i = _partitions.lower_bound(pos, cmp, hint);
-            if (i != _partitions.end() && hint.match) {
+            if (hint.match) {
                 cache_entry& e = *i;
                 upgrade_entry(e);
                 on_partition_hit();
