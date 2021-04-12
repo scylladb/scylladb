@@ -1620,7 +1620,13 @@ property[cql3::statements::property_definitions& props]
 
 propertyValue returns [sstring str]
     : c=constant           { $str = c->get_raw_text(); }
+    // FIXME: unreserved keywords below are indistinguishable from their string representation,
+    // which might be problematic in the future. A possible solution is to use a more complicated
+    // type for storing property values instead of just plain strings. For the specific case
+    // of "null" it would be enough to use an optional, but for the general case it should be
+    // a variant-like class which distinguishes plain string values from special keywords
     | u=unreserved_keyword { $str = u; }
+    | K_NULL { $str = "null"; }
     ;
 
 relationType returns [cql3::expr::oper_t op]
