@@ -47,7 +47,6 @@ private:
     void register_backend_creator(sstring name, std::function<std::unique_ptr<i_tracing_backend_helper> (tracing&)> creator);
 public:
     backend_registry();
-    ~backend_registry();
     std::unique_ptr<i_tracing_backend_helper> create_backend(const sstring& name, tracing& t) const; // may throw no_such_tracing_backend
     template <typename Backend>
     void register_backend(sstring name);

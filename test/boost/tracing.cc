@@ -37,12 +37,14 @@ future<> do_with_tracing_env(std::function<future<>(cql_test_env&)> func, cql_te
         // supervisor::notify("starting tracing");
         tracing::tracing::start_tracing(env.qp()).get();
 
-        return func(env).finally([](){
-            tracing::tracing::tracing_instance().invoke_on_all([] (tracing::tracing& local_tracing) {
-                return local_tracing.shutdown();
-            }).get();
-
-            return tracing::tracing::tracing_instance().stop();
+        return do_with(std::move(tracing_backend_registry), [func, &env](auto &reg) {
+            return func(env).finally([]() {
+                return tracing::tracing::tracing_instance().invoke_on_all([](tracing::tracing &local_tracing) {
+                    return local_tracing.shutdown();
+                }).finally([]() {
+                    return tracing::tracing::tracing_instance().stop();
+                });
+            });
         });
     }, std::move(cfg_in));
 }
