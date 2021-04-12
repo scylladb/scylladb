@@ -173,7 +173,7 @@ static std::vector<expr::expression> extract_clustering_prefix_restrictions(
         }
 
         void operator()(const binary_operator& b) {
-            if (std::holds_alternative<std::vector<column_value>>(b.lhs)) {
+            if (std::holds_alternative<column_value_tuple>(b.lhs)) {
                 multi.push_back(b);
             }
             if (auto s = std::get_if<column_value>(&b.lhs)) {
@@ -719,12 +719,12 @@ struct multi_column_range_accumulator {
     void operator()(const binary_operator& binop) {
         if (is_compare(binop.op)) {
             auto opt_values = dynamic_pointer_cast<tuples::value>(binop.rhs->bind(options))->get_elements();
-            auto& lhs = std::get<std::vector<column_value>>(binop.lhs);
-            std::vector<managed_bytes> values(lhs.size());
-            for (size_t i = 0; i < lhs.size(); ++i) {
+            auto& lhs = std::get<column_value_tuple>(binop.lhs);
+            std::vector<managed_bytes> values(lhs.elements.size());
+            for (size_t i = 0; i < lhs.elements.size(); ++i) {
                 values[i] = *statements::request_validations::check_not_null(
                         opt_values[i],
-                        "Invalid null value in condition for column %s", lhs.at(i).col->name_as_text());
+                        "Invalid null value in condition for column %s", lhs.elements.at(i).col->name_as_text());
             }
             intersect_all(to_range(binop.op, clustering_key_prefix(std::move(values))));
         } else if (binop.op == oper_t::IN) {
@@ -1029,7 +1029,7 @@ std::vector<query::clustering_range> statement_restrictions::get_clustering_boun
             if (is_clustering_order(binop)) {
                 return {range_from_raw_bounds(_clustering_prefix_restrictions, options, *_schema)};
             }
-            for (auto& cv : std::get<std::vector<column_value>>(binop.lhs)) {
+            for (auto& cv : std::get<column_value_tuple>(binop.lhs).elements) {
                 if (cv.col->type->is_reversed()) {
                     all_natural = false;
                 } else {
