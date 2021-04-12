@@ -264,6 +264,9 @@ future<> cache_flat_mutation_reader::do_fill_buffer(db::timeout_clock::time_poin
         }
         _state = state::reading_from_underlying;
         _population_range_starts_before_all_rows = _lower_bound.is_before_all_clustered_rows(*_schema);
+        if (!_read_context->partition_exists()) {
+            return read_from_underlying(timeout);
+        }
         auto end = _next_row_in_range ? position_in_partition(_next_row.position())
                                       : position_in_partition(_upper_bound);
         return _underlying->fast_forward_to(position_range{_lower_bound, std::move(end)}, timeout).then([this, timeout] {
