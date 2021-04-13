@@ -107,7 +107,7 @@ static void create_partitions(cql_test_env& env, test_config& cfg) {
     }
 }
 
-static std::vector<double> test_read(cql_test_env& env, test_config& cfg) {
+static std::vector<perf_result> test_read(cql_test_env& env, test_config& cfg) {
     create_partitions(env, cfg);
     auto id = env.prepare("select \"C0\", \"C1\", \"C2\", \"C3\", \"C4\" from cf where \"KEY\" = ?").get0();
     return time_parallel([&env, &cfg, id] {
@@ -116,7 +116,7 @@ static std::vector<double> test_read(cql_test_env& env, test_config& cfg) {
         }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard);
 }
 
-static std::vector<double> test_write(cql_test_env& env, test_config& cfg) {
+static std::vector<perf_result> test_write(cql_test_env& env, test_config& cfg) {
     auto id = env.prepare("UPDATE cf SET "
                            "\"C0\" = 0x8f75da6b3dcec90c8a404fb9a5f6b0621e62d39c69ba5758e5f41b78311fbb26cc7a,"
                            "\"C1\" = 0xa8761a2127160003033a8f4f3d1069b7833ebe24ef56b3beee728c2b686ca516fa51,"
@@ -130,7 +130,7 @@ static std::vector<double> test_write(cql_test_env& env, test_config& cfg) {
         }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard);
 }
 
-static std::vector<double> test_delete(cql_test_env& env, test_config& cfg) {
+static std::vector<perf_result> test_delete(cql_test_env& env, test_config& cfg) {
     create_partitions(env, cfg);
     auto id = env.prepare("DELETE \"C0\", \"C1\", \"C2\", \"C3\", \"C4\" FROM cf WHERE \"KEY\" = ?").get0();
     return time_parallel([&env, &cfg, id] {
@@ -139,7 +139,7 @@ static std::vector<double> test_delete(cql_test_env& env, test_config& cfg) {
         }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard);
 }
 
-static std::vector<double> test_counter_update(cql_test_env& env, test_config& cfg) {
+static std::vector<perf_result> test_counter_update(cql_test_env& env, test_config& cfg) {
     auto id = env.prepare("UPDATE cf SET "
                            "\"C0\" = \"C0\" + 1,"
                            "\"C1\" = \"C1\" + 2,"
@@ -164,7 +164,7 @@ static schema_ptr make_counter_schema(std::string_view ks_name) {
             .build();
 }
 
-static std::vector<double> do_test(cql_test_env& env, test_config& cfg) {
+static std::vector<perf_result> do_test(cql_test_env& env, test_config& cfg) {
     std::cout << "Running test with config: " << cfg << std::endl;
     env.create_table([&cfg] (auto ks_name) {
         if (cfg.counters) {
@@ -193,7 +193,7 @@ static std::vector<double> do_test(cql_test_env& env, test_config& cfg) {
     abort();
 }
 
-void write_json_result(std::string result_file, const test_config& cfg, double median, double mad, double max, double min) {
+void write_json_result(std::string result_file, const test_config& cfg, perf_result median, double mad, double max, double min) {
     Json::Value results;
 
     Json::Value params;
@@ -205,7 +205,9 @@ void write_json_result(std::string result_file, const test_config& cfg, double m
     results["parameters"] = std::move(params);
 
     Json::Value stats;
-    stats["median tps"] = median;
+    stats["median tps"] = median.throughput;
+    stats["allocs_per_op"] = median.mallocs_per_op;
+    stats["tasks_per_op"] = median.tasks_per_op;
     stats["mad tps"] = mad;
     stats["max tps"] = max;
     stats["min tps"] = min;
@@ -294,19 +296,22 @@ int main(int argc, char** argv) {
             }
             auto results = do_test(env, cfg);
 
-            std::sort(results.begin(), results.end());
-            auto median = results[results.size() / 2];
-            auto min = results[0];
-            auto max = results[results.size() - 1];
-            for (auto& r : results) {
-                r = abs(r - median);
-            }
-            std::sort(results.begin(), results.end());
-            auto mad = results[results.size() / 2];
-            std::cout << format("\nmedian {:.2f}\nmedian absolute deviation: {:.2f}\nmaximum: {:.2f}\nminimum: {:.2f}\n", median, mad, max, min);
+            auto compare_throughput = [] (perf_result a, perf_result b) { return a.throughput < b.throughput; };
+            std::sort(results.begin(), results.end(), compare_throughput);
+            auto median_result = results[results.size() / 2];
+            auto median = median_result.throughput;
+            auto min = results[0].throughput;
+            auto max = results[results.size() - 1].throughput;
+            auto absolute_deviations = boost::copy_range<std::vector<double>>(
+                    results
+                    | boost::adaptors::transformed(std::mem_fn(&perf_result::throughput))
+                    | boost::adaptors::transformed([&] (double r) { return abs(r - median); }));
+            std::sort(absolute_deviations.begin(), absolute_deviations.end());
+            auto mad = absolute_deviations[results.size() / 2];
+            std::cout << format("\nmedian {}\nmedian absolute deviation: {:.2f}\nmaximum: {:.2f}\nminimum: {:.2f}\n", median_result, mad, max, min);
 
             if (app.configuration().contains("json-result")) {
-                write_json_result(app.configuration()["json-result"].as<std::string>(), cfg, median, mad, max, min);
+                write_json_result(app.configuration()["json-result"].as<std::string>(), cfg, median_result, mad, max, min);
             }
           });
         });

@@ -56,8 +56,35 @@ void time_it(Func func, int iterations = 5, int iterations_between_clock_reading
     }
 }
 
+struct executor_shard_stats {
+    uint64_t invocations = 0;
+    uint64_t allocations = 0;
+    uint64_t tasks_executed = 0;
+};
+
+inline
+executor_shard_stats
+operator+(executor_shard_stats a, executor_shard_stats b) {
+    a.invocations += b.invocations;
+    a.allocations += b.allocations;
+    a.tasks_executed += b.tasks_executed;
+    return a;
+}
+
+inline
+executor_shard_stats
+operator-(executor_shard_stats a, executor_shard_stats b) {
+    a.invocations -= b.invocations;
+    a.allocations -= b.allocations;
+    a.tasks_executed -= b.tasks_executed;
+    return a;
+}
+
+executor_shard_stats executor_shard_stats_snapshot();
+
+
 // Drives concurrent and continuous execution of given asynchronous action
-// until a deadline. Counts invocations.
+// until a deadline. Counts invocations and collects statistics.
 template <typename Func>
 class executor {
     const Func _func;
@@ -67,6 +94,7 @@ class executor {
     uint64_t _count;
 private:
     future<> run_worker() {
+        auto stats_begin = executor_shard_stats_snapshot();
         return do_until([this] {
             return _end_at_count ? _count == _end_at_count : lowres_clock::now() >= _end_at;
         }, [this] () mutable {
@@ -84,12 +112,15 @@ public:
     { }
 
     // Returns the number of invocations of @func
-    future<uint64_t> run() {
+    future<executor_shard_stats> run() {
+        auto stats_start = executor_shard_stats_snapshot();
         auto idx = boost::irange(0, (int)_n_workers);
         return parallel_for_each(idx.begin(), idx.end(), [this] (auto idx) mutable {
             return this->run_worker();
-        }).then([this] {
-            return _count;
+        }).then([this, stats_start] {
+            auto stats_end = executor_shard_stats_snapshot();
+            stats_end.invocations = _count;
+            return stats_end - stats_start;
         });
     }
 
@@ -97,6 +128,14 @@ public:
         return make_ready_future<>();
     }
 };
+
+struct perf_result {
+    double throughput;
+    double mallocs_per_op;
+    double tasks_per_op;
+};
+
+std::ostream& operator<<(std::ostream& os, const perf_result& result);
 
 /**
  * Measures throughput of an asynchronous action. Executes the action on all cores
@@ -108,22 +147,27 @@ public:
  */
 template <typename Func>
 static
-std::vector<double> time_parallel(Func func, unsigned concurrency_per_core, int iterations = 5, unsigned operations_per_shard = 0) {
+std::vector<perf_result> time_parallel(Func func, unsigned concurrency_per_core, int iterations = 5, unsigned operations_per_shard = 0) {
     using clk = std::chrono::steady_clock;
     if (operations_per_shard) {
         iterations = 1;
     }
-    std::vector<double> results;
+    std::vector<perf_result> results;
     for (int i = 0; i < iterations; ++i) {
         auto start = clk::now();
         auto end_at = lowres_clock::now() + std::chrono::seconds(1);
         distributed<executor<Func>> exec;
         exec.start(concurrency_per_core, func, std::move(end_at), operations_per_shard).get();
-        auto total = exec.map_reduce(adder<uint64_t>(), [] (auto& oc) { return oc.run(); }).get0();
+        auto stats = exec.map_reduce0(std::mem_fn(&executor<Func>::run),
+                executor_shard_stats(), std::plus<executor_shard_stats>()).get0();
         auto end = clk::now();
         auto duration = std::chrono::duration<double>(end - start).count();
-        auto result = static_cast<double>(total) / duration;
-        std::cout << format("{:.2f}", result) << " tps\n";
+        auto result = perf_result{
+            .throughput = static_cast<double>(stats.invocations) / duration,
+            .mallocs_per_op = double(stats.allocations) / stats.invocations,
+            .tasks_per_op = double(stats.tasks_executed) / stats.invocations,
+        };
+        std::cout << result << "\n";
         results.emplace_back(result);
         exec.stop().get();
     }
@@ -172,28 +216,4 @@ public:
     clk::duration max() const { return _minmax.max(); }
 };
 
-void scheduling_latency_measurer::schedule_tick() {
-    seastar::schedule(make_task(default_scheduling_group(), [self = weak_from_this()] () mutable {
-        if (self) {
-            self->tick();
-        }
-    }));
-}
-
-std::ostream& operator<<(std::ostream& out, const scheduling_latency_measurer& slm) {
-    auto to_ms = [] (int64_t nanos) {
-        return float(nanos) / 1e6;
-    };
-    return out << sprint("{count: %d, "
-                         //"min: %.6f [ms], "
-                         //"50%%: %.6f [ms], "
-                         //"90%%: %.6f [ms], "
-                         "99%%: %.6f [ms], "
-                         "max: %.6f [ms]}",
-        slm.histogram().count(),
-        //to_ms(slm.min().count()),
-        //to_ms(slm.histogram().percentile(0.5)),
-        //to_ms(slm.histogram().percentile(0.9)),
-        to_ms(slm.histogram().percentile(0.99)),
-        to_ms(slm.max().count()));
-}
+std::ostream& operator<<(std::ostream& out, const scheduling_latency_measurer& slm);
