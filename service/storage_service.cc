@@ -1807,6 +1807,7 @@ future<> storage_service::do_stop_stream_manager() {
 future<> storage_service::decommission() {
     return run_with_api_lock(sstring("decommission"), [] (storage_service& ss) {
         return seastar::async([&ss] {
+            auto uuid = utils::make_random_uuid();
             auto tmptr = ss.get_token_metadata_ptr();
             auto& db = ss.db().local();
             auto endpoint = ss.get_broadcast_address();
@@ -1835,15 +1836,105 @@ future<> storage_service::decommission() {
             }
 
             slogger.info("DECOMMISSIONING: starts");
-            ss.start_leaving().get();
-            // FIXME: long timeout = Math.max(RING_DELAY, BatchlogManager.instance.getBatchlogTimeout());
-            auto timeout = ss.get_ring_delay();
-            ss.set_mode(mode::LEAVING, format("sleeping {} ms for batch processing and pending range setup", timeout.count()), true);
-            sleep_abortable(timeout, ss._abort_source).get();
+            auto leaving_nodes = std::list<gms::inet_address>{endpoint};
+            // TODO: wire ignore_nodes provided by user
+            std::list<gms::inet_address> ignore_nodes;
 
-            slogger.info("DECOMMISSIONING: unbootstrap starts");
-            ss.unbootstrap();
-            slogger.info("DECOMMISSIONING: unbootstrap done");
+            future<> heartbeat_updater = make_ready_future<>();
+            auto heartbeat_updater_done = make_lw_shared<bool>(false);
+
+            // Step 1: Decide who needs to sync data
+            std::vector<gms::inet_address> nodes;
+            for (const auto& x : tmptr->get_endpoint_to_host_id_map_for_reading()) {
+                seastar::thread::maybe_yield();
+                if (std::find(ignore_nodes.begin(), ignore_nodes.end(), x.first) == ignore_nodes.end()) {
+                    nodes.push_back(x.first);
+                }
+            }
+            slogger.info("decommission[{}]: Started decommission operation, removing node={}, sync_nodes={}, ignore_nodes={}", uuid, endpoint, nodes, ignore_nodes);
+
+            // Step 2: Prepare to sync data
+            std::unordered_set<gms::inet_address> nodes_unknown_verb;
+            std::unordered_set<gms::inet_address> nodes_down;
+            auto req = node_ops_cmd_request{node_ops_cmd::decommission_prepare, uuid, ignore_nodes, leaving_nodes, {}};
+            try {
+                parallel_for_each(nodes, [&ss, &req, &nodes_unknown_verb, &nodes_down, uuid] (const gms::inet_address& node) {
+                    return ss._messaging.local().send_node_ops_cmd(netw::msg_addr(node), req).then([uuid, node] (node_ops_cmd_response resp) {
+                        slogger.debug("decommission[{}]: Got prepare response from node={}", uuid, node);
+                    }).handle_exception_type([&nodes_unknown_verb, node, uuid] (seastar::rpc::unknown_verb_error&) {
+                        slogger.warn("decommission[{}]: Node {} does not support decommission verb", uuid, node);
+                        nodes_unknown_verb.emplace(node);
+                    }).handle_exception_type([&nodes_down, node, uuid] (seastar::rpc::closed_error&) {
+                        slogger.warn("decommission[{}]: Node {} is down for node_ops_cmd verb", uuid, node);
+                        nodes_down.emplace(node);
+                    });
+                }).get();
+                if (!nodes_unknown_verb.empty()) {
+                    auto msg = format("decommission[{}]: Nodes={} do not support decommission verb. Please upgrade your cluster and run decommission again.", uuid, nodes_unknown_verb);
+                    slogger.warn("{}", msg);
+                    throw std::runtime_error(msg);
+                }
+                if (!nodes_down.empty()) {
+                    auto msg = format("decommission[{}]: Nodes={} needed for decommission operation are down. It is highly recommended to fix the down nodes and try again. To proceed with best-effort mode which might cause data inconsistency, run nodetool decommission --ignore-dead-nodes <list_of_dead_nodes>. E.g., nodetool decommission --ignore-dead-nodes 127.0.0.1,127.0.0.2", uuid, nodes_down);
+                    slogger.warn("{}", msg);
+                    throw std::runtime_error(msg);
+                }
+
+                // Step 3: Start heartbeat updater
+                heartbeat_updater = seastar::async([&ss, &nodes, uuid, heartbeat_updater_done] {
+                    slogger.debug("decommission[{}]: Started heartbeat_updater", uuid);
+                    while (!(*heartbeat_updater_done)) {
+                        auto req = node_ops_cmd_request{node_ops_cmd::decommission_heartbeat, uuid, {}, {}, {}};
+                        parallel_for_each(nodes, [&ss, &req, uuid] (const gms::inet_address& node) {
+                            return ss._messaging.local().send_node_ops_cmd(netw::msg_addr(node), req).then([uuid, node] (node_ops_cmd_response resp) {
+                                slogger.debug("decommission[{}]: Got heartbeat response from node={}", uuid, node);
+                                return make_ready_future<>();
+                            });
+                        }).handle_exception([uuid] (std::exception_ptr ep) {
+                            slogger.warn("decommission[{}]: Failed to send heartbeat: {}", uuid, ep);
+                        }).get();
+                        int nr_seconds = 10;
+                        while (!(*heartbeat_updater_done) && nr_seconds--) {
+                            sleep(std::chrono::seconds(1)).get();
+                        }
+                    }
+                    slogger.debug("decommission[{}]: Stopped heartbeat_updater", uuid);
+                });
+                auto stop_heartbeat_updater = defer([&] {
+                    *heartbeat_updater_done = true;
+                    heartbeat_updater.get();
+                });
+
+                // Step 5: Start to sync data
+                slogger.info("DECOMMISSIONING: unbootstrap starts");
+                ss.unbootstrap();
+                slogger.info("DECOMMISSIONING: unbootstrap done");
+
+                // Step 6: Finish
+                req.cmd = node_ops_cmd::decommission_done;
+                parallel_for_each(nodes, [&ss, &req, uuid] (const gms::inet_address& node) {
+                    return ss._messaging.local().send_node_ops_cmd(netw::msg_addr(node), req).then([uuid, node] (node_ops_cmd_response resp) {
+                        slogger.debug("decommission[{}]: Got done response from node={}", uuid, node);
+                        return make_ready_future<>();
+                    });
+                }).get();
+                slogger.info("decommission[{}]: Finished decommission operation, removing node={}, sync_nodes={}, ignore_nodes={}", uuid, endpoint, nodes, ignore_nodes);
+            } catch (...) {
+                slogger.warn("decommission[{}]: Abort decommission operation started, removing node={}, sync_nodes={}, ignore_nodes={}", uuid, endpoint, nodes, ignore_nodes);
+                // we need to revert the effect of prepare verb the decommission ops is failed
+                req.cmd = node_ops_cmd::decommission_abort;
+                parallel_for_each(nodes, [&ss, &req, &nodes_unknown_verb, &nodes_down, uuid] (const gms::inet_address& node) {
+                    if (nodes_unknown_verb.contains(node) || nodes_down.contains(node)) {
+                        // No need to revert previous prepare cmd for those who do not apply prepare cmd.
+                        return make_ready_future<>();
+                    }
+                    return ss._messaging.local().send_node_ops_cmd(netw::msg_addr(node), req).then([uuid, node] (node_ops_cmd_response resp) {
+                        slogger.debug("decommission[{}]: Got abort response from node={}", uuid, node);
+                    });
+                }).get();
+                slogger.warn("decommission[{}]: Abort decommission operation finished, removing node={}, sync_nodes={}, ignore_nodes={}", uuid, endpoint, nodes, ignore_nodes);
+                throw;
+            }
 
             ss.shutdown_client_servers();
             slogger.info("DECOMMISSIONING: shutdown rpc and cql server done");
@@ -2144,7 +2235,7 @@ future<> storage_service::removenode(sstring host_id_string, std::list<gms::inet
 void storage_service::node_ops_cmd_check(gms::inet_address coordinator, const node_ops_cmd_request& req) {
     auto ops_uuids = boost::copy_range<std::vector<utils::UUID>>(_node_ops| boost::adaptors::map_keys);
     std::string msg;
-    if (req.cmd == node_ops_cmd::removenode_prepare || req.cmd == node_ops_cmd::replace_prepare) {
+    if (req.cmd == node_ops_cmd::removenode_prepare || req.cmd == node_ops_cmd::replace_prepare || req.cmd == node_ops_cmd::decommission_prepare) {
         // Peer node wants to start a new node operation. Make sure no pending node operation is in progress.
         if (!_node_ops.empty()) {
             msg = format("node_ops_cmd_check: Node {} rejected node_ops_cmd={} from node={} with ops_uuid={}, pending_node_ops={}, pending node ops is in progress",
@@ -2219,6 +2310,39 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
                     removenode_with_repair(ss._db, ss._messaging, ss.get_token_metadata_ptr(), node, ops).get();
                 }
             } else if (req.cmd == node_ops_cmd::removenode_abort) {
+                ss.node_ops_abort(ops_uuid);
+            } else if (req.cmd == node_ops_cmd::decommission_prepare) {
+                if (req.leaving_nodes.size() > 1) {
+                    auto msg = format("decommission[{}]: Could not decommission more than one node at a time: leaving_nodes={}", req.ops_uuid, req.leaving_nodes);
+                    slogger.warn("{}", msg);
+                    throw std::runtime_error(msg);
+                }
+                ss.mutate_token_metadata([coordinator, &req, &ss] (mutable_token_metadata_ptr tmptr) mutable {
+                    for (auto& node : req.leaving_nodes) {
+                        slogger.info("decommission[{}]: Added node={} as leaving node, coordinator={}", req.ops_uuid, node, coordinator);
+                        tmptr->add_leaving_endpoint(node);
+                    }
+                    return ss.update_pending_ranges(tmptr, format("decommission {}", req.leaving_nodes));
+                }).get();
+                auto ops = seastar::make_shared<node_ops_info>(node_ops_info{ops_uuid, false, std::move(req.ignore_nodes)});
+                auto meta = node_ops_meta_data(ops_uuid, coordinator, std::move(ops), [&ss, coordinator, req = std::move(req)] () mutable {
+                    return ss.mutate_token_metadata([&ss, coordinator, req = std::move(req)] (mutable_token_metadata_ptr tmptr) mutable {
+                        for (auto& node : req.leaving_nodes) {
+                            slogger.info("decommission[{}]: Removed node={} as leaving node, coordinator={}", req.ops_uuid, node, coordinator);
+                            tmptr->del_leaving_endpoint(node);
+                        }
+                        return ss.update_pending_ranges(tmptr, format("decommission {}", req.leaving_nodes));
+                    });
+                },
+                [&ss, ops_uuid] () mutable { ss.node_ops_singal_abort(ops_uuid); });
+                ss._node_ops.emplace(ops_uuid, std::move(meta));
+            } else if (req.cmd == node_ops_cmd::decommission_heartbeat) {
+                slogger.debug("decommission[{}]: Updated heartbeat from coordinator={}", req.ops_uuid,  coordinator);
+                ss.node_ops_update_heartbeat(ops_uuid);
+            } else if (req.cmd == node_ops_cmd::decommission_done) {
+                slogger.info("decommission[{}]: Marked ops done from coordinator={}", req.ops_uuid, coordinator);
+                ss.node_ops_done(ops_uuid);
+            } else if (req.cmd == node_ops_cmd::decommission_abort) {
                 ss.node_ops_abort(ops_uuid);
             } else if (req.cmd == node_ops_cmd::replace_prepare) {
                 // Mark the replacing node as replacing

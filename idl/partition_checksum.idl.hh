@@ -116,6 +116,10 @@ enum class node_ops_cmd : uint32_t {
      replace_heartbeat,
      replace_abort,
      replace_done,
+     decommission_prepare,
+     decommission_heartbeat,
+     decommission_abort,
+     decommission_done,
 };
 
 struct node_ops_cmd_request {
