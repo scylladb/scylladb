@@ -105,15 +105,17 @@ def have_pkg(package):
 
 
 def pkg_config(package, *options):
+    pkg_config_path = os.environ.get('PKG_CONFIG_PATH', '')
     # Add the directory containing the package to the search path, if a file is
     # specified instead of a name.
     if package.endswith('.pc'):
         local_path = os.path.dirname(package)
-        env = { 'PKG_CONFIG_PATH' : '{}:{}'.format(local_path, os.environ.get('PKG_CONFIG_PATH', '')) }
-    else:
-        env = None
+        pkg_config_path = '{}:{}'.format(local_path, pkg_config_path)
 
-    output = subprocess.check_output(['pkg-config'] + list(options) + [package], env=env)
+    output = subprocess.check_output(['pkg-config'] + list(options) + [package],
+                                     env = {**os.environ,
+                                            'PKG_CONFIG_PATH': pkg_config_path})
+
     return output.decode('utf-8').strip()
 
 
