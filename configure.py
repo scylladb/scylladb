@@ -40,13 +40,24 @@ tempfile.tempdir = f"{outdir}/tmp"
 
 configure_args = str.join(' ', [shlex.quote(x) for x in sys.argv[1:]])
 
-for line in open('/etc/os-release'):
-    key, _, value = line.partition('=')
-    value = value.strip().strip('"')
-    if key == 'ID':
-        os_ids = [value]
-    if key == 'ID_LIKE':
-        os_ids += value.split(' ')
+if os.path.exists('/etc/os-release'):
+    for line in open('/etc/os-release'):
+        key, _, value = line.partition('=')
+        value = value.strip().strip('"')
+        if key == 'ID':
+            os_ids = [value]
+        if key == 'ID_LIKE':
+            os_ids += value.split(' ')
+    if not os_ids:
+        os_ids = ['linux']  # default ID per os-release(5)
+else:
+    os_ids = ['unknown']
+
+distro_extra_cflags = ''
+distro_extra_ldflags = ''
+distro_extra_cmake_args = []
+employ_ld_trickery = True
+
 
 
 # distribution "internationalization", converting package names.
@@ -1398,9 +1409,12 @@ for m in ['debug', 'release', 'sanitize']:
 
 gcc_linker_output = subprocess.check_output(['gcc', '-###', '/dev/null', '-o', 't'], stderr=subprocess.STDOUT).decode('utf-8')
 original_dynamic_linker = re.search('-dynamic-linker ([^ ]*)', gcc_linker_output).groups()[0]
-# gdb has a SO_NAME_MAX_PATH_SIZE of 512, so limit the path size to
-# that. The 512 includes the null at the end, hence the 511 bellow.
-dynamic_linker = '/' * (511 - len(original_dynamic_linker)) + original_dynamic_linker
+if employ_ld_trickery:
+    # gdb has a SO_NAME_MAX_PATH_SIZE of 512, so limit the path size to
+    # that. The 512 includes the null at the end, hence the 511 bellow.
+    dynamic_linker = '/' * (511 - len(original_dynamic_linker)) + original_dynamic_linker
+else:
+    dynamic_linker = original_dynamic_linker
 
 forced_ldflags = '-Wl,'
 
@@ -1449,7 +1463,7 @@ def configure_seastar(build_dir, mode):
         '-DSeastar_CXX_DIALECT=gnu++20',
         '-DSeastar_API_LEVEL=6',
         '-DSeastar_UNUSED_RESULT_ERROR=ON',
-    ]
+    ] + distro_extra_cmake_args
 
     if args.stack_guards is not None:
         stack_guards = 'ON' if args.stack_guards else 'OFF'
@@ -1514,7 +1528,7 @@ def configure_abseil(build_dir, mode):
         '-DCMAKE_C_COMPILER={}'.format(args.cc),
         '-DCMAKE_CXX_COMPILER={}'.format(args.cxx),
         '-DCMAKE_CXX_FLAGS_{}={}'.format(cmake_mode.upper(), abseil_cflags),
-    ]
+    ] + distro_extra_cmake_args
 
     abseil_cmd = ['cmake', '-G', 'Ninja', real_relpath('abseil', abseil_build_dir)] + abseil_cmake_args
 
@@ -1570,7 +1584,7 @@ if any(filter(thrift_version.startswith, thrift_boost_versions)):
 for pkg in pkgs:
     args.user_cflags += ' ' + pkg_config(pkg, '--cflags')
     libs += ' ' + pkg_config(pkg, '--libs')
-args.user_cflags += '-I abseil'
+args.user_cflags += ' -Iabseil'
 user_cflags = args.user_cflags + ' -fvisibility=hidden'
 user_ldflags = args.user_ldflags + ' -fvisibility=hidden'
 if args.staticcxx:
@@ -1608,9 +1622,9 @@ with open(buildfile_tmp, 'w') as f:
         configure_args = {configure_args}
         builddir = {outdir}
         cxx = {cxx}
-        cxxflags = --std=gnu++20 {user_cflags} {warnings} {defines}
-        ldflags = {linker_flags} {user_ldflags}
-        ldflags_build = {linker_flags}
+        cxxflags = --std=gnu++20 {user_cflags} {distro_extra_cflags} {warnings} {defines}
+        ldflags = {linker_flags} {user_ldflags} {distro_extra_ldflags}
+        ldflags_build = {linker_flags} {distro_extra_ldflags}
         libs = {libs}
         pool link_pool
             depth = {link_pool_depth}
