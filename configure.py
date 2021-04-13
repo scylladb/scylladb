@@ -473,6 +473,7 @@ scylla_tests = set([
     'test/boost/raft_address_map_test',
     'test/boost/raft_sys_table_storage_test',
     'test/boost/sstable_set_test',
+    'test/boost/reader_concurrency_semaphore_test',
     'test/manual/ec2_snitch_test',
     'test/manual/enormous_table_scan_test',
     'test/manual/gce_snitch_test',
