@@ -533,6 +533,14 @@ public:
     ///
     /// This method will be called on the shard where the relevant reader lives.
     virtual reader_concurrency_semaphore& semaphore() = 0;
+
+    /// Obtain an admitted permit.
+    ///
+    /// The permit will be associated with the semaphore returned by
+    /// `semaphore()`.
+    ///
+    /// This method will be called on the shard where the relevant reader lives.
+    virtual future<reader_permit> obtain_reader_permit(schema_ptr schema, const char* const description, db::timeout_clock::time_point timeout) = 0;
 };
 
 /// Make a multishard_combining_reader.

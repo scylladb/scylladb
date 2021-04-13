@@ -264,6 +264,15 @@ public:
         return *_semaphores[shard];
     }
 
+    virtual future<reader_permit> obtain_reader_permit(schema_ptr schema, const char* const description, db::timeout_clock::time_point timeout) override {
+        const auto shard = this_shard_id();
+        auto& rm = _readers[shard];
+        if (rm.state == reader_state::successful_lookup) {
+            return make_ready_future<reader_permit>(rm.rparts->permit);
+        }
+        return _db.local().obtain_reader_permit(std::move(schema), description, timeout);
+    }
+
     future<> lookup_readers();
 
     future<> save_readers(flat_mutation_reader::tracked_buffer unconsumed_buffer, detached_compaction_state compaction_state,

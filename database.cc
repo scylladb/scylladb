@@ -2342,6 +2342,10 @@ flat_mutation_reader make_multishard_streaming_reader(distributed<database>& db,
             }
             return *_contexts[shard].semaphore;
         }
+        virtual future<reader_permit> obtain_reader_permit(schema_ptr schema, const char* const description, db::timeout_clock::time_point timeout) override {
+            auto& cf = _db.local().find_column_family(_table_id);
+            return semaphore().obtain_permit(schema.get(), description, cf.estimate_read_memory_cost(), timeout);
+        }
     };
     auto ms = mutation_source([&db] (schema_ptr s,
             reader_permit permit,
