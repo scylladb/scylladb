@@ -154,20 +154,22 @@ class gcp_instance:
         return curl(self.META_DATA_BASE_URL + path + "?recursive=%s" % str(recursive).lower(),
                     headers={"Metadata-Flavor": "Google"})
 
+    def is_in_root_devs(self, x, root_devs):
+        for root_dev in root_devs:
+            if root_dev.startswith(os.path.join("/dev/", x)):
+                return True
+        return False
+
     def _non_root_nvmes(self):
         """get list of nvme disks from os, filter away if one of them is root"""
         nvme_re = re.compile(r"nvme\d+n\d+$")
 
         root_dev_candidates = [x for x in psutil.disk_partitions() if x.mountpoint == "/"]
-        if len(root_dev_candidates) != 1:
-            raise Exception("found more than one disk mounted at root ".format(root_dev_candidates))
 
-        root_dev = root_dev_candidates[0].device
-        # if root_dev.startswith("/dev/mapper"):
-        #     raise Exception("mapper used for root, not checking if nvme is used ".format(root_dev))
+        root_devs = [x.device for x in root_dev_candidates]
 
         nvmes_present = list(filter(nvme_re.match, os.listdir("/dev")))
-        return {self.ROOT: [root_dev], self.EPHEMERAL: [x for x in nvmes_present if not root_dev.startswith(os.path.join("/dev/", x))]}
+        return {self.ROOT: root_devs, self.EPHEMERAL: [x for x in nvmes_present if not self.is_in_root_devs(x, root_devs)]}
 
     @property
     def os_disks(self):
@@ -296,13 +298,17 @@ class gcp_instance:
         """return the size of first non root NVME disk in GB"""
         if self.__firstNvmeSize is None:
             ephemeral_disks = self.getEphemeralOsDisks()
-            firstDisk = ephemeral_disks[0]
-            firstDiskSize = self.get_file_size_by_seek(os.path.join("/dev/", firstDisk))
-            firstDiskSizeGB = firstDiskSize/1024/1024/1024
-            if firstDiskSizeGB >= self.GCP_NVME_DISK_SIZE_2020:
-                self.__firstNvmeSize = firstDiskSizeGB
+            if len(ephemeral_disks) > 0:
+              firstDisk = ephemeral_disks[0]
+              firstDiskSize = self.get_file_size_by_seek(os.path.join("/dev/", firstDisk))
+              firstDiskSizeGB = firstDiskSize/1024/1024/1024
+              if firstDiskSizeGB >= self.GCP_NVME_DISK_SIZE_2020:
+                  self.__firstNvmeSize = firstDiskSizeGB
+              else:
+                  self.__firstNvmeSize = 0
+                  logging.warning("First nvme is smaller than lowest expected size. ".format(firstDisk))
             else:
-                raise Exception("First nvme is smaller than lowest expected size. ".format(firstDisk))
+                self.__firstNvmeSize = 0
         return self.__firstNvmeSize
 
     def is_recommended_instance(self):
