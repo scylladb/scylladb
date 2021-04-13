@@ -375,7 +375,7 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
             max_memory_system_concurrent_reads(),
             "_system_read_concurrency_sem")
     , _data_query_stage("data_query", &column_family::query)
-    , _mutation_query_stage()
+    , _mutation_query_stage("mutation_query", &column_family::mutation_query)
     , _apply_stage("db_apply", &database::do_apply)
     , _version(empty_version)
     , _compaction_manager(make_compaction_manager(_cfg, dbcfg, as))
@@ -1462,17 +1462,14 @@ database::query_mutations(schema_ptr s, const query::read_command& cmd, const dh
     auto& semaphore = get_reader_concurrency_semaphore();
     auto class_config = query::query_class_config{.semaphore = semaphore, .max_memory_for_unlimited_query = *cmd.max_result_size};
     query::querier_cache_context cache_ctx(_querier_cache, cmd.query_uuid, cmd.is_first_page);
-    return _mutation_query_stage(std::move(s),
-            cf.as_mutation_source(),
-            seastar::cref(range),
-            seastar::cref(cmd.slice),
-            cmd.get_row_limit(),
-            cmd.partition_limit,
-            cmd.timestamp,
-            timeout,
+    return _mutation_query_stage(&cf,
+            std::move(s),
+            seastar::cref(cmd),
             class_config,
-            std::move(accounter),
+            seastar::cref(range),
             std::move(trace_state),
+            std::move(accounter),
+            timeout,
             std::move(cache_ctx)).then_wrapped([this, s = _stats, &semaphore, hit_rate = cf.get_global_cache_hit_rate(), op = cf.read_in_progress()] (auto f) {
         if (f.failed()) {
             ++semaphore.get_stats().total_failed_reads;

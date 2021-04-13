@@ -774,6 +774,27 @@ public:
         db::timeout_clock::time_point timeout,
         query::querier_cache_context cache_ctx = { });
 
+    // Performs a query on given data source returning data in reconcilable form.
+    //
+    // Reads at most row_limit rows. If less rows are returned, the data source
+    // didn't have more live data satisfying the query.
+    //
+    // Any cells which have expired according to query_time are returned as
+    // deleted cells and do not count towards live data. The mutations are
+    // compact, meaning that any cell which is covered by higher-level tombstone
+    // is absent in the results.
+    //
+    // 'source' doesn't have to survive deferring.
+    future<reconcilable_result>
+    mutation_query(schema_ptr s,
+            const query::read_command& cmd,
+            query::query_class_config class_config,
+            const dht::partition_range& range,
+            tracing::trace_state_ptr trace_state,
+            query::result_memory_accounter accounter,
+            db::timeout_clock::time_point timeout,
+            query::querier_cache_context cache_ctx = { });
+
     void start();
     future<> stop();
     future<> flush(std::optional<db::replay_position> = {});
@@ -1289,7 +1310,16 @@ private:
         db::timeout_clock::time_point,
         query::querier_cache_context> _data_query_stage;
 
-    mutation_query_stage _mutation_query_stage;
+    inheriting_concrete_execution_stage<future<reconcilable_result>,
+        table*,
+        schema_ptr,
+        const query::read_command&,
+        query::query_class_config,
+        const dht::partition_range&,
+        tracing::trace_state_ptr,
+        query::result_memory_accounter,
+        db::timeout_clock::time_point,
+        query::querier_cache_context> _mutation_query_stage;
 
     inheriting_concrete_execution_stage<
             future<>,
