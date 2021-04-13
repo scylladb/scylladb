@@ -101,7 +101,7 @@ public:
             return messaging_service::no_wait();
         });
 
-        ms.register_gossip_digest_ack2([] (gms::gossip_digest_ack2 msg) {
+        ms.register_gossip_digest_ack2([] (const rpc::client_info& cinfo, gms::gossip_digest_ack2 msg) {
             fmt::print("Server got ack2 msg = {}\n", msg);
             return messaging_service::no_wait();
         });

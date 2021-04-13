@@ -1125,7 +1125,7 @@ future<> messaging_service::send_gossip_digest_ack(msg_addr id, gossip_digest_ac
 }
 
 // gossip ack2
-void messaging_service::register_gossip_digest_ack2(std::function<rpc::no_wait_type (gossip_digest_ack2)>&& func) {
+void messaging_service::register_gossip_digest_ack2(std::function<rpc::no_wait_type (const rpc::client_info& cinfo, gossip_digest_ack2)>&& func) {
     register_handler(this, messaging_verb::GOSSIP_DIGEST_ACK2, std::move(func));
 }
 future<> messaging_service::unregister_gossip_digest_ack2() {

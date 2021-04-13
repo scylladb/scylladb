@@ -220,6 +220,8 @@ future<> gossiper::handle_syn_msg(msg_addr from, gossip_digest_syn syn_msg) {
         return make_ready_future<>();
     }
 
+    fd().report(from.addr);
+
     syn_msg_pending& p = _syn_handlers[from.addr];
     if (p.pending) {
         // The latest syn message from peer has the latest infomation, so
@@ -302,6 +304,8 @@ future<> gossiper::handle_ack_msg(msg_addr id, gossip_digest_ack ack_msg) {
     if (!this->is_enabled() && !this->is_in_shadow_round()) {
         return make_ready_future<>();
     }
+
+    fd().report(id.addr);
 
     msg_proc_guard mp(*this);
 
@@ -394,11 +398,13 @@ future<> gossiper::do_send_ack2_msg(msg_addr from, utils::chunked_vector<gossip_
 // - on_restart callbacks
 // - on_join callbacks
 // - on_alive callbacks
-future<> gossiper::handle_ack2_msg(gossip_digest_ack2 msg) {
+future<> gossiper::handle_ack2_msg(msg_addr from, gossip_digest_ack2 msg) {
     logger.trace("handle_ack2_msg():msg={}", msg);
     if (!is_enabled()) {
         return make_ready_future<>();
     }
+
+    fd().report(from.addr);
 
     msg_proc_guard mp(*this);
 
@@ -496,10 +502,11 @@ future<> gossiper::init_messaging_service_handler(bind_messaging_port do_bind) {
         });
         return messaging_service::no_wait();
     });
-    _messaging.register_gossip_digest_ack2([] (gossip_digest_ack2 msg) {
+    _messaging.register_gossip_digest_ack2([] (const rpc::client_info& cinfo, gossip_digest_ack2 msg) {
+        auto from = netw::messaging_service::get_source(cinfo);
         // In a new fiber.
-        (void)smp::submit_to(0, [msg = std::move(msg)] () mutable {
-            return gms::get_local_gossiper().handle_ack2_msg(std::move(msg));
+        (void)smp::submit_to(0, [from, msg = std::move(msg)] () mutable {
+            return gms::get_local_gossiper().handle_ack2_msg(from, std::move(msg));
         }).handle_exception([] (auto ep) {
             logger.warn("Fail to handle GOSSIP_DIGEST_ACK2: {}", ep);
         });
