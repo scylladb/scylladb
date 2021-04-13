@@ -180,17 +180,21 @@ public:
     promoted_index_block_parser _block_parser;
     reader_permit _permit;
     cached_file::stream _stream;
+    logalloc::allocating_section _as;
 private:
     // Feeds the stream into the consumer until the consumer is satisfied.
     // Does not give unconsumed data back to the stream.
     template <typename Consumer>
-    static future<> consume_stream(cached_file::stream& s, Consumer& c) {
+    future<> consume_stream(cached_file::stream& s, Consumer& c) {
         return repeat([&] {
-            return s.next().then([&] (temporary_buffer<char>&& buf) {
-                if (buf.empty()) {
+            return s.next_page_view().then([&] (cached_file::page_view&& page) {
+                if (!page) {
                     on_internal_error(sstlog, "End of stream while parsing");
                 }
-                return stop_iteration(c.consume(buf) == data_consumer::read_status::ready);
+                return _as(_cached_file.region(), [&] {
+                    auto buf = page.get_buf();
+                    return stop_iteration(c.consume(buf) == data_consumer::read_status::ready);
+                });
             });
         });
     }
@@ -204,7 +208,9 @@ private:
 
     future<pi_offset_type> read_block_offset(pi_index_type idx, tracing::trace_state_ptr trace_state) {
         _stream = _cached_file.read(_promoted_index_start + get_offset_entry_pos(idx), _pc, _permit, trace_state);
-        return _stream.next().then([this, idx] (temporary_buffer<char>&& buf) {
+        return _stream.next_page_view().then([this, idx] (cached_file::page_view page) {
+            temporary_buffer<char> buf = page.get_buf();
+            static_assert(noexcept(std::declval<data_consumer::primitive_consumer>().read_32(buf)));
             if (__builtin_expect(_primitive_parser.read_32(buf) == data_consumer::read_status::ready, true)) {
                 return make_ready_future<pi_offset_type>(_primitive_parser._u32);
             }
