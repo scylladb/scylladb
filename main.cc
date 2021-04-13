@@ -593,6 +593,22 @@ int main(int ac, char** av) {
             };
             auto background_reclaim_scheduling_group = make_sched_group("background_reclaim", 50);
             auto maintenance_scheduling_group = make_sched_group("streaming", 200);
+
+            smp::invoke_on_all([&cfg, background_reclaim_scheduling_group] {
+                logalloc::tracker::config st_cfg;
+                st_cfg.defragment_on_idle = cfg->defragment_memory_on_idle();
+                st_cfg.abort_on_lsa_bad_alloc = cfg->abort_on_lsa_bad_alloc();
+                st_cfg.lsa_reclamation_step = cfg->lsa_reclamation_step();
+                st_cfg.background_reclaim_sched_group = background_reclaim_scheduling_group;
+                logalloc::shard_tracker().configure(st_cfg);
+            }).get();
+
+            auto stop_lsa_background_reclaim = defer([&] {
+                smp::invoke_on_all([&] {
+                    return logalloc::shard_tracker().stop();
+                }).get();
+            });
+
             uint16_t api_port = cfg->api_port();
             ctx.api_dir = cfg->api_ui_dir();
             ctx.api_doc = cfg->api_doc_dir();
@@ -1420,21 +1436,6 @@ int main(int ac, char** av) {
                     return redis.init(proxy, db, auth_service, *cfg);
                 }).get();
             }
-
-            smp::invoke_on_all([&cfg, background_reclaim_scheduling_group] {
-                logalloc::tracker::config st_cfg;
-                st_cfg.defragment_on_idle = cfg->defragment_memory_on_idle();
-                st_cfg.abort_on_lsa_bad_alloc = cfg->abort_on_lsa_bad_alloc();
-                st_cfg.lsa_reclamation_step = cfg->lsa_reclamation_step();
-                st_cfg.background_reclaim_sched_group = background_reclaim_scheduling_group;
-                logalloc::shard_tracker().configure(st_cfg);
-            }).get();
-
-            auto stop_lsa_background_reclaim = defer([&] {
-                smp::invoke_on_all([&] {
-                    return logalloc::shard_tracker().stop();
-                }).get();
-            });
 
             seastar::set_abort_on_ebadf(cfg->abort_on_ebadf());
             api::set_server_done(ctx).get();
