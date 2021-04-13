@@ -821,3 +821,73 @@ SEASTAR_TEST_CASE(test_commitlog_deadlock_in_recycle) {
         co_await log.clear();
     }
 }
+
+// Test for #8438 - ensure we can shut down (in orderly fashion)
+// even if CL write is stuck waiting for segment recycle/alloc
+SEASTAR_TEST_CASE(test_commitlog_shutdown_during_wait) {
+    commitlog::config cfg;
+
+    constexpr auto max_size_mb = 2;
+    cfg.commitlog_segment_size_in_mb = max_size_mb;
+    // ensure total size per shard is not multiple of segment size.
+    cfg.commitlog_total_space_in_mb = 5 * smp::count;
+    cfg.commitlog_sync_period_in_ms = 10;
+    cfg.reuse_segments = true;
+    cfg.allow_going_over_size_limit = false;
+    cfg.use_o_dsync = true; // make sure we pre-allocate.
+
+    // not using cl_test, because we need to be able to abandon
+    // the log.
+
+    tmpdir tmp;
+    cfg.commit_log_location = tmp.path().string();
+    auto log = co_await commitlog::create_commitlog(cfg);
+
+    rp_set rps;
+    std::deque<rp_set> queue;
+    size_t n = 0;
+
+    // uncomment for verbosity
+    //logging::logger_registry().set_logger_level("commitlog", logging::log_level::debug);
+
+    auto uuid = utils::UUID_gen::get_time_UUID();
+    auto size = log.max_record_size() / 2;
+
+    // add a flush handler that does not.
+    auto r = log.add_flush_handler([&](cf_id_type, replay_position pos) {
+        auto old = std::exchange(rps, rp_set{});
+        queue.emplace_back(std::move(old));
+    });
+
+    for (;;) {
+        try {
+            auto now = timeout_clock::now();
+            rp_handle h = co_await with_timeout(now + 10s, log.add_mutation(uuid, size, db::commitlog::force_sync::no, [&](db::commitlog::output& dst) {
+                dst.fill('1', size);
+            }));
+            rps.put(std::move(h));
+        } catch (timed_out_error&) {
+            if (log.disk_footprint() >= log.disk_limit()) {
+                // now a segment alloc is waiting.
+                break;
+            }
+        }
+    }
+
+    // shut down is assumed to 
+    // a.) stop allocating
+    // b.) ensure all segments get's free:d
+    while (!queue.empty()) {
+        auto flush = std::move(queue.front());
+        queue.pop_front();
+        log.discard_completed_segments(uuid, flush);
+    }
+
+    try {
+        auto now = timeout_clock::now();
+        co_await with_timeout(now + 30s, log.shutdown());
+        co_await log.clear();
+    } catch (timed_out_error&) {
+        BOOST_FAIL("log shutdown timed out. maybe it is deadlocked... Will not free log. ASAN errors and leaks will follow...");
+    }
+}
