@@ -429,7 +429,7 @@ public:
     future<> send_gossip_digest_ack(msg_addr id, gms::gossip_digest_ack msg);
 
     // Wrapper for GOSSIP_DIGEST_ACK2
-    void register_gossip_digest_ack2(std::function<rpc::no_wait_type (gms::gossip_digest_ack2)>&& func);
+    void register_gossip_digest_ack2(std::function<rpc::no_wait_type (const rpc::client_info& cinfo, gms::gossip_digest_ack2)>&& func);
     future<> unregister_gossip_digest_ack2();
     future<> send_gossip_digest_ack2(msg_addr id, gms::gossip_digest_ack2 msg);
 
