@@ -58,7 +58,32 @@ distro_extra_ldflags = ''
 distro_extra_cmake_args = []
 employ_ld_trickery = True
 
+# distro-specific setup
+def distro_setup_nix():
+    global os_ids, employ_ld_trickery
+    global distro_extra_ldflags, distro_extra_cflags, distro_extra_cmake_args
 
+    os_ids = ['linux']
+    employ_ld_trickery = False
+
+    libdirs = list(dict.fromkeys(os.environ.get('CMAKE_LIBRARY_PATH').split(':')))
+    incdirs = list(dict.fromkeys(os.environ.get('CMAKE_INCLUDE_PATH').split(':')))
+
+    # add nix {lib,inc}dirs to relevant flags, mimicing nix versions of cmake & autotools.
+    # also add rpaths to make sure that any built executables can run in place.
+    distro_extra_ldflags = ' '.join([ '-rpath ' + path + ' -L' + path for path in libdirs ]);
+    distro_extra_cflags = ' '.join([ '-isystem ' + path for path in incdirs ])
+
+    # indexers like clangd may or may not know which stdc++ or glibc
+    # the compiler was configured with, so make the relevant paths
+    # explicit on each compilation command line:
+    implicit_cflags = os.environ.get('IMPLICIT_CFLAGS').strip()
+    distro_extra_cflags += ' ' + implicit_cflags
+    # also propagate to cmake-built dependencies:
+    distro_extra_cmake_args = ['-DCMAKE_CXX_STANDARD_INCLUDE_DIRECTORIES:INTERNAL=' + implicit_cflags]
+
+if os.environ.get('NIX_BUILD_TOP'):
+        distro_setup_nix()
 
 # distribution "internationalization", converting package names.
 # Fedora name is key, values is distro -> package name dict.
