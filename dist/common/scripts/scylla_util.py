@@ -136,7 +136,7 @@ class azure_instance:
 
     @staticmethod
     def is_azure_instance():
-        """Check if it's AZURE instance via DNS lookup to metadata server."""
+        """Check if it's Azure instance via DNS lookup to metadata server."""
         import socket
         try:
             addrlist = socket.getaddrinfo('169.254.169.254', 80)
@@ -161,8 +161,6 @@ class azure_instance:
             raise Exception("found more than one disk mounted at root ".format(root_dev_candidates))
 
         root_dev = root_dev_candidates[0].device
-        # if root_dev.startswith("/dev/mapper"):
-        #     raise Exception("mapper used for root, not checking if nvme is used ".format(root_dev))
 
         nvmes_present = list(filter(nvme_re.match, os.listdir("/dev")))
         return {self.ROOT: [root_dev], self.EPHEMERAL: [x for x in nvmes_present if not root_dev.startswith(os.path.join("/dev/", x))]}
@@ -193,13 +191,13 @@ class azure_instance:
         """get list of nvme disks from metadata server"""
         import json
         try:
-            disksREST=self.__instance_metadata("disks", True)
-            disksobj=json.loads(disksREST)
-            nvmedisks=list(filter(self.isNVME, disksobj))
+            raw_disks = self.__instance_metadata("disks", True)
+            disks = json.loads(raw_disks)
+            nvmedisks = list(filter(self.isNVME, disks))
         except Exception as e:
-            print ("Problem when parsing disks from metadata:")
+            print (f"Fauked to parse disk metadata: {e}")
             print (e)
-            nvmedisks={}
+            nvmedisks = {}
         return nvmedisks
 
     @property
@@ -208,13 +206,13 @@ class azure_instance:
         if self.__nvmeDiskCount is None:
             try:
                 ephemeral_disks = self.getEphemeralOsDisks()
-                count_os_disks=len(ephemeral_disks)
+                count_os_disks = len(ephemeral_disks)
             except Exception as e:
                 print ("Problem when parsing disks from OS:")
                 print (e)
-                count_os_disks=0
+                count_os_disks = 0
             nvme_metadata_disks = self.__get_nvme_disks_from_metadata()
-            count_metadata_nvme_disks=len(nvme_metadata_disks)
+            count_metadata_nvme_disks = len(nvme_metadata_disks)
             self.__nvmeDiskCount = count_os_disks if count_os_disks<count_metadata_nvme_disks else count_metadata_nvme_disks
         return self.__nvmeDiskCount
 
@@ -270,7 +268,6 @@ class azure_instance:
             return True
         return False
 
-
     def is_recommended_instance_size(self):
         """if this instance has at least 2 cpus, it has a recommended size"""
         if int(self.instance_size()) > 1:
@@ -280,7 +277,7 @@ class azure_instance:
     @staticmethod
     def get_file_size_by_seek(filename):
         "Get the file size by seeking at end"
-        fd= os.open(filename, os.O_RDONLY)
+        fd = os.open(filename, os.O_RDONLY)
         try:
             return os.lseek(fd, 0, os.SEEK_END)
         finally:
@@ -803,7 +800,7 @@ def get_cloud_instance():
     elif is_azure():
         return azure_instance()
     else:
-        raise Exception("Unknown cloud provider! Only AWS/GCP and AZURE supported.")
+        raise Exception("Unknown cloud provider! Only AWS/GCP and Azure are supported.")
 
 
 def hex2list(hex_str):
