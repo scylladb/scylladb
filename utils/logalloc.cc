@@ -374,6 +374,7 @@ class background_reclaimer {
     future<> _done;
     bool _stopping = false;
     static constexpr size_t free_memory_threshold = 60'000'000;
+    static constexpr size_t reclaim_batch_size = 2'000'000;
 private:
     bool have_work() const {
 #ifndef SEASTAR_DEFAULT_ALLOCATOR
@@ -403,7 +404,10 @@ private:
             if (_stopping) {
                 break;
             }
-            _reclaim(free_memory_threshold - memory::stats().free_memory());
+            // Ask to reclaim a fairly large amount of memory so that reclaim efficiency
+            // is good, but will smaller than the maximum backlog so latency to first
+            // reclaimed segment is reasonable.
+            _reclaim(reclaim_batch_size);
             co_await make_ready_future<>();
         }
         llogger.debug("background_reclaimer::main_loop: exit");
