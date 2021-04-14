@@ -1313,7 +1313,7 @@ SEASTAR_TEST_CASE(test_no_index_reads_when_rows_fall_into_range_boundaries) {
             auto ms = make_sstable_mutation_source(env, s, dir.path().string(), {m1, m2}, env.manager().configure_writer(), version);
 
             auto index_accesses = [] {
-                auto&& stats = sstables::shared_index_lists::shard_stats();
+                auto&& stats = sstables::partition_index_cache::shard_stats();
                 return stats.hits + stats.misses + stats.blocks;
             };
 

@@ -29,10 +29,10 @@
 
 namespace sstables {
 
-// Associative cache of summary index -> index_list
+// Associative cache of summary index -> partition_index_page
 // Entries stay around as long as there is any live external reference (list_ptr) to them.
 // Supports asynchronous insertion, ensures that only one entry will be loaded.
-class shared_index_lists {
+class partition_index_cache {
 public:
     using key_type = uint64_t;
     static thread_local struct stats {
@@ -57,9 +57,10 @@ private:
     loading_shared_lists_type _lists;
 public:
 
-    shared_index_lists() = default;
-    shared_index_lists(shared_index_lists&&) = delete;
-    shared_index_lists(const shared_index_lists&) = delete;
+    // Create a cache with a given LRU attached.
+    partition_index_cache() = default;
+    partition_index_cache(partition_index_cache&&) = delete;
+    partition_index_cache(const partition_index_cache&) = delete;
 
     // Returns a future which resolves with a shared pointer to index_list for given key.
     // Always returns a valid pointer if succeeds. The pointer is never invalidated externally.
@@ -75,5 +76,7 @@ public:
 
     static const stats& shard_stats() { return _shard_stats; }
 };
+
+using shared_index_lists = partition_index_cache;
 
 }
