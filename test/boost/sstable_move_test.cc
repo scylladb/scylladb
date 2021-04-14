@@ -23,6 +23,7 @@
 #include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 
+#include "lister.hh"
 #include "test/lib/tmpdir.hh"
 #include "test/lib/sstable_test_env.hh"
 #include "sstable_test.hh"

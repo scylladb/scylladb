@@ -36,6 +36,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <seastar/core/sleep.hh>
 #include "dht/range_streamer.hh"
 #include "utils/fb_utilities.hh"
 #include "locator/snitch_base.hh"

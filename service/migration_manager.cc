@@ -39,6 +39,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <seastar/core/sleep.hh>
 #include "schema_registry.hh"
 #include "service/migration_manager.hh"
 

@@ -38,6 +38,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <seastar/core/sleep.hh>
 #include "load_meter.hh"
 #include "load_broadcaster.hh"
 #include "cache_hitrate_calculator.hh"

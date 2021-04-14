@@ -23,6 +23,7 @@
 
 #include "base64.hh"
 
+#include <seastar/core/sleep.hh>
 #include "alternator/executor.hh"
 #include "log.hh"
 #include "schema_builder.hh"

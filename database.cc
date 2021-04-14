@@ -22,82 +22,46 @@
 #include "log.hh"
 #include "lister.hh"
 #include "database.hh"
-#include "unimplemented.hh"
 #include <seastar/core/future-util.hh>
-#include "db/commitlog/commitlog_entry.hh"
 #include "db/system_keyspace.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "db/commitlog/commitlog.hh"
 #include "db/config.hh"
 #include "to_string.hh"
-#include "query-result-writer.hh"
-#include "cql3/column_identifier.hh"
 #include "cql3/functions/functions.hh"
 #include <seastar/core/seastar.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/reactor.hh>
-#include <seastar/core/sleep.hh>
-#include <seastar/core/rwlock.hh>
 #include <seastar/core/metrics.hh>
-#include <seastar/core/execution_stage.hh>
-#include <seastar/util/bool_class.hh>
 #include <seastar/util/defer.hh>
-#include <boost/algorithm/string/classification.hpp>
 #include <boost/algorithm/string/split.hpp>
 #include "sstables/sstables.hh"
 #include "sstables/sstables_manager.hh"
 #include "sstables/compaction.hh"
-#include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/adaptor/map.hpp>
-#include "locator/simple_snitch.hh"
-#include <boost/algorithm/cxx11/all_of.hpp>
 #include <boost/algorithm/cxx11/any_of.hpp>
-#include <boost/function_output_iterator.hpp>
-#include <boost/range/algorithm/heap_algorithm.hpp>
-#include <boost/range/algorithm/remove_if.hpp>
-#include <boost/range/algorithm/find.hpp>
 #include <boost/range/algorithm/find_if.hpp>
 #include <boost/range/algorithm/sort.hpp>
-#include <boost/range/adaptor/map.hpp>
 #include <boost/container/static_vector.hpp>
 #include "frozen_mutation.hh"
 #include <seastar/core/do_with.hh>
 #include "service/migration_manager.hh"
 #include "message/messaging_service.hh"
-#include "mutation_query.hh"
-#include <seastar/core/fstream.hh>
-#include <seastar/core/enum.hh>
-#include "utils/latency.hh"
-#include "schema_registry.hh"
-#include "service/priority_manager.hh"
 #include "cell_locking.hh"
-#include "db/view/row_locking.hh"
 #include "view_info.hh"
-#include "memtable-sstable.hh"
 #include "db/schema_tables.hh"
-#include "db/query_context.hh"
 #include "sstables/compaction_manager.hh"
-#include "sstables/compaction_backlog_manager.hh"
-#include "sstables/progress_monitor.hh"
-#include "auth/common.hh"
-#include "tracing/trace_keyspace_helper.hh"
 #include "gms/feature_service.hh"
 
-#include "checked-file-impl.hh"
-#include "utils/disk-error-handler.hh"
 #include "utils/human_readable.hh"
 
 #include "db/timeout_clock.hh"
 #include "db/large_data_handler.hh"
 #include "db/data_listeners.hh"
-#include "distributed_loader.hh"
 
 #include "user_types_metadata.hh"
 #include <seastar/core/shared_ptr_incomplete.hh>
 #include <seastar/util/memory_diagnostics.hh>
-#include <seastar/core/coroutine.hh>
-
-#include "schema_builder.hh"
 
 using namespace std::chrono_literals;
 using namespace db;
