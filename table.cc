@@ -1327,16 +1327,7 @@ future<> table::write_schema_as_cql(database& db, sstring dir) const {
 future<> table::snapshot(database& db, sstring name) {
     return flush().then([this, &db, name = std::move(name)]() {
        return with_semaphore(_sstable_deletion_sem, 1, [this, &db, name = std::move(name)]() {
-        // If the SSTables are shared, link this sstable to the snapshot directory only by one of the shards that own it.
-        auto all = _sstables->all();
-        std::vector<sstables::shared_sstable> tables;
-        tables.reserve(all->size());
-        for (auto& sst : *all) {
-            const auto& shards = sst->get_shards_for_this_sstable();
-            if (shards.size() <= 1 || shards[0] == this_shard_id()) {
-                tables.emplace_back(sst);
-            }
-        }
+        auto tables = boost::copy_range<std::vector<sstables::shared_sstable>>(*_sstables->all());
         auto jsondir = _config.datadir + "/snapshots/" + name;
         return do_with(std::move(tables), std::move(jsondir), [this, &db] (std::vector<sstables::shared_sstable>& tables, const sstring& jsondir) {
             return io_check([&jsondir] { return recursive_touch_directory(jsondir); }).then([this, &db, &jsondir, &tables] {
