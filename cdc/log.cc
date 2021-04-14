@@ -349,7 +349,11 @@ cdc::options::options(const std::map<sstring, sstring>& map) {
         auto is_false = val == "false" || val == "0";
 
         if (key == "enabled") {
-            _enabled = is_true;
+            if (is_true || is_false) {
+                _enabled = is_true;    
+            } else {
+                throw exceptions::configuration_exception("Invalid value for CDC option \"enabled\": " + p.second);
+            }
         } else if (key == "preimage") {
             if (is_true || val == image_mode_string_on) {
                 _preimage = image_mode::on;
@@ -361,7 +365,11 @@ cdc::options::options(const std::map<sstring, sstring>& map) {
                 throw exceptions::configuration_exception("Invalid value for CDC option \"preimage\": " + p.second);
             }
         } else if (key == "postimage") {
-            _postimage = is_true;
+            if (is_true || is_false) {
+                _postimage = is_true;    
+            } else {
+                throw exceptions::configuration_exception("Invalid value for CDC option \"postimage\": " + p.second);
+            }
         } else if (key == "delta") {
             if (val == delta_mode_string_keys) {
                 _delta_mode = delta_mode::keys;
@@ -369,7 +377,13 @@ cdc::options::options(const std::map<sstring, sstring>& map) {
                 throw exceptions::configuration_exception("Invalid value for CDC option \"delta\": " + p.second);
             }
         } else if (key == "ttl") {
-            _ttl = std::stoi(p.second);
+            try {
+                _ttl = std::stoi(p.second);
+            } catch (std::invalid_argument& e) {
+                throw exceptions::configuration_exception("Invalid value for CDC option \"ttl\": " + p.second);
+            } catch (std::out_of_range& e) {
+                throw exceptions::configuration_exception("Invalid CDC option: ttl too large");
+            }
             if (_ttl < 0) {
                 throw exceptions::configuration_exception("Invalid CDC option: ttl must be >= 0");
             }
