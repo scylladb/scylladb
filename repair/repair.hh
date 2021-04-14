@@ -500,21 +500,52 @@ enum class node_ops_cmd : uint32_t {
      decommission_heartbeat,
      decommission_abort,
      decommission_done,
+     bootstrap_prepare,
+     bootstrap_heartbeat,
+     bootstrap_abort,
+     bootstrap_done,
+     query_pending_ops,
 };
 
 // The cmd and ops_uuid are mandatory for each request.
 // The ignore_nodes and leaving_node are optional.
 struct node_ops_cmd_request {
+    // Mandatory field, set by all cmds
     node_ops_cmd cmd;
+    // Mandatory field, set by all cmds
     utils::UUID ops_uuid;
+    // Optional field, list nodes to ignore, set by all cmds
     std::list<gms::inet_address> ignore_nodes;
+    // Optional field, list leaving nodes, set by decommission and removenode cmd
     std::list<gms::inet_address> leaving_nodes;
-    // Map existing nodes to replacing nodes
+    // Optional field, map existing nodes to replacing nodes, set by replace cmd
     std::unordered_map<gms::inet_address, gms::inet_address> replace_nodes;
+    // Optional field, map bootstrapping nodes to bootstrap tokens, set by bootstrap cmd
+    std::unordered_map<gms::inet_address, std::list<dht::token>> bootstrap_nodes;
+    node_ops_cmd_request(node_ops_cmd command,
+            utils::UUID uuid,
+            std::list<gms::inet_address> ignore = {},
+            std::list<gms::inet_address> leaving = {},
+            std::unordered_map<gms::inet_address, gms::inet_address> replace = {},
+            std::unordered_map<gms::inet_address, std::list<dht::token>> bootstrap = {})
+        : cmd(command)
+        , ops_uuid(std::move(uuid))
+        , ignore_nodes(std::move(ignore))
+        , leaving_nodes(std::move(leaving))
+        , replace_nodes(std::move(replace))
+        , bootstrap_nodes(std::move(bootstrap)) {
+    }
 };
 
 struct node_ops_cmd_response {
+    // Mandatory field, set by all cmds
     bool ok;
+    // Optional field, set by query_pending_ops cmd
+    std::list<utils::UUID> pending_ops;
+    node_ops_cmd_response(bool o, std::list<utils::UUID> pending = {})
+        : ok(o)
+        , pending_ops(std::move(pending)) {
+    }
 };
 
 namespace std {

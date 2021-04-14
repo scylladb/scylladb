@@ -654,11 +654,15 @@ void storage_service::bootstrap() {
 
         // Update pending ranges now, so we correctly count ourselves as a pending replica
         // when inserting the new CDC generation.
+      if (!is_repair_based_node_ops_enabled()) {
+        // When is_repair_based_node_ops_enabled is true, the bootstrap node
+        // will use node_ops_cmd to bootstrap, node_ops_cmd will update the pending ranges.
         mutate_token_metadata([this] (mutable_token_metadata_ptr tmptr) {
             auto endpoint = get_broadcast_address();
             tmptr->add_bootstrap_tokens(_bootstrap_tokens, endpoint);
             return update_pending_ranges(std::move(tmptr), format("bootstrapping node {}", endpoint));
         }).get();
+      }
 
         // After we pick a generation timestamp, we start gossiping it, and we stick with it.
         // We don't do any other generation switches (unless we crash before complecting bootstrap).
@@ -668,6 +672,9 @@ void storage_service::bootstrap() {
                 _bootstrap_tokens, get_token_metadata_ptr(), _gossiper,
                 _sys_dist_ks.local(), get_ring_delay(), !_for_testing && !is_first_node()).get0();
 
+      if (!is_repair_based_node_ops_enabled()) {
+        // When is_repair_based_node_ops_enabled is true, the bootstrap node
+        // will use node_ops_cmd to bootstrap, bootstrapping gossip status is not needed for bootstrap.
         _gossiper.add_local_application_state({
             // Order is important: both the CDC streams timestamp and tokens must be known when a node handles our status.
             { gms::application_state::TOKENS, versioned_value::tokens(_bootstrap_tokens) },
@@ -677,6 +684,7 @@ void storage_service::bootstrap() {
 
         set_mode(mode::JOINING, format("sleeping {} ms for pending range setup", get_ring_delay().count()), true);
         _gossiper.wait_for_range_setup().get();
+     }
     } else {
         // Wait until we know tokens of existing node before announcing replacing status.
         set_mode(mode::JOINING, sprint("Wait until local node knows tokens of peer nodes"), true);
@@ -711,7 +719,7 @@ void storage_service::bootstrap() {
         if (db().local().is_replacing()) {
             run_replace_ops();
         } else {
-            bootstrap_with_repair(_db, _messaging, get_token_metadata_ptr(), _bootstrap_tokens).get();
+            run_bootstrap_ops();
         }
     } else {
         dht::boot_strapper bs(_db, _abort_source, get_broadcast_address(), _bootstrap_tokens, get_token_metadata_ptr());
@@ -1959,6 +1967,146 @@ future<> storage_service::decommission() {
 }
 
 // Runs inside seastar::async context
+void storage_service::run_bootstrap_ops() {
+    auto uuid = utils::make_random_uuid();
+    // TODO: Specify ignore_nodes
+    std::list<gms::inet_address> ignore_nodes;
+    std::list<gms::inet_address> sync_nodes;
+
+    auto start_time = std::chrono::steady_clock::now();
+    for (;;) {
+        sync_nodes.clear();
+        // Step 1: Decide who needs to sync data for bootstrap operation
+        for (const auto& x :_gossiper.endpoint_state_map) {
+            seastar::thread::maybe_yield();
+            const auto& node = x.first;
+            slogger.info("bootstrap[{}]: Check node={}, status={}", uuid, node, _gossiper.get_gossip_status(node));
+            if (node != get_broadcast_address() &&
+                    _gossiper.is_normal_ring_member(node) &&
+                    std::find(ignore_nodes.begin(), ignore_nodes.end(), x.first) == ignore_nodes.end()) {
+                sync_nodes.push_back(node);
+            }
+        }
+        sync_nodes.push_front(get_broadcast_address());
+
+        // Step 2: Wait until no pending node operations
+        std::unordered_map<gms::inet_address, std::list<utils::UUID>> pending_ops;
+        auto req = node_ops_cmd_request(node_ops_cmd::query_pending_ops, uuid);
+        parallel_for_each(sync_nodes, [this, req, uuid, &pending_ops] (const gms::inet_address& node) {
+            return _messaging.local().send_node_ops_cmd(netw::msg_addr(node), req).then([uuid, node, &pending_ops] (node_ops_cmd_response resp) {
+                slogger.debug("bootstrap[{}]: Got query_pending_ops response from node={}, resp.pending_ops={}", uuid, node, resp.pending_ops);
+                if (!resp.pending_ops.empty()) {
+                    pending_ops.emplace(node, resp.pending_ops);
+                }
+                return make_ready_future<>();
+            });
+        }).handle_exception([uuid] (std::exception_ptr ep) {
+            slogger.warn("bootstrap[{}]: Failed to query_pending_ops : {}", uuid, ep);
+        }).get();
+        if (pending_ops.empty()) {
+            break;
+        } else {
+            if (std::chrono::steady_clock::now() > start_time + std::chrono::seconds(60)) {
+                throw std::runtime_error(format("bootstrap[{}]: Found pending node ops = {}, reject bootstrap", uuid, pending_ops));
+            }
+            slogger.warn("bootstrap[{}]: Found pending node ops = {}, sleep 5 seconds and check again", uuid, pending_ops);
+            sleep_abortable(std::chrono::seconds(5), _abort_source).get();
+        }
+    }
+
+    std::unordered_set<gms::inet_address> nodes_unknown_verb;
+    std::unordered_set<gms::inet_address> nodes_down;
+    std::unordered_set<gms::inet_address> nodes_aborted;
+    auto tokens = std::list<dht::token>(_bootstrap_tokens.begin(), _bootstrap_tokens.end());
+    std::unordered_map<gms::inet_address, std::list<dht::token>> bootstrap_nodes = {
+        {get_broadcast_address(), tokens},
+    };
+    auto req = node_ops_cmd_request(node_ops_cmd::bootstrap_prepare, uuid, ignore_nodes, {}, {}, bootstrap_nodes);
+    slogger.info("bootstrap[{}]: Started bootstrap operation, bootstrap_nodes={}, sync_nodes={}, ignore_nodes={}", uuid, bootstrap_nodes, sync_nodes, ignore_nodes);
+    future<> heartbeat_updater = make_ready_future<>();
+    auto heartbeat_updater_done = make_lw_shared<bool>(false);
+    try {
+        // Step 3: Prepare to sync data
+        parallel_for_each(sync_nodes, [this, &req, &nodes_unknown_verb, &nodes_down, uuid] (const gms::inet_address& node) {
+            return _messaging.local().send_node_ops_cmd(netw::msg_addr(node), req).then([uuid, node] (node_ops_cmd_response resp) {
+                slogger.debug("bootstrap[{}]: Got node_ops_cmd::bootstrap_prepare response from node={}", uuid, node);
+            }).handle_exception_type([&nodes_unknown_verb, node, uuid] (seastar::rpc::unknown_verb_error&) {
+                slogger.warn("bootstrap[{}]: Node {} does not support node_ops_cmd verb", uuid, node);
+                nodes_unknown_verb.emplace(node);
+            }).handle_exception_type([&nodes_down, node, uuid] (seastar::rpc::closed_error&) {
+                slogger.warn("bootstrap[{}]: Node {} is down for node_ops_cmd verb", uuid, node);
+                nodes_down.emplace(node);
+            });
+        }).get();
+        if (!nodes_unknown_verb.empty()) {
+            auto msg = format("bootstrap[{}]: Nodes={} do not support bootstrap verb. Please upgrade your cluster and run bootstrap again.", uuid, nodes_unknown_verb);
+            slogger.warn("{}", msg);
+            throw std::runtime_error(msg);
+        }
+        if (!nodes_down.empty()) {
+            auto msg = format("bootstrap[{}]: Nodes={} needed for bootstrap operation are down. It is highly recommended to fix the down nodes and try again. To proceed with best-effort mode which might cause data inconsistency, add --ignore-dead-nodes <list_of_dead_nodes>. E.g., scylla --ignore-dead-nodes 127.0.0.1,127.0.0.2", uuid, nodes_down);
+            slogger.warn("{}", msg);
+            throw std::runtime_error(msg);
+        }
+
+        // Step 4: Start heartbeat updater
+        heartbeat_updater = seastar::async([this, &sync_nodes, uuid, heartbeat_updater_done] {
+            slogger.debug("bootstrap[{}]: Started heartbeat_updater", uuid);
+            while (!(*heartbeat_updater_done)) {
+                auto req = node_ops_cmd_request(node_ops_cmd::bootstrap_heartbeat, uuid);
+                parallel_for_each(sync_nodes, [this, req, uuid] (const gms::inet_address& node) {
+                    return _messaging.local().send_node_ops_cmd(netw::msg_addr(node), req).then([uuid, node] (node_ops_cmd_response resp) {
+                        slogger.debug("bootstrap[{}]: Got heartbeat response from node={}", uuid, node);
+                        return make_ready_future<>();
+                    });
+                }).handle_exception([uuid] (std::exception_ptr ep) {
+                    slogger.warn("bootstrap[{}]: Failed to send heartbeat: {}", uuid, ep);
+                }).get();
+                int nr_seconds = 10;
+                while (!(*heartbeat_updater_done) && nr_seconds--) {
+                    sleep(std::chrono::seconds(1)).get();
+                }
+            }
+            slogger.debug("bootstrap[{}]: Stopped heartbeat_updater", uuid);
+        });
+        auto stop_heartbeat_updater = defer([&] {
+            *heartbeat_updater_done = true;
+            heartbeat_updater.get();
+        });
+
+        // Step 5: Sync data for bootstrap
+        bootstrap_with_repair(_db, _messaging, get_token_metadata_ptr(), _bootstrap_tokens).get();
+
+        // Step 6: Finish
+        req.cmd = node_ops_cmd::bootstrap_done;
+        parallel_for_each(sync_nodes, [this, &req, &nodes_aborted, uuid] (const gms::inet_address& node) {
+            return _messaging.local().send_node_ops_cmd(netw::msg_addr(node), req).then([&nodes_aborted, uuid, node] (node_ops_cmd_response resp) {
+                nodes_aborted.emplace(node);
+                slogger.debug("bootstrap[{}]: Got done response from node={}", uuid, node);
+                return make_ready_future<>();
+            });
+        }).get();
+    } catch (...) {
+        slogger.error("bootstrap[{}]: Abort bootstrap operation started, bootstrap_nodes={}, sync_nodes={}, ignore_nodes={}: {}",
+                uuid, bootstrap_nodes, sync_nodes, ignore_nodes, std::current_exception());
+        // we need to revert the effect of prepare verb the bootstrap ops is failed
+        req.cmd = node_ops_cmd::bootstrap_abort;
+        parallel_for_each(sync_nodes, [this, &req, &nodes_unknown_verb, &nodes_down, &nodes_aborted, uuid] (const gms::inet_address& node) {
+            if (nodes_unknown_verb.contains(node) || nodes_down.contains(node) || nodes_aborted.contains(node)) {
+                // No need to revert previous prepare cmd for those who do not apply prepare cmd.
+                return make_ready_future<>();
+            }
+            return _messaging.local().send_node_ops_cmd(netw::msg_addr(node), req).then([uuid, node] (node_ops_cmd_response resp) {
+                slogger.debug("bootstrap[{}]: Got abort response from node={}", uuid, node);
+            });
+        }).get();
+        slogger.error("bootstrap[{}]: Abort bootstrap operation finished, bootstrap_nodes={}, sync_nodes={}, ignore_nodes={}: {}",
+                uuid, bootstrap_nodes, sync_nodes, ignore_nodes, std::current_exception());
+        throw;
+    }
+}
+
+// Runs inside seastar::async context
 void storage_service::run_replace_ops() {
     if (!db().local().get_replace_address()) {
         throw std::runtime_error(format("replace_address is empty"));
@@ -2235,7 +2383,8 @@ future<> storage_service::removenode(sstring host_id_string, std::list<gms::inet
 void storage_service::node_ops_cmd_check(gms::inet_address coordinator, const node_ops_cmd_request& req) {
     auto ops_uuids = boost::copy_range<std::vector<utils::UUID>>(_node_ops| boost::adaptors::map_keys);
     std::string msg;
-    if (req.cmd == node_ops_cmd::removenode_prepare || req.cmd == node_ops_cmd::replace_prepare || req.cmd == node_ops_cmd::decommission_prepare) {
+    if (req.cmd == node_ops_cmd::removenode_prepare || req.cmd == node_ops_cmd::replace_prepare ||
+            req.cmd == node_ops_cmd::decommission_prepare || req.cmd == node_ops_cmd::bootstrap_prepare) {
         // Peer node wants to start a new node operation. Make sure no pending node operation is in progress.
         if (!_node_ops.empty()) {
             msg = format("node_ops_cmd_check: Node {} rejected node_ops_cmd={} from node={} with ops_uuid={}, pending_node_ops={}, pending node ops is in progress",
@@ -2265,6 +2414,14 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
         return seastar::async([&ss, coordinator, req = std::move(req)] () mutable {
             auto ops_uuid = req.ops_uuid;
             slogger.debug("node_ops_cmd_handler cmd={}, ops_uuid={}", uint32_t(req.cmd), ops_uuid);
+
+            if (req.cmd == node_ops_cmd::query_pending_ops) {
+                bool ok = true;
+                auto ops_uuids = boost::copy_range<std::list<utils::UUID>>(ss._node_ops| boost::adaptors::map_keys);
+                node_ops_cmd_response resp(ok, ops_uuids);
+                slogger.debug("node_ops_cmd_handler: Got query_pending_ops request from {}, pending_ops={}", coordinator, ops_uuids);
+                return resp;
+            }
 
             ss.node_ops_cmd_check(coordinator, req);
 
@@ -2398,13 +2555,51 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
                 ss.node_ops_done(ops_uuid);
             } else if (req.cmd == node_ops_cmd::replace_abort) {
                 ss.node_ops_abort(ops_uuid);
+            } else if (req.cmd == node_ops_cmd::bootstrap_prepare) {
+                // Mark the bootstrap node as bootstrapping
+                if (req.bootstrap_nodes.size() > 1) {
+                    auto msg = format("bootstrap[{}]: Could not bootstrap more than one node at a time: bootstrap_nodes={}", req.ops_uuid, req.bootstrap_nodes);
+                    slogger.warn("{}", msg);
+                    throw std::runtime_error(msg);
+                }
+                ss.mutate_token_metadata([coordinator, &req, &ss] (mutable_token_metadata_ptr tmptr) mutable {
+                    for (auto& x: req.bootstrap_nodes) {
+                        auto& endpoint = x.first;
+                        auto tokens = std::unordered_set<dht::token>(x.second.begin(), x.second.end());
+                        slogger.info("bootstrap[{}]: Added node={} as bootstrap, coordinator={}", req.ops_uuid, endpoint, coordinator);
+                        tmptr->add_bootstrap_tokens(tokens, endpoint);
+                    }
+                    return ss.update_pending_ranges(tmptr, format("bootstrap {}", req.bootstrap_nodes));
+                }).get();
+                auto ops = seastar::make_shared<node_ops_info>(node_ops_info{ops_uuid, false, std::move(req.ignore_nodes)});
+                auto meta = node_ops_meta_data(ops_uuid, coordinator, std::move(ops), [&ss, coordinator, req = std::move(req)] () mutable {
+                    return ss.mutate_token_metadata([&ss, coordinator, req = std::move(req)] (mutable_token_metadata_ptr tmptr) mutable {
+                        for (auto& x: req.bootstrap_nodes) {
+                            auto& endpoint = x.first;
+                            auto tokens = std::unordered_set<dht::token>(x.second.begin(), x.second.end());
+                            slogger.info("bootstrap[{}]: Removed node={} as bootstrap, coordinator={}", req.ops_uuid, endpoint, coordinator);
+                            tmptr->remove_bootstrap_tokens(tokens);
+                        }
+                        return ss.update_pending_ranges(tmptr, format("bootstrap {}", req.bootstrap_nodes));
+                    });
+                },
+                [&ss, ops_uuid ] { ss.node_ops_singal_abort(ops_uuid); });
+                ss._node_ops.emplace(ops_uuid, std::move(meta));
+            } else if (req.cmd == node_ops_cmd::bootstrap_heartbeat) {
+                slogger.debug("bootstrap[{}]: Updated heartbeat from coordinator={}", req.ops_uuid, coordinator);
+                ss.node_ops_update_heartbeat(ops_uuid);
+            } else if (req.cmd == node_ops_cmd::bootstrap_done) {
+                slogger.info("bootstrap[{}]: Marked ops done from coordinator={}", req.ops_uuid, coordinator);
+                ss.node_ops_done(ops_uuid);
+            } else if (req.cmd == node_ops_cmd::bootstrap_abort) {
+                ss.node_ops_abort(ops_uuid);
             } else {
                 auto msg = format("node_ops_cmd_handler: ops_uuid={}, unknown cmd={}", req.ops_uuid, uint32_t(req.cmd));
                 slogger.warn("{}", msg);
                 throw std::runtime_error(msg);
             }
-            node_ops_cmd_response resp;
-            resp.ok = true;
+            bool ok = true;
+            node_ops_cmd_response resp(ok);
             return resp;
         });
     });

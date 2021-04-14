@@ -380,6 +380,7 @@ private:
             const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features, bind_messaging_port do_bind = bind_messaging_port::yes);
 
     void run_replace_ops();
+    void run_bootstrap_ops();
 
 public:
     future<bool> is_initialized();
