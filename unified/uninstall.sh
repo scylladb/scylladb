@@ -22,6 +22,11 @@
 
 set -e
 
+if [ -z "$BASH_VERSION" ]; then
+    echo "Unsupported shell, please run this script on bash."
+    exit 1
+fi
+
 # change directory to the package's root directory
 cd "$(dirname "$0")"
 
