@@ -22,6 +22,11 @@
 
 set -e
 
+if [ -z "$BASH_VERSION" ]; then
+    echo "Unsupported shell, please run this script on bash."
+    exit 1
+fi
+
 print_usage() {
     cat <<EOF
 Usage: install.sh [options]
