@@ -970,6 +970,62 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_destroyed_permit_rele
     BOOST_REQUIRE(semaphore.available_resources() == initial_resources);
 }
 
+// This unit test passes a read through admission again-and-again, just
+// like an evictable reader would be during its lifetime. When readmitted
+// the read sometimes has to wait and sometimes not. This is to check that
+// the readmitting a previously admitted reader doesn't leak any units.
+SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_readmission_preserves_units) {
+    simple_schema s;
+    const auto initial_resources = reader_concurrency_semaphore::resources{10, 1024 * 1024};
+    reader_concurrency_semaphore semaphore(initial_resources.count, initial_resources.memory, get_name());
+
+    auto permit = semaphore.make_permit(s.schema().get(), get_name());
+
+    std::optional<reader_permit::resource_units> residue_units;
+
+    for (int i = 0; i < 10; ++i) {
+        const auto have_residue_units = bool(residue_units);
+
+        auto current_resources = initial_resources;
+        if (have_residue_units) {
+            current_resources -= residue_units->resources();
+        }
+        BOOST_REQUIRE(semaphore.available_resources() == current_resources);
+
+        std::optional<reader_permit::resource_units> admitted_units;
+        if (i % 2) {
+            const auto consumed_resources = semaphore.available_resources();
+            semaphore.consume(consumed_resources);
+
+            auto units_fut = permit.wait_admission(1024, db::no_timeout);
+            BOOST_REQUIRE(!units_fut.available());
+
+            semaphore.signal(consumed_resources);
+            admitted_units = units_fut.get();
+        } else {
+            admitted_units = permit.wait_admission(1024, db::no_timeout).get();
+        }
+
+        current_resources -= admitted_units->resources();
+        BOOST_REQUIRE(semaphore.available_resources() == current_resources);
+
+        residue_units.emplace(permit.consume_resources(reader_resources(0, 100)));
+        if (!have_residue_units) {
+            current_resources -= residue_units->resources();
+        }
+        BOOST_REQUIRE(semaphore.available_resources() == current_resources);
+
+        auto handle = semaphore.register_inactive_read(make_empty_flat_reader(s.schema(), permit));
+        BOOST_REQUIRE(semaphore.try_evict_one_inactive_read());
+    }
+
+    BOOST_REQUIRE(semaphore.available_resources() == initial_resources - residue_units->resources());
+
+    residue_units.reset();
+
+    BOOST_REQUIRE(semaphore.available_resources() == initial_resources);
+}
+
 static
 sstables::shared_sstable create_sstable(sstables::test_env& env, schema_ptr s, std::vector<mutation> mutations) {
     static thread_local auto tmp = tmpdir();
