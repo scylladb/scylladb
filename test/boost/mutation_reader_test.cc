@@ -1026,6 +1026,136 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_readmission_preserves
     BOOST_REQUIRE(semaphore.available_resources() == initial_resources);
 }
 
+// This unit test checks that the semaphore doesn't get into a deadlock
+// when contended, in the presence of many memory-only reads (that don't
+// wait for admission). This is tested by simulating the 3 kind of reads we
+// currently have in the system:
+// * memory-only: reads that don't pass admission and only own memory.
+// * admitted: reads that pass admission.
+// * evictable: admitted reads that are furthermore evictable.
+//
+// The test creates and runs a large number of these reads in parallel,
+// read kinds being selected randomly, then creates a watchdog which
+// kills the test if no progress is being made.
+SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_forward_progress) {
+    class reader {
+        class skeleton_reader : public flat_mutation_reader::impl {
+            reader_permit::resource_units _base_resources;
+            std::optional<reader_permit::resource_units> _resources;
+        public:
+            skeleton_reader(schema_ptr s, reader_permit permit, reader_permit::resource_units res)
+                : impl(std::move(s), std::move(permit)), _base_resources(std::move(res)) { }
+            virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override {
+                _resources.emplace(_permit.consume_resources(reader_resources(0, tests::random::get_int(1024, 2048))));
+                return make_ready_future<>();
+            }
+            virtual future<> next_partition() override { return make_ready_future<>(); }
+            virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override { return make_ready_future<>(); }
+            virtual future<> fast_forward_to(position_range, db::timeout_clock::time_point timeout) override { return make_ready_future<>(); }
+        };
+        struct reader_visitor {
+            reader& r;
+            future<> operator()(std::monostate& ms) { return r.tick(ms); }
+            future<> operator()(flat_mutation_reader& reader) { return r.tick(reader); }
+            future<> operator()(reader_concurrency_semaphore::inactive_read_handle& handle) { return r.tick(handle); }
+        };
+
+    private:
+        schema_ptr _schema;
+        reader_permit _permit;
+        bool _memory_only = true;
+        bool _evictable = false;
+        std::optional<reader_permit::resource_units> _units;
+        std::variant<std::monostate, flat_mutation_reader, reader_concurrency_semaphore::inactive_read_handle> _reader;
+
+    private:
+        future<> make_reader() {
+            auto res = _permit.consume_memory();
+            if (!_memory_only) {
+                res = co_await _permit.wait_admission(1024, db::no_timeout);
+            }
+            _reader = make_flat_mutation_reader<skeleton_reader>(_schema, _permit, std::move(res));
+        }
+        future<> tick(std::monostate&) {
+            co_await make_reader();
+            co_await tick(std::get<flat_mutation_reader>(_reader));
+        }
+        future<> tick(flat_mutation_reader& reader) {
+            co_await reader.fill_buffer(db::no_timeout);
+            if (_evictable) {
+                _reader = _permit.semaphore().register_inactive_read(std::move(reader));
+            }
+        }
+        future<> tick(reader_concurrency_semaphore::inactive_read_handle& handle) {
+            if (auto reader = _permit.semaphore().unregister_inactive_read(std::move(handle)); reader) {
+                _reader = std::move(*reader);
+            } else {
+                co_await make_reader();
+            }
+            co_await tick(std::get<flat_mutation_reader>(_reader));
+        }
+
+    public:
+        reader(schema_ptr s, reader_permit permit, bool memory_only, bool evictable)
+            : _schema(std::move(s))
+            , _permit(std::move(permit))
+            , _memory_only(memory_only)
+            , _evictable(evictable)
+            , _units(_permit.consume_memory(tests::random::get_int(128, 1024)))
+        {
+        }
+        future<> tick() {
+            return std::visit(reader_visitor{*this}, _reader);
+        }
+    };
+
+    const auto count = 10;
+    const auto num_readers = 512;
+    const auto ticks = 1000;
+
+    simple_schema s;
+    reader_concurrency_semaphore semaphore(count, count * 1024, get_name());
+
+    std::list<std::optional<reader>> readers;
+    unsigned nr_memory_only = 0;
+    unsigned nr_admitted = 0;
+    unsigned nr_evictable = 0;
+
+    for (auto i = 0; i <  num_readers; ++i) {
+        const auto memory_only = tests::random::get_bool();
+        const auto evictable = !memory_only && tests::random::get_bool();
+        if (memory_only) {
+            ++nr_memory_only;
+        } else if (evictable) {
+            ++nr_evictable;
+        } else {
+            ++nr_admitted;
+        }
+        readers.emplace_back(reader(s.schema(), semaphore.make_permit(s.schema().get(), fmt::format("reader{}", i)), memory_only, evictable));
+    }
+
+    testlog.info("Created {} readers, memory_only={}, admitted={}, evictable={}", readers.size(), nr_memory_only, nr_admitted, nr_evictable);
+
+    bool watchdog_touched = false;
+    auto watchdog = timer<db::timeout_clock>([&semaphore, &watchdog_touched] {
+        if (!watchdog_touched) {
+            testlog.error("Watchdog detected a deadlock, dumping diagnostics before killing the test: {}", semaphore.dump_diagnostics());
+            semaphore.broken(std::make_exception_ptr(std::runtime_error("test killed by watchdog")));
+        }
+        watchdog_touched = false;
+    });
+    watchdog.arm_periodic(std::chrono::seconds(30));
+
+    parallel_for_each(readers, [&] (std::optional<reader>& r) -> future<> {
+        for (auto i = 0; i < ticks; ++i) {
+            watchdog_touched = true;
+            co_await r->tick();
+        }
+        r.reset();
+        watchdog_touched = true;
+    }).get();
+}
+
 static
 sstables::shared_sstable create_sstable(sstables::test_env& env, schema_ptr s, std::vector<mutation> mutations) {
     static thread_local auto tmp = tmpdir();
