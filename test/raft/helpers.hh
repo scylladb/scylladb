@@ -133,6 +133,22 @@ bool compare_log_entries(raft::log& log1, raft::log& log2, size_t from, size_t t
 
 using raft_routing_map = std::unordered_map<raft::server_id, raft::fsm*>;
 
+bool deliver(raft_routing_map& routes, raft::server_id from, std::pair<raft::server_id, raft::rpc_message> m) {
+    auto it = routes.find(m.first);
+    if (it == routes.end()) {
+        // Destination not available
+        return false;
+    }
+    std::visit([from, &to = *it->second] (auto&& m) { to.step(from, std::move(m)); }, std::move(m.second));
+    return true;
+}
+
+void deliver(raft_routing_map& routes, raft::server_id from, std::vector<std::pair<raft::server_id, raft::rpc_message>> msgs) {
+    for (auto& m: msgs) {
+        deliver(routes, from, std::move(m));
+    }
+}
+
 void
 communicate_impl(std::function<bool()> stop_pred, raft_routing_map& map) {
     // To enable tracing, set:
@@ -150,15 +166,7 @@ communicate_impl(std::function<bool()> stop_pred, raft_routing_map& map) {
                 }
                 for (auto&& m : output.messages) {
                     has_traffic = true;
-                    auto it = map.find(m.first);
-                    if (it == map.end()) {
-                        // The node is not available, drop the message
-                        continue;
-                    }
-                    raft::fsm& to = *(it->second);
-                    std::visit([&from, &to](auto&& m) { to.step(from.id(), std::move(m)); },
-                        std::move(m.second));
-                    if (stop_pred()) {
+                    if (deliver(map, from.id(), std::move(m)) && stop_pred()) {
                         return;
                     }
                 }

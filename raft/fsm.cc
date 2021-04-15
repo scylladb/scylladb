@@ -596,15 +596,17 @@ void fsm::append_entries_reply(server_id from, append_reply&& reply) {
             return;
         }
 
+        // is_stray_reject may return a false negative so even if the check above passes,
+        // we may still be dealing with a stray reject. That's fine though; it is always safe
+        // to rollback next_idx on a reject and in fact that's what the Raft spec (TLA+) does.
+        // Detecting stray rejects is an optimization that should rarely even be needed.
+
         // Start re-sending from the non matching index, or from
         // the last index in the follower's log.
         // FIXME: make it more efficient
         progress.next_idx = std::min(rejected.non_matching_idx, index_t(rejected.last_idx + 1));
 
         progress.become_probe();
-
-        // We should not fail to apply an entry following the matched one.
-        assert(progress.next_idx != progress.match_idx);
     }
 
     // We may have just applied a configuration that removes this

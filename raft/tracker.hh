@@ -56,8 +56,9 @@ public:
     size_t in_flight = 0;
     static constexpr size_t max_in_flight = 10;
 
-    // check if a reject packet should be ignored because it was delayed
-    // or reordered
+    // Check if a reject packet should be ignored because it was delayed or reordered.
+    // This is not 100% accurate (may return false negatives) and should only be relied on
+    // for liveness optimizations, not for safety.
     bool is_stray_reject(const append_reply::rejected&);
 
     void become_probe();
