@@ -26,6 +26,7 @@
 #include <exception>
 #include <absl/container/btree_set.h>
 
+#include <seastar/core/abort_source.hh>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/sharded.hh>
 #include <seastar/core/future.hh>
@@ -310,6 +311,8 @@ private:
     seastar::gate _gate;
     // Set when the repair service is being shutdown
     std::atomic_bool _shutdown alignas(seastar::cache_line_size);
+    // Triggered when service is being shutdown
+    seastar::abort_source _shutdown_as;
     // Map repair id into repair_info. The vector has smp::count elements, each
     // element will be accessed by only one shard.
     std::vector<std::unordered_map<int, lw_shared_ptr<repair_info>>> _repairs;
@@ -328,6 +331,7 @@ public:
     repair_uniq_id next_repair_command();
     future<> shutdown();
     void check_in_shutdown();
+    seastar::abort_source& get_shutdown_abort_source();
     void add_repair_info(int id, lw_shared_ptr<repair_info> ri);
     void remove_repair_info(int id);
     lw_shared_ptr<repair_info> get_repair_info(int id);

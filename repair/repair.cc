@@ -419,6 +419,7 @@ repair_uniq_id tracker::next_repair_command() {
 
 future<> tracker::shutdown() {
     _shutdown.store(true, std::memory_order_relaxed);
+    _shutdown_as.request_abort();
     return _gate.close();
 }
 
@@ -426,6 +427,10 @@ void tracker::check_in_shutdown() {
     if (_shutdown.load(std::memory_order_relaxed)) {
         throw std::runtime_error(format("Repair service is being shutdown"));
     }
+}
+
+seastar::abort_source& tracker::get_shutdown_abort_source() {
+    return _shutdown_as;
 }
 
 void tracker::add_repair_info(int id, lw_shared_ptr<repair_info> ri) {
@@ -1342,8 +1347,7 @@ static future<> try_wait_for_hints_to_be_replayed(repair_uniq_id id, std::vector
     auto& sp = service::get_local_storage_proxy();
     rlogger.info("repair id {}: started replaying hints before repair, source nodes: {}, target nodes: {}", id, source_nodes, target_nodes);
     try {
-        seastar::abort_source as;
-        co_await sp.wait_for_hints_to_be_replayed(id.uuid, std::move(source_nodes), std::move(target_nodes), as);
+        co_await sp.wait_for_hints_to_be_replayed(id.uuid, std::move(source_nodes), std::move(target_nodes), repair_tracker().get_shutdown_abort_source());
         rlogger.info("repair id {}: finished replaying hints (took {}s), continuing with repair", id, get_elapsed_seconds());
     } catch (...) {
         rlogger.warn("repair id {}: failed to replay hints before repair (took {}s): {}, the repair will continue", id, get_elapsed_seconds(), std::current_exception());
