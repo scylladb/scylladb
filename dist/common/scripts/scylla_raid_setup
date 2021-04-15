@@ -161,6 +161,7 @@ if __name__ == '__main__':
 Description=Scylla data directory
 Before=scylla-server.service
 After={after}
+DefaultDependencies=no
 
 [Mount]
 What=UUID={uuid}
