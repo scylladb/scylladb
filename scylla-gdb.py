@@ -38,7 +38,7 @@ def get_base_class_offset(gdb_type, base_class_name):
     name_pattern = re.escape(base_class_name) + "(<.*>)?$"
     for field in gdb_type.fields():
         if field.is_base_class and re.match(name_pattern, field.name):
-            return field.bitpos / 8
+            return int(field.bitpos / 8)
 
 
 class intrusive_list:
