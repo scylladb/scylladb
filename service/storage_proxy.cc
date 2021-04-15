@@ -5314,12 +5314,12 @@ future<bool> storage_proxy::check_hint_queue_sync_point(utils::UUID sync_point) 
     });
 }
 
-future<> storage_proxy::wait_for_hints_to_be_replayed(utils::UUID operation_id, std::vector<gms::inet_address> source_endpoints, std::vector<gms::inet_address> target_endpoints) {
+future<> storage_proxy::wait_for_hints_to_be_replayed(utils::UUID operation_id, std::vector<gms::inet_address> source_endpoints, std::vector<gms::inet_address> target_endpoints, seastar::abort_source& as) {
     const auto deadline = lowres_clock::time_point::max();
 
     slogger.debug("Coordinating a request to wait until all hints are sent on {} nodes", source_endpoints.size());
 
-    co_await parallel_for_each(source_endpoints, [this, operation_id,  &target_endpoints_ = target_endpoints, deadline_ = deadline] (gms::inet_address addr) -> future<> {
+    co_await parallel_for_each(source_endpoints, [this, operation_id, &target_endpoints_ = target_endpoints, deadline_ = deadline, &as] (gms::inet_address addr) -> future<> {
         const auto deadline = deadline_;
         const auto& target_endpoints = target_endpoints_;
 
@@ -5341,7 +5341,7 @@ future<> storage_proxy::wait_for_hints_to_be_replayed(utils::UUID operation_id, 
         // Step 2: Wait until hints are replayed
         // Sleep 1 second between checks
         bool reached_sync_point = false;
-        while (!reached_sync_point && lowres_clock::now() < deadline) {
+        while (!reached_sync_point && !as.abort_requested() && lowres_clock::now() < deadline) {
             // Check if the destination is alive
             if (!gms::get_local_gossiper().is_alive(addr)) {
                 slogger.debug("Node {} is no longer alive, won't wait anymore for its hint sync point", addr);
@@ -5369,7 +5369,7 @@ future<> storage_proxy::wait_for_hints_to_be_replayed(utils::UUID operation_id, 
                 throw;
             }
 
-            co_await sleep_abortable(wait_duration);
+            co_await sleep_abortable(wait_duration, as);
         }
 
         if (reached_sync_point) {
