@@ -313,6 +313,9 @@ private:
     std::atomic_bool _shutdown alignas(seastar::cache_line_size);
     // Triggered when service is being shutdown
     seastar::abort_source _shutdown_as;
+    // Triggered when all repairs are requested to be aborted.
+    // It is immediately initialized again after an abort.
+    seastar::abort_source _abort_all_as;
     // Map repair id into repair_info. The vector has smp::count elements, each
     // element will be accessed by only one shard.
     std::vector<std::unordered_map<int, lw_shared_ptr<repair_info>>> _repairs;
@@ -338,6 +341,7 @@ public:
     std::vector<int> get_active() const;
     size_t nr_running_repair_jobs();
     void abort_all_repairs();
+    seastar::abort_source& get_abort_all_abort_source();
     named_semaphore& range_parallelism_semaphore();
     static size_t max_repair_memory_per_range() { return _max_repair_memory_per_range; }
     future<> run(repair_uniq_id id, std::function<void ()> func);
