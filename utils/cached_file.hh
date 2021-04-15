@@ -196,6 +196,12 @@ public:
         page_idx_type _page_idx;
         offset_type _offset_in_page;
         tracing::trace_state_ptr _trace_state;
+    private:
+        std::optional<reader_permit::resource_units> get_page_units() {
+            return _permit
+                ? std::make_optional(_permit->consume_memory(page_size))
+                : std::nullopt;
+        }
     public:
         // Creates an empty stream.
         stream()
@@ -221,12 +227,15 @@ public:
             if (!_cached_file || _page_idx > _cached_file->_last_page) {
                 return make_ready_future<temporary_buffer<char>>(temporary_buffer<char>());
             }
-            return _cached_file->get_page(_page_idx, *_pc, _trace_state).then([this] (temporary_buffer<char> page) {
+            auto units = get_page_units();
+            return _cached_file->get_page(_page_idx, *_pc, _trace_state).then(
+                    [units = std::move(units), this] (temporary_buffer<char> page) mutable {
                 if (_page_idx == _cached_file->_last_page) {
                     page.trim(_cached_file->_last_page_size);
                 }
-                if (_permit) {
-                    page = make_tracked_temporary_buffer(std::move(page), *_permit);
+                if (units) {
+                    page = temporary_buffer<char>(page.get_write(), page.size(),
+                                                  make_object_deleter(page.release(), std::move(*units)));
                 }
                 page.trim_front(_offset_in_page);
                 _offset_in_page = 0;
