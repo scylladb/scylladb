@@ -1723,7 +1723,7 @@ class scylla_memory(gdb.Command):
             pages_in_use = 0
             use_count = 0
             for s in sc.spans():
-                if s.pool() == sp.address:
+                if not s.is_free() and s.pool() == sp.address:
                     pages_in_use += s.size()
                     use_count += int(s.used_span_size() * page_size / object_size)
             memory = pages_in_use * page_size
