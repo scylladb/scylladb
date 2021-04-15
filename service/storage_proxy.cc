@@ -5342,6 +5342,12 @@ future<> storage_proxy::wait_for_hints_to_be_replayed(utils::UUID operation_id, 
         // Sleep 1 second between checks
         bool reached_sync_point = false;
         while (!reached_sync_point && lowres_clock::now() < deadline) {
+            // Check if the destination is alive
+            if (!gms::get_local_gossiper().is_alive(addr)) {
+                slogger.debug("Node {} is no longer alive, won't wait anymore for its hint sync point", addr);
+                break;
+            }
+
             slogger.debug("Waiting for all hints from endpoint {} to be sent out; time spent so far: {}s, targets: {}",
                     addr, std::chrono::duration_cast<std::chrono::seconds>(lowres_clock::now() - start_time).count(), target_endpoints);
             try {
