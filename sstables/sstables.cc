@@ -2831,7 +2831,7 @@ future<> replay_pending_delete_log(sstring pending_delete_log) {
 }
 
 thread_local sstables_stats::stats sstables_stats::_shard_stats;
-thread_local shared_index_lists::stats shared_index_lists::_shard_stats;
+thread_local partition_index_cache::stats partition_index_cache::_shard_stats;
 thread_local cached_file::metrics index_page_cache_metrics;
 thread_local mc::cached_promoted_index::metrics promoted_index_cache_metrics;
 static thread_local seastar::metrics::metric_groups metrics;
@@ -2840,17 +2840,17 @@ future<> init_metrics() {
   return seastar::smp::invoke_on_all([] {
     namespace sm = seastar::metrics;
     metrics.add_group("sstables", {
-        sm::make_derive("index_page_hits", [] { return shared_index_lists::shard_stats().hits; },
+        sm::make_derive("index_page_hits", [] { return partition_index_cache::shard_stats().hits; },
             sm::description("Index page requests which could be satisfied without waiting")),
-        sm::make_derive("index_page_misses", [] { return shared_index_lists::shard_stats().misses; },
+        sm::make_derive("index_page_misses", [] { return partition_index_cache::shard_stats().misses; },
             sm::description("Index page requests which initiated a read from disk")),
-        sm::make_derive("index_page_blocks", [] { return shared_index_lists::shard_stats().blocks; },
+        sm::make_derive("index_page_blocks", [] { return partition_index_cache::shard_stats().blocks; },
             sm::description("Index page requests which needed to wait due to page not being loaded yet")),
-        sm::make_derive("index_page_evictions", [] { return shared_index_lists::shard_stats().evictions; },
+        sm::make_derive("index_page_evictions", [] { return partition_index_cache::shard_stats().evictions; },
             sm::description("Index pages which got evicted from memory")),
-        sm::make_derive("index_page_populations", [] { return shared_index_lists::shard_stats().populations; },
+        sm::make_derive("index_page_populations", [] { return partition_index_cache::shard_stats().populations; },
             sm::description("Index pages which got populated into memory")),
-        sm::make_gauge("index_page_used_bytes", [] { return shared_index_lists::shard_stats().used_bytes; },
+        sm::make_gauge("index_page_used_bytes", [] { return partition_index_cache::shard_stats().used_bytes; },
             sm::description("Amount of bytes used by index pages in memory")),
 
         sm::make_derive("index_page_cache_hits", [] { return index_page_cache_metrics.page_hits; },
@@ -2971,7 +2971,7 @@ sstable::sstable(schema_ptr schema,
     , _generation(generation)
     , _version(v)
     , _format(f)
-    , _index_lists(manager.get_cache_tracker().get_lru(), manager.get_cache_tracker().region())
+    , _index_cache(manager.get_cache_tracker().get_lru(), manager.get_cache_tracker().region())
     , _now(now)
     , _read_error_handler(error_handler_gen(sstable_read_error))
     , _write_error_handler(error_handler_gen(sstable_write_error))
@@ -2993,7 +2993,7 @@ void sstable::unused() {
 
 future<> sstable::destroy() {
     return close_files().finally([this] {
-        return _index_lists.evict_gently();
+        return _index_cache.evict_gently();
     });
 }
 

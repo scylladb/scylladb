@@ -23,7 +23,7 @@
 #include "sstables.hh"
 #include "consumer.hh"
 #include "downsampling.hh"
-#include "sstables/shared_index_lists.hh"
+#include "sstables/partition_index_cache.hh"
 #include <seastar/util/bool_class.hh>
 #include "utils/buffer_input_stream.hh"
 #include "sstables/prepended_input_stream.hh"
@@ -386,7 +386,7 @@ struct open_rt_marker {
 // Contains information about index_reader position in the index file
 struct index_bound {
     index_bound() = default;
-    shared_index_lists::list_ptr current_list;
+    partition_index_cache::entry_ptr current_list;
     uint64_t previous_summary_idx = 0;
     uint64_t current_summary_idx = 0;
     uint64_t current_index_idx = 0;
@@ -428,7 +428,7 @@ class index_reader {
     reader_permit _permit;
     const io_priority_class& _pc;
     tracing::trace_state_ptr _trace_state;
-    shared_index_lists& _index_lists;
+    partition_index_cache& _index_cache;
     logalloc::allocating_section _alloc_section;
     logalloc::region& _region;
 
@@ -527,7 +527,7 @@ private:
             });
         };
 
-        return _index_lists.get_or_load(summary_idx, loader).then([this, &bound, summary_idx] (shared_index_lists::list_ptr ref) {
+        return _index_cache.get_or_load(summary_idx, loader).then([this, &bound, summary_idx] (partition_index_cache::entry_ptr ref) {
             bound.current_list = std::move(ref);
             bound.current_summary_idx = summary_idx;
             bound.current_index_idx = 0;
@@ -740,7 +740,7 @@ public:
         , _permit(std::move(permit))
         , _pc(pc)
         , _trace_state(std::move(trace_state))
-        , _index_lists(_sstable->_index_lists)
+        , _index_cache(_sstable->_index_cache)
         , _region(_sstable->manager().get_cache_tracker().region())
     {
         sstlog.trace("index {}: index_reader for {}", fmt::ptr(this), _sstable->get_filename());

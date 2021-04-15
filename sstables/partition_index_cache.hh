@@ -288,6 +288,4 @@ void partition_index_cache::entry::on_evicted() noexcept {
     it.erase(key_less_comparator());
 }
 
-using shared_index_lists = partition_index_cache;
-
 }
