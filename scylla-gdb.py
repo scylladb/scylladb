@@ -1369,11 +1369,11 @@ class scylla_active_sstables(gdb.Command):
     def invoke(self, arg, from_tty):
         try:
             sizeof_index_entry = int(gdb.parse_and_eval('sizeof(sstables::index_entry)'))
-            sizeof_entry = int(gdb.parse_and_eval('sizeof(sstables::shared_index_lists::entry)'))
+            sizeof_entry = int(gdb.parse_and_eval('sizeof(sstables::partition_index_cache::entry)'))
 
             def count_index_lists(sst):
                 index_lists_size = 0
-                for key, entry in unordered_map(sst['_index_lists']['_lists']):
+                for key, entry in intrusive_btree(sst['_index_lists']['_entries']):
                     index_entries = std_vector(entry['list'])
                     index_lists_size += sizeof_entry
                     for e in index_entries:

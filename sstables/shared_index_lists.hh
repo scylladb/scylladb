@@ -21,61 +21,9 @@
 
 #pragma once
 
-#include "index_entry.hh"
-#include <vector>
-#include <seastar/core/future.hh>
-#include "utils/loading_shared_values.hh"
-#include "utils/chunked_vector.hh"
+#include "partition_index_cache.hh"
 
 namespace sstables {
-
-// Associative cache of summary index -> partition_index_page
-// Entries stay around as long as there is any live external reference (list_ptr) to them.
-// Supports asynchronous insertion, ensures that only one entry will be loaded.
-class partition_index_cache {
-public:
-    using key_type = uint64_t;
-    static thread_local struct stats {
-        uint64_t hits = 0; // Number of times entry was found ready
-        uint64_t misses = 0; // Number of times entry was not found
-        uint64_t blocks = 0; // Number of times entry was not ready (>= misses)
-        uint64_t evictions = 0; // Number of times entry was evicted
-    } _shard_stats;
-
-    struct stats_updater {
-        static void inc_hits() noexcept { ++_shard_stats.hits; }
-        static void inc_misses() noexcept { ++_shard_stats.misses; }
-        static void inc_blocks() noexcept { ++_shard_stats.blocks; }
-        static void inc_evictions() noexcept { ++_shard_stats.evictions; }
-    };
-
-    using loading_shared_lists_type = utils::loading_shared_values<key_type, index_list, std::hash<key_type>, std::equal_to<key_type>, stats_updater>;
-    // Pointer to index_list
-    using list_ptr = loading_shared_lists_type::entry_ptr;
-private:
-
-    loading_shared_lists_type _lists;
-public:
-
-    // Create a cache with a given LRU attached.
-    partition_index_cache() = default;
-    partition_index_cache(partition_index_cache&&) = delete;
-    partition_index_cache(const partition_index_cache&) = delete;
-
-    // Returns a future which resolves with a shared pointer to index_list for given key.
-    // Always returns a valid pointer if succeeds. The pointer is never invalidated externally.
-    //
-    // If entry is missing, the loader is invoked. If list is already loading, this invocation
-    // will wait for prior loading to complete and use its result when it's done.
-    //
-    // The loader object does not survive deferring, so the caller must deal with its liveness.
-    template<typename Loader>
-    future<list_ptr> get_or_load(const key_type& key, Loader&& loader) {
-        return _lists.get_or_load(key, std::forward<Loader>(loader));
-    }
-
-    static const stats& shard_stats() { return _shard_stats; }
-};
 
 using shared_index_lists = partition_index_cache;
 

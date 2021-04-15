@@ -249,4 +249,13 @@ public:
         }
         return 0;
     }
+
+    // Returns the amount of external memory used to hold inserted items.
+    // Takes into account reserved space.
+    size_t external_memory_usage() const {
+        if (is_external()) {
+            return sizeof(external) + _capacity * sizeof(T);
+        }
+        return 0;
+    }
 };

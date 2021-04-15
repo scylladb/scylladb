@@ -285,6 +285,10 @@ public:
     const managed_ref<promoted_index>& get_promoted_index() const { return _index; }
     managed_ref<promoted_index>& get_promoted_index() { return _index; }
     uint32_t get_promoted_index_size() const { return _index ? _index->get_promoted_index_size() : 0; }
+
+    size_t external_memory_usage() const {
+        return _key.external_memory_usage() + _index.external_memory_usage();
+    }
 };
 
 // A partition index page.
@@ -301,6 +305,14 @@ public:
 
     bool empty() const { return _entries.empty(); }
     size_t size() const { return _entries.size(); }
+
+    size_t external_memory_usage() const {
+        size_t size = _entries.external_memory_usage();
+        for (auto&& e : _entries) {
+            size += sizeof(index_entry) + e->external_memory_usage();
+        }
+        return size;
+    }
 };
 
 using index_list = partition_index_page;

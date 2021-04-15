@@ -2848,6 +2848,10 @@ future<> init_metrics() {
             sm::description("Index page requests which needed to wait due to page not being loaded yet")),
         sm::make_derive("index_page_evictions", [] { return shared_index_lists::shard_stats().evictions; },
             sm::description("Index pages which got evicted from memory")),
+        sm::make_derive("index_page_populations", [] { return shared_index_lists::shard_stats().populations; },
+            sm::description("Index pages which got populated into memory")),
+        sm::make_gauge("index_page_used_bytes", [] { return shared_index_lists::shard_stats().used_bytes; },
+            sm::description("Amount of bytes used by index pages in memory")),
 
         sm::make_derive("index_page_cache_hits", [] { return index_page_cache_metrics.page_hits; },
             sm::description("Index page cache requests which were served from cache")),
@@ -2967,13 +2971,13 @@ sstable::sstable(schema_ptr schema,
     , _generation(generation)
     , _version(v)
     , _format(f)
+    , _index_lists(manager.get_cache_tracker().get_lru(), manager.get_cache_tracker().region())
     , _now(now)
     , _read_error_handler(error_handler_gen(sstable_read_error))
     , _write_error_handler(error_handler_gen(sstable_write_error))
     , _large_data_handler(large_data_handler)
     , _manager(manager)
 {
-    _index_lists.set_allocator(manager.get_cache_tracker().region().allocator());
     tracker.add(*this);
     manager.add(this);
 }
