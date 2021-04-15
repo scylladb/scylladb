@@ -29,6 +29,7 @@
 
 #include <boost/test/unit_test.hpp>
 #include "test/lib/log.hh"
+#include "test/lib/random_utils.hh"
 #include "serializer_impl.hh"
 #include <limits>
 
@@ -240,4 +241,9 @@ raft::server_address to_server_address(size_t local_id) {
 
 size_t to_local_id(utils::UUID uuid) {
     return uuid.get_least_significant_bits() - 1;
+}
+
+// Return true upon a random event with given probability
+bool rolladice(float probability = 1.0/2.0) {
+    return tests::random::get_real(0.0, 1.0) < probability;
 }
