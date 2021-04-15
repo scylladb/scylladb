@@ -1101,7 +1101,7 @@ class scylla_task_histogram(gdb.Command):
                 help="Show only the top COUNT elements of the histogram. Defaults to 30. Set to 0 to show all items. Ignored when `--all` is used.")
         parser.add_argument("-a", "--all", action="store_true", default=False,
                 help="Sample all pages and show all results. Equivalent to -m=0 -c=0.")
-        parser.add_argument("-s", "--size", action="store", default=0,
+        parser.add_argument("-s", "--size", type=int, action="store", default=0,
                 help="The size of objects to sample. When set, only objects of this size will be sampled. A size of 0 (the default value) means no size restrictions.")
         try:
             args = parser.parse_args(arg.split())
