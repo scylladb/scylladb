@@ -21,6 +21,7 @@
 
 #include "log.hh"
 #include "sstables/sstables_manager.hh"
+#include "sstables/partition_index_cache.hh"
 #include "sstables/sstables.hh"
 #include "db/config.hh"
 #include "gms/feature.hh"

@@ -1373,7 +1373,7 @@ class scylla_active_sstables(gdb.Command):
 
             def count_index_lists(sst):
                 index_lists_size = 0
-                for key, entry in intrusive_btree(sst['_index_cache']['_entries']):
+                for key, entry in intrusive_btree(std_unique_ptr(sst['_index_cache']).get()['_entries']):
                     index_entries = std_vector(entry['list'])
                     index_lists_size += sizeof_entry
                     for e in index_entries:

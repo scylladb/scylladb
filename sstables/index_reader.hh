@@ -740,7 +740,7 @@ public:
         , _permit(std::move(permit))
         , _pc(pc)
         , _trace_state(std::move(trace_state))
-        , _index_cache(_sstable->_index_cache)
+        , _index_cache(*_sstable->_index_cache)
         , _region(_sstable->manager().get_cache_tracker().region())
     {
         sstlog.trace("index {}: index_reader for {}", fmt::ptr(this), _sstable->get_filename());

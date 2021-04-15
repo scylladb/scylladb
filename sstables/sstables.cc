@@ -77,6 +77,7 @@
 #include "db/config.hh"
 #include "sstables/random_access_reader.hh"
 #include "sstables/sstables_manager.hh"
+#include "sstables/partition_index_cache.hh"
 #include "utils/UUID_gen.hh"
 #include "database.hh"
 #include "sstables_manager.hh"
@@ -2971,7 +2972,8 @@ sstable::sstable(schema_ptr schema,
     , _generation(generation)
     , _version(v)
     , _format(f)
-    , _index_cache(manager.get_cache_tracker().get_lru(), manager.get_cache_tracker().region())
+    , _index_cache(std::make_unique<partition_index_cache>(
+            manager.get_cache_tracker().get_lru(), manager.get_cache_tracker().region()))
     , _now(now)
     , _read_error_handler(error_handler_gen(sstable_read_error))
     , _write_error_handler(error_handler_gen(sstable_write_error))
@@ -2993,7 +2995,7 @@ void sstable::unused() {
 
 future<> sstable::destroy() {
     return close_files().finally([this] {
-        return _index_cache.evict_gently();
+        return _index_cache->evict_gently();
     });
 }
 
