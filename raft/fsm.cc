@@ -65,6 +65,10 @@ const log_entry& fsm::add_entry(T command) {
     }
 
     if constexpr (std::is_same_v<T, configuration>) {
+        // Do not permit changes which would render the cluster
+        // unusable, such as transitioning to an empty configuration or
+        // one with no voters.
+        raft::configuration::check(command.current);
         if (_log.last_conf_idx() > _commit_idx ||
             _log.get_configuration().is_joint()) {
             // 4.1. Cluster membership changes/Safety.
