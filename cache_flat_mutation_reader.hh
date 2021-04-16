@@ -117,6 +117,7 @@ class cache_flat_mutation_reader final : public flat_mutation_reader::impl {
     void add_to_buffer(const partition_snapshot_row_cursor&);
     void add_clustering_row_to_buffer(mutation_fragment&&);
     void add_to_buffer(range_tombstone&&);
+    void add_range_tombstone_to_buffer(range_tombstone&&);
     void add_to_buffer(mutation_fragment&&);
     future<> read_from_underlying(db::timeout_clock::time_point);
     void start_reading_from_underlying();
@@ -506,17 +507,7 @@ void cache_flat_mutation_reader::copy_from_cache_to_buffer() {
     _next_row.touch();
     position_in_partition_view next_lower_bound = _next_row.dummy() ? _next_row.position() : position_in_partition_view::after_key(_next_row.key());
     for (auto &&rts : _snp->range_tombstones(_lower_bound, _next_row_in_range ? next_lower_bound : _upper_bound)) {
-        position_in_partition::less_compare less(*_schema);
-        // This guarantees that rts starts after any emitted clustering_row
-        // and not before any emitted range tombstone.
-        if (!less(_lower_bound, rts.position())) {
-            rts.set_start(_lower_bound);
-        } else {
-            _lower_bound = position_in_partition(rts.position());
-            _lower_bound_changed = true;
-        }
-        push_mutation_fragment(*_schema, _permit, std::move(rts));
-
+        add_range_tombstone_to_buffer(std::move(rts));
         if (_lower_bound_changed && is_buffer_full()) {
             return;
         }
@@ -688,9 +679,14 @@ void cache_flat_mutation_reader::add_to_buffer(range_tombstone&& rt) {
     // This guarantees that rt starts after any emitted clustering_row
     // and not before any emitted range tombstone.
     position_in_partition::less_compare less(*_schema);
-    if (!less(_lower_bound, rt.end_position())) {
-        return;
+    if (less(_lower_bound, rt.end_position())) {
+        add_range_tombstone_to_buffer(std::move(rt));
     }
+}
+
+inline
+void cache_flat_mutation_reader::add_range_tombstone_to_buffer(range_tombstone&& rt) {
+    position_in_partition::less_compare less(*_schema);
     if (!less(_lower_bound, rt.position())) {
         rt.set_start(_lower_bound);
     } else {
