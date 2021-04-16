@@ -361,7 +361,7 @@ future<> cache_flat_mutation_reader::read_from_underlying(db::timeout_clock::tim
                                     e.release();
                                     auto next = std::next(it);
                                     it->set_continuous(next->continuous());
-                                    clogger.trace("csm {}: inserted dummy at {}, cont={}", fmt::ptr(this), it->position(), it->continuous());
+                                    clogger.trace("csm {}: inserted empty row at {}, cont={}", fmt::ptr(this), it->position(), it->continuous());
                                 }
                             });
                         } else if (ensure_population_lower_bound()) {
