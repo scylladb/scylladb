@@ -66,7 +66,6 @@ class cache_flat_mutation_reader final : public flat_mutation_reader::impl {
         end_of_stream
     };
     partition_snapshot_ptr _snp;
-    position_in_partition::tri_compare _position_cmp;
 
     query::clustering_key_filter_ranges _ck_ranges;
     query::clustering_row_ranges::const_iterator _ck_ranges_curr;
@@ -149,7 +148,6 @@ public:
                                row_cache& cache)
         : flat_mutation_reader::impl(std::move(s), ctx->permit())
         , _snp(std::move(snp))
-        , _position_cmp(*_schema)
         , _ck_ranges(std::move(crr))
         , _ck_ranges_curr(_ck_ranges.begin())
         , _ck_ranges_end(_ck_ranges.end())
@@ -495,7 +493,8 @@ void cache_flat_mutation_reader::maybe_add_to_cache(const clustering_row& cr) {
 
 inline
 bool cache_flat_mutation_reader::after_current_range(position_in_partition_view p) {
-    return _position_cmp(p, _upper_bound) >= 0;
+    position_in_partition::tri_compare cmp(*_schema);
+    return cmp(p, _upper_bound) >= 0;
 }
 
 inline
