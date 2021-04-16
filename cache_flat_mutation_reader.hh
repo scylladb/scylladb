@@ -81,9 +81,11 @@ class cache_flat_mutation_reader final : public flat_mutation_reader::impl {
     position_in_partition _lower_bound;
     position_in_partition_view _upper_bound;
 
-    state _state = state::before_static_row;
     lw_shared_ptr<read_context> _read_context;
     partition_snapshot_row_cursor _next_row;
+
+    state _state = state::before_static_row;
+
     bool _next_row_in_range = false;
 
     // True iff current population interval, since the previous clustering row, starts before all clustered rows.
