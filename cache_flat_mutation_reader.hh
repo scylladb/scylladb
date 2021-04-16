@@ -514,11 +514,12 @@ void cache_flat_mutation_reader::copy_from_cache_to_buffer() {
         } else {
             _lower_bound = position_in_partition(rts.position());
             _lower_bound_changed = true;
-            if (is_buffer_full()) {
-                return;
-            }
         }
         push_mutation_fragment(*_schema, _permit, std::move(rts));
+
+        if (_lower_bound_changed && is_buffer_full()) {
+            return;
+        }
     }
     // We add the row to the buffer even when it's full.
     // This simplifies the code. For more info see #3139.
