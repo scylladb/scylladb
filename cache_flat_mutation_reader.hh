@@ -353,12 +353,10 @@ future<> cache_flat_mutation_reader::read_from_underlying(db::timeout_clock::tim
                                 auto e = alloc_strategy_unique_ptr<rows_entry>(
                                     current_allocator().construct<rows_entry>(_ck_ranges_curr->start()->value()));
                                 // Use _next_row iterator only as a hint, because there could be insertions after _upper_bound.
-                                auto insert_result = rows.insert_before_hint(_next_row.get_iterator_in_latest_version(), *e, cmp);
-                                auto inserted = insert_result.second;
-                                auto it = insert_result.first;
-                                if (inserted) {
-                                    _snp->tracker()->insert(*e);
-                                    e.release();
+                                auto insert_result = rows.insert_before_hint(_next_row.get_iterator_in_latest_version(), std::move(e), cmp);
+                                if (insert_result.second) {
+                                    auto it = insert_result.first;
+                                    _snp->tracker()->insert(*it);
                                     auto next = std::next(it);
                                     it->set_continuous(next->continuous());
                                     clogger.trace("csm {}: inserted empty row at {}, cont={}", fmt::ptr(this), it->position(), it->continuous());
@@ -369,12 +367,10 @@ future<> cache_flat_mutation_reader::read_from_underlying(db::timeout_clock::tim
                                 auto e = alloc_strategy_unique_ptr<rows_entry>(
                                     current_allocator().construct<rows_entry>(*_schema, _upper_bound, is_dummy::yes, is_continuous::yes));
                                 // Use _next_row iterator only as a hint, because there could be insertions after _upper_bound.
-                                auto insert_result = rows.insert_before_hint(_next_row.get_iterator_in_latest_version(), *e, cmp);
-                                auto inserted = insert_result.second;
-                                if (inserted) {
+                                auto insert_result = rows.insert_before_hint(_next_row.get_iterator_in_latest_version(), std::move(e), cmp);
+                                if (insert_result.second) {
                                     clogger.trace("csm {}: inserted dummy at {}", fmt::ptr(this), _upper_bound);
-                                    _snp->tracker()->insert(*e);
-                                    e.release();
+                                    _snp->tracker()->insert(*insert_result.first);
                                 } else {
                                     clogger.trace("csm {}: mark {} as continuous", fmt::ptr(this), insert_result.first->position());
                                     insert_result.first->set_continuous(true);
@@ -415,12 +411,11 @@ bool cache_flat_mutation_reader::ensure_population_lower_bound() {
             auto e = alloc_strategy_unique_ptr<rows_entry>(
                 current_allocator().construct<rows_entry>(*_schema, *_last_row));
             e->set_continuous(false);
-            auto insert_result = rows.insert_before_hint(rows.end(), *e, cmp);
-            auto inserted = insert_result.second;
-            if (inserted) {
-                clogger.trace("csm {}: inserted lower bound dummy at {}", fmt::ptr(this), e->position());
-                _snp->tracker()->insert(*e);
-                e.release();
+            auto insert_result = rows.insert_before_hint(rows.end(), std::move(e), cmp);
+            if (insert_result.second) {
+                auto it = insert_result.first;
+                clogger.trace("csm {}: inserted lower bound dummy at {}", fmt::ptr(this), it->position());
+                _snp->tracker()->insert(*it);
             }
         });
     }
@@ -472,12 +467,11 @@ void cache_flat_mutation_reader::maybe_add_to_cache(const clustering_row& cr) {
         new_entry->set_continuous(false);
         auto it = _next_row.iterators_valid() ? _next_row.get_iterator_in_latest_version()
                                               : mp.clustered_rows().lower_bound(cr.key(), cmp);
-        auto insert_result = mp.clustered_rows().insert_before_hint(it, *new_entry, cmp);
-        if (insert_result.second) {
-            _snp->tracker()->insert(*new_entry);
-            new_entry.release();
-        }
+        auto insert_result = mp.clustered_rows().insert_before_hint(it, std::move(new_entry), cmp);
         it = insert_result.first;
+        if (insert_result.second) {
+            _snp->tracker()->insert(*it);
+        }
 
         rows_entry& e = *it;
         if (ensure_population_lower_bound()) {
