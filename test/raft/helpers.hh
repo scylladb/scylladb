@@ -34,7 +34,6 @@
 
 #include "raft/fsm.hh"
 
-using raft::term_t, raft::index_t, raft::server_id, raft::log_entry, raft::server_address_set;
 using seastar::make_lw_shared;
 
 void election_threshold(raft::fsm& fsm) {
@@ -68,21 +67,21 @@ struct trivial_failure_detector: public raft::failure_detector {
 
 class discrete_failure_detector: public raft::failure_detector {
     bool _is_alive = true;
-    std::unordered_set<server_id> _dead;
+    std::unordered_set<raft::server_id> _dead;
 public:
     bool is_alive(raft::server_id id) override {
         return _is_alive && !_dead.contains(id);
     }
-    void mark_dead(server_id id) { _dead.emplace(id); }
-    void mark_alive(server_id id) { _dead.erase(id); }
+    void mark_dead(raft::server_id id) { _dead.emplace(id); }
+    void mark_alive(raft::server_id id) { _dead.erase(id); }
     void mark_all_dead() { _is_alive = false; }
 };
 
 template <typename T> void add_entry(raft::log& log, T cmd) {
-    log.emplace_back(make_lw_shared<log_entry>(log_entry{log.last_term(), log.next_idx(), cmd}));
+    log.emplace_back(make_lw_shared<raft::log_entry>(raft::log_entry{log.last_term(), log.next_idx(), cmd}));
 }
 
-raft::snapshot log_snapshot(raft::log& log, index_t idx) {
+raft::snapshot log_snapshot(raft::log& log, raft::index_t idx) {
     return raft::snapshot{.idx = idx, .term = log.last_term(), .config = log.get_snapshot().config};
 }
 
@@ -100,10 +99,10 @@ raft::fsm_config fsm_cfg_pre{.append_request_threshold = 1, .enable_prevoting = 
 class fsm_debug : public raft::fsm {
 public:
     using raft::fsm::fsm;
-    void become_follower(server_id leader) {
+    void become_follower(raft::server_id leader) {
         raft::fsm::become_follower(leader);
     }
-    const raft::follower_progress& get_progress(server_id id) {
+    const raft::follower_progress& get_progress(raft::server_id id) {
         raft::follower_progress* progress = leader_state().tracker.find(id);
         return *progress;
     }
@@ -220,6 +219,6 @@ raft::server_address_set address_set(std::initializer_list<raft::server_id> ids)
 }
 
 raft::fsm create_follower(raft::server_id id, raft::log log, raft::failure_detector& fd = trivial_failure_detector) {
-    return raft::fsm(id, term_t{}, server_id{}, std::move(log), fd, fsm_cfg);
+    return raft::fsm(id, raft::term_t{}, raft::server_id{}, std::move(log), fd, fsm_cfg);
 }
 
