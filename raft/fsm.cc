@@ -402,20 +402,23 @@ void fsm::maybe_commit() {
             // configuration, and 6 if we assume we left it. Let
             // it happen without an extra FSM step.
             maybe_commit();
-        } else if (leader_state().tracker.find(_my_id) == nullptr) {
-            logger.trace("maybe_commit[{}]: stepping down as leader", _my_id);
-            // 4.2.2 Removing the current leader
-            //
-            // The leader temporarily manages a configuration
-            // in which it is not a member.
-            //
-            // A leader that is removed from the configuration
-            // steps down once the C_new entry is committed.
-            //
-            // If the leader stepped down before this point,
-            // it might still time out and become leader
-            // again, delaying progress.
-            transfer_leadership();
+        } else {
+            auto lp = leader_state().tracker.find(_my_id);
+            if (lp == nullptr || !lp->can_vote) {
+                logger.trace("maybe_commit[{}]: stepping down as leader", _my_id);
+                // 4.2.2 Removing the current leader
+                //
+                // The leader temporarily manages a configuration
+                // in which it is not a member.
+                //
+                // A leader that is removed from the configuration
+                // steps down once the C_new entry is committed.
+                //
+                // If the leader stepped down before this point,
+                // it might still time out and become leader
+                // again, delaying progress.
+                transfer_leadership();
+            }
         }
     }
 }
