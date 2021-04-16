@@ -1587,3 +1587,31 @@ BOOST_AUTO_TEST_CASE(test_non_voter_stays_pipeline) {
     BOOST_CHECK_EQUAL(A.get_configuration().current.find(raft::server_address{B_id})->can_vote, false);
     BOOST_CHECK(A.get_progress(B_id).state == raft::follower_progress::state::PIPELINE);
 }
+
+BOOST_AUTO_TEST_CASE(test_leader_change_to_non_voter) {
+    // Test a two-node cluster, change a leader to a non-voter.
+    server_id A_id = id(), B_id = id();
+    raft::server_address_set oldset{raft::server_address{A_id, true}, raft::server_address{B_id, false}};
+    raft::configuration cfg(oldset);
+    raft::log log(raft::snapshot{.idx = index_t{0}, .config = cfg});
+    auto A = create_follower(A_id, log);
+    auto B = create_follower(B_id, log);
+    election_timeout(A);
+    communicate(A, B);
+    BOOST_CHECK(A.is_leader());
+    raft::server_address_set newset{raft::server_address{A_id, false}, raft::server_address{B_id, true}};
+    raft::configuration newcfg(newset);
+    A.add_entry(newcfg);
+    A.tick();
+    communicate(A, B);
+    BOOST_CHECK(A.is_follower());
+    BOOST_CHECK(B.is_leader());
+    // Try to switch the leader to a non-voter, leaving no other voters.
+    newset = raft::server_address_set{raft::server_address{A_id, false}, raft::server_address{B_id, false}};
+    newcfg = raft::configuration(newset);
+    BOOST_CHECK_THROW(B.add_entry(newcfg), std::invalid_argument);
+    // Try to remove the last remaining voter
+    newset = raft::server_address_set{raft::server_address{B_id, false}};
+    newcfg = raft::configuration(newset);
+    BOOST_CHECK_THROW(B.add_entry(newcfg), std::invalid_argument);
+}
