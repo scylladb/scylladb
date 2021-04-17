@@ -565,7 +565,7 @@ void fsm::step(server_id from, Message&& msg) {
                 follower_state().current_leader = from;
             }
             if (current_leader() != from) {
-                on_internal_error_noexcept(logger, "Got append request or install snpaphot from unexpected leader");
+                on_internal_error_noexcept(logger, "Got append request or install snapshot from an unexpected leader");
             }
         }
     }

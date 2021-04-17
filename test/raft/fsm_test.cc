@@ -1714,3 +1714,71 @@ BOOST_AUTO_TEST_CASE(test_non_voter_voter_loop) {
     BOOST_CHECK_EQUAL(A.get_current_term(), C.get_current_term());
     BOOST_CHECK_EQUAL(A.log_last_idx(), C.log_last_idx());
 }
+
+BOOST_AUTO_TEST_CASE(test_non_voter_confchange_in_snapshot) {
+    // Test non-voter learns it's a non-voter via snapshot
+    discrete_failure_detector fd;
+    server_id A_id = id(), B_id = id(), C_id = id();
+
+    raft::configuration cfg({A_id, B_id, C_id});
+
+    raft::log log(raft::snapshot{.idx = index_t{0}, .config = cfg});
+    auto A = create_follower(A_id, log, fd);
+    auto B = create_follower(B_id, log, fd);
+    auto C = create_follower(C_id, log, fd);
+    election_timeout(A);
+    communicate(A, B, C);
+    BOOST_CHECK(A.is_leader());
+    A.add_entry(log_entry::dummy{});
+    raft::configuration cfg_with_non_voter(raft::server_address_set{
+            raft::server_address{A_id},
+            raft::server_address{B_id},
+            raft::server_address{C_id, false}});
+    A.tick();
+    A.add_entry(cfg_with_non_voter);
+    A.tick();
+    // Majority commits the configuration change
+    communicate(A, B);
+    BOOST_CHECK_EQUAL(A.get_configuration().is_joint(), false);
+    BOOST_CHECK_EQUAL(A.get_configuration().current.find(raft::server_address{C_id})->can_vote, false);
+    A.tick();
+    raft::snapshot A_snp{.idx = A.log_last_idx(), .term = A.log_last_term(), .config = A.get_configuration()};
+    A.apply_snapshot(A_snp, 0);
+    A.tick();
+    communicate(A, B, C);
+    BOOST_CHECK(A.is_leader());
+    BOOST_CHECK_EQUAL(A.get_current_term(), C.get_current_term());
+    BOOST_CHECK_EQUAL(A.log_last_idx(), C.log_last_idx());
+    // A non-voter doesn't become candidate on election timeout
+    fd.mark_all_dead();
+    election_timeout(C);
+    BOOST_CHECK(C.is_follower());
+    // Now try the same trick, but this time convert a non-voter
+    // to a voter with a snapshot
+    fd.mark_all_alive();
+    A.tick();
+    for (int i = 0; i < 100; i++) {
+        A.add_entry(log_entry::dummy{});
+    }
+    A.add_entry(cfg);
+    A.tick();
+    // Majority commits the configuration change
+    communicate(A, B);
+    BOOST_CHECK_EQUAL(A.get_configuration().is_joint(), false);
+    BOOST_CHECK_EQUAL(A.get_configuration().current.find(raft::server_address{C_id})->can_vote, true);
+    A.tick();
+    A_snp = raft::snapshot{.idx = A.log_last_idx(), .term = A.log_last_term(), .config = A.get_configuration()};
+    A.apply_snapshot(A_snp, 0);
+    A.tick();
+    communicate(A, B, C);
+    BOOST_CHECK(A.is_leader());
+    BOOST_CHECK_EQUAL(A.get_current_term(), C.get_current_term());
+    BOOST_CHECK_EQUAL(A.log_last_idx(), C.log_last_idx());
+    fd.mark_all_dead();
+    election_timeout(C);
+    BOOST_CHECK(C.is_candidate());
+    // Check an ex-voter can become a leader alright (LearnerPromotion)
+    election_threshold(B);
+    communicate(C, B);
+    BOOST_CHECK(C.is_leader());
+}

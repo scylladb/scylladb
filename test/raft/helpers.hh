@@ -76,6 +76,7 @@ public:
     void mark_dead(raft::server_id id) { _dead.emplace(id); }
     void mark_alive(raft::server_id id) { _dead.erase(id); }
     void mark_all_dead() { _is_alive = false; }
+    void mark_all_alive() { _is_alive = true; }
 };
 
 template <typename T> void add_entry(raft::log& log, T cmd) {
