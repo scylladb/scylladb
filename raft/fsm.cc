@@ -57,7 +57,7 @@ template<typename T>
 const log_entry& fsm::add_entry(T command) {
     // It's only possible to add entries on a leader.
     check_is_leader();
-    if(leader_state().stepdown) {
+    if (leader_state().stepdown) {
         // A leader that is stepping down should not add new entries
         // to its log (see 3.10), but it still does not know who the new
         // leader will be.
