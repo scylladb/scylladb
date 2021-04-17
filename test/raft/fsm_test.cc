@@ -1615,3 +1615,34 @@ BOOST_AUTO_TEST_CASE(test_leader_change_to_non_voter) {
     newcfg = raft::configuration(newset);
     BOOST_CHECK_THROW(B.add_entry(newcfg), std::invalid_argument);
 }
+
+BOOST_AUTO_TEST_CASE(test_non_voter_gets_timeout_now) {
+    // Test that even if a non-voter gets timeout now, there is no
+    // elections and later this learner can rejoin the cluster,
+    // although it does  disrupt the cluster a bit (through
+    // leader's having to increase its term).
+    server_id A_id = id(), B_id = id(), C_id = id();
+    raft::configuration cfg(raft::server_address_set{
+            raft::server_address{A_id},
+            raft::server_address{B_id},
+            raft::server_address{C_id, false}});
+
+    raft::log log(raft::snapshot{.idx = index_t{0}, .config = cfg});
+    auto A = create_follower(A_id, log);
+    auto B = create_follower(B_id, log);
+    auto C = create_follower(C_id, log);
+    election_timeout(A);
+    communicate(A, B, C);
+    BOOST_CHECK(A.is_leader());
+    C.step(A.id(), raft::timeout_now{.current_term = A.get_current_term()});
+    C.tick();
+    auto output = C.get_output();
+    BOOST_CHECK(C.is_follower());
+    BOOST_CHECK_EQUAL(output.messages.size(), 0);
+    BOOST_CHECK(!output.term_and_vote);
+    A.add_entry(log_entry::dummy{});
+    communicate(A, B, C);
+    BOOST_CHECK_EQUAL(A.log_last_idx(), C.log_last_idx());
+    BOOST_CHECK_EQUAL(A.get_current_term(), C.get_current_term());
+    BOOST_CHECK(A.is_leader());
+}
