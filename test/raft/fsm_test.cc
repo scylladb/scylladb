@@ -1646,3 +1646,27 @@ BOOST_AUTO_TEST_CASE(test_non_voter_gets_timeout_now) {
     BOOST_CHECK_EQUAL(A.get_current_term(), C.get_current_term());
     BOOST_CHECK(A.is_leader());
 }
+
+BOOST_AUTO_TEST_CASE(test_non_voter_election_timeout) {
+    // Test that non-voter doesn't start election even if its
+    // election timeout expires and it doesn't see a valid leader.
+    discrete_failure_detector fd;
+    server_id A_id = id(), B_id = id(), C_id = id();
+    raft::configuration cfg(raft::server_address_set{
+            raft::server_address{A_id},
+            raft::server_address{B_id},
+            raft::server_address{C_id, false}});
+
+    raft::log log(raft::snapshot{.idx = index_t{0}, .config = cfg});
+    auto A = create_follower(A_id, log, fd);
+    auto B = create_follower(B_id, log, fd);
+    auto C = create_follower(C_id, log, fd);
+    election_timeout(A);
+    communicate(A, B, C);
+    BOOST_CHECK(A.is_leader());
+    fd.mark_all_dead();
+    auto C_term = C.get_current_term();
+    election_timeout(C);
+    BOOST_CHECK(C.is_follower());
+    BOOST_CHECK_EQUAL(C_term, C.get_current_term());
+}
