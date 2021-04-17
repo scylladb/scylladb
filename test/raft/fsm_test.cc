@@ -1670,3 +1670,47 @@ BOOST_AUTO_TEST_CASE(test_non_voter_election_timeout) {
     BOOST_CHECK(C.is_follower());
     BOOST_CHECK_EQUAL(C_term, C.get_current_term());
 }
+
+BOOST_AUTO_TEST_CASE(test_non_voter_voter_loop) {
+    // Test voter-non-voter change in a loop
+    server_id A_id = id(), B_id = id(), C_id = id();
+
+    raft::configuration cfg({A_id, B_id, C_id});
+    raft::configuration cfg_with_non_voter(raft::server_address_set{
+            raft::server_address{A_id},
+            raft::server_address{B_id},
+            raft::server_address{C_id, false}});
+
+    raft::log log(raft::snapshot{.idx = index_t{0}, .config = cfg});
+    auto A = create_follower(A_id, log);
+    auto B = create_follower(B_id, log);
+    auto C = create_follower(C_id, log);
+    election_timeout(A);
+    communicate(A, B, C);
+    BOOST_CHECK(A.is_leader());
+    for (int i = 0; i < 100; ++i) {
+        A.add_entry(i % 2 ? cfg_with_non_voter : cfg);
+        if (rolladice()) {
+            A.add_entry(log_entry::dummy{});
+        }
+        communicate(A, B, C);
+        if (rolladice()) {
+            A.add_entry(log_entry::dummy());
+            communicate(A, B, C);
+        }
+        // If iteration count is large, this helps save some
+        // memory
+        if (rolladice(1./1000)) {
+            A.apply_snapshot(log_snapshot(A.get_log(), A.log_last_idx()), 0);
+        }
+        if (rolladice(1./100)) {
+            B.apply_snapshot(log_snapshot(A.get_log(), B.log_last_idx()), 0);
+        }
+        if (rolladice(1./5000)) {
+            C.apply_snapshot(log_snapshot(A.get_log(), B.log_last_idx()), 0);
+        }
+    }
+    BOOST_CHECK(A.is_leader());
+    BOOST_CHECK_EQUAL(A.get_current_term(), C.get_current_term());
+    BOOST_CHECK_EQUAL(A.log_last_idx(), C.log_last_idx());
+}
