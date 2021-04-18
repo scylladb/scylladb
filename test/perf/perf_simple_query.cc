@@ -27,6 +27,8 @@
 #include "test/perf/perf.hh"
 #include <seastar/core/app-template.hh>
 #include <seastar/testing/test_runner.hh>
+#include "test/lib/random_utils.hh"
+
 #include "schema_builder.hh"
 #include "release.hh"
 #include <fstream>
@@ -107,11 +109,15 @@ static void create_partitions(cql_test_env& env, test_config& cfg) {
     }
 }
 
+static bytes make_random_key(test_config& cfg) {
+    return make_key(cfg.query_single_key ? 0 : tests::random::get_int<uint64_t>(cfg.partitions - 1));
+}
+
 static std::vector<perf_result> test_read(cql_test_env& env, test_config& cfg) {
     create_partitions(env, cfg);
     auto id = env.prepare("select \"C0\", \"C1\", \"C2\", \"C3\", \"C4\" from cf where \"KEY\" = ?").get0();
     return time_parallel([&env, &cfg, id] {
-            bytes key = make_key(cfg.query_single_key ? 0 : std::rand() % cfg.partitions);
+            bytes key = make_random_key(cfg);
             return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(key))}}).discard_result();
         }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard);
 }
@@ -125,7 +131,7 @@ static std::vector<perf_result> test_write(cql_test_env& env, test_config& cfg) 
                            "\"C4\" = 0x222fcbe31ffa1e689540e1499b87fa3f9c781065fccd10e4772b4c7039c2efd0fb27 "
                            "WHERE \"KEY\" = ?;").get0();
     return time_parallel([&env, &cfg, id] {
-            bytes key = make_key(cfg.query_single_key ? 0 : std::rand() % cfg.partitions);
+            bytes key = make_random_key(cfg);
             return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(key))}}).discard_result();
         }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard);
 }
@@ -134,7 +140,7 @@ static std::vector<perf_result> test_delete(cql_test_env& env, test_config& cfg)
     create_partitions(env, cfg);
     auto id = env.prepare("DELETE \"C0\", \"C1\", \"C2\", \"C3\", \"C4\" FROM cf WHERE \"KEY\" = ?").get0();
     return time_parallel([&env, &cfg, id] {
-            bytes key = make_key(cfg.query_single_key ? 0 : std::rand() % cfg.partitions);
+            bytes key = make_random_key(cfg);
             return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(key))}}).discard_result();
         }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard);
 }
@@ -148,7 +154,7 @@ static std::vector<perf_result> test_counter_update(cql_test_env& env, test_conf
                            "\"C4\" = \"C4\" + 5 "
                            "WHERE \"KEY\" = ?;").get0();
     return time_parallel([&env, &cfg, id] {
-            bytes key = make_key(cfg.query_single_key ? 0 : std::rand() % cfg.partitions);
+            bytes key = make_random_key(cfg);
             return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(key))}}).discard_result();
         }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard);
 }
