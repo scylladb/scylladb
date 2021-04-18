@@ -170,7 +170,7 @@ future<redis_message> set(service::storage_proxy& proxy, request& req, redis::re
             }
         }
     }
-    return redis::write_strings(proxy, options, std::move(req._args[0]), std::move(req._args[1]), ttl, permit).then([] {
+    return redis::write_strings(proxy, options, std::move(req._args[0]), std::move(req._args[1]), ttl, permit).then([] () {
         return redis_message::ok();
     });
 }
@@ -180,7 +180,7 @@ future<redis_message> setex(service::storage_proxy& proxy, request& req, redis::
         throw wrong_arguments_exception(3, req.arguments_size(), req._command);
     }
     long ttl = std::stol(std::string(reinterpret_cast<const char*>(req._args[1].data()), req._args[1].size()));
-    return redis::write_strings(proxy, options, std::move(req._args[0]), std::move(req._args[2]), ttl, permit).then([] {
+    return redis::write_strings(proxy, options, std::move(req._args[0]), std::move(req._args[2]), ttl, permit).then([] () {
         return redis_message::ok();
     });
 }

@@ -64,6 +64,7 @@ struct redis_server_config {
     db::consistency_level _read_consistency_level;
     db::consistency_level _write_consistency_level;
     size_t _total_redis_db_count;
+    seastar::smp_service_group _ssg;
 };
 
 class redis_server : public generic_server::server {

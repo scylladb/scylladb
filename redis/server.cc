@@ -84,7 +84,7 @@ redis_server::connection::connection(redis_server& server, socket_address server
     : generic_server::connection(server, std::move(fd))
     , _server(server)
     , _server_addr(server_addr)
-    , _options(server._config._read_consistency_level, server._config._write_consistency_level, server._config._timeout_config, server._auth_service, addr, server._total_redis_db_count)
+    , _options(server._config._read_consistency_level, server._config._write_consistency_level, server._config._timeout_config, server._auth_service, addr, server._total_redis_db_count, server._config._ssg)
 {
 }
 

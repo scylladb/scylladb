@@ -52,11 +52,11 @@ class redis_service {
     seastar::sharded<redis::query_processor> _query_processor;
     seastar::shared_ptr<seastar::sharded<redis_transport::redis_server>> _server;
 private:
-    seastar::future<> listen(seastar::sharded<auth::service>& auth_service, db::config& cfg);
+    seastar::future<> listen(seastar::sharded<auth::service>& auth_service, db::config& cfg, seastar::smp_service_group ssg);
 public:
     redis_service();
     ~redis_service();
     seastar::future<> init(seastar::sharded<service::storage_proxy>& proxy, seastar::sharded<database>& db,
-            seastar::sharded<auth::service>& auth_service, seastar::sharded<service::migration_manager>& mm, db::config& cfg);
+            seastar::sharded<auth::service>& auth_service, seastar::sharded<service::migration_manager>& mm, db::config& cfg, seastar::smp_service_group ssg);
     seastar::future<> stop();
 };

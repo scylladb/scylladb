@@ -1438,8 +1438,11 @@ int main(int ac, char** av) {
 
             static redis_service redis;
             if (cfg->redis_port() || cfg->redis_ssl_port()) {
-                with_scheduling_group(dbcfg.statement_scheduling_group, [proxy = std::ref(proxy), db = std::ref(db), auth_service = std::ref(auth_service), mm = std::ref(mm), cfg] {
-                    return redis.init(proxy, db, auth_service, mm, *cfg);
+                smp_service_group_config c;
+                c.max_nonlocal_requests = 5000;
+                smp_service_group ssg = create_smp_service_group(c).get0();
+                with_scheduling_group(dbcfg.statement_scheduling_group, [proxy = std::ref(proxy), db = std::ref(db), auth_service = std::ref(auth_service), mm = std::ref(mm), cfg, ssg] {
+                    return redis.init(proxy, db, auth_service, mm, *cfg, ssg);
                 }).get();
             }
 

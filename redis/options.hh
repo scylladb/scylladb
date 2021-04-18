@@ -43,19 +43,22 @@ class redis_options {
     const timeout_config& _timeout_config;
     service::client_state _client_state;
     size_t _total_redis_db_count;
+    seastar::smp_service_group _ssg;
 public:
     explicit redis_options(const db::consistency_level rcl,
         const db::consistency_level wcl,
         const timeout_config& tc,
         auth::service& auth,
         const socket_address addr,
-        size_t total_redis_db_count)
+        size_t total_redis_db_count,
+        seastar::smp_service_group ssg)
         :_ks_name("REDIS_0")
         ,_read_consistency(rcl)
         ,_write_consistency(wcl)
         ,_timeout_config(tc)
         ,_client_state(service::client_state::external_tag{}, auth, tc, addr)
         ,_total_redis_db_count(total_redis_db_count)
+        ,_ssg(ssg)
     {
     }
     explicit redis_options(const sstring& ks_name,
@@ -64,13 +67,15 @@ public:
         const timeout_config& tc,
         auth::service& auth,
         const socket_address addr,
-        size_t total_redis_db_count)
+        size_t total_redis_db_count,
+        seastar::smp_service_group ssg)
         :_ks_name(ks_name)
         ,_read_consistency(rcl)
         ,_write_consistency(wcl)
         ,_timeout_config(tc)
         ,_client_state(service::client_state::external_tag{}, auth, tc, addr)
         ,_total_redis_db_count(total_redis_db_count)
+        ,_ssg(ssg)
     {
     }
 
@@ -85,6 +90,7 @@ public:
 
     void set_keyspace_name(const sstring ks_name) { _ks_name = ks_name; }
     size_t get_total_redis_db_count() const { return _total_redis_db_count; }
+    seastar::smp_service_group get_smp_service_group() const { return _ssg; }
 };
 
 schema_ptr get_schema(service::storage_proxy& proxy, const sstring& ks_name, const sstring& cf_name);

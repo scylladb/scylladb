@@ -39,7 +39,7 @@ redis_service::~redis_service()
 {
 }
 
-future<> redis_service::listen(seastar::sharded<auth::service>& auth_service, db::config& cfg)
+future<> redis_service::listen(seastar::sharded<auth::service>& auth_service, db::config& cfg, seastar::smp_service_group ssg)
 {
     if (_server) {
         return make_ready_future<>();
@@ -52,12 +52,14 @@ future<> redis_service::listen(seastar::sharded<auth::service>& auth_service, db
     auto family = cfg.enable_ipv6_dns_lookup() || preferred ? std::nullopt : std::make_optional(net::inet_address::family::INET);
     auto ceo = cfg.client_encryption_options();
     auto keepalive = cfg.rpc_keepalive();
-    redis_transport::redis_server_config redis_cfg;
-    redis_cfg._timeout_config = make_timeout_config(cfg);
-    redis_cfg._read_consistency_level = make_consistency_level(cfg.redis_read_consistency_level());
-    redis_cfg._write_consistency_level = make_consistency_level(cfg.redis_write_consistency_level());
-    redis_cfg._max_request_size = memory::stats().total_memory() / 10;
-    redis_cfg._total_redis_db_count = cfg.redis_database_count();
+    redis_transport::redis_server_config redis_cfg {
+        make_timeout_config(cfg),
+        memory::stats().total_memory() / 10,
+        make_consistency_level(cfg.redis_read_consistency_level()),
+        make_consistency_level(cfg.redis_write_consistency_level()),
+        cfg.redis_database_count(),
+        ssg
+    };
     return gms::inet_address::lookup(addr, family, preferred).then([this, server, addr, &cfg, keepalive, ceo = std::move(ceo), redis_cfg, &auth_service] (seastar::net::inet_address ip) {
         return server->start(std::ref(service::get_storage_proxy()), std::ref(_query_processor), std::ref(auth_service), redis_cfg).then([server, &cfg, addr, ip, ceo, keepalive]() {
             auto f = make_ready_future();
@@ -116,7 +118,7 @@ future<> redis_service::listen(seastar::sharded<auth::service>& auth_service, db
 }
 
 future<> redis_service::init(seastar::sharded<service::storage_proxy>& proxy, seastar::sharded<database>& db,
-        seastar::sharded<auth::service>& auth_service, seastar::sharded<service::migration_manager>& mm, db::config& cfg)
+        seastar::sharded<auth::service>& auth_service, seastar::sharded<service::migration_manager>& mm, db::config& cfg, seastar::smp_service_group ssg)
 {
     // 1. Create keyspace/tables used by redis API if not exists.
     // 2. Initialize the redis query processor.
@@ -127,8 +129,8 @@ future<> redis_service::init(seastar::sharded<service::storage_proxy>& proxy, se
         return _query_processor.invoke_on_all([] (auto& processor) {
             return processor.start();
         });
-    }).then([this, &cfg, &auth_service] {
-        return listen(auth_service, cfg);
+    }).then([this, &cfg, &auth_service, ssg] {
+        return listen(auth_service, cfg, ssg);
     });
 }
 
