@@ -494,6 +494,7 @@ scylla_tests = set([
     'test/perf/perf_row_cache_reads',
     'test/perf/perf_simple_query',
     'test/perf/perf_sstable',
+    'test/perf/perf_logalloc',
     'test/unit/lsa_async_eviction_test',
     'test/unit/lsa_sync_eviction_test',
     'test/unit/row_cache_alloc_stress_test',
@@ -1195,6 +1196,7 @@ deps['test/perf/perf_fast_forward'] += ['release.cc']
 deps['test/perf/perf_simple_query'] += ['release.cc', 'test/perf/perf.cc']
 deps['test/perf/perf_row_cache_reads'] += ['test/perf/perf.cc']
 deps['test/perf/perf_row_cache_update'] += ['test/perf/perf.cc']
+deps['test/perf/perf_logalloc'] += ['test/perf/perf.cc']
 deps['test/boost/reusable_buffer_test'] = [
     "test/boost/reusable_buffer_test.cc",
     "test/lib/log.cc",
