@@ -123,7 +123,7 @@ struct rjson_engaged_ptr_comp {
 // as internally they're stored in an array, and the order of elements is
 // not important in set equality. See issue #5021
 static bool check_EQ_for_sets(const rjson::value& set1, const rjson::value& set2) {
-    if (set1.Size() != set2.Size()) {
+    if (!set1.IsArray() || !set2.IsArray() || set1.Size() != set2.Size()) {
         return false;
     }
     std::set<const rjson::value*, rjson_engaged_ptr_comp> set1_raw;
@@ -137,20 +137,65 @@ static bool check_EQ_for_sets(const rjson::value& set1, const rjson::value& set2
     }
     return true;
 }
+// Moreover, the JSON being compared can be a nested document with outer
+// layers of lists and maps and some inner set - and we need to get to that
+// inner set to compare it correctly with check_EQ_for_sets() (issue #8514).
+static bool check_EQ(const rjson::value* v1, const rjson::value& v2);
+static bool check_EQ_for_lists(const rjson::value& list1, const rjson::value& list2) {
+    if (!list1.IsArray() || !list2.IsArray() || list1.Size() != list2.Size()) {
+        return false;
+    }
+    auto it1 = list1.Begin();
+    auto it2 = list2.Begin();
+    while (it1 != list1.End()) {
+        // Note: Alternator limits an item's depth (rjson::parse() limits
+        // it to around 37 levels), so this recursion is safe.
+        if (!check_EQ(&*it1, *it2)) {
+            return false;
+        }
+        ++it1;
+        ++it2;
+    }
+    return true;
+}
+static bool check_EQ_for_maps(const rjson::value& list1, const rjson::value& list2) {
+    if (!list1.IsObject() || !list2.IsObject() || list1.MemberCount() != list2.MemberCount()) {
+        return false;
+    }
+    for (auto it1 = list1.MemberBegin(); it1 != list1.MemberEnd(); ++it1) {
+        auto it2 = list2.FindMember(it1->name);
+        if (it2 == list2.MemberEnd() || !check_EQ(&it1->value, it2->value)) {
+            return false;
+        }
+    }
+    return true;
+}
 
 // Check if two JSON-encoded values match with the EQ relation
 static bool check_EQ(const rjson::value* v1, const rjson::value& v2) {
-    if (!v1 || v1->IsNull()) {
-        return false;
-    }
-    if (v1->IsObject() && v1->MemberCount() == 1 && v2.IsObject() && v2.MemberCount() == 1) {
+    if (v1 && v1->IsObject() && v1->MemberCount() == 1 && v2.IsObject() && v2.MemberCount() == 1) {
         auto it1 = v1->MemberBegin();
         auto it2 = v2.MemberBegin();
-        if ((it1->name == "SS" && it2->name == "SS") || (it1->name == "NS" && it2->name == "NS") || (it1->name == "BS" && it2->name == "BS")) {
-            return check_EQ_for_sets(it1->value, it2->value);
+        if (it1->name != it2->name) {
+            return false;
         }
+        if (it1->name == "SS" || it1->name == "NS" || it1->name == "BS") {
+            return check_EQ_for_sets(it1->value, it2->value);
+        } else if(it1->name == "L") {
+            return check_EQ_for_lists(it1->value, it2->value);
+        } else if(it1->name == "M") {
+            return check_EQ_for_maps(it1->value, it2->value);
+        } else {
+            // Other, non-nested types (number, string, etc.) can be compared
+            // literally, comparing their JSON representation.
+            return it1->value == it2->value;
+        }
+    } else {
+        // If v1 and/or v2 are missing (IsNull()) the result should be false.
+        // In the unlikely case that the object is malformed (issue #8070),
+        // let's also return false.
+        return false;
     }
-    return *v1 == v2;
 }
 
 // Check if two JSON-encoded values match with the NE relation
