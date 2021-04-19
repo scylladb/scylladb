@@ -404,6 +404,7 @@ static auto defer_verbose_shutdown(const char* what, Func&& func) {
 namespace debug {
 sharded<netw::messaging_service>* the_messaging_service;
 sharded<cql3::query_processor>* the_query_processor;
+sharded<qos::service_level_controller>* the_sl_controller;
 }
 
 int main(int ac, char** av) {
@@ -815,6 +816,7 @@ int main(int ac, char** av) {
 
             static sharded<auth::service> auth_service;
             static sharded<qos::service_level_controller> sl_controller;
+            debug::the_sl_controller = &sl_controller;
 
             //starting service level controller
             qos::service_level_options default_service_level_configuration;
