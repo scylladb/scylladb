@@ -1120,10 +1120,10 @@ public:
 
     flat_mutation_reader::filter make_partition_filter() const {
         return [this] (const dht::decorated_key& dk) {
-            if (dht::shard_of(*_schema, dk.token()) != this_shard_id()) {
-                log_trace("Token {} does not belong to CPU {}, skipping", dk.token(), this_shard_id());
-                return false;
-            }
+#ifdef SEASTAR_DEBUG
+            // sstables should never be shared with other shards at this point.
+            assert(dht::shard_of(*_schema, dk.token()) == this_shard_id());
+#endif
 
             if (!belongs_to_current_node(dk.token(), _owned_ranges)) {
                 log_trace("Token {} does not belong to this node, skipping", dk.token());
