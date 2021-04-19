@@ -276,13 +276,14 @@ private:
      * Starts the tracing session time measurments.
      * This overload is meant for primary sessions.
      *
-     * @param request description of a request being traces
+     * @param name description of a tracing context.
+     *             Caller must guarantee static storage duration.
      * @param client address of a client the traced request came from
      */
-    void begin(sstring request, gms::inet_address client) {
+    void begin(const char* name, gms::inet_address client) {
         begin();
         _records->session_rec.client = client;
-        _records->session_rec.request = std::move(request);
+        _records->session_rec.name = name;
         _records->session_rec.started_at = std::chrono::system_clock::now();
     }
 
@@ -672,6 +673,9 @@ inline bool should_return_id_in_response(const trace_state_ptr& p) {
  *
  * If trace state is initialized the operation takes place immediatelly,
  * otherwise nothing happens.
+ *
+ * For begin(name, address) form the caller must guarantee static
+ * storage duration for name.
  *
  * @tparam A
  * @param p trace state handle

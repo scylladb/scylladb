@@ -217,7 +217,7 @@ struct session_record {
     std::map<sstring, sstring> parameters;
     std::set<sstring> tables;
     sstring username;
-    sstring request;
+    const char* name;
     size_t request_size = 0;
     size_t response_size = 0;
     std::chrono::system_clock::time_point started_at;

@@ -355,7 +355,7 @@ static tracing::trace_state_ptr maybe_trace_query(service::client_state& client_
         std::string buf;
         tracing::add_session_param(trace_state, "alternator_op", op);
         tracing::add_query(trace_state, truncated_content_view(query, buf));
-        tracing::begin(trace_state, format("Alternator {}", op), client_state.get_client_address());
+        tracing::begin(trace_state, "alternator", client_state.get_client_address());
     }
     return trace_state;
 }
