@@ -280,9 +280,7 @@ fsm_output fsm::get_output() {
 
         for (auto idx = observed_ci + 1; idx <= _commit_idx; ++idx) {
             const auto& entry = _log[idx];
-            if (!std::holds_alternative<configuration>(entry->data)) {
-                output.committed.push_back(entry);
-            }
+            output.committed.push_back(entry);
         }
     }
 
