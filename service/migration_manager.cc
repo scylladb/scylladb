@@ -53,6 +53,7 @@
 #include "database.hh"
 #include "db/schema_tables.hh"
 #include "types/user.hh"
+#include "db/schema_tables.hh"
 
 namespace service {
 
@@ -1075,8 +1076,19 @@ future<schema_ptr> get_schema_definition(table_schema_version v, netw::messaging
             // referenced by the incoming request.
             // That means the column mapping for the schema should always be inserted
             // with TTL (refresh TTL in case column mapping already existed prior to that).
-            return db::schema_tables::store_column_mapping(proxy, s.unfreeze(db::schema_ctxt(proxy)), true).then([s] {
-                return s;
+            auto us = s.unfreeze(db::schema_ctxt(proxy));
+            // if this is a view - we might need to fix it's schema before registering it.
+            if (us->is_view()) {
+                auto& db = proxy.local().local_db();
+                schema_ptr base_schema = db.find_schema(us->view_info()->base_id());
+                auto fixed_view = db::schema_tables::maybe_fix_legacy_secondary_index_mv_schema(db, view_ptr(us), base_schema,
+                        db::schema_tables::preserve_version::yes);
+                if (fixed_view) {
+                    us = fixed_view;
+                }
+            }
+            return db::schema_tables::store_column_mapping(proxy, us, true).then([us] {
+                return frozen_schema{us};
             });
         });
     }).then([] (schema_ptr s) {
@@ -1084,7 +1096,7 @@ future<schema_ptr> get_schema_definition(table_schema_version v, netw::messaging
         // table.
         if (s->is_view()) {
             if (!s->view_info()->base_info()) {
-                auto& db = service::get_local_storage_proxy().get_db().local();
+                auto& db = service::get_local_storage_proxy().local_db();
                 // This line might throw a no_such_column_family
                 // It should be fine since if we tried to register a view for which
                 // we don't know the base table, our registry is broken.
