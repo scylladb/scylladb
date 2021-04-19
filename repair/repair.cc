@@ -1631,8 +1631,8 @@ future<> bootstrap_with_repair(seastar::sharded<database>& db, seastar::sharded<
                             auto nodes = boost::copy_range<std::vector<gms::inet_address>>(old_nodes |
                                     boost::adaptors::filtered([&] (const gms::inet_address& node) { return !new_nodes.contains(node); }));
                             if (nodes.size() != 1) {
-                                throw std::runtime_error(format("bootstrap_with_repair: keyspace={}, range={}, expected 1 node losing range but found more nodes={}",
-                                        keyspace_name, desired_range, nodes));
+                                throw std::runtime_error(format("bootstrap_with_repair: keyspace={}, range={}, expected 1 node losing range but found {} nodes={}",
+                                        keyspace_name, desired_range, nodes.size(), nodes));
                             }
                             return nodes;
                         };
