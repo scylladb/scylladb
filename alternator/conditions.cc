@@ -140,7 +140,7 @@ static bool check_EQ_for_sets(const rjson::value& set1, const rjson::value& set2
 
 // Check if two JSON-encoded values match with the EQ relation
 static bool check_EQ(const rjson::value* v1, const rjson::value& v2) {
-    if (!v1) {
+    if (!v1 || v1->IsNull()) {
         return false;
     }
     if (v1->IsObject() && v1->MemberCount() == 1 && v2.IsObject() && v2.MemberCount() == 1) {
@@ -155,7 +155,7 @@ static bool check_EQ(const rjson::value* v1, const rjson::value& v2) {
 
 // Check if two JSON-encoded values match with the NE relation
 static bool check_NE(const rjson::value* v1, const rjson::value& v2) {
-    return !v1 || *v1 != v2; // null is unequal to anything.
+    return !v1 || v1->IsNull() || *v1 != v2; // null is unequal to anything.
 }
 
 // Check if two JSON-encoded values match with the BEGINS_WITH relation
@@ -298,6 +298,8 @@ static bool check_NOT_NULL(const rjson::value* val) {
 
 // Only types S, N or B (string, number or bytes) may be compared by the
 // various comparion operators - lt, le, gt, ge, and between.
+// Note that in particular, if the value is missing (v->IsNull()), this
+// check returns false.
 static bool check_comparable_type(const rjson::value& v) {
     if (!v.IsObject() || v.MemberCount() != 1) {
         return false;
