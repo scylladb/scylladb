@@ -265,7 +265,7 @@ struct permit_group_key_hash {
 
 using permit_groups = std::unordered_map<permit_group_key, permit_stats, permit_group_key_hash>;
 
-static permit_stats do_dump_reader_permit_diagnostics(std::ostream& os, const permit_groups& permits) {
+static permit_stats do_dump_reader_permit_diagnostics(std::ostream& os, const permit_groups& permits, unsigned max_lines = 20) {
     struct permit_summary {
         const schema* s;
         std::string_view op_name;
@@ -285,6 +285,8 @@ static permit_stats do_dump_reader_permit_diagnostics(std::ostream& os, const pe
     });
 
     permit_stats total;
+    unsigned lines = 0;
+    permit_stats omitted_permit_stats;
 
     auto print_line = [&os] (auto col1, auto col2, auto col3, auto col4) {
         fmt::print(os, "{}\t{}\t{}\t{}\n", col1, col2, col3, col4);
@@ -294,11 +296,19 @@ static permit_stats do_dump_reader_permit_diagnostics(std::ostream& os, const pe
     for (const auto& summary : permit_summaries) {
         total.permits += summary.permits;
         total.resources += summary.resources;
-        print_line(summary.permits, summary.resources.count, utils::to_hr_size(summary.resources.memory), fmt::format("{}.{}/{}/{}",
-                    summary.s ? summary.s->ks_name() : "*",
-                    summary.s ? summary.s->cf_name() : "*",
-                    summary.op_name,
-                    summary.state));
+        if (!max_lines || lines++ < max_lines) {
+            print_line(summary.permits, summary.resources.count, utils::to_hr_size(summary.resources.memory), fmt::format("{}.{}/{}/{}",
+                        summary.s ? summary.s->ks_name() : "*",
+                        summary.s ? summary.s->cf_name() : "*",
+                        summary.op_name,
+                        summary.state));
+        } else {
+            omitted_permit_stats.permits += summary.permits;
+            omitted_permit_stats.resources += summary.resources;
+        }
+    }
+    if (max_lines && lines > max_lines) {
+        print_line(omitted_permit_stats.permits, omitted_permit_stats.resources.count, utils::to_hr_size(omitted_permit_stats.resources.memory), "permits omitted for brevity");
     }
     fmt::print(os, "\n");
     print_line(total.permits, total.resources.count, utils::to_hr_size(total.resources.memory), "total");
@@ -306,7 +316,7 @@ static permit_stats do_dump_reader_permit_diagnostics(std::ostream& os, const pe
 }
 
 static void do_dump_reader_permit_diagnostics(std::ostream& os, const reader_concurrency_semaphore& semaphore,
-        const reader_concurrency_semaphore::permit_list& list, std::string_view problem) {
+        const reader_concurrency_semaphore::permit_list& list, std::string_view problem, unsigned max_lines = 20) {
     permit_groups permits;
 
     for (const auto& permit : list.permits) {
@@ -316,7 +326,7 @@ static void do_dump_reader_permit_diagnostics(std::ostream& os, const reader_con
     permit_stats total;
 
     fmt::print(os, "Semaphore {}: {}, dumping permit diagnostics:\n", semaphore.name(), problem);
-    total += do_dump_reader_permit_diagnostics(os, permits);
+    total += do_dump_reader_permit_diagnostics(os, permits, max_lines);
     fmt::print(os, "\n");
     fmt::print(os, "Total: {} permits with {} count and {} memory resources\n", total.permits, total.resources.count, utils::to_hr_size(total.resources.memory));
 }
@@ -602,9 +612,9 @@ void reader_concurrency_semaphore::broken(std::exception_ptr ex) {
     }
 }
 
-std::string reader_concurrency_semaphore::dump_diagnostics() const {
+std::string reader_concurrency_semaphore::dump_diagnostics(unsigned max_lines) const {
     std::ostringstream os;
-    do_dump_reader_permit_diagnostics(os, *this, *_permit_list, "user request");
+    do_dump_reader_permit_diagnostics(os, *this, *_permit_list, "user request", max_lines);
     return os.str();
 }
 
