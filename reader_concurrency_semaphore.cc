@@ -281,7 +281,7 @@ static permit_stats do_dump_reader_permit_diagnostics(std::ostream& os, const pe
     }
 
     std::ranges::sort(permit_summaries, [] (const permit_summary& a, const permit_summary& b) {
-        return a.resources.memory < b.resources.memory;
+        return a.resources.memory > b.resources.memory;
     });
 
     permit_stats total;
