@@ -325,7 +325,13 @@ static void do_dump_reader_permit_diagnostics(std::ostream& os, const reader_con
 
     permit_stats total;
 
-    fmt::print(os, "Semaphore {}: {}, dumping permit diagnostics:\n", semaphore.name(), problem);
+    fmt::print(os, "Semaphore {} with {}/{} count and {}/{} memory resources: {}, dumping permit diagnostics:\n",
+            semaphore.name(),
+            semaphore.initial_resources().count - semaphore.available_resources().count,
+            semaphore.initial_resources().count,
+            semaphore.initial_resources().memory - semaphore.available_resources().memory,
+            semaphore.initial_resources().memory,
+            problem);
     total += do_dump_reader_permit_diagnostics(os, permits, max_lines);
     fmt::print(os, "\n");
     fmt::print(os, "Total: {} permits with {} count and {} memory resources\n", total.permits, total.resources.count, utils::to_hr_size(total.resources.memory));
