@@ -1054,6 +1054,137 @@ private:
     friend std::unique_ptr<raft_server> std::make_unique<raft_server, raft_server::initializer>(initializer&&);
 };
 
+static raft::server_id to_raft_id(size_t id) {
+    // Raft uses UUID 0 as special case.
+    assert(id > 0);
+    return raft::server_id{utils::UUID{0, id}};
+}
+
+// A set of `raft_server`s connected by a `network`.
+//
+// The `network` is initialized with a message delivery function
+// which notifies the destination's failure detector on each message
+// and if the message contains an RPC payload, pushes it into the destination's
+// `delivery_queue`.
+//
+// Needs to be periodically `tick()`ed which ticks the network
+// and underlying servers.
+template <PureStateMachine M>
+class environment {
+    using input_t = typename M::output_t;
+    using state_t = typename M::state_t;
+    using output_t = typename M::output_t;
+
+    struct route {
+        std::unique_ptr<raft_server<M>> _server;
+        shared_ptr<failure_detector> _fd;
+    };
+
+    // Used to deliver messages coming from the network to appropriate servers and their failure detectors.
+    // Also keeps the servers and the failure detectors alive (owns them).
+    // Before we show a Raft server to others we must add it to this map.
+    std::unordered_map<raft::server_id, route> _routes;
+
+    // Used to create a new ID in `new_server`.
+    size_t _next_id = 1;
+
+    // Engaged optional: RPC message, nullopt: heartbeat
+    using message_t = std::optional<typename rpc<state_t>::message_t>;
+    network<message_t> _network;
+
+    bool _stopped = false;
+
+    // Used to ensure that when `abort()` returns there are
+    // no more in-progress methods running on this object.
+    seastar::gate _gate;
+
+public:
+    environment()
+            : _network(
+        [this] (raft::server_id src, raft::server_id dst, const message_t& m) {
+            auto& [s, fd] = _routes.at(dst);
+            fd->receive_heartbeat(src);
+            if (m) {
+                s->deliver(src, *m);
+            }
+        }) {
+    }
+
+    ~environment() {
+        assert(_routes.empty() || _stopped);
+    }
+
+    environment(const environment&) = delete;
+    environment(environment&&) = delete;
+
+    // TODO: adjustable/randomizable ticking ratios
+    void tick() {
+        _network.tick();
+        for (auto& [_, r] : _routes) {
+            r._server->tick();
+            r._fd->tick();
+        }
+    }
+
+    // Creates and starts a server with a local (uniquely owned) failure detector,
+    // connects it to the network and returns its ID.
+    //
+    // If `first == true` the server is created with a singleton configuration containing itself.
+    // Otherwise it is created with an empty configuration. The user must explicitly ask for a configuration change
+    // if they want to make a cluster (group) out of this server and other existing servers.
+    // The user should be able to create multiple clusters by calling `new_server` multiple times with `first = true`.
+    // (`first` means ``first in group'').
+    future<raft::server_id> new_server(bool first) {
+        return with_gate(_gate, [this, first] () -> future<raft::server_id> {
+            auto id = to_raft_id(_next_id++);
+
+            // TODO: in the future we want to simulate multiple raft servers running on a single ``node'',
+            // sharing a single failure detector. We will then likely split `new_server` into two steps: `new_node` and `new_server`,
+            // the first creating the failure detector for a node and wiring it up, the second creating a server on a given node.
+            // We will also possibly need to introduce some kind of ``node IDs'' which `failure_detector` (and `network`)
+            // will operate on (currently they operate on `raft::server_id`s, assuming a 1-1 mapping of server-to-node).
+            auto fd = seastar::make_shared<failure_detector>([id, this] (raft::server_id dst) {
+                _network.send(id, dst, std::nullopt);
+            });
+
+            auto srv = raft_server<M>::create(id, fd, first,
+                    [id, this] (raft::server_id dst, typename rpc<state_t>::message_t m) {
+                _network.send(id, dst, {std::move(m)});
+            });
+
+            co_await srv->start();
+
+            // Add us to other servers' failure detectors.
+            for (auto& [_, r] : _routes) {
+                r._fd->add_server(id);
+            }
+
+            // Add other servers to our failure detector.
+            for (auto& [id, _] : _routes) {
+                fd->add_server(id);
+            }
+
+            _routes.emplace(id, route{std::move(srv), std::move(fd)});
+
+            co_return id;
+        });
+    }
+
+    raft_server<M>& get_server(raft::server_id id) {
+        return *_routes.at(id)._server;
+    }
+
+    // Must be called before we are destroyed unless `new_server` was never called.
+    future<> abort() {
+        // Close the gate before iterating over _routes to prevent concurrent modification by other methods.
+        co_await _gate.close();
+        for (auto& [_, r] : _routes) {
+            co_await r._server->abort();
+        }
+        _stopped = true;
+    }
+};
+
 SEASTAR_TEST_CASE(dummy_test) {
     return seastar::make_ready_future<>();
 }
