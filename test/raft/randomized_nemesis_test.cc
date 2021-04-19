@@ -24,6 +24,7 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/gate.hh>
 #include <seastar/core/queue.hh>
+#include <seastar/core/future-util.hh>
 #include <seastar/util/defer.hh>
 
 #include "raft/server.hh"
@@ -1184,6 +1185,64 @@ public:
         _stopped = true;
     }
 };
+
+// Calls the given function (``tick''s) as fast as the Seastar reactor allows and yields between each call.
+// May be provided a limit for the number of calls; crashes if the limit is reached before the ticker
+// is `abort()`ed.
+// Call `start()` to start the ticking.
+class ticker {
+    bool _stop = false;
+    std::optional<future<>> _ticker;
+
+public:
+    ticker() = default;
+    ticker(const ticker&) = delete;
+    ticker(ticker&&) = delete;
+
+    ~ticker() {
+        assert(!_ticker);
+    }
+
+    void start(noncopyable_function<void()> on_tick, uint64_t limit = std::numeric_limits<uint64_t>::max()) {
+        assert(!_ticker);
+        _ticker = tick(std::move(on_tick), limit);
+    }
+
+    future<> abort() {
+        if (_ticker) {
+            _stop = true;
+            co_await *std::exchange(_ticker, std::nullopt);
+        }
+    }
+
+private:
+    future<> tick(noncopyable_function<void()> on_tick, uint64_t limit) {
+        for (uint64_t i = 0; i < limit; ++i) {
+            if (_stop) {
+                tlogger.debug("ticker: finishing after {} ticks", i);
+                co_return;
+            }
+            on_tick();
+            co_await seastar::later();
+        }
+
+        tlogger.error("ticker: limit reached");
+        assert(false);
+    }
+};
+
+template <PureStateMachine M>
+future<> with_env_and_ticker(noncopyable_function<future<>(environment<M>&, ticker&)> f) {
+    auto env = std::make_unique<environment<M>>();
+    auto t = std::make_unique<ticker>();
+    return f(*env, *t).finally([env_ = std::move(env), t_ = std::move(t)] () mutable -> future<> {
+        // move into coroutine body so they don't get destroyed with the lambda (on first co_await)
+        auto env = std::move(env_);
+        auto t = std::move(t_);
+        co_await t->abort();
+        co_await env->abort();
+    });
+}
 
 SEASTAR_TEST_CASE(dummy_test) {
     return seastar::make_ready_future<>();
