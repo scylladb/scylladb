@@ -1579,6 +1579,7 @@ future<> bootstrap_with_repair(seastar::sharded<database>& db, seastar::sharded<
             auto& strat = ks.get_replication_strategy();
             dht::token_range_vector desired_ranges = strat.get_pending_address_ranges(tmptr, tokens, myip, utils::can_yield::yes);
             bool find_node_in_local_dc_only = strat.get_type() == locator::replication_strategy_type::network_topology;
+            bool everywhere_topology = strat.get_type() == locator::replication_strategy_type::everywhere_topology;
 
             //Active ranges
             auto metadata_clone = tmptr->clone_only_token_map().get0();
@@ -1656,7 +1657,9 @@ future<> bootstrap_with_repair(seastar::sharded<database>& db, seastar::sharded<
                         };
                         auto old_endpoints_in_local_dc = get_old_endpoints_in_local_dc();
                         auto rf_in_local_dc = get_rf_in_local_dc();
-                        if (old_endpoints.size() == strat.get_replication_factor()) {
+                        if (everywhere_topology) {
+                            neighbors = old_endpoints_in_local_dc;
+                        } else if (old_endpoints.size() == strat.get_replication_factor()) {
                             // For example, with RF = 3 and 3 nodes n1, n2, n3
                             // in the cluster, n4 is bootstrapped, old_replicas
                             // = {n1, n2, n3}, new_replicas = {n1, n2, n4}, n3
