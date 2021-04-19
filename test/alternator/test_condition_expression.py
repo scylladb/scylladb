@@ -268,6 +268,35 @@ def test_update_condition_ne(test_table_s):
         ExpressionAttributeValues={':newval': 3, ':oldval': 1})
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['c'] == 3
 
+# Check that set inequality is checked correctly. This reproduces the same
+# bug #5021 that we reproduced above in test_update_condition_eq_set(), just
+# that here we check the inequality operator instead of equality.
+# Reproduces issue #8513.
+def test_update_condition_ne_set(test_table_s):
+    p = random_string()
+    # Because boto3 sorts the set values we give it, in order to generate a
+    # set with a different order, we need to build it incrementally.
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'a': {'Value': set(['dog', 'chinchilla']), 'Action': 'PUT'}})
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='ADD a :val1',
+        ExpressionAttributeValues={':val1': set(['cat', 'mouse'])})
+    # Sanity check - the attribute contains the set we think it does
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['a'] == set(['chinchilla', 'cat', 'dog', 'mouse'])
+    # Now check that condition expression check knows there is no inequality
+    # here.
+    with pytest.raises(ClientError, match='ConditionalCheckFailedException'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET b = :val1',
+            ConditionExpression='a <> :oldval',
+            ExpressionAttributeValues={':val1': 2, ':oldval': set(['chinchilla', 'cat', 'dog', 'mouse'])})
+    # As a sanity check, also check something which should be unequal:
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET b = :val1',
+        ConditionExpression='a <> :oldval',
+        ExpressionAttributeValues={':val1': 3, ':oldval': set(['chinchilla', 'cat', 'dog', 'horse'])})
+    assert 'b' in test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']
+
 # In test_update_condition_ne() above we saw that a non-existent attribute is
 # "not equal" to any value. Here we check what happens when two non-existent
 # attributes are checked for non-equality. It turns out, they are also
