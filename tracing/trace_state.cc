@@ -54,17 +54,42 @@ namespace tracing {
 
 logging::logger trace_state_logger("trace_state");
 
+template<typename T, size_t N> using small_vector = ::utils::small_vector<T, N>;
+
+using query_names = small_vector<sstring_view, 4>;
+using query_values = small_vector<cql3::raw_value_view, 4>;
+
 struct trace_state::params_values {
     std::optional<std::unordered_set<gms::inet_address>> batchlog_endpoints;
     std::optional<api::timestamp_type> user_timestamp;
-    std::vector<sstring> queries;
+    small_vector<sstring, 1> queries;
     std::optional<db::consistency_level> cl;
     std::optional<db::consistency_level> serial_cl;
     std::optional<int32_t> page_size;
-    std::vector<prepared_checked_weak_ptr> prepared_statements;
-    std::vector<std::optional<std::vector<sstring_view>>> query_option_names;
-    std::vector<std::vector<cql3::raw_value_view>> query_option_values;
+    small_vector<prepared_checked_weak_ptr, 1> prepared_statements;
+    small_vector<std::optional<query_names>, 1> query_option_names;
+    small_vector<query_values, 1> query_option_values;
 };
+
+sstring raw_value_to_sstring(const cql3::raw_value_view& v, const data_type& t);
+
+void build_parameters_map_for_one_prepared(const lw_shared_ptr<one_session_records>& _records,
+                                           const prepared_checked_weak_ptr& prepared_ptr,
+                                           std::optional<query_names>& names_opt,
+                                           query_values& values, const sstring& param_name_prefix);
+
+template<typename T, size_t N>
+small_vector<T, N> from_vec(const std::vector<T> &v) {
+    return small_vector<T, N>(v.begin(), v.end());
+}
+
+template<typename T, size_t N>
+std::optional<small_vector<T, N>> from_vec(const std::optional<std::vector<T>> &v) {
+    if (!v.has_value() || v->empty()) {
+        return {};
+    }
+    return small_vector<T, N>(v->begin(), v->end());
+}
 
 trace_state::params_values* trace_state::params_ptr::get_ptr_safe() {
     if (!_vals) {
@@ -156,8 +181,8 @@ void trace_state::add_prepared_query_options(const cql3::query_options& prepared
     _params_ptr->query_option_values.reserve(_params_ptr->prepared_statements.size());
 
     for (size_t i = 0; i < _params_ptr->prepared_statements.size(); ++i) {
-        _params_ptr->query_option_names.emplace_back(prepared_options_ptr.for_statement(i).get_names());
-        _params_ptr->query_option_values.emplace_back(prepared_options_ptr.for_statement(i).get_values());
+        _params_ptr->query_option_names.emplace_back(from_vec<sstring_view, 4>(prepared_options_ptr.for_statement(i).get_names()));
+        _params_ptr->query_option_values.emplace_back(from_vec<cql3::raw_value_view, 4>(prepared_options_ptr.for_statement(i).get_values()));
     }
 }
 
@@ -208,19 +233,29 @@ void trace_state::build_parameters_map() {
         // queries CQL command, where X is an index of the parameter in a corresponding query and Y is an index of the
         // corresponding query in the BATCH.
         if (prepared_statements.size() == 1) {
-            build_parameters_map_for_one_prepared(prepared_statements[0], vals.query_option_names[0], vals.query_option_values[0], "param");
+            build_parameters_map_for_one_prepared(_records, prepared_statements[0], vals.query_option_names[0], vals.query_option_values[0], "param");
         } else {
             // BATCH
             for (size_t i = 0; i < prepared_statements.size(); ++i) {
-                build_parameters_map_for_one_prepared(prepared_statements[i], vals.query_option_names[i], vals.query_option_values[i], format("param[{:d}]", i));
+                build_parameters_map_for_one_prepared(_records, prepared_statements[i], vals.query_option_names[i], vals.query_option_values[i], format("param[{:d}]", i));
             }
         }
     }
 }
 
-void trace_state::build_parameters_map_for_one_prepared(const prepared_checked_weak_ptr& prepared_ptr,
-        std::optional<std::vector<sstring_view>>& names_opt,
-        std::vector<cql3::raw_value_view>& values, const sstring& param_name_prefix) {
+/**
+ * Fill the map in a session's record with the parameters' values of a single prepared statement.
+ *
+ * Parameters values will be stored with a key '@ref param_name_prefix[X]' where X is an index of the corresponding
+ * parameter.
+ *
+ * @param param_name_prefix prefix of the parameter key in the map, e.g. "param" or "param[1]"
+ */
+void build_parameters_map_for_one_prepared(
+        const lw_shared_ptr<one_session_records>& _records,
+        const prepared_checked_weak_ptr& prepared_ptr,
+        std::optional<query_names>& names_opt,
+        query_values & values, const sstring& param_name_prefix) {
     auto& params_map = _records->session_rec.parameters;
     size_t i = 0;
 
@@ -307,7 +342,15 @@ void trace_state::stop_foreground_and_write() noexcept {
     }
 }
 
-sstring trace_state::raw_value_to_sstring(const cql3::raw_value_view& v, const data_type& t) {
+/**
+ * Returns the string with the representation of the given raw value.
+ * If the value is NULL or unset the 'null' or 'unset value' strings are returned correspondingly.
+ *
+ * @param v view of the given raw value
+ * @param t type object corresponding to the given raw value.
+ * @return the string with the representation of the given raw value.
+ */
+sstring raw_value_to_sstring(const cql3::raw_value_view& v, const data_type& t) {
     static constexpr int max_val_bytes = 64;
 
     if (v.is_null()) {
@@ -321,7 +364,7 @@ sstring trace_state::raw_value_to_sstring(const cql3::raw_value_view& v, const d
         if (t) {
             str_rep = t->to_string(to_bytes(val));
         } else {
-            trace_state_logger.trace("{}: data types are unavailable - tracing a raw value", session_id());
+            trace_state_logger.trace("data types are unavailable - tracing a raw value");
             str_rep = to_hex(val);
         }
 

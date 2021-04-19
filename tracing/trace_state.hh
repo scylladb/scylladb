@@ -318,16 +318,6 @@ private:
     void set_optional_serial_consistency_level(const std::optional<db::consistency_level>& val);
 
     /**
-     * Returns the string with the representation of the given raw value.
-     * If the value is NULL or unset the 'null' or 'unset value' strings are returned correspondingly.
-     *
-     * @param v view of the given raw value
-     * @param t type object corresponding to the given raw value.
-     * @return the string with the representation of the given raw value.
-     */
-    sstring raw_value_to_sstring(const cql3::raw_value_view& v, const data_type& t);
-
-    /**
      * Stores a page size of a query being traced.
      *
      * This value will eventually be stored in a params<string, string> map of a tracing session
@@ -412,21 +402,6 @@ private:
      * @param prepared_options_ptr parameters of the prepared statement
      */
     void add_prepared_query_options(const cql3::query_options& prepared_options_ptr);
-
-    /**
-     * Fill the map in a session's record with the parameters' values of a single prepared statement.
-     *
-     * Parameters values will be stored with a key '@ref param_name_prefix[X]' where X is an index of the corresponding
-     * parameter.
-     *
-     * @param prepared prepared statement handle
-     * @param names_opt CQL cell names used in the current invocation of the prepared statement
-     * @param values CQL value used in the current invocation of the prepared statement
-     * @param param_name_prefix prefix of the parameter key in the map, e.g. "param" or "param[1]"
-     */
-    void build_parameters_map_for_one_prepared(const prepared_checked_weak_ptr& prepared_ptr,
-            std::optional<std::vector<sstring_view>>& names_opt,
-            std::vector<cql3::raw_value_view>& values, const sstring& param_name_prefix);
 
     /**
      * The actual trace message storing method.
