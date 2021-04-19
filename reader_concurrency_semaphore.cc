@@ -265,10 +265,11 @@ struct permit_group_key_hash {
 
 using permit_groups = std::unordered_map<permit_group_key, permit_stats, permit_group_key_hash>;
 
-static permit_stats do_dump_reader_permit_diagnostics(std::ostream& os, const permit_groups& permits, reader_permit::state state) {
+static permit_stats do_dump_reader_permit_diagnostics(std::ostream& os, const permit_groups& permits) {
     struct permit_summary {
         const schema* s;
         std::string_view op_name;
+        reader_permit::state state;
         uint64_t permits;
         reader_resources resources;
     };
@@ -276,9 +277,7 @@ static permit_stats do_dump_reader_permit_diagnostics(std::ostream& os, const pe
     std::vector<permit_summary> permit_summaries;
     for (const auto& [k, v] : permits) {
         const auto& [s, op_name, k_state] = k;
-        if (k_state == state) {
-            permit_summaries.emplace_back(permit_summary{s, op_name, v.permits, v.resources});
-        }
+        permit_summaries.emplace_back(permit_summary{s, op_name, k_state, v.permits, v.resources});
     }
 
     std::ranges::sort(permit_summaries, [] (const permit_summary& a, const permit_summary& b) {
@@ -291,15 +290,15 @@ static permit_stats do_dump_reader_permit_diagnostics(std::ostream& os, const pe
         fmt::print(os, "{}\t{}\t{}\t{}\n", col1, col2, col3, col4);
     };
 
-    fmt::print(os, "Permits with state {}\n", state);
-    print_line("permits", "count", "memory", "name");
+    print_line("permits", "count", "memory", "table/description/state");
     for (const auto& summary : permit_summaries) {
         total.permits += summary.permits;
         total.resources += summary.resources;
-        print_line(summary.permits, summary.resources.count, utils::to_hr_size(summary.resources.memory), fmt::format("{}.{}:{}",
+        print_line(summary.permits, summary.resources.count, utils::to_hr_size(summary.resources.memory), fmt::format("{}.{}/{}/{}",
                     summary.s ? summary.s->ks_name() : "*",
                     summary.s ? summary.s->cf_name() : "*",
-                    summary.op_name));
+                    summary.op_name,
+                    summary.state));
     }
     fmt::print(os, "\n");
     print_line(total.permits, total.resources.count, utils::to_hr_size(total.resources.memory), "total");
@@ -317,11 +316,7 @@ static void do_dump_reader_permit_diagnostics(std::ostream& os, const reader_con
     permit_stats total;
 
     fmt::print(os, "Semaphore {}: {}, dumping permit diagnostics:\n", semaphore.name(), problem);
-    total += do_dump_reader_permit_diagnostics(os, permits, reader_permit::state::active);
-    fmt::print(os, "\n");
-    total += do_dump_reader_permit_diagnostics(os, permits, reader_permit::state::inactive);
-    fmt::print(os, "\n");
-    total += do_dump_reader_permit_diagnostics(os, permits, reader_permit::state::waiting);
+    total += do_dump_reader_permit_diagnostics(os, permits);
     fmt::print(os, "\n");
     fmt::print(os, "Total: {} permits with {} count and {} memory resources\n", total.permits, total.resources.count, utils::to_hr_size(total.resources.memory));
 }
