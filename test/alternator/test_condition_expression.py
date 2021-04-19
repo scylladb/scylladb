@@ -196,6 +196,38 @@ def test_update_condition_eq_set(test_table_s):
         ExpressionAttributeValues={':val1': 3, ':oldval': set(['chinchilla', 'cat', 'dog', 'mouse'])})
     assert 'b' in test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']
 
+# The above test (test_update_condition_eq_set()) checked equality of simple
+# set attributes. But an attributes can contain a nested document, where the
+# set sits in a deep level (the set itself is a leaf in this heirarchy because
+# it can only contain numbers, strings or bytes). We need to correctly support
+# equality check in that case too.
+# Reproduces issue #8514.
+def test_update_condition_eq_nested_set(test_table_s):
+    p = random_string()
+    # Because boto3 sorts the set values we give it, in order to generate a
+    # set with a different order, we need to build it incrementally.
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'a': {'Value': {'b': 'c', 'd': ['e', 'f', set(['g', 'h'])], 'i': set(['j', 'k'])}, 'Action': 'PUT'}})
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='ADD a.d[2] :val1, a.i :val2',
+        ExpressionAttributeValues={':val1': set(['l', 'm']), ':val2': set(['n', 'o'])})
+    # Sanity check - the attribute contains the set we think it does
+    expected = {'b': 'c', 'd': ['e', 'f', set(['g', 'h', 'l', 'm'])], 'i': set(['j', 'k', 'n', 'o'])}
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['a'] == expected
+    # Now finally check that condition expression check knows the equality too.
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET b = :val1',
+        ConditionExpression='a = :oldval',
+        ExpressionAttributeValues={':val1': 3, ':oldval': expected})
+    assert 'b' in test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']
+    # Check that equality can also fail, if the inner set differs
+    wrong = {'b': 'c', 'd': ['e', 'f', set(['g', 'h', 'l', 'bad'])], 'i': set(['j', 'k', 'n', 'o'])}
+    with pytest.raises(ClientError, match='ConditionalCheckFailedException'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET b = :val1',
+            ConditionExpression='a = :oldval',
+            ExpressionAttributeValues={':val1': 4, ':oldval': wrong})
+
 # Test for ConditionExpression with operator "<>" (non-equality),
 def test_update_condition_ne(test_table_s):
     p = random_string()
