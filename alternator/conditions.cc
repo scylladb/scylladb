@@ -155,7 +155,7 @@ static bool check_EQ(const rjson::value* v1, const rjson::value& v2) {
 
 // Check if two JSON-encoded values match with the NE relation
 static bool check_NE(const rjson::value* v1, const rjson::value& v2) {
-    return !v1 || v1->IsNull() || *v1 != v2; // null is unequal to anything.
+    return !check_EQ(v1, v2);
 }
 
 // Check if two JSON-encoded values match with the BEGINS_WITH relation
