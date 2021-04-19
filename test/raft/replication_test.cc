@@ -506,6 +506,27 @@ future<size_t> elect_new_leader(std::vector<std::pair<std::unique_ptr<raft::serv
     co_return new_leader;
 }
 
+// Run a free election of nodes in configuration
+// NOTE: there should be enough nodes capable of participating
+future<size_t> free_election(std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>& rafts) {
+    tlogger.debug("Running free election");
+    elapse_elections(rafts);
+    size_t node = 0;
+    for (;;) {
+        for (auto& r: rafts) {
+            r.first->tick();
+        }
+        co_await seastar::sleep(10us);   // Wait for election rpc exchanges
+        // find if we have a leader
+        for (size_t s = 0; s < rafts.size(); ++s) {
+            if (rafts[s].first->is_leader()) {
+                tlogger.debug("New leader {}", s);
+                co_return s;
+            }
+        }
+    }
+}
+
 void pause_tickers(std::vector<seastar::timer<lowres_clock>>& tickers) {
     for (auto& ticker: tickers) {
         ticker.cancel();
@@ -630,23 +651,7 @@ future<> run_test(test_case test, bool packet_drops) {
                 leader = co_await elect_new_leader(rafts, connected, leader, new_leader.id);
             } else if (partition_servers.find(leader) == partition_servers.end() && p.size() > 0) {
                 // Old leader disconnected and not specified new, free election
-                for (size_t s = 0; s < test.nodes; ++s) {
-                    rafts[s].first->elapse_election();
-                }
-                for (bool have_leader = false; !have_leader; ) {
-                    for (auto s: partition_servers) {
-                        rafts[s].first->tick();
-                    }
-                    co_await later();                 // yield
-                    for (auto s: partition_servers) {
-                        if (rafts[s].first->is_leader()) {
-                            have_leader = true;
-                            leader = s;
-                            break;
-                        }
-                    }
-                }
-                tlogger.debug("confirmed new leader on {}", leader);
+                leader = co_await free_election(rafts);
             }
             restart_tickers(tickers);
         }
