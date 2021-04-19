@@ -1244,6 +1244,130 @@ future<> with_env_and_ticker(noncopyable_function<future<>(environment<M>&, tick
     });
 }
 
-SEASTAR_TEST_CASE(dummy_test) {
-    return seastar::make_ready_future<>();
+struct ExReg {
+    // Replaces the state with `x` and returns the previous state.
+    struct exchange { int32_t x; };
+
+    // Returns the state.
+    struct read {};
+
+    // Return value for `exchange` or `read`.
+    struct ret { int32_t x; };
+
+    using state_t = int32_t;
+    using input_t = std::variant<read, exchange>;
+    using output_t = ret;
+
+    static std::pair<state_t, output_t> delta(state_t curr, input_t input) {
+        using res_t = std::pair<state_t, output_t>;
+
+        return std::visit(make_visitor(
+        [&curr] (const exchange& w) -> res_t {
+            return {w.x, ret{curr}};
+        },
+        [&curr] (const read&) -> res_t {
+            return {curr, ret{curr}};
+        }
+        ), input);
+    }
+
+    static const state_t init = 0;
+};
+
+namespace ser {
+    template <>
+    struct serializer<ExReg::exchange> {
+        template <typename Output>
+        static void write(Output& buf, const ExReg::exchange& op) { serializer<int32_t>::write(buf, op.x); };
+
+        template <typename Input>
+        static ExReg::exchange read(Input& buf) { return { serializer<int32_t>::read(buf) }; }
+
+        template <typename Input>
+        static void skip(Input& buf) { serializer<int32_t>::skip(buf); }
+    };
+
+    template <>
+    struct serializer<ExReg::read> {
+        template <typename Output>
+        static void write(Output& buf, const ExReg::read&) {};
+
+        template <typename Input>
+        static ExReg::read read(Input& buf) { return {}; }
+
+        template <typename Input>
+        static void skip(Input& buf) {}
+    };
+}
+
+bool operator==(ExReg::ret a, ExReg::ret b) { return a.x == b.x; }
+
+SEASTAR_TEST_CASE(basic_test) {
+    logical_timer timer;
+    co_await with_env_and_ticker<ExReg>([&timer] (environment<ExReg>& env, ticker& t) -> future<> {
+        using output_t = typename ExReg::output_t;
+
+        t.start([&] {
+            env.tick();
+            timer.tick();
+        }, 10'000);
+
+        auto leader_id = co_await env.new_server(true);
+
+        // Wait at most 100 ticks for the server to elect itself as a leader.
+        co_await timer.with_timeout(timer.now() + 100_t, ([&] () -> future<> {
+            while (true) {
+                if (env.get_server(leader_id).is_leader()) {
+                    co_return;
+                }
+                co_await seastar::later();
+            }
+        })());
+
+        assert(env.get_server(leader_id).is_leader());
+
+        auto call = [&] (ExReg::input_t input, raft::logical_clock::duration timeout) {
+            return env.get_server(leader_id).call(std::move(input),  timer.now() + timeout, timer);
+        };
+
+        auto eq = [] (const call_result_t<ExReg>& r, const output_t& expected) {
+            return std::holds_alternative<output_t>(r) && std::get<output_t>(r) == expected;
+        };
+
+        for (int i = 1; i <= 100; ++i) {
+            assert(eq(co_await call(ExReg::exchange{i}, 100_t), ExReg::ret{i - 1}));
+        }
+
+        tlogger.debug("100 exchanges - single server - passed");
+
+        auto id2 = co_await env.new_server(false);
+        auto id3 = co_await env.new_server(false);
+
+        tlogger.debug("Started 2 more servers, changing configuration");
+
+        co_await env.get_server(leader_id).set_configuration({{.id = leader_id}, {.id = id2}, {.id = id3}});
+
+        tlogger.debug("Configuration changed");
+
+        co_await call(ExReg::exchange{0}, 100_t);
+        for (int i = 1; i <= 100; ++i) {
+            assert(eq(co_await call(ExReg::exchange{i}, 100_t), ExReg::ret{i - 1}));
+        }
+
+        tlogger.debug("100 exchanges - three servers - passed");
+
+        // concurrent calls
+        std::vector<future<call_result_t<ExReg>>> futs;
+        for (int i = 0; i < 100; ++i) {
+            futs.push_back(call(ExReg::read{}, 100_t));
+            co_await timer.sleep(2_t);
+        }
+        for (int i = 0; i < 100; ++i) {
+            assert(eq(co_await std::move(futs[i]), ExReg::ret{100}));
+        }
+
+        tlogger.debug("100 concurrent reads - three servers - passed");
+    });
+
+    tlogger.debug("Finished");
 }
