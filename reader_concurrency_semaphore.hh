@@ -311,5 +311,9 @@ public:
 
     void broken(std::exception_ptr ex = {});
 
-    std::string dump_diagnostics() const;
+    /// Dump diagnostics printout
+    ///
+    /// Use max-lines to cap the number of (permit) lines in the report.
+    /// Use 0 for unlimited.
+    std::string dump_diagnostics(unsigned max_lines = 0) const;
 };
