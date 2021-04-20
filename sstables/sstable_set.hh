@@ -180,4 +180,9 @@ std::ostream& operator<<(std::ostream& os, const sstables::sstable_run& run);
 
 using offstrategy = bool_class<class offstrategy_tag>;
 
+/// Return the amount of overlapping in a set of sstables. 0 is returned if set is disjoint.
+///
+/// The 'sstables' parameter must be a set of sstables sorted by first key.
+unsigned sstable_set_overlapping_count(const schema_ptr& schema, const std::vector<shared_sstable>& sstables);
+
 }
