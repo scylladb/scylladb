@@ -35,6 +35,7 @@
 #include <seastar/core/byteorder.hh>
 #include <seastar/core/aligned_buffer.hh>
 #include <iterator>
+#include <seastar/core/coroutine.hh>
 
 #include "dht/sharder.hh"
 #include "types.hh"
@@ -2649,11 +2650,19 @@ delete_sstables(std::vector<sstring> tocs) {
 }
 
 future<>
-sstable::unlink()
-{
-    auto name = toc_filename();
+sstable::unlink() noexcept {
+    // We must be able to generate toc_filename()
+    // in order to delete the sstable.
+    // Running out of memory here will terminate.
+    auto name = [this] () noexcept {
+        memory::scoped_critical_alloc_section _;
+        return toc_filename();
+    }();
+
+    // remove_by_toc_name doesn't throw
     auto fut = remove_by_toc_name(name);
-    auto remove_fut = fut.then_wrapped([name = std::move(name)] (future<> f) {
+    // remove_fut never fails
+    auto remove_fut = fut.then_wrapped([&name] (future<> f) {
         if (f.failed()) {
             // Log and ignore the failure since there is nothing much we can do about it at this point.
             // a. Compaction will retry deleting the sstable in the next pass, and
@@ -2665,18 +2674,15 @@ sstable::unlink()
         return make_ready_future<>();
     });
 
-    name = get_filename();
-    fut = get_large_data_handler().maybe_delete_large_data_entries(shared_from_this());
-    auto update_large_data_fut = fut.then_wrapped([name = std::move(name)] (future<> f) {
-        if (f.failed()) {
-            // Just log and ignore failures to delete large data entries.
-            // They are not critical to the operation of the database.
-            sstlog.warn("Failed to delete large data entry for {}: {}. Ignoring.", name, f.get_exception());
-        }
-        return make_ready_future<>();
-    });
+    try {
+        co_await get_large_data_handler().maybe_delete_large_data_entries(shared_from_this());
+    } catch (...) {
+        // Just log and ignore failures to delete large data entries.
+        // They are not critical to the operation of the database.
+        sstlog.warn("Failed to delete large data entry for {}: {}. Ignoring.", name, std::current_exception());
+    }
 
-    return when_all(std::move(remove_fut), std::move(update_large_data_fut)).discard_result();
+    co_await std::move(remove_fut);
 }
 
 future<>

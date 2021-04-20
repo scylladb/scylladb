@@ -380,7 +380,8 @@ public:
     }
 
     // Delete the sstable by unlinking all sstable files
-    future<> unlink();
+    // Ignores all errors.
+    future<> unlink() noexcept;
 
     db::large_data_handler& get_large_data_handler() {
         return _large_data_handler;
