@@ -26,6 +26,7 @@
 #include "dht/i_partitioner.hh"
 #include "schema.hh"
 #include "sstables/index_reader.hh"
+#include "reader_permit.hh"
 
 class index_reader_assertions {
     std::unique_ptr<sstables::index_reader> _r;

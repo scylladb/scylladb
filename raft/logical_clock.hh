@@ -21,6 +21,7 @@
 #pragma once
 
 #include <chrono>
+#include <ostream>
 
 namespace raft {
 

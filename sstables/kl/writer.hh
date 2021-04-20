@@ -20,6 +20,7 @@
  */
 
 #include "sstables/writer_impl.hh"
+#include "sstables/writer.hh"
 
 namespace sstables {
 
