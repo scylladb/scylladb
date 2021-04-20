@@ -449,7 +449,15 @@ struct leader {
 };
 using partition = std::vector<std::variant<leader,int>>;
 
-using set_config = std::vector<size_t>;
+struct set_config_entry {
+    size_t node_idx;
+    bool can_vote;
+
+    set_config_entry(size_t idx, bool can_vote = true)
+        : node_idx(idx), can_vote(can_vote)
+    {}
+};
+using set_config = std::vector<set_config_entry>;
 
 struct tick {
     uint64_t ticks;
@@ -568,10 +576,12 @@ future<std::unordered_set<size_t>> change_configuration(std::vector<std::pair<st
     raft::server_address_set set;
     std::unordered_set<size_t> new_config;
     for (auto s: sc) {
-        new_config.insert(s);
-        set.insert(to_server_address(s));
-        BOOST_CHECK_MESSAGE(s < rafts.size(),
-                format("Configuration element {} past node limit {}", s, rafts.size() - 1));
+        new_config.insert(s.node_idx);
+        auto addr = to_server_address(s.node_idx);
+        addr.can_vote = s.can_vote;
+        set.insert(std::move(addr));
+        BOOST_CHECK_MESSAGE(s.node_idx < rafts.size(),
+                format("Configuration element {} past node limit {}", s.node_idx, rafts.size() - 1));
     }
     BOOST_CHECK_MESSAGE(new_config.contains(leader) || sc.size() < (rafts.size()/2 + 1),
             "New configuration without old leader and below quorum size (no election)");
