@@ -157,7 +157,7 @@ protected:
     template<typename Base>
     class query_result_visitor;
     
-    future<service::storage_proxy::coordinator_query_result>
+    future<service::storage_proxy_coordinator_query_result>
     do_fetch_page(uint32_t page_size, gc_clock::time_point now, db::timeout_clock::time_point timeout);
 
     template<typename Visitor>

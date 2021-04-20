@@ -151,6 +151,20 @@ public:
             const query::partition_slice& slice, api::timestamp_type ts) = 0;
 };
 
+struct storage_proxy_coordinator_query_result {
+    foreign_ptr<lw_shared_ptr<query::result>> query_result;
+    replicas_per_token_range last_replicas;
+    db::read_repair_decision read_repair_decision;
+
+    storage_proxy_coordinator_query_result(foreign_ptr<lw_shared_ptr<query::result>> query_result,
+            replicas_per_token_range last_replicas = {},
+            db::read_repair_decision read_repair_decision = db::read_repair_decision::NONE)
+        : query_result(std::move(query_result))
+        , last_replicas(std::move(last_replicas))
+        , read_repair_decision(std::move(read_repair_decision)) {
+    }
+};
+
 class storage_proxy : public seastar::async_sharded_service<storage_proxy>, public peering_sharded_service<storage_proxy>, public service::endpoint_lifecycle_subscriber  {
 public:
     enum class error : uint8_t {
@@ -224,19 +238,8 @@ public:
         }
     };
 
-    struct coordinator_query_result {
-        foreign_ptr<lw_shared_ptr<query::result>> query_result;
-        replicas_per_token_range last_replicas;
-        db::read_repair_decision read_repair_decision;
+    using coordinator_query_result = storage_proxy_coordinator_query_result;
 
-        coordinator_query_result(foreign_ptr<lw_shared_ptr<query::result>> query_result,
-                replicas_per_token_range last_replicas = {},
-                db::read_repair_decision read_repair_decision = db::read_repair_decision::NONE)
-            : query_result(std::move(query_result))
-            , last_replicas(std::move(last_replicas))
-            , read_repair_decision(std::move(read_repair_decision)) {
-        }
-    };
     // Holds  a list of endpoints participating in CAS request, for a given
     // consistency level, token, and state of joining/leaving nodes.
     struct paxos_participants {
