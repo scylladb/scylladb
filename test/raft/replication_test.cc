@@ -365,7 +365,12 @@ public:
 
 std::unordered_map<raft::server_id, rpc*> rpc::net;
 
-std::pair<std::unique_ptr<raft::server>, state_machine*>
+struct test_server {
+    std::unique_ptr<raft::server> server;
+    state_machine* sm;
+};
+
+test_server
 create_raft_server(raft::server_id uuid, state_machine::apply_fn apply, initial_state state,
         size_t apply_entries, lw_shared_ptr<connected> connected, lw_shared_ptr<snapshots> snapshots,
         lw_shared_ptr<persisted_snapshots> persisted_snapshots, bool packet_drops) {
@@ -379,14 +384,17 @@ create_raft_server(raft::server_id uuid, state_machine::apply_fn apply, initial_
     auto raft = raft::create_server(uuid, std::move(mrpc), std::move(sm), std::move(mpersistence),
         std::move(fd), state.server_config);
 
-    return std::make_pair(std::move(raft), &rsm);
+    return {
+        std::move(raft),
+        &rsm
+    };
 }
 
-future<std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>> create_cluster(std::vector<initial_state> states, state_machine::apply_fn apply, size_t apply_entries,
+future<std::vector<test_server>> create_cluster(std::vector<initial_state> states, state_machine::apply_fn apply, size_t apply_entries,
         lw_shared_ptr<connected> connected, lw_shared_ptr<snapshots> snapshots,
         lw_shared_ptr<persisted_snapshots> persisted_snapshots, bool packet_drops) {
     raft::configuration config;
-    std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>> rafts;
+    std::vector<test_server> rafts;
 
     for (size_t i = 0; i < states.size(); i++) {
         states[i].address = raft::server_address{to_raft_id(i)};
@@ -398,7 +406,7 @@ future<std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>> cr
         states[i].snapshot.config = config;
         (*snapshots)[s.id] = states[i].snp_value;
         auto& raft = *rafts.emplace_back(create_raft_server(s.id, apply, states[i], apply_entries,
-                    connected, snapshots, persisted_snapshots, packet_drops)).first;
+                    connected, snapshots, persisted_snapshots, packet_drops)).server;
         co_await raft.start();
     }
 
@@ -484,26 +492,26 @@ struct test_case {
     const std::vector<update> updates;
 };
 
-future<> wait_log(std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>& rafts,
+future<> wait_log(std::vector<test_server>& rafts,
         lw_shared_ptr<connected> connected, std::unordered_set<size_t>& in_configuration,
         size_t leader) {
     // Wait for leader log to propagate
-    auto leader_log_idx = rafts[leader].first->log_last_idx();
+    auto leader_log_idx = rafts[leader].server->log_last_idx();
     for (size_t s = 0; s < rafts.size(); ++s) {
         if (s != leader && (*connected)(to_raft_id(s), to_raft_id(leader)) &&
                 in_configuration.contains(s)) {
-            co_await rafts[s].first->wait_log_idx(leader_log_idx);
+            co_await rafts[s].server->wait_log_idx(leader_log_idx);
         }
     }
 }
 
-void elapse_elections(std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>& rafts) {
+void elapse_elections(std::vector<test_server>& rafts) {
     for (size_t s = 0; s < rafts.size(); ++s) {
-        rafts[s].first->elapse_election();
+        rafts[s].server->elapse_election();
     }
 }
 
-future<size_t> elect_new_leader(std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>& rafts,
+future<size_t> elect_new_leader(std::vector<test_server>& rafts,
         lw_shared_ptr<connected> connected, std::unordered_set<size_t>& in_configuration,
         size_t leader, size_t new_leader) {
     BOOST_CHECK_MESSAGE(new_leader < rafts.size(),
@@ -519,15 +527,15 @@ future<size_t> elect_new_leader(std::vector<std::pair<std::unique_ptr<raft::serv
             elapse_elections(rafts);
             // Consume leader output messages since a stray append might make new leader step down
             co_await later();                 // yield
-            rafts[new_leader].first->wait_until_candidate();
+            rafts[new_leader].server->wait_until_candidate();
             // Re-connect old leader
             connected->connect(to_raft_id(leader));
             // Disconnect old leader from all nodes except new leader
             connected->disconnect(to_raft_id(leader), to_raft_id(new_leader));
-            co_await rafts[new_leader].first->wait_election_done();
+            co_await rafts[new_leader].server->wait_election_done();
             // Restore connections to the original setting
             *connected = prev_disconnected;
-        } while (!rafts[new_leader].first->is_leader());
+        } while (!rafts[new_leader].server->is_leader());
         tlogger.debug("confirmed leader on {}", to_raft_id(new_leader));
     }
     co_return new_leader;
@@ -535,18 +543,18 @@ future<size_t> elect_new_leader(std::vector<std::pair<std::unique_ptr<raft::serv
 
 // Run a free election of nodes in configuration
 // NOTE: there should be enough nodes capable of participating
-future<size_t> free_election(std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>& rafts) {
+future<size_t> free_election(std::vector<test_server>& rafts) {
     tlogger.debug("Running free election");
     elapse_elections(rafts);
     size_t node = 0;
     for (;;) {
         for (auto& r: rafts) {
-            r.first->tick();
+            r.server->tick();
         }
         co_await seastar::sleep(10us);   // Wait for election rpc exchanges
         // find if we have a leader
         for (size_t s = 0; s < rafts.size(); ++s) {
-            if (rafts[s].first->is_leader()) {
+            if (rafts[s].server->is_leader()) {
                 tlogger.debug("New leader {}", s);
                 co_return s;
             }
@@ -566,7 +574,7 @@ void restart_tickers(std::vector<seastar::timer<lowres_clock>>& tickers) {
     }
 }
 
-future<std::unordered_set<size_t>> change_configuration(std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>& rafts,
+future<std::unordered_set<size_t>> change_configuration(std::vector<test_server>& rafts,
         size_t total_values, lw_shared_ptr<connected> connected,
         std::unordered_set<size_t>& in_configuration, lw_shared_ptr<snapshots> snapshots,
         lw_shared_ptr<persisted_snapshots> persisted_snapshots, bool packet_drops, set_config sc,
@@ -586,7 +594,7 @@ future<std::unordered_set<size_t>> change_configuration(std::vector<std::pair<st
     BOOST_CHECK_MESSAGE(new_config.contains(leader) || sc.size() < (rafts.size()/2 + 1),
             "New configuration without old leader and below quorum size (no election)");
     tlogger.debug("Changing configuration on leader {}", leader);
-    co_await rafts[leader].first->set_configuration(std::move(set));
+    co_await rafts[leader].server->set_configuration(std::move(set));
 
     if (!new_config.contains(leader)) {
         leader = co_await free_election(rafts);
@@ -595,7 +603,7 @@ future<std::unordered_set<size_t>> change_configuration(std::vector<std::pair<st
     // Now we know joint configuration was applied
     // Add a dummy entry to confirm new configuration was committed
     try {
-        co_await rafts[leader].first->add_entry(create_command(dummy_command),
+        co_await rafts[leader].server->add_entry(create_command(dummy_command),
                 raft::wait_type::committed);
     } catch (raft::not_a_leader& e) {
         // leader stepped down, implying config fully changed
@@ -606,11 +614,11 @@ future<std::unordered_set<size_t>> change_configuration(std::vector<std::pair<st
     for (auto s: in_configuration) {
         if (!new_config.contains(s)) {
             tickers[s].cancel();
-            co_await rafts[s].first->abort();
+            co_await rafts[s].server->abort();
             rafts[s] = create_raft_server(to_raft_id(s), apply_changes, initial_state{.log = {}},
                     total_values, connected, snapshots, persisted_snapshots, packet_drops);
-            co_await rafts[s].first->start();
-            tickers[s].set_callback([&rafts, s] { rafts[s].first->tick(); });
+            co_await rafts[s].server->start();
+            tickers[s].set_callback([&rafts, s] { rafts[s].server->tick(); });
         }
     }
     restart_tickers(tickers); // start all tickers
@@ -619,12 +627,12 @@ future<std::unordered_set<size_t>> change_configuration(std::vector<std::pair<st
 }
 
 // Add consecutive integer entries to a leader
-future<> add_entries(std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>& rafts,
+future<> add_entries(std::vector<test_server>& rafts,
         size_t start, size_t end, size_t& leader) {
     size_t value = start;
     for (size_t value = start; value != end;) {
         try {
-            co_await rafts[leader].first->add_entry(create_command(value), raft::wait_type::committed);
+            co_await rafts[leader].server->add_entry(create_command(value), raft::wait_type::committed);
             value++;
         } catch (raft::not_a_leader& e) {
             // leader stepped down, update with new leader if present
@@ -689,7 +697,7 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
     for (size_t s = 0; s < test.nodes; ++s) {
         tickers[s].arm_periodic(tick_delta);
         tickers[s].set_callback([&rafts, s] {
-            rafts[s].first->tick();
+            rafts[s].server->tick();
         });
     }
 
@@ -700,8 +708,8 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
     }
 
     BOOST_TEST_MESSAGE("Electing first leader " << leader);
-    rafts[leader].first->wait_until_candidate();
-    co_await rafts[leader].first->wait_election_done();
+    rafts[leader].server->wait_until_candidate();
+    co_await rafts[leader].server->wait_election_done();
     BOOST_TEST_MESSAGE("Processing updates");
     // Process all updates in order
     size_t next_val = leader_snap_skipped + leader_initial_entries;
@@ -715,8 +723,8 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
             co_await wait_log(rafts, connected, in_configuration, leader);
         } else if (std::holds_alternative<new_leader>(update)) {
             unsigned next_leader = std::get<new_leader>(update);
-            auto leader_log_idx = rafts[leader].first->log_last_idx();
-            co_await rafts[next_leader].first->wait_log_idx(leader_log_idx);
+            auto leader_log_idx = rafts[leader].server->log_last_idx();
+            co_await rafts[next_leader].server->wait_log_idx(leader_log_idx);
             pause_tickers(tickers);
             leader = co_await elect_new_leader(rafts, connected, in_configuration, leader,
                     next_leader);
@@ -764,7 +772,7 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
             auto t = std::get<tick>(update);
             for (uint64_t i = 0; i < t.ticks; i++) {
                 for (auto& r: rafts) {
-                    r.first->tick();
+                    r.server->tick();
                 }
                 co_await later();
             }
@@ -790,17 +798,17 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
 
     // Wait for all state_machine s to finish processing commands
     for (auto& r:  rafts) {
-        co_await r.second->done();
+        co_await r.sm->done();
     }
 
     for (auto& r: rafts) {
-        co_await r.first->abort(); // Stop servers
+        co_await r.server->abort(); // Stop servers
     }
 
     BOOST_TEST_MESSAGE("Verifying hashes match expected (snapshot and apply calls)");
     auto expected = hasher_int::hash_range(test.total_values).finalize_uint64();
     for (size_t i = 0; i < rafts.size(); ++i) {
-        auto digest = rafts[i].second->hasher->finalize_uint64();
+        auto digest = rafts[i].sm->hasher->finalize_uint64();
         BOOST_CHECK_MESSAGE(digest == expected,
                 format("Digest doesn't match for server [{}]: {} != {}", i, digest, expected));
     }
