@@ -136,16 +136,6 @@ sstring to_string(const event::schema_change::target_type t) {
     assert(false && "unreachable");
 }
 
-static bool is_broken_pipe_or_connection_reset(std::exception_ptr ep) {
-    try {
-        std::rethrow_exception(ep);
-    } catch (const std::system_error& e) {
-        return e.code().category() == std::system_category()
-            && (e.code().value() == EPIPE || e.code().value() == ECONNRESET);
-    } catch (...) {}
-    return false;
-}
-
 event::event_type parse_event_type(const sstring& value)
 {
     if (value == "TOPOLOGY_CHANGE") {
@@ -161,7 +151,8 @@ event::event_type parse_event_type(const sstring& value)
 
 cql_server::cql_server(distributed<cql3::query_processor>& qp, auth::service& auth_service,
         service::migration_notifier& mn, database& db, service::memory_limiter& ml, cql_server_config config, qos::service_level_controller& sl_controller)
-    : _query_processor(qp)
+    : server("CQLServer", clogger)
+    , _query_processor(qp)
     , _config(config)
     , _max_request_size(config.max_request_size)
     , _max_concurrent_requests(db.get_config().max_concurrent_requests_per_shard)
@@ -246,121 +237,38 @@ cql_server::cql_server(distributed<cql3::query_processor>& qp, auth::service& au
     _metrics.add_group("transport", std::move(transport_metrics));
 }
 
-future<> cql_server::stop() {
-    _stopping = true;
-    size_t nr = 0;
-    size_t nr_total = _listeners.size();
-    clogger.debug("cql_server: abort accept nr_total={}", nr_total);
-    for (auto&& l : _listeners) {
-        l.abort_accept();
-        clogger.debug("cql_server: abort accept {} out of {} done", ++nr, nr_total);
+future<> cql_server::on_stop() {
+    return _notifier->stop();
+}
+
+shared_ptr<generic_server::connection>
+cql_server::make_connection(socket_address server_addr, connected_socket&& fd, socket_address addr) {
+    auto conn = make_shared<connection>(*this, server_addr, std::move(fd), std::move(addr));
+    ++_stats.connects;
+    ++_stats.connections;
+    return conn;
+}
+
+future<>
+cql_server::advertise_new_connection(shared_ptr<generic_server::connection> raw_conn) {
+    if (auto conn = dynamic_pointer_cast<connection>(raw_conn)) {
+        client_data cd = conn->make_client_data();
+        clogger.trace("Advertising new connection from CQL client {}:{}", cd.ip, cd.port);
+        return notify_new_client(std::move(cd));
     }
-    auto nr_conn = make_lw_shared<size_t>(0);
-    auto nr_conn_total = _connections_list.size();
-    clogger.debug("cql_server: shutdown connection nr_total={}", nr_conn_total);
-    return parallel_for_each(_connections_list.begin(), _connections_list.end(), [nr_conn, nr_conn_total] (auto&& c) {
-        return c.shutdown().then([nr_conn, nr_conn_total] {
-            clogger.debug("cql_server: shutdown connection {} out of {} done", ++(*nr_conn), nr_conn_total);
-        });
-    }).then([this] {
-        return _notifier->stop();
-    }).then([this] {
-        return std::move(_stopped);
-    });
+    return make_ready_future<>();
 }
 
 future<>
-cql_server::listen(socket_address addr, std::shared_ptr<seastar::tls::credentials_builder> creds, bool is_shard_aware, bool keepalive) {
-    auto f = make_ready_future<shared_ptr<seastar::tls::server_credentials>>(nullptr);
-    if (creds) {
-        f = creds->build_reloadable_server_credentials([](const std::unordered_set<sstring>& files, std::exception_ptr ep) {
-            if (ep) {
-                clogger.warn("Exception loading {}: {}", files, ep);
-            } else {
-                clogger.info("Reloaded {}", files);
-            }
-        });
+cql_server::unadvertise_connection(shared_ptr<generic_server::connection> raw_conn) {
+    --_stats.connections;
+    if (auto conn = dynamic_pointer_cast<connection>(raw_conn)) {
+        const auto ip = conn->get_client_state().get_client_address().addr();
+        const auto port = conn->get_client_state().get_client_port();
+        clogger.trace("Advertising disconnection of CQL client {}:{}", ip, port);
+        return notify_disconnected_client(ip, port, client_type::cql);
     }
-    return f.then([this, addr, is_shard_aware, keepalive](shared_ptr<seastar::tls::server_credentials> creds) {
-        listen_options lo;
-        lo.reuse_address = true;
-        if (is_shard_aware) {
-            lo.lba = server_socket::load_balancing_algorithm::port;
-        }
-        server_socket ss;
-        try {
-            ss = creds
-                ? seastar::tls::listen(std::move(creds), addr, lo)
-                : seastar::listen(addr, lo);
-        } catch (...) {
-            throw std::runtime_error(format("CQLServer error while listening on {} -> {}", addr, std::current_exception()));
-        }
-        _listeners.emplace_back(std::move(ss));
-        _stopped = when_all(std::move(_stopped), do_accepts(_listeners.size() - 1, keepalive, addr)).discard_result();
-    });
-}
-
-future<>
-cql_server::do_accepts(int which, bool keepalive, socket_address server_addr) {
-    return repeat([this, which, keepalive, server_addr] {
-        ++_connections_being_accepted;
-        return _listeners[which].accept().then_wrapped([this, which, keepalive, server_addr] (future<accept_result> f_cs_sa) mutable {
-            --_connections_being_accepted;
-            if (_stopping) {
-                f_cs_sa.ignore_ready_future();
-                maybe_idle();
-                return stop_iteration::yes;
-            }
-            auto cs_sa = f_cs_sa.get0();
-            auto fd = std::move(cs_sa.connection);
-            auto addr = std::move(cs_sa.remote_address);
-            fd.set_nodelay(true);
-            fd.set_keepalive(keepalive);
-            auto conn = make_shared<connection>(*this, server_addr, std::move(fd), std::move(addr));
-            ++_stats.connects;
-            ++_stats.connections;
-            // Move the processing into the background.
-            (void)futurize_invoke([this, conn] {
-                return advertise_new_connection(conn); // Notify any listeners about new connection.
-            }).then_wrapped([this, conn] (future<> f) {
-                try {
-                    f.get();
-                } catch (...) {
-                    clogger.info("exception while advertising new connection: {}", std::current_exception());
-                }
-                // Block while monitoring for lifetime/errors.
-                return conn->process().finally([this, conn] {
-                    --_stats.connections;
-                    return unadvertise_connection(conn);
-                }).handle_exception([] (std::exception_ptr ep) {
-                    if (is_broken_pipe_or_connection_reset(ep)) {
-                        // expected if another side closes a connection or we're shutting down
-                        return;
-                    }
-                    clogger.info("exception while processing connection: {}", ep);
-                });
-            });
-            return stop_iteration::no;
-        }).handle_exception([] (auto ep) {
-            clogger.debug("accept failed: {}", ep);
-            return stop_iteration::no;
-        });
-    });
-}
-
-future<>
-cql_server::advertise_new_connection(shared_ptr<connection> conn) {
-    client_data cd = conn->make_client_data();
-    clogger.trace("Advertising new connection from CQL client {}:{}", cd.ip, cd.port);
-    return notify_new_client(std::move(cd));
-}
-
-future<>
-cql_server::unadvertise_connection(shared_ptr<connection> conn) {
-    const auto ip = conn->get_client_state().get_client_address().addr();
-    const auto port = conn->get_client_state().get_client_port();
-    clogger.trace("Advertising disconnection of CQL client {}:{}", ip, port);
-    return notify_disconnected_client(ip, port, client_type::cql);
+    return make_ready_future<>();
 }
 
 unsigned
@@ -606,69 +514,19 @@ future<foreign_ptr<std::unique_ptr<cql_server::response>>>
 }
 
 cql_server::connection::connection(cql_server& server, socket_address server_addr, connected_socket&& fd, socket_address addr)
-    : _server(server)
+    : generic_server::connection{server, std::move(fd)}
+    , _server(server)
     , _server_addr(server_addr)
-    , _fd(std::move(fd))
-    , _read_buf(_fd.input())
-    , _write_buf(_fd.output())
     , _client_state(service::client_state::external_tag{}, server._auth_service, server.timeout_config(), addr)
 {
-    ++_server._total_connections;
-    ++_server._current_connections;
-    _server._connections_list.push_back(*this);
 }
 
 cql_server::connection::~connection() {
-    --_server._current_connections;
-    _server._connections_list.erase(_server._connections_list.iterator_to(*this));
-    _server.maybe_idle();
 }
 
-future<> cql_server::connection::process()
+void cql_server::connection::on_connection_close()
 {
-    return with_gate(_pending_requests_gate, [this] {
-        return do_until([this] {
-            return _read_buf.eof();
-        }, [this] {
-            return process_request();
-        }).then_wrapped([this] (future<> f) {
-            try {
-                f.get();
-            } catch (const exceptions::cassandra_exception& ex) {
-                try { ++_server._stats.errors[ex.code()]; } catch(...) {}
-                write_response(make_error(0, ex.code(), ex.what(), tracing::trace_state_ptr()));
-            } catch (std::exception& ex) {
-                try { ++_server._stats.errors[exceptions::exception_code::SERVER_ERROR]; } catch(...) {}
-                write_response(make_error(0, exceptions::exception_code::SERVER_ERROR, ex.what(), tracing::trace_state_ptr()));
-            } catch (...) {
-                try { ++_server._stats.errors[exceptions::exception_code::SERVER_ERROR]; } catch(...) {}
-                write_response(make_error(0, exceptions::exception_code::SERVER_ERROR, "unknown error", tracing::trace_state_ptr()));
-            }
-        });
-    }).finally([this] {
-        return _pending_requests_gate.close().then([this] {
-            _server._notifier->unregister_connection(this);
-            return _ready_to_respond.handle_exception([] (std::exception_ptr ep) {
-                if (is_broken_pipe_or_connection_reset(ep)) {
-                    // expected if another side closes a connection or we're shutting down
-                    return;
-                }
-                std::rethrow_exception(ep);
-            }).finally([this] {
-                 return _write_buf.close();
-            });
-        });
-    });
-}
-
-future<> cql_server::connection::shutdown()
-{
-    try {
-        _fd.shutdown_input();
-        _fd.shutdown_output();
-    } catch (...) {
-    }
-    return make_ready_future<>();
+    _server._notifier->unregister_connection(this);
 }
 
 std::tuple<net::inet_address, int, client_type> cql_server::connection::make_client_key(const service::client_state& cli_state) {
@@ -692,6 +550,21 @@ client_data cql_server::connection::make_client_data() const {
 
 thread_local cql_server::connection::execution_stage_type
         cql_server::connection::_process_request_stage{"transport", &connection::process_request_one};
+
+void cql_server::connection::handle_error(future<>&& f) {
+    try {
+        f.get();
+    } catch (const exceptions::cassandra_exception& ex) {
+        try { ++_server._stats.errors[ex.code()]; } catch(...) {}
+        write_response(make_error(0, ex.code(), ex.what(), tracing::trace_state_ptr()));
+    } catch (std::exception& ex) {
+        try { ++_server._stats.errors[exceptions::exception_code::SERVER_ERROR]; } catch(...) {}
+        write_response(make_error(0, exceptions::exception_code::SERVER_ERROR, ex.what(), tracing::trace_state_ptr()));
+    } catch (...) {
+        try { ++_server._stats.errors[exceptions::exception_code::SERVER_ERROR]; } catch(...) {}
+        write_response(make_error(0, exceptions::exception_code::SERVER_ERROR, "unknown error", tracing::trace_state_ptr()));
+    }
+}
 
 future<> cql_server::connection::process_request() {
     return read_frame().then_wrapped([this] (future<std::optional<cql_binary_frame_v3>>&& v) {

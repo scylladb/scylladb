@@ -46,7 +46,8 @@ namespace redis_transport {
 static logging::logger logging("redis_server");
 
 redis_server::redis_server(seastar::sharded<service::storage_proxy>& proxy, seastar::sharded<redis::query_processor>& qp, auth::service& auth_service, redis_server_config config)
-    : _proxy(proxy)
+    : server("Redis", logging)
+    , _proxy(proxy)
     , _query_processor(qp)
     , _config(config)
     , _max_request_size(config._max_request_size)
@@ -56,86 +57,18 @@ redis_server::redis_server(seastar::sharded<service::storage_proxy>& proxy, seas
 {
 }
 
-future<> redis_server::stop() {
-    _stopping = true;
-    size_t nr = 0;
-    size_t nr_total = _listeners.size();
-    logging.debug("redis_server: abort accept nr_total={}", nr_total);
-    for (auto&& l : _listeners) {
-        l.abort_accept();
-        logging.debug("redis_server: abort accept {} out of {} done", ++nr, nr_total);
-    }
-    auto nr_conn = make_lw_shared<size_t>(0);
-    auto nr_conn_total = _connections_list.size();
-    logging.debug("redis_server: shutdown connection nr_total={}", nr_conn_total);
-    return parallel_for_each(_connections_list.begin(), _connections_list.end(), [nr_conn, nr_conn_total] (auto&& c) {
-        return c.shutdown().then([nr_conn, nr_conn_total] {
-            logging.debug("redis_server: shutdown connection {} out of {} done", ++(*nr_conn), nr_conn_total);
-        });
-    }).then([this] {
-        return std::move(_stopped);
-    });
+shared_ptr<generic_server::connection>
+redis_server::make_connection(socket_address server_addr, connected_socket&& fd, socket_address addr) {
+    auto conn = make_shared<connection>(*this, server_addr, std::move(fd), std::move(addr));
+    ++_stats._connects;
+    ++_stats._connections;
+    return conn;
 }
 
-future<> redis_server::listen(socket_address addr, std::shared_ptr<seastar::tls::credentials_builder> creds, bool keepalive) {
-    auto f = make_ready_future<shared_ptr<seastar::tls::server_credentials>>(nullptr);
-    if (creds) {
-        f = creds->build_reloadable_server_credentials([](const std::unordered_set<sstring>& files, std::exception_ptr ep) {
-            if (ep) {
-                logging.warn("Exception loading {}: {}", files, ep);
-            } else {
-                logging.info("Reloaded {}", files);
-            }
-        });
-    }
-    return f.then([this, addr, keepalive](shared_ptr<seastar::tls::server_credentials> creds) {
-        listen_options lo;
-        lo.reuse_address = true;
-        server_socket ss;
-        try {
-            ss = creds
-                ? seastar::tls::listen(std::move(creds), addr, lo)
-                : seastar::listen(addr, lo);
-        } catch (...) {
-            throw std::runtime_error(sprint("Redis server error while listening on %s -> %s", addr, std::current_exception()));
-        }
-        _listeners.emplace_back(std::move(ss));
-        _stopped = when_all(std::move(_stopped), do_accepts(_listeners.size() - 1, keepalive, addr)).discard_result();
-    });
-}
-
-future<> redis_server::do_accepts(int which, bool keepalive, socket_address server_addr) {
-    return repeat([this, which, keepalive, server_addr] {
-        ++_stats._connections_being_accepted;
-        return _listeners[which].accept().then_wrapped([this, which, keepalive, server_addr] (future<accept_result> f_cs_sa) mutable {
-            --_stats._connections_being_accepted;
-            if (_stopping) {
-                f_cs_sa.ignore_ready_future();
-                maybe_idle();
-                return stop_iteration::yes;
-            }
-            auto cs_sa = f_cs_sa.get0();
-            auto fd = std::move(cs_sa.connection);
-            auto addr = std::move(cs_sa.remote_address);
-            fd.set_nodelay(true);
-            fd.set_keepalive(keepalive);
-            auto conn = make_shared<connection>(*this, server_addr, std::move(fd), std::move(addr));
-            ++_stats._connects;
-            ++_stats._connections;
-            (void)conn->process().then_wrapped([this, conn] (future<> f) {
-                --_stats._connections;
-                try {
-                    f.get();
-                } catch (...) {
-                    logging.debug("connection error: {}", std::current_exception());
-                }
-            });
-            return stop_iteration::no;
-        }).handle_exception([] (auto ep) {
-            logging.debug("accept failed: {}", ep);
-            return stop_iteration::no;
-        });
-    });
+future<>
+redis_server::unadvertise_connection(shared_ptr<generic_server::connection> raw_conn) {
+    --_stats._connections;
+    return make_ready_future<>();
 }
 
 future<redis_server::result> redis_server::connection::process_request_one(redis::request&& request, redis::redis_options& opts, service_permit permit) {
@@ -147,62 +80,14 @@ future<redis_server::result> redis_server::connection::process_request_one(redis
 }
 
 redis_server::connection::connection(redis_server& server, socket_address server_addr, connected_socket&& fd, socket_address addr)
-    : _server(server)
+    : generic_server::connection(server, std::move(fd))
+    , _server(server)
     , _server_addr(server_addr)
-    , _fd(std::move(fd))
-    , _read_buf(_fd.input())
-    , _write_buf(_fd.output())
     , _options(server._config._read_consistency_level, server._config._write_consistency_level, server._config._timeout_config, server._auth_service, addr, server._total_redis_db_count)
 {
-    ++_server._stats._total_connections;
-    ++_server._stats._current_connections;
-    _server._connections_list.push_back(*this);
 }
 
 redis_server::connection::~connection() {
-    --_server._stats._current_connections;
-    _server._connections_list.erase(_server._connections_list.iterator_to(*this));
-    _server.maybe_idle();
-}
-
-future<> redis_server::connection::process()
-{
-    return do_until([this] {
-        return _read_buf.eof();
-    }, [this] {
-        return with_gate(_pending_requests_gate, [this] {
-            return process_request().then_wrapped([this] (auto f) {
-                try {
-                    f.get();
-                }
-                catch (redis_exception& e) {
-                    write_reply(e);
-                }
-                catch (std::exception& e) {
-                    write_reply(redis_exception { e.what() });
-                }
-                catch (...) {
-                    write_reply(redis_exception { "Unknown exception" });
-                }
-            });
-        });
-    }).finally([this] {
-        return _pending_requests_gate.close().then([this] {
-            return _ready_to_respond.finally([this] {
-                return _write_buf.close();
-            });
-        });
-    });
-}
-
-future<> redis_server::connection::shutdown()
-{
-    try {
-        _fd.shutdown_input();
-        _fd.shutdown_output();
-    } catch (...) {
-    }
-    return make_ready_future<>();
 }
 
 thread_local redis_server::connection::execution_stage_type redis_server::connection::_process_request_stage {"redis_transport", &connection::process_request_one};
@@ -232,6 +117,7 @@ void redis_server::connection::write_reply(redis_server::result result)
         });
     });
 }
+
 future<> redis_server::connection::process_request() {
     _parser.init();
     return _read_buf.consume(_parser).then([this] {
@@ -263,6 +149,21 @@ future<> redis_server::connection::process_request() {
             }
         });
     });
+}
+
+void redis_server::connection::handle_error(future<>&& f) {
+    try {
+        f.get();
+    }
+    catch (redis_exception& e) {
+        write_reply(e);
+    }
+    catch (std::exception& e) {
+        write_reply(redis_exception { e.what() });
+    }
+    catch (...) {
+        write_reply(redis_exception { "Unknown exception" });
+    }
 }
 
 }
