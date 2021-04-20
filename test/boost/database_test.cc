@@ -45,6 +45,22 @@
 
 using namespace std::chrono_literals;
 
+class database_test {
+    database& _db;
+public:
+    explicit database_test(database& db) : _db(db) { }
+
+    reader_concurrency_semaphore& get_user_read_concurrency_semaphore() {
+        return _db._read_concurrency_sem;
+    }
+    reader_concurrency_semaphore& get_streaming_read_concurrency_semaphore() {
+        return _db._streaming_concurrency_sem;
+    }
+    reader_concurrency_semaphore& get_system_read_concurrency_semaphore() {
+        return _db._system_read_concurrency_sem;
+    }
+};
+
 SEASTAR_TEST_CASE(test_safety_after_truncate) {
     auto cfg = make_shared<db::config>();
     cfg->auto_snapshot.set(false);
@@ -615,6 +631,60 @@ SEASTAR_THREAD_TEST_CASE(unpaged_mutation_read_global_limit) {
             } catch (std::runtime_error& e) {
                 testlog.trace("Exception thrown, as expected: {}", e);
             }
+        }
+    }, std::move(cfg)).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(reader_concurrency_semaphore_selection_test) {
+    cql_test_config cfg;
+
+    cfg.dbcfg.emplace();
+    cfg.dbcfg->available_memory = memory::stats().total_memory();
+
+    scheduling_group unknown_scheduling_group;
+
+    const auto user_semaphore = std::mem_fn(&database_test::get_user_read_concurrency_semaphore);
+    const auto system_semaphore = std::mem_fn(&database_test::get_system_read_concurrency_semaphore);
+    const auto streaming_semaphore = std::mem_fn(&database_test::get_streaming_read_concurrency_semaphore);
+
+    std::vector<std::pair<scheduling_group, std::function<reader_concurrency_semaphore&(database_test&)>>> scheduling_group_and_expected_semaphore{
+        {default_scheduling_group(), system_semaphore}
+    };
+
+    auto clean_up_sched_groups = defer([&scheduling_group_and_expected_semaphore] {
+        for (const auto& [sched_group, _] : scheduling_group_and_expected_semaphore) {
+            if (!sched_group.is_main()) {
+                destroy_scheduling_group(sched_group).get();
+            }
+        }
+    });
+
+    auto create_sched_group = [&scheduling_group_and_expected_semaphore] (const char* name, unsigned shares, scheduling_group& target,
+            std::function<reader_concurrency_semaphore&(database_test&)> semaphore_getter) mutable {
+        target = create_scheduling_group(name, shares).get();
+        scheduling_group_and_expected_semaphore.emplace_back(target, semaphore_getter);
+    };
+
+    create_sched_group("unknown", 800, unknown_scheduling_group, user_semaphore);
+
+    create_sched_group("compaction", 1000, cfg.dbcfg->compaction_scheduling_group, system_semaphore);
+    create_sched_group("mem_compaction", 1000, cfg.dbcfg->memory_compaction_scheduling_group, system_semaphore);
+    create_sched_group("streaming", 200, cfg.dbcfg->streaming_scheduling_group, streaming_semaphore);
+    create_sched_group("statement", 1000, cfg.dbcfg->statement_scheduling_group, user_semaphore);
+    create_sched_group("memtable", 1000, cfg.dbcfg->memtable_scheduling_group, system_semaphore);
+    create_sched_group("memtable_to_cache", 200, cfg.dbcfg->memtable_to_cache_scheduling_group, system_semaphore);
+    create_sched_group("gossip", 1000, cfg.dbcfg->gossip_scheduling_group, system_semaphore);
+
+    do_with_cql_env_thread([&scheduling_group_and_expected_semaphore] (cql_test_env& e) {
+        auto& db = e.local_db();
+        database_test tdb(db);
+        for (const auto& [sched_group, expected_sem_getter] : scheduling_group_and_expected_semaphore) {
+            with_scheduling_group(sched_group, [&db, sched_group = sched_group, expected_sem_ptr = &expected_sem_getter(tdb)] {
+                auto& sem = db.get_reader_concurrency_semaphore();
+                if (&sem != expected_sem_ptr) {
+                    BOOST_FAIL(fmt::format("Unexpected semaphore for scheduling group {}, expected {}, got {}", sched_group.name(), expected_sem_ptr->name(), sem.name()));
+                }
+            }).get();
         }
     }, std::move(cfg)).get();
 }
