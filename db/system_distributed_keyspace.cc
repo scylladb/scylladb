@@ -541,7 +541,7 @@ system_distributed_keyspace::get_cdc_desc_v1_timestamps(context ctx) {
 future<qos::service_levels_info> system_distributed_keyspace::get_service_levels() const {
     static sstring prepared_query = format("SELECT * FROM {}.{};", NAME, SERVICE_LEVELS);
 
-    return _qp.execute_internal(prepared_query, {}).then([] (shared_ptr<cql3::untyped_result_set> result_set) {
+    return _qp.execute_internal(prepared_query, db::consistency_level::ONE, internal_distributed_query_state(), {}).then([] (shared_ptr<cql3::untyped_result_set> result_set) {
         qos::service_levels_info service_levels;
         for (auto &&row : *result_set) {
             auto service_level_name = row.get_as<sstring>("service_level");
@@ -554,7 +554,7 @@ future<qos::service_levels_info> system_distributed_keyspace::get_service_levels
 
 future<qos::service_levels_info> system_distributed_keyspace::get_service_level(sstring service_level_name) const {
     static sstring prepared_query = format("SELECT * FROM {}.{} WHERE service_level = ?;", NAME, SERVICE_LEVELS);
-    return _qp.execute_internal(prepared_query, {service_level_name}).then([] (shared_ptr<cql3::untyped_result_set> result_set) {
+    return _qp.execute_internal(prepared_query, db::consistency_level::ONE, internal_distributed_query_state(), {service_level_name}).then([] (shared_ptr<cql3::untyped_result_set> result_set) {
         qos::service_levels_info service_levels;
         if (!result_set->empty()) {
             auto &&row = result_set->one();
@@ -568,12 +568,12 @@ future<qos::service_levels_info> system_distributed_keyspace::get_service_level(
 
 future<> system_distributed_keyspace::set_service_level(sstring service_level_name, qos::service_level_options slo) const {
     static sstring prepared_puery = format("INSERT INTO {}.{} (service_level) VALUES (?);", NAME, SERVICE_LEVELS);
-    return _qp.execute_internal(prepared_puery, {service_level_name}).discard_result();
+    return _qp.execute_internal(prepared_puery, db::consistency_level::ONE, internal_distributed_query_state(), {service_level_name}).discard_result();
 }
 
 future<> system_distributed_keyspace::drop_service_level(sstring service_level_name) const {
     static sstring prepared_query = format("DELETE FROM {}.{} WHERE service_level= ?;", NAME, SERVICE_LEVELS);
-    return _qp.execute_internal(prepared_query, {service_level_name}).discard_result();
+    return _qp.execute_internal(prepared_query, db::consistency_level::ONE, internal_distributed_query_state(), {service_level_name}).discard_result();
 }
 
 }
