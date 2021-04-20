@@ -147,7 +147,7 @@ leveled_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> input
         unsigned overlapping_sstables = 0;
         auto prev_last = dht::ring_position::min();
         for (auto& sst : sstables) {
-            if (dht::ring_position(sst->get_first_decorated_key()).less_compare(*schema, prev_last)) {
+            if (dht::ring_position(sst->get_first_decorated_key()).tri_compare(*schema, prev_last) <= 0) {
                 overlapping_sstables++;
             }
             prev_last = dht::ring_position(sst->get_last_decorated_key());
