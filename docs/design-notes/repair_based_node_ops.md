@@ -71,6 +71,8 @@ Select nodes to synchronize with:
   Synchronize with all replica nodes from local DC
 
 - Bootstrap operation
+  0) If everywhere_topology is used, synchronize with all nodes in local dc
+
   1) If local_dc_replica_nodes = RF, synchronize with 1 node that is losing the
   range in the local DC
 
