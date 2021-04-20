@@ -35,6 +35,7 @@
 #include <boost/move/iterator.hpp>
 #include "db/marshal/type_parser.hh"
 #include "service/migration_manager.hh"
+#include "service/storage_proxy.hh"
 #include "utils/class_registrator.hh"
 #include "noexcept_traits.hh"
 #include "schema_registry.hh"

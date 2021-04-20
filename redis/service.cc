@@ -23,6 +23,7 @@
 #include "redis/service.hh"
 #include "redis/keyspace_utils.hh"
 #include "redis/server.hh"
+#include "service/storage_proxy.hh"
 #include "db/config.hh"
 #include "log.hh"
 #include "auth/common.hh"

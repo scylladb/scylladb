@@ -22,6 +22,7 @@
 
 #include <memory>
 #include <seastar/core/sharded.hh>
+#include <seastar/core/distributed.hh>
 #include <seastar/core/future.hh>
 #include "cql3/query_processor.hh"
 #include "cql3/query_options.hh"

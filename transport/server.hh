@@ -25,7 +25,6 @@
 #include <seastar/core/seastar.hh>
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include "service/migration_listener.hh"
-#include "service/storage_proxy.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/values.hh"
 #include "auth/authenticator.hh"
@@ -39,6 +38,7 @@
 #include "utils/fragmented_temporary_buffer.hh"
 #include "service_permit.hh"
 #include <seastar/core/sharded.hh>
+#include <seastar/core/execution_stage.hh>
 #include "utils/updateable_value.hh"
 #include "service/qos/service_level_controller.hh"
 #include "generic_server.hh"

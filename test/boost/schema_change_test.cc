@@ -30,6 +30,7 @@
 #include "test/lib/mutation_source_test.hh"
 #include "test/lib/result_set_assertions.hh"
 #include "service/migration_manager.hh"
+#include "service/storage_proxy.hh"
 #include "schema_builder.hh"
 #include "schema_registry.hh"
 #include "db/schema_tables.hh"

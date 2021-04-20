@@ -42,6 +42,7 @@
 #include "schema_builder.hh"
 #include "service/migration_listener.hh"
 #include "service/storage_service.hh"
+#include "service/storage_proxy.hh"
 #include "types/tuple.hh"
 #include "cql3/statements/select_statement.hh"
 #include "cql3/multi_column_relation.hh"

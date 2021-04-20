@@ -70,6 +70,7 @@
 #include "mutation_partition.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_service.hh"
+#include "service/storage_proxy.hh"
 #include "view_info.hh"
 #include "view_update_checks.hh"
 #include "types/user.hh"

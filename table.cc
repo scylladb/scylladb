@@ -42,7 +42,9 @@
 #include <boost/range/adaptor/map.hpp>
 #include "utils/error_injection.hh"
 #include "utils/histogram_metrics_helper.hh"
+#include "utils/fb_utilities.hh"
 #include "mutation_source_metadata.hh"
+#include "gms/gossiper.hh"
 
 static logging::logger tlogger("table");
 static seastar::metrics::label column_family_label("cf");

@@ -31,6 +31,7 @@
 #include "test/lib/log.hh"
 
 #include "database.hh"
+#include "lister.hh"
 #include "partition_slice_builder.hh"
 #include "frozen_mutation.hh"
 #include "test/lib/mutation_source_test.hh"

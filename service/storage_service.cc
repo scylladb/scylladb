@@ -47,6 +47,7 @@
 #include "gms/inet_address.hh"
 #include "log.hh"
 #include "service/migration_manager.hh"
+#include "service/storage_proxy.hh"
 #include "to_string.hh"
 #include "gms/gossiper.hh"
 #include "gms/failure_detector.hh"

@@ -30,6 +30,7 @@
 #include "db/query_context.hh"
 #include "auth/service.hh"
 #include "service/migration_manager.hh"
+#include "service/storage_proxy.hh"
 #include "service/client_state.hh"
 #include "transport/server.hh"
 #include "db/system_keyspace.hh"

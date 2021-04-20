@@ -43,6 +43,7 @@
 
 #include "message/messaging_service.hh"
 #include "gms/failure_detector.hh"
+#include "gms/gossiper.hh"
 #include "db/schema_tables.hh"
 #include "frozen_mutation.hh"
 #include "migration_manager.hh"

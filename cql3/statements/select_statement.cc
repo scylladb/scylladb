@@ -52,6 +52,7 @@
 #include "query-result-reader.hh"
 #include "query_result_merger.hh"
 #include "service/pager/query_pagers.hh"
+#include "service/storage_proxy.hh"
 #include <seastar/core/execution_stage.hh>
 #include "view_info.hh"
 #include "partition_slice_builder.hh"

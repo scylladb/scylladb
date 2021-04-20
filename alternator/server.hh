@@ -23,6 +23,7 @@
 
 #include "alternator/executor.hh"
 #include <seastar/core/future.hh>
+#include <seastar/core/condition-variable.hh>
 #include <seastar/http/httpd.hh>
 #include <seastar/net/tls.hh>
 #include <optional>

@@ -36,6 +36,7 @@
 #include "cql3/query_processor.hh"
 #include "cql3/untyped_result_set.hh"
 #include "db/batchlog_manager.hh"
+#include "service/storage_proxy.hh"
 
 #include "message/messaging_service.hh"
 

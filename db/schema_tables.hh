@@ -40,7 +40,6 @@
 
 #pragma once
 
-#include "service/storage_proxy.hh"
 #include "mutation.hh"
 #include "cql3/functions/user_function.hh"
 #include "schema_fwd.hh"
@@ -48,6 +47,7 @@
 #include "hashing.hh"
 #include "schema_mutations.hh"
 #include "types/map.hh"
+#include "query-result-set.hh"
 
 #include <vector>
 #include <map>
@@ -61,6 +61,13 @@ class result_set;
 namespace service {
 
 class storage_service;
+class storage_proxy;
+
+}
+
+namespace gms {
+
+class feature_service;
 
 }
 

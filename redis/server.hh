@@ -32,7 +32,6 @@
 #include "auth/service.hh"
 #include "cql3/values.hh"
 #include "service/client_state.hh"
-#include "service/storage_proxy.hh"
 #include "service_permit.hh"
 #include "timeout_config.hh"
 #include "utils/estimated_histogram.hh"
@@ -42,6 +41,7 @@
 #include <seastar/core/seastar.hh>
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/sharded.hh>
+#include <seastar/core/execution_stage.hh>
 #include <seastar/net/tls.hh>
 
 #include <memory>
@@ -49,6 +49,12 @@
 db::consistency_level make_consistency_level(const sstring&);
 
 class redis_exception;
+
+namespace service {
+
+class storage_proxy;
+
+}
 
 namespace redis_transport {
 

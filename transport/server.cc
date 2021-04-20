@@ -35,6 +35,7 @@
 #include "dht/token-sharding.hh"
 #include "service/migration_manager.hh"
 #include "service/memory_limiter.hh"
+#include "service/storage_proxy.hh"
 #include "db/consistency_level_type.hh"
 #include "database.hh"
 #include "db/write_type.hh"

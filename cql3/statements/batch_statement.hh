@@ -41,7 +41,6 @@
 #include "modification_statement.hh"
 #include "raw/modification_statement.hh"
 #include "raw/batch_statement.hh"
-#include "service/storage_proxy.hh"
 #include "transport/messages/result_message.hh"
 #include "timestamp.hh"
 #include "log.hh"
