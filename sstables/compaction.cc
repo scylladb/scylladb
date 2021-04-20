@@ -857,6 +857,10 @@ public:
         : compaction(cf, std::move(descriptor)) {
     }
 
+    virtual sstables::sstable_set make_sstable_set_for_input() const override {
+        return sstables::make_partitioned_sstable_set(_schema, make_lw_shared<sstable_list>(sstable_list{}), false);
+    }
+
     flat_mutation_reader make_sstable_reader() const override {
         return _compacting->make_local_shard_sstable_reader(_schema,
                 _permit,
