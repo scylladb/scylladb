@@ -340,7 +340,7 @@ scylla_tests = set([
     'test/boost/cdc_generation_test',
     'test/boost/aggregate_fcts_test',
     'test/boost/allocation_strategy_test',
-    'test/boost/alternator_base64_test',
+    'test/boost/alternator_unit_test',
     'test/boost/anchorless_list_test',
     'test/boost/auth_passwords_test',
     'test/boost/auth_resource_test',
@@ -1128,7 +1128,7 @@ pure_boost_tests = set([
 ])
 
 tests_not_using_seastar_test_framework = set([
-    'test/boost/alternator_base64_test',
+    'test/boost/alternator_unit_test',
     'test/boost/small_vector_test',
     'test/manual/gossip',
     'test/manual/message',
@@ -1208,7 +1208,7 @@ deps['test/boost/linearizing_input_stream_test'] = [
 ]
 
 deps['test/boost/duration_test'] += ['test/lib/exception_utils.cc']
-deps['test/boost/alternator_base64_test'] += ['alternator/base64.cc']
+deps['test/boost/alternator_unit_test'] += ['alternator/base64.cc']
 
 deps['test/raft/replication_test'] = ['test/raft/replication_test.cc'] + scylla_raft_dependencies
 deps['test/raft/fsm_test'] =  ['test/raft/fsm_test.cc', 'test/lib/log.cc'] + scylla_raft_dependencies
