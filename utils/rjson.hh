@@ -66,18 +66,35 @@ public:
 #include <rapidjson/writer.h>
 #include <rapidjson/stringbuffer.h>
 #include <rapidjson/error/en.h>
+#include <rapidjson/allocators.h>
 #include <seastar/core/sstring.hh>
 #include "seastarx.hh"
 
 namespace rjson {
 
-using allocator = rapidjson::CrtAllocator;
+// The internal namespace is a workaround for the fact that fmt::format
+// also has a to_string_view function and erroneously looks up our rjson::to_string_view
+// if this allocator is in the rjson namespace.
+namespace internal {
+// Implements an interface conforming to the one in rapidjson/allocators.h,
+// but throws rjson::error on allocation failures
+class throwing_allocator : public rapidjson::CrtAllocator {
+    using base = rapidjson::CrtAllocator;
+public:
+    static const bool kNeedFree = base::kNeedFree;
+    void* Malloc(size_t size);
+    void* Realloc(void* orig_ptr, size_t orig_size, size_t new_size);
+    static void Free(void* ptr);
+};
+}
+
+using allocator = internal::throwing_allocator;
 using encoding = rapidjson::UTF8<>;
-using document = rapidjson::GenericDocument<encoding, allocator>;
+using document = rapidjson::GenericDocument<encoding, allocator, allocator>;
 using value = rapidjson::GenericValue<encoding, allocator>;
 using string_ref_type = value::StringRefType;
-using string_buffer = rapidjson::GenericStringBuffer<encoding>;
-using writer = rapidjson::Writer<string_buffer, encoding>;
+using string_buffer = rapidjson::GenericStringBuffer<encoding, allocator>;
+using writer = rapidjson::Writer<string_buffer, encoding, encoding, allocator>;
 using type = rapidjson::Type;
 
 // The default value is derived from the days when rjson resided in alternator:

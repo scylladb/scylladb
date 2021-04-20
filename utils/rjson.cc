@@ -192,6 +192,26 @@ protected:
     }
 };
 
+void* internal::throwing_allocator::Malloc(size_t size) {
+    void* ret = base::Malloc(size);
+    if (size > 0 && !ret) {
+        throw rjson::error(format("Failed to allocate {} bytes", size));
+    }
+    return ret;
+}
+
+void* internal::throwing_allocator::Realloc(void* orig_ptr, size_t orig_size, size_t new_size) {
+    void* ret = base::Realloc(orig_ptr, orig_size, new_size);
+    if (new_size > 0 && !ret) {
+        throw rjson::error(format("Failed to reallocate {} bytes to {} bytes from {}", orig_size, new_size, orig_ptr));
+    }
+    return ret;
+}
+
+void internal::throwing_allocator::Free(void* ptr) {
+    base::Free(ptr);
+}
+
 std::string print(const rjson::value& value, size_t max_nested_level) {
     string_buffer buffer;
     guarded_yieldable_json_handler<writer, false> writer(buffer, max_nested_level);
