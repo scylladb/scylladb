@@ -40,6 +40,7 @@
 #include "cql3/lists.hh"
 #include "cql3/selection/selection.hh"
 #include "cql3/single_column_relation.hh"
+#include "cql3/statements/request_validations.hh"
 #include "cql3/tuples.hh"
 #include "types/list.hh"
 #include "types/map.hh"
@@ -52,6 +53,7 @@ static logging::logger rlogger("restrictions");
 
 using boost::adaptors::filtered;
 using boost::adaptors::transformed;
+using statements::request_validations::invalid_request;
 
 template<typename T>
 class statement_restrictions::initial_key_restrictions : public primary_key_restrictions<T> {
@@ -598,14 +600,97 @@ void statement_restrictions::process_clustering_columns_restrictions(bool for_vi
     }
 }
 
+namespace {
+
+using namespace expr;
+
+/// Computes partition-key ranges from token atoms in ex.
+dht::partition_range_vector partition_ranges_from_token(const expr::expression& ex, const query_options& options) {
+    auto values = possible_lhs_values(nullptr, ex, options);
+    if (values == expr::value_set(expr::value_list{})) {
+        return {};
+    }
+    const auto bounds = expr::to_range(values);
+    const auto start_token = bounds.start() ? bounds.start()->value().with_linearized([] (bytes_view bv) { return dht::token::from_bytes(bv); })
+            : dht::minimum_token();
+    auto end_token = bounds.end() ? bounds.end()->value().with_linearized([] (bytes_view bv) { return dht::token::from_bytes(bv); })
+            : dht::maximum_token();
+    const bool include_start = bounds.start() && bounds.start()->is_inclusive();
+    const auto include_end = bounds.end() && bounds.end()->is_inclusive();
+
+    auto start = dht::partition_range::bound(include_start
+                                             ? dht::ring_position::starting_at(start_token)
+                                             : dht::ring_position::ending_at(start_token));
+    auto end = dht::partition_range::bound(include_end
+                                           ? dht::ring_position::ending_at(end_token)
+                                           : dht::ring_position::starting_at(end_token));
+
+    return {{std::move(start), std::move(end)}};
+}
+
+/// Turns a partition-key value into a partition_range. \p pk must have elements for all partition columns.
+dht::partition_range range_from_bytes(const schema& schema, const std::vector<managed_bytes>& pk) {
+    const auto k = partition_key::from_exploded(pk);
+    const auto tok = dht::get_token(schema, k);
+    const query::ring_position pos(std::move(tok), std::move(k));
+    return dht::partition_range::make_singular(std::move(pos));
+}
+
+void error_if_exceeds(size_t size, size_t limit) {
+    if (size > limit) {
+        throw std::runtime_error(
+                fmt::format("clustering-key cartesian product size {} is greater than maximum {}", size, limit));
+    }
+}
+
+/// Computes partition-key ranges from expressions, which contains EQ/IN for every partition column.
+dht::partition_range_vector partition_ranges_from_singles(
+        const std::vector<expr::expression>& expressions, const query_options& options, const schema& schema) {
+    const size_t size_limit =
+            options.get_cql_config().restrictions.partition_key_restrictions_max_cartesian_product_size;
+    // Each element is a vector of that column's possible values:
+    std::vector<std::vector<managed_bytes>> column_values(schema.partition_key_size());
+    size_t product_size = 1;
+    for (const auto& e : expressions) {
+        if (const auto arbitrary_binop = find_atom(e, [] (const binary_operator&) { return true; })) {
+            if (auto cv = std::get_if<expr::column_value>(&arbitrary_binop->lhs)) {
+                const value_set vals = possible_lhs_values(cv->col, e, options);
+                if (auto lst = std::get_if<value_list>(&vals)) {
+                    if (lst->empty()) {
+                        return {};
+                    }
+                    product_size *= lst->size();
+                    error_if_exceeds(product_size, size_limit);
+                    column_values[schema.position(*cv->col)] = move(*lst);
+                } else {
+                    throw exceptions::invalid_request_exception(
+                            "Only EQ and IN relation are supported on the partition key "
+                            "(unless you use the token() function or allow filtering)");
+                }
+            }
+        }
+    }
+    cartesian_product cp(column_values);
+    dht::partition_range_vector ranges(product_size);
+    std::transform(cp.begin(), cp.end(), ranges.begin(), std::bind_front(range_from_bytes, std::ref(schema)));
+    return ranges;
+}
+
+} // anonymous namespace
+
 dht::partition_range_vector statement_restrictions::get_partition_key_ranges(const query_options& options) const {
-    if (_partition_key_restrictions->empty()) {
+    if (_partition_range_restrictions.empty()) {
         return {dht::partition_range::make_open_ended_both_sides()};
     }
-    if (_partition_key_restrictions->needs_filtering(*_schema)) {
-        return {dht::partition_range::make_open_ended_both_sides()};
+    if (has_token(_partition_range_restrictions[0])) {
+        if (_partition_range_restrictions.size() != 1) {
+            on_internal_error(
+                    rlogger,
+                    format("Unexpected size of token restrictions: {}", _partition_range_restrictions.size()));
+        }
+        return partition_ranges_from_token(_partition_range_restrictions[0], options);
     }
-    return _partition_key_restrictions->bounds_ranges(options);
+    return partition_ranges_from_singles(_partition_range_restrictions, options, *_schema);
 }
 
 namespace {
@@ -852,13 +937,6 @@ std::vector<query::clustering_range> get_multi_column_clustering_bounds(
 /// Reverses the range if the type is reversed.  Why don't we have nonwrapping_interval::reverse()??
 query::clustering_range reverse_if_reqd(query::clustering_range r, const abstract_type& t) {
     return t.is_reversed() ? query::clustering_range(r.end(), r.start()) : std::move(r);
-}
-
-void error_if_exceeds(size_t size, size_t limit) {
-    if (size > limit) {
-        throw std::runtime_error(
-                fmt::format("clustering-key cartesian product size {} is greater than maximum {}", size, limit));
-    }
 }
 
 constexpr bool inclusive = true;
