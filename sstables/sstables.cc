@@ -2902,6 +2902,9 @@ future<> init_metrics() {
 
         sm::make_derive("total_deleted", [] { return sstables_stats::get_shard_stats().deleted; },
             sm::description("Counter of deleted sstables")),
+
+        sm::make_gauge("bloom_filter_memory_size", [] { return utils::filter::bloom_filter::get_shard_stats().memory_size; },
+            sm::description("Bloom filter memory usage in bytes.")),
     });
   });
 }

@@ -59,15 +59,18 @@ private:
     bitmap _bitset;
     int _hash_count;
     filter_format _format;
+
+    static thread_local struct stats {
+        uint64_t memory_size = 0;
+    } _shard_stats;
+    stats& _stats = _shard_stats;
+
 public:
     int num_hashes() { return _hash_count; }
     bitmap& bits() { return _bitset; }
 
-    bloom_filter(int hashes, bitmap&& bs, filter_format format)
-        : _bitset(std::move(bs))
-        , _hash_count(hashes)
-        , _format(format)
-    {}
+    bloom_filter(int hashes, bitmap&& bs, filter_format format) noexcept;
+    ~bloom_filter() noexcept;
 
     virtual void add(const bytes_view& key) override;
 
@@ -83,6 +86,10 @@ public:
 
     virtual size_t memory_size() override {
         return sizeof(_hash_count) + _bitset.memory_size();
+    }
+
+    static const stats& get_shard_stats() noexcept {
+        return _shard_stats;
     }
 };
 
