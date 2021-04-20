@@ -80,6 +80,14 @@ using string_buffer = rapidjson::GenericStringBuffer<encoding>;
 using writer = rapidjson::Writer<string_buffer, encoding>;
 using type = rapidjson::Type;
 
+// The default value is derived from the days when rjson resided in alternator:
+// - the original DynamoDB nested level limit is 32
+// - it's raised by 7 for alternator to make it safer and more cool
+// - the value is doubled because the nesting level is bumped twice
+//   for every alternator object - because each alternator object
+//   consists of a 2-level JSON object.
+inline constexpr size_t default_max_nested_level = 78;
+
 /** 
  * exception specializations. 
  */
@@ -117,7 +125,7 @@ inline rjson::value empty_string() {
 
 // Convert the JSON value to a string with JSON syntax, the opposite of parse().
 // The representation is dense - without any redundant indentation.
-std::string print(const rjson::value& value);
+std::string print(const rjson::value& value, size_t max_nested_level = default_max_nested_level);
 
 // Returns a string_view to the string held in a JSON value (which is
 // assumed to hold a string, i.e., v.IsString() == true). This is a view
@@ -133,13 +141,13 @@ rjson::value copy(const rjson::value& value);
 // The string/char array liveness does not need to be persisted,
 // as parse() will allocate member names and values.
 // Throws rjson::error if parsing failed.
-rjson::value parse(std::string_view str);
+rjson::value parse(std::string_view str, size_t max_nested_level = default_max_nested_level);
 // Parses a JSON value returns a disengaged optional on failure.
 // NOTICE: any error context will be lost, so this function should
 // be used only if one does not care why parsing failed.
-std::optional<rjson::value> try_parse(std::string_view str);
+std::optional<rjson::value> try_parse(std::string_view str, size_t max_nested_level = default_max_nested_level);
 // Needs to be run in thread context
-rjson::value parse_yieldable(std::string_view str);
+rjson::value parse_yieldable(std::string_view str, size_t max_nested_level = default_max_nested_level);
 
 // chunked_content holds a non-contiguous buffer of bytes - such as bytes
 // read by httpd::read_entire_stream(). We assume that chunked_content does
@@ -150,8 +158,8 @@ using chunked_content = std::vector<temporary_buffer<char>>;
 // Additional variants of parse() and parse_yieldable() that work on non-
 // contiguous chunked_content. The chunked_content is moved into the parsing
 // function so that we can start freeing chunks as soon as we parse them.
-rjson::value parse(chunked_content&&);
-rjson::value parse_yieldable(chunked_content&&);
+rjson::value parse(chunked_content&&, size_t max_nested_level = default_max_nested_level);
+rjson::value parse_yieldable(chunked_content&&, size_t max_nested_level = default_max_nested_level);
 
 // Creates a JSON value (of JSON string type) out of internal string representations.
 // The string value is copied, so str's liveness does not need to be persisted.

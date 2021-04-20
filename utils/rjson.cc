@@ -192,9 +192,9 @@ protected:
     }
 };
 
-std::string print(const rjson::value& value) {
+std::string print(const rjson::value& value, size_t max_nested_level) {
     string_buffer buffer;
-    guarded_yieldable_json_handler<writer, false> writer(buffer, 78);
+    guarded_yieldable_json_handler<writer, false> writer(buffer, max_nested_level);
     value.Accept(writer);
     return std::string(buffer.GetString());
 }
@@ -218,8 +218,8 @@ rjson::value copy(const rjson::value& value) {
     return rjson::value(value, the_allocator);
 }
 
-rjson::value parse(std::string_view str) {
-    guarded_yieldable_json_handler<document, false> d(78);
+rjson::value parse(std::string_view str, size_t max_nested_level) {
+    guarded_yieldable_json_handler<document, false> d(max_nested_level);
     d.Parse(str.data(), str.size());
     if (d.HasParseError()) {
         throw rjson::error(format("Parsing JSON failed: {}", GetParseError_En(d.GetParseError())));
@@ -228,8 +228,8 @@ rjson::value parse(std::string_view str) {
     return std::move(v);
 }
 
-rjson::value parse(chunked_content&& content) {
-    guarded_yieldable_json_handler<document, false> d(78);
+rjson::value parse(chunked_content&& content, size_t max_nested_level) {
+    guarded_yieldable_json_handler<document, false> d(max_nested_level);
     d.Parse(std::move(content));
     if (d.HasParseError()) {
         throw rjson::error(format("Parsing JSON failed: {}", GetParseError_En(d.GetParseError())));
@@ -238,8 +238,8 @@ rjson::value parse(chunked_content&& content) {
     return std::move(v);
 }
 
-std::optional<rjson::value> try_parse(std::string_view str) {
-    guarded_yieldable_json_handler<document, false> d(78);
+std::optional<rjson::value> try_parse(std::string_view str, size_t max_nested_level) {
+    guarded_yieldable_json_handler<document, false> d(max_nested_level);
     try {
         d.Parse(str.data(), str.size());
     } catch (const rjson::error&) {
@@ -252,8 +252,8 @@ std::optional<rjson::value> try_parse(std::string_view str) {
     return std::move(v);
 }
 
-rjson::value parse_yieldable(std::string_view str) {
-    guarded_yieldable_json_handler<document, true> d(78);
+rjson::value parse_yieldable(std::string_view str, size_t max_nested_level) {
+    guarded_yieldable_json_handler<document, true> d(max_nested_level);
     d.Parse(str.data(), str.size());
     if (d.HasParseError()) {
         throw rjson::error(format("Parsing JSON failed: {}", GetParseError_En(d.GetParseError())));
@@ -262,8 +262,8 @@ rjson::value parse_yieldable(std::string_view str) {
     return std::move(v);
 }
 
-rjson::value parse_yieldable(chunked_content&& content) {
-    guarded_yieldable_json_handler<document, true> d(78);
+rjson::value parse_yieldable(chunked_content&& content, size_t max_nested_level) {
+    guarded_yieldable_json_handler<document, true> d(max_nested_level);
     d.Parse(std::move(content));
     if (d.HasParseError()) {
         throw rjson::error(format("Parsing JSON failed: {}", GetParseError_En(d.GetParseError())));
