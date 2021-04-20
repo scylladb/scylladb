@@ -32,6 +32,7 @@
 #include "serializer.hh"
 #include "serializer_impl.hh"
 #include "xx_hasher.hh"
+#include "test/raft/helpers.hh"
 
 // Test Raft library with declarative test definitions
 //
@@ -408,13 +409,6 @@ struct log_entry {
     unsigned term;
     int value;
 };
-
-template <typename T>
-raft::command create_command(T value) {
-    raft::command command;
-    ser::serialize(command, value);
-    return command;
-}
 
 std::vector<raft::log_entry> create_log(std::vector<log_entry> list, unsigned start_idx) {
     std::vector<raft::log_entry> log;
