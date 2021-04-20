@@ -646,6 +646,19 @@ future<> add_entries(std::vector<test_server>& rafts,
     }
 }
 
+using raft_ticker_type = seastar::timer<lowres_clock>;
+
+std::vector<raft_ticker_type> init_raft_tickers(std::vector<test_server>& rafts) {
+    std::vector<seastar::timer<lowres_clock>> tickers(rafts.size());
+    for (size_t s = 0; s < rafts.size(); ++s) {
+        tickers[s].arm_periodic(tick_delta);
+        tickers[s].set_callback([&rafts, s] {
+            rafts[s].server->tick();
+        });
+    }
+    return tickers;
+}
+
 // Run test case (name, nodes, leader, initial logs, updates)
 future<> run_test(test_case test, bool prevote, bool packet_drops) {
     std::vector<initial_state> states(test.nodes);       // Server initial states
@@ -693,13 +706,7 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
             snaps, persisted_snaps, packet_drops);
 
     // Tickers for servers
-    std::vector<seastar::timer<lowres_clock>> tickers(test.nodes);
-    for (size_t s = 0; s < test.nodes; ++s) {
-        tickers[s].arm_periodic(tick_delta);
-        tickers[s].set_callback([&rafts, s] {
-            rafts[s].server->tick();
-        });
-    }
+    std::vector<raft_ticker_type> tickers = init_raft_tickers(rafts);
 
     // Keep track of what servers are in the current configuration
     std::unordered_set<size_t> in_configuration;
