@@ -581,10 +581,14 @@ private:
     // Default range sstable reader that will only return mutation that belongs to current shard.
     virtual flat_mutation_reader make_sstable_reader() const = 0;
 
+    virtual sstables::sstable_set make_sstable_set_for_input() const {
+        return _cf.get_compaction_strategy().make_sstable_set(_schema);
+    }
+
     template <typename GCConsumer>
     requires CompactedFragmentsConsumer<GCConsumer>
     future<> setup(GCConsumer gc_consumer) {
-        auto ssts = make_lw_shared<sstables::sstable_set>(_cf.get_compaction_strategy().make_sstable_set(_schema));
+        auto ssts = make_lw_shared<sstables::sstable_set>(make_sstable_set_for_input());
         sstring formatted_msg = "{} [";
         auto fully_expired = get_fully_expired_sstables(_cf, _sstables, gc_clock::now() - _schema->gc_grace_seconds());
         min_max_tracker<api::timestamp_type> timestamp_tracker;
