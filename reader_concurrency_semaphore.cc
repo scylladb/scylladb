@@ -900,14 +900,6 @@ void reader_concurrency_semaphore::on_permit_unblocked() noexcept {
     --_permit_list->stats.blocked_permits;
 }
 
-reader_permit reader_concurrency_semaphore::make_permit(const schema* const schema, const char* const op_name) {
-    return reader_permit(*this, schema, std::string_view(op_name), {});
-}
-
-reader_permit reader_concurrency_semaphore::make_permit(const schema* const schema, sstring&& op_name) {
-    return reader_permit(*this, schema, std::move(op_name), {});
-}
-
 future<reader_permit> reader_concurrency_semaphore::obtain_permit(const schema* const schema, const char* const op_name, size_t memory,
         db::timeout_clock::time_point timeout) {
     auto permit = reader_permit(*this, schema, std::string_view(op_name), {1, static_cast<ssize_t>(memory)});
