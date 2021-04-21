@@ -1319,6 +1319,7 @@ future<> sstable::open_data() noexcept {
         }
     }).then([this] {
         _open_mode.emplace(open_flags::ro);
+        _stats.on_open_for_reading();
     });
 }
 
@@ -1372,6 +1373,7 @@ future<> sstable::create_data() noexcept {
     opt.sloppy_size = true;
     return open_or_create_data(oflags, std::move(opt)).then([this, oflags] {
         _open_mode.emplace(oflags);
+        _stats.on_open_for_writing();
     });
 }
 
@@ -2352,6 +2354,13 @@ future<> sstable::close_files() {
     _on_closed(*this);
 
     return when_all_succeed(std::move(index_closed), std::move(data_closed), std::move(unlinked)).discard_result().then([this] {
+        if (_open_mode) {
+            if (_open_mode.value() == open_flags::ro) {
+                _stats.on_close_for_reading();
+            } else {
+                _stats.on_close_for_writing();
+            }
+        }
         _open_mode.reset();
     });
 }
@@ -2694,6 +2703,7 @@ sstable::unlink() noexcept {
     }
 
     co_await std::move(remove_fut);
+    _stats.on_delete();
 }
 
 future<>
@@ -2875,6 +2885,23 @@ future<> init_metrics() {
             sm::description("Was local deletion time capped at maximum allowed value in Statistics")),
         sm::make_counter("capped_tombstone_deletion_time", [] { return sstables_stats::get_shard_stats().capped_tombstone_deletion_time; },
             sm::description("Was partition tombstone deletion time capped at maximum allowed value")),
+
+        sm::make_derive("total_open_for_reading", [] { return sstables_stats::get_shard_stats().open_for_reading; },
+            sm::description("Counter of sstables open for reading")),
+        sm::make_derive("total_open_for_writing", [] { return sstables_stats::get_shard_stats().open_for_writing; },
+            sm::description("Counter of sstables open for writing")),
+
+        sm::make_gauge("currently_open_for_reading", [] {
+            return sstables_stats::get_shard_stats().open_for_reading -
+                   sstables_stats::get_shard_stats().closed_for_reading;
+        }, sm::description("Number of sstables currently open for reading")),
+        sm::make_gauge("currently_open_for_writing", [] {
+            return sstables_stats::get_shard_stats().open_for_writing -
+                   sstables_stats::get_shard_stats().closed_for_writing;
+        }, sm::description("Number of sstables currently open for writing")),
+
+        sm::make_derive("total_deleted", [] { return sstables_stats::get_shard_stats().deleted; },
+            sm::description("Counter of deleted sstables")),
     });
   });
 }

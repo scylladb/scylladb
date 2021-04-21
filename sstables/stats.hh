@@ -41,6 +41,11 @@ class sstables_stats {
         uint64_t row_reads = 0;
         uint64_t capped_local_deletion_time = 0;
         uint64_t capped_tombstone_deletion_time = 0;
+        uint64_t open_for_reading = 0;
+        uint64_t closed_for_reading = 0;
+        uint64_t open_for_writing = 0;
+        uint64_t closed_for_writing = 0;
+        uint64_t deleted = 0;
     } _shard_stats;
 
     stats& _stats = _shard_stats;
@@ -104,6 +109,24 @@ public:
 
     inline void on_capped_tombstone_deletion_time() noexcept {
         ++_stats.capped_tombstone_deletion_time;
+    }
+
+    inline void on_open_for_reading() noexcept {
+        ++_stats.open_for_reading;
+    }
+    inline void on_close_for_reading() noexcept {
+        ++_stats.closed_for_reading;
+    }
+
+    inline void on_open_for_writing() noexcept {
+        ++_stats.open_for_writing;
+    }
+    inline void on_close_for_writing() noexcept {
+        ++_stats.closed_for_writing;
+    }
+
+    inline void on_delete() noexcept {
+        ++_stats.deleted;
     }
 };
 
