@@ -42,11 +42,15 @@
 #pragma once
 
 #include <seastar/core/shared_ptr.hh>
-#include "column_identifier.hh"
+#include <seastar/core/sstring.hh>
+#include "seastarx.hh"
+#include "bytes.hh"
 
 #include <optional>
 
 namespace cql3 {
+
+class column_identifier;
 
 class ut_name final {
     std::optional<sstring> _ks_name;

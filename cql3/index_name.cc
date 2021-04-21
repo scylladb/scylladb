@@ -40,6 +40,7 @@
  */
 
 #include "cql3/index_name.hh"
+#include "cql3/cf_name.hh"
 
 namespace cql3 {
 

@@ -44,9 +44,10 @@
 #include "cql3/keyspace_element_name.hh"
 
 #include <seastar/core/shared_ptr.hh>
-#include "cql3/cf_name.hh"
 
 namespace cql3 {
+
+class cf_name;
 
 class index_name : public keyspace_element_name {
     sstring _idx_name = "";

@@ -40,6 +40,7 @@
  */
 
 #include "cql3/ut_name.hh"
+#include "cql3/column_identifier.hh"
 
 namespace cql3 {
 

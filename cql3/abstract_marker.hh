@@ -41,11 +41,12 @@
 
 #pragma once
 
-#include "cql3/variable_specifications.hh"
-#include "cql3/column_specification.hh"
 #include "cql3/term.hh"
 
 namespace cql3 {
+
+class column_specification;
+class variable_specifications;
 
 /**
  * A single bind marker.

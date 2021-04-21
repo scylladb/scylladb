@@ -41,11 +41,13 @@
 
 #pragma once
 
-#include "exceptions/exceptions.hh"
 #include "cql3/term.hh"
-#include <optional>
 
 namespace cql3 {
+
+class query_options;
+class variable_specifications;
+
 /**
  * Utility class for the Parser to gather attributes for modification
  * statements.

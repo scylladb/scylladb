@@ -40,6 +40,8 @@
  */
 
 #include "cql3/variable_specifications.hh"
+#include "cql3/column_identifier.hh"
+#include "cql3/column_specification.hh"
 
 namespace cql3 {
 
