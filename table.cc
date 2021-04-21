@@ -72,52 +72,18 @@ table::make_sstable_reader(schema_ptr s,
     // we want to optimize and read exactly this partition. As a
     // consequence, fast_forward_to() will *NOT* work on the result,
     // regardless of what the fwd_mr parameter says.
-    auto ms = [&] () -> mutation_source {
         if (pr.is_singular() && pr.start()->value().has_key()) {
             const dht::ring_position& pos = pr.start()->value();
             if (dht::shard_of(*s, pos.token()) != this_shard_id()) {
-                return mutation_source([] (
-                        schema_ptr s,
-                        reader_permit permit,
-                        const dht::partition_range& pr,
-                        const query::partition_slice& slice,
-                        const io_priority_class& pc,
-                        tracing::trace_state_ptr trace_state,
-                        streamed_mutation::forwarding fwd,
-                        mutation_reader::forwarding fwd_mr) {
                     return make_empty_flat_reader(s, std::move(permit)); // range doesn't belong to this shard
-                });
             }
 
-            return mutation_source([this, sstables=std::move(sstables)] (
-                    schema_ptr s,
-                    reader_permit permit,
-                    const dht::partition_range& pr,
-                    const query::partition_slice& slice,
-                    const io_priority_class& pc,
-                    tracing::trace_state_ptr trace_state,
-                    streamed_mutation::forwarding fwd,
-                    mutation_reader::forwarding fwd_mr) {
                 return sstables->create_single_key_sstable_reader(const_cast<column_family*>(this), std::move(s), std::move(permit),
                         _stats.estimated_sstable_per_read, pr, slice, pc, std::move(trace_state), fwd, fwd_mr);
-            });
         } else {
-            return mutation_source([sstables=std::move(sstables)] (
-                    schema_ptr s,
-                    reader_permit permit,
-                    const dht::partition_range& pr,
-                    const query::partition_slice& slice,
-                    const io_priority_class& pc,
-                    tracing::trace_state_ptr trace_state,
-                    streamed_mutation::forwarding fwd,
-                    mutation_reader::forwarding fwd_mr) {
                 return sstables->make_local_shard_sstable_reader(std::move(s), std::move(permit), pr, slice, pc,
                         std::move(trace_state), fwd, fwd_mr);
-            });
         }
-    }();
-
-    return ms.make_reader(std::move(s), std::move(permit), pr, slice, pc, std::move(trace_state), fwd, fwd_mr);
 }
 
 lw_shared_ptr<sstables::sstable_set> table::make_compound_sstable_set() {
