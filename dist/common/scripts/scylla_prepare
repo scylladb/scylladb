@@ -74,6 +74,9 @@ def create_perftune_conf(cfg):
     if cfg.has_option('SET_CLOCKSOURCE') and cfg.get('SET_CLOCKSOURCE') == 'yes':
         params += ' --tune system --tune-clock'
 
+    if cfg.has_option('DISABLE_WRITEBACK_CACHE') and cfg.get('DISABLE_WRITEBACK_CACHE') == 'yes':
+        params += ' --write-back-cache=false'
+
     if len(params) > 0:
         if os.path.exists('/etc/scylla.d/perftune.yaml'):
             return True

@@ -45,3 +45,6 @@ SCYLLA_ARGS="--log-to-syslog 1 --log-to-stdout 0 --default-log-level info --netw
 
 # setup as AMI instance
 AMI=no
+
+# Disable disk writeback cache
+DISABLE_WRITEBACK_CACHE=no
