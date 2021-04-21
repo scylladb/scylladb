@@ -162,7 +162,20 @@ time_window_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> i
     for (auto& pair : all_buckets.first) {
         auto ssts = std::move(pair.second);
         if (ssts.size() >= offstrategy_threshold) {
-            ssts.resize(std::min(ssts.size(), max_sstables));
+            bool compact_all_sstables_in_window = false;
+            if (mode == reshape_mode::strict) {
+                std::sort(ssts.begin(), ssts.end(), [&schema] (const shared_sstable& a, const shared_sstable& b) {
+                    return dht::ring_position(a->get_first_decorated_key()).less_compare(*schema, dht::ring_position(b->get_first_decorated_key()));
+                });
+                // All sstables in a window can be compacted at once if they're disjoint, given that partitioned set
+                // will incrementally open sstables which translates into bounded memory usage.
+                if (sstable_set_overlapping_count(schema, ssts) == 0) {
+                    compact_all_sstables_in_window = true;
+                }
+            }
+            if (!compact_all_sstables_in_window) {
+                ssts.resize(std::min(ssts.size(), max_sstables));
+            }
             compaction_descriptor desc(std::move(ssts), std::optional<sstables::sstable_set>(), iop);
             desc.options = compaction_options::make_reshape();
             return desc;

@@ -1113,4 +1113,16 @@ flat_mutation_reader make_restricted_range_sstable_reader(
     return make_restricted_flat_reader(std::move(ms), std::move(s), std::move(permit), pr, slice, pc, std::move(trace_state), fwd, fwd_mr);
 }
 
+unsigned sstable_set_overlapping_count(const schema_ptr& schema, const std::vector<shared_sstable>& sstables) {
+    unsigned overlapping_sstables = 0;
+    auto prev_last = dht::ring_position::min();
+    for (auto& sst : sstables) {
+        if (dht::ring_position(sst->get_first_decorated_key()).tri_compare(*schema, prev_last) <= 0) {
+            overlapping_sstables++;
+        }
+        prev_last = dht::ring_position(sst->get_last_decorated_key());
+    }
+    return overlapping_sstables;
+}
+
 } // namespace sstables

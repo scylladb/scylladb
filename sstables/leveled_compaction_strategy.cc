@@ -144,14 +144,7 @@ leveled_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> input
     std::array<std::vector<shared_sstable>, leveled_manifest::MAX_LEVELS> level_info;
 
     auto is_disjoint = [this, schema] (const std::vector<shared_sstable>& sstables, unsigned tolerance) -> std::tuple<bool, unsigned> {
-        unsigned overlapping_sstables = 0;
-        auto prev_last = dht::ring_position::min();
-        for (auto& sst : sstables) {
-            if (dht::ring_position(sst->get_first_decorated_key()).less_compare(*schema, prev_last)) {
-                overlapping_sstables++;
-            }
-            prev_last = dht::ring_position(sst->get_last_decorated_key());
-        }
+        auto overlapping_sstables = sstable_set_overlapping_count(schema, sstables);
         return { overlapping_sstables <= tolerance, overlapping_sstables };
     };
 

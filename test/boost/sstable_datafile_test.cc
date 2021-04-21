@@ -7042,6 +7042,76 @@ SEASTAR_TEST_CASE(test_offstrategy_sstable_compaction) {
     });
 }
 
+SEASTAR_TEST_CASE(twcs_reshape_with_disjoint_set_test) {
+    static constexpr unsigned disjoint_sstable_count = 256;
+
+    return test_env::do_with_async([] (test_env& env) {
+        auto builder = schema_builder("tests", "twcs_reshape_test")
+                .with_column("id", utf8_type, column_kind::partition_key)
+                .with_column("cl", ::timestamp_type, column_kind::clustering_key)
+                .with_column("value", int32_type);
+        builder.set_compaction_strategy(sstables::compaction_strategy_type::time_window);
+        std::map <sstring, sstring> opts = {
+                {time_window_compaction_strategy_options::COMPACTION_WINDOW_UNIT_KEY, "HOURS"},
+                {time_window_compaction_strategy_options::COMPACTION_WINDOW_SIZE_KEY, "1"},
+        };
+        builder.set_compaction_strategy_options(std::move(opts));
+        auto s = builder.build();
+        auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::time_window, std::move(opts));
+
+        auto next_timestamp = [](auto step) {
+            using namespace std::chrono;
+            return (gc_clock::now().time_since_epoch() + duration_cast<microseconds>(step)).count();
+        };
+
+        auto tokens = token_generation_for_shard(disjoint_sstable_count, this_shard_id(), test_db_config.murmur3_partitioner_ignore_msb_bits(), smp::count);
+
+        auto make_row = [&](unsigned token_idx, std::chrono::hours step) {
+            static thread_local int32_t value = 1;
+            auto key_str = tokens[token_idx].first;
+            auto key = partition_key::from_exploded(*s, {to_bytes(key_str)});
+
+            mutation m(s, key);
+            auto next_ts = next_timestamp(step);
+            auto c_key = clustering_key::from_exploded(*s, {::timestamp_type->decompose(next_ts)});
+            m.set_clustered_cell(c_key, bytes("value"), data_value(int32_t(value++)), next_ts);
+            return m;
+        };
+
+        auto tmp = tmpdir();
+
+        auto sst_gen = [&env, s, &tmp, gen = make_lw_shared<unsigned>(1)]() {
+            return env.make_sstable(s, tmp.path().string(), (*gen)++, sstables::sstable::version_types::md, big);
+        };
+
+        {
+            // create set of 256 disjoint ssts that belong to the same time window and expect that twcs reshape allows them all to be compacted at once
+
+            std::vector<sstables::shared_sstable> sstables;
+            sstables.reserve(disjoint_sstable_count);
+            for (auto i = 0; i < disjoint_sstable_count; i++) {
+                auto sst = make_sstable_containing(sst_gen, {make_row(i, std::chrono::hours(1))});
+                sstables.push_back(std::move(sst));
+            }
+
+            BOOST_REQUIRE(cs.get_reshaping_job(sstables, s, default_priority_class(), reshape_mode::strict).sstables.size() == disjoint_sstable_count);
+        }
+
+        {
+            // create set of 256 overlapping ssts that belong to the same time window and expect that twcs reshape allows only 32 to be compacted at once
+
+            std::vector<sstables::shared_sstable> sstables;
+            sstables.reserve(disjoint_sstable_count);
+            for (auto i = 0; i < disjoint_sstable_count; i++) {
+                auto sst = make_sstable_containing(sst_gen, {make_row(0, std::chrono::hours(1))});
+                sstables.push_back(std::move(sst));
+            }
+
+            BOOST_REQUIRE(cs.get_reshaping_job(sstables, s, default_priority_class(), reshape_mode::strict).sstables.size() == s->max_compaction_threshold());
+        }
+    });
+}
+
 SEASTAR_TEST_CASE(single_key_reader_through_compound_set_test) {
     return test_env::do_with_async([] (test_env& env) {
         auto builder = schema_builder("tests", "single_key_reader_through_compound_set_test")
