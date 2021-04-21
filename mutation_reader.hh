@@ -345,37 +345,6 @@ public:
 mutation_source make_empty_mutation_source();
 snapshot_source make_empty_snapshot_source();
 
-extern const ssize_t new_reader_base_cost;
-
-// Creates a restricted reader whose resource usages will be tracked
-// during it's lifetime. If there are not enough resources (dues to
-// existing readers) to create the new reader, it's construction will
-// be deferred until there are sufficient resources.
-// The internal reader once created will not be hindered in it's work
-// anymore. Reusorce limits are determined by the config which contains
-// a semaphore to track and limit the memory usage of readers. It also
-// contains a timeout and a maximum queue size for inactive readers
-// whose construction is blocked.
-flat_mutation_reader make_restricted_flat_reader(
-        mutation_source ms,
-        schema_ptr s,
-        reader_permit permit,
-        const dht::partition_range& range,
-        const query::partition_slice& slice,
-        const io_priority_class& pc = default_priority_class(),
-        tracing::trace_state_ptr trace_state = nullptr,
-        streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
-        mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes);
-
-inline flat_mutation_reader make_restricted_flat_reader(
-                                              mutation_source ms,
-                                              schema_ptr s,
-                                              reader_permit permit,
-                                              const dht::partition_range& range = query::full_partition_range) {
-    auto& full_slice = s->full_slice();
-    return make_restricted_flat_reader(std::move(ms), std::move(s), std::move(permit), range, full_slice);
-}
-
 using mutation_source_opt = optimized_optional<mutation_source>;
 
 // Adapts a non-movable FlattenedConsumer to a movable one.

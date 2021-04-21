@@ -319,6 +319,8 @@ class database_sstable_write_monitor;
 
 using enable_backlog_tracker = bool_class<class enable_backlog_tracker_tag>;
 
+extern const ssize_t new_reader_base_cost;
+
 struct table_stats {
     /** Number of times flush has resulted in the memtable being switched out. */
     int64_t memtable_switch_count = 0;
