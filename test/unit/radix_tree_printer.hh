@@ -22,6 +22,7 @@
 #pragma once
 
 #include <fmt/core.h>
+#include "utils/compact-radix-tree.hh"
 
 namespace compact_radix_tree {
 

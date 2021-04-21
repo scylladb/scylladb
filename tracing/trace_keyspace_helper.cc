@@ -49,6 +49,7 @@
 #include "types/set.hh"
 #include "types/map.hh"
 #include "utils/UUID_gen.hh"
+#include "utils/fb_utilities.hh"
 
 namespace tracing {
 

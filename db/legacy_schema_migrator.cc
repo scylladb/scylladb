@@ -61,6 +61,7 @@
 #include "system_keyspace.hh"
 #include "schema_tables.hh"
 #include "schema_builder.hh"
+#include "service/storage_proxy.hh"
 #include "utils/rjson.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/untyped_result_set.hh"

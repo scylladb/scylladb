@@ -44,6 +44,7 @@
 #include "boost/range/adaptor/map.hpp"
 
 #include "service/migration_manager.hh"
+#include "service/storage_proxy.hh"
 #include "database.hh"
 #include "user_types_metadata.hh"
 

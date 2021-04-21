@@ -22,16 +22,26 @@
 
 #pragma once
 
+#include <seastar/core/sharded.hh>
 #include "cdc/metadata.hh"
 #include "cdc/generation_id.hh"
 #include "gms/i_endpoint_state_change_subscriber.hh"
 
 namespace db {
 class system_distributed_keyspace;
+class config;
 }
 
 namespace gms {
 class gossiper;
+}
+
+namespace seastar {
+class abort_source;
+}
+
+namespace locator {
+class shared_token_metadata;
 }
 
 namespace cdc {

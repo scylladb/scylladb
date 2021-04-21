@@ -27,6 +27,7 @@
 #include <fmt/core.h>
 #include "utils/allocation_strategy.hh"
 #include "utils/array-search.hh"
+#include <boost/intrusive/parent_from_member.hpp>
 
 class size_calculator;
 

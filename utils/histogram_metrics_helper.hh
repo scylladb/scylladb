@@ -23,6 +23,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <seastar/core/metrics_types.hh>
 #include "seastarx.hh"
 #include "estimated_histogram.hh"

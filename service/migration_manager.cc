@@ -42,6 +42,7 @@
 #include <seastar/core/sleep.hh>
 #include "schema_registry.hh"
 #include "service/migration_manager.hh"
+#include "service/storage_proxy.hh"
 
 #include "service/migration_listener.hh"
 #include "message/messaging_service.hh"

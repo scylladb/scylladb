@@ -27,9 +27,9 @@
 #include <seastar/json/json_elements.hh>
 #include <seastar/core/sharded.hh>
 
-#include "service/storage_proxy.hh"
 #include "service/migration_manager.hh"
 #include "service/client_state.hh"
+#include "service_permit.hh"
 #include "db/timeout_clock.hh"
 
 #include "alternator/error.hh"
@@ -51,6 +51,7 @@ namespace cql3::selection {
 
 namespace service {
     class storage_service;
+    class storage_proxy;
 }
 
 namespace cdc {

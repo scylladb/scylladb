@@ -20,6 +20,7 @@
  */
 
 #include <boost/algorithm/string/split.hpp>
+#include <boost/algorithm/string/classification.hpp>
 #include <json/json.h>
 
 #include <boost/range/irange.hpp>

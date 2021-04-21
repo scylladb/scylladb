@@ -21,6 +21,9 @@
 
 #pragma once
 
+#include <stddef.h>
+#include "utils/intrusive_btree.hh"
+
 namespace intrusive_b {
 
 class member_hook;

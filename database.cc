@@ -35,6 +35,7 @@
 #include <seastar/core/metrics.hh>
 #include <seastar/util/defer.hh>
 #include <boost/algorithm/string/split.hpp>
+#include <boost/algorithm/string/erase.hpp>
 #include "sstables/sstables.hh"
 #include "sstables/sstables_manager.hh"
 #include "sstables/compaction.hh"
@@ -54,6 +55,7 @@
 #include "gms/feature_service.hh"
 
 #include "utils/human_readable.hh"
+#include "utils/fb_utilities.hh"
 
 #include "db/timeout_clock.hh"
 #include "db/large_data_handler.hh"

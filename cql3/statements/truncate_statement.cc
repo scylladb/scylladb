@@ -44,6 +44,7 @@
 #include "cql3/cql_statement.hh"
 #include "database.hh"
 #include "cql3/query_processor.hh"
+#include "service/storage_proxy.hh"
 #include <optional>
 
 namespace cql3 {

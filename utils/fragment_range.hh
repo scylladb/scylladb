@@ -26,6 +26,7 @@
 #include <boost/range/algorithm/for_each.hpp>
 #include <seastar/net/byteorder.hh>
 #include <seastar/core/print.hh>
+#include <seastar/util/backtrace.hh>
 
 #include "marshal_exception.hh"
 #include "bytes.hh"

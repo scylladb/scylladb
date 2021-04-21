@@ -24,6 +24,7 @@
 #include "db/config.hh"
 #include "database.hh"
 #include "gms/feature_service.hh"
+#include "service/storage_proxy.hh"
 
 namespace cql3 {
 namespace statements {

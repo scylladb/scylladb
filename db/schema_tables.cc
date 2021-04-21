@@ -41,6 +41,7 @@
 #include "db/schema_tables.hh"
 
 #include "service/migration_manager.hh"
+#include "service/storage_proxy.hh"
 #include "gms/feature_service.hh"
 #include "partition_slice_builder.hh"
 #include "dht/i_partitioner.hh"

@@ -28,6 +28,8 @@
 #include "types/list.hh"
 #include "test/lib/exception_utils.hh"
 
+#include <boost/algorithm/string/join.hpp>
+
 // Specifies that the given 'cql' query fails with the 'msg' message.
 // Requires a cql_test_env. The caller must be inside thread.
 #define REQUIRE_INVALID(e, cql, msg) \

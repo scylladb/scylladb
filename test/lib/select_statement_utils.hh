@@ -22,6 +22,7 @@
 #pragma once
 
 #include <seastar/core/future.hh>
+#include "seastarx.hh"
 
 namespace cql3 {
 

@@ -31,6 +31,7 @@
 #include "exceptions/exceptions.hh"
 #include "service/query_state.hh"
 #include "service/storage_service.hh"
+#include "service/storage_proxy.hh"
 
 #include <seastar/core/future-util.hh>
 #include <seastar/core/seastar.hh>

@@ -42,6 +42,7 @@
 #include "alter_keyspace_statement.hh"
 #include "prepared_statement.hh"
 #include "service/migration_manager.hh"
+#include "service/storage_proxy.hh"
 #include "db/system_keyspace.hh"
 #include "database.hh"
 #include "cql3/query_processor.hh"
