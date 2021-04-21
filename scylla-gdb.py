@@ -3474,8 +3474,13 @@ class scylla_sstables(gdb.Command):
         sstable_histogram = histogram(print_indicators=False)
 
         for sst in sstable_generator():
-            if not sst['_open']:
+            try:
+                is_open = sst['_open']
+            except gdb.error:
+                is_open = bool(std_optional(sst['_open_mode']))
+            if not is_open:
                 continue
+
             count += 1
             size = 0
 

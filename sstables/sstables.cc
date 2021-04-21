@@ -1297,7 +1297,6 @@ future<> sstable::open_data() noexcept {
         }
         auto* sm = _components->scylla_metadata->data.get<scylla_metadata_type::Sharding, sharding_metadata>();
         if (!sm) {
-            _open = true;
             return make_ready_future<>();
         }
         auto c = &sm->token_ranges.elements;
@@ -1307,7 +1306,6 @@ future<> sstable::open_data() noexcept {
             return make_ready_future<>();
         }).then([this, c] () mutable {
             *c = {};
-            _open = true;
             return make_ready_future<>();
         });
     }).then([this] {
@@ -1319,6 +1317,8 @@ future<> sstable::open_data() noexcept {
         if (origin) {
             _origin = sstring(to_sstring_view(bytes_view(origin->value)));
         }
+    }).then([this] {
+        _open_mode.emplace(open_flags::ro);
     });
 }
 
@@ -1370,7 +1370,9 @@ future<> sstable::create_data() noexcept {
     file_open_options opt;
     opt.extent_allocation_size_hint = 32 << 20;
     opt.sloppy_size = true;
-    return open_or_create_data(oflags, std::move(opt));
+    return open_or_create_data(oflags, std::move(opt)).then([this, oflags] {
+        _open_mode.emplace(oflags);
+    });
 }
 
 future<> sstable::read_filter(const io_priority_class& pc) {
@@ -2349,7 +2351,9 @@ future<> sstable::close_files() {
 
     _on_closed(*this);
 
-    return when_all_succeed(std::move(index_closed), std::move(data_closed), std::move(unlinked)).discard_result();
+    return when_all_succeed(std::move(index_closed), std::move(data_closed), std::move(unlinked)).discard_result().then([this] {
+        _open_mode.reset();
+    });
 }
 
 static inline sstring dirname(const sstring& fname) {
