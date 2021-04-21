@@ -298,44 +298,46 @@ public:
     }
     virtual future<raft::snapshot_reply> send_snapshot(raft::server_id id, const raft::install_snapshot& snap) {
         if (!(*_connected)(id, _id)) {
-            return make_ready_future<raft::snapshot_reply>(raft::snapshot_reply{
-                    .current_term = snap.current_term,
-                    .success = false});
+            return make_exception_future<raft::snapshot_reply>(std::runtime_error("cannot send snapshot since nodes are disconnected"));
         }
         (*_snapshots)[id] = (*_snapshots)[_id];
         return net[id]->_client->apply_snapshot(_id, std::move(snap));
     }
     virtual future<> send_append_entries(raft::server_id id, const raft::append_request& append_request) {
-        if (!(*_connected)(id, _id) || (_packet_drops && !(rand() % 5))) {
-            return make_ready_future<>();
+        if (!(*_connected)(id, _id)) {
+            return make_exception_future<>(std::runtime_error("cannot send append since nodes are disconnected"));
         }
-        net[id]->_client->append_entries(_id, append_request);
+        if (!_packet_drops || (rand() % 5)) {
+            net[id]->_client->append_entries(_id, append_request);
+        }
         return make_ready_future<>();
     }
     virtual future<> send_append_entries_reply(raft::server_id id, const raft::append_reply& reply) {
-        if (!(*_connected)(id, _id) || (_packet_drops && !(rand() % 5))) {
-            return make_ready_future<>();
+        if (!(*_connected)(id, _id)) {
+            return make_exception_future<>(std::runtime_error("cannot send append reply since nodes are disconnected"));
         }
-        net[id]->_client->append_entries_reply(_id, std::move(reply));
+        if (!_packet_drops || (rand() % 5)) {
+            net[id]->_client->append_entries_reply(_id, std::move(reply));
+        }
         return make_ready_future<>();
     }
     virtual future<> send_vote_request(raft::server_id id, const raft::vote_request& vote_request) {
         if (!(*_connected)(id, _id)) {
-            return make_ready_future<>();
+            return make_exception_future<>(std::runtime_error("cannot send vote request since nodes are disconnected"));
         }
         net[id]->_client->request_vote(_id, std::move(vote_request));
         return make_ready_future<>();
     }
     virtual future<> send_vote_reply(raft::server_id id, const raft::vote_reply& vote_reply) {
         if (!(*_connected)(id, _id)) {
-            return make_ready_future<>();
+            return make_exception_future<>(std::runtime_error("cannot send vote reply since nodes are disconnected"));
         }
         net[id]->_client->request_vote_reply(_id, std::move(vote_reply));
         return make_ready_future<>();
     }
     virtual future<> send_timeout_now(raft::server_id id, const raft::timeout_now& timeout_now) {
         if (!(*_connected)(id, _id)) {
-            return make_ready_future<>();
+            return make_exception_future<>(std::runtime_error("cannot send timeout now since nodes are disconnected"));
         }
         net[id]->_client->timeout_now_request(_id, std::move(timeout_now));
         return make_ready_future<>();
