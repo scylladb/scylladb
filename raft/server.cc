@@ -482,7 +482,13 @@ future<> server_impl::io_fiber(index_t last_stable) {
             if (batch.messages.size()) {
                 // After entries are persisted we can send messages.
                 co_await seastar::parallel_for_each(std::move(batch.messages), [this] (std::pair<server_id, rpc_message>& message) {
-                    return send_message(message.first, std::move(message.second));
+                    return send_message(message.first, std::move(message.second)).then_wrapped([this, &message] (future<>&& f) {
+                        if (f.failed()) {
+                            // Not being able to send a message is not a critical error
+                            logger.debug("[{}] io_fiber failed to send a message to {}: {}", _id, message.first, f.get_exception());
+                        }
+                        return make_ready_future();
+                    });
                 });
             }
 
