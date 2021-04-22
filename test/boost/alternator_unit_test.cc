@@ -23,6 +23,7 @@
 #include <boost/test/included/unit_test.hpp>
 
 #include <seastar/util/defer.hh>
+#include <seastar/core/memory.hh>
 #include "alternator/base64.hh"
 
 static bytes_view to_bytes_view(const std::string& s) {
@@ -81,10 +82,10 @@ BOOST_AUTO_TEST_CASE(test_base64_begins_with) {
 }
 
 BOOST_AUTO_TEST_CASE(test_allocator_fail_gracefully) {
-// Unfortunately the address sanitizer fails if the allocator is not able
-// to allocate the requested memory. The test is therefore skipped for debug  mode
-#ifndef DEBUG
-    static constexpr size_t too_large_alloc_size = 0xffffffffff;
+    // Allocation size is set to a ridiculously high value to ensure
+    // that it will immediately fail - trying to lazily allocate just
+    // a little more than total memory may still succeed.
+    static size_t too_large_alloc_size = memory::stats().total_memory() * 1024 * 1024;
     rjson::allocator allocator;
     // Impossible allocation should throw
     BOOST_REQUIRE_THROW(allocator.Malloc(too_large_alloc_size), rjson::error);
@@ -96,5 +97,4 @@ BOOST_AUTO_TEST_CASE(test_allocator_fail_gracefully) {
     // and also be destroyed gracefully later
     rapidjson::internal::Stack stack(&allocator, 0);
     BOOST_REQUIRE_THROW(stack.Push<char>(too_large_alloc_size), rjson::error);
-#endif
 }
