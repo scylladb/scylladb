@@ -279,57 +279,6 @@ SEASTAR_TEST_CASE(test_fragmenting_and_freezing) {
     });
 }
 
-
-SEASTAR_TEST_CASE(test_partition_checksum) {
-    return seastar::async([] {
-        for_each_mutation_pair([] (auto&& m1, auto&& m2, are_equal eq) {
-            auto get_hash = [] (mutation m) {
-                return partition_checksum::compute(flat_mutation_reader_from_mutations(tests::make_permit(), { m }),
-                                                   repair_checksum::streamed).get0();
-            };
-            auto h1 = get_hash(m1);
-            auto h2 = get_hash(m2);
-            if (eq) {
-                if (h1 != h2) {
-                    BOOST_FAIL(format("Hash should be equal for {} and {}", m1, m2));
-                }
-            } else {
-                // We're using a strong hasher, collision should be unlikely
-                if (h1 == h2) {
-                    BOOST_FAIL(format("Hash should be different for {} and {}", m1, m2));
-                }
-            }
-        });
-
-        auto test_random_streams = [] (random_mutation_generator&& gen) {
-            for (auto i = 0; i < 4; i++) {
-                auto muts = gen(4);
-                auto muts2 = muts;
-                std::vector<partition_checksum> checksum;
-                while (!muts2.empty()) {
-                    auto chk = partition_checksum::compute(flat_mutation_reader_from_mutations(tests::make_permit(), muts2),
-                                                           repair_checksum::streamed).get0();
-                    BOOST_REQUIRE(boost::count(checksum, chk) == 0);
-                    checksum.emplace_back(chk);
-                    muts2.pop_back();
-                }
-                std::vector<partition_checksum> individually_computed_checksums(muts.size());
-                for (auto k = 0u; k < muts.size(); k++) {
-                    auto chk = partition_checksum::compute(flat_mutation_reader_from_mutations(tests::make_permit(), { muts[k] }),
-                                                           repair_checksum::streamed).get0();
-                    for (auto j = 0u; j < (muts.size() - k); j++) {
-                        individually_computed_checksums[j].add(chk);
-                    }
-                }
-                BOOST_REQUIRE_EQUAL(checksum, individually_computed_checksums);
-            }
-        };
-
-        test_random_streams(random_mutation_generator(random_mutation_generator::generate_counters::no));
-        test_random_streams(random_mutation_generator(random_mutation_generator::generate_counters::yes));
-    });
-}
-
 SEASTAR_THREAD_TEST_CASE(test_flat_mutation_reader_move_buffer_content_to) {
     struct dummy_reader_impl : public flat_mutation_reader::impl {
         using flat_mutation_reader::impl::impl;

@@ -252,7 +252,7 @@
                  "UNUSED__STREAM_MUTATION",
                  "STREAM_MUTATION_DONE",
                  "COMPLETE_MESSAGE",
-                 "REPAIR_CHECKSUM_RANGE",
+                 "UNUSED__REPAIR_CHECKSUM_RANGE",
                  "GET_SCHEMA_VERSION"
                ]
             }

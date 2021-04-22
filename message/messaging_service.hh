@@ -73,7 +73,6 @@ class update_backlog;
 
 class frozen_mutation;
 class frozen_schema;
-class partition_checksum;
 class canonical_mutation;
 
 namespace dht {
@@ -120,7 +119,7 @@ enum class messaging_verb : int32_t {
     STREAM_MUTATION_DONE = 18,
     COMPLETE_MESSAGE = 19,
     // end of streaming verbs
-    REPAIR_CHECKSUM_RANGE = 20,
+    UNUSED__REPAIR_CHECKSUM_RANGE = 20,
     GET_SCHEMA_VERSION = 21,
     SCHEMA_CHECK = 22,
     COUNTER_MUTATION = 23,
@@ -347,11 +346,6 @@ public:
     void register_complete_message(std::function<future<> (const rpc::client_info& cinfo, UUID plan_id, unsigned dst_cpu_id, rpc::optional<bool> failed)>&& func);
     future<> send_complete_message(msg_addr id, UUID plan_id, unsigned dst_cpu_id, bool failed = false);
     future<> unregister_complete_message();
-
-    // Wrapper for REPAIR_CHECKSUM_RANGE verb
-    void register_repair_checksum_range(std::function<future<partition_checksum> (sstring keyspace, sstring cf, dht::token_range range, rpc::optional<repair_checksum> hash_version)>&& func);
-    future<> unregister_repair_checksum_range();
-    future<partition_checksum> send_repair_checksum_range(msg_addr id, sstring keyspace, sstring cf, dht::token_range range, repair_checksum hash_version);
 
     // Wrapper for REPAIR_GET_FULL_ROW_HASHES
     void register_repair_get_full_row_hashes(std::function<future<repair_hash_set> (const rpc::client_info& cinfo, uint32_t repair_meta_id)>&& func);
