@@ -296,7 +296,7 @@ public:
             _packet_drops(packet_drops) {
         net[_id] = this;
     }
-    virtual future<raft::snapshot_reply> send_snapshot(raft::server_id id, const raft::install_snapshot& snap) {
+    virtual future<raft::snapshot_reply> send_snapshot(raft::server_id id, const raft::install_snapshot& snap, seastar::abort_source& as) {
         if (!(*_connected)(id, _id)) {
             return make_exception_future<raft::snapshot_reply>(std::runtime_error("cannot send snapshot since nodes are disconnected"));
         }

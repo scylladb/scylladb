@@ -27,6 +27,7 @@
 #include <seastar/core/lowres_clock.hh>
 #include <seastar/core/future.hh>
 #include <seastar/util/log.hh>
+#include <seastar/core/abort_source.hh>
 #include "bytes_ostream.hh"
 #include "utils/UUID.hh"
 #include "internal.hh"
@@ -379,7 +380,7 @@ public:
     // A returned future is resolved when snapshot is sent and
     // successfully applied by a receiver. Will be waited to
     // know if a snapshot transfer succeeded.
-    virtual future<snapshot_reply> send_snapshot(server_id server_id, const install_snapshot& snap) = 0;
+    virtual future<snapshot_reply> send_snapshot(server_id server_id, const install_snapshot& snap, seastar::abort_source& as) = 0;
 
     // Send provided append_request to the supplied server, does
     // not wait for reply. The returned future resolves when

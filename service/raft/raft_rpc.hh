@@ -39,7 +39,7 @@ class raft_rpc : public raft::rpc {
 public:
     explicit raft_rpc(netw::messaging_service& ms, raft_services& raft_srvs, raft::group_id gid, raft::server_id srv_id);
 
-    future<raft::snapshot_reply> send_snapshot(raft::server_id server_id, const raft::install_snapshot& snap) override;
+    future<raft::snapshot_reply> send_snapshot(raft::server_id server_id, const raft::install_snapshot& snap, seastar::abort_source& as) override;
     future<> send_append_entries(raft::server_id id, const raft::append_request& append_request) override;
     future<> send_append_entries_reply(raft::server_id id, const raft::append_reply& reply) override;
     future<> send_vote_request(raft::server_id id, const raft::vote_request& vote_request) override;

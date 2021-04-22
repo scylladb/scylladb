@@ -130,8 +130,19 @@ private:
     // the respective entry is applied.
     std::map<index_t, op_status> _awaited_applies;
 
+    uint64_t _next_snapshot_transfer_id = 0;
+
+    struct snapshot_transfer {
+        future<> f;
+        seastar::abort_source as;
+        uint64_t id;
+    };
+
     // Contains active snapshot transfers, to be waited on exit.
-    std::unordered_map<server_id, future<>> _snapshot_transfers;
+    std::unordered_map<server_id, snapshot_transfer> _snapshot_transfers;
+
+    // Contains aborted snapshot transfers with still unresolved futures
+    std::unordered_map<uint64_t, future<>> _aborted_snapshot_transfers;
 
     // The optional is engaged when incoming snapshot is received
     // And the promise signalled when it is successfully applied or there was an error
@@ -158,6 +169,10 @@ private:
 
     template <typename T> future<> add_entry_internal(T command, wait_type type);
     template <typename Message> future<> send_message(server_id id, Message m);
+
+    // Abort all snapshot transfers.
+    // Called when no longer a leader or on shutdown
+    void abort_snapshot_transfers();
 
     // Apply a dummy entry. Dummy entry is not propagated to the
     // state machine, but waiting for it to be "applied" ensures
@@ -506,10 +521,14 @@ future<> server_impl::io_fiber(index_t last_stable) {
                 co_await _apply_entries.push_eventually(std::move(batch.committed));
             }
 
-            if (!_fsm->is_leader() && !_current_rpc_config.contains(server_address{_id})) {
-                // If the node is no longer part of a config and no longer the leader
-                // it will never know the status of entries it submitted
-                drop_waiters();
+            if (!_fsm->is_leader()) {
+                if (!_current_rpc_config.contains(server_address{_id})) {
+                    // If the node is no longer part of a config and no longer the leader
+                    // it will never know the status of entries it submitted
+                    drop_waiters();
+                }
+                // request aborts of snapshot transfers
+                abort_snapshot_transfers();
             }
         }
     } catch (seastar::broken_condition_variable&) {
@@ -523,7 +542,14 @@ future<> server_impl::io_fiber(index_t last_stable) {
 }
 
 void server_impl::send_snapshot(server_id dst, install_snapshot&& snp) {
-    future<> f = _rpc->send_snapshot(dst, std::move(snp)).then_wrapped([this, dst] (future<snapshot_reply> f) {
+    seastar::abort_source as;
+    uint64_t id = _next_snapshot_transfer_id++;
+    future<> f = _rpc->send_snapshot(dst, std::move(snp), as).then_wrapped([this, dst, id] (future<snapshot_reply> f) {
+        if (_aborted_snapshot_transfers.erase(id)) {
+            // The transfer was aborted
+            f.ignore_ready_future();
+            return;
+        }
         _snapshot_transfers.erase(dst);
         auto reply = raft::snapshot_reply{.current_term = _fsm->get_current_term(), .success = false};
         if (f.failed()) {
@@ -534,7 +560,7 @@ void server_impl::send_snapshot(server_id dst, install_snapshot&& snp) {
         }
         _fsm->step(dst, std::move(reply));
     });
-    auto res = _snapshot_transfers.emplace(dst, std::move(f));
+    auto res = _snapshot_transfers.emplace(dst, snapshot_transfer{std::move(f), std::move(as), id});
     assert(res.second);
 }
 
@@ -604,6 +630,15 @@ future<> server_impl::read_barrier() {
     co_return;
 }
 
+void server_impl::abort_snapshot_transfers() {
+    for (auto&& [id, t] : _snapshot_transfers) {
+        logger.trace("[{}] Request abort of snapshot transfer to {}", _id, id);
+        t.as.request_abort();
+        _aborted_snapshot_transfers.emplace(t.id, std::move(t.f));
+    }
+    _snapshot_transfers.clear();
+}
+
 future<> server_impl::abort() {
     logger.trace("abort() called");
     _fsm->stop();
@@ -622,11 +657,13 @@ future<> server_impl::abort() {
         f.set_exception(std::runtime_error("Snapshot application aborted"));
     }
 
-    auto snp_futures = _snapshot_transfers | boost::adaptors::map_values;
-    auto snapshots = seastar::when_all_succeed(snp_futures.begin(), snp_futures.end());
+    abort_snapshot_transfers();
+
+    auto snp_futures = _aborted_snapshot_transfers | boost::adaptors::map_values;
 
     return seastar::when_all_succeed(std::move(_io_status), std::move(_applier_status),
-            _rpc->abort(), _state_machine->abort(), _persistence->abort(), std::move(snapshots)).discard_result();
+            _rpc->abort(), _state_machine->abort(), _persistence->abort(),
+            seastar::when_all_succeed(snp_futures.begin(), snp_futures.end())).discard_result();
 }
 
 future<> server_impl::set_configuration(server_address_set c_new) {
