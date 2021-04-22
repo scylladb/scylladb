@@ -4,18 +4,27 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-{
-  pkgs ? null,
-  mode ? "dev",
-  useCcache ? false
-}:
-import ./default.nix ({
-  inherit mode useCcache;
-  testInputsFrom = pkgs: with pkgs; [
-    python3Packages.boto3
-    python3Packages.colorama
-    python3Packages.pytest
+args:
+
+import ./default.nix (args // {
+  shell = true;
+
+  devInputs = { pkgs, llvm }: with pkgs; [
+    # for impure building
+    ccache
+    distcc
+
+    # for debugging
+    binutils  # addr2line etc.
+    elfutils
+
+    gdbWithGreenThreadSupport
+
+    llvm.llvm
+    lz4       # coredumps on modern Systemd installations are lz4-compressed
+
+    # etc
+    diffutils
+    colordiff
   ];
-  gitPkg = pkgs: pkgs.gitFull;
-} //
-(if pkgs != null then { inherit pkgs; } else {}))
+})
