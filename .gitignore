@@ -28,3 +28,4 @@ test/*/*.reject
 docs/_build
 docs/poetry.lock
 compile_commands.json
+.ccls-cache/
