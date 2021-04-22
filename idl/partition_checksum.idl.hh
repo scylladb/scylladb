@@ -19,15 +19,6 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-enum class repair_checksum : uint8_t {
-    legacy = 0,
-    streamed = 1,
-};
-
-class partition_checksum {
-  std::array<uint8_t, 32> digest();
-};
-
 class repair_hash {
     uint64_t hash;
 };

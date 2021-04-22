@@ -537,7 +537,7 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::STREAM_MUTATION_DONE:
     case messaging_verb::COMPLETE_MESSAGE:
     case messaging_verb::REPLICATION_FINISHED:
-    case messaging_verb::REPAIR_CHECKSUM_RANGE:
+    case messaging_verb::UNUSED__REPAIR_CHECKSUM_RANGE:
     case messaging_verb::STREAM_MUTATION_FRAGMENTS:
     case messaging_verb::REPAIR_ROW_LEVEL_START:
     case messaging_verb::REPAIR_ROW_LEVEL_STOP:
@@ -1285,23 +1285,6 @@ future<> messaging_service::unregister_replication_finished() {
 future<> messaging_service::send_replication_finished(msg_addr id, inet_address from) {
     // FIXME: getRpcTimeout : conf.request_timeout_in_ms
     return send_message_timeout<void>(this, messaging_verb::REPLICATION_FINISHED, std::move(id), 10000ms, std::move(from));
-}
-
-// Wrapper for REPAIR_CHECKSUM_RANGE
-void messaging_service::register_repair_checksum_range(
-        std::function<future<partition_checksum> (sstring keyspace,
-                sstring cf, dht::token_range range, rpc::optional<repair_checksum> hash_version)>&& f) {
-    register_handler(this, messaging_verb::REPAIR_CHECKSUM_RANGE, std::move(f));
-}
-future<> messaging_service::unregister_repair_checksum_range() {
-    return unregister_handler(messaging_verb::REPAIR_CHECKSUM_RANGE);
-}
-future<partition_checksum> messaging_service::send_repair_checksum_range(
-        msg_addr id, sstring keyspace, sstring cf, ::dht::token_range range, repair_checksum hash_version)
-{
-    return send_message<partition_checksum>(this,
-            messaging_verb::REPAIR_CHECKSUM_RANGE, std::move(id),
-            std::move(keyspace), std::move(cf), std::move(range), hash_version);
 }
 
 // Wrapper for REPAIR_GET_FULL_ROW_HASHES

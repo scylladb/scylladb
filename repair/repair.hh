@@ -137,40 +137,6 @@ enum class repair_checksum {
     streamed = 1,
 };
 
-// The class partition_checksum calculates a 256-bit cryptographically-secure
-// checksum of a set of partitions fed to it. The checksum of a partition set
-// is calculated by calculating a strong hash function (SHA-256) of each
-// individual partition, and then XORing the individual hashes together.
-// XOR is good enough for merging strong checksums, and allows us to
-// independently calculate the checksums of different subsets of the original
-// set, and then combine the results into one checksum with the add() method.
-// The hash of an individual partition uses both its key and value.
-class partition_checksum {
-private:
-    std::array<uint8_t, 32> _digest; // 256 bits
-private:
-    static future<partition_checksum> compute_legacy(flat_mutation_reader m);
-    static future<partition_checksum> compute_streamed(flat_mutation_reader m);
-public:
-    constexpr partition_checksum() : _digest{} { }
-    explicit partition_checksum(std::array<uint8_t, 32> digest) : _digest(std::move(digest)) { }
-    static future<partition_checksum> compute(flat_mutation_reader mr, repair_checksum rt);
-    void add(const partition_checksum& other);
-    bool operator==(const partition_checksum& other) const;
-    bool operator!=(const partition_checksum& other) const { return !operator==(other); }
-    friend std::ostream& operator<<(std::ostream&, const partition_checksum&);
-    const std::array<uint8_t, 32>& digest() const;
-};
-
-// Calculate the checksum of the data held on all shards of a column family,
-// in the given token range.
-// All parameters to this function are constant references, and the caller
-// must ensure they live as long as the future returned by this function is
-// not resolved.
-future<partition_checksum> checksum_range(seastar::sharded<database> &db,
-        const sstring& keyspace, const sstring& cf,
-        const ::dht::token_range& range, repair_checksum rt);
-
 class repair_stats {
 public:
     uint64_t round_nr = 0;
@@ -510,14 +476,6 @@ struct node_ops_cmd_response {
 };
 
 namespace std {
-template<>
-struct hash<partition_checksum> {
-    size_t operator()(partition_checksum sum) const {
-        size_t h = 0;
-        std::copy_n(sum.digest().begin(), std::min(sizeof(size_t), sizeof(sum.digest())), reinterpret_cast<uint8_t*>(&h));
-        return h;
-    }
-};
 
 template<>
 struct hash<repair_hash> {
