@@ -22,6 +22,9 @@
 #include "rjson.hh"
 #include <seastar/core/print.hh>
 #include <seastar/core/thread.hh>
+#ifdef SANITIZE
+#include <seastar/core/memory.hh>
+#endif
 
 namespace rjson {
 
@@ -193,6 +196,13 @@ protected:
 };
 
 void* internal::throwing_allocator::Malloc(size_t size) {
+    // For bypassing the address sanitizer failure in debug mode - allocating
+    // too much memory results in an abort
+    #ifdef SANITIZE
+    if (size > memory::stats().total_memory()) {
+        throw rjson::error(format("Failed to allocate {} bytes", size));
+    }
+    #endif
     void* ret = base::Malloc(size);
     if (size > 0 && !ret) {
         throw rjson::error(format("Failed to allocate {} bytes", size));
@@ -201,6 +211,13 @@ void* internal::throwing_allocator::Malloc(size_t size) {
 }
 
 void* internal::throwing_allocator::Realloc(void* orig_ptr, size_t orig_size, size_t new_size) {
+    // For bypassing the address sanitizer failure in debug mode - allocating
+    // too much memory results in an abort
+    #ifdef SANITIZE
+    if (new_size > memory::stats().total_memory()) {
+        throw rjson::error(format("Failed to allocate {} bytes", new_size));
+    }
+    #endif
     void* ret = base::Realloc(orig_ptr, orig_size, new_size);
     if (new_size > 0 && !ret) {
         throw rjson::error(format("Failed to reallocate {} bytes to {} bytes from {}", orig_size, new_size, orig_ptr));
