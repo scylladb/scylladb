@@ -41,6 +41,7 @@
 #include "dht/token-sharding.hh"
 #include "cdc/cdc_extension.hh"
 #include "db/paxos_grace_seconds_extension.hh"
+#include "utils/rjson.hh"
 
 constexpr int32_t schema::NAME_LENGTH;
 
@@ -1598,10 +1599,7 @@ raw_view_info::raw_view_info(utils::UUID base_id, sstring base_name, bool includ
 { }
 
 column_computation_ptr column_computation::deserialize(bytes_view raw) {
-    return deserialize(rjson::parse(std::string_view(reinterpret_cast<const char*>(raw.begin()), reinterpret_cast<const char*>(raw.end()))));
-}
-
-column_computation_ptr column_computation::deserialize(const rjson::value& parsed) {
+    rjson::value parsed = rjson::parse(std::string_view(reinterpret_cast<const char*>(raw.begin()), reinterpret_cast<const char*>(raw.end())));
     if (!parsed.IsObject()) {
         throw std::runtime_error(format("Invalid column computation value: {}", parsed));
     }

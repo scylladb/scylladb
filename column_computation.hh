@@ -21,7 +21,6 @@
 
 #pragma once
 
-#include "utils/rjson.hh"
 #include "bytes.hh"
 
 class schema;
@@ -46,7 +45,6 @@ public:
     virtual ~column_computation() = default;
 
     static column_computation_ptr deserialize(bytes_view raw);
-    static column_computation_ptr deserialize(const rjson::value& json);
 
     virtual column_computation_ptr clone() const = 0;
 
