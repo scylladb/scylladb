@@ -97,6 +97,9 @@ private:
     class drain_tag {};
     using drain = seastar::bool_class<drain_tag>;
 
+    class force_segment_list_update_tag {};
+    using force_segment_list_update = seastar::bool_class<force_segment_list_update_tag>;
+
     friend class space_watchdog;
 
 public:
@@ -176,6 +179,14 @@ public:
 
             /// \brief Add a new segment ready for sending.
             void add_segment(sstring seg_name);
+
+            /// \brief Overrides the current list of segments with a new one.
+            ///
+            /// If there are some segments to replay present, then the first one
+            /// is not erased because we might be sending it at the moment. However,
+            /// this function makes sure that if the first segment is in the `seg_names`
+            /// list, then it is not added twice.
+            void update_segment_list(std::vector<sstring> seg_names);
 
             /// \brief Check if there are still unsent segments.
             /// \return TRUE if there are still unsent segments.
@@ -325,7 +336,7 @@ public:
         /// \brief Get the corresponding hints_store object. Create it if needed.
         /// \note Must be called under the \ref _file_update_mutex.
         /// \return The corresponding hints_store object.
-        future<hints_store_ptr> get_or_load();
+        future<hints_store_ptr> get_or_load(force_segment_list_update force_update = force_segment_list_update::no);
 
         /// \brief Store a single mutation hint.
         /// \param s column family descriptor
@@ -428,13 +439,13 @@ public:
         /// - Populate _segments_to_replay if it's empty.
         ///
         /// \return A new hints store object.
-        future<commitlog> add_store() noexcept;
+        future<commitlog> add_store(force_segment_list_update force_update = force_segment_list_update::no) noexcept;
 
         /// \brief Flushes all hints written so far to the disk.
         ///  - Repopulates the _segments_to_replay list if needed.
         ///
         /// \return Ready future when the procedure above completes.
-        future<> flush_current_hints() noexcept;
+        future<> flush_current_hints(force_segment_list_update force_update = force_segment_list_update::no) noexcept;
 
         struct stats& shard_stats() {
             return _shard_manager._stats;
