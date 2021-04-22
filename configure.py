@@ -1572,6 +1572,7 @@ def configure_seastar(build_dir, mode, mode_config):
         '-DSeastar_CXX_DIALECT=gnu++20',
         '-DSeastar_API_LEVEL=6',
         '-DSeastar_UNUSED_RESULT_ERROR=ON',
+        '-DCMAKE_EXPORT_COMPILE_COMMANDS=ON',
     ] + distro_extra_cmake_args
 
     if args.stack_guards is not None:
@@ -1638,6 +1639,7 @@ def configure_abseil(build_dir, mode, mode_config):
         '-DCMAKE_C_COMPILER={}'.format(args.cc),
         '-DCMAKE_CXX_COMPILER={}'.format(args.cxx),
         '-DCMAKE_CXX_FLAGS_{}={}'.format(cmake_mode.upper(), abseil_cflags),
+        '-DCMAKE_EXPORT_COMPILE_COMMANDS=ON',
     ] + distro_extra_cmake_args
 
     abseil_cmd = ['cmake', '-G', 'Ninja', real_relpath('abseil', abseil_build_dir)] + abseil_cmake_args
@@ -2188,3 +2190,23 @@ with open(buildfile_tmp, 'w') as f:
         ''').format(**globals()))
 
 os.rename(buildfile_tmp, buildfile)
+
+# create compdbs
+compdb = 'compile_commands.json'
+for mode in selected_modes:
+    mode_out = outdir + '/' + mode
+    submodule_compdbs = [mode_out + '/' + sm + '/' + compdb
+                         for sm in ['abseil', 'seastar']]
+    subprocess.run(['/bin/sh', '-c',
+                    ninja + ' -t compdb ' +
+                    '| ./scripts/merge-compdb.py build/' + mode + ' - ' +
+                    ' '.join(submodule_compdbs) +
+                    '> ' + mode_out + '/' + compdb])
+# make sure there is a valid compile_commands.json link in the source root
+if not os.path.exists(compdb):
+    # sort modes by supposed indexing speed
+    for mode in ['dev', 'debug', 'release', 'sanitize']:
+        compdb_target = outdir + '/' + mode + '/' + compdb
+        if os.path.exists(compdb_target):
+            os.symlink(compdb_target, compdb)
+            break
