@@ -135,7 +135,7 @@ private:
 
     // The optional is engaged when incoming snapshot is received
     // And the promise signalled when it is successfully applied or there was an error
-    std::optional<promise<snapshot_reply>> _snapshot_application_done;
+    std::unordered_map<server_id, promise<snapshot_reply>> _snapshot_application_done;
 
     // An id of last loaded snapshot into a state machine
     snapshot_id _last_loaded_snapshot_id;
@@ -383,11 +383,11 @@ future<> server_impl::send_message(server_id id, Message m) {
             return make_ready_future<>();
         } else if constexpr (std::is_same_v<T, snapshot_reply>) {
             _stats.snapshot_reply_sent++;
-            assert(_snapshot_application_done);
+            assert(_snapshot_application_done.contains(id));
             // Send a reply to install_snapshot after
             // snapshot application is done.
-            _snapshot_application_done->set_value(std::move(m));
-            _snapshot_application_done = std::nullopt;
+            _snapshot_application_done[id].set_value(std::move(m));
+            _snapshot_application_done.erase(id);
             // ... and do not wait for it here.
             return make_ready_future<>();
         } else {
@@ -540,10 +540,9 @@ void server_impl::send_snapshot(server_id dst, install_snapshot&& snp) {
 
 future<snapshot_reply> server_impl::apply_snapshot(server_id from, install_snapshot snp) {
     _fsm->step(from, std::move(snp));
-    // Only one snapshot can be received at a time
-    assert(! _snapshot_application_done);
-    _snapshot_application_done = promise<snapshot_reply>();
-    return _snapshot_application_done->get_future();
+    // Only one snapshot can be received at a time from each node
+    assert(! _snapshot_application_done.contains(from));
+    return _snapshot_application_done[from].get_future();
 }
 
 future<> server_impl::applier_fiber() {
@@ -619,8 +618,8 @@ future<> server_impl::abort() {
     _awaited_commits.clear();
     _awaited_applies.clear();
 
-    if (_snapshot_application_done) {
-        _snapshot_application_done->set_exception(std::runtime_error("Snapshot application aborted"));
+    for (auto&& [_, f] : _snapshot_application_done) {
+        f.set_exception(std::runtime_error("Snapshot application aborted"));
     }
 
     auto snp_futures = _snapshot_transfers | boost::adaptors::map_values;
