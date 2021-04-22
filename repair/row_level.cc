@@ -2871,7 +2871,7 @@ public:
             }
 
             parallel_for_each(nodes_to_stop, [&] (const gms::inet_address& node) {
-                master.set_repair_state(repair_state::row_level_stop_finished, node);
+                master.set_repair_state(repair_state::row_level_stop_started, node);
                 return master.repair_row_level_stop(node, _ri.keyspace, _cf_name, _range).then([node, &master] {
                     master.set_repair_state(repair_state::row_level_stop_finished, node);
                 });
