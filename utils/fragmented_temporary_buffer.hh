@@ -489,3 +489,12 @@ public:
         });
     }
 };
+
+// The operator below is used only for logging
+
+inline std::ostream& operator<<(std::ostream& out, const fragmented_temporary_buffer::view& v) {
+    for (bytes_view frag : fragment_range(v)) {
+        out << to_hex(frag);
+    }
+    return out;
+}

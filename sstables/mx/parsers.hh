@@ -44,10 +44,10 @@ class clustering_parser {
     bool _parsing_start_key;
     boost::iterator_range<column_values_fixed_lengths::const_iterator> ck_range;
 
-    std::vector<temporary_buffer<char>> clustering_key_values;
+    std::vector<fragmented_temporary_buffer> clustering_key_values;
     bound_kind_m kind{};
 
-    temporary_buffer<char> column_value;
+    fragmented_temporary_buffer column_value;
     uint64_t ck_blocks_header = 0;
     uint32_t ck_blocks_header_offset = 0;
     std::optional<position_in_partition> _pos;
@@ -91,7 +91,7 @@ class clustering_parser {
 
     position_in_partition make_position() {
         auto key = clustering_key_prefix::from_range(clustering_key_values | boost::adaptors::transformed(
-            [] (const temporary_buffer<char>& b) { return to_bytes_view(b); }));
+            [] (const fragmented_temporary_buffer& b) { return fragmented_temporary_buffer::view(b); }));
 
         if (kind == bound_kind_m::clustering) {
             return position_in_partition::for_key(std::move(key));

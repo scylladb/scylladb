@@ -68,7 +68,7 @@ public:
     // proceed consuming more data.
     virtual proceed consume_partition_end() = 0;
 
-    virtual row_processing_result consume_row_start(const std::vector<temporary_buffer<char>>& ecp) = 0;
+    virtual row_processing_result consume_row_start(const std::vector<fragmented_temporary_buffer>& ecp) = 0;
 
     virtual proceed consume_row_marker_and_tombstone(
             const sstables::liveness_info& info, tombstone tomb, tombstone shadowable_tomb) = 0;
@@ -77,7 +77,7 @@ public:
 
     virtual proceed consume_column(const sstables::column_translation::column_info& column_info,
                                    bytes_view cell_path,
-                                   bytes_view value,
+                                   fragmented_temporary_buffer::view value,
                                    api::timestamp_type timestamp,
                                    gc_clock::duration ttl,
                                    gc_clock::time_point local_deletion_time,
@@ -89,13 +89,13 @@ public:
     virtual proceed consume_complex_column_end(const sstables::column_translation::column_info& column_info) = 0;
 
     virtual proceed consume_counter_column(const sstables::column_translation::column_info& column_info,
-                                           bytes_view value, api::timestamp_type timestamp) = 0;
+                                           fragmented_temporary_buffer::view value, api::timestamp_type timestamp) = 0;
 
-    virtual proceed consume_range_tombstone(const std::vector<temporary_buffer<char>>& ecp,
+    virtual proceed consume_range_tombstone(const std::vector<fragmented_temporary_buffer>& ecp,
                                             bound_kind kind,
                                             tombstone tomb) = 0;
 
-    virtual proceed consume_range_tombstone(const std::vector<temporary_buffer<char>>& ecp,
+    virtual proceed consume_range_tombstone(const std::vector<fragmented_temporary_buffer>& ecp,
                                             sstables::bound_kind_m,
                                             tombstone end_tombstone,
                                             tombstone start_tombstone) = 0;
@@ -203,7 +203,7 @@ private:
     liveness_info _liveness;
     bool _is_first_unfiltered = true;
 
-    std::vector<temporary_buffer<char>> _row_key;
+    std::vector<fragmented_temporary_buffer> _row_key;
 
     struct row_schema {
         using column_range = boost::iterator_range<std::vector<column_translation::column_info>::const_iterator>;
@@ -234,7 +234,7 @@ private:
     gc_clock::time_point _column_local_deletion_time;
     gc_clock::duration _column_ttl;
     uint32_t _column_value_length;
-    temporary_buffer<char> _column_value;
+    fragmented_temporary_buffer _column_value;
     temporary_buffer<char> _cell_path;
     uint64_t _ck_blocks_header;
     uint32_t _ck_blocks_header_offset;
@@ -671,7 +671,7 @@ private:
         case state::COLUMN_CELL_PATH:
         column_cell_path_label:
             if (!is_column_simple()) {
-                if (read_unsigned_vint_length_bytes(data, _cell_path) != read_status::ready) {
+                if (read_unsigned_vint_length_bytes_contiguous(data, _cell_path) != read_status::ready) {
                     _state = state::COLUMN_VALUE;
                     break;
                 }
@@ -681,7 +681,7 @@ private:
         case state::COLUMN_VALUE:
         {
             if (!_column_flags.has_value()) {
-                _column_value = temporary_buffer<char>(0);
+                _column_value = fragmented_temporary_buffer();
                 _state = state::COLUMN_END;
                 goto column_end_label;
             }
@@ -701,14 +701,14 @@ private:
             _state = state::NEXT_COLUMN;
             if (is_column_counter() && !_column_flags.is_deleted()) {
                 if (_consumer.consume_counter_column(get_column_info(),
-                                                     to_bytes_view(_column_value),
+                                                     fragmented_temporary_buffer::view(_column_value),
                                                      _column_timestamp) == consumer_m::proceed::no) {
                     return consumer_m::proceed::no;
                 }
             } else {
                 if (_consumer.consume_column(get_column_info(),
                                              to_bytes_view(_cell_path),
-                                             to_bytes_view(_column_value),
+                                             fragmented_temporary_buffer::view(_column_value),
                                              _column_timestamp,
                                              _column_ttl,
                                              _column_local_deletion_time,
@@ -991,7 +991,7 @@ class mp_row_consumer_m : public consumer_m {
         }
     };
 
-    inline friend std::ostream& operator<<(std::ostream& o, const sstables::mx::mp_row_consumer_m::range_tombstone_start& rt_start) {
+    inline friend std::ostream& operator<<(std::ostream& o, const mp_row_consumer_m::range_tombstone_start& rt_start) {
         o << "{ clustering: " << rt_start.ck
           << ", kind: " << rt_start.kind
           << ", tombstone: " << rt_start.tomb << " }";
@@ -1224,9 +1224,9 @@ public:
         return proceed(!_reader->is_buffer_full() && !need_preempt());
     }
 
-    virtual consumer_m::row_processing_result consume_row_start(const std::vector<temporary_buffer<char>>& ecp) override {
+    virtual consumer_m::row_processing_result consume_row_start(const std::vector<fragmented_temporary_buffer>& ecp) override {
         auto key = clustering_key_prefix::from_range(ecp | boost::adaptors::transformed(
-            [] (const temporary_buffer<char>& b) { return to_bytes_view(b); }));
+            [] (const fragmented_temporary_buffer& b) { return fragmented_temporary_buffer::view(b); }));
 
         sstlog.trace("mp_row_consumer_m {}: consume_row_start({})", fmt::ptr(this), key);
 
@@ -1306,14 +1306,14 @@ public:
 
     virtual proceed consume_column(const column_translation::column_info& column_info,
                                    bytes_view cell_path,
-                                   bytes_view value,
+                                   fragmented_temporary_buffer::view value,
                                    api::timestamp_type timestamp,
                                    gc_clock::duration ttl,
                                    gc_clock::time_point local_deletion_time,
                                    bool is_deleted) override {
         const std::optional<column_id>& column_id = column_info.id;
         sstlog.trace("mp_row_consumer_m {}: consume_column(id={}, path={}, value={}, ts={}, ttl={}, del_time={}, deleted={})", fmt::ptr(this),
-            column_id, fmt_hex(cell_path), fmt_hex(value), timestamp, ttl.count(), local_deletion_time.time_since_epoch().count(), is_deleted);
+            column_id, fmt_hex(cell_path), value, timestamp, ttl.count(), local_deletion_time.time_since_epoch().count(), is_deleted);
         check_column_missing_in_current_schema(column_info, timestamp);
         if (!column_id) {
             return proceed::yes;
@@ -1388,10 +1388,10 @@ public:
     }
 
     virtual proceed consume_counter_column(const column_translation::column_info& column_info,
-                                           bytes_view value,
+                                           fragmented_temporary_buffer::view value,
                                            api::timestamp_type timestamp) override {
         const std::optional<column_id>& column_id = column_info.id;
-        sstlog.trace("mp_row_consumer_m {}: consume_counter_column({}, {}, {})", fmt::ptr(this), column_id, fmt_hex(value), timestamp);
+        sstlog.trace("mp_row_consumer_m {}: consume_counter_column({}, {}, {})", fmt::ptr(this), column_id, value, timestamp);
         check_column_missing_in_current_schema(column_info, timestamp);
         if (!column_id) {
             return proceed::yes;
@@ -1406,11 +1406,11 @@ public:
         return proceed::yes;
     }
 
-    virtual proceed consume_range_tombstone(const std::vector<temporary_buffer<char>>& ecp,
+    virtual proceed consume_range_tombstone(const std::vector<fragmented_temporary_buffer>& ecp,
                                             bound_kind kind,
                                             tombstone tomb) override {
         auto ck = clustering_key_prefix::from_range(ecp | boost::adaptors::transformed(
-            [] (const temporary_buffer<char>& b) { return to_bytes_view(b); }));
+            [] (const fragmented_temporary_buffer& b) { return fragmented_temporary_buffer::view(b); }));
         if (kind == bound_kind::incl_start || kind == bound_kind::excl_start) {
             consume_range_tombstone_start(std::move(ck), kind, std::move(tomb));
             return proceed(!_reader->is_buffer_full() && !need_preempt());
@@ -1419,13 +1419,13 @@ public:
         }
     }
 
-    virtual proceed consume_range_tombstone(const std::vector<temporary_buffer<char>>& ecp,
+    virtual proceed consume_range_tombstone(const std::vector<fragmented_temporary_buffer>& ecp,
                                             sstables::bound_kind_m kind,
                                             tombstone end_tombstone,
                                             tombstone start_tombstone) override {
         auto result = proceed::yes;
         auto ck = clustering_key_prefix::from_range(ecp | boost::adaptors::transformed(
-            [] (const temporary_buffer<char>& b) { return to_bytes_view(b); }));
+            [] (const fragmented_temporary_buffer& b) { return fragmented_temporary_buffer::view(b); }));
         switch (kind) {
         case bound_kind_m::incl_end_excl_start:
             result = consume_range_tombstone_end(ck, bound_kind::incl_end, std::move(end_tombstone));

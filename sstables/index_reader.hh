@@ -160,7 +160,7 @@ public:
             }
         case state::KEY_BYTES:
             sstlog.trace("{}: pos {} state {}", fmt::ptr(this), current_pos(), state::KEY_BYTES);
-            if (this->read_bytes(data, this->_u16, _key) != continuous_data_consumer::read_status::ready) {
+            if (this->read_bytes_contiguous(data, this->_u16, _key) != continuous_data_consumer::read_status::ready) {
                 _state = state::POSITION;
                 break;
             }

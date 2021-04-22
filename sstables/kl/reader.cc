@@ -467,7 +467,7 @@ public:
         return ret;
     }
 
-    virtual proceed consume_counter_cell(bytes_view col_name, bytes_view value, int64_t timestamp) override {
+    virtual proceed consume_counter_cell(bytes_view col_name, fragmented_temporary_buffer::view value, int64_t timestamp) override {
         return do_consume_cell(col_name, timestamp, 0, 0, [&] (auto&& col) {
             auto ac = make_counter_cell(timestamp, value);
 
@@ -483,7 +483,7 @@ public:
         });
     }
 
-    virtual proceed consume_cell(bytes_view col_name, bytes_view value, int64_t timestamp, int64_t ttl, int64_t expiration) override {
+    virtual proceed consume_cell(bytes_view col_name, fragmented_temporary_buffer::view value, int64_t timestamp, int64_t ttl, int64_t expiration) override {
         return do_consume_cell(col_name, timestamp, ttl, expiration, [&] (auto&& col) {
             bool is_multi_cell = col.collection_extra_data.size();
             if (is_multi_cell != col.cdef->is_multi_cell()) {
