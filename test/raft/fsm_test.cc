@@ -1451,3 +1451,65 @@ BOOST_AUTO_TEST_CASE(test_zero) {
     BOOST_CHECK_THROW(raft::configuration cfg(raft::server_address_set{raft::server_address{id}}), std::invalid_argument);
     BOOST_CHECK_THROW(create_follower(id, raft::log(raft::snapshot{})), std::invalid_argument);
 }
+
+BOOST_AUTO_TEST_CASE(test_reordered_reject) {
+    auto id1 = id();
+    raft::fsm fsm1(id1, term_t{1}, server_id{},
+            raft::log{raft::snapshot{.config = {{raft::server_address{id1.id}}}}},
+            trivial_failure_detector, fsm_cfg);
+
+    while (!fsm1.is_leader()) {
+        fsm1.tick();
+    }
+
+    fsm1.add_entry(log_entry::dummy{});
+    (void)fsm1.get_output();
+
+    auto id2 = id();
+    raft::fsm fsm2(id2, term_t{1}, server_id{},
+            raft::log{raft::snapshot{.config = raft::configuration{}}},
+            trivial_failure_detector, fsm_cfg);
+
+    raft_routing_map routes{{fsm1.id(), &fsm1}, {fsm2.id(), &fsm2}};
+
+    fsm1.add_entry(raft::configuration{{raft::server_address{fsm1.id().id}, raft::server_address{fsm2.id().id}}});
+    fsm1.tick();
+
+    // fsm1 sends append_entries with idx=2 to fsm2
+    auto append_idx2_1 = fsm1.get_output();
+
+    fsm1.tick();
+
+    // fsm1 sends append_entries with idx=2 to fsm2 (again)
+    auto append_idx2_2 = fsm1.get_output();
+
+    raft::logger.trace("delivering first append idx=2");
+    deliver(routes, fsm1.id(), std::move(append_idx2_1.messages));
+
+    // fsm2 rejects the first idx=2 append
+    auto reject_1 = fsm2.get_output();
+
+    raft::logger.trace("delivering second append idx=2");
+    deliver(routes, fsm1.id(), std::move(append_idx2_2.messages));
+
+    // fsm2 rejects the second idx=2 append
+    auto reject_2 = fsm2.get_output();
+
+    raft::logger.trace("delivering first reject");
+    deliver(routes, fsm2.id(), std::move(reject_1.messages));
+
+    // fsm1 sends append_entries with idx=1 to fsm2
+    auto append_idx1 = fsm1.get_output();
+
+    raft::logger.trace("delivering append idx=1");
+    deliver(routes, fsm1.id(), std::move(append_idx1.messages));
+
+    // fsm2 accepts the idx=1 append
+    auto accept = fsm2.get_output();
+
+    raft::logger.trace("delivering accept for append idx=1");
+    deliver(routes, fsm2.id(), std::move(accept.messages));
+
+    raft::logger.trace("delivering second reject");
+    deliver(routes, fsm2.id(), std::move(reject_2.messages));
+}

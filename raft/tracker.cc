@@ -24,16 +24,32 @@
 namespace raft {
 
 bool follower_progress::is_stray_reject(const append_reply::rejected& rejected) {
+    // By precondition, we are the leader and `rejected.current_term` is equal to our term.
+    // By definition of `match_idx` we know that at some point all entries up to and including
+    // `match_idx` were the same in our log and the follower's log; ...
+    if (rejected.non_matching_idx <= match_idx) {
+        // ... in particular, entry `rejected.non_matching_idx` (which is <= `match_idx`) at some point
+        // was the same in our log and the follower's log, but `rejected` claims they are different.
+        // A follower cannot change an entry unless it enters a different term, but `rejected.current_term`
+        // is equal to our term. Thus `rejected` must be stray.
+        return true;
+    }
+    if (rejected.last_idx < match_idx) {
+        // ... in particular, at some point the follower had to have an entry with index `rejected.last_idx + 1`
+        // (because `rejected.last_idx < match_idx implies rejected.last_idx + 1 <= match_idx)
+        // but `rejected` claims it doesn't have such entry now.
+        // A follower cannot truncate a suffix of its log unless it enters a different term,
+        // but `rejected.current_term` is equal to our term. Thus `rejected` must be stray.
+        return true;
+    }
+
     switch (state) {
     case follower_progress::state::PIPELINE:
-        if (rejected.non_matching_idx <= match_idx) {
-            // If rejected index is smaller that matched it means this is a stray reply
-            return true;
-        }
         break;
     case follower_progress::state::PROBE:
-        // In the probe state the reply is only valid if it matches next_idx - 1, since only
-        // one append request is outstanding.
+        // In PROBE state we send a single append request `req` with `req.prev_log_idx == next_idx - 1`.
+        // When the follower generates a rejected response `r`, it sets `r.non_matching_idx = req.prev_log_idx`.
+        // Thus the reject either satisfies `rejected.non_matching_idx == next_idx - 1` or is stray.
         if (rejected.non_matching_idx != index_t(next_idx - 1)) {
             return true;
         }

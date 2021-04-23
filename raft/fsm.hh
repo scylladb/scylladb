@@ -257,6 +257,8 @@ private:
     void replicate_to(follower_progress& progress, bool allow_empty);
     void replicate();
     void append_entries(server_id from, append_request&& append_request);
+
+    // Precondition: `is_leader() && reply.current_term == _current_term`
     void append_entries_reply(server_id from, append_reply&& reply);
 
     void request_vote(server_id from, vote_request&& vote_request);

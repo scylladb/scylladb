@@ -32,9 +32,12 @@ public:
     // Id of this server
     const server_id id;
     // Index of the next log entry to send to this server.
+    // Invariant: next_idx > match_idx.
     index_t next_idx;
-    // Index of the highest log entry known to be replicated to this
-    // server.
+    // Index of the highest log entry known to be replicated to this server.
+    // More specifically, this is the greatest `last_new_idx` received from this follower
+    // in an `accepted` message. As long as the follower remains in our term we know
+    // that its log must match with ours up to (and including) `match_idx`.
     index_t match_idx = index_t(0);
     // Index that we know to be committed by the follower
     index_t commit_idx = index_t(0);
@@ -56,9 +59,16 @@ public:
     size_t in_flight = 0;
     static constexpr size_t max_in_flight = 10;
 
-    // check if a reject packet should be ignored because it was delayed
-    // or reordered
-    bool is_stray_reject(const append_reply::rejected&);
+    // Check if a reject packet should be ignored because it was delayed or reordered.
+    // This is not 100% accurate (may return false negatives) and should only be relied on
+    // for liveness optimizations, not for safety.
+    //
+    // Precondition: we are the leader and `r.current_term` is equal to our term (`_current_term`).
+    // Postcondition: if the function returns `false` it is guaranteed that:
+    // 1. `match_idx < r.non_matching_idx`.
+    // 2. `match_idx < r.last_idx + 1`.
+    // 3. If we're in PROBE mode then `next_idx == r.non_matching_idx + 1`.
+    bool is_stray_reject(const append_reply::rejected& r);
 
     void become_probe();
     void become_pipeline();
