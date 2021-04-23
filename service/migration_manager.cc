@@ -112,12 +112,12 @@ void migration_manager::init_messaging_service()
         auto src = netw::messaging_service::get_source(cinfo);
         auto f = make_ready_future<>();
         if (cm) {
-            f = do_with(std::move(*cm), get_local_shared_storage_proxy(), [src] (const std::vector<canonical_mutation>& mutations, shared_ptr<storage_proxy>& p) {
-                return service::get_local_migration_manager().merge_schema_in_background(src, mutations);
+            f = do_with(std::move(*cm), get_local_shared_storage_proxy(), [this, src] (const std::vector<canonical_mutation>& mutations, shared_ptr<storage_proxy>& p) {
+                return merge_schema_in_background(src, mutations);
             });
         } else {
-            f = do_with(std::move(fm), get_local_shared_storage_proxy(), [src] (const std::vector<frozen_mutation>& mutations, shared_ptr<storage_proxy>& p) {
-                return service::get_local_migration_manager().merge_schema_in_background(src, mutations);
+            f = do_with(std::move(fm), get_local_shared_storage_proxy(), [this, src] (const std::vector<frozen_mutation>& mutations, shared_ptr<storage_proxy>& p) {
+                return merge_schema_in_background(src, mutations);
             });
         }
         // Start a new fiber.
@@ -279,7 +279,7 @@ future<> migration_manager::submit_migration_task(const gms::inet_address& endpo
         return can_ignore_down_node ? make_ready_future<>() : make_exception_future<>(std::runtime_error(msg));
     }
     netw::messaging_service::msg_addr id{endpoint, 0};
-    return service::get_local_migration_manager().merge_schema_from(id).handle_exception([](std::exception_ptr e) {
+    return merge_schema_from(id).handle_exception([](std::exception_ptr e) {
         try {
             std::rethrow_exception(e);
         } catch (const exceptions::configuration_exception& e) {
