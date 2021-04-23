@@ -38,7 +38,7 @@ class raft_gossip_failure_detector : public raft::failure_detector {
     raft_services& _raft_services;
 
 public:
-    raft_gossip_failure_detector(gms::gossiper& gs, raft_services& raft_srvs);
+    raft_gossip_failure_detector(gms::gossiper& gs, raft_services& raft_svcs);
 
     bool is_alive(raft::server_id server) override;
 };

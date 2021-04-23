@@ -42,6 +42,7 @@
 #include "service/migration_manager.hh"
 #include "sstables/compaction_manager.hh"
 #include "message/messaging_service.hh"
+#include "service/raft/raft_services.hh"
 #include "service/storage_service.hh"
 #include "service/storage_proxy.hh"
 #include "auth/service.hh"
@@ -530,11 +531,24 @@ public:
             sharded<db::view::view_update_generator> view_update_generator;
             sharded<cdc::generation_service> cdc_generation_service;
             sharded<repair_service> repair;
+            sharded<cql3::query_processor> qp;
+            sharded<raft_services> raft_svcs;
+            raft_svcs.start(std::ref(ms), std::ref(gms::get_gossiper()), std::ref(qp)).get();
+            auto stop_raft = defer([&raft_svcs] { raft_svcs.stop().get(); });
 
             auto& ss = service::get_storage_service();
             service::storage_service_config sscfg;
             sscfg.available_memory = memory::stats().total_memory();
-            ss.start(std::ref(abort_sources), std::ref(db), std::ref(gms::get_gossiper()), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(feature_service), sscfg, std::ref(mm), std::ref(token_metadata), std::ref(ms), std::ref(cdc_generation_service), std::ref(repair), true).get();
+            ss.start(std::ref(abort_sources), std::ref(db),
+                std::ref(gms::get_gossiper()),
+                std::ref(sys_dist_ks),
+                std::ref(view_update_generator),
+                std::ref(feature_service), sscfg, std::ref(mm),
+                std::ref(token_metadata), std::ref(ms),
+                std::ref(cdc_generation_service),
+                std::ref(repair),
+                std::ref(raft_svcs),
+                true).get();
             auto stop_storage_service = defer([&ss] { ss.stop().get(); });
 
             sharded<semaphore> sst_dir_semaphore;
@@ -593,7 +607,6 @@ public:
             mm.start(std::ref(mm_notif), std::ref(feature_service), std::ref(ms)).get();
             auto stop_mm = defer([&mm] { mm.stop().get(); });
 
-            sharded<cql3::query_processor> qp;
             cql3::query_processor::memory_config qp_mcfg = {memory::stats().total_memory() / 256, memory::stats().total_memory() / 2560};
             qp.start(std::ref(proxy), std::ref(db), std::ref(mm_notif), std::ref(mm), qp_mcfg, std::ref(cql_config), std::ref(sl_controller)).get();
             auto stop_qp = defer([&qp] { qp.stop().get(); });
@@ -645,6 +658,13 @@ public:
             auto stop_local_cache = defer([] { db::system_keyspace::deinit_local_cache().get(); });
 
             sys_dist_ks.start(std::ref(qp), std::ref(mm), std::ref(proxy)).get();
+
+            // We need to have a system keyspace started and
+            // initialized to initialize Raft service.
+            raft_svcs.invoke_on_all(&raft_services::init).get();
+            auto stop_raft_rpc = defer([&raft_svcs] {
+                raft_svcs.invoke_on_all(&raft_services::uninit).get();
+            });
 
             cdc_generation_service.start(std::ref(*cfg), std::ref(gms::get_gossiper()), std::ref(sys_dist_ks), std::ref(abort_sources), std::ref(token_metadata), std::ref(feature_service)).get();
             auto stop_cdc_generation_service = defer([&cdc_generation_service] {

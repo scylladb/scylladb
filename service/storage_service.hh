@@ -73,6 +73,7 @@ class node_ops_cmd_request;
 class node_ops_cmd_response;
 class node_ops_info;
 class repair_service;
+class raft_services;
 
 namespace cql_transport { class controller; }
 
@@ -173,6 +174,8 @@ private:
     gms::feature_service& _feature_service;
     distributed<database>& _db;
     gms::gossiper& _gossiper;
+    // Container for all Raft instances running on this shard.
+    raft_services& _raft_svcs;
     sharded<netw::messaging_service>& _messaging;
     sharded<service::migration_manager>& _migration_manager;
     sharded<repair_service>& _repair;
@@ -212,7 +215,19 @@ private:
     void node_ops_singal_abort(std::optional<utils::UUID> ops_uuid);
     future<> node_ops_abort_thread();
 public:
-    storage_service(abort_source& as, distributed<database>& db, gms::gossiper& gossiper, sharded<db::system_distributed_keyspace>&, sharded<db::view::view_update_generator>&, gms::feature_service& feature_service, storage_service_config config, sharded<service::migration_manager>& mm, locator::shared_token_metadata& stm, sharded<netw::messaging_service>& ms, sharded<cdc::generation_service>&, sharded<repair_service>& repair, /* only for tests */ bool for_testing = false);
+    storage_service(abort_source& as, distributed<database>& db,
+        gms::gossiper& gossiper,
+        sharded<db::system_distributed_keyspace>&,
+        sharded<db::view::view_update_generator>&,
+        gms::feature_service& feature_service,
+        storage_service_config config,
+        sharded<service::migration_manager>& mm,
+        locator::shared_token_metadata& stm,
+        sharded<netw::messaging_service>& ms,
+        sharded<cdc::generation_service>&,
+        sharded<repair_service>& repair,
+        raft_services& raft_svcs,
+        /* only for tests */ bool for_testing = false);
 
     // Needed by distributed<>
     future<> stop();
@@ -895,12 +910,19 @@ public:
     bool is_repair_based_node_ops_enabled();
 };
 
-future<> init_storage_service(sharded<abort_source>& abort_sources, distributed<database>& db, sharded<gms::gossiper>& gossiper,
-        sharded<db::system_distributed_keyspace>& sys_dist_ks,
-        sharded<db::view::view_update_generator>& view_update_generator, sharded<gms::feature_service>& feature_service,
-        storage_service_config config,
-        sharded<service::migration_manager>& mm, sharded<locator::shared_token_metadata>& stm,
-        sharded<netw::messaging_service>& ms, sharded<cdc::generation_service>&, sharded<repair_service>& repair);
+future<> init_storage_service(sharded<abort_source>& abort_sources,
+    distributed<database>& db,
+    sharded<gms::gossiper>& gossiper,
+    sharded<db::system_distributed_keyspace>& sys_dist_ks,
+    sharded<db::view::view_update_generator>& view_update_generator,
+    sharded<gms::feature_service>& feature_service,
+    storage_service_config config,
+    sharded<service::migration_manager>& mm,
+    sharded<locator::shared_token_metadata>& stm,
+    sharded<netw::messaging_service>& ms,
+    sharded<cdc::generation_service>&,
+    sharded<repair_service>& repair,
+    sharded<raft_services>& raft_svcs);
 future<> deinit_storage_service();
 
 }

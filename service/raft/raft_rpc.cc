@@ -29,8 +29,8 @@
 
 static seastar::logger rlogger("raft_rpc");
 
-raft_rpc::raft_rpc(netw::messaging_service& ms, raft_services& raft_srvs, raft::group_id gid, raft::server_id srv_id)
-    : _group_id(std::move(gid)), _server_id(srv_id), _messaging(ms), _raft_services(raft_srvs)
+raft_rpc::raft_rpc(netw::messaging_service& ms, raft_services& raft_svcs, raft::group_id gid, raft::server_id srv_id)
+    : _group_id(std::move(gid)), _server_id(srv_id), _messaging(ms), _raft_services(raft_svcs)
 {}
 
 future<raft::snapshot_reply> raft_rpc::send_snapshot(raft::server_id id, const raft::install_snapshot& snap, seastar::abort_source& as) {

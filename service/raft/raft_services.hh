@@ -58,7 +58,8 @@ private:
     using create_server_result = std::pair<std::unique_ptr<raft::server>, raft_rpc*>;
 
     netw::messaging_service& _ms;
-    cql3::query_processor& _qp;
+    gms::gossiper& _gossiper;
+    sharded<cql3::query_processor>& _qp;
     // Shard-local failure detector instance shared among all raft groups
     shared_ptr<raft_gossip_failure_detector> _fd;
 
@@ -81,7 +82,7 @@ private:
 
 public:
 
-    raft_services(netw::messaging_service& ms, gms::gossiper& gs, cql3::query_processor& qp);
+    raft_services(netw::messaging_service& ms, gms::gossiper& gs, sharded<cql3::query_processor>& qp);
     // To integrate Raft service into the boot procedure, the
     // initialization is split into 2 steps:
     // - in sharded::start(), we construct an instance of
