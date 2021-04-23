@@ -178,6 +178,16 @@ private:
 
 public:
     future<> maybe_sync(const schema_ptr& s, netw::msg_addr endpoint);
+
+    // Returns schema of given version, either from cache or from remote node identified by 'from'.
+    // The returned schema may not be synchronized. See schema::is_synced().
+    // Intended to be used in the read path.
+    future<schema_ptr> get_schema_for_read(table_schema_version, netw::msg_addr from, netw::messaging_service& ms);
+
+    // Returns schema of given version, either from cache or from remote node identified by 'from'.
+    // Ensures that this node is synchronized with the returned schema. See schema::is_synced().
+    // Intended to be used in the write path, which relies on synchronized schema.
+    future<schema_ptr> get_schema_for_write(table_schema_version, netw::msg_addr from, netw::messaging_service& ms);
 };
 
 extern distributed<migration_manager> _the_migration_manager;
@@ -189,16 +199,6 @@ inline distributed<migration_manager>& get_migration_manager() {
 inline migration_manager& get_local_migration_manager() {
     return _the_migration_manager.local();
 }
-
-// Returns schema of given version, either from cache or from remote node identified by 'from'.
-// The returned schema may not be synchronized. See schema::is_synced().
-// Intended to be used in the read path.
-future<schema_ptr> get_schema_for_read(table_schema_version, netw::msg_addr from, netw::messaging_service& ms);
-
-// Returns schema of given version, either from cache or from remote node identified by 'from'.
-// Ensures that this node is synchronized with the returned schema. See schema::is_synced().
-// Intended to be used in the write path, which relies on synchronized schema.
-future<schema_ptr> get_schema_for_write(table_schema_version, netw::msg_addr from, netw::messaging_service& ms);
 
 future<column_mapping> get_column_mapping(utils::UUID table_id, table_schema_version v);
 

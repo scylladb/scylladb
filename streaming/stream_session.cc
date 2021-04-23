@@ -136,7 +136,7 @@ void stream_session::init_messaging_service_handler(netw::messaging_service& ms,
                     utils::fb_utilities::get_broadcast_address())));
         }
 
-        return service::get_schema_for_write(schema_id, from, ms).then([from, estimated_partitions, plan_id, schema_id, &cf, source, reason] (schema_ptr s) mutable {
+        return mm->get_schema_for_write(schema_id, from, ms).then([from, estimated_partitions, plan_id, schema_id, &cf, source, reason] (schema_ptr s) mutable {
             auto sink = stream_session::ms().make_sink_for_stream_mutation_fragments(source);
             struct stream_mutation_fragments_cmd_status {
                 bool got_cmd = false;

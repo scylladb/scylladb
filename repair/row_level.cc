@@ -900,7 +900,7 @@ public:
             shard_config master_node_shard_config,
             table_schema_version schema_version,
             streaming::stream_reason reason) {
-        return service::get_schema_for_write(schema_version, {from, src_cpu_id}, ::_messaging->local()).then([from,
+        return _migration_manager->local().get_schema_for_write(schema_version, {from, src_cpu_id}, ::_messaging->local()).then([from,
                 repair_meta_id,
                 range,
                 algo,
