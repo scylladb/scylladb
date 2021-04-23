@@ -103,7 +103,7 @@ static auto get_session(utils::UUID plan_id, gms::inet_address from, const char*
     return coordinator->get_or_create_session(from);
 }
 
-void stream_session::init_messaging_service_handler(netw::messaging_service& ms) {
+void stream_session::init_messaging_service_handler(netw::messaging_service& ms, shared_ptr<service::migration_manager> mm) {
     ms.register_prepare_message([] (const rpc::client_info& cinfo, prepare_message msg, UUID plan_id, sstring description, rpc::optional<stream_reason> reason_opt) {
         const auto& src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
         const auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
@@ -283,7 +283,7 @@ stream_session::stream_session(inet_address peer_)
 stream_session::~stream_session() = default;
 
 future<> stream_session::init_streaming_service(distributed<database>& db, distributed<db::system_distributed_keyspace>& sys_dist_ks,
-        distributed<db::view::view_update_generator>& view_update_generator, sharded<netw::messaging_service>& ms) {
+        distributed<db::view::view_update_generator>& view_update_generator, sharded<netw::messaging_service>& ms, sharded<service::migration_manager>& mm) {
     _db = &db;
     _sys_dist_ks = &sys_dist_ks;
     _view_update_generator = &view_update_generator;
@@ -292,9 +292,9 @@ future<> stream_session::init_streaming_service(distributed<database>& db, distr
     // engine().at_exit([] {
     //     return get_stream_manager().stop();
     // });
-    return get_stream_manager().start().then([&ms] {
+    return get_stream_manager().start().then([&ms, &mm] {
         gms::get_local_gossiper().register_(get_local_stream_manager().shared_from_this());
-        return ms.invoke_on_all([] (netw::messaging_service& ms) { init_messaging_service_handler(ms); });
+        return ms.invoke_on_all([&mm] (netw::messaging_service& ms) { init_messaging_service_handler(ms, mm.local().shared_from_this()); });
     });
 }
 
