@@ -175,6 +175,9 @@ private:
     future<> do_announce_new_type(user_type new_type);
 
     future<> push_schema_mutation(const gms::inet_address& endpoint, const std::vector<mutation>& schema);
+
+public:
+    future<> maybe_sync(const schema_ptr& s, netw::msg_addr endpoint);
 };
 
 extern distributed<migration_manager> _the_migration_manager;
