@@ -250,7 +250,7 @@ void storage_service::install_schema_version_change_listener() {
 }
 
 future<> storage_service::publish_schema_version() {
-    return get_local_migration_manager().passive_announce(_db.local().get_version());
+    return _migration_manager.local().passive_announce(_db.local().get_version());
 }
 
 future<> storage_service::snitch_reconfigured() {
@@ -455,7 +455,7 @@ void storage_service::join_token_ring(int delay) {
         }
         // if our schema hasn't matched yet, keep sleeping until it does
         // (post CASSANDRA-1391 we don't expect this to be necessary very often, but it doesn't hurt to be careful)
-        while (!get_local_migration_manager().have_schema_agreement()) {
+        while (!_migration_manager.local().have_schema_agreement()) {
             set_mode(mode::JOINING, "waiting for schema information to complete", true);
             sleep_abortable(std::chrono::seconds(1), _abort_source).get();
         }
@@ -483,7 +483,7 @@ void storage_service::join_token_ring(int delay) {
             }
 
             // Check the schema and pending range again
-            while (!get_local_migration_manager().have_schema_agreement()) {
+            while (!_migration_manager.local().have_schema_agreement()) {
                 set_mode(mode::JOINING, "waiting for schema information to complete", true);
                 sleep_abortable(std::chrono::seconds(1), _abort_source).get();
             }
@@ -1139,7 +1139,7 @@ void storage_service::on_join(gms::inet_address endpoint, gms::endpoint_state ep
         on_change(endpoint, e.first, e.second);
     }
     //FIXME: discarded future.
-    (void)get_local_migration_manager().schedule_schema_pull(endpoint, ep_state).handle_exception([endpoint] (auto ep) {
+    (void)_migration_manager.local().schedule_schema_pull(endpoint, ep_state).handle_exception([endpoint] (auto ep) {
         slogger.warn("Fail to pull schema from {}: {}", endpoint, ep);
     });
 }
@@ -1147,7 +1147,7 @@ void storage_service::on_join(gms::inet_address endpoint, gms::endpoint_state ep
 void storage_service::on_alive(gms::inet_address endpoint, gms::endpoint_state state) {
     slogger.debug("endpoint={} on_alive", endpoint);
     //FIXME: discarded future.
-    (void)get_local_migration_manager().schedule_schema_pull(endpoint, state).handle_exception([endpoint] (auto ep) {
+    (void)_migration_manager.local().schedule_schema_pull(endpoint, state).handle_exception([endpoint] (auto ep) {
         slogger.warn("Fail to pull schema from {}: {}", endpoint, ep);
     });
     if (get_token_metadata().is_member(endpoint)) {
@@ -1198,7 +1198,7 @@ void storage_service::on_change(inet_address endpoint, application_state state, 
             do_update_system_peers_table(endpoint, state, value);
             if (state == application_state::SCHEMA) {
                 //FIXME: discarded future.
-                (void)get_local_migration_manager().schedule_schema_pull(endpoint, *ep_state).handle_exception([endpoint] (auto ep) {
+                (void)_migration_manager.local().schedule_schema_pull(endpoint, *ep_state).handle_exception([endpoint] (auto ep) {
                     slogger.warn("Failed to pull schema from {}: {}", endpoint, ep);
                 });
             } else if (state == application_state::RPC_READY) {
@@ -2374,7 +2374,7 @@ future<> storage_service::do_drain(bool on_shutdown) {
         }).get();
 
         set_mode(mode::DRAINING, "shutting down migration manager", false);
-        service::get_migration_manager().invoke_on_all(&service::migration_manager::stop).get();
+        _migration_manager.invoke_on_all(&service::migration_manager::stop).get();
 
         db().invoke_on_all([] (auto& db) {
             return db.commitlog()->shutdown();
