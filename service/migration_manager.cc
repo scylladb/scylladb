@@ -1125,8 +1125,8 @@ future<schema_ptr> migration_manager::get_schema_for_read(table_schema_version v
 }
 
 future<schema_ptr> migration_manager::get_schema_for_write(table_schema_version v, netw::messaging_service::msg_addr dst, netw::messaging_service& ms) {
-    return get_schema_definition(v, dst, ms).then([dst] (schema_ptr s) {
-        return get_local_migration_manager().maybe_sync(s, dst).then([s] {
+    return get_schema_definition(v, dst, ms).then([this, dst] (schema_ptr s) {
+        return maybe_sync(s, dst).then([s] {
             return s;
         });
     });
