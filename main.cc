@@ -1071,7 +1071,9 @@ int main(int ac, char** av) {
                 mm.init_messaging_service();
             }).get();
             supervisor::notify("initializing storage proxy RPC verbs");
-            proxy.invoke_on_all(&service::storage_proxy::init_messaging_service).get();
+            proxy.invoke_on_all([&mm] (service::storage_proxy& proxy) {
+                proxy.init_messaging_service(mm.local().shared_from_this());
+            }).get();
             auto stop_proxy_handlers = defer_verbose_shutdown("storage proxy RPC verbs", [&proxy] {
                 proxy.invoke_on_all(&service::storage_proxy::uninit_messaging_service).get();
             });

@@ -4760,7 +4760,7 @@ future<> storage_proxy::truncate_blocking(sstring keyspace, sstring cfname) {
     });
 }
 
-void storage_proxy::init_messaging_service() {
+void storage_proxy::init_messaging_service(shared_ptr<migration_manager> mm) {
     auto& ms = _messaging;
     ms.register_counter_mutation([&ms] (const rpc::client_info& cinfo, rpc::opt_time_point t, std::vector<frozen_mutation> fms, db::consistency_level cl, std::optional<tracing::trace_info> trace_info) {
         auto src_addr = netw::messaging_service::get_source(cinfo);
