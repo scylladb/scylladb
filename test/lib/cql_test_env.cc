@@ -350,6 +350,10 @@ public:
         return _mnotifier.local();
     }
 
+    virtual sharded<service::migration_manager>& migration_manager() override {
+        return service::get_migration_manager();
+    }
+
     future<> start() {
         return _core_local.start(std::ref(_auth_service));
     }
