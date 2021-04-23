@@ -234,8 +234,15 @@ future<> server_impl::start() {
     if (snp_id) {
         co_await _state_machine->load_snapshot(snp_id);
         _last_loaded_snapshot_id = snp_id;
+    }
+
+    if (!rpc_config.current.empty()) {
         // Update RPC address map from the latest configuration (either from
         // the log or the snapshot)
+        //
+        // Account both for current and previous configurations since
+        // the last configuration idx can point to the joint configuration entry.
+        rpc_config.current.merge(rpc_config.previous);
         for (const auto& addr: rpc_config.current) {
             add_to_rpc_config(addr);
             _rpc->add_server(addr.id, addr.info);
