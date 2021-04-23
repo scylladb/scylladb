@@ -175,7 +175,9 @@ future<> service_level_controller::update_service_levels_from_distributed_data()
 
             for (; current_it != _service_levels_db.end(); current_it++) {
                 sl_logger.info("service level \"{}\" was deleted.", current_it->first.c_str());
-                service_levels_for_delete.emplace(current_it->first, current_it->second.slo);
+                if (!current_it->second.is_static) {
+                    service_levels_for_delete.emplace(current_it->first, current_it->second.slo);
+                }
             }
             for (; new_state_it != service_levels.end(); new_state_it++) {
                 sl_logger.info("service level \"{}\" was added.", new_state_it->first.c_str());
