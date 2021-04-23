@@ -100,7 +100,8 @@ static logging::logger slogger("storage_service");
 distributed<storage_service> _the_storage_service;
 
 storage_service::storage_service(abort_source& abort_source, distributed<database>& db, gms::gossiper& gossiper, sharded<db::system_distributed_keyspace>& sys_dist_ks,
-        sharded<db::view::view_update_generator>& view_update_generator, gms::feature_service& feature_service, storage_service_config config, sharded<service::migration_notifier>& mn,
+        sharded<db::view::view_update_generator>& view_update_generator, gms::feature_service& feature_service, storage_service_config config,
+        sharded<service::migration_notifier>& mn, sharded<service::migration_manager>& mm,
         locator::shared_token_metadata& stm, sharded<netw::messaging_service>& ms, sharded<cdc::generation_service>& cdc_gen_service, bool for_testing)
         : _abort_source(abort_source)
         , _feature_service(feature_service)
@@ -108,6 +109,7 @@ storage_service::storage_service(abort_source& abort_source, distributed<databas
         , _gossiper(gossiper)
         , _mnotifier(mn)
         , _messaging(ms)
+        , _migration_manager(mm)
         , _for_testing(for_testing)
         , _node_ops_abort_thread(node_ops_abort_thread())
         , _shared_token_metadata(stm)
@@ -3379,9 +3381,10 @@ storage_service::view_build_statuses(sstring keyspace, sstring view_name) const 
 future<> init_storage_service(sharded<abort_source>& abort_source, distributed<database>& db, sharded<gms::gossiper>& gossiper,
         sharded<db::system_distributed_keyspace>& sys_dist_ks,
         sharded<db::view::view_update_generator>& view_update_generator, sharded<gms::feature_service>& feature_service,
-        storage_service_config config, sharded<service::migration_notifier>& mn, sharded<locator::shared_token_metadata>& stm,
+        storage_service_config config, sharded<service::migration_notifier>& mn,
+        sharded<service::migration_manager>& mm, sharded<locator::shared_token_metadata>& stm,
         sharded<netw::messaging_service>& ms, sharded<cdc::generation_service>& cdc_gen_service) {
-    return service::get_storage_service().start(std::ref(abort_source), std::ref(db), std::ref(gossiper), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(feature_service), config, std::ref(mn), std::ref(stm), std::ref(ms), std::ref(cdc_gen_service));
+    return service::get_storage_service().start(std::ref(abort_source), std::ref(db), std::ref(gossiper), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(feature_service), config, std::ref(mn), std::ref(mm), std::ref(stm), std::ref(ms), std::ref(cdc_gen_service));
 }
 
 future<> deinit_storage_service() {
