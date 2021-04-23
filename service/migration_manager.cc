@@ -46,7 +46,6 @@
 
 #include "service/migration_listener.hh"
 #include "message/messaging_service.hh"
-#include "service/migration_task.hh"
 #include "gms/feature_service.hh"
 #include "utils/runtime.hh"
 #include "gms/gossiper.hh"
@@ -274,7 +273,20 @@ future<> migration_manager::maybe_schedule_schema_pull(const utils::UUID& their_
 
 future<> migration_manager::submit_migration_task(const gms::inet_address& endpoint, bool can_ignore_down_node)
 {
-    return service::migration_task::run_may_throw(endpoint, can_ignore_down_node);
+    if (!gms::get_local_gossiper().is_alive(endpoint)) {
+        auto msg = format("Can't send migration request: node {} is down.", endpoint);
+        mlogger.warn("{}", msg);
+        return can_ignore_down_node ? make_ready_future<>() : make_exception_future<>(std::runtime_error(msg));
+    }
+    netw::messaging_service::msg_addr id{endpoint, 0};
+    return service::get_local_migration_manager().merge_schema_from(id).handle_exception([](std::exception_ptr e) {
+        try {
+            std::rethrow_exception(e);
+        } catch (const exceptions::configuration_exception& e) {
+            mlogger.error("Configuration exception merging remote schema: {}", e.what());
+            return make_exception_future<>(e);
+        }
+    });
 }
 
 future<> migration_manager::do_merge_schema_from(netw::messaging_service::msg_addr id)
