@@ -65,6 +65,7 @@ distributed<service::migration_manager> _the_migration_manager;
 using namespace std::chrono_literals;
 
 const std::chrono::milliseconds migration_manager::migration_delay = 60000ms;
+static future<schema_ptr> get_schema_definition(table_schema_version v, netw::messaging_service::msg_addr dst, netw::messaging_service& ms);
 
 migration_manager::migration_manager(migration_notifier& notifier, gms::feature_service& feat, netw::messaging_service& ms) :
         _notifier(notifier), _feat(feat), _messaging(ms)
@@ -1075,7 +1076,9 @@ future<> migration_manager::maybe_sync(const schema_ptr& s, netw::messaging_serv
     });
 }
 
-future<schema_ptr> get_schema_definition(table_schema_version v, netw::messaging_service::msg_addr dst, netw::messaging_service& ms) {
+// Returns schema of given version, either from cache or from remote node identified by 'from'.
+// Doesn't affect current node's schema in any way.
+static future<schema_ptr> get_schema_definition(table_schema_version v, netw::messaging_service::msg_addr dst, netw::messaging_service& ms) {
     return local_schema_registry().get_or_load(v, [&ms, dst] (table_schema_version v) {
         mlogger.debug("Requesting schema {} from {}", v, dst);
         return ms.send_get_schema_version(dst, v).then([] (frozen_schema s) {

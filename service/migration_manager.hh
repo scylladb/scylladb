@@ -191,10 +191,6 @@ inline migration_manager& get_local_migration_manager() {
 }
 
 // Returns schema of given version, either from cache or from remote node identified by 'from'.
-// Doesn't affect current node's schema in any way.
-future<schema_ptr> get_schema_definition(table_schema_version, netw::msg_addr from, netw::messaging_service& ms);
-
-// Returns schema of given version, either from cache or from remote node identified by 'from'.
 // The returned schema may not be synchronized. See schema::is_synced().
 // Intended to be used in the read path.
 future<schema_ptr> get_schema_for_read(table_schema_version, netw::msg_addr from, netw::messaging_service& ms);
