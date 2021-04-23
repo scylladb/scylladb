@@ -1060,20 +1060,16 @@ static future<> maybe_sync(const schema_ptr& s, netw::messaging_service::msg_add
     }
 
     return s->registry_entry()->maybe_sync([s, endpoint] {
-        auto merge = [gs = global_schema_ptr(s), endpoint] {
-            schema_ptr s = gs.get();
-            mlogger.debug("Syncing schema of {}.{} (v={}) with {}", s->ks_name(), s->cf_name(), s->version(), endpoint);
-            return get_local_migration_manager().merge_schema_from(endpoint);
-        };
-
         // Serialize schema sync by always doing it on shard 0.
         if (this_shard_id() == 0) {
-            return merge();
+            mlogger.debug("Syncing schema of {}.{} (v={}) with {}", s->ks_name(), s->cf_name(), s->version(), endpoint);
+            return get_local_migration_manager().merge_schema_from(endpoint);
         } else {
-            return smp::submit_to(0, [gs = global_schema_ptr(s), endpoint, merge] {
+            return smp::submit_to(0, [gs = global_schema_ptr(s), endpoint] {
                 schema_ptr s = gs.get();
                 schema_registry_entry& e = *s->registry_entry();
-                return e.maybe_sync(merge);
+                mlogger.debug("Syncing schema of {}.{} (v={}) with {}", s->ks_name(), s->cf_name(), s->version(), endpoint);
+                return get_local_migration_manager().merge_schema_from(endpoint);
             });
         }
     });
