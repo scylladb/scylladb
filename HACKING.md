@@ -366,6 +366,42 @@ $ git remote update
 $ git checkout -t local/my_local_seastar_branch
 ```
 
+### Generating code coverage report
+
+Install dependencies:
+
+    $ dnf install llvm # for llvm-profdata and llvm-cov
+    $ dnf install lcov # for genhtml
+
+Build the tests you want to generate coverage for, as many as you want. Only debug mode is supported for now. Make sure to build the tests with debug symbols.
+Run the test and also set `LLVM_PROFILE_FILE` such that its path and filename matches that of the test executable:
+
+    $ LLVM_PROFILE_FILE='build/debug/test/boost/querier_cache_test_g.profraw' build/debug/test/boost/querier_cache_test_g
+
+Note that `profraw` extension. Run all the tests you want to include in the generated report.
+
+Merge and index the generated raw profiling data into a single `profdata` file:
+
+    $ llvm-profdata merge -sparse $(find -name *.profraw) -o build/debug/test/tests.profdata
+
+You can include all generated `profraw` files as above, or list the files you want to include manually.
+Export the report into `lcov` format:
+
+    $ llvm-cov export -format=lcov -instr-profile=build/debug/test/tests.profdata ${test_executables} > build/debug/test/tests.info
+
+`$test_executables` is a space-separated list of all the test executables that participate in the report. These are needed to resolve symbols to source lines.
+
+Generate the html report:
+
+    $ genhtml -o build/debug/test/coverage-report build/debug/test/tests.info
+
+Point your browser to `index.html` in the specified output directory:
+
+    $ xdg-open file:///$(realpath ./build/debug/test/coverage-report/index.html)
+
+Be horrified. Go and write more tests.
+
+
 ### Core dump debugging
 
 Slides:
