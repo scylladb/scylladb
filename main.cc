@@ -1434,8 +1434,8 @@ int main(int ac, char** av) {
 
             static redis_service redis;
             if (cfg->redis_port() || cfg->redis_ssl_port()) {
-                with_scheduling_group(dbcfg.statement_scheduling_group, [proxy = std::ref(proxy), db = std::ref(db), auth_service = std::ref(auth_service), cfg] {
-                    return redis.init(proxy, db, auth_service, *cfg);
+                with_scheduling_group(dbcfg.statement_scheduling_group, [proxy = std::ref(proxy), db = std::ref(db), auth_service = std::ref(auth_service), mm = std::ref(mm), cfg] {
+                    return redis.init(proxy, db, auth_service, mm, *cfg);
                 }).get();
             }
 

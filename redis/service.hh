@@ -43,6 +43,7 @@ class service;
 
 namespace service {
 class storage_proxy;
+class migration_manager;
 }
 
 class database;
@@ -55,6 +56,7 @@ private:
 public:
     redis_service();
     ~redis_service();
-    seastar::future<> init(seastar::sharded<service::storage_proxy>& proxy, seastar::sharded<database>& db, seastar::sharded<auth::service>& auth_service, db::config& cfg);
+    seastar::future<> init(seastar::sharded<service::storage_proxy>& proxy, seastar::sharded<database>& db,
+            seastar::sharded<auth::service>& auth_service, seastar::sharded<service::migration_manager>& mm, db::config& cfg);
     seastar::future<> stop();
 };
