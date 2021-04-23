@@ -405,6 +405,7 @@ namespace debug {
 sharded<netw::messaging_service>* the_messaging_service;
 sharded<cql3::query_processor>* the_query_processor;
 sharded<qos::service_level_controller>* the_sl_controller;
+sharded<service::migration_manager>* the_migration_manager;
 }
 
 int main(int ac, char** av) {
@@ -481,7 +482,7 @@ int main(int ac, char** av) {
     service::load_meter load_meter;
     debug::db = &db;
     auto& proxy = service::get_storage_proxy();
-    auto& mm = service::get_migration_manager();
+    sharded<service::migration_manager> mm;
     api::http_context ctx(db, proxy, load_meter, token_metadata);
     httpd::http_server_control prometheus_server;
     std::optional<utils::directories> dirs = {};
@@ -956,6 +957,7 @@ int main(int ac, char** av) {
             // #293 - do not stop anything
             // engine().at_exit([&proxy] { return proxy.stop(); });
             supervisor::notify("starting migration manager");
+            debug::the_migration_manager = &mm;
             mm.start(std::ref(mm_notifier), std::ref(feature_service), std::ref(messaging)).get();
             auto stop_migration_manager = defer_verbose_shutdown("migration manager", [&mm] {
                 mm.stop().get();

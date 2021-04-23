@@ -190,16 +190,6 @@ public:
     future<schema_ptr> get_schema_for_write(table_schema_version, netw::msg_addr from, netw::messaging_service& ms);
 };
 
-extern distributed<migration_manager> _the_migration_manager;
-
-inline distributed<migration_manager>& get_migration_manager() {
-    return _the_migration_manager;
-}
-
-inline migration_manager& get_local_migration_manager() {
-    return _the_migration_manager.local();
-}
-
 future<column_mapping> get_column_mapping(utils::UUID table_id, table_schema_version v);
 
 }
