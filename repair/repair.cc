@@ -727,7 +727,7 @@ static future<> repair_range(repair_info& ri, const dht::token_range& range) {
             ri.ranges_index, ri.ranges.size(), ri.id, ri.shard, ri.keyspace, ri.table_names(), range, neighbors, live_neighbors, status);
             return make_ready_future<>();
       }
-      return ::service::get_local_migration_manager().sync_schema(ri.db.local(), neighbors).then([&neighbors, &ri, range, id] {
+      return _migration_manager->local().sync_schema(ri.db.local(), neighbors).then([&neighbors, &ri, range, id] {
         return do_for_each(ri.table_ids.begin(), ri.table_ids.end(), [&ri, &neighbors, range] (utils::UUID table_id) {
             sstring cf;
             try {
