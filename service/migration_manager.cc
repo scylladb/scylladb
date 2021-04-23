@@ -639,7 +639,7 @@ future<> migration_manager::include_keyspace_and_announce(
     return db::schema_tables::read_keyspace_mutation(service::get_storage_proxy(), keyspace.name())
             .then([mutations = std::move(mutations)] (mutation m) mutable {
                 mutations.push_back(std::move(m));
-                return migration_manager::announce(std::move(mutations));
+                return get_local_migration_manager().announce(std::move(mutations));
             });
 }
 
@@ -951,17 +951,16 @@ future<> migration_manager::push_schema_mutation(const gms::inet_address& endpoi
 
 // Returns a future on the local application of the schema
 future<> migration_manager::announce(std::vector<mutation> schema) {
-    migration_manager& mm = get_local_migration_manager();
-    auto f = db::schema_tables::merge_schema(get_storage_proxy(), mm._feat, schema);
+    auto f = db::schema_tables::merge_schema(get_storage_proxy(), _feat, schema);
 
-    return do_with(std::move(schema), [live_members = gms::get_local_gossiper().get_live_members(), &mm](auto && schema) {
-        return parallel_for_each(live_members.begin(), live_members.end(), [&schema, &mm](auto& endpoint) {
+    return do_with(std::move(schema), [this, live_members = gms::get_local_gossiper().get_live_members()](auto && schema) {
+        return parallel_for_each(live_members.begin(), live_members.end(), [this, &schema](auto& endpoint) {
             // only push schema to nodes with known and equal versions
             if (endpoint != utils::fb_utilities::get_broadcast_address() &&
-                mm._messaging.knows_version(endpoint) &&
-                mm._messaging.get_raw_version(endpoint) ==
+                _messaging.knows_version(endpoint) &&
+                _messaging.get_raw_version(endpoint) ==
                 netw::messaging_service::current_version) {
-                return mm.push_schema_mutation(endpoint, schema);
+                return push_schema_mutation(endpoint, schema);
             } else {
                 return make_ready_future<>();
             }

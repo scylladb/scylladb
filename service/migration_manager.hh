@@ -154,7 +154,7 @@ public:
      * @param schema The schema mutation to be applied
      */
     // Returns a future on the local application of the schema
-    static future<> announce(std::vector<mutation> schema);
+    future<> announce(std::vector<mutation> schema);
 
     static future<> passive_announce(utils::UUID version);
 
