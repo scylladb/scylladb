@@ -66,6 +66,7 @@ static bool inject_rpc_stream_error = false;
 distributed<db::system_distributed_keyspace>* _sys_dist_ks;
 distributed<db::view::view_update_generator>* _view_update_generator;
 sharded<netw::messaging_service>* _messaging;
+sharded<service::migration_manager>* _migration_manager;
 
 enum class repair_state : uint16_t {
     unknown,
@@ -2279,10 +2280,11 @@ static future<> repair_get_full_row_hashes_with_rpc_stream_handler(
 }
 
 future<> row_level_repair_init_messaging_service_handler(repair_service& rs, distributed<db::system_distributed_keyspace>& sys_dist_ks,
-        distributed<db::view::view_update_generator>& view_update_generator, sharded<netw::messaging_service>& ms) {
+        distributed<db::view::view_update_generator>& view_update_generator, sharded<netw::messaging_service>& ms, sharded<service::migration_manager>& mm) {
     _sys_dist_ks = &sys_dist_ks;
     _view_update_generator = &view_update_generator;
     _messaging = &ms;
+    _migration_manager = &mm;
     return ms.invoke_on_all([] (auto& ms) {
         ms.register_repair_get_row_diff_with_rpc_stream([&ms] (const rpc::client_info& cinfo, uint64_t repair_meta_id, rpc::source<repair_hash_with_cmd> source) {
             auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");

@@ -50,12 +50,16 @@ namespace db {
     class system_distributed_keyspace;
 }
 namespace netw { class messaging_service; }
+namespace service {
+class migration_manager;
+}
 
 future<> repair_init_messaging_service_handler(repair_service& rs,
         distributed<db::system_distributed_keyspace>& sys_dist_ks,
         distributed<db::view::view_update_generator>& view_update_generator,
         sharded<database>& db,
-        sharded<netw::messaging_service>& ms);
+        sharded<netw::messaging_service>& ms,
+        sharded<service::migration_manager>& mm);
 future<> repair_uninit_messaging_service_handler();
 
 class repair_exception : public std::exception {
