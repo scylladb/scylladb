@@ -637,9 +637,9 @@ future<> migration_manager::include_keyspace_and_announce(
         const keyspace_metadata& keyspace, std::vector<mutation> mutations) {
     // Include the serialized keyspace in case the target node missed a CREATE KEYSPACE migration (see CASSANDRA-5631).
     return db::schema_tables::read_keyspace_mutation(service::get_storage_proxy(), keyspace.name())
-            .then([mutations = std::move(mutations)] (mutation m) mutable {
+            .then([this, mutations = std::move(mutations)] (mutation m) mutable {
                 mutations.push_back(std::move(m));
-                return get_local_migration_manager().announce(std::move(mutations));
+                return announce(std::move(mutations));
             });
 }
 
@@ -664,7 +664,7 @@ future<> migration_manager::announce_new_column_family(schema_ptr cfm, api::time
             auto mutations = db::schema_tables::make_create_table_mutations(ksm, cfm, timestamp);
             get_notifier().before_create_column_family(*cfm, mutations, timestamp);
             return mutations;
-        }).then([ksm](std::vector<mutation> mutations) {
+        }).then([this, ksm](std::vector<mutation> mutations) {
             return include_keyspace_and_announce(*ksm, std::move(mutations));
         });
     } catch (const no_such_keyspace& e) {
@@ -702,7 +702,7 @@ future<> migration_manager::announce_column_family_update(schema_ptr cfm, bool f
 
             get_notifier().before_update_column_family(*cfm, *old_schema, mutations, ts);
             return mutations;
-        }).then([keyspace] (auto&& mutations) {
+        }).then([this, keyspace] (auto&& mutations) {
             return include_keyspace_and_announce(*keyspace, std::move(mutations));
         });
     } catch (const no_such_column_family& e) {
