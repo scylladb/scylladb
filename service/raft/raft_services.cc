@@ -127,6 +127,9 @@ future<> raft_services::stop_servers() {
 }
 
 seastar::future<> raft_services::init() {
+    // Once a Raft server starts, it soon times out
+    // and starts an election, so RPC must be ready by
+    // then to send VoteRequest messages.
     init_rpc_verbs();
     auto uninit_rpc_verbs = defer([this] { this->uninit_rpc_verbs().get(); });
     // schema raft server instance always resides on shard 0

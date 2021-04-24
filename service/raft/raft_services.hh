@@ -82,8 +82,18 @@ private:
 public:
 
     raft_services(netw::messaging_service& ms, gms::gossiper& gs, cql3::query_processor& qp);
-
+    // To integrate Raft service into the boot procedure, the
+    // initialization is split into 2 steps:
+    // - in sharded::start(), we construct an instance of
+    // raft_services on each shard. The RPC is not available
+    // yet and no groups are created. The created object is
+    // useless but it won't crash on use.
+    // - in init(), which must be invoked explicitly on each
+    // shard after the query processor and database have started,
+    // we boot all existing groups from the local system tables
+    // and start RPC
     seastar::future<> init();
+    // Must be invoked explicitly on each shard to stop this service.
     seastar::future<> uninit();
 
     raft_rpc& get_rpc(raft::server_id id);
