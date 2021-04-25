@@ -135,6 +135,8 @@ public:
     resource_units consume_resources(reader_resources res);
 
     reader_resources consumed_resources() const;
+
+    sstring description() const;
 };
 
 class reader_permit::resource_units {

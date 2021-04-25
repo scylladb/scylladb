@@ -216,7 +216,7 @@ public:
 
 private:
     build_step& get_or_create_build_step(utils::UUID);
-    void initialize_reader_at_current_token(build_step&);
+    future<> initialize_reader_at_current_token(build_step&);
     void load_view_status(view_build_status, std::unordered_set<utils::UUID>&);
     void reshard(std::vector<std::vector<view_build_status>>, std::unordered_set<utils::UUID>&);
     void setup_shard_build_step(view_builder_init_state& vbi, std::vector<system_keyspace::view_name>, std::vector<system_keyspace::view_build_progress>);

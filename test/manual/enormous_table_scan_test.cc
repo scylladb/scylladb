@@ -134,6 +134,10 @@ public:
         return make_ready_future<>();
     }
 
+    virtual future<> close() noexcept override {
+        return make_ready_future<>();
+    }
+
 private:
     void get_next_partition() {
         if (_pps != partition_production_state::not_started) {

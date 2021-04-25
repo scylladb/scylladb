@@ -132,6 +132,15 @@ struct table {
         dht::partition_range pr;
         query::partition_slice slice;
         flat_mutation_reader rd;
+
+        reader(dht::partition_range pr_, query::partition_slice slice_) noexcept
+            : pr(std::move(pr_))
+            , slice(std::move(slice_))
+            , rd(nullptr)
+        { }
+        ~reader() {
+            rd.close().get();
+        }
     };
 
     void alter_schema() {
@@ -145,7 +154,7 @@ struct table {
 
     std::unique_ptr<reader> make_reader(dht::partition_range pr, query::partition_slice slice) {
         testlog.trace("making reader, pk={} ck={}", pr, slice);
-        auto r = std::make_unique<reader>(reader{std::move(pr), std::move(slice), make_empty_flat_reader(s.schema(), tests::make_permit())});
+        auto r = std::make_unique<reader>(std::move(pr), std::move(slice));
         std::vector<flat_mutation_reader> rd;
         if (prev_mt) {
             rd.push_back(prev_mt->make_flat_reader(s.schema(), tests::make_permit(), r->pr, r->slice, default_priority_class(), nullptr,

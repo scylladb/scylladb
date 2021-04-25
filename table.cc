@@ -19,6 +19,10 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <seastar/core/seastar.hh>
+#include <seastar/core/coroutine.hh>
+#include <seastar/util/closeable.hh>
+
 #include "database.hh"
 #include "sstables/sstables.hh"
 #include "sstables/sstables_manager.hh"
@@ -36,8 +40,6 @@
 #include "db/query_context.hh"
 #include "query-result-writer.hh"
 #include "db/view/view.hh"
-#include <seastar/core/seastar.hh>
-#include <seastar/core/coroutine.hh>
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/adaptor/map.hpp>
 #include "utils/error_injection.hh"
@@ -134,7 +136,7 @@ void table::refresh_compound_sstable_set() {
 future<table::const_mutation_partition_ptr>
 table::find_partition(schema_ptr s, reader_permit permit, const dht::decorated_key& key) const {
     return do_with(dht::partition_range::make_singular(key), [s = std::move(s), permit = std::move(permit), this] (auto& range) mutable {
-        return do_with(this->make_reader(std::move(s), std::move(permit), range), [] (flat_mutation_reader& reader) {
+        return with_closeable(this->make_reader(std::move(s), std::move(permit), range), [] (flat_mutation_reader& reader) {
             return read_mutation_from_flat_mutation_reader(reader, db::no_timeout).then([] (mutation_opt&& mo) -> std::unique_ptr<const mutation_partition> {
                 if (!mo) {
                     return {};
@@ -311,6 +313,8 @@ table::for_all_partitions_slow(schema_ptr s, reader_permit permit, std::function
             });
         }).then([&is] {
             return is.ok;
+        }).finally([&is] {
+            return is.reader.close();
         });
     });
 }
@@ -1941,11 +1945,20 @@ table::query(schema_ptr s,
                 : query::data_querier(as_mutation_source(), s, class_config.semaphore.make_permit(s.get(), "data-query"), range, qs.cmd.slice,
                         service::get_local_sstable_query_read_priority(), trace_state);
 
+        std::exception_ptr ex;
+      try {
         co_await q.consume_page(query_result_builder(*s, qs.builder), qs.remaining_rows(), qs.remaining_partitions(), qs.cmd.timestamp, timeout,
                 class_config.max_memory_for_unlimited_query);
 
         if (q.are_limits_reached() || qs.builder.is_short_read()) {
             cache_ctx.insert(std::move(q), std::move(trace_state));
+        }
+      } catch (...) {
+        ex = std::current_exception();
+      }
+        co_await q.close();
+        if (ex) {
+            std::rethrow_exception(std::move(ex));
         }
     }
 
@@ -1971,14 +1984,21 @@ table::mutation_query(schema_ptr s,
             : query::mutation_querier(as_mutation_source(), s, class_config.semaphore.make_permit(s.get(), "mutation-query"), range, cmd.slice,
                     service::get_local_sstable_query_read_priority(), trace_state);
 
+    std::exception_ptr ex;
+  try {
     auto rrb = reconcilable_result_builder(*s, cmd.slice, std::move(accounter));
     auto r = co_await q.consume_page(std::move(rrb), cmd.get_row_limit(), cmd.partition_limit, cmd.timestamp, timeout, class_config.max_memory_for_unlimited_query);
 
     if (q.are_limits_reached() || r.is_short_read()) {
         cache_ctx.insert(std::move(q), std::move(trace_state));
     }
-
+    co_await q.close();
     co_return r;
+  } catch (...) {
+    ex = std::current_exception();
+  }
+    co_await q.close();
+    std::rethrow_exception(std::move(ex));
 }
 
 mutation_source

@@ -31,8 +31,33 @@
 #include <boost/range/adaptor/transformed.hpp>
 #include <seastar/util/defer.hh>
 #include "utils/exceptions.hh"
+#include <seastar/core/on_internal_error.hh>
 
 logging::logger fmr_logger("flat_mutation_reader");
+
+flat_mutation_reader& flat_mutation_reader::operator=(flat_mutation_reader&& o) noexcept {
+    if (_impl) {
+        impl* ip = _impl.get();
+        // Abort to enforce calling close() before readers are closed
+        // to prevent leaks and potential use-after-free due to background
+        // tasks left behind.
+        on_internal_error_noexcept(fmr_logger, format("{} [{}]: permit {}: was not closed before overwritten by move-assign", typeid(*ip).name(), fmt::ptr(ip), ip->_permit.description()));
+        abort();
+    }
+    _impl = std::move(o._impl);
+    return *this;
+}
+
+flat_mutation_reader::~flat_mutation_reader() {
+    if (_impl) {
+        impl* ip = _impl.get();
+        // Abort to enforce calling close() before readers are closed
+        // to prevent leaks and potential use-after-free due to background
+        // tasks left behind.
+        on_internal_error_noexcept(fmr_logger, format("{} [{}]: permit {}: was not closed before destruction", typeid(*ip).name(), fmt::ptr(ip), ip->_permit.description()));
+        abort();
+    }
+}
 
 static size_t compute_buffer_size(const schema& s, const flat_mutation_reader::tracked_buffer& buffer)
 {
@@ -189,6 +214,11 @@ flat_mutation_reader make_reversing_reader(flat_mutation_reader& original, query
         virtual future<> fast_forward_to(position_range, db::timeout_clock::time_point) override {
             return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
         }
+
+        virtual future<> close() noexcept override {
+            // we don't own _source therefore do not close it
+            return make_ready_future<>();
+        }
     };
 
     return make_flat_mutation_reader<partition_reversing_mutation_reader>(original, max_size);
@@ -213,12 +243,8 @@ future<bool> flat_mutation_reader::impl::fill_buffer_from(Source& source, db::ti
 
 template future<bool> flat_mutation_reader::impl::fill_buffer_from<flat_mutation_reader>(flat_mutation_reader&, db::timeout_clock::time_point);
 
-flat_mutation_reader& to_reference(reference_wrapper<flat_mutation_reader>& wrapper) {
-    return wrapper.get();
-}
-
 flat_mutation_reader make_delegating_reader(flat_mutation_reader& r) {
-    return make_flat_mutation_reader<delegating_reader<reference_wrapper<flat_mutation_reader>>>(ref(r));
+    return make_flat_mutation_reader<delegating_reader>(r);
 }
 
 flat_mutation_reader make_forwardable(flat_mutation_reader m) {
@@ -298,6 +324,9 @@ flat_mutation_reader make_forwardable(flat_mutation_reader m) {
             };
             return _underlying.fast_forward_to(pr, timeout);
         }
+        virtual future<> close() noexcept override {
+            return _underlying.close();
+        }
     };
     return make_flat_mutation_reader<reader>(std::move(m));
 }
@@ -361,6 +390,9 @@ flat_mutation_reader make_nonforwardable(flat_mutation_reader r, bool single_par
             clear_buffer();
             return _underlying.fast_forward_to(pr, timeout);
         }
+        virtual future<> close() noexcept override {
+            return _underlying.close();
+        }
     };
     return make_flat_mutation_reader<reader>(std::move(r), single_partition);
 }
@@ -372,6 +404,7 @@ public:
     virtual future<> next_partition() override { return make_ready_future<>(); }
     virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override { return make_ready_future<>(); };
     virtual future<> fast_forward_to(position_range cr, db::timeout_clock::time_point timeout) override { return make_ready_future<>(); };
+    virtual future<> close() noexcept override { return make_ready_future<>(); }
 };
 
 flat_mutation_reader make_empty_flat_reader(schema_ptr s, reader_permit permit) {
@@ -588,6 +621,9 @@ flat_mutation_reader_from_mutations(reader_permit permit, std::vector<mutation> 
         virtual future<> fast_forward_to(position_range cr, db::timeout_clock::time_point timeout) override {
             throw std::runtime_error("This reader can't be fast forwarded to another position.");
         };
+        virtual future<> close() noexcept override {
+            return make_ready_future<>();
+        };
     };
     assert(!mutations.empty());
     schema_ptr s = mutations[0].schema();
@@ -664,6 +700,9 @@ public:
         }
         return make_ready_future<>();
     }
+    virtual future<> close() noexcept override {
+        return _reader ? _reader->close() : make_ready_future<>();
+    }
 };
 
 template<typename Generator>
@@ -731,6 +770,10 @@ public:
             return _reader.next_partition();
         }
         return make_ready_future<>();
+    }
+
+    virtual future<> close() noexcept override {
+        return _reader.close();
     }
 };
 
@@ -874,6 +917,9 @@ make_flat_mutation_reader_from_fragments(schema_ptr schema, reader_permit permit
             do_fast_forward_to(pr);
             return make_ready_future<>();
         }
+        virtual future<> close() noexcept override {
+            return make_ready_future<>();
+        }
     };
     return make_flat_mutation_reader<reader>(std::move(schema), std::move(permit), std::move(fragments), pr);
 }
@@ -940,6 +986,9 @@ public:
     virtual future<> fast_forward_to(position_range, db::timeout_clock::time_point) override {
         return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
     }
+    virtual future<> close() noexcept override {
+        return make_ready_future<>();
+    }
 };
 
 flat_mutation_reader make_generating_reader(schema_ptr s, reader_permit permit, std::function<future<mutation_fragment_opt> ()> get_next_fragment) {
@@ -948,6 +997,12 @@ flat_mutation_reader make_generating_reader(schema_ptr s, reader_permit permit, 
 
 void flat_mutation_reader::do_upgrade_schema(const schema_ptr& s) {
     *this = transform(std::move(*this), schema_upgrader(s));
+}
+
+void flat_mutation_reader::on_close_error(std::unique_ptr<impl> i, std::exception_ptr ep) noexcept {
+    impl* ip = i.get();
+    on_internal_error_noexcept(fmr_logger,
+            format("Failed to close {} [{}]: permit {}: {}", typeid(*ip).name(), fmt::ptr(ip), ip->_permit.description(), ep));
 }
 
 invalid_mutation_fragment_stream::invalid_mutation_fragment_stream(std::runtime_error e) : std::runtime_error(std::move(e)) {

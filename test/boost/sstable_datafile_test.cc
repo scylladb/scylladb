@@ -23,6 +23,8 @@
 #include <seastar/core/future-util.hh>
 #include <seastar/core/align.hh>
 #include <seastar/core/aligned_buffer.hh>
+#include <seastar/util/closeable.hh>
+
 #include "sstables/sstables.hh"
 #include "sstables/key.hh"
 #include "sstables/compress.hh"
@@ -860,6 +862,8 @@ SEASTAR_TEST_CASE(datafile_generation_11) {
                         // The clustered set
                         auto m = verifier(mutation);
                         verify_set(m);
+                    }).finally([rd] {
+                        return rd->close().finally([rd] {});
                     });
                 }).then([sstp, s, verifier] {
                     return do_with(dht::partition_range::make_singular(make_dkey(s, "key2")), [sstp, s, verifier] (auto& pr) {
@@ -869,6 +873,8 @@ SEASTAR_TEST_CASE(datafile_generation_11) {
                             BOOST_REQUIRE(!m.tomb);
                             BOOST_REQUIRE(m.cells.size() == 1);
                             BOOST_REQUIRE(m.cells[0].first == to_bytes("4"));
+                        }).finally([rd] {
+                            return rd->close().finally([rd] {});
                         });
                     });
                 });
@@ -903,6 +909,8 @@ SEASTAR_TEST_CASE(datafile_generation_12) {
                         for (auto& rt: mp.row_tombstones()) {
                             BOOST_REQUIRE(rt.tomb == tomb);
                         }
+                    }).finally([rd] {
+                        return rd->close().finally([rd] {});
                     });
                 });
             });
@@ -939,6 +947,8 @@ static future<> sstable_compression_test(compressor_ptr c, unsigned generation) 
                         for (auto& rt: mp.row_tombstones()) {
                             BOOST_REQUIRE(rt.tomb == tomb);
                         }
+                    }).finally([rd] {
+                        return rd->close().finally([rd] {});
                     });
                 });
             });
@@ -1196,6 +1206,8 @@ SEASTAR_TEST_CASE(compact) {
                         return read_mutation_from_flat_mutation_reader(*reader, db::no_timeout);
                     }).then([reader] (mutation_opt m) {
                         BOOST_REQUIRE(!m);
+                    }).finally([reader] {
+                        return reader->close();
                     });
                 });
             });
@@ -1332,7 +1344,7 @@ static future<> check_compacted_sstables(test_env& env, sstring tmpdir_path, uns
         auto reader = sstable_reader(sst, s); // reader holds sst and s alive.
         auto keys = make_lw_shared<std::vector<partition_key>>();
 
-        return do_with(std::move(reader), [generations, s, keys] (flat_mutation_reader& reader) {
+        return with_closeable(std::move(reader), [generations, s, keys] (flat_mutation_reader& reader) {
             return do_for_each(*generations, [&reader, keys] (unsigned long generation) mutable {
                 return read_mutation_from_flat_mutation_reader(reader, db::no_timeout).then([generation, keys] (mutation_opt m) {
                     BOOST_REQUIRE(m);
@@ -1423,6 +1435,8 @@ SEASTAR_TEST_CASE(datafile_generation_37) {
                         auto& row = mp.clustered_row(*s, clustering);
                         match_live_cell(row.cells(), *s, "cl2", data_value(to_bytes("cl2")));
                         return make_ready_future<>();
+                    }).finally([rd] {
+                        return rd->close().finally([rd] {});
                     });
                 });
             });
@@ -1457,6 +1471,8 @@ SEASTAR_TEST_CASE(datafile_generation_38) {
                         auto& row = mp.clustered_row(*s, clustering);
                         match_live_cell(row.cells(), *s, "cl3", data_value(to_bytes("cl3")));
                         return make_ready_future<>();
+                    }).finally([rd] {
+                        return rd->close().finally([rd] {});
                     });
                 });
             });
@@ -1492,6 +1508,8 @@ SEASTAR_TEST_CASE(datafile_generation_39) {
                         match_live_cell(row.cells(), *s, "cl1", data_value(data_value(to_bytes("cl1"))));
                         match_live_cell(row.cells(), *s, "cl2", data_value(data_value(to_bytes("cl2"))));
                         return make_ready_future<>();
+                    }).finally([rd] {
+                        return rd->close().finally([rd] {});
                     });
                 });
             });
@@ -1587,6 +1605,8 @@ SEASTAR_TEST_CASE(datafile_generation_41) {
                         BOOST_REQUIRE(mp.clustered_rows().calculate_size() == 1);
                         auto& c_row = *(mp.clustered_rows().begin());
                         BOOST_REQUIRE(c_row.row().deleted_at().tomb() == tomb);
+                    }).finally([rd] {
+                        return rd->close().finally([rd] {});
                     });
                 });
             });
@@ -1647,7 +1667,9 @@ SEASTAR_TEST_CASE(datafile_generation_47) {
                         }
                         return make_ready_future<stop_iteration>(stop_iteration::no);
                     });
-                }).then([sstp, reader, s] {});
+                }).finally([sstp, reader, s] {
+                    return reader->close();
+                });
             });
         }).then([sst, mt] {});
     });
@@ -2277,6 +2299,8 @@ SEASTAR_TEST_CASE(tombstone_purge_test) {
                 return (*reader)(db::no_timeout);
             }).then([reader, s] (mutation_fragment_opt m) {
                 BOOST_REQUIRE(!m);
+            }).finally([reader] {
+                return reader->close();
             }).get();
         };
 
@@ -2454,6 +2478,8 @@ SEASTAR_TEST_CASE(check_multi_schema) {
                     return (*reader)(db::no_timeout);
                 }).then([reader, s] (mutation_fragment_opt m) {
                     BOOST_REQUIRE(!m);
+                }).finally([reader] {
+                    return reader->close();
                 });
             });
             return make_ready_future<>();
@@ -2510,6 +2536,8 @@ SEASTAR_TEST_CASE(sstable_rewrite) {
                     return (*reader)(db::no_timeout);
                 }).then([reader] (mutation_fragment_opt m) {
                     BOOST_REQUIRE(!m);
+                }).finally([reader] {
+                    return reader->close();
                 });
             }).then([cf] {});
         }).then([sst, mt, s] {});
@@ -2520,6 +2548,7 @@ void test_sliced_read_row_presence(shared_sstable sst, schema_ptr s, const query
     std::vector<std::pair<partition_key, std::vector<clustering_key>>> expected)
 {
     auto reader = sst->as_mutation_source().make_reader(s, tests::make_permit(), query::full_partition_range, ps);
+    auto close_reader = deferred_close(reader);
 
     partition_key::equality pk_eq(*s);
     clustering_key::equality ck_eq(*s);
@@ -2751,6 +2780,7 @@ SEASTAR_TEST_CASE(test_counter_read) {
             auto sst = env.make_sstable(s, get_test_dir("counter_test", s), 5, version, big);
             sst->load().get();
             auto reader = sstable_reader(sst, s);
+            auto close_reader = deferred_close(reader);
 
             auto mfopt = reader(db::no_timeout).get0();
             BOOST_REQUIRE(mfopt);
@@ -4949,6 +4979,7 @@ SEASTAR_TEST_CASE(test_wrong_counter_shard_order) {
             auto sst = env.make_sstable(s, get_test_dir("wrong_counter_shard_order", s), 2, version, big);
             sst->load().get0();
             auto reader = sstable_reader(sst, s);
+            auto close_reader = deferred_close(reader);
 
             auto verify_row = [&s] (mutation_fragment_opt mfopt, int64_t expected_value) {
                 BOOST_REQUIRE(bool(mfopt));
@@ -6098,6 +6129,7 @@ SEASTAR_TEST_CASE(purged_tombstone_consumer_sstable_test) {
                 ::mutation_reader::forwarding::no);
 
             auto r = std::move(reader);
+            auto close_r = deferred_close(r);
             r.consume_in_thread(std::move(cfc), db::no_timeout);
 
             return {std::move(non_purged), std::move(purged_only)};
@@ -6138,6 +6170,8 @@ SEASTAR_TEST_CASE(purged_tombstone_consumer_sstable_test) {
                 return (*reader)(db::no_timeout);
             }).then([reader, s] (mutation_fragment_opt m) {
                 BOOST_REQUIRE(!m);
+            }).finally([reader] {
+                return reader->close();
             }).get();
         };
 
@@ -6676,6 +6710,7 @@ SEASTAR_TEST_CASE(test_zero_estimated_partitions) {
             sst->load().get();
 
             auto sst_mr = sst->as_mutation_source().make_reader(s, tests::make_permit(), query::full_partition_range, s->full_slice());
+            auto close_mr = deferred_close(sst_mr);
             auto sst_mut = read_mutation_from_flat_mutation_reader(sst_mr, db::no_timeout).get0();
 
             // The real test here is that we don't assert() in
@@ -6841,6 +6876,7 @@ SEASTAR_TEST_CASE(test_missing_partition_end_fragment) {
             frags.push_back(mutation_fragment(*s, tests::make_permit(), partition_end()));
 
             auto mr = make_flat_mutation_reader_from_fragments(s, tests::make_permit(), std::move(frags));
+            auto close_mr = deferred_close(mr);
 
             auto sst = env.make_sstable(s, tmpdir_path, 0, version, big);
             sstable_writer_config cfg = env.manager().configure_writer();
@@ -7183,6 +7219,7 @@ SEASTAR_TEST_CASE(single_key_reader_through_compound_set_test) {
         auto reader = compound.create_single_key_sstable_reader(&*cf, s, permit, eh, pr, s->full_slice(), default_priority_class(),
                                                                 tracing::trace_state_ptr(), ::streamed_mutation::forwarding::no,
                                                                 ::mutation_reader::forwarding::no);
+        auto close_reader = deferred_close(reader);
         auto mfopt = read_mutation_from_flat_mutation_reader(reader, db::no_timeout).get0();
         BOOST_REQUIRE(mfopt);
         mfopt = read_mutation_from_flat_mutation_reader(reader, db::no_timeout).get0();
@@ -7247,6 +7284,7 @@ SEASTAR_TEST_CASE(test_twcs_single_key_reader_filtering) {
                 &cf, s, permit, eh, pr, slice, default_priority_class(),
                 tracing::trace_state_ptr(), ::streamed_mutation::forwarding::no,
                 ::mutation_reader::forwarding::no);
+        auto close_reader = deferred_close(reader);
 
         auto checked_by_ck = cf_stats.sstables_checked_by_clustering_filter;
         auto surviving_after_ck = cf_stats.surviving_sstables_after_clustering_filter;

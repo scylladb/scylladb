@@ -20,6 +20,9 @@
  */
 
 #pragma once
+
+#include <seastar/util/closeable.hh>
+
 #include "sstables/sstables.hh"
 #include "sstables/compaction_manager.hh"
 #include "cell_locking.hh"
@@ -204,7 +207,7 @@ public:
     }
 
     future<double> read_sequential_partitions(int idx) {
-        return do_with(_sst[0]->make_reader(s, tests::make_permit(), query::full_partition_range, s->full_slice()), [this] (flat_mutation_reader& r) {
+        return with_closeable(_sst[0]->make_reader(s, tests::make_permit(), query::full_partition_range, s->full_slice()), [this] (flat_mutation_reader& r) {
             auto start = perf_sstable_test_env::now();
             auto total = make_lw_shared<size_t>(0);
             auto done = make_lw_shared<bool>(false);

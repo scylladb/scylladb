@@ -720,9 +720,6 @@ void database::set_format_by_config() {
 }
 
 database::~database() {
-    _read_concurrency_sem.clear_inactive_reads();
-    _streaming_concurrency_sem.clear_inactive_reads();
-    _system_read_concurrency_sem.clear_inactive_reads();
 }
 
 void database::update_version(const utils::UUID& version) {
@@ -945,7 +942,7 @@ bool database::update_column_family(schema_ptr new_schema) {
 future<> database::remove(const column_family& cf) noexcept {
     auto s = cf.schema();
     auto& ks = find_keyspace(s->ks_name());
-    _querier_cache.evict_all_for_table(s->id());
+    co_await _querier_cache.evict_all_for_table(s->id());
     _column_families.erase(s->id());
     ks.metadata()->remove_column_family(s);
     _ks_cf_to_uuid.erase(std::make_pair(s->ks_name(), s->cf_name()));
@@ -956,7 +953,6 @@ future<> database::remove(const column_family& cf) noexcept {
             // Drop view mutations received after base table drop.
         }
     }
-    co_return;
 }
 
 future<> database::drop_column_family(const sstring& ks_name, const sstring& cf_name, timestamp_func tsf, bool snapshot) {
@@ -2015,6 +2011,14 @@ database::stop() {
         return _user_sstables_manager->close();
     }).then([this] {
         return _system_sstables_manager->close();
+    }).finally([this] {
+        return when_all_succeed(
+                _read_concurrency_sem.stop(),
+                _streaming_concurrency_sem.stop(),
+                _compaction_concurrency_sem.stop(),
+                _system_read_concurrency_sem.stop()).discard_result().finally([this] {
+            return _querier_cache.stop();
+        });
     });
 }
 
@@ -2259,11 +2263,11 @@ flat_mutation_reader make_multishard_streaming_reader(distributed<database>& db,
 
             return cf.make_streaming_reader(std::move(schema), *_contexts[shard].range, slice, fwd_mr);
         }
-        virtual void destroy_reader(shard_id shard, future<stopped_reader> reader_fut) noexcept override {
-            // Move to the background.
-            (void)reader_fut.then([this, zis = shared_from_this(), shard] (stopped_reader&& reader) mutable {
+        virtual future<> destroy_reader(shard_id shard, future<stopped_reader> reader_fut) noexcept override {
+            return reader_fut.then([this, zis = shared_from_this(), shard] (stopped_reader&& reader) mutable {
                 return smp::submit_to(shard, [ctx = std::move(_contexts[shard]), handle = std::move(reader.handle)] () mutable {
-                    ctx.semaphore->unregister_inactive_read(std::move(*handle));
+                    auto reader_opt = ctx.semaphore->unregister_inactive_read(std::move(*handle));
+                    return reader_opt ? reader_opt->close() : make_ready_future<>();
                 });
             }).handle_exception([shard] (std::exception_ptr e) {
                 dblog.warn("Failed to destroy shard reader of streaming multishard reader on shard {}: {}", shard, e);

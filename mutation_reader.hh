@@ -121,6 +121,9 @@ public:
         _end_of_stream = false;
         return _rd.fast_forward_to(std::move(pr), timeout);
     }
+    virtual future<> close() noexcept {
+        return _rd.close();
+    }
 };
 
 // Creates a mutation_reader wrapper which creates a new stream of mutations
@@ -476,7 +479,7 @@ public:
     /// all the readers being cleaned up is up to the implementation.
     ///
     /// This method will be called from a destructor so it cannot throw.
-    virtual void destroy_reader(shard_id shard, future<stopped_reader> reader) noexcept = 0;
+    virtual future<> destroy_reader(shard_id shard, future<stopped_reader> reader) noexcept = 0;
 
     /// Get the relevant semaphore for this read.
     ///
@@ -665,6 +668,9 @@ public:
 
     // Return the next batch of readers from `pref(b)`.
     virtual std::vector<reader_and_upper_bound> pop(position_in_partition_view bound) = 0;
+
+    // Close all readers
+    virtual future<> close() noexcept = 0;
 };
 
 flat_mutation_reader make_clustering_combined_reader(schema_ptr schema,

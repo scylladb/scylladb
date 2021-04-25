@@ -24,6 +24,7 @@
 #include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/util/bool_class.hh>
+#include <seastar/util/closeable.hh>
 
 #include "mutation_fragment.hh"
 #include "test/lib/mutation_source_test.hh"
@@ -66,14 +67,18 @@ SEASTAR_TEST_CASE(test_multishard_writer) {
                     shards_before[shard]++;
                 }
                 auto source_reader = partition_nr > 0 ? flat_mutation_reader_from_mutations(tests::make_permit(), muts) : make_empty_flat_reader(s, tests::make_permit());
+                auto close_source_reader = deferred_close(source_reader);
                 auto& sharder = s->get_sharder();
                 size_t partitions_received = distribute_reader_and_consume_on_shards(s,
                     std::move(source_reader),
                     [&sharder, &shards_after, error] (flat_mutation_reader reader) mutable {
                         if (error) {
+                          return reader.close().then([] {
                             return make_exception_future<>(std::runtime_error("Failed to write"));
+                          });
                         }
-                        return repeat([&sharder, &shards_after, reader = std::move(reader), error] () mutable {
+                        return with_closeable(std::move(reader), [&sharder, &shards_after, error] (flat_mutation_reader& reader) {
+                          return repeat([&sharder, &shards_after, &reader, error] () mutable {
                             return reader(db::no_timeout).then([&sharder, &shards_after, error] (mutation_fragment_opt mf_opt) mutable {
                                 if (mf_opt) {
                                     if (mf_opt->is_partition_start()) {
@@ -86,6 +91,7 @@ SEASTAR_TEST_CASE(test_multishard_writer) {
                                     return make_ready_future<stop_iteration>(stop_iteration::yes);
                                 }
                             });
+                          });
                         });
                     }
                 ).get0();
@@ -123,6 +129,7 @@ SEASTAR_TEST_CASE(test_multishard_writer_producer_aborts) {
             auto muts = gen(partition_nr);
             schema_ptr s = gen.schema();
             auto source_reader = partition_nr > 0 ? flat_mutation_reader_from_mutations(tests::make_permit(), muts) : make_empty_flat_reader(s, tests::make_permit());
+            auto close_source_reader = deferred_close(source_reader);
             int mf_produced = 0;
             auto get_next_mutation_fragment = [&source_reader, &mf_produced] () mutable {
                 if (mf_produced++ > 800) {
@@ -137,9 +144,12 @@ SEASTAR_TEST_CASE(test_multishard_writer_producer_aborts) {
                     make_generating_reader(s, tests::make_permit(), std::move(get_next_mutation_fragment)),
                     [&sharder, error] (flat_mutation_reader reader) mutable {
                         if (error) {
+                          return reader.close().then([] {
                             return make_exception_future<>(std::runtime_error("Failed to write"));
+                          });
                         }
-                        return repeat([&sharder, reader = std::move(reader), error] () mutable {
+                        return with_closeable(std::move(reader), [&sharder, error] (flat_mutation_reader& reader) {
+                          return repeat([&sharder, &reader, error] () mutable {
                             return reader(db::no_timeout).then([&sharder,  error] (mutation_fragment_opt mf_opt) mutable {
                                 if (mf_opt) {
                                     if (mf_opt->is_partition_start()) {
@@ -151,6 +161,7 @@ SEASTAR_TEST_CASE(test_multishard_writer_producer_aborts) {
                                     return make_ready_future<stop_iteration>(stop_iteration::yes);
                                 }
                             });
+                          });
                         });
                     }
                 ).get0();
@@ -334,7 +345,7 @@ SEASTAR_THREAD_TEST_CASE(test_timestamp_based_splitting_mutation_writer) {
     std::unordered_map<int64_t, std::vector<mutation>> buckets;
 
     auto consumer = [&] (flat_mutation_reader bucket_reader) {
-        return do_with(std::move(bucket_reader), [&] (flat_mutation_reader& rd) {
+        return with_closeable(std::move(bucket_reader), [&] (flat_mutation_reader& rd) {
             return rd.consume(test_bucket_writer(random_schema.schema(), classify_fn, buckets), db::no_timeout);
         });
     };
@@ -347,6 +358,7 @@ SEASTAR_THREAD_TEST_CASE(test_timestamp_based_splitting_mutation_writer) {
             boost::adaptors::transformed([] (std::vector<mutation> muts) { return flat_mutation_reader_from_mutations(tests::make_permit(), std::move(muts)); }));
     auto reader = make_combined_reader(random_schema.schema(), tests::make_permit(), std::move(bucket_readers), streamed_mutation::forwarding::no,
             mutation_reader::forwarding::no);
+    auto close_reader = deferred_close(reader);
 
     const auto now = gc_clock::now();
     for (auto& m : muts) {
@@ -364,7 +376,6 @@ SEASTAR_THREAD_TEST_CASE(test_timestamp_based_splitting_mutation_writer) {
         testlog.debug("Comparing mutation #{}", i);
         assert_that(combined_mutations[i]).is_equal_to(muts[i]);
     }
-
 }
 
 SEASTAR_THREAD_TEST_CASE(test_timestamp_based_splitting_mutation_writer_abort) {
@@ -402,7 +413,7 @@ SEASTAR_THREAD_TEST_CASE(test_timestamp_based_splitting_mutation_writer_abort) {
     int throw_after = tests::random::get_int(muts.size() - 1);
     testlog.info("Will raise exception after {}/{} mutations", throw_after, muts.size());
     auto consumer = [&] (flat_mutation_reader bucket_reader) {
-        return do_with(std::move(bucket_reader), [&] (flat_mutation_reader& rd) {
+        return with_closeable(std::move(bucket_reader), [&] (flat_mutation_reader& rd) {
             return rd.consume(test_bucket_writer(random_schema.schema(), classify_fn, buckets, throw_after), db::no_timeout);
         });
     };

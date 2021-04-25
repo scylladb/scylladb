@@ -19,6 +19,8 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <seastar/core/coroutine.hh>
+
 #include "querier.hh"
 
 #include "schema.hh"
@@ -309,15 +311,15 @@ void querier_cache::insert(utils::UUID key, shard_mutation_querier&& q, tracing:
 }
 
 template <typename Querier>
-static std::optional<Querier> lookup_querier(
+std::optional<Querier> querier_cache::lookup_querier(
         querier_cache::index& index,
-        querier_cache::stats& stats,
         utils::UUID key,
         const schema& s,
         dht::partition_ranges_view ranges,
         const query::partition_slice& slice,
         tracing::trace_state_ptr trace_state) {
     auto base_ptr = find_querier(index, key, ranges, trace_state);
+    auto& stats = _stats;
     ++stats.lookups;
     if (!base_ptr) {
         ++stats.misses;
@@ -344,6 +346,14 @@ static std::optional<Querier> lookup_querier(
 
     tracing::trace(trace_state, "Dropping querier because {}", cannot_use_reason(can_be_used));
     ++stats.drops;
+
+    // Close and drop the querier in the background.
+    // It is safe to do so, since _closing_gate is closed and
+    // waited on in querier_cache::stop()
+    (void)with_gate(_closing_gate, [this, q = std::move(q)] () mutable {
+        return q.close().finally([q = std::move(q)] {});
+    });
+
     return std::nullopt;
 }
 
@@ -352,7 +362,7 @@ std::optional<data_querier> querier_cache::lookup_data_querier(utils::UUID key,
         const dht::partition_range& range,
         const query::partition_slice& slice,
         tracing::trace_state_ptr trace_state) {
-    return lookup_querier<data_querier>(_data_querier_index, _stats, key, s, range, slice, std::move(trace_state));
+    return lookup_querier<data_querier>(_data_querier_index, key, s, range, slice, std::move(trace_state));
 }
 
 std::optional<mutation_querier> querier_cache::lookup_mutation_querier(utils::UUID key,
@@ -360,7 +370,7 @@ std::optional<mutation_querier> querier_cache::lookup_mutation_querier(utils::UU
         const dht::partition_range& range,
         const query::partition_slice& slice,
         tracing::trace_state_ptr trace_state) {
-    return lookup_querier<mutation_querier>(_mutation_querier_index, _stats, key, s, range, slice, std::move(trace_state));
+    return lookup_querier<mutation_querier>(_mutation_querier_index, key, s, range, slice, std::move(trace_state));
 }
 
 std::optional<shard_mutation_querier> querier_cache::lookup_shard_mutation_querier(utils::UUID key,
@@ -368,46 +378,76 @@ std::optional<shard_mutation_querier> querier_cache::lookup_shard_mutation_queri
         const dht::partition_range_vector& ranges,
         const query::partition_slice& slice,
         tracing::trace_state_ptr trace_state) {
-    return lookup_querier<shard_mutation_querier>(_shard_mutation_querier_index, _stats, key, s, ranges, slice,
+    return lookup_querier<shard_mutation_querier>(_shard_mutation_querier_index, key, s, ranges, slice,
             std::move(trace_state));
+}
+
+future<> querier_base::close() noexcept {
+    struct variant_closer {
+        querier_base& q;
+        future<> operator()(flat_mutation_reader& reader) {
+            return reader.close();
+        }
+        future<> operator()(reader_concurrency_semaphore::inactive_read_handle& irh) {
+            auto reader_opt = q.permit().semaphore().unregister_inactive_read(std::move(irh));
+            return reader_opt ? reader_opt->close() : make_ready_future<>();
+        }
+    };
+    return std::visit(variant_closer{*this}, _reader);
 }
 
 void querier_cache::set_entry_ttl(std::chrono::seconds entry_ttl) {
     _entry_ttl = entry_ttl;
 }
 
-bool querier_cache::evict_one() {
-    auto maybe_evict_from_index = [this] (index& idx) -> bool {
+future<bool> querier_cache::evict_one() noexcept {
+    for (auto ip : {&_data_querier_index, &_mutation_querier_index, &_shard_mutation_querier_index}) {
+        auto& idx = *ip;
         if (idx.empty()) {
-            return false;
+            continue;
         }
         auto it = idx.begin();
-        it->second->permit().semaphore().unregister_inactive_read(querier_utils::get_inactive_read_handle(*it->second));
+        auto reader_opt = it->second->permit().semaphore().unregister_inactive_read(querier_utils::get_inactive_read_handle(*it->second));
         idx.erase(it);
         ++_stats.resource_based_evictions;
         --_stats.population;
-        return true;
-    };
-
-    return maybe_evict_from_index(_data_querier_index) || maybe_evict_from_index(_mutation_querier_index) || maybe_evict_from_index(_shard_mutation_querier_index);
+        if (reader_opt) {
+            co_await reader_opt->close();
+        }
+        co_return true;
+    }
+    co_return false;
 }
 
-void querier_cache::evict_all_for_table(const utils::UUID& schema_id) {
-    auto evict_from_index = [this, schema_id] (index& idx) {
+future<> querier_cache::evict_all_for_table(const utils::UUID& schema_id) noexcept {
+    for (auto ip : {&_data_querier_index, &_mutation_querier_index, &_shard_mutation_querier_index}) {
+        auto& idx = *ip;
         for (auto it = idx.begin(); it != idx.end();) {
             if (it->second->schema().id() == schema_id) {
-                it->second->permit().semaphore().unregister_inactive_read(querier_utils::get_inactive_read_handle(*it->second));
+                auto reader_opt = it->second->permit().semaphore().unregister_inactive_read(querier_utils::get_inactive_read_handle(*it->second));
                 it = idx.erase(it);
                 --_stats.population;
+                if (reader_opt) {
+                    co_await reader_opt->close();
+                }
             } else {
                 ++it;
             }
         }
-    };
+    }
+    co_return;
+}
 
-    evict_from_index(_data_querier_index);
-    evict_from_index(_mutation_querier_index);
-    evict_from_index(_shard_mutation_querier_index);
+future<> querier_cache::stop() noexcept {
+    co_await _closing_gate.close();
+
+    for (auto* ip : {&_data_querier_index, &_mutation_querier_index, &_shard_mutation_querier_index}) {
+        auto& idx = *ip;
+        for (auto it = idx.begin(); it != idx.end(); it = idx.erase(it)) {
+            co_await it->second->close();
+            --_stats.population;
+        }
+    }
 }
 
 querier_cache_context::querier_cache_context(querier_cache& cache, utils::UUID key, query::is_first_page is_first_page)

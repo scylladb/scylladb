@@ -22,6 +22,8 @@
 
 #include <seastar/core/thread.hh>
 #include <seastar/testing/test_case.hh>
+#include <seastar/testing/thread_test_case.hh>
+#include <seastar/util/closeable.hh>
 
 #include "test/lib/mutation_source_test.hh"
 #include "mutation_fragment.hh"
@@ -112,6 +114,7 @@ SEASTAR_TEST_CASE(test_mutation_merger_conforms_to_mutation_source) {
                     muts.push_back(mutation(m.schema(), m.decorated_key()));
                 }
                 auto rd = flat_mutation_reader_from_mutations(tests::make_permit(), {m});
+                auto close_rd = deferred_close(rd);
                 rd.consume(fragment_scatterer{muts}, db::no_timeout).get();
                 for (int i = 0; i < n; ++i) {
                     memtables[i]->apply(std::move(muts[i]));
@@ -398,6 +401,7 @@ SEASTAR_TEST_CASE(test_schema_upgrader_is_equivalent_with_mutation_upgrade) {
                 // upgrade m1 to m2's schema
 
                 auto reader = transform(flat_mutation_reader_from_mutations(tests::make_permit(), {m1}), schema_upgrader(m2.schema()));
+                auto close_reader = deferred_close(reader);
                 auto from_upgrader = read_mutation_from_flat_mutation_reader(reader, db::no_timeout).get0();
 
                 auto regular = m1;
@@ -409,12 +413,13 @@ SEASTAR_TEST_CASE(test_schema_upgrader_is_equivalent_with_mutation_upgrade) {
     });
 }
 
-SEASTAR_TEST_CASE(test_mutation_fragment_mutate_exception_safety) {
+SEASTAR_THREAD_TEST_CASE(test_mutation_fragment_mutate_exception_safety) {
     struct dummy_exception { };
 
     simple_schema s;
 
     reader_concurrency_semaphore sem(1, 100, get_name());
+    auto stop_sem = deferred_stop(sem);
     auto permit = sem.make_permit(s.schema().get(), get_name());
 
     const auto available_res = sem.available_resources();
@@ -467,6 +472,4 @@ SEASTAR_TEST_CASE(test_mutation_fragment_mutate_exception_safety) {
         } catch (dummy_exception&) { }
         BOOST_REQUIRE(available_res == sem.available_resources());
     }
-
-    return make_ready_future<>();
 }

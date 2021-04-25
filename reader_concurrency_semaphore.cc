@@ -23,6 +23,7 @@
 #include <seastar/core/print.hh>
 #include <seastar/util/lazy.hh>
 #include <seastar/util/log.hh>
+#include <seastar/core/coroutine.hh>
 
 #include "reader_concurrency_semaphore.hh"
 #include "utils/exceptions.hh"
@@ -95,10 +96,8 @@ public:
     { }
     ~impl() {
         if (_resources) {
-            on_internal_error_noexcept(rcslog, format("reader_permit::impl::~impl(): permit {}.{}:{} detected a leak of {{count={}, memory={}}} resources",
-                        _schema ? _schema->ks_name() : "*",
-                        _schema ? _schema->cf_name() : "*",
-                        _op_name_view,
+            on_internal_error_noexcept(rcslog, format("reader_permit::impl::~impl(): permit {} detected a leak of {{count={}, memory={}}} resources",
+                        description(),
                         _resources.count,
                         _resources.memory));
             signal(_resources);
@@ -165,6 +164,13 @@ public:
     reader_resources resources() const {
         return _resources;
     }
+
+    sstring description() const {
+        return format("{}.{}:{}",
+                _schema ? _schema->ks_name() : "*",
+                _schema ? _schema->cf_name() : "*",
+                _op_name_view);
+    }
 };
 
 struct reader_concurrency_semaphore::permit_list {
@@ -222,6 +228,10 @@ reader_permit::resource_units reader_permit::consume_resources(reader_resources 
 
 reader_resources reader_permit::consumed_resources() const {
     return _impl->resources();
+}
+
+sstring reader_permit::description() const {
+    return _impl->description();
 }
 
 std::ostream& operator<<(std::ostream& os, reader_permit::state s) {
@@ -409,8 +419,10 @@ reader_concurrency_semaphore::reader_concurrency_semaphore(no_limits, sstring na
             std::move(name)) {}
 
 reader_concurrency_semaphore::~reader_concurrency_semaphore() {
-    broken(std::make_exception_ptr(broken_semaphore{}));
-    clear_inactive_reads();
+    // FIXME: assert(_stopped) once all reader_concurrency_semaphore:s
+    // are properly closed (needs de-static-fying tests::the_semaphore)
+    assert(_inactive_reads.empty() && !_close_readers_gate.get_count());
+    broken();
 }
 
 reader_concurrency_semaphore::inactive_read_handle reader_concurrency_semaphore::register_inactive_read(flat_mutation_reader reader) noexcept {
@@ -440,6 +452,7 @@ reader_concurrency_semaphore::inactive_read_handle reader_concurrency_semaphore:
     } else {
         ++_stats.permit_based_evictions;
     }
+    close_reader(std::move(reader));
     return inactive_read_handle();
 }
 
@@ -459,6 +472,12 @@ flat_mutation_reader_opt reader_concurrency_semaphore::unregister_inactive_read(
         return {};
     }
     if (irh._sem != this) {
+        // unregister from the other semaphore
+        // and close the reader, in case on_internal_error
+        // doesn't abort.
+        auto irp = std::move(irh._irp);
+        irp->unlink();
+        irh._sem->close_reader(std::move(irp->reader));
         on_internal_error(rcslog, fmt::format(
                     "reader_concurrency_semaphore::unregister_inactive_read(): "
                     "attempted to unregister an inactive read with a handle belonging to another semaphore: "
@@ -485,12 +504,28 @@ bool reader_concurrency_semaphore::try_evict_one_inactive_read(evict_reason reas
 
 void reader_concurrency_semaphore::clear_inactive_reads() {
     while (!_inactive_reads.empty()) {
+        auto& ir = _inactive_reads.front();
+        close_reader(std::move(ir.reader));
         // Destroying the read unlinks it too.
         std::unique_ptr<inactive_read> _(&*_inactive_reads.begin());
     }
 }
 
-void reader_concurrency_semaphore::evict(inactive_read& ir, evict_reason reason) noexcept {
+std::runtime_error reader_concurrency_semaphore::stopped_exception() {
+    return std::runtime_error(format("{} was stopped", _name));
+}
+
+future<> reader_concurrency_semaphore::stop() noexcept {
+    assert(!_stopped);
+    _stopped = true;
+    clear_inactive_reads();
+    co_await _close_readers_gate.close();
+    broken(std::make_exception_ptr(stopped_exception()));
+    co_return;
+}
+
+flat_mutation_reader reader_concurrency_semaphore::detach_inactive_reader(inactive_read& ir, evict_reason reason) noexcept {
+    auto reader = std::move(ir.reader);
     ir.detach();
     std::unique_ptr<inactive_read> irp(&ir);
     try {
@@ -511,6 +546,19 @@ void reader_concurrency_semaphore::evict(inactive_read& ir, evict_reason reason)
             break;
     }
     --_stats.inactive_reads;
+    return std::move(reader);
+}
+
+void reader_concurrency_semaphore::evict(inactive_read& ir, evict_reason reason) noexcept {
+    close_reader(detach_inactive_reader(ir, reason));
+}
+
+void reader_concurrency_semaphore::close_reader(flat_mutation_reader reader) {
+    // It is safe to discard the future since it is waited on indirectly
+    // by closing the _close_readers_gate in stop().
+    (void)with_gate(_close_readers_gate, [reader = std::move(reader)] () mutable {
+        return reader.close();
+    });
 }
 
 bool reader_concurrency_semaphore::has_available_units(const resources& r) const {
@@ -539,22 +587,33 @@ future<reader_permit::resource_units> reader_concurrency_semaphore::enqueue_wait
     return fut;
 }
 
+void reader_concurrency_semaphore::evict_readers_in_background() {
+    // Evict inactive readers in the background while wait list isn't empty
+    // This is safe since stop() closes _gate;
+    (void)with_gate(_close_readers_gate, [this] {
+        return do_until([this] { return _wait_list.empty() || _inactive_reads.empty(); }, [this] {
+            return detach_inactive_reader(_inactive_reads.front(), evict_reason::permit).close();
+        });
+    });
+ }
+
 future<reader_permit::resource_units> reader_concurrency_semaphore::do_wait_admission(reader_permit permit, size_t memory,
         db::timeout_clock::time_point timeout) {
     auto r = resources(1, static_cast<ssize_t>(memory));
+    auto first = _wait_list.empty();
 
-    if (!_wait_list.empty()) {
-        return enqueue_waiter(std::move(permit), r, timeout);
+    if (first && has_available_units(r)) {
+        permit.on_admission();
+        return make_ready_future<reader_permit::resource_units>(reader_permit::resource_units(std::move(permit), r));
     }
 
-    while (!has_available_units(r)) {
-        if (!try_evict_one_inactive_read(evict_reason::permit)) {
-            return enqueue_waiter(std::move(permit), r, timeout);
-        }
+    auto fut = enqueue_waiter(std::move(permit), r, timeout);
+
+    if (first && !_inactive_reads.empty()) {
+        evict_readers_in_background();
     }
 
-    permit.on_admission();
-    return make_ready_future<reader_permit::resource_units>(reader_permit::resource_units(std::move(permit), r));
+    return fut;
 }
 
 reader_permit reader_concurrency_semaphore::make_permit(const schema* const schema, const char* const op_name) {
@@ -566,8 +625,11 @@ reader_permit reader_concurrency_semaphore::make_permit(const schema* const sche
 }
 
 void reader_concurrency_semaphore::broken(std::exception_ptr ex) {
+    if (!ex) {
+        ex = std::make_exception_ptr(broken_semaphore{});
+    }
     while (!_wait_list.empty()) {
-        _wait_list.front().pr.set_exception(std::make_exception_ptr(broken_semaphore{}));
+        _wait_list.front().pr.set_exception(ex);
         _wait_list.pop_front();
     }
 }

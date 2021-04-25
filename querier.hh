@@ -21,6 +21,8 @@
 
 #pragma once
 
+#include <seastar/util/closeable.hh>
+
 #include "mutation_compactor.hh"
 #include "mutation_reader.hh"
 
@@ -96,7 +98,7 @@ auto consume_page(flat_mutation_reader& reader,
 
         auto consume = [&reader, &slice, reader_consumer = std::move(reader_consumer), timeout, max_size] () mutable {
             if (slice.options.contains(query::partition_slice::option::reversed)) {
-                return do_with(make_reversing_reader(reader, max_size),
+                return with_closeable(make_reversing_reader(reader, max_size),
                         [reader_consumer = std::move(reader_consumer), timeout] (flat_mutation_reader& reversing_reader) mutable {
                     return reversing_reader.consume(std::move(reader_consumer), timeout);
                 });
@@ -174,6 +176,8 @@ public:
     size_t memory_usage() const {
         return _permit.consumed_resources().memory;
     }
+
+    future<> close() noexcept;
 };
 
 /// One-stop object for serving queries.
@@ -366,6 +370,16 @@ private:
     index _shard_mutation_querier_index;
     std::chrono::seconds _entry_ttl;
     stats _stats;
+    gate _closing_gate;
+
+    template <typename Querier>
+    std::optional<Querier> lookup_querier(
+        querier_cache::index& index,
+        utils::UUID key,
+        const schema& s,
+        dht::partition_ranges_view ranges,
+        const query::partition_slice& slice,
+        tracing::trace_state_ptr trace_state);
 
 public:
     explicit querier_cache(std::chrono::seconds entry_ttl = default_entry_ttl);
@@ -429,12 +443,17 @@ public:
     ///
     /// Return true if a querier was evicted and false otherwise (if the cache
     /// is empty).
-    bool evict_one();
+    future<bool> evict_one() noexcept;
 
     /// Evict all queriers that belong to a table.
     ///
     /// Should be used when dropping a table.
-    void evict_all_for_table(const utils::UUID& schema_id);
+    future<> evict_all_for_table(const utils::UUID& schema_id) noexcept;
+
+    /// Close all queriers and wait on background work.
+    ///
+    /// Should be used before destroying the querier_cache.
+    future<> stop() noexcept;
 
     const stats& get_stats() const {
         return _stats;

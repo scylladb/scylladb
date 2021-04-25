@@ -247,7 +247,7 @@ public:
             tracing::trace_state_ptr trace_state,
             mutation_reader::forwarding fwd_mr) override;
 
-    virtual void destroy_reader(shard_id shard, future<stopped_reader> reader_fut) noexcept override;
+    virtual future<> destroy_reader(shard_id shard, future<stopped_reader> reader_fut) noexcept override;
 
     virtual reader_concurrency_semaphore& semaphore() override {
         const auto shard = this_shard_id();
@@ -323,9 +323,9 @@ flat_mutation_reader read_context::create_reader(
             std::move(trace_state), streamed_mutation::forwarding::no, fwd_mr);
 }
 
-void read_context::destroy_reader(shard_id shard, future<stopped_reader> reader_fut) noexcept {
+future<> read_context::destroy_reader(shard_id shard, future<stopped_reader> reader_fut) noexcept {
     // Future is waited on indirectly in `stop()` (via `_dismantling_gate`).
-    (void)with_gate(_dismantling_gate, [this, shard, reader_fut = std::move(reader_fut)] () mutable {
+    return with_gate(_dismantling_gate, [this, shard, reader_fut = std::move(reader_fut)] () mutable {
         return reader_fut.then_wrapped([this, shard] (future<stopped_reader>&& reader_fut) {
             auto& rm = _readers[shard];
 
@@ -353,23 +353,18 @@ void read_context::destroy_reader(shard_id shard, future<stopped_reader> reader_
 }
 
 future<> read_context::stop() {
-    auto pr = promise<>();
-    auto fut = pr.get_future();
     auto gate_fut = _dismantling_gate.is_closed() ? make_ready_future<>() : _dismantling_gate.close();
-    // Forwarded to `fut`.
-    (void)gate_fut.then([this] {
-        for (shard_id shard = 0; shard != smp::count; ++shard) {
-            if (_readers[shard].state == reader_state::saving) {
-                // Move to the background.
-                (void)_db.invoke_on(shard, [rm = std::move(_readers[shard])] (database& db) mutable {
-                    rm.rparts->permit.semaphore().unregister_inactive_read(std::move(*rm.handle));
+    return gate_fut.then([this] {
+        return parallel_for_each(smp::all_cpus(), [this] (unsigned shard) {
+            if (_readers[shard].handle && *_readers[shard].handle) {
+                return _db.invoke_on(shard, [rm = std::move(_readers[shard])] (database& db) mutable {
+                    auto reader_opt = rm.rparts->permit.semaphore().unregister_inactive_read(std::move(*rm.handle));
+                    return reader_opt ? reader_opt->close() : make_ready_future<>();
                 });
             }
-        }
-    }).finally([pr = std::move(pr)] () mutable {
-        pr.set_value();
+            return make_ready_future<>();
+        });
     });
-    return fut;
 }
 
 read_context::dismantle_buffer_stats read_context::dismantle_combined_buffer(flat_mutation_reader::tracked_buffer combined_buffer,
@@ -593,9 +588,6 @@ future<> read_context::save_readers(flat_mutation_reader::tracked_buffer unconsu
 namespace {
 
 template <typename ResultType>
-using consume_result = std::tuple<std::optional<clustering_key_prefix>, ResultType>;
-
-template <typename ResultType>
 using compact_for_result_state = compact_for_query_state<ResultType::only_live>;
 
 template <typename ResultBuilder>
@@ -605,12 +597,13 @@ struct page_consume_result {
     flat_mutation_reader::tracked_buffer unconsumed_fragments;
     lw_shared_ptr<compact_for_result_state<ResultBuilder>> compaction_state;
 
-    page_consume_result(consume_result<typename ResultBuilder::result_type>&& result, flat_mutation_reader::tracked_buffer&& unconsumed_fragments,
-            lw_shared_ptr<compact_for_result_state<ResultBuilder>>&& compaction_state)
-        : last_ckey(std::get<std::optional<clustering_key_prefix>>(std::move(result)))
-        , result(std::get<typename ResultBuilder::result_type>(std::move(result)))
+    page_consume_result(std::optional<clustering_key_prefix>&& ckey, typename ResultBuilder::result_type&& result, flat_mutation_reader::tracked_buffer&& unconsumed_fragments,
+            lw_shared_ptr<compact_for_result_state<ResultBuilder>>&& compaction_state) noexcept
+        : last_ckey(std::move(ckey))
+        , result(std::move(result))
         , unconsumed_fragments(std::move(unconsumed_fragments))
         , compaction_state(std::move(compaction_state)) {
+        static_assert(std::is_nothrow_move_constructible_v<typename ResultBuilder::result_type>);
     }
 };
 
@@ -635,15 +628,25 @@ future<page_consume_result<ResultBuilder>> read_page(
             mutation_reader::forwarding fwd_mr) {
         return make_multishard_combining_reader(ctx, std::move(s), std::move(permit), pr, ps, pc, std::move(trace_state), fwd_mr);
     });
-    auto reader = make_flat_multi_range_reader(s, ctx->permit(), std::move(ms), ranges,
-            cmd.slice, service::get_local_sstable_query_read_priority(), trace_state, mutation_reader::forwarding::no);
-
     auto compaction_state = make_lw_shared<compact_for_result_state<ResultBuilder>>(*s, cmd.timestamp, cmd.slice, cmd.get_row_limit(),
             cmd.partition_limit);
 
-    auto result = co_await query::consume_page(reader, compaction_state, cmd.slice, std::move(result_builder), cmd.get_row_limit(),
-            cmd.partition_limit, cmd.timestamp, timeout, *cmd.max_result_size);
-    co_return page_consume_result<ResultBuilder>(std::move(result), reader.detach_buffer(), std::move(compaction_state));
+    auto reader = make_flat_multi_range_reader(s, ctx->permit(), std::move(ms), ranges,
+            cmd.slice, service::get_local_sstable_query_read_priority(), trace_state, mutation_reader::forwarding::no);
+
+    std::exception_ptr ex;
+    try {
+        auto [ckey, result] = co_await query::consume_page(reader, compaction_state, cmd.slice, std::move(result_builder), cmd.get_row_limit(),
+                cmd.partition_limit, cmd.timestamp, timeout, *cmd.max_result_size);
+        auto buffer = reader.detach_buffer();
+        co_await reader.close();
+        // page_consume_result cannot fail so there's no risk of double-closing reader.
+        co_return page_consume_result<ResultBuilder>(std::move(ckey), std::move(result), std::move(buffer), std::move(compaction_state));
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    co_await reader.close();
+    std::rethrow_exception(std::move(ex));
 }
 
 template <typename ResultBuilder>

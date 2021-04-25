@@ -493,9 +493,17 @@ public:
         });
     }
 
-    void on_end_of_stream() {
+    future<> on_end_of_stream() noexcept {
+      return _reader.close().then([this] {
         _reader = make_empty_flat_reader(_schema, _permit);
         _reader_handle.reset();
+      });
+    }
+
+    future<> close() noexcept {
+      return _reader.close().then([this] {
+        _reader_handle.reset();
+      });
     }
 
     lw_shared_ptr<const decorated_key_with_hash>& get_current_dk() {
@@ -872,8 +880,11 @@ public:
         auto f1 = _sink_source_for_get_full_row_hashes.close();
         auto f2 = _sink_source_for_get_row_diff.close();
         auto f3 = _sink_source_for_put_row_diff.close();
+        rlogger.info("repair_meta::stop");
         return when_all_succeed(std::move(gate_future), std::move(f1), std::move(f2), std::move(f3)).discard_result().finally([this] {
-            return _repair_writer->wait_for_writer_done();
+            return _repair_writer->wait_for_writer_done().finally([this] {
+                return close();
+            });
         });
     }
 
@@ -1065,6 +1076,10 @@ public:
         return std::pair<std::optional<repair_sync_boundary>, bool>(sync_boundary_min, already_synced);
     }
 
+    future<> close() noexcept {
+        return _repair_reader.close();
+    }
+
 private:
     future<uint64_t> do_estimate_partitions_on_all_shards() {
         return estimate_partitions(_db, _schema->ks_name(), _schema->cf_name(), _range);
@@ -1193,15 +1208,17 @@ private:
                 _gate.check();
                 return _repair_reader.read_mutation_fragment().then([this, &cur_size, &new_rows_size, &cur_rows] (mutation_fragment_opt mfopt) mutable {
                     if (!mfopt) {
-                        _repair_reader.on_end_of_stream();
+                      return _repair_reader.on_end_of_stream().then([] {
                         return stop_iteration::yes;
+                      });
                     }
-                    return handle_mutation_fragment(*mfopt, cur_size, new_rows_size, cur_rows);
+                    return make_ready_future<stop_iteration>(handle_mutation_fragment(*mfopt, cur_size, new_rows_size, cur_rows));
                 });
             }).then_wrapped([this, &cur_rows, &new_rows_size] (future<> fut) mutable {
                 if (fut.failed()) {
-                    _repair_reader.on_end_of_stream();
-                    return make_exception_future<value_type>(fut.get_exception());
+                    return make_exception_future<value_type>(fut.get_exception()).finally([this] {
+                        return _repair_reader.on_end_of_stream();
+                    });
                 }
                 _repair_reader.pause();
                 return make_ready_future<value_type>(value_type(std::move(cur_rows), new_rows_size));
@@ -2815,6 +2832,11 @@ public:
                     _all_live_peer_nodes,
                     _all_live_peer_nodes.size(),
                     this);
+            auto auto_close_master = defer([&master] {
+                master.close().handle_exception([] (std::exception_ptr ep) {
+                    rlogger.warn("Failed auto-closing Row Level Repair (Master): {}. Ignored.", ep);
+                }).get();
+            });
 
             rlogger.debug(">>> Started Row Level Repair (Master): local={}, peers={}, repair_meta_id={}, keyspace={}, cf={}, schema_version={}, range={}, seed={}, max_row_buf_size={}",
                     master.myip(), _all_live_peer_nodes, master.repair_meta_id(), _ri.keyspace, _cf_name, schema_version, _range, _seed, max_row_buf_size);

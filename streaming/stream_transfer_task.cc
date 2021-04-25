@@ -230,6 +230,8 @@ future<> stream_transfer_task::execute() {
                 return make_ready_future<>();
             }
             return send_mutation_fragments(std::move(si));
+        }).finally([si] {
+            return si->reader.close();
         });
     }).then([this, plan_id, cf_id, id] {
         sslog.debug("[Stream #{}] SEND STREAM_MUTATION_DONE to {}, cf_id={}", plan_id, id, cf_id);

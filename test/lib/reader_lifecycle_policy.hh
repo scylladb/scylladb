@@ -143,19 +143,22 @@ public:
         _contexts[shard]->op = _operation_gate.enter();
         return _factory_function(std::move(schema), *_contexts[shard]->range, *_contexts[shard]->slice, pc, std::move(trace_state), fwd_mr);
     }
-    virtual void destroy_reader(shard_id shard, future<stopped_reader> reader) noexcept override {
-        // Move to the background, waited via _operation_gate
-        (void)reader.then([shard, this] (stopped_reader&& reader) {
+    virtual future<> destroy_reader(shard_id shard, future<stopped_reader> reader) noexcept override {
+        // waited via _operation_gate
+        return reader.then([shard, this] (stopped_reader&& reader) {
             return smp::submit_to(shard, [handle = std::move(reader.handle), ctx = &*_contexts[shard]] () mutable {
-                ctx->semaphore->unregister_inactive_read(std::move(*handle));
-                ctx->semaphore->broken(std::make_exception_ptr(broken_semaphore{}));
+                auto reader_opt = ctx->semaphore->unregister_inactive_read(std::move(*handle));
+                auto ret = reader_opt ? reader_opt->close() : make_ready_future<>();
+                ctx->semaphore->broken();
                 if (ctx->wait_future) {
+                  ret = ret.then([ctx = std::move(ctx)] () mutable {
                     return ctx->wait_future->then_wrapped([ctx = std::move(ctx)] (future<reader_permit::resource_units> f) mutable {
                         f.ignore_ready_future();
                         ctx->permit.reset(); // make sure it's destroyed before the semaphore
                     });
+                  });
                 }
-                return make_ready_future<>();
+                return std::move(ret);
             });
         }).finally([zis = shared_from_this()] {});
     }

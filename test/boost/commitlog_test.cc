@@ -38,6 +38,8 @@
 #include <seastar/core/file.hh>
 #include <seastar/core/seastar.hh>
 #include <seastar/util/noncopyable_function.hh>
+#include <seastar/util/closeable.hh>
+
 #include "utils/UUID_gen.hh"
 #include "test/lib/tmpdir.hh"
 #include "db/commitlog/commitlog.hh"
@@ -647,6 +649,7 @@ SEASTAR_TEST_CASE(test_commitlog_replay_invalid_key){
 
         {
             auto rd = mt.make_flat_reader(s, tests::make_permit());
+            auto close_rd = deferred_close(rd);
             auto mopt = read_mutation_from_flat_mutation_reader(rd, db::no_timeout).get0();
             BOOST_REQUIRE(mopt);
 

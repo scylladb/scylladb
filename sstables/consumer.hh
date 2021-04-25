@@ -625,7 +625,7 @@ public:
         return _remain == 0;
     }
 
-    future<> close() {
+    future<> close() noexcept {
         return _input.close();
     }
 };

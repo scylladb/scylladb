@@ -51,6 +51,7 @@
 
 #include <seastar/core/future-util.hh>
 #include <seastar/core/scheduling.hh>
+#include <seastar/util/closeable.hh>
 
 #include "sstables.hh"
 #include "sstables/progress_monitor.hh"
@@ -643,13 +644,15 @@ private:
         auto now = gc_clock::now();
         auto consumer = make_interposer_consumer([this, gc_consumer = std::move(gc_consumer), now] (flat_mutation_reader reader) mutable
         {
-            using compact_mutations = compact_for_compaction<compacting_sstable_writer, GCConsumer>;
-            auto cfc = make_stable_flattened_mutations_consumer<compact_mutations>(*schema(), now,
+            return seastar::async([this, reader = std::move(reader), gc_consumer = std::move(gc_consumer), now] () mutable {
+                auto close_reader = deferred_close(reader);
+
+                using compact_mutations = compact_for_compaction<compacting_sstable_writer, GCConsumer>;
+                auto cfc = make_stable_flattened_mutations_consumer<compact_mutations>(*schema(), now,
                                          max_purgeable_func(),
                                          get_compacting_sstable_writer(),
                                          std::move(gc_consumer));
 
-            return seastar::async([cfc = std::move(cfc), reader = std::move(reader), this] () mutable {
                 reader.consume_in_thread(std::move(cfc), db::no_timeout);
             });
         });
@@ -1306,6 +1309,9 @@ class scrub_compaction final : public regular_compaction {
         }
         virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) override {
             return make_exception_future<>(make_backtraced_exception_ptr<std::bad_function_call>());
+        }
+        virtual future<> close() noexcept override {
+            return _reader.close();
         }
     };
 

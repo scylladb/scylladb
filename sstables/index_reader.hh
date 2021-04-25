@@ -439,7 +439,7 @@ private:
     std::optional<index_bound> _upper_bound;
 
 private:
-    static future<> reset_clustered_cursor(index_bound& bound) {
+    static future<> reset_clustered_cursor(index_bound& bound) noexcept {
         if (bound.clustered_cursor) {
             return bound.clustered_cursor->close().then([&bound] {
                 bound.clustered_cursor.reset();
@@ -700,7 +700,7 @@ private:
         return _sstable->data_size();
     }
 
-    static future<> close(index_bound& b) {
+    static future<> close(index_bound& b) noexcept {
         return reset_clustered_cursor(b);
     }
 public:
@@ -897,7 +897,8 @@ public:
 
     const shared_sstable& sstable() const { return _sstable; }
 
-    future<> close() {
+    future<> close() noexcept {
+        // index_bound::close must not fail
         return close(_lower_bound).then([this] {
             if (_upper_bound) {
                 return close(*_upper_bound);

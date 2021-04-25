@@ -93,6 +93,9 @@ future<> normalizing_reader::fast_forward_to(
     _end_of_stream = false;
     return _rd.fast_forward_to(std::move(pr), timeout);
 }
+future<> normalizing_reader::close() noexcept {
+    return _rd.close();
+}
 
 flat_mutation_reader make_normalizing_reader(flat_mutation_reader rd) {
     return make_flat_mutation_reader<normalizing_reader>(std::move(rd));

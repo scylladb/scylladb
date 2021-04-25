@@ -126,6 +126,9 @@ public:
     }
     stats_collector(const stats_collector&) = delete;
     stats_collector(stats_collector&&) = delete;
+    ~stats_collector() {
+        _sem.stop().get();
+    }
     collect_guard collect() {
         return collect_guard{*this, _params ? _params->period : std::chrono::milliseconds(0)};
     }

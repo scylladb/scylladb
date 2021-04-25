@@ -246,19 +246,10 @@ public:
     sstable_mutation_reader(sstable_mutation_reader&&) = delete;
     sstable_mutation_reader(const sstable_mutation_reader&) = delete;
     ~sstable_mutation_reader() {
-        _monitor.on_read_completed();
-        auto close = [this] (std::unique_ptr<index_reader>& ptr) {
-            if (ptr) {
-                auto f = ptr->close();
-                // FIXME: discarded future.
-                (void)f.handle_exception([index = std::move(ptr)] (auto&&) { });
-            }
-        };
-        close(_index_reader);
-        if (_context) {
-            auto f = _context->close();
-            //FIXME: discarded future.
-            (void)f.handle_exception([ctx = std::move(_context), sst = _sst](auto) {});
+        if (_context || _index_reader) {
+            sstlog.warn("sstable_mutation_reader was not closed. Closing in the background. Backtrace: {}", current_backtrace());
+            // FIXME: discarded future.
+            (void)close();
         }
     }
 private:
@@ -539,6 +530,25 @@ public:
             _end_of_stream = true;
             return make_ready_future<>();
         }
+    }
+    virtual future<> close() noexcept override {
+        auto close_context = make_ready_future<>();
+        if (_context) {
+            _monitor.on_read_completed();
+            // move _context to prevent double-close from destructor.
+            close_context = _context->close().finally([_ = std::move(_context)] {});
+        }
+
+        auto close_index_reader = make_ready_future<>();
+        if (_index_reader) {
+            // move _index_reader to prevent double-close from destructor.
+            close_index_reader = _index_reader->close().finally([_ = std::move(_index_reader)] {});
+        }
+
+        return when_all_succeed(std::move(close_context), std::move(close_index_reader)).discard_result().handle_exception([] (std::exception_ptr ep) {
+            // close can not fail as it is called either from the destructor or from flat_mutation_reader::close
+            sstlog.warn("Failed closing of sstable_mutation_reader: {}. Ignored since the reader is already done.", ep);
+        });
     }
 };
 

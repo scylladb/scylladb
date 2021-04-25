@@ -275,6 +275,16 @@ public:
         virtual future<> fast_forward_to(const dht::partition_range&, db::timeout_clock::time_point timeout) = 0;
         virtual future<> fast_forward_to(position_range, db::timeout_clock::time_point timeout) = 0;
 
+        // close should cancel any outstanding background operations,
+        // if possible, and wait on them to complete.
+        // It should also transitively close underlying resources
+        // and wait on them too.
+        //
+        // Once closed, the reader should be unusable.
+        //
+        // Similar to destructors, close must never fail.
+        virtual future<> close() noexcept = 0;
+
         size_t buffer_size() const {
             return _buffer_size;
         }
@@ -304,12 +314,20 @@ private:
     explicit operator bool() const noexcept { return bool(_impl); }
     friend class optimized_optional<flat_mutation_reader>;
     void do_upgrade_schema(const schema_ptr&);
+    static void on_close_error(std::unique_ptr<impl>, std::exception_ptr ep) noexcept;
 public:
     // Documented in mutation_reader::forwarding.
     class partition_range_forwarding_tag;
     using partition_range_forwarding = bool_class<partition_range_forwarding_tag>;
 
     flat_mutation_reader(std::unique_ptr<impl> impl) noexcept : _impl(std::move(impl)) {}
+    flat_mutation_reader(const flat_mutation_reader&) = delete;
+    flat_mutation_reader(flat_mutation_reader&&) = default;
+
+    flat_mutation_reader& operator=(const flat_mutation_reader&) = delete;
+    flat_mutation_reader& operator=(flat_mutation_reader&& o) noexcept;
+
+    ~flat_mutation_reader();
 
     future<mutation_fragment_opt> operator()(db::timeout_clock::time_point timeout) {
         return _impl->operator()(timeout);
@@ -441,6 +459,26 @@ public:
     // fragment before calling `fast_forward_to`.
     future<> fast_forward_to(position_range cr, db::timeout_clock::time_point timeout) {
         return _impl->fast_forward_to(std::move(cr), timeout);
+    }
+    // Closes the reader.
+    //
+    // Note: The reader object can can be safely destroyed after close returns.
+    // since close makes sure to keep the underlying impl object alive until
+    // the latter's close call is resolved.
+    future<> close() noexcept {
+        if (auto i = std::move(_impl)) {
+            auto f = i->close();
+            // most close implementations are expexcted to return a ready future
+            // so expedite prcessing it.
+            if (f.available() && !f.failed()) {
+                return std::move(f);
+            }
+            // close must not fail
+            return f.handle_exception([i = std::move(i)] (std::exception_ptr ep) mutable {
+                on_close_error(std::move(i), std::move(ep));
+            });
+        }
+        return make_ready_future<>();
     }
     bool is_end_of_stream() const { return _impl->is_end_of_stream(); }
     bool is_buffer_empty() const { return _impl->is_buffer_empty(); }
@@ -605,46 +643,64 @@ flat_mutation_reader transform(flat_mutation_reader r, T t) {
             _end_of_stream = false;
             return _reader.fast_forward_to(std::move(pr), timeout);
         }
+        virtual future<> close() noexcept override {
+            return _reader.close();
+        }
     };
     return make_flat_mutation_reader<transforming_reader>(std::move(r), std::move(t));
 }
 
-inline flat_mutation_reader& to_reference(flat_mutation_reader& r) { return r; }
-inline const flat_mutation_reader& to_reference(const flat_mutation_reader& r) { return r; }
-
-template <typename Underlying>
 class delegating_reader : public flat_mutation_reader::impl {
-    Underlying _underlying;
+    flat_mutation_reader_opt _underlying_holder;
+    flat_mutation_reader* _underlying;
 public:
-    delegating_reader(Underlying&& r) : impl(to_reference(r).schema(), to_reference(r).permit()), _underlying(std::forward<Underlying>(r)) { }
+    // when passed a lvalue reference to the reader
+    // we don't own it and the caller is responsible
+    // for evenetually closing the reader.
+    delegating_reader(flat_mutation_reader& r)
+        : impl(r.schema(), r.permit())
+        , _underlying_holder()
+        , _underlying(&r)
+    { }
+    // when passed a rvalue reference to the reader
+    // we assume ownership of it and will close it
+    // in close().
+    delegating_reader(flat_mutation_reader&& r)
+        : impl(r.schema(), r.permit())
+        , _underlying_holder(std::move(r))
+        , _underlying(&*_underlying_holder)
+    { }
     virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override {
         if (is_buffer_full()) {
             return make_ready_future<>();
         }
-        return to_reference(_underlying).fill_buffer(timeout).then([this] {
-            _end_of_stream = to_reference(_underlying).is_end_of_stream();
-            to_reference(_underlying).move_buffer_content_to(*this);
+        return _underlying->fill_buffer(timeout).then([this] {
+            _end_of_stream = _underlying->is_end_of_stream();
+            _underlying->move_buffer_content_to(*this);
         });
     }
     virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) override {
         _end_of_stream = false;
         forward_buffer_to(pr.start());
-        return to_reference(_underlying).fast_forward_to(std::move(pr), timeout);
+        return _underlying->fast_forward_to(std::move(pr), timeout);
     }
     virtual future<> next_partition() override {
         clear_buffer_to_next_partition();
         auto maybe_next_partition = make_ready_future<>();
         if (is_buffer_empty()) {
-            maybe_next_partition = to_reference(_underlying).next_partition();
+            maybe_next_partition = _underlying->next_partition();
         }
       return maybe_next_partition.then([this] {
-        _end_of_stream = to_reference(_underlying).is_end_of_stream() && to_reference(_underlying).is_buffer_empty();
+        _end_of_stream = _underlying->is_end_of_stream() && _underlying->is_buffer_empty();
       });
     }
     virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {
         _end_of_stream = false;
         clear_buffer();
-        return to_reference(_underlying).fast_forward_to(pr, timeout);
+        return _underlying->fast_forward_to(pr, timeout);
+    }
+    virtual future<> close() noexcept override {
+        return _underlying_holder ? _underlying_holder->close() : make_ready_future<>();
     }
 };
 flat_mutation_reader make_delegating_reader(flat_mutation_reader&);

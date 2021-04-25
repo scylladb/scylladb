@@ -386,6 +386,9 @@ public:
     virtual future<> fast_forward_to(position_range cr, db::timeout_clock::time_point timeout) override {
         throw std::runtime_error("This reader can't be fast forwarded to another position.");
     };
+    virtual future<> close() noexcept override {
+        return make_ready_future<>();
+    }
 };
 
 template <typename MemoryAccounter, typename... Args>

@@ -23,6 +23,7 @@
 
 #include <boost/intrusive/list.hpp>
 #include <seastar/core/future.hh>
+#include <seastar/core/gate.hh>
 #include "reader_permit.hh"
 #include "flat_mutation_reader.hh"
 
@@ -170,8 +171,11 @@ private:
     inactive_reads_type _inactive_reads;
     stats _stats;
     std::unique_ptr<permit_list> _permit_list;
+    bool _stopped = false;
+    gate _close_readers_gate;
 
 private:
+    [[nodiscard]] flat_mutation_reader detach_inactive_reader(inactive_read&, evict_reason reason) noexcept;
     void evict(inactive_read&, evict_reason reason) noexcept;
 
     bool has_available_units(const resources& r) const;
@@ -179,8 +183,13 @@ private:
     // Add the permit to the wait queue and return the future which resolves when
     // the permit is admitted (popped from the queue).
     future<reader_permit::resource_units> enqueue_waiter(reader_permit permit, resources r, db::timeout_clock::time_point timeout);
-
+    void evict_readers_in_background();
     future<reader_permit::resource_units> do_wait_admission(reader_permit permit, size_t memory, db::timeout_clock::time_point timeout);
+
+    std::runtime_error stopped_exception();
+
+    // closes reader in the background.
+    void close_reader(flat_mutation_reader reader);
 
 public:
     struct no_limits { };
@@ -249,7 +258,13 @@ public:
     /// (if there was no reader to evict).
     bool try_evict_one_inactive_read(evict_reason = evict_reason::manual);
 
+    /// Clear all inactive reads.
     void clear_inactive_reads();
+
+    /// Stop the reader_concurrency_semaphore and clear all inactive reads.
+    ///
+    /// Wait on all async background work to complete.
+    future<> stop() noexcept;
 
     const stats& get_stats() const {
         return _stats;
@@ -294,5 +309,5 @@ public:
         return _wait_list.size();
     }
 
-    void broken(std::exception_ptr ex);
+    void broken(std::exception_ptr ex = {});
 };
