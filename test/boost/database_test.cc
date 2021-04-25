@@ -151,11 +151,11 @@ SEASTAR_THREAD_TEST_CASE(test_database_with_data_in_sstables_is_a_mutation_sourc
         run_mutation_source_tests([&] (schema_ptr s, const std::vector<mutation>& partitions) -> mutation_source {
             try {
                 e.local_db().find_column_family(s->ks_name(), s->cf_name());
-                service::get_local_migration_manager().announce_column_family_drop(s->ks_name(), s->cf_name()).get();
+                e.migration_manager().local().announce_column_family_drop(s->ks_name(), s->cf_name()).get();
             } catch (const no_such_column_family&) {
                 // expected
             }
-            service::get_local_migration_manager().announce_new_column_family(s).get();
+            e.migration_manager().local().announce_new_column_family(s).get();
             column_family& cf = e.local_db().find_column_family(s);
             for (auto&& m : partitions) {
                 e.local_db().apply(cf.schema(), freeze(m), tracing::trace_state_ptr(), db::commitlog::force_sync::no, db::no_timeout).get();

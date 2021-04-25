@@ -405,6 +405,7 @@ namespace debug {
 sharded<netw::messaging_service>* the_messaging_service;
 sharded<cql3::query_processor>* the_query_processor;
 sharded<qos::service_level_controller>* the_sl_controller;
+sharded<service::migration_manager>* the_migration_manager;
 }
 
 int main(int ac, char** av) {
@@ -481,7 +482,7 @@ int main(int ac, char** av) {
     service::load_meter load_meter;
     debug::db = &db;
     auto& proxy = service::get_storage_proxy();
-    auto& mm = service::get_migration_manager();
+    sharded<service::migration_manager> mm;
     api::http_context ctx(db, proxy, load_meter, token_metadata);
     httpd::http_server_control prometheus_server;
     std::optional<utils::directories> dirs = {};
@@ -855,7 +856,7 @@ int main(int ac, char** av) {
             supervisor::notify("initializing storage service");
             service::storage_service_config sscfg;
             sscfg.available_memory = memory::stats().total_memory();
-            service::init_storage_service(stop_signal.as_sharded_abort_source(), db, gossiper, sys_dist_ks, view_update_generator, feature_service, sscfg, mm_notifier, token_metadata, messaging, cdc_generation_service).get();
+            service::init_storage_service(stop_signal.as_sharded_abort_source(), db, gossiper, sys_dist_ks, view_update_generator, feature_service, sscfg, mm_notifier, mm, token_metadata, messaging, cdc_generation_service).get();
             supervisor::notify("starting per-shard database core");
 
             sst_dir_semaphore.start(cfg->initial_sstable_loading_concurrency()).get();
@@ -956,6 +957,7 @@ int main(int ac, char** av) {
             // #293 - do not stop anything
             // engine().at_exit([&proxy] { return proxy.stop(); });
             supervisor::notify("starting migration manager");
+            debug::the_migration_manager = &mm;
             mm.start(std::ref(mm_notifier), std::ref(feature_service), std::ref(messaging)).get();
             auto stop_migration_manager = defer_verbose_shutdown("migration manager", [&mm] {
                 mm.stop().get();
@@ -1071,7 +1073,9 @@ int main(int ac, char** av) {
                 mm.init_messaging_service();
             }).get();
             supervisor::notify("initializing storage proxy RPC verbs");
-            proxy.invoke_on_all(&service::storage_proxy::init_messaging_service).get();
+            proxy.invoke_on_all([&mm] (service::storage_proxy& proxy) {
+                proxy.init_messaging_service(mm.local().shared_from_this());
+            }).get();
             auto stop_proxy_handlers = defer_verbose_shutdown("storage proxy RPC verbs", [&proxy] {
                 proxy.invoke_on_all(&service::storage_proxy::uninit_messaging_service).get();
             });
@@ -1082,7 +1086,7 @@ int main(int ac, char** av) {
                 raft_srvs.invoke_on_all(&raft_services::uninit).get();
             });
             supervisor::notify("starting streaming service");
-            streaming::stream_session::init_streaming_service(db, sys_dist_ks, view_update_generator, messaging).get();
+            streaming::stream_session::init_streaming_service(db, sys_dist_ks, view_update_generator, messaging, mm).get();
             auto stop_streaming_service = defer_verbose_shutdown("streaming service", [] {
                 streaming::stream_session::uninit_streaming_service().get();
             });
@@ -1115,7 +1119,7 @@ int main(int ac, char** av) {
             auto stop_repair_service = defer_verbose_shutdown("repair service", [&rs] {
                 rs.stop().get();
             });
-            repair_init_messaging_service_handler(rs, sys_dist_ks, view_update_generator, db, messaging).get();
+            repair_init_messaging_service_handler(rs, sys_dist_ks, view_update_generator, db, messaging, mm).get();
             auto stop_repair_messages = defer_verbose_shutdown("repair message handlers", [] {
                 repair_uninit_messaging_service_handler().get();
             });
@@ -1434,8 +1438,8 @@ int main(int ac, char** av) {
 
             static redis_service redis;
             if (cfg->redis_port() || cfg->redis_ssl_port()) {
-                with_scheduling_group(dbcfg.statement_scheduling_group, [proxy = std::ref(proxy), db = std::ref(db), auth_service = std::ref(auth_service), cfg] {
-                    return redis.init(proxy, db, auth_service, *cfg);
+                with_scheduling_group(dbcfg.statement_scheduling_group, [proxy = std::ref(proxy), db = std::ref(db), auth_service = std::ref(auth_service), mm = std::ref(mm), cfg] {
+                    return redis.init(proxy, db, auth_service, mm, *cfg);
                 }).get();
             }
 

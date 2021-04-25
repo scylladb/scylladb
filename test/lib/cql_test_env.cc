@@ -126,6 +126,7 @@ private:
     sharded<service::migration_notifier>& _mnotifier;
     sharded<cdc::generation_service>& _cdc_generation_service;
     sharded<qos::service_level_controller>& _sl_controller;
+    sharded<service::migration_manager>& _mm;
 private:
     struct core_local_state {
         service::client_state client_state;
@@ -157,6 +158,7 @@ public:
             sharded<db::view::view_builder>& view_builder,
             sharded<db::view::view_update_generator>& view_update_generator,
             sharded<service::migration_notifier>& mnotifier,
+            sharded<service::migration_manager>& mm,
             sharded<cdc::generation_service>& cdc_generation_service,
             sharded<qos::service_level_controller> &sl_controller)
             : _feature_service(feature_service)
@@ -168,6 +170,7 @@ public:
             , _mnotifier(mnotifier)
             , _cdc_generation_service(cdc_generation_service)
             , _sl_controller(sl_controller)
+            , _mm(mm)
     { }
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_cql(sstring_view text) override {
@@ -247,7 +250,7 @@ public:
         schema_builder builder(make_lw_shared<schema>(schema_maker(ks_name)));
         builder.set_uuid(id);
         auto s = builder.build(schema_builder::compact_storage::no);
-        return service::get_local_migration_manager().announce_new_column_family(s);
+        return _mm.local().announce_new_column_family(s);
     }
 
     virtual future<> require_keyspace_exists(const sstring& ks_name) override {
@@ -348,6 +351,10 @@ public:
 
     virtual service::migration_notifier& local_mnotifier() override {
         return _mnotifier.local();
+    }
+
+    virtual sharded<service::migration_manager>& migration_manager() override {
+        return _mm;
     }
 
     future<> start() {
@@ -482,7 +489,7 @@ public:
             tst_init_ms_fd_gossiper(feature_service, token_metadata, ms, *cfg, db::config::seed_provider_type(), abort_sources).get();
 
             distributed<service::storage_proxy>& proxy = service::get_storage_proxy();
-            distributed<service::migration_manager>& mm = service::get_migration_manager();
+            distributed<service::migration_manager> mm;
             distributed<db::batchlog_manager>& bm = db::get_batchlog_manager();
             sharded<cql3::cql_config> cql_config;
             cql_config.start().get();
@@ -494,7 +501,7 @@ public:
             auto& ss = service::get_storage_service();
             service::storage_service_config sscfg;
             sscfg.available_memory = memory::stats().total_memory();
-            ss.start(std::ref(abort_sources), std::ref(db), std::ref(gms::get_gossiper()), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(feature_service), sscfg, std::ref(mm_notif), std::ref(token_metadata), std::ref(ms), std::ref(cdc_generation_service), true).get();
+            ss.start(std::ref(abort_sources), std::ref(db), std::ref(gms::get_gossiper()), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(feature_service), sscfg, std::ref(mm_notif), std::ref(mm), std::ref(token_metadata), std::ref(ms), std::ref(cdc_generation_service), true).get();
             auto stop_storage_service = defer([&ss] { ss.stop().get(); });
 
             sharded<semaphore> sst_dir_semaphore;
@@ -659,7 +666,7 @@ public:
                 // The default user may already exist if this `cql_test_env` is starting with previously populated data.
             }
 
-            single_node_cql_env env(feature_service, db, qp, auth_service, view_builder, view_update_generator, mm_notif, cdc_generation_service, std::ref(sl_controller));
+            single_node_cql_env env(feature_service, db, qp, auth_service, view_builder, view_update_generator, mm_notif, mm, cdc_generation_service, std::ref(sl_controller));
             env.start().get();
             auto stop_env = defer([&env] { env.stop().get(); });
 

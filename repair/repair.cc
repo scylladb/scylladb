@@ -55,6 +55,7 @@
 logging::logger rlogger("repair");
 
 static sharded<netw::messaging_service>* _messaging;
+static sharded<service::migration_manager>* _migration_manager;
 
 void node_ops_info::check_abort() {
     if (abort) {
@@ -726,7 +727,7 @@ static future<> repair_range(repair_info& ri, const dht::token_range& range) {
             ri.ranges_index, ri.ranges.size(), ri.id, ri.shard, ri.keyspace, ri.table_names(), range, neighbors, live_neighbors, status);
             return make_ready_future<>();
       }
-      return ::service::get_local_migration_manager().sync_schema(ri.db.local(), neighbors).then([&neighbors, &ri, range, id] {
+      return _migration_manager->local().sync_schema(ri.db.local(), neighbors).then([&neighbors, &ri, range, id] {
         return do_for_each(ri.table_ids.begin(), ri.table_ids.end(), [&ri, &neighbors, range] (utils::UUID table_id) {
             sstring cf;
             try {
@@ -1782,8 +1783,9 @@ future<> replace_with_repair(seastar::sharded<database>& db, seastar::sharded<ne
     co_return co_await do_rebuild_replace_with_repair(db, ms, std::move(cloned_tmptr), std::move(op), std::move(source_dc), reason);
 }
 
-static future<> init_messaging_service_handler(sharded<database>& db, sharded<netw::messaging_service>& messaging) {
+static future<> init_messaging_service_handler(sharded<database>& db, sharded<netw::messaging_service>& messaging, sharded<service::migration_manager>& mm) {
     _messaging = &messaging;
+    _migration_manager = &mm;
     return messaging.invoke_on_all([&db] (auto& ms) {
         ms.register_node_ops_cmd([] (const rpc::client_info& cinfo, node_ops_cmd_request req) {
             auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
@@ -1804,10 +1806,11 @@ static future<> uninit_messaging_service_handler() {
 future<> repair_init_messaging_service_handler(repair_service& rs,
         distributed<db::system_distributed_keyspace>& sys_dist_ks,
         distributed<db::view::view_update_generator>& view_update_generator,
-        sharded<database>& db, sharded<netw::messaging_service>& ms) {
+        sharded<database>& db, sharded<netw::messaging_service>& ms,
+        sharded<service::migration_manager>& mm) {
     return when_all_succeed(
-            init_messaging_service_handler(db, ms),
-            row_level_repair_init_messaging_service_handler(rs, sys_dist_ks, view_update_generator, ms)
+            init_messaging_service_handler(db, ms, mm),
+            row_level_repair_init_messaging_service_handler(rs, sys_dist_ks, view_update_generator, ms, mm)
     ).discard_result();
 }
 

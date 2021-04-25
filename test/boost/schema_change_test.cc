@@ -54,7 +54,7 @@ SEASTAR_TEST_CASE(test_new_schema_with_no_structural_change_is_propagated) {
 
             auto old_schema = partial.build();
 
-            service::get_local_migration_manager().announce_new_column_family(old_schema).get();
+            e.migration_manager().local().announce_new_column_family(old_schema).get();
 
             auto old_table_version = e.db().local().find_schema(old_schema->id())->version();
             auto old_node_version = e.db().local().get_version();
@@ -62,7 +62,7 @@ SEASTAR_TEST_CASE(test_new_schema_with_no_structural_change_is_propagated) {
             auto new_schema = partial.build();
             BOOST_REQUIRE_NE(new_schema->version(), old_schema->version());
 
-            service::get_local_migration_manager().announce_column_family_update(new_schema, false, { }).get();
+            e.migration_manager().local().announce_column_family_update(new_schema, false, { }).get();
 
             BOOST_REQUIRE_NE(e.db().local().find_schema(old_schema->id())->version(), old_table_version);
             BOOST_REQUIRE_NE(e.db().local().get_version(), old_node_version);
@@ -81,7 +81,7 @@ SEASTAR_TEST_CASE(test_schema_is_updated_in_keyspace) {
 
             auto old_schema = builder.build();
 
-            service::get_local_migration_manager().announce_new_column_family(old_schema).get();
+            e.migration_manager().local().announce_new_column_family(old_schema).get();
 
             auto s = e.local_db().find_schema(old_schema->id());
             BOOST_REQUIRE_EQUAL(*old_schema, *s);
@@ -91,7 +91,7 @@ SEASTAR_TEST_CASE(test_schema_is_updated_in_keyspace) {
             builder.set_gc_grace_seconds(1);
             auto new_schema = builder.build();
 
-            service::get_local_migration_manager().announce_column_family_update(new_schema, false, { }).get();
+            e.migration_manager().local().announce_column_family_update(new_schema, false, { }).get();
 
             s = e.local_db().find_schema(old_schema->id());
             BOOST_REQUIRE_NE(*old_schema, *s);
@@ -112,7 +112,7 @@ SEASTAR_TEST_CASE(test_tombstones_are_ignored_in_version_calculation) {
                     .with_column("v1", bytes_type)
                     .build();
 
-            service::get_local_migration_manager().announce_new_column_family(table_schema).get();
+            e.migration_manager().local().announce_new_column_family(table_schema).get();
 
             auto old_table_version = e.db().local().find_schema(table_schema->id())->version();
             auto old_node_version = e.db().local().get_version();
@@ -124,7 +124,7 @@ SEASTAR_TEST_CASE(test_tombstones_are_ignored_in_version_calculation) {
                 mutation m(s, pkey);
                 auto ckey = clustering_key::from_exploded(*s, {utf8_type->decompose(table_schema->cf_name()), "v1"});
                 m.partition().apply_delete(*s, ckey, tombstone(api::min_timestamp, gc_clock::now()));
-                service::get_local_migration_manager().announce(std::vector<mutation>({m})).get();
+                e.migration_manager().local().announce(std::vector<mutation>({m})).get();
             }
 
             auto new_table_version = e.db().local().find_schema(table_schema->id())->version();
@@ -141,7 +141,7 @@ SEASTAR_TEST_CASE(test_concurrent_column_addition) {
         return seastar::async([&] {
             e.execute_cql("create keyspace tests with replication = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 };").get();
 
-            service::migration_manager& mm = service::get_local_migration_manager();
+            service::migration_manager& mm = e.migration_manager().local();
 
             auto s0 = schema_builder("ks", "table")
                     .with_column("pk", bytes_type, column_kind::partition_key)
@@ -185,7 +185,7 @@ SEASTAR_TEST_CASE(test_concurrent_column_addition) {
 
 SEASTAR_TEST_CASE(test_sort_type_in_update) {
     return do_with_cql_env_thread([](cql_test_env& e) {
-        service::migration_manager& mm = service::get_local_migration_manager();
+        service::migration_manager& mm = e.migration_manager().local();
         auto&& keyspace = e.db().local().find_keyspace("ks").metadata();
 
         auto type1 = user_type_impl::get_instance("ks", to_bytes("type1"), {}, {}, true);
@@ -294,7 +294,7 @@ SEASTAR_TEST_CASE(test_multiple_static_columns_add_and_drop) {
 SEASTAR_TEST_CASE(test_combined_column_add_and_drop) {
     return do_with_cql_env([](cql_test_env& e) {
         return seastar::async([&] {
-            service::migration_manager& mm = service::get_local_migration_manager();
+            service::migration_manager& mm = e.migration_manager().local();
 
             e.execute_cql("create keyspace tests with replication = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 };").get();
 
@@ -347,7 +347,7 @@ SEASTAR_TEST_CASE(test_combined_column_add_and_drop) {
 SEASTAR_TEST_CASE(test_merging_does_not_alter_tables_which_didnt_change) {
     return do_with_cql_env([](cql_test_env& e) {
         return seastar::async([&] {
-            service::migration_manager& mm = service::get_local_migration_manager();
+            service::migration_manager& mm = e.migration_manager().local();
 
             auto&& keyspace = e.db().local().find_keyspace("ks").metadata();
 
@@ -450,7 +450,7 @@ SEASTAR_TEST_CASE(test_nested_type_mutation_in_update) {
 
         BOOST_REQUIRE_EQUAL(listener.create_user_type_count, 2);
 
-        service::migration_manager& mm = service::get_local_migration_manager();
+        service::migration_manager& mm = e.migration_manager().local();
         auto&& keyspace = e.db().local().find_keyspace("ks").metadata();
 
         auto type1 = user_type_impl::get_instance("ks", to_bytes("foo"), {"foo_k", "extra"}, {int32_type, int32_type}, true);

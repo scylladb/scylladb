@@ -46,7 +46,6 @@
 
 #include "service/migration_listener.hh"
 #include "message/messaging_service.hh"
-#include "service/migration_task.hh"
 #include "gms/feature_service.hh"
 #include "utils/runtime.hh"
 #include "gms/gossiper.hh"
@@ -61,11 +60,10 @@ namespace service {
 
 static logging::logger mlogger("migration_manager");
 
-distributed<service::migration_manager> _the_migration_manager;
-
 using namespace std::chrono_literals;
 
 const std::chrono::milliseconds migration_manager::migration_delay = 60000ms;
+static future<schema_ptr> get_schema_definition(table_schema_version v, netw::messaging_service::msg_addr dst, netw::messaging_service& ms);
 
 migration_manager::migration_manager(migration_notifier& notifier, gms::feature_service& feat, netw::messaging_service& ms) :
         _notifier(notifier), _feat(feat), _messaging(ms)
@@ -113,12 +111,12 @@ void migration_manager::init_messaging_service()
         auto src = netw::messaging_service::get_source(cinfo);
         auto f = make_ready_future<>();
         if (cm) {
-            f = do_with(std::move(*cm), get_local_shared_storage_proxy(), [src] (const std::vector<canonical_mutation>& mutations, shared_ptr<storage_proxy>& p) {
-                return service::get_local_migration_manager().merge_schema_in_background(src, mutations);
+            f = do_with(std::move(*cm), get_local_shared_storage_proxy(), [this, src] (const std::vector<canonical_mutation>& mutations, shared_ptr<storage_proxy>& p) {
+                return merge_schema_in_background(src, mutations);
             });
         } else {
-            f = do_with(std::move(fm), get_local_shared_storage_proxy(), [src] (const std::vector<frozen_mutation>& mutations, shared_ptr<storage_proxy>& p) {
-                return service::get_local_migration_manager().merge_schema_in_background(src, mutations);
+            f = do_with(std::move(fm), get_local_shared_storage_proxy(), [this, src] (const std::vector<frozen_mutation>& mutations, shared_ptr<storage_proxy>& p) {
+                return merge_schema_in_background(src, mutations);
             });
         }
         // Start a new fiber.
@@ -274,7 +272,20 @@ future<> migration_manager::maybe_schedule_schema_pull(const utils::UUID& their_
 
 future<> migration_manager::submit_migration_task(const gms::inet_address& endpoint, bool can_ignore_down_node)
 {
-    return service::migration_task::run_may_throw(endpoint, can_ignore_down_node);
+    if (!gms::get_local_gossiper().is_alive(endpoint)) {
+        auto msg = format("Can't send migration request: node {} is down.", endpoint);
+        mlogger.warn("{}", msg);
+        return can_ignore_down_node ? make_ready_future<>() : make_exception_future<>(std::runtime_error(msg));
+    }
+    netw::messaging_service::msg_addr id{endpoint, 0};
+    return merge_schema_from(id).handle_exception([](std::exception_ptr e) {
+        try {
+            std::rethrow_exception(e);
+        } catch (const exceptions::configuration_exception& e) {
+            mlogger.error("Configuration exception merging remote schema: {}", e.what());
+            return make_exception_future<>(e);
+        }
+    });
 }
 
 future<> migration_manager::do_merge_schema_from(netw::messaging_service::msg_addr id)
@@ -625,9 +636,9 @@ future<> migration_manager::include_keyspace_and_announce(
         const keyspace_metadata& keyspace, std::vector<mutation> mutations) {
     // Include the serialized keyspace in case the target node missed a CREATE KEYSPACE migration (see CASSANDRA-5631).
     return db::schema_tables::read_keyspace_mutation(service::get_storage_proxy(), keyspace.name())
-            .then([mutations = std::move(mutations)] (mutation m) mutable {
+            .then([this, mutations = std::move(mutations)] (mutation m) mutable {
                 mutations.push_back(std::move(m));
-                return migration_manager::announce(std::move(mutations));
+                return announce(std::move(mutations));
             });
 }
 
@@ -652,7 +663,7 @@ future<> migration_manager::announce_new_column_family(schema_ptr cfm, api::time
             auto mutations = db::schema_tables::make_create_table_mutations(ksm, cfm, timestamp);
             get_notifier().before_create_column_family(*cfm, mutations, timestamp);
             return mutations;
-        }).then([ksm](std::vector<mutation> mutations) {
+        }).then([this, ksm](std::vector<mutation> mutations) {
             return include_keyspace_and_announce(*ksm, std::move(mutations));
         });
     } catch (const no_such_keyspace& e) {
@@ -690,7 +701,7 @@ future<> migration_manager::announce_column_family_update(schema_ptr cfm, bool f
 
             get_notifier().before_update_column_family(*cfm, *old_schema, mutations, ts);
             return mutations;
-        }).then([keyspace] (auto&& mutations) {
+        }).then([this, keyspace] (auto&& mutations) {
             return include_keyspace_and_announce(*keyspace, std::move(mutations));
         });
     } catch (const no_such_column_family& e) {
@@ -939,17 +950,16 @@ future<> migration_manager::push_schema_mutation(const gms::inet_address& endpoi
 
 // Returns a future on the local application of the schema
 future<> migration_manager::announce(std::vector<mutation> schema) {
-    migration_manager& mm = get_local_migration_manager();
-    auto f = db::schema_tables::merge_schema(get_storage_proxy(), mm._feat, schema);
+    auto f = db::schema_tables::merge_schema(get_storage_proxy(), _feat, schema);
 
-    return do_with(std::move(schema), [live_members = gms::get_local_gossiper().get_live_members(), &mm](auto && schema) {
-        return parallel_for_each(live_members.begin(), live_members.end(), [&schema, &mm](auto& endpoint) {
+    return do_with(std::move(schema), [this, live_members = gms::get_local_gossiper().get_live_members()](auto && schema) {
+        return parallel_for_each(live_members.begin(), live_members.end(), [this, &schema](auto& endpoint) {
             // only push schema to nodes with known and equal versions
             if (endpoint != utils::fb_utilities::get_broadcast_address() &&
-                mm._messaging.knows_version(endpoint) &&
-                mm._messaging.get_raw_version(endpoint) ==
+                _messaging.knows_version(endpoint) &&
+                _messaging.get_raw_version(endpoint) ==
                 netw::messaging_service::current_version) {
-                return mm.push_schema_mutation(endpoint, schema);
+                return push_schema_mutation(endpoint, schema);
             } else {
                 return make_ready_future<>();
             }
@@ -1043,32 +1053,30 @@ public static class MigrationsSerializer implements IVersionedSerializer<Collect
 //
 // The endpoint is the node from which 's' originated.
 //
-static future<> maybe_sync(const schema_ptr& s, netw::messaging_service::msg_addr endpoint) {
+future<> migration_manager::maybe_sync(const schema_ptr& s, netw::messaging_service::msg_addr endpoint) {
     if (s->is_synced()) {
         return make_ready_future<>();
     }
 
-    return s->registry_entry()->maybe_sync([s, endpoint] {
-        auto merge = [gs = global_schema_ptr(s), endpoint] {
-            schema_ptr s = gs.get();
-            mlogger.debug("Syncing schema of {}.{} (v={}) with {}", s->ks_name(), s->cf_name(), s->version(), endpoint);
-            return get_local_migration_manager().merge_schema_from(endpoint);
-        };
-
+    return s->registry_entry()->maybe_sync([this, s, endpoint] {
         // Serialize schema sync by always doing it on shard 0.
         if (this_shard_id() == 0) {
-            return merge();
+            mlogger.debug("Syncing schema of {}.{} (v={}) with {}", s->ks_name(), s->cf_name(), s->version(), endpoint);
+            return merge_schema_from(endpoint);
         } else {
-            return smp::submit_to(0, [gs = global_schema_ptr(s), endpoint, merge] {
+            return container().invoke_on(0, [gs = global_schema_ptr(s), endpoint] (migration_manager& local_mm) {
                 schema_ptr s = gs.get();
                 schema_registry_entry& e = *s->registry_entry();
-                return e.maybe_sync(merge);
+                mlogger.debug("Syncing schema of {}.{} (v={}) with {}", s->ks_name(), s->cf_name(), s->version(), endpoint);
+                return local_mm.merge_schema_from(endpoint);
             });
         }
     });
 }
 
-future<schema_ptr> get_schema_definition(table_schema_version v, netw::messaging_service::msg_addr dst, netw::messaging_service& ms) {
+// Returns schema of given version, either from cache or from remote node identified by 'from'.
+// Doesn't affect current node's schema in any way.
+static future<schema_ptr> get_schema_definition(table_schema_version v, netw::messaging_service::msg_addr dst, netw::messaging_service& ms) {
     return local_schema_registry().get_or_load(v, [&ms, dst] (table_schema_version v) {
         mlogger.debug("Requesting schema {} from {}", v, dst);
         return ms.send_get_schema_version(dst, v).then([] (frozen_schema s) {
@@ -1110,12 +1118,12 @@ future<schema_ptr> get_schema_definition(table_schema_version v, netw::messaging
     });
 }
 
-future<schema_ptr> get_schema_for_read(table_schema_version v, netw::messaging_service::msg_addr dst, netw::messaging_service& ms) {
+future<schema_ptr> migration_manager::get_schema_for_read(table_schema_version v, netw::messaging_service::msg_addr dst, netw::messaging_service& ms) {
     return get_schema_for_write(v, dst, ms);
 }
 
-future<schema_ptr> get_schema_for_write(table_schema_version v, netw::messaging_service::msg_addr dst, netw::messaging_service& ms) {
-    return get_schema_definition(v, dst, ms).then([dst] (schema_ptr s) {
+future<schema_ptr> migration_manager::get_schema_for_write(table_schema_version v, netw::messaging_service::msg_addr dst, netw::messaging_service& ms) {
+    return get_schema_definition(v, dst, ms).then([this, dst] (schema_ptr s) {
         return maybe_sync(s, dst).then([s] {
             return s;
         });
