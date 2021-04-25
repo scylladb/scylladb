@@ -2944,7 +2944,7 @@ future<> storage_service::load_new_sstables(sstring ks_name, sstring cf_name,
         _loading_new_sstables = false;
         throw;
     }
-    slogger.warn("Done loading new SSTables for keyspace={}, table={}, load_and_stream={}, primary_replica_only={}, status=succeeded",
+    slogger.info("Done loading new SSTables for keyspace={}, table={}, load_and_stream={}, primary_replica_only={}, status=succeeded",
             ks_name, cf_name, load_and_stream, primary_replica_only);
     _loading_new_sstables = false;
     co_return;
