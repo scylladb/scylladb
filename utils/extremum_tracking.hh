@@ -22,6 +22,7 @@
 #pragma once
 
 #include <functional>
+#include <limits>
 
 namespace detail {
 
