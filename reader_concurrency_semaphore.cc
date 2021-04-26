@@ -385,7 +385,10 @@ void reader_concurrency_semaphore::inactive_read::detach() noexcept {
 }
 
 void reader_concurrency_semaphore::inactive_read_handle::abandon() noexcept {
-    delete std::exchange(_irp, nullptr);
+    if (_irp) {
+        _sem->close_reader(std::move(_irp->reader));
+        delete std::exchange(_irp, nullptr);
+    }
 }
 
 void reader_concurrency_semaphore::signal(const resources& r) noexcept {

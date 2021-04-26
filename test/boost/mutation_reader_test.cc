@@ -971,6 +971,20 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_destroyed_permit_rele
     BOOST_REQUIRE(semaphore.available_resources() == initial_resources);
 }
 
+SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_abandoned_handle_closes_reader) {
+    simple_schema s;
+    reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::no_limits{}, get_name());
+    auto stop_sem = deferred_stop(semaphore);
+
+    auto permit = semaphore.make_permit(s.schema().get(), get_name());
+    {
+        auto handle = semaphore.register_inactive_read(make_empty_flat_reader(s.schema(), permit));
+        // The handle is destroyed here, triggering the destrution of the inactive read.
+        // If the test fails an assert() is triggered due to the reader being
+        // destroyed without having been closed before.
+    }
+}
+
 static
 sstables::shared_sstable create_sstable(sstables::test_env& env, schema_ptr s, std::vector<mutation> mutations) {
     static thread_local auto tmp = tmpdir();
