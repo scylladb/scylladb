@@ -41,18 +41,15 @@
 
 #pragma once
 
-#include "exceptions/exceptions.hh"
-#include <seastar/core/print.hh>
 #include <seastar/core/sstring.hh>
 
 #include <optional>
-#include <unordered_map>
-#include <algorithm>
 #include <cctype>
-#include <string>
 #include <map>
 #include <set>
 #include <variant>
+
+#include "seastarx.hh"
 
 namespace cql3 {
 

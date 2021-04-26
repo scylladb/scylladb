@@ -40,6 +40,7 @@
  */
 
 #include "cql3/statements/property_definitions.hh"
+#include "exceptions/exceptions.hh"
 
 namespace cql3 {
 

@@ -44,8 +44,6 @@
 #include "cql3/statements/raw/cf_statement.hh"
 #include "cql3/cql_statement.hh"
 
-#include <optional>
-
 namespace cql3 {
 
 class query_processor;

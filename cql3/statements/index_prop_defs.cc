@@ -42,6 +42,7 @@
 #include <set>
 #include "index_prop_defs.hh"
 #include "index/secondary_index.hh"
+#include "exceptions/exceptions.hh"
 
 void cql3::statements::index_prop_defs::validate() {
     static std::set<sstring> keywords({ sstring(KW_OPTIONS) });
