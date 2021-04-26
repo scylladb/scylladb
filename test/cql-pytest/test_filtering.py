@@ -25,6 +25,7 @@
 
 import pytest
 from util import new_test_table
+from cassandra.protocol import InvalidRequest
 
 # When filtering for "x > 0" or "x < 0", rows with an unset value for x
 # should not match the filter.
@@ -86,3 +87,22 @@ def test_filtering_contiguous_nonmatching_single_partition(cql, test_keyspace):
         # Scylla won't count its size as part of the 1MB limit, and will not
         # return empty pages - the first page will contain the result.
         assert list(cql.execute(f"SELECT c, s FROM {table} WHERE p=1 AND v={count-1} ALLOW FILTERING")) == [(count-1, long)]
+
+@pytest.fixture(scope="module")
+def table1(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "a int, b int, PRIMARY KEY (a)") as table:
+        yield table
+
+# Although the "!=" operator exists in the parser and might be allowed in
+# other places (e.g., LWT), it is *NOT* supported in WHERE clauses - not
+# for filtering, and also not in relations tha don't need filtering
+# (on partition keys or tokens). It is not supported in either Cassandra or
+# Scylla, and there are no plans to add this support, so for now the test
+# verifies that at least we get the expected error.
+def test_operator_ne_not_supported(cql, table1):
+    with pytest.raises(InvalidRequest, match='Unsupported.*!='):
+        cql.execute(f'SELECT a FROM {table1} WHERE b != 0 ALLOW FILTERING')
+    with pytest.raises(InvalidRequest, match='Unsupported.*!='):
+        cql.execute(f'SELECT a FROM {table1} WHERE a != 0')
+    with pytest.raises(InvalidRequest, match='Unsupported.*!='):
+        cql.execute(f'SELECT a FROM {table1} WHERE token(a) != 0')
