@@ -22,10 +22,10 @@
 import pytest
 import re
 from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, ConfigurationException, ReadFailure
-from util import unique_name, random_string
+from util import unique_name, random_string, new_test_table
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def table1(cql, test_keyspace):
     table = test_keyspace + "." + unique_name()
     cql.execute(f"CREATE TABLE {table} (p text, c text, v text, primary key (p, c))")
@@ -80,3 +80,27 @@ def test_regular_column_in_null(scylla_only, cql, table1):
     cql.execute(f"INSERT INTO {table1} (p,c) VALUES ('p', 'c')")
     with pytest.raises(InvalidRequest, match='null value'):
         cql.execute(cql.prepare(f"SELECT v FROM {table1} WHERE v IN ? ALLOW FILTERING"), [None])
+
+# Test what SELECT does with the restriction "WHERE v=NULL".
+# In SQL, "WHERE v=NULL" doesn't match anything - because nothing is equal
+# to null - not even null. SQL also provides a more useful restriction
+# "WHERE v IS NULL" which matches all rows where v is unset.
+# Scylla and Cassandra do *not* support the "IS NULL" syntax yet (they do
+# have "IS NOT NULL" but only in a definition of a materialized view),
+# so it is commonly requested that "WHERE v=NULL" should do what "IS NULL"
+# is supposed to do - see issues #4776 and #8489 for Scylla and
+# CASSANDRA-10715 for Cassandra, where this feature was requested.
+# Nevertheless, in Scylla we decided to follow SQL: "WHERE v=NULL" should
+# matche nothing, not even rows where v is unset. This is what the following
+# test verifies.
+# This test fails on Cassandra (hence cassandra_bug) because Cassandra
+# refuses the "WHERE v=NULL" relation, rather than matching nothing.
+# We consider this a mistake, and not something we want to emulate in Scylla.
+def test_filtering_eq_null(cassandra_bug, cql, table1):
+    p = random_string()
+    cql.execute(f"INSERT INTO {table1} (p,c,v) VALUES ('{p}', '1', 'hello')")
+    cql.execute(f"INSERT INTO {table1} (p,c,v) VALUES ('{p}', '2', '')")
+    cql.execute(f"INSERT INTO {table1} (p,c) VALUES ('{p}', '3')")
+    # As explained above, none of the above-inserted rows should match -
+    # not even the one with an unset v:
+    assert list(cql.execute(f"SELECT c FROM {table1} WHERE p='{p}' AND v=NULL ALLOW FILTERING")) == []
