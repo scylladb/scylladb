@@ -1902,7 +1902,7 @@ class scylla_heapprof(gdb.Command):
                 n = root
                 n.size += size
                 n.count += count
-                bt = site['backtrace']
+                bt = site['backtrace']['_main']
                 addresses = list(int(f['addr']) for f in static_vector(bt['_frames']))
                 addresses.pop(0)  # drop memory::get_backtrace()
                 if args.inverted:
