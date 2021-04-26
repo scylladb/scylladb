@@ -232,10 +232,10 @@ protected:
     }
 };
 
-future<> server::verify_signature(const request& req, const chunked_content& content) {
+future<std::string> server::verify_signature(const request& req, const chunked_content& content) {
     if (!_enforce_authorization) {
         slogger.debug("Skipping authorization");
-        return make_ready_future<>();
+        return make_ready_future<std::string>("<unauthenticated request>");
     }
     auto host_it = req._headers.find("Host");
     if (host_it == req._headers.end()) {
@@ -316,6 +316,7 @@ future<> server::verify_signature(const request& req, const chunked_content& con
             _key_cache.remove(user);
             throw api_error::unrecognized_client("The security token included in the request is invalid.");
         }
+        return user;
     });
 }
 

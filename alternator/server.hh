@@ -84,7 +84,8 @@ public:
     future<> stop();
 private:
     void set_routes(seastar::httpd::routes& r);
-    future<> verify_signature(const seastar::httpd::request&, const chunked_content&);
+    // If verification succeeds, returns the authenticated user's username
+    future<std::string> verify_signature(const seastar::httpd::request&, const chunked_content&);
     future<executor::request_return_type> handle_api_request(std::unique_ptr<request> req);
 };
 
