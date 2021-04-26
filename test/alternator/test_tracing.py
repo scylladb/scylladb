@@ -266,8 +266,10 @@ def test_slow_query_log(with_slow_query_logging, test_table_s, dynamodb):
     delay = 0.2
     while delay < 30:
         results = full_scan(slow_query_table, ConsistentRead=False)
-        put_item_found = any("PutItem" in result['parameters'] and p in result['parameters'] for result in results)
-        delete_item_found = any("DeleteItem" in result['parameters'] and p in result['parameters'] for result in results)
+        put_item_found = any("PutItem" in result['parameters'] and p in result['parameters']
+                and result['username'] == "alternator" for result in results)
+        delete_item_found = any("DeleteItem" in result['parameters'] and p in result['parameters']
+                and result['username'] == "alternator" for result in results)
         if put_item_found and delete_item_found:
             return
         else:
