@@ -61,7 +61,7 @@ executor_shard_stats_snapshot() {
 
 std::ostream&
 operator<<(std::ostream& os, const perf_result& result) {
-    fmt::print(os, "{:.2f} tps ({:.0} allocs/op, {:.0} tasks/op)",
+    fmt::print(os, "{:.2f} tps ({:5.1f} allocs/op, {:5.1f} tasks/op)",
             result.throughput, result.mallocs_per_op, result.tasks_per_op);
     return os;
 }
