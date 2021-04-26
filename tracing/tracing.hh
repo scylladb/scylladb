@@ -52,6 +52,7 @@
 #include "enum_set.hh"
 #include "log.hh"
 #include "seastarx.hh"
+#include "auth/authenticated_user.hh"
 
 namespace cql3 { class query_processor; }
 
@@ -216,8 +217,8 @@ struct session_record {
     // container is very small.
     std::map<sstring, sstring> parameters;
     std::set<sstring> tables;
-    sstring username;
-    sstring request;
+    lw_shared_ptr<auth::authenticated_user> user;
+    const char* name;
     size_t request_size = 0;
     size_t response_size = 0;
     std::chrono::system_clock::time_point started_at;
@@ -230,8 +231,7 @@ private:
 
 public:
     session_record()
-        : username("<unauthenticated request>")
-        , elapsed(-1) {}
+        : elapsed(-1) {}
 
     bool ready() const {
         return elapsed.count() >= 0 && !_consumed;
@@ -240,6 +240,8 @@ public:
     void set_consumed() {
         _consumed = true;
     }
+
+    sstring get_username_string() const;
 };
 
 class one_session_records {

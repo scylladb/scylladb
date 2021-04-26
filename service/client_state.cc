@@ -56,7 +56,7 @@
 thread_local api::timestamp_type service::client_state::_last_timestamp_micros = 0;
 
 void service::client_state::set_login(auth::authenticated_user user) {
-    _user = std::move(user);
+    _user = make_lw_shared(std::move(user));
 }
 
 future<> service::client_state::check_user_can_login() {

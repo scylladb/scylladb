@@ -276,19 +276,15 @@ private:
      * Starts the tracing session time measurments.
      * This overload is meant for primary sessions.
      *
-     * @param request description of a request being traces
+     * @param name description of a tracing context.
+     *             Caller must guarantee static storage duration.
      * @param client address of a client the traced request came from
      */
-    void begin(sstring request, gms::inet_address client) {
+    void begin(const char* name, gms::inet_address client) {
         begin();
         _records->session_rec.client = client;
-        _records->session_rec.request = std::move(request);
+        _records->session_rec.name = name;
         _records->session_rec.started_at = std::chrono::system_clock::now();
-    }
-
-    template <typename Func>
-    void begin(const seastar::lazy_eval<Func>& lf, gms::inet_address client) {
-        begin(lf(), client);
     }
 
     /**
@@ -320,16 +316,6 @@ private:
      * @param val the optional value with a serial consistency level
      */
     void set_optional_serial_consistency_level(const std::optional<db::consistency_level>& val);
-
-    /**
-     * Returns the string with the representation of the given raw value.
-     * If the value is NULL or unset the 'null' or 'unset value' strings are returned correspondingly.
-     *
-     * @param v view of the given raw value
-     * @param t type object corresponding to the given raw value.
-     * @return the string with the representation of the given raw value.
-     */
-    sstring raw_value_to_sstring(const cql3::raw_value_view& v, const data_type& t);
 
     /**
      * Stores a page size of a query being traced.
@@ -394,9 +380,9 @@ private:
      */
     void add_prepared_statement(prepared_checked_weak_ptr& prepared);
 
-    void set_username(const std::optional<auth::authenticated_user>& user) {
+    void set_user(lw_shared_ptr<auth::authenticated_user> user) {
         if (user) {
-            _records->session_rec.username = format("{}", *user);
+            _records->session_rec.user = std::move(user);
         }
     }
 
@@ -416,21 +402,6 @@ private:
      * @param prepared_options_ptr parameters of the prepared statement
      */
     void add_prepared_query_options(const cql3::query_options& prepared_options_ptr);
-
-    /**
-     * Fill the map in a session's record with the parameters' values of a single prepared statement.
-     *
-     * Parameters values will be stored with a key '@ref param_name_prefix[X]' where X is an index of the corresponding
-     * parameter.
-     *
-     * @param prepared prepared statement handle
-     * @param names_opt CQL cell names used in the current invocation of the prepared statement
-     * @param values CQL value used in the current invocation of the prepared statement
-     * @param param_name_prefix prefix of the parameter key in the map, e.g. "param" or "param[1]"
-     */
-    void build_parameters_map_for_one_prepared(const prepared_checked_weak_ptr& prepared_ptr,
-            std::optional<std::vector<sstring_view>>& names_opt,
-            std::vector<cql3::raw_value_view>& values, const sstring& param_name_prefix);
 
     /**
      * The actual trace message storing method.
@@ -496,7 +467,7 @@ private:
     friend void add_session_param(const trace_state_ptr& p, sstring_view key, sstring_view val);
     friend void set_user_timestamp(const trace_state_ptr& p, api::timestamp_type val);
     friend void add_prepared_statement(const trace_state_ptr& p, prepared_checked_weak_ptr& prepared);
-    friend void set_username(const trace_state_ptr& p, const std::optional<auth::authenticated_user>& user);
+    friend void set_user(const trace_state_ptr& p, lw_shared_ptr<auth::authenticated_user> user);
     friend void add_table_name(const trace_state_ptr& p, const sstring& ks_name, const sstring& cf_name);
     friend void add_prepared_query_options(const trace_state_ptr& state, const cql3::query_options& prepared_options_ptr);
     friend void stop_foreground(const trace_state_ptr& state) noexcept;
@@ -653,9 +624,9 @@ inline void add_prepared_statement(const trace_state_ptr& p, prepared_checked_we
     }
 }
 
-inline void set_username(const trace_state_ptr& p, const std::optional<auth::authenticated_user>& user) {
+inline void set_user(const trace_state_ptr& p, lw_shared_ptr<auth::authenticated_user> user) {
     if (p) {
-        p->set_username(user);
+        p->set_user(std::move(user));
     }
 }
 
@@ -677,6 +648,9 @@ inline bool should_return_id_in_response(const trace_state_ptr& p) {
  *
  * If trace state is initialized the operation takes place immediatelly,
  * otherwise nothing happens.
+ *
+ * For begin(name, address) form the caller must guarantee static
+ * storage duration for name.
  *
  * @tparam A
  * @param p trace state handle

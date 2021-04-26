@@ -125,7 +125,7 @@ private:
     private volatile AuthenticatedUser user;
     private volatile String keyspace;
 #endif
-    std::optional<auth::authenticated_user> _user;
+    lw_shared_ptr<auth::authenticated_user> _user;
     std::optional<sstring> _driver_name, _driver_version;
 
     auth_state _auth_state = auth_state::UNINITIALIZED;
@@ -182,7 +182,7 @@ public:
             , _default_timeout_config(timeout_config)
             , _timeout_config(timeout_config) {
         if (!auth_service.underlying_authenticator().require_authentication()) {
-            _user = auth::authenticated_user();
+            _user = make_lw_shared(auth::authenticated_user());
         }
     }
 
@@ -367,7 +367,7 @@ public:
     }
 #endif
 
-    const std::optional<auth::authenticated_user>& user() const {
+    const lw_shared_ptr<auth::authenticated_user>& user() const {
         return _user;
     }
 

@@ -416,7 +416,7 @@ future<foreign_ptr<std::unique_ptr<cql_server::response>>>
                 break;
         }
 
-        tracing::set_username(trace_state, client_state.user());
+        tracing::set_user(trace_state, client_state.user());
 
         auto wrap_in_foreign = [] (future<std::unique_ptr<cql_server::response>> f) {
             return f.then([] (std::unique_ptr<cql_server::response> p) {
@@ -543,7 +543,7 @@ client_data cql_server::connection::make_client_data() const {
     cd.protocol_version = _version;
     cd.driver_name = _client_state.get_driver_name();
     cd.driver_version = _client_state.get_driver_version();
-    if (const auto user_ptr = _client_state.user(); user_ptr) {
+    if (const auto& user_ptr = _client_state.user(); user_ptr) {
         cd.username = user_ptr->name;
     }
     return cd;
@@ -960,11 +960,9 @@ process_execute_internal(service::client_state& client_state, distributed<cql3::
         tracing::set_page_size(trace_state, options.get_page_size());
         tracing::set_consistency_level(trace_state, options.get_consistency());
         tracing::set_optional_serial_consistency_level(trace_state, options.get_serial_consistency());
-        tracing::add_query(trace_state, prepared->statement->raw_cql_statement);
         tracing::add_prepared_statement(trace_state, prepared);
 
-        tracing::begin(trace_state, seastar::value_of([&id] { return seastar::format("Execute CQL3 prepared query [{}]", id); }),
-                client_state.get_client_address());
+        tracing::begin(trace_state, "Execute CQL3 prepared query", client_state.get_client_address());
     }
 
     auto stmt = prepared->statement;

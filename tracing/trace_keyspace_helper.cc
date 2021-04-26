@@ -310,11 +310,11 @@ cql3::query_options trace_keyspace_helper::make_session_mutation_data(const one_
         cql3::raw_value::make_value(inet_addr_type->decompose(utils::fb_utilities::get_broadcast_address().addr())),
         cql3::raw_value::make_value(int32_type->decompose(elapsed_to_micros(record.elapsed))),
         cql3::raw_value::make_value(make_map_value(my_map_type, map_type_impl::native_type(std::move(parameters_values_vector))).serialize()),
-        cql3::raw_value::make_value(utf8_type->decompose(record.request)),
+        cql3::raw_value::make_value(utf8_type->decompose(record.name)),
         cql3::raw_value::make_value(timestamp_type->decompose(millis_since_epoch)),
         cql3::raw_value::make_value(int32_type->decompose((int32_t)(record.request_size))),
         cql3::raw_value::make_value(int32_type->decompose((int32_t)(record.response_size))),
-        cql3::raw_value::make_value(utf8_type->decompose(record.username)),
+        cql3::raw_value::make_value(utf8_type->decompose(record.get_username_string())),
         cql3::raw_value::make_value(int32_type->decompose((int32_t)(session_records.ttl.count())))
     };
 
@@ -375,7 +375,7 @@ cql3::query_options trace_keyspace_helper::make_slow_query_mutation_data(const o
         cql3::raw_value::make_value(make_map_value(my_map_type, map_type_impl::native_type(std::move(parameters_values_vector))).serialize()),
         cql3::raw_value::make_value(inet_addr_type->decompose(record.client.addr())),
         cql3::raw_value::make_value(make_set_value(my_set_type, set_type_impl::native_type(std::move(tables_names_vector))).serialize()),
-        cql3::raw_value::make_value(utf8_type->decompose(record.username)),
+        cql3::raw_value::make_value(utf8_type->decompose(record.get_username_string())),
         cql3::raw_value::make_value(int32_type->decompose((int32_t)(record.slow_query_record_ttl.count())))
     });
 
