@@ -161,6 +161,7 @@ if __name__ == '__main__':
 Description=Scylla data directory
 Before=scylla-server.service
 After={after}
+Wants={md_service}
 DefaultDependencies=no
 
 [Mount]
@@ -184,7 +185,6 @@ WantedBy=multi-user.target
             f.write(f'RequiresMountsFor={mount_at}\n')
 
     systemd_unit.reload()
-    md_service.enable()
     md_service.start()
     mount = systemd_unit(mntunit_bn)
     mount.start()
