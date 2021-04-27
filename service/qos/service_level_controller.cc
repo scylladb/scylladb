@@ -27,6 +27,7 @@
 #include "db/system_distributed_keyspace.hh"
 
 namespace qos {
+static logging::logger sl_logger("service_level_controller");
 
 sstring service_level_controller::default_service_level_name = "default";
 
@@ -122,7 +123,14 @@ future<> service_level_controller::update_service_levels_from_distributed_data()
 
     return with_semaphore(_global_controller_db->notifications_serializer, 1, [this] () {
         return async([this] () {
-            service_levels_info service_levels = _sl_data_accessor->get_service_levels().get0();
+            service_levels_info service_levels;
+            try {
+                service_levels = _sl_data_accessor->get_service_levels().get0();
+            } catch (...) {
+                sl_logger.warn("update_service_levels_from_distributed_data: an error occurred"
+                        " while retrieving configuration ({})", std::current_exception());
+                return;
+            }
             service_levels_info service_levels_for_add_or_update;
             service_levels_info service_levels_for_delete;
 
@@ -152,22 +160,29 @@ future<> service_level_controller::update_service_levels_from_distributed_data()
                     //removed, but only if it is not static since static configurations dont
                     //come from the distributed keyspace but from code.
                     if (!current_it->second.is_static) {
+                        sl_logger.info("service level \"{}\" was deleted.", current_it->first.c_str());
                         service_levels_for_delete.emplace(current_it->first, current_it->second.slo);
                     }
                     current_it++;
                 } else { /*new_it->first < current_it->first */
                     // The service level exits in the new state but not in the old state
                     // so it needs to be added.
+                    sl_logger.info("service level \"{}\" was added.", new_state_it->first.c_str());
                     service_levels_for_add_or_update.insert(*new_state_it);
                     new_state_it++;
                 }
             }
 
             for (; current_it != _service_levels_db.end(); current_it++) {
-                service_levels_for_delete.emplace(current_it->first, current_it->second.slo);
+                sl_logger.info("service level \"{}\" was deleted.", current_it->first.c_str());
+                if (!current_it->second.is_static) {
+                    service_levels_for_delete.emplace(current_it->first, current_it->second.slo);
+                }
             }
-            std::copy(new_state_it, service_levels.end(), std::inserter(service_levels_for_add_or_update,
-                    service_levels_for_add_or_update.end()));
+            for (; new_state_it != service_levels.end(); new_state_it++) {
+                sl_logger.info("service level \"{}\" was added.", new_state_it->first.c_str());
+                service_levels_for_add_or_update.emplace(new_state_it->first, new_state_it->second);
+            }
 
             for (auto&& sl : service_levels_for_delete) {
                 do_remove_service_level(sl.first, false).get();
@@ -244,19 +259,33 @@ void service_level_controller::update_from_distributed_data(std::chrono::duratio
         throw std::runtime_error(format("Service level updates from distributed data can only be activated on shard {}", global_controller));
     }
     if (_global_controller_db->distributed_data_update.available()) {
+        sl_logger.info("update_from_distributed_data: starting configuration polling loop");
         _global_controller_db->distributed_data_update = repeat([this, interval] {
             return sleep_abortable<steady_clock_type>(std::chrono::duration_cast<steady_clock_type::duration>(interval),
                     _global_controller_db->dist_data_update_aborter).then_wrapped([this] (future<>&& f) {
-                    try {
-                        f.get();
-                        return update_service_levels_from_distributed_data().then([this] {
-                                return stop_iteration::no;
-                        });
-                    }
-                    catch (const sleep_aborted& e) {
-                        return make_ready_future<seastar::bool_class<seastar::stop_iteration_tag>>(stop_iteration::yes);
-                    }
-                });
+                try {
+                    f.get();
+                    return update_service_levels_from_distributed_data().then_wrapped([] (future<>&& f){
+                        try {
+                            f.get();
+                        } catch (...) {
+                            sl_logger.warn("update_from_distributed_data: exception occurred in distributed"
+                                    " data check loop: {}", std::current_exception());
+                        }
+                        return stop_iteration::no;
+                    });
+                } catch (const sleep_aborted& e) {
+                    sl_logger.info("update_from_distributed_data: configuration polling loop aborted");
+                    return make_ready_future<seastar::bool_class<seastar::stop_iteration_tag>>(stop_iteration::yes);
+                }
+            });
+        }).then_wrapped([] (future<>&& f) {
+            try {
+                f.get();
+            } catch (...) {
+                sl_logger.error("update_from_distributed_data: polling loop stopped unexpectedly by: {}",
+                        std::current_exception());
+            }
         });
     }
 }
