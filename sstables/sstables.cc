@@ -1513,6 +1513,11 @@ create_sharding_metadata(schema_ptr schema, const dht::decorated_key& first_key,
     auto prange = dht::partition_range::make(dht::ring_position(first_key), dht::ring_position(last_key));
     auto sm = sharding_metadata();
     auto&& ranges = dht::split_range_to_single_shard(*schema, prange, shard).get0();
+    if (ranges.empty()) {
+        auto split_ranges_all_shards = dht::split_range_to_shards(prange, *schema);
+        sstlog.warn("create_sharding_metadata: range={} has no intersection with shard={} first_key={} last_key={} ranges_single_shard={} ranges_all_shards={}",
+                prange, shard, first_key, last_key, ranges, split_ranges_all_shards);
+    }
     sm.token_ranges.elements.reserve(ranges.size());
     for (auto&& range : std::move(ranges)) {
         if (true) { // keep indentation
