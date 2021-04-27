@@ -765,12 +765,12 @@ storage_service::get_rpc_address(const inet_address& endpoint) const {
     return boost::lexical_cast<std::string>(endpoint);
 }
 
-std::unordered_map<dht::token_range, std::vector<inet_address>>
+std::unordered_map<dht::token_range, inet_address_vector_replica_set>
 storage_service::get_range_to_address_map(const sstring& keyspace) const {
     return get_range_to_address_map(keyspace, get_token_metadata().sorted_tokens());
 }
 
-std::unordered_map<dht::token_range, std::vector<inet_address>>
+std::unordered_map<dht::token_range, inet_address_vector_replica_set>
 storage_service::get_range_to_address_map_in_local_dc(
         const sstring& keyspace) const {
     std::function<bool(const inet_address&)> filter =  [this](const inet_address& address) {
@@ -778,7 +778,7 @@ storage_service::get_range_to_address_map_in_local_dc(
     };
 
     auto orig_map = get_range_to_address_map(keyspace, get_tokens_in_local_dc());
-    std::unordered_map<dht::token_range, std::vector<inet_address>> filtered_map;
+    std::unordered_map<dht::token_range, inet_address_vector_replica_set> filtered_map;
     for (auto entry : orig_map) {
         auto& addresses = filtered_map[entry.first];
         addresses.reserve(entry.second.size());
@@ -807,7 +807,7 @@ storage_service::is_local_dc(const inet_address& targetHost) const {
     return remote_dc == local_dc;
 }
 
-std::unordered_map<dht::token_range, std::vector<inet_address>>
+std::unordered_map<dht::token_range, inet_address_vector_replica_set>
 storage_service::get_range_to_address_map(const sstring& keyspace,
         const std::vector<token>& sorted_tokens) const {
     sstring ks = keyspace;
@@ -2433,7 +2433,7 @@ std::unordered_multimap<dht::token_range, inet_address> storage_service::get_cha
 
     slogger.debug("Node {} ranges [{}]", endpoint, ranges);
 
-    std::unordered_map<dht::token_range, std::vector<inet_address>> current_replica_endpoints;
+    std::unordered_map<dht::token_range, inet_address_vector_replica_set> current_replica_endpoints;
 
     // Find (for each range) all nodes that store replicas for these ranges as well
     auto tmptr = get_token_metadata_ptr();
@@ -2472,7 +2472,7 @@ std::unordered_multimap<dht::token_range, inet_address> storage_service::get_cha
         auto rg = current_replica_endpoints.equal_range(r);
         for (auto it = rg.first; it != rg.second; it++) {
             const dht::token_range& range_ = it->first;
-            std::vector<inet_address>& current_eps = it->second;
+            inet_address_vector_replica_set& current_eps = it->second;
             slogger.debug("range={}, current_replica_endpoints={}, new_replica_endpoints={}", range_, current_eps, new_replica_endpoints);
             for (auto ep : it->second) {
                 auto beg = new_replica_endpoints.begin();
@@ -2830,7 +2830,7 @@ future<> storage_service::load_and_stream(sstring ks_name, sstring cf_name,
                 ops_uuid, nr_sst_current, nr_sst_current + sst_processed.size(), nr_sst_total, sst_names);
 
         auto start_time = std::chrono::steady_clock::now();
-        std::vector<gms::inet_address> current_targets;
+        inet_address_vector_replica_set current_targets;
         std::unordered_map<gms::inet_address, send_meta_data> metas;
         size_t num_partitions_processed = 0;
         size_t num_bytes_read = 0;
@@ -2996,19 +2996,19 @@ storage_service::get_new_source_ranges(const sstring& keyspace_name, const dht::
     auto my_address = get_broadcast_address();
     auto& ks = _db.local().find_keyspace(keyspace_name);
     auto& strat = ks.get_replication_strategy();
-    std::unordered_map<dht::token_range, std::vector<inet_address>> range_addresses = strat.get_range_addresses(tm, utils::can_yield::yes);
+    std::unordered_map<dht::token_range, inet_address_vector_replica_set> range_addresses = strat.get_range_addresses(tm, utils::can_yield::yes);
     std::unordered_multimap<inet_address, dht::token_range> source_ranges;
 
     // find alive sources for our new ranges
     for (auto r : ranges) {
-        std::vector<inet_address> possible_nodes;
+        inet_address_vector_replica_set possible_nodes;
         auto it = range_addresses.find(r);
         if (it != range_addresses.end()) {
             possible_nodes = it->second;
         }
 
         auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
-        std::vector<inet_address> sources = snitch->get_sorted_list_by_proximity(my_address, possible_nodes);
+        inet_address_vector_replica_set sources = snitch->get_sorted_list_by_proximity(my_address, possible_nodes);
 
         if (std::find(sources.begin(), sources.end(), my_address) != sources.end()) {
             auto err = format("get_new_source_ranges: sources={}, my_address={}", sources, my_address);
@@ -3038,7 +3038,7 @@ storage_service::describe_ring(const sstring& keyspace, bool include_only_local_
     std::vector<token_range_endpoints> ranges;
     //Token.TokenFactory tf = getPartitioner().getTokenFactory();
 
-    std::unordered_map<dht::token_range, std::vector<inet_address>> range_to_address_map =
+    std::unordered_map<dht::token_range, inet_address_vector_replica_set> range_to_address_map =
             include_only_local_dc
                     ? get_range_to_address_map_in_local_dc(keyspace)
                     : get_range_to_address_map(keyspace);
@@ -3082,11 +3082,11 @@ storage_service::describe_ring(const sstring& keyspace, bool include_only_local_
     return ranges;
 }
 
-std::unordered_map<dht::token_range, std::vector<inet_address>>
+std::unordered_map<dht::token_range, inet_address_vector_replica_set>
 storage_service::construct_range_to_endpoint_map(
         const sstring& keyspace,
         const dht::token_range_vector& ranges) const {
-    std::unordered_map<dht::token_range, std::vector<inet_address>> res;
+    std::unordered_map<dht::token_range, inet_address_vector_replica_set> res;
     for (auto r : ranges) {
         res[r] = _db.local().find_keyspace(keyspace).get_replication_strategy().get_natural_endpoints(
                 r.end() ? r.end()->value() : dht::maximum_token());
@@ -3351,7 +3351,7 @@ storage_service::get_all_ranges(const std::vector<token>& sorted_tokens) const {
     return ranges;
 }
 
-std::vector<gms::inet_address>
+inet_address_vector_replica_set
 storage_service::get_natural_endpoints(const sstring& keyspace,
         const sstring& cf, const sstring& key) const {
     auto schema = _db.local().find_schema(keyspace, cf);
@@ -3360,7 +3360,7 @@ storage_service::get_natural_endpoints(const sstring& keyspace,
     return get_natural_endpoints(keyspace, token);
 }
 
-std::vector<gms::inet_address>
+inet_address_vector_replica_set
 storage_service::get_natural_endpoints(const sstring& keyspace, const token& pos) const {
     return _db.local().find_keyspace(keyspace).get_replication_strategy().get_natural_endpoints(pos);
 }

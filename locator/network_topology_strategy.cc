@@ -102,7 +102,7 @@ network_topology_strategy::network_topology_strategy(
     }
 }
 
-std::vector<inet_address>
+inet_address_vector_replica_set
 network_topology_strategy::calculate_natural_endpoints(
     const token& search_token, const token_metadata& tm, can_yield can_yield) const {
 

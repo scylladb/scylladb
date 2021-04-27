@@ -1169,7 +1169,7 @@ get_view_natural_endpoint(const sstring& keyspace_name,
     return view_endpoints[base_it - base_endpoints.begin()];
 }
 
-static future<> apply_to_remote_endpoints(gms::inet_address target, std::vector<gms::inet_address>&& pending_endpoints,
+static future<> apply_to_remote_endpoints(gms::inet_address target, inet_address_vector_topology_change&& pending_endpoints,
         frozen_mutation_and_schema& mut, const dht::token& base_token, const dht::token& view_token,
         service::allow_hints allow_hints, tracing::trace_state_ptr tr_state) {
 

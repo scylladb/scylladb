@@ -155,11 +155,11 @@ bool is_local(gms::inet_address endpoint) {
            snitch_ptr->get_datacenter(endpoint);
 }
 
-std::vector<gms::inet_address>
+inet_address_vector_replica_set
 filter_for_query(consistency_level cl,
                  keyspace& ks,
-                 std::vector<gms::inet_address> live_endpoints,
-                 const std::vector<gms::inet_address>& preferred_endpoints,
+                 inet_address_vector_replica_set live_endpoints,
+                 const inet_address_vector_replica_set& preferred_endpoints,
                  read_repair_decision read_repair,
                  gms::inet_address* extra,
                  column_family* cf) {
@@ -187,7 +187,7 @@ filter_for_query(consistency_level cl,
         return std::move(live_endpoints);
     }
 
-    std::vector<gms::inet_address> selected_endpoints;
+    inet_address_vector_replica_set selected_endpoints;
 
     // Pre-select endpoints based on client preference. If the endpoints
     // selected this way aren't enough to satisfy CL requirements select the
@@ -201,7 +201,7 @@ filter_for_query(consistency_level cl,
              if (extra) {
                  *extra = selected == bf ? live_endpoints.front() : *(it + bf);
              }
-             return std::vector<gms::inet_address>(it, it + bf);
+             return inet_address_vector_replica_set(it, it + bf);
         } else if (selected) {
              selected_endpoints.reserve(bf);
              std::move(it, live_endpoints.end(), std::back_inserter(selected_endpoints));
@@ -255,10 +255,10 @@ filter_for_query(consistency_level cl,
     return selected_endpoints;
 }
 
-std::vector<gms::inet_address> filter_for_query(consistency_level cl,
+inet_address_vector_replica_set filter_for_query(consistency_level cl,
         keyspace& ks,
-        std::vector<gms::inet_address>& live_endpoints,
-        const std::vector<gms::inet_address>& preferred_endpoints,
+        inet_address_vector_replica_set& live_endpoints,
+        const inet_address_vector_replica_set& preferred_endpoints,
         column_family* cf) {
     return filter_for_query(cl, ks, live_endpoints, preferred_endpoints, read_repair_decision::NONE, nullptr, cf);
 }
@@ -266,7 +266,7 @@ std::vector<gms::inet_address> filter_for_query(consistency_level cl,
 bool
 is_sufficient_live_nodes(consistency_level cl,
                          keyspace& ks,
-                         const std::vector<gms::inet_address>& live_endpoints) {
+                         const inet_address_vector_replica_set& live_endpoints) {
     using namespace locator;
 
     switch (cl) {

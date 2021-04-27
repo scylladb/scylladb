@@ -49,11 +49,11 @@ snitch_base::get_endpoint_info(inet_address endpoint,
     return ep_state ? std::optional(ep_state->value) : std::nullopt;
 }
 
-std::vector<inet_address> snitch_base::get_sorted_list_by_proximity(
+inet_address_vector_replica_set snitch_base::get_sorted_list_by_proximity(
     inet_address address,
-    std::vector<inet_address>& unsorted_address) {
+    inet_address_vector_replica_set& unsorted_address) {
 
-    std::vector<inet_address>
+    inet_address_vector_replica_set
         preferred(unsorted_address.begin(), unsorted_address.end());
 
     sort_by_proximity(address, preferred);
@@ -61,7 +61,7 @@ std::vector<inet_address> snitch_base::get_sorted_list_by_proximity(
 }
 
 void snitch_base::sort_by_proximity(
-    inet_address address, std::vector<inet_address>& addresses) {
+    inet_address address, inet_address_vector_replica_set& addresses) {
 
     std::sort(addresses.begin(), addresses.end(),
               [this, &address](inet_address& a1, inet_address& a2)
@@ -122,9 +122,9 @@ int snitch_base::compare_endpoints(
 }
 
 bool snitch_base::is_worth_merging_for_range_query(
-    std::vector<inet_address>& merged,
-    std::vector<inet_address>& l1,
-    std::vector<inet_address>& l2) {
+    inet_address_vector_replica_set& merged,
+    inet_address_vector_replica_set& l1,
+    inet_address_vector_replica_set& l2) {
     //
     // Querying remote DC is likely to be an order of magnitude slower than
     // querying locally, so 2 queries to local nodes is likely to still be
@@ -136,7 +136,7 @@ bool snitch_base::is_worth_merging_for_range_query(
         : true;
 }
 
-bool snitch_base::has_remote_node(std::vector<inet_address>& l) {
+bool snitch_base::has_remote_node(inet_address_vector_replica_set& l) {
     for (auto&& ep : l) {
         if (_my_dc != get_datacenter(ep)) {
             return true;

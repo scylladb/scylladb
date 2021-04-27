@@ -415,7 +415,7 @@ void set_storage_service(http_context& ctx, routes& r) {
         auto keyspace = validate_keyspace(ctx, req->param);
         std::vector<ss::maplist_mapper> res;
         return make_ready_future<json::json_return_type>(stream_range_as_array(service::get_local_storage_service().get_range_to_address_map(keyspace),
-                [](const std::pair<dht::token_range, std::vector<gms::inet_address>>& entry){
+                [](const std::pair<dht::token_range, inet_address_vector_replica_set>& entry){
             ss::maplist_mapper m;
             if (entry.first.start()) {
                 m.key.push(entry.first.start().value().value().to_sstring());

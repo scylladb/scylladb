@@ -1189,7 +1189,7 @@ void messaging_service::register_mutation(std::function<future<rpc::no_wait_type
 future<> messaging_service::unregister_mutation() {
     return unregister_handler(netw::messaging_verb::MUTATION);
 }
-future<> messaging_service::send_mutation(msg_addr id, clock_type::time_point timeout, const frozen_mutation& fm, std::vector<inet_address> forward,
+future<> messaging_service::send_mutation(msg_addr id, clock_type::time_point timeout, const frozen_mutation& fm, inet_address_vector_replica_set forward,
     inet_address reply_to, unsigned shard, response_id_type response_id, std::optional<tracing::trace_info> trace_info) {
     return send_message_oneway_timeout(this, timeout, messaging_verb::MUTATION, std::move(id), fm, std::move(forward),
         std::move(reply_to), shard, std::move(response_id), std::move(trace_info));
@@ -1462,7 +1462,7 @@ future<> messaging_service::unregister_paxos_learn() {
     return unregister_handler(netw::messaging_verb::PAXOS_LEARN);
 }
 future<> messaging_service::send_paxos_learn(msg_addr id, clock_type::time_point timeout, const service::paxos::proposal& decision,
-    std::vector<inet_address> forward, inet_address reply_to, unsigned shard, response_id_type response_id,
+    inet_address_vector_replica_set forward, inet_address reply_to, unsigned shard, response_id_type response_id,
     std::optional<tracing::trace_info> trace_info) {
     return send_message_oneway_timeout(this, timeout, messaging_verb::PAXOS_LEARN, std::move(id), decision, std::move(forward),
         std::move(reply_to), shard, std::move(response_id), std::move(trace_info));
@@ -1488,7 +1488,7 @@ void messaging_service::register_hint_mutation(std::function<future<rpc::no_wait
 future<> messaging_service::unregister_hint_mutation() {
     return unregister_handler(netw::messaging_verb::HINT_MUTATION);
 }
-future<> messaging_service::send_hint_mutation(msg_addr id, clock_type::time_point timeout, const frozen_mutation& fm, std::vector<inet_address> forward,
+future<> messaging_service::send_hint_mutation(msg_addr id, clock_type::time_point timeout, const frozen_mutation& fm, inet_address_vector_replica_set forward,
         inet_address reply_to, unsigned shard, response_id_type response_id, std::optional<tracing::trace_info> trace_info) {
     return send_message_oneway_timeout(this, timeout, messaging_verb::HINT_MUTATION, std::move(id), fm, std::move(forward),
         std::move(reply_to), shard, std::move(response_id), std::move(trace_info));

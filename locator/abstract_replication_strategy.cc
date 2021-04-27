@@ -74,11 +74,11 @@ void abstract_replication_strategy::validate_replication_strategy(const sstring&
     }
 }
 
-std::vector<inet_address> abstract_replication_strategy::get_natural_endpoints(const token& search_token, can_yield can_yield) {
+inet_address_vector_replica_set abstract_replication_strategy::get_natural_endpoints(const token& search_token, can_yield can_yield) {
     return do_get_natural_endpoints(search_token, *_shared_token_metadata.get(), can_yield);
 }
 
-std::vector<inet_address> abstract_replication_strategy::do_get_natural_endpoints(const token& search_token, const token_metadata& tm, can_yield can_yield) {
+inet_address_vector_replica_set abstract_replication_strategy::do_get_natural_endpoints(const token& search_token, const token_metadata& tm, can_yield can_yield) {
     const token& key_token = tm.first_token(search_token);
     auto& cached_endpoints = get_cached_endpoints(tm);
     auto res = cached_endpoints.find(key_token);
@@ -94,9 +94,9 @@ std::vector<inet_address> abstract_replication_strategy::do_get_natural_endpoint
     return res->second;
 }
 
-std::vector<inet_address> abstract_replication_strategy::get_natural_endpoints_without_node_being_replaced(const token& search_token, can_yield can_yield) {
+inet_address_vector_replica_set abstract_replication_strategy::get_natural_endpoints_without_node_being_replaced(const token& search_token, can_yield can_yield) {
     token_metadata_ptr tmptr = _shared_token_metadata.get();
-    std::vector<gms::inet_address> natural_endpoints = do_get_natural_endpoints(search_token, *tmptr, can_yield);
+    inet_address_vector_replica_set natural_endpoints = do_get_natural_endpoints(search_token, *tmptr, can_yield);
     if (tmptr->is_any_node_being_replaced() &&
         allow_remove_node_being_replaced_from_natural_endpoints()) {
         // When a new node is started to replace an existing dead node, we want
@@ -132,7 +132,7 @@ void abstract_replication_strategy::validate_replication_factor(sstring rf) cons
     }
 }
 
-inline std::unordered_map<token, std::vector<inet_address>>&
+inline std::unordered_map<token, inet_address_vector_replica_set>&
 abstract_replication_strategy::get_cached_endpoints(const token_metadata& tm) {
     auto ring_version = tm.get_ring_version();
     if (_last_invalidated_ring_version != ring_version) {
@@ -272,9 +272,9 @@ abstract_replication_strategy::get_address_ranges(const token_metadata& tm, inet
     return ret;
 }
 
-std::unordered_map<dht::token_range, std::vector<inet_address>>
+std::unordered_map<dht::token_range, inet_address_vector_replica_set>
 abstract_replication_strategy::get_range_addresses(const token_metadata& tm, can_yield can_yield) const {
-    std::unordered_map<dht::token_range, std::vector<inet_address>> ret;
+    std::unordered_map<dht::token_range, inet_address_vector_replica_set> ret;
     for (auto& t : tm.sorted_tokens()) {
         dht::token_range_vector ranges = tm.get_primary_ranges_for(t);
         auto eps = calculate_natural_endpoints(t, tm, can_yield);

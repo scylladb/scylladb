@@ -48,7 +48,7 @@ struct ring_point {
     inet_address host;
 };
 
-void print_natural_endpoints(double point, const std::vector<inet_address> v) {
+void print_natural_endpoints(double point, const inet_address_vector_replica_set v) {
     testlog.debug("Natural endpoints for a token {}:", point);
     std::string str;
     std::ostringstream strm(str);
@@ -105,7 +105,7 @@ void strategy_sanity_check(
 
 void endpoints_check(
     abstract_replication_strategy* ars_ptr,
-    std::vector<inet_address>& endpoints) {
+    inet_address_vector_replica_set& endpoints) {
 
     // Check the total RF
     BOOST_CHECK(endpoints.size() == ars_ptr->get_replication_factor());
