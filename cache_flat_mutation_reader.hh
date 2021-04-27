@@ -245,9 +245,9 @@ void cache_flat_mutation_reader::touch_partition() {
 inline
 future<> cache_flat_mutation_reader::fill_buffer(db::timeout_clock::time_point timeout) {
     if (_state == state::before_static_row) {
+        touch_partition();
         auto after_static_row = [this, timeout] {
             if (_ck_ranges_curr == _ck_ranges_end) {
-                touch_partition();
                 finish_reader();
                 return make_ready_future<>();
             }
