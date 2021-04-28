@@ -229,7 +229,7 @@ unsigned
 shard_of(unsigned shard_count, unsigned sharding_ignore_msb_bits, const token& t) {
     switch (t._kind) {
         case token::kind::before_all_keys:
-            return 0;
+            return token::shard_of_minimum_token();
         case token::kind::after_all_keys:
             return shard_count - 1;
         case token::kind::key:
