@@ -61,7 +61,7 @@ std::ostream& operator<<(std::ostream& out, const scheduling_latency_measurer& s
 
 std::ostream&
 operator<<(std::ostream& os, const perf_result& result) {
-    fmt::print(os, "{:.2f} tps ({:5.1f} allocs/op, {:5.1f} tasks/op)",
-            result.throughput, result.mallocs_per_op, result.tasks_per_op);
+    fmt::print(os, "{:.2f} tps ({:5.1f} allocs/op, {:5.1f} tasks/op, {:7.0f} insns/op)",
+            result.throughput, result.mallocs_per_op, result.tasks_per_op, result.instructions_per_op);
     return os;
 }
