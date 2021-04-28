@@ -24,6 +24,15 @@
 #include <seastar/core/memory.hh>
 #include "seastarx.hh"
 
+
+uint64_t perf_mallocs() {
+    return memory::stats().mallocs();
+}
+
+uint64_t perf_tasks_processed() {
+    return engine().get_sched_stats().tasks_processed;
+}
+
 void scheduling_latency_measurer::schedule_tick() {
     seastar::schedule(make_task(default_scheduling_group(), [self = weak_from_this()] () mutable {
         if (self) {
@@ -48,15 +57,6 @@ std::ostream& operator<<(std::ostream& out, const scheduling_latency_measurer& s
         //to_ms(slm.histogram().percentile(0.9)),
         to_ms(slm.histogram().percentile(0.99)),
         to_ms(slm.max().count()));
-}
-
-
-executor_shard_stats
-executor_shard_stats_snapshot() {
-    return executor_shard_stats{
-        .allocations = memory::stats().mallocs(),
-        .tasks_executed = engine().get_sched_stats().tasks_processed,
-    };
 }
 
 std::ostream&

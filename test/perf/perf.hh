@@ -80,7 +80,8 @@ operator-(executor_shard_stats a, executor_shard_stats b) {
     return a;
 }
 
-executor_shard_stats executor_shard_stats_snapshot();
+uint64_t perf_tasks_processed();
+uint64_t perf_mallocs();
 
 
 // Drives concurrent and continuous execution of given asynchronous action
@@ -93,6 +94,7 @@ class executor {
     const unsigned _n_workers;
     uint64_t _count;
 private:
+    executor_shard_stats executor_shard_stats_snapshot();
     future<> run_worker() {
         auto stats_begin = executor_shard_stats_snapshot();
         return do_until([this] {
@@ -128,6 +130,15 @@ public:
         return make_ready_future<>();
     }
 };
+
+template <typename Func>
+executor_shard_stats
+executor<Func>::executor_shard_stats_snapshot() {
+    return executor_shard_stats{
+        .allocations = perf_mallocs(),
+        .tasks_executed = perf_tasks_processed(),
+    };
+}
 
 struct perf_result {
     double throughput;
