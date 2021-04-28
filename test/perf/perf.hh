@@ -128,7 +128,6 @@ public:
         }).then([this, stats_start] {
             _instructions_retired_counter.disable();
             auto stats_end = executor_shard_stats_snapshot();
-            stats_end.invocations = _count;
             return stats_end - stats_start;
         });
     }
@@ -142,6 +141,7 @@ template <typename Func>
 executor_shard_stats
 executor<Func>::executor_shard_stats_snapshot() {
     return executor_shard_stats{
+        .invocations = _count,
         .allocations = perf_mallocs(),
         .tasks_executed = perf_tasks_processed(),
         .instructions_retired = _instructions_retired_counter.read(),
