@@ -302,7 +302,21 @@ statement_restrictions::statement_restrictions(database& db,
                 } else if (has_token(restriction->expression)) {
                     _partition_key_restrictions = _partition_key_restrictions->merge_to(_schema, restriction);
                 } else {
-                    add_single_column_restriction(::static_pointer_cast<single_column_restriction>(restriction), for_view, allow_filtering);
+                    auto single = ::static_pointer_cast<single_column_restriction>(restriction);
+                    auto& def = single->get_column_def();
+                    if (def.is_partition_key()) {
+                        // View definition allows PK slices, because it's not a performance problem.
+                        if (has_slice(restriction->expression) && !allow_filtering && !for_view) {
+                            throw exceptions::invalid_request_exception(
+                                    "Only EQ and IN relation are supported on the partition key "
+                                    "(unless you use the token() function or allow filtering)");
+                        }
+                        _partition_key_restrictions = _partition_key_restrictions->merge_to(_schema, restriction);
+                    } else if (def.is_clustering_key()) {
+                        _clustering_columns_restrictions = _clustering_columns_restrictions->merge_to(_schema, restriction);
+                    } else {
+                        _nonprimary_key_restrictions->add_restriction(single);
+                    }
                 }
                 _where = _where.has_value() ? make_conjunction(std::move(*_where), restriction->expression) : restriction->expression;
             }
@@ -402,29 +416,6 @@ statement_restrictions::statement_restrictions(database& db,
 
     if (_uses_secondary_indexing && !(for_view || allow_filtering)) {
         validate_secondary_index_selections(selects_only_static_columns);
-    }
-}
-
-void statement_restrictions::add_single_column_restriction(::shared_ptr<single_column_restriction> restriction, bool for_view, bool allow_filtering) {
-    auto& def = restriction->get_column_def();
-    if (def.is_partition_key()) {
-        // A SELECT query may not request a slice (range) of partition keys
-        // without using token(). This is because there is no way to do this
-        // query efficiently: mumur3 turns a contiguous range of partition
-        // keys into tokens all over the token space.
-        // However, in a SELECT statement used to define a materialized view,
-        // such a slice is fine - it is used to check whether individual
-        // partitions, match, and does not present a performance problem.
-        assert(!has_token(restriction->expression));
-        if (has_slice(restriction->expression) && !for_view && !allow_filtering) {
-            throw exceptions::invalid_request_exception(
-                    "Only EQ and IN relation are supported on the partition key (unless you use the token() function or allow filtering)");
-        }
-        _partition_key_restrictions = _partition_key_restrictions->merge_to(_schema, restriction);
-    } else if (def.is_clustering_key()) {
-        _clustering_columns_restrictions = _clustering_columns_restrictions->merge_to(_schema, restriction);
-    } else {
-        _nonprimary_key_restrictions->add_restriction(restriction);
     }
 }
 

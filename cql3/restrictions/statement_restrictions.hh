@@ -126,8 +126,6 @@ public:
         bool for_view = false,
         bool allow_filtering = false);
 
-    void add_single_column_restriction(::shared_ptr<single_column_restriction> restriction, bool for_view, bool allow_filtering);
-public:
     const std::vector<::shared_ptr<restrictions>>& index_restrictions() const;
 
     /**
