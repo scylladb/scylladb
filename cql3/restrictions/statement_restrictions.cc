@@ -646,6 +646,19 @@ void error_if_exceeds(size_t size, size_t limit) {
 /// Computes partition-key ranges from expressions, which contains EQ/IN for every partition column.
 dht::partition_range_vector partition_ranges_from_singles(
         const std::vector<expr::expression>& expressions, const query_options& options, const schema& schema) {
+    if (std::ranges::all_of(expressions, [] (const expression& e) { return find(e, oper_t::EQ); })) {
+        // Special case to avoid a vector of vectors, which makes for a couple of extra allocations per request.
+        std::vector<managed_bytes> pk_value(schema.partition_key_size());
+        for (const auto& e : expressions) {
+            const auto col = std::get<column_value>(find(e, oper_t::EQ)->lhs).col;
+            const auto vals = std::get<value_list>(possible_lhs_values(col, e, options));
+            if (vals.empty()) { // Case of C=1 AND C=2.
+                return {};
+            }
+            pk_value[schema.position(*col)] = std::move(vals[0]);
+        }
+        return {range_from_bytes(schema, pk_value)};
+    }
     const size_t size_limit =
             options.get_cql_config().restrictions.partition_key_restrictions_max_cartesian_product_size;
     // Each element is a vector of that column's possible values:
