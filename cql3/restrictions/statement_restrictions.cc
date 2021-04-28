@@ -296,7 +296,15 @@ statement_restrictions::statement_restrictions(database& db,
                     throw exceptions::invalid_request_exception(format("restriction '{}' is only supported in materialized view creation", relation->to_string()));
                 }
             } else {
-                add_restriction(relation->to_restriction(db, schema, bound_names), for_view, allow_filtering);
+                const auto restriction = relation->to_restriction(db, schema, bound_names);
+                if (dynamic_pointer_cast<multi_column_restriction>(restriction)) {
+                    _clustering_columns_restrictions = _clustering_columns_restrictions->merge_to(_schema, restriction);
+                } else if (has_token(restriction->expression)) {
+                    _partition_key_restrictions = _partition_key_restrictions->merge_to(_schema, restriction);
+                } else {
+                    add_single_column_restriction(::static_pointer_cast<single_column_restriction>(restriction), for_view, allow_filtering);
+                }
+                _where = _where.has_value() ? make_conjunction(std::move(*_where), restriction->expression) : restriction->expression;
             }
         }
     }
@@ -395,17 +403,6 @@ statement_restrictions::statement_restrictions(database& db,
     if (_uses_secondary_indexing && !(for_view || allow_filtering)) {
         validate_secondary_index_selections(selects_only_static_columns);
     }
-}
-
-void statement_restrictions::add_restriction(::shared_ptr<restriction> restriction, bool for_view, bool allow_filtering) {
-    if (dynamic_pointer_cast<multi_column_restriction>(restriction)) {
-        _clustering_columns_restrictions = _clustering_columns_restrictions->merge_to(_schema, restriction);
-    } else if (has_token(restriction->expression)) {
-        _partition_key_restrictions = _partition_key_restrictions->merge_to(_schema, restriction);
-    } else {
-        add_single_column_restriction(::static_pointer_cast<single_column_restriction>(restriction), for_view, allow_filtering);
-    }
-    _where = _where.has_value() ? make_conjunction(std::move(*_where), restriction->expression) : restriction->expression;
 }
 
 void statement_restrictions::add_single_column_restriction(::shared_ptr<single_column_restriction> restriction, bool for_view, bool allow_filtering) {
