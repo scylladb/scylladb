@@ -474,17 +474,26 @@ static future<> stop_servers(std::array<std::unique_ptr<messaging_service::rpc_p
 }
 
 future<> messaging_service::stop_tls_server() {
-    return stop_servers(_server_tls);
+    mlogger.info("Stopping tls server");
+    return stop_servers(_server_tls).then( [] {
+        mlogger.info("Stopping tls server - Done");
+    });
 }
 
 future<> messaging_service::stop_nontls_server() {
-    return stop_servers(_server);
+    mlogger.info("Stopping nontls server");
+    return stop_servers(_server).then([] {
+        mlogger.info("Stopping nontls server - Done");
+    });
 }
 
 future<> messaging_service::stop_client() {
     return parallel_for_each(_clients, [] (auto& m) {
         return parallel_for_each(m, [] (std::pair<const msg_addr, shard_info>& c) {
-            return c.second.rpc_client->stop();
+            mlogger.info("Stopping client for address: {}", c.first);
+            return c.second.rpc_client->stop().then([addr = c.first] {
+                mlogger.info("Stopping client for address: {} - Done", addr);
+            });
         });
     });
 }
