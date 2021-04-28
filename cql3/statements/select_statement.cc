@@ -1103,7 +1103,7 @@ indexed_table_select_statement::do_execute(service::storage_proxy& proxy,
 }
 
 dht::partition_range_vector indexed_table_select_statement::get_partition_ranges_for_local_index_posting_list(const query_options& options) const {
-    return _restrictions->get_partition_key_restrictions()->bounds_ranges(options);
+    return _restrictions->get_partition_key_ranges(options);
 }
 
 dht::partition_range_vector indexed_table_select_statement::get_partition_ranges_for_global_index_posting_list(const query_options& options) const {
