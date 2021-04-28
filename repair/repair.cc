@@ -284,7 +284,7 @@ static std::vector<gms::inet_address> get_neighbors(database& db,
         ret.erase(it, ret.end());
     }
 
-    return ret;
+    return boost::copy_range<std::vector<gms::inet_address>>(std::move(ret));
 
 #if 0
     // Origin's ActiveRepairService.getNeighbors() also verifies that the
@@ -1686,7 +1686,7 @@ static future<> do_decommission_removenode_with_repair(seastar::sharded<database
                         // Choose the decommission node n3 to run repair to
                         // sync with one of the replica nodes, e.g., n1, in the
                         // local DC.
-                        neighbors_set = get_neighbors_set(new_eps);
+                        neighbors_set = get_neighbors_set(boost::copy_range<std::vector<inet_address>>(new_eps));
                     }
                 } else {
                     throw std::runtime_error(format("{}: keyspace={}, range={}, current_replica_endpoints={}, new_replica_endpoints={}, wrong nubmer of new owner node={}",

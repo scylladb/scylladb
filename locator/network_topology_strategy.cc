@@ -258,7 +258,7 @@ network_topology_strategy::calculate_natural_endpoints(
         }
     }
 
-    return std::move(replicas.get_vector());
+    return boost::copy_range<inet_address_vector_replica_set>(replicas.get_vector());
 }
 
 void network_topology_strategy::validate_options() const {

@@ -66,7 +66,7 @@ inet_address_vector_replica_set simple_strategy::calculate_natural_endpoints(con
         endpoints.push_back(*ep);
     }
 
-    return std::move(endpoints.get_vector());
+    return boost::copy_range<inet_address_vector_replica_set>(endpoints.get_vector());
 }
 
 size_t simple_strategy::get_replication_factor() const {
