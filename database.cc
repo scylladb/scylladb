@@ -760,9 +760,6 @@ void database::set_format_by_config() {
 }
 
 database::~database() {
-    _read_concurrency_sem.clear_inactive_reads();
-    _streaming_concurrency_sem.clear_inactive_reads();
-    _system_read_concurrency_sem.clear_inactive_reads();
 }
 
 void database::update_version(const utils::UUID& version) {
@@ -2015,6 +2012,13 @@ void database::revert_initial_system_read_concurrency_boost() {
 future<>
 database::stop() {
     assert(!_large_data_handler->running());
+
+    // Inactive reads might hold on to sstables, blocking the
+    // `sstables_manager::close()` calls below. No one will come back for these
+    // reads at this point so clear them before proceeding with the shutdown.
+    _read_concurrency_sem.clear_inactive_reads();
+    _streaming_concurrency_sem.clear_inactive_reads();
+    _system_read_concurrency_sem.clear_inactive_reads();
 
     // try to ensure that CL has done disk flushing
     future<> maybe_shutdown_commitlog = _commitlog != nullptr ? _commitlog->shutdown() : make_ready_future<>();
