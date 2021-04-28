@@ -48,8 +48,10 @@ unique_name.last_ms = 0
 def new_test_keyspace(cql, opts):
     keyspace = unique_name()
     cql.execute("CREATE KEYSPACE " + keyspace + " " + opts)
-    yield keyspace
-    cql.execute("DROP KEYSPACE " + keyspace)
+    try:
+        yield keyspace
+    finally:
+        cql.execute("DROP KEYSPACE " + keyspace)
 
 # A utility function for creating a new temporary table with a given schema.
 # It can be used in a "with", as:
@@ -59,8 +61,10 @@ def new_test_keyspace(cql, opts):
 def new_test_table(cql, keyspace, schema, extra=""):
     table = keyspace + "." + unique_name()
     cql.execute("CREATE TABLE " + table + "(" + schema + ")" + extra)
-    yield table
-    cql.execute("DROP TABLE " + table)
+    try:
+        yield table
+    finally:
+        cql.execute("DROP TABLE " + table)
 
 def project(column_name_string, rows):
     """Returns a list of column values from each of the rows."""

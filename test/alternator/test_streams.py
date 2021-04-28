@@ -71,19 +71,22 @@ def create_stream_test_table(dynamodb, StreamViewType=None):
                     { 'AttributeName': 'p', 'AttributeType': 'S' },
                     { 'AttributeName': 'c', 'AttributeType': 'S' },
         ])
-    yield table
-    while True:
-        try:
-            table.delete()
-            return
-        except ClientError as ce:
-            # if the table has a stream currently being created we cannot
-            # delete the table immediately. Again, only with real dynamo
-            if ce.response['Error']['Code'] == 'ResourceInUseException':
-                print('Could not delete table yet. Sleeping 5s.')
-                time.sleep(5)
-                continue;
-            raise
+    try:
+        yield table
+    finally:
+        print(f"Deleting table {table.name}")
+        while True:
+            try:
+                table.delete()
+                break
+            except ClientError as ce:
+                # if the table has a stream currently being created we cannot
+                # delete the table immediately. Again, only with real dynamo
+                if ce.response['Error']['Code'] == 'ResourceInUseException':
+                    print('Could not delete table yet. Sleeping 5s.')
+                    time.sleep(5)
+                    continue;
+                raise
 
 def wait_for_active_stream(dynamodbstreams, table, timeout=60):
     exp = time.process_time() + timeout

@@ -46,23 +46,29 @@ def create_table(cql, keyspace, schema):
     table_name = previously_used_table_names.pop()
     table = keyspace + "." + table_name
     cql.execute("CREATE TABLE " + table + " " + schema)
-    yield table
-    cql.execute("DROP TABLE " + table)
-    previously_used_table_names.append(table_name)
+    try:
+        yield table
+    finally:
+        cql.execute("DROP TABLE " + table)
+        previously_used_table_names.append(table_name)
 
 @contextmanager
 def create_type(cql, keyspace, cmd):
     type_name = keyspace + "." + unique_name()
     cql.execute("CREATE TYPE " + type_name + " " + cmd)
-    yield type_name
-    cql.execute("DROP TYPE " + type_name)
+    try:
+        yield type_name
+    finally:
+        cql.execute("DROP TYPE " + type_name)
 
 @contextmanager
 def create_function(cql, keyspace, arg):
     function_name = keyspace + "." + unique_name()
     cql.execute("CREATE FUNCTION " + function_name + " " + arg)
-    yield function_name
-    cql.execute("DROP FUNCTION " + function_name)
+    try:
+        yield function_name
+    finally:
+        cql.execute("DROP FUNCTION " + function_name)
 
 # utility function to substitute table name in command.
 # For easy conversion of Java code, support %s as used in Java. Also support
