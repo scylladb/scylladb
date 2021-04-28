@@ -56,6 +56,20 @@ def pytest_addoption(parser):
             " running against a local Scylla installation")
     parser.addoption("--url", action="store",
         help="communicate with given URL instead of defaults")
+    parser.addoption("--runveryslow", action="store_true",
+        help="run tests marked veryslow instead of skipping them")
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "veryslow: mark test as very slow to run")
+
+def pytest_collection_modifyitems(config, items):
+    if config.getoption("--runveryslow"):
+        # --runveryslow given in cli: do not skip veryslow tests
+        return
+    skip_veryslow = pytest.mark.skip(reason="need --runveryslow option to run")
+    for item in items:
+        if "veryslow" in item.keywords:
+            item.add_marker(skip_veryslow)
 
 # "dynamodb" fixture: set up client object for communicating with the DynamoDB
 # API. Currently this chooses either Amazon's DynamoDB in the default region
