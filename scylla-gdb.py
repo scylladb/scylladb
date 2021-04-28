@@ -2381,6 +2381,9 @@ class scylla_shard(gdb.Command):
         gdb.Command.__init__(self, 'scylla shard', gdb.COMMAND_USER, gdb.COMPLETE_NONE)
 
     def invoke(self, arg, from_tty):
+        if arg is None or arg == '':
+            gdb.write('Current shard is %d\n' % current_shard())
+            return
         id = int(arg)
         orig = gdb.selected_thread()
         for t in gdb.selected_inferior().threads():
