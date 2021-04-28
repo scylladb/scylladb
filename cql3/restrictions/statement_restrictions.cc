@@ -135,6 +135,7 @@ statement_restrictions::statement_restrictions(schema_ptr schema, bool allow_fil
     , _partition_key_restrictions(get_initial_partition_key_restrictions(allow_filtering))
     , _clustering_columns_restrictions(get_initial_clustering_key_restrictions(allow_filtering))
     , _nonprimary_key_restrictions(::make_shared<single_column_restrictions>(schema))
+    , _partition_range_is_simple(true)
 { }
 #if 0
 static const column_definition*
@@ -273,7 +274,7 @@ statement_restrictions::statement_restrictions(database& db,
 {
     if (!where_clause.empty()) {
         for (auto&& relation : where_clause) {
-            if (relation->get_operator() == cql3::expr::oper_t::IS_NOT) {
+            if (relation->get_operator() == expr::oper_t::IS_NOT) {
                 single_column_relation* r =
                         dynamic_cast<single_column_relation*>(relation.get());
                 // The "IS NOT NULL" restriction is only supported (and
@@ -319,6 +320,7 @@ statement_restrictions::statement_restrictions(database& db,
                     }
                 }
                 _where = _where.has_value() ? make_conjunction(std::move(*_where), restriction->expression) : restriction->expression;
+                _partition_range_is_simple &= !find(restriction->expression, expr::oper_t::IN);
             }
         }
     }
