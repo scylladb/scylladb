@@ -261,8 +261,7 @@ split_range_to_single_shard(const schema& s, const partition_range& pr, shard_id
             start_token,
             start_boundary,
             shard,
-            next_shard,
-            start_shard] () mutable {
+            next_shard] () mutable {
         if (pr.overlaps(partition_range(start_boundary, {}), cmp)
                 && !(start_boundary && start_boundary->value().token() == maximum_token())) {
             auto end_token = sharder.token_for_next_shard(start_token, next_shard);
