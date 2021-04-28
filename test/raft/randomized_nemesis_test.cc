@@ -281,7 +281,7 @@ public:
     }
 
     future<raft::snapshot_id> take_snapshot() override {
-        auto id = raft::snapshot_id{utils::make_random_uuid()};
+        auto id = raft::snapshot_id::create_random_id();
         _snapshots[id] = _val;
         co_return id;
     }

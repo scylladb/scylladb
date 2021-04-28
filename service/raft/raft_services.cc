@@ -133,7 +133,7 @@ seastar::future<> raft_services::init() {
     if (this_shard_id() == 0) {
         // FIXME: Server id will change each time scylla server restarts,
         // need to persist it or find a deterministic way to compute!
-        raft::server_id id = {.id = utils::make_random_uuid()};
+        raft::server_id id = raft::server_id::create_random_id();
         co_await add_server(id, create_schema_server(id));
     }
     uninit_rpc_verbs.cancel();
