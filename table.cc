@@ -364,7 +364,7 @@ void table::notify_bootstrap_or_replace_start() {
 
 void table::notify_bootstrap_or_replace_end() {
     _is_bootstrap_or_replace = false;
-    _compaction_manager.submit_offstrategy(this);
+    trigger_offstrategy_compaction();
 }
 
 void table::update_stats_for_new_sstable(uint64_t disk_space_used_by_sstable) noexcept {
@@ -966,6 +966,10 @@ void table::do_trigger_compaction() {
 
 future<> table::run_compaction(sstables::compaction_descriptor descriptor) {
     return compact_sstables(std::move(descriptor));
+}
+
+void table::trigger_offstrategy_compaction() {
+    _compaction_manager.submit_offstrategy(this);
 }
 
 future<> table::run_offstrategy_compaction() {

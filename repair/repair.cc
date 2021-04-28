@@ -1675,7 +1675,14 @@ future<> decommission_with_repair(seastar::sharded<database>& db, seastar::shard
 }
 
 future<> removenode_with_repair(seastar::sharded<database>& db, seastar::sharded<netw::messaging_service>& ms, locator::token_metadata_ptr tmptr, gms::inet_address leaving_node, shared_ptr<node_ops_info> ops) {
-    return do_decommission_removenode_with_repair(db, ms, std::move(tmptr), std::move(leaving_node), std::move(ops));
+    return do_decommission_removenode_with_repair(db, ms, std::move(tmptr), std::move(leaving_node), std::move(ops)).then([&db] {
+        rlogger.debug("Triggering off-strategy compaction for all non-system tables on removenode completion");
+        return db.invoke_on_all([](database &db) {
+            for (auto& table : db.get_non_system_column_families()) {
+                table->trigger_offstrategy_compaction();
+            }
+        });
+    });
 }
 
 future<> abort_repair_node_ops(utils::UUID ops_uuid) {
