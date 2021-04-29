@@ -593,11 +593,6 @@ db_context::builder::builder(service::storage_proxy& proxy, cdc::metadata& cdc_m
     : _proxy(proxy), _cdc_metadata(cdc_metadata)
 {}
 
-db_context::builder& db_context::builder::with_migration_notifier(service::migration_notifier& migration_notifier) {
-    _migration_notifier = migration_notifier;
-    return *this;
-}
-
 db_context db_context::builder::build() {
     return db_context{
         _proxy,

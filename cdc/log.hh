@@ -108,9 +108,6 @@ struct db_context final {
         std::optional<std::reference_wrapper<service::migration_notifier>> _migration_notifier;
     public:
         builder(service::storage_proxy& proxy, cdc::metadata&);
-
-        builder& with_migration_notifier(service::migration_notifier& migration_notifier);
-
         db_context build();
     };
 };
