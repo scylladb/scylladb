@@ -224,10 +224,12 @@ bool range_streamer::use_strict_sources_for_ranges(const sstring& keyspace_name)
     auto& strat = ks.get_replication_strategy();
     auto rf = strat.get_replication_factor();
     auto nr_nodes_in_ring = get_token_metadata().get_all_endpoints().size();
+    bool everywhere_topology = strat.get_type() == locator::replication_strategy_type::everywhere_topology;
     // Use strict when number of nodes in the ring is equal or more than RF
     auto strict = !_db.local().is_replacing()
            && _db.local().get_config().consistent_rangemovement()
            && !_tokens.empty()
+           && !everywhere_topology
            && nr_nodes_in_ring >= rf;
     logger.debug("use_strict_sources_for_ranges: ks={}, nr_nodes_in_ring={}, rf={}, strict={}",
             keyspace_name, nr_nodes_in_ring, rf, strict);
