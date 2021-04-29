@@ -107,6 +107,7 @@ private:
     std::optional<expr::expression> _where; ///< The entire WHERE clause.
     std::vector<expr::expression> _clustering_prefix_restrictions; ///< Parts of _where defining the clustering slice.
     std::vector<expr::expression> _partition_range_restrictions; ///< Parts of _where defining the partition range.
+    bool _partition_range_is_simple; ///< False iff _partition_range_restrictions imply a Cartesian product.
 
 public:
     /**
@@ -126,9 +127,6 @@ public:
         bool for_view = false,
         bool allow_filtering = false);
 
-    void add_restriction(::shared_ptr<restriction> restriction, bool for_view, bool allow_filtering);
-    void add_single_column_restriction(::shared_ptr<single_column_restriction> restriction, bool for_view, bool allow_filtering);
-public:
     const std::vector<::shared_ptr<restrictions>>& index_restrictions() const;
 
     /**

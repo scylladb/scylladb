@@ -135,6 +135,7 @@ statement_restrictions::statement_restrictions(schema_ptr schema, bool allow_fil
     , _partition_key_restrictions(get_initial_partition_key_restrictions(allow_filtering))
     , _clustering_columns_restrictions(get_initial_clustering_key_restrictions(allow_filtering))
     , _nonprimary_key_restrictions(::make_shared<single_column_restrictions>(schema))
+    , _partition_range_is_simple(true)
 { }
 #if 0
 static const column_definition*
@@ -273,7 +274,7 @@ statement_restrictions::statement_restrictions(database& db,
 {
     if (!where_clause.empty()) {
         for (auto&& relation : where_clause) {
-            if (relation->get_operator() == cql3::expr::oper_t::IS_NOT) {
+            if (relation->get_operator() == expr::oper_t::IS_NOT) {
                 single_column_relation* r =
                         dynamic_cast<single_column_relation*>(relation.get());
                 // The "IS NOT NULL" restriction is only supported (and
@@ -296,7 +297,30 @@ statement_restrictions::statement_restrictions(database& db,
                     throw exceptions::invalid_request_exception(format("restriction '{}' is only supported in materialized view creation", relation->to_string()));
                 }
             } else {
-                add_restriction(relation->to_restriction(db, schema, bound_names), for_view, allow_filtering);
+                const auto restriction = relation->to_restriction(db, schema, bound_names);
+                if (dynamic_pointer_cast<multi_column_restriction>(restriction)) {
+                    _clustering_columns_restrictions = _clustering_columns_restrictions->merge_to(_schema, restriction);
+                } else if (has_token(restriction->expression)) {
+                    _partition_key_restrictions = _partition_key_restrictions->merge_to(_schema, restriction);
+                } else {
+                    auto single = ::static_pointer_cast<single_column_restriction>(restriction);
+                    auto& def = single->get_column_def();
+                    if (def.is_partition_key()) {
+                        // View definition allows PK slices, because it's not a performance problem.
+                        if (has_slice(restriction->expression) && !allow_filtering && !for_view) {
+                            throw exceptions::invalid_request_exception(
+                                    "Only EQ and IN relation are supported on the partition key "
+                                    "(unless you use the token() function or allow filtering)");
+                        }
+                        _partition_key_restrictions = _partition_key_restrictions->merge_to(_schema, restriction);
+                    } else if (def.is_clustering_key()) {
+                        _clustering_columns_restrictions = _clustering_columns_restrictions->merge_to(_schema, restriction);
+                    } else {
+                        _nonprimary_key_restrictions->add_restriction(single);
+                    }
+                }
+                _where = _where.has_value() ? make_conjunction(std::move(*_where), restriction->expression) : restriction->expression;
+                _partition_range_is_simple &= !find(restriction->expression, expr::oper_t::IN);
             }
         }
     }
@@ -394,40 +418,6 @@ statement_restrictions::statement_restrictions(database& db,
 
     if (_uses_secondary_indexing && !(for_view || allow_filtering)) {
         validate_secondary_index_selections(selects_only_static_columns);
-    }
-}
-
-void statement_restrictions::add_restriction(::shared_ptr<restriction> restriction, bool for_view, bool allow_filtering) {
-    if (dynamic_pointer_cast<multi_column_restriction>(restriction)) {
-        _clustering_columns_restrictions = _clustering_columns_restrictions->merge_to(_schema, restriction);
-    } else if (has_token(restriction->expression)) {
-        _partition_key_restrictions = _partition_key_restrictions->merge_to(_schema, restriction);
-    } else {
-        add_single_column_restriction(::static_pointer_cast<single_column_restriction>(restriction), for_view, allow_filtering);
-    }
-    _where = _where.has_value() ? make_conjunction(std::move(*_where), restriction->expression) : restriction->expression;
-}
-
-void statement_restrictions::add_single_column_restriction(::shared_ptr<single_column_restriction> restriction, bool for_view, bool allow_filtering) {
-    auto& def = restriction->get_column_def();
-    if (def.is_partition_key()) {
-        // A SELECT query may not request a slice (range) of partition keys
-        // without using token(). This is because there is no way to do this
-        // query efficiently: mumur3 turns a contiguous range of partition
-        // keys into tokens all over the token space.
-        // However, in a SELECT statement used to define a materialized view,
-        // such a slice is fine - it is used to check whether individual
-        // partitions, match, and does not present a performance problem.
-        assert(!has_token(restriction->expression));
-        if (has_slice(restriction->expression) && !for_view && !allow_filtering) {
-            throw exceptions::invalid_request_exception(
-                    "Only EQ and IN relation are supported on the partition key (unless you use the token() function or allow filtering)");
-        }
-        _partition_key_restrictions = _partition_key_restrictions->merge_to(_schema, restriction);
-    } else if (def.is_clustering_key()) {
-        _clustering_columns_restrictions = _clustering_columns_restrictions->merge_to(_schema, restriction);
-    } else {
-        _nonprimary_key_restrictions->add_restriction(restriction);
     }
 }
 
@@ -646,19 +636,6 @@ void error_if_exceeds(size_t size, size_t limit) {
 /// Computes partition-key ranges from expressions, which contains EQ/IN for every partition column.
 dht::partition_range_vector partition_ranges_from_singles(
         const std::vector<expr::expression>& expressions, const query_options& options, const schema& schema) {
-    if (std::ranges::all_of(expressions, [] (const expression& e) { return find(e, oper_t::EQ); })) {
-        // Special case to avoid a vector of vectors, which makes for a couple of extra allocations per request.
-        std::vector<managed_bytes> pk_value(schema.partition_key_size());
-        for (const auto& e : expressions) {
-            const auto col = std::get<column_value>(find(e, oper_t::EQ)->lhs).col;
-            const auto vals = std::get<value_list>(possible_lhs_values(col, e, options));
-            if (vals.empty()) { // Case of C=1 AND C=2.
-                return {};
-            }
-            pk_value[schema.position(*col)] = std::move(vals[0]);
-        }
-        return {range_from_bytes(schema, pk_value)};
-    }
     const size_t size_limit =
             options.get_cql_config().restrictions.partition_key_restrictions_max_cartesian_product_size;
     // Each element is a vector of that column's possible values:
@@ -689,6 +666,22 @@ dht::partition_range_vector partition_ranges_from_singles(
     return ranges;
 }
 
+/// Computes partition-key ranges from EQ restrictions on each partition column.  Returns a single singleton range if
+/// the EQ restrictions are not mutually conflicting.  Otherwise, returns an empty vector.
+dht::partition_range_vector partition_ranges_from_EQs(
+        const std::vector<expr::expression>& eq_expressions, const query_options& options, const schema& schema) {
+    std::vector<managed_bytes> pk_value(schema.partition_key_size());
+    for (const auto& e : eq_expressions) {
+        const auto col = std::get<column_value>(find(e, oper_t::EQ)->lhs).col;
+        const auto vals = std::get<value_list>(possible_lhs_values(col, e, options));
+        if (vals.empty()) { // Case of C=1 AND C=2.
+            return {};
+        }
+        pk_value[schema.position(*col)] = std::move(vals[0]);
+    }
+    return {range_from_bytes(schema, pk_value)};
+}
+
 } // anonymous namespace
 
 dht::partition_range_vector statement_restrictions::get_partition_key_ranges(const query_options& options) const {
@@ -702,6 +695,9 @@ dht::partition_range_vector statement_restrictions::get_partition_key_ranges(con
                     format("Unexpected size of token restrictions: {}", _partition_range_restrictions.size()));
         }
         return partition_ranges_from_token(_partition_range_restrictions[0], options);
+    } else if (_partition_range_is_simple) {
+        // Special case to avoid extra allocations required for a Cartesian product.
+        return partition_ranges_from_EQs(_partition_range_restrictions, options, *_schema);
     }
     return partition_ranges_from_singles(_partition_range_restrictions, options, *_schema);
 }
