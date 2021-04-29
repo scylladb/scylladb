@@ -35,7 +35,10 @@ sstring service_level_controller::default_service_level_name = "default";
 
 service_level_controller::service_level_controller(sharded<auth::service>& auth_service, service_level_options default_service_level_config):
         _sl_data_accessor(nullptr),
-        _auth_service(auth_service)
+        _auth_service(auth_service),
+        _last_successful_config_update(seastar::lowres_clock::now()),
+        _logged_intervals(0)
+
 {
     if (this_shard_id() == global_controller) {
         _global_controller_db = std::make_unique<global_controller_data>();
@@ -124,13 +127,12 @@ future<> service_level_controller::update_service_levels_from_distributed_data()
     return with_semaphore(_global_controller_db->notifications_serializer, 1, [this] () {
         return async([this] () {
             service_levels_info service_levels;
-            try {
-                service_levels = _sl_data_accessor->get_service_levels().get0();
-            } catch (...) {
-                sl_logger.warn("update_service_levels_from_distributed_data: an error occurred"
-                        " while retrieving configuration ({})", std::current_exception());
-                return;
-            }
+            // The next statement can throw, but that's fine since we would like the caller
+            // to be able to agreggate those failures and only report when it is critical or noteworthy.
+            // one common reason for failure is because one of the nodes comes down and before this node
+            // detects it the scan query done inside this call is failing.
+            service_levels = _sl_data_accessor->get_service_levels().get0();
+
             service_levels_info service_levels_for_add_or_update;
             service_levels_info service_levels_for_delete;
 
@@ -255,17 +257,28 @@ void service_level_controller::update_from_distributed_data(std::chrono::duratio
     }
     if (_global_controller_db->distributed_data_update.available()) {
         sl_logger.info("update_from_distributed_data: starting configuration polling loop");
+        _logged_intervals = 0;
         _global_controller_db->distributed_data_update = repeat([this, interval] {
             return sleep_abortable<steady_clock_type>(std::chrono::duration_cast<steady_clock_type::duration>(interval),
                     _global_controller_db->dist_data_update_aborter).then_wrapped([this] (future<>&& f) {
                 try {
                     f.get();
-                    return update_service_levels_from_distributed_data().then_wrapped([] (future<>&& f){
+                    return update_service_levels_from_distributed_data().then_wrapped([this] (future<>&& f){
                         try {
                             f.get();
+                            _last_successful_config_update = seastar::lowres_clock::now();
+                            _logged_intervals = 0;
                         } catch (...) {
-                            sl_logger.warn("update_from_distributed_data: exception occurred in distributed"
-                                    " data check loop: {}", std::current_exception());
+                            using namespace std::literals::chrono_literals;
+                            constexpr auto age_resolution = 90s;
+                            constexpr unsigned error_threshold = 10; // Change the logging level to error after 10 age_resolution intervals.
+                            unsigned configuration_age = (seastar::lowres_clock::now() - _last_successful_config_update) / age_resolution;
+                            if (configuration_age > _logged_intervals) {
+                                log_level ll = configuration_age >= error_threshold ? log_level::error : log_level::warn;
+                                sl_logger.log(ll, "update_from_distributed_data: failed to update configuration for more than  {} seconds : {}",
+                                        (age_resolution*configuration_age).count(), std::current_exception());
+                                _logged_intervals++;
+                            }
                         }
                         return stop_iteration::no;
                     });
