@@ -210,7 +210,7 @@ public:
     future<> perform_sstable_upgrade(database& db, column_family* cf, bool exclude_current_version);
 
     // Submit a column family to be scrubbed and wait for its termination.
-    future<> perform_sstable_scrub(column_family* cf, bool skip_corrupted);
+    future<> perform_sstable_scrub(column_family* cf, sstables::compaction_options::scrub::mode scrub_mode);
 
     // Submit a column family for major compaction.
     future<> submit_major_compaction(column_family* cf);

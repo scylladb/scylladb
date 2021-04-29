@@ -122,6 +122,19 @@ std::ostream& operator<<(std::ostream& os, compaction_type type) {
     return os;
 }
 
+std::string_view to_string(compaction_options::scrub::mode scrub_mode) {
+    switch (scrub_mode) {
+        case compaction_options::scrub::mode::abort:
+            return "abort";
+        case compaction_options::scrub::mode::skip:
+            return "skip";
+    }
+}
+
+std::ostream& operator<<(std::ostream& os, compaction_options::scrub::mode scrub_mode) {
+    return os << to_string(scrub_mode);
+}
+
 std::ostream& operator<<(std::ostream& os, pretty_printed_data_size data) {
     static constexpr const char* suffixes[] = { " bytes", "kB", "MB", "GB", "TB", "PB" };
 
@@ -1147,14 +1160,14 @@ public:
 
 class scrub_compaction final : public regular_compaction {
     class reader : public flat_mutation_reader::impl {
-        bool _skip_corrupted;
+        compaction_options::scrub::mode _scrub_mode;
         flat_mutation_reader _reader;
         mutation_fragment_stream_validator _validator;
         bool _skip_to_next_partition = false;
 
     private:
         void maybe_abort_scrub() {
-            if (!_skip_corrupted) {
+            if (_scrub_mode == compaction_options::scrub::mode::abort) {
                 throw compaction_stop_exception(_schema->ks_name(), _schema->cf_name(), "scrub compaction found invalid data", false);
             }
         }
@@ -1270,9 +1283,9 @@ class scrub_compaction final : public regular_compaction {
         }
 
     public:
-        reader(flat_mutation_reader underlying, bool skip_corrupted)
+        reader(flat_mutation_reader underlying, compaction_options::scrub::mode scrub_mode)
             : impl(underlying.schema(), underlying.permit())
-            , _skip_corrupted(skip_corrupted)
+            , _scrub_mode(scrub_mode)
             , _reader(std::move(underlying))
             , _validator(*_schema)
         { }
@@ -1320,30 +1333,34 @@ class scrub_compaction final : public regular_compaction {
 
 private:
     compaction_options::scrub _options;
+    std::string _scrub_start_description;
+    std::string _scrub_finish_description;
 
 public:
     scrub_compaction(column_family& cf, compaction_descriptor descriptor, compaction_options::scrub options)
         : regular_compaction(cf, std::move(descriptor))
-        , _options(options) {
+        , _options(options)
+        , _scrub_start_description(fmt::format("Scrubbing in {} mode", _options.operation_mode))
+        , _scrub_finish_description(fmt::format("Finished scrubbing in {} mode", _options.operation_mode)) {
     }
 
     std::string_view report_start_desc() const override {
-        return "Scrubbing";
+        return _scrub_start_description;
     }
 
     std::string_view report_finish_desc() const override {
-        return "Finished scrubbing";
+        return _scrub_finish_description;
     }
 
     flat_mutation_reader make_sstable_reader() const override {
-        return make_flat_mutation_reader<reader>(regular_compaction::make_sstable_reader(), _options.skip_corrupted);
+        return make_flat_mutation_reader<reader>(regular_compaction::make_sstable_reader(), _options.operation_mode);
     }
 
-    friend flat_mutation_reader make_scrubbing_reader(flat_mutation_reader rd, bool skip_corrupted);
+    friend flat_mutation_reader make_scrubbing_reader(flat_mutation_reader rd, compaction_options::scrub::mode scrub_mode);
 };
 
-flat_mutation_reader make_scrubbing_reader(flat_mutation_reader rd, bool skip_corrupted) {
-    return make_flat_mutation_reader<scrub_compaction::reader>(std::move(rd), skip_corrupted);
+flat_mutation_reader make_scrubbing_reader(flat_mutation_reader rd, compaction_options::scrub::mode scrub_mode) {
+    return make_flat_mutation_reader<scrub_compaction::reader>(std::move(rd), scrub_mode);
 }
 
 class resharding_compaction final : public compaction {

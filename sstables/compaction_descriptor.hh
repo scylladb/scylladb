@@ -73,7 +73,11 @@ public:
         std::reference_wrapper<database> db;
     };
     struct scrub {
-        bool skip_corrupted;
+        enum class mode {
+            abort, // abort scrub on the first sign of corruption
+            skip, // skip corrupt data, including range of rows and/or partitions that are out-of-order
+        };
+        mode operation_mode = mode::abort;
     };
     struct reshard {
     };
@@ -110,8 +114,8 @@ public:
         return compaction_options(upgrade{db});
     }
 
-    static compaction_options make_scrub(bool skip_corrupted) {
-        return compaction_options(scrub{skip_corrupted});
+    static compaction_options make_scrub(scrub::mode mode) {
+        return compaction_options(scrub{mode});
     }
 
     template <typename... Visitor>
@@ -121,6 +125,9 @@ public:
 
     compaction_type type() const;
 };
+
+std::string_view to_string(compaction_options::scrub::mode);
+std::ostream& operator<<(std::ostream& os, compaction_options::scrub::mode scrub_mode);
 
 struct compaction_descriptor {
     // List of sstables to be compacted.

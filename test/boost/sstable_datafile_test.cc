@@ -5453,18 +5453,18 @@ SEASTAR_TEST_CASE(sstable_scrub_test) {
             // Make sure we wrote what we though we wrote.
             verify_fragments(sst, corrupt_fragments);
 
-            testlog.info("Scrub with --skip-corrupted=false");
+            testlog.info("Scrub in abort mode");
 
-            // We expect the scrub with skip_corrupted=false to stop on the first invalid fragment.
-            compaction_manager.perform_sstable_scrub(table.get(), false).get();
+            // We expect the scrub with mode=srub::mode::abort to stop on the first invalid fragment.
+            compaction_manager.perform_sstable_scrub(table.get(), sstables::compaction_options::scrub::mode::abort).get();
 
             BOOST_REQUIRE(table->in_strategy_sstables().size() == 1);
             verify_fragments(sst, corrupt_fragments);
 
-            testlog.info("Scrub with --skip-corrupted=true");
+            testlog.info("Scrub in skip mode");
 
-            // We expect the scrub with skip_corrupted=true to get rid of all invalid data.
-            compaction_manager.perform_sstable_scrub(table.get(), true).get();
+            // We expect the scrub with mode=srub::mode::skip to get rid of all invalid data.
+            compaction_manager.perform_sstable_scrub(table.get(), sstables::compaction_options::scrub::mode::skip).get();
 
             BOOST_REQUIRE(table->in_strategy_sstables().size() == 1);
             BOOST_REQUIRE(table->in_strategy_sstables().front() != sst);
@@ -5551,7 +5551,8 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_reader_test) {
     add_fragment(make_clustering_row(3));
     scrubbed_fragments.emplace_back(*schema, permit, partition_end{}); // missing partition-end - at EOS
 
-    auto r = assert_that(make_scrubbing_reader(make_flat_mutation_reader_from_fragments(schema, permit, std::move(corrupt_fragments)), true));
+    auto r = assert_that(make_scrubbing_reader(make_flat_mutation_reader_from_fragments(schema, permit, std::move(corrupt_fragments)),
+                compaction_options::scrub::mode::skip));
     for (const auto& mf : scrubbed_fragments) {
        testlog.info("Expecting {}", mutation_fragment::printer(*schema, mf));
        r.produces(*schema, mf);
