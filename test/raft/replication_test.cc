@@ -605,6 +605,24 @@ future<std::unordered_set<size_t>> change_configuration(std::vector<std::pair<st
     co_return new_config;
 }
 
+// Add consecutive integer entries to a leader
+future<> add_entries(std::vector<std::pair<std::unique_ptr<raft::server>, state_machine*>>& rafts,
+        size_t start, size_t end, size_t& leader) {
+    size_t value = start;
+    for (size_t value = start; value != end;) {
+        try {
+            co_await rafts[leader].first->add_entry(create_command(value), raft::wait_type::committed);
+            value++;
+        } catch (raft::not_a_leader& e) {
+            // leader stepped down, update with new leader if present
+            if (e.leader != raft::server_id{}) {
+                leader = e.leader.id.get_least_significant_bits() - 1;
+            }
+        } catch (raft::commit_status_unknown& e) {
+        }
+    }
+}
+
 // Run test case (name, nodes, leader, initial logs, updates)
 future<> run_test(test_case test, bool prevote, bool packet_drops) {
     std::vector<initial_state> states(test.nodes);       // Server initial states
@@ -677,13 +695,7 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
             auto n = std::get<entries>(update);
             BOOST_CHECK_MESSAGE(in_configuration.contains(leader),
                     format("Current leader {} is not in configuration", leader));
-            std::vector<int> values(n);
-            std::iota(values.begin(), values.end(), next_val);
-            std::vector<raft::command> commands = create_commands<int>(values);
-            co_await seastar::do_for_each(commands, [&] (raft::command cmd) {
-                tlogger.debug("Adding command entry on leader {}", leader);
-                return rafts[leader].first->add_entry(std::move(cmd), raft::wait_type::committed);
-            });
+            co_await add_entries(rafts, next_val, next_val + n, leader);
             next_val += n;
             co_await wait_log(rafts, connected, in_configuration, leader);
         } else if (std::holds_alternative<new_leader>(update)) {
@@ -727,7 +739,6 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
                 leader = co_await free_election(rafts);
             }
             restart_tickers(tickers);
-
         } else if (std::holds_alternative<set_config>(update)) {
             co_await wait_log(rafts, connected, in_configuration, leader);
             auto sc = std::get<set_config>(update);
@@ -738,7 +749,6 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
 
     // Reconnect and bring all nodes back into configuration, if needed
     connected->connect_all();
-
     if (in_configuration.size() < test.nodes) {
         set_config sc;
         for (size_t s = 0; s < test.nodes; ++s) {
@@ -751,14 +761,7 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
 
     BOOST_TEST_MESSAGE("Appending remaining values");
     if (next_val < test.total_values) {
-        // Send remaining updates
-        std::vector<int> values(test.total_values - next_val);
-        std::iota(values.begin(), values.end(), next_val);
-        std::vector<raft::command> commands = create_commands<int>(values);
-        tlogger.debug("Adding remaining {} entries on leader {}", values.size(), leader);
-        co_await seastar::do_for_each(commands, [&] (raft::command cmd) {
-            return rafts[leader].first->add_entry(std::move(cmd), raft::wait_type::committed);
-        });
+        co_await add_entries(rafts, next_val, test.total_values, leader);
     }
 
     // Wait for all state_machine s to finish processing commands
