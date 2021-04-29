@@ -2371,9 +2371,13 @@ class scylla_apply(gdb.Command):
         gdb.Command.__init__(self, 'scylla apply', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
 
     def invoke(self, arg, from_tty):
-        for r in reactors():
-            gdb.write("\nShard %d: \n\n" % (r['_id']))
-            gdb.execute(arg)
+        orig = gdb.selected_thread()
+        try:
+            for r in reactors():
+                gdb.write("\nShard %d: \n\n" % (r['_id']))
+                gdb.execute(arg)
+        finally:
+            orig.switch()
 
 
 class scylla_shard(gdb.Command):
