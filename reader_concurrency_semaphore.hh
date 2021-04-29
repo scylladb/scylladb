@@ -293,4 +293,6 @@ public:
     }
 
     void broken(std::exception_ptr ex);
+
+    std::string dump_diagnostics() const;
 };
