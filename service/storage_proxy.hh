@@ -66,6 +66,7 @@
 #include "cdc/stats.hh"
 #include "locator/token_metadata.hh"
 #include "db/hints/host_filter.hh"
+#include "utils/small_vector.hh"
 
 class reconcilable_result;
 class frozen_mutation_and_schema;
@@ -199,7 +200,7 @@ private:
         ~unique_response_handler();
         response_id_type release();
     };
-    using unique_response_handler_vector = std::vector<unique_response_handler>;
+    using unique_response_handler_vector = utils::small_vector<unique_response_handler, 1>;
     using response_handlers_map = std::unordered_map<response_id_type, ::shared_ptr<abstract_write_response_handler>>;
 
 public:
