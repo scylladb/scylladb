@@ -762,7 +762,7 @@
          "operations":[
             {
                "method":"GET",
-               "summary":"Scrub (deserialize + reserialize at the latest version, skipping bad rows if any) the given keyspace. If columnFamilies array is empty, all CFs are scrubbed. Scrubbed CFs will be snapshotted first, if disableSnapshot is false",
+               "summary":"Scrub (deserialize + reserialize at the latest version, resolving corruptions if any) the given keyspace. If columnFamilies array is empty, all CFs are scrubbed. Scrubbed CFs will be snapshotted first, if disableSnapshot is false. Scrub has the following modes: Abort (default) - abort scrub if corruption is detected; Skip (same as `skip_corrupted=true`) skip over corrupt data, omitting them from the output.",
                "type": "long",
                "nickname":"scrub",
                "produces":[
@@ -783,6 +783,18 @@
                      "required":false,
                      "allowMultiple":false,
                      "type":"boolean",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"scrub_mode",
+                     "description":"How to handle corrupt data (overrides 'skip_corrupted'); ",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "enum":[
+                        "ABORT",
+                        "SKIP"
+                     ],
                      "paramType":"query"
                   },
                   {
