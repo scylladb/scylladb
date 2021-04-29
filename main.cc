@@ -1146,7 +1146,7 @@ int main(int ac, char** av) {
 
             supervisor::notify("starting CDC log service");
             static sharded<cdc::cdc_service> cdc;
-            cdc.start(std::ref(proxy), sharded_parameter(get_cdc_metadata, std::ref(cdc_generation_service))).get();
+            cdc.start(std::ref(proxy), sharded_parameter(get_cdc_metadata, std::ref(cdc_generation_service)), std::ref(mm_notifier)).get();
             auto stop_cdc_service = defer_verbose_shutdown("cdc log service", [] {
                 cdc.stop().get();
             });

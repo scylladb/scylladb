@@ -41,7 +41,6 @@
 #include "schema.hh"
 #include "schema_builder.hh"
 #include "service/migration_listener.hh"
-#include "service/storage_service.hh"
 #include "service/storage_proxy.hh"
 #include "types/tuple.hh"
 #include "cql3/statements/select_statement.hh"
@@ -282,8 +281,8 @@ private:
     }
 };
 
-cdc::cdc_service::cdc_service(service::storage_proxy& proxy, cdc::metadata& cdc_metadata)
-    : cdc_service(db_context::builder(proxy, cdc_metadata).build())
+cdc::cdc_service::cdc_service(service::storage_proxy& proxy, cdc::metadata& cdc_metadata, service::migration_notifier& notifier)
+    : cdc_service(db_context::builder(proxy, cdc_metadata, notifier).build())
 {}
 
 cdc::cdc_service::cdc_service(db_context ctxt)
@@ -589,14 +588,14 @@ static schema_ptr create_log_schema(const schema& s, std::optional<utils::UUID> 
     return b.build();
 }
 
-db_context::builder::builder(service::storage_proxy& proxy, cdc::metadata& cdc_metadata)
-    : _proxy(proxy), _cdc_metadata(cdc_metadata)
+db_context::builder::builder(service::storage_proxy& proxy, cdc::metadata& cdc_metadata, service::migration_notifier& notifier)
+    : _proxy(proxy), _cdc_metadata(cdc_metadata), _migration_notifier(notifier)
 {}
 
 db_context db_context::builder::build() {
     return db_context{
         _proxy,
-        _migration_notifier ? _migration_notifier->get() : service::get_local_storage_service().get_migration_notifier(),
+        _migration_notifier,
         _cdc_metadata,
     };
 }
