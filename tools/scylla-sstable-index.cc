@@ -23,6 +23,7 @@
 #include <seastar/core/app-template.hh>
 #include <seastar/core/seastar.hh>
 #include <seastar/util/log.hh>
+#include <seastar/util/closeable.hh>
 
 #include "schema_builder.hh"
 #include "db/marshal/type_parser.hh"
@@ -167,6 +168,7 @@ Note: UDT is not supported for now.
             db::config dbcfg;
             gms::feature_service feature_service(gms::feature_config_from_db_config(dbcfg));
             sstables::sstables_manager sst_man(large_data_handler, dbcfg, feature_service);
+            auto close_sst_man = deferred_close(sst_man);
 
             auto ed = sstables::entry_descriptor::make_descriptor(dir_path.c_str(), sst_filename.c_str());
             auto sst = sst_man.make_sstable(primary_key_schema, dir_path.c_str(), ed.generation, ed.version, ed.format);
@@ -182,8 +184,6 @@ Note: UDT is not supported for now.
             }
 
             sst = {};
-
-            sst_man.close().get();
         });
     });
 }
