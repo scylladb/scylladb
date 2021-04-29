@@ -44,6 +44,8 @@
 #include "sstables/sstable_mutation_reader.hh"
 #include "sstables/kl/reader_impl.hh"
 
+#include <boost/range/combine.hpp>
+
 using namespace sstables;
 using row_consumer = sstables::kl::row_consumer;
 using data_consume_rows_context = sstables::kl::data_consume_rows_context;

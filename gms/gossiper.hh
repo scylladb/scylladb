@@ -56,7 +56,6 @@
 #include "utils/loading_shared_values.hh"
 #include "utils/in.hh"
 #include "message/messaging_service_fwd.hh"
-#include <boost/algorithm/string.hpp>
 #include <optional>
 #include <algorithm>
 #include <chrono>

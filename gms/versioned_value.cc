@@ -38,6 +38,9 @@
 #include "gms/versioned_value.hh"
 #include "message/messaging_service.hh"
 
+#include <boost/algorithm/string/split.hpp>
+#include <boost/algorithm/string/classification.hpp>
+
 namespace gms {
 
 static_assert(std::is_nothrow_default_constructible_v<versioned_value>);

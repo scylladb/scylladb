@@ -20,6 +20,8 @@
  */
 
 #include <boost/algorithm/string/join.hpp>
+#include <boost/range/algorithm/sort.hpp>
+#include <boost/range/algorithm/unique.hpp>
 
 #include "cql3/cql3_type.hh"
 #include "mutation.hh"

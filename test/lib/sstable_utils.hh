@@ -28,8 +28,6 @@
 #include "sstables/writer.hh"
 #include "memtable-sstable.hh"
 #include "dht/i_partitioner.hh"
-#include <boost/range/irange.hpp>
-#include <boost/range/adaptor/map.hpp>
 #include "test/lib/test_services.hh"
 #include "test/lib/sstable_test_env.hh"
 #include "test/lib/reader_permit.hh"

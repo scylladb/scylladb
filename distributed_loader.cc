@@ -37,6 +37,7 @@
 #include "db/view/view_update_checks.hh"
 #include <unordered_map>
 #include <boost/range/adaptor/map.hpp>
+#include <boost/range/algorithm/min_element.hpp>
 #include "db/view/view_update_generator.hh"
 
 extern logging::logger dblog;

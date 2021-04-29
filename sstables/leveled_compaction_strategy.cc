@@ -23,6 +23,8 @@
 #include <algorithm>
 #include <ranges>
 
+#include <boost/range/algorithm/remove_if.hpp>
+
 namespace sstables {
 
 compaction_descriptor leveled_compaction_strategy::get_sstables_for_compaction(column_family& cfs, std::vector<sstables::shared_sstable> candidates) {

@@ -27,6 +27,8 @@
 #include "seastarx.hh"
 #include "db/config.hh"
 
+#include <boost/algorithm/string/trim.hpp>
+
 logging::logger startlog("init");
 
 void init_gossiper(sharded<gms::gossiper>& gossiper

@@ -24,6 +24,7 @@
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/algorithm/copy.hpp>
 #include <boost/range/algorithm_ext/push_back.hpp>
+#include <boost/range/combine.hpp>
 #include "mutation_query.hh"
 #include "hashers.hh"
 #include "xx_hasher.hh"

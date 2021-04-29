@@ -48,6 +48,7 @@
 #include "schema.hh"
 #include "sstable_set.hh"
 #include <boost/range/algorithm/find.hpp>
+#include <boost/range/algorithm/remove_if.hpp>
 #include <boost/range/adaptors.hpp>
 #include <boost/algorithm/cxx11/any_of.hpp>
 #include "size_tiered_compaction_strategy.hh"

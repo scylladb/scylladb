@@ -1,6 +1,9 @@
 #include "locator/ec2_snitch.hh"
 #include <seastar/core/seastar.hh>
 
+#include <boost/algorithm/string/classification.hpp>
+#include <boost/algorithm/string/split.hpp>
+
 namespace locator {
 
 ec2_snitch::ec2_snitch(const sstring& fname, unsigned io_cpuid) : production_snitch_base(fname) {

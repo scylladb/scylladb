@@ -87,6 +87,9 @@
 #include "utils/generation-number.hh"
 #include <seastar/core/coroutine.hh>
 
+#include <boost/algorithm/string/split.hpp>
+#include <boost/algorithm/string/classification.hpp>
+
 using token = dht::token;
 using UUID = utils::UUID;
 using inet_address = gms::inet_address;

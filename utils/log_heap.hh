@@ -23,7 +23,6 @@
 #pragma once
 
 #include <boost/intrusive/list.hpp>
-#include <boost/range/algorithm/max_element.hpp>
 #include <limits>
 #include <seastar/core/bitops.hh>
 #include "seastarx.hh"

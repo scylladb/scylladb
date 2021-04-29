@@ -21,8 +21,6 @@
 
 #pragma once
 
-#include <boost/locale/encoding_utf.hpp>
-
 #include "server.hh"
 #include "utils/utf8.hh"
 #include "utils/reusable_buffer.hh"

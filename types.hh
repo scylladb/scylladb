@@ -39,10 +39,6 @@
 #include "to_string.hh"
 #include "duration.hh"
 #include "marshal_exception.hh"
-#include <boost/range/adaptor/transformed.hpp>
-#include <boost/range/algorithm/for_each.hpp>
-#include <boost/range/numeric.hpp>
-#include <boost/range/combine.hpp>
 #include <seastar/net/ip.hh>
 #include <seastar/net/inet_address.hh>
 #include <seastar/util/backtrace.hh>

@@ -59,6 +59,8 @@
 #include "service/priority_manager.hh"
 #include "utils/ranges.hh"
 
+#include <boost/range/algorithm/sort.hpp>
+
 static schema_ptr make_schema() {
     return schema_builder("ks", "cf")
         .with_column("pk", bytes_type, column_kind::partition_key)

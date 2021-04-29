@@ -22,6 +22,8 @@
 #include "range_tombstone.hh"
 #include "mutation_fragment.hh"
 
+#include <boost/range/algorithm/upper_bound.hpp>
+
 std::ostream& operator<<(std::ostream& out, const range_tombstone& rt) {
     if (rt) {
         return out << "{range_tombstone: start=" << rt.start_bound() << ", end=" << rt.end_bound() << ", " << rt.tomb << "}";

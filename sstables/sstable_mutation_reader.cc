@@ -25,6 +25,8 @@
 #include "concrete_types.hh"
 #include "utils/fragment_range.hh"
 
+#include <boost/range/algorithm/stable_partition.hpp>
+
 namespace sstables {
 
 atomic_cell make_counter_cell(api::timestamp_type timestamp, fragmented_temporary_buffer::view cell_value) {

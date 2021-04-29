@@ -26,6 +26,7 @@
 #include <seastar/core/thread.hh>
 
 #include <boost/range/algorithm/sort.hpp>
+#include <boost/range/algorithm/random_shuffle.hpp>
 
 #include <seastar/testing/test_case.hh>
 #include "test/lib/test_services.hh"

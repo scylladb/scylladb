@@ -21,7 +21,6 @@
 
 #include <vector>
 #include <map>
-#include <boost/range/numeric.hpp>
 #include "sstables/compaction_strategy_impl.hh"
 #include "sstables/sstable_set.hh"
 #include "sstables/compaction.hh"

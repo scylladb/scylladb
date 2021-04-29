@@ -58,6 +58,7 @@
 #include "alternator/rmw_operation.hh"
 #include <seastar/core/coroutine.hh>
 #include <boost/range/adaptors.hpp>
+#include <boost/range/algorithm/find_end.hpp>
 
 logging::logger elogger("alternator-executor");
 

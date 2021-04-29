@@ -37,6 +37,8 @@
 
 #include <experimental/source_location>
 
+#include <boost/range/algorithm/sort.hpp>
+
 const sstring KEYSPACE_NAME = "multishard_mutation_query_test";
 
 static uint64_t aggregate_querier_cache_stat(distributed<database>& db, uint64_t query::querier_cache::stats::*stat) {

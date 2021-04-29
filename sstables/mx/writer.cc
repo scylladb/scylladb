@@ -34,6 +34,8 @@
 #include <functional>
 #include <boost/iterator/iterator_facade.hpp>
 #include <boost/container/static_vector.hpp>
+#include <boost/range/adaptor/indexed.hpp>
+#include <boost/range/algorithm/stable_partition.hpp>
 
 logging::logger slogger("mc_writer");
 

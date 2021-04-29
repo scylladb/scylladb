@@ -46,6 +46,7 @@
 #include "size_tiered_compaction_strategy.hh"
 #include "range.hh"
 #include "log.hh"
+#include <boost/range/algorithm/sort.hpp>
 #include <boost/range/algorithm/partial_sort.hpp>
 #include "service/priority_manager.hh"
 

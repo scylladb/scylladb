@@ -39,6 +39,8 @@
 #include "test/lib/random_schema.hh"
 #include "test/lib/log.hh"
 
+#include <boost/range/adaptor/map.hpp>
+
 using namespace mutation_writer;
 
 struct generate_error_tag { };

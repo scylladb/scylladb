@@ -29,7 +29,6 @@
 #include <seastar/core/bitops.hh>
 #include <boost/intrusive/unordered_set.hpp>
 #include <boost/iterator/transform_iterator.hpp>
-#include <boost/lambda/bind.hpp>
 #include "seastarx.hh"
 
 namespace bi = boost::intrusive;

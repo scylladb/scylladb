@@ -22,6 +22,7 @@
 #pragma once
 
 #include <boost/range/adaptor/transformed.hpp>
+#include <boost/range/numeric.hpp>
 
 #include "query-request.hh"
 #include "query-result.hh"

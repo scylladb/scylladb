@@ -29,6 +29,7 @@
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/adaptor/filtered.hpp>
 #include <boost/algorithm/string/trim_all.hpp>
+#include <boost/algorithm/string/case_conv.hpp>
 #include <boost/functional/hash.hpp>
 #include "service/storage_service.hh"
 #include "service/load_meter.hh"

@@ -23,6 +23,8 @@
 #include "mutation.hh"
 #include "combine.hh"
 
+#include <boost/range/algorithm/sort.hpp>
+
 std::ostream& operator<<(std::ostream& os, const counter_id& id) {
     return os << id.to_uuid();
 }

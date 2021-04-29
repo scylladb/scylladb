@@ -46,6 +46,10 @@
 #include "utils/fb_utilities.hh"
 #include "db/config.hh"
 
+#include <boost/algorithm/string/trim.hpp>
+#include <boost/algorithm/string/classification.hpp>
+#include <boost/algorithm/string/split.hpp>
+
 namespace locator {
 
 production_snitch_base::production_snitch_base(const sstring& prop_file_name)
