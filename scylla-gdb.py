@@ -647,6 +647,19 @@ class sstring_printer(gdb.printing.PrettyPrinter):
         return 'string'
 
 
+class string_view_printer(gdb.printing.PrettyPrinter):
+    'print an std::string_view'
+
+    def __init__(self, val):
+        self.val = val
+
+    def to_string(self):
+        return str(self.val['_M_str'])[0:int(self.val['_M_len'])]
+
+    def display_hint(self):
+        return 'string'
+
+
 class managed_bytes_printer(gdb.printing.PrettyPrinter):
     'print a managed_bytes'
 
@@ -826,6 +839,7 @@ class ring_position_printer(gdb.printing.PrettyPrinter):
 def build_pretty_printer():
     pp = gdb.printing.RegexpCollectionPrettyPrinter('scylla')
     pp.add_printer('sstring', r'^seastar::basic_sstring<char,.*>$', sstring_printer)
+    pp.add_printer('std::string_view', r'^std::basic_string_view<char,.*>$', string_view_printer)
     pp.add_printer('bytes', r'^seastar::basic_sstring<signed char, unsigned int, 31, false>$', sstring_printer)
     pp.add_printer('managed_bytes', r'^managed_bytes$', managed_bytes_printer)
     pp.add_printer('partition_entry', r'^partition_entry$', partition_entry_printer)
