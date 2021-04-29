@@ -1518,6 +1518,18 @@ public:
         auto process_cell = [&, this] (const column_definition& cdef) {
             if (auto current = get_col_from_row_state(row_state, cdef)) {
                 _builder->set_value(image_ck, cdef, *current);
+            } else if (op == operation::pre_image) {
+                // Cell is NULL. 
+                // If we generate the preimage,
+                // we should also fill in the deleted column.
+                // Otherwise the user will not be able
+                // to discern whether a value in the preimage
+                // is NULL or it was not included in the
+                // preimage ('full' preimage disabled).
+                // If we generate the postimage,
+                // we don't have to fill in the deleted column,
+                // as all postimages are full.
+                _builder->set_deleted(image_ck, cdef);
             }
         };
 
