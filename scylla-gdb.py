@@ -77,7 +77,7 @@ class intrusive_list:
         return self.__nonzero__()
 
     def __len__(self):
-        return len(list(self))
+        return len(list(iter(self)))
 
 
 class intrusive_slist:
