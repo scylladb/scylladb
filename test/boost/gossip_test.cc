@@ -85,7 +85,7 @@ SEASTAR_TEST_CASE(test_boot_shutdown){
         service::storage_service_config sscfg;
         sscfg.available_memory =  memory::stats().total_memory();
 
-        service::get_storage_service().start(std::ref(abort_sources), std::ref(db), std::ref(gms::get_gossiper()), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(feature_service), sscfg, std::ref(mm_notif), std::ref(migration_manager), std::ref(token_metadata), std::ref(_messaging), std::ref(cdc_generation_service), true).get();
+        service::get_storage_service().start(std::ref(abort_sources), std::ref(db), std::ref(gms::get_gossiper()), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(feature_service), sscfg, std::ref(migration_manager), std::ref(token_metadata), std::ref(_messaging), std::ref(cdc_generation_service), true).get();
         auto stop_ss = defer([&] { service::get_storage_service().stop().get(); });
 
         sharded<semaphore> sst_dir_semaphore;
