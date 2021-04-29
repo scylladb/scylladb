@@ -468,4 +468,19 @@ public:
     }
 };
 
+template <typename T, size_t N>
+std::ostream& operator<<(std::ostream& os, const utils::small_vector<T, N>& v) {
+    os << "{";
+    bool first = true;
+    for (auto&& e : v) {
+        if (!first) {
+            os << ", ";
+        }
+        first = false;
+        os << e;
+    }
+    os << "}";
+    return os;
+}
+
 }
