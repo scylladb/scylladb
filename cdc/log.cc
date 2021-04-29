@@ -282,7 +282,7 @@ private:
 };
 
 cdc::cdc_service::cdc_service(service::storage_proxy& proxy, cdc::metadata& cdc_metadata, service::migration_notifier& notifier)
-    : cdc_service(db_context::builder(proxy, cdc_metadata, notifier).build())
+    : cdc_service(db_context(proxy, cdc_metadata, notifier))
 {}
 
 cdc::cdc_service::cdc_service(db_context ctxt)
@@ -586,18 +586,6 @@ static schema_ptr create_log_schema(const schema& s, std::optional<utils::UUID> 
     }
 
     return b.build();
-}
-
-db_context::builder::builder(service::storage_proxy& proxy, cdc::metadata& cdc_metadata, service::migration_notifier& notifier)
-    : _proxy(proxy), _cdc_metadata(cdc_metadata), _migration_notifier(notifier)
-{}
-
-db_context db_context::builder::build() {
-    return db_context{
-        _proxy,
-        _migration_notifier,
-        _cdc_metadata,
-    };
 }
 
 // iterators for collection merge

@@ -101,15 +101,8 @@ struct db_context final {
     service::storage_proxy& _proxy;
     service::migration_notifier& _migration_notifier;
     cdc::metadata& _cdc_metadata;
-
-    class builder final {
-        service::storage_proxy& _proxy;
-        cdc::metadata& _cdc_metadata;
-        service::migration_notifier& _migration_notifier;
-    public:
-        builder(service::storage_proxy& proxy, cdc::metadata&, service::migration_notifier&);
-        db_context build();
-    };
+    db_context(service::storage_proxy& proxy, cdc::metadata& cdc_meta, service::migration_notifier& notifier) noexcept
+        : _proxy(proxy), _migration_notifier(notifier), _cdc_metadata(cdc_meta) {}
 };
 
 // cdc log table operation
