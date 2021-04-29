@@ -1485,6 +1485,9 @@ public:
     void generate_image(operation op, const clustering_key* ck, const one_kind_column_set* affected_columns) {
         assert(op == operation::pre_image || op == operation::post_image);
 
+        // assert that post_image is always full
+        assert(!(op == operation::post_image && affected_columns));
+
         assert(_builder);
 
         const auto kind = ck ? column_kind::regular_column : column_kind::static_column;
