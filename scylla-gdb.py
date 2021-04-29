@@ -326,6 +326,7 @@ class std_map:
         vt = container_type.template_argument(1)
         self.value_type = gdb.lookup_type('::std::pair<{} const, {} >'.format(str(kt), str(vt)))
         self.root = ref['_M_t']['_M_impl']['_M_header']['_M_parent']
+        self.size = int(ref['_M_t']['_M_impl']['_M_node_count'])
 
     def __visit(self, node):
         if node:
@@ -341,6 +342,9 @@ class std_map:
     def __iter__(self):
         for n in self.__visit(self.root):
             yield n
+
+    def __len__(self):
+        return self.size
 
 
 class intrusive_set_external_comparator:
