@@ -87,7 +87,7 @@ public:
     // Start raft server instance, store in the map of raft servers and
     // initialize the associated timer to tick the server.
     future<> add_server(raft::server_id id, create_server_result srv);
-    unsigned shard_for_group(uint64_t group_id) const;
+    unsigned shard_for_group(const raft::group_id& gid) const;
 
     // Map raft server_id to inet_address to be consumed by `messaging_service`
     gms::inet_address get_inet_address(raft::server_id id) const;

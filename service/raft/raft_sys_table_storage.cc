@@ -34,8 +34,8 @@
 #include <seastar/core/loop.hh>
 #include <seastar/core/coroutine.hh>
 
-raft_sys_table_storage::raft_sys_table_storage(cql3::query_processor& qp, uint64_t group_id)
-    : _group_id(group_id)
+raft_sys_table_storage::raft_sys_table_storage(cql3::query_processor& qp, raft::group_id gid)
+    : _group_id(std::move(gid))
     , _qp(qp)
     , _dummy_query_state(service::client_state::for_internal_calls(), empty_service_permit())
     , _pending_op_fut(make_ready_future<>())
@@ -53,13 +53,13 @@ future<> raft_sys_table_storage::store_term_and_vote(raft::term_t term, raft::se
             db::system_keyspace::RAFT);
         return _qp.execute_internal(
             store_cql,
-            {int64_t(_group_id), int64_t(term), vote.id}).discard_result();
+            {_group_id.id, int64_t(term), vote.id}).discard_result();
     });
 }
 
 future<std::pair<raft::term_t, raft::server_id>> raft_sys_table_storage::load_term_and_vote() {
     static const auto load_cql = format("SELECT vote_term, vote FROM system.{} WHERE group_id = ?", db::system_keyspace::RAFT);
-    ::shared_ptr<cql3::untyped_result_set> rs = co_await _qp.execute_internal(load_cql, {int64_t(_group_id)});
+    ::shared_ptr<cql3::untyped_result_set> rs = co_await _qp.execute_internal(load_cql, {_group_id.id});
     if (rs->empty()) {
         co_return std::pair(raft::term_t(), raft::server_id());
     }
@@ -71,7 +71,7 @@ future<std::pair<raft::term_t, raft::server_id>> raft_sys_table_storage::load_te
 
 future<raft::log_entries> raft_sys_table_storage::load_log() {
     static const auto load_cql = format("SELECT term, \"index\", data FROM system.{} WHERE group_id = ?", db::system_keyspace::RAFT);
-    ::shared_ptr<cql3::untyped_result_set> rs = co_await _qp.execute_internal(load_cql, {int64_t(_group_id)});
+    ::shared_ptr<cql3::untyped_result_set> rs = co_await _qp.execute_internal(load_cql, {_group_id.id});
 
     raft::log_entries log;
     for (const cql3::untyped_result_set_row& row : *rs) {
@@ -92,7 +92,7 @@ future<raft::log_entries> raft_sys_table_storage::load_log() {
 
 future<raft::snapshot> raft_sys_table_storage::load_snapshot() {
     static const auto load_id_cql = format("SELECT snapshot_id FROM system.{} WHERE group_id = ?", db::system_keyspace::RAFT);
-    ::shared_ptr<cql3::untyped_result_set> id_rs = co_await _qp.execute_internal(load_id_cql, {int64_t(_group_id)});
+    ::shared_ptr<cql3::untyped_result_set> id_rs = co_await _qp.execute_internal(load_id_cql, {_group_id.id});
     if (id_rs->empty()) {
         co_return raft::snapshot();
     }
@@ -101,7 +101,7 @@ future<raft::snapshot> raft_sys_table_storage::load_snapshot() {
 
     static const auto load_snp_info_cql = format("SELECT idx, term, config FROM system.{} WHERE group_id = ? AND id = ?",
         db::system_keyspace::RAFT_SNAPSHOTS);
-    ::shared_ptr<cql3::untyped_result_set> snp_rs = co_await _qp.execute_internal(load_snp_info_cql, {int64_t(_group_id), snapshot_id});
+    ::shared_ptr<cql3::untyped_result_set> snp_rs = co_await _qp.execute_internal(load_snp_info_cql, {_group_id.id, snapshot_id});
     const auto& snp_row = snp_rs->one(); // should be only one matching row for a given snapshot id
     auto snp_cfg = snp_row.get_blob("config");
     auto in = ser::as_input_stream(snp_cfg);
@@ -121,14 +121,14 @@ future<> raft_sys_table_storage::store_snapshot(const raft::snapshot& snap, size
             db::system_keyspace::RAFT_SNAPSHOTS);
         co_await _qp.execute_internal(
             store_snp_cql,
-            {int64_t(_group_id), snap.id.id, int64_t(snap.idx), int64_t(snap.term), data_value(ser::serialize_to_buffer<bytes>(snap.config))}
+            {_group_id.id, snap.id.id, int64_t(snap.idx), int64_t(snap.term), data_value(ser::serialize_to_buffer<bytes>(snap.config))}
         );
         // Also update the latest snapshot id in `system.raft` table
         static const auto store_latest_id_cql = format("INSERT INTO system.{} (group_id, snapshot_id) VALUES (?, ?)",
             db::system_keyspace::RAFT);
         co_await _qp.execute_internal(
             store_latest_id_cql,
-            {int64_t(_group_id), snap.id.id}
+            {_group_id.id, snap.id.id}
         );
         if (preserve_log_entries > snap.idx) {
             co_return;
@@ -164,7 +164,7 @@ future<> raft_sys_table_storage::do_store_log_entries(const std::vector<raft::lo
 
         // don't include serialized "data" here since it will require to linearize the stream
         std::vector<cql3::raw_value> single_stmt_values = {
-            cql3::raw_value::make_value(long_type->decompose(int64_t(_group_id))),
+            cql3::raw_value::make_value(long_type->decompose(_group_id.id)),
             cql3::raw_value::make_value(long_type->decompose(int64_t(eptr->term))),
             cql3::raw_value::make_value(long_type->decompose(int64_t(eptr->idx)))
         };
@@ -215,7 +215,7 @@ future<> raft_sys_table_storage::truncate_log(raft::index_t idx) {
     return execute_with_linearization_point([this, idx] {
         static const auto truncate_cql = format("DELETE FROM system.{} WHERE group_id = ? AND \"index\" >= ?",
             db::system_keyspace::RAFT); 
-        return _qp.execute_internal(truncate_cql, {int64_t(_group_id), int64_t(idx)}).discard_result();
+        return _qp.execute_internal(truncate_cql, {_group_id.id, int64_t(idx)}).discard_result();
     });
 }
 
@@ -227,7 +227,7 @@ future<> raft_sys_table_storage::abort() {
 
 future<> raft_sys_table_storage::truncate_log_tail(raft::index_t idx) {
     static const auto truncate_cql = format("DELETE FROM system.{} WHERE group_id = ? AND \"index\" <= ?", db::system_keyspace::RAFT);
-    return _qp.execute_internal(truncate_cql, {int64_t(_group_id), int64_t(idx)}).discard_result();
+    return _qp.execute_internal(truncate_cql, {_group_id.id, int64_t(idx)}).discard_result();
 }
 
 future<> raft_sys_table_storage::execute_with_linearization_point(std::function<future<>()> f) {

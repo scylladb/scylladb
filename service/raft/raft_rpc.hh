@@ -22,6 +22,7 @@
 
 #include "raft/raft.hh"
 #include "message/messaging_service_fwd.hh"
+#include "utils/UUID.hh"
 
 class raft_services;
 
@@ -30,13 +31,13 @@ class raft_services;
 // Uses `netw::messaging_service` as an underlying implementation for
 // actually sending RPC messages.
 class raft_rpc : public raft::rpc {
-    uint64_t _group_id;
+    raft::group_id _group_id;
     raft::server_id _server_id;
     netw::messaging_service& _messaging;
     raft_services& _raft_services;
 
 public:
-    explicit raft_rpc(netw::messaging_service& ms, raft_services& raft_srvs, uint64_t group_id, raft::server_id srv_id);
+    explicit raft_rpc(netw::messaging_service& ms, raft_services& raft_srvs, raft::group_id gid, raft::server_id srv_id);
 
     future<raft::snapshot_reply> send_snapshot(raft::server_id server_id, const raft::install_snapshot& snap) override;
     future<> send_append_entries(raft::server_id id, const raft::append_request& append_request) override;

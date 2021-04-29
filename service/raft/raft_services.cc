@@ -44,8 +44,8 @@ raft_services::raft_services(netw::messaging_service& ms, gms::gossiper& gs, cql
 void raft_services::init_rpc_verbs() {
     auto handle_raft_rpc = [this] (
             const rpc::client_info& cinfo,
-            uint64_t group_id, raft::server_id from, raft::server_id dst, auto handler) {
-        return container().invoke_on(shard_for_group(group_id),
+            const raft::group_id& gid, raft::server_id from, raft::server_id dst, auto handler) {
+        return container().invoke_on(shard_for_group(gid),
                 [addr = netw::messaging_service::get_source(cinfo).addr, from, dst, handler] (raft_services& self) mutable {
             // Update the address mappings for the rpc module
             // in case the sender is encountered for the first time
@@ -59,47 +59,47 @@ void raft_services::init_rpc_verbs() {
     };
 
     _ms.register_raft_send_snapshot([handle_raft_rpc] (const rpc::client_info& cinfo, rpc::opt_time_point timeout,
-            uint64_t group_id, raft::server_id from, raft::server_id dst, raft::install_snapshot snp) mutable {
-        return handle_raft_rpc(cinfo, group_id, from, dst, [from, snp = std::move(snp)] (raft_rpc& rpc) mutable {
+            raft::group_id gid, raft::server_id from, raft::server_id dst, raft::install_snapshot snp) mutable {
+        return handle_raft_rpc(cinfo, gid, from, dst, [from, snp = std::move(snp)] (raft_rpc& rpc) mutable {
             return rpc.apply_snapshot(std::move(from), std::move(snp));
         });
     });
 
     _ms.register_raft_append_entries([handle_raft_rpc] (const rpc::client_info& cinfo, rpc::opt_time_point timeout,
-           uint64_t group_id, raft::server_id from, raft::server_id dst, raft::append_request append_request) mutable {
-        return handle_raft_rpc(cinfo, group_id, from, dst, [from, append_request = std::move(append_request)] (raft_rpc& rpc) mutable {
+           raft::group_id gid, raft::server_id from, raft::server_id dst, raft::append_request append_request) mutable {
+        return handle_raft_rpc(cinfo, gid, from, dst, [from, append_request = std::move(append_request)] (raft_rpc& rpc) mutable {
             rpc.append_entries(std::move(from), std::move(append_request));
             return make_ready_future<>();
         });
     });
 
     _ms.register_raft_append_entries_reply([handle_raft_rpc] (const rpc::client_info& cinfo, rpc::opt_time_point timeout,
-            uint64_t group_id, raft::server_id from, raft::server_id dst, raft::append_reply reply) mutable {
-        return handle_raft_rpc(cinfo, group_id, from, dst, [from, reply = std::move(reply)] (raft_rpc& rpc) mutable {
+            raft::group_id gid, raft::server_id from, raft::server_id dst, raft::append_reply reply) mutable {
+        return handle_raft_rpc(cinfo, gid, from, dst, [from, reply = std::move(reply)] (raft_rpc& rpc) mutable {
             rpc.append_entries_reply(std::move(from), std::move(reply));
             return make_ready_future<>();
         });
     });
 
     _ms.register_raft_vote_request([handle_raft_rpc] (const rpc::client_info& cinfo, rpc::opt_time_point timeout,
-            uint64_t group_id, raft::server_id from, raft::server_id dst, raft::vote_request vote_request) mutable {
-        return handle_raft_rpc(cinfo, group_id, from, dst, [from, vote_request] (raft_rpc& rpc) mutable {
+            raft::group_id gid, raft::server_id from, raft::server_id dst, raft::vote_request vote_request) mutable {
+        return handle_raft_rpc(cinfo, gid, from, dst, [from, vote_request] (raft_rpc& rpc) mutable {
             rpc.request_vote(std::move(from), std::move(vote_request));
             return make_ready_future<>();
         });
     });
 
     _ms.register_raft_vote_reply([handle_raft_rpc] (const rpc::client_info& cinfo, rpc::opt_time_point timeout,
-            uint64_t group_id, raft::server_id from, raft::server_id dst, raft::vote_reply vote_reply) mutable {
-        return handle_raft_rpc(cinfo, group_id, from, dst, [from, vote_reply] (raft_rpc& rpc) mutable {
+            raft::group_id gid, raft::server_id from, raft::server_id dst, raft::vote_reply vote_reply) mutable {
+        return handle_raft_rpc(cinfo, gid, from, dst, [from, vote_reply] (raft_rpc& rpc) mutable {
             rpc.request_vote_reply(std::move(from), std::move(vote_reply));
             return make_ready_future<>();
         });
     });
 
     _ms.register_raft_timeout_now([handle_raft_rpc] (const rpc::client_info& cinfo, rpc::opt_time_point timeout,
-            uint64_t group_id, raft::server_id from, raft::server_id dst, raft::timeout_now timeout_now) mutable {
-        return handle_raft_rpc(cinfo, group_id, from, dst, [from, timeout_now] (raft_rpc& rpc) mutable {
+            raft::group_id gid, raft::server_id from, raft::server_id dst, raft::timeout_now timeout_now) mutable {
+        return handle_raft_rpc(cinfo, gid, from, dst, [from, timeout_now] (raft_rpc& rpc) mutable {
             rpc.timeout_now_request(std::move(from), std::move(timeout_now));
             return make_ready_future<>();
         });
@@ -154,9 +154,9 @@ raft_rpc& raft_services::get_rpc(raft::server_id id) {
 }
 
 raft_services::create_server_result raft_services::create_schema_server(raft::server_id id) {
-    auto rpc = std::make_unique<raft_rpc>(_ms, *this, schema_raft_state_machine::group_id, id);
+    auto rpc = std::make_unique<raft_rpc>(_ms, *this, schema_raft_state_machine::gid, id);
     auto& rpc_ref = *rpc;
-    auto storage = std::make_unique<raft_sys_table_storage>(_qp, schema_raft_state_machine::group_id);
+    auto storage = std::make_unique<raft_sys_table_storage>(_qp, schema_raft_state_machine::gid);
     auto state_machine = std::make_unique<schema_raft_state_machine>();
 
     return std::pair(raft::create_server(id,
@@ -200,12 +200,12 @@ future<> raft_services::add_server(raft::server_id id, create_server_result srv)
     ticker_from_map.arm_periodic(tick_interval);
 }
 
-unsigned raft_services::shard_for_group(uint64_t group_id) const {
-    if (group_id == schema_raft_state_machine::group_id) {
+unsigned raft_services::shard_for_group(const raft::group_id& gid) const {
+    if (gid == schema_raft_state_machine::gid) {
         return 0; // schema raft server is always owned by shard 0
     }
     // We haven't settled yet on how to organize and manage (group_id -> shard_id) mapping
-    on_internal_error(rslog, format("Could not map raft group id {} to a corresponding shard id", group_id));
+    on_internal_error(rslog, format("Could not map raft group id {} to a corresponding shard id", gid));
 }
 
 gms::inet_address raft_services::get_inet_address(raft::server_id id) const {

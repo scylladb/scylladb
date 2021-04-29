@@ -44,6 +44,8 @@ extern seastar::logger logger;
 using snapshot_id = internal::tagged_id<struct snapshot_id_tag>;
 // Unique identifier of a server in a Raft group
 using server_id = internal::tagged_id<struct server_id_tag>;
+// Unique identifier of a Raft group
+using group_id = raft::internal::tagged_id<struct group_id_tag>;
 
 // This type represents the raft term
 using term_t = internal::tagged_uint64<struct term_tag>;
