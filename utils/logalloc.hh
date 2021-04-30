@@ -688,7 +688,7 @@ struct reclaim_lock {
 // should reserve up front in order to not cause allocation failures.
 class allocating_section {
     // Do not decay below these minimal values
-    static constexpr size_t s_min_lsa_reserve = 10;
+    static constexpr size_t s_min_lsa_reserve = 1;
     static constexpr size_t s_min_std_reserve = 1024;
     static constexpr uint64_t s_bytes_per_decay = 10'000'000'000;
     static constexpr unsigned s_segments_per_decay = 100'000;
