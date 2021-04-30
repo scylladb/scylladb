@@ -91,9 +91,8 @@ public:
     class resource_units;
 
     enum class state {
-        registered, // read is registered, but didn't attempt admission yet
         waiting, // waiting for admission
-        admitted,
+        active,
     };
 
     class impl;

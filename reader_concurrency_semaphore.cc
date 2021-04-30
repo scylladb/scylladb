@@ -76,7 +76,7 @@ class reader_permit::impl : public boost::intrusive::list_base_hook<boost::intru
     sstring _op_name;
     std::string_view _op_name_view;
     reader_resources _resources;
-    reader_permit::state _state = reader_permit::state::registered;
+    reader_permit::state _state = reader_permit::state::active;
 
 public:
     struct value_tag {};
@@ -124,22 +124,17 @@ public:
     }
 
     void on_admission() {
-        _state = reader_permit::state::admitted;
-        _semaphore.consume(_resources);
+        _state = reader_permit::state::active;
     }
 
     void consume(reader_resources res) {
         _resources += res;
-        if (_state == reader_permit::state::admitted) {
-            _semaphore.consume(res);
-        }
+        _semaphore.consume(res);
     }
 
     void signal(reader_resources res) {
         _resources -= res;
-        if (_state == reader_permit::state::admitted) {
-            _semaphore.signal(res);
-        }
+        _semaphore.signal(res);
     }
 
     reader_resources resources() const {
@@ -206,14 +201,11 @@ reader_resources reader_permit::consumed_resources() const {
 
 std::ostream& operator<<(std::ostream& os, reader_permit::state s) {
     switch (s) {
-        case reader_permit::state::registered:
-            os << "registered";
-            break;
         case reader_permit::state::waiting:
             os << "waiting";
             break;
-        case reader_permit::state::admitted:
-            os << "admitted";
+        case reader_permit::state::active:
+            os << "active";
             break;
     }
     return os;
@@ -250,7 +242,7 @@ struct permit_group_key_hash {
 
 using permit_groups = std::unordered_map<permit_group_key, permit_stats, permit_group_key_hash>;
 
-static permit_stats do_dump_reader_permit_diagnostics(std::ostream& os, const permit_groups& permits, reader_permit::state state, bool sort_by_memory) {
+static permit_stats do_dump_reader_permit_diagnostics(std::ostream& os, const permit_groups& permits, reader_permit::state state) {
     struct permit_summary {
         const schema* s;
         std::string_view op_name;
@@ -266,25 +258,17 @@ static permit_stats do_dump_reader_permit_diagnostics(std::ostream& os, const pe
         }
     }
 
-    std::ranges::sort(permit_summaries, [sort_by_memory] (const permit_summary& a, const permit_summary& b) {
-        if (sort_by_memory) {
-            return a.memory < b.memory;
-        } else {
-            return a.count < b.count;
-        }
+    std::ranges::sort(permit_summaries, [] (const permit_summary& a, const permit_summary& b) {
+        return a.memory < b.memory;
     });
 
     permit_stats total;
 
-    auto print_line = [&os, sort_by_memory] (auto col1, auto col2, auto col3) {
-        if (sort_by_memory) {
-            fmt::print(os, "{}\t{}\t{}\n", col2, col1, col3);
-        } else {
-            fmt::print(os, "{}\t{}\t{}\n", col1, col2, col3);
-        }
+    auto print_line = [&os] (auto col1, auto col2, auto col3) {
+        fmt::print(os, "{}\t{}\t{}\n", col2, col1, col3);
     };
 
-    fmt::print(os, "Permits with state {}, sorted by {}\n", state, sort_by_memory ? "memory" : "count");
+    fmt::print(os, "Permits with state {}\n", state);
     print_line("count", "memory", "name");
     for (const auto& summary : permit_summaries) {
         total.count += summary.count;
@@ -310,11 +294,9 @@ static void do_dump_reader_permit_diagnostics(std::ostream& os, const reader_con
     permit_stats total;
 
     fmt::print(os, "Semaphore {}: {}, dumping permit diagnostics:\n", semaphore.name(), problem);
-    total += do_dump_reader_permit_diagnostics(os, permits, reader_permit::state::admitted, true);
+    total += do_dump_reader_permit_diagnostics(os, permits, reader_permit::state::active);
     fmt::print(os, "\n");
-    total += do_dump_reader_permit_diagnostics(os, permits, reader_permit::state::waiting, false);
-    fmt::print(os, "\n");
-    total += do_dump_reader_permit_diagnostics(os, permits, reader_permit::state::registered, false);
+    total += do_dump_reader_permit_diagnostics(os, permits, reader_permit::state::waiting);
     fmt::print(os, "\n");
     fmt::print(os, "Total: permits: {}, memory: {}\n", total.count, utils::to_hr_size(total.memory));
 }
@@ -375,7 +357,7 @@ reader_concurrency_semaphore::~reader_concurrency_semaphore() {
 reader_concurrency_semaphore::inactive_read_handle reader_concurrency_semaphore::register_inactive_read(std::unique_ptr<inactive_read> ir) {
     // Implies _inactive_reads.empty(), we don't queue new readers before
     // evicting all inactive reads.
-    if (_wait_list.empty()) {
+    if (_wait_list.empty() && _resources.memory > 0) {
         const auto [it, _] = _inactive_reads.emplace(_next_id++, std::move(ir));
         (void)_;
         ++_stats.inactive_reads;
@@ -425,13 +407,13 @@ bool reader_concurrency_semaphore::try_evict_one_inactive_read() {
 }
 
 bool reader_concurrency_semaphore::has_available_units(const resources& r) const {
-    return bool(_resources) && _resources >= r;
+    // Special case: when there is no active reader (based on count) admit one
+    // regardless of availability of memory.
+    return (bool(_resources) && _resources >= r) || _resources.count == _initial_resources.count;
 }
 
 bool reader_concurrency_semaphore::may_proceed(const resources& r) const {
-    // Special case: when there is no active reader (based on count) admit one
-    // regardless of availability of memory.
-    return _wait_list.empty() && (has_available_units(r) || _resources.count == _initial_resources.count);
+    return _wait_list.empty() && has_available_units(r);
 }
 
 future<reader_permit::resource_units> reader_concurrency_semaphore::do_wait_admission(reader_permit permit, size_t memory,
@@ -480,6 +462,12 @@ void reader_concurrency_semaphore::broken(std::exception_ptr ex) {
         _wait_list.front().pr.set_exception(std::make_exception_ptr(broken_semaphore{}));
         _wait_list.pop_front();
     }
+}
+
+std::string reader_concurrency_semaphore::dump_diagnostics() const {
+    std::ostringstream os;
+    do_dump_reader_permit_diagnostics(os, *this, *_permit_list, "user request");
+    return os.str();
 }
 
 // A file that tracks the memory usage of buffers resulting from read
