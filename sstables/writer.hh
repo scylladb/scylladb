@@ -30,8 +30,13 @@
 #include <seastar/core/byteorder.hh>
 #include "version.hh"
 #include "counters.hh"
-#include "service/storage_service.hh"
 #include "utils/bit_cast.hh"
+
+namespace db {
+
+class config;
+
+} // namespace db
 
 namespace sstables {
 
