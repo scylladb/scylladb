@@ -410,18 +410,6 @@ std::vector<raft::log_entry> create_log(std::vector<log_entry> list, unsigned st
     return log;
 }
 
-template <typename T>
-std::vector<raft::command> create_commands(std::vector<T> list) {
-    std::vector<raft::command> commands;
-    commands.reserve(list.size());
-
-    for (auto e : list) {
-        commands.push_back(create_command(e));
-    }
-
-    return commands;
-}
-
 size_t apply_changes(raft::server_id id, const std::vector<raft::command_cref>& commands,
         lw_shared_ptr<hasher_int> hasher) {
     size_t entries = 0;
