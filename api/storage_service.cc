@@ -51,6 +51,7 @@
 #include "thrift/controller.hh"
 #include "locator/token_metadata.hh"
 #include "cdc/generation_service.hh"
+#include "service/storage_proxy.hh"
 
 extern logging::logger apilog;
 

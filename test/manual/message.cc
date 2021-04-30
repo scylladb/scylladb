@@ -30,6 +30,7 @@
 #include "gms/gossip_digest_ack2.hh"
 #include "gms/gossip_digest.hh"
 #include "api/api.hh"
+#include "utils/fb_utilities.hh"
 
 using namespace std::chrono_literals;
 using namespace netw;
