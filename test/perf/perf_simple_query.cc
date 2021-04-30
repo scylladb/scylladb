@@ -36,6 +36,7 @@
 #include "release.hh"
 #include <fstream>
 #include "service/storage_proxy.hh"
+#include "service/storage_service.hh"
 #include "cql3/query_processor.hh"
 #include "db/config.hh"
 #include "db/extensions.hh"

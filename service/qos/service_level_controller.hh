@@ -27,8 +27,8 @@
 #include "auth/authenticated_user.hh"
 #include <seastar/core/sstring.hh>
 #include <seastar/core/distributed.hh>
+#include <seastar/core/abort_source.hh>
 #include "auth/service.hh"
-#include "service/storage_service.hh"
 #include <map>
 #include <unordered_set>
 #include "qos_common.hh"
