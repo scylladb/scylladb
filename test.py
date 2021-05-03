@@ -47,6 +47,10 @@ from scripts import coverage
 
 output_is_a_tty = sys.stdout.isatty()
 
+all_modes = set(['debug', 'release', 'dev', 'sanitize', 'coverage'])
+debug_modes = set(['debug', 'sanitize'])
+
+
 def create_formatter(*decorators):
     """Return a function which decorates its argument with the given
     color/style if stdout is a tty, and leaves intact otherwise."""
@@ -85,6 +89,17 @@ class TestSuite(ABC):
         self.name = os.path.basename(self.path)
         self.cfg = cfg
         self.tests = []
+
+        self.run_first_tests = set(cfg.get("run_first", []))
+        disabled = self.cfg.get("disable", [])
+        non_debug = self.cfg.get("skip_in_debug_modes", [])
+        self.enabled_modes = dict()
+        self.disabled_tests = dict()
+        for mode in all_modes:
+            self.disabled_tests[mode] = \
+                set(self.cfg.get("skip_in_" + mode, []) + (non_debug if mode in debug_modes else []) + disabled)
+            for shortname in set(self.cfg.get("run_in_" + mode, [])):
+                self.enabled_modes[shortname] = self.enabled_modes.get(shortname, []) + [mode]
 
     @property
     def next_id(self):
@@ -140,20 +155,23 @@ class TestSuite(ABC):
 
     def add_test_list(self, mode, options):
         lst = [ os.path.splitext(os.path.basename(t))[0] for t in glob.glob(os.path.join(self.path, self.pattern)) ]
-        run_first_tests = set(self.cfg.get("run_first", []))
         if lst:
             # Some tests are long and are better to be started earlier,
             # so pop them up while sorting the list
-            lst.sort(key=lambda x: (x not in run_first_tests, x))
-        disable_tests = set(self.cfg.get("disable", []))
-        skip_tests = set(self.cfg.get("skip_in_debug_mode", []))
+            lst.sort(key=lambda x: (x not in self.run_first_tests, x))
+
         for shortname in lst:
-            if shortname in disable_tests or (mode not in ["release", "dev"] and shortname in skip_tests):
+            if shortname in self.disabled_tests[mode]:
                 continue
+            enabled_modes = self.enabled_modes.get(shortname, [])
+            if enabled_modes and mode not in enabled_modes:
+                continue
+
             t = os.path.join(self.name, shortname)
             patterns = options.name if options.name else [t]
             if options.skip_pattern and options.skip_pattern in t:
                 continue
+
             for p in patterns:
                 if p in t:
                     for i in range(options.repeat):
@@ -514,7 +532,6 @@ def setup_signal_handlers(loop, signaled):
 
 def parse_cmd_line():
     """ Print usage and process command line options. """
-    all_modes = ['debug', 'release', 'dev', 'sanitize', 'coverage']
     sysmem = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
     testmem = 6e9 if os.sysconf('SC_PAGE_SIZE') > 4096 else 2e9
     cpus_per_test_job = 1
