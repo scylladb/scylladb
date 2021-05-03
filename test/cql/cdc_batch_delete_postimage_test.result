@@ -15,33 +15,21 @@ select "cdc$batch_seq_no", "cdc$operation", pk, ck, v from t_scylla_cdc_log;
 	[
 		{
 			"cdc$batch_seq_no" : "0",
-			"cdc$operation" : "0",
-			"ck" : "1",
-			"pk" : "1"
-		},
-		{
-			"cdc$batch_seq_no" : "1",
 			"cdc$operation" : "2",
 			"ck" : "1",
 			"pk" : "1",
 			"v" : "100"
 		},
 		{
-			"cdc$batch_seq_no" : "2",
+			"cdc$batch_seq_no" : "1",
 			"cdc$operation" : "5",
 			"ck" : "1",
 			"pk" : "1"
 		},
 		{
-			"cdc$batch_seq_no" : "3",
+			"cdc$batch_seq_no" : "2",
 			"cdc$operation" : "7",
 			"ck" : "2",
-			"pk" : "1"
-		},
-		{
-			"cdc$batch_seq_no" : "4",
-			"cdc$operation" : "9",
-			"ck" : "1",
 			"pk" : "1"
 		}
 	]
@@ -64,26 +52,14 @@ select "cdc$batch_seq_no", "cdc$operation", pk, ck, v from t2_scylla_cdc_log;
 	[
 		{
 			"cdc$batch_seq_no" : "0",
-			"cdc$operation" : "0",
-			"ck" : "1",
-			"pk" : "1"
-		},
-		{
-			"cdc$batch_seq_no" : "1",
 			"cdc$operation" : "2",
 			"ck" : "1",
 			"pk" : "1",
 			"v" : "100"
 		},
 		{
-			"cdc$batch_seq_no" : "2",
+			"cdc$batch_seq_no" : "1",
 			"cdc$operation" : "4",
-			"pk" : "1"
-		},
-		{
-			"cdc$batch_seq_no" : "3",
-			"cdc$operation" : "9",
-			"ck" : "1",
 			"pk" : "1"
 		}
 	]
@@ -107,31 +83,25 @@ select "cdc$batch_seq_no", "cdc$operation", pk, ck, v from t3_scylla_cdc_log;
 	[
 		{
 			"cdc$batch_seq_no" : "0",
-			"cdc$operation" : "0",
-			"ck" : "1",
-			"pk" : "1"
-		},
-		{
-			"cdc$batch_seq_no" : "1",
 			"cdc$operation" : "2",
 			"ck" : "1",
 			"pk" : "1",
 			"v" : "100"
 		},
 		{
-			"cdc$batch_seq_no" : "2",
+			"cdc$batch_seq_no" : "1",
 			"cdc$operation" : "5",
 			"ck" : "2",
 			"pk" : "1"
 		},
 		{
-			"cdc$batch_seq_no" : "3",
+			"cdc$batch_seq_no" : "2",
 			"cdc$operation" : "7",
 			"ck" : "3",
 			"pk" : "1"
 		},
 		{
-			"cdc$batch_seq_no" : "4",
+			"cdc$batch_seq_no" : "3",
 			"cdc$operation" : "9",
 			"ck" : "1",
 			"pk" : "1",
