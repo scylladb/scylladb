@@ -66,6 +66,7 @@
 #include "idl/messaging_service.dist.hh"
 #include "idl/paxos.dist.hh"
 #include "idl/raft.dist.hh"
+#include "idl/hinted_handoff.dist.hh"
 #include "serializer_impl.hh"
 #include "serialization_visitors.hh"
 #include "idl/consistency_level.dist.impl.hh"
@@ -89,6 +90,7 @@
 #include "idl/messaging_service.dist.impl.hh"
 #include "idl/paxos.dist.impl.hh"
 #include "idl/raft.dist.impl.hh"
+#include "idl/hinted_handoff.dist.impl.hh"
 #include <seastar/rpc/lz4_compressor.hh>
 #include <seastar/rpc/lz4_fragmented_compressor.hh>
 #include <seastar/rpc/multi_algo_compressor_factory.hh>
@@ -563,6 +565,8 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::REPAIR_GET_FULL_ROW_HASHES_WITH_RPC_STREAM:
     case messaging_verb::NODE_OPS_CMD:
     case messaging_verb::HINT_MUTATION:
+    case messaging_verb::HINT_SYNC_POINT_CREATE:
+    case messaging_verb::HINT_SYNC_POINT_CHECK:
         return 1;
     case messaging_verb::CLIENT_ID:
     case messaging_verb::MUTATION:
@@ -1549,6 +1553,28 @@ future<> messaging_service::unregister_raft_timeout_now() {
 future<> messaging_service::send_raft_timeout_now(msg_addr id, clock_type::time_point timeout, raft::group_id gid, raft::server_id from_id, raft::server_id dst_id, const raft::timeout_now& timeout_now) {
    return send_message_oneway_timeout(this, timeout, messaging_verb::RAFT_TIMEOUT_NOW, std::move(id), std::move(gid), std::move(from_id), std::move(dst_id), timeout_now);
 }
+
+
+void messaging_service::register_hint_sync_point_create(std::function<future<db::hints::sync_point_create_response> (db::hints::sync_point_create_request request)>&& func) {
+    register_handler(this, netw::messaging_verb::HINT_SYNC_POINT_CREATE, std::move(func));
+}
+future<> messaging_service::unregister_hint_sync_point_create() {
+    return unregister_handler(netw::messaging_verb::HINT_SYNC_POINT_CREATE);
+}
+future<db::hints::sync_point_create_response> messaging_service::send_hint_sync_point_create(msg_addr id, clock_type::time_point timeout, db::hints::sync_point_create_request request) {
+    return send_message_timeout<future<db::hints::sync_point_create_response>>(this, messaging_verb::HINT_SYNC_POINT_CREATE, std::move(id), timeout, std::move(request));
+}
+
+void messaging_service::register_hint_sync_point_check(std::function<future<db::hints::sync_point_check_response> (db::hints::sync_point_check_request request)>&& func) {
+    register_handler(this, netw::messaging_verb::HINT_SYNC_POINT_CHECK, std::move(func));
+}
+future<> messaging_service::unregister_hint_sync_point_check() {
+    return unregister_handler(netw::messaging_verb::HINT_SYNC_POINT_CHECK);
+}
+future<db::hints::sync_point_check_response> messaging_service::send_hint_sync_point_check(msg_addr id, clock_type::time_point timeout, db::hints::sync_point_check_request request) {
+    return send_message_timeout<future<db::hints::sync_point_check_response>>(this, messaging_verb::HINT_SYNC_POINT_CHECK, std::move(id), timeout, std::move(request));
+}
+
 void init_messaging_service(sharded<messaging_service>& ms,
                 messaging_service::config mscfg, netw::messaging_service::scheduling_config scfg,
                 sstring ms_trust_store, sstring ms_cert, sstring ms_key, sstring ms_tls_prio, bool ms_client_auth) {

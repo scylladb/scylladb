@@ -58,6 +58,7 @@
 #include "db/config.hh"
 #include "db/batchlog_manager.hh"
 #include "db/hints/manager.hh"
+#include "db/hints/messages.hh"
 #include "db/system_keyspace.hh"
 #include "exceptions/exceptions.hh"
 #include <boost/range/algorithm_ext/push_back.hpp>
@@ -97,6 +98,7 @@
 #include "service/paxos/proposal.hh"
 #include "locator/token_metadata.hh"
 #include "seastar/core/coroutine.hh"
+#include "seastar/core/with_timeout.hh"
 
 namespace bi = boost::intrusive;
 
@@ -5144,6 +5146,16 @@ void storage_proxy::init_messaging_service(shared_ptr<migration_manager> mm) {
             });
         });
     });
+
+    ms.register_hint_sync_point_create([this] (db::hints::sync_point_create_request request) -> future<db::hints::sync_point_create_response> {
+        co_await create_hint_queue_sync_point(request.sync_point_id, std::move(request.target_endpoints), request.mark_deadline);
+        co_return db::hints::sync_point_create_response{};
+    });
+
+    ms.register_hint_sync_point_check([this] (db::hints::sync_point_check_request request) -> future<db::hints::sync_point_check_response> {
+        const bool expired = co_await check_hint_queue_sync_point(request.sync_point_id);
+        co_return db::hints::sync_point_check_response{expired};
+    });
 }
 
 future<> storage_proxy::uninit_messaging_service() {
@@ -5161,7 +5173,9 @@ future<> storage_proxy::uninit_messaging_service() {
         ms.unregister_paxos_prepare(),
         ms.unregister_paxos_accept(),
         ms.unregister_paxos_learn(),
-        ms.unregister_paxos_prune()
+        ms.unregister_paxos_prune(),
+        ms.unregister_hint_sync_point_create(),
+        ms.unregister_hint_sync_point_check()
     ).discard_result();
 
 }
@@ -5258,6 +5272,115 @@ future<> storage_proxy::change_hints_host_filter(db::hints::host_filter new_filt
 
 const db::hints::host_filter& storage_proxy::get_hints_host_filter() const {
     return _hints_manager.get_host_filter();
+}
+
+future<> storage_proxy::create_hint_queue_sync_point(utils::UUID sync_point_id, std::vector<gms::inet_address> endpoints, clock_type::time_point deadline) {
+    return container().invoke_on(0, [sync_point_id, endpoints = std::move(endpoints), deadline] (storage_proxy& sp) mutable {
+        auto [it, was_inserted] = sp._hint_queue_checkpoints.emplace(sync_point_id);
+        if (!was_inserted) {
+            return make_exception_future<>(std::runtime_error(format("Hint sync point {} already exists", sync_point_id)));
+        }
+
+        // Waited indirectly by keeping a pointer to the storage_proxy.
+        // When drain_on_shutdown is triggered, hints manager will report an error
+        // and this future will resolve.
+        (void)sp.container().invoke_on_all([endpoints = std::move(endpoints), sync_point_id, deadline] (storage_proxy& sp) {
+            auto wait_for_hints_manager = [&endpoints, sync_point_id, deadline] (db::hints::manager& mgr, const char* mgr_name) {
+                return mgr.wait_until_hints_are_replayed(endpoints, deadline).then_wrapped([mgr_name, sync_point_id] (future<>&& f) {
+                    if (!f.failed()) {
+                        slogger.debug("Hint sync point {} for {} reached", sync_point_id, mgr_name);
+                        f.get();
+                    } else {
+                        slogger.debug("An error occured when waiting for hint sync point {} for {} to resolve: {}", sync_point_id, mgr_name, f.get_exception());
+                    }
+                });
+            };
+
+            return when_all(
+                wait_for_hints_manager(sp._hints_manager, "hints manager"),
+                wait_for_hints_manager(sp._hints_for_views_manager, "hints for view manager")
+            ).discard_result();
+        }).then([&sp, sync_point_id, guard = sp.shared_from_this()] {
+            sp._hint_queue_checkpoints.erase(sync_point_id);
+        });
+
+        return make_ready_future<>();
+    });
+}
+
+future<bool> storage_proxy::check_hint_queue_sync_point(utils::UUID sync_point) {
+    return container().invoke_on(0, [sync_point] (storage_proxy& sp) {
+        return !sp._hint_queue_checkpoints.contains(sync_point);
+    });
+}
+
+future<> storage_proxy::wait_for_hints_to_be_replayed(utils::UUID operation_id, std::vector<gms::inet_address> source_endpoints, std::vector<gms::inet_address> target_endpoints, seastar::abort_source& as) {
+    const auto deadline = lowres_clock::time_point::max();
+
+    slogger.debug("Coordinating a request to wait until all hints are sent on {} nodes", source_endpoints.size());
+
+    co_await parallel_for_each(source_endpoints, [this, operation_id, &target_endpoints_ = target_endpoints, deadline_ = deadline, &as] (gms::inet_address addr) -> future<> {
+        const auto deadline = deadline_;
+        const auto& target_endpoints = target_endpoints_;
+
+        const auto start_time = lowres_clock::now();
+        const std::chrono::seconds wait_duration{1};
+
+        // Step 1: Create a hint queue sync point
+        try {
+            db::hints::sync_point_create_request request;
+            request.sync_point_id = operation_id;
+            request.target_endpoints = target_endpoints;
+            request.mark_deadline = deadline;
+            co_await _messaging.send_hint_sync_point_create({ addr, 0 }, deadline, std::move(request));
+        } catch (...) {
+            slogger.debug("Failed to create a sync point for {}. I won't wait for hints to be replayed on this node");
+            throw;
+        }
+
+        // Step 2: Wait until hints are replayed
+        // Sleep 1 second between checks
+        bool reached_sync_point = false;
+        while (!reached_sync_point && !as.abort_requested() && lowres_clock::now() < deadline) {
+            // Check if the destination is alive
+            if (!gms::get_local_gossiper().is_alive(addr)) {
+                slogger.debug("Node {} is no longer alive, won't wait anymore for its hint sync point", addr);
+                break;
+            }
+
+            slogger.debug("Waiting for all hints from endpoint {} to be sent out; time spent so far: {}s, targets: {}",
+                    addr, std::chrono::duration_cast<std::chrono::seconds>(lowres_clock::now() - start_time).count(), target_endpoints);
+            try {
+                db::hints::sync_point_check_request request;
+                request.sync_point_id = operation_id;
+                const auto response = co_await _messaging.send_hint_sync_point_check({ addr, 0 }, deadline, std::move(request));
+                reached_sync_point = response.expired;
+                if (reached_sync_point) {
+                    break;
+                }
+            } catch (rpc::timeout_error&) {
+                slogger.debug("Caught a timeout error while sending hint queue query at {}", addr);
+                // RPC timeout should be set to the deadline, so we can assume here that the deadline is reached
+                break;
+            } catch (rpc::closed_error&) {
+                slogger.debug("Caught a connection closed error while sending hint queue query at {}", addr);
+            } catch (...) {
+                slogger.debug("Caught an unexpected error while sending hint queue query at {}: {}. Won't wait anymore", addr, std::current_exception());
+                throw;
+            }
+
+            co_await sleep_abortable(wait_duration, as);
+        }
+
+        if (reached_sync_point) {
+            slogger.debug("Finished waiting for all hints from endpoint {} to be sent out - all segments waited on were sent", addr);
+        } else {
+            slogger.debug("Finished waiting for all hints from endpoint {} to be sent out - stopped waiting before all segments were sent", addr);
+        }
+        co_return;
+    });
+
+    co_return;
 }
 
 void storage_proxy::on_join_cluster(const gms::inet_address& endpoint) {};
