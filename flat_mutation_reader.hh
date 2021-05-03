@@ -585,7 +585,7 @@ future<> consume_mutation_fragments_until(
     return do_until([stop] { return stop(); }, [&r, stop, consume_mf, consume_eos, timeout] {
         while (!r.is_buffer_empty()) {
             consume_mf(r.pop_mutation_fragment());
-            if (stop()) {
+            if (stop() || need_preempt()) {
                 return make_ready_future<>();
             }
         }
