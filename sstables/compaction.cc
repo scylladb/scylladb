@@ -1277,6 +1277,9 @@ class scrub_compaction final : public regular_compaction {
             , _validator(*_schema)
         { }
         virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override {
+            if (_end_of_stream) {
+                return make_ready_future<>();
+            }
             return repeat([this, timeout] {
                 return _reader.fill_buffer(timeout).then([this] {
                     fill_buffer_from_underlying();
