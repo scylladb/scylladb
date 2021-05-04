@@ -101,7 +101,8 @@ class time_window_compaction_strategy : public compaction_strategy_impl {
     time_window_compaction_strategy_options _options;
     int64_t _estimated_remaining_tasks = 0;
     db_clock::time_point _last_expired_check;
-    timestamp_type _highest_window_seen;
+    // As timestamp_type is an int64_t, a primitive type, it must be initialized here.
+    timestamp_type _highest_window_seen = 0;
     // Keep track of all recent active windows that still need to be compacted into a single SSTable
     std::unordered_set<timestamp_type> _recent_active_windows;
     size_tiered_compaction_strategy_options _stcs_options;
