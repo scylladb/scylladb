@@ -37,6 +37,7 @@ import distro
 from scylla_sysconfdir import SYSCONFDIR
 from scylla_product import PRODUCT
 
+from multiprocessing import cpu_count
 
 def scriptsdir_p():
     p = Path(sys.argv[0]).resolve()
@@ -98,6 +99,27 @@ def scyllabindir():
 
 def sysconfdir():
     return str(sysconfdir_p())
+
+def get_required_aio_slots():
+    return cpu_count() * 11026 + 65536
+
+def configure_aio_slots():
+    aio_conf_file = "/etc/sysctl.d/aio-max-nr.conf"
+    aio_max_nr_value = "fs.aio-max-nr = " + str(get_required_aio_slots())
+    mode = 'w+'
+    if os.path.exists(aio_conf_file):
+        with open(aio_conf_file, 'r') as file:
+            for line in file:
+                aio_conf_value = re.findall(r"[=]?\d*\.\d+|\d+", line)
+                aio_value = int((', '.join(map(str, aio_conf_value))))
+                if aio_value > get_required_aio_slots():
+                    with open('/proc/sys/fs/aio-max-nr', mode) as f:
+                        f.write(str(aio_value))
+    else:
+        with open(aio_conf_file, mode) as f:
+            f.write(aio_max_nr_value + '\n')
+        with open('/proc/sys/fs/aio-max-nr', mode) as f:
+            f.write(str(get_required_aio_slots()))
 
 # @param headers dict of k:v
 def curl(url, headers=None, byte=False, timeout=3, max_retries=5, retry_interval=5):
