@@ -100,6 +100,8 @@ bool
 is_sufficient_live_nodes(consistency_level cl,
                          keyspace& ks,
                          const inet_address_vector_replica_set& live_endpoints);
+bool is_sufficient_live_nodes(consistency_level cl, keyspace& ks, const inet_address_vector_replica_set::const_iterator& begin_it,
+        const inet_address_vector_replica_set::const_iterator& end_it);
 
 template<typename Range, typename PendingRange = std::array<gms::inet_address, 0>>
 void assure_sufficient_live_nodes(

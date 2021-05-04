@@ -394,7 +394,13 @@ bool
 is_sufficient_live_nodes(consistency_level cl,
                          keyspace& ks,
                          const inet_address_vector_replica_set& live_endpoints) {
+    return is_sufficient_live_nodes(cl, ks, live_endpoints.begin(), live_endpoints.end());
+}
+
+bool is_sufficient_live_nodes(consistency_level cl, keyspace& ks, const inet_address_vector_replica_set::const_iterator& begin_it,
+        const inet_address_vector_replica_set::const_iterator& end_it) {
     using namespace locator;
+    auto live_endpoints = boost::make_iterator_range(begin_it, end_it);
 
     switch (cl) {
     case consistency_level::ANY:
