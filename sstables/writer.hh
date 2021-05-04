@@ -180,6 +180,10 @@ public:
         // Nothing to do, because close at the file_stream level will call flush on us.
         return _out.close();
     }
+
+    virtual size_t buffer_size() const noexcept override {
+        return _out.buffer_size();
+    }
 };
 
 template <typename ChecksumType>
@@ -193,8 +197,8 @@ public:
 template <typename ChecksumType>
 requires ChecksumUtils<ChecksumType>
 inline
-output_stream<char> make_checksummed_file_output_stream(data_sink out, struct checksum& cinfo, uint32_t& full_file_checksum, size_t buffer_size) {
-    return output_stream<char>(checksummed_file_data_sink<ChecksumType>(std::move(out), cinfo, full_file_checksum), buffer_size, true);
+output_stream<char> make_checksummed_file_output_stream(data_sink out, struct checksum& cinfo, uint32_t& full_file_checksum) {
+    return output_stream<char>(checksummed_file_data_sink<ChecksumType>(std::move(out), cinfo, full_file_checksum));
 }
 
 template <typename ChecksumType>
@@ -204,7 +208,7 @@ class checksummed_file_writer : public file_writer {
     uint32_t _full_checksum;
 public:
     checksummed_file_writer(data_sink out, size_t buffer_size, sstring filename)
-            : file_writer(make_checksummed_file_output_stream<ChecksumType>(std::move(out), _c, _full_checksum, buffer_size), std::move(filename))
+            : file_writer(make_checksummed_file_output_stream<ChecksumType>(std::move(out), _c, _full_checksum), std::move(filename))
             , _c({uint32_t(std::min(size_t(DEFAULT_CHUNK_SIZE), buffer_size))})
             , _full_checksum(ChecksumType::init_checksum()) {}
 
