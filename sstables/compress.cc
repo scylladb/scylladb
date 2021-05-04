@@ -544,6 +544,10 @@ public:
     virtual future<> close() override {
         return _out.close();
     }
+
+    virtual size_t buffer_size() const noexcept override {
+        return _compression_metadata->uncompressed_chunk_length();
+    }
 };
 
 template <typename ChecksumType, compressed_checksum_mode mode>
@@ -571,8 +575,7 @@ inline output_stream<char> make_compressed_file_output_stream(output_stream<char
     // defaults to 1.0.
     cm->options.elements.push_back({"crc_check_chance", "1.0"});
 
-    auto outer_buffer_size = cm->uncompressed_chunk_length();
-    return output_stream<char>(compressed_file_data_sink<ChecksumType, mode>(std::move(out), cm, p), outer_buffer_size, true);
+    return output_stream<char>(compressed_file_data_sink<ChecksumType, mode>(std::move(out), cm, p));
 }
 
 input_stream<char> sstables::make_compressed_file_k_l_format_input_stream(file f,
