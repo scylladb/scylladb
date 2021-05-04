@@ -1,0 +1,37 @@
+#! /bin/bash -eu
+
+here=$(dirname $(readlink -e "$0"))
+src=$(realpath -e "$here"/../..)
+
+scylla=$(readlink -e "${SCYLLA-$src/build/release/scylla}")
+gdb=$(readlink -e "${GDB-$(command -v gdb)}")
+
+_WORKDIR="$(readlink -e ${TMPDIR-/tmp})"/scylla-gdb-$$
+mkdir "$_WORKDIR"
+
+code=0
+cleanup() {
+    rm -rf --preserve-root "$_WORKDIR"
+    exit $code
+}
+trap 'cleanup' EXIT
+
+# for easier pkill
+scylla_link="$_WORKDIR"/test-gdb-scylla
+ln -s "$scylla" "$scylla_link"
+gdb_link="$_WORKDIR"/test-gdb
+ln -s "$gdb" "$gdb_link"
+
+# see explanation of SCYLLA_IP in ../alternator/run
+scylla_ip=127.1.$(($$ >> 8 & 255)).$(($$ & 255))
+
+export _WORKDIR
+"$gdb_link" -n -batch -return-child-result -se "$scylla_link" -ex "source $src/scylla-gdb.py" -x "$here"/test.py \
+	    --args "$scylla_link" --developer-mode=true -W "$_WORKDIR" \
+	    -c2 -m256M \
+            --api-address $scylla_ip \
+            --rpc-address $scylla_ip \
+            --listen-address $scylla_ip \
+            --prometheus-address $scylla_ip \
+            --seed-provider-parameters seeds=$scylla_ip \
+	|| code=$?
