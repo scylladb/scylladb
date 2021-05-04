@@ -137,7 +137,15 @@ if __name__ == '__main__':
         run('udevadm settle', shell=True, check=True)
         run('mdadm --create --verbose --force --run {raid} --level=0 -c1024 --raid-devices={nr_disk} {disks}'.format(raid=fsdev, nr_disk=len(disks), disks=args.disks.replace(',', ' ')), shell=True, check=True)
         run('udevadm settle', shell=True, check=True)
-    run('mkfs.xfs {} -f -K'.format(fsdev), shell=True, check=True)
+
+    major_minor = os.stat(fsdev).st_rdev
+    major, minor = major_minor // 256, major_minor % 256
+    sector_size = int(open(f'/sys/dev/block/{major}:{minor}/queue/logical_block_size').read())
+    # We want smaller block sizes to allow smaller commitlog writes without
+    # stalling. The minimum block size for crc enabled filesystems is 1024,
+    # and it also cannot be smaller than the sector size.
+    block_size = max(1024, sector_size)
+    run(f'mkfs.xfs -b size={block_size} {fsdev} -f -K', shell=True, check=True)
 
     if is_debian_variant():
         confpath = '/etc/mdadm/mdadm.conf'
