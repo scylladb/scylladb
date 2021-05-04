@@ -1990,3 +1990,120 @@ SEASTAR_THREAD_TEST_CASE(test_postimage_with_no_regular_columns) {
         BOOST_REQUIRE_EQUAL(expected, result);
     }).get();
 }
+
+SEASTAR_THREAD_TEST_CASE(test_image_deleted_column) {
+    // Test that cdc$deleted_ columns are correctly
+    // filled in the pre/post-image rows.
+    //
+    // Pre-image rows should set cdc$deleted_ column:
+    // 1. If pre-image is in 'full' mode, for
+    // all NULL columns in the read pre-image.
+    // 2. If pre-image is in 'true' mode, for
+    // all columns that are both affected and
+    // have NULL value in the read pre-image.
+    //
+    // Post-image rows should never set cdc$deleted_
+    // column, as post-images are always in 'full'
+    // mode. Filling cdc$deleted_ columns would
+    // bring no value.
+
+    do_with_cql_env_thread([] (cql_test_env& e) {
+        using oper_ut = std::underlying_type_t<cdc::operation>;
+        auto oper_type = data_type_for<oper_ut>();
+        auto int32_set_type = set_type_impl::get_instance(int32_type, false);
+        auto make_int32_set = [&](int32_t value) {
+            return ::make_set_value(int32_set_type, { value }); 
+        };
+
+        auto perform_test = [&](bool full_preimage) {
+            sstring preimage_mode = full_preimage ? "'full'" : "true";
+
+            // Create a table and insert data with v = NULL
+            cquery_nofail(e, "drop table if exists tbl");
+            cquery_nofail(e, format("create table tbl(pk int, ck int, v int, v2 int, primary key(pk, ck)) with cdc = {{'enabled': true, 'preimage': {}, 'postimage': true}}", preimage_mode));
+            cquery_nofail(e, "insert into tbl(pk, ck, v, v2) values (1, 1, null, 1)");
+            cquery_nofail(e, "insert into tbl(pk, ck, v, v2) values (2, 2, null, 2)");
+
+            // These are the queried columns:
+            sstring query_string = "select \"cdc$operation\", pk, ck, v, \"cdc$deleted_v\", \"cdc$deleted_v2\" from tbl_scylla_cdc_log";
+
+            // Perform an insert that does not affect v column.
+            // Pre-image: v=NULL, cdc$deleted_v=NULL
+            // Pre-image ('full' mode): v=NULL, cdc$deleted_v=true
+            // Post-image should not set cdc$deleted_ columns
+            cquery_nofail(e, "insert into tbl(pk, ck, v2) values (1, 1, 1)");
+            data_value deleted_v = full_preimage ? true : data_value::make_null(boolean_type);
+            std::vector<data_value> preimage1 = 
+                { oper_ut(cdc::operation::pre_image), int32_t(1), int32_t(1), data_value::make_null(int32_type), deleted_v, data_value::make_null(boolean_type) };
+            std::vector<data_value> postimage1 = 
+                { oper_ut(cdc::operation::post_image), int32_t(1), int32_t(1), data_value::make_null(int32_type), data_value::make_null(boolean_type), data_value::make_null(boolean_type) };
+
+            // Perform an insert that affects v column.
+            // Pre-image: v=NULL, cdc$deleted_v=true
+            // Pre-image ('full' mode): v=NULL, cdc$deleted_v=true
+            // Post-image should not set cdc$deleted_ columns   
+            cquery_nofail(e, "insert into tbl(pk, ck, v, v2) values (2, 2, 2, 2)");
+            std::vector<data_value> preimage2 = 
+                { oper_ut(cdc::operation::pre_image), int32_t(2), int32_t(2), data_value::make_null(int32_type), true, data_value::make_null(boolean_type) };
+            std::vector<data_value> postimage2 = 
+                { oper_ut(cdc::operation::post_image), int32_t(2), int32_t(2), int32_t(2), data_value::make_null(boolean_type), data_value::make_null(boolean_type) };
+
+            auto result = get_result(e, {oper_type, int32_type, int32_type, int32_type, boolean_type, boolean_type}, query_string);
+            BOOST_REQUIRE_EQUAL(result.size(), 10);
+            BOOST_REQUIRE_EQUAL(result[2], preimage1);
+            BOOST_REQUIRE_EQUAL(result[4], postimage1);
+            BOOST_REQUIRE_EQUAL(result[7], preimage2);
+            BOOST_REQUIRE_EQUAL(result[9], postimage2);
+
+            auto test_table_with_collection = [&](bool frozen_collection) {
+                // Create a table and insert data with v = NULL
+                cquery_nofail(e, "drop table if exists tbl");
+                if (frozen_collection) {
+                    cquery_nofail(e, 
+                        format("create table tbl(pk int, ck int, v frozen<set<int>>, v2 frozen<set<int>>, primary key(pk, ck)) with cdc = {{'enabled': true, 'preimage': {}, 'postimage': true}}", preimage_mode));
+                } else {
+                    cquery_nofail(e, 
+                        format("create table tbl(pk int, ck int, v set<int>, v2 set<int>, primary key(pk, ck)) with cdc = {{'enabled': true, 'preimage': {}, 'postimage': true}}", preimage_mode));
+                }
+                cquery_nofail(e, "insert into tbl(pk, ck, v, v2) values (1, 1, null, {1})");
+                cquery_nofail(e, "insert into tbl(pk, ck, v, v2) values (2, 2, null, {2})");
+
+                // These are the queried columns:
+                sstring query_string = "select \"cdc$operation\", pk, ck, v, \"cdc$deleted_v\", \"cdc$deleted_v2\" from tbl_scylla_cdc_log";
+
+                // Perform an insert that does not affect v column.
+                // Pre-image: v=NULL, cdc$deleted_v=NULL
+                // Pre-image ('full' mode): v=NULL, cdc$deleted_v=true
+                // Post-image should not set cdc$deleted_ columns
+                cquery_nofail(e, "insert into tbl(pk, ck, v2) values (1, 1, {1})");
+                std::vector<data_value> preimage1 = 
+                    { oper_ut(cdc::operation::pre_image), int32_t(1), int32_t(1), data_value::make_null(int32_set_type), deleted_v, data_value::make_null(boolean_type) };
+                std::vector<data_value> postimage1 = 
+                    { oper_ut(cdc::operation::post_image), int32_t(1), int32_t(1), data_value::make_null(int32_set_type), data_value::make_null(boolean_type), data_value::make_null(boolean_type) };
+
+                // Perform an insert that affects v column.
+                // Pre-image: v=NULL, cdc$deleted_v=true
+                // Pre-image ('full' mode): v=NULL, cdc$deleted_v=true
+                // Post-image should not set cdc$deleted_ columns   
+                cquery_nofail(e, "insert into tbl(pk, ck, v, v2) values (2, 2, {2}, {2})");
+                std::vector<data_value> preimage2 = 
+                    { oper_ut(cdc::operation::pre_image), int32_t(2), int32_t(2), data_value::make_null(int32_set_type), true, data_value::make_null(boolean_type) };
+                std::vector<data_value> postimage2 = 
+                    { oper_ut(cdc::operation::post_image), int32_t(2), int32_t(2), make_int32_set(2), data_value::make_null(boolean_type), data_value::make_null(boolean_type) };
+
+                auto result = get_result(e, {oper_type, int32_type, int32_type, int32_set_type, boolean_type, boolean_type}, query_string);
+                BOOST_REQUIRE_EQUAL(result.size(), 10);
+                BOOST_REQUIRE_EQUAL(result[2], preimage1);
+                BOOST_REQUIRE_EQUAL(result[4], postimage1);
+                BOOST_REQUIRE_EQUAL(result[7], preimage2);
+                BOOST_REQUIRE_EQUAL(result[9], postimage2);
+            };
+
+            test_table_with_collection(false);
+            test_table_with_collection(true);
+        };
+
+        perform_test(false);
+        perform_test(true);
+    }).get();
+}
