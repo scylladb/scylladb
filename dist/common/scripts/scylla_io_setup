@@ -122,6 +122,7 @@ class scylla_cpuinfo:
             return len(self._cpu_data["system"])
 
 def run_iotune():
+            configure_aio_slots()
             if "SCYLLA_CONF" in os.environ:
                 conf_dir = os.environ["SCYLLA_CONF"]
             else:
