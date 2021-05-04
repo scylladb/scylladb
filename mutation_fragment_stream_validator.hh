@@ -95,6 +95,24 @@ public:
     /// \returns true if the partition key is valid.
     bool operator()(const dht::decorated_key& dk);
 
+    /// Reset the state of the validator to the given partition
+    ///
+    /// Reset the state of the validator as if it has just validated a valid
+    /// partition start with the provided key. This can be used t force a reset
+    /// to a given partition that is normally invalid and hence wouldn't advance
+    /// the internal state. This can be used by users that can correct such
+    /// invalid streams and wish to continue validating it.
+    void reset(dht::decorated_key dk);
+
+    /// Reset the state of the validator to the given fragment
+    ///
+    /// Reset the state of the validator as if it has just validated a valid
+    /// fragment. This can be used t force a reset to a given fragment that is
+    /// normally invalid and hence wouldn't advance the internal state. This
+    /// can be used by users that can correct such invalid streams and wish to
+    /// continue validating it.
+    void reset(const mutation_fragment&);
+
     /// Validate that the stream was properly closed.
     ///
     /// \returns false if the last partition wasn't closed, i.e. the last
