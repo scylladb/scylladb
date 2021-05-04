@@ -806,6 +806,28 @@ def test_streams_updateitem_old_image_lsi(test_table_ss_old_image_and_lsi, dynam
         return events
     do_test(test_table_ss_old_image_and_lsi, dynamodbstreams, do_updates, 'OLD_IMAGE')
 
+# This test is the same as the previous (test_streams_updateitem_old_image_lsi)
+# except that the *old* value of the LSI key k is missing. Since PR 8568, CDC
+# adds a special deleted$k marker for a missing column in the preimage, and
+# this test verifies that Alternator Streams doesn't put this extra marker in
+# its output.
+def test_streams_updateitem_old_image_lsi_missing_column(test_table_ss_old_image_and_lsi, dynamodbstreams):
+    def do_updates(table, p, c):
+        events = []
+        # Note that we do *not* set the "k" attribute (the LSI key)
+        table.update_item(Key={'p': p, 'c': c},
+            UpdateExpression='SET x = :x',
+            ExpressionAttributeValues={':x': 2})
+        events.append(['*', {'p': p, 'c': c}, None, {'p': p, 'c': c, 'x': 2}])
+        table.update_item(Key={'p': p, 'c': c},
+            UpdateExpression='SET y = :y', ExpressionAttributeValues={':y': 3})
+        # "k" should be missing from OldImage, because it wasn't set earlier.
+        # Verify the events contain only the expected attributes - not some
+        # internal markers like "deleted$k".
+        events.append(['MODIFY', {'p': p, 'c': c}, {'p': p, 'c': c, 'x': 2}, {'p': p, 'c': c, 'x': 2, 'y': 3}])
+        return events
+    do_test(test_table_ss_old_image_and_lsi, dynamodbstreams, do_updates, 'OLD_IMAGE')
+
 # Tests similar to the above tests for OLD_IMAGE, just for NEW_IMAGE mode.
 # Verify that the NEW_IMAGE includes the entire old item (including the key),
 # that deleting the item results in a missing NEW_IMAGE, and that setting the
