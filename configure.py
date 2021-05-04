@@ -1170,7 +1170,7 @@ perf_tests_seastar_deps = [
 
 for t in perf_tests:
     deps[t] = [t + '.cc'] + scylla_tests_dependencies + perf_tests_seastar_deps
-    deps[t] += ['test/perf/perf.cc']
+    deps[t] += ['test/perf/perf.cc', 'test/perf/linux-perf-event.cc']
 
 deps['test/boost/sstable_test'] += ['test/lib/normalizing_reader.cc']
 deps['test/boost/sstable_datafile_test'] += ['test/lib/normalizing_reader.cc']
@@ -1193,9 +1193,9 @@ deps['test/boost/log_heap_test'] = ['test/boost/log_heap_test.cc']
 deps['test/boost/estimated_histogram_test'] = ['test/boost/estimated_histogram_test.cc']
 deps['test/boost/anchorless_list_test'] = ['test/boost/anchorless_list_test.cc']
 deps['test/perf/perf_fast_forward'] += ['release.cc']
-deps['test/perf/perf_simple_query'] += ['release.cc', 'test/perf/perf.cc']
-deps['test/perf/perf_row_cache_reads'] += ['test/perf/perf.cc']
-deps['test/perf/perf_row_cache_update'] += ['test/perf/perf.cc']
+deps['test/perf/perf_simple_query'] += ['release.cc', 'test/perf/perf.cc', 'test/perf/linux-perf-event.cc']
+deps['test/perf/perf_row_cache_reads'] += ['test/perf/perf.cc', 'test/perf/linux-perf-event.cc']
+deps['test/perf/perf_row_cache_update'] += ['test/perf/perf.cc', 'test/perf/linux-perf-event.cc']
 deps['test/boost/reusable_buffer_test'] = [
     "test/boost/reusable_buffer_test.cc",
     "test/lib/log.cc",

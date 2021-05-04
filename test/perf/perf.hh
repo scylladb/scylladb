@@ -28,6 +28,7 @@
 #include "seastarx.hh"
 #include "utils/extremum_tracking.hh"
 #include "utils/estimated_histogram.hh"
+#include "linux-perf-event.hh"
 
 #include <chrono>
 #include <iosfwd>
@@ -60,6 +61,7 @@ struct executor_shard_stats {
     uint64_t invocations = 0;
     uint64_t allocations = 0;
     uint64_t tasks_executed = 0;
+    uint64_t instructions_retired = 0;
 };
 
 inline
@@ -68,6 +70,7 @@ operator+(executor_shard_stats a, executor_shard_stats b) {
     a.invocations += b.invocations;
     a.allocations += b.allocations;
     a.tasks_executed += b.tasks_executed;
+    a.instructions_retired += b.instructions_retired;
     return a;
 }
 
@@ -77,10 +80,12 @@ operator-(executor_shard_stats a, executor_shard_stats b) {
     a.invocations -= b.invocations;
     a.allocations -= b.allocations;
     a.tasks_executed -= b.tasks_executed;
+    a.instructions_retired -= b.instructions_retired;
     return a;
 }
 
-executor_shard_stats executor_shard_stats_snapshot();
+uint64_t perf_tasks_processed();
+uint64_t perf_mallocs();
 
 
 // Drives concurrent and continuous execution of given asynchronous action
@@ -92,9 +97,12 @@ class executor {
     const uint64_t _end_at_count;
     const unsigned _n_workers;
     uint64_t _count;
+    linux_perf_event _instructions_retired_counter = linux_perf_event::user_instructions_retired();
 private:
+    executor_shard_stats executor_shard_stats_snapshot();
     future<> run_worker() {
         auto stats_begin = executor_shard_stats_snapshot();
+        _instructions_retired_counter.enable();
         return do_until([this] {
             return _end_at_count ? _count == _end_at_count : lowres_clock::now() >= _end_at;
         }, [this] () mutable {
@@ -118,8 +126,8 @@ public:
         return parallel_for_each(idx.begin(), idx.end(), [this] (auto idx) mutable {
             return this->run_worker();
         }).then([this, stats_start] {
+            _instructions_retired_counter.disable();
             auto stats_end = executor_shard_stats_snapshot();
-            stats_end.invocations = _count;
             return stats_end - stats_start;
         });
     }
@@ -129,10 +137,22 @@ public:
     }
 };
 
+template <typename Func>
+executor_shard_stats
+executor<Func>::executor_shard_stats_snapshot() {
+    return executor_shard_stats{
+        .invocations = _count,
+        .allocations = perf_mallocs(),
+        .tasks_executed = perf_tasks_processed(),
+        .instructions_retired = _instructions_retired_counter.read(),
+    };
+}
+
 struct perf_result {
     double throughput;
     double mallocs_per_op;
     double tasks_per_op;
+    double instructions_per_op;
 };
 
 std::ostream& operator<<(std::ostream& os, const perf_result& result);
@@ -166,6 +186,7 @@ std::vector<perf_result> time_parallel(Func func, unsigned concurrency_per_core,
             .throughput = static_cast<double>(stats.invocations) / duration,
             .mallocs_per_op = double(stats.allocations) / stats.invocations,
             .tasks_per_op = double(stats.tasks_executed) / stats.invocations,
+            .instructions_per_op = double(stats.instructions_retired) / stats.invocations,
         };
         std::cout << result << "\n";
         results.emplace_back(result);
