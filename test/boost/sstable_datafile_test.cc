@@ -62,6 +62,7 @@
 #include "mutation_compactor.hh"
 #include "service/priority_manager.hh"
 #include "db/config.hh"
+#include "mutation_writer/partition_based_splitting_writer.hh"
 
 #include <stdio.h>
 #include <ftw.h>
@@ -5300,7 +5301,7 @@ SEASTAR_TEST_CASE(sstable_cleanup_correctness_test) {
     });
 }
 
-SEASTAR_TEST_CASE(sstable_scrub_test) {
+SEASTAR_TEST_CASE(sstable_scrub_skip_mode_test) {
     cql_test_config test_cfg;
 
     auto& db_cfg = *test_cfg.db_config;
@@ -5471,6 +5472,328 @@ SEASTAR_TEST_CASE(sstable_scrub_test) {
             verify_fragments(table->in_strategy_sstables().front(), scrubbed_fragments);
         });
     }, test_cfg);
+}
+
+SEASTAR_TEST_CASE(sstable_scrub_segregate_mode_test) {
+    cql_test_config test_cfg;
+
+    auto& db_cfg = *test_cfg.db_config;
+
+    // Disable cache to filter out its possible "corrections" to the corrupt sstable.
+    db_cfg.enable_cache(false);
+    db_cfg.enable_commitlog(false);
+
+    return do_with_cql_env([this] (cql_test_env& cql_env) -> future<> {
+        return test_env::do_with_async([this, &cql_env] (test_env& env) {
+            cell_locker_stats cl_stats;
+
+            auto& db = cql_env.local_db();
+            auto& compaction_manager = db.get_compaction_manager();
+
+            auto schema = schema_builder("ks", get_name())
+                    .with_column("pk", utf8_type, column_kind::partition_key)
+                    .with_column("ck", int32_type, column_kind::clustering_key)
+                    .with_column("s", int32_type, column_kind::static_column)
+                    .with_column("v", int32_type).build();
+            auto permit = tests::make_permit();
+
+            auto tmp = tmpdir();
+            auto sst_gen = [&env, schema, &tmp, gen = make_lw_shared<unsigned>(1)] () mutable {
+                return env.make_sstable(schema, tmp.path().string(), (*gen)++);
+            };
+
+            std::vector<mutation_fragment> corrupt_fragments;
+            auto scrubbed_mt = make_lw_shared<memtable>(schema);
+            auto sst = sst_gen();
+
+            testlog.info("Writing sstable {}", sst->get_filename());
+
+            {
+                const auto ts = api::timestamp_type{1};
+
+                auto local_keys = make_local_keys(3, schema);
+
+                auto config = env.manager().configure_writer();
+                config.validation_level = mutation_fragment_stream_validation_level::partition_region; // this test violates key order on purpose
+                auto writer = sst->get_writer(*schema, local_keys.size(), config, encoding_stats{});
+
+                auto make_static_row = [&, schema, ts] (mutation& mut) {
+                    auto r = row{};
+                    auto cdef = schema->static_column_at(0);
+                    r.apply(cdef, atomic_cell_or_collection{atomic_cell::make_live(*cdef.type, ts, cdef.type->decompose(data_value(1)))});
+                    mut.set_static_cell(cdef, atomic_cell_or_collection{atomic_cell::make_live(*cdef.type, ts, cdef.type->decompose(data_value(1)))});
+                    return static_row(*schema, std::move(r));
+                };
+
+                auto make_clustering_row = [&, schema, ts] (unsigned i, mutation* mut) {
+                    auto r = row{};
+                    auto cdef = schema->regular_column_at(0);
+                    auto ckey = clustering_key::from_single_value(*schema, int32_type->decompose(data_value(int(i))));
+                    r.apply(cdef, atomic_cell_or_collection{atomic_cell::make_live(*cdef.type, ts, cdef.type->decompose(data_value(1)))});
+                    if (mut) {
+                        mut->set_clustered_cell(ckey, cdef, atomic_cell_or_collection{atomic_cell::make_live(*cdef.type, ts, cdef.type->decompose(data_value(1)))});
+                    }
+                    return clustering_row(std::move(ckey), {}, {}, std::move(r));
+                };
+
+                auto write_partition = [&, schema, ts] (int pk) {
+                    auto pkey = partition_key::from_deeply_exploded(*schema, { local_keys.at(pk) });
+                    auto dkey = dht::decorate_key(*schema, pkey);
+
+                    testlog.trace("Writing partition {}", pkey);
+
+                    auto mut = mutation(schema, dkey);
+                    corrupt_fragments.emplace_back(*schema, permit, partition_start(dkey, {}));
+                    writer.consume_new_partition(dkey);
+
+                    {
+                        auto sr = make_static_row(mut);
+
+                        testlog.trace("Writing row {}", sr.position());
+
+                        corrupt_fragments.emplace_back(*schema, permit, static_row(*schema, sr));
+                        writer.consume(std::move(sr));
+                    }
+
+                    const unsigned rows_count = 10;
+                    for (unsigned i = 0; i < rows_count; ++i) {
+                        auto cr = make_clustering_row(i, &mut);
+
+                        testlog.trace("Writing row {}", cr.position());
+
+                        corrupt_fragments.emplace_back(*schema, permit, clustering_row(*schema, cr));
+                        writer.consume(clustering_row(*schema, cr));
+
+                        // write row twice
+                        if (i == (rows_count / 2)) {
+                            auto bad_cr = make_clustering_row(i - 2, nullptr);
+                            testlog.trace("Writing out-of-order row {}", bad_cr.position());
+                            corrupt_fragments.emplace_back(*schema, permit, clustering_row(*schema, bad_cr));
+                            writer.consume(std::move(bad_cr));
+                        }
+                    }
+
+                    testlog.trace("Writing partition_end");
+
+                    corrupt_fragments.emplace_back(*schema, permit, partition_end{});
+                    writer.consume_end_of_partition();
+                    scrubbed_mt->apply(mut);
+                };
+
+                write_partition(1);
+                write_partition(0);
+                write_partition(2);
+
+                testlog.info("Writing done");
+                writer.consume_end_of_stream();
+            }
+            sst->load().get();
+
+            testlog.info("Loaded sstable {}", sst->get_filename());
+
+            auto cfg = column_family_test_config(env.manager());
+            cfg.datadir = tmp.path().string();
+            auto table = make_lw_shared<column_family>(schema, cfg, column_family::no_commitlog(),
+                db.get_compaction_manager(), cl_stats, db.row_cache_tracker());
+            auto stop_table = defer([table] {
+                table->stop().get();
+            });
+            table->mark_ready_for_writes();
+            table->start();
+
+            table->add_sstable_and_update_cache(sst).get();
+
+            BOOST_REQUIRE(table->in_strategy_sstables().size() == 1);
+            BOOST_REQUIRE(table->in_strategy_sstables().front() == sst);
+
+            auto verify_fragments = [&] (sstables::shared_sstable sst, const std::vector<mutation_fragment>& mfs) {
+                auto r = assert_that(sst->as_mutation_source().make_reader(schema, tests::make_permit()));
+                for (const auto& mf : mfs) {
+                   testlog.trace("Expecting {}", mutation_fragment::printer(*schema, mf));
+                   r.produces(*schema, mf);
+                }
+                r.produces_end_of_stream();
+            };
+
+            testlog.info("Verifying written data...");
+
+            // Make sure we wrote what we though we wrote.
+            verify_fragments(sst, corrupt_fragments);
+
+            testlog.info("Scrub in abort mode");
+
+            // We expect the scrub with mode=srub::mode::abort to stop on the first invalid fragment.
+            compaction_manager.perform_sstable_scrub(table.get(), sstables::compaction_options::scrub::mode::abort).get();
+
+            BOOST_REQUIRE(table->in_strategy_sstables().size() == 1);
+            verify_fragments(sst, corrupt_fragments);
+
+            testlog.info("Scrub in segregate mode");
+
+            // We expect the scrub with mode=srub::mode::segregate to fix all out-of-order data.
+            compaction_manager.perform_sstable_scrub(table.get(), sstables::compaction_options::scrub::mode::segregate).get();
+
+            testlog.info("Scrub resulted in {} sstables", table->in_strategy_sstables().size());
+            BOOST_REQUIRE(table->in_strategy_sstables().size() > 1);
+            {
+                auto sst_reader = assert_that(table->as_mutation_source().make_reader(schema, tests::make_permit()));
+                auto mt_reader = scrubbed_mt->as_data_source().make_reader(schema, tests::make_permit());
+                auto mt_reader_close = deferred_close(mt_reader);
+                while (auto mf_opt = mt_reader(db::no_timeout).get()) {
+                   testlog.trace("Expecting {}", mutation_fragment::printer(*schema, *mf_opt));
+                   sst_reader.produces(*schema, *mf_opt);
+                }
+                sst_reader.produces_end_of_stream();
+            }
+        });
+    }, test_cfg);
+}
+
+// Test the scrub_reader in segregate mode and segregate_by_partition together,
+// as they are used in scrub compaction in segregate mode.
+SEASTAR_THREAD_TEST_CASE(test_scrub_segregate_stack) {
+    simple_schema ss;
+    auto schema = ss.schema();
+    auto permit = tests::make_permit();
+
+    struct expected_rows_type {
+        using expected_clustering_rows_type = std::set<clustering_key, clustering_key::less_compare>;
+
+        bool has_static_row = false;
+        expected_clustering_rows_type clustering_rows;
+
+        explicit expected_rows_type(const ::schema& s) : clustering_rows(s) { }
+    };
+    using expected_partitions_type = std::map<dht::decorated_key, expected_rows_type, dht::decorated_key::less_comparator>;
+    expected_partitions_type expected_partitions{dht::decorated_key::less_comparator(schema)};
+
+    std::deque<mutation_fragment> all_fragments;
+    size_t double_partition_end = 0;
+    size_t missing_partition_end = 0;
+
+    for (uint32_t p = 0; p < 10; ++p) {
+        auto dk = ss.make_pkey(tests::random::get_int<uint32_t>(0, 8));
+        auto it = expected_partitions.find(dk);
+
+        testlog.trace("Generating data for {} partition {}", it == expected_partitions.end() ? "new" : "existing", dk);
+
+        if (it == expected_partitions.end()) {
+            auto [inserted_it, _] = expected_partitions.emplace(dk, expected_rows_type(*schema));
+            it = inserted_it;
+        }
+
+        all_fragments.emplace_back(*schema, permit, partition_start(dk, {}));
+
+        auto& expected_rows = it->second;
+
+        for (uint32_t r = 0; r < 10; ++r) {
+            const auto is_clustering_row = tests::random::get_int<unsigned>(0, 8);
+            if (is_clustering_row) {
+                auto ck = ss.make_ckey(tests::random::get_int<uint32_t>(0, 8));
+                testlog.trace("Generating clustering row {}", ck);
+
+                all_fragments.emplace_back(*schema, permit, ss.make_row(ck, "cv"));
+                expected_rows.clustering_rows.insert(ck);
+            } else {
+                testlog.trace("Generating static row");
+
+                all_fragments.emplace_back(*schema, permit, ss.make_static_row("sv"));
+                expected_rows.has_static_row = true;
+            }
+        }
+
+        const auto partition_end_roll = tests::random::get_int(0, 100);
+        if (partition_end_roll < 80) {
+            testlog.trace("Generating partition end");
+            all_fragments.emplace_back(*schema, permit, partition_end());
+        } else if (partition_end_roll < 90) {
+            testlog.trace("Generating double partition end");
+            ++double_partition_end;
+            all_fragments.emplace_back(*schema, permit, partition_end());
+            all_fragments.emplace_back(*schema, permit, partition_end());
+        } else {
+            testlog.trace("Not generating partition end");
+            ++missing_partition_end;
+        }
+    }
+
+    {
+        size_t rows = 0;
+        for (const auto& part : expected_partitions) {
+            rows += part.second.clustering_rows.size();
+        }
+        testlog.info("Generated {} partitions (with {} double and {} missing partition ends), {} rows and {} fragments total", expected_partitions.size(), double_partition_end, missing_partition_end, rows, all_fragments.size());
+    }
+
+    auto copy_fragments = [&schema] (const std::deque<mutation_fragment>& frags) {
+        auto permit = tests::make_permit();
+        std::deque<mutation_fragment> copied_fragments;
+        for (const auto& frag : frags) {
+            copied_fragments.emplace_back(*schema, permit, frag);
+        }
+        return copied_fragments;
+    };
+
+    std::list<std::deque<mutation_fragment>> segregated_fragment_streams;
+
+    mutation_writer::segregate_by_partition(make_scrubbing_reader(make_flat_mutation_reader_from_fragments(schema, permit, std::move(all_fragments)),
+                sstables::compaction_options::scrub::mode::segregate), [&schema, &segregated_fragment_streams] (flat_mutation_reader rd) {
+        return async([&schema, &segregated_fragment_streams, rd = std::move(rd)] () mutable {
+            auto close = deferred_close(rd);
+            auto& fragments = segregated_fragment_streams.emplace_back();
+            while (auto mf_opt = rd(db::no_timeout).get()) {
+                fragments.emplace_back(*schema, rd.permit(), *mf_opt);
+            }
+        });
+    }).get();
+
+    testlog.info("Segregation resulted in {} fragment streams", segregated_fragment_streams.size());
+
+    testlog.info("Checking position monotonicity of segregated streams");
+    {
+        size_t i = 0;
+        for (const auto& segregated_fragment_stream : segregated_fragment_streams) {
+            testlog.debug("Checking position monotonicity of segregated stream #{}", i++);
+            assert_that(make_flat_mutation_reader_from_fragments(schema, permit, std::move(copy_fragments(segregated_fragment_stream))))
+                    .has_monotonic_positions();
+        }
+    }
+
+    testlog.info("Checking position monotonicity of re-combined stream");
+    {
+        std::vector<flat_mutation_reader> readers;
+        readers.reserve(segregated_fragment_streams.size());
+
+        for (const auto& segregated_fragment_stream : segregated_fragment_streams) {
+            readers.emplace_back(make_flat_mutation_reader_from_fragments(schema, permit, std::move(copy_fragments(segregated_fragment_stream))));
+        }
+
+        assert_that(make_combined_reader(schema, permit, std::move(readers))).has_monotonic_positions();
+    }
+
+    testlog.info("Checking content of re-combined stream");
+    {
+        std::vector<flat_mutation_reader> readers;
+        readers.reserve(segregated_fragment_streams.size());
+
+        for (const auto& segregated_fragment_stream : segregated_fragment_streams) {
+            readers.emplace_back(make_flat_mutation_reader_from_fragments(schema, permit, std::move(copy_fragments(segregated_fragment_stream))));
+        }
+
+        auto rd = assert_that(make_combined_reader(schema, permit, std::move(readers)));
+        for (const auto& [pkey, content] : expected_partitions) {
+            testlog.debug("Checking content of partition {}", pkey);
+            rd.produces_partition_start(pkey);
+            if (content.has_static_row) {
+                rd.produces_static_row();
+            }
+            for (const auto& ckey : content.clustering_rows) {
+                rd.produces_row_with_key(ckey);
+            }
+            rd.produces_partition_end();
+        }
+        rd.produces_end_of_stream();
+    }
 }
 
 SEASTAR_THREAD_TEST_CASE(sstable_scrub_reader_test) {
