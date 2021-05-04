@@ -76,7 +76,7 @@ size_tiered_compaction_strategy::get_buckets(const std::vector<sstables::shared_
 
     using bucket_type = std::vector<sstables::shared_sstable>;
     std::vector<bucket_type> bucket_list;
-    std::vector<size_t> bucket_average_size_list;
+    std::vector<double> bucket_average_size_list;
 
     for (auto& pair : sorted_sstables) {
         size_t size = pair.second;
@@ -90,8 +90,8 @@ size_tiered_compaction_strategy::get_buckets(const std::vector<sstables::shared_
             if ((size > (bucket_average_size * options.bucket_low) && size < (bucket_average_size * options.bucket_high)) ||
                     (size < options.min_sstable_size && bucket_average_size < options.min_sstable_size)) {
                 auto& bucket = bucket_list.back();
-                size_t total_size = bucket.size() * bucket_average_size;
-                size_t new_average_size = (total_size + size) / (bucket.size() + 1);
+                auto total_size = bucket.size() * bucket_average_size;
+                auto new_average_size = (total_size + size) / (bucket.size() + 1);
 
                 bucket.push_back(pair.first);
                 bucket_average_size = new_average_size;
