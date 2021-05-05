@@ -47,6 +47,7 @@
 #include "utils/fb_utilities.hh"
 #include "mutation_source_metadata.hh"
 #include "gms/gossiper.hh"
+#include "db/config.hh"
 
 static logging::logger tlogger("table");
 static seastar::metrics::label column_family_label("cf");

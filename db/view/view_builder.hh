@@ -21,7 +21,6 @@
 
 #pragma once
 
-#include "database.hh"
 #include "dht/i_partitioner.hh"
 #include "keys.hh"
 #include "query-request.hh"
@@ -56,6 +55,7 @@ class view_build_progress;
 
 }
 
+class database;
 
 namespace db::view {
 

@@ -24,13 +24,13 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/distributed.hh>
 #include <seastar/core/abort_source.hh>
-#include "db/config.hh"
 #include "log.hh"
 #include "seastarx.hh"
 
 namespace db {
 class extensions;
 class seed_provider_type;
+class config;
 namespace view {
 class view_update_generator;
 }

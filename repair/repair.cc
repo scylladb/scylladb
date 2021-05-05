@@ -35,6 +35,7 @@
 #include "message/messaging_service.hh"
 #include "sstables/sstables.hh"
 #include "database.hh"
+#include "db/config.hh"
 #include "hashers.hh"
 #include "locator/network_topology_strategy.hh"
 #include "utils/bit_cast.hh"

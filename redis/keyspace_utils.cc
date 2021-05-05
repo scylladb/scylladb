@@ -38,6 +38,7 @@
 #include "database.hh"
 #include "gms/gossiper.hh"
 #include <seastar/core/print.hh>
+#include "db/config.hh"
 
 using namespace seastar;
 

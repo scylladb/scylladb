@@ -23,6 +23,8 @@
 #include "lua.hh"
 #include "log.hh"
 
+#include <seastar/core/thread.hh>
+
 namespace cql3 {
 namespace functions {
 

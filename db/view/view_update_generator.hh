@@ -21,7 +21,7 @@
 
 #pragma once
 
-#include "database_fwd.hh"
+#include "database.hh"
 #include "sstables/sstables.hh"
 #include "db/view/view_updating_consumer.hh"
 

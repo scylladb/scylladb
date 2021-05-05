@@ -49,10 +49,13 @@
 #include "types/map.hh"
 #include "query-result-set.hh"
 
+#include <seastar/core/distributed.hh>
+
 #include <vector>
 #include <map>
 
 class keyspace_metadata;
+class database;
 
 namespace query {
 class result_set;

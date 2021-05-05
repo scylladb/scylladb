@@ -69,6 +69,7 @@
 
 #include "transport/cql_protocol_extension.hh"
 #include "utils/bit_cast.hh"
+#include "db/config.hh"
 
 namespace cql_transport {
 

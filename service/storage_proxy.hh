@@ -65,7 +65,6 @@
 #include "cdc/stats.hh"
 #include "locator/token_metadata.hh"
 #include "db/hints/host_filter.hh"
-#include "db/config.hh"
 
 class reconcilable_result;
 class frozen_mutation_and_schema;
@@ -174,7 +173,7 @@ public:
     };
     using clock_type = lowres_clock;
     struct config {
-        db::config::hinted_handoff_enabled_type hinted_handoff_enabled = {};
+        db::hints::host_filter hinted_handoff_enabled = {};
         db::hints::directory_initializer hints_directory_initializer;
         size_t available_memory;
         smp_service_group read_smp_service_group = default_smp_service_group();

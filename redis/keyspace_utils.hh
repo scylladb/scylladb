@@ -21,12 +21,14 @@
 
 #pragma once
 
-#include  "db/config.hh"
 #include "seastar/core/sharded.hh"
 #include "seastar/core/future.hh"
 
 namespace service {
 class migration_manager;
+}
+namespace db {
+class config;
 }
 
 namespace redis {
