@@ -272,7 +272,7 @@ class double_decker:
                     yield ce
                     if ce['_flags']['_tail']:
                         break
-                    if p >= this.max_conflicting_partitions:
+                    if p >= self.max_conflicting_partitions:
                         raise ValueError("Too many conflicting partitions")
                     p += 1
 
