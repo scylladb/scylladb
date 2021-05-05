@@ -855,10 +855,20 @@ def current_shard():
     return int(gdb.parse_and_eval('\'seastar\'::local_engine->_id'))
 
 
+class sharded:
+    def __init__(self, val):
+        self.val = val
+        self.instances = std_vector(self.val['_instances'])
+
+    def instance(self, shard=None):
+        return self.instances[shard or current_shard()]['service']['_p']
+
+    def local(self):
+        return self.instance()
+
+
 def find_db(shard=None):
-    if shard is None:
-        shard = current_shard()
-    return gdb.parse_and_eval('::debug::db')['_instances']['_M_impl']['_M_start'][shard]['service']['_p']
+    return sharded(gdb.parse_and_eval('::debug::db')).instance(shard)
 
 
 def find_dbs():
@@ -3253,15 +3263,6 @@ class std_unique_ptr:
 
     def __bool__(self):
         return self.__nonzero__()
-
-
-class sharded:
-    def __init__(self, val):
-        self.val = val
-
-    def local(self):
-        shard = int(gdb.parse_and_eval('\'seastar\'::local_engine->_id'))
-        return std_vector(self.val['_instances'])[shard]['service']['_p']
 
 
 def ip_to_str(val, byteorder):
