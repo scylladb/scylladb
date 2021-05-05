@@ -74,47 +74,42 @@ size_tiered_compaction_strategy::get_buckets(const std::vector<sstables::shared_
         return i.second < j.second;
     });
 
-    std::map<size_t, std::vector<sstables::shared_sstable>> buckets;
+    using bucket_type = std::vector<sstables::shared_sstable>;
+    std::vector<bucket_type> bucket_list;
+    std::vector<double> bucket_average_size_list;
 
-    bool found;
     for (auto& pair : sorted_sstables) {
-        found = false;
         size_t size = pair.second;
 
         // look for a bucket containing similar-sized files:
-        // group in the same bucket if it's w/in 50% of the average for this bucket,
+        // group in the same bucket if it's w/in (bucket_low, bucket_high) of the average for this bucket,
         // or this file and the bucket are all considered "small" (less than `minSSTableSize`)
-        for (auto it = buckets.begin(); it != buckets.end(); it++) {
-            size_t old_average_size = it->first;
+        if (!bucket_list.empty()) {
+            auto& bucket_average_size = bucket_average_size_list.back();
 
-            if ((size > (old_average_size * options.bucket_low) && size < (old_average_size * options.bucket_high)) ||
-                    (size < options.min_sstable_size && old_average_size < options.min_sstable_size)) {
-                auto bucket = std::move(it->second);
-                size_t total_size = bucket.size() * old_average_size;
-                size_t new_average_size = (total_size + size) / (bucket.size() + 1);
+            if ((size > (bucket_average_size * options.bucket_low) && size < (bucket_average_size * options.bucket_high)) ||
+                    (size < options.min_sstable_size && bucket_average_size < options.min_sstable_size)) {
+                auto& bucket = bucket_list.back();
+                auto total_size = bucket.size() * bucket_average_size;
+                auto new_average_size = (total_size + size) / (bucket.size() + 1);
+                auto smallest_sstable_in_bucket = bucket[0]->data_size();
 
-                bucket.push_back(pair.first);
-                buckets.erase(it);
-                buckets.insert({ new_average_size, std::move(bucket) });
-
-                found = true;
-                break;
+                // SSTables are added in increasing size order so the bucket's
+                // average might drift upwards.
+                // Don't let it drift too high, to a point where the smallest
+                // SSTable might fall out of range.
+                if (size < options.min_sstable_size || smallest_sstable_in_bucket > new_average_size * options.bucket_low) {
+                    bucket.push_back(pair.first);
+                    bucket_average_size = new_average_size;
+                    continue;
+                }
             }
         }
 
         // no similar bucket found; put it in a new one
-        if (!found) {
-            std::vector<sstables::shared_sstable> new_bucket;
-            new_bucket.push_back(pair.first);
-            buckets.insert({ size, std::move(new_bucket) });
-        }
-    }
-
-    std::vector<std::vector<sstables::shared_sstable>> bucket_list;
-    bucket_list.reserve(buckets.size());
-
-    for (auto& entry : buckets) {
-        bucket_list.push_back(std::move(entry.second));
+        bucket_type new_bucket = {pair.first};
+        bucket_list.push_back(std::move(new_bucket));
+        bucket_average_size_list.push_back(size);
     }
 
     return bucket_list;
