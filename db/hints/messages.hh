@@ -25,6 +25,7 @@
 #include <seastar/core/lowres_clock.hh>
 
 #include "utils/UUID.hh"
+#include "gms/inet_address.hh"
 
 namespace db {
 

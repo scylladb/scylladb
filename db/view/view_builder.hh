@@ -29,6 +29,7 @@
 #include "utils/exponential_backoff_retry.hh"
 #include "utils/serialized_action.hh"
 #include "utils/UUID.hh"
+#include "database.hh"
 
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/future.hh>

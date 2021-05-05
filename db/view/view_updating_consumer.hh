@@ -28,6 +28,7 @@
 #include "reader_permit.hh"
 #include "db/view/row_locking.hh"
 #include <seastar/core/abort_source.hh>
+#include "mutation.hh"
 
 class evictable_reader_handle;
 
