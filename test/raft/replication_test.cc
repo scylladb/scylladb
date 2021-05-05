@@ -123,6 +123,12 @@ struct snapshot_value {
 using snapshots = std::unordered_map<raft::server_id, snapshot_value>;
 using persisted_snapshots = std::unordered_map<raft::server_id, std::pair<raft::snapshot, snapshot_value>>;
 
+seastar::semaphore snapshot_sync(0);
+// application of a snaphot with that id will be delayed until snapshot_sync is signaled
+raft::snapshot_id delay_apply_snapshot{utils::UUID(0, 0xdeadbeaf)};
+// sending of a snaphot with that id will be delayed until snapshot_sync is signaled
+raft::snapshot_id delay_send_snapshot{utils::UUID(0xdeadbeaf, 0)};
+
 class state_machine : public raft::state_machine {
 public:
     using apply_fn = std::function<size_t(raft::server_id id, const std::vector<raft::command_cref>& commands, lw_shared_ptr<hasher_int> hasher)>;
@@ -165,7 +171,11 @@ public:
         if (_seen >= _apply_entries) {
             _done.set_value();
         }
-        return make_ready_future<>();
+        if (id == delay_apply_snapshot) {
+            snapshot_sync.signal();
+            co_await snapshot_sync.wait();
+        }
+        co_return;
     };
     future<> abort() override { return make_ready_future<>(); }
 
@@ -298,10 +308,15 @@ public:
     }
     virtual future<raft::snapshot_reply> send_snapshot(raft::server_id id, const raft::install_snapshot& snap, seastar::abort_source& as) {
         if (!(*_connected)(id, _id)) {
-            return make_exception_future<raft::snapshot_reply>(std::runtime_error("cannot send snapshot since nodes are disconnected"));
+            throw std::runtime_error("cannot send snapshot since nodes are disconnected");
         }
         (*_snapshots)[id] = (*_snapshots)[_id];
-        return net[id]->_client->apply_snapshot(_id, std::move(snap));
+        auto s = snap; // snap is not always held alive by a caller
+        if (s.snp.id == delay_send_snapshot) {
+            co_await snapshot_sync.wait();
+            snapshot_sync.signal();
+        }
+        co_return co_await net[id]->_client->apply_snapshot(_id, std::move(s));
     }
     virtual future<> send_append_entries(raft::server_id id, const raft::append_request& append_request) {
         if (!(*_connected)(id, _id)) {
@@ -442,7 +457,11 @@ using partition = std::vector<std::variant<leader,int>>;
 
 using set_config = std::vector<size_t>;
 
-using update = std::variant<entries, new_leader, partition, set_config>;
+struct tick {
+    uint64_t ticks;
+};
+
+using update = std::variant<entries, new_leader, partition, set_config, tick>;
 
 struct initial_log {
     std::vector<log_entry> le;
@@ -737,6 +756,14 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
             auto sc = std::get<set_config>(update);
             in_configuration = co_await change_configuration(rafts, test.total_values, connected,
                     in_configuration, snaps, persisted_snaps, packet_drops, std::move(sc), leader, tickers);
+        } else if (std::holds_alternative<tick>(update)) {
+            auto t = std::get<tick>(update);
+            for (uint64_t i = 0; i < t.ticks; i++) {
+                for (auto& r: rafts) {
+                    r.first->tick();
+                }
+                co_await later();
+            }
         }
     }
 
@@ -980,6 +1007,19 @@ SEASTAR_THREAD_TEST_CASE(remove_node_cycle) {
                      // TODO: find out why it breaks in release mode
                      // set_config{3,0,1}, entries{2}, new_leader{0}
                      }}
+    , false, false);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_leader_change_during_snapshot_transfere) {
+    replication_test(
+        {.nodes = 3,
+         .initial_snapshots  = {{.snap = {.idx = raft::index_t(10),
+                                         .term = raft::term_t(1),
+                                         .id = delay_send_snapshot}},
+                                {.snap = {.idx = raft::index_t(10),
+                                         .term = raft::term_t(1),
+                                         .id = delay_apply_snapshot}}},
+         .updates = {tick{10} /* ticking starts snapshot transfer */, new_leader{1}, entries{10}}}
     , false, false);
 }
 
