@@ -3269,16 +3269,28 @@ def ip_to_str(val, byteorder):
     return '%d.%d.%d.%d' % (struct.unpack('BBBB', val.to_bytes(4, byteorder=byteorder))[::-1])
 
 
+def get_ip(ep):
+    try:
+        return ep['_addr']['ip']['raw']
+    except gdb.error:
+        return ep['_addr']['_in']['s_addr']
+
+
 class scylla_netw(gdb.Command):
     def __init__(self):
         gdb.Command.__init__(self, 'scylla netw', gdb.COMMAND_USER, gdb.COMPLETE_NONE, True)
 
     def invoke(self, arg, for_tty):
-        ms = sharded(gdb.parse_and_eval('netw::_the_messaging_service')).local()
+        mss = sharded(gdb.parse_and_eval('netw::_the_messaging_service'))
+        if not mss.instances:
+            gdb.write('netw::_the_messaging_service does not exist (yet?)\n')
+            return
+
+        ms = mss.local()
         gdb.write('Dropped messages: %s\n' % ms['_dropped_messages'])
         gdb.write('Outgoing connections:\n')
         for (addr, shard_info) in list_unordered_map(std_vector(ms['_clients'])[0]):
-            ip = ip_to_str(int(addr['addr']['_addr']['ip']['raw']), byteorder=sys.byteorder)
+            ip = ip_to_str(int(get_ip(addr['addr'])), byteorder=sys.byteorder)
             client = shard_info['rpc_client']['_p']
             rpc_client = std_unique_ptr(client['_p'])
             gdb.write('IP: %s, (netw::messaging_service::rpc_protocol_client_wrapper*) %s:\n' % (ip, client))
@@ -3308,7 +3320,7 @@ class scylla_gms(gdb.Command):
     def invoke(self, arg, for_tty):
         gossiper = sharded(gdb.parse_and_eval('gms::_the_gossiper')).local()
         for (endpoint, state) in list_unordered_map(gossiper['endpoint_state_map']):
-            ip = ip_to_str(int(endpoint['_addr']['ip']['raw']), byteorder=sys.byteorder)
+            ip = ip_to_str(int(get_ip(endpoint)), byteorder=sys.byteorder)
             gdb.write('%s: (gms::endpoint_state*) %s (%s)\n' % (ip, state.address, state['_heart_beat_state']))
             for app_state, value in std_map(state['_application_state']):
                 gdb.write('  %s: {version=%d, value=%s}\n' % (app_state, value['version'], value['value']))
