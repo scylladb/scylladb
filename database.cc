@@ -1493,12 +1493,20 @@ void database::register_connection_drop_notifier(netw::messaging_service& ms) {
     });
 }
 
-reader_concurrency_semaphore& database::get_reader_concurrency_semaphore() {
+namespace {
+
+enum class query_class {
+    user,
+    system,
+    maintenance,
+};
+
+query_class classify_query(const database_config& _dbcfg) {
     const auto current_group = current_scheduling_group();
 
     // Everything running in the statement group is considered a user query
     if (current_group == _dbcfg.statement_scheduling_group) {
-        return _read_concurrency_sem;
+        return query_class::user;
     // System queries run in the default (main) scheduling group
     // All queries executed on behalf of internal work also uses the system semaphore
     } else if (current_group == default_scheduling_group()
@@ -1507,13 +1515,23 @@ reader_concurrency_semaphore& database::get_reader_concurrency_semaphore() {
             || current_group == _dbcfg.memory_compaction_scheduling_group
             || current_group == _dbcfg.memtable_scheduling_group
             || current_group == _dbcfg.memtable_to_cache_scheduling_group) {
-        return _system_read_concurrency_sem;
+        return query_class::system;
     // Reads done on behalf of view update generation run in the streaming group
     } else if (current_scheduling_group() == _dbcfg.streaming_scheduling_group) {
-        return _streaming_concurrency_sem;
+        return query_class::maintenance;
     // Everything else is considered a user query
     } else {
-        return _read_concurrency_sem;
+        return query_class::user;
+    }
+}
+
+} // anonymous namespace
+
+reader_concurrency_semaphore& database::get_reader_concurrency_semaphore() {
+    switch (classify_query(_dbcfg)) {
+        case query_class::user: return _read_concurrency_sem;
+        case query_class::system: return _system_read_concurrency_sem;
+        case query_class::maintenance: return _streaming_concurrency_sem;
     }
 }
 
