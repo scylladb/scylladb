@@ -689,9 +689,10 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
             next_val += n;
             co_await wait_log(rafts, connected, in_configuration, leader);
         } else if (std::holds_alternative<new_leader>(update)) {
-            co_await wait_log(rafts, connected, in_configuration, leader);
-            pause_tickers(tickers);
             unsigned next_leader = std::get<new_leader>(update);
+            auto leader_log_idx = rafts[leader].first->log_last_idx();
+            co_await rafts[next_leader].first->wait_log_idx(leader_log_idx);
+            pause_tickers(tickers);
             leader = co_await elect_new_leader(rafts, connected, in_configuration, leader,
                     next_leader);
             restart_tickers(tickers);
