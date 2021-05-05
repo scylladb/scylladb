@@ -1683,7 +1683,11 @@ class scylla_memory(gdb.Command):
             gdb.write('    {}:\n'.format(human_name))
             es = db
             for path_component in es_path:
-                es = es[path_component]
+                try:
+                    es = es[path_component]
+                except gdb.error:
+                    break
+
             for sg_id, sg_name, count in scylla_memory.summarize_inheriting_execution_stage(es):
                 total += count
                 gdb.write('      {:02} {:32} {}\n'.format(sg_id, sg_name, count))
