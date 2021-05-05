@@ -237,3 +237,7 @@ raft::server_id to_raft_id(size_t local_id) {
 raft::server_address to_server_address(size_t local_id) {
     return raft::server_address{raft::server_id{to_raft_uuid(local_id)}};
 }
+
+size_t to_local_id(utils::UUID uuid) {
+    return uuid.get_least_significant_bits() - 1;
+}

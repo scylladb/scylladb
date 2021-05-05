@@ -686,7 +686,7 @@ future<> add_entries(std::vector<test_server>& rafts,
         } catch (raft::not_a_leader& e) {
             // leader stepped down, update with new leader if present
             if (e.leader != raft::server_id{}) {
-                leader = e.leader.id.get_least_significant_bits() - 1;
+                leader = to_local_id(e.leader.id);
             }
         } catch (raft::commit_status_unknown& e) {
         } catch (raft::dropped_entry& e) {
