@@ -609,6 +609,8 @@ future<> add_entries(std::vector<std::pair<std::unique_ptr<raft::server>, state_
                 leader = e.leader.id.get_least_significant_bits() - 1;
             }
         } catch (raft::commit_status_unknown& e) {
+        } catch (raft::dropped_entry& e) {
+            // retry if an entry is dropped because the leader have changed after it was submitetd
         }
     }
 }
