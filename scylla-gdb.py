@@ -2331,7 +2331,13 @@ class scylla_lsa_segment(gdb.Command):
     def invoke(self, arg, from_tty):
         # See logalloc::region_impl::for_each_live()
 
-        logalloc_alignment = gdb.parse_and_eval("'::debug::logalloc_alignment'")
+        try:
+            logalloc_alignment = gdb.parse_and_eval("'::debug::logalloc_alignment'")
+        except gdb.error:
+            # optimized-out and/or garbage-collected by ld, which
+            # _probably_ means the mode is not "sanitize", so:
+            logalloc_alignment = 1
+
         logalloc_alignment_mask = logalloc_alignment - 1
 
         ptr = int(arg, 0)
