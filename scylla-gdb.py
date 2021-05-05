@@ -883,11 +883,22 @@ def for_each_table(db=None):
         yield value['_p'].reinterpret_cast(gdb.lookup_type('column_family').pointer()).dereference()  # it's a lw_shared_ptr
 
 
-def list_unordered_map(map, cache=True):
+def lookup_type(type_names):
+    for type_name in type_names:
+        try:
+            return (type_name, gdb.lookup_type(type_name))
+        except gdb.error:
+            continue
+    raise gdb.error('none of the types found')
+
+
+def list_unordered_map(map):
     kt = map.type.template_argument(0)
     vt = map.type.template_argument(1)
     value_type = gdb.lookup_type('::std::pair<{} const, {} >'.format(str(kt), str(vt)))
-    hashnode_ptr_type = gdb.lookup_type('::std::__detail::_Hash_node<' + value_type.name + ', ' + ('false', 'true')[cache] + '>').pointer()
+    _, hashnode_type = lookup_type(['::std::__detail::_Hash_node<{}, {}>'.format(value_type.name, cache)
+                                    for cache in ('false', 'true')])
+    hashnode_ptr_type = hashnode_type.pointer()
     h = map['_M_h']
     p = h['_M_before_begin']['_M_nxt']
     while p:
@@ -1291,7 +1302,7 @@ class scylla_active_sstables(gdb.Command):
 
             def count_index_lists(sst):
                 index_lists_size = 0
-                for key, entry in list_unordered_map(sst['_index_lists']['_lists'], cache=False):
+                for key, entry in list_unordered_map(sst['_index_lists']['_lists']):
                     index_entries = std_vector(entry['list'])
                     index_lists_size += sizeof_entry
                     for e in index_entries:
@@ -2713,7 +2724,7 @@ def get_local_task_queues():
 
 def get_local_io_queues():
     """ Return a list of io queues for the local reactor. """
-    for dev, ioq in list_unordered_map(gdb.parse_and_eval('\'seastar\'::local_engine._io_queues'), cache=False):
+    for dev, ioq in list_unordered_map(gdb.parse_and_eval('\'seastar\'::local_engine._io_queues')):
         yield dev, std_unique_ptr(ioq).dereference()
 
 
