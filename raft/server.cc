@@ -353,6 +353,20 @@ void server_impl::notify_waiters(std::map<index_t, op_status>& waiters,
         }
         _stats.waiters_awaken++;
     }
+    // Drop all waiters with smaller term that last one been committed
+    // since there is no way they will be committed any longer (terms in
+    // the log only grow).
+    term_t last_committed_term = entries.back()->term;
+    while (waiters.size() != 0) {
+        auto it = waiters.begin();
+        if (it->second.term < last_committed_term) {
+            it->second.done.set_exception(dropped_entry());
+            waiters.erase(it);
+            _stats.waiters_awaken++;
+        } else {
+            break;
+        }
+    }
 }
 
 void server_impl::drop_waiters(std::optional<index_t> idx) {
