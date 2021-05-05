@@ -17,6 +17,7 @@
 
 import configparser
 import io
+import json
 import logging
 import os
 import re
@@ -29,6 +30,7 @@ import urllib.parse
 import urllib.request
 import yaml
 import psutil
+import socket
 import sys
 from pathlib import Path, PurePath
 from subprocess import run, DEVNULL
@@ -137,7 +139,6 @@ class gcp_instance:
     @staticmethod
     def is_gce_instance():
         """Check if it's GCE instance via DNS lookup to metadata server."""
-        import socket
         try:
             addrlist = socket.getaddrinfo('metadata.google.internal', 80)
         except socket.gaierror:
@@ -193,7 +194,6 @@ class gcp_instance:
 
     def __get_nvme_disks_from_metadata(self):
         """get list of nvme disks from metadata server"""
-        import json
         try:
             disksREST=self.__instance_metadata("disks", True)
             disksobj=json.loads(disksREST)
@@ -351,6 +351,172 @@ class gcp_instance:
         except urllib.error.HTTPError:  # empty user-data
             return ""
 
+
+class azure_instance:
+    """Describe several aspects of the current Azure instance"""
+
+    EPHEMERAL = "ephemeral"
+    ROOT = "root"
+    GETTING_STARTED_URL = "http://www.scylladb.com/doc/getting-started-azure/"
+    META_DATA_BASE_URL = "http://169.254.169.254/1.0/meta-data/instance/"
+    ENDPOINT_SNITCH = "GossipingPropertyFileSnitch"
+
+    def __init__(self):
+        self.__type = None
+        self.__cpu = None
+        self.__location = None
+        self.__zone = None
+        self.__memoryGB = None
+        self.__nvmeDiskCount = None
+        self.__firstNvmeSize = None
+        self.__osDisks = None
+
+    @staticmethod
+    def is_azure_instance():
+        """Check if it's Azure instance via DNS lookup to metadata server."""
+        try:
+            addrlist = socket.getaddrinfo('metadata.azure.internal', 80)
+        except socket.gaierror:
+            return False
+        return True
+
+# as per https://docs.microsoft.com/en-us/azure/virtual-machines/windows/instance-metadata-service?tabs=windows#supported-api-versions
+    API_VERSION = "?api-version=2021-01-01"
+
+    def __instance_metadata(self, path):
+        """query Azure metadata server"""
+        return curl(self.META_DATA_BASE_URL + path + self.API_VERSION + "&format=text")
+
+    def is_in_root_devs(self, x, root_devs):
+        for root_dev in root_devs:
+            if root_dev.startswith(os.path.join("/dev/", x)):
+                return True
+        return False
+
+    def _non_root_nvmes(self):
+        """get list of nvme disks from os, filter away if one of them is root"""
+        nvme_re = re.compile(r"nvme\d+n\d+$")
+
+        root_dev_candidates = [x for x in psutil.disk_partitions() if x.mountpoint == "/"]
+        if len(root_dev_candidates) != 1:
+            raise Exception("found more than one disk mounted at root ".format(root_dev_candidates))
+
+        root_devs = [x.device for x in root_dev_candidates]
+
+        nvmes_present = list(filter(nvme_re.match, os.listdir("/dev")))
+        return {self.ROOT: root_devs, self.EPHEMERAL: [x for x in nvmes_present if not self.is_in_root_devs(x, root_devs)]}
+
+    @property
+    def os_disks(self):
+        """populate disks from /dev/ and root mountpoint"""
+        if self.__osDisks is None:
+            __osDisks = {}
+            nvmes_present = self._non_root_nvmes()
+            for k, v in nvmes_present.items():
+                __osDisks[k] = v
+            self.__osDisks = __osDisks
+        return self.__osDisks
+
+    def getEphemeralOsDisks(self):
+        """return just transient disks"""
+        return self.os_disks[self.EPHEMERAL]
+
+    @property
+    def nvmeDiskCount(self):
+        """get # of nvme disks available for scylla raid"""
+        if self.__nvmeDiskCount is None:
+            try:
+                ephemeral_disks = self.getEphemeralOsDisks()
+                count_os_disks = len(ephemeral_disks)
+            except Exception as e:
+                print("Problem when parsing disks from OS:")
+                print(e)
+                count_os_disks = 0
+            count_metadata_nvme_disks = self.__get_nvme_disks_count_from_metadata()
+            self.__nvmeDiskCount = count_os_disks if count_os_disks < count_metadata_nvme_disks else count_metadata_nvme_disks
+        return self.__nvmeDiskCount
+
+    instanceToDiskCount = {
+        "L8s": 1,
+        "L16s": 2,
+        "L32s": 4,
+        "L48s": 6,
+        "L64s": 8,
+        "L80s": 10
+    }
+
+    def __get_nvme_disks_count_from_metadata(self):
+        #storageProfile in VM metadata lacks the number of NVMEs, it's hardcoded based on VM type
+        return self.instanceToDiskCount.get(self.instance_class(), 0)
+
+    @property
+    def instancelocation(self):
+        """return the location of this instance, e.g. eastus"""
+        if self.__location is None:
+            self.__location = self.__instance_metadata("location")
+        return self.__location
+
+    @property
+    def instancezone(self):
+        """return the zone of this instance, e.g. 1"""
+        if self.__zone is None:
+            self.__zone = self.__instance_metadata("zone")
+        return self.__zone
+
+    @property
+    def instancetype(self):
+        """return the type of this instance, e.g. Standard_L8s_v2"""
+        if self.__type is None:
+            self.__type = self.__instance_metadata("vmSize")
+        return self.__type
+
+    @property
+    def cpu(self):
+        """return the # of cpus of this instance"""
+        if self.__cpu is None:
+            self.__cpu = psutil.cpu_count()
+        return self.__cpu
+
+    @property
+    def memoryGB(self):
+        """return the size of memory in GB of this instance"""
+        if self.__memoryGB is None:
+            self.__memoryGB = psutil.virtual_memory().total/1024/1024/1024
+        return self.__memoryGB
+
+    def instance_version(self):
+        """Returns the size of the instance we are running in. i.e.: v2"""
+        instancetypesplit = self.instancetype.split("_")
+        return instancetypesplit[2] if len(instancetypesplit) > 2 else ""
+
+    def instance_purpose(self):
+        """Returns the class of the instance we are running in. i.e.: Standard"""
+        return self.instancetype.split("_")[0]
+
+    def instance_class(self):
+        """Returns the purpose of the instance we are running in. i.e.: L8s"""
+        return self.instancetype.split("_")[1]
+
+    def is_unsupported_instance(self):
+        """Returns if this instance type belongs to unsupported ones for nvmes"""
+        return False
+
+    def is_supported_instance(self):
+        """Returns if this instance type belongs to supported ones for nvmes"""
+        if self.instance_class() in list(self.instanceToDiskCount.keys()):
+            return True
+        return False
+
+    def is_recommended_instance_size(self):
+        """if this instance has at least 2 cpus, it has a recommended size"""
+        if int(self.instance_size()) > 1:
+            return True
+        return False
+
+    def is_recommended_instance(self):
+        if self.is_recommended_instance_size() and not self.is_unsupported_instance() and self.is_supported_instance():
+            return True
+        return False
 
 class aws_instance:
     """Describe several aspects of the current AWS instance"""

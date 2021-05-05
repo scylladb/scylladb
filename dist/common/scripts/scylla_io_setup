@@ -272,12 +272,71 @@ if __name__ == "__main__":
                     disk_properties["write_bandwidth"] = 4663037952
                     #below is google, above is our measured
                     #disk_properties["write_bandwidth"] = 4680 * mbs
-                properties_file = open(etcdir() + "/scylla.d/io_properties.yaml", "w")
-                yaml.dump({"disks": [disk_properties]}, properties_file,  default_flow_style=False)
-                ioconf = open(etcdir() + "/scylla.d/io.conf", "w")
-                ioconf.write("SEASTAR_IO=\"--io-properties-file={}\"\n".format(properties_file.name))
+                if "read_iops" in disk_properties:
+                    properties_file = open(etcdir() + "/scylla.d/io_properties.yaml", "w")
+                    yaml.dump({"disks": [disk_properties]}, properties_file,  default_flow_style=False)
+                    ioconf = open(etcdir() + "/scylla.d/io.conf", "w")
+                    ioconf.write("SEASTAR_IO=\"--io-properties-file={}\"\n".format(properties_file.name))
+                else:
+                    logging.error(
+                        'Did not detect number of disks in Google Cloud instance setup for auto local disk tuning, running manual iotune.')
+                    run_iotune()
             else:
-                logging.error('This is not a recommended Google Cloud instance setup for auto tuning, running manual iotune.')
+                logging.error(
+                    'This is not a recommended Google Cloud instance setup for auto local disk tuning, running manual iotune.')
+                run_iotune()
+        elif azure_instance().is_azure_instance():
+            idata = azure_instance()
+            if idata.is_recommended_instance():
+                disk_properties = {}
+                disk_properties["mountpoint"] = datadir()
+                nr_disks = idata.nvmeDiskCount
+                # below is based on https://docs.microsoft.com/en-us/azure/virtual-machines/lsv2-series
+                # note that scylla iotune might measure more, this is Azure recommended
+                # since write properties are not defined, they come from our iotune tests
+                mbs = 1024*1024
+                if nr_disks == 1:
+                    disk_properties["read_iops"] = 400000
+                    disk_properties["read_bandwidth"] = 2000 * mbs
+                    disk_properties["write_iops"] = 271696
+                    disk_properties["write_bandwidth"] = 1314 * mbs
+                elif nr_disks == 2:
+                    disk_properties["read_iops"] = 800000
+                    disk_properties["read_bandwidth"] = 4000 * mbs
+                    disk_properties["write_iops"] = 552434
+                    disk_properties["write_bandwidth"] = 2478 * mbs
+                elif nr_disks == 4:
+                    disk_properties["read_iops"] = 1500000
+                    disk_properties["read_bandwidth"] = 8000 * mbs
+                    disk_properties["write_iops"] = 1105063
+                    disk_properties["write_bandwidth"] = 4948 * mbs
+                elif nr_disks == 6:
+                    disk_properties["read_iops"] = 2200000
+                    disk_properties["read_bandwidth"] = 14000 * mbs
+                    disk_properties["write_iops"] = 1616847
+                    disk_properties["write_bandwidth"] = 7892 * mbs
+                elif nr_disks == 8:
+                    disk_properties["read_iops"] = 2900000
+                    disk_properties["read_bandwidth"] = 16000 * mbs
+                    disk_properties["write_iops"] = 2208081
+                    disk_properties["write_bandwidth"] = 9694 * mbs
+                elif nr_disks == 10:
+                    disk_properties["read_iops"] = 3800000
+                    disk_properties["read_bandwidth"] = 20000 * mbs
+                    disk_properties["write_iops"] = 2546511
+                    disk_properties["write_bandwidth"] = 11998 * mbs
+                if "read_iops" in disk_properties:
+                    properties_file = open(etcdir() + "/scylla.d/io_properties.yaml", "w")
+                    yaml.dump({"disks": [disk_properties]}, properties_file,  default_flow_style=False)
+                    ioconf = open(etcdir() + "/scylla.d/io.conf", "w")
+                    ioconf.write("SEASTAR_IO=\"--io-properties-file={}\"\n".format(properties_file.name))
+                else:
+                    logging.error(
+                        'Did not detect number of disks in Azure Cloud instance setup for auto local disk tuning, running manual iotune.')
+                    run_iotune()
+            else:
+                logging.error(
+                    'This is not a recommended Azure Cloud instance setup for auto local disk tuning, running manual iotune.')
                 run_iotune()
         else:
             run_iotune()
