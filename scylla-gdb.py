@@ -886,6 +886,18 @@ def list_unordered_map(map, cache=True):
         p = p['_M_nxt']
 
 
+def list_flat_hash_map(map):
+    kt = map.type.template_argument(0)
+    vt = map.type.template_argument(1)
+    slot_ptr_type = gdb.lookup_type('::std::pair<const {}, {} >'.format(str(kt), str(vt))).pointer()
+    size = int(map['size_'])
+    slot = map['slots_'].cast(slot_ptr_type)
+    while size > 0:
+        yield (slot['first'], slot['second'])
+        slot += 1
+        size -= 1
+
+
 def list_unordered_set(map, cache=True):
     value_type = map.type.template_argument(0)
     hashnode_ptr_type = gdb.lookup_type('::std::__detail::_Hash_node<' + value_type.name + ', ' + ('false', 'true')[cache] + '>').pointer()
@@ -1054,7 +1066,8 @@ class scylla_keyspaces(gdb.Command):
         for shard in range(cpus()):
             db = find_db(shard)
             keyspaces = db['_keyspaces']
-            for (key, value) in list_unordered_map(keyspaces):
+            gen = list_flat_hash_map if keyspaces.type.name.startswith('flat_hash_map') else list_unordered_map
+            for (key, value) in gen(keyspaces):
                 gdb.write('{:5} {:20} (keyspace*){}\n'.format(shard, str(key), value.address))
 
 
