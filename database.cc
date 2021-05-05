@@ -1527,6 +1527,16 @@ query_class classify_query(const database_config& _dbcfg) {
 
 } // anonymous namespace
 
+query::max_result_size database::get_unlimited_query_max_result_size() const {
+    switch (classify_query(_dbcfg)) {
+        case query_class::user:
+            return query::max_result_size(_cfg.max_memory_for_unlimited_query_soft_limit(), _cfg.max_memory_for_unlimited_query_hard_limit());
+        case query_class::system: [[fallthrough]];
+        case query_class::maintenance:
+            return query::max_result_size(query::result_memory_limiter::unlimited_result_size);
+    }
+}
+
 reader_concurrency_semaphore& database::get_reader_concurrency_semaphore() {
     switch (classify_query(_dbcfg)) {
         case query_class::user: return _read_concurrency_sem;

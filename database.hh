@@ -1598,6 +1598,10 @@ public:
         return _supports_infinite_bound_range_deletions;
     }
 
+    // Get the maximum result size for an unlimited query, appropriate for the
+    // query class, which is deduced from the current scheduling group.
+    query::max_result_size get_unlimited_query_max_result_size() const;
+
     // Get the reader concurrency semaphore, appropriate for the query class,
     // which is deduced from the current scheduling group.
     reader_concurrency_semaphore& get_reader_concurrency_semaphore();
