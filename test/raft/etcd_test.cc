@@ -258,7 +258,7 @@ BOOST_AUTO_TEST_CASE(test_leader_election_overwrite_newer_logs) {
     fsm_debug fsm1(id1, term_t{1}, server_id{}, std::move(log1), fd, fsm_cfg);
     raft::log_entry_ptr lep2 = seastar::make_lw_shared<log_entry>(log_entry{term_t{1}, index_t{1}, raft::log_entry::dummy{}});
     raft::log log2{raft::snapshot{.config = cfg}, raft::log_entries{lep2}};
-    fsm_debug fsm2(id1, term_t{1}, server_id{}, std::move(log1), fd, fsm_cfg);
+    fsm_debug fsm2(id2, term_t{1}, server_id{}, std::move(log2), fd, fsm_cfg);
 
     raft::log_entry_ptr lep3 = seastar::make_lw_shared<log_entry>(log_entry{term_t{2}, index_t{1}, raft::log_entry::dummy{}});
     raft::log log3{raft::snapshot{.config = cfg}, raft::log_entries{lep3}};
