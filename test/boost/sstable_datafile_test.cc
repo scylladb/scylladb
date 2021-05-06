@@ -6785,6 +6785,49 @@ SEASTAR_TEST_CASE(stcs_reshape_test) {
     });
 }
 
+SEASTAR_TEST_CASE(lcs_reshape_test) {
+    return test_env::do_with_async([] (test_env& env) {
+        simple_schema ss;
+        auto s = ss.schema();
+        auto keys = token_generation_for_current_shard(256);
+        auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::leveled,
+                                                     s->compaction_strategy_options());
+
+        // non overlapping
+        {
+            std::vector <shared_sstable> sstables;
+            for (auto i = 0; i < 256; i++) {
+                auto sst = env.make_sstable(s, "", i + 1);
+                auto key = keys[i].first;
+                sstables::test(sst).set_values_for_leveled_strategy(1 /* size */, 0 /* level */, 0 /* max ts */, key, key);
+                sstables.push_back(std::move(sst));
+            }
+
+            BOOST_REQUIRE(cs.get_reshaping_job(sstables, s, default_priority_class(), reshape_mode::strict).sstables.size() == 256);
+        }
+        // all overlapping
+        {
+            std::vector <shared_sstable> sstables;
+            for (auto i = 0; i < 256; i++) {
+                auto sst = env.make_sstable(s, "", i + 1);
+                auto key = keys[0].first;
+                sstables::test(sst).set_values_for_leveled_strategy(1 /* size */, 0 /* level */, 0 /* max ts */, key, key);
+                sstables.push_back(std::move(sst));
+            }
+
+            BOOST_REQUIRE(cs.get_reshaping_job(sstables, s, default_priority_class(), reshape_mode::strict).sstables.size() == s->max_compaction_threshold());
+        }
+        // single sstable
+        {
+            auto sst = env.make_sstable(s, "", 1);
+            auto key = keys[0].first;
+            sstables::test(sst).set_values_for_leveled_strategy(1 /* size */, 0 /* level */, 0 /* max ts */, key, key);
+
+            BOOST_REQUIRE(cs.get_reshaping_job({ sst }, s, default_priority_class(), reshape_mode::strict).sstables.size() == 0);
+        }
+    });
+}
+
 SEASTAR_TEST_CASE(test_twcs_interposer_on_memtable_flush) {
     return test_env::do_with_async([] (test_env& env) {
       storage_service_for_tests ssft;
