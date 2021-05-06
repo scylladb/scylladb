@@ -193,7 +193,7 @@ leveled_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> input
     // If there's only disjoint L0 sstables like on bootstrap, let's compact them all into a level L which has capacity to store the output.
     // The best possible level can be calculated with the formula: log (base fan_out) of (L0_total_bytes / max_sstable_size)
     auto [l0_disjoint, _] = is_disjoint(level_info[0], 0);
-    if (mode == reshape_mode::strict && level_info[0].size() == input.size() && l0_disjoint) {
+    if (mode == reshape_mode::strict && level_info[0].size() >= offstrategy_threshold && level_info[0].size() == input.size() && l0_disjoint) {
         auto log_fanout = [fanout = leveled_manifest::leveled_fan_out] (double x) {
             double inv_log_fanout = 1.0f / std::log(fanout);
             return log(x) * inv_log_fanout;
