@@ -75,6 +75,61 @@ lowres_clock::duration tick_delta = 1ms;
 
 auto dummy_command = std::numeric_limits<int>::min();
 
+// Updates can be
+//  - Entries
+//  - Leader change
+//  - Configuration change
+struct entries {
+    size_t n;
+};
+struct new_leader {
+    size_t id;
+};
+struct leader {
+    size_t id;
+};
+using partition = std::vector<std::variant<leader,int>>;
+
+struct set_config_entry {
+    size_t node_idx;
+    bool can_vote;
+
+    set_config_entry(size_t idx, bool can_vote = true)
+        : node_idx(idx), can_vote(can_vote)
+    {}
+};
+using set_config = std::vector<set_config_entry>;
+
+struct tick {
+    uint64_t ticks;
+};
+
+using update = std::variant<entries, new_leader, partition, set_config, tick>;
+
+struct log_entry {
+    unsigned term;
+    int value;
+};
+
+struct initial_log {
+    std::vector<log_entry> le;
+};
+
+struct initial_snapshot {
+    raft::snapshot snap;
+};
+
+struct test_case {
+    const size_t nodes;
+    const size_t total_values = 100;
+    uint64_t initial_term = 1;
+    const size_t initial_leader = 0;
+    const std::vector<struct initial_log> initial_states;
+    const std::vector<struct initial_snapshot> initial_snapshots;
+    const std::vector<raft::server::configuration> config;
+    const std::vector<update> updates;
+};
+
 std::mt19937 random_generator() {
     auto& gen = seastar::testing::local_random_engine;
     return std::mt19937(gen());
@@ -396,16 +451,6 @@ public:
 
 std::unordered_map<raft::server_id, rpc*> rpc::net;
 
-struct set_config_entry {
-    size_t node_idx;
-    bool can_vote;
-
-    set_config_entry(size_t idx, bool can_vote = true)
-        : node_idx(idx), can_vote(can_vote)
-    {}
-};
-using set_config = std::vector<set_config_entry>;
-
 struct test_server {
     std::unique_ptr<raft::server> server;
     state_machine* sm;
@@ -521,11 +566,6 @@ void raft_cluster::connect_all() {
     _connected->connect_all();
 }
 
-struct log_entry {
-    unsigned term;
-    int value;
-};
-
 std::vector<raft::log_entry> create_log(std::vector<log_entry> list, unsigned start_idx) {
     std::vector<raft::log_entry> log;
 
@@ -552,46 +592,6 @@ size_t apply_changes(raft::server_id id, const std::vector<raft::command_cref>& 
         }
     }
     return entries;
-};
-
-// Updates can be
-//  - Entries
-//  - Leader change
-//  - Configuration change
-struct entries {
-    size_t n;
-};
-struct new_leader {
-    size_t id;
-};
-struct leader {
-    size_t id;
-};
-using partition = std::vector<std::variant<leader,int>>;
-
-struct tick {
-    uint64_t ticks;
-};
-
-using update = std::variant<entries, new_leader, partition, set_config, tick>;
-
-struct initial_log {
-    std::vector<log_entry> le;
-};
-
-struct initial_snapshot {
-    raft::snapshot snap;
-};
-
-struct test_case {
-    const size_t nodes;
-    const size_t total_values = 100;
-    uint64_t initial_term = 1;
-    const size_t initial_leader = 0;
-    const std::vector<struct initial_log> initial_states;
-    const std::vector<struct initial_snapshot> initial_snapshots;
-    const std::vector<raft::server::configuration> config;
-    const std::vector<update> updates;
 };
 
 // Wait for leader log to propagate to follower
