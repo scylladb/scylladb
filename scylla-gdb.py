@@ -428,6 +428,90 @@ class std_vector:
         return int(self.ref['_M_impl']['_M_end_of_storage']) - int(self.ref['_M_impl']['_M_start'])
 
 
+class std_unordered_set:
+    def __init__(self, ref):
+        self.ht = ref['_M_h']
+        value_type = ref.type.template_argument(0)
+        _, node_type = lookup_type(['::std::__detail::_Hash_node<{}, {}>'.format(value_type.name, cache)
+                                    for cache in ('false', 'true')])
+        self.node_ptr_type = node_type.pointer()
+        self.value_ptr_type = value_type.pointer()
+
+    def __len__(self):
+        return self.ht['_M_element_count']
+
+    def __iter__(self):
+        p = self.ht['_M_before_begin']['_M_nxt']
+        while p:
+            pc = p.cast(self.node_ptr_type)['_M_storage']['_M_storage']['__data'].cast(self.value_ptr_type)
+            yield pc.dereference()
+            p = p['_M_nxt']
+
+    def __nonzero__(self):
+        return self.__len__() > 0
+
+    def __bool__(self):
+        return self.__nonzero__()
+
+
+class std_unordered_map:
+    def __init__(self, ref):
+        self.ht = ref['_M_h']
+        kt = ref.type.template_argument(0)
+        vt = ref.type.template_argument(1)
+        value_type = gdb.lookup_type('::std::pair<{} const, {} >'.format(str(kt), str(vt)))
+        _, node_type = lookup_type(['::std::__detail::_Hash_node<{}, {}>'.format(value_type.name, cache)
+                                    for cache in ('false', 'true')])
+        self.node_ptr_type = node_type.pointer()
+        self.value_ptr_type = value_type.pointer()
+
+    def __len__(self):
+        return self.ht['_M_element_count']
+
+    def __iter__(self):
+        p = self.ht['_M_before_begin']['_M_nxt']
+        while p:
+            pc = p.cast(self.node_ptr_type)['_M_storage']['_M_storage']['__data'].cast(self.value_ptr_type)
+            yield (pc['first'], pc['second'])
+            p = p['_M_nxt']
+
+    def __nonzero__(self):
+        return self.__len__() > 0
+
+    def __bool__(self):
+        return self.__nonzero__()
+
+
+class flat_hash_map:
+    def __init__(self, ref):
+        kt = ref.type.template_argument(0)
+        vt = ref.type.template_argument(1)
+        slot_ptr_type = gdb.lookup_type('::std::pair<const {}, {} >'.format(str(kt), str(vt))).pointer()
+        self.slots = ref['slots_'].cast(slot_ptr_type)
+        self.size = ref['size_']
+
+    def __len__(self):
+        return self.size
+
+    def __iter__(self):
+        size = self.size
+        slot = self.slots
+        while size > 0:
+            yield (slot['first'], slot['second'])
+            slot += 1
+            size -= 1
+
+    def __nonzero__(self):
+        return self.__len__() > 0
+
+    def __bool__(self):
+        return self.__nonzero__()
+
+
+def unordered_map(ref):
+    return flat_hash_map(ref) if ref.type.name.startswith('flat_hash_map') else std_unordered_map(ref)
+
+
 def std_priority_queue(ref):
     return std_vector(ref['c'])
 
@@ -879,7 +963,7 @@ def for_each_table(db=None):
     if not db:
         db = find_db()
     cfs = db['_column_families']
-    for (key, value) in list_unordered_map(cfs):
+    for (key, value) in unordered_map(cfs):
         yield value['_p'].reinterpret_cast(gdb.lookup_type('column_family').pointer()).dereference()  # it's a lw_shared_ptr
 
 
@@ -890,44 +974,6 @@ def lookup_type(type_names):
         except gdb.error:
             continue
     raise gdb.error('none of the types found')
-
-
-def list_unordered_map(map):
-    kt = map.type.template_argument(0)
-    vt = map.type.template_argument(1)
-    value_type = gdb.lookup_type('::std::pair<{} const, {} >'.format(str(kt), str(vt)))
-    _, hashnode_type = lookup_type(['::std::__detail::_Hash_node<{}, {}>'.format(value_type.name, cache)
-                                    for cache in ('false', 'true')])
-    hashnode_ptr_type = hashnode_type.pointer()
-    h = map['_M_h']
-    p = h['_M_before_begin']['_M_nxt']
-    while p:
-        pc = p.cast(hashnode_ptr_type)['_M_storage']['_M_storage']['__data'].cast(value_type.pointer())
-        yield (pc['first'], pc['second'])
-        p = p['_M_nxt']
-
-
-def list_flat_hash_map(map):
-    kt = map.type.template_argument(0)
-    vt = map.type.template_argument(1)
-    slot_ptr_type = gdb.lookup_type('::std::pair<const {}, {} >'.format(str(kt), str(vt))).pointer()
-    size = int(map['size_'])
-    slot = map['slots_'].cast(slot_ptr_type)
-    while size > 0:
-        yield (slot['first'], slot['second'])
-        slot += 1
-        size -= 1
-
-
-def list_unordered_set(map, cache=True):
-    value_type = map.type.template_argument(0)
-    hashnode_ptr_type = gdb.lookup_type('::std::__detail::_Hash_node<' + value_type.name + ', ' + ('false', 'true')[cache] + '>').pointer()
-    h = map['_M_h']
-    p = h['_M_before_begin']['_M_nxt']
-    while p:
-        pc = p.cast(hashnode_ptr_type)['_M_storage']['_M_storage']['__data'].cast(value_type.pointer())
-        yield pc.dereference()
-        p = p['_M_nxt']
 
 
 def get_text_range():
@@ -1087,8 +1133,7 @@ class scylla_keyspaces(gdb.Command):
         for shard in range(cpus()):
             db = find_db(shard)
             keyspaces = db['_keyspaces']
-            gen = list_flat_hash_map if keyspaces.type.name.startswith('flat_hash_map') else list_unordered_map
-            for (key, value) in gen(keyspaces):
+            for (key, value) in unordered_map(keyspaces):
                 gdb.write('{:5} {:20} (keyspace*){}\n'.format(shard, str(key), value.address))
 
 
@@ -1100,7 +1145,7 @@ class scylla_column_families(gdb.Command):
         for shard in range(cpus()):
             db = find_db(shard)
             cfs = db['_column_families']
-            for (key, value) in list_unordered_map(cfs):
+            for (key, value) in unordered_map(cfs):
                 value = value['_p'].reinterpret_cast(gdb.lookup_type('column_family').pointer()).dereference()  # it's a lw_shared_ptr
                 schema = value['_schema']['_p'].reinterpret_cast(gdb.lookup_type('schema').pointer())
                 name = str(schema['_raw']['_ks_name']) + '/' + str(schema['_raw']['_cf_name'])
@@ -1304,7 +1349,7 @@ class scylla_active_sstables(gdb.Command):
 
             def count_index_lists(sst):
                 index_lists_size = 0
-                for key, entry in list_unordered_map(sst['_index_lists']['_lists']):
+                for key, entry in unordered_map(sst['_index_lists']['_lists']):
                     index_entries = std_vector(entry['list'])
                     index_lists_size += sizeof_entry
                     for e in index_entries:
@@ -1385,7 +1430,7 @@ class seastar_lw_shared_ptr():
 def all_tables(db):
     """Returns pointers to table objects which exist on current shard"""
 
-    for (key, value) in list_unordered_map(db['_column_families']):
+    for (key, value) in unordered_map(db['_column_families']):
         yield seastar_lw_shared_ptr(value).get()
 
 
@@ -2730,7 +2775,7 @@ def get_local_task_queues():
 
 def get_local_io_queues():
     """ Return a list of io queues for the local reactor. """
-    for dev, ioq in list_unordered_map(gdb.parse_and_eval('\'seastar\'::local_engine._io_queues')):
+    for dev, ioq in unordered_map(gdb.parse_and_eval('\'seastar\'::local_engine._io_queues')):
         yield dev, std_unique_ptr(ioq).dereference()
 
 
@@ -3306,7 +3351,7 @@ class scylla_netw(gdb.Command):
         ms = mss.local()
         gdb.write('Dropped messages: %s\n' % ms['_dropped_messages'])
         gdb.write('Outgoing connections:\n')
-        for (addr, shard_info) in list_unordered_map(std_vector(ms['_clients'])[0]):
+        for (addr, shard_info) in unordered_map(std_vector(ms['_clients'])[0]):
             ip = ip_to_str(int(get_ip(addr['addr'])), byteorder=sys.byteorder)
             client = shard_info['rpc_client']['_p']
             rpc_client = std_unique_ptr(client['_p'])
@@ -3322,7 +3367,7 @@ class scylla_netw(gdb.Command):
             if srv:
                 gdb.write('Server: resources=%s\n' % srv['_resources_available'])
                 gdb.write('Incoming connections:\n')
-                for clnt in list_unordered_map(srv['_conns']):
+                for clnt in unordered_map(srv['_conns']):
                     conn = clnt['_p'].cast(clnt.type.template_argument(0).pointer())
                     ip = ip_to_str(int(conn['_info']['addr']['u']['in']['sin_addr']['s_addr']), byteorder='big')
                     port = int(conn['_info']['addr']['u']['in']['sin_port'])
@@ -3336,7 +3381,7 @@ class scylla_gms(gdb.Command):
 
     def invoke(self, arg, for_tty):
         gossiper = sharded(gdb.parse_and_eval('gms::_the_gossiper')).local()
-        for (endpoint, state) in list_unordered_map(gossiper['endpoint_state_map']):
+        for (endpoint, state) in unordered_map(gossiper['endpoint_state_map']):
             ip = ip_to_str(int(get_ip(endpoint)), byteorder=sys.byteorder)
             gdb.write('%s: (gms::endpoint_state*) %s (%s)\n' % (ip, state.address, state['_heart_beat_state']))
             for app_state, value in std_map(state['_application_state']):
@@ -3371,7 +3416,7 @@ class scylla_cache(gdb.Command):
 def find_sstables_attached_to_tables():
     db = find_db(current_shard())
     for table in all_tables(db):
-        for sst_ptr in list_unordered_set(seastar_lw_shared_ptr(seastar_lw_shared_ptr(table['_sstables']).get()['_all']).get().dereference()):
+        for sst_ptr in std_unordered_set(seastar_lw_shared_ptr(seastar_lw_shared_ptr(table['_sstables']).get()['_all']).get().dereference()):
             yield seastar_lw_shared_ptr(sst_ptr).get()
 
 
@@ -3453,7 +3498,7 @@ class scylla_sstables(gdb.Command):
             sm_size = 0
             sm = std_optional(sc['scylla_metadata'])
             if sm:
-                for tag, value in list_unordered_map(sm.get()['data']['data']):
+                for tag, value in unordered_map(sm.get()['data']['data']):
                     bv = boost_variant(value)
                     # FIXME: only gdb.Type.template_argument(0) works for boost::variant<>
                     if bv.which() != 0:
@@ -4248,7 +4293,7 @@ class scylla_features(gdb.Command):
 
     def invoke(self, arg, for_tty):
         gossiper = sharded(gdb.parse_and_eval('gms::_the_gossiper')).local()
-        for (name, f) in list_unordered_map(gossiper['_feature_service']['_registered_features']):
+        for (name, f) in unordered_map(gossiper['_feature_service']['_registered_features']):
             f = reference_wrapper(f).get()
             gdb.write('%s: %s\n' % (f['_name'], f['_enabled']))
 
