@@ -96,7 +96,7 @@ private:
         uint64_t append_entries_reply_received = 0;
         uint64_t request_vote_received = 0;
         uint64_t request_vote_reply_received = 0;
-        uint64_t waiters_awaiken = 0;
+        uint64_t waiters_awaken = 0;
         uint64_t waiters_dropped = 0;
         uint64_t append_entries_reply_sent = 0;
         uint64_t append_entries_sent = 0;
@@ -336,7 +336,7 @@ void server_impl::notify_waiters(std::map<index_t, op_status>& waiters,
             // was a leadership change and the entry was replaced.
             status.done.set_exception(dropped_entry());
         }
-        _stats.waiters_awaiken++;
+        _stats.waiters_awaken++;
     }
 }
 
@@ -674,7 +674,7 @@ void server_impl::register_metrics() {
         sm::make_total_operations("messages_sent", _stats.timeout_now_sent,
              sm::description("how many messages were sent"), {server_id_label(_id), message_type("timeout_now")}),
 
-        sm::make_total_operations("waiter_awaiken", _stats.waiters_awaiken,
+        sm::make_total_operations("waiter_awaken", _stats.waiters_awaken,
              sm::description("how many waiters got result back"), {server_id_label(_id)}),
         sm::make_total_operations("waiter_dropped", _stats.waiters_dropped,
              sm::description("how many waiters did not get result back"), {server_id_label(_id)}),
