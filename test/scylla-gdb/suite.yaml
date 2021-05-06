@@ -1,5 +1,3 @@
 type: Run
-disable:
-    - run
 run_in_release:
     - run
