@@ -1222,17 +1222,17 @@ SEASTAR_TEST_CASE(rpc_load_conf_from_snapshot) {
     constexpr size_t nodes = 1;
 
     raft::server_id sid = id();
-    initial_state state;
-    state.snapshot.config = raft::configuration{sid};
+    std::vector<initial_state> states(1);
+    states[0].snapshot.config = raft::configuration{sid};
 
-    auto raft = create_raft_server(sid, dummy_apply_fn, state, 1,
-        make_lw_shared<connected>(nodes), make_lw_shared<snapshots>(),
+    raft_cluster rafts(states, dummy_apply_fn, 0,
+        make_lw_shared<connected>(1), make_lw_shared<snapshots>(),
         make_lw_shared<persisted_snapshots>(), false);
-    co_await raft.server->start();
+    co_await rafts.start_all();
 
-    BOOST_CHECK(raft.rpc->known_peers() == address_set({sid}));
+    BOOST_CHECK(rafts[0].rpc->known_peers() == address_set({sid}));
 
-    co_await raft.server->abort();
+    co_await rafts.stop_all();
 }
 
 SEASTAR_TEST_CASE(rpc_load_conf_from_log) {
@@ -1240,19 +1240,20 @@ SEASTAR_TEST_CASE(rpc_load_conf_from_log) {
     // Initial configuration is taken from the persisted log.
     constexpr size_t nodes = 1;
 
+    std::vector<initial_state> states(1);
     raft::server_id sid = id();
     initial_state state;
     raft::log_entry conf_entry{.idx = raft::index_t{1}, .data = raft::configuration{sid}};
-    state.log.emplace_back(std::move(conf_entry));
+    states[0].log.emplace_back(std::move(conf_entry));
 
-    auto raft = create_raft_server(sid, dummy_apply_fn, state, 1,
-        make_lw_shared<connected>(nodes), make_lw_shared<snapshots>(),
+    raft_cluster rafts(states, dummy_apply_fn, 0,
+        make_lw_shared<connected>(1), make_lw_shared<snapshots>(),
         make_lw_shared<persisted_snapshots>(), false);
-    co_await raft.server->start();
+    co_await rafts.start_all();
 
-    BOOST_CHECK(raft.rpc->known_peers() == address_set({sid}));
+    BOOST_CHECK(rafts[0].rpc->known_peers() == address_set({sid}));
 
-    co_await raft.server->abort();
+    co_await rafts.stop_all();
 }
 
 SEASTAR_TEST_CASE(rpc_propose_conf_change) {
