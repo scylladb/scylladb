@@ -66,7 +66,7 @@ struct simple_snitch : public snitch_base {
     }
 
     virtual void sort_by_proximity(
-        inet_address address, std::vector<inet_address>& addresses) override {
+        inet_address address, inet_address_vector_replica_set& addresses) override {
         // Optimization to avoid walking the list
     }
 

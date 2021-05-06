@@ -47,6 +47,7 @@
 #include "exceptions/exceptions.hh"
 #include "utils/fb_utilities.hh"
 #include "gms/inet_address.hh"
+#include "inet_address_vectors.hh"
 #include "database.hh"
 
 #include <iosfwd>
@@ -75,19 +76,19 @@ inline size_t count_local_endpoints(const Range& live_endpoints) {
     return std::count_if(live_endpoints.begin(), live_endpoints.end(), is_local);
 }
 
-std::vector<gms::inet_address>
+inet_address_vector_replica_set
 filter_for_query(consistency_level cl,
                  keyspace& ks,
-                 std::vector<gms::inet_address> live_endpoints,
-                 const std::vector<gms::inet_address>& preferred_endpoints,
+                 inet_address_vector_replica_set live_endpoints,
+                 const inet_address_vector_replica_set& preferred_endpoints,
                  read_repair_decision read_repair,
                  gms::inet_address* extra,
                  column_family* cf);
 
-std::vector<gms::inet_address> filter_for_query(consistency_level cl,
+inet_address_vector_replica_set filter_for_query(consistency_level cl,
         keyspace& ks,
-        std::vector<gms::inet_address>& live_endpoints,
-        const std::vector<gms::inet_address>& preferred_endpoints,
+        inet_address_vector_replica_set& live_endpoints,
+        const inet_address_vector_replica_set& preferred_endpoints,
         column_family* cf);
 
 struct dc_node_count {
@@ -132,7 +133,7 @@ inline std::unordered_map<sstring, dc_node_count> count_per_dc_endpoints(
 bool
 is_sufficient_live_nodes(consistency_level cl,
                          keyspace& ks,
-                         const std::vector<gms::inet_address>& live_endpoints);
+                         const inet_address_vector_replica_set& live_endpoints);
 
 template<typename Range, typename PendingRange>
 inline bool assure_sufficient_live_nodes_each_quorum(

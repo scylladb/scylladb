@@ -27,6 +27,7 @@
 #include <seastar/core/distributed.hh>
 #include <seastar/core/sstring.hh>
 #include "gms/inet_address.hh"
+#include "inet_address_vectors.hh"
 #include <seastar/rpc/rpc_types.hh>
 #include <unordered_map>
 #include "query-request.hh"
@@ -462,7 +463,7 @@ public:
     void register_mutation(std::function<future<rpc::no_wait_type> (const rpc::client_info&, rpc::opt_time_point, frozen_mutation fm, std::vector<inet_address> forward,
         inet_address reply_to, unsigned shard, response_id_type response_id, rpc::optional<std::optional<tracing::trace_info>> trace_info)>&& func);
     future<> unregister_mutation();
-    future<> send_mutation(msg_addr id, clock_type::time_point timeout, const frozen_mutation& fm, std::vector<inet_address> forward,
+    future<> send_mutation(msg_addr id, clock_type::time_point timeout, const frozen_mutation& fm, inet_address_vector_replica_set forward,
         inet_address reply_to, unsigned shard, response_id_type response_id, std::optional<tracing::trace_info> trace_info = std::nullopt);
 
     // Wrapper for COUNTER_MUTATION
@@ -543,7 +544,7 @@ public:
     future<> unregister_paxos_learn();
 
     future<> send_paxos_learn(msg_addr id, clock_type::time_point timeout, const service::paxos::proposal& decision,
-            std::vector<inet_address> forward, inet_address reply_to, unsigned shard, response_id_type response_id,
+            inet_address_vector_replica_set forward, inet_address reply_to, unsigned shard, response_id_type response_id,
             std::optional<tracing::trace_info> trace_info = std::nullopt);
 
     void register_paxos_prune(std::function<future<rpc::no_wait_type>(const rpc::client_info&, rpc::opt_time_point, UUID schema_id, partition_key key,
@@ -557,7 +558,7 @@ public:
     void register_hint_mutation(std::function<future<rpc::no_wait_type> (const rpc::client_info&, rpc::opt_time_point, frozen_mutation fm, std::vector<inet_address> forward,
         inet_address reply_to, unsigned shard, response_id_type response_id, rpc::optional<std::optional<tracing::trace_info>> trace_info)>&& func);
     future<> unregister_hint_mutation();
-    future<> send_hint_mutation(msg_addr id, clock_type::time_point timeout, const frozen_mutation& fm, std::vector<inet_address> forward,
+    future<> send_hint_mutation(msg_addr id, clock_type::time_point timeout, const frozen_mutation& fm, inet_address_vector_replica_set forward,
         inet_address reply_to, unsigned shard, response_id_type response_id, std::optional<tracing::trace_info> trace_info = std::nullopt);
 
     void register_hint_sync_point_create(std::function<future<db::hints::sync_point_create_response> (db::hints::sync_point_create_request request)>&& func);

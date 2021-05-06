@@ -418,7 +418,7 @@ future<timespec> manager::end_point_hints_manager::sender::get_last_file_modific
     });
 }
 
-future<> manager::end_point_hints_manager::sender::do_send_one_mutation(frozen_mutation_and_schema m, const std::vector<gms::inet_address>& natural_endpoints) noexcept {
+future<> manager::end_point_hints_manager::sender::do_send_one_mutation(frozen_mutation_and_schema m, const inet_address_vector_replica_set& natural_endpoints) noexcept {
     return futurize_invoke([this, m = std::move(m), &natural_endpoints] () mutable -> future<> {
         // The fact that we send with CL::ALL in both cases below ensures that new hints are not going
         // to be generated as a result of hints sending.
@@ -804,7 +804,7 @@ future<> manager::end_point_hints_manager::sender::send_one_mutation(frozen_muta
     keyspace& ks = _db.find_keyspace(m.s->ks_name());
     auto& rs = ks.get_replication_strategy();
     auto token = dht::get_token(*m.s, m.fm.key());
-    std::vector<gms::inet_address> natural_endpoints = rs.get_natural_endpoints(std::move(token));
+    inet_address_vector_replica_set natural_endpoints = rs.get_natural_endpoints(std::move(token));
 
     return do_send_one_mutation(std::move(m), natural_endpoints);
 }

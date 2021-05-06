@@ -42,11 +42,11 @@ simple_strategy::simple_strategy(const sstring& keyspace_name, const shared_toke
     }
 }
 
-std::vector<inet_address> simple_strategy::calculate_natural_endpoints(const token& t, const token_metadata& tm, can_yield can_yield) const {
+inet_address_vector_replica_set simple_strategy::calculate_natural_endpoints(const token& t, const token_metadata& tm, can_yield can_yield) const {
     const std::vector<token>& tokens = tm.sorted_tokens();
 
     if (tokens.empty()) {
-        return std::vector<inet_address>();
+        return inet_address_vector_replica_set();
     }
 
     size_t replicas = get_replication_factor();
@@ -66,7 +66,7 @@ std::vector<inet_address> simple_strategy::calculate_natural_endpoints(const tok
         endpoints.push_back(*ep);
     }
 
-    return std::move(endpoints.get_vector());
+    return boost::copy_range<inet_address_vector_replica_set>(endpoints.get_vector());
 }
 
 size_t simple_strategy::get_replication_factor() const {

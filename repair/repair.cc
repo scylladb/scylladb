@@ -285,7 +285,7 @@ static std::vector<gms::inet_address> get_neighbors(database& db,
         ret.erase(it, ret.end());
     }
 
-    return ret;
+    return boost::copy_range<std::vector<gms::inet_address>>(std::move(ret));
 
 #if 0
     // Origin's ActiveRepairService.getNeighbors() also verifies that the
@@ -1592,7 +1592,7 @@ static future<> do_decommission_removenode_with_repair(seastar::sharded<database
             rlogger.info("{}: started with keyspace={}, leaving_node={}, nr_ranges={}", op, keyspace_name, leaving_node, ranges.size());
             size_t nr_ranges_total = ranges.size();
             size_t nr_ranges_skipped = 0;
-            std::unordered_map<dht::token_range, std::vector<inet_address>> current_replica_endpoints;
+            std::unordered_map<dht::token_range, inet_address_vector_replica_set> current_replica_endpoints;
             // Find (for each range) all nodes that store replicas for these ranges as well
             for (auto& r : ranges) {
                 auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
@@ -1615,8 +1615,8 @@ static future<> do_decommission_removenode_with_repair(seastar::sharded<database
                     ops->check_abort();
                 }
                 auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
-                const std::vector<inet_address> new_eps = ks.get_replication_strategy().calculate_natural_endpoints(end_token, temp, utils::can_yield::yes);
-                const std::vector<inet_address>& current_eps = current_replica_endpoints[r];
+                const inet_address_vector_replica_set new_eps = ks.get_replication_strategy().calculate_natural_endpoints(end_token, temp, utils::can_yield::yes);
+                const inet_address_vector_replica_set& current_eps = current_replica_endpoints[r];
                 std::unordered_set<inet_address> neighbors_set(new_eps.begin(), new_eps.end());
                 bool skip_this_range = false;
                 auto new_owner = neighbors_set;
@@ -1687,7 +1687,7 @@ static future<> do_decommission_removenode_with_repair(seastar::sharded<database
                         // Choose the decommission node n3 to run repair to
                         // sync with one of the replica nodes, e.g., n1, in the
                         // local DC.
-                        neighbors_set = get_neighbors_set(new_eps);
+                        neighbors_set = get_neighbors_set(boost::copy_range<std::vector<inet_address>>(new_eps));
                     }
                 } else {
                     throw std::runtime_error(format("{}: keyspace={}, range={}, current_replica_endpoints={}, new_replica_endpoints={}, wrong nubmer of new owner node={}",

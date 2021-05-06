@@ -43,6 +43,7 @@
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include "locator/token_metadata.hh"
 #include "gms/gossiper.hh"
+#include "inet_address_vectors.hh"
 #include <seastar/core/distributed.hh>
 #include "dht/i_partitioner.hh"
 #include "dht/token_range_endpoints.hh"
@@ -469,16 +470,16 @@ public:
      */
     sstring get_rpc_address(const inet_address& endpoint) const;
 
-    std::unordered_map<dht::token_range, std::vector<inet_address>> get_range_to_address_map(const sstring& keyspace) const;
+    std::unordered_map<dht::token_range, inet_address_vector_replica_set> get_range_to_address_map(const sstring& keyspace) const;
 
-    std::unordered_map<dht::token_range, std::vector<inet_address>> get_range_to_address_map_in_local_dc(
+    std::unordered_map<dht::token_range, inet_address_vector_replica_set> get_range_to_address_map_in_local_dc(
             const sstring& keyspace) const;
 
     std::vector<token> get_tokens_in_local_dc() const;
 
     bool is_local_dc(const inet_address& targetHost) const;
 
-    std::unordered_map<dht::token_range, std::vector<inet_address>> get_range_to_address_map(const sstring& keyspace,
+    std::unordered_map<dht::token_range, inet_address_vector_replica_set> get_range_to_address_map(const sstring& keyspace,
             const std::vector<token>& sorted_tokens) const;
 
     /**
@@ -511,7 +512,7 @@ public:
      * @param ranges
      * @return mapping of ranges to the replicas responsible for them.
     */
-    std::unordered_map<dht::token_range, std::vector<inet_address>> construct_range_to_endpoint_map(
+    std::unordered_map<dht::token_range, inet_address_vector_replica_set> construct_range_to_endpoint_map(
             const sstring& keyspace,
             const dht::token_range_vector& ranges) const;
 public:
@@ -728,7 +729,7 @@ public:
      * @param key key for which we need to find the endpoint
      * @return the endpoint responsible for this key
      */
-    std::vector<gms::inet_address> get_natural_endpoints(const sstring& keyspace,
+    inet_address_vector_replica_set get_natural_endpoints(const sstring& keyspace,
             const sstring& cf, const sstring& key) const;
 
     /**
@@ -739,7 +740,7 @@ public:
      * @param pos position for which we need to find the endpoint
      * @return the endpoint responsible for this token
      */
-    std::vector<gms::inet_address>  get_natural_endpoints(const sstring& keyspace, const token& pos) const;
+    inet_address_vector_replica_set  get_natural_endpoints(const sstring& keyspace, const token& pos) const;
 
     /**
      * @return Vector of Token ranges (_not_ keys!) together with estimated key count,

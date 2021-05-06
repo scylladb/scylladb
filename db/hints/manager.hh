@@ -36,6 +36,7 @@
 #include "lister.hh"
 #include "gms/gossiper.hh"
 #include "locator/snitch_base.hh"
+#include "inet_address_vectors.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include "db/commitlog/commitlog.hh"
 #include "utils/loading_shared_values.hh"
@@ -292,7 +293,7 @@ public:
             /// \param m mutation to send
             /// \param natural_endpoints current replicas for the given mutation
             /// \return future that resolves when the operation is complete
-            future<> do_send_one_mutation(frozen_mutation_and_schema m, const std::vector<gms::inet_address>& natural_endpoints) noexcept;
+            future<> do_send_one_mutation(frozen_mutation_and_schema m, const inet_address_vector_replica_set& natural_endpoints) noexcept;
 
             /// \brief Send one mutation out.
             ///

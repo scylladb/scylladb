@@ -25,6 +25,7 @@
 #include <functional>
 #include <unordered_map>
 #include "gms/inet_address.hh"
+#include "locator/snitch_base.hh"
 #include "dht/i_partitioner.hh"
 #include "token_metadata.hh"
 #include "snitch_base.hh"
@@ -51,12 +52,12 @@ using can_yield = utils::can_yield;
 class abstract_replication_strategy {
 private:
     long _last_invalidated_ring_version = 0;
-    std::unordered_map<token, std::vector<inet_address>> _cached_endpoints;
+    std::unordered_map<token, inet_address_vector_replica_set> _cached_endpoints;
     uint64_t _cache_hits_count = 0;
 
     static logging::logger logger;
 
-    std::unordered_map<token, std::vector<inet_address>>&
+    std::unordered_map<token, inet_address_vector_replica_set>&
     get_cached_endpoints(const token_metadata& tm);
 protected:
     sstring _ks_name;
@@ -91,15 +92,15 @@ public:
         snitch_ptr& snitch,
         const std::map<sstring, sstring>& config_options,
         replication_strategy_type my_type);
-    virtual std::vector<inet_address> calculate_natural_endpoints(const token& search_token, const token_metadata& tm, can_yield = can_yield::no) const = 0;
+    virtual inet_address_vector_replica_set calculate_natural_endpoints(const token& search_token, const token_metadata& tm, can_yield = can_yield::no) const = 0;
     virtual ~abstract_replication_strategy() {}
     static std::unique_ptr<abstract_replication_strategy> create_replication_strategy(const sstring& ks_name, const sstring& strategy_name, const shared_token_metadata& stm, const std::map<sstring, sstring>& config_options);
     static void validate_replication_strategy(const sstring& ks_name,
                                               const sstring& strategy_name,
                                               const shared_token_metadata& stm,
                                               const std::map<sstring, sstring>& config_options);
-    std::vector<inet_address> get_natural_endpoints(const token& search_token, can_yield = can_yield::no);
-    std::vector<inet_address> get_natural_endpoints_without_node_being_replaced(const token& search_token, can_yield = can_yield::no);
+    inet_address_vector_replica_set get_natural_endpoints(const token& search_token, can_yield = can_yield::no);
+    inet_address_vector_replica_set get_natural_endpoints_without_node_being_replaced(const token& search_token, can_yield = can_yield::no);
     virtual void validate_options() const = 0;
     virtual std::optional<std::set<sstring>> recognized_options() const = 0;
     virtual size_t get_replication_factor() const = 0;
@@ -128,7 +129,7 @@ public:
 private:
     // Caller must ensure that token_metadata will not change throughout the call if can_yield::yes.
     dht::token_range_vector do_get_ranges(inet_address ep, const token_metadata_ptr tmptr, can_yield) const;
-    virtual std::vector<inet_address> do_get_natural_endpoints(const token& search_token, const token_metadata& tm, can_yield);
+    virtual inet_address_vector_replica_set do_get_natural_endpoints(const token& search_token, const token_metadata& tm, can_yield);
 
 public:
     // get_primary_ranges() returns the list of "primary ranges" for the given
@@ -146,7 +147,7 @@ public:
     std::unordered_multimap<inet_address, dht::token_range> get_address_ranges(const token_metadata& tm, can_yield) const;
     std::unordered_multimap<inet_address, dht::token_range> get_address_ranges(const token_metadata& tm, inet_address endpoint, can_yield) const;
 
-    std::unordered_map<dht::token_range, std::vector<inet_address>> get_range_addresses(const token_metadata& tm, can_yield) const;
+    std::unordered_map<dht::token_range, inet_address_vector_replica_set> get_range_addresses(const token_metadata& tm, can_yield) const;
 
     dht::token_range_vector get_pending_address_ranges(const token_metadata_ptr tmptr, token pending_token, inet_address pending_address, can_yield) const;
 

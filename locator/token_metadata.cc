@@ -735,7 +735,7 @@ public:
 #endif
 public:
     // returns empty vector if keyspace_name not found.
-    std::vector<gms::inet_address> pending_endpoints_for(const token& token, const sstring& keyspace_name) const;
+    inet_address_vector_topology_change pending_endpoints_for(const token& token, const sstring& keyspace_name) const;
 #if 0
     /**
      * @deprecated retained for benefit of old tests
@@ -1676,7 +1676,7 @@ void token_metadata_impl::del_replacing_endpoint(inet_address existing_node) {
     _replacing_endpoints.erase(existing_node);
 }
 
-std::vector<gms::inet_address> token_metadata_impl::pending_endpoints_for(const token& token, const sstring& keyspace_name) const {
+inet_address_vector_topology_change token_metadata_impl::pending_endpoints_for(const token& token, const sstring& keyspace_name) const {
     // Fast path 0: pending ranges not found for this keyspace_name
     const auto pr_it = _pending_ranges_interval_map.find(keyspace_name);
     if (pr_it == _pending_ranges_interval_map.end()) {
@@ -1690,12 +1690,12 @@ std::vector<gms::inet_address> token_metadata_impl::pending_endpoints_for(const 
     }
 
     // Slow path: lookup pending ranges
-    std::vector<gms::inet_address> endpoints;
+    inet_address_vector_topology_change endpoints;
     auto interval = range_to_interval(range<dht::token>(token));
     const auto it = ks_map.find(interval);
     if (it != ks_map.end()) {
         // interval_map does not work with std::vector, convert to std::vector of ips
-        endpoints = std::vector<gms::inet_address>(it->second.begin(), it->second.end());
+        endpoints = inet_address_vector_topology_change(it->second.begin(), it->second.end());
     }
     return endpoints;
 }
@@ -2050,7 +2050,7 @@ token_metadata::count_normal_token_owners() const {
     return _impl->count_normal_token_owners();
 }
 
-std::vector<gms::inet_address>
+inet_address_vector_topology_change
 token_metadata::pending_endpoints_for(const token& token, const sstring& keyspace_name) const {
     return _impl->pending_endpoints_for(token, keyspace_name);
 }

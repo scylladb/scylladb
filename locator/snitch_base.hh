@@ -44,6 +44,7 @@
 #include <boost/signals2/dummy_mutex.hpp>
 
 #include "gms/inet_address.hh"
+#include "inet_address_vectors.hh"
 #include "gms/versioned_value.hh"
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/thread.hh>
@@ -94,16 +95,16 @@ public:
     /**
      * returns a new <tt>List</tt> sorted by proximity to the given endpoint
      */
-    virtual std::vector<inet_address> get_sorted_list_by_proximity(
+    virtual inet_address_vector_replica_set get_sorted_list_by_proximity(
         inet_address address,
-        std::vector<inet_address>& unsorted_address) = 0;
+        inet_address_vector_replica_set& unsorted_address) = 0;
 
     /**
      * This method will sort the <tt>List</tt> by proximity to the given
      * address.
      */
     virtual void sort_by_proximity(
-        inet_address address, std::vector<inet_address>& addresses) = 0;
+        inet_address address, inet_address_vector_replica_set& addresses) = 0;
 
     /**
      * compares two endpoints in relation to the target endpoint, returning as
@@ -127,9 +128,9 @@ public:
      * against l2.
      */
     virtual bool is_worth_merging_for_range_query(
-        std::vector<inet_address>& merged,
-        std::vector<inet_address>& l1,
-        std::vector<inet_address>& l2) = 0;
+        inet_address_vector_replica_set& merged,
+        inet_address_vector_replica_set& l1,
+        inet_address_vector_replica_set& l2) = 0;
 
     virtual ~i_endpoint_snitch() { assert(_state == snitch_state::stopped); };
 
@@ -426,25 +427,25 @@ public:
     // virtual sstring get_datacenter(inet_address endpoint)  = 0;
     //
 
-    virtual std::vector<inet_address> get_sorted_list_by_proximity(
+    virtual inet_address_vector_replica_set get_sorted_list_by_proximity(
         inet_address address,
-        std::vector<inet_address>& unsorted_address) override;
+        inet_address_vector_replica_set& unsorted_address) override;
 
     virtual void sort_by_proximity(
-        inet_address address, std::vector<inet_address>& addresses) override;
+        inet_address address, inet_address_vector_replica_set& addresses) override;
 
     virtual int compare_endpoints(
         inet_address& address, inet_address& a1, inet_address& a2) override;
 
     virtual bool is_worth_merging_for_range_query(
-        std::vector<inet_address>& merged,
-        std::vector<inet_address>& l1,
-        std::vector<inet_address>& l2) override;
+        inet_address_vector_replica_set& merged,
+        inet_address_vector_replica_set& l1,
+        inet_address_vector_replica_set& l2) override;
 
     virtual future<> gossip_snitch_info(std::list<std::pair<gms::application_state, gms::versioned_value>> info) override;
 
 private:
-    bool has_remote_node(std::vector<inet_address>& l);
+    bool has_remote_node(inet_address_vector_replica_set& l);
 
 protected:
     static std::optional<sstring> get_endpoint_info(inet_address endpoint,

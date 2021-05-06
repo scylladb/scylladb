@@ -45,6 +45,7 @@
 #include "query-request.hh"
 #include "query-result.hh"
 #include "query-result-set.hh"
+#include "inet_address_vectors.hh"
 #include <seastar/core/distributed.hh>
 #include <seastar/core/execution_stage.hh>
 #include <seastar/core/scheduling_specific.hh>
@@ -242,7 +243,7 @@ public:
     // Holds  a list of endpoints participating in CAS request, for a given
     // consistency level, token, and state of joining/leaving nodes.
     struct paxos_participants {
-        std::vector<gms::inet_address> endpoints;
+        inet_address_vector_replica_set endpoints;
         // How many participants are required for a quorum (i.e. is it SERIAL or LOCAL_SERIAL).
         size_t required_participants;
         bool has_dead_endpoints;
@@ -337,7 +338,7 @@ private:
             std::unique_ptr<mutation_holder> mh, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state,
             service_permit permit);
     response_id_type create_write_response_handler(keyspace& ks, db::consistency_level cl, db::write_type type, std::unique_ptr<mutation_holder> m, std::unordered_set<gms::inet_address> targets,
-            const std::vector<gms::inet_address>& pending_endpoints, std::vector<gms::inet_address>, tracing::trace_state_ptr tr_state, storage_proxy::write_stats& stats, service_permit permit);
+            const inet_address_vector_topology_change& pending_endpoints, inet_address_vector_topology_change, tracing::trace_state_ptr tr_state, storage_proxy::write_stats& stats, service_permit permit);
     response_id_type create_write_response_handler(const mutation&, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit);
     response_id_type create_write_response_handler(const hint_wrapper&, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit);
     response_id_type create_write_response_handler(const std::unordered_map<gms::inet_address, std::optional<mutation>>&, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit);
@@ -354,9 +355,9 @@ private:
     bool cannot_hint(const Range& targets, db::write_type type) const;
     bool hints_enabled(db::write_type type) const noexcept;
     db::hints::manager& hints_manager_for(db::write_type type);
-    std::vector<gms::inet_address> get_live_endpoints(keyspace& ks, const dht::token& token) const;
-    static void sort_endpoints_by_proximity(std::vector<gms::inet_address>& eps);
-    std::vector<gms::inet_address> get_live_sorted_endpoints(keyspace& ks, const dht::token& token) const;
+    inet_address_vector_replica_set get_live_endpoints(keyspace& ks, const dht::token& token) const;
+    static void sort_endpoints_by_proximity(inet_address_vector_replica_set& eps);
+    inet_address_vector_replica_set get_live_sorted_endpoints(keyspace& ks, const dht::token& token) const;
     db::read_repair_decision new_read_repair_decision(const schema& s);
     ::shared_ptr<abstract_read_executor> get_read_executor(lw_shared_ptr<query::read_command> cmd,
             schema_ptr schema,
@@ -364,7 +365,7 @@ private:
             db::consistency_level cl,
             db::read_repair_decision repair_decision,
             tracing::trace_state_ptr trace_state,
-            const std::vector<gms::inet_address>& preferred_endpoints,
+            const inet_address_vector_replica_set& preferred_endpoints,
             bool& is_bounced_read,
             service_permit permit);
     future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>> query_result_local(schema_ptr, lw_shared_ptr<query::read_command> cmd, const dht::partition_range& pr,
@@ -379,7 +380,7 @@ private:
             dht::partition_range_vector partition_ranges,
             db::consistency_level cl,
             coordinator_query_options optional_params);
-    static std::vector<gms::inet_address> intersection(const std::vector<gms::inet_address>& l1, const std::vector<gms::inet_address>& l2);
+    static inet_address_vector_replica_set intersection(const inet_address_vector_replica_set& l1, const inet_address_vector_replica_set& l2);
     future<query_partition_key_range_concurrent_result> query_partition_key_range_concurrent(clock_type::time_point timeout,
             std::vector<foreign_ptr<lw_shared_ptr<query::result>>>&& results,
             lw_shared_ptr<query::read_command> cmd,
@@ -433,7 +434,7 @@ private:
     future<> send_to_endpoint(
             std::unique_ptr<mutation_holder> m,
             gms::inet_address target,
-            std::vector<gms::inet_address> pending_endpoints,
+            inet_address_vector_topology_change pending_endpoints,
             db::write_type type,
             tracing::trace_state_ptr tr_state,
             write_stats& stats,
@@ -561,9 +562,9 @@ public:
     // Inspired by Cassandra's StorageProxy.sendToHintedEndpoints but without
     // hinted handoff support, and just one target. See also
     // send_to_live_endpoints() - another take on the same original function.
-    future<> send_to_endpoint(frozen_mutation_and_schema fm_a_s, gms::inet_address target, std::vector<gms::inet_address> pending_endpoints, db::write_type type,
+    future<> send_to_endpoint(frozen_mutation_and_schema fm_a_s, gms::inet_address target, inet_address_vector_topology_change pending_endpoints, db::write_type type,
             tracing::trace_state_ptr tr_state, write_stats& stats, allow_hints allow_hints = allow_hints::yes);
-    future<> send_to_endpoint(frozen_mutation_and_schema fm_a_s, gms::inet_address target, std::vector<gms::inet_address> pending_endpoints, db::write_type type,
+    future<> send_to_endpoint(frozen_mutation_and_schema fm_a_s, gms::inet_address target, inet_address_vector_topology_change pending_endpoints, db::write_type type,
             tracing::trace_state_ptr tr_state, allow_hints allow_hints = allow_hints::yes);
 
     // Send a mutation to a specific remote target as a hint.
@@ -692,7 +693,7 @@ private:
     // Is either set explicitly or derived from the consistency level set in keyspace options.
     db::consistency_level _cl_for_learn;
     // Live endpoints, as per get_paxos_participants()
-    std::vector<gms::inet_address> _live_endpoints;
+    inet_address_vector_replica_set _live_endpoints;
     // How many endpoints need to respond favourably for the protocol to progress to the next step.
     size_t _required_participants;
     // A deadline when the entire CAS operation timeout expires, derived from write_request_timeout_in_ms
