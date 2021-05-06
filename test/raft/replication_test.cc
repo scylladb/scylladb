@@ -770,24 +770,13 @@ std::vector<raft_ticker_type> init_raft_tickers(raft_cluster& rafts) {
     return tickers;
 }
 
-// Run test case (name, nodes, leader, initial logs, updates)
-future<> run_test(test_case test, bool prevote, bool packet_drops) {
+std::vector<initial_state> get_states(test_case test, bool prevote) {
     rpc::reset_network();
-
     std::vector<initial_state> states(test.nodes);       // Server initial states
 
     size_t leader = test.initial_leader;
 
     states[leader].term = raft::term_t{test.initial_term};
-
-    int leader_initial_entries = 0;
-    if (leader < test.initial_states.size()) {
-        leader_initial_entries += test.initial_states[leader].le.size();  // Count existing leader entries
-    }
-    int leader_snap_skipped = 0; // Next value to write
-    if (leader < test.initial_snapshots.size()) {
-        leader_snap_skipped = test.initial_snapshots[leader].snap.idx;  // Count existing leader entries
-    }
 
     // Server initial logs, etc
     for (size_t i = 0; i < states.size(); ++i) {
@@ -810,12 +799,18 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
             states[i].server_config = { .enable_prevoting = prevote };
         }
     }
+    return states;
+}
+
+future<> run_test(test_case test, bool prevote, bool packet_drops) {
+
+    size_t leader = test.initial_leader;
 
     auto snaps = make_lw_shared<snapshots>();
     auto persisted_snaps = make_lw_shared<persisted_snapshots>();
     auto connected = make_lw_shared<struct connected>(test.nodes);
 
-    raft_cluster rafts(states, apply_changes, test.total_values, connected,
+    raft_cluster rafts(get_states(test, prevote), apply_changes, test.total_values, connected,
             snaps, persisted_snaps, packet_drops);
     co_await rafts.start_all();
 
@@ -832,8 +827,17 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
     rafts[leader].server->wait_until_candidate();
     co_await rafts[leader].server->wait_election_done();
     BOOST_TEST_MESSAGE("Processing updates");
+
+    // Count existing leader snap index and entries, if present
+    size_t next_val = 0;
+    if (leader < test.initial_states.size()) {
+        next_val += test.initial_states[leader].le.size();
+    }
+    if (leader < test.initial_snapshots.size()) {
+        next_val = test.initial_snapshots[leader].snap.idx;
+    }
+
     // Process all updates in order
-    size_t next_val = leader_snap_skipped + leader_initial_entries;
     for (auto update: test.updates) {
         if (std::holds_alternative<entries>(update)) {
             auto n = std::get<entries>(update).n;
