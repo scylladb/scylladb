@@ -104,7 +104,7 @@ struct leader {
     bool stepdown = false;
     // True it timeout_now was already sent to one of the followers
     bool timeout_now_sent = false;
-    leader(server_id id, size_t max_log_size, const class fsm& fsm_) : tracker(id), fsm(fsm_), log_limiter_semaphore(max_log_size) {}
+    leader(size_t max_log_size, const class fsm& fsm_) : fsm(fsm_), log_limiter_semaphore(max_log_size) {}
     ~leader();
 };
 

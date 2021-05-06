@@ -93,19 +93,9 @@ public:
 using progress = std::unordered_map<server_id, follower_progress>;
 
 class tracker: private progress {
-    // Copy of this server's id
-    server_id _my_id;
     std::unordered_set<server_id> _current_voters;
     std::unordered_set<server_id> _previous_voters;
 
-    // Not NULL if the leader is part of the current configuration.
-    //
-    // 4.2.2 Removing the current leader
-    // There will be a period of time (while it is committing
-    // C_new) when a leader can manage a cluster that does not
-    // include itself; it replicates log entries but does not
-    // count itself in majorities.
-    follower_progress *_leader_progress = nullptr;
     // Hide size() function we inherited from progress since
     // it is never right to use it directly in case of joint config
     size_t size() const {
@@ -113,10 +103,6 @@ class tracker: private progress {
     }
 public:
     using progress::begin, progress::end, progress::cbegin, progress::cend, progress::size;
-
-    explicit tracker(server_id my_id)
-            : _my_id(my_id)
-    {}
 
     // Return progress for a follower
     // May return nullptr if the follower is not part of the current
@@ -127,11 +113,6 @@ public:
         return  it == this->progress::end() ? nullptr : &it->second;
     }
     void set_configuration(const configuration& configuration, index_t next_idx);
-    // Return progress object for the current leader if it's
-    // part of the current configuration.
-    follower_progress* leader_progress() {
-        return _leader_progress;
-    }
     // Calculate the current commit index based on the current
     // simple or joint quorum.
     index_t committed(index_t prev_commit_idx);

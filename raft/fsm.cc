@@ -144,7 +144,7 @@ void fsm::reset_election_timeout() {
 
 void fsm::become_leader() {
     assert(!std::holds_alternative<leader>(_state));
-    _state.emplace<leader>(_my_id, _config.max_log_size, *this);
+    _state.emplace<leader>(_config.max_log_size, *this);
     leader_state().log_limiter_semaphore.consume(_log.in_memory_size());
     _last_election_time = _clock.now();
     // a new leader needs to commit at lease one entry to make sure that
@@ -330,11 +330,12 @@ void fsm::advance_stable_idx(index_t idx) {
     logger.trace("advance_stable_idx[{}]: prev_stable_idx={}, idx={}", _my_id, prev_stable_idx, idx);
     if (is_leader()) {
         replicate();
-        if (leader_state().tracker.leader_progress()) {
+        auto leader_progress = leader_state().tracker.find(_my_id);
+        if (leader_progress) {
             // If this server is leader and is part of the current
             // configuration, update it's progress and optionally
             // commit new entries.
-            leader_state().tracker.leader_progress()->accepted(idx);
+            leader_progress->accepted(idx);
             maybe_commit();
         }
     }
@@ -397,7 +398,7 @@ void fsm::maybe_commit() {
             // configuration, and 6 if we assume we left it. Let
             // it happen without an extra FSM step.
             maybe_commit();
-        } else if (leader_state().tracker.leader_progress() == nullptr) {
+        } else if (leader_state().tracker.find(_my_id) == nullptr) {
             logger.trace("maybe_commit[{}]: stepping down as leader", _my_id);
             // 4.2.2 Removing the current leader
             //
@@ -903,7 +904,7 @@ void fsm::send_timeout_now(server_id id) {
     logger.trace("send_timeout_now[{}] send timeout_now to {}", _my_id, id);
     send_to(id, timeout_now{_current_term});
     leader_state().timeout_now_sent = true;
-    if (leader_state().tracker.leader_progress() == nullptr) {
+    if (leader_state().tracker.find(_my_id) == nullptr) {
         logger.trace("send_timeout_now[{}] become follower", _my_id);
         become_follower({});
     }
