@@ -160,6 +160,9 @@ void fsm::become_leader() {
 }
 
 void fsm::become_follower(server_id leader) {
+    if (leader == _my_id) {
+        on_internal_error(logger, "fsm cannot become a follower of itself");
+    }
     _current_leader = leader;
     _state = follower{};
     if (_current_leader) {

@@ -457,6 +457,9 @@ void fsm::step(server_id from, const follower& c, Message&& msg) {
 
 template <typename Message>
 void fsm::step(server_id from, Message&& msg) {
+    if (from == _my_id) {
+        on_internal_error(logger, "fsm cannot process messages from itself");
+    }
     static_assert(std::is_rvalue_reference<decltype(msg)>::value, "must be rvalue");
     // 4.1. Safety
     // Servers process incoming RPC requests without consulting
