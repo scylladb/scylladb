@@ -544,10 +544,6 @@ public:
         return std::vector<inet_address>(tmp.begin(), tmp.end());
     }
 
-    size_t get_all_endpoints_count() const {
-        return count_normal_token_owners();
-    }
-
     /* Returns the number of different endpoints that own tokens in the ring.
      * Bootstrapping tokens are not taken into account. */
     size_t count_normal_token_owners() const;
@@ -2040,11 +2036,6 @@ token_metadata::get_predecessor(token t) const {
 std::vector<inet_address>
 token_metadata::get_all_endpoints() const {
     return _impl->get_all_endpoints();
-}
-
-size_t
-token_metadata::get_all_endpoints_count() const {
-    return _impl->get_all_endpoints_count();
 }
 
 size_t
