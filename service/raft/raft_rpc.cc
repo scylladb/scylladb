@@ -31,7 +31,7 @@ raft_rpc::raft_rpc(netw::messaging_service& ms, raft_services& raft_srvs, raft::
     : _group_id(std::move(gid)), _server_id(srv_id), _messaging(ms), _raft_services(raft_srvs)
 {}
 
-future<raft::snapshot_reply> raft_rpc::send_snapshot(raft::server_id id, const raft::install_snapshot& snap) {
+future<raft::snapshot_reply> raft_rpc::send_snapshot(raft::server_id id, const raft::install_snapshot& snap, seastar::abort_source& as) {
     return _messaging.send_raft_snapshot(
         netw::msg_addr(_raft_services.get_inet_address(id)), db::no_timeout, _group_id, _server_id, id, snap);
 }

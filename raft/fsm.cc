@@ -430,12 +430,18 @@ void fsm::tick_leader() {
             if (_failure_detector.is_alive(progress.id)) {
                 active(progress.id);
             }
-            if (progress.state == follower_progress::state::PROBE) {
+            switch(progress.state) {
+            case follower_progress::state::PROBE:
                 // allow one probe to be resent per follower per time tick
                 progress.probe_sent = false;
-            } else if (progress.state == follower_progress::state::PIPELINE &&
-                progress.in_flight == follower_progress::max_in_flight) {
-                progress.in_flight--; // allow one more packet to be sent
+                break;
+            case follower_progress::state::PIPELINE:
+                if (progress.in_flight == follower_progress::max_in_flight) {
+                    progress.in_flight--; // allow one more packet to be sent
+                }
+                break;
+            case follower_progress::state::SNAPSHOT:
+                continue;
             }
             if (progress.match_idx < _log.stable_idx() || progress.commit_idx < _commit_idx) {
                 logger.trace("tick[{}]: replicate to {} because match={} < stable={} || "

@@ -56,8 +56,9 @@ public:
     //  'committed' - when the entry is committed
     //  'applied'   - when the entry is applied (happens after it is committed)
     // The function has to be called on a leader, throws not_a_leader exception otherwise.
-    // May fail because of internal error or because leader changed and an entry was replaced
-    // by another leader. In the later case dropped_entry exception will be returned.
+    // May fail because of an internal error or because leader changed and an entry was either
+    // replaced by the new leader or the server lost track of it. The former will result in
+    // dropped_entry exception the later in commit_status_unknown.
     virtual future<> add_entry(command command, wait_type type) = 0;
 
     // Set a new cluster configuration. If the configuration is

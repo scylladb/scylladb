@@ -96,7 +96,7 @@ private:
         uint64_t append_entries_reply_received = 0;
         uint64_t request_vote_received = 0;
         uint64_t request_vote_reply_received = 0;
-        uint64_t waiters_awaiken = 0;
+        uint64_t waiters_awaken = 0;
         uint64_t waiters_dropped = 0;
         uint64_t append_entries_reply_sent = 0;
         uint64_t append_entries_sent = 0;
@@ -130,12 +130,23 @@ private:
     // the respective entry is applied.
     std::map<index_t, op_status> _awaited_applies;
 
+    uint64_t _next_snapshot_transfer_id = 0;
+
+    struct snapshot_transfer {
+        future<> f;
+        seastar::abort_source as;
+        uint64_t id;
+    };
+
     // Contains active snapshot transfers, to be waited on exit.
-    std::unordered_map<server_id, future<>> _snapshot_transfers;
+    std::unordered_map<server_id, snapshot_transfer> _snapshot_transfers;
+
+    // Contains aborted snapshot transfers with still unresolved futures
+    std::unordered_map<uint64_t, future<>> _aborted_snapshot_transfers;
 
     // The optional is engaged when incoming snapshot is received
     // And the promise signalled when it is successfully applied or there was an error
-    std::optional<promise<snapshot_reply>> _snapshot_application_done;
+    std::unordered_map<server_id, promise<snapshot_reply>> _snapshot_application_done;
 
     // An id of last loaded snapshot into a state machine
     snapshot_id _last_loaded_snapshot_id;
@@ -158,6 +169,10 @@ private:
 
     template <typename T> future<> add_entry_internal(T command, wait_type type);
     template <typename Message> future<> send_message(server_id id, Message m);
+
+    // Abort all snapshot transfers.
+    // Called when no longer a leader or on shutdown
+    void abort_snapshot_transfers();
 
     // Apply a dummy entry. Dummy entry is not propagated to the
     // state machine, but waiting for it to be "applied" ensures
@@ -336,7 +351,21 @@ void server_impl::notify_waiters(std::map<index_t, op_status>& waiters,
             // was a leadership change and the entry was replaced.
             status.done.set_exception(dropped_entry());
         }
-        _stats.waiters_awaiken++;
+        _stats.waiters_awaken++;
+    }
+    // Drop all waiters with smaller term that last one been committed
+    // since there is no way they will be committed any longer (terms in
+    // the log only grow).
+    term_t last_committed_term = entries.back()->term;
+    while (waiters.size() != 0) {
+        auto it = waiters.begin();
+        if (it->second.term < last_committed_term) {
+            it->second.done.set_exception(dropped_entry());
+            waiters.erase(it);
+            _stats.waiters_awaken++;
+        } else {
+            break;
+        }
     }
 }
 
@@ -383,11 +412,11 @@ future<> server_impl::send_message(server_id id, Message m) {
             return make_ready_future<>();
         } else if constexpr (std::is_same_v<T, snapshot_reply>) {
             _stats.snapshot_reply_sent++;
-            assert(_snapshot_application_done);
+            assert(_snapshot_application_done.contains(id));
             // Send a reply to install_snapshot after
             // snapshot application is done.
-            _snapshot_application_done->set_value(std::move(m));
-            _snapshot_application_done = std::nullopt;
+            _snapshot_application_done[id].set_value(std::move(m));
+            _snapshot_application_done.erase(id);
             // ... and do not wait for it here.
             return make_ready_future<>();
         } else {
@@ -482,7 +511,13 @@ future<> server_impl::io_fiber(index_t last_stable) {
             if (batch.messages.size()) {
                 // After entries are persisted we can send messages.
                 co_await seastar::parallel_for_each(std::move(batch.messages), [this] (std::pair<server_id, rpc_message>& message) {
-                    return send_message(message.first, std::move(message.second));
+                    return send_message(message.first, std::move(message.second)).then_wrapped([this, &message] (future<>&& f) {
+                        if (f.failed()) {
+                            // Not being able to send a message is not a critical error
+                            logger.debug("[{}] io_fiber failed to send a message to {}: {}", _id, message.first, f.get_exception());
+                        }
+                        return make_ready_future();
+                    });
                 });
             }
 
@@ -500,10 +535,14 @@ future<> server_impl::io_fiber(index_t last_stable) {
                 co_await _apply_entries.push_eventually(std::move(batch.committed));
             }
 
-            if (!_fsm->is_leader() && !_current_rpc_config.contains(server_address{_id})) {
-                // If the node is no longer part of a config and no longer the leader
-                // it will never know the status of entries it submitted
-                drop_waiters();
+            if (!_fsm->is_leader()) {
+                if (!_current_rpc_config.contains(server_address{_id})) {
+                    // If the node is no longer part of a config and no longer the leader
+                    // it will never know the status of entries it submitted
+                    drop_waiters();
+                }
+                // request aborts of snapshot transfers
+                abort_snapshot_transfers();
             }
         }
     } catch (seastar::broken_condition_variable&) {
@@ -517,7 +556,14 @@ future<> server_impl::io_fiber(index_t last_stable) {
 }
 
 void server_impl::send_snapshot(server_id dst, install_snapshot&& snp) {
-    future<> f = _rpc->send_snapshot(dst, std::move(snp)).then_wrapped([this, dst] (future<snapshot_reply> f) {
+    seastar::abort_source as;
+    uint64_t id = _next_snapshot_transfer_id++;
+    future<> f = _rpc->send_snapshot(dst, std::move(snp), as).then_wrapped([this, dst, id] (future<snapshot_reply> f) {
+        if (_aborted_snapshot_transfers.erase(id)) {
+            // The transfer was aborted
+            f.ignore_ready_future();
+            return;
+        }
         _snapshot_transfers.erase(dst);
         auto reply = raft::snapshot_reply{.current_term = _fsm->get_current_term(), .success = false};
         if (f.failed()) {
@@ -528,16 +574,15 @@ void server_impl::send_snapshot(server_id dst, install_snapshot&& snp) {
         }
         _fsm->step(dst, std::move(reply));
     });
-    auto res = _snapshot_transfers.emplace(dst, std::move(f));
+    auto res = _snapshot_transfers.emplace(dst, snapshot_transfer{std::move(f), std::move(as), id});
     assert(res.second);
 }
 
 future<snapshot_reply> server_impl::apply_snapshot(server_id from, install_snapshot snp) {
     _fsm->step(from, std::move(snp));
-    // Only one snapshot can be received at a time
-    assert(! _snapshot_application_done);
-    _snapshot_application_done = promise<snapshot_reply>();
-    return _snapshot_application_done->get_future();
+    // Only one snapshot can be received at a time from each node
+    assert(! _snapshot_application_done.contains(from));
+    return _snapshot_application_done[from].get_future();
 }
 
 future<> server_impl::applier_fiber() {
@@ -599,6 +644,15 @@ future<> server_impl::read_barrier() {
     co_return;
 }
 
+void server_impl::abort_snapshot_transfers() {
+    for (auto&& [id, t] : _snapshot_transfers) {
+        logger.trace("[{}] Request abort of snapshot transfer to {}", _id, id);
+        t.as.request_abort();
+        _aborted_snapshot_transfers.emplace(t.id, std::move(t.f));
+    }
+    _snapshot_transfers.clear();
+}
+
 future<> server_impl::abort() {
     logger.trace("abort() called");
     _fsm->stop();
@@ -613,15 +667,17 @@ future<> server_impl::abort() {
     _awaited_commits.clear();
     _awaited_applies.clear();
 
-    if (_snapshot_application_done) {
-        _snapshot_application_done->set_exception(std::runtime_error("Snapshot application aborted"));
+    for (auto&& [_, f] : _snapshot_application_done) {
+        f.set_exception(std::runtime_error("Snapshot application aborted"));
     }
 
-    auto snp_futures = _snapshot_transfers | boost::adaptors::map_values;
-    auto snapshots = seastar::when_all_succeed(snp_futures.begin(), snp_futures.end());
+    abort_snapshot_transfers();
+
+    auto snp_futures = _aborted_snapshot_transfers | boost::adaptors::map_values;
 
     return seastar::when_all_succeed(std::move(_io_status), std::move(_applier_status),
-            _rpc->abort(), _state_machine->abort(), _persistence->abort(), std::move(snapshots)).discard_result();
+            _rpc->abort(), _state_machine->abort(), _persistence->abort(),
+            seastar::when_all_succeed(snp_futures.begin(), snp_futures.end())).discard_result();
 }
 
 future<> server_impl::set_configuration(server_address_set c_new) {
@@ -674,7 +730,7 @@ void server_impl::register_metrics() {
         sm::make_total_operations("messages_sent", _stats.timeout_now_sent,
              sm::description("how many messages were sent"), {server_id_label(_id), message_type("timeout_now")}),
 
-        sm::make_total_operations("waiter_awaiken", _stats.waiters_awaiken,
+        sm::make_total_operations("waiter_awaken", _stats.waiters_awaken,
              sm::description("how many waiters got result back"), {server_id_label(_id)}),
         sm::make_total_operations("waiter_dropped", _stats.waiters_dropped,
              sm::description("how many waiters did not get result back"), {server_id_label(_id)}),
