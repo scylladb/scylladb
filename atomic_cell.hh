@@ -256,9 +256,6 @@ public:
     size_t value_size() const {
         return atomic_cell_type::value(_view).size();
     }
-    bool is_value_fragmented() const {
-        return _view.is_fragmented();
-    }
     // Can be called on live counter update cells only
     int64_t counter_update_value() const {
         return atomic_cell_type::counter_update_value(_view);

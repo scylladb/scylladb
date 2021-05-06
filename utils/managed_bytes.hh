@@ -301,10 +301,6 @@ public:
         return !(*this == o);
     }
 
-    bool is_fragmented() const {
-        return external() && _u.ptr->next;
-    }
-
     bytes_view::value_type& operator[](size_type index) {
         return value_at_index(index);
     }
@@ -450,9 +446,6 @@ public:
         auto v = *this;
         v.remove_prefix(index);
         return v.current_fragment().front();
-    }
-    bool is_fragmented() const {
-        return _size != _current_fragment.size();
     }
     bytes linearize() const {
         return linearized(*this);
