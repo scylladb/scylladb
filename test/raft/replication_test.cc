@@ -854,8 +854,6 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
     for (auto update: test.updates) {
         if (std::holds_alternative<entries>(update)) {
             auto n = std::get<entries>(update).n;
-            BOOST_CHECK_MESSAGE(in_configuration.contains(leader),
-                    format("Current leader {} is not in configuration", leader));
             co_await rafts.add_entries(n, leader);
         } else if (std::holds_alternative<new_leader>(update)) {
             unsigned next_leader = std::get<new_leader>(update).id;
