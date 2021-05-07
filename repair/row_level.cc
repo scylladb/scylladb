@@ -580,6 +580,7 @@ public:
             streaming::stream_reason::bootstrap,
             streaming::stream_reason::replace,
             streaming::stream_reason::removenode,
+            streaming::stream_reason::decommission,
         };
         return sstables::offstrategy(operations_supported.contains(reason));
     }
