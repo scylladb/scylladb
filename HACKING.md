@@ -404,5 +404,4 @@ Be horrified. Go and write more tests.
 
 ### Core dump debugging
 
-Slides:
-2018.11.20: https://www.slideshare.net/tomekgrabiec/scylla-core-dump-debugging-tools
+See [debugging.md](docs/guides/debugging.md).
