@@ -502,6 +502,7 @@ public:
     void connect_all();
     void elapse_elections();
     future<size_t> elect_new_leader(size_t leader, size_t new_leader);
+    future<size_t> free_election();
     future<> add_entries(size_t n, size_t& leader);
     future<> add_remaining_entries(size_t& leader);
     future<> wait_log(
@@ -705,16 +706,16 @@ future<size_t> raft_cluster::elect_new_leader(size_t leader, size_t new_leader) 
 
 // Run a free election of nodes in configuration
 // NOTE: there should be enough nodes capable of participating
-future<size_t> free_election(raft_cluster& rafts) {
+future<size_t> raft_cluster::free_election() {
     tlogger.debug("Running free election");
-    rafts.elapse_elections();
+    elapse_elections();
     size_t node = 0;
     for (;;) {
-        rafts.tick_all();
+        tick_all();
         co_await seastar::sleep(10us);   // Wait for election rpc exchanges
         // find if we have a leader
-        for (size_t s = 0; s < rafts.size(); ++s) {
-            if (rafts[s].server->is_leader()) {
+        for (size_t s = 0; s < _servers.size(); ++s) {
+            if (_servers[s].server->is_leader()) {
                 tlogger.debug("New leader {}", s);
                 co_return s;
             }
@@ -757,7 +758,7 @@ future<std::unordered_set<size_t>> change_configuration(raft_cluster& rafts,
     co_await rafts[leader].server->set_configuration(std::move(set));
 
     if (!new_config.contains(leader)) {
-        leader = co_await free_election(rafts);
+        leader = co_await rafts.free_election();
     }
 
     // Now we know joint configuration was applied
@@ -904,7 +905,7 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
                 leader = co_await rafts.elect_new_leader(leader, *next_leader);
             } else if (partition_servers.find(leader) == partition_servers.end() && p.size() > 0) {
                 // Old leader disconnected and not specified new, free election
-                leader = co_await free_election(rafts);
+                leader = co_await rafts.free_election();
             }
             restart_tickers(tickers);
         } else if (std::holds_alternative<set_config>(update)) {
