@@ -513,7 +513,7 @@ public:
             size_t leader);
     future<std::unordered_set<size_t>> change_configuration(size_t total_values,
             std::unordered_set<size_t>& in_configuration, set_config sc, size_t& leader,
-            std::vector<seastar::timer<lowres_clock>>& tickers, state_machine::apply_fn apply);
+            std::vector<seastar::timer<lowres_clock>>& tickers);
 };
 
 test_server
@@ -740,7 +740,7 @@ void restart_tickers(std::vector<seastar::timer<lowres_clock>>& tickers) {
 
 future<std::unordered_set<size_t>> raft_cluster::change_configuration(size_t total_values,
         std::unordered_set<size_t>& in_configuration, set_config sc, size_t& leader,
-        std::vector<seastar::timer<lowres_clock>>& tickers, state_machine::apply_fn apply) {
+        std::vector<seastar::timer<lowres_clock>>& tickers) {
 
     BOOST_CHECK_MESSAGE(sc.size() > 0, "Empty configuration change not supported");
     raft::server_address_set set;
@@ -777,7 +777,7 @@ future<std::unordered_set<size_t>> raft_cluster::change_configuration(size_t tot
         if (!new_config.contains(s)) {
             tickers[s].cancel();
             co_await _servers[s].server->abort();
-            _servers[s] = create_raft_server(to_raft_id(s), apply, initial_state{.log = {}},
+            _servers[s] = create_raft_server(to_raft_id(s), _apply, initial_state{.log = {}},
                     total_values, _connected, _snapshots, _persisted_snapshots, _packet_drops);
             co_await _servers[s].server->start();
             tickers[s].set_callback([&, s] { _servers[s].server->tick(); });
@@ -913,7 +913,7 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
             co_await rafts.wait_log_all(in_configuration, leader);
             auto sc = std::get<set_config>(update);
             in_configuration = co_await rafts.change_configuration(test.total_values,
-                    in_configuration, std::move(sc), leader, tickers, apply_changes);
+                    in_configuration, std::move(sc), leader, tickers);
         } else if (std::holds_alternative<tick>(update)) {
             auto t = std::get<tick>(update);
             for (uint64_t i = 0; i < t.ticks; i++) {
@@ -933,7 +933,7 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
             sc.push_back(s);
         }
         in_configuration = co_await rafts.change_configuration(test.total_values,
-                in_configuration, std::move(sc), leader, tickers, apply_changes);
+                in_configuration, std::move(sc), leader, tickers);
     }
 
     BOOST_TEST_MESSAGE("Appending remaining values");
@@ -995,7 +995,7 @@ size_t dummy_apply_fn(raft::server_id id, const std::vector<raft::command_cref>&
 future<std::unordered_set<size_t>> rpc_test_change_configuration(raft_cluster& rafts,
         std::unordered_set<size_t>& in_configuration, set_config sc, size_t& leader,
         std::vector<seastar::timer<lowres_clock>>& tickers) {
-    return rafts.change_configuration(1, in_configuration, sc, leader, tickers, dummy_apply_fn);
+    return rafts.change_configuration(1, in_configuration, sc, leader, tickers);
 }
 
 // Wrapper function for running RPC tests that provides a convenient
