@@ -504,6 +504,9 @@ public:
     future<size_t> elect_new_leader(size_t leader, size_t new_leader);
     future<> add_entries(size_t n, size_t& leader);
     future<> add_remaining_entries(size_t& leader);
+    future<> wait_log(
+            std::unordered_set<size_t>& in_configuration,
+            size_t leader, size_t follower);
 };
 
 test_server
@@ -639,14 +642,14 @@ size_t apply_changes(raft::server_id id, const std::vector<raft::command_cref>& 
 };
 
 // Wait for leader log to propagate to follower
-future<> wait_log(raft_cluster& rafts,
-      lw_shared_ptr<connected> connected, std::unordered_set<size_t>& in_configuration,
+future<> raft_cluster::wait_log(
+      std::unordered_set<size_t>& in_configuration,
       size_t leader, size_t follower) {
 
-    if ((*connected)(to_raft_id(leader), to_raft_id(follower)) &&
+    if ((*_connected)(to_raft_id(leader), to_raft_id(follower)) &&
            in_configuration.contains(leader) && in_configuration.contains(follower)) {
-        auto leader_log_idx = rafts[leader].server->log_last_idx();
-        co_await rafts[follower].server->wait_log_idx(leader_log_idx);
+        auto leader_log_idx = _servers[leader].server->log_last_idx();
+        co_await _servers[follower].server->wait_log_idx(leader_log_idx);
     }
 }
 
@@ -858,7 +861,7 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
             co_await rafts.add_entries(n, leader);
         } else if (std::holds_alternative<new_leader>(update)) {
             unsigned next_leader = std::get<new_leader>(update).id;
-            co_await wait_log(rafts, connected, in_configuration, leader, next_leader);
+            co_await rafts.wait_log(in_configuration, leader, next_leader);
             pause_tickers(tickers);
             leader = co_await rafts.elect_new_leader(leader, next_leader);
             restart_tickers(tickers);
@@ -878,11 +881,11 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
             }
             if (next_leader) {
                 // Wait for log to propagate to next leader, before disconnections
-                co_await wait_log(rafts, connected, in_configuration, leader, *next_leader);
+                co_await rafts.wait_log(in_configuration, leader, *next_leader);
             } else {
                 // No leader specified, wait log for all connected servers, before disconnections
                 for (auto s: partition_servers) {
-                    co_await wait_log(rafts, connected, in_configuration, leader, s);
+                    co_await rafts.wait_log(in_configuration, leader, s);
                 }
             }
             pause_tickers(tickers);
