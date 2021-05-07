@@ -754,17 +754,17 @@ void handle_proposal(int nodes, std::vector<int> accepting_int) {
     raft::log_entry_ptr lep;
 
     for (auto id: accepting_int) {
-        accepting.insert({utils::UUID(0, id)});
+        accepting.insert(raft::server_id{utils::UUID(0, id)});
     }
 
     server_address_set ids;     // ids of leader 1 .. #nodes
     for (int i = 1; i < nodes + 1; ++i) {
-        ids.insert({utils::UUID(0, i)});
+        ids.insert({.id = raft::server_id{utils::UUID(0, i)}});
     }
 
     raft::configuration cfg(ids);
     raft::log log1{raft::snapshot{.config = cfg}};
-    raft::fsm fsm1({utils::UUID(0, 1)}, term_t{}, server_id{}, std::move(log1),
+    raft::fsm fsm1(raft::server_id{utils::UUID(0, 1)}, term_t{}, server_id{}, std::move(log1),
             trivial_failure_detector, fsm_cfg);
 
     // promote 1 to become leader (i.e. gets votes)
@@ -773,7 +773,7 @@ void handle_proposal(int nodes, std::vector<int> accepting_int) {
     BOOST_CHECK(output1.messages.size() >= nodes - 1);
     BOOST_CHECK(output1.term_and_vote);
     for (int i = 2; i < nodes + 1; ++i) {
-        fsm1.step({utils::UUID(0, i)}, raft::vote_reply{output1.term_and_vote->first, true, false});
+        fsm1.step(raft::server_id{utils::UUID(0, i)}, raft::vote_reply{output1.term_and_vote->first, true, false});
     }
     BOOST_CHECK(fsm1.is_leader());
     output1 = fsm1.get_output();

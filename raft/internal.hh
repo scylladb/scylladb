@@ -87,7 +87,9 @@ struct tagged_id {
         // guaranteed to not match any valid id.
         return id != utils::UUID();
     }
-    static tagged_id create_random_id() { return tagged_id{.id = utils::make_random_uuid()}; }
+    static tagged_id create_random_id() { return tagged_id{utils::make_random_uuid()}; }
+    explicit tagged_id(const utils::UUID& uuid) : id(uuid) {}
+    tagged_id() = default;
 };
 
 template<typename Tag>

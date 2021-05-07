@@ -118,7 +118,7 @@ BOOST_AUTO_TEST_CASE(test_votes) {
     BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::WON);
     // Same node is voting in one config and non voting in another
     votes = raft::votes(raft::configuration({{.id = id1}, {.id = id4}},
-            {{.id = id2}, {.id = id3}, {id4.id, false}}));
+            {{.id = id2}, {.id = id3}, {id4, false}}));
     votes.register_vote(id2, true);
     votes.register_vote(id1, true);
     votes.register_vote(id4, true);
@@ -222,7 +222,7 @@ BOOST_AUTO_TEST_CASE(test_tracker) {
     BOOST_CHECK_EQUAL(tracker.committed(index_t{18}), index_t{19});
 
     // Check that non voting member is not counted for the quorum in simple config
-    cfg.enter_joint({{.id = id1}, {.id = id2}, {id3.id, false}});
+    cfg.enter_joint({{.id = id1}, {.id = id2}, {id3, false}});
     cfg.leave_joint();
     tracker.set_configuration(cfg, index_t{1});
     pr(id1)->accepted(index_t{30});
@@ -939,7 +939,7 @@ BOOST_AUTO_TEST_CASE(test_leader_stepdown) {
 
     server_id id1 = id(), id2 = id(), id3 = id();
 
-    raft::configuration cfg({raft::server_address{id1.id}, raft::server_address{id2.id}, raft::server_address{id3.id, false}});
+    raft::configuration cfg({{id1}, {id2}, {id3, false}});
     raft::log log(raft::snapshot{.config = cfg});
 
     raft::fsm fsm(id1, term_t{1}, /* voted for */ server_id{}, std::move(log), trivial_failure_detector, fsm_cfg);
@@ -1025,7 +1025,7 @@ BOOST_AUTO_TEST_CASE(test_leader_stepdown) {
     fsm.step(id2, raft::append_reply{fsm.get_current_term(), idx, raft::append_reply::accepted{idx}});
 
     // Drop the leader from the current config and see that stepdown message is sent
-    raft::configuration newcfg({raft::server_address{id2.id}, raft::server_address{id3.id, false}});
+    raft::configuration newcfg({{id2}, {id3, false}});
     fsm.add_entry(newcfg);
     (void)fsm.get_output(); // send it out
     output = fsm.get_output();
@@ -1048,7 +1048,7 @@ BOOST_AUTO_TEST_CASE(test_leader_stepdown) {
 
 
     /// Check that leader stepdown works when the leader is removed from the config and there are entries above C_new in its log
-    raft::configuration cfg2({raft::server_address{id1.id}, raft::server_address{id2.id}, raft::server_address{id3.id}});
+    raft::configuration cfg2({{id1}, {id2}, {id3}});
     raft::log log2(raft::snapshot{.config = cfg});
 
     raft::fsm fsm2(id1, term_t{1}, /* voted for */ server_id{}, std::move(log2), trivial_failure_detector, fsm_cfg);
@@ -1068,7 +1068,7 @@ BOOST_AUTO_TEST_CASE(test_leader_stepdown) {
     fsm2.step(id3, raft::append_reply{fsm2.get_current_term(), idx, raft::append_reply::accepted{idx}});
 
     // Drop the leader from the current config and see that stepdown message is sent
-    raft::configuration newcfg2({raft::server_address{id2.id}, raft::server_address{id3.id}});
+    raft::configuration newcfg2({{id2}, {id3}});
     fsm2.add_entry(newcfg2);
     (void)fsm2.get_output(); // send it out
     output = fsm2.get_output();
@@ -1491,7 +1491,7 @@ BOOST_AUTO_TEST_CASE(test_zero) {
 BOOST_AUTO_TEST_CASE(test_reordered_reject) {
     auto id1 = id();
     raft::fsm fsm1(id1, term_t{1}, server_id{},
-            raft::log{raft::snapshot{.config = {{raft::server_address{id1.id}}}}},
+            raft::log{raft::snapshot{.config = {{{id1}}}}},
             trivial_failure_detector, fsm_cfg);
 
     while (!fsm1.is_leader()) {
@@ -1508,7 +1508,7 @@ BOOST_AUTO_TEST_CASE(test_reordered_reject) {
 
     raft_routing_map routes{{fsm1.id(), &fsm1}, {fsm2.id(), &fsm2}};
 
-    fsm1.add_entry(raft::configuration{{raft::server_address{fsm1.id().id}, raft::server_address{fsm2.id().id}}});
+    fsm1.add_entry(raft::configuration{{{fsm1.id()}, {fsm2.id()}}});
     fsm1.tick();
 
     // fsm1 sends append_entries with idx=2 to fsm2

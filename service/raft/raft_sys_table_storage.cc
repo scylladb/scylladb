@@ -66,7 +66,7 @@ future<std::pair<raft::term_t, raft::server_id>> raft_sys_table_storage::load_te
     }
     const auto& static_row = rs->one();
     raft::term_t vote_term = raft::term_t(static_row.get_as<int64_t>("vote_term"));
-    raft::server_id vote = {.id = static_row.get_as<utils::UUID>("vote")};
+    raft::server_id vote{static_row.get_as<utils::UUID>("vote")};
     co_return std::pair(vote_term, vote);
 }
 
@@ -111,7 +111,7 @@ future<raft::snapshot> raft_sys_table_storage::load_snapshot() {
         .idx = raft::index_t(snp_row.get_as<int64_t>("idx")),
         .term = raft::term_t(snp_row.get_as<int64_t>("term")),
         .config = ser::deserialize(in, boost::type<raft::configuration>()),
-        .id = std::move(snapshot_id)};
+        .id = raft::snapshot_id(snapshot_id)};
     co_return s;
 }
 
