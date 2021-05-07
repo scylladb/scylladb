@@ -500,6 +500,7 @@ public:
     void tick_all();
     void disconnect(size_t id, std::optional<raft::server_id> except = std::nullopt);
     void connect_all();
+    void elapse_elections();
     future<> add_entries(size_t n, size_t& leader);
     future<> add_remaining_entries(size_t& leader);
 };
@@ -661,9 +662,9 @@ future<> wait_log_all(raft_cluster& rafts,
     }
 }
 
-void elapse_elections(raft_cluster& rafts) {
-    for (size_t s = 0; s < rafts.size(); ++s) {
-        rafts[s].server->elapse_election();
+void raft_cluster::elapse_elections() {
+    for (size_t s = 0; s < _servers.size(); ++s) {
+        _servers[s].server->elapse_election();
     }
 }
 
@@ -679,7 +680,7 @@ future<size_t> elect_new_leader(raft_cluster& rafts,
             // Disconnect current leader from everyone
             connected->disconnect(to_raft_id(leader));
             // Make move all nodes past election threshold, also making old leader follower
-            elapse_elections(rafts);
+            rafts.elapse_elections();
             // Consume leader output messages since a stray append might make new leader step down
             co_await later();                 // yield
             rafts[new_leader].server->wait_until_candidate();
@@ -700,7 +701,7 @@ future<size_t> elect_new_leader(raft_cluster& rafts,
 // NOTE: there should be enough nodes capable of participating
 future<size_t> free_election(raft_cluster& rafts) {
     tlogger.debug("Running free election");
-    elapse_elections(rafts);
+    rafts.elapse_elections();
     size_t node = 0;
     for (;;) {
         rafts.tick_all();
