@@ -567,7 +567,8 @@ arg_parser.add_argument('--so', dest='so', action='store_true',
                         help='Build shared object (SO) instead of executable')
 arg_parser.add_argument('--mode', action='append', choices=list(modes.keys()), dest='selected_modes',
                         help="Build modes to generate ninja files for. The available build modes are:\n{}".format("; ".join(["{} - {}".format(m, cfg['description']) for m, cfg in modes.items()])))
-arg_parser.add_argument('--with', dest='artifacts', action='append', choices=all_artifacts, default=[])
+arg_parser.add_argument('--with', dest='artifacts', action='append', default=[],
+                        help="Specify the artifacts to build, invoke {} with --list-artifacts to list all available artifacts, if unspecified all artifacts are built".format(sys.argv[0]))
 arg_parser.add_argument('--with-seastar', action='store', dest='seastar_path', default='seastar', help='Path to Seastar sources')
 add_tristate(arg_parser, name='dist', dest='enable_dist',
                         help='scylla-tools-java, scylla-jmx and packages')
@@ -621,7 +622,14 @@ arg_parser.add_argument('--clang-inline-threshold', action='store', type=int, de
                         help="LLVM-specific inline threshold compilation parameter")
 arg_parser.add_argument('--coverage', dest='coverage', action='store_true',
                         help='Enable coverage report generation for tests. Only clang is supported at the moment. See HACKING.md for more information.')
+arg_parser.add_argument('--list-artifacts', dest='list_artifacts', action='store_true', default=False,
+                        help='List all available build artifacts, that can be passed to --with')
 args = arg_parser.parse_args()
+
+if args.list_artifacts:
+    for artifact in sorted(all_artifacts):
+        print(artifact)
+    exit(0)
 
 defines = ['XXH_PRIVATE_API',
            'SEASTAR_TESTING_MAIN',
@@ -1419,7 +1427,19 @@ link_pool_depth = max(int(total_memory / 7e9), 1)
 selected_modes = args.selected_modes or modes.keys()
 default_modes = args.selected_modes or [mode for mode, mode_cfg in modes.items() if mode_cfg["default"]]
 build_modes =  {m: modes[m] for m in selected_modes}
-build_artifacts = all_artifacts if not args.artifacts else args.artifacts
+
+if args.artifacts:
+    build_artifacts = []
+    for artifact in args.artifacts:
+        if artifact in all_artifacts:
+            build_artifacts.append(artifact)
+        else:
+            print("Ignoring unknown build artifact: {}".format(artifact))
+    if not build_artifacts:
+        print("No artifacts to build, exiting")
+        exit(1)
+else:
+    build_artifacts = all_artifacts
 
 status = subprocess.call("./SCYLLA-VERSION-GEN")
 if status != 0:
