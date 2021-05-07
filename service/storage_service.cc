@@ -711,18 +711,6 @@ void storage_service::bootstrap() {
         // Wait until we know tokens of existing node before announcing replacing status.
         set_mode(mode::JOINING, sprint("Wait until local node knows tokens of peer nodes"), true);
         _gossiper.wait_for_range_setup().get();
-
-      if (!is_repair_based_node_ops_enabled()) {
-        set_mode(mode::JOINING, sprint("Announce tokens and status of the replacing node"), true);
-        _gossiper.add_local_application_state({
-            { gms::application_state::TOKENS, versioned_value::tokens(_bootstrap_tokens) },
-            { gms::application_state::CDC_GENERATION_ID, versioned_value::cdc_generation_id(_cdc_gen_id) },
-            { gms::application_state::STATUS, versioned_value::hibernate(true) },
-        }).get();
-        _gossiper.advertise_myself().get();
-        set_mode(mode::JOINING, format("Wait until peer nodes know the bootstrap tokens of local node"), true);
-        _gossiper.wait_for_range_setup().get();
-       }
         auto replace_addr = db().local().get_replace_address();
         if (replace_addr) {
             slogger.debug("Removing replaced endpoint {} from system.peers", *replace_addr);
@@ -744,11 +732,11 @@ void storage_service::bootstrap() {
             run_bootstrap_ops();
         }
     } else {
-        dht::boot_strapper bs(_db, _abort_source, get_broadcast_address(), _bootstrap_tokens, get_token_metadata_ptr());
         // Does the actual streaming of newly replicated token ranges.
         if (db().local().is_replacing()) {
-            bs.bootstrap(streaming::stream_reason::replace).get();
+            run_replace_ops();
         } else {
+            dht::boot_strapper bs(_db, _abort_source, get_broadcast_address(), _bootstrap_tokens, get_token_metadata_ptr());
             bs.bootstrap(streaming::stream_reason::bootstrap).get();
         }
     }
@@ -2232,7 +2220,14 @@ void storage_service::run_replace_ops() {
 
 
         // Step 7: Sync data for replace
-        replace_with_repair(_db, _messaging, get_token_metadata_ptr(), _bootstrap_tokens).get();
+        if (is_repair_based_node_ops_enabled()) {
+            slogger.info("replace[{}]: Using repair based node ops to sync data", uuid);
+            replace_with_repair(_db, _messaging, get_token_metadata_ptr(), _bootstrap_tokens).get();
+        } else {
+            slogger.info("replace[{}]: Using streaming based node ops to sync data", uuid);
+            dht::boot_strapper bs(_db, _abort_source, get_broadcast_address(), _bootstrap_tokens, get_token_metadata_ptr());
+            bs.bootstrap(streaming::stream_reason::replace).get();
+        }
 
 
         // Step 8: Finish
