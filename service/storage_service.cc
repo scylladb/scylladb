@@ -2515,6 +2515,12 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
                 ss.node_ops_update_heartbeat(ops_uuid);
             } else if (req.cmd == node_ops_cmd::decommission_done) {
                 slogger.info("decommission[{}]: Marked ops done from coordinator={}", req.ops_uuid, coordinator);
+                slogger.debug("Triggering off-strategy compaction for all non-system tables on decommission completion");
+                ss.db().invoke_on_all([](database &db) {
+                    for (auto& table : db.get_non_system_column_families()) {
+                        table->trigger_offstrategy_compaction();
+                    }
+                }).get();
                 ss.node_ops_done(ops_uuid);
             } else if (req.cmd == node_ops_cmd::decommission_abort) {
                 ss.node_ops_abort(ops_uuid);
