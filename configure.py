@@ -318,6 +318,7 @@ modes = {
         'cmake_build_type': 'Debug',
         'can_have_debug_info': True,
         'default': True,
+        'description': 'a mode with no optimizations, with sanitizers, and with additional debug checks enabled, used for testing',
     },
     'release': {
         'cxxflags': '-ffunction-sections -fdata-sections ',
@@ -328,6 +329,7 @@ modes = {
         'cmake_build_type': 'RelWithDebInfo',
         'can_have_debug_info': True,
         'default': True,
+        'description': 'a mode with optimizations and no debug checks, used for production builds',
     },
     'dev': {
         'cxxflags': '-DDEVEL -DSEASTAR_ENABLE_ALLOC_FAILURE_INJECTION -DSCYLLA_ENABLE_ERROR_INJECTION',
@@ -338,6 +340,7 @@ modes = {
         'cmake_build_type': 'Dev',
         'can_have_debug_info': False,
         'default': True,
+        'description': 'a mode with no optimizations and no debug checks, optimized for fast build times, used for development',
     },
     'sanitize': {
         'cxxflags': '-DDEBUG -DSANITIZE -DDEBUG_LSA_SANITIZER -DSCYLLA_ENABLE_ERROR_INJECTION',
@@ -348,6 +351,7 @@ modes = {
         'cmake_build_type': 'Sanitize',
         'can_have_debug_info': True,
         'default': False,
+        'description': 'a mode with optimizations and sanitizers enabled, used for finding memory errors',
     }
 }
 
@@ -561,7 +565,8 @@ arg_parser.add_argument('--pie', dest='pie', action='store_true',
                         help='Build position-independent executable (PIE)')
 arg_parser.add_argument('--so', dest='so', action='store_true',
                         help='Build shared object (SO) instead of executable')
-arg_parser.add_argument('--mode', action='append', choices=list(modes.keys()), dest='selected_modes')
+arg_parser.add_argument('--mode', action='append', choices=list(modes.keys()), dest='selected_modes',
+                        help="Build modes to generate ninja files for. The available build modes are:\n{}".format("; ".join(["{} - {}".format(m, cfg['description']) for m, cfg in modes.items()])))
 arg_parser.add_argument('--with', dest='artifacts', action='append', choices=all_artifacts, default=[])
 arg_parser.add_argument('--with-seastar', action='store', dest='seastar_path', default='seastar', help='Path to Seastar sources')
 add_tristate(arg_parser, name='dist', dest='enable_dist',
