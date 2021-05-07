@@ -352,7 +352,18 @@ modes = {
         'can_have_debug_info': True,
         'default': False,
         'description': 'a mode with optimizations and sanitizers enabled, used for finding memory errors',
-    }
+    },
+    'coverage': {
+        'cxxflags': '-fprofile-instr-generate -fcoverage-mapping -g -gz',
+        'cxx_ld_flags': '-fprofile-instr-generate -fcoverage-mapping',
+        'stack-usage-threshold': 1024*40,
+        'optimization-level': 'g',
+        'per_src_extra_cxxflags': {},
+        'cmake_build_type': 'Debug',
+        'can_have_debug_info': True,
+        'default': False,
+        'description': 'a mode exclusively used for generating test coverage reports',
+    },
 }
 
 scylla_tests = set([
@@ -620,8 +631,6 @@ arg_parser.add_argument('--test-repeat', dest='test_repeat', action='store', typ
 arg_parser.add_argument('--test-timeout', dest='test_timeout', action='store', type=str, default='7200')
 arg_parser.add_argument('--clang-inline-threshold', action='store', type=int, dest='clang_inline_threshold', default=-1,
                         help="LLVM-specific inline threshold compilation parameter")
-arg_parser.add_argument('--coverage', dest='coverage', action='store_true',
-                        help='Enable coverage report generation for tests. Only clang is supported at the moment. See HACKING.md for more information.')
 arg_parser.add_argument('--list-artifacts', dest='list_artifacts', action='store_true', default=False,
                         help='List all available build artifacts, that can be passed to --with')
 args = arg_parser.parse_args()
@@ -1494,11 +1503,6 @@ forced_ldflags += f'--dynamic-linker={dynamic_linker}'
 args.user_ldflags = forced_ldflags + ' ' + args.user_ldflags
 
 args.user_cflags += f" -ffile-prefix-map={curdir}=."
-
-if args.coverage:
-    #FIXME: works with clang only
-    args.user_cflags = args.user_cflags + ' ' + '-fprofile-instr-generate -fcoverage-mapping'
-    args.user_ldflags = args.user_ldflags + ' ' + '-fprofile-instr-generate -fcoverage-mapping'
 
 seastar_cflags = args.user_cflags
 
