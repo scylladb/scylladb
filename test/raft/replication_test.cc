@@ -507,6 +507,9 @@ public:
     future<> wait_log(
             std::unordered_set<size_t>& in_configuration,
             size_t leader, size_t follower);
+    future<> wait_log_all(
+            std::unordered_set<size_t>& in_configuration,
+            size_t leader);
 };
 
 test_server
@@ -654,14 +657,14 @@ future<> raft_cluster::wait_log(
 }
 
 // Wait for all connected followers to catch up
-future<> wait_log_all(raft_cluster& rafts,
-      lw_shared_ptr<connected> connected, std::unordered_set<size_t>& in_configuration,
+future<> raft_cluster::wait_log_all(
+      std::unordered_set<size_t>& in_configuration,
       size_t leader) {
-    auto leader_log_idx = rafts[leader].server->log_last_idx();
-    for (size_t s = 0; s < rafts.size(); ++s) {
-        if (s != leader && (*connected)(to_raft_id(s), to_raft_id(leader)) &&
+    auto leader_log_idx = _servers[leader].server->log_last_idx();
+    for (size_t s = 0; s < _servers.size(); ++s) {
+        if (s != leader && (*_connected)(to_raft_id(s), to_raft_id(leader)) &&
                 in_configuration.contains(s)) {
-            co_await rafts[s].server->wait_log_idx(leader_log_idx);
+            co_await _servers[s].server->wait_log_idx(leader_log_idx);
         }
     }
 }
@@ -905,7 +908,7 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
             }
             restart_tickers(tickers);
         } else if (std::holds_alternative<set_config>(update)) {
-            co_await wait_log_all(rafts, connected, in_configuration, leader);
+            co_await rafts.wait_log_all(in_configuration, leader);
             auto sc = std::get<set_config>(update);
             in_configuration = co_await change_configuration(rafts, test.total_values, connected,
                     in_configuration, snaps, persisted_snaps, packet_drops, std::move(sc), leader, tickers, apply_changes);
@@ -1018,7 +1021,7 @@ future<> rpc_test(size_t nodes, test_func test_case_body) {
     constexpr size_t initial_leader = 0;
     rafts[initial_leader].server->wait_until_candidate();
     co_await rafts[initial_leader].server->wait_election_done();
-    co_await wait_log_all(rafts, conn, in_configuration, initial_leader);
+    co_await rafts.wait_log_all(in_configuration, initial_leader);
     try {
         // Execute the test
         co_await test_case_body(rafts, conn, tickers, initial_leader, in_configuration);
@@ -1444,7 +1447,7 @@ SEASTAR_TEST_CASE(rpc_configuration_truncate_restore_from_snp) {
         connected->connect_all();
 
         // wait to synchronize logs between current leader (B) and the rest of the cluster
-        co_await wait_log_all(rafts, connected, in_configuration, initial_leader);
+        co_await rafts.wait_log_all(in_configuration, initial_leader);
         // A should have truncated an offending configuration entry and revert its RPC configuration.
         //
         // Since B's log is effectively empty (does not contain any configuration
@@ -1553,7 +1556,7 @@ SEASTAR_TEST_CASE(rpc_configuration_truncate_restore_from_log) {
         connected->connect_all();
 
         // wait to synchronize logs between current leader (B) and the rest of the cluster
-        co_await wait_log_all(rafts, connected, in_configuration, new_leader);
+        co_await rafts.wait_log_all(in_configuration, new_leader);
 
         // Again, A's RPC configuration is the same as before despite the
         // real cfg being reverted to the committed state as it is the union
@@ -1574,7 +1577,7 @@ SEASTAR_TEST_CASE(rpc_configuration_truncate_restore_from_log) {
         co_await rafts.elect_new_leader(new_leader, initial_leader);
         restart_tickers(tickers);
 
-        co_await wait_log_all(rafts, connected, in_configuration, new_leader);
+        co_await rafts.wait_log_all(in_configuration, new_leader);
 
         // Disconnect A from the rest of the cluster.
         rafts.disconnect(0);
@@ -1616,7 +1619,7 @@ SEASTAR_TEST_CASE(rpc_configuration_truncate_restore_from_log) {
         connected->connect_all();
 
         // wait to synchronize logs between current leader (B) and the rest of the cluster
-        co_await wait_log_all(rafts, connected, in_configuration, new_leader);
+        co_await rafts.wait_log_all(in_configuration, new_leader);
         // A's RPC configuration is reverted to committed configuration {A, B, C}.
         co_await seastar::async([&] {
             CHECK_EVENTUALLY_EQUAL(rafts[0].rpc->known_peers(), committed_conf);
