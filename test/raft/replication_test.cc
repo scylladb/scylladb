@@ -128,7 +128,20 @@ struct test_case {
     const std::vector<struct initial_snapshot> initial_snapshots;
     const std::vector<raft::server::configuration> config;
     const std::vector<update> updates;
+    size_t get_first_val();
 };
+
+size_t test_case::get_first_val() {
+    // Count existing leader snap index and entries, if present
+    size_t first_val = 0;
+    if (initial_leader < initial_states.size()) {
+        first_val += initial_states[initial_leader].le.size();
+    }
+    if (initial_leader < initial_snapshots.size()) {
+        first_val = initial_snapshots[initial_leader].snap.idx;
+    }
+    return first_val;
+}
 
 std::mt19937 random_generator() {
     auto& gen = seastar::testing::local_random_engine;
@@ -829,13 +842,7 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
     BOOST_TEST_MESSAGE("Processing updates");
 
     // Count existing leader snap index and entries, if present
-    size_t next_val = 0;
-    if (leader < test.initial_states.size()) {
-        next_val += test.initial_states[leader].le.size();
-    }
-    if (leader < test.initial_snapshots.size()) {
-        next_val = test.initial_snapshots[leader].snap.idx;
-    }
+    size_t next_val = test.get_first_val();
 
     // Process all updates in order
     for (auto update: test.updates) {
