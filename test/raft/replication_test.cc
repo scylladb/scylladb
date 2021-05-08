@@ -1250,7 +1250,7 @@ SEASTAR_TEST_CASE(rpc_load_conf_from_snapshot) {
     // instance is started.
     constexpr size_t nodes = 1;
 
-    raft::server_id sid = id();
+    raft::server_id sid{to_raft_id(0)};
     std::vector<initial_state> states(1);
     states[0].snapshot.config = raft::configuration{sid};
 
@@ -1270,7 +1270,7 @@ SEASTAR_TEST_CASE(rpc_load_conf_from_log) {
     constexpr size_t nodes = 1;
 
     std::vector<initial_state> states(1);
-    raft::server_id sid = id();
+    raft::server_id sid{to_raft_id(0)};
     initial_state state;
     raft::log_entry conf_entry{.idx = raft::index_t{1}, .data = raft::configuration{sid}};
     states[0].log.emplace_back(std::move(conf_entry));
