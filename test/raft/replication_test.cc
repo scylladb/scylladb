@@ -484,7 +484,7 @@ class raft_cluster {
     size_t _leader;
 public:
     raft_cluster(std::vector<initial_state> states, state_machine::apply_fn apply,
-            size_t apply_entries, lw_shared_ptr<connected> connected,
+            size_t apply_entries,
             lw_shared_ptr<persisted_snapshots> persisted_snapshots, size_t first_val,
             size_t first_leader, bool packet_drops);
     // No copy
@@ -550,10 +550,10 @@ test_server raft_cluster::create_server(size_t id, initial_state state) {
 }
 
 raft_cluster::raft_cluster(std::vector<initial_state> states, state_machine::apply_fn apply,
-        size_t apply_entries, lw_shared_ptr<connected> connected,
+        size_t apply_entries,
         lw_shared_ptr<persisted_snapshots> persisted_snapshots, size_t first_val,
         size_t first_leader, bool packet_drops) :
-            _connected(connected),
+            _connected(make_lw_shared<struct connected>(states.size())),
             _snapshots(make_lw_shared<snapshots>()),
             _persisted_snapshots(persisted_snapshots),
             _apply_entries(apply_entries),
@@ -935,9 +935,8 @@ std::vector<initial_state> get_states(test_case test, bool prevote) {
 future<> run_test(test_case test, bool prevote, bool packet_drops) {
 
     auto persisted_snaps = make_lw_shared<persisted_snapshots>();
-    auto connected = make_lw_shared<struct connected>(test.nodes);
 
-    raft_cluster rafts(get_states(test, prevote), apply_changes, test.total_values, connected,
+    raft_cluster rafts(get_states(test, prevote), apply_changes, test.total_values,
             persisted_snaps, test.get_first_val(), test.initial_leader, packet_drops);
     co_await rafts.start_all();
 
@@ -1015,7 +1014,7 @@ raft::server_address_set full_cluster_address_set(size_t nodes) {
 }
 
 using test_func = seastar::noncopyable_function<
-    future<>(raft_cluster&, lw_shared_ptr<connected>, size_t)>;
+    future<>(raft_cluster&, size_t)>;
 
 size_t dummy_apply_fn(raft::server_id id, const std::vector<raft::command_cref>& commands,
         lw_shared_ptr<hasher_int> hasher) {
@@ -1030,12 +1029,11 @@ future<> rpc_test_change_configuration(raft_cluster& rafts, set_config sc) {
 // automatic initialization and de-initialization of a raft cluster.
 future<> rpc_test(size_t nodes, test_func test_case_body) {
     std::vector<initial_state> states(nodes);
-    auto conn = make_lw_shared<connected>(nodes);
 
     rpc::reset_network();
     // Initialize and start the cluster with corresponding tickers
-    raft_cluster rafts(states, dummy_apply_fn, 1, conn, make_lw_shared<persisted_snapshots>(),
-            0, 0, false);
+    raft_cluster rafts(states, dummy_apply_fn, 1, make_lw_shared<persisted_snapshots>(), 0, 0,
+            false);
     co_await rafts.start_all();
     // Elect first node a leader
     constexpr size_t initial_leader = 0;
@@ -1044,7 +1042,7 @@ future<> rpc_test(size_t nodes, test_func test_case_body) {
     co_await rafts.wait_log_all();
     try {
         // Execute the test
-        co_await test_case_body(rafts, conn, initial_leader);
+        co_await test_case_body(rafts, initial_leader);
     } catch (...) {
         BOOST_ERROR(format("RPC test failed unexpectedly with error: {}", std::current_exception()));
     }
@@ -1273,8 +1271,8 @@ SEASTAR_TEST_CASE(rpc_load_conf_from_snapshot) {
     std::vector<initial_state> states(1);
     states[0].snapshot.config = raft::configuration{sid};
 
-    raft_cluster rafts(states, dummy_apply_fn, 0, make_lw_shared<connected>(1),
-        make_lw_shared<persisted_snapshots>(), 0, 0, false);
+    raft_cluster rafts(states, dummy_apply_fn, 0, make_lw_shared<persisted_snapshots>(), 0, 0,
+            false);
     co_await rafts.start_all();
 
     BOOST_CHECK(rafts[0].rpc->known_peers() == address_set({sid}));
@@ -1293,8 +1291,8 @@ SEASTAR_TEST_CASE(rpc_load_conf_from_log) {
     raft::log_entry conf_entry{.idx = raft::index_t{1}, .data = raft::configuration{sid}};
     states[0].log.emplace_back(std::move(conf_entry));
 
-    raft_cluster rafts(states, dummy_apply_fn, 0, make_lw_shared<connected>(1),
-        make_lw_shared<persisted_snapshots>(), 0, to_local_id(sid.id), false);
+    raft_cluster rafts(states, dummy_apply_fn, 0, make_lw_shared<persisted_snapshots>(), 0,
+            to_local_id(sid.id), false);
     co_await rafts.start_all();
 
     BOOST_CHECK(rafts[0].rpc->known_peers() == address_set({sid}));
@@ -1307,8 +1305,7 @@ SEASTAR_TEST_CASE(rpc_propose_conf_change) {
     // Shrinked later to 2 nodes and then expanded back to 3 nodes.
     // Test that both configuration changes update RPC configuration correspondingly
     // on all nodes.
-    return rpc_test(3, [] (raft_cluster& rafts, lw_shared_ptr<connected> connected,
-            size_t leader) -> future<> {
+    return rpc_test(3, [] (raft_cluster& rafts, size_t leader) -> future<> {
         // Remove node C from the cluster configuration.
         co_await rpc_test_change_configuration(rafts, set_config{0, 1});
 
@@ -1334,8 +1331,7 @@ SEASTAR_TEST_CASE(rpc_propose_conf_change) {
 SEASTAR_TEST_CASE(rpc_leader_election) {
     // 3 node cluster {A, B, C}.
     // Test that leader elections don't change RPC configuration.
-    return rpc_test(3, [] (raft_cluster& rafts, lw_shared_ptr<connected> connected,
-            size_t initial_leader) -> future<> {
+    return rpc_test(3, [] (raft_cluster& rafts, size_t initial_leader) -> future<> {
         auto all_nodes = full_cluster_address_set(rafts.size());
         for (size_t s = 0; s < rafts.size(); ++s) {
             BOOST_CHECK(rafts[s].rpc->known_peers() == all_nodes);
@@ -1358,8 +1354,7 @@ SEASTAR_TEST_CASE(rpc_voter_non_voter_transision) {
     // 3 node cluster {A, B, C}.
     // Test that demoting of node C to learner state and then promoting back
     // to voter doesn't involve any RPC configuration changes. 
-    return rpc_test(3, [] (raft_cluster& rafts, lw_shared_ptr<connected> connected,
-            size_t leader) -> future<> {
+    return rpc_test(3, [] (raft_cluster& rafts, size_t leader) -> future<> {
         const auto all_voter_nodes = full_cluster_address_set(rafts.size());
         for (size_t s = 0; s < rafts.size(); ++s) {
             BOOST_CHECK(rafts[s].rpc->known_peers() == all_voter_nodes);
@@ -1402,8 +1397,7 @@ SEASTAR_TEST_CASE(rpc_configuration_truncate_restore_from_snp) {
     // it's empty since B does not have any entries at all, except for dummies).
     // The RPC configuration on A is restored from initial snapshot configuration,
     // which is {A, B, C}.
-    return rpc_test(3, [] (raft_cluster& rafts, lw_shared_ptr<connected> connected,
-            size_t initial_leader) -> future<> {
+    return rpc_test(3, [] (raft_cluster& rafts, size_t initial_leader) -> future<> {
         const auto all_nodes = full_cluster_address_set(rafts.size());
         rafts.pause_tickers();
         // Disconnect A from B and C.
@@ -1447,7 +1441,7 @@ SEASTAR_TEST_CASE(rpc_configuration_truncate_restore_from_snp) {
         co_await rafts.elect_new_leader(1);
 
         // Heal network partition.
-        connected->connect_all();
+        rafts.connect_all();
 
         // wait to synchronize logs between current leader (B) and the rest of the cluster
         co_await rafts.wait_log_all();
@@ -1496,8 +1490,7 @@ SEASTAR_TEST_CASE(rpc_configuration_truncate_restore_from_log) {
     // configuration.
     // After healing the network and synchronizing with new leader B, RPC config
     // should be reverted back to committed state {A, B, C}.
-    return rpc_test(4, [] (raft_cluster& rafts, lw_shared_ptr<connected> connected,
-            size_t initial_leader) -> future<> {
+    return rpc_test(4, [] (raft_cluster& rafts, size_t initial_leader) -> future<> {
         const auto all_nodes = full_cluster_address_set(rafts.size());
 
         // Remove node D from the cluster configuration.
@@ -1549,7 +1542,7 @@ SEASTAR_TEST_CASE(rpc_configuration_truncate_restore_from_log) {
         co_await rafts.elect_new_leader(1);
 
         // Heal network partition.
-        connected->connect_all();
+        rafts.connect_all();
 
         // wait to synchronize logs between current leader (B) and the rest of the cluster
         co_await rafts.wait_log_all();
@@ -1604,7 +1597,7 @@ SEASTAR_TEST_CASE(rpc_configuration_truncate_restore_from_log) {
         co_await rafts.elect_new_leader(1);
 
         // Heal network partition.
-        connected->connect_all();
+        rafts.connect_all();
 
         // wait to synchronize logs between current leader (B) and the rest of the cluster
         co_await rafts.wait_log_all();
