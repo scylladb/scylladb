@@ -428,6 +428,8 @@ public:
     future<> stop_all();
     future<> wait_all();
     void tick_all();
+    void disconnect(size_t id, std::optional<raft::server_id> except = std::nullopt);
+    void connect_all();
 };
 
 test_server
@@ -499,6 +501,14 @@ void raft_cluster::tick_all() {
     for (auto& r: _servers) {
         r.server->tick();
     }
+}
+
+void raft_cluster::disconnect(size_t id, std::optional<raft::server_id> except) {
+    _connected->disconnect(to_raft_id(id), except);
+}
+
+void raft_cluster::connect_all() {
+    _connected->connect_all();
 }
 
 struct log_entry {
