@@ -524,19 +524,21 @@ public:
     const std::unordered_set<size_t>& get_configuration() {
         return _in_configuration;   // Servers in current configuration
     }
+private:
+    test_server create_server(size_t id, initial_state state);
 };
 
-test_server
-create_raft_server(raft::server_id uuid, state_machine::apply_fn apply, initial_state state,
-        size_t apply_entries, lw_shared_ptr<connected> connected, lw_shared_ptr<snapshots> snapshots,
-        lw_shared_ptr<persisted_snapshots> persisted_snapshots, bool packet_drops) {
+test_server raft_cluster::create_server(size_t id, initial_state state) {
 
-    auto sm = std::make_unique<state_machine>(uuid, std::move(apply), apply_entries, snapshots);
+    auto uuid = to_raft_id(id);
+    auto sm = std::make_unique<state_machine>(uuid, _apply, _apply_entries, _snapshots);
     auto& rsm = *sm;
-    auto mrpc = std::make_unique<rpc>(uuid, connected, snapshots, packet_drops);
+
+    auto mrpc = std::make_unique<rpc>(uuid, _connected, _snapshots, _packet_drops);
     auto& rpc_ref = *mrpc;
-    auto mpersistence = std::make_unique<persistence>(uuid, state, snapshots, persisted_snapshots);
-    auto fd = seastar::make_shared<failure_detector>(uuid, connected);
+
+    auto mpersistence = std::make_unique<persistence>(uuid, state, _snapshots, _persisted_snapshots);
+    auto fd = seastar::make_shared<failure_detector>(uuid, _connected);
 
     auto raft = raft::create_server(uuid, std::move(mrpc), std::move(sm), std::move(mpersistence),
         std::move(fd), state.server_config);
@@ -576,8 +578,7 @@ raft_cluster::raft_cluster(std::vector<initial_state> states, state_machine::app
         auto& s = states[i].address;
         states[i].snapshot.config = config;
         (*_snapshots)[s.id] = states[i].snp_value;
-        _servers.emplace_back(create_raft_server(s.id, _apply, states[i], _apply_entries,
-                    connected, _snapshots, _persisted_snapshots, _packet_drops));
+        _servers.emplace_back(create_server(i, states[i]));
     }
 }
 
@@ -590,8 +591,7 @@ future<> raft_cluster::stop_server(size_t id) {
 
 // Reset previously stopped server
 future<> raft_cluster::reset_server(size_t id, initial_state state) {
-    _servers[id] = create_raft_server(to_raft_id(id), _apply, state, _apply_entries,
-            _connected, _snapshots, _persisted_snapshots, _packet_drops);
+    _servers[id] = create_server(id, state);
     co_await _servers[id].server->start();
     set_ticker_callback(id);
 }
