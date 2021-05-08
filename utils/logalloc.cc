@@ -1910,18 +1910,23 @@ void tracker::impl::full_compaction() {
 }
 
 static void reclaim_from_evictable(region::impl& r, size_t target_mem_in_use, is_preemptible preempt) {
-    while (true) {
-        auto deficit = shard_segment_pool.total_memory_in_use() - target_mem_in_use;
-        auto occupancy = r.occupancy();
-        auto used = occupancy.used_space();
-        if (used == 0) {
-            break;
+    llogger.debug("reclaim_from_evictable: total_memory_in_use={} target={}", shard_segment_pool.total_memory_in_use(), target_mem_in_use);
+
+    // Before attempting segment compaction, try to evict at least deficit and one segment more so that
+    // for workloads in which eviction order matches allocation order we will reclaim full segments
+    // without needing to perform expensive compaction.
+    auto deficit = shard_segment_pool.total_memory_in_use() - target_mem_in_use;
+    auto used = r.occupancy().used_space();
+    auto used_target = used - std::min(used, deficit + segment::size);
+
+    while (shard_segment_pool.total_memory_in_use() > target_mem_in_use) {
+        used = r.occupancy().used_space();
+        if (used > used_target) {
+            llogger.debug("Evicting {} bytes from region {}, occupancy={} in advance",
+                    used - used_target, r.id(), r.occupancy());
+        } else {
+            llogger.debug("Evicting from region {}, occupancy={} until it's compactible", r.id(), r.occupancy());
         }
-        // Before attempting segment compaction, try to evict at least deficit and one segment more so that
-        // for workloads in which eviction order matches allocation order we will reclaim full segments
-        // without needing to perform expensive compaction.
-        auto used_target = used - std::min(used, deficit + segment::size);
-        llogger.debug("Evicting {} bytes from region {}, occupancy={}", used - used_target, r.id(), r.occupancy());
         while (r.occupancy().used_space() > used_target || !r.is_compactible()) {
             if (r.evict_some() == memory::reclaiming_result::reclaimed_nothing) {
                 if (r.is_compactible()) { // Need to make forward progress in case there is nothing to evict.
@@ -1930,16 +1935,23 @@ static void reclaim_from_evictable(region::impl& r, size_t target_mem_in_use, is
                 llogger.debug("Unable to evict more, evicted {} bytes", used - r.occupancy().used_space());
                 return;
             }
-            if (shard_segment_pool.total_memory_in_use() <= target_mem_in_use) {
-                llogger.debug("Target met after evicting {} bytes", used - r.occupancy().used_space());
-                return;
-            }
-            if (r.empty()) {
-                return;
-            }
             if (preempt && need_preempt()) {
+                llogger.debug("reclaim_from_evictable preempted");
                 return;
             }
+        }
+        // If there are many compactible segments, we will keep compacting without
+        // entering the eviction loop above. So the preemption check there is not
+        // sufficient and we also need to check here.
+        //
+        // Note that a preemptible reclaim_from_evictable may not do any real progress,
+        // but it doesn't need to. Preemptible (background) reclaim is an optimization.
+        // If the system is overwhelmed, and reclaim_from_evictable keeps getting
+        // preempted without doing any useful work, then eventually memory will be
+        // exhausted and reclaim will be called synchronously, without preemption.
+        if (preempt && need_preempt()) {
+            llogger.debug("reclaim_from_evictable preempted");
+            return;
         }
         llogger.debug("Compacting after evicting {} bytes", used - r.occupancy().used_space());
         r.compact();
