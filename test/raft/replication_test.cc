@@ -609,14 +609,14 @@ future<> raft_cluster::stop_all() {
 }
 
 future<> raft_cluster::wait_all() {
-    for (auto& r: _servers) {
-        co_await r.sm->done();
+    for (auto s: _in_configuration) {
+        co_await _servers[s].sm->done();
     }
 }
 
 void raft_cluster::tick_all() {
-    for (auto& r: _servers) {
-        r.server->tick();
+    for (auto s: _in_configuration) {
+        _servers[s].server->tick();
     }
 }
 
@@ -815,6 +815,15 @@ future<> raft_cluster::change_configuration(set_config sc) {
         }
     }
 
+    // Start nodes in new configuration but not in current configuration (re-added)
+    for (auto s: new_config) {
+        if (!_in_configuration.contains(s)) {
+            tlogger.debug("Starting node being re-added to configuration {}", s);
+            co_await reset_server(s, initial_state{.log = {}});
+            _tickers[s].rearm_periodic(tick_delta);
+        }
+    }
+
     tlogger.debug("Changing configuration on leader {}", _leader);
     co_await _servers[_leader].server->set_configuration(std::move(set));
 
@@ -831,13 +840,11 @@ future<> raft_cluster::change_configuration(set_config sc) {
         // leader stepped down, implying config fully changed
     } catch (raft::commit_status_unknown& e) {}
 
-    // Reset removed nodes
+    // Stop nodes no longer in configuration
     for (auto s: _in_configuration) {
         if (!new_config.contains(s)) {
             _tickers[s].cancel();
             co_await stop_server(s);
-            co_await reset_server(s, initial_state{.log = {}});
-            _tickers[s].rearm_periodic(tick_delta);
         }
     }
 
@@ -1608,6 +1615,5 @@ SEASTAR_TEST_CASE(rpc_configuration_truncate_restore_from_log) {
         });
         BOOST_CHECK(rafts[1].rpc->known_peers() == committed_conf);
         BOOST_CHECK(rafts[2].rpc->known_peers() == committed_conf);
-        co_await rafts.stop_server(3); // server out of config
     });
 }
