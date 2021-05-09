@@ -824,14 +824,14 @@ future<> raft_cluster::change_configuration(set_config sc) {
     } catch (raft::commit_status_unknown& e) {}
 
     // Reset removed nodes
-    pause_tickers();
     for (auto s: _in_configuration) {
         if (!new_config.contains(s)) {
+            _tickers[s].cancel();
             co_await stop_server(s);
             co_await reset_server(s, initial_state{.log = {}});
+            _tickers[s].rearm_periodic(tick_delta);
         }
     }
-    restart_tickers();
 
     _in_configuration = new_config;
 }
