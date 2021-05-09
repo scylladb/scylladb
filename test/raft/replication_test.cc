@@ -960,17 +960,14 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
     // Process all updates in order
     for (auto update: test.updates) {
         if (std::holds_alternative<entries>(update)) {
-            auto n = std::get<entries>(update).n;
-            co_await rafts.add_entries(n);
+            co_await rafts.add_entries(std::get<entries>(update).n);
         } else if (std::holds_alternative<new_leader>(update)) {
-            unsigned next_leader = std::get<new_leader>(update).id;
-            co_await rafts.elect_new_leader(next_leader);
+            co_await rafts.elect_new_leader(std::get<new_leader>(update).id);
         } else if (std::holds_alternative<partition>(update)) {
             co_await rafts.partition(std::get<partition>(update));
         } else if (std::holds_alternative<set_config>(update)) {
             co_await rafts.wait_log_all();
-            auto sc = std::get<set_config>(update);
-            co_await rafts.change_configuration(std::move(sc));
+            co_await rafts.change_configuration(std::get<set_config>(update));
         } else if (std::holds_alternative<tick>(update)) {
             auto t = std::get<tick>(update);
             co_await rafts.tick(t);
