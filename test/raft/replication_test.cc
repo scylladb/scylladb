@@ -523,6 +523,7 @@ public:
     const std::unordered_set<size_t>& get_configuration() {
         return _in_configuration;   // Servers in current configuration
     }
+    void verify();
 private:
     test_server create_server(size_t id, initial_state state);
 };
@@ -900,6 +901,26 @@ future<> raft_cluster::tick(::tick t) {
     }
 }
 
+void raft_cluster::verify() {
+    BOOST_TEST_MESSAGE("Verifying hashes match expected (snapshot and apply calls)");
+    auto expected = hasher_int::hash_range(_apply_entries).finalize_uint64();
+    for (size_t i = 0; i < _servers.size(); ++i) {
+        auto digest = _servers[i].sm->hasher->finalize_uint64();
+        BOOST_CHECK_MESSAGE(digest == expected,
+                format("Digest doesn't match for server [{}]: {} != {}", i, digest, expected));
+    }
+
+    BOOST_TEST_MESSAGE("Verifying persisted snapshots");
+    // TODO: check that snapshot is taken when it should be
+    for (auto& s : (*_persisted_snapshots)) {
+        auto& [snp, val] = s.second;
+        auto digest = val.hasher.finalize_uint64();
+        auto expected = hasher_int::hash_range(val.idx).finalize_uint64();
+        BOOST_CHECK_MESSAGE(digest == expected,
+                format("Persisted snapshot {} doesn't match {} != {}", snp.id, digest, expected));
+   }
+}
+
 std::vector<initial_state> get_states(test_case test, bool prevote) {
     rpc::reset_network();
     std::vector<initial_state> states(test.nodes);       // Server initial states
@@ -972,23 +993,7 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
     co_await rafts.wait_all();
     co_await rafts.stop_all();
 
-    BOOST_TEST_MESSAGE("Verifying hashes match expected (snapshot and apply calls)");
-    auto expected = hasher_int::hash_range(test.total_values).finalize_uint64();
-    for (size_t i = 0; i < rafts.size(); ++i) {
-        auto digest = rafts[i].sm->hasher->finalize_uint64();
-        BOOST_CHECK_MESSAGE(digest == expected,
-                format("Digest doesn't match for server [{}]: {} != {}", i, digest, expected));
-    }
-
-    BOOST_TEST_MESSAGE("Verifying persisted snapshots");
-    // TODO: check that snapshot is taken when it should be
-    for (auto& s : (*persisted_snaps)) {
-        auto& [snp, val] = s.second;
-        auto digest = val.hasher.finalize_uint64();
-        auto expected = hasher_int::hash_range(val.idx).finalize_uint64();
-        BOOST_CHECK_MESSAGE(digest == expected,
-                format("Persisted snapshot {} doesn't match {} != {}", snp.id, digest, expected));
-   }
+    rafts.verify();
 }
 
 void replication_test(struct test_case test, bool prevote, bool packet_drops) {
