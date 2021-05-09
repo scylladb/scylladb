@@ -251,9 +251,9 @@ SEASTAR_TEST_CASE(test_query_built_indexes_virtual_table) {
         });
         rs = e.execute_cql("select * from system.\"IndexInfo\"").get0();
         assert_that(rs).is_rows().with_rows_ignore_order({
-                { {utf8_type->decompose(sstring("ks"))}, {utf8_type->decompose(idx)} },
+                { {utf8_type->decompose(sstring("ks"))}, {utf8_type->decompose(sstring("idx"))} },
         });
-        rs = e.execute_cql(format("select * from system.\"IndexInfo\" where table_name = 'ks' and index_name = '{}'", idx)).get0();
+        rs = e.execute_cql("select * from system.\"IndexInfo\" where table_name = 'ks' and index_name = 'idx'").get0();
         assert_that(rs).is_rows().with_size(1);
         rs = e.execute_cql("select * from system.\"IndexInfo\" where table_name = 'ks' and index_name = 'vcf'").get0();
         assert_that(rs).is_rows().with_size(0);
