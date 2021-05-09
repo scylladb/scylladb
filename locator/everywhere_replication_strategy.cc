@@ -59,7 +59,7 @@ inet_address_vector_replica_set everywhere_replication_strategy::do_get_natural_
 }
 
 size_t everywhere_replication_strategy::get_replication_factor() const {
-    return _shared_token_metadata.get()->get_all_endpoints_count();
+    return _shared_token_metadata.get()->count_normal_token_owners();
 }
 
 using registry = class_registrator<abstract_replication_strategy, everywhere_replication_strategy, const sstring&, const shared_token_metadata&, snitch_ptr&, const std::map<sstring, sstring>&>;
