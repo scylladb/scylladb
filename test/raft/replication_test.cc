@@ -1380,7 +1380,7 @@ SEASTAR_TEST_CASE(rpc_configuration_truncate_restore_from_snp) {
         const auto all_nodes = full_cluster_address_set(rafts.size());
         pause_tickers(tickers);
         // Disconnect A from B and C.
-        connected->disconnect(to_raft_id(0));
+        rafts.disconnect(0);
         // Emulate a failed configuration change on A (add node D) by
         // restarting A with a modified initial log containing one extraneous
         // configuration entry.
@@ -1490,7 +1490,7 @@ SEASTAR_TEST_CASE(rpc_configuration_truncate_restore_from_log) {
         //
 
         // Disconnect A from the rest of the cluster.
-        connected->disconnect(to_raft_id(0));
+        rafts.disconnect(0);
         // Try to change configuration (remove node C)
         auto uncommitted_conf = address_set({to_raft_id(0), to_raft_id(1)});
         // `set_configuration` call will fail on A because
@@ -1561,7 +1561,7 @@ SEASTAR_TEST_CASE(rpc_configuration_truncate_restore_from_log) {
         co_await wait_log_all(rafts, connected, in_configuration, new_leader);
 
         // Disconnect A from the rest of the cluster.
-        connected->disconnect(to_raft_id(0));
+        rafts.disconnect(0);
 
         // Try to add D back.
         tickers[0].cancel();
