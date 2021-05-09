@@ -159,7 +159,6 @@ public:
 private:
     std::vector<shared_memtable> _memtables;
     seal_immediate_fn_type _seal_immediate_fn;
-    seal_delayed_fn_type _seal_delayed_fn;
     std::function<schema_ptr()> _current_schema;
     dirty_memory_manager* _dirty_memory_manager;
     std::optional<shared_promise<>> _flush_coalescing;
@@ -168,14 +167,12 @@ private:
 public:
     memtable_list(
             seal_immediate_fn_type seal_immediate_fn,
-            seal_delayed_fn_type seal_delayed_fn,
             std::function<schema_ptr()> cs,
             dirty_memory_manager* dirty_memory_manager,
             table_stats& table_stats,
             seastar::scheduling_group compaction_scheduling_group = seastar::current_scheduling_group())
         : _memtables({})
         , _seal_immediate_fn(seal_immediate_fn)
-        , _seal_delayed_fn(seal_delayed_fn)
         , _current_schema(cs)
         , _dirty_memory_manager(dirty_memory_manager)
         , _compaction_scheduling_group(compaction_scheduling_group)
@@ -183,19 +180,10 @@ public:
         add_memtable();
     }
 
-    memtable_list(
-            seal_immediate_fn_type seal_immediate_fn,
-            std::function<schema_ptr()> cs,
-            dirty_memory_manager* dirty_memory_manager,
-            table_stats& table_stats,
-            seastar::scheduling_group compaction_scheduling_group = seastar::current_scheduling_group())
-        : memtable_list(std::move(seal_immediate_fn), {}, std::move(cs), dirty_memory_manager, table_stats, compaction_scheduling_group) {
-    }
-
     memtable_list(std::function<schema_ptr()> cs, dirty_memory_manager* dirty_memory_manager,
             table_stats& table_stats,
             seastar::scheduling_group compaction_scheduling_group = seastar::current_scheduling_group())
-        : memtable_list({}, {}, std::move(cs), dirty_memory_manager, table_stats, compaction_scheduling_group) {
+        : memtable_list({}, std::move(cs), dirty_memory_manager, table_stats, compaction_scheduling_group) {
     }
 
     bool may_flush() const {
@@ -241,13 +229,6 @@ public:
 
     future<> seal_active_memtable_immediate(flush_permit&& permit) {
         return _seal_immediate_fn(std::move(permit));
-    }
-
-    future<> seal_active_memtable_delayed() {
-        if (_seal_delayed_fn) {
-            return _seal_delayed_fn();
-        }
-        return request_flush();
     }
 
     auto begin() noexcept {
