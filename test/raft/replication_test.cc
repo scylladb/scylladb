@@ -663,14 +663,14 @@ void raft_cluster::init_raft_tickers() {
 }
 
 void raft_cluster::pause_tickers() {
-    for (auto& ticker: _tickers) {
-        ticker.cancel();
+    for (auto s: _in_configuration) {
+        _tickers[s].cancel();
     }
 }
 
 void raft_cluster::restart_tickers() {
-    for (auto& ticker: _tickers) {
-        ticker.rearm_periodic(tick_delta);
+    for (auto s: _in_configuration) {
+        _tickers[s].rearm_periodic(tick_delta);
     }
 }
 
