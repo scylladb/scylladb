@@ -227,7 +227,7 @@ public:
         return _memtables.size();
     }
 
-    future<> seal_active_memtable_immediate(flush_permit&& permit) {
+    future<> seal_active_memtable(flush_permit&& permit) {
         return _seal_immediate_fn(std::move(permit));
     }
 

@@ -1662,7 +1662,7 @@ future<flush_permit> flush_permit::reacquire_sstable_write_permit() && {
 }
 
 future<> dirty_memory_manager::flush_one(memtable_list& mtlist, flush_permit&& permit) {
-    return mtlist.seal_active_memtable_immediate(std::move(permit)).handle_exception([this, schema = mtlist.back()->schema()] (std::exception_ptr ep) {
+    return mtlist.seal_active_memtable(std::move(permit)).handle_exception([this, schema = mtlist.back()->schema()] (std::exception_ptr ep) {
         dblog.error("Failed to flush memtable, {}:{} - {}", schema->ks_name(), schema->cf_name(), ep);
         return make_exception_future<>(ep);
     });
