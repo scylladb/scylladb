@@ -484,9 +484,7 @@ class raft_cluster {
     size_t _leader;
 public:
     raft_cluster(std::vector<initial_state> states, state_machine::apply_fn apply,
-            size_t apply_entries,
-            lw_shared_ptr<persisted_snapshots> persisted_snapshots, size_t first_val,
-            size_t first_leader, bool packet_drops);
+            size_t apply_entries, size_t first_val, size_t first_leader, bool packet_drops);
     // No copy
     raft_cluster(const raft_cluster&) = delete;
     raft_cluster(raft_cluster&&) = default;
@@ -551,12 +549,10 @@ test_server raft_cluster::create_server(size_t id, initial_state state) {
 }
 
 raft_cluster::raft_cluster(std::vector<initial_state> states, state_machine::apply_fn apply,
-        size_t apply_entries,
-        lw_shared_ptr<persisted_snapshots> persisted_snapshots, size_t first_val,
-        size_t first_leader, bool packet_drops) :
+        size_t apply_entries, size_t first_val, size_t first_leader, bool packet_drops) :
             _connected(make_lw_shared<struct connected>(states.size())),
             _snapshots(make_lw_shared<snapshots>()),
-            _persisted_snapshots(persisted_snapshots),
+            _persisted_snapshots(make_lw_shared<persisted_snapshots>()),
             _apply_entries(apply_entries),
             _next_val(first_val),
             _packet_drops(packet_drops),
@@ -955,10 +951,8 @@ std::vector<initial_state> get_states(test_case test, bool prevote) {
 
 future<> run_test(test_case test, bool prevote, bool packet_drops) {
 
-    auto persisted_snaps = make_lw_shared<persisted_snapshots>();
-
     raft_cluster rafts(get_states(test, prevote), apply_changes, test.total_values,
-            persisted_snaps, test.get_first_val(), test.initial_leader, packet_drops);
+            test.get_first_val(), test.initial_leader, packet_drops);
     co_await rafts.start_all();
 
     BOOST_TEST_MESSAGE("Processing updates");
@@ -1037,8 +1031,7 @@ future<> rpc_test(size_t nodes, test_func test_case_body) {
 
     rpc::reset_network();
     // Initialize and start the cluster with corresponding tickers
-    raft_cluster rafts(states, dummy_apply_fn, 1, make_lw_shared<persisted_snapshots>(), 0, 0,
-            false);
+    raft_cluster rafts(states, dummy_apply_fn, 1, 0, 0, false);
     co_await rafts.start_all();
     // Elect first node a leader
     constexpr size_t initial_leader = 0;
@@ -1276,8 +1269,7 @@ SEASTAR_TEST_CASE(rpc_load_conf_from_snapshot) {
     std::vector<initial_state> states(1);
     states[0].snapshot.config = raft::configuration{sid};
 
-    raft_cluster rafts(states, dummy_apply_fn, 0, make_lw_shared<persisted_snapshots>(), 0, 0,
-            false);
+    raft_cluster rafts(states, dummy_apply_fn, 0, 0, 0, false);
     co_await rafts.start_all();
 
     BOOST_CHECK(rafts[0].rpc->known_peers() == address_set({sid}));
@@ -1296,8 +1288,7 @@ SEASTAR_TEST_CASE(rpc_load_conf_from_log) {
     raft::log_entry conf_entry{.idx = raft::index_t{1}, .data = raft::configuration{sid}};
     states[0].log.emplace_back(std::move(conf_entry));
 
-    raft_cluster rafts(states, dummy_apply_fn, 0, make_lw_shared<persisted_snapshots>(), 0,
-            to_local_id(sid.id), false);
+    raft_cluster rafts(states, dummy_apply_fn, 0, 0, to_local_id(sid.id), false);
     co_await rafts.start_all();
 
     BOOST_CHECK(rafts[0].rpc->known_peers() == address_set({sid}));
