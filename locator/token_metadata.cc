@@ -31,6 +31,7 @@
 #include <boost/icl/interval.hpp>
 #include <boost/icl/interval_map.hpp>
 #include <seastar/core/coroutine.hh>
+#include <boost/range/adaptors.hpp>
 
 namespace locator {
 
@@ -534,16 +535,13 @@ public:
     }
 
 #endif
+    // Returns nodes that are officially part of the ring. It does not include
+    // node that is still joining the cluster, e.g., a node that is still
+    // streaming data before it finishes the bootstrap process and turns into
+    // NORMAL status.
     std::vector<inet_address> get_all_endpoints() const {
-        std::vector<inet_address> tmp;
-        std::transform(_endpoint_to_host_id_map.begin(), _endpoint_to_host_id_map.end(), std::back_inserter(tmp), [](const auto& p) {
-           return p.first;
-        });
-        return tmp;
-    }
-
-    size_t get_all_endpoints_count() const {
-        return _endpoint_to_host_id_map.size();
+        auto tmp = boost::copy_range<std::unordered_set<gms::inet_address>>(_token_to_endpoint_map | boost::adaptors::map_values);
+        return std::vector<inet_address>(tmp.begin(), tmp.end());
     }
 
     /* Returns the number of different endpoints that own tokens in the ring.
@@ -2038,11 +2036,6 @@ token_metadata::get_predecessor(token t) const {
 std::vector<inet_address>
 token_metadata::get_all_endpoints() const {
     return _impl->get_all_endpoints();
-}
-
-size_t
-token_metadata::get_all_endpoints_count() const {
-    return _impl->get_all_endpoints_count();
 }
 
 size_t
