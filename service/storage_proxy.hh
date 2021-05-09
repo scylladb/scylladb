@@ -194,7 +194,8 @@ private:
         unique_response_handler(storage_proxy& p_, response_id_type id_);
         unique_response_handler(const unique_response_handler&) = delete;
         unique_response_handler& operator=(const unique_response_handler&) = delete;
-        unique_response_handler(unique_response_handler&& x);
+        unique_response_handler(unique_response_handler&& x) noexcept;
+        unique_response_handler& operator=(unique_response_handler&&) noexcept;
         ~unique_response_handler();
         response_id_type release();
     };

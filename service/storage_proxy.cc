@@ -1811,7 +1811,15 @@ storage_proxy::storage_proxy(distributed<database>& db, storage_proxy::config cf
 }
 
 storage_proxy::unique_response_handler::unique_response_handler(storage_proxy& p_, response_id_type id_) : id(id_), p(p_) {}
-storage_proxy::unique_response_handler::unique_response_handler(unique_response_handler&& x) : id(x.id), p(x.p) { x.id = 0; };
+storage_proxy::unique_response_handler::unique_response_handler(unique_response_handler&& x) noexcept : id(x.id), p(x.p) { x.id = 0; };
+
+storage_proxy::unique_response_handler&
+storage_proxy::unique_response_handler::operator=(unique_response_handler&& x) noexcept {
+    // this->p must equal x.p
+    id = std::exchange(x.id, 0);
+    return *this;
+}
+
 storage_proxy::unique_response_handler::~unique_response_handler() {
     if (id) {
         p.remove_response_handler(id);
