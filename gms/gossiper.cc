@@ -2013,7 +2013,6 @@ future<> gossiper::add_local_application_state(std::list<std::pair<application_s
             if (!es) {
                 auto err = format("endpoint_state_map does not contain endpoint = {}, application_states = {}",
                                   ep_addr, states);
-                logger.error("{}", err);
                 throw std::runtime_error(err);
             }
 
