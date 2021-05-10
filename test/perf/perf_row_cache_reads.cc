@@ -35,6 +35,11 @@
 #include "test/lib/memtable_snapshot_source.hh"
 #include "test/perf/perf.hh"
 #include "test/lib/reader_permit.hh"
+#include "test/lib/random_utils.hh"
+#include "test/lib/simple_schema.hh"
+#include "querier.hh"
+#include "types.hh"
+#include "reader_concurrency_semaphore.hh"
 
 /// Tests read scenarios from cache.
 ///
@@ -60,6 +65,8 @@ static bool cancelled = false;
 static const auto MB = 1024 * 1024;
 
 void test_scans_with_dummy_entries() {
+    std::cout << __FUNCTION__<< std::endl;
+
     auto s = schema_builder("ks", "cf")
             .with_column("pk", uuid_type, column_kind::partition_key)
             .with_column("st", bytes_type, column_kind::static_column)
@@ -98,6 +105,7 @@ void test_scans_with_dummy_entries() {
                 .build();
 
         auto rd = cache.make_reader(s, tests::make_permit(), pr, slice);
+        auto close_reader = deferred_close(rd);
         rd.set_max_buffer_size(1);
         rd.fill_buffer(db::no_timeout).get();
         seastar::thread::maybe_yield();
@@ -112,6 +120,7 @@ void test_scans_with_dummy_entries() {
 
     auto test_read = [&] {
         auto rd = cache.make_reader(s, tests::make_permit(), pr);
+        auto close_reader = deferred_close(rd);
         scheduling_latency_measurer slm;
         slm.start();
         auto d = duration_in_seconds([&] {
@@ -141,6 +150,90 @@ void test_scans_with_dummy_entries() {
     tracker.cleaner().drain().get();
 }
 
+void test_scan_with_range_delete_over_rows() {
+    std::cout << __FUNCTION__<< std::endl;
+
+    simple_schema ss;
+    auto s = ss.schema();
+
+    cache_tracker tracker;
+    memtable_snapshot_source mss(s);
+
+    auto pk = ss.make_pkey(0);
+    auto val = sstring(sstring::initialized_later(), cell_size);
+
+    std::cout << "Populating with rows" << std::endl;
+
+    const size_t cache_size = seastar::memory::stats().total_memory() / 4;
+    auto pr = dht::partition_range::make_singular(pk);
+    size_t ck_index = 0;
+    while (mss.used_space() < cache_size) {
+        mutation m(s, pk);
+        ss.add_row(m, ss.make_ckey(ck_index++), val);
+        mss.apply(m);
+
+        if (cancelled) {
+            return;
+        }
+    }
+
+    mutation m(s, pk);
+    ss.delete_range(m, ss.make_ckey_range(0, ck_index));
+    mss.apply(m);
+
+    row_cache cache(s, snapshot_source([&] { return mss(); }), tracker, is_continuous::no);
+
+    auto cache_ms = mutation_source([&] (schema_ptr s,
+            reader_permit permit,
+            const dht::partition_range& range,
+            const query::partition_slice& slice,
+            const io_priority_class& pc,
+            tracing::trace_state_ptr trace,
+            streamed_mutation::forwarding fwd) {
+        return cache.make_reader(s, permit, range, slice, pc, std::move(trace), std::move(fwd));
+    });
+
+    std::cout << "Rows: " << ck_index << std::endl;
+    std::cout << "Scanning..." << std::endl;
+
+    auto test_read = [&] {
+        scheduling_latency_measurer slm;
+        slm.start();
+
+        auto d = duration_in_seconds([&] {
+            auto slice = partition_slice_builder(*s).build();
+            auto q = query::querier<emit_only_live_rows::yes>(cache_ms, s, tests::make_permit(), pr, slice,
+                                                              default_priority_class(), nullptr);
+            auto close_q = deferred_close(q);
+            q.consume_page(noop_compacted_fragments_consumer(),
+                           std::numeric_limits<uint32_t>::max(),
+                           std::numeric_limits<uint32_t>::max(),
+                           gc_clock::now(),
+                           db::no_timeout,
+                           query::max_result_size()).get();
+        });
+
+        slm.stop();
+
+        std::cout << format("read: {:.6f} [ms], preemption: {}, cache: {:d}/{:d} [MB]\n",
+                            d.count() * 1000,
+                            slm,
+                            tracker.region().occupancy().used_space() / MB,
+                            tracker.region().occupancy().total_space() / MB);
+    };
+
+    // The first scan populates the cache with continuity
+    // It reads from underlying so will be preemptible.
+    test_read();
+
+    // This should be a pure cache scan.
+    test_read();
+
+    // Clean gently to avoid reactor stalls in destructors
+    cache.invalidate(row_cache::external_updater([]{})).get();
+    tracker.cleaner().drain().get();
+}
+
 int main(int argc, char** argv) {
     app_template app;
     return app.run(argc, argv, [&app] {
@@ -151,6 +244,7 @@ int main(int argc, char** argv) {
             });
             logalloc::prime_segment_pool(memory::stats().total_memory(), memory::min_free_memory()).get();
             test_scans_with_dummy_entries();
+            test_scan_with_range_delete_over_rows();
         });
     });
 }

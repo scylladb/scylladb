@@ -119,6 +119,13 @@ public:
         _apply.advance_and_await().get();
         _memtables.erase(_memtables.begin(), _memtables.end());
     }
+    size_t used_space() const {
+        size_t space = 0;
+        for (auto&& mt : _memtables) {
+            space += mt->region().occupancy().used_space();
+        }
+        return space;
+    }
     void apply(const mutation& mt) {
         pending()->apply(mt);
     }
