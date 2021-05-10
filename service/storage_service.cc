@@ -831,6 +831,19 @@ storage_service::get_range_to_address_map(const sstring& keyspace,
     return construct_range_to_endpoint_map(ks, get_all_ranges(sorted_tokens));
 }
 
+void storage_service::handle_state_replacing_update_pending_ranges(mutable_token_metadata_ptr tmptr, inet_address replacing_node) {
+    try {
+        slogger.info("handle_state_replacing: Waiting for replacing node {} to be alive on all shards", replacing_node);
+        _gossiper.wait_alive({replacing_node}, std::chrono::milliseconds(5 * 1000));
+        slogger.info("handle_state_replacing: Replacing node {} is now alive on all shards", replacing_node);
+    } catch (...) {
+        slogger.warn("handle_state_replacing: Failed to wait for replacing node {} to be alive on all shards: {}",
+                replacing_node, std::current_exception());
+    }
+    slogger.info("handle_state_replacing: Update pending ranges for replacing node {}", replacing_node);
+    update_pending_ranges(tmptr, format("handle_state_replacing {}", replacing_node)).get();
+}
+
 void storage_service::handle_state_replacing(inet_address replacing_node) {
     slogger.debug("endpoint={} handle_state_replacing", replacing_node);
     auto host_id = _gossiper.get_host_id(replacing_node);
@@ -851,7 +864,13 @@ void storage_service::handle_state_replacing(inet_address replacing_node) {
     slogger.info("Node {} is replacing existing node {} with host_id={}, existing_tokens={}, replacing_tokens={}",
             replacing_node, existing_node, host_id, existing_tokens, replacing_tokens);
     tmptr->add_replacing_endpoint(existing_node, replacing_node);
-    update_pending_ranges(tmptr, format("handle_state_replacing {}", replacing_node)).get();
+    if (_gossiper.is_alive(replacing_node)) {
+        slogger.info("handle_state_replacing: Replacing node {} is already alive, update pending ranges", replacing_node);
+        handle_state_replacing_update_pending_ranges(tmptr, replacing_node);
+    } else {
+        slogger.info("handle_state_replacing: Replacing node {} is not alive yet, delay update pending ranges", replacing_node);
+        _replacing_nodes_pending_ranges_updater.insert(replacing_node);
+    }
     replicate_to_all_cores(std::move(tmptr)).get();
 }
 
@@ -1160,6 +1179,14 @@ void storage_service::on_alive(gms::inet_address endpoint, gms::endpoint_state s
     });
     if (get_token_metadata().is_member(endpoint)) {
         notify_up(endpoint);
+    }
+    if (_replacing_nodes_pending_ranges_updater.contains(endpoint)) {
+        _replacing_nodes_pending_ranges_updater.erase(endpoint);
+        slogger.info("Trigger pending ranges updater for replacing node {}", endpoint);
+        auto tmlock = get_token_metadata_lock().get0();
+        auto tmptr = get_mutable_token_metadata_ptr().get0();
+        handle_state_replacing_update_pending_ranges(tmptr, endpoint);
+        replicate_to_all_cores(std::move(tmptr)).get();
     }
 }
 
