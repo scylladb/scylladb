@@ -534,7 +534,13 @@ void cache_flat_mutation_reader::copy_from_cache_to_buffer() {
     clogger.trace("csm {}: copy_from_cache, next={}, next_row_in_range={}", fmt::ptr(this), _next_row.position(), _next_row_in_range);
     _next_row.touch();
     position_in_partition_view next_lower_bound = _next_row.dummy() ? _next_row.position() : position_in_partition_view::after_key(_next_row.key());
-    for (auto &&rts : _snp->range_tombstones(_lower_bound, _next_row_in_range ? next_lower_bound : _upper_bound)) {
+    auto upper_bound = _next_row_in_range ? next_lower_bound : _upper_bound;
+    for (auto &&rts : _snp->range_tombstones(_lower_bound, upper_bound)) {
+        position_in_partition::less_compare less(*_schema);
+        // Avoid emitting overlapping range tombstones for performance reasons.
+        if (less(upper_bound, rts.end_position())) {
+            rts.set_end(*_schema, upper_bound);
+        }
         add_range_tombstone_to_buffer(std::move(rts));
         if (_lower_bound_changed && is_buffer_full()) {
             return;
