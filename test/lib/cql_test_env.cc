@@ -501,7 +501,7 @@ public:
             auto& ss = service::get_storage_service();
             service::storage_service_config sscfg;
             sscfg.available_memory = memory::stats().total_memory();
-            ss.start(std::ref(abort_sources), std::ref(db), std::ref(gms::get_gossiper()), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(feature_service), sscfg, std::ref(mm_notif), std::ref(mm), std::ref(token_metadata), std::ref(ms), std::ref(cdc_generation_service), true).get();
+            ss.start(std::ref(abort_sources), std::ref(db), std::ref(gms::get_gossiper()), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(feature_service), sscfg, std::ref(mm), std::ref(token_metadata), std::ref(ms), std::ref(cdc_generation_service), true).get();
             auto stop_storage_service = defer([&ss] { ss.stop().get(); });
 
             sharded<semaphore> sst_dir_semaphore;
@@ -610,7 +610,7 @@ public:
 
             sharded<cdc::cdc_service> cdc;
             auto get_cdc_metadata = [] (cdc::generation_service& svc) { return std::ref(svc.get_cdc_metadata()); };
-            cdc.start(std::ref(proxy), sharded_parameter(get_cdc_metadata, std::ref(cdc_generation_service))).get();
+            cdc.start(std::ref(proxy), sharded_parameter(get_cdc_metadata, std::ref(cdc_generation_service)), std::ref(mm_notif)).get();
             auto stop_cdc_service = defer([&] {
                 cdc.stop().get();
             });

@@ -856,7 +856,7 @@ int main(int ac, char** av) {
             supervisor::notify("initializing storage service");
             service::storage_service_config sscfg;
             sscfg.available_memory = memory::stats().total_memory();
-            service::init_storage_service(stop_signal.as_sharded_abort_source(), db, gossiper, sys_dist_ks, view_update_generator, feature_service, sscfg, mm_notifier, mm, token_metadata, messaging, cdc_generation_service).get();
+            service::init_storage_service(stop_signal.as_sharded_abort_source(), db, gossiper, sys_dist_ks, view_update_generator, feature_service, sscfg, mm, token_metadata, messaging, cdc_generation_service).get();
             supervisor::notify("starting per-shard database core");
 
             sst_dir_semaphore.start(cfg->initial_sstable_loading_concurrency()).get();
@@ -1146,7 +1146,7 @@ int main(int ac, char** av) {
 
             supervisor::notify("starting CDC log service");
             static sharded<cdc::cdc_service> cdc;
-            cdc.start(std::ref(proxy), sharded_parameter(get_cdc_metadata, std::ref(cdc_generation_service))).get();
+            cdc.start(std::ref(proxy), sharded_parameter(get_cdc_metadata, std::ref(cdc_generation_service)), std::ref(mm_notifier)).get();
             auto stop_cdc_service = defer_verbose_shutdown("cdc log service", [] {
                 cdc.stop().get();
             });
