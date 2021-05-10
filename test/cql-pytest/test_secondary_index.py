@@ -100,3 +100,15 @@ def test_order_of_indexes(scylla_only, cql, test_keyspace):
         # Local indexes are still preferred over global ones, if they can be used
         index_used(f"SELECT * FROM {table} WHERE p = 1 and v1 = 1 and v3 = 2 and v2 = 2 allow filtering", "my_v2_idx")
         index_used(f"SELECT * FROM {table} WHERE p = 1 and v2 = 1 and v1 = 2 allow filtering", "my_v2_idx")
+
+@pytest.mark.xfail(reason="Creating a maliciously named table breaks secondary index creation mechanism. Issue #8620")
+def test_create_index_when_its_name_is_taken(scylla_only, cql, test_keyspace):
+    schema = 'p int primary key, v int'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE TABLE {table}_v_idx_index (i_do_not_exist_in_the_base_table int primary key)")
+        # The index's name is taken, so its creation fails
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"CREATE INDEX ON {table}(v)")
+        cql.execute(f"DROP TABLE {table}_v_idx_index")
+        # After the offending table is dropped, index creation should succeed
+        cql.execute(f"CREATE INDEX ON {table}(v)")
