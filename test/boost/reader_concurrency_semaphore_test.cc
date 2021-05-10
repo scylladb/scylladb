@@ -515,4 +515,41 @@ SEASTAR_TEST_CASE(reader_concurrency_semaphore_max_queue_length) {
     });
 }
 
+SEASTAR_THREAD_TEST_CASE(reader_concurrency_semaphore_dump_reader_diganostics) {
+    reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::no_limits{}, get_name());
+    auto stop_sem = deferred_stop(semaphore);
 
+    const auto nr_tables = tests::random::get_int<unsigned>(2, 4);
+    std::vector<schema_ptr> schemas;
+    for (unsigned i = 0; i < nr_tables; ++i) {
+        schemas.emplace_back(schema_builder("ks", fmt::format("tbl{}", i))
+                .with_column("pk", int32_type, column_kind::partition_key)
+                .with_column("v", int32_type, column_kind::regular_column).build());
+    }
+
+    const auto nr_ops = tests::random::get_int<unsigned>(1, 3);
+    std::vector<std::string> op_names;
+    for (unsigned i = 0; i < nr_ops; ++i) {
+        op_names.emplace_back(fmt::format("op{}", i));
+    }
+
+    std::deque<std::pair<reader_permit, reader_permit::resource_units>> permits;
+    for (auto& schema : schemas) {
+        const auto nr_permits = tests::random::get_int<unsigned>(2, 32);
+        for (unsigned i = 0; i < nr_permits; ++i) {
+            auto permit = semaphore.make_permit(schema.get(), op_names.at(tests::random::get_int<unsigned>(0, nr_ops - 1)));
+            if (tests::random::get_int<unsigned>(0, 4)) {
+                auto units = permit.consume_resources(reader_resources(tests::random::get_int<unsigned>(0, 1), tests::random::get_int<unsigned>(1024, 16 * 1024 * 1024)));
+                permits.push_back(std::pair(std::move(permit), std::move(units)));
+            } else {
+                auto hdnl = semaphore.register_inactive_read(make_empty_flat_reader(schema, permit));
+                BOOST_REQUIRE(semaphore.try_evict_one_inactive_read());
+                auto units = permit.consume_memory(tests::random::get_int<unsigned>(1024, 2048));
+                permits.push_back(std::pair(std::move(permit), std::move(units)));
+            }
+        }
+    }
+
+    testlog.info("With max-lines=4: {}", semaphore.dump_diagnostics(4));
+    testlog.info("With no max-lines: {}", semaphore.dump_diagnostics(0));
+}

@@ -237,17 +237,17 @@ std::ostream& operator<<(std::ostream& os, reader_permit::state s) {
 namespace {
 
 struct permit_stats {
-    uint64_t memory = 0;
-    uint64_t count = 0;
+    uint64_t permits = 0;
+    reader_resources resources;
 
-    void add(uint64_t m) {
-        memory += m;
-        ++count;
+    void add(const reader_permit::impl& permit) {
+        ++permits;
+        resources += permit.resources();
     }
 
     permit_stats& operator+=(const permit_stats& o) {
-        memory += o.memory;
-        count += o.count;
+        permits += o.permits;
+        resources += o.resources;
         return *this;
     }
 };
@@ -265,65 +265,76 @@ struct permit_group_key_hash {
 
 using permit_groups = std::unordered_map<permit_group_key, permit_stats, permit_group_key_hash>;
 
-static permit_stats do_dump_reader_permit_diagnostics(std::ostream& os, const permit_groups& permits, reader_permit::state state) {
+static permit_stats do_dump_reader_permit_diagnostics(std::ostream& os, const permit_groups& permits, unsigned max_lines = 20) {
     struct permit_summary {
         const schema* s;
         std::string_view op_name;
-        uint64_t memory;
-        uint64_t count;
+        reader_permit::state state;
+        uint64_t permits;
+        reader_resources resources;
     };
 
     std::vector<permit_summary> permit_summaries;
     for (const auto& [k, v] : permits) {
         const auto& [s, op_name, k_state] = k;
-        if (k_state == state) {
-            permit_summaries.emplace_back(permit_summary{s, op_name, v.memory, v.count});
-        }
+        permit_summaries.emplace_back(permit_summary{s, op_name, k_state, v.permits, v.resources});
     }
 
     std::ranges::sort(permit_summaries, [] (const permit_summary& a, const permit_summary& b) {
-        return a.memory < b.memory;
+        return a.resources.memory > b.resources.memory;
     });
 
     permit_stats total;
+    unsigned lines = 0;
+    permit_stats omitted_permit_stats;
 
-    auto print_line = [&os] (auto col1, auto col2, auto col3) {
-        fmt::print(os, "{}\t{}\t{}\n", col2, col1, col3);
+    auto print_line = [&os] (auto col1, auto col2, auto col3, auto col4) {
+        fmt::print(os, "{}\t{}\t{}\t{}\n", col1, col2, col3, col4);
     };
 
-    fmt::print(os, "Permits with state {}\n", state);
-    print_line("count", "memory", "name");
+    print_line("permits", "count", "memory", "table/description/state");
     for (const auto& summary : permit_summaries) {
-        total.count += summary.count;
-        total.memory += summary.memory;
-        print_line(summary.count, utils::to_hr_size(summary.memory), fmt::format("{}.{}:{}",
-                    summary.s ? summary.s->ks_name() : "*",
-                    summary.s ? summary.s->cf_name() : "*",
-                    summary.op_name));
+        total.permits += summary.permits;
+        total.resources += summary.resources;
+        if (!max_lines || lines++ < max_lines) {
+            print_line(summary.permits, summary.resources.count, utils::to_hr_size(summary.resources.memory), fmt::format("{}.{}/{}/{}",
+                        summary.s ? summary.s->ks_name() : "*",
+                        summary.s ? summary.s->cf_name() : "*",
+                        summary.op_name,
+                        summary.state));
+        } else {
+            omitted_permit_stats.permits += summary.permits;
+            omitted_permit_stats.resources += summary.resources;
+        }
+    }
+    if (max_lines && lines > max_lines) {
+        print_line(omitted_permit_stats.permits, omitted_permit_stats.resources.count, utils::to_hr_size(omitted_permit_stats.resources.memory), "permits omitted for brevity");
     }
     fmt::print(os, "\n");
-    print_line(total.count, utils::to_hr_size(total.memory), "total");
+    print_line(total.permits, total.resources.count, utils::to_hr_size(total.resources.memory), "total");
     return total;
 }
 
 static void do_dump_reader_permit_diagnostics(std::ostream& os, const reader_concurrency_semaphore& semaphore,
-        const reader_concurrency_semaphore::permit_list& list, std::string_view problem) {
+        const reader_concurrency_semaphore::permit_list& list, std::string_view problem, unsigned max_lines = 20) {
     permit_groups permits;
 
     for (const auto& permit : list.permits) {
-        permits[permit_group_key(permit.get_schema(), permit.get_op_name(), permit.get_state())].add(permit.resources().memory);
+        permits[permit_group_key(permit.get_schema(), permit.get_op_name(), permit.get_state())].add(permit);
     }
 
     permit_stats total;
 
-    fmt::print(os, "Semaphore {}: {}, dumping permit diagnostics:\n", semaphore.name(), problem);
-    total += do_dump_reader_permit_diagnostics(os, permits, reader_permit::state::active);
+    fmt::print(os, "Semaphore {} with {}/{} count and {}/{} memory resources: {}, dumping permit diagnostics:\n",
+            semaphore.name(),
+            semaphore.initial_resources().count - semaphore.available_resources().count,
+            semaphore.initial_resources().count,
+            semaphore.initial_resources().memory - semaphore.available_resources().memory,
+            semaphore.initial_resources().memory,
+            problem);
+    total += do_dump_reader_permit_diagnostics(os, permits, max_lines);
     fmt::print(os, "\n");
-    total += do_dump_reader_permit_diagnostics(os, permits, reader_permit::state::inactive);
-    fmt::print(os, "\n");
-    total += do_dump_reader_permit_diagnostics(os, permits, reader_permit::state::waiting);
-    fmt::print(os, "\n");
-    fmt::print(os, "Total: permits: {}, memory: {}\n", total.count, utils::to_hr_size(total.memory));
+    fmt::print(os, "Total: {} permits with {} count and {} memory resources\n", total.permits, total.resources.count, utils::to_hr_size(total.resources.memory));
 }
 
 static void maybe_dump_reader_permit_diagnostics(const reader_concurrency_semaphore& semaphore, const reader_concurrency_semaphore::permit_list& list,
@@ -607,9 +618,9 @@ void reader_concurrency_semaphore::broken(std::exception_ptr ex) {
     }
 }
 
-std::string reader_concurrency_semaphore::dump_diagnostics() const {
+std::string reader_concurrency_semaphore::dump_diagnostics(unsigned max_lines) const {
     std::ostringstream os;
-    do_dump_reader_permit_diagnostics(os, *this, *_permit_list, "user request");
+    do_dump_reader_permit_diagnostics(os, *this, *_permit_list, "user request", max_lines);
     return os.str();
 }
 
