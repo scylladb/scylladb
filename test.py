@@ -43,6 +43,8 @@ import time
 import xml.etree.ElementTree as ET
 import yaml
 
+from scripts import coverage
+
 output_is_a_tty = sys.stdout.isatty()
 
 def create_formatter(*decorators):
@@ -461,6 +463,7 @@ async def run_test(test, options, gentle_kill=False, env=dict()):
                          # TMPDIR env variable is used by any seastar/scylla
                          # test for directory to store test temporary data.
                          TMPDIR=os.path.join(options.tmpdir, test.mode),
+                         **coverage.env(test.path),
                          **env,
                          ),
                 preexec_fn=os.setsid,
@@ -511,7 +514,7 @@ def setup_signal_handlers(loop, signaled):
 
 def parse_cmd_line():
     """ Print usage and process command line options. """
-    all_modes = ['debug', 'release', 'dev', 'sanitize']
+    all_modes = ['debug', 'release', 'dev', 'sanitize', 'coverage']
     sysmem = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
     testmem = 6e9 if os.sysconf('SC_PAGE_SIZE') > 4096 else 2e9
     cpus_per_test_job = 1
@@ -773,6 +776,9 @@ async def main():
 
     for mode in options.modes:
         write_junit_report(options.tmpdir, mode)
+
+    if 'coverage' in options.modes:
+        coverage.generate_coverage_report("build/coverage/test", "tests")
 
     # Note: failure codes must be in the ranges 0-124, 126-127,
     #       to cooperate with git bisect's expectations
