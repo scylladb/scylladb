@@ -373,33 +373,33 @@ Install dependencies:
     $ dnf install llvm # for llvm-profdata and llvm-cov
     $ dnf install lcov # for genhtml
 
-Build the tests you want to generate coverage for, as many as you want. Only debug mode is supported for now. Make sure to build the tests with debug symbols.
-Run the test and also set `LLVM_PROFILE_FILE` such that its path and filename matches that of the test executable:
+#### Automated way
 
-    $ LLVM_PROFILE_FILE='build/debug/test/boost/querier_cache_test_g.profraw' build/debug/test/boost/querier_cache_test_g
+Instruct `configure.py` to generate build files for `coverage` mode:
 
-Note that `profraw` extension. Run all the tests you want to include in the generated report.
+    $ ./configure.py --mode=coverage
 
-Merge and index the generated raw profiling data into a single `profdata` file:
+Build the tests you want to run, then run them via `test.py` (important!):
 
-    $ llvm-profdata merge -sparse $(find -name *.profraw) -o build/debug/test/tests.profdata
+    $ ./test.py --mode=coverage [...]
 
-You can include all generated `profraw` files as above, or list the files you want to include manually.
-Export the report into `lcov` format:
+Open the link printed at the end. Be horrified. Go and write more tests.
 
-    $ llvm-cov export -format=lcov -instr-profile=build/debug/test/tests.profdata ${test_executables} > build/debug/test/tests.info
+#### Manual way
 
-`$test_executables` is a space-separated list of all the test executables that participate in the report. These are needed to resolve symbols to source lines.
+Build the tests you want to generate coverage for, as many as you want. Use the `coverage` build mode:
 
-Generate the html report:
+    $ ./configure.py --mode=coverage
 
-    $ genhtml -o build/debug/test/coverage-report build/debug/test/tests.info
+Run the test(s) and also set `LLVM_PROFILE_FILE` such that its path and filename matches that of the test executable:
 
-Point your browser to `index.html` in the specified output directory:
+    $ LLVM_PROFILE_FILE='build/coverage/test/boost/querier_cache_test_g.profraw' build/coverage/test/boost/querier_cache_test_g
 
-    $ xdg-open file:///$(realpath ./build/debug/test/coverage-report/index.html)
+After having run all the tests of you heart's desire, produce the combined coverage report:
 
-Be horrified. Go and write more tests.
+    $ ./scripts/coverage.py
+
+Open the link printed at the end. Be horrified. Go and write more tests.
 
 
 ### Core dump debugging
