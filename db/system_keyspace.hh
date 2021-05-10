@@ -204,7 +204,7 @@ public:
         static schema_ptr batchlog();
     };
 
-    static constexpr const char* extra_durable_tables[] = { PAXOS };
+    static constexpr const char* extra_durable_tables[] = { PAXOS, SCYLLA_LOCAL };
 
     static bool is_extra_durable(const sstring& name);
 

@@ -649,6 +649,8 @@ schema_ptr system_keyspace::large_cells() {
         "Scylla specific information about the local node"
        );
        builder.set_gc_grace_seconds(0);
+       // Raft Group id and server id updates must be sync
+       builder.set_wait_for_sync_to_commitlog(true);
        builder.with_version(generate_schema_version(builder.uuid()));
        return builder.build(schema_builder::compact_storage::no);
     }();
