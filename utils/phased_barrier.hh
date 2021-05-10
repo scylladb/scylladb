@@ -51,7 +51,13 @@ public:
         operation(lw_shared_ptr<gate> g) : _gate(std::move(g)) {}
         operation(const operation&) = delete;
         operation(operation&&) = default;
-        operation& operator=(operation&&) = default;
+        operation& operator=(operation&& o) noexcept {
+            if (this != &o) {
+                this->~operation();
+                new (this) operation(std::move(o));
+            }
+            return *this;
+        }
         ~operation() {
             if (_gate) {
                 _gate->leave();

@@ -26,6 +26,9 @@
 #include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include "utils/phased_barrier.hh"
+#include <seastar/core/timer.hh>
+
+using namespace std::chrono_literals;
 
 SEASTAR_TEST_CASE(test_serialized_action_triggering) {
     return seastar::async([] {
@@ -140,4 +143,23 @@ SEASTAR_THREAD_TEST_CASE(test_serialized_action_exception) {
     BOOST_REQUIRE_THROW(t2.get(), expected_exception);
     BOOST_REQUIRE_THROW(t3.get(), expected_exception);
     BOOST_REQUIRE_EQUAL(count, 2);          // verify that `triggered_action` was called only once for t2 and t3.
+}
+
+SEASTAR_THREAD_TEST_CASE(test_phased_barrier_reassignment) {
+    utils::phased_barrier bar1;
+    utils::phased_barrier bar2;
+    {
+        auto op1 = bar1.start();
+        auto op2 = bar2.start();
+        op1 = std::move(op2);
+    }
+    timer<> completion_timer;
+    completion_timer.set_callback([&] {
+        BOOST_ERROR("phased_barrier::advance_and_await timed out");
+        _exit(1);
+    });
+    completion_timer.arm(1ms);
+    bar1.advance_and_await().get();
+    bar2.advance_and_await().get();
+    completion_timer.cancel();
 }
