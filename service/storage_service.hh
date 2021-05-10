@@ -587,6 +587,7 @@ private:
     sharded<db::view::view_update_generator>& _view_update_generator;
     locator::snitch_signal_slot_t _snitch_reconfigure;
     serialized_action _schema_version_publisher;
+    std::unordered_set<gms::inet_address> _replacing_nodes_pending_ranges_updater;
 private:
     /**
      * Handle node bootstrap
@@ -640,6 +641,8 @@ private:
      * @param endpoint node
      */
     void handle_state_replacing(inet_address endpoint);
+
+    void handle_state_replacing_update_pending_ranges(mutable_token_metadata_ptr tmptr, inet_address replacing_node);
 
 private:
     void excise(std::unordered_set<token> tokens, inet_address endpoint);
