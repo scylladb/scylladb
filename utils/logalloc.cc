@@ -596,6 +596,9 @@ struct segment_descriptor : public log_heap_hook<segment_descriptor_hist_options
     segment::size_type _free_space;
     region::impl* _region;
 
+    using latency_reserve_link_type = bi::list_member_hook<bi::link_mode<bi::auto_unlink>>;
+    latency_reserve_link_type _latency_reserve_link;
+
     segment_descriptor()
         : _region(nullptr)
     { }
@@ -724,6 +727,14 @@ class segment_pool {
     bool _allocation_failure_flag = false;
     bool _allocation_enabled = true;
 
+    using latency_reserve_type = bi::list<segment_descriptor,
+        bi::member_hook<segment_descriptor, segment_descriptor::latency_reserve_link_type, &segment_descriptor::_latency_reserve_link>,
+        bi::constant_time_size<false>>; // we need this to have bi::auto_unlink on hooks.
+    latency_reserve_type _latency_reserve;
+    size_t _latency_reserve_counter = 0;
+    constexpr static size_t _latency_reserve_threshold = 20 * segment_size;
+    constexpr static size_t _latency_reserve_antithrashing_margin = segment_size;
+
     struct allocation_lock {
         segment_pool& _pool;
         bool _prev;
@@ -744,10 +755,17 @@ class segment_pool {
     //     - set in _lsa_owned_segments_bitmap
     //     - clear in _lsa_free_segments_bitmap
     //     - counted in _segments_in_use
+    //     - not in _latency_reserve
     //   Free:
     //     - set in _lsa_owned_segments_bitmap
     //     - set in _lsa_free_segments_bitmap
     //     - counted in _unreserved_free_segments
+    //     - not in _latency_reserve
+    //   In latency reserve:
+    //     - set in _lsa_owned_segments_bitmap
+    //     - clear in _lsa_free_segments_bitmap
+    //     - counted in _segments_in_use
+    //     - in _latency_reserve
     //   Non-lsa:
     //     - clear everywhere
 private:
@@ -824,6 +842,8 @@ public:
     const stats& statistics() const { return _stats; }
     void on_segment_compaction(size_t used_size);
     void on_memory_allocation(size_t size);
+    void increase_latency_reserve_counter(size_t size);
+    void decrease_latency_reserve_counter(size_t size) noexcept;
     size_t unreserved_free_segments() const { return _free_segments - std::min(_free_segments, _emergency_reserve_max); }
     size_t free_segments() const { return _free_segments; }
 };
@@ -960,7 +980,7 @@ segment_pool::containing_segment(const void* obj) {
 
 segment*
 segment_pool::segment_from(const segment_descriptor& desc) {
-    assert(desc._region);
+    //assert(desc._region);
     auto index = &desc - &_segments[0];
     return segment_from_idx(index);
 }
@@ -1030,6 +1050,33 @@ void segment_pool::on_segment_compaction(size_t used_size) {
 
 void segment_pool::on_memory_allocation(size_t size) {
     _stats.memory_allocated += size;
+}
+
+void segment_pool::increase_latency_reserve_counter(size_t size) {
+    if (_latency_reserve_counter + size > _latency_reserve_threshold + _latency_reserve_antithrashing_margin) [[unlikely]] {
+        assert(size <= _latency_reserve_threshold);
+        segment* seg = new_segment(nullptr);
+        _latency_reserve.push_front(descriptor(seg));
+        // new_segment might have lowered _latency_reserve_counter through evictions,
+        // so we can't just do _latency_reserve_counter -= _latency_reserve_threshold - size;
+        decrease_latency_reserve_counter(_latency_reserve_threshold - size);
+    } else {
+        _latency_reserve_counter += size;
+    }
+    assert(_latency_reserve_counter >= 0 && _latency_reserve_counter <= _latency_reserve_threshold + _latency_reserve_antithrashing_margin);
+}
+
+void segment_pool::decrease_latency_reserve_counter(size_t size) noexcept {
+    if (_latency_reserve_counter < size) [[unlikely]] {
+        assert(size <= _latency_reserve_threshold);
+        segment_descriptor& desc = _latency_reserve.front();
+        _latency_reserve.pop_front();
+        free_segment(segment_from(desc));
+        _latency_reserve_counter += _latency_reserve_threshold - size;
+    } else {
+        _latency_reserve_counter -= size;
+    }
+    assert(_latency_reserve_counter >= 0 && _latency_reserve_counter <= _latency_reserve_threshold + _latency_reserve_antithrashing_margin);
 }
 
 // RAII wrapper to maintain segment_pool::current_emergency_reserve_goal()
@@ -1512,7 +1559,14 @@ public:
             shard_segment_pool.update_non_lsa_memory_in_use(allocated_size);
             return ptr;
         } else {
-            auto ptr = alloc_small(object_descriptor(migrator), (segment::size_type) size, alignment);
+            shard_segment_pool.increase_latency_reserve_counter(size);
+            void* ptr = nullptr;
+            try {
+                ptr = alloc_small(object_descriptor(migrator), (segment::size_type) size, alignment);
+            } catch (...) {
+                shard_segment_pool.decrease_latency_reserve_counter(size);
+                throw;
+            }
             _sanitizer.on_allocation(ptr, size);
             return ptr;
         }
@@ -1552,6 +1606,8 @@ public:
             standard_allocator().free(obj, size);
             return;
         }
+
+        shard_segment_pool.decrease_latency_reserve_counter(size);
 
         _sanitizer.on_free(obj, size);
 
@@ -2229,6 +2285,16 @@ tracker::impl::~impl() {
 
 bool segment_pool::compact_segment(segment* seg) {
     auto& desc = descriptor(seg);
+
+    if (desc._latency_reserve_link.is_linked()) {
+        llogger.trace("latency_reserve: compacting {}", fmt::ptr(seg));
+        segment* new_seg = new_segment(nullptr);
+        llogger.trace("latency_reserve: swapping {} to {}", fmt::ptr(seg), fmt::ptr(new_seg));
+        desc._latency_reserve_link.swap_nodes(shard_segment_pool.descriptor(new_seg)._latency_reserve_link);
+        free_segment(seg, desc);
+        return true;
+    }
+
     if (!desc._region->reclaiming_enabled()) {
         return false;
     }
