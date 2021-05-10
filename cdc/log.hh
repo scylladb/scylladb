@@ -80,7 +80,7 @@ class cdc_service final : public async_sharded_service<cdc::cdc_service> {
     std::unique_ptr<impl> _impl;
 public:
     future<> stop();
-    cdc_service(service::storage_proxy&, cdc::metadata&);
+    cdc_service(service::storage_proxy&, cdc::metadata&, service::migration_notifier&);
     cdc_service(db_context);
     ~cdc_service();
 
@@ -101,18 +101,8 @@ struct db_context final {
     service::storage_proxy& _proxy;
     service::migration_notifier& _migration_notifier;
     cdc::metadata& _cdc_metadata;
-
-    class builder final {
-        service::storage_proxy& _proxy;
-        cdc::metadata& _cdc_metadata;
-        std::optional<std::reference_wrapper<service::migration_notifier>> _migration_notifier;
-    public:
-        builder(service::storage_proxy& proxy, cdc::metadata&);
-
-        builder& with_migration_notifier(service::migration_notifier& migration_notifier);
-
-        db_context build();
-    };
+    db_context(service::storage_proxy& proxy, cdc::metadata& cdc_meta, service::migration_notifier& notifier) noexcept
+        : _proxy(proxy), _migration_notifier(notifier), _cdc_metadata(cdc_meta) {}
 };
 
 // cdc log table operation
