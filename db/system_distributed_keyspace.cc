@@ -45,6 +45,7 @@
 #include <vector>
 #include <set>
 
+static logging::logger dlogger("system_distributed_keyspace");
 extern logging::logger cdc_log;
 
 namespace db {
@@ -160,6 +161,33 @@ system_distributed_keyspace::system_distributed_keyspace(cql3::query_processor& 
         , _sp(sp) {
 }
 
+static future<> add_new_columns_if_missing(database& db, ::service::migration_manager& mm) noexcept {
+    static std::string_view new_columns[] {
+        "timeout"
+    };
+    try {
+        auto schema = db.find_schema(system_distributed_keyspace::NAME, system_distributed_keyspace::SERVICE_LEVELS);
+        schema_builder b(schema);
+        bool updated = false;
+        for (const std::string_view& col_name : new_columns) {
+            bytes options_name = to_bytes(col_name.data());
+            if (schema->get_column_definition(options_name)) {
+                continue;
+            }
+            updated = true;
+            b.with_column(options_name, duration_type, column_kind::regular_column);
+        }
+        if (!updated) {
+            return make_ready_future<>();
+        }
+        schema_ptr table = b.build();
+        return mm.announce_column_family_update(table, false, {}, api::timestamp_type(0)).handle_exception([] (const std::exception_ptr&) {});
+    } catch (...) {
+        dlogger.warn("Failed to update options column in the role attributes table: {}", std::current_exception());
+        return make_ready_future<>();
+    }
+}
+
 future<> system_distributed_keyspace::start() {
     if (this_shard_id() != 0) {
         _started = true;
@@ -197,6 +225,7 @@ future<> system_distributed_keyspace::start() {
     }
 
     _started = true;
+    co_await add_new_columns_if_missing(_qp.db(), _mm);
 }
 
 future<> system_distributed_keyspace::stop() {
@@ -538,6 +567,14 @@ system_distributed_keyspace::get_cdc_desc_v1_timestamps(context ctx) {
     co_return res;
 }
 
+static qos::service_level_options::timeout_type get_duration(const cql3::untyped_result_set_row&row, std::string_view col_name) {
+    auto dur_opt = row.get_opt<cql_duration>(col_name);
+    if (!dur_opt) {
+        return qos::service_level_options::unset_marker{};
+    }
+    return std::chrono::duration_cast<lowres_clock::duration>(std::chrono::nanoseconds(dur_opt->nanoseconds));
+};
+
 future<qos::service_levels_info> system_distributed_keyspace::get_service_levels() const {
     static sstring prepared_query = format("SELECT * FROM {}.{};", NAME, SERVICE_LEVELS);
 
@@ -545,7 +582,9 @@ future<qos::service_levels_info> system_distributed_keyspace::get_service_levels
         qos::service_levels_info service_levels;
         for (auto &&row : *result_set) {
             auto service_level_name = row.get_as<sstring>("service_level");
-            qos::service_level_options slo{};
+            qos::service_level_options slo{
+                .timeout = get_duration(row, "timeout"),
+            };
             service_levels.emplace(service_level_name, slo);
         }
         return service_levels;
@@ -559,7 +598,9 @@ future<qos::service_levels_info> system_distributed_keyspace::get_service_level(
         if (!result_set->empty()) {
             auto &&row = result_set->one();
             auto service_level_name = row.get_as<sstring>("service_level");
-            qos::service_level_options slo{};
+            qos::service_level_options slo{
+                .timeout = get_duration(row, "timeout"),
+            };
             service_levels.emplace(service_level_name, slo);
         }
         return service_levels;
@@ -567,8 +608,27 @@ future<qos::service_levels_info> system_distributed_keyspace::get_service_level(
 }
 
 future<> system_distributed_keyspace::set_service_level(sstring service_level_name, qos::service_level_options slo) const {
-    static sstring prepared_puery = format("INSERT INTO {}.{} (service_level) VALUES (?);", NAME, SERVICE_LEVELS);
-    return _qp.execute_internal(prepared_puery, db::consistency_level::ONE, internal_distributed_query_state(), {service_level_name}).discard_result();
+    static sstring prepared_query = format("INSERT INTO {}.{} (service_level) VALUES (?);", NAME, SERVICE_LEVELS);
+    co_await _qp.execute_internal(prepared_query, db::consistency_level::ONE, internal_distributed_query_state(), {service_level_name});
+    auto to_data_value = [&] (const qos::service_level_options::timeout_type& tv) {
+        return std::visit(overloaded_functor {
+            [&] (const qos::service_level_options::unset_marker&) {
+                return data_value::make_null(duration_type);
+            },
+            [&] (const qos::service_level_options::delete_marker&) {
+                return data_value::make_null(duration_type);
+            },
+            [&] (const lowres_clock::duration& d) {
+                return data_value(cql_duration(months_counter{0},
+                        days_counter{0},
+                        nanoseconds_counter{std::chrono::duration_cast<std::chrono::nanoseconds>(d).count()}));
+            },
+        }, tv);
+    };
+    co_await _qp.execute_internal(format("UPDATE {}.{} SET timeout = ? WHERE service_level = ?;", NAME, SERVICE_LEVELS),
+                db::consistency_level::ONE,
+                internal_distributed_query_state(),
+                {to_data_value(slo.timeout), service_level_name});
 }
 
 future<> system_distributed_keyspace::drop_service_level(sstring service_level_name) const {

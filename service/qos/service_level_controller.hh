@@ -178,6 +178,29 @@ public:
     future<service_levels_info> get_distributed_service_levels();
     future<service_levels_info> get_distributed_service_level(sstring service_level_name);
 
+    /**
+     * Returns the service level options **in effect** for a user having the given
+     * collection of roles.
+     * @param roles - the collection of roles to consider
+     * @return the effective service level options - they may in particular be a combination
+     *         of options from multiple service levels
+     */
+    future<std::optional<service_level_options>> find_service_level(auth::role_set roles);
+
+    /**
+     * Gets the service level data by name.
+     * @param service_level_name - the name of the requested service level
+     * @return the service level data if it exists (in the local controller) or
+     * get_service_level("default") otherwise.
+     */
+    service_level& get_service_level(sstring service_level_name) {
+        auto sl_it = _service_levels_db.find(service_level_name);
+        if (sl_it == _service_levels_db.end() || sl_it->second.marked_for_deletion) {
+            sl_it = _service_levels_db.find(default_service_level_name);
+        }
+        return sl_it->second;
+    }
+
 private:
     /**
      *  Adds a service level configuration if it doesn't exists, and updates
@@ -198,16 +221,6 @@ private:
      */
     future<> do_remove_service_level(sstring name, bool remove_static);
 
-
-
-    /**
-     * Returns the service level **in effect** for a user having the given
-     * collection of roles.
-     * @param roles - the collection of roles to consider
-     * @return the name of the service level in effect.
-     */
-    future<sstring> find_service_level(auth::role_set roles);
-
     /**
      * The notify functions are used by the global service level controller
      * to propagate configuration changes to the local controllers.
@@ -218,20 +231,6 @@ private:
     future<> notify_service_level_added(sstring name, service_level sl_data);
     future<> notify_service_level_updated(sstring name, service_level_options slo);
     future<> notify_service_level_removed(sstring name);
-
-    /**
-     * Gets the service level data by name.
-     * @param service_level_name - the name of the requested service level
-     * @return the service level data if it exists (in the local controller) or
-     * get_service_level("default") otherwise.
-     */
-    service_level& get_service_level(sstring service_level_name) {
-        auto sl_it = _service_levels_db.find(service_level_name);
-        if (sl_it == _service_levels_db.end() || sl_it->second.marked_for_deletion) {
-            sl_it = _service_levels_db.find(default_service_level_name);
-        }
-        return sl_it->second;
-    }
 
     enum class  set_service_level_op_type {
         add_if_not_exists,

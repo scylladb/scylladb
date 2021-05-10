@@ -31,6 +31,7 @@ namespace statements {
 create_service_level_statement::create_service_level_statement(sstring service_level, shared_ptr<sl_prop_defs> attrs, bool if_not_exists)
         : _service_level(service_level), _if_not_exists(if_not_exists) {
     attrs->validate();
+    _slo = attrs->get_service_level_options();
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>
@@ -50,6 +51,7 @@ future<::shared_ptr<cql_transport::messages::result_message>>
 create_service_level_statement::execute(query_processor& qp,
         service::query_state &state,
         const query_options &) const {
+    qos::service_level_options slo = _slo.replace_defaults(qos::service_level_options{});
     return state.get_service_level_controller().add_distributed_service_level(_service_level, _slo, _if_not_exists).then([] {
         using void_result_msg = cql_transport::messages::result_message::void_message;
         using result_msg = cql_transport::messages::result_message;

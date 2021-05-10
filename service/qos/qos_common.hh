@@ -26,8 +26,8 @@
 #include <seastar/core/print.hh>
 #include <map>
 #include <stdexcept>
-
-
+#include <variant>
+#include <seastar/core/lowres_clock.hh>
 
 namespace qos {
 
@@ -36,6 +36,23 @@ namespace qos {
  *  a service level.
  */
 struct service_level_options {
+    struct unset_marker {
+        bool operator==(const unset_marker&) const { return true; };
+        bool operator!=(const unset_marker&) const { return false; };
+    };
+    struct delete_marker {
+        bool operator==(const delete_marker&) const { return true; };
+        bool operator!=(const delete_marker&) const { return false; };
+    };
+
+    using timeout_type = std::variant<unset_marker, delete_marker, lowres_clock::duration>;
+    timeout_type timeout = unset_marker{};
+
+    service_level_options replace_defaults(const service_level_options& other) const;
+    // Merges the values of two service level options. The semantics depends
+    // on the type of the parameter - e.g. for timeouts, a min value is preferred.
+    service_level_options merge_with(const service_level_options& other) const;
+
     bool operator==(const service_level_options& other) const = default;
     bool operator!=(const service_level_options& other) const = default;
 };

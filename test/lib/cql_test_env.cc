@@ -131,8 +131,8 @@ private:
     struct core_local_state {
         service::client_state client_state;
 
-        core_local_state(auth::service& auth_service)
-            : client_state(service::client_state::external_tag{}, auth_service, infinite_timeout_config)
+        core_local_state(auth::service& auth_service, qos::service_level_controller& sl_controller)
+            : client_state(service::client_state::external_tag{}, auth_service, &sl_controller, infinite_timeout_config)
         {
             client_state.set_login(auth::authenticated_user(testing_superuser));
         }
@@ -147,7 +147,7 @@ private:
         if (_db.local().has_keyspace(ks_name)) {
             _core_local.local().client_state.set_keyspace(_db.local(), ks_name);
         }
-        return ::make_shared<service::query_state>(_core_local.local().client_state, empty_service_permit(), _sl_controller.local());
+        return ::make_shared<service::query_state>(_core_local.local().client_state, empty_service_permit());
     }
 public:
     single_node_cql_env(
@@ -357,8 +357,14 @@ public:
         return _mm;
     }
 
+    virtual future<> refresh_client_state() override {
+        return _core_local.invoke_on_all([] (core_local_state& state) {
+            return state.client_state.maybe_update_per_service_level_params();
+        });
+    }
+
     future<> start() {
-        return _core_local.start(std::ref(_auth_service));
+        return _core_local.start(std::ref(_auth_service), std::ref(_sl_controller));
     }
 
     future<> stop() {

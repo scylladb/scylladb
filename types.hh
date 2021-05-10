@@ -1029,6 +1029,12 @@ shared_ptr<const abstract_type> data_type_for<big_decimal>() {
     return decimal_type;
 }
 
+template<>
+inline
+shared_ptr<const abstract_type> data_type_for<cql_duration>() {
+    return duration_type;
+}
+
 namespace std {
 
 template <>

@@ -223,7 +223,7 @@ public:
         : _db(db)
         , _query_processor(qp)
         , _timeout_config(timeout_config)
-        , _client_state(service::client_state::external_tag{}, auth_service, _timeout_config, socket_address(), true)
+        , _client_state(service::client_state::external_tag{}, auth_service, nullptr, _timeout_config, socket_address(), true)
         // FIXME: Handlers are not created per query, but rather per connection, so it makes little sense to store
         // service permits in here. The query state should be reinstantiated per query - AFAIK it's only used
         // for CQL queries which piggy-back on Thrift protocol.
@@ -974,7 +974,7 @@ public:
                 fail(unimplemented::cause::MIXED_CF);
             }
             return _query_state.get_client_state().has_schema_access(*schema, auth::permission::ALTER).then([this, s = std::move(s)] {
-                return _query_processor.local().get_migration_manager().announce_column_family_update(std::move(s), true, {}).then([this] {
+                return _query_processor.local().get_migration_manager().announce_column_family_update(std::move(s), true, {}, std::nullopt).then([this] {
                     return std::string(_db.local().get_version().to_sstring());
                 });
             });

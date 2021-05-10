@@ -194,41 +194,36 @@ future<> service_level_controller::update_service_levels_from_distributed_data()
     });
 }
 
-future<sstring> service_level_controller::find_service_level(auth::role_set roles) {
-        // FIXME: this arbitrary order based on names is OK for now, because the service levels do not yet
-        // have any parameters. Once they do, this comparison could be based on comparing the parameters.
+future<std::optional<service_level_options>> service_level_controller::find_service_level(auth::role_set roles) {
     static auto sl_compare = std::less<sstring>();
     auto& role_manager = _auth_service.local().underlying_role_manager();
 
     // converts a list of roles into the chosen service level.
     return ::map_reduce(roles.begin(), roles.end(), [&role_manager, this] (const sstring& role) {
-        return role_manager.get_attribute(role, "service_level").then_wrapped([this, role] (future<std::optional<sstring>> sl_name_fut) {
+        return role_manager.get_attribute(role, "service_level").then_wrapped([this, role] (future<std::optional<sstring>> sl_name_fut) -> std::optional<service_level_options> {
             try {
                 std::optional<sstring> sl_name = sl_name_fut.get0();
-                if (! sl_name) {
-                    return sl_name;
+                if (!sl_name) {
+                    return std::nullopt;
                 }
                 auto sl_it = _service_levels_db.find(*sl_name);
                 if ( sl_it == _service_levels_db.end()) {
-                    return std::optional<sstring>{};
-                } else {
-                   return sl_name;
+                    return std::nullopt;
                 }
-            } catch(...) { // when we fail, we act as if the attribute does not exist so the node
+                return sl_it->second.slo;
+            } catch (...) { // when we fail, we act as if the attribute does not exist so the node
                            // will not be brought down.
-                return std::optional<sstring>{};
+                return std::nullopt;
             }
         });
-    }, std::optional<sstring>{}, [this] (std::optional<sstring> first, std::optional<sstring> second) {
+    }, std::optional<service_level_options>{}, [this] (std::optional<service_level_options> first, std::optional<service_level_options> second) -> std::optional<service_level_options> {
         if (!second) {
             return first;
         } else if (!first) {
             return second;
         } else {
-            return std::optional<sstring>{ sl_compare(*first, *second) ? second : first };
+            return first->merge_with(*second);
         }
-    }).then([] (std::optional<sstring> sl) {
-        return sl? *sl:default_service_level_name;
     });
 }
 

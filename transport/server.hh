@@ -104,8 +104,8 @@ struct cql_query_state {
     service::query_state query_state;
     std::unique_ptr<cql3::query_options> options;
 
-    cql_query_state(service::client_state& client_state, tracing::trace_state_ptr trace_state_ptr, service_permit permit,  qos::service_level_controller& sl_controller)
-        : query_state(client_state, std::move(trace_state_ptr), std::move(permit), sl_controller)
+    cql_query_state(service::client_state& client_state, tracing::trace_state_ptr trace_state_ptr, service_permit permit)
+        : query_state(client_state, std::move(trace_state_ptr), std::move(permit))
     { }
 };
 
