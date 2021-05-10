@@ -37,35 +37,44 @@ def get_template_arg_with_prefix(gdb_type, prefix):
 def get_base_class_offset(gdb_type, base_class_name):
     name_pattern = re.escape(base_class_name) + "(<.*>)?$"
     for field in gdb_type.fields():
-        if field.is_base_class and re.match(name_pattern, field.name):
+        if field.is_base_class and re.match(name_pattern, field.type.strip_typedefs().name):
+            return int(field.bitpos / 8)
+
+
+def get_field_offset(gdb_type, name):
+    for field in gdb_type.fields():
+        if field.name == name:
             return int(field.bitpos / 8)
 
 
 class intrusive_list:
     size_t = gdb.lookup_type('size_t')
 
-    def __init__(self, list_ref):
+    def __init__(self, list_ref, link=None):
         list_type = list_ref.type.strip_typedefs()
         self.node_type = list_type.template_argument(0)
         rps = list_ref['data_']['root_plus_size_']
         try:
             self.root = rps['root_']
-        except Exception:
+        except gdb.error:
             # Some boost versions have this instead
             self.root = rps['m_header']
-        member_hook = get_template_arg_with_prefix(list_type, "boost::intrusive::member_hook")
-        if not member_hook:
-            member_hook = get_template_arg_with_prefix(list_type, "struct boost::intrusive::member_hook")
-        if member_hook:
-            self.link_offset = member_hook.template_argument(2).cast(self.size_t)
+        if link is not None:
+            self.link_offset = get_field_offset(self.node_type, link)
         else:
-            self.link_offset = get_base_class_offset(self.node_type, "boost::intrusive::list_base_hook")
-            if self.link_offset is None:
-                raise Exception("Class does not extend list_base_hook: " + str(self.node_type))
+            member_hook = get_template_arg_with_prefix(list_type, "boost::intrusive::member_hook")
+            if not member_hook:
+                member_hook = get_template_arg_with_prefix(list_type, "struct boost::intrusive::member_hook")
+            if member_hook:
+                self.link_offset = member_hook.template_argument(2).cast(self.size_t)
+            else:
+                self.link_offset = get_base_class_offset(self.node_type, "boost::intrusive::list_base_hook")
+                if self.link_offset is None:
+                    raise Exception("Class does not extend list_base_hook: " + str(self.node_type))
 
     def __iter__(self):
         hook = self.root['next_']
-        while hook != self.root.address:
+        while hook and hook != self.root.address:
             node_ptr = hook.cast(self.size_t) - self.link_offset
             yield node_ptr.cast(self.node_type.pointer()).dereference()
             hook = hook['next_']
@@ -83,27 +92,22 @@ class intrusive_list:
 class intrusive_slist:
     size_t = gdb.lookup_type('size_t')
 
-    def __init__(self, list_ref):
+    def __init__(self, list_ref, link=None):
         list_type = list_ref.type.strip_typedefs()
         self.node_type = list_type.template_argument(0)
         rps = list_ref['data_']['root_plus_size_']
         self.root = rps['header_holder_']
 
-        # Workaround for the fact that gdb seems to think that a slist entry
-        # has only one template argument, while it has several more. Cause not known.
-        for field in self.node_type.fields():
-            if str(field.type).startswith("boost::intrusive::slist_member_hook"):
-                self.link_offset = int(field.bitpos / 8)
-                return
-
-        if not member_hook:
-            member_hook = get_template_arg_with_prefix(list_type, "struct boost::intrusive::member_hook")
-        if member_hook:
-            self.link_offset = member_hook.template_argument(2).cast(self.size_t)
+        if link is not None:
+            self.link_offset = get_field_offset(self.node_type, link)
         else:
-            self.link_offset = get_base_class_offset(self.node_type, "boost::intrusive::slist_base_hook")
-            if self.link_offset is None:
-                raise Exception("Class does not extend slist_base_hook: " + str(self.node_type))
+            member_hook = get_template_arg_with_prefix(list_type, "struct boost::intrusive::member_hook")
+            if member_hook:
+                self.link_offset = member_hook.template_argument(2).cast(self.size_t)
+            else:
+                self.link_offset = get_base_class_offset(self.node_type, "boost::intrusive::slist_base_hook")
+                if self.link_offset is None:
+                    raise Exception("Class does not extend slist_base_hook: " + str(self.node_type))
 
     def __iter__(self):
         hook = self.root['next_']
@@ -168,13 +172,16 @@ class std_tuple:
 class intrusive_set:
     size_t = gdb.lookup_type('size_t')
 
-    def __init__(self, ref):
+    def __init__(self, ref, link=None):
         container_type = ref.type.strip_typedefs()
         self.node_type = container_type.template_argument(0)
-        member_hook = get_template_arg_with_prefix(container_type, "boost::intrusive::member_hook")
-        if not member_hook:
-            raise Exception('Expected member_hook<> option not found in container\'s template parameters')
-        self.link_offset = member_hook.template_argument(2).cast(self.size_t)
+        if link is not None:
+            self.link_offset = get_field_offset(self.node_type, link)
+        else:
+            member_hook = get_template_arg_with_prefix(container_type, "boost::intrusive::member_hook")
+            if not member_hook:
+                raise Exception('Expected member_hook<> option not found in container\'s template parameters')
+            self.link_offset = member_hook.template_argument(2).cast(self.size_t)
         self.root = ref['holder']['root']['parent_']
 
     def __visit(self, node):
@@ -265,7 +272,7 @@ class double_decker:
                     yield ce
                     if ce['_flags']['_tail']:
                         break
-                    if p >= this.max_conflicting_partitions:
+                    if p >= self.max_conflicting_partitions:
                         raise ValueError("Too many conflicting partitions")
                     p += 1
 
@@ -419,6 +426,90 @@ class std_vector:
 
     def external_memory_footprint(self):
         return int(self.ref['_M_impl']['_M_end_of_storage']) - int(self.ref['_M_impl']['_M_start'])
+
+
+class std_unordered_set:
+    def __init__(self, ref):
+        self.ht = ref['_M_h']
+        value_type = ref.type.template_argument(0)
+        _, node_type = lookup_type(['::std::__detail::_Hash_node<{}, {}>'.format(value_type.name, cache)
+                                    for cache in ('false', 'true')])
+        self.node_ptr_type = node_type.pointer()
+        self.value_ptr_type = value_type.pointer()
+
+    def __len__(self):
+        return self.ht['_M_element_count']
+
+    def __iter__(self):
+        p = self.ht['_M_before_begin']['_M_nxt']
+        while p:
+            pc = p.cast(self.node_ptr_type)['_M_storage']['_M_storage']['__data'].cast(self.value_ptr_type)
+            yield pc.dereference()
+            p = p['_M_nxt']
+
+    def __nonzero__(self):
+        return self.__len__() > 0
+
+    def __bool__(self):
+        return self.__nonzero__()
+
+
+class std_unordered_map:
+    def __init__(self, ref):
+        self.ht = ref['_M_h']
+        kt = ref.type.template_argument(0)
+        vt = ref.type.template_argument(1)
+        value_type = gdb.lookup_type('::std::pair<{} const, {} >'.format(str(kt), str(vt)))
+        _, node_type = lookup_type(['::std::__detail::_Hash_node<{}, {}>'.format(value_type.name, cache)
+                                    for cache in ('false', 'true')])
+        self.node_ptr_type = node_type.pointer()
+        self.value_ptr_type = value_type.pointer()
+
+    def __len__(self):
+        return self.ht['_M_element_count']
+
+    def __iter__(self):
+        p = self.ht['_M_before_begin']['_M_nxt']
+        while p:
+            pc = p.cast(self.node_ptr_type)['_M_storage']['_M_storage']['__data'].cast(self.value_ptr_type)
+            yield (pc['first'], pc['second'])
+            p = p['_M_nxt']
+
+    def __nonzero__(self):
+        return self.__len__() > 0
+
+    def __bool__(self):
+        return self.__nonzero__()
+
+
+class flat_hash_map:
+    def __init__(self, ref):
+        kt = ref.type.template_argument(0)
+        vt = ref.type.template_argument(1)
+        slot_ptr_type = gdb.lookup_type('::std::pair<const {}, {} >'.format(str(kt), str(vt))).pointer()
+        self.slots = ref['slots_'].cast(slot_ptr_type)
+        self.size = ref['size_']
+
+    def __len__(self):
+        return self.size
+
+    def __iter__(self):
+        size = self.size
+        slot = self.slots
+        while size > 0:
+            yield (slot['first'], slot['second'])
+            slot += 1
+            size -= 1
+
+    def __nonzero__(self):
+        return self.__len__() > 0
+
+    def __bool__(self):
+        return self.__nonzero__()
+
+
+def unordered_map(ref):
+    return flat_hash_map(ref) if ref.type.name.startswith('flat_hash_map') else std_unordered_map(ref)
 
 
 def std_priority_queue(ref):
@@ -700,7 +791,7 @@ class mutation_partition_printer(gdb.printing.PrettyPrinter):
 
     def to_string(self):
         rows = list(str(r) for r in self.__rows())
-        range_tombstones = list(str(r) for r in intrusive_set(self.val['_row_tombstones']['_tombstones']))
+        range_tombstones = list(str(r) for r in intrusive_set(self.val['_row_tombstones']['_tombstones'], link='_link'))
         return '{_tombstone=%s, _static_row=%s (cont=%s), _row_tombstones=[%s], _rows=[%s]}' % (
             self.val['_tombstone'],
             self.val['_static_row'],
@@ -848,10 +939,20 @@ def current_shard():
     return int(gdb.parse_and_eval('\'seastar\'::local_engine->_id'))
 
 
+class sharded:
+    def __init__(self, val):
+        self.val = val
+        self.instances = std_vector(self.val['_instances'])
+
+    def instance(self, shard=None):
+        return self.instances[shard or current_shard()]['service']['_p']
+
+    def local(self):
+        return self.instance()
+
+
 def find_db(shard=None):
-    if shard is None:
-        shard = current_shard()
-    return gdb.parse_and_eval('::debug::db')['_instances']['_M_impl']['_M_start'][shard]['service']['_p']
+    return sharded(gdb.parse_and_eval('::debug::db')).instance(shard)
 
 
 def find_dbs():
@@ -862,32 +963,17 @@ def for_each_table(db=None):
     if not db:
         db = find_db()
     cfs = db['_column_families']
-    for (key, value) in list_unordered_map(cfs):
+    for (key, value) in unordered_map(cfs):
         yield value['_p'].reinterpret_cast(gdb.lookup_type('column_family').pointer()).dereference()  # it's a lw_shared_ptr
 
 
-def list_unordered_map(map, cache=True):
-    kt = map.type.template_argument(0)
-    vt = map.type.template_argument(1)
-    value_type = gdb.lookup_type('::std::pair<{} const, {} >'.format(str(kt), str(vt)))
-    hashnode_ptr_type = gdb.lookup_type('::std::__detail::_Hash_node<' + value_type.name + ', ' + ('false', 'true')[cache] + '>').pointer()
-    h = map['_M_h']
-    p = h['_M_before_begin']['_M_nxt']
-    while p:
-        pc = p.cast(hashnode_ptr_type)['_M_storage']['_M_storage']['__data'].cast(value_type.pointer())
-        yield (pc['first'], pc['second'])
-        p = p['_M_nxt']
-
-
-def list_unordered_set(map, cache=True):
-    value_type = map.type.template_argument(0)
-    hashnode_ptr_type = gdb.lookup_type('::std::__detail::_Hash_node<' + value_type.name + ', ' + ('false', 'true')[cache] + '>').pointer()
-    h = map['_M_h']
-    p = h['_M_before_begin']['_M_nxt']
-    while p:
-        pc = p.cast(hashnode_ptr_type)['_M_storage']['_M_storage']['__data'].cast(value_type.pointer())
-        yield pc.dereference()
-        p = p['_M_nxt']
+def lookup_type(type_names):
+    for type_name in type_names:
+        try:
+            return (type_name, gdb.lookup_type(type_name))
+        except gdb.error:
+            continue
+    raise gdb.error('none of the types found')
 
 
 def get_text_range():
@@ -1047,7 +1133,7 @@ class scylla_keyspaces(gdb.Command):
         for shard in range(cpus()):
             db = find_db(shard)
             keyspaces = db['_keyspaces']
-            for (key, value) in list_unordered_map(keyspaces):
+            for (key, value) in unordered_map(keyspaces):
                 gdb.write('{:5} {:20} (keyspace*){}\n'.format(shard, str(key), value.address))
 
 
@@ -1059,7 +1145,7 @@ class scylla_column_families(gdb.Command):
         for shard in range(cpus()):
             db = find_db(shard)
             cfs = db['_column_families']
-            for (key, value) in list_unordered_map(cfs):
+            for (key, value) in unordered_map(cfs):
                 value = value['_p'].reinterpret_cast(gdb.lookup_type('column_family').pointer()).dereference()  # it's a lw_shared_ptr
                 schema = value['_schema']['_p'].reinterpret_cast(gdb.lookup_type('schema').pointer())
                 name = str(schema['_raw']['_ks_name']) + '/' + str(schema['_raw']['_cf_name'])
@@ -1197,17 +1283,20 @@ def find_vptrs_of_type(vptr=None, typename=None):
 
 
 def find_single_sstable_readers():
-    def _lookup_type(type_name):
-        return {'name': type_name, 'ptr_type': gdb.lookup_type(type_name).pointer()}
+    def _lookup_type(type_names):
+        n, t = lookup_type(type_names)
+        return (n, t.pointer())
 
     types = []
     try:
         # For Scylla < 2.1
         # FIXME: this only finds range readers
-        types = [_lookup_type('sstable_range_wrapping_reader')]
-    except Exception:
-        types = [_lookup_type('sstables::sstable_mutation_reader<sstables::data_consume_rows_context_m, sstables::mp_row_consumer_m>'),
-                 _lookup_type('sstables::sstable_mutation_reader<sstables::data_consume_rows_context, sstables::mp_row_consumer_k_l>')]
+        types = [_lookup_type(['sstable_range_wrapping_reader'])]
+    except gdb.error:
+        types = [_lookup_type(['sstables::sstable_mutation_reader<sstables::data_consume_rows_context_m, sstables::mp_row_consumer_m>',
+                               'sstables::sstable_mutation_reader<sstables::mx::data_consume_rows_context_m, sstables::mx::mp_row_consumer_m>']),
+                 _lookup_type(['sstables::sstable_mutation_reader<sstables::data_consume_rows_context, sstables::mp_row_consumer_k_l>',
+                               'sstables::sstable_mutation_reader<sstables::kl::data_consume_rows_context, sstables::kl::mp_row_consumer_k_l>'])]
 
     def _lookup_obj(obj_addr, vtable_addr):
         vtable_pfx = 'vtable for '
@@ -1215,9 +1304,8 @@ def find_single_sstable_readers():
         if not name:
             return None
         name = name[len(vtable_pfx):]
-        for t in types:
-            if name.startswith(t['name']):
-                ptr_type = t['ptr_type']
+        for type_name, ptr_type in types:
+            if name.startswith(type_name):
                 return obj_addr.reinterpret_cast(ptr_type)
 
     for obj_addr, vtable_addr in find_vptrs():
@@ -1261,7 +1349,7 @@ class scylla_active_sstables(gdb.Command):
 
             def count_index_lists(sst):
                 index_lists_size = 0
-                for key, entry in list_unordered_map(sst['_index_lists']['_lists'], cache=False):
+                for key, entry in unordered_map(sst['_index_lists']['_lists']):
                     index_entries = std_vector(entry['list'])
                     index_lists_size += sizeof_entry
                     for e in index_entries:
@@ -1342,7 +1430,7 @@ class seastar_lw_shared_ptr():
 def all_tables(db):
     """Returns pointers to table objects which exist on current shard"""
 
-    for (key, value) in list_unordered_map(db['_column_families']):
+    for (key, value) in unordered_map(db['_column_families']):
         yield seastar_lw_shared_ptr(value).get()
 
 
@@ -1640,7 +1728,11 @@ class scylla_memory(gdb.Command):
             gdb.write('    {}:\n'.format(human_name))
             es = db
             for path_component in es_path:
-                es = es[path_component]
+                try:
+                    es = es[path_component]
+                except gdb.error:
+                    break
+
             for sg_id, sg_name, count in scylla_memory.summarize_inheriting_execution_stage(es):
                 total += count
                 gdb.write('      {:02} {:32} {}\n'.format(sg_id, sg_name, count))
@@ -2311,7 +2403,13 @@ class scylla_lsa_segment(gdb.Command):
     def invoke(self, arg, from_tty):
         # See logalloc::region_impl::for_each_live()
 
-        logalloc_alignment = gdb.parse_and_eval("'::debug::logalloc_alignment'")
+        try:
+            logalloc_alignment = gdb.parse_and_eval("'::debug::logalloc_alignment'")
+        except gdb.error:
+            # optimized-out and/or garbage-collected by ld, which
+            # _probably_ means the mode is not "sanitize", so:
+            logalloc_alignment = 1
+
         logalloc_alignment_mask = logalloc_alignment - 1
 
         ptr = int(arg, 0)
@@ -2333,11 +2431,11 @@ class scylla_timers(gdb.Command):
         gdb.write('Timers:\n')
         timer_set = gdb.parse_and_eval('\'seastar\'::local_engine->_timers')
         for timer_list in std_array(timer_set['_buckets']):
-            for t in intrusive_list(timer_list):
+            for t in intrusive_list(timer_list, link='_link'):
                 gdb.write('(%s*) %s = %s\n' % (t.type, t.address, t))
         timer_set = gdb.parse_and_eval('\'seastar\'::local_engine->_lowres_timers')
         for timer_list in std_array(timer_set['_buckets']):
-            for t in intrusive_list(timer_list):
+            for t in intrusive_list(timer_list, link='_link'):
                 gdb.write('(%s*) %s = %s\n' % (t.type, t.address, t))
 
 
@@ -2520,7 +2618,7 @@ def exit_thread_context():
 
 
 def seastar_threads_on_current_shard():
-    return intrusive_list(gdb.parse_and_eval('\'seastar::thread_context::_all_threads\''))
+    return intrusive_list(gdb.parse_and_eval('\'seastar::thread_context::_all_threads\''), link='_all_link')
 
 
 class scylla_thread(gdb.Command):
@@ -2677,7 +2775,7 @@ def get_local_task_queues():
 
 def get_local_io_queues():
     """ Return a list of io queues for the local reactor. """
-    for dev, ioq in list_unordered_map(gdb.parse_and_eval('\'seastar\'::local_engine._io_queues'), cache=False):
+    for dev, ioq in unordered_map(gdb.parse_and_eval('\'seastar\'::local_engine._io_queues')):
         yield dev, std_unique_ptr(ioq).dereference()
 
 
@@ -2846,7 +2944,7 @@ class scylla_io_queues(gdb.Command):
     def _print_io_priority_class(pclass_ptr, names_from_ptrs, indent = '\t\t'):
         pclass = seastar_lw_shared_ptr(pclass_ptr).get().dereference()
         gdb.write("{}Class {}:\n".format(indent, names_from_ptrs.get(pclass.address, pclass.address)))
-        slist = intrusive_slist(pclass['_queue'])
+        slist = intrusive_slist(pclass['_queue'], link='_hook')
         for entry in slist:
             gdb.write("{}\t{}\n".format(indent, scylla_io_queues.ticket(entry['_ticket'])))
 
@@ -3229,17 +3327,15 @@ class std_unique_ptr:
         return self.__nonzero__()
 
 
-class sharded:
-    def __init__(self, val):
-        self.val = val
-
-    def local(self):
-        shard = int(gdb.parse_and_eval('\'seastar\'::local_engine->_id'))
-        return std_vector(self.val['_instances'])[shard]['service']['_p']
-
-
 def ip_to_str(val, byteorder):
     return '%d.%d.%d.%d' % (struct.unpack('BBBB', val.to_bytes(4, byteorder=byteorder))[::-1])
+
+
+def get_ip(ep):
+    try:
+        return ep['_addr']['ip']['raw']
+    except gdb.error:
+        return ep['_addr']['_in']['s_addr']
 
 
 class scylla_netw(gdb.Command):
@@ -3247,11 +3343,16 @@ class scylla_netw(gdb.Command):
         gdb.Command.__init__(self, 'scylla netw', gdb.COMMAND_USER, gdb.COMPLETE_NONE, True)
 
     def invoke(self, arg, for_tty):
-        ms = sharded(gdb.parse_and_eval('netw::_the_messaging_service')).local()
+        mss = sharded(gdb.parse_and_eval('netw::_the_messaging_service'))
+        if not mss.instances:
+            gdb.write('netw::_the_messaging_service does not exist (yet?)\n')
+            return
+
+        ms = mss.local()
         gdb.write('Dropped messages: %s\n' % ms['_dropped_messages'])
         gdb.write('Outgoing connections:\n')
-        for (addr, shard_info) in list_unordered_map(std_vector(ms['_clients'])[0]):
-            ip = ip_to_str(int(addr['addr']['_addr']['ip']['raw']), byteorder=sys.byteorder)
+        for (addr, shard_info) in unordered_map(std_vector(ms['_clients'])[0]):
+            ip = ip_to_str(int(get_ip(addr['addr'])), byteorder=sys.byteorder)
             client = shard_info['rpc_client']['_p']
             rpc_client = std_unique_ptr(client['_p'])
             gdb.write('IP: %s, (netw::messaging_service::rpc_protocol_client_wrapper*) %s:\n' % (ip, client))
@@ -3266,7 +3367,7 @@ class scylla_netw(gdb.Command):
             if srv:
                 gdb.write('Server: resources=%s\n' % srv['_resources_available'])
                 gdb.write('Incoming connections:\n')
-                for clnt in list_unordered_map(srv['_conns']):
+                for clnt in unordered_map(srv['_conns']):
                     conn = clnt['_p'].cast(clnt.type.template_argument(0).pointer())
                     ip = ip_to_str(int(conn['_info']['addr']['u']['in']['sin_addr']['s_addr']), byteorder='big')
                     port = int(conn['_info']['addr']['u']['in']['sin_port'])
@@ -3280,8 +3381,8 @@ class scylla_gms(gdb.Command):
 
     def invoke(self, arg, for_tty):
         gossiper = sharded(gdb.parse_and_eval('gms::_the_gossiper')).local()
-        for (endpoint, state) in list_unordered_map(gossiper['endpoint_state_map']):
-            ip = ip_to_str(int(endpoint['_addr']['ip']['raw']), byteorder=sys.byteorder)
+        for (endpoint, state) in unordered_map(gossiper['endpoint_state_map']):
+            ip = ip_to_str(int(get_ip(endpoint)), byteorder=sys.byteorder)
             gdb.write('%s: (gms::endpoint_state*) %s (%s)\n' % (ip, state.address, state['_heart_beat_state']))
             for app_state, value in std_map(state['_application_state']):
                 gdb.write('  %s: {version=%d, value=%s}\n' % (app_state, value['version'], value['value']))
@@ -3315,13 +3416,13 @@ class scylla_cache(gdb.Command):
 def find_sstables_attached_to_tables():
     db = find_db(current_shard())
     for table in all_tables(db):
-        for sst_ptr in list_unordered_set(seastar_lw_shared_ptr(seastar_lw_shared_ptr(table['_sstables']).get()['_all']).get().dereference()):
+        for sst_ptr in std_unordered_set(seastar_lw_shared_ptr(seastar_lw_shared_ptr(table['_sstables']).get()['_all']).get().dereference()):
             yield seastar_lw_shared_ptr(sst_ptr).get()
 
 
 def find_sstables():
     """A generator which yields pointers to all live sstable objects on current shard."""
-    for sst in intrusive_list(gdb.parse_and_eval('sstables::tracker._sstables')):
+    for sst in intrusive_list(gdb.parse_and_eval('sstables::tracker._sstables'), link='_tracker_link'):
         yield sst.address
 
 class scylla_sstables(gdb.Command):
@@ -3397,7 +3498,7 @@ class scylla_sstables(gdb.Command):
             sm_size = 0
             sm = std_optional(sc['scylla_metadata'])
             if sm:
-                for tag, value in list_unordered_map(sm.get()['data']['data']):
+                for tag, value in unordered_map(sm.get()['data']['data']):
                     bv = boost_variant(value)
                     # FIXME: only gdb.Type.template_argument(0) works for boost::variant<>
                     if bv.which() != 0:
@@ -4192,7 +4293,7 @@ class scylla_features(gdb.Command):
 
     def invoke(self, arg, for_tty):
         gossiper = sharded(gdb.parse_and_eval('gms::_the_gossiper')).local()
-        for (name, f) in list_unordered_map(gossiper['_feature_service']['_registered_features']):
+        for (name, f) in unordered_map(gossiper['_feature_service']['_registered_features']):
             f = reference_wrapper(f).get()
             gdb.write('%s: %s\n' % (f['_name'], f['_enabled']))
 
@@ -4235,9 +4336,9 @@ class scylla_repairs(gdb.Command):
         gdb.write('(%s*) for %s: addr = %s, table = %s, ip = %s, states = %s, repair_meta = %s\n' % (rm.type, master, str(rm.address), table, ip, all_nodes_state, rm))
 
     def invoke(self, arg, for_tty):
-        for rm in intrusive_list(gdb.parse_and_eval('debug::repair_meta_for_masters._repair_metas')):
+        for rm in intrusive_list(gdb.parse_and_eval('debug::repair_meta_for_masters._repair_metas'), link='_tracker_link'):
             self.process("masters", rm)
-        for rm in intrusive_list(gdb.parse_and_eval('debug::repair_meta_for_followers._repair_metas')):
+        for rm in intrusive_list(gdb.parse_and_eval('debug::repair_meta_for_followers._repair_metas'), link='_tracker_link'):
             self.process("follower", rm)
 
 class scylla_gdb_func_collection_element(gdb.Function):
