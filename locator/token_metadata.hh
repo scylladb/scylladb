@@ -293,8 +293,14 @@ public:
      */
     future<> clear_gently() noexcept;
 
+    /*
+     * Number of returned ranges = O(tokens.size())
+     */
     dht::token_range_vector get_primary_ranges_for(std::unordered_set<token> tokens) const;
 
+    /*
+     * Number of returned ranges = O(1)
+     */
     dht::token_range_vector get_primary_ranges_for(token right) const;
     static boost::icl::interval<token>::interval_type range_to_interval(range<dht::token> r);
     static range<dht::token> interval_to_range(boost::icl::interval<token>::interval_type i);
