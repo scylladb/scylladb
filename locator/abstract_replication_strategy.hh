@@ -92,7 +92,14 @@ public:
         snitch_ptr& snitch,
         const std::map<sstring, sstring>& config_options,
         replication_strategy_type my_type);
+
+    // The returned vector has size O(number of normal token owners), which is O(number of nodes in the cluster).
+    // Note: it is not guaranteed that the function will actually yield. If the complexity of a particular implementation
+    // is small, that implementation may not yield since by itself it won't cause a reactor stall (assuming practical
+    // cluster sizes and number of tokens per node). The caller is responsible for yielding if they call this function
+    // in a loop.
     virtual inet_address_vector_replica_set calculate_natural_endpoints(const token& search_token, const token_metadata& tm, can_yield = can_yield::no) const = 0;
+
     virtual ~abstract_replication_strategy() {}
     static std::unique_ptr<abstract_replication_strategy> create_replication_strategy(const sstring& ks_name, const sstring& strategy_name, const shared_token_metadata& stm, const std::map<sstring, sstring>& config_options);
     static void validate_replication_strategy(const sstring& ks_name,
