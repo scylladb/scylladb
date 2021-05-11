@@ -21,7 +21,7 @@ import time
 import pytest
 from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, ConfigurationException, ReadFailure
 
-from util import new_test_table
+from util import new_test_table, unique_name
 
 # A reproducer for issue #7443: Normally, when the entire table is SELECTed,
 # the partitions are returned sorted by the partitions' token. When there
@@ -100,3 +100,33 @@ def test_order_of_indexes(scylla_only, cql, test_keyspace):
         # Local indexes are still preferred over global ones, if they can be used
         index_used(f"SELECT * FROM {table} WHERE p = 1 and v1 = 1 and v3 = 2 and v2 = 2 allow filtering", "my_v2_idx")
         index_used(f"SELECT * FROM {table} WHERE p = 1 and v2 = 1 and v1 = 2 allow filtering", "my_v2_idx")
+
+# Indexes can be created without an explicit name, in which case a default name is chosen.
+# However, due to #8620 it was possible to break the index creation mechanism by creating
+# a properly named regular table, which conflicts with the generated index name.
+def test_create_unnamed_index_when_its_name_is_taken(cql, test_keyspace):
+    schema = 'p int primary key, v int'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        try:
+            cql.execute(f"CREATE TABLE {table}_v_idx_index (i_do_not_exist_in_the_base_table int primary key)")
+            # Creating an index should succeed, even though its default name is taken
+            # by the table above
+            cql.execute(f"CREATE INDEX ON {table}(v)")
+        finally:
+            cql.execute(f"DROP TABLE {table}_v_idx_index")
+
+# Indexed created with an explicit name cause a materialized view to be created,
+# and this view has a specific name - <index-name>_index. If there happens to be
+# a regular table (or another view) named just like that, index creation should fail.
+def test_create_named_index_when_its_name_is_taken(scylla_only, cql, test_keyspace):
+    schema = 'p int primary key, v int'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        index_name = unique_name()
+        try:
+            cql.execute(f"CREATE TABLE {test_keyspace}.{index_name}_index (i_do_not_exist_in_the_base_table int primary key)")
+            # Creating an index should fail, because it's impossible to create
+            # its underlying materialized view, because its name is taken by a regular table
+            with pytest.raises(InvalidRequest, match="already exists"):
+                cql.execute(f"CREATE INDEX {index_name} ON {table}(v)")
+        finally:
+            cql.execute(f"DROP TABLE {test_keyspace}.{index_name}_index")
