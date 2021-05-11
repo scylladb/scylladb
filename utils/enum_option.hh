@@ -87,6 +87,10 @@ class enum_option {
         return _value == that._value;
     }
 
+    bool operator==(typename map_t::mapped_type value) const {
+        return _value == value;
+    }
+
     // For program_options parser:
     friend std::istream& operator>>(std::istream& s, enum_option<Mapper>& opt) {
         typename map_t::key_type key;
