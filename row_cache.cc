@@ -45,8 +45,9 @@ using namespace cache;
 
 flat_mutation_reader
 row_cache::create_underlying_reader(read_context& ctx, mutation_source& src, const dht::partition_range& pr) {
+    auto reader = src.make_reader(_schema, ctx.permit(), pr, ctx.slice(), ctx.pc(), ctx.trace_state(), streamed_mutation::forwarding::yes);
     ctx.on_underlying_created();
-    return src.make_reader(_schema, ctx.permit(), pr, ctx.slice(), ctx.pc(), ctx.trace_state(), streamed_mutation::forwarding::yes);
+    return reader;
 }
 
 static thread_local mutation_application_stats dummy_app_stats;
