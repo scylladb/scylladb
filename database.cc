@@ -1948,7 +1948,11 @@ sstring database::get_available_index_name(const sstring &ks_name, const sstring
     auto base_name = index_metadata::get_default_index_name(cf_name, index_name_root);
     sstring accepted_name = base_name;
     int i = 0;
-    while (existing_names.contains(accepted_name)) {
+    auto name_accepted = [&] {
+        auto index_table_name = secondary_index::index_table_name(accepted_name);
+        return !has_schema(ks_name, index_table_name) && !existing_names.contains(accepted_name);
+    };
+    while (!name_accepted()) {
         accepted_name = base_name + "_" + std::to_string(++i);
     }
     return accepted_name;
