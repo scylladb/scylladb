@@ -1233,6 +1233,20 @@ static int do_repair_start(seastar::sharded<database>& db, seastar::sharded<netw
     (void)repair_tracker().run(id, [&db, &ms, id, keyspace = std::move(keyspace),
             cfs = std::move(cfs), ranges = std::move(ranges), options = std::move(options), ignore_nodes = std::move(ignore_nodes)] () mutable {
 
+        std::vector<foreign_ptr<lw_shared_ptr<repair_info>>> repair_infos;
+        repair_infos.resize(smp::count);
+        auto table_ids = get_table_ids(db.local(), keyspace, cfs);
+        parallel_for_each(boost::irange(unsigned(0), smp::count), [&] (unsigned shard) -> future<> {
+            repair_infos[shard] = co_await db.invoke_on(shard, [&db, &ms, keyspace, table_ids, id, ranges,
+                    data_centers = options.data_centers, hosts = options.hosts, ignore_nodes] (database& localdb) mutable {
+                _node_ops_metrics.repair_total_ranges_sum += ranges.size();
+                auto ri = make_lw_shared<repair_info>(db, ms,
+                        std::move(keyspace), std::move(ranges), std::move(table_ids),
+                        id, std::move(data_centers), std::move(hosts), std::move(ignore_nodes), streaming::stream_reason::repair, id.uuid);
+                return make_foreign(std::move(ri));
+            });
+        }).get();
+
         if (db.local().get_config().wait_for_hint_replay_before_repair()) {
             auto participants = get_hosts_participating_in_repair(db.local(), keyspace, ranges, options.data_centers, options.hosts, ignore_nodes).get();
             auto waiting_nodes = db.local().get_token_metadata().get_all_endpoints();
@@ -1244,15 +1258,10 @@ static int do_repair_start(seastar::sharded<database>& db, seastar::sharded<netw
 
         std::vector<future<>> repair_results;
         repair_results.reserve(smp::count);
-        auto table_ids = get_table_ids(db.local(), keyspace, cfs);
         for (auto shard : boost::irange(unsigned(0), smp::count)) {
-            auto f = db.invoke_on(shard, [&db, &ms, keyspace, table_ids, id, ranges,
-                    data_centers = options.data_centers, hosts = options.hosts, ignore_nodes] (database& localdb) mutable {
-                _node_ops_metrics.repair_total_ranges_sum += ranges.size();
-                auto ri = make_lw_shared<repair_info>(db, ms,
-                        std::move(keyspace), std::move(ranges), std::move(table_ids),
-                        id, std::move(data_centers), std::move(hosts), std::move(ignore_nodes), streaming::stream_reason::repair, id.uuid);
-                return repair_ranges(ri);
+            auto f = db.invoke_on(shard, [ri = std::move(repair_infos[shard])] (database& localdb) mutable {
+                assert(ri.get_owner_shard() == this_shard_id());
+                return repair_ranges(ri.release());
             });
             repair_results.push_back(std::move(f));
         }
