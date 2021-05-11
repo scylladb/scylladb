@@ -288,6 +288,13 @@ create_index_statement::announce_migration(service::storage_proxy& proxy, bool i
         }
         accepted_name = db.get_available_index_name(keyspace(), column_family(), index_name_root);
     }
+    auto index_table_name = secondary_index::index_table_name(accepted_name);
+    if (db.has_schema(keyspace(), index_table_name)) {
+        return make_exception_future<::shared_ptr<cql_transport::event::schema_change>>(
+            exceptions::invalid_request_exception(format("Index {} cannot be created, because table {} already exists",
+                    accepted_name, index_table_name))
+        );
+    }
     index_metadata_kind kind;
     index_options_map index_options;
     if (_properties->is_custom) {
