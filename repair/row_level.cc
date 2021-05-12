@@ -2983,7 +2983,7 @@ class row_level_repair_gossip_helper : public gms::i_endpoint_state_change_subsc
 repair_service::repair_service(distributed<gms::gossiper>& gossiper, size_t max_repair_memory)
     : _gossiper(gossiper)
     , _gossip_helper(make_shared<row_level_repair_gossip_helper>())
-    , _tracker(smp::count, max_repair_memory) {
+    , _tracker(std::make_unique<tracker>(smp::count, max_repair_memory)) {
     _gossiper.local().register_(_gossip_helper);
 }
 

@@ -45,7 +45,7 @@ namespace gms {
 class repair_service {
     distributed<gms::gossiper>& _gossiper;
     shared_ptr<row_level_repair_gossip_helper> _gossip_helper;
-    tracker _tracker;
+    std::unique_ptr<tracker> _tracker;
     bool _stopped = false;
 
 public:
