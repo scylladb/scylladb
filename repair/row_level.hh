@@ -70,6 +70,8 @@ public:
     future<> start();
     future<> stop();
 
+    int do_repair_start(sstring keyspace, std::unordered_map<sstring, sstring> options_map);
+
 public:
     netw::messaging_service& get_messaging() noexcept { return _messaging; }
     sharded<database>& get_db() noexcept { return _db; }

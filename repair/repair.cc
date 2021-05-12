@@ -1138,8 +1138,9 @@ static future<> try_wait_for_hints_to_be_replayed(repair_uniq_id id, std::vector
 // CPU is that it allows us to keep some state (like a list of ongoing
 // repairs). It is fine to always do this on one CPU, because the function
 // itself does very little (mainly tell other nodes and CPUs what to do).
-static int do_repair_start(seastar::sharded<database>& db, seastar::sharded<netw::messaging_service>& ms,
-        sstring keyspace, std::unordered_map<sstring, sstring> options_map) {
+int repair_service::do_repair_start(sstring keyspace, std::unordered_map<sstring, sstring> options_map) {
+    seastar::sharded<database>& db = get_db();
+    seastar::sharded<netw::messaging_service>& ms = get_messaging().container();
     check_in_shutdown();
 
     repair_options options(options_map);
@@ -1281,9 +1282,7 @@ static int do_repair_start(seastar::sharded<database>& db, seastar::sharded<netw
 future<int> repair_start(seastar::sharded<repair_service>& repair,
         sstring keyspace, std::unordered_map<sstring, sstring> options) {
     return repair.invoke_on(0, [keyspace = std::move(keyspace), options = std::move(options)] (repair_service& local_repair) {
-        seastar::sharded<database>& db = local_repair.get_db();
-        seastar::sharded<netw::messaging_service>& ms = local_repair.get_messaging().container();
-        return do_repair_start(db, ms, std::move(keyspace), std::move(options));
+        return local_repair.do_repair_start(std::move(keyspace), std::move(options));
     });
 }
 
