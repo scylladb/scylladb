@@ -252,6 +252,7 @@ public:
     named_value<uint32_t> dynamic_snitch_reset_interval_in_ms;
     named_value<uint32_t> dynamic_snitch_update_interval_in_ms;
     named_value<hinted_handoff_enabled_type> hinted_handoff_enabled;
+    named_value<uint32_t> max_hinted_handoff_concurrency;
     named_value<uint32_t> hinted_handoff_throttle_in_kb;
     named_value<uint32_t> max_hint_window_in_ms;
     named_value<uint32_t> max_hints_delivery_threads;

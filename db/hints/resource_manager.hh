@@ -30,6 +30,7 @@
 #include "seastarx.hh"
 #include <unordered_set>
 #include "utils/small_vector.hh"
+#include "utils/updateable_value.hh"
 #include "lister.hh"
 #include "enum_set.hh"
 
@@ -125,7 +126,7 @@ private:
 
 class resource_manager {
     const size_t _max_send_in_flight_memory;
-    const size_t _min_send_hint_budget;
+    utils::updateable_value<uint32_t> _max_hints_send_queue_length;
     seastar::named_semaphore _send_limiter;
 
     seastar::named_semaphore _operation_lock;
@@ -171,12 +172,12 @@ class resource_manager {
 public:
     static constexpr size_t hint_segment_size_in_mb = 32;
     static constexpr size_t max_hints_per_ep_size_mb = 128; // 4 files 32MB each
-    static constexpr size_t max_hints_send_queue_length = 128;
+    static constexpr size_t default_per_shard_concurrency_limit = 8;
 
 public:
-    resource_manager(size_t max_send_in_flight_memory)
-        : _max_send_in_flight_memory(std::max(max_send_in_flight_memory, max_hints_send_queue_length))
-        , _min_send_hint_budget(_max_send_in_flight_memory / max_hints_send_queue_length)
+    resource_manager(size_t max_send_in_flight_memory, utils::updateable_value<uint32_t> max_hint_sending_concurrency)
+        : _max_send_in_flight_memory(max_send_in_flight_memory)
+        , _max_hints_send_queue_length(std::move(max_hint_sending_concurrency))
         , _send_limiter(_max_send_in_flight_memory, named_semaphore_exception_factory{"send limiter"})
         , _operation_lock(1, named_semaphore_exception_factory{"operation lock"})
         , _space_watchdog(_shard_managers, _per_device_limits_map)
