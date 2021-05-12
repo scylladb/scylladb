@@ -42,15 +42,16 @@ namespace gms {
     class gossiper;
 }
 
-struct repair_service {
+class repair_service {
     distributed<gms::gossiper>& _gossiper;
     shared_ptr<row_level_repair_gossip_helper> _gossip_helper;
     tracker _tracker;
+    bool _stopped = false;
+
+public:
     repair_service(distributed<gms::gossiper>& gossiper, size_t max_repair_memory);
     ~repair_service();
     future<> stop();
-private:
-    bool _stopped = false;
 };
 
 future<> row_level_repair_init_messaging_service_handler(repair_service& rs, distributed<db::system_distributed_keyspace>& sys_dist_ks,
