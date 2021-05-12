@@ -44,15 +44,33 @@ namespace gms {
 
 class repair_service : public seastar::peering_sharded_service<repair_service> {
     distributed<gms::gossiper>& _gossiper;
+    netw::messaging_service& _messaging;
+    sharded<database>& _db;
+    sharded<db::system_distributed_keyspace>& _sys_dist_ks;
+    sharded<db::view::view_update_generator>& _view_update_generator;
+    service::migration_manager& _mm;
+
     shared_ptr<row_level_repair_gossip_helper> _gossip_helper;
     std::unique_ptr<tracker> _tracker;
     bool _stopped = false;
 
 public:
-    repair_service(distributed<gms::gossiper>& gossiper, size_t max_repair_memory);
+    repair_service(distributed<gms::gossiper>& gossiper,
+            netw::messaging_service& ms,
+            sharded<database>& db,
+            sharded<db::system_distributed_keyspace>& sys_dist_ks,
+            sharded<db::view::view_update_generator>& vug,
+            service::migration_manager& mm, size_t max_repair_memory);
     ~repair_service();
     future<> start();
     future<> stop();
+
+public:
+    netw::messaging_service& get_messaging() noexcept { return _messaging; }
+    sharded<database>& get_db() noexcept { return _db; }
+    service::migration_manager& get_migration_manager() noexcept { return _mm; }
+    sharded<db::system_distributed_keyspace>& get_sys_dist_ks() noexcept { return _sys_dist_ks; }
+    sharded<db::view::view_update_generator>& get_view_update_generator() noexcept { return _view_update_generator; }
 };
 
 future<> row_level_repair_init_messaging_service_handler(distributed<db::system_distributed_keyspace>& sys_dist_ks,

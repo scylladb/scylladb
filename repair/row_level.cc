@@ -2980,8 +2980,19 @@ class row_level_repair_gossip_helper : public gms::i_endpoint_state_change_subsc
     }
 };
 
-repair_service::repair_service(distributed<gms::gossiper>& gossiper, size_t max_repair_memory)
+repair_service::repair_service(distributed<gms::gossiper>& gossiper,
+        netw::messaging_service& ms,
+        sharded<database>& db,
+        sharded<db::system_distributed_keyspace>& sys_dist_ks,
+        sharded<db::view::view_update_generator>& vug,
+        service::migration_manager& mm,
+        size_t max_repair_memory)
     : _gossiper(gossiper)
+    , _messaging(ms)
+    , _db(db)
+    , _sys_dist_ks(sys_dist_ks)
+    , _view_update_generator(vug)
+    , _mm(mm)
 {
     if (this_shard_id() == 0) {
         _gossip_helper = make_shared<row_level_repair_gossip_helper>();
