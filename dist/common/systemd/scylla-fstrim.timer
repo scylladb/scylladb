@@ -1,5 +1,5 @@
 [Unit]
-Description=Run Scylla fstrim daily
+Description=Run Scylla fstrim weekly
 After=scylla-server.service
 BindsTo=scylla-server.service
 
