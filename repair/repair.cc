@@ -1885,14 +1885,14 @@ static future<> uninit_messaging_service_handler() {
     });
 }
 
-future<> repair_init_messaging_service_handler(repair_service& rs,
+future<> repair_init_messaging_service_handler(
         distributed<db::system_distributed_keyspace>& sys_dist_ks,
         distributed<db::view::view_update_generator>& view_update_generator,
         sharded<database>& db, sharded<netw::messaging_service>& ms,
         sharded<service::migration_manager>& mm) {
     return when_all_succeed(
             init_messaging_service_handler(db, ms, mm),
-            row_level_repair_init_messaging_service_handler(rs, sys_dist_ks, view_update_generator, ms, mm)
+            row_level_repair_init_messaging_service_handler(sys_dist_ks, view_update_generator, ms, mm)
     ).discard_result();
 }
 

@@ -54,7 +54,7 @@ public:
     future<> stop();
 };
 
-future<> row_level_repair_init_messaging_service_handler(repair_service& rs, distributed<db::system_distributed_keyspace>& sys_dist_ks,
+future<> row_level_repair_init_messaging_service_handler(distributed<db::system_distributed_keyspace>& sys_dist_ks,
         distributed<db::view::view_update_generator>& view_update_generator, sharded<netw::messaging_service>& ms, sharded<service::migration_manager>& mm);
 future<> row_level_repair_uninit_messaging_service_handler();
 

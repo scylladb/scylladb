@@ -2298,7 +2298,7 @@ static future<> repair_get_full_row_hashes_with_rpc_stream_handler(
     });
 }
 
-future<> row_level_repair_init_messaging_service_handler(repair_service& rs, distributed<db::system_distributed_keyspace>& sys_dist_ks,
+future<> row_level_repair_init_messaging_service_handler(distributed<db::system_distributed_keyspace>& sys_dist_ks,
         distributed<db::view::view_update_generator>& view_update_generator, sharded<netw::messaging_service>& ms, sharded<service::migration_manager>& mm) {
     _sys_dist_ks = &sys_dist_ks;
     _view_update_generator = &view_update_generator;

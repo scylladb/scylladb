@@ -55,7 +55,7 @@ namespace service {
 class migration_manager;
 }
 
-future<> repair_init_messaging_service_handler(repair_service& rs,
+future<> repair_init_messaging_service_handler(
         distributed<db::system_distributed_keyspace>& sys_dist_ks,
         distributed<db::view::view_update_generator>& view_update_generator,
         sharded<database>& db,
