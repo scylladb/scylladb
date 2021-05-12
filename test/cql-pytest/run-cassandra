@@ -40,6 +40,7 @@ def run_cassandra_cmd(pid, dir):
               'listen_address: ' + ip + '\n' +
               'auto_snapshot: false\n' +
               'enable_user_defined_functions: true\n' +
+              'authenticator: PasswordAuthenticator\n' +
               'enable_materialized_views: true\n', file=f)
     print('Booting Cassandra on ' + ip + ' in ' + dir + '...')
     logsdir = os.path.join(dir, 'logs')

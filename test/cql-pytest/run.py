@@ -186,11 +186,15 @@ def run_scylla_cmd(pid, dir):
         '--num-tokens', '16',
         # Allow testing experimental features
         '--experimental', '1', '--enable-user-defined-functions', '1',
+        # Set up authentication in order to allow testing this module
+        # and other modules dependent on it: e.g. service levels
+        '--authenticator', 'PasswordAuthenticator',
         ], {})
 
 ## Test that CQL is serving.
 def check_cql(ip):
-    cassandra.cluster.Cluster([ip]).connect()
+    auth_provider = cassandra.auth.PlainTextAuthProvider(username='cassandra', password='cassandra')
+    cassandra.cluster.Cluster([ip], auth_provider=auth_provider).connect()
 
 # Wait for scylla to finish booting successfully. Raises an exception if
 # we know it did not.

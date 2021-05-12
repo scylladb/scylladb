@@ -24,6 +24,7 @@
 
 import pytest
 
+from cassandra.auth import PlainTextAuthProvider
 from cassandra.cluster import Cluster, ConsistencyLevel, ExecutionProfile, EXEC_PROFILE_DEFAULT
 from cassandra.policies import RoundRobinPolicy
 
@@ -60,7 +61,9 @@ def cql(request):
         # TODO: make the protocol version an option, to allow testing with
         # different versions. If we drop this setting completely, it will
         # mean pick the latest version supported by the client and the server.
-        protocol_version=4
+        protocol_version=4,
+        # Use the default superuser credentials, which work for both Scylla and Cassandra
+        auth_provider=PlainTextAuthProvider(username='cassandra', password='cassandra'),
     )
     return cluster.connect()
 
