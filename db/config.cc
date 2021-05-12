@@ -591,6 +591,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , hinted_handoff_enabled(this, "hinted_handoff_enabled", value_status::Used, db::config::hinted_handoff_enabled_type(db::config::hinted_handoff_enabled_type::enabled_for_all_tag()),
         "Enable or disable hinted handoff. To enable per data center, add data center list. For example: hinted_handoff_enabled: DC1,DC2. A hint indicates that the write needs to be replayed to an unavailable node. "
         "Related information: About hinted handoff writes")
+    , max_hinted_handoff_concurrency(this, "max_hinted_handoff_concurrency", liveness::LiveUpdate, value_status::Used, 0,
+        "Maximum concurrency allowed for sending hints. The concurrency is divided across shards and rounded up if not divisible by the number of shards. By default (or when set to 0), concurrency of 8*shard_count will be used.")
     , hinted_handoff_throttle_in_kb(this, "hinted_handoff_throttle_in_kb", value_status::Unused, 1024,
         "Maximum throttle per delivery thread in kilobytes per second. This rate reduces proportionally to the number of nodes in the cluster. For example, if there are two nodes in the cluster, each delivery thread will use the maximum rate. If there are three, each node will throttle to half of the maximum, since the two nodes are expected to deliver hints simultaneously.")
     , max_hint_window_in_ms(this, "max_hint_window_in_ms", value_status::Used, 10800000,

@@ -28,6 +28,7 @@
 #include "seastarx.hh"
 #include <seastar/core/sleep.hh>
 #include <seastar/core/seastar.hh>
+#include "utils/div_ceil.hh"
 
 namespace db {
 namespace hints {
@@ -51,8 +52,15 @@ future<bool> is_mountpoint(const fs::path& path) {
 }
 
 future<semaphore_units<named_semaphore::exception_factory>> resource_manager::get_send_units_for(size_t buf_size) {
+    // In order to impose a limit on the number of hints being sent concurrently,
+    // require each hint to reserve at least 1/(max concurrency) of the shard budget
+    const size_t per_node_concurrency_limit = _max_hints_send_queue_length();
+    const size_t per_shard_concurrency_limit = (per_node_concurrency_limit > 0)
+            ? div_ceil(per_node_concurrency_limit, smp::count)
+            : default_per_shard_concurrency_limit;
+    const size_t min_send_hint_budget = _max_send_in_flight_memory / per_shard_concurrency_limit;
     // Let's approximate the memory size the mutation is going to consume by the size of its serialized form
-    size_t hint_memory_budget = std::max(_min_send_hint_budget, buf_size);
+    size_t hint_memory_budget = std::max(min_send_hint_budget, buf_size);
     // Allow a very big mutation to be sent out by consuming the whole shard budget
     hint_memory_budget = std::min(hint_memory_budget, _max_send_in_flight_memory);
     resource_manager_logger.trace("memory budget: need {} have {}", hint_memory_budget, _send_limiter.available_units());
