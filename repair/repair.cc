@@ -1868,7 +1868,12 @@ future<> replace_with_repair(seastar::sharded<database>& db, seastar::sharded<ne
 static future<> init_messaging_service_handler(sharded<database>& db, sharded<netw::messaging_service>& messaging, sharded<service::migration_manager>& mm) {
     _messaging = &messaging;
     _migration_manager = &mm;
-    return messaging.invoke_on_all([&db] (auto& ms) {
+    return make_ready_future<>();
+}
+
+future<> repair_service::init_ms_handlers() {
+    auto& ms = this->_messaging;
+
         ms.register_node_ops_cmd([] (const rpc::client_info& cinfo, node_ops_cmd_request req) {
             auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
             auto coordinator = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
@@ -1876,13 +1881,18 @@ static future<> init_messaging_service_handler(sharded<database>& db, sharded<ne
                 return service::get_local_storage_service().node_ops_cmd_handler(coordinator, std::move(req));
             });
         });
-    });
+
+    return make_ready_future<>();
 }
 
 static future<> uninit_messaging_service_handler() {
-    return _messaging->invoke_on_all([] (auto& ms) {
+    return make_ready_future<>();
+}
+
+future<> repair_service::uninit_ms_handlers() {
+    auto& ms = this->_messaging;
+
         return when_all_succeed(ms.unregister_node_ops_cmd()).discard_result();
-    });
 }
 
 future<> repair_init_messaging_service_handler(

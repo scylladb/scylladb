@@ -2304,7 +2304,12 @@ future<> row_level_repair_init_messaging_service_handler(distributed<db::system_
     _view_update_generator = &view_update_generator;
     _messaging = &ms;
     _migration_manager = &mm;
-    return ms.invoke_on_all([] (auto& ms) {
+    return make_ready_future<>();
+}
+
+future<> repair_service::init_row_level_ms_handlers() {
+    auto& ms = this->_messaging;
+
         ms.register_repair_get_row_diff_with_rpc_stream([&ms] (const rpc::client_info& cinfo, uint64_t repair_meta_id, rpc::source<repair_hash_with_cmd> source) {
             auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
             auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
@@ -2462,11 +2467,17 @@ future<> row_level_repair_init_messaging_service_handler(distributed<db::system_
         ms.register_repair_get_diff_algorithms([] (const rpc::client_info& cinfo) {
             return make_ready_future<std::vector<row_level_diff_detect_algorithm>>(suportted_diff_detect_algorithms());
         });
-    });
+
+    return make_ready_future<>();
 }
 
 future<> row_level_repair_uninit_messaging_service_handler() {
-    return _messaging->invoke_on_all([] (auto& ms) {
+    return make_ready_future<>();
+}
+
+future<> repair_service::uninit_row_level_ms_handlers() {
+    auto& ms = this->_messaging;
+
         return when_all_succeed(
             ms.unregister_repair_get_row_diff_with_rpc_stream(),
             ms.unregister_repair_put_row_diff_with_rpc_stream(),
@@ -2481,7 +2492,6 @@ future<> row_level_repair_uninit_messaging_service_handler() {
             ms.unregister_repair_get_estimated_partitions(),
             ms.unregister_repair_set_estimated_partitions(),
             ms.unregister_repair_get_diff_algorithms()).discard_result();
-    });
 }
 
 class repair_meta_tracker {
@@ -3002,10 +3012,18 @@ repair_service::repair_service(distributed<gms::gossiper>& gossiper,
 }
 
 future<> repair_service::start() {
-    return make_ready_future<>();
+    return when_all_succeed(
+            init_ms_handlers(),
+            init_row_level_ms_handlers()
+    ).discard_result();
 }
 
 future<> repair_service::stop() {
+    return when_all_succeed(
+            uninit_ms_handlers(),
+            uninit_row_level_ms_handlers()
+    ).discard_result().then([this] {
+
     if (this_shard_id() != 0) {
         _stopped = true;
         return make_ready_future<>();
@@ -3013,6 +3031,8 @@ future<> repair_service::stop() {
 
     return _gossiper.local().unregister_(_gossip_helper).then([this] {
         _stopped = true;
+    });
+
     });
 }
 
