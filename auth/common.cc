@@ -45,15 +45,13 @@ static logging::logger auth_log("auth");
 // Func must support being invoked more than once.
 future<> do_after_system_ready(seastar::abort_source& as, seastar::noncopyable_function<future<>()> func) {
     struct empty_state { };
-    return delay_until_system_ready(as).then([&as, func = std::move(func)] () mutable {
-        return exponential_backoff_retry::do_until_value(1s, 1min, as, [func = std::move(func)] {
-            return func().then_wrapped([] (auto&& f) -> std::optional<empty_state> {
-                if (f.failed()) {
-                    auth_log.debug("Auth task failed with error, rescheduling: {}", f.get_exception());
-                    return { };
-                }
-                return { empty_state() };
-            });
+    return exponential_backoff_retry::do_until_value(1s, 1min, as, [func = std::move(func)] {
+        return func().then_wrapped([] (auto&& f) -> std::optional<empty_state> {
+            if (f.failed()) {
+                auth_log.debug("Auth task failed with error, rescheduling: {}", f.get_exception());
+                return { };
+            }
+            return { empty_state() };
         });
     }).discard_result();
 }
