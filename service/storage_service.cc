@@ -83,6 +83,7 @@
 #include "cdc/generation.hh"
 #include "cdc/generation_service.hh"
 #include "repair/repair.hh"
+#include "repair/row_level.hh"
 #include "service/priority_manager.hh"
 #include "utils/generation-number.hh"
 #include <seastar/core/coroutine.hh>
@@ -2093,7 +2094,7 @@ void storage_service::run_bootstrap_ops() {
         });
 
         // Step 5: Sync data for bootstrap
-        bootstrap_with_repair(_db, _messaging, get_token_metadata_ptr(), _bootstrap_tokens).get();
+        _repair.local().bootstrap_with_repair(get_token_metadata_ptr(), _bootstrap_tokens).get();
 
         // Step 6: Finish
         req.cmd = node_ops_cmd::bootstrap_done;
@@ -2233,7 +2234,7 @@ void storage_service::run_replace_ops() {
 
 
         // Step 7: Sync data for replace
-        replace_with_repair(_db, _messaging, get_token_metadata_ptr(), _bootstrap_tokens).get();
+        _repair.local().replace_with_repair(get_token_metadata_ptr(), _bootstrap_tokens).get();
 
 
         // Step 8: Finish
@@ -2482,7 +2483,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
                 auto ops = it->second.get_ops_info();
                 for (auto& node : req.leaving_nodes) {
                     slogger.info("removenode[{}]: Started to sync data for removing node={}, coordinator={}", req.ops_uuid, node, coordinator);
-                    removenode_with_repair(ss._db, ss._messaging, ss.get_token_metadata_ptr(), node, ops).get();
+                    ss._repair.local().removenode_with_repair(ss.get_token_metadata_ptr(), node, ops).get();
                 }
             } else if (req.cmd == node_ops_cmd::removenode_abort) {
                 ss.node_ops_abort(ops_uuid);
@@ -2713,7 +2714,7 @@ future<> storage_service::rebuild(sstring source_dc) {
         slogger.info("rebuild from dc: {}", source_dc == "" ? "(any dc)" : source_dc);
         auto tmptr = ss.get_token_metadata_ptr();
         if (ss.is_repair_based_node_ops_enabled()) {
-            return rebuild_with_repair(ss._db, ss._messaging, tmptr, std::move(source_dc));
+            return ss._repair.local().rebuild_with_repair(tmptr, std::move(source_dc));
         } else {
             auto streamer = make_lw_shared<dht::range_streamer>(ss._db, tmptr, ss._abort_source,
                     ss.get_broadcast_address(), "Rebuild", streaming::stream_reason::rebuild);
@@ -2827,7 +2828,7 @@ std::unordered_multimap<dht::token_range, inet_address> storage_service::get_cha
 void storage_service::unbootstrap() {
     db::get_local_batchlog_manager().do_batch_log_replay().get();
     if (is_repair_based_node_ops_enabled()) {
-        decommission_with_repair(_db, _messaging, get_token_metadata_ptr()).get();
+        _repair.local().decommission_with_repair(get_token_metadata_ptr()).get();
     } else {
         std::unordered_map<sstring, std::unordered_multimap<dht::token_range, inet_address>> ranges_to_stream;
 
@@ -2871,7 +2872,7 @@ future<> storage_service::restore_replica_count(inet_address endpoint, inet_addr
     if (is_repair_based_node_ops_enabled()) {
         auto ops_uuid = utils::make_random_uuid();
         auto ops = seastar::make_shared<node_ops_info>(node_ops_info{ops_uuid, false, std::list<gms::inet_address>()});
-        return removenode_with_repair(_db, _messaging, get_token_metadata_ptr(), endpoint, ops).finally([this, notify_endpoint] () {
+        return _repair.local().removenode_with_repair(get_token_metadata_ptr(), endpoint, ops).finally([this, notify_endpoint] () {
             return send_replication_notification(notify_endpoint);
         });
     }

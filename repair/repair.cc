@@ -1398,7 +1398,10 @@ static future<> do_sync_data_using_repair(seastar::sharded<database>& db,
     });
 }
 
-future<> bootstrap_with_repair(seastar::sharded<database>& db, seastar::sharded<netw::messaging_service>& ms, locator::token_metadata_ptr tmptr, std::unordered_set<dht::token> bootstrap_tokens) {
+future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr, std::unordered_set<dht::token> bootstrap_tokens) {
+    seastar::sharded<database>& db = get_db();
+    seastar::sharded<netw::messaging_service>& ms = get_messaging().container();
+
     using inet_address = gms::inet_address;
     return seastar::async([&db, &ms, tmptr = std::move(tmptr), tokens = std::move(bootstrap_tokens)] () mutable {
         auto keyspaces = db.local().get_non_system_keyspaces();
@@ -1569,7 +1572,10 @@ future<> bootstrap_with_repair(seastar::sharded<database>& db, seastar::sharded<
     });
 }
 
-static future<> do_decommission_removenode_with_repair(seastar::sharded<database>& db, seastar::sharded<netw::messaging_service>& ms, locator::token_metadata_ptr tmptr, gms::inet_address leaving_node, shared_ptr<node_ops_info> ops) {
+future<> repair_service::do_decommission_removenode_with_repair(locator::token_metadata_ptr tmptr, gms::inet_address leaving_node, shared_ptr<node_ops_info> ops) {
+    seastar::sharded<database>& db = get_db();
+    seastar::sharded<netw::messaging_service>& ms = get_messaging().container();
+
     using inet_address = gms::inet_address;
     return seastar::async([&db, &ms, tmptr = std::move(tmptr), leaving_node = std::move(leaving_node), ops] () mutable {
         auto myip = utils::fb_utilities::get_broadcast_address();
@@ -1763,13 +1769,14 @@ static future<> do_decommission_removenode_with_repair(seastar::sharded<database
     });
 }
 
-future<> decommission_with_repair(seastar::sharded<database>& db, seastar::sharded<netw::messaging_service>& ms, locator::token_metadata_ptr tmptr) {
-    return do_decommission_removenode_with_repair(db, ms, std::move(tmptr), utils::fb_utilities::get_broadcast_address(), {});
+future<> repair_service::decommission_with_repair(locator::token_metadata_ptr tmptr) {
+    return do_decommission_removenode_with_repair(std::move(tmptr), utils::fb_utilities::get_broadcast_address(), {});
 }
 
-future<> removenode_with_repair(seastar::sharded<database>& db, seastar::sharded<netw::messaging_service>& ms, locator::token_metadata_ptr tmptr, gms::inet_address leaving_node, shared_ptr<node_ops_info> ops) {
-    return do_decommission_removenode_with_repair(db, ms, std::move(tmptr), std::move(leaving_node), std::move(ops)).then([&db] {
+future<> repair_service::removenode_with_repair(locator::token_metadata_ptr tmptr, gms::inet_address leaving_node, shared_ptr<node_ops_info> ops) {
+    return do_decommission_removenode_with_repair(std::move(tmptr), std::move(leaving_node), std::move(ops)).then([this] {
         rlogger.debug("Triggering off-strategy compaction for all non-system tables on removenode completion");
+        seastar::sharded<database>& db = get_db();
         return db.invoke_on_all([](database &db) {
             for (auto& table : db.get_non_system_column_families()) {
                 table->trigger_offstrategy_compaction();
@@ -1784,7 +1791,10 @@ future<> abort_repair_node_ops(utils::UUID ops_uuid) {
     });
 }
 
-static future<> do_rebuild_replace_with_repair(seastar::sharded<database>& db, seastar::sharded<netw::messaging_service>& ms, locator::token_metadata_ptr tmptr, sstring op, sstring source_dc, streaming::stream_reason reason) {
+future<> repair_service::do_rebuild_replace_with_repair(locator::token_metadata_ptr tmptr, sstring op, sstring source_dc, streaming::stream_reason reason) {
+    seastar::sharded<database>& db = get_db();
+    seastar::sharded<netw::messaging_service>& ms = get_messaging().container();
+
     return seastar::async([&db, &ms, tmptr = std::move(tmptr), source_dc = std::move(source_dc), op = std::move(op), reason] () mutable {
         auto keyspaces = db.local().get_non_system_keyspaces();
         auto myip = utils::fb_utilities::get_broadcast_address();
@@ -1863,16 +1873,16 @@ static future<> do_rebuild_replace_with_repair(seastar::sharded<database>& db, s
     });
 }
 
-future<> rebuild_with_repair(seastar::sharded<database>& db, seastar::sharded<netw::messaging_service>& ms, locator::token_metadata_ptr tmptr, sstring source_dc) {
+future<> repair_service::rebuild_with_repair(locator::token_metadata_ptr tmptr, sstring source_dc) {
     auto op = sstring("rebuild_with_repair");
     if (source_dc.empty()) {
         source_dc = get_local_dc();
     }
     auto reason = streaming::stream_reason::rebuild;
-    return do_rebuild_replace_with_repair(db, ms, std::move(tmptr), std::move(op), std::move(source_dc), reason);
+    return do_rebuild_replace_with_repair(std::move(tmptr), std::move(op), std::move(source_dc), reason);
 }
 
-future<> replace_with_repair(seastar::sharded<database>& db, seastar::sharded<netw::messaging_service>& ms, locator::token_metadata_ptr tmptr, std::unordered_set<dht::token> replacing_tokens) {
+future<> repair_service::replace_with_repair(locator::token_metadata_ptr tmptr, std::unordered_set<dht::token> replacing_tokens) {
     auto cloned_tm = co_await tmptr->clone_async();
     auto op = sstring("replace_with_repair");
     auto source_dc = get_local_dc();
@@ -1881,7 +1891,7 @@ future<> replace_with_repair(seastar::sharded<database>& db, seastar::sharded<ne
     // no need to set the original version
     auto cloned_tmptr = make_token_metadata_ptr(std::move(cloned_tm));
     co_await cloned_tmptr->update_normal_tokens(replacing_tokens, utils::fb_utilities::get_broadcast_address());
-    co_return co_await do_rebuild_replace_with_repair(db, ms, std::move(cloned_tmptr), std::move(op), std::move(source_dc), reason);
+    co_return co_await do_rebuild_replace_with_repair(std::move(cloned_tmptr), std::move(op), std::move(source_dc), reason);
 }
 
 static future<> init_messaging_service_handler(sharded<database>& db, sharded<netw::messaging_service>& messaging, sharded<service::migration_manager>& mm) {

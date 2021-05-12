@@ -72,6 +72,16 @@ public:
 
     int do_repair_start(sstring keyspace, std::unordered_map<sstring, sstring> options_map);
 
+    // The tokens are the tokens assigned to the bootstrap node.
+    future<> bootstrap_with_repair(locator::token_metadata_ptr tmptr, std::unordered_set<dht::token> bootstrap_tokens);
+    future<> decommission_with_repair(locator::token_metadata_ptr tmptr);
+    future<> removenode_with_repair(locator::token_metadata_ptr tmptr, gms::inet_address leaving_node, shared_ptr<node_ops_info> ops);
+    future<> rebuild_with_repair(locator::token_metadata_ptr tmptr, sstring source_dc);
+    future<> replace_with_repair(locator::token_metadata_ptr tmptr, std::unordered_set<dht::token> replacing_tokens);
+private:
+    future<> do_decommission_removenode_with_repair(locator::token_metadata_ptr tmptr, gms::inet_address leaving_node, shared_ptr<node_ops_info> ops);
+    future<> do_rebuild_replace_with_repair(locator::token_metadata_ptr tmptr, sstring op, sstring source_dc, streaming::stream_reason reason);
+
 public:
     netw::messaging_service& get_messaging() noexcept { return _messaging; }
     sharded<database>& get_db() noexcept { return _db; }
