@@ -107,7 +107,7 @@ future<> abort_repair_node_ops(utils::UUID ops_uuid);
 // repair_get_status(). The returned future<int> becomes available quickly,
 // as soon as repair_get_status() can be used - it doesn't wait for the
 // repair to complete.
-future<int> repair_start(seastar::sharded<database>& db, seastar::sharded<netw::messaging_service>& ms,
+future<int> repair_start(seastar::sharded<repair_service>& repair,
         sstring keyspace, std::unordered_map<sstring, sstring> options);
 
 // TODO: Have repair_progress contains a percentage progress estimator

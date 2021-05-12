@@ -1278,9 +1278,11 @@ static int do_repair_start(seastar::sharded<database>& db, seastar::sharded<netw
     return id.id;
 }
 
-future<int> repair_start(seastar::sharded<database>& db, seastar::sharded<netw::messaging_service>& ms,
+future<int> repair_start(seastar::sharded<repair_service>& repair,
         sstring keyspace, std::unordered_map<sstring, sstring> options) {
-    return db.invoke_on(0, [&db, &ms, keyspace = std::move(keyspace), options = std::move(options)] (database& localdb) {
+    return repair.invoke_on(0, [keyspace = std::move(keyspace), options = std::move(options)] (repair_service& local_repair) {
+        seastar::sharded<database>& db = local_repair.get_db();
+        seastar::sharded<netw::messaging_service>& ms = local_repair.get_messaging().container();
         return do_repair_start(db, ms, std::move(keyspace), std::move(options));
     });
 }

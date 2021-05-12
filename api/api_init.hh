@@ -29,6 +29,7 @@ namespace cql_transport { class controller; }
 class thrift_controller;
 namespace db { class snapshot_ctl; }
 namespace netw { class messaging_service; }
+class repair_service;
 
 namespace api {
 
@@ -54,7 +55,7 @@ future<> set_server_init(http_context& ctx);
 future<> set_server_config(http_context& ctx);
 future<> set_server_snitch(http_context& ctx);
 future<> set_server_storage_service(http_context& ctx);
-future<> set_server_repair(http_context& ctx, sharded<netw::messaging_service>& ms);
+future<> set_server_repair(http_context& ctx, sharded<repair_service>& repair);
 future<> unset_server_repair(http_context& ctx);
 future<> set_transport_controller(http_context& ctx, cql_transport::controller& ctl);
 future<> unset_transport_controller(http_context& ctx);
