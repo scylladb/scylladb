@@ -1297,7 +1297,6 @@ future<> sstable::open_data() noexcept {
         }
         auto* sm = _components->scylla_metadata->data.get<scylla_metadata_type::Sharding, sharding_metadata>();
         if (!sm) {
-            _open = true;
             return make_ready_future<>();
         }
         auto c = &sm->token_ranges.elements;
@@ -1307,7 +1306,6 @@ future<> sstable::open_data() noexcept {
             return make_ready_future<>();
         }).then([this, c] () mutable {
             *c = {};
-            _open = true;
             return make_ready_future<>();
         });
     }).then([this] {
@@ -1319,6 +1317,9 @@ future<> sstable::open_data() noexcept {
         if (origin) {
             _origin = sstring(to_sstring_view(bytes_view(origin->value)));
         }
+    }).then([this] {
+        _open_mode.emplace(open_flags::ro);
+        _stats.on_open_for_reading();
     });
 }
 
@@ -1370,7 +1371,10 @@ future<> sstable::create_data() noexcept {
     file_open_options opt;
     opt.extent_allocation_size_hint = 32 << 20;
     opt.sloppy_size = true;
-    return open_or_create_data(oflags, std::move(opt));
+    return open_or_create_data(oflags, std::move(opt)).then([this, oflags] {
+        _open_mode.emplace(oflags);
+        _stats.on_open_for_writing();
+    });
 }
 
 future<> sstable::read_filter(const io_priority_class& pc) {
@@ -2349,7 +2353,16 @@ future<> sstable::close_files() {
 
     _on_closed(*this);
 
-    return when_all_succeed(std::move(index_closed), std::move(data_closed), std::move(unlinked)).discard_result();
+    return when_all_succeed(std::move(index_closed), std::move(data_closed), std::move(unlinked)).discard_result().then([this] {
+        if (_open_mode) {
+            if (_open_mode.value() == open_flags::ro) {
+                _stats.on_close_for_reading();
+            } else {
+                _stats.on_close_for_writing();
+            }
+        }
+        _open_mode.reset();
+    });
 }
 
 static inline sstring dirname(const sstring& fname) {
@@ -2690,6 +2703,7 @@ sstable::unlink() noexcept {
     }
 
     co_await std::move(remove_fut);
+    _stats.on_delete();
 }
 
 future<>
@@ -2871,6 +2885,26 @@ future<> init_metrics() {
             sm::description("Was local deletion time capped at maximum allowed value in Statistics")),
         sm::make_counter("capped_tombstone_deletion_time", [] { return sstables_stats::get_shard_stats().capped_tombstone_deletion_time; },
             sm::description("Was partition tombstone deletion time capped at maximum allowed value")),
+
+        sm::make_derive("total_open_for_reading", [] { return sstables_stats::get_shard_stats().open_for_reading; },
+            sm::description("Counter of sstables open for reading")),
+        sm::make_derive("total_open_for_writing", [] { return sstables_stats::get_shard_stats().open_for_writing; },
+            sm::description("Counter of sstables open for writing")),
+
+        sm::make_gauge("currently_open_for_reading", [] {
+            return sstables_stats::get_shard_stats().open_for_reading -
+                   sstables_stats::get_shard_stats().closed_for_reading;
+        }, sm::description("Number of sstables currently open for reading")),
+        sm::make_gauge("currently_open_for_writing", [] {
+            return sstables_stats::get_shard_stats().open_for_writing -
+                   sstables_stats::get_shard_stats().closed_for_writing;
+        }, sm::description("Number of sstables currently open for writing")),
+
+        sm::make_derive("total_deleted", [] { return sstables_stats::get_shard_stats().deleted; },
+            sm::description("Counter of deleted sstables")),
+
+        sm::make_gauge("bloom_filter_memory_size", [] { return utils::filter::bloom_filter::get_shard_stats().memory_size; },
+            sm::description("Bloom filter memory usage in bytes.")),
     });
   });
 }

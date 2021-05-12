@@ -53,6 +53,8 @@
 namespace utils {
 namespace filter {
 
+thread_local bloom_filter::stats bloom_filter::_shard_stats;
+
 template<typename Func>
 void for_each_index(hashed_key hk, int count, int64_t max, filter_format format, Func&& func) {
     auto h = hk.hash();
@@ -64,6 +66,18 @@ void for_each_index(hashed_key hk, int count, int64_t max, filter_format format,
         }
         base = static_cast<int64_t>(static_cast<uint64_t>(base) + static_cast<uint64_t>(inc));
     }
+}
+
+bloom_filter::bloom_filter(int hashes, bitmap&& bs, filter_format format) noexcept
+    : _bitset(std::move(bs))
+    , _hash_count(hashes)
+    , _format(format)
+{
+    _stats.memory_size += memory_size();
+}
+
+bloom_filter::~bloom_filter() noexcept {
+    _stats.memory_size -= memory_size();
 }
 
 bool bloom_filter::is_present(hashed_key key) {
