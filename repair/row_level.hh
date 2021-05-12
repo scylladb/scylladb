@@ -42,7 +42,7 @@ namespace gms {
     class gossiper;
 }
 
-class repair_service {
+class repair_service : public seastar::peering_sharded_service<repair_service> {
     distributed<gms::gossiper>& _gossiper;
     shared_ptr<row_level_repair_gossip_helper> _gossip_helper;
     std::unique_ptr<tracker> _tracker;

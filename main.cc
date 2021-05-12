@@ -493,6 +493,7 @@ int main(int ac, char** av) {
     sharded<semaphore> sst_dir_semaphore;
     sharded<raft_services> raft_srvs;
     sharded<service::memory_limiter> service_memory_limiter;
+    sharded<repair_service> repair;
 
     return app.run(ac, av, [&] () -> future<int> {
 
@@ -521,7 +522,8 @@ int main(int ac, char** av) {
 
         return seastar::async([cfg, ext, &db, &qp, &proxy, &mm, &mm_notifier, &ctx, &opts, &dirs,
                 &prometheus_server, &cf_cache_hitrate_calculator, &load_meter, &feature_service,
-                &token_metadata, &snapshot_ctl, &messaging, &sst_dir_semaphore, &raft_srvs, &service_memory_limiter] {
+                &token_metadata, &snapshot_ctl, &messaging, &sst_dir_semaphore, &raft_srvs, &service_memory_limiter,
+                &repair] {
           try {
             // disable reactor stall detection during startup
             auto blocked_reactor_notify_ms = engine().get_blocked_reactor_notify_ms();
@@ -1115,9 +1117,9 @@ int main(int ac, char** av) {
 
             supervisor::notify("starting messaging service");
             auto max_memory_repair = db.local().get_available_memory() * 0.1;
-            repair_service rs(gossiper, max_memory_repair);
-            auto stop_repair_service = defer_verbose_shutdown("repair service", [&rs] {
-                rs.stop().get();
+            repair.start(std::ref(gossiper), max_memory_repair).get();
+            auto stop_repair_service = defer_verbose_shutdown("repair service", [&repair] {
+                repair.stop().get();
             });
             repair_init_messaging_service_handler(sys_dist_ks, view_update_generator, db, messaging, mm).get();
             auto stop_repair_messages = defer_verbose_shutdown("repair message handlers", [] {
