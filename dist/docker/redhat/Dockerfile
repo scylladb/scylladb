@@ -6,7 +6,7 @@ ENV container docker
 
 # The SCYLLA_REPO_URL argument specifies the URL to the RPM repository this Docker image uses to install Scylla. The default value is the Scylla's unstable RPM repository, which contains the daily build.
 ARG SCYLLA_REPO_URL=downloads.scylladb.com/unstable/scylla/branch-4.5/rpm/centos/latest/
-ARG VERSION=4.5.rc1
+ARG VERSION=4.5.rc2
 
 ADD scylla_bashrc /scylla_bashrc
 
