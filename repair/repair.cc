@@ -1874,13 +1874,13 @@ static future<> init_messaging_service_handler(sharded<database>& db, sharded<ne
 future<> repair_service::init_ms_handlers() {
     auto& ms = this->_messaging;
 
-        ms.register_node_ops_cmd([] (const rpc::client_info& cinfo, node_ops_cmd_request req) {
-            auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
-            auto coordinator = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
-            return smp::submit_to(src_cpu_id % smp::count, [coordinator, req = std::move(req)] () mutable {
-                return service::get_local_storage_service().node_ops_cmd_handler(coordinator, std::move(req));
-            });
+    ms.register_node_ops_cmd([] (const rpc::client_info& cinfo, node_ops_cmd_request req) {
+        auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
+        auto coordinator = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
+        return smp::submit_to(src_cpu_id % smp::count, [coordinator, req = std::move(req)] () mutable {
+            return service::get_local_storage_service().node_ops_cmd_handler(coordinator, std::move(req));
         });
+    });
 
     return make_ready_future<>();
 }
@@ -1892,7 +1892,7 @@ static future<> uninit_messaging_service_handler() {
 future<> repair_service::uninit_ms_handlers() {
     auto& ms = this->_messaging;
 
-        return when_all_succeed(ms.unregister_node_ops_cmd()).discard_result();
+    return when_all_succeed(ms.unregister_node_ops_cmd()).discard_result();
 }
 
 future<> repair_init_messaging_service_handler(
