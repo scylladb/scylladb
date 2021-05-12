@@ -70,10 +70,6 @@ future<> once_among_shards(Task&& f) {
     return make_ready_future<>();
 }
 
-inline future<> delay_until_system_ready(seastar::abort_source& as) {
-    return sleep_abortable(15s, as);
-}
-
 // Func must support being invoked more than once.
 future<> do_after_system_ready(seastar::abort_source& as, seastar::noncopyable_function<future<>()> func);
 
