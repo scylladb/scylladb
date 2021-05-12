@@ -166,6 +166,13 @@ public:
         start_kind = new_start.kind();
     }
 
+    // Assumes !pos.is_clustering_row(), because range_tombstone bounds can't represent such positions
+    void set_end(const schema& s, position_in_partition_view pos) {
+        bound_view new_end = pos.as_end_bound_view();
+        end = new_end.prefix();
+        end_kind = new_end.kind();
+    }
+
     size_t external_memory_usage(const schema&) const {
         return start.external_memory_usage() + end.external_memory_usage();
     }

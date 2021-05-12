@@ -73,10 +73,14 @@ void range_tombstone_accumulator::drop_unneeded_tombstones(const clustering_key_
         auto bv = rt.end_bound();
         return _cmp(bv.prefix(), weight(bv.kind()), ck, w);
     };
+    bool dropped = false;
     while (!_range_tombstones.empty() && cmp(*_range_tombstones.begin(), ck, w)) {
+        dropped = true;
         _range_tombstones.pop_front();
     }
-    update_current_tombstone();
+    if (dropped) {
+        update_current_tombstone();
+    }
 }
 
 void range_tombstone_accumulator::apply(range_tombstone rt) {
