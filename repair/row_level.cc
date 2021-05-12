@@ -2990,6 +2990,10 @@ repair_service::repair_service(distributed<gms::gossiper>& gossiper, size_t max_
     }
 }
 
+future<> repair_service::start() {
+    return make_ready_future<>();
+}
+
 future<> repair_service::stop() {
     if (this_shard_id() != 0) {
         _stopped = true;

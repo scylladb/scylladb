@@ -51,6 +51,7 @@ class repair_service : public seastar::peering_sharded_service<repair_service> {
 public:
     repair_service(distributed<gms::gossiper>& gossiper, size_t max_repair_memory);
     ~repair_service();
+    future<> start();
     future<> stop();
 };
 

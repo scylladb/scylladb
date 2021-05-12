@@ -1121,6 +1121,7 @@ int main(int ac, char** av) {
             auto stop_repair_service = defer_verbose_shutdown("repair service", [&repair] {
                 repair.stop().get();
             });
+            repair.invoke_on_all(&repair_service::start).get();
             repair_init_messaging_service_handler(sys_dist_ks, view_update_generator, db, messaging, mm).get();
             auto stop_repair_messages = defer_verbose_shutdown("repair message handlers", [] {
                 repair_uninit_messaging_service_handler().get();
