@@ -858,7 +858,7 @@ int main(int ac, char** av) {
             supervisor::notify("initializing storage service");
             service::storage_service_config sscfg;
             sscfg.available_memory = memory::stats().total_memory();
-            service::init_storage_service(stop_signal.as_sharded_abort_source(), db, gossiper, sys_dist_ks, view_update_generator, feature_service, sscfg, mm, token_metadata, messaging, cdc_generation_service).get();
+            service::init_storage_service(stop_signal.as_sharded_abort_source(), db, gossiper, sys_dist_ks, view_update_generator, feature_service, sscfg, mm, token_metadata, messaging, cdc_generation_service, repair).get();
             supervisor::notify("starting per-shard database core");
 
             sst_dir_semaphore.start(cfg->initial_sstable_loading_concurrency()).get();
@@ -1115,6 +1115,9 @@ int main(int ac, char** av) {
                 }).get();
             });
 
+            // ATTN -- sharded repair reference already sits on storage_service and if
+            // it calls repair.local() before this place it'll crash (now it doesn't do
+            // both)
             supervisor::notify("starting messaging service");
             auto max_memory_repair = db.local().get_available_memory() * 0.1;
             repair.start(std::ref(gossiper), std::ref(messaging), std::ref(db), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(mm), max_memory_repair).get();
