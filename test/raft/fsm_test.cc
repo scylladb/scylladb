@@ -259,11 +259,11 @@ BOOST_AUTO_TEST_CASE(test_log_last_conf_idx) {
     BOOST_CHECK_EQUAL(log.last_conf_idx(), log.get_snapshot().idx);
     // log::last_term() is maintained correctly by truncate_head/truncate_tail() (snapshotting)
     BOOST_CHECK_EQUAL(log.last_term(), log.get_snapshot().term);
-    BOOST_CHECK(log.term_for(log.get_snapshot().idx).has_value());
+    BOOST_CHECK(log.term_for(log.get_snapshot().idx));
     BOOST_CHECK_EQUAL(log.term_for(log.get_snapshot().idx).value(), log.get_snapshot().term);
-    BOOST_CHECK(! log.term_for(log.last_idx() - index_t{1}).has_value());
+    BOOST_CHECK(! log.term_for(log.last_idx() - index_t{1}));
     add_entry(log, log_entry::dummy{});
-    BOOST_CHECK(log.term_for(log.last_idx()).has_value());
+    BOOST_CHECK(log.term_for(log.last_idx()));
     add_entry(log, log_entry::dummy{});
     const size_t GAP = 10;
     // apply_snapshot with a log gap, this should clear all log

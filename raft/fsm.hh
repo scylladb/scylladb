@@ -42,10 +42,10 @@ struct fsm_output {
 
     // True if there is no new output
     bool empty() const {
-        return !term_and_vote.has_value() &&
+        return !term_and_vote &&
             log_entries.size() == 0 && messages.size() == 0 &&
-            committed.size() == 0 && !snp.has_value() &&
-            !rpc_configuration.has_value();
+            committed.size() == 0 && !snp &&
+            !rpc_configuration;
     }
 };
 

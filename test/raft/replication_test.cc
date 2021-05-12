@@ -260,7 +260,7 @@ struct connected {
             auto other_id = to_raft_id(other);
             // Disconnect if not the same, and the other id is not an exception
             // disconnect(0, except=1)
-            if (id != other_id && !(except.has_value() && other_id == *except)) {
+            if (id != other_id && !(except && other_id == *except)) {
                 cut(id, other_id);
             }
         }
