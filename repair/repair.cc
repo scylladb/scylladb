@@ -1232,7 +1232,7 @@ int repair_service::do_repair_start(sstring keyspace, std::unordered_map<sstring
     }
 
     // Do it in the background.
-    (void)repair_tracker().run(id, [&db, &ms, id, keyspace = std::move(keyspace),
+    (void)repair_tracker().run(id, [this, &db, &ms, id, keyspace = std::move(keyspace),
             cfs = std::move(cfs), ranges = std::move(ranges), options = std::move(options), ignore_nodes = std::move(ignore_nodes)] () mutable {
 
         if (db.local().get_config().wait_for_hint_replay_before_repair()) {
@@ -1248,8 +1248,8 @@ int repair_service::do_repair_start(sstring keyspace, std::unordered_map<sstring
         repair_results.reserve(smp::count);
         auto table_ids = get_table_ids(db.local(), keyspace, cfs);
         for (auto shard : boost::irange(unsigned(0), smp::count)) {
-            auto f = db.invoke_on(shard, [&db, &ms, keyspace, table_ids, id, ranges,
-                    data_centers = options.data_centers, hosts = options.hosts, ignore_nodes] (database& localdb) mutable {
+            auto f = container().invoke_on(shard, [&db, &ms, keyspace, table_ids, id, ranges,
+                    data_centers = options.data_centers, hosts = options.hosts, ignore_nodes] (repair_service& local_repair) mutable {
                 _node_ops_metrics.repair_total_ranges_sum += ranges.size();
                 auto ri = make_lw_shared<repair_info>(db, ms,
                         std::move(keyspace), std::move(ranges), std::move(table_ids),
@@ -1343,7 +1343,7 @@ future<> repair_service::do_sync_data_using_repair(
 
     repair_uniq_id id = repair_tracker().next_repair_command();
     rlogger.info("repair id {} to sync data for keyspace={}, status=started", id, keyspace);
-    return repair_tracker().run(id, [id, &db, &ms, keyspace, ranges = std::move(ranges), neighbors = std::move(neighbors), reason, ops_uuid] () mutable {
+    return repair_tracker().run(id, [this, id, &db, &ms, keyspace, ranges = std::move(ranges), neighbors = std::move(neighbors), reason, ops_uuid] () mutable {
         auto cfs = list_column_families(db.local(), keyspace);
         if (cfs.empty()) {
             rlogger.warn("repair id {} to sync data for keyspace={}, no table in this keyspace", id, keyspace);
@@ -1353,7 +1353,7 @@ future<> repair_service::do_sync_data_using_repair(
         std::vector<future<>> repair_results;
         repair_results.reserve(smp::count);
         for (auto shard : boost::irange(unsigned(0), smp::count)) {
-            auto f = db.invoke_on(shard, [&db, &ms, keyspace, table_ids, id, ranges, neighbors, reason, ops_uuid] (database& localdb) mutable {
+            auto f = container().invoke_on(shard, [&db, &ms, keyspace, table_ids, id, ranges, neighbors, reason, ops_uuid] (repair_service& local_repair) mutable {
                 auto data_centers = std::vector<sstring>();
                 auto hosts = std::vector<sstring>();
                 auto ignore_nodes = std::unordered_set<gms::inet_address>();
