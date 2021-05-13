@@ -608,6 +608,7 @@ repair_info::repair_info(repair_service& repair,
     std::optional<utils::UUID> ops_uuid)
     : db(repair.get_db())
     , messaging(repair.get_messaging().container())
+    , mm(repair.get_migration_manager())
     , sharder(get_sharder_for_tables(db, keyspace_, table_ids_))
     , keyspace(keyspace_)
     , ranges(ranges_)
@@ -763,7 +764,7 @@ future<> repair_info::repair_range(const dht::token_range& range) {
             ranges_index, ranges.size(), id, shard, keyspace, table_names(), range, neighbors, live_neighbors, status);
             return make_ready_future<>();
       }
-      return _migration_manager->local().sync_schema(db.local(), neighbors).then([this, &neighbors, range, id] {
+      return mm.sync_schema(db.local(), neighbors).then([this, &neighbors, range, id] {
         return do_for_each(table_ids.begin(), table_ids.end(), [this, &neighbors, range] (utils::UUID table_id) {
             sstring cf;
             try {

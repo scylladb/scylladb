@@ -184,6 +184,7 @@ class repair_info {
 public:
     seastar::sharded<database>& db;
     seastar::sharded<netw::messaging_service>& messaging;
+    service::migration_manager& mm;
     const dht::sharder& sharder;
     sstring keyspace;
     dht::token_range_vector ranges;
