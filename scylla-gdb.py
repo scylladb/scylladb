@@ -86,7 +86,7 @@ class intrusive_list:
         return self.__nonzero__()
 
     def __len__(self):
-        return len(list(self))
+        return len(list(iter(self)))
 
 
 class intrusive_slist:
@@ -333,6 +333,7 @@ class std_map:
         vt = container_type.template_argument(1)
         self.value_type = gdb.lookup_type('::std::pair<{} const, {} >'.format(str(kt), str(vt)))
         self.root = ref['_M_t']['_M_impl']['_M_header']['_M_parent']
+        self.size = int(ref['_M_t']['_M_impl']['_M_node_count'])
 
     def __visit(self, node):
         if node:
@@ -348,6 +349,9 @@ class std_map:
     def __iter__(self):
         for n in self.__visit(self.root):
             yield n
+
+    def __len__(self):
+        return self.size
 
 
 class intrusive_set_external_comparator:
@@ -734,6 +738,19 @@ class sstring_printer(gdb.printing.PrettyPrinter):
         return 'string'
 
 
+class string_view_printer(gdb.printing.PrettyPrinter):
+    'print an std::string_view'
+
+    def __init__(self, val):
+        self.val = val
+
+    def to_string(self):
+        return str(self.val['_M_str'])[0:int(self.val['_M_len'])]
+
+    def display_hint(self):
+        return 'string'
+
+
 class managed_bytes_printer(gdb.printing.PrettyPrinter):
     'print a managed_bytes'
 
@@ -913,6 +930,7 @@ class ring_position_printer(gdb.printing.PrettyPrinter):
 def build_pretty_printer():
     pp = gdb.printing.RegexpCollectionPrettyPrinter('scylla')
     pp.add_printer('sstring', r'^seastar::basic_sstring<char,.*>$', sstring_printer)
+    pp.add_printer('std::string_view', r'^std::basic_string_view<char,.*>$', string_view_printer)
     pp.add_printer('bytes', r'^seastar::basic_sstring<signed char, unsigned int, 31, false>$', sstring_printer)
     pp.add_printer('managed_bytes', r'^managed_bytes$', managed_bytes_printer)
     pp.add_printer('partition_entry', r'^partition_entry$', partition_entry_printer)
@@ -4155,6 +4173,124 @@ class scylla_schema(gdb.Command):
                     cdef['_is_counter']))
 
 
+class permit_stats:
+    def __init__(self, *args):
+        if len(args) == 2:
+            self.permits = 1
+            self.resource_count = args[0]
+            self.resource_memory = args[1]
+        elif len(args) == 0: # default constructor
+            self.permits = 0
+            self.resource_count = 0
+            self.resource_memory = 0
+        else:
+            raise TypeError("permit_stats.__init__(): expected 0 or 2 arguments, got {}".format(len(args)))
+
+    def add(self, o):
+        self.permits += o.permits
+        self.resource_count += o.resource_count
+        self.resource_memory += o.resource_memory
+
+
+class scylla_read_stats(gdb.Command):
+    """Summarize all active reads for the given semaphores.
+
+    The command accepts multiple semaphores as arguments to summarize reads
+    from. If no semaphores are provided, the command uses the semaphores
+    from the local database instance. Reads are discovered through the
+    reader_permit they own. A read is considered to be the group readers
+    that belong to the same permit. Semaphores, which have no associated
+    reads are omitted from the printout.
+
+    Example:
+    (gdb) scylla read-stats
+    Semaphore _read_concurrency_sem with: 1/100 count and 14334414/14302576 memory resources, queued: 0, inactive=1
+       permits count       memory table/description/state
+             1     1     14279738 multishard_mutation_query_test.fuzzy_test/fuzzy-test/active
+            16     0        53532 multishard_mutation_query_test.fuzzy_test/shard-reader/active
+             1     0         1144 multishard_mutation_query_test.fuzzy_test/shard-reader/inactive
+             1     0            0 *.*/view_builder/active
+             1     0            0 multishard_mutation_query_test.fuzzy_test/multishard-mutation-query/active
+            20     1     14334414 Total
+    """
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla read-stats', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
+
+    @staticmethod
+    def dump_reads_from_semaphore(semaphore):
+        try:
+            permit_list = semaphore['_permit_list']
+        except gdb.error:
+            gdb.write("Scylla version doesn't seem to have the permits linked yet, cannot list reads.")
+            raise
+
+        permit_list = std_unique_ptr(permit_list).get().dereference()['permits']
+
+        state_prefix_len = len('reader_permit::state::')
+
+        # (table, description, state) -> stats
+        permit_summaries = defaultdict(permit_stats)
+        total = permit_stats()
+
+        for permit in intrusive_list(permit_list):
+            schema = permit['_schema']
+            if schema:
+                raw_schema = schema.dereference()['_raw']
+                schema_name = "{}.{}".format(str(raw_schema['_ks_name']).replace('"', ''), str(raw_schema['_cf_name']).replace('"', ''))
+            else:
+                schema_name = "*.*"
+
+            description = str(permit['_op_name_view'])[1:-1]
+            state = str(permit['_state'])[state_prefix_len:]
+            summary = permit_stats(int(permit['_resources']['count']), int(permit['_resources']['memory']))
+
+            permit_summaries[(schema_name, description, state)].add(summary)
+            total.add(summary)
+
+        if not permit_summaries:
+            return
+
+        semaphore_name = str(semaphore['_name'])[1:-1]
+        initial_count = int(semaphore['_initial_resources']['count'])
+        initial_memory = int(semaphore['_initial_resources']['memory'])
+        if semaphore['_inactive_reads'].type.name.startswith('std::map'):
+            # 4.4 compatibility
+            inactive_read_count = len(std_map(semaphore['_inactive_reads']))
+        else:
+            inactive_read_count = len(intrusive_list(semaphore['_inactive_reads']))
+
+        gdb.write("Semaphore {} with: {}/{} count and {}/{} memory resources, queued: {}, inactive={}\n".format(
+                semaphore_name,
+                initial_count - int(semaphore['_resources']['count']), initial_count,
+                initial_memory - int(semaphore['_resources']['memory']), initial_memory,
+                int(semaphore['_wait_list']['_size']), inactive_read_count))
+
+        gdb.write("{:>10} {:5} {:>12} {}\n".format('permits', 'count', 'memory', 'table/description/state'))
+
+        permit_summaries_sorted = [(t, d, s, v) for (t, d, s), v in permit_summaries.items()]
+        permit_summaries_sorted.sort(key=lambda x: x[3].resource_memory, reverse=True)
+
+        for table, description, state, stats in permit_summaries_sorted:
+            gdb.write("{:10} {:5} {:12} {}/{}/{}\n".format(stats.permits, stats.resource_count, stats.resource_memory, table, description, state))
+
+        gdb.write("{:10} {:5} {:12} Total\n".format(total.permits, total.resource_count, total.resource_memory))
+
+    def invoke(self, args, from_tty):
+        if args:
+            semaphores = [gdb.parse_and_eval(arg) for arg in args.split(' ')]
+        else:
+            db = find_db()
+            semaphores = [db["_read_concurrency_sem"], db["_streaming_concurrency_sem"], db["_system_read_concurrency_sem"]]
+            try:
+                semaphores.append(db["_compaction_concurrency_sem"])
+            except gdb.error:
+                # 2020.1 compatibility
+                pass
+
+        for semaphore in semaphores:
+            scylla_read_stats.dump_reads_from_semaphore(semaphore)
+
+
 class scylla_gdb_func_dereference_smart_ptr(gdb.Function):
     """Dereference the pointer guarded by the smart pointer instance.
 
@@ -4465,6 +4601,7 @@ scylla_repairs()
 scylla_small_objects()
 scylla_compaction_tasks()
 scylla_schema()
+scylla_read_stats()
 
 
 # Convenience functions
