@@ -80,6 +80,11 @@ public:
     future<> truncate_log(raft::index_t idx) override;
     future<> abort() override;
 
+    // Persist initial configuration of a new Raft group.
+    // To be called before start for the new group.
+    // Uses a special snapshot id (0) to identify the snapshot
+    // descriptor.
+    future<> bootstrap(raft::configuration initial_configuation);
 private:
 
     future<> do_store_log_entries(const std::vector<raft::log_entry_ptr>& entries);

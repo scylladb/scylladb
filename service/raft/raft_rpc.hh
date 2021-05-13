@@ -28,6 +28,16 @@
 
 namespace service {
 
+inline gms::inet_address
+raft_addr_to_inet_addr(const raft::server_address& addr) {
+    return ser::deserialize_from_buffer(addr.info, boost::type<gms::inet_address>{});
+}
+
+inline bytes
+inet_addr_to_raft_addr(gms::inet_address addr) {
+    return ser::serialize_to_buffer<bytes>(addr);
+}
+
 // Scylla-specific implementation of raft RPC module.
 //
 // Uses `netw::messaging_service` as an underlying implementation for

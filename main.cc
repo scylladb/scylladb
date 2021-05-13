@@ -816,11 +816,20 @@ int main(int ac, char** av) {
             });
             gossiper.invoke_on_all(&gms::gossiper::start).get();
 
-            supervisor::notify("starting Raft service");
-            raft_gr.start(std::ref(messaging), std::ref(gossiper), std::ref(qp)).get();
+
+            raft_gr.start(cfg->check_experimental(db::experimental_features_t::RAFT),
+                std::ref(messaging), std::ref(gossiper)).get();
+            // XXX: stop_raft has to happen before query_processor
+            // is stopped, since some groups keep using the query
+            // processor until are stopped inside stop_raft.
             auto stop_raft = defer_verbose_shutdown("Raft", [&raft_gr] {
                 raft_gr.stop().get();
             });
+            if (cfg->check_experimental(db::experimental_features_t::RAFT)) {
+                supervisor::notify("starting Raft Group Registry service");
+            }
+            raft_gr.invoke_on_all(&service::raft_group_registry::start).get();
+
             supervisor::notify("initializing storage service");
             service::storage_service_config sscfg;
             sscfg.available_memory = memory::stats().total_memory();
@@ -1028,18 +1037,6 @@ int main(int ac, char** av) {
                 proxy.invoke_on_all(&service::storage_proxy::uninit_messaging_service).get();
             });
 
-            const bool raft_enabled = cfg->check_experimental(db::experimental_features_t::RAFT);
-            if (raft_enabled) {
-                supervisor::notify("starting Raft RPC");
-                raft_gr.invoke_on_all(&service::raft_group_registry::init).get();
-            }
-            auto stop_raft_rpc = defer_verbose_shutdown("Raft RPC", [&raft_gr] {
-                raft_gr.invoke_on_all(&service::raft_group_registry::uninit).get();
-            });
-            if (!raft_enabled) {
-                stop_raft_rpc->cancel();
-            }
-
             debug::the_stream_manager = &stream_manager;
             supervisor::notify("starting streaming service");
             stream_manager.start(std::ref(db), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(messaging), std::ref(mm), std::ref(gossiper)).get();
@@ -1173,7 +1170,7 @@ int main(int ac, char** av) {
             }).get();
 
             with_scheduling_group(maintenance_scheduling_group, [&] {
-                return ss.local().init_server();
+                return ss.local().init_server(qp.local());
             }).get();
 
             gossiper.local().wait_for_gossip_to_settle().get();

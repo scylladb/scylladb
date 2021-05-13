@@ -1020,6 +1020,7 @@ scylla_core = (['database.cc',
                 'service/raft/raft_gossip_failure_detector.cc',
                 'service/raft/raft_group_registry.cc',
                 'service/raft/discovery.cc',
+                'service/raft/raft_group0.cc',
                 ] + [Antlr3Grammar('cql3/Cql.g')] + [Thrift('interface/cassandra.thrift', 'Cassandra')] \
                   + scylla_raft_core
                )
@@ -1119,6 +1120,7 @@ idls = ['idl/gossip_digest.idl.hh',
         'idl/messaging_service.idl.hh',
         'idl/paxos.idl.hh',
         'idl/raft.idl.hh',
+        'idl/group0.idl.hh',
         'idl/hinted_handoff.idl.hh',
         ]
 

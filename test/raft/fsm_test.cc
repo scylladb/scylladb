@@ -1110,7 +1110,6 @@ BOOST_AUTO_TEST_CASE(test_empty_configuration) {
     BOOST_CHECK_EQUAL(output.log_entries.size(), 0);
     BOOST_CHECK_EQUAL(output.messages.size(), 0);
     BOOST_CHECK_EQUAL(follower.get_current_term(), 0);
-    BOOST_CHECK_THROW(follower.get_configuration(), raft::not_a_leader);
 
     server_id id2 = id();
     auto log2 = raft::log(raft::snapshot_descriptor{.idx = index_t{0}, .config = raft::configuration({id2})});

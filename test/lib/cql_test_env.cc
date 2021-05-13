@@ -574,8 +574,9 @@ public:
             sharded<service::raft_group_registry> raft_gr;
             sharded<streaming::stream_manager> stream_manager;
 
-            raft_gr.start(std::ref(ms), std::ref(gossiper), std::ref(qp)).get();
-            auto stop_raft = defer([&raft_gr] { raft_gr.stop().get(); });
+            raft_gr.start(cfg->check_experimental(db::experimental_features_t::RAFT),
+                std::ref(ms), std::ref(gossiper)).get();
+            raft_gr.invoke_on_all(&service::raft_group_registry::start).get();
 
             stream_manager.start(std::ref(db), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(ms), std::ref(mm), std::ref(gms::get_gossiper())).get();
             auto stop_streaming = defer([&stream_manager] { stream_manager.stop().get(); });
@@ -684,6 +685,11 @@ public:
             auto shutdown_db = defer([&db] {
                 db.invoke_on_all(&database::shutdown).get();
             });
+            // XXX: stop_raft before stopping the database and
+            // query processor. Group registry stop raft groups
+            // when stopped, and until then the groups may use
+            // the database and the query processor.
+            auto stop_raft = defer([&raft_gr] { raft_gr.stop().get(); });
 
             view_update_generator.start(std::ref(db)).get();
             view_update_generator.invoke_on_all(&db::view::view_update_generator::start).get();
@@ -702,19 +708,6 @@ public:
                                 make_shared<qos::unit_test_service_levels_accessor>(sl_controller,sys_dist_ks));
                 return service.set_distributed_data_accessor(std::move(service_level_data_accessor));
             }).get();
-
-            const bool raft_enabled = cfg->check_experimental(db::experimental_features_t::RAFT);
-            if (raft_enabled) {
-                // We need to have a system keyspace started and
-                // initialized to initialize Raft service.
-                raft_gr.invoke_on_all(&service::raft_group_registry::init).get();
-            }
-            auto stop_raft_rpc = defer([&raft_gr] {
-                raft_gr.invoke_on_all(&service::raft_group_registry::uninit).get();
-            });
-            if (!raft_enabled) {
-                stop_raft_rpc.cancel();
-            }
 
             cdc::generation_service::config cdc_config;
             cdc_config.ignore_msb_bits = cfg->murmur3_partitioner_ignore_msb_bits();
@@ -737,8 +730,15 @@ public:
                 cdc.stop().get();
             });
 
-            ss.local().init_server().get();
-            ss.local().join_cluster().get();
+            ss.local().init_server(qp.local()).get();
+            try {
+                ss.local().join_cluster().get();
+            } catch (std::exception& e) {
+                // if any of the defers crashes too, we'll never see
+                // the error
+                testlog.error("Failed to join cluster: {}", e);
+                throw;
+            }
 
             auth::permissions_cache_config perm_cache_config;
             perm_cache_config.max_entries = cfg->permissions_cache_max_entries();

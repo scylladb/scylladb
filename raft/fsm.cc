@@ -53,7 +53,6 @@ future<> fsm::wait_max_log_size() {
 }
 
 const configuration& fsm::get_configuration() const {
-    check_is_leader();
     return _log.get_configuration();
 }
 

@@ -281,6 +281,17 @@ public:
         }
         return set_it->_addr;
     }
+    // Linear search for id based on inet address. Used when
+    // removing a node which id is unknown. Do not return self
+    // - we need to remove id of the node self is replacing.
+    std::optional<raft::server_id> find_replace_id(gms::inet_address addr, raft::server_id self) const {
+        for (auto it : _set) {
+            if (it._addr == addr && it._id != self) {
+                return it._id;
+            }
+        }
+        return {};
+    }
     // Inserts a new mapping or updates the existing one.
     // The function verifies that if the mapping exists, then its inet_address
     // and the provided one match.
@@ -329,6 +340,14 @@ public:
         }
         // No action needed when a regular entry is updated
     }
+
+    // A shortcut to setting a new permanent address
+    void set(raft::server_address addr) {
+        return set(addr.id,
+            ser::deserialize_from_buffer(addr.info, boost::type<gms::inet_address>{}),
+            false);
+    }
+
     // Erase an entry from the server address map.
     // Does nothing if an element with a given id does not exist.
     void erase(raft::server_id id) {
