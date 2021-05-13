@@ -57,9 +57,6 @@
 
 logging::logger rlogger("repair");
 
-static sharded<netw::messaging_service>* _messaging;
-static sharded<service::migration_manager>* _migration_manager;
-
 void node_ops_info::check_abort() {
     if (abort) {
         auto msg = format("Node operation with ops_uuid={} is aborted", ops_uuid);
@@ -1881,12 +1878,6 @@ future<> repair_service::replace_with_repair(locator::token_metadata_ptr tmptr, 
     co_return co_await do_rebuild_replace_with_repair(std::move(cloned_tmptr), std::move(op), std::move(source_dc), reason);
 }
 
-static future<> init_messaging_service_handler(sharded<database>& db, sharded<netw::messaging_service>& messaging, sharded<service::migration_manager>& mm) {
-    _messaging = &messaging;
-    _migration_manager = &mm;
-    return make_ready_future<>();
-}
-
 future<> repair_service::init_ms_handlers() {
     auto& ms = this->_messaging;
 
@@ -1901,30 +1892,8 @@ future<> repair_service::init_ms_handlers() {
     return make_ready_future<>();
 }
 
-static future<> uninit_messaging_service_handler() {
-    return make_ready_future<>();
-}
-
 future<> repair_service::uninit_ms_handlers() {
     auto& ms = this->_messaging;
 
     return when_all_succeed(ms.unregister_node_ops_cmd()).discard_result();
-}
-
-future<> repair_init_messaging_service_handler(
-        distributed<db::system_distributed_keyspace>& sys_dist_ks,
-        distributed<db::view::view_update_generator>& view_update_generator,
-        sharded<database>& db, sharded<netw::messaging_service>& ms,
-        sharded<service::migration_manager>& mm) {
-    return when_all_succeed(
-            init_messaging_service_handler(db, ms, mm),
-            row_level_repair_init_messaging_service_handler(sys_dist_ks, view_update_generator, ms, mm)
-    ).discard_result();
-}
-
-future<> repair_uninit_messaging_service_handler() {
-    return when_all_succeed(
-            uninit_messaging_service_handler(),
-            row_level_repair_uninit_messaging_service_handler()
-    ).discard_result();
 }

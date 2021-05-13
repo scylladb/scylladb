@@ -55,14 +55,6 @@ namespace service {
 class migration_manager;
 }
 
-future<> repair_init_messaging_service_handler(
-        distributed<db::system_distributed_keyspace>& sys_dist_ks,
-        distributed<db::view::view_update_generator>& view_update_generator,
-        sharded<database>& db,
-        sharded<netw::messaging_service>& ms,
-        sharded<service::migration_manager>& mm);
-future<> repair_uninit_messaging_service_handler();
-
 class repair_exception : public std::exception {
 private:
     sstring _what;

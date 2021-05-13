@@ -1125,10 +1125,6 @@ int main(int ac, char** av) {
                 repair.stop().get();
             });
             repair.invoke_on_all(&repair_service::start).get();
-            repair_init_messaging_service_handler(sys_dist_ks, view_update_generator, db, messaging, mm).get();
-            auto stop_repair_messages = defer_verbose_shutdown("repair message handlers", [] {
-                repair_uninit_messaging_service_handler().get();
-            });
 
             supervisor::notify("starting CDC Generation Management service");
             /* This service uses the system distributed keyspace.

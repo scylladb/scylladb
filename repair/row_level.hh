@@ -102,10 +102,6 @@ public:
     sharded<db::view::view_update_generator>& get_view_update_generator() noexcept { return _view_update_generator; }
 };
 
-future<> row_level_repair_init_messaging_service_handler(distributed<db::system_distributed_keyspace>& sys_dist_ks,
-        distributed<db::view::view_update_generator>& view_update_generator, sharded<netw::messaging_service>& ms, sharded<service::migration_manager>& mm);
-future<> row_level_repair_uninit_messaging_service_handler();
-
 class repair_info;
 
 future<> repair_cf_range_row_level(repair_info& ri,
