@@ -1318,16 +1318,7 @@ future<> repair_abort_all(seastar::sharded<database>& db) {
     });
 }
 
-static future<> do_sync_data_using_repair(seastar::sharded<database>& db,
-        seastar::sharded<netw::messaging_service>& ms,
-        sstring keyspace,
-        dht::token_range_vector ranges,
-        std::unordered_map<dht::token_range, repair_neighbors> neighbors,
-        streaming::stream_reason reason,
-        std::optional<utils::UUID> ops_uuid);
-
-static future<> sync_data_using_repair(seastar::sharded<database>& db,
-        seastar::sharded<netw::messaging_service>& ms,
+future<> repair_service::sync_data_using_repair(
         sstring keyspace,
         dht::token_range_vector ranges,
         std::unordered_map<dht::token_range, repair_neighbors> neighbors,
@@ -1336,18 +1327,20 @@ static future<> sync_data_using_repair(seastar::sharded<database>& db,
     if (ranges.empty()) {
         return make_ready_future<>();
     }
-    return smp::submit_to(0, [&db, &ms, keyspace = std::move(keyspace), ranges = std::move(ranges), neighbors = std::move(neighbors), reason, ops_uuid] () mutable {
-        return do_sync_data_using_repair(db, ms, std::move(keyspace), std::move(ranges), std::move(neighbors), reason, ops_uuid);
+    return container().invoke_on(0, [keyspace = std::move(keyspace), ranges = std::move(ranges), neighbors = std::move(neighbors), reason, ops_uuid] (repair_service& local_repair) mutable {
+        return local_repair.do_sync_data_using_repair(std::move(keyspace), std::move(ranges), std::move(neighbors), reason, ops_uuid);
     });
 }
 
-static future<> do_sync_data_using_repair(seastar::sharded<database>& db,
-        seastar::sharded<netw::messaging_service>& ms,
+future<> repair_service::do_sync_data_using_repair(
         sstring keyspace,
         dht::token_range_vector ranges,
         std::unordered_map<dht::token_range, repair_neighbors> neighbors,
         streaming::stream_reason reason,
         std::optional<utils::UUID> ops_uuid) {
+    seastar::sharded<database>& db = get_db();
+    seastar::sharded<netw::messaging_service>& ms = get_messaging().container();
+
     repair_uniq_id id = repair_tracker().next_repair_command();
     rlogger.info("repair id {} to sync data for keyspace={}, status=started", id, keyspace);
     return repair_tracker().run(id, [id, &db, &ms, keyspace, ranges = std::move(ranges), neighbors = std::move(neighbors), reason, ops_uuid] () mutable {
@@ -1403,7 +1396,7 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
     seastar::sharded<netw::messaging_service>& ms = get_messaging().container();
 
     using inet_address = gms::inet_address;
-    return seastar::async([&db, &ms, tmptr = std::move(tmptr), tokens = std::move(bootstrap_tokens)] () mutable {
+    return seastar::async([this, &db, &ms, tmptr = std::move(tmptr), tokens = std::move(bootstrap_tokens)] () mutable {
         auto keyspaces = db.local().get_non_system_keyspaces();
         auto myip = utils::fb_utilities::get_broadcast_address();
         auto reason = streaming::stream_reason::bootstrap;
@@ -1565,7 +1558,7 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
                 }
             }
             auto nr_ranges = desired_ranges.size();
-            sync_data_using_repair(db, ms, keyspace_name, std::move(desired_ranges), std::move(range_sources), reason, {}).get();
+            sync_data_using_repair(keyspace_name, std::move(desired_ranges), std::move(range_sources), reason, {}).get();
             rlogger.info("bootstrap_with_repair: finished with keyspace={}, nr_ranges={}", keyspace_name, nr_ranges);
         }
         rlogger.info("bootstrap_with_repair: finished with keyspaces={}", keyspaces);
@@ -1577,7 +1570,7 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
     seastar::sharded<netw::messaging_service>& ms = get_messaging().container();
 
     using inet_address = gms::inet_address;
-    return seastar::async([&db, &ms, tmptr = std::move(tmptr), leaving_node = std::move(leaving_node), ops] () mutable {
+    return seastar::async([this, &db, &ms, tmptr = std::move(tmptr), leaving_node = std::move(leaving_node), ops] () mutable {
         auto myip = utils::fb_utilities::get_broadcast_address();
         auto keyspaces = db.local().get_non_system_keyspaces();
         bool is_removenode = myip != leaving_node;
@@ -1761,7 +1754,7 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
             }
             auto nr_ranges_synced = ranges.size();
             std::optional<utils::UUID> opt_uuid = ops ? std::make_optional<utils::UUID>(ops->ops_uuid) : std::nullopt;
-            sync_data_using_repair(db, ms, keyspace_name, std::move(ranges), std::move(range_sources), reason, opt_uuid).get();
+            sync_data_using_repair(keyspace_name, std::move(ranges), std::move(range_sources), reason, opt_uuid).get();
             rlogger.info("{}: finished with keyspace={}, leaving_node={}, nr_ranges={}, nr_ranges_synced={}, nr_ranges_skipped={}",
                 op, keyspace_name, leaving_node, nr_ranges_total, nr_ranges_synced, nr_ranges_skipped);
         }
@@ -1795,7 +1788,7 @@ future<> repair_service::do_rebuild_replace_with_repair(locator::token_metadata_
     seastar::sharded<database>& db = get_db();
     seastar::sharded<netw::messaging_service>& ms = get_messaging().container();
 
-    return seastar::async([&db, &ms, tmptr = std::move(tmptr), source_dc = std::move(source_dc), op = std::move(op), reason] () mutable {
+    return seastar::async([this, &db, &ms, tmptr = std::move(tmptr), source_dc = std::move(source_dc), op = std::move(op), reason] () mutable {
         auto keyspaces = db.local().get_non_system_keyspaces();
         auto myip = utils::fb_utilities::get_broadcast_address();
         size_t nr_ranges_total = 0;
@@ -1866,7 +1859,7 @@ future<> repair_service::do_rebuild_replace_with_repair(locator::token_metadata_
                 }).get();
             }
             auto nr_ranges = ranges.size();
-            sync_data_using_repair(db, ms, keyspace_name, std::move(ranges), std::move(range_sources), reason, {}).get();
+            sync_data_using_repair(keyspace_name, std::move(ranges), std::move(range_sources), reason, {}).get();
             rlogger.info("{}: finished with keyspace={}, source_dc={}, nr_ranges={}", op, keyspace_name, source_dc, nr_ranges);
         }
         rlogger.info("{}: finished with keyspaces={}, source_dc={}", op, keyspaces, source_dc);
