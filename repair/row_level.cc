@@ -719,6 +719,8 @@ public:
 private:
     seastar::sharded<database>& _db;
     seastar::sharded<netw::messaging_service>& _messaging;
+    seastar::sharded<db::system_distributed_keyspace>& _sys_dist_ks;
+    seastar::sharded<db::view::view_update_generator>& _view_update_generator;
     column_family& _cf;
     schema_ptr _schema;
     reader_permit _permit;
@@ -807,6 +809,8 @@ public:
     repair_meta(
             seastar::sharded<database>& db,
             seastar::sharded<netw::messaging_service>& ms,
+            seastar::sharded<db::system_distributed_keyspace>& sys_dist_ks,
+            seastar::sharded<db::view::view_update_generator>& view_update_generator,
             column_family& cf,
             schema_ptr s,
             dht::token_range range,
@@ -822,6 +826,8 @@ public:
             row_level_repair* row_level_repair_ptr = nullptr)
             : _db(db)
             , _messaging(ms)
+            , _sys_dist_ks(sys_dist_ks)
+            , _view_update_generator(view_update_generator)
             , _cf(cf)
             , _schema(s)
             , _permit(_cf.streaming_read_concurrency_semaphore().make_permit(_schema.get(), "repair-meta"))
@@ -928,6 +934,8 @@ public:
             node_repair_meta_id id{from, repair_meta_id};
             auto rm = make_lw_shared<repair_meta>(db,
                     repair.get_messaging().container(),
+                    repair.get_sys_dist_ks(),
+                    repair.get_view_update_generator(),
                     cf,
                     s,
                     range,
@@ -2831,6 +2839,8 @@ public:
 
             repair_meta master(_ri.db,
                     _ri.messaging,
+                    _ri.sys_dist_ks,
+                    _ri.view_update_generator,
                     _cf,
                     s,
                     _range,
