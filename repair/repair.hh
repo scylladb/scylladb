@@ -258,6 +258,8 @@ public:
     const std::optional<utils::UUID>& ops_uuid() const {
         return _ops_uuid;
     };
+
+    future<> repair_range(const dht::token_range& range);
 };
 
 // The repair_tracker tracks ongoing repair operations and their progress.
