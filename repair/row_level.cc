@@ -1700,10 +1700,6 @@ public:
     repair_row_level_start_handler(gms::inet_address from, uint32_t src_cpu_id, uint32_t repair_meta_id, sstring ks_name, sstring cf_name,
             dht::token_range range, row_level_diff_detect_algorithm algo, uint64_t max_row_buf_size,
             uint64_t seed, shard_config master_node_shard_config, table_schema_version schema_version, streaming::stream_reason reason) {
-        if (!_sys_dist_ks->local_is_initialized() || !_view_update_generator->local_is_initialized()) {
-            return make_exception_future<repair_row_level_start_response>(std::runtime_error(format("Node {} is not fully initialized for repair, try again later",
-                    utils::fb_utilities::get_broadcast_address())));
-        }
         rlogger.debug(">>> Started Row Level Repair (Follower): local={}, peers={}, repair_meta_id={}, keyspace={}, cf={}, schema_version={}, range={}, seed={}, max_row_buf_siz={}",
             utils::fb_utilities::get_broadcast_address(), from, repair_meta_id, ks_name, cf_name, schema_version, range, seed, max_row_buf_size);
         return insert_repair_meta(from, src_cpu_id, repair_meta_id, std::move(range), algo, max_row_buf_size, seed, std::move(master_node_shard_config), std::move(schema_version), reason).then([] {
@@ -2433,6 +2429,10 @@ future<> repair_service::init_row_level_ms_handlers() {
         auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         return smp::submit_to(src_cpu_id % smp::count, [from, src_cpu_id, repair_meta_id, ks_name, cf_name,
                 range, algo, max_row_buf_size, seed, remote_shard, remote_shard_count, remote_ignore_msb, schema_version, reason] () mutable {
+            if (!::_sys_dist_ks->local_is_initialized() || !::_view_update_generator->local_is_initialized()) {
+                return make_exception_future<repair_row_level_start_response>(std::runtime_error(format("Node {} is not fully initialized for repair, try again later",
+                        utils::fb_utilities::get_broadcast_address())));
+            }
             streaming::stream_reason r = reason ? *reason : streaming::stream_reason::repair;
             return repair_meta::repair_row_level_start_handler(from, src_cpu_id, repair_meta_id, std::move(ks_name),
                     std::move(cf_name), std::move(range), algo, max_row_buf_size, seed,
