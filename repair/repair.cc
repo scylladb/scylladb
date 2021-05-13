@@ -1317,6 +1317,14 @@ future<> repair_abort_all(seastar::sharded<database>& db) {
     });
 }
 
+static future<> do_sync_data_using_repair(seastar::sharded<database>& db,
+        seastar::sharded<netw::messaging_service>& ms,
+        sstring keyspace,
+        dht::token_range_vector ranges,
+        std::unordered_map<dht::token_range, repair_neighbors> neighbors,
+        streaming::stream_reason reason,
+        std::optional<utils::UUID> ops_uuid);
+
 static future<> sync_data_using_repair(seastar::sharded<database>& db,
         seastar::sharded<netw::messaging_service>& ms,
         sstring keyspace,
@@ -1328,6 +1336,17 @@ static future<> sync_data_using_repair(seastar::sharded<database>& db,
         return make_ready_future<>();
     }
     return smp::submit_to(0, [&db, &ms, keyspace = std::move(keyspace), ranges = std::move(ranges), neighbors = std::move(neighbors), reason, ops_uuid] () mutable {
+        return do_sync_data_using_repair(db, ms, std::move(keyspace), std::move(ranges), std::move(neighbors), reason, ops_uuid);
+    });
+}
+
+static future<> do_sync_data_using_repair(seastar::sharded<database>& db,
+        seastar::sharded<netw::messaging_service>& ms,
+        sstring keyspace,
+        dht::token_range_vector ranges,
+        std::unordered_map<dht::token_range, repair_neighbors> neighbors,
+        streaming::stream_reason reason,
+        std::optional<utils::UUID> ops_uuid) {
         repair_uniq_id id = repair_tracker().next_repair_command();
         rlogger.info("repair id {} to sync data for keyspace={}, status=started", id, keyspace);
         return repair_tracker().run(id, [id, &db, &ms, keyspace, ranges = std::move(ranges), neighbors = std::move(neighbors), reason, ops_uuid] () mutable {
@@ -1376,7 +1395,6 @@ static future<> sync_data_using_repair(seastar::sharded<database>& db,
             rlogger.warn("repair id {} to sync data for keyspace={}, status=failed: {}", id, keyspace,  ep);
             return make_exception_future<>(ep);
         });
-    });
 }
 
 future<> bootstrap_with_repair(seastar::sharded<database>& db, seastar::sharded<netw::messaging_service>& ms, locator::token_metadata_ptr tmptr, std::unordered_set<dht::token> bootstrap_tokens) {
