@@ -222,8 +222,7 @@ public:
     std::unordered_set<sstring> dropped_tables;
     std::optional<utils::UUID> _ops_uuid;
 public:
-    repair_info(seastar::sharded<database>& db_,
-            seastar::sharded<netw::messaging_service>& ms_,
+    repair_info(repair_service& repair,
             const sstring& keyspace_,
             const dht::token_range_vector& ranges_,
             std::vector<utils::UUID> table_ids_,

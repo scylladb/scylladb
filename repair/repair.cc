@@ -596,8 +596,7 @@ get_sharder_for_tables(seastar::sharded<database>& db, const sstring& keyspace, 
     return last_s->get_sharder();
 }
 
-repair_info::repair_info(seastar::sharded<database>& db_,
-    seastar::sharded<netw::messaging_service>& ms_,
+repair_info::repair_info(repair_service& repair,
     const sstring& keyspace_,
     const dht::token_range_vector& ranges_,
     std::vector<utils::UUID> table_ids_,
@@ -607,12 +606,12 @@ repair_info::repair_info(seastar::sharded<database>& db_,
     const std::unordered_set<gms::inet_address>& ignore_nodes_,
     streaming::stream_reason reason_,
     std::optional<utils::UUID> ops_uuid)
-    : db(db_)
-    , messaging(ms_)
-    , sharder(get_sharder_for_tables(db_, keyspace_, table_ids_))
+    : db(repair.get_db())
+    , messaging(repair.get_messaging().container())
+    , sharder(get_sharder_for_tables(db, keyspace_, table_ids_))
     , keyspace(keyspace_)
     , ranges(ranges_)
-    , cfs(get_table_names(db_.local(), table_ids_))
+    , cfs(get_table_names(db.local(), table_ids_))
     , table_ids(std::move(table_ids_))
     , id(id_)
     , shard(this_shard_id())
@@ -1248,10 +1247,10 @@ int repair_service::do_repair_start(sstring keyspace, std::unordered_map<sstring
         repair_results.reserve(smp::count);
         auto table_ids = get_table_ids(db.local(), keyspace, cfs);
         for (auto shard : boost::irange(unsigned(0), smp::count)) {
-            auto f = container().invoke_on(shard, [&db, &ms, keyspace, table_ids, id, ranges,
+            auto f = container().invoke_on(shard, [keyspace, table_ids, id, ranges,
                     data_centers = options.data_centers, hosts = options.hosts, ignore_nodes] (repair_service& local_repair) mutable {
                 _node_ops_metrics.repair_total_ranges_sum += ranges.size();
-                auto ri = make_lw_shared<repair_info>(db, ms,
+                auto ri = make_lw_shared<repair_info>(local_repair,
                         std::move(keyspace), std::move(ranges), std::move(table_ids),
                         id, std::move(data_centers), std::move(hosts), std::move(ignore_nodes), streaming::stream_reason::repair, id.uuid);
                 return repair_ranges(ri);
@@ -1353,11 +1352,11 @@ future<> repair_service::do_sync_data_using_repair(
         std::vector<future<>> repair_results;
         repair_results.reserve(smp::count);
         for (auto shard : boost::irange(unsigned(0), smp::count)) {
-            auto f = container().invoke_on(shard, [&db, &ms, keyspace, table_ids, id, ranges, neighbors, reason, ops_uuid] (repair_service& local_repair) mutable {
+            auto f = container().invoke_on(shard, [keyspace, table_ids, id, ranges, neighbors, reason, ops_uuid] (repair_service& local_repair) mutable {
                 auto data_centers = std::vector<sstring>();
                 auto hosts = std::vector<sstring>();
                 auto ignore_nodes = std::unordered_set<gms::inet_address>();
-                auto ri = make_lw_shared<repair_info>(db, ms,
+                auto ri = make_lw_shared<repair_info>(local_repair,
                         std::move(keyspace), std::move(ranges), std::move(table_ids),
                         id, std::move(data_centers), std::move(hosts), std::move(ignore_nodes), reason, ops_uuid);
                 ri->neighbors = std::move(neighbors);
