@@ -66,8 +66,8 @@ future<std::pair<raft::term_t, raft::server_id>> raft_sys_table_storage::load_te
         co_return std::pair(raft::term_t(), raft::server_id());
     }
     const auto& static_row = rs->one();
-    raft::term_t vote_term = raft::term_t(static_row.get_as<int64_t>("vote_term"));
-    raft::server_id vote{static_row.get_as<utils::UUID>("vote")};
+    raft::term_t vote_term = raft::term_t(static_row.get_or<int64_t>("vote_term", raft::term_t{}));
+    raft::server_id vote{static_row.get_or<utils::UUID>("vote", raft::server_id{}.id)};
     co_return std::pair(vote_term, vote);
 }
 
@@ -77,6 +77,11 @@ future<raft::log_entries> raft_sys_table_storage::load_log() {
 
     raft::log_entries log;
     for (const cql3::untyped_result_set_row& row : *rs) {
+        if (!row.has("data")) {
+            // The partition only contains static cells, the log
+            // is empty.
+            break;
+        }
         raft::term_t term = raft::term_t(row.get_as<int64_t>("term"));
         raft::index_t idx = raft::index_t(row.get_as<int64_t>("index"));
         auto raw_data = row.get_blob("data");
@@ -95,7 +100,7 @@ future<raft::log_entries> raft_sys_table_storage::load_log() {
 future<raft::snapshot> raft_sys_table_storage::load_snapshot() {
     static const auto load_id_cql = format("SELECT snapshot_id FROM system.{} WHERE group_id = ?", db::system_keyspace::RAFT);
     ::shared_ptr<cql3::untyped_result_set> id_rs = co_await _qp.execute_internal(load_id_cql, {_group_id.id});
-    if (id_rs->empty()) {
+    if (id_rs->empty() || !id_rs->one().has("snapshot_id")) {
         co_return raft::snapshot();
     }
     const auto& id_row = id_rs->one(); // should be only one row since snapshot_id column is static
