@@ -608,6 +608,8 @@ repair_info::repair_info(repair_service& repair,
     std::optional<utils::UUID> ops_uuid)
     : db(repair.get_db())
     , messaging(repair.get_messaging().container())
+    , sys_dist_ks(repair.get_sys_dist_ks())
+    , view_update_generator(repair.get_view_update_generator())
     , mm(repair.get_migration_manager())
     , sharder(get_sharder_for_tables(db, keyspace_, table_ids_))
     , keyspace(keyspace_)

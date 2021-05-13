@@ -184,6 +184,8 @@ class repair_info {
 public:
     seastar::sharded<database>& db;
     seastar::sharded<netw::messaging_service>& messaging;
+    sharded<db::system_distributed_keyspace>& sys_dist_ks;
+    sharded<db::view::view_update_generator>& view_update_generator;
     service::migration_manager& mm;
     const dht::sharder& sharder;
     sstring keyspace;
