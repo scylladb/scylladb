@@ -1139,7 +1139,6 @@ static future<> try_wait_for_hints_to_be_replayed(repair_uniq_id id, std::vector
 // itself does very little (mainly tell other nodes and CPUs what to do).
 int repair_service::do_repair_start(sstring keyspace, std::unordered_map<sstring, sstring> options_map) {
     seastar::sharded<database>& db = get_db();
-    seastar::sharded<netw::messaging_service>& ms = get_messaging().container();
     check_in_shutdown();
 
     repair_options options(options_map);
@@ -1231,7 +1230,7 @@ int repair_service::do_repair_start(sstring keyspace, std::unordered_map<sstring
     }
 
     // Do it in the background.
-    (void)repair_tracker().run(id, [this, &db, &ms, id, keyspace = std::move(keyspace),
+    (void)repair_tracker().run(id, [this, &db, id, keyspace = std::move(keyspace),
             cfs = std::move(cfs), ranges = std::move(ranges), options = std::move(options), ignore_nodes = std::move(ignore_nodes)] () mutable {
 
         if (db.local().get_config().wait_for_hint_replay_before_repair()) {
@@ -1338,11 +1337,10 @@ future<> repair_service::do_sync_data_using_repair(
         streaming::stream_reason reason,
         std::optional<utils::UUID> ops_uuid) {
     seastar::sharded<database>& db = get_db();
-    seastar::sharded<netw::messaging_service>& ms = get_messaging().container();
 
     repair_uniq_id id = repair_tracker().next_repair_command();
     rlogger.info("repair id {} to sync data for keyspace={}, status=started", id, keyspace);
-    return repair_tracker().run(id, [this, id, &db, &ms, keyspace, ranges = std::move(ranges), neighbors = std::move(neighbors), reason, ops_uuid] () mutable {
+    return repair_tracker().run(id, [this, id, &db, keyspace, ranges = std::move(ranges), neighbors = std::move(neighbors), reason, ops_uuid] () mutable {
         auto cfs = list_column_families(db.local(), keyspace);
         if (cfs.empty()) {
             rlogger.warn("repair id {} to sync data for keyspace={}, no table in this keyspace", id, keyspace);
@@ -1392,10 +1390,9 @@ future<> repair_service::do_sync_data_using_repair(
 
 future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr, std::unordered_set<dht::token> bootstrap_tokens) {
     seastar::sharded<database>& db = get_db();
-    seastar::sharded<netw::messaging_service>& ms = get_messaging().container();
 
     using inet_address = gms::inet_address;
-    return seastar::async([this, &db, &ms, tmptr = std::move(tmptr), tokens = std::move(bootstrap_tokens)] () mutable {
+    return seastar::async([this, &db, tmptr = std::move(tmptr), tokens = std::move(bootstrap_tokens)] () mutable {
         auto keyspaces = db.local().get_non_system_keyspaces();
         auto myip = utils::fb_utilities::get_broadcast_address();
         auto reason = streaming::stream_reason::bootstrap;
@@ -1566,10 +1563,9 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
 
 future<> repair_service::do_decommission_removenode_with_repair(locator::token_metadata_ptr tmptr, gms::inet_address leaving_node, shared_ptr<node_ops_info> ops) {
     seastar::sharded<database>& db = get_db();
-    seastar::sharded<netw::messaging_service>& ms = get_messaging().container();
 
     using inet_address = gms::inet_address;
-    return seastar::async([this, &db, &ms, tmptr = std::move(tmptr), leaving_node = std::move(leaving_node), ops] () mutable {
+    return seastar::async([this, &db, tmptr = std::move(tmptr), leaving_node = std::move(leaving_node), ops] () mutable {
         auto myip = utils::fb_utilities::get_broadcast_address();
         auto keyspaces = db.local().get_non_system_keyspaces();
         bool is_removenode = myip != leaving_node;
@@ -1785,9 +1781,8 @@ future<> abort_repair_node_ops(utils::UUID ops_uuid) {
 
 future<> repair_service::do_rebuild_replace_with_repair(locator::token_metadata_ptr tmptr, sstring op, sstring source_dc, streaming::stream_reason reason) {
     seastar::sharded<database>& db = get_db();
-    seastar::sharded<netw::messaging_service>& ms = get_messaging().container();
 
-    return seastar::async([this, &db, &ms, tmptr = std::move(tmptr), source_dc = std::move(source_dc), op = std::move(op), reason] () mutable {
+    return seastar::async([this, &db, tmptr = std::move(tmptr), source_dc = std::move(source_dc), op = std::move(op), reason] () mutable {
         auto keyspaces = db.local().get_non_system_keyspaces();
         auto myip = utils::fb_utilities::get_broadcast_address();
         size_t nr_ranges_total = 0;
