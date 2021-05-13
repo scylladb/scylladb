@@ -133,15 +133,19 @@ seastar::future<> raft_services::init() {
     // and starts an election, so RPC must be ready by
     // then to send VoteRequest messages.
     init_rpc_verbs();
-    auto uninit_rpc_verbs = defer([this] { this->uninit_rpc_verbs().get(); });
     // schema raft server instance always resides on shard 0
-    if (this_shard_id() == 0) {
-        // FIXME: Server id will change each time scylla server restarts,
-        // need to persist it or find a deterministic way to compute!
+    if (this_shard_id() != 0) {
+        co_return;
+    }
+    co_await [this] () -> future<> {
         raft::server_id id = raft::server_id::create_random_id();
         co_await add_server(id, create_schema_server(id));
-    }
-    uninit_rpc_verbs.cancel();
+    }().handle_exception([this] (auto ep) -> future<> {
+        // co_await is not allowed inside catch (...), use
+        // handle_exception instead.
+        co_await uninit_rpc_verbs();
+        std::rethrow_exception(ep);
+    });
 }
 
 seastar::future<> raft_services::uninit() {
