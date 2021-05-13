@@ -2437,7 +2437,7 @@ future<> repair_service::init_row_level_ms_handlers() {
         auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         return container().invoke_on(src_cpu_id % smp::count, [from, src_cpu_id, repair_meta_id, ks_name, cf_name,
                 range, algo, max_row_buf_size, seed, remote_shard, remote_shard_count, remote_ignore_msb, schema_version, reason] (repair_service& local_repair) mutable {
-            if (!::_sys_dist_ks->local_is_initialized() || !::_view_update_generator->local_is_initialized()) {
+            if (!local_repair._sys_dist_ks.local_is_initialized() || !local_repair._view_update_generator.local_is_initialized()) {
                 return make_exception_future<repair_row_level_start_response>(std::runtime_error(format("Node {} is not fully initialized for repair, try again later",
                         utils::fb_utilities::get_broadcast_address())));
             }
