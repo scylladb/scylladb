@@ -1347,54 +1347,54 @@ static future<> do_sync_data_using_repair(seastar::sharded<database>& db,
         std::unordered_map<dht::token_range, repair_neighbors> neighbors,
         streaming::stream_reason reason,
         std::optional<utils::UUID> ops_uuid) {
-        repair_uniq_id id = repair_tracker().next_repair_command();
-        rlogger.info("repair id {} to sync data for keyspace={}, status=started", id, keyspace);
-        return repair_tracker().run(id, [id, &db, &ms, keyspace, ranges = std::move(ranges), neighbors = std::move(neighbors), reason, ops_uuid] () mutable {
-            auto cfs = list_column_families(db.local(), keyspace);
-            if (cfs.empty()) {
-                rlogger.warn("repair id {} to sync data for keyspace={}, no table in this keyspace", id, keyspace);
-                return;
-            }
-            auto table_ids = get_table_ids(db.local(), keyspace, cfs);
-            std::vector<future<>> repair_results;
-            repair_results.reserve(smp::count);
-            for (auto shard : boost::irange(unsigned(0), smp::count)) {
-                auto f = db.invoke_on(shard, [&db, &ms, keyspace, table_ids, id, ranges, neighbors, reason, ops_uuid] (database& localdb) mutable {
-                    auto data_centers = std::vector<sstring>();
-                    auto hosts = std::vector<sstring>();
-                    auto ignore_nodes = std::unordered_set<gms::inet_address>();
-                    auto ri = make_lw_shared<repair_info>(db, ms,
-                            std::move(keyspace), std::move(ranges), std::move(table_ids),
-                            id, std::move(data_centers), std::move(hosts), std::move(ignore_nodes), reason, ops_uuid);
-                    ri->neighbors = std::move(neighbors);
-                    return repair_ranges(ri);
-                });
-                repair_results.push_back(std::move(f));
-            }
-            when_all(repair_results.begin(), repair_results.end()).then([id, keyspace] (std::vector<future<>> results) mutable {
-                std::vector<sstring> errors;
-                for (unsigned shard = 0; shard < results.size(); shard++) {
-                    auto& f = results[shard];
-                    if (f.failed()) {
-                        auto ep = f.get_exception();
-                        errors.push_back(format("shard {}: {}", shard, ep));
-                    }
+    repair_uniq_id id = repair_tracker().next_repair_command();
+    rlogger.info("repair id {} to sync data for keyspace={}, status=started", id, keyspace);
+    return repair_tracker().run(id, [id, &db, &ms, keyspace, ranges = std::move(ranges), neighbors = std::move(neighbors), reason, ops_uuid] () mutable {
+        auto cfs = list_column_families(db.local(), keyspace);
+        if (cfs.empty()) {
+            rlogger.warn("repair id {} to sync data for keyspace={}, no table in this keyspace", id, keyspace);
+            return;
+        }
+        auto table_ids = get_table_ids(db.local(), keyspace, cfs);
+        std::vector<future<>> repair_results;
+        repair_results.reserve(smp::count);
+        for (auto shard : boost::irange(unsigned(0), smp::count)) {
+            auto f = db.invoke_on(shard, [&db, &ms, keyspace, table_ids, id, ranges, neighbors, reason, ops_uuid] (database& localdb) mutable {
+                auto data_centers = std::vector<sstring>();
+                auto hosts = std::vector<sstring>();
+                auto ignore_nodes = std::unordered_set<gms::inet_address>();
+                auto ri = make_lw_shared<repair_info>(db, ms,
+                        std::move(keyspace), std::move(ranges), std::move(table_ids),
+                        id, std::move(data_centers), std::move(hosts), std::move(ignore_nodes), reason, ops_uuid);
+                ri->neighbors = std::move(neighbors);
+                return repair_ranges(ri);
+            });
+            repair_results.push_back(std::move(f));
+        }
+        when_all(repair_results.begin(), repair_results.end()).then([id, keyspace] (std::vector<future<>> results) mutable {
+            std::vector<sstring> errors;
+            for (unsigned shard = 0; shard < results.size(); shard++) {
+                auto& f = results[shard];
+                if (f.failed()) {
+                    auto ep = f.get_exception();
+                    errors.push_back(format("shard {}: {}", shard, ep));
                 }
-                if (!errors.empty()) {
-                    return make_exception_future<>(std::runtime_error(format("{}", errors)));
-                }
-                return make_ready_future<>();
-            }).get();
-        }).then([id, keyspace] {
-            rlogger.info("repair id {} to sync data for keyspace={}, status=succeeded", id, keyspace);
-        }).handle_exception([&db, id, keyspace] (std::exception_ptr ep) {
-            if (!db.local().has_keyspace(keyspace)) {
-                rlogger.warn("repair id {} to sync data for keyspace={}, status=failed: keyspace does not exist any more, ignoring it, {}", id, keyspace, ep);
-                return make_ready_future<>();
             }
-            rlogger.warn("repair id {} to sync data for keyspace={}, status=failed: {}", id, keyspace,  ep);
-            return make_exception_future<>(ep);
-        });
+            if (!errors.empty()) {
+                return make_exception_future<>(std::runtime_error(format("{}", errors)));
+            }
+            return make_ready_future<>();
+        }).get();
+    }).then([id, keyspace] {
+        rlogger.info("repair id {} to sync data for keyspace={}, status=succeeded", id, keyspace);
+    }).handle_exception([&db, id, keyspace] (std::exception_ptr ep) {
+        if (!db.local().has_keyspace(keyspace)) {
+            rlogger.warn("repair id {} to sync data for keyspace={}, status=failed: keyspace does not exist any more, ignoring it, {}", id, keyspace, ep);
+            return make_ready_future<>();
+        }
+        rlogger.warn("repair id {} to sync data for keyspace={}, status=failed: {}", id, keyspace,  ep);
+        return make_exception_future<>(ep);
+    });
 }
 
 future<> bootstrap_with_repair(seastar::sharded<database>& db, seastar::sharded<netw::messaging_service>& ms, locator::token_metadata_ptr tmptr, std::unordered_set<dht::token> bootstrap_tokens) {
