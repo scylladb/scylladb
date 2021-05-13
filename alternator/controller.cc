@@ -76,6 +76,11 @@ future<> controller::start_server() {
         _ssg = create_smp_service_group(c).get();
 
         rmw_operation::set_default_write_isolation(_config.alternator_write_isolation());
+        alternator::executor::set_default_write_consistency_level(_config.alternator_write_consistency_level());
+        alternator::executor::set_default_read_consistency_level(_config.alternator_read_consistency_level());
+        alternator::executor::set_default_getrecords_consistency_level(_config.alternator_getrecords_consistency_level());
+        alternator::executor::set_default_query_consistency_level(_config.alternator_query_consistency_level());
+        alternator::executor::set_alternator_replication_factor(_config.alternator_replication_factor());
 
         net::inet_address addr = utils::resolve(_config.alternator_address, family).get();
 

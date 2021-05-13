@@ -828,7 +828,7 @@ future<executor::request_return_type> executor::get_records(client_state& client
 
     tracing::add_table_name(trace_state, schema->ks_name(), schema->cf_name());
 
-    db::consistency_level cl = db::consistency_level::LOCAL_QUORUM;
+    db::consistency_level cl = executor::default_getrecords_consistency_level;
     partition_key pk = iter.shard.id.to_partition_key(*schema);
 
     dht::partition_range_vector partition_ranges{ dht::partition_range::make_singular(dht::decorate_key(*schema, pk)) };

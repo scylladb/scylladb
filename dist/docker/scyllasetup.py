@@ -18,6 +18,11 @@ class ScyllaSetup:
         self._alternatorPort = arguments.alternatorPort
         self._alternatorHttpsPort = arguments.alternatorHttpsPort
         self._alternatorWriteIsolation = arguments.alternatorWriteIsolation
+        self._alternatorWriteCL = arguments.alternatorWriteCL
+        self._alternatorReadCL = arguments.alternatorReadCL
+        self._alternatorGetrecordsCL = arguments.alternatorGetrecordsCL
+        self._alternatorQueryCL = arguments.alternatorQueryCL
+        self._alternatorRF = arguments.alternatorRF
         self._smp = arguments.smp
         self._memory = arguments.memory
         self._reserveMemory = arguments.reserveMemory
@@ -139,6 +144,21 @@ class ScyllaSetup:
 
         if self._alternatorWriteIsolation is not None:
             args += ["--alternator-write-isolation %s" % self._alternatorWriteIsolation]
+
+        if self._alternatorWriteCL is not None:
+            args += ["--alternator-write-consistency-level %s" % self._alternatorWriteCL]
+
+        if self._alternatorReadCL is not None:
+            args += ["--alternator-read-consistency-level %s" % self._alternatorReadCL]
+
+        if self._alternatorGetrecordsCL is not None:
+            args += ["--alternator-getrecords-consistency-level %s" % self._alternatorGetrecordsCL]
+            
+        if self._alternatorQueryCL is not None:
+            args += ["--alternator-query-consistency-level %s" % self._alternatorQueryCL]
+
+        if self._alternatorRF is not None:
+            args += ["--alternator-replication-factor %d" % self._alternatorRF]
 
         if self._authenticator is not None:
             args += ["--authenticator %s" % self._authenticator]

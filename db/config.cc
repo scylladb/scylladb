@@ -1073,8 +1073,13 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , alternator_address(this, "alternator_address", value_status::Used, "0.0.0.0", "Alternator API listening address.")
     , alternator_enforce_authorization(this, "alternator_enforce_authorization", value_status::Used, false, "Enforce checking the authorization header for every request in Alternator.")
     , alternator_write_isolation(this, "alternator_write_isolation", value_status::Used, "", "Default write isolation policy for Alternator.")
+    , alternator_write_consistency_level(this, "alternator_write_consistency_level", value_status::Used, "", "Default write consistency level for Alternator.")
+    , alternator_read_consistency_level(this, "alternator_read_consistency_level", value_status::Used, "", "Default read consistency level  for Alternator.")
+    , alternator_getrecords_consistency_level(this, "alternator_getrecords_consistency_level", value_status::Used, "", "Default getrecords consistency level  for Alternator")
+    , alternator_query_consistency_level(this, "alternator_query_consistency_level", value_status::Used, "", "Default query consistency level  for Alternator.")
+    , alternator_replication_factor(this, "alternator_replication_factor", value_status::Used, 3, "Default replication factor for Alternator.")
     , alternator_streams_time_window_s(this, "alternator_streams_time_window_s", value_status::Used, 10, "CDC query confidence window for alternator streams.")
-    , alternator_timeout_in_ms(this, "alternator_timeout_in_ms", liveness::LiveUpdate, value_status::Used, 10000,
+    , alternator_timeout_in_ms(this, "alternator_timeout_in_ms", value_status::Used, 10000,
         "The server-side timeout for completing Alternator API requests.")
     , alternator_ttl_period_in_seconds(this, "alternator_ttl_period_in_seconds", value_status::Used,
         60*60*24,
