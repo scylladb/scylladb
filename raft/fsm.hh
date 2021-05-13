@@ -70,6 +70,8 @@ struct fsm_config {
 // leader.
 static constexpr logical_clock::duration ELECTION_TIMEOUT = logical_clock::duration{10};
 
+class fsm;
+
 // 3.3 Raft Basics
 // At any given time each server is in one of three states:
 // leader, follower, or candidate.
@@ -80,7 +82,9 @@ static constexpr logical_clock::duration ELECTION_TIMEOUT = logical_clock::durat
 // (if a client contacts a follower, the follower redirects it to
 // the leader). The third state, candidate, is used to elect a new
 // leader.
-struct follower : std::monostate {};
+struct follower {
+    server_id current_leader;
+};
 struct candidate {
      // Votes received during an election round.
     votes votes;
@@ -92,19 +96,16 @@ struct candidate {
 struct leader {
     // A state for each follower
     tracker tracker;
-    // Will be set to point to the new leader before it's
-    // used to set semaphore exception.
-    const server_id& current_leader;
+    // Used to acces new leader to set semaphore exception
+    const fsm& fsm;
     // Used to limit log size
     seastar::semaphore log_limiter_semaphore;
     // True if the leader is in the process of transferring the leadership
     bool stepdown = false;
     // True it timeout_now was already sent to one of the followers
     bool timeout_now_sent = false;
-    leader(server_id id, size_t max_log_size, const server_id& leader_) : tracker(id), current_leader(leader_), log_limiter_semaphore(max_log_size) {}
-    ~leader() {
-        log_limiter_semaphore.broken(not_a_leader(current_leader));
-    }
+    leader(size_t max_log_size, const class fsm& fsm_) : fsm(fsm_), log_limiter_semaphore(max_log_size) {}
+    ~leader();
 };
 
 // Raft protocol finite state machine
@@ -143,8 +144,6 @@ struct leader {
 class fsm {
     // id of this node
     server_id _my_id;
-    // id of the current leader
-    server_id _current_leader;
     // What state the server is in. The default is follower.
     std::variant<follower, candidate, leader> _state;
     // _current_term, _voted_for && _log are persisted in persistence
@@ -218,6 +217,15 @@ private:
     // Signaled when there is a IO event to process.
     seastar::condition_variable _sm_events;
 
+    server_id current_leader() const {
+        if (is_leader()) {
+            return _my_id;
+        } else if (is_candidate()) {
+            return {};
+        } else {
+            return follower_state().current_leader;
+        }
+    }
     // Called when one of the replicas advances its match index
     // so it may be the case that some entries are committed now.
     // Signals _sm_events. May resign leadership if we committed
@@ -241,7 +249,7 @@ private:
 
     void check_is_leader() const {
         if (!is_leader()) {
-            throw not_a_leader(_current_leader);
+            throw not_a_leader(current_leader());
         }
     }
 
@@ -284,6 +292,14 @@ private:
 
     const candidate& candidate_state() const {
         return std::get<candidate>(_state);
+    }
+
+    follower& follower_state() {
+        return std::get<follower>(_state);
+    }
+
+    const follower& follower_state() const {
+        return std::get<follower>(_state);
     }
 
     void send_timeout_now(server_id);
@@ -406,6 +422,7 @@ public:
     server_id id() const { return _my_id; }
 
     friend std::ostream& operator<<(std::ostream& os, const fsm& f);
+    friend leader;
 };
 
 template <typename Message>
@@ -457,6 +474,9 @@ void fsm::step(server_id from, const follower& c, Message&& msg) {
 
 template <typename Message>
 void fsm::step(server_id from, Message&& msg) {
+    if (from == _my_id) {
+        on_internal_error(logger, "fsm cannot process messages from itself");
+    }
     static_assert(std::is_rvalue_reference<decltype(msg)>::value, "must be rvalue");
     // 4.1. Safety
     // Servers process incoming RPC requests without consulting
@@ -482,7 +502,7 @@ void fsm::step(server_id from, Message&& msg) {
             leader = from;
         } else {
             if constexpr (std::is_same_v<Message, vote_request>) {
-                if (_current_leader != server_id{} && election_elapsed() < ELECTION_TIMEOUT && !msg.force) {
+                if (current_leader() != server_id{} && election_elapsed() < ELECTION_TIMEOUT && !msg.force) {
                     // 4.2.3 Disruptive servers
                     // If a server receives a RequestVote request
                     // within the minimum election timeout of
@@ -491,7 +511,7 @@ void fsm::step(server_id from, Message&& msg) {
                     // Unless `force` flag is set which indicates that the current leader
                     // wants to stepdown.
                     logger.trace("{} [term: {}] not granting a vote within a minimum election timeout, elapsed {} (current leader = {})",
-                        _my_id, _current_term, election_elapsed(), _current_leader);
+                        _my_id, _current_term, election_elapsed(), current_leader());
                     return;
                 }
             }
@@ -543,15 +563,15 @@ void fsm::step(server_id from, Message&& msg) {
                 // candidate’s current term, then the candidate recognizes the
                 // leader as legitimate and returns to follower state.
                 become_follower(from);
-            } else if (_current_leader == server_id{}) {
+            } else if (current_leader() == server_id{}) {
                 // Earlier we changed our term to match a candidate's
                 // term. Now we get the first message from the
                 // newly elected leader. Keep track of the current
                 // leader to avoid starting an election if the
                 // leader becomes idle.
-                _current_leader = from;
+                follower_state().current_leader = from;
             }
-            if (_current_leader != from) {
+            if (current_leader() != from) {
                 on_internal_error_noexcept(logger, "Got append request or install snpaphot from unexpected leader");
             }
         }

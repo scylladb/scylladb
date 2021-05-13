@@ -111,7 +111,6 @@ bool follower_progress::can_send_to() {
 // progress for non-members (to make sure we don't send noise
 // messages to them).
 void tracker::set_configuration(const configuration& configuration, index_t next_idx) {
-    _leader_progress = nullptr;
     _current_voters.clear();
     _previous_voters.clear();
 
@@ -137,11 +136,6 @@ void tracker::set_configuration(const configuration& configuration, index_t next
                 newp = this->progress::emplace(s.id, follower_progress{s.id, next_idx}).first;
             }
             newp->second.can_vote = s.can_vote;
-            if (s.id == _my_id) {
-                // The leader is part of the current
-                // configuration.
-                _leader_progress = &newp->second;
-            }
         }
     };
     emplace_simple_config(configuration.current, _current_voters);

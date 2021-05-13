@@ -127,14 +127,13 @@ BOOST_AUTO_TEST_CASE(test_votes) {
 
 BOOST_AUTO_TEST_CASE(test_tracker) {
     auto id1 = id();
-    raft::tracker tracker(id1);
+    raft::tracker tracker;
     raft::configuration cfg({id1});
     tracker.set_configuration(cfg, index_t{1});
     BOOST_CHECK_NE(tracker.find(id1), nullptr);
     // The node with id set during construction is assumed to be
     // the leader, since otherwise we wouldn't create a tracker
     // in the first place.
-    BOOST_CHECK_EQUAL(tracker.find(id1), tracker.leader_progress());
     BOOST_CHECK_EQUAL(tracker.committed(index_t{0}), index_t{0});
     // Avoid keeping a reference, follower_progress address may
     // change with configuration change

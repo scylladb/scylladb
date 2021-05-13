@@ -24,6 +24,10 @@
 
 namespace raft {
 
+leader::~leader() {
+    log_limiter_semaphore.broken(not_a_leader(fsm.current_leader()));
+}
+
 fsm::fsm(server_id id, term_t current_term, server_id voted_for, log log,
         failure_detector& failure_detector, fsm_config config) :
         _my_id(id), _current_term(current_term), _voted_for(voted_for),
@@ -36,8 +40,6 @@ fsm::fsm(server_id id, term_t current_term, server_id voted_for, log log,
     _observed.advance(*this);
     logger.trace("{}: starting, current term {}, log length {}", _my_id, _current_term, _log.last_idx());
     reset_election_timeout();
-
-    assert(!bool(_current_leader));
 }
 
 future<> fsm::wait_max_log_size() {
@@ -142,8 +144,7 @@ void fsm::reset_election_timeout() {
 
 void fsm::become_leader() {
     assert(!std::holds_alternative<leader>(_state));
-    _state.emplace<leader>(_my_id, _config.max_log_size, _current_leader);
-    _current_leader = _my_id;
+    _state.emplace<leader>(_config.max_log_size, *this);
     leader_state().log_limiter_semaphore.consume(_log.in_memory_size());
     _last_election_time = _clock.now();
     // a new leader needs to commit at lease one entry to make sure that
@@ -160,9 +161,11 @@ void fsm::become_leader() {
 }
 
 void fsm::become_follower(server_id leader) {
-    _current_leader = leader;
-    _state = follower{};
-    if (_current_leader) {
+    if (leader == _my_id) {
+        on_internal_error(logger, "fsm cannot become a follower of itself");
+    }
+    _state = follower{.current_leader = leader};
+    if (leader != server_id{}) {
         _last_election_time = _clock.now();
     }
 }
@@ -171,7 +174,6 @@ void fsm::become_candidate(bool is_prevote, bool is_leadership_transfer) {
     // When starting a campain we need to reset current leader otherwise
     // disruptive server prevention will stall an election if quorum of nodes
     // start election together since each one will ignore vote requests from others
-    _current_leader = {};
     _state = candidate(_log.get_configuration(), is_prevote);
 
     reset_election_timeout();
@@ -328,11 +330,12 @@ void fsm::advance_stable_idx(index_t idx) {
     logger.trace("advance_stable_idx[{}]: prev_stable_idx={}, idx={}", _my_id, prev_stable_idx, idx);
     if (is_leader()) {
         replicate();
-        if (leader_state().tracker.leader_progress()) {
+        auto leader_progress = leader_state().tracker.find(_my_id);
+        if (leader_progress) {
             // If this server is leader and is part of the current
             // configuration, update it's progress and optionally
             // commit new entries.
-            leader_state().tracker.leader_progress()->accepted(idx);
+            leader_progress->accepted(idx);
             maybe_commit();
         }
     }
@@ -395,7 +398,7 @@ void fsm::maybe_commit() {
             // configuration, and 6 if we assume we left it. Let
             // it happen without an extra FSM step.
             maybe_commit();
-        } else if (leader_state().tracker.leader_progress() == nullptr) {
+        } else if (leader_state().tracker.find(_my_id) == nullptr) {
             logger.trace("maybe_commit[{}]: stepping down as leader", _my_id);
             // 4.2.2 Removing the current leader
             //
@@ -473,8 +476,8 @@ void fsm::tick() {
         // healthy, we must not apply the stable leader rule
         // in this case.
         const configuration& conf = _log.get_configuration();
-        return _current_leader && (conf.is_joint() || conf.current.contains(server_address{_current_leader})) &&
-            _failure_detector.is_alive(_current_leader);
+        return current_leader() && (conf.is_joint() || conf.current.contains(server_address{current_leader()})) &&
+            _failure_detector.is_alive(current_leader());
     };
 
     if (is_leader()) {
@@ -639,7 +642,7 @@ void fsm::request_vote(server_id from, vote_request&& request) {
         // We can vote if this is a repeat of a vote we've already cast...
         _voted_for == from ||
         // ...we haven't voted and we don't think there's a leader yet in this term...
-        (_voted_for == server_id{} && _current_leader == server_id{}) ||
+        (_voted_for == server_id{} && current_leader() == server_id{}) ||
         // ...this is prevote for a future term...
         // (we will get here if the node does not know any leader yet and already
         //  voted for some other node, but now it get even newer prevote request)
@@ -901,7 +904,7 @@ void fsm::send_timeout_now(server_id id) {
     logger.trace("send_timeout_now[{}] send timeout_now to {}", _my_id, id);
     send_to(id, timeout_now{_current_term});
     leader_state().timeout_now_sent = true;
-    if (leader_state().tracker.leader_progress() == nullptr) {
+    if (leader_state().tracker.find(_my_id) == nullptr) {
         logger.trace("send_timeout_now[{}] become follower", _my_id);
         become_follower({});
     }
@@ -913,7 +916,7 @@ void fsm::stop() {
 
 std::ostream& operator<<(std::ostream& os, const fsm& f) {
     os << "current term: " << f._current_term << ", ";
-    os << "current leader: " << f._current_leader << ", ";
+    os << "current leader: " << f.current_leader() << ", ";
     os << "len messages: " << f._messages.size() << ", ";
     os << "voted for: " << f._voted_for << ", ";
     os << "commit idx:" << f._commit_idx << ", ";
