@@ -33,7 +33,6 @@
 #include "utils/UUID.hh"
 #include "utils/hash.hh"
 #include "service/priority_manager.hh"
-#include "service/storage_proxy.hh"
 #include "db/view/view_update_checks.hh"
 #include "database.hh"
 #include <seastar/util/bool_class.hh>
@@ -914,7 +913,8 @@ public:
             shard_config master_node_shard_config,
             table_schema_version schema_version,
             streaming::stream_reason reason) {
-        return _migration_manager->local().get_schema_for_write(schema_version, {from, src_cpu_id}, ::_messaging->local()).then([from,
+        return repair.get_migration_manager().get_schema_for_write(schema_version, {from, src_cpu_id}, repair.get_messaging()).then([&repair,
+                from,
                 repair_meta_id,
                 range,
                 algo,
@@ -923,12 +923,11 @@ public:
                 master_node_shard_config,
                 schema_version,
                 reason] (schema_ptr s) {
-            sharded<netw::messaging_service>& ms = *::_messaging;
-            auto& db = service::get_local_storage_proxy().get_db();
+            auto& db = repair.get_db();
             auto& cf = db.local().find_column_family(s->id());
             node_repair_meta_id id{from, repair_meta_id};
             auto rm = make_lw_shared<repair_meta>(db,
-                    ms,
+                    repair.get_messaging().container(),
                     cf,
                     s,
                     range,
