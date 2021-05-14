@@ -4602,20 +4602,9 @@ SEASTAR_TEST_CASE(test_impossible_where) {
 SEASTAR_THREAD_TEST_CASE(test_query_limit) {
     cql_test_config cfg;
 
-    cfg.db_config->max_memory_for_unlimited_query_soft_limit.set(256, utils::config_file::config_source::CommandLine);
-    cfg.db_config->max_memory_for_unlimited_query_hard_limit.set(1024, utils::config_file::config_source::CommandLine);
+    auto db_config = cfg.db_config;
 
-    cfg.dbcfg.emplace();
-    cfg.dbcfg->available_memory = memory::stats().total_memory();
-    cfg.dbcfg->statement_scheduling_group = seastar::create_scheduling_group("statement", 1000).get0();
-    cfg.dbcfg->streaming_scheduling_group = seastar::create_scheduling_group("streaming", 200).get0();
-
-    auto clean_up_sched_groups = defer([dbcfg = *cfg.dbcfg] {
-        seastar::destroy_scheduling_group(dbcfg.statement_scheduling_group).get0();
-        seastar::destroy_scheduling_group(dbcfg.streaming_scheduling_group).get0();
-    });
-
-    do_with_cql_env_thread([] (cql_test_env& e) {
+    do_with_cql_env_thread([db_config] (cql_test_env& e) {
         e.execute_cql("CREATE TABLE test (pk int, ck int, v text, PRIMARY KEY (pk, ck));").get();
         auto id = e.prepare("INSERT INTO test (pk, ck, v) VALUES (?, ?, ?);").get0();
 
@@ -4642,6 +4631,9 @@ SEASTAR_THREAD_TEST_CASE(test_query_limit) {
 
         const auto normal_rows = boost::copy_range<std::vector<std::vector<bytes_opt>>>(boost::irange(0, num_rows) | boost::adaptors::transformed(make_expected_row));
         const auto reversed_rows = boost::copy_range<std::vector<std::vector<bytes_opt>>>(boost::irange(0, num_rows) | boost::adaptors::reversed | boost::adaptors::transformed(make_expected_row));
+
+        db_config->max_memory_for_unlimited_query_soft_limit.set(256, utils::config_file::config_source::CommandLine);
+        db_config->max_memory_for_unlimited_query_hard_limit.set(1024, utils::config_file::config_source::CommandLine);
 
         for (auto is_paged : {true, false}) {
             for (auto is_reversed : {true, false}) {
@@ -4848,15 +4840,12 @@ SEASTAR_THREAD_TEST_CASE(test_query_unselected_columns) {
 
     cfg.dbcfg.emplace();
     cfg.dbcfg->available_memory = memory::stats().total_memory();
-    cfg.dbcfg->statement_scheduling_group = seastar::create_scheduling_group("statement", 1000).get0();
-
-    auto statement_sched_group = cfg.dbcfg->statement_scheduling_group;
-
-    auto clean_up_sched_groups = defer([statement_sched_group] {
-        seastar::destroy_scheduling_group(statement_sched_group).get0();
-    });
 
     do_with_cql_env_thread([] (cql_test_env& e) {
+        // Sanity test, this test-case has to run in the statement group that is != default group.
+        BOOST_REQUIRE(e.local_db().get_statement_scheduling_group() == current_scheduling_group());
+        BOOST_REQUIRE(default_scheduling_group() != current_scheduling_group());
+
         auto now_nano = std::chrono::duration_cast<std::chrono::nanoseconds>(db_clock::now().time_since_epoch()).count();
         e.execute_cql("CREATE TABLE tbl (pk int, ck int, v text, PRIMARY KEY (pk, ck))").get();
 
@@ -4880,7 +4869,7 @@ SEASTAR_THREAD_TEST_CASE(test_query_unselected_columns) {
                     cql3::query_options::specific_options{-1, nullptr, {}, api::new_timestamp()});
             assert_that(e.execute_cql("SELECT pk, ck FROM tbl", std::move(qo)).get0()).is_rows().with_size(num_rows);
         }
-    }, std::move(cfg), thread_attributes{.sched_group = statement_sched_group}).get();
+    }, std::move(cfg)).get();
 }
 
 SEASTAR_TEST_CASE(test_user_based_sla_queries) {

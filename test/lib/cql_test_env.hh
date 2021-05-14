@@ -61,9 +61,28 @@ namespace db {
     class config;
 }
 
+struct scheduling_groups {
+    scheduling_group compaction_scheduling_group;
+    scheduling_group memory_compaction_scheduling_group;
+    scheduling_group streaming_scheduling_group;
+    scheduling_group statement_scheduling_group;
+    scheduling_group memtable_scheduling_group;
+    scheduling_group memtable_to_cache_scheduling_group;
+    scheduling_group gossip_scheduling_group;
+};
+
+// Creating and destroying scheduling groups on each env setup and teardown
+// doesn't work because it messes up execution stages due to scheduling groups
+// having the same name but not having the same id on each run. So they are
+// created once and used across all envs. This method allows retrieving them to
+// be used in tests.
+// Not thread safe!
+future<scheduling_groups> get_scheduling_groups();
+
 class cql_test_config {
 public:
     seastar::shared_ptr<db::config> db_config;
+    // Scheduling groups are overwritten unconditionally, see get_scheduling_groups().
     std::optional<database_config> dbcfg;
     std::set<sstring> disabled_features;
 

@@ -37,6 +37,7 @@
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/scheduling.hh>
 #include <seastar/core/reactor.hh>
+#include <seastar/core/coroutine.hh>
 #include "utils/UUID_gen.hh"
 #include "service/migration_manager.hh"
 #include "sstables/compaction_manager.hh"
@@ -68,6 +69,26 @@
 #include "debug.hh"
 
 using namespace std::chrono_literals;
+
+namespace {
+
+
+} // anonymous namespace
+
+future<scheduling_groups> get_scheduling_groups() {
+    static std::optional<scheduling_groups> _scheduling_groups;
+    if (!_scheduling_groups) {
+        _scheduling_groups.emplace();
+        _scheduling_groups->compaction_scheduling_group = co_await create_scheduling_group("compaction", 1000);
+        _scheduling_groups->memory_compaction_scheduling_group = co_await create_scheduling_group("mem_compaction", 1000);
+        _scheduling_groups->streaming_scheduling_group = co_await create_scheduling_group("streaming", 200);
+        _scheduling_groups->statement_scheduling_group = co_await create_scheduling_group("statement", 1000);
+        _scheduling_groups->memtable_scheduling_group = co_await create_scheduling_group("memtable", 1000);
+        _scheduling_groups->memtable_to_cache_scheduling_group = co_await create_scheduling_group("memtable_to_cache", 200);
+        _scheduling_groups->gossip_scheduling_group = co_await create_scheduling_group("gossip", 1000);
+    }
+    co_return *_scheduling_groups;
+}
 
 cql_test_config::cql_test_config()
     : cql_test_config(make_shared<db::config>())
@@ -525,6 +546,16 @@ public:
             } else {
                 dbcfg.available_memory = memory::stats().total_memory();
             }
+
+            auto scheduling_groups = get_scheduling_groups().get();
+            dbcfg.compaction_scheduling_group = scheduling_groups.compaction_scheduling_group;
+            dbcfg.memory_compaction_scheduling_group = scheduling_groups.memory_compaction_scheduling_group;
+            dbcfg.streaming_scheduling_group = scheduling_groups.streaming_scheduling_group;
+            dbcfg.statement_scheduling_group = scheduling_groups.statement_scheduling_group;
+            dbcfg.memtable_scheduling_group = scheduling_groups.memtable_scheduling_group;
+            dbcfg.memtable_to_cache_scheduling_group = scheduling_groups.memtable_to_cache_scheduling_group;
+            dbcfg.gossip_scheduling_group = scheduling_groups.gossip_scheduling_group;
+
             db.start(std::ref(*cfg), dbcfg, std::ref(mm_notif), std::ref(feature_service), std::ref(token_metadata), std::ref(abort_sources), std::ref(sst_dir_semaphore)).get();
             auto stop_db = defer([&db] {
                 db.stop().get();
@@ -683,7 +714,9 @@ public:
                 env.create_keyspace(ks_name).get();
             }
 
-            func(env).get();
+            with_scheduling_group(dbcfg.statement_scheduling_group, [&func, &env] {
+                return func(env);
+            }).get();
         });
     }
 

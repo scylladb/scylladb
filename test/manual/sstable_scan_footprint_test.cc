@@ -323,11 +323,6 @@ int main(int argc, char** argv) {
       return async([] {
         cql_test_config test_cfg;
 
-        test_cfg.dbcfg.emplace();
-        test_cfg.dbcfg->available_memory = memory::stats().total_memory();
-        test_cfg.dbcfg->statement_scheduling_group = seastar::create_scheduling_group("statement", 1000).get0();
-        test_cfg.dbcfg->streaming_scheduling_group = seastar::create_scheduling_group("streaming", 200).get0();
-
         auto& db_cfg = *test_cfg.db_config;
 
         db_cfg.enable_cache(app.configuration().contains("enable-cache"));
