@@ -72,7 +72,7 @@ static void require_eventually_empty_caches(distributed<database>& db,
 
 // Best run with SMP>=2
 SEASTAR_THREAD_TEST_CASE(test_abandoned_read) {
-    do_with_cql_env([] (cql_test_env& env) -> future<> {
+    do_with_cql_env_thread([] (cql_test_env& env) -> future<> {
         using namespace std::chrono_literals;
 
         env.db().invoke_on_all([] (database& db) {
@@ -237,7 +237,7 @@ void check_results_are_equal(std::vector<mutation>& results1, std::vector<mutati
 
 // Best run with SMP>=2
 SEASTAR_THREAD_TEST_CASE(test_read_all) {
-    do_with_cql_env([] (cql_test_env& env) -> future<> {
+    do_with_cql_env_thread([] (cql_test_env& env) -> future<> {
         using namespace std::chrono_literals;
 
         env.db().invoke_on_all([] (database& db) {
@@ -278,7 +278,7 @@ SEASTAR_THREAD_TEST_CASE(test_read_all) {
 
 // Best run with SMP>=2
 SEASTAR_THREAD_TEST_CASE(test_evict_a_shard_reader_on_each_page) {
-    do_with_cql_env([] (cql_test_env& env) -> future<> {
+    do_with_cql_env_thread([] (cql_test_env& env) -> future<> {
         using namespace std::chrono_literals;
 
         env.db().invoke_on_all([] (database& db) {
@@ -952,7 +952,7 @@ SEASTAR_THREAD_TEST_CASE(fuzzy_test) {
     auto db_cfg = make_shared<db::config>();
     db_cfg->enable_commitlog(false);
 
-    do_with_cql_env([] (cql_test_env& env) -> future<> {
+    do_with_cql_env_thread([] (cql_test_env& env) -> future<> {
         // REPLACE RANDOM SEED HERE.
         const auto seed = tests::random::get_int<uint32_t>();
         testlog.info("fuzzy test seed: {}", seed);

@@ -54,7 +54,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_as_mutation_source) {
     test_reader_lifecycle_policy::operations_gate operations_gate;
     test_reader_lifecycle_policy::semaphore_registry semaphore_registry;
 
-    do_with_cql_env([&] (cql_test_env& env) -> future<> {
+    do_with_cql_env_thread([&] (cql_test_env& env) -> future<> {
         auto make_populate = [&] (bool evict_paused_readers, bool single_fragment_buffer) {
             return [&, evict_paused_readers, single_fragment_buffer] (schema_ptr s, const std::vector<mutation>& mutations) mutable {
                 // We need to group mutations that have the same token so they land on the same shard.

@@ -630,7 +630,7 @@ SEASTAR_THREAD_TEST_CASE(test_resources_based_cache_eviction) {
     db_cfg.enable_cache(false);
     db_cfg.enable_commitlog(false);
 
-    do_with_cql_env([] (cql_test_env& env) {
+    do_with_cql_env_thread([] (cql_test_env& env) {
         using namespace std::chrono_literals;
 
         auto& db = env.local_db();

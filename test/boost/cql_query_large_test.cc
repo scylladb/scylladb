@@ -61,7 +61,7 @@ static void flush(cql_test_env& e) {
 SEASTAR_THREAD_TEST_CASE(test_large_collection) {
     auto cfg = make_shared<db::config>();
     cfg->compaction_large_cell_warning_threshold_mb(1);
-    do_with_cql_env([](cql_test_env& e) {
+    do_with_cql_env_thread([](cql_test_env& e) {
         e.execute_cql("create table tbl (a int, b list<text>, primary key (a))").get();
         e.execute_cql("insert into tbl (a, b) values (42, []);").get();
         sstring blob(1024, 'x');
@@ -83,7 +83,7 @@ SEASTAR_THREAD_TEST_CASE(test_large_data) {
     auto cfg = make_shared<db::config>();
     cfg->compaction_large_row_warning_threshold_mb(1);
     cfg->compaction_large_cell_warning_threshold_mb(1);
-    do_with_cql_env([](cql_test_env& e) {
+    do_with_cql_env_thread([](cql_test_env& e) {
         e.execute_cql("create table tbl (a int, b text, primary key (a))").get();
         sstring blob(1024*1024, 'x');
         e.execute_cql("insert into tbl (a, b) values (42, 'foo');").get();
