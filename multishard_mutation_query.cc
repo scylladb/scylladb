@@ -317,13 +317,18 @@ flat_mutation_reader read_context::create_reader(
 
     auto& table = _db.local().find_column_family(schema);
 
+    auto remote_parts = reader_meta::remote_parts(
+            std::move(permit),
+            std::make_unique<const dht::partition_range>(pr),
+            std::make_unique<const query::partition_slice>(ps),
+            table.read_in_progress());
+
     if (!rm.rparts) {
-        rm.rparts = make_foreign(std::make_unique<reader_meta::remote_parts>(std::move(permit)));
+        rm.rparts = make_foreign(std::make_unique<reader_meta::remote_parts>(std::move(remote_parts)));
+    } else {
+        *rm.rparts = std::move(remote_parts);
     }
 
-    rm.rparts->range = std::make_unique<const dht::partition_range>(pr);
-    rm.rparts->slice = std::make_unique<const query::partition_slice>(ps);
-    rm.rparts->read_operation = table.read_in_progress();
     rm.state = reader_state::used;
 
     return table.as_mutation_source().make_reader(std::move(schema), rm.rparts->permit, *rm.rparts->range, *rm.rparts->slice, pc,
