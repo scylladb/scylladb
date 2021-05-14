@@ -457,7 +457,8 @@ future<> read_context::save_reader(shard_id shard, const dht::decorated_key& las
     return _db.invoke_on(shard, [this, query_uuid = _cmd.query_uuid, query_ranges = _ranges, &rm,
             &last_pkey, &last_ckey, gts = tracing::global_trace_state_ptr(_trace_state)] (database& db) mutable {
         try {
-            flat_mutation_reader_opt reader = rm.rparts->permit.semaphore().unregister_inactive_read(std::move(*rm.handle));
+            auto rparts = rm.rparts.release(); // avoid another round-trip when destroying rparts
+            flat_mutation_reader_opt reader = rparts->permit.semaphore().unregister_inactive_read(std::move(*rm.handle));
 
             if (!reader) {
                 return make_ready_future<>();
@@ -472,17 +473,17 @@ future<> read_context::save_reader(shard_id shard, const dht::decorated_key& las
             auto& schema = *reader->schema();
             for (;rit != rend; ++rit) {
                 // Copy the fragment, the buffer is on another shard.
-                reader->unpop_mutation_fragment(mutation_fragment(schema, rm.rparts->permit, *rit));
+                reader->unpop_mutation_fragment(mutation_fragment(schema, rparts->permit, *rit));
             }
 
             const auto size_after = reader->buffer_size();
 
             auto querier = query::shard_mutation_querier(
                     std::move(query_ranges),
-                    std::move(rm.rparts->range),
-                    std::move(rm.rparts->slice),
+                    std::move(rparts->range),
+                    std::move(rparts->slice),
                     std::move(*reader),
-                    std::move(rm.rparts->permit),
+                    std::move(rparts->permit),
                     last_pkey,
                     last_ckey);
 
