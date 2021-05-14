@@ -52,6 +52,7 @@
 #include "test/lib/reader_permit.hh"
 #include "db/query_context.hh"
 #include "test/lib/test_services.hh"
+#include "test/lib/log.hh"
 #include "unit_test_service_levels_accessor.hh"
 #include "db/view/view_builder.hh"
 #include "db/view/node_view_update_backlog.hh"
@@ -174,6 +175,7 @@ public:
     { }
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_cql(sstring_view text) override {
+        testlog.trace("{}(\"{}\")", __FUNCTION__, text);
         auto qs = make_query_state();
         return local_qp().execute_direct(text, *qs, cql3::query_options::DEFAULT).finally([qs] {});
     }
@@ -182,6 +184,7 @@ public:
         sstring_view text,
         std::unique_ptr<cql3::query_options> qo) override
     {
+        testlog.trace("{}(\"{}\")", __FUNCTION__, text);
         auto qs = make_query_state();
         auto& lqo = *qo;
         return local_qp().execute_direct(text, *qs, lqo).finally([qs, qo = std::move(qo)] {});
