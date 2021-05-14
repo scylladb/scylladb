@@ -2902,7 +2902,13 @@ future<> storage_service::restore_replica_count(inet_address endpoint, inet_addr
     }
   return seastar::async([this, endpoint, notify_endpoint] {
     auto tmptr = get_token_metadata_ptr();
-    auto streamer = make_lw_shared<dht::range_streamer>(_db, tmptr, _abort_source, get_broadcast_address(), "Restore_replica_count", streaming::stream_reason::removenode);
+    abort_source as;
+    auto sub = _abort_source.subscribe([&as] () noexcept {
+        if (!as.abort_requested()) {
+            as.request_abort();
+        }
+    });
+    auto streamer = make_lw_shared<dht::range_streamer>(_db, tmptr, as, get_broadcast_address(), "Restore_replica_count", streaming::stream_reason::removenode);
     auto my_address = get_broadcast_address();
     auto non_system_keyspaces = _db.local().get_non_system_keyspaces();
     for (const auto& keyspace_name : non_system_keyspaces) {
@@ -2920,6 +2926,42 @@ future<> storage_service::restore_replica_count(inet_address endpoint, inet_addr
         }
         streamer->add_rx_ranges(keyspace_name, std::move(ranges_per_endpoint));
     }
+    auto status_checker = seastar::async([this, endpoint, &as] {
+        slogger.info("restore_replica_count: Started status checker for removing node {}", endpoint);
+        while (!as.abort_requested()) {
+            auto status = _gossiper.get_gossip_status(endpoint);
+            // If the node to be removed is already in removed status, it has
+            // probably been removed forcely with `nodetool removenode force`.
+            // Abort the restore_replica_count in such case to avoid streaming
+            // attempt since the user has removed the node forcely.
+            if (status == sstring(versioned_value::REMOVED_TOKEN)) {
+                slogger.info("restore_replica_count: Detected node {} has left the cluster, status={}, abort restore_replica_count for removing node {}",
+                        endpoint, status, endpoint);
+                if (!as.abort_requested()) {
+                    as.request_abort();
+                }
+                return;
+            }
+            slogger.debug("restore_replica_count: Sleep and detect removing node {}, status={}", endpoint, status);
+            sleep_abortable(std::chrono::seconds(10), as).get();
+        }
+    });
+    auto stop_status_checker = defer([endpoint, &status_checker, &as] () mutable {
+        try {
+            slogger.info("restore_replica_count: Started to stop status checker for removing node {}", endpoint);
+            if (!as.abort_requested()) {
+                as.request_abort();
+            }
+            status_checker.get();
+        } catch (const seastar::sleep_aborted& ignored) {
+            slogger.debug("restore_replica_count: Got sleep_abort to stop status checker for removing node {}: {}", endpoint, ignored);
+        } catch (...) {
+            slogger.warn("restore_replica_count: Found error in status checker for removing node {}: {}",
+                    endpoint, std::current_exception());
+        }
+        slogger.info("restore_replica_count: Finished to stop status checker for removing node {}", endpoint);
+    });
+
     streamer->stream_async().then_wrapped([this, streamer, notify_endpoint] (auto&& f) {
         try {
             f.get();
