@@ -101,8 +101,6 @@ class executor {
 private:
     executor_shard_stats executor_shard_stats_snapshot();
     future<> run_worker() {
-        auto stats_begin = executor_shard_stats_snapshot();
-        _instructions_retired_counter.enable();
         return do_until([this] {
             return _end_at_count ? _count == _end_at_count : lowres_clock::now() >= _end_at;
         }, [this] () mutable {
@@ -122,6 +120,7 @@ public:
     // Returns the number of invocations of @func
     future<executor_shard_stats> run() {
         auto stats_start = executor_shard_stats_snapshot();
+        _instructions_retired_counter.enable();
         auto idx = boost::irange(0, (int)_n_workers);
         return parallel_for_each(idx.begin(), idx.end(), [this] (auto idx) mutable {
             return this->run_worker();
