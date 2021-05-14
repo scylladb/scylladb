@@ -1059,7 +1059,6 @@ private:
     tracing::global_trace_state_ptr _trace_state;
     const mutation_reader::forwarding _fwd_mr;
     reader_concurrency_semaphore::inactive_read_handle _irh;
-    bool _reader_created = false;
     bool _drop_partition_start = false;
     bool _drop_static_row = false;
     // Trim range tombstones on the start of the buffer to the start of the read
@@ -1214,6 +1213,7 @@ flat_mutation_reader evictable_reader::recreate_reader() {
         case partition_region::clustered:
             _drop_partition_start = true;
             _drop_static_row = true;
+            _trim_range_tombstones = true;
             adjust_partition_slice();
             slice = &*_slice_override;
             break;
@@ -1235,10 +1235,9 @@ flat_mutation_reader evictable_reader::recreate_reader() {
 
         _range_override = dht::partition_range({dht::partition_range::bound(*_last_pkey, partition_range_is_inclusive)}, _pr->end());
         range = &*_range_override;
-    }
 
-    _trim_range_tombstones = true;
-    _validate_partition_key = true;
+        _validate_partition_key = true;
+    }
 
     return _ms.make_reader(
             _schema,
@@ -1252,11 +1251,6 @@ flat_mutation_reader evictable_reader::recreate_reader() {
 }
 
 flat_mutation_reader evictable_reader::resume_or_create_reader() {
-    if (!_reader_created) {
-        auto reader = _ms.make_reader(_schema, _permit, *_pr, _ps, _pc, _trace_state, streamed_mutation::forwarding::no, _fwd_mr);
-        _reader_created = true;
-        return reader;
-    }
     if (_reader) {
         return std::move(*_reader);
     }
@@ -1522,9 +1516,6 @@ future<> evictable_reader::fast_forward_to(const dht::partition_range& pr, db::t
     if (_reader) {
         co_await _reader->fast_forward_to(pr, timeout);
         _range_override.reset();
-        co_return;
-    }
-    if (!_reader_created || !_irh) {
         co_return;
     }
     if (auto reader_opt = try_resume()) {
