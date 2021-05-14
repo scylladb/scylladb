@@ -1107,7 +1107,6 @@ public:
             const io_priority_class& pc,
             tracing::trace_state_ptr trace_state,
             mutation_reader::forwarding fwd_mr);
-    ~evictable_reader();
     virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override;
     virtual future<> next_partition() override;
     virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override;
@@ -1488,10 +1487,6 @@ evictable_reader::evictable_reader(
     , _trace_state(std::move(trace_state))
     , _fwd_mr(fwd_mr)
     , _tri_cmp(*_schema) {
-}
-
-evictable_reader::~evictable_reader() {
-    try_resume();
 }
 
 future<> evictable_reader::fill_buffer(db::timeout_clock::time_point timeout) {
