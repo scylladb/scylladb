@@ -1145,7 +1145,11 @@ public:
         setup_for_partition(pk);
         auto dk = dht::decorate_key(*_schema, pk);
         _reader->on_next_partition(std::move(dk), tombstone(deltime));
-        return proceed::yes;
+        // Only partition start will be consumed if processing a large run of partition tombstones,
+        // so let's stop the consumer if buffer is full.
+        // Otherwise, partition tombstones will keep accumulating in memory till other fragment type
+        // is found which can stop the consumer (perhaps there's none if sstable is full of tombstones).
+        return proceed(!_reader->is_buffer_full());
     }
 
     virtual consumer_m::row_processing_result consume_row_start(const std::vector<temporary_buffer<char>>& ecp) override {
