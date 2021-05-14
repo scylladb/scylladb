@@ -1808,13 +1808,14 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_reading_empty_table) {
         simple_schema s;
         auto factory = [&shards_touched] (
                 schema_ptr s,
+                reader_permit permit,
                 const dht::partition_range& range,
                 const query::partition_slice& slice,
                 const io_priority_class& pc,
                 tracing::trace_state_ptr trace_state,
                 mutation_reader::forwarding fwd_mr) {
             shards_touched[this_shard_id()] = true;
-            return make_empty_flat_reader(s, tests::make_permit());
+            return make_empty_flat_reader(s, std::move(permit));
         };
 
         assert_that(make_multishard_combining_reader(
@@ -2064,6 +2065,7 @@ multishard_reader_for_read_ahead prepare_multishard_reader_for_read_ahead_test(s
 
     auto factory = [gs = global_simple_schema(s), remote_controls = std::move(remote_control_refs), shard_pkeys = std::move(shard_pkeys)] (
             schema_ptr,
+            reader_permit,
             const dht::partition_range& range,
             const query::partition_slice& slice,
             const io_priority_class& pc,
@@ -2107,13 +2109,14 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_custom_shard_number) {
         auto sharder = std::make_unique<dht::sharder>(no_shards, 0);
         auto factory = [&shards_touched] (
                 schema_ptr s,
+                reader_permit permit,
                 const dht::partition_range& range,
                 const query::partition_slice& slice,
                 const io_priority_class& pc,
                 tracing::trace_state_ptr trace_state,
                 mutation_reader::forwarding fwd_mr) {
             shards_touched[this_shard_id()] = true;
-            return make_empty_flat_reader(s, tests::make_permit());
+            return make_empty_flat_reader(s, std::move(permit));
         };
 
         assert_that(make_multishard_combining_reader_for_tests(
@@ -2147,13 +2150,14 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_only_reads_from_needed
         simple_schema s;
         auto factory = [&shards_touched] (
                 schema_ptr s,
+                reader_permit permit,
                 const dht::partition_range& range,
                 const query::partition_slice& slice,
                 const io_priority_class& pc,
                 tracing::trace_state_ptr trace_state,
                 mutation_reader::forwarding fwd_mr) {
             shards_touched[this_shard_id()] = true;
-            return make_empty_flat_reader(s, tests::make_permit());
+            return make_empty_flat_reader(s, std::move(permit));
         };
 
         std::vector<bool> expected_shards_touched(smp::count);
@@ -2392,6 +2396,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_next_partition) {
 
         auto factory = [db = &env.db(), max_buffer_size] (
                 schema_ptr schema,
+                reader_permit permit,
                 const dht::partition_range& range,
                 const query::partition_slice& slice,
                 const io_priority_class& pc,
@@ -2400,7 +2405,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_next_partition) {
             auto& table = db->local().find_column_family(schema);
             auto reader = table.as_mutation_source().make_reader(
                     schema,
-                    tests::make_permit(),
+                    std::move(permit),
                     range,
                     slice,
                     service::get_local_sstable_query_read_priority(),
@@ -2524,6 +2529,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_non_strictly_monotonic
     do_with_cql_env_thread([=, s = std::move(s)] (cql_test_env& env) mutable -> future<> {
         auto factory = [=, gs = global_simple_schema(s)] (
                 schema_ptr,
+                reader_permit permit,
                 const dht::partition_range& range,
                 const query::partition_slice& slice,
                 const io_priority_class& pc,
@@ -2532,9 +2538,8 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_non_strictly_monotonic
             auto s = gs.get();
             auto pkey = s.make_pkey(pk);
             if (s.schema()->get_sharder().shard_of(pkey.token()) != this_shard_id()) {
-                return make_empty_flat_reader(s.schema(), tests::make_permit());
+                return make_empty_flat_reader(s.schema(), std::move(permit));
             }
-            auto permit = tests::make_permit();
             auto fragments = make_fragments_with_non_monotonic_positions(s, permit, std::move(pkey), max_buffer_size, tombstone_deletion_time);
             auto rd = make_flat_mutation_reader_from_fragments(s.schema(), permit, std::move(fragments), range, slice);
             rd.set_max_buffer_size(max_buffer_size);
@@ -2604,13 +2609,14 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_streaming_reader) {
 
         auto reader_factory = [db = &env.db()] (
                 schema_ptr s,
+                reader_permit permit,
                 const dht::partition_range& range,
                 const query::partition_slice& slice,
                 const io_priority_class& pc,
                 tracing::trace_state_ptr trace_state,
                 mutation_reader::forwarding fwd_mr) mutable {
             auto& table = db->local().find_column_family(s);
-            return table.as_mutation_source().make_reader(std::move(s), tests::make_permit(), range, slice, pc, std::move(trace_state),
+            return table.as_mutation_source().make_reader(std::move(s), std::move(permit), range, slice, pc, std::move(trace_state),
                     streamed_mutation::forwarding::no, fwd_mr);
         };
         auto reference_reader = make_filtering_reader(

@@ -94,12 +94,13 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_as_mutation_source) {
                         mutation_reader::forwarding fwd_mr) mutable {
                     auto factory = [remote_memtables, single_fragment_buffer] (
                             schema_ptr s,
+                            reader_permit permit,
                             const dht::partition_range& range,
                             const query::partition_slice& slice,
                             const io_priority_class& pc,
                             tracing::trace_state_ptr trace_state,
                             mutation_reader::forwarding fwd_mr) {
-                            auto reader = remote_memtables->at(this_shard_id())->make_flat_reader(s, tests::make_permit(), range, slice, pc, std::move(trace_state),
+                            auto reader = remote_memtables->at(this_shard_id())->make_flat_reader(s, std::move(permit), range, slice, pc, std::move(trace_state),
                                     streamed_mutation::forwarding::no, fwd_mr);
                             if (single_fragment_buffer) {
                                 reader.set_max_buffer_size(1);
