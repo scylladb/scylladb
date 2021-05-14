@@ -147,6 +147,10 @@ EOF
     chmod +x "$install"
 }
 
+install() {
+    command install -Z "$@"
+}
+
 installconfig() {
     local perm="$1"
     local src="$2"
@@ -197,13 +201,13 @@ if [ -z "$python3" ]; then
 fi
 rpython3=$(realpath -m "$root/$python3")
 if ! $nonroot; then
-    retc="$root/etc"
-    rsysconfdir="$root/$sysconfdir"
-    rusr="$root/usr"
-    rsystemd="$rusr/lib/systemd/system"
+    retc=$(realpath -m "$root/etc")
+    rsysconfdir=$(realpath -m "$root/$sysconfdir")
+    rusr=$(realpath -m "$root/usr")
+    rsystemd=$(realpath -m "$rusr/lib/systemd/system")
     rdoc="$rprefix/share/doc"
-    rdata="$root/var/lib/scylla"
-    rhkdata="$root/var/lib/scylla-housekeeping"
+    rdata=$(realpath -m "$root/var/lib/scylla")
+    rhkdata=$(realpath -m "$root/var/lib/scylla-housekeeping")
 else
     retc="$rprefix/etc"
     rsysconfdir="$rprefix/$sysconfdir"
