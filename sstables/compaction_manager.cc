@@ -314,6 +314,7 @@ future<> compaction_manager::run_custom_job(column_family* cf, sstring name, non
             cmlog.info("{} was abruptly stopped, reason: {}", name, e.what());
         } catch (...) {
             cmlog.error("{} failed: {}", name, std::current_exception());
+            throw;
         }
     });
     return task->compaction_done.get_future().then([task] {});
