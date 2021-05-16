@@ -44,6 +44,7 @@
 #include "sstables/compaction_manager.hh"
 #include "transport/messages/result_message.hh"
 #include "sstables/shared_index_lists.hh"
+#include "linux-perf-event.hh"
 #include <fstream>
 
 using namespace std::chrono_literals;
@@ -62,6 +63,15 @@ static void print_error(const sstring& msg) {
     errors_found = true;
 }
 
+class instructions_counter {
+    linux_perf_event _event = linux_perf_event::user_instructions_retired();
+public:
+    instructions_counter() { _event.enable(); }
+    uint64_t read() { return _event.read(); }
+};
+
+static thread_local instructions_counter the_instructions_counter;
+
 struct metrics_snapshot {
     std::chrono::high_resolution_clock::time_point hr_clock;
     steady_clock_type::duration busy_time;
@@ -71,6 +81,7 @@ struct metrics_snapshot {
     memory::statistics mem;
     sstables::shared_index_lists::stats index;
     cache_tracker::stats cache;
+    uint64_t instructions;
 
     metrics_snapshot()
             : mem(memory::stats()) {
@@ -82,6 +93,7 @@ struct metrics_snapshot {
         hr_clock = std::chrono::high_resolution_clock::now();
         index = sstables::shared_index_lists::shard_stats();
         cache = cql_env->local_db().row_cache_tracker().get_stats();
+        instructions = the_instructions_counter.read();
     }
 };
 
@@ -209,6 +221,7 @@ using stats_values = std::tuple<
     uint64_t, // c_blk
     uint64_t, // allocations
     uint64_t, // tasks
+    uint64_t, // instructions
     float // cpu
 >;
 
@@ -239,6 +252,7 @@ std::array<sstring, std::tuple_size<stats_values>::value> stats_formats =
     "{:.0f}",
     "{:.0f}",
     "{:.1f}", // average aio
+    "{}",
     "{}",
     "{}",
     "{}",
@@ -641,6 +655,7 @@ public:
 
     uint64_t allocations() const { return after.mem.mallocs() - before.mem.mallocs(); }
     uint64_t tasks() const { return after.sched.tasks_processed - before.sched.tasks_processed; }
+    uint64_t instructions() const { return after.instructions - before.instructions; }
 
     float cpu_utilization() const {
         auto busy_delta = after.busy_time.count() - before.busy_time.count();
@@ -670,6 +685,7 @@ public:
             {"c blk",    "{:>8}"},
             {"allocs",   "{:>9}"},
             {"tasks",    "{:>7}"},
+            {"insns/f",  "{:>7}"},
             {"cpu",      "{:>6}"}
         };
     }
@@ -702,6 +718,7 @@ public:
             cache_insertions(),
             allocations(),
             tasks(),
+            instructions() / fragments_read,
             cpu_utilization() * 100
         };
     }
