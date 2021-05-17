@@ -137,7 +137,7 @@ sets::value::from_serialized(const raw_value_view& val, const set_type_impl& typ
     try {
         std::set<managed_bytes, serialized_compare> elements(type.get_elements_type()->as_less_comparator());
         if (sf.collection_format_unchanged()) {
-            std::vector<managed_bytes> tmp = val.with_value([sf] (const FragmentedView auto& v) {
+            utils::chunked_vector<managed_bytes> tmp = val.with_value([sf] (const FragmentedView auto& v) {
                 return partially_deserialize_listlike(v, sf);
             });
             for (auto&& element : tmp) {

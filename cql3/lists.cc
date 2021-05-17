@@ -126,9 +126,9 @@ lists::literal::to_string() const {
 lists::value
 lists::value::from_serialized(const raw_value_view& val, const list_type_impl& type, cql_serialization_format sf) {
     try {
-        std::vector<managed_bytes_opt> elements;
+        utils::chunked_vector<managed_bytes_opt> elements;
         if (sf.collection_format_unchanged()) {
-            std::vector<managed_bytes> tmp = val.with_value([sf] (const FragmentedView auto& v) {
+            utils::chunked_vector<managed_bytes> tmp = val.with_value([sf] (const FragmentedView auto& v) {
                 return partially_deserialize_listlike(v, sf);
             });
             elements.reserve(tmp.size());
@@ -174,14 +174,14 @@ lists::value::equals(const list_type_impl& lt, const value& v) {
             [t = lt.get_elements_type()] (const managed_bytes_opt& e1, const managed_bytes_opt& e2) { return t->equal(*e1, *e2); });
 }
 
-const std::vector<managed_bytes_opt>&
+const utils::chunked_vector<managed_bytes_opt>&
 lists::value::get_elements() const {
     return _elements;
 }
 
 std::vector<managed_bytes_opt>
 lists::value::copy_elements() const {
-    return _elements;
+    return std::vector<managed_bytes_opt>(_elements.begin(), _elements.end());
 }
 
 sstring
@@ -212,7 +212,7 @@ lists::delayed_value::collect_marker_specification(variable_specifications& boun
 
 shared_ptr<terminal>
 lists::delayed_value::bind(const query_options& options) {
-    std::vector<managed_bytes_opt> buffers;
+    utils::chunked_vector<managed_bytes_opt> buffers;
     buffers.reserve(_elements.size());
     for (auto&& t : _elements) {
         auto bo = t->bind_and_get(options);
@@ -444,7 +444,7 @@ lists::prepender::execute(mutation& m, const clustering_key_prefix& prefix, cons
     }
 
     collection_mutation_description mut;
-    mut.cells.reserve(lvalue->get_elements().size());
+    mut.cells.reserve(lvalue->_elements.size());
 
     auto ltype = static_cast<const list_type_impl*>(column.type.get());
     int clockseq = params._options.next_list_prepend_seq(lvalue->_elements.size(), utils::UUID_gen::SUBMICRO_LIMIT);

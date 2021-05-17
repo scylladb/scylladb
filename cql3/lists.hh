@@ -44,6 +44,7 @@
 #include "cql3/abstract_marker.hh"
 #include "to_string.hh"
 #include "operation.hh"
+#include "utils/chunked_vector.hh"
 
 namespace cql3 {
 
@@ -73,16 +74,16 @@ public:
 
     class value : public multi_item_terminal, collection_terminal {
     public:
-        std::vector<managed_bytes_opt> _elements;
+        utils::chunked_vector<managed_bytes_opt> _elements;
     public:
-        explicit value(std::vector<managed_bytes_opt> elements)
+        explicit value(utils::chunked_vector<managed_bytes_opt> elements)
             : _elements(std::move(elements)) {
         }
         static value from_serialized(const raw_value_view& v, const list_type_impl& type, cql_serialization_format sf);
         virtual cql3::raw_value get(const query_options& options) override;
         virtual managed_bytes get_with_protocol_version(cql_serialization_format sf) override;
         bool equals(const list_type_impl& lt, const value& v);
-        const std::vector<managed_bytes_opt>& get_elements() const;
+        const utils::chunked_vector<managed_bytes_opt>& get_elements() const;
         virtual std::vector<managed_bytes_opt> copy_elements() const override;
         virtual sstring to_string() const;
         friend class lists;
