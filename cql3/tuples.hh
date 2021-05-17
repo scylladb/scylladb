@@ -43,6 +43,7 @@
 #include "abstract_marker.hh"
 #include "types/tuple.hh"
 #include "types/collection.hh"
+#include "utils/chunked_vector.hh"
 
 class list_type_impl;
 
@@ -198,9 +199,9 @@ public:
      */
     class in_value : public terminal {
     private:
-        std::vector<std::vector<managed_bytes_opt>> _elements;
+        utils::chunked_vector<std::vector<managed_bytes_opt>> _elements;
     public:
-        in_value(std::vector<std::vector<managed_bytes_opt>> items) : _elements(std::move(items)) { }
+        in_value(utils::chunked_vector<std::vector<managed_bytes_opt>> items) : _elements(std::move(items)) { }
 
         static in_value from_serialized(const raw_value_view& value_view, const list_type_impl& type, const query_options& options);
 
@@ -208,7 +209,7 @@ public:
             throw exceptions::unsupported_operation_exception();
         }
 
-        std::vector<std::vector<managed_bytes_opt>> get_split_values() const {
+        utils::chunked_vector<std::vector<managed_bytes_opt>> get_split_values() const {
             return _elements;
         }
 

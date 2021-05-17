@@ -89,7 +89,7 @@ tuples::in_value::from_serialized(const raw_value_view& value_view, const list_t
         auto ttype = dynamic_pointer_cast<const tuple_type_impl>(type.get_elements_type());
         assert(ttype);
 
-        std::vector<std::vector<managed_bytes_opt>> elements;
+        utils::chunked_vector<std::vector<managed_bytes_opt>> elements;
         elements.reserve(l.size());
         for (auto&& e : l) {
             // FIXME: Avoid useless copies.
