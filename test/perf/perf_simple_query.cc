@@ -30,6 +30,7 @@
 #include <seastar/testing/test_runner.hh>
 #include "test/lib/random_utils.hh"
 
+#include "db/config.hh"
 #include "schema_builder.hh"
 #include "release.hh"
 #include <fstream>
@@ -272,6 +273,7 @@ int main(int argc, char** argv) {
         ("counters", "test counters")
         ("flush", "flush memtables before test")
         ("json-result", bpo::value<std::string>(), "name of the json result file")
+        ("enable-cache", bpo::value<bool>()->default_value(true), "enable row cache")
         ;
 
     set_abort_on_internal_error(true);
@@ -282,7 +284,13 @@ int main(int argc, char** argv) {
         std::cout << "random-seed=" << seed << '\n';
         return smp::invoke_on_all([seed] {
             seastar::testing::local_random_engine.seed(seed + this_shard_id());
-        }).then([&app] {
+        }).then([&app] () -> future<> {
+            cql_test_config cfg;
+
+            const auto enable_cache = app.configuration()["enable-cache"].as<bool>();
+            std::cout << "enable-cache=" << enable_cache << '\n';
+            cfg.db_config->enable_cache(enable_cache);
+
           return do_with_cql_env_thread([&app] (auto&& env) {
             auto cfg = test_config();
             cfg.partitions = app.configuration()["partitions"].as<unsigned>();
@@ -320,7 +328,7 @@ int main(int argc, char** argv) {
             if (app.configuration().contains("json-result")) {
                 write_json_result(app.configuration()["json-result"].as<std::string>(), cfg, median_result, mad, max, min);
             }
-          });
+          }, std::move(cfg));
         });
     });
 }
