@@ -434,6 +434,7 @@ set(scylla_sources
     db/sstables-format-selector.cc
     db/system_distributed_keyspace.cc
     db/system_keyspace.cc
+    db/virtual_table.cc
     db/view/row_locking.cc
     db/view/view.cc
     db/view/view_update_generator.cc
