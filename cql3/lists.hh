@@ -82,7 +82,8 @@ public:
         virtual cql3::raw_value get(const query_options& options) override;
         virtual managed_bytes get_with_protocol_version(cql_serialization_format sf) override;
         bool equals(const list_type_impl& lt, const value& v);
-        virtual const std::vector<managed_bytes_opt>& get_elements() const override;
+        const std::vector<managed_bytes_opt>& get_elements() const;
+        virtual std::vector<managed_bytes_opt> copy_elements() const override;
         virtual sstring to_string() const;
         friend class lists;
     };

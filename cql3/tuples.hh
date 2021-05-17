@@ -122,7 +122,10 @@ public:
             return cql3::raw_value::make_value(tuple_type_impl::build_value_fragmented(_elements));
         }
 
-        virtual const std::vector<managed_bytes_opt>& get_elements() const override {
+        const std::vector<managed_bytes_opt>& get_elements() const {
+            return _elements;
+        }
+        virtual std::vector<managed_bytes_opt> copy_elements() const override {
             return _elements;
         }
         size_t size() const {

@@ -179,6 +179,11 @@ lists::value::get_elements() const {
     return _elements;
 }
 
+std::vector<managed_bytes_opt>
+lists::value::copy_elements() const {
+    return _elements;
+}
+
 sstring
 lists::value::to_string() const {
     std::ostringstream os;

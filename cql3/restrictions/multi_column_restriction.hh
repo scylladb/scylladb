@@ -342,7 +342,7 @@ protected:
         std::vector<std::vector<managed_bytes_opt>> buffers(_values.size());
         std::transform(_values.begin(), _values.end(), buffers.begin(), [&] (const ::shared_ptr<term>& value) {
             auto term = static_pointer_cast<multi_item_terminal>(value->bind(options));
-            return term->get_elements();
+            return term->copy_elements();
         });
         return buffers;
     }

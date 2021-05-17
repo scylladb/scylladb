@@ -192,7 +192,7 @@ public:
 
 class multi_item_terminal : public terminal {
 public:
-    virtual const std::vector<managed_bytes_opt>& get_elements() const = 0;
+    virtual std::vector<managed_bytes_opt> copy_elements() const = 0;
 };
 
 class collection_terminal {
