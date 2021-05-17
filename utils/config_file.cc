@@ -221,6 +221,16 @@ sstring utils::hyphenate(const std::string_view& v) {
     return result;
 }
 
+sstring utils::trim_to_first_comma(const std::string_view& v) {
+    auto idx = v.find(',');
+    if (idx == 0) {
+        return v.data();
+    } else {
+        sstring result(v.substr(0, idx));
+        return result;
+    }
+}
+
 utils::config_file::config_file(std::initializer_list<cfg_ref> cfgs)
     : _cfgs(cfgs)
 {}
@@ -291,7 +301,9 @@ void utils::config_file::read_from_yaml(const char* yaml, error_handler h) {
     for (auto node : doc) {
         auto label = node.first.as<sstring>();
 
-        auto i = std::find_if(_cfgs.begin(), _cfgs.end(), [&label](const config_src& cfg) { return cfg.name() == label; });
+        auto i = std::find_if(_cfgs.begin(), _cfgs.end(), [&label](const config_src& cfg) {
+            return trim_to_first_comma(cfg.name()) == label;
+        });
         if (i == _cfgs.end()) {
             h(label, "Unknown option", std::nullopt);
             continue;

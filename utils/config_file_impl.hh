@@ -189,6 +189,8 @@ inline typed_value_ex<T>* value_ex() {
 
 sstring hyphenate(const std::string_view&);
 
+sstring trim_to_first_comma(const std::string_view&);
+
 }
 
 template<typename T>
