@@ -163,6 +163,8 @@ public:
     virtual void set_prefer_local(bool prefer_local) {};
     virtual void set_local_private_addr(const sstring& addr_str) {};
 
+    // DEPRECATED, DON'T USE!
+    // Pass references to services through constructor/function parameters. Don't use globals.
     static distributed<snitch_ptr>& snitch_instance() {
         // FIXME: leaked intentionally to avoid shutdown problems, see #293
         static distributed<snitch_ptr>* snitch_inst = new distributed<snitch_ptr>();
@@ -170,6 +172,8 @@ public:
         return *snitch_inst;
     }
 
+    // DEPRECATED, DON'T USE!
+    // Pass references to services through constructor/function parameters. Don't use globals.
     static snitch_ptr& get_local_snitch_ptr() {
         return snitch_instance().local();
     }

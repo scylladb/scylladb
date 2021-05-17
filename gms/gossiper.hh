@@ -639,10 +639,14 @@ public:
 
 extern distributed<gossiper> _the_gossiper;
 
+// DEPRECATED, DON'T USE!
+// Pass references to services through constructor/function parameters. Don't use globals.
 inline gossiper& get_local_gossiper() {
     return _the_gossiper.local();
 }
 
+// DEPRECATED, DON'T USE!
+// Pass references to services through constructor/function parameters. Don't use globals.
 inline distributed<gossiper>& get_gossiper() {
     return _the_gossiper;
 }
