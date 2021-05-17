@@ -279,6 +279,7 @@ if ! $nonroot; then
     done
 fi
 # scylla-node-exporter
+install -d -m755 "$rsysconfdir" "$rsystemd"
 install -d -m755 "$rprefix"/node_exporter
 install -d -m755 "$rprefix"/node_exporter/licenses
 install -m755 node_exporter/node_exporter "$rprefix"/node_exporter
@@ -312,7 +313,6 @@ fi
 
 # scylla-server
 install -m755 -d "$rprefix"
-install -m755 -d "$rsysconfdir"
 install -m755 -d "$retc/scylla.d"
 installconfig 644 dist/common/sysconfig/scylla-housekeeping "$rsysconfdir"
 installconfig 644 dist/common/sysconfig/scylla-server "$rsysconfdir"
@@ -320,7 +320,7 @@ for file in dist/common/scylla.d/*.conf; do
     installconfig 644 "$file" "$retc"/scylla.d
 done
 
-install -d -m755 "$retc"/scylla "$rsystemd" "$rprefix/bin" "$rprefix/libexec" "$rprefix/libreloc" "$rprefix/scripts" "$rprefix/bin"
+install -d -m755 "$retc"/scylla "$rprefix/bin" "$rprefix/libexec" "$rprefix/libreloc" "$rprefix/scripts" "$rprefix/bin"
 install -m644 dist/common/systemd/scylla-fstrim.service -Dt "$rsystemd"
 install -m644 dist/common/systemd/scylla-housekeeping-daily.service -Dt "$rsystemd"
 install -m644 dist/common/systemd/scylla-housekeeping-restart.service -Dt "$rsystemd"
