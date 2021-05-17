@@ -26,13 +26,17 @@
 
 #include "alternator/executor.hh"
 #include "utils/rjson.hh"
-#include "cql3/query_processor.hh"
-#include "service/storage_service.hh"
-#include "service/storage_proxy.hh"
-#include "cdc/log.hh"
-#include "cdc/metadata.hh"
-#include "cdc/generation.hh"
 #include "db/system_distributed_keyspace.hh"
+#include "cdc/metadata.hh"
+
+namespace service {
+class storage_proxy;
+class migration_manager;
+class storage_service;
+}
+namespace cql3 {
+class query_processor;
+}
 
 // Test environment for alternator frontend.
 // The interface is minimal and does not cover alternator streams,
