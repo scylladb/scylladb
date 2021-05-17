@@ -69,69 +69,20 @@ else
     rdata="$rprefix"
 fi
 
-# scylla-kernel-conf
-rm -fv "$rusr"/lib/sysctl.d/99-scylla-*.conf
-
-# scylla-server
-rm -fv "$rsystemd"/{scylla-server.*,scylla-fstrim.*,scylla-helper.service,scylla-housekeeping-*.*,node-exporter.service}
-rm -rfv "$rprefix"/libreloc
-rm -rfv "$rprefix"/libexec
-rm -rfv "$rdoc"
-rm -rfv "$rprefix"/swagger-ui
-rm -rfv "$rprefix"/api
-rm -rfv "$rprefix"/scyllatop
-rm -rfv "$rprefix"/scripts
-rm -rfv "$rprefix"/bin
+rm -fv "$rsystemd"/{scylla-*.service,scylla-*.timer,scylla-*.slice}
 if ! $nonroot; then
-    rm -rfv "$retc"/systemd/system/scylla-server.service.d
-    rm -rfv "$retc"/systemd/system/scylla-housekeeping-*.service.d
-    rm -fv "$retc"/security/limits.d/scylla.conf
-    rm -fv "$rusr"/bin/scylla
-    rm -fv "$rusr"/bin/iotune
-    rm -fv "$rusr"/bin/scyllatop
+    rm -rfv "$retc"/systemd/system/scylla-*.service.d
+    rm -fv "$retc"/bash_completion.d/nodetool-completion
+    rm -fv "$rusr"/lib/sysctl.d/99-scylla-*.conf
+    rm -fv "$rusr"/bin/{scylla,iotune,scyllatop}
     rm -fv "$rusr"/sbin/{scylla_*setup,node_exporter_install,node_health_check,scylla_ec2_check,scylla_kernel_check}
     find "$rusr"/lib/scylla -type l -exec rm -fv {} \;
-    rm -rfv "$rusr"/lib/scylla/scyllatop
 else
-    rm -rfv "$rprefix"/sbin
-    rm -rfv "$rsystemd"/scylla-server.service.d
-    rm -rfv "$rsystemd"/node-exporter.service.d
+    rm -rfv "$rsystemd"/scylla-*.service.d
 fi
 
-# scylla-python3
-rm -rfv "$rprefix"/python3
+rm -rfv "$rprefix"
 
-# scylla-jmx
-rm -fv "$rsystemd"/scylla-jmx.service
-if ! $nonroot; then
-    rm -rfv "$retc"/systemd/system/scylla-jmx.service.d
-else
-    rm -rfv "$rsystemd"/scylla-jmx.service.d
-fi
-rm -rfv "$rprefix"/jmx
-if ! $nonroot; then
-    rm -rfv "$rusr"/lib/scylla/jmx
-fi
-
-# scylla-tools-core
-rm -rfv "$retc"/scylla/cassandra
-rm -rfv "$rprefix"/share/cassandra/lib
-rm -rfv "$rprefix"/share/cassandra/doc
-rm -rfv "$rprefix"/share/cassandra/bin/cassandra.in.sh
-
-# scylla-tools
-rm -rfv "$rprefix"/share/cassandra/pylib
-rm -fv "$retc"/bash_completion.d/nodetool-completion
-rm -fv "$rprefix"/share/cassandra/bin/{nodetool,sstableloader,cqlsh,cqlsh.py,scylla-sstableloader,cassandra-stress,cassandra-stressd,sstabledump,sstablelevelreset,sstablemetadata,sstablerepairedset}
-if ! $nonroot; then
-    rm -fv "$rusr"/bin/{nodetool,sstableloader,cqlsh,cqlsh.py,scylla-sstableloader,cassandra-stress,cassandra-stressd,sstabledump,sstablelevelreset,sstablemetadata,sstablerepairedset}
-fi
-rm -fdv "$rprefix"/share/cassandra/bin
-rm -fdv "$rprefix"/share/cassandra
-
-rm -fdv "$rprefix"/share
-rm -fv SCYLLA-*-FILE
-rm -fv "$0"
 if ! $nonroot; then
     systemctl daemon-reload
 else
