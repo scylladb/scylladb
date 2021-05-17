@@ -20,6 +20,7 @@
 import time
 import pytest
 from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, ConfigurationException, ReadFailure
+from cassandra.query import SimpleStatement
 
 from util import new_test_table, unique_name
 
@@ -130,3 +131,19 @@ def test_create_named_index_when_its_name_is_taken(scylla_only, cql, test_keyspa
                 cql.execute(f"CREATE INDEX {index_name} ON {table}(v)")
         finally:
             cql.execute(f"DROP TABLE {test_keyspace}.{index_name}_index")
+
+# Test that the paging state works properly for indexes on tables
+# with descending clustering order. There was a problem with indexes
+# created on clustering keys with DESC clustering order - they are represented
+# as "reverse" types internally and Scylla assertions failed that the base type
+# is different from the underlying view type, even though, from the perspective
+# of deserialization, they're equal. Issue #8666
+def test_paging_with_desc_clustering_order(cql, test_keyspace):
+    schema = 'p int, c int, primary key (p,c)'
+    extra = 'with clustering order by (c desc)'
+    with new_test_table(cql, test_keyspace, schema, extra) as table:
+        cql.execute(f"CREATE INDEX ON {table}(c)")
+        for i in range(3):
+            cql.execute(f"INSERT INTO {table}(p,c) VALUES ({i}, 42)")
+        stmt = SimpleStatement(f"SELECT * FROM {table} WHERE c = 42", fetch_size=1)
+        assert len([row for row in cql.execute(stmt)]) == 3
