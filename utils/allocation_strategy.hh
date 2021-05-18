@@ -45,8 +45,9 @@ class migrate_fn_type {
 private:
     static uint32_t register_migrator(migrate_fn_type* m);
     static void unregister_migrator(uint32_t index);
-public:
+protected:
     explicit migrate_fn_type(size_t align) : _align(align), _index(register_migrator(this)) {}
+public:
     virtual ~migrate_fn_type() { unregister_migrator(_index); }
     virtual void migrate(void* src, void* dsts, size_t size) const noexcept = 0;
     virtual size_t size(const void* obj) const = 0;
@@ -65,8 +66,10 @@ size_for_allocation_strategy(const T& obj) noexcept {
 
 template <typename T>
 class standard_migrator final : public migrate_fn_type {
-public:
+    friend class allocation_strategy;
     standard_migrator() : migrate_fn_type(alignof(T)) {}
+
+public:
     virtual void migrate(void* src, void* dst, size_t size) const noexcept override {
         static_assert(std::is_nothrow_move_constructible<T>::value, "T must be nothrow move-constructible.");
         static_assert(std::is_nothrow_destructible<T>::value, "T must be nothrow destructible.");
@@ -79,14 +82,6 @@ public:
         return size_for_allocation_strategy(*static_cast<const T*>(obj));
     }
 };
-
-template <typename T>
-standard_migrator<T>& get_standard_migrator()
-{
-    seastar::memory::scoped_critical_alloc_section dfg;
-    static thread_local standard_migrator<T> instance;
-    return instance;
-}
 
 //
 // Abstracts allocation strategy for managed objects.
@@ -111,6 +106,14 @@ standard_migrator<T>& get_standard_migrator()
 // across deferring points.
 //
 class allocation_strategy {
+    template <typename T>
+    standard_migrator<T>& get_standard_migrator()
+    {
+        seastar::memory::scoped_critical_alloc_section dfg;
+        static thread_local standard_migrator<T> instance;
+        return instance;
+    }
+
 protected:
     size_t _preferred_max_contiguous_allocation = std::numeric_limits<size_t>::max();
     uint64_t _invalidate_counter = 1;
