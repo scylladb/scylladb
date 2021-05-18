@@ -1376,7 +1376,7 @@ private:
 
     template <typename... Args>
     static node* construct(size_t size, Args&&... args) {
-        void* mem = current_allocator().alloc(&get_standard_migrator<node>(), size, alignof(node));
+        void* mem = current_allocator().alloc<node>(size);
         return new (mem) node(std::forward<Args>(args)...);
     }
 

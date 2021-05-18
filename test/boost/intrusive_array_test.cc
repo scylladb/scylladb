@@ -99,13 +99,13 @@ SEASTAR_THREAD_TEST_CASE(test_basic_construct) {
 
 test_array* grow(test_array& from, size_t nsize, int npos, long ndat) {
     BOOST_REQUIRE(from.size() + 1 == nsize);
-    auto ptr = current_allocator().alloc(&get_standard_migrator<test_array>(), sizeof(element) * nsize, alignof(test_array));
+    auto ptr = current_allocator().alloc<test_array>(sizeof(element) * nsize);
     return new (ptr) test_array(from, test_array::grow_tag{npos}, ndat);
 }
 
 test_array* shrink(test_array& from, size_t nszie, int spos) {
     BOOST_REQUIRE(from.size() - 1 == nszie);
-    auto ptr = current_allocator().alloc(&get_standard_migrator<test_array>(), sizeof(element) * nszie, alignof(test_array));
+    auto ptr = current_allocator().alloc<test_array>(sizeof(element) * nszie);
     return new (ptr) test_array(from, test_array::shrink_tag{spos});
 }
 

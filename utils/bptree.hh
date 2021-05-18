@@ -817,7 +817,7 @@ public:
             size_t new_size = super::_data->storage_size(new_payload_size);
 
             node* leaf = super::revalidate();
-            auto ptr = current_allocator().alloc(&get_standard_migrator<data>(), new_size, alignof(data));
+            auto ptr = current_allocator().alloc<data>(new_size);
             data *dat, *cur = super::_data;
 
             try {

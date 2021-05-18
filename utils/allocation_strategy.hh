@@ -119,6 +119,7 @@ public:
 
     virtual ~allocation_strategy() {}
 
+    virtual void* alloc(migrate_fn, size_t size, size_t alignment) = 0;
     //
     // Allocates space for a new ManagedObject. The caller must construct the
     // object before compaction runs. "size" is the amount of space to reserve
@@ -128,7 +129,10 @@ public:
     //
     // Doesn't invalidate references to objects allocated with this strategy.
     //
-    virtual void* alloc(migrate_fn, size_t size, size_t alignment) = 0;
+    template <typename T>
+    void* alloc(size_t size) {
+        return alloc(&get_standard_migrator<T>(), size, alignof(T));
+    }
 
     // Releases storage for the object. Doesn't invoke object's destructor.
     // Doesn't invalidate references to objects allocated with this strategy.

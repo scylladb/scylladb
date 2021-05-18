@@ -146,16 +146,14 @@ public:
             auto& alctr = current_allocator();
             auto maxseg = max_seg(alctr);
             auto now = std::min(size_t(size), maxseg);
-            void* p = alctr.alloc(&get_standard_migrator<blob_storage>(),
-                sizeof(blob_storage) + now, alignof(blob_storage));
+            void* p = alctr.alloc<blob_storage>(sizeof(blob_storage) + now);
             auto first = new (p) blob_storage(&_u.ptr, size, now);
             auto last = first;
             size -= now;
             try {
                 while (size) {
                     auto now = std::min(size_t(size), maxseg);
-                    void* p = alctr.alloc(&get_standard_migrator<blob_storage>(),
-                        sizeof(blob_storage) + now, alignof(blob_storage));
+                    void* p = alctr.alloc<blob_storage>(sizeof(blob_storage) + now);
                     last = new (p) blob_storage(&last->next, 0, now);
                     size -= now;
                 }

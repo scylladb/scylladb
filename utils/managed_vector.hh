@@ -181,8 +181,7 @@ public:
         if (new_capacity <= _capacity) {
             return;
         }
-        auto ptr = current_allocator().alloc(&get_standard_migrator<external>(),
-            sizeof(external) + sizeof(T) * new_capacity, alignof(external));
+        auto ptr = current_allocator().alloc<external>(sizeof(external) + sizeof(T) * new_capacity);
         auto ext = static_cast<external*>(ptr);
         ext->_backref = this;
         T* data_ptr = ext->_data;
