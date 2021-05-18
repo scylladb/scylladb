@@ -461,7 +461,7 @@ generate_base_key_from_index_pk(const partition_key& index_pk, const std::option
         if (!view_col) {
             throw std::runtime_error(format("Base key column not found in the view: {}", base_col.name_as_text()));
         }
-        if (base_col.type->without_reversed() != *view_col->type) {
+        if (base_col.type->without_reversed() != view_col->type->without_reversed()) {
             throw std::runtime_error(format("Mismatched types for base and view columns {}: {} and {}",
                     base_col.name_as_text(), base_col.type->cql3_type_name(), view_col->type->cql3_type_name()));
         }
