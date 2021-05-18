@@ -588,6 +588,9 @@ public:
     cql3::cql3_type as_cql3_type() const;
     const sstring& cql3_type_name() const;
     virtual shared_ptr<const abstract_type> freeze() const { return shared_from_this(); }
+    const abstract_type& without_reversed() const {
+        return is_reversed() ? *underlying_type() : *this;
+    }
     friend class list_type_impl;
 private:
     mutable sstring _cql3_type_name;
