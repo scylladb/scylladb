@@ -1698,8 +1698,8 @@ private:
         leaf_node(leaf_node&& other) noexcept : _base(std::move(other._base)) {}
         ~leaf_node() { }
 
-        friend size_t size_for_allocation_strategy(const leaf_node& n) noexcept {
-            return n._base.node_size();
+        size_t storage_size() const noexcept {
+            return _base.node_size();
         }
 
     private:
@@ -1740,8 +1740,8 @@ private:
         inner_node(inner_node&& other) noexcept : _base(std::move(other._base)) {}
         ~inner_node() {}
 
-        friend size_t size_for_allocation_strategy(const inner_node& n) noexcept {
-            return n._base.node_size();
+        size_t storage_size() const noexcept {
+            return _base.node_size();
         }
 
     private:

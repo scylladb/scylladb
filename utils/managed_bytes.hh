@@ -77,6 +77,10 @@ struct blob_storage {
         }
         memcpy(data, o.data, frag_size);
     }
+
+    size_t storage_size() const noexcept {
+        return sizeof(*this) + frag_size;
+    }
 } __attribute__((packed));
 
 // A managed version of "bytes" (can be used with LSA).
@@ -368,13 +372,6 @@ public:
     template <mutable_view is_mutable_view>
     friend class managed_bytes_basic_view;
 };
-
-// blob_storage is a variable-size type
-inline
-size_t
-size_for_allocation_strategy(const blob_storage& bs) {
-    return sizeof(bs) + bs.frag_size;
-}
 
 template <mutable_view is_mutable>
 class managed_bytes_basic_view {

@@ -1966,13 +1966,9 @@ private:
         return sizeof(data) - sizeof(T) + payload;
     }
 
+public:
     size_t storage_size() const noexcept {
         return storage_size(size_for_allocation_strategy(value));
-    }
-
-public:
-    friend size_t size_for_allocation_strategy(const data& obj) noexcept {
-        return obj.storage_size();
     }
 };
 

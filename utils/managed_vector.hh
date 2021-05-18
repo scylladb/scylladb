@@ -47,11 +47,8 @@ private:
             }
             _backref->_data = _data;
         }
-        size_t storage_size() const {
+        size_t storage_size() const noexcept {
             return sizeof(*this) + sizeof(T[_backref->_capacity]);
-        }
-        friend size_t size_for_allocation_strategy(const external& obj) {
-            return obj.storage_size();
         }
     };
     union maybe_constructed {

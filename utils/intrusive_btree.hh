@@ -1368,12 +1368,12 @@ public:
         assert(_base.num_keys == 0);
     }
 
-private:
-    friend size_t size_for_allocation_strategy(const node& n) noexcept {
-        return n.is_linear() ? linear_node_size(n._base.capacity) :
-            n.is_leaf() ? leaf_node_size : inner_node_size;
+    size_t storage_size() const noexcept {
+        return is_linear() ? linear_node_size(_base.capacity) :
+            is_leaf() ? leaf_node_size : inner_node_size;
     }
 
+private:
     template <typename... Args>
     static node* construct(size_t size, Args&&... args) {
         void* mem = current_allocator().alloc<node>(size);

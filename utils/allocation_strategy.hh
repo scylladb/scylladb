@@ -55,13 +55,22 @@ public:
     uint32_t index() const { return _index; }
 };
 
-// Non-constant-size classes (ending with `char data[0]`) must override this
-// to tell the allocator about the real size of the object
+// Non-constant-size classes (ending with `char data[0]`) must provide
+// the method telling the underlying storage size
+template <typename T>
+concept DynamicObject = requires (const T& obj) {
+    { obj.storage_size() } noexcept -> std::same_as<size_t>;
+};
+
 template <typename T>
 inline
 size_t
 size_for_allocation_strategy(const T& obj) noexcept {
-    return sizeof(T);
+    if constexpr (DynamicObject<T>) {
+        return obj.storage_size();
+    } else {
+        return sizeof(T);
+    }
 }
 
 template <typename T>
@@ -133,6 +142,7 @@ public:
     // Doesn't invalidate references to objects allocated with this strategy.
     //
     template <typename T>
+    requires DynamicObject<T>
     void* alloc(size_t size) {
         return alloc(&get_standard_migrator<T>(), size, alignof(T));
     }
