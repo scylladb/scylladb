@@ -1242,7 +1242,26 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
     });
 
     ss::scrub.set(r, wrap_ks_cf(ctx, [&snap_ctl] (http_context& ctx, std::unique_ptr<request> req, sstring keyspace, std::vector<sstring> column_families) {
-        const auto skip_corrupted = req_param<bool>(*req, "skip_corrupted", false);
+        auto scrub_mode = sstables::compaction_options::scrub::mode::abort;
+
+        const sstring scrub_mode_str = req_param<sstring>(*req, "scrub_mode", "");
+        if (scrub_mode_str == "") {
+            const auto skip_corrupted = req_param<bool>(*req, "skip_corrupted", false);
+
+            if (skip_corrupted) {
+                scrub_mode = sstables::compaction_options::scrub::mode::skip;
+            }
+        } else {
+            if (scrub_mode_str == "ABORT") {
+                scrub_mode = sstables::compaction_options::scrub::mode::abort;
+            } else if (scrub_mode_str == "SKIP") {
+                scrub_mode = sstables::compaction_options::scrub::mode::skip;
+            } else if (scrub_mode_str == "SEGREGATE") {
+                scrub_mode = sstables::compaction_options::scrub::mode::segregate;
+            } else {
+                throw std::invalid_argument(fmt::format("Unknown argument for 'scrub_mode' parameter: {}", scrub_mode_str));
+            }
+        }
 
         auto f = make_ready_future<>();
         if (!req_param<bool>(*req, "disable_snapshot", false)) {
@@ -1252,12 +1271,12 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
             });
         }
 
-        return f.then([&ctx, keyspace, column_families, skip_corrupted] {
+        return f.then([&ctx, keyspace, column_families, scrub_mode] {
             return ctx.db.invoke_on_all([=] (database& db) {
                 return do_for_each(column_families, [=, &db](sstring cfname) {
                     auto& cm = db.get_compaction_manager();
                     auto& cf = db.find_column_family(keyspace, cfname);
-                    return cm.perform_sstable_scrub(&cf, skip_corrupted);
+                    return cm.perform_sstable_scrub(&cf, scrub_mode);
                 });
             });
         }).then([]{

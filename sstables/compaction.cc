@@ -68,6 +68,7 @@
 #include "leveled_manifest.hh"
 #include "dht/token.hh"
 #include "mutation_writer/shard_based_splitting_writer.hh"
+#include "mutation_writer/partition_based_splitting_writer.hh"
 #include "mutation_source_metadata.hh"
 #include "mutation_fragment_stream_validator.hh"
 
@@ -120,6 +121,21 @@ static std::string_view to_string(compaction_type type) {
 std::ostream& operator<<(std::ostream& os, compaction_type type) {
     os << to_string(type);
     return os;
+}
+
+std::string_view to_string(compaction_options::scrub::mode scrub_mode) {
+    switch (scrub_mode) {
+        case compaction_options::scrub::mode::abort:
+            return "abort";
+        case compaction_options::scrub::mode::skip:
+            return "skip";
+        case compaction_options::scrub::mode::segregate:
+            return "segregate";
+    }
+}
+
+std::ostream& operator<<(std::ostream& os, compaction_options::scrub::mode scrub_mode) {
+    return os << to_string(scrub_mode);
 }
 
 std::ostream& operator<<(std::ostream& os, pretty_printed_data_size data) {
@@ -1147,14 +1163,16 @@ public:
 
 class scrub_compaction final : public regular_compaction {
     class reader : public flat_mutation_reader::impl {
-        bool _skip_corrupted;
+        using skip = bool_class<class skip_tag>;
+    private:
+        compaction_options::scrub::mode _scrub_mode;
         flat_mutation_reader _reader;
         mutation_fragment_stream_validator _validator;
         bool _skip_to_next_partition = false;
 
     private:
         void maybe_abort_scrub() {
-            if (!_skip_corrupted) {
+            if (_scrub_mode == compaction_options::scrub::mode::abort) {
                 throw compaction_stop_exception(_schema->ks_name(), _schema->cf_name(), "scrub compaction found invalid data", false);
             }
         }
@@ -1191,9 +1209,21 @@ class scrub_compaction final : public regular_compaction {
             }
         }
 
-        void on_invalid_partition(const dht::decorated_key& new_key) {
+        skip on_invalid_partition(const dht::decorated_key& new_key) {
             maybe_abort_scrub();
             const auto& current_key = _validator.previous_partition_key();
+            if (_scrub_mode == compaction_options::scrub::mode::segregate) {
+                clogger.error("[scrub compaction {}.{}] Detected out-of-order partition {} ({}) (previous being {} ({}))",
+                        _schema->ks_name(),
+                        _schema->cf_name(),
+                        new_key.key().with_schema(*_schema),
+                        new_key,
+                        current_key.key().with_schema(*_schema),
+                        current_key);
+                _validator.reset(new_key);
+                // Let the segregating interposer consumer handle this.
+                return skip::no;
+            }
             clogger.error("[scrub compaction {}.{}] Skipping invalid partition {} ({}):"
                     " partition has non-monotonic key compared to current one {} ({})",
                     _schema->ks_name(),
@@ -1203,11 +1233,38 @@ class scrub_compaction final : public regular_compaction {
                     current_key.key().with_schema(*_schema),
                     current_key);
             _skip_to_next_partition = true;
+            return skip::yes;
         }
 
-        void on_invalid_mutation_fragment(const mutation_fragment& mf) {
+        skip on_invalid_mutation_fragment(const mutation_fragment& mf) {
             maybe_abort_scrub();
+
             const auto& key = _validator.previous_partition_key();
+
+            // If the unexpected fragment is a partition end, we just drop it.
+            // The only case a partition end is invalid is when it comes after
+            // another partition end, and we can just drop it in that case.
+            if (!mf.is_end_of_partition() && _scrub_mode == compaction_options::scrub::mode::segregate) {
+                clogger.error("[scrub compaction {}.{}] Injecting partition start/end to segregate out-of-order fragment {} (previous position being {}) in partition {} ({}):",
+                        _schema->ks_name(),
+                        _schema->cf_name(),
+                        mf.position(),
+                        _validator.previous_position(),
+                        key.key().with_schema(*_schema),
+                        key);
+
+                push_mutation_fragment(*_schema, _permit, partition_end{});
+
+                // We loose the partition tombstone if any, but it will be
+                // picked up when compaction merges these partitions back.
+                push_mutation_fragment(mutation_fragment(*_schema, _permit, partition_start(key, {})));
+
+                _validator.reset(mf);
+
+                // Let the segregating interposer consumer handle this.
+                return skip::no;
+            }
+
             clogger.error("[scrub compaction {}.{}] Skipping invalid {} fragment {}in partition {} ({}):"
                     " fragment has non-monotonic position {} compared to previous position {}.",
                     _schema->ks_name(),
@@ -1218,6 +1275,7 @@ class scrub_compaction final : public regular_compaction {
                     key,
                     mf.position(),
                     _validator.previous_position());
+            return skip::yes;
         }
 
         void on_invalid_end_of_stream() {
@@ -1245,15 +1303,13 @@ class scrub_compaction final : public regular_compaction {
                     _skip_to_next_partition = false;
                     // Then check that the partition monotonicity stands.
                     const auto& dk = mf.as_partition_start().key();
-                    if (!_validator(dk)) {
-                        on_invalid_partition(dk);
+                    if (!_validator(dk) && on_invalid_partition(dk) == skip::yes) {
                         continue;
                     }
                 } else if (_skip_to_next_partition) {
                     continue;
                 } else {
-                    if (!_validator(mf)) {
-                        on_invalid_mutation_fragment(mf);
+                    if (!_validator(mf) && on_invalid_mutation_fragment(mf) == skip::yes) {
                         continue;
                     }
                 }
@@ -1270,13 +1326,16 @@ class scrub_compaction final : public regular_compaction {
         }
 
     public:
-        reader(flat_mutation_reader underlying, bool skip_corrupted)
+        reader(flat_mutation_reader underlying, compaction_options::scrub::mode scrub_mode)
             : impl(underlying.schema(), underlying.permit())
-            , _skip_corrupted(skip_corrupted)
+            , _scrub_mode(scrub_mode)
             , _reader(std::move(underlying))
             , _validator(*_schema)
         { }
         virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override {
+            if (_end_of_stream) {
+                return make_ready_future<>();
+            }
             return repeat([this, timeout] {
                 return _reader.fill_buffer(timeout).then([this] {
                     fill_buffer_from_underlying();
@@ -1317,30 +1376,44 @@ class scrub_compaction final : public regular_compaction {
 
 private:
     compaction_options::scrub _options;
+    std::string _scrub_start_description;
+    std::string _scrub_finish_description;
 
 public:
     scrub_compaction(column_family& cf, compaction_descriptor descriptor, compaction_options::scrub options)
         : regular_compaction(cf, std::move(descriptor))
-        , _options(options) {
+        , _options(options)
+        , _scrub_start_description(fmt::format("Scrubbing in {} mode", _options.operation_mode))
+        , _scrub_finish_description(fmt::format("Finished scrubbing in {} mode", _options.operation_mode)) {
     }
 
     std::string_view report_start_desc() const override {
-        return "Scrubbing";
+        return _scrub_start_description;
     }
 
     std::string_view report_finish_desc() const override {
-        return "Finished scrubbing";
+        return _scrub_finish_description;
     }
 
     flat_mutation_reader make_sstable_reader() const override {
-        return make_flat_mutation_reader<reader>(regular_compaction::make_sstable_reader(), _options.skip_corrupted);
+        return make_flat_mutation_reader<reader>(regular_compaction::make_sstable_reader(), _options.operation_mode);
     }
 
-    friend flat_mutation_reader make_scrubbing_reader(flat_mutation_reader rd, bool skip_corrupted);
+    reader_consumer make_interposer_consumer(reader_consumer end_consumer) override {
+        return [this, end_consumer = std::move(end_consumer)] (flat_mutation_reader reader) mutable -> future<> {
+            return mutation_writer::segregate_by_partition(std::move(reader), std::move(end_consumer));
+        };
+    }
+
+    bool use_interposer_consumer() const override {
+        return _options.operation_mode == compaction_options::scrub::mode::segregate;
+    }
+
+    friend flat_mutation_reader make_scrubbing_reader(flat_mutation_reader rd, compaction_options::scrub::mode scrub_mode);
 };
 
-flat_mutation_reader make_scrubbing_reader(flat_mutation_reader rd, bool skip_corrupted) {
-    return make_flat_mutation_reader<scrub_compaction::reader>(std::move(rd), skip_corrupted);
+flat_mutation_reader make_scrubbing_reader(flat_mutation_reader rd, compaction_options::scrub::mode scrub_mode) {
+    return make_flat_mutation_reader<scrub_compaction::reader>(std::move(rd), scrub_mode);
 }
 
 class resharding_compaction final : public compaction {

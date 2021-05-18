@@ -1086,6 +1086,17 @@ bool mutation_fragment_stream_validator::on_end_of_stream() {
     return _prev_kind == mutation_fragment::kind::partition_end;
 }
 
+void mutation_fragment_stream_validator::reset(dht::decorated_key dk) {
+    _prev_partition_key = dk;
+    _prev_pos = position_in_partition::for_partition_start();
+    _prev_kind = mutation_fragment::kind::partition_start;
+}
+
+void mutation_fragment_stream_validator::reset(const mutation_fragment& mf) {
+    _prev_pos = mf.position();
+    _prev_kind = mf.mutation_fragment_kind();
+}
+
 namespace {
 
 [[noreturn]] void on_validation_error(seastar::logger& l, const seastar::sstring& reason) {

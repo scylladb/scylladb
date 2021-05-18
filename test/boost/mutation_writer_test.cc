@@ -31,7 +31,9 @@
 #include "flat_mutation_reader.hh"
 #include "mutation_writer/multishard_writer.hh"
 #include "mutation_writer/timestamp_based_splitting_writer.hh"
+#include "mutation_writer/partition_based_splitting_writer.hh"
 #include "test/lib/cql_test_env.hh"
+#include "test/lib/flat_mutation_reader_assertions.hh"
 #include "test/lib/mutation_assertions.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/random_schema.hh"
@@ -426,4 +428,27 @@ SEASTAR_THREAD_TEST_CASE(test_timestamp_based_splitting_mutation_writer_abort) {
         // Tolerated until we properly abort readers
         BOOST_TEST_PASSPOINT();
     }
+}
+
+// Check that the partition_based_splitting_mutation_writer can fix reordered partitions
+SEASTAR_THREAD_TEST_CASE(test_partition_based_splitting_mutation_writer) {
+    auto random_spec = tests::make_random_schema_specification(
+            get_name(),
+            std::uniform_int_distribution<size_t>(1, 2),
+            std::uniform_int_distribution<size_t>(0, 2),
+            std::uniform_int_distribution<size_t>(1, 2),
+            std::uniform_int_distribution<size_t>(0, 1));
+
+    auto random_schema = tests::random_schema{tests::random::get_int<uint32_t>(), *random_spec};
+
+    auto input_mutations = tests::generate_random_mutations(random_schema).get();
+    input_mutations.emplace_back(*input_mutations.begin()); // Have a duplicate partition as well.
+    std::shuffle(input_mutations.begin(), input_mutations.end(), tests::random::gen());
+
+    mutation_writer::segregate_by_partition(flat_mutation_reader_from_mutations(tests::make_permit(), std::move(input_mutations)), [] (flat_mutation_reader rd) {
+        testlog.info("Checking segregated output stream");
+        return async([rd = std::move(rd)] () mutable {
+            assert_that(std::move(rd)).has_monotonic_positions();
+        });
+    }).get();
 }
