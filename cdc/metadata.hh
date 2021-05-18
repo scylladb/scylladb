@@ -25,6 +25,7 @@
 
 #include "db_clock.hh"
 #include "timestamp.hh"
+#include "cdc/generation.hh"
 
 namespace dht {
     class token;
