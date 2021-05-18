@@ -71,9 +71,12 @@ public:
             if (_reader) {
                 ++_cache._tracker._stats.underlying_recreations;
             }
-          refresh_reader = close_reader().then([this, phase] {
+            auto old_reader = std::move(*_reader);
+          refresh_reader = futurize_invoke([this, phase] () {
             _reader = _cache.create_underlying_reader(_read_context, _cache.snapshot_for_phase(phase), _range);
             _reader_creation_phase = phase;
+          }).finally([rd = std::move(old_reader)] () mutable {
+            return rd.close();
           });
         }
      return refresh_reader.then([this, timeout] {
