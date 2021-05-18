@@ -813,6 +813,7 @@ public:
         iterator erase(Less less) { return erase_and_dispose(default_dispose<T>, less); }
 
         template <typename... Args>
+        requires DynamicObject<T>
         void reconstruct(size_t new_payload_size, Args&&... args) {
             size_t new_size = super::_data->storage_size(new_payload_size);
 
