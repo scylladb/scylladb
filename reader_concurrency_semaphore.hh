@@ -331,9 +331,6 @@ public:
     future<reader_permit> obtain_permit(const schema* const schema, const char* const op_name, size_t memory, db::timeout_clock::time_point timeout);
     future<reader_permit> obtain_permit(const schema* const schema, sstring&& op_name, size_t memory, db::timeout_clock::time_point timeout);
 
-    future<reader_permit> obtain_permit_nowait(const schema* const schema, const char* const op_name, size_t memory, db::timeout_clock::time_point timeout);
-    future<reader_permit> obtain_permit_nowait(const schema* const schema, sstring&& op_name, size_t memory, db::timeout_clock::time_point timeout);
-
     /// Make a tracking only permit
     ///
     /// The permit is not admitted. It is intended for reads that bypass the

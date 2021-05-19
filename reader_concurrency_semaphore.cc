@@ -926,15 +926,6 @@ future<reader_permit> reader_concurrency_semaphore::obtain_permit(const schema* 
     });
 }
 
-future<reader_permit> reader_concurrency_semaphore::obtain_permit_nowait(const schema* const schema, const char* const op_name, size_t memory,
-        db::timeout_clock::time_point timeout) {
-    return make_ready_future<reader_permit>(reader_permit(*this, schema, std::string_view(op_name), {}));
-}
-future<reader_permit> reader_concurrency_semaphore::obtain_permit_nowait(const schema* const schema, sstring&& op_name, size_t memory,
-        db::timeout_clock::time_point timeout) {
-    return make_ready_future<reader_permit>(reader_permit(*this, schema, std::move(op_name), {}));
-}
-
 reader_permit reader_concurrency_semaphore::make_tracking_only_permit(const schema* const schema, const char* const op_name) {
     return reader_permit(*this, schema, std::string_view(op_name), {});
 }
