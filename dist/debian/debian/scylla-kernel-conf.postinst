@@ -11,6 +11,7 @@ else
     sysctl -p/usr/lib/sysctl.d/99-scylla-sched.conf || :
     sysctl -p/usr/lib/sysctl.d/99-scylla-vm.conf || :
     sysctl -p/usr/lib/sysctl.d/99-scylla-inotify.conf || :
+    sysctl -p/usr/lib/sysctl.d/99-scylla-aio.conf || :
 fi
 
 #DEBHELPER#
