@@ -24,7 +24,6 @@
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/distributed.hh>
 #include <seastar/core/future.hh>
-#include "service/qos/service_level_controller.hh"
 
 using namespace seastar;
 
@@ -37,6 +36,7 @@ namespace service {
 }
 namespace gms { class gossiper; }
 namespace cql3 { class query_processor; }
+namespace qos { class service_level_controller; }
 
 namespace cql_transport {
 
