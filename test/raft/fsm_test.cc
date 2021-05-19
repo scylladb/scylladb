@@ -362,6 +362,41 @@ BOOST_AUTO_TEST_CASE(test_single_node_is_quiet) {
     BOOST_CHECK(fsm.get_output().messages.empty());
 }
 
+BOOST_AUTO_TEST_CASE(test_snapshot_follower_is_quiet) {
+    server_id id1 = id(), id2 = id();
+
+    raft::configuration cfg({id1, id2});
+    raft::log log(raft::snapshot{.idx = index_t{999}, .config = cfg});
+
+    log.emplace_back(seastar::make_lw_shared<raft::log_entry>(raft::log_entry{term_t{10}, index_t{1000}}));
+    log.stable_to(log.last_idx());
+
+    fsm_debug fsm(id1, term_t{10}, server_id{}, std::move(log), trivial_failure_detector, fsm_cfg);
+
+    // become leader
+    election_timeout(fsm);
+
+    fsm.step(id2, raft::vote_reply{fsm.get_current_term(), true});
+
+    BOOST_CHECK(fsm.is_leader());
+
+    // clear output
+    (void) fsm.get_output();
+
+    // reply with reject pointing into the snapshot
+    fsm.step(id2, raft::append_reply{fsm.get_current_term(), raft::index_t{1}, raft::append_reply::rejected{raft::index_t{1000}, raft::index_t{1}}});
+
+    BOOST_CHECK(fsm.get_progress(id2).state == raft::follower_progress::state::SNAPSHOT);
+
+    // clear output
+    (void) fsm.get_output();
+
+    for (int i = 0; i < 100; i++) {
+      fsm.tick();
+      BOOST_CHECK(fsm.get_output().messages.empty());
+    }
+}
+
 BOOST_AUTO_TEST_CASE(test_election_two_nodes) {
 
     discrete_failure_detector fd;
