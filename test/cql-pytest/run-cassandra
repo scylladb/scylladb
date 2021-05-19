@@ -48,7 +48,14 @@ def run_cassandra_cmd(pid, dir):
     os.mkdir(os.path.join(dir, 'hints'))
     env = { 'CASSANDRA_CONF': confdir,
             'CASSANDRA_LOG_DIR': logsdir,
-            'CASSANDRA_INCLUDE': '' }
+            'CASSANDRA_INCLUDE': '',
+            # Unfortunately, Cassandra's JMX cannot listen only on a specific
+            # interface. To allow tests to use JMX (nodetool), we need to
+            # have it listen on 0.0.0.0 :-( This is insecure, but arguably
+            # can be forgiven for test enviroments. The following JVM_OPTS
+            # configures that:
+            'JVM_OPTS': '-Dcassandra.jmx.remote.port=7199',
+          }
     # On JVM 11, Cassandra requires a bunch of configuration options in
     # conf/jvm11-server.options, or it fails loading classes because of JPMS.
     # The following options were copied from Cassandra's jvm11-server.options.
