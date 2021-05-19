@@ -1531,6 +1531,10 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
     if (!cfg.allow_going_over_size_limit && max_disk_size != 0 && totals.total_size_on_disk >= max_disk_size) {
         clogger.debug("Disk usage ({} MB) exceeds maximum ({} MB) - allocation will wait...", totals.total_size_on_disk/(1024*1024), max_disk_size/(1024*1024));
         auto f = cfg.reuse_segments ? _recycled_segments.not_empty() :  _disk_deletions.get_shared_future();
+        if (!f.available()) {
+            _new_counter = 0; // zero this so timer task does not duplicate the below flush
+            flush_segments(0); // force memtable flush already
+        }
         return f.handle_exception([this](auto ep) {
             clogger.warn("Exception while waiting for segments {}. Will retry allocation...", ep);
         }).then([this] {
@@ -1902,9 +1906,10 @@ void db::commitlog::segment_manager::on_timer() {
         if (_new_counter > 0) {
             auto max = disk_usage_threshold;
             auto cur = totals.active_size_on_disk + totals.wasted_size_on_disk;
+
             if (max != 0 && cur >= max) {
-                _new_counter = 0;
                 clogger.debug("Used size on disk {} MB exceeds local threshold {} MB", cur / (1024 * 1024), max / (1024 * 1024));
+                _new_counter = 0;
                 flush_segments(cur - max);
             }
         }
