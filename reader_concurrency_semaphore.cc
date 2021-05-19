@@ -788,6 +788,7 @@ future<> reader_concurrency_semaphore::enqueue_waiter(reader_permit permit, db::
     auto fut = pr.get_future();
     permit.on_waiting();
     _wait_list.push_back(entry(std::move(pr), std::move(permit), std::move(func)), timeout);
+    ++_stats.reads_enqueued;
     return fut;
 }
 
@@ -822,6 +823,7 @@ future<> reader_concurrency_semaphore::do_wait_admission(reader_permit permit, d
     }
 
     permit.on_admission();
+    ++_stats.reads_admitted;
     if (func) {
         return with_ready_permit(std::move(permit), std::move(func));
     }
@@ -833,6 +835,7 @@ void reader_concurrency_semaphore::maybe_admit_waiters() noexcept {
         auto& x = _wait_list.front();
         try {
             x.permit.on_admission();
+            ++_stats.reads_admitted;
             if (x.func) {
                 _ready_list.push(std::move(x));
             } else {

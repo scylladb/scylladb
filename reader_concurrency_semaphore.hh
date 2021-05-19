@@ -82,6 +82,10 @@ public:
         uint64_t total_failed_reads = 0;
         // Total number of reads rejected because the admission queue reached its max capacity
         uint64_t total_reads_shed_due_to_overload = 0;
+        // Total number of reads admitted, via all admission paths.
+        uint64_t reads_admitted = 0;
+        // Total number of reads enqueued to wait for admission.
+        uint64_t reads_enqueued = 0;
     };
     struct permit_stats {
         // Total number of permits created so far.
