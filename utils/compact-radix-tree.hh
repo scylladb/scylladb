@@ -1698,8 +1698,8 @@ private:
         leaf_node(leaf_node&& other) noexcept : _base(std::move(other._base)) {}
         ~leaf_node() { }
 
-        friend size_t size_for_allocation_strategy(const leaf_node& n) noexcept {
-            return n._base.node_size();
+        size_t storage_size() const noexcept {
+            return _base.node_size();
         }
 
     private:
@@ -1713,9 +1713,7 @@ private:
         }
 
         static leaf_node* allocate(key_t prefix, layout lt, uint8_t capacity = 0) {
-            void* mem = current_allocator().alloc(
-                    &get_standard_migrator<leaf_node>(),
-                    node_type::node_size(lt, capacity), alignof(node_head));
+            void* mem = current_allocator().alloc<leaf_node>(node_type::node_size(lt, capacity));
             return new (mem) leaf_node(prefix, lt, capacity);
         }
 
@@ -1742,8 +1740,8 @@ private:
         inner_node(inner_node&& other) noexcept : _base(std::move(other._base)) {}
         ~inner_node() {}
 
-        friend size_t size_for_allocation_strategy(const inner_node& n) noexcept {
-            return n._base.node_size();
+        size_t storage_size() const noexcept {
+            return _base.node_size();
         }
 
     private:
@@ -1761,9 +1759,7 @@ private:
         }
 
         static inner_node* allocate(key_t prefix, layout lt, uint8_t capacity = 0) {
-            void* mem = current_allocator().alloc(
-                &get_standard_migrator<inner_node>(),
-                node_type::node_size(lt, capacity), alignof(node_head));
+            void* mem = current_allocator().alloc<inner_node>(node_type::node_size(lt, capacity));
             return new (mem) inner_node(prefix, lt, capacity);
         }
 

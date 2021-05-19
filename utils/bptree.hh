@@ -813,11 +813,12 @@ public:
         iterator erase(Less less) { return erase_and_dispose(default_dispose<T>, less); }
 
         template <typename... Args>
+        requires DynamicObject<T>
         void reconstruct(size_t new_payload_size, Args&&... args) {
             size_t new_size = super::_data->storage_size(new_payload_size);
 
             node* leaf = super::revalidate();
-            auto ptr = current_allocator().alloc(&get_standard_migrator<data>(), new_size, alignof(data));
+            auto ptr = current_allocator().alloc<data>(new_size);
             data *dat, *cur = super::_data;
 
             try {
@@ -1966,13 +1967,9 @@ private:
         return sizeof(data) - sizeof(T) + payload;
     }
 
+public:
     size_t storage_size() const noexcept {
         return storage_size(size_for_allocation_strategy(value));
-    }
-
-public:
-    friend size_t size_for_allocation_strategy(const data& obj) noexcept {
-        return obj.storage_size();
     }
 };
 

@@ -47,11 +47,8 @@ private:
             }
             _backref->_data = _data;
         }
-        size_t storage_size() const {
+        size_t storage_size() const noexcept {
             return sizeof(*this) + sizeof(T[_backref->_capacity]);
-        }
-        friend size_t size_for_allocation_strategy(const external& obj) {
-            return obj.storage_size();
         }
     };
     union maybe_constructed {
@@ -181,8 +178,7 @@ public:
         if (new_capacity <= _capacity) {
             return;
         }
-        auto ptr = current_allocator().alloc(&get_standard_migrator<external>(),
-            sizeof(external) + sizeof(T) * new_capacity, alignof(external));
+        auto ptr = current_allocator().alloc<external>(sizeof(external) + sizeof(T) * new_capacity);
         auto ext = static_cast<external*>(ptr);
         ext->_backref = this;
         T* data_ptr = ext->_data;
