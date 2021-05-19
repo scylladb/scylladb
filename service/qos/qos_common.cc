@@ -21,6 +21,7 @@
 
 #include "qos_common.hh"
 #include "utils/overloaded_functor.hh"
+
 namespace qos {
 
 service_level_options service_level_options::replace_defaults(const service_level_options& default_values) const {
@@ -38,6 +39,9 @@ service_level_options service_level_options::replace_defaults(const service_leve
             // leave the value as is
         },
     }, ret.timeout);
+    if (ret.workload == workload_type::unspecified) {
+        ret.workload = default_values.workload;
+    }
     return ret;
 }
 
@@ -56,7 +60,37 @@ service_level_options service_level_options::merge_with(const service_level_opti
             }
         },
     }, ret.timeout);
+    // Specified workloads should be preferred over unspecified ones
+    if (ret.workload == workload_type::unspecified || other.workload == workload_type::unspecified) {
+        ret.workload = std::max(ret.workload, other.workload);
+    } else {
+        ret.workload = std::min(ret.workload, other.workload);
+    }
     return ret;
+}
+
+std::string_view service_level_options::to_string(const workload_type& wt) {
+    switch (wt) {
+    case workload_type::unspecified: return "unspecified";
+    case workload_type::batch: return "batch";
+    case workload_type::interactive: return "interactive";
+    }
+    abort();
+}
+
+std::ostream& operator<<(std::ostream& os, const service_level_options::workload_type& wt) {
+    return os << service_level_options::to_string(wt);
+}
+
+std::optional<service_level_options::workload_type> service_level_options::parse_workload_type(std::string_view sv) {
+    if (sv == "unspecified") {
+        return workload_type::unspecified;
+    } else if (sv == "interactive") {
+        return workload_type::interactive;
+    } else if (sv == "batch") {
+        return workload_type::batch;
+    }
+    return std::nullopt;
 }
 
 }
