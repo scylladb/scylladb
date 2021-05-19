@@ -515,6 +515,7 @@ protected:
         _info->run_identifier = _run_identifier;
         _info->cf = &cf;
         _info->compaction_uuid = utils::UUID_gen::get_time_UUID();
+        _info->fan_in = descriptor.fan_in();
         for (auto& sst : _sstables) {
             _stats_collector.update(sst->get_encoding_stats_for_compaction());
         }
@@ -1650,6 +1651,11 @@ get_fully_expired_sstables(column_family& cf, const std::vector<sstables::shared
         }
     }
     return candidates;
+}
+
+unsigned
+compaction_descriptor::fan_in() const {
+    return sstables.size();
 }
 
 }

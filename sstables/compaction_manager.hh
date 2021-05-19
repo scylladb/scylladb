@@ -123,7 +123,7 @@ private:
     future<> task_stop(lw_shared_ptr<task> task);
 
     // Return true if weight is not registered.
-    bool can_register_weight(column_family* cf, int weight) const;
+    bool can_register_weight(column_family* cf, int weight, unsigned fan_in) const;
     // Register weight for a column family. Do that only if can_register_weight()
     // returned true.
     void register_weight(int weight);
@@ -246,6 +246,8 @@ public:
     const std::list<lw_shared_ptr<sstables::compaction_info>>& get_compactions() const {
         return _compactions;
     }
+
+    unsigned current_fan_in_threshold() const;
 
     // Returns true if table has an ongoing compaction, running on its behalf
     bool has_table_ongoing_compaction(column_family* cf) const {

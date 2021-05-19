@@ -155,6 +155,8 @@ struct compaction_descriptor {
 
     ::io_priority_class io_priority = default_priority_class();
 
+    unsigned fan_in() const;
+
     compaction_descriptor() = default;
 
     static constexpr int default_level = 0;

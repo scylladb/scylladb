@@ -146,7 +146,15 @@ static inline int calculate_weight(const std::vector<sstables::shared_sstable>& 
     return calculate_weight(get_total_size(sstables));
 }
 
-bool compaction_manager::can_register_weight(column_family* cf, int weight) const {
+unsigned
+compaction_manager::current_fan_in_threshold() const {
+    if (_compactions.empty()) {
+        return 0;
+    }
+    return std::ranges::max(_compactions | boost::adaptors::transformed(std::mem_fn(&sstables::compaction_info::fan_in)));
+}
+
+bool compaction_manager::can_register_weight(column_family* cf, int weight, unsigned fan_in) const {
     // Only one weight is allowed if parallel compaction is disabled.
     if (!cf->get_compaction_strategy().parallel_compaction() && has_table_ongoing_compaction(cf)) {
         return false;
@@ -159,6 +167,15 @@ bool compaction_manager::can_register_weight(column_family* cf, int weight) cons
         // with the weight of the compaction job.
         return false;
     }
+
+    // Don't allow a compaction with smaller fan-in than current compactions to run.
+    // Instead, let the compaction with higher fan-in complete more quickly. One of
+    // two things will happpen: the current compaction will complete, or the fan-in of
+    // the pending compaction will increase.
+    if (fan_in <= current_fan_in_threshold()) {
+        return false;
+    }
+
     return true;
 }
 
@@ -571,7 +588,8 @@ void compaction_manager::submit(column_family* cf) {
                 _stats.pending_tasks--;
                 return make_ready_future<stop_iteration>(stop_iteration::yes);
             }
-            if (!can_register_weight(&cf, weight)) {
+            auto fan_in = descriptor.fan_in();
+            if (!can_register_weight(&cf, weight, fan_in)) {
                 _stats.pending_tasks--;
                 cmlog.debug("Refused compaction job ({} sstable(s)) of weight {} for {}.{}, postponing it...",
                     descriptor.sstables.size(), weight, cf.schema()->ks_name(), cf.schema()->cf_name());
