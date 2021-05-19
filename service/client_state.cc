@@ -300,5 +300,7 @@ future<> service::client_state::maybe_update_per_service_level_params() {
         _timeout_config.truncate_timeout = slo_timeout_or(_default_timeout_config.truncate_timeout);
         _timeout_config.cas_timeout = slo_timeout_or(_default_timeout_config.cas_timeout);
         _timeout_config.other_timeout = slo_timeout_or(_default_timeout_config.other_timeout);
+
+        _workload_type = slo_opt->workload;
     }
 }

@@ -72,6 +72,7 @@ public:
     enum class auth_state : uint8_t {
         UNINITIALIZED, AUTHENTICATION, READY
     };
+    using workload_type = qos::service_level_options::workload_type;
 
     // This class is used to move client_state between shards
     // It is created on a shard that owns client_state than passed
@@ -150,9 +151,15 @@ private:
     timeout_config _default_timeout_config;
     timeout_config _timeout_config;
 
+    workload_type _workload_type = workload_type::unspecified;
+
 public:
     struct internal_tag {};
     struct external_tag {};
+
+    workload_type get_workload_type() const noexcept {
+        return _workload_type;
+    }
 
     auth_state get_auth_state() const noexcept {
         return _auth_state;
