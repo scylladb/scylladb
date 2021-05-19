@@ -564,7 +564,6 @@ SEASTAR_THREAD_TEST_CASE(reader_concurrency_semaphore_dump_reader_diganostics) {
     testlog.info("With max-lines=4: {}", semaphore.dump_diagnostics(4));
     testlog.info("With no max-lines: {}", semaphore.dump_diagnostics(0));
 }
-
 SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_stop_waits_on_permits) {
     BOOST_TEST_MESSAGE("unused");
     {
@@ -594,4 +593,248 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_stop_waits_on_permits
         // Test will fail by timing out.
         f.get();
     }
+}
+
+SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_admission) {
+    simple_schema s;
+    const auto schema_ptr = s.schema().get();
+    const auto initial_resources = reader_concurrency_semaphore::resources{2, 2 * 1024};
+    reader_concurrency_semaphore semaphore(initial_resources.count, initial_resources.memory, get_name());
+    auto stop_sem = deferred_stop(semaphore);
+
+    auto require_can_admit = [&] (bool expected_can_admit, const char* description,
+            std::experimental::source_location sl = std::experimental::source_location::current()) {
+        testlog.trace("Running admission scenario {}, with exepcted_can_admit={}", description, expected_can_admit);
+        const auto stats_before = semaphore.get_stats();
+
+        auto admit_fut = semaphore.obtain_permit(schema_ptr, get_name(), 1024, db::timeout_clock::now());
+        admit_fut.wait();
+        const bool can_admit = !admit_fut.failed();
+        if (can_admit) {
+            admit_fut.ignore_ready_future();
+        } else {
+            // Make sure we have a timeout exception, not something else
+            BOOST_REQUIRE_THROW(std::rethrow_exception(admit_fut.get_exception()), semaphore_timed_out);
+        }
+
+        const auto stats_after = semaphore.get_stats();
+        BOOST_REQUIRE_EQUAL(stats_after.reads_admitted, stats_before.reads_admitted + uint64_t(can_admit));
+        // Deliberately not checking `reads_enqueued`, a read can be enqueued temporarily during the admission process.
+
+        if (can_admit == expected_can_admit) {
+            testlog.trace("admission scenario '{}' with expected_can_admit={} passed at {}:{}", description, expected_can_admit, sl.file_name(),
+                    sl.line());
+        } else {
+            BOOST_FAIL(fmt::format("admission scenario '{}'  with expected_can_admit={} failed at {}:{}\ndiagnostics: {}", description,
+                    expected_can_admit, sl.file_name(), sl.line(), semaphore.dump_diagnostics()));
+        }
+    };
+
+    require_can_admit(true, "semaphore in initial state");
+
+    // resources and waitlist
+    {
+        reader_permit_opt permit = semaphore.obtain_permit(schema_ptr, get_name(), 1024, db::timeout_clock::now()).get();
+
+        require_can_admit(true, "enough resources");
+
+        const auto stats_before = semaphore.get_stats();
+
+        auto enqueued_permit_fut = semaphore.obtain_permit(schema_ptr, get_name(), 2 * 1024, db::no_timeout);
+        {
+            const auto stats_after = semaphore.get_stats();
+            BOOST_REQUIRE(!enqueued_permit_fut.available());
+            BOOST_REQUIRE_EQUAL(stats_after.reads_enqueued, stats_before.reads_enqueued + 1);
+            BOOST_REQUIRE_EQUAL(stats_after.reads_admitted, stats_before.reads_admitted);
+            BOOST_REQUIRE_EQUAL(semaphore.waiters(), 1);
+        }
+
+        BOOST_REQUIRE(semaphore.available_resources().count >= 1);
+        BOOST_REQUIRE(semaphore.available_resources().memory >= 1024);
+        require_can_admit(false, "enough resources but waitlist not empty");
+
+        permit = {};
+
+        reader_permit _(enqueued_permit_fut.get());
+    }
+    BOOST_REQUIRE_EQUAL(semaphore.available_resources(), initial_resources);
+    require_can_admit(true, "semaphore in initial state");
+
+    // used and blocked
+    {
+        auto permit = semaphore.obtain_permit(schema_ptr, get_name(), 1024, db::timeout_clock::now()).get();
+
+        require_can_admit(true, "!used");
+        {
+            reader_permit::used_guard ug{permit};
+
+            require_can_admit(false, "used > blocked");
+            {
+                reader_permit::blocked_guard bg{permit};
+                require_can_admit(true, "used == blocked");
+            }
+            require_can_admit(false, "used > blocked");
+        }
+        require_can_admit(true, "!used");
+    }
+    BOOST_REQUIRE_EQUAL(semaphore.available_resources(), initial_resources);
+    require_can_admit(true, "semaphore in initial state");
+
+    // forward progress -- resources
+    {
+        const auto resources = reader_resources::with_memory(semaphore.available_resources().memory);
+        semaphore.consume(resources);
+        require_can_admit(true, "semaphore with no memory but all count available");
+        semaphore.signal(resources);
+    }
+    BOOST_REQUIRE_EQUAL(semaphore.available_resources(), initial_resources);
+    require_can_admit(true, "semaphore in initial state");
+
+    // forward progress -- readmission
+    {
+        auto permit = semaphore.obtain_permit(schema_ptr, get_name(), 1024, db::timeout_clock::now()).get();
+
+        auto irh = semaphore.register_inactive_read(make_empty_flat_reader(s.schema(), permit));
+        BOOST_REQUIRE(semaphore.try_evict_one_inactive_read());
+        BOOST_REQUIRE(!irh);
+
+        reader_permit::used_guard _{permit};
+
+        const auto stats_before = semaphore.get_stats();
+
+        auto wait_fut = permit.maybe_wait_readmission(db::timeout_clock::now());
+        wait_fut.wait();
+        BOOST_REQUIRE(!wait_fut.failed());
+
+        const auto stats_after = semaphore.get_stats();
+        BOOST_REQUIRE_EQUAL(stats_after.reads_admitted, stats_before.reads_admitted + 1);
+        BOOST_REQUIRE_EQUAL(stats_after.reads_enqueued, stats_before.reads_enqueued);
+    }
+    BOOST_REQUIRE_EQUAL(semaphore.available_resources(), initial_resources);
+    require_can_admit(true, "semaphore in initial state");
+
+    // inactive readers
+    {
+        auto permit = semaphore.obtain_permit(schema_ptr, get_name(), 1024, db::timeout_clock::now()).get();
+
+        require_can_admit(true, "!used");
+        {
+            auto irh = semaphore.register_inactive_read(make_empty_flat_reader(s.schema(), permit));
+            require_can_admit(true, "inactive");
+
+            reader_permit::used_guard ug{permit};
+
+            require_can_admit(true, "inactive (used)");
+
+            {
+                auto rd = semaphore.unregister_inactive_read(std::move(irh));
+                rd->close().get();
+            }
+
+            require_can_admit(false, "used > blocked");
+
+            irh = semaphore.register_inactive_read(make_empty_flat_reader(s.schema(), permit));
+            require_can_admit(true, "inactive (used)");
+        }
+        require_can_admit(true, "!used");
+    }
+    BOOST_REQUIRE_EQUAL(semaphore.available_resources(), initial_resources);
+    require_can_admit(true, "semaphore in initial state");
+
+    // evicting inactive readers for admission
+    {
+        auto permit1 = semaphore.obtain_permit(schema_ptr, get_name(), 1024, db::timeout_clock::now()).get();
+        auto irh1 = semaphore.register_inactive_read(make_empty_flat_reader(s.schema(), permit1));
+
+        auto permit2 = semaphore.obtain_permit(schema_ptr, get_name(), 1024, db::timeout_clock::now()).get();
+        auto irh2 = semaphore.register_inactive_read(make_empty_flat_reader(s.schema(), permit2));
+
+        require_can_admit(true, "evictable reads");
+    }
+    BOOST_REQUIRE_EQUAL(semaphore.available_resources(), initial_resources);
+    require_can_admit(true, "semaphore in initial state");
+
+    auto check_admitting_enqueued_read = [&] (auto pre_admission_hook, auto post_enqueue_hook) {
+        auto cookie1 = pre_admission_hook();
+
+        require_can_admit(false, "admission blocked");
+
+        const auto stats_before = semaphore.get_stats();
+
+        auto permit2_fut = semaphore.obtain_permit(schema_ptr, get_name(), 1024, db::no_timeout);
+
+        const auto stats_after = semaphore.get_stats();
+        BOOST_REQUIRE_EQUAL(stats_after.reads_admitted, stats_before.reads_admitted);
+        BOOST_REQUIRE_EQUAL(stats_after.reads_enqueued, stats_before.reads_enqueued + 1);
+        BOOST_REQUIRE_EQUAL(semaphore.waiters(), 1);
+
+        auto cookie2 = post_enqueue_hook(cookie1);
+
+        if (!eventually_true([&] { return permit2_fut.available(); })) {
+            semaphore.broken();
+            permit2_fut.wait();
+            permit2_fut.ignore_ready_future();
+            BOOST_FAIL("Enqueued permit didn't get admitted as expected");
+        }
+    };
+
+    // admitting enqueued reads -- permit owning resources destroyed
+    {
+        check_admitting_enqueued_read(
+            [&] {
+                return reader_permit_opt(semaphore.obtain_permit(schema_ptr, get_name(), 2 * 1024, db::timeout_clock::now()).get());
+            },
+            [] (reader_permit_opt& permit1) {
+                permit1 = {};
+                return 0;
+            }
+        );
+    }
+    BOOST_REQUIRE_EQUAL(semaphore.available_resources(), initial_resources);
+    require_can_admit(true, "semaphore in initial state");
+
+    // admitting enqueued reads -- permit owning resources becomes inactive
+    {
+        check_admitting_enqueued_read(
+            [&] {
+                return reader_permit_opt(semaphore.obtain_permit(schema_ptr, get_name(), 2 * 1024, db::timeout_clock::now()).get());
+            },
+            [&] (reader_permit_opt& permit1) {
+                return semaphore.register_inactive_read(make_empty_flat_reader(s.schema(), *permit1));
+            }
+        );
+    }
+    BOOST_REQUIRE_EQUAL(semaphore.available_resources(), initial_resources);
+    require_can_admit(true, "semaphore in initial state");
+
+    // admitting enqueued reads -- permit becomes unused
+    {
+        check_admitting_enqueued_read(
+            [&] {
+                auto permit = semaphore.obtain_permit(schema_ptr, get_name(), 1024, db::timeout_clock::now()).get();
+                require_can_admit(true, "enough resources");
+                return std::pair(permit, std::optional<reader_permit::used_guard>{permit});
+            }, [&] (std::pair<reader_permit, std::optional<reader_permit::used_guard>>& permit_and_used_guard) {
+                permit_and_used_guard.second.reset();
+                return 0;
+            }
+        );
+    }
+    BOOST_REQUIRE_EQUAL(semaphore.available_resources(), initial_resources);
+    require_can_admit(true, "semaphore in initial state");
+
+    // admitting enqueued reads -- permit becomes blocked
+    {
+        check_admitting_enqueued_read(
+            [&] {
+                auto permit = semaphore.obtain_permit(schema_ptr, get_name(), 1024, db::timeout_clock::now()).get();
+                require_can_admit(true, "enough resources");
+                return std::pair(permit, reader_permit::used_guard{permit});
+            }, [&] (std::pair<reader_permit, reader_permit::used_guard>& permit_and_used_guard) {
+                return reader_permit::blocked_guard{permit_and_used_guard.first};
+            }
+        );
+    }
+    BOOST_REQUIRE_EQUAL(semaphore.available_resources(), initial_resources);
+    require_can_admit(true, "semaphore in initial state");
 }
