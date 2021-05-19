@@ -57,6 +57,7 @@
 #include "time_window_compaction_strategy.hh"
 #include "sstables/compaction_backlog_manager.hh"
 #include "sstables/size_tiered_backlog_tracker.hh"
+#include "sstables/leveled_manifest.hh"
 
 logging::logger date_tiered_manifest::logger = logging::logger("DateTieredCompactionStrategy");
 logging::logger leveled_manifest::logger("LeveledManifest");

@@ -24,7 +24,7 @@
 #include "compaction_strategy_impl.hh"
 #include "compaction.hh"
 #include "sstables/sstables.hh"
-#include "database.hh"
+#include "database_fwd.hh"
 #include <boost/algorithm/cxx11/any_of.hpp>
 
 namespace sstables {

@@ -20,6 +20,7 @@
  */
 
 #include "leveled_compaction_strategy.hh"
+#include "sstables/leveled_manifest.hh"
 #include <algorithm>
 #include <ranges>
 

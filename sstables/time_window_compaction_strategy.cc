@@ -20,6 +20,7 @@
  */
 
 #include "sstables/time_window_compaction_strategy.hh"
+#include "sstables/leveled_manifest.hh"
 #include "mutation_writer/timestamp_based_splitting_writer.hh"
 #include "mutation_source_metadata.hh"
 
