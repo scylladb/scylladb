@@ -113,8 +113,6 @@ if __name__ == '__main__':
         os.remove('/etc/scylla/ami_disabled')
         sys.exit(1)
 
-    configure_aio_slots()
-
     if mode == 'virtio':
         tap = cfg.get('TAP')
         user = cfg.get('USER')
@@ -144,4 +142,3 @@ if __name__ == '__main__':
             print(f'Exception occurred while creating perftune.yaml: {e}')
             print('To fix the error, please re-run scylla_setup.')
             sys.exit(1)
-
