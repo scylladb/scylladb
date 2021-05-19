@@ -316,6 +316,7 @@ public:
         uint64_t buffer_list_bytes = 0;
         // size on disk, actually used - i.e. containing data (allocate+cycle)
         uint64_t active_size_on_disk = 0;
+        uint64_t wasted_size_on_disk = 0;
         // size allocated on disk - i.e. files created (new, reserve, recycled)
         uint64_t total_size_on_disk = 0;
         uint64_t requests_blocked_memory = 0;
@@ -584,6 +585,7 @@ public:
             clogger.debug("Segment {} is no longer active and will submitted for delete now", *this);
             ++_segment_manager->totals.segments_destroyed;
             _segment_manager->totals.active_size_on_disk -= file_position();
+            _segment_manager->totals.wasted_size_on_disk -= (_size_on_disk - file_position());
             _segment_manager->add_file_to_delete(_file_name, _desc);
         } else if (_segment_manager->cfg.warn_about_segments_left_on_disk_after_shutdown) {
             clogger.warn("Segment {} is dirty and is left on disk.", *this);
@@ -695,7 +697,14 @@ public:
     }
     future<sseg_ptr> close() {
         _closed = true;
-        return sync().then([] (sseg_ptr s) { return s->flush(); }).then([] (sseg_ptr s) { return s->terminate(); });
+        return sync().then([] (sseg_ptr s) {
+            return s->flush();
+        }).then([](sseg_ptr s) {
+            return s->terminate();
+        }).then([](sseg_ptr s) {
+            s->_segment_manager->totals.wasted_size_on_disk += (s->_size_on_disk - s->file_position());
+            return s;
+        });
     }
     future<sseg_ptr> do_flush(uint64_t pos) {
         auto me = shared_from_this();
@@ -1336,6 +1345,10 @@ void db::commitlog::segment_manager::create_counters(const sstring& metrics_cate
                        sm::description("Holds a size of disk space in bytes used for data so far. "
                                        "A too high value indicates that we have some bottleneck in the writing to sstables path.")),
 
+        sm::make_gauge("disk_slack_end_bytes", totals.wasted_size_on_disk,
+                       sm::description("Holds a size of disk space in bytes unused because of segment switching (end slack). "
+                                       "A too high value indicates that we do not write enough data to each segment.")),
+
         sm::make_gauge("memory_buffer_bytes", totals.buffer_list_bytes,
                        sm::description("Holds the total number of bytes in internal memory buffers.")),
     });
@@ -1540,7 +1553,8 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
             clogger.debug("Increased segment reserve count to {}", _reserve_segments.max_size());
         }
         // if we have no reserve and we're above/at limits, make background task a little more eager.
-        if (!_shutdown && totals.total_size_on_disk >= disk_usage_threshold) {
+        auto cur = totals.active_size_on_disk + totals.wasted_size_on_disk;
+        if (!_shutdown && cur >= disk_usage_threshold) {
             _timer.cancel();
             _timer.arm(std::chrono::milliseconds(0));
         }
@@ -1876,7 +1890,7 @@ void db::commitlog::segment_manager::on_timer() {
         // above threshold, request flush.
         if (_new_counter > 0) {
             auto max = disk_usage_threshold;
-            auto cur = totals.active_size_on_disk;
+            auto cur = totals.active_size_on_disk + totals.wasted_size_on_disk;
             if (max != 0 && cur >= max) {
                 _new_counter = 0;
                 clogger.debug("Used size on disk {} MB exceeds local threshold {} MB", cur / (1024 * 1024), max / (1024 * 1024));
@@ -2503,7 +2517,10 @@ uint64_t db::commitlog::disk_footprint() const {
 }
 
 uint64_t db::commitlog::get_total_size() const {
-    return _segment_manager->totals.active_size_on_disk + _segment_manager->totals.buffer_list_bytes;
+    return _segment_manager->totals.active_size_on_disk
+        + _segment_manager->totals.wasted_size_on_disk
+        + _segment_manager->totals.buffer_list_bytes
+        ;
 }
 
 uint64_t db::commitlog::get_completed_tasks() const {
