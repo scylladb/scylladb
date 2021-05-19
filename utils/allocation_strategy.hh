@@ -59,7 +59,7 @@ public:
 template <typename T>
 inline
 size_t
-size_for_allocation_strategy(const T& obj) {
+size_for_allocation_strategy(const T& obj) noexcept {
     return sizeof(T);
 }
 
