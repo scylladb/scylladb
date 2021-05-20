@@ -160,10 +160,10 @@ mutation_fragment_v2::mutation_fragment_v2(const schema& s, reader_permit permit
     _data->_memory.reset(reader_resources::with_memory(calculate_memory_usage(s)));
 }
 
-mutation_fragment_v2::mutation_fragment_v2(const schema& s, reader_permit permit, range_tombstone&& r)
-    : _kind(kind::range_tombstone), _data(std::make_unique<data>(std::move(permit)))
+mutation_fragment_v2::mutation_fragment_v2(const schema& s, reader_permit permit, range_tombstone_change&& r)
+    : _kind(kind::range_tombstone_change), _data(std::make_unique<data>(std::move(permit)))
 {
-    new (&_data->_range_tombstone) range_tombstone(std::move(r));
+    new (&_data->_range_tombstone_chg) range_tombstone_change(std::move(r));
     _data->_memory.reset(reader_resources::with_memory(calculate_memory_usage(s)));
 }
 
@@ -190,8 +190,8 @@ void mutation_fragment_v2::destroy_data() noexcept
     case kind::clustering_row:
         _data->_clustering_row.~clustering_row();
         break;
-    case kind::range_tombstone:
-        _data->_range_tombstone.~range_tombstone();
+    case kind::range_tombstone_change:
+        _data->_range_tombstone_chg.~range_tombstone_change();
         break;
     case kind::partition_start:
         _data->_partition_start.~partition_start();
@@ -207,6 +207,7 @@ namespace {
 struct get_key_visitor {
     const clustering_key_prefix& operator()(const clustering_row& cr) { return cr.key(); }
     const clustering_key_prefix& operator()(const range_tombstone& rt) { return rt.start; }
+    const clustering_key_prefix& operator()(const range_tombstone_change& rt) { return rt.position().key(); }
     template <typename T>
     const clustering_key_prefix& operator()(const T&) { abort(); }
 };
@@ -335,7 +336,7 @@ std::ostream& operator<<(std::ostream& os, mutation_fragment_v2::kind k)
     switch (k) {
     case mutation_fragment_v2::kind::static_row: return os << "static row";
     case mutation_fragment_v2::kind::clustering_row: return os << "clustering row";
-    case mutation_fragment_v2::kind::range_tombstone: return os << "range tombstone";
+    case mutation_fragment_v2::kind::range_tombstone_change: return os << "range tombstone change";
     case mutation_fragment_v2::kind::partition_start: return os << "partition start";
     case mutation_fragment_v2::kind::partition_end: return os << "partition end";
     }
@@ -441,12 +442,6 @@ bool mutation_fragment_v2::relevant_for_range(const schema& s, position_in_parti
         return true;
     }
     return false;
-}
-
-bool mutation_fragment_v2::relevant_for_range_assuming_after(const schema& s, position_in_partition_view pos) const {
-    position_in_partition::less_compare cmp(s);
-    // Range tombstones overlapping with the new range are let in
-    return is_range_tombstone() && cmp(pos, as_range_tombstone().end_position());
 }
 
 std::ostream& operator<<(std::ostream& out, const range_tombstone_stream& rtl) {

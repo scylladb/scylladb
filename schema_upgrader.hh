@@ -103,7 +103,7 @@ public:
         return mutation_fragment_v2(*_new, std::move(*_permit), clustering_row(row.key(), row.tomb(), row.marker(),
             transform(std::move(row.cells()), column_kind::regular_column)));
     }
-    mutation_fragment_v2 consume(range_tombstone&& rt) {
+    mutation_fragment_v2 consume(range_tombstone_change&& rt) {
         return mutation_fragment_v2(*_new, std::move(*_permit), std::move(rt));
     }
     mutation_fragment_v2 consume(partition_start&& ph) {

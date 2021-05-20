@@ -26,7 +26,7 @@
 
 #include "dht/i_partitioner.hh"
 #include "position_in_partition.hh"
-#include "flat_mutation_reader_v2.hh"
+#include "flat_mutation_reader.hh"
 #include "mutation_fragment_v2.hh"
 #include "tracing/trace_state.hh"
 #include "mutation.hh"
@@ -91,14 +91,23 @@ concept FlattenedConsumerFilterV2 =
 ///
 ///   stream ::= partition*
 ///   partition ::= partition_start static_row? clustered* partition_end
-///   clustered ::= clustering_row | range_tombstone
+///   clustered ::= clustering_row | range_tombstone_change
 ///
-/// The range_tombstone fragments can have ranges which overlap with other
-/// range_tombstone fragments.
+/// Deletions of ranges of rows within a given partition are represented with range_tombstone_change fragments.
+/// At any point in the stream there is a single active clustered tombstone.
+/// It is initially equal to the neutral tombstone when the stream of each partition starts.
+/// range_tombstone_change fragments signify changes of the active clustered tombstone.
+/// All fragments emitted while a given clustered tombstone is active are affected by that tombstone.
+/// The clustered tombstone is independent from the partition tombstone carried in partition_start.
+/// The partition tombstone takes effect for all fragments within the partition.
 ///
-/// Consecutive range_tombstone fragments can have the same position(), so they
-/// are weakly ordered. This makes merging two streams easier, and is
-/// relied upon by combined_mutation_reader.
+/// The stream guarantees that each partition ends with a neutral active clustered tombstone
+/// by closing active tombstones with a range_tombstone_change.
+/// In fast-forwarding mode, each sub-stream ends with a neutral active clustered tombstone.
+///
+/// All fragments within a partition have weakly monotonically increasing position().
+/// Consecutive range_tombstone_change fragments may share the position.
+/// All clustering row fragments within a partition have strictly monotonically increasing position().
 ///
 /// \section Clustering restrictions
 ///
@@ -113,23 +122,20 @@ concept FlattenedConsumerFilterV2 =
 ///   0) The stream must contain fragments corresponding to all writes
 ///      which are relevant to the requested ranges.
 ///
-///   1) The stream _may_ contain fragments with information
-///      about _some_ of the writes which are relevant to clustering ranges
-///      outside of the requested ranges. For example, it may return
-///      some of the range tombstones relevant to the clustering ranges
-///      outside of the requested ranges, but this information may not
-///      be complete (e.g. there could be a more recent deletion).
+///   1) The ranges of non-neutral clustered tombstones must be enclosed in requested
+///      ranges. In other words, range tombstones don't extend beyond boundaries of requested ranges.
 ///
-///   2) The stream will not contain writes which are absent in the unrestricted stream,
+///   2) The stream will not return writes which are absent in the unrestricted stream,
 ///      both for the requested clustering ranges and not requested ranges.
 ///      This means that it's safe to populate cache with all the returned information.
 ///      Even though it may be incomplete for non-requested ranges, it won't contain
 ///      incorrect information.
 ///
-///   3) All clustering_row fragments have position() which is within the requested
-///      ranges.
+///   3) All clustered fragments have position() which is within the requested
+///      ranges or, in case of range_tombstone_change fragments, equal to the end bound.
 ///
-///   4) range_tombstone fragments can have position() outside of requested ranges.
+///   4) Streams may produce redundant range_tombstone_change fragments
+///      which do not change the current clustered tombstone, or have the same position.
 ///
 /// \section Intra-partition fast-forwarding mode
 ///
@@ -153,9 +159,7 @@ concept FlattenedConsumerFilterV2 =
 ///    3) The position_range passed to fast_forward_to() is a clustering key restriction.
 ///       Same rules apply as with clustering restrictions described above.
 ///
-///    4) range_tombstones produced in earlier sub-stream which are also relevant
-///       for next sub-streams do not have to be repeated. They _may_ be repeated
-///       with a starting position trimmed.
+///    4) The sub-stream will not end with a non-neutral active clustered tombstone. All range tombstones are closed.
 ///
 ///    5) partition_end is never emitted, the user needs to call next_partition()
 ///       to move to the next partition in the original stream, which will open
@@ -316,7 +320,7 @@ public:
             future<stop_iteration> consume(clustering_row&& cr) {
                 return handle_result(_consumer.consume(std::move(cr)));
             }
-            future<stop_iteration> consume(range_tombstone&& rt) {
+            future<stop_iteration> consume(range_tombstone_change&& rt) {
                 return handle_result(_consumer.consume(std::move(rt)));
             }
             future<stop_iteration> consume(partition_start&& ps) {
