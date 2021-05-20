@@ -296,25 +296,6 @@ public:
         }
         return _semaphore.do_wait_admission(shared_from_this(), timeout);
     }
-
-    // Support method for old-style admission, which passes a new base resources
-    // each time the permit is admitted.
-    void set_base_resources(reader_resources base_resources) {
-        assert(!_base_resources_consumed);
-        _base_resources = base_resources;
-    }
-
-    // Support method for old-style admission, which passes a new base resources
-    // each time the permit is admitted and after admission it stores the base
-    // resources externally.
-    reader_permit::resource_units base_resources_as_resource_units() {
-        auto res_units = reader_permit::resource_units(reader_permit(shared_from_this()), _base_resources);
-        if (_base_resources_consumed) {
-            signal(_base_resources);
-            _base_resources_consumed = false;
-        }
-        return res_units;
-    }
 };
 
 struct reader_concurrency_semaphore::permit_list {
@@ -353,13 +334,6 @@ reader_permit::~reader_permit() {
 
 reader_concurrency_semaphore& reader_permit::semaphore() {
     return _impl->semaphore();
-}
-
-future<reader_permit::resource_units> reader_permit::wait_admission(size_t memory, db::timeout_clock::time_point timeout) {
-    _impl->set_base_resources(reader_resources(1, static_cast<ssize_t>(memory)));
-    return _impl->semaphore().do_wait_admission(*this, timeout).then([this] {
-        return _impl->base_resources_as_resource_units();
-    });
 }
 
 future<> reader_permit::maybe_wait_readmission(db::timeout_clock::time_point timeout) {
