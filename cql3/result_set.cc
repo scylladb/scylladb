@@ -177,7 +177,7 @@ const metadata& result_set::get_metadata() const {
     return *_metadata;
 }
 
-const std::deque<std::vector<bytes_opt>>& result_set::rows() const {
+const utils::chunked_vector<std::vector<bytes_opt>>& result_set::rows() const {
     return _rows;
 }
 
