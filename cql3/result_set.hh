@@ -41,8 +41,8 @@
 
 #pragma once
 
-#include <deque>
 #include <vector>
+#include "utils/chunked_vector.hh"
 #include "enum_set.hh"
 #include "service/pager/paging_state.hh"
 
@@ -168,7 +168,7 @@ concept ResultVisitor = requires(Visitor& visitor) {
 
 class result_set {
     ::shared_ptr<metadata> _metadata;
-    std::deque<std::vector<bytes_opt>> _rows;
+    utils::chunked_vector<std::vector<bytes_opt>> _rows;
 
     friend class result;
 public:
@@ -201,7 +201,7 @@ public:
     const metadata& get_metadata() const;
 
     // Returns a range of rows. A row is a range of bytes_opt.
-    const std::deque<std::vector<bytes_opt>>& rows() const;
+    const utils::chunked_vector<std::vector<bytes_opt>>& rows() const;
 
     template<typename Visitor>
     requires ResultVisitor<Visitor>
