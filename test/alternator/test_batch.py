@@ -324,7 +324,8 @@ def test_batch_unprocessed(test_table_s):
 # is only 10 MB, but the JSON format has additional overheads). If we write
 # less than those limits in a single BatchWriteItem operation, it should
 # work. Testing a large request exercises our code which calculates the
-# request signature, and parses a long request (issue #7213).
+# request signature, and parses a long request (issue #7213) as well as the
+# resulting long write (issue #8183).
 def test_batch_write_item_large(test_table_sn):
     p = random_string()
     long_content = random_string(100)*500
@@ -334,3 +335,38 @@ def test_batch_write_item_large(test_table_sn):
     assert 'UnprocessedItems' in write_reply and write_reply['UnprocessedItems'] == dict()
     assert full_query(test_table_sn, KeyConditionExpression='p=:p', ExpressionAttributeValues={':p': p}
         ) == [{'p': p, 'c': i, 'content': long_content} for i in range(25)]
+
+# According to the DynamoDB documention, a single BatchGetItem operation is
+# limited to retrieving up to 100 items or a total of 16 MB of data,
+# whichever is smaller. If we read less than those limits in a single
+# BatchGetItem operation, it should work - though may still return only
+# partial results (filling UnprocessedKeys instead). Testing a BatchGetItem
+# with a large response exercises our code which builds such large responses
+# and how it may cause warnings about excessively large allocations or long
+# unpreemptable computation (see issues #8661, #7926).
+def test_batch_get_item_large(test_table_sn):
+    p = random_string()
+    long_content = random_string(100)*500
+    count = 30
+    with test_table_sn.batch_writer() as batch:
+        for i in range(count):
+            batch.put_item(Item={
+                'p': p, 'c': i, 'content': long_content})
+    # long_content is 49 KB, 30 such items is about 1.5 MB, well below the
+    # BatchGetItem response limit, so the following BatchGetItem call should
+    # be able to return all items we just wrote in one response - and in fact
+    # does so in Alternator and thus exercises its handling of large
+    # responses. Strangely, in DynamoDB, even though we're below the limit,
+    # it often returns only partial results (with the unread keys in
+    # UnprocessedKeys), so for reliable success of this test we need a loop:
+    responses = []
+    to_read = { test_table_sn.name: {'Keys': [{'p': p, 'c': c} for c in range(count)], 'ConsistentRead': True } }
+    while to_read:
+        reply = test_table_sn.meta.client.batch_get_item(RequestItems = to_read)
+        assert 'UnprocessedKeys' in reply
+        to_read = reply['UnprocessedKeys']
+        assert 'Responses' in reply
+        assert test_table_sn.name in reply['Responses']
+        responses.extend(reply['Responses'][test_table_sn.name])
+    assert multiset(responses) == multiset(
+        [{'p': p, 'c': i, 'content': long_content} for i in range(count)])
