@@ -838,3 +838,82 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_admission) {
     BOOST_REQUIRE_EQUAL(semaphore.available_resources(), initial_resources);
     require_can_admit(true, "semaphore in initial state");
 }
+
+SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_used_blocked) {
+    const auto initial_resources = reader_concurrency_semaphore::resources{2, 2 * 1024};
+    reader_concurrency_semaphore semaphore(initial_resources.count, initial_resources.memory, get_name());
+    auto stop_sem = deferred_stop(semaphore);
+
+    BOOST_REQUIRE_EQUAL(semaphore.get_permit_stats().current_permits, 0);
+    BOOST_REQUIRE_EQUAL(semaphore.get_permit_stats().used_permits, 0);
+    BOOST_REQUIRE_EQUAL(semaphore.get_permit_stats().blocked_permits, 0);
+
+    auto permit = semaphore.obtain_permit(nullptr, get_name(), 1024, db::no_timeout).get0();
+
+    for (auto scenario = 0; scenario < 5; ++scenario) {
+        testlog.info("Running scenario {}", scenario);
+
+        std::vector<reader_permit::used_guard> used;
+        std::vector<reader_permit::blocked_guard> blocked;
+        unsigned count;
+
+        switch (scenario) {
+            case 0:
+                used.emplace_back(permit);
+
+                BOOST_REQUIRE_EQUAL(semaphore.get_permit_stats().current_permits, 1);
+                BOOST_REQUIRE_EQUAL(semaphore.get_permit_stats().used_permits, 1);
+                BOOST_REQUIRE_EQUAL(semaphore.get_permit_stats().blocked_permits, 0);
+                break;
+            case 1:
+                used.emplace_back(permit);
+                blocked.emplace_back(permit);
+
+                BOOST_REQUIRE_EQUAL(semaphore.get_permit_stats().current_permits, 1);
+                BOOST_REQUIRE_EQUAL(semaphore.get_permit_stats().used_permits, 1);
+                BOOST_REQUIRE_EQUAL(semaphore.get_permit_stats().blocked_permits, 1);
+                break;
+            case 2:
+                blocked.emplace_back(permit);
+
+                BOOST_REQUIRE_EQUAL(semaphore.get_permit_stats().current_permits, 1);
+                BOOST_REQUIRE_EQUAL(semaphore.get_permit_stats().used_permits, 0);
+                BOOST_REQUIRE_EQUAL(semaphore.get_permit_stats().blocked_permits, 0);
+                break;
+            case 3:
+                blocked.emplace_back(permit);
+                used.emplace_back(permit);
+
+                BOOST_REQUIRE_EQUAL(semaphore.get_permit_stats().current_permits, 1);
+                BOOST_REQUIRE_EQUAL(semaphore.get_permit_stats().used_permits, 1);
+                BOOST_REQUIRE_EQUAL(semaphore.get_permit_stats().blocked_permits, 1);
+                break;
+            default:
+                count = tests::random::get_int<unsigned>(3, 100);
+                for (unsigned i = 0; i < count; ++i) {
+                    if (tests::random::get_bool()) {
+                        used.emplace_back(permit);
+                    } else {
+                        blocked.emplace_back(permit);
+                    }
+                }
+                break;
+        }
+
+        while (!used.empty() && !blocked.empty()) {
+            const bool pop_used = !used.empty() && tests::random::get_bool();
+
+            if (pop_used) {
+                used.pop_back();
+                if (used.empty()) {
+                    BOOST_REQUIRE_EQUAL(semaphore.get_permit_stats().used_permits, 0);
+                }
+            } else {
+                blocked.pop_back();
+                if (blocked.empty()) {
+                    BOOST_REQUIRE_EQUAL(semaphore.get_permit_stats().blocked_permits, 0);
+                }
+            }
+        }
+    }
+}
