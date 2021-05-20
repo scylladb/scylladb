@@ -2462,6 +2462,18 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
                 node_ops_cmd_response resp(ok, ops_uuids);
                 slogger.debug("node_ops_cmd_handler: Got query_pending_ops request from {}, pending_ops={}", coordinator, ops_uuids);
                 return resp;
+            } else if (req.cmd == node_ops_cmd::repair_updater) {
+                slogger.debug("repair[{}]: Got repair_updater request from {}", ops_uuid, coordinator);
+                ss.db().invoke_on_all([coordinator, ops_uuid, tables = req.repair_tables] (database &db) {
+                    for (const auto& table_id : tables) {
+                        auto& table = db.find_column_family(table_id);
+                        table.update_off_strategy_trigger();
+                        slogger.debug("repair[{}]: Updated off_strategy_trigger for table {}.{} by node {}",
+                                ops_uuid, table.schema()->ks_name(), table.schema()->cf_name(), coordinator);
+                    }
+                }).get();
+                bool ok = true;
+                return node_ops_cmd_response(ok);
             }
 
             ss.node_ops_cmd_check(coordinator, req);

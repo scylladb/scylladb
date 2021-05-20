@@ -412,6 +412,26 @@ void table::add_maintenance_sstable(sstables::shared_sstable sst) {
     refresh_compound_sstable_set();
 }
 
+void table::do_update_off_strategy_trigger() {
+    _off_strategy_trigger.rearm(timer<>::clock::now() +  std::chrono::minutes(5));
+}
+
+// If there are more sstables to be added to the off-strategy sstable set, call
+// update_off_strategy_trigger to update the timer and delay to trigger
+// off-strategy compaction. The off-strategy compaction will be triggered when
+// the timer is expired.
+void table::update_off_strategy_trigger() {
+    if (_off_strategy_trigger.armed()) {
+        do_update_off_strategy_trigger();
+    }
+}
+
+// Call enable_off_strategy_trigger to enable the automatic off-strategy
+// compaction trigger.
+void table::enable_off_strategy_trigger() {
+    do_update_off_strategy_trigger();
+}
+
 future<>
 table::add_sstable_and_update_cache(sstables::shared_sstable sst, sstables::offstrategy offstrategy) {
     return get_row_cache().invalidate(row_cache::external_updater([this, sst, offstrategy] () noexcept {
@@ -970,6 +990,9 @@ future<> table::run_compaction(sstables::compaction_descriptor descriptor) {
 }
 
 void table::trigger_offstrategy_compaction() {
+    // If the user calls trigger_offstrategy_compaction() to trigger
+    // off-strategy explicitly, cancel the timeout based automatic trigger.
+    _off_strategy_trigger.cancel();
     _compaction_manager.submit_offstrategy(this);
 }
 
@@ -1185,6 +1208,7 @@ table::table(schema_ptr schema, config config, db::commitlog* cl, compaction_man
     , _index_manager(*this)
     , _counter_cell_locks(_schema->is_counter() ? std::make_unique<cell_locker>(_schema, cl_stats) : nullptr)
     , _row_locker(_schema)
+    , _off_strategy_trigger([this] { trigger_offstrategy_compaction(); })
 {
     if (!_config.enable_disk_writes) {
         tlogger.warn("Writes disabled, column family no durable.");
