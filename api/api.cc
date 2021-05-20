@@ -113,8 +113,8 @@ future<> set_server_storage_service(http_context& ctx) {
     return register_api(ctx, "storage_service", "The storage service API", set_storage_service);
 }
 
-future<> set_server_repair(http_context& ctx, sharded<netw::messaging_service>& ms) {
-    return ctx.http_server.set_routes([&ctx, &ms] (routes& r) { set_repair(ctx, r, ms); });
+future<> set_server_repair(http_context& ctx, sharded<repair_service>& repair) {
+    return ctx.http_server.set_routes([&ctx, &repair] (routes& r) { set_repair(ctx, r, repair); });
 }
 
 future<> unset_server_repair(http_context& ctx) {

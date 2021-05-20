@@ -42,20 +42,65 @@ namespace gms {
     class gossiper;
 }
 
-struct repair_service {
+class repair_service : public seastar::peering_sharded_service<repair_service> {
     distributed<gms::gossiper>& _gossiper;
-    shared_ptr<row_level_repair_gossip_helper> _gossip_helper;
-    tracker _tracker;
-    repair_service(distributed<gms::gossiper>& gossiper, size_t max_repair_memory);
-    ~repair_service();
-    future<> stop();
-private:
-    bool _stopped = false;
-};
+    netw::messaging_service& _messaging;
+    sharded<database>& _db;
+    sharded<db::system_distributed_keyspace>& _sys_dist_ks;
+    sharded<db::view::view_update_generator>& _view_update_generator;
+    service::migration_manager& _mm;
 
-future<> row_level_repair_init_messaging_service_handler(repair_service& rs, distributed<db::system_distributed_keyspace>& sys_dist_ks,
-        distributed<db::view::view_update_generator>& view_update_generator, sharded<netw::messaging_service>& ms, sharded<service::migration_manager>& mm);
-future<> row_level_repair_uninit_messaging_service_handler();
+    shared_ptr<row_level_repair_gossip_helper> _gossip_helper;
+    std::unique_ptr<tracker> _tracker;
+    bool _stopped = false;
+
+    future<> init_ms_handlers();
+    future<> uninit_ms_handlers();
+    future<> init_row_level_ms_handlers();
+    future<> uninit_row_level_ms_handlers();
+
+public:
+    repair_service(distributed<gms::gossiper>& gossiper,
+            netw::messaging_service& ms,
+            sharded<database>& db,
+            sharded<db::system_distributed_keyspace>& sys_dist_ks,
+            sharded<db::view::view_update_generator>& vug,
+            service::migration_manager& mm, size_t max_repair_memory);
+    ~repair_service();
+    future<> start();
+    future<> stop();
+
+    int do_repair_start(sstring keyspace, std::unordered_map<sstring, sstring> options_map);
+
+    // The tokens are the tokens assigned to the bootstrap node.
+    future<> bootstrap_with_repair(locator::token_metadata_ptr tmptr, std::unordered_set<dht::token> bootstrap_tokens);
+    future<> decommission_with_repair(locator::token_metadata_ptr tmptr);
+    future<> removenode_with_repair(locator::token_metadata_ptr tmptr, gms::inet_address leaving_node, shared_ptr<node_ops_info> ops);
+    future<> rebuild_with_repair(locator::token_metadata_ptr tmptr, sstring source_dc);
+    future<> replace_with_repair(locator::token_metadata_ptr tmptr, std::unordered_set<dht::token> replacing_tokens);
+private:
+    future<> do_decommission_removenode_with_repair(locator::token_metadata_ptr tmptr, gms::inet_address leaving_node, shared_ptr<node_ops_info> ops);
+    future<> do_rebuild_replace_with_repair(locator::token_metadata_ptr tmptr, sstring op, sstring source_dc, streaming::stream_reason reason);
+
+    future<> sync_data_using_repair(sstring keyspace,
+            dht::token_range_vector ranges,
+            std::unordered_map<dht::token_range, repair_neighbors> neighbors,
+            streaming::stream_reason reason,
+            std::optional<utils::UUID> ops_uuid);
+
+    future<> do_sync_data_using_repair(sstring keyspace,
+            dht::token_range_vector ranges,
+            std::unordered_map<dht::token_range, repair_neighbors> neighbors,
+            streaming::stream_reason reason,
+            std::optional<utils::UUID> ops_uuid);
+
+public:
+    netw::messaging_service& get_messaging() noexcept { return _messaging; }
+    sharded<database>& get_db() noexcept { return _db; }
+    service::migration_manager& get_migration_manager() noexcept { return _mm; }
+    sharded<db::system_distributed_keyspace>& get_sys_dist_ks() noexcept { return _sys_dist_ks; }
+    sharded<db::view::view_update_generator>& get_view_update_generator() noexcept { return _view_update_generator; }
+};
 
 class repair_info;
 

@@ -57,9 +57,6 @@
 
 logging::logger rlogger("repair");
 
-static sharded<netw::messaging_service>* _messaging;
-static sharded<service::migration_manager>* _migration_manager;
-
 void node_ops_info::check_abort() {
     if (abort) {
         auto msg = format("Node operation with ops_uuid={} is aborted", ops_uuid);
@@ -596,8 +593,7 @@ get_sharder_for_tables(seastar::sharded<database>& db, const sstring& keyspace, 
     return last_s->get_sharder();
 }
 
-repair_info::repair_info(seastar::sharded<database>& db_,
-    seastar::sharded<netw::messaging_service>& ms_,
+repair_info::repair_info(repair_service& repair,
     const sstring& keyspace_,
     const dht::token_range_vector& ranges_,
     std::vector<utils::UUID> table_ids_,
@@ -607,12 +603,15 @@ repair_info::repair_info(seastar::sharded<database>& db_,
     const std::unordered_set<gms::inet_address>& ignore_nodes_,
     streaming::stream_reason reason_,
     std::optional<utils::UUID> ops_uuid)
-    : db(db_)
-    , messaging(ms_)
-    , sharder(get_sharder_for_tables(db_, keyspace_, table_ids_))
+    : db(repair.get_db())
+    , messaging(repair.get_messaging().container())
+    , sys_dist_ks(repair.get_sys_dist_ks())
+    , view_update_generator(repair.get_view_update_generator())
+    , mm(repair.get_migration_manager())
+    , sharder(get_sharder_for_tables(db, keyspace_, table_ids_))
     , keyspace(keyspace_)
     , ranges(ranges_)
-    , cfs(get_table_names(db_.local(), table_ids_))
+    , cfs(get_table_names(db.local(), table_ids_))
     , table_ids(std::move(table_ids_))
     , id(id_)
     , shard(this_shard_id())
@@ -730,29 +729,29 @@ repair_neighbors repair_info::get_repair_neighbors(const dht::token_range& range
 
 // Repair a single local range, multiple column families.
 // Comparable to RepairSession in Origin
-static future<> repair_range(repair_info& ri, const dht::token_range& range) {
+future<> repair_info::repair_range(const dht::token_range& range) {
     auto id = utils::UUID_gen::get_time_UUID();
-    repair_neighbors neighbors = ri.get_repair_neighbors(range);
-    return do_with(std::move(neighbors.all), std::move(neighbors.mandatory), [&ri, range, id] (auto& neighbors, auto& mandatory_neighbors) {
+    repair_neighbors neighbors = get_repair_neighbors(range);
+    return do_with(std::move(neighbors.all), std::move(neighbors.mandatory), [this, range, id] (auto& neighbors, auto& mandatory_neighbors) {
       auto live_neighbors = boost::copy_range<std::vector<gms::inet_address>>(neighbors |
                     boost::adaptors::filtered([] (const gms::inet_address& node) { return gms::get_local_gossiper().is_alive(node); }));
       for (auto& node : mandatory_neighbors) {
            auto it = std::find(live_neighbors.begin(), live_neighbors.end(), node);
            if (it == live_neighbors.end()) {
-                ri.nr_failed_ranges++;
+                nr_failed_ranges++;
                 auto status = format("failed: mandatory neighbor={} is not alive", node);
                 rlogger.error("Repair {} out of {} ranges, id={}, shard={}, keyspace={}, table={}, range={}, peers={}, live_peers={}, status={}",
-                    ri.ranges_index, ri.ranges.size(), ri.id, ri.shard, ri.keyspace, ri.table_names(), range, neighbors, live_neighbors, status);
-                ri.abort();
+                    ranges_index, ranges.size(), id, shard, keyspace, table_names(), range, neighbors, live_neighbors, status);
+                abort();
                 return make_exception_future<>(std::runtime_error(format("Repair mandatory neighbor={} is not alive, keyspace={}, mandatory_neighbors={}",
-                    node, ri.keyspace, mandatory_neighbors)));
+                    node, keyspace, mandatory_neighbors)));
            }
       }
       if (live_neighbors.size() != neighbors.size()) {
-            ri.nr_failed_ranges++;
+            nr_failed_ranges++;
             auto status = live_neighbors.empty() ? "skipped" : "partial";
             rlogger.warn("Repair {} out of {} ranges, id={}, shard={}, keyspace={}, table={}, range={}, peers={}, live_peers={}, status={}",
-            ri.ranges_index, ri.ranges.size(), ri.id, ri.shard, ri.keyspace, ri.table_names(), range, neighbors, live_neighbors, status);
+            ranges_index, ranges.size(), id, shard, keyspace, table_names(), range, neighbors, live_neighbors, status);
             if (live_neighbors.empty()) {
                 return make_ready_future<>();
             }
@@ -761,27 +760,27 @@ static future<> repair_range(repair_info& ri, const dht::token_range& range) {
       if (neighbors.empty()) {
             auto status = "skipped_no_followers";
             rlogger.warn("Repair {} out of {} ranges, id={}, shard={}, keyspace={}, table={}, range={}, peers={}, live_peers={}, status={}",
-            ri.ranges_index, ri.ranges.size(), ri.id, ri.shard, ri.keyspace, ri.table_names(), range, neighbors, live_neighbors, status);
+            ranges_index, ranges.size(), id, shard, keyspace, table_names(), range, neighbors, live_neighbors, status);
             return make_ready_future<>();
       }
-      return _migration_manager->local().sync_schema(ri.db.local(), neighbors).then([&neighbors, &ri, range, id] {
-        return do_for_each(ri.table_ids.begin(), ri.table_ids.end(), [&ri, &neighbors, range] (utils::UUID table_id) {
+      return mm.sync_schema(db.local(), neighbors).then([this, &neighbors, range, id] {
+        return do_for_each(table_ids.begin(), table_ids.end(), [this, &neighbors, range] (utils::UUID table_id) {
             sstring cf;
             try {
-                cf = ri.db.local().find_column_family(table_id).schema()->cf_name();
+                cf = db.local().find_column_family(table_id).schema()->cf_name();
             } catch (no_such_column_family&) {
                 return make_ready_future<>();
             }
-            ri._sub_ranges_nr++;
+            _sub_ranges_nr++;
             // Row level repair
-            if (ri.dropped_tables.contains(cf)) {
+            if (dropped_tables.contains(cf)) {
                 return make_ready_future<>();
             }
-            return repair_cf_range_row_level(ri, cf, table_id, range, neighbors).handle_exception_type([&ri, cf] (no_such_column_family&) mutable {
-                ri.dropped_tables.insert(cf);
+            return repair_cf_range_row_level(*this, cf, table_id, range, neighbors).handle_exception_type([this, cf] (no_such_column_family&) mutable {
+                dropped_tables.insert(cf);
                 return make_ready_future<>();
-            }).handle_exception([&ri] (std::exception_ptr ep) mutable {
-                ri.nr_failed_ranges++;
+            }).handle_exception([this] (std::exception_ptr ep) mutable {
+                nr_failed_ranges++;
                 return make_exception_future<>(std::move(ep));
             });
         });
@@ -1068,7 +1067,7 @@ static future<> do_repair_ranges(lw_shared_ptr<repair_info> ri) {
             ri->ranges_index++;
             rlogger.info("Repair {} out of {} ranges, id={}, shard={}, keyspace={}, table={}, range={}",
                 ri->ranges_index, ri->ranges.size(), ri->id, ri->shard, ri->keyspace, ri->table_names(), range);
-            return repair_range(*ri, range).then([ri] {
+            return ri->repair_range(range).then([ri] {
                 if (ri->reason == streaming::stream_reason::bootstrap) {
                     _node_ops_metrics.bootstrap_finished_ranges++;
                 } else if (ri->reason == streaming::stream_reason::replace) {
@@ -1138,8 +1137,8 @@ static future<> try_wait_for_hints_to_be_replayed(repair_uniq_id id, std::vector
 // CPU is that it allows us to keep some state (like a list of ongoing
 // repairs). It is fine to always do this on one CPU, because the function
 // itself does very little (mainly tell other nodes and CPUs what to do).
-static int do_repair_start(seastar::sharded<database>& db, seastar::sharded<netw::messaging_service>& ms,
-        sstring keyspace, std::unordered_map<sstring, sstring> options_map) {
+int repair_service::do_repair_start(sstring keyspace, std::unordered_map<sstring, sstring> options_map) {
+    seastar::sharded<database>& db = get_db();
     check_in_shutdown();
 
     repair_options options(options_map);
@@ -1231,7 +1230,7 @@ static int do_repair_start(seastar::sharded<database>& db, seastar::sharded<netw
     }
 
     // Do it in the background.
-    (void)repair_tracker().run(id, [&db, &ms, id, keyspace = std::move(keyspace),
+    (void)repair_tracker().run(id, [this, &db, id, keyspace = std::move(keyspace),
             cfs = std::move(cfs), ranges = std::move(ranges), options = std::move(options), ignore_nodes = std::move(ignore_nodes)] () mutable {
 
         if (db.local().get_config().wait_for_hint_replay_before_repair()) {
@@ -1247,10 +1246,10 @@ static int do_repair_start(seastar::sharded<database>& db, seastar::sharded<netw
         repair_results.reserve(smp::count);
         auto table_ids = get_table_ids(db.local(), keyspace, cfs);
         for (auto shard : boost::irange(unsigned(0), smp::count)) {
-            auto f = db.invoke_on(shard, [&db, &ms, keyspace, table_ids, id, ranges,
-                    data_centers = options.data_centers, hosts = options.hosts, ignore_nodes] (database& localdb) mutable {
+            auto f = container().invoke_on(shard, [keyspace, table_ids, id, ranges,
+                    data_centers = options.data_centers, hosts = options.hosts, ignore_nodes] (repair_service& local_repair) mutable {
                 _node_ops_metrics.repair_total_ranges_sum += ranges.size();
-                auto ri = make_lw_shared<repair_info>(db, ms,
+                auto ri = make_lw_shared<repair_info>(local_repair,
                         std::move(keyspace), std::move(ranges), std::move(table_ids),
                         id, std::move(data_centers), std::move(hosts), std::move(ignore_nodes), streaming::stream_reason::repair, id.uuid);
                 return repair_ranges(ri);
@@ -1278,10 +1277,10 @@ static int do_repair_start(seastar::sharded<database>& db, seastar::sharded<netw
     return id.id;
 }
 
-future<int> repair_start(seastar::sharded<database>& db, seastar::sharded<netw::messaging_service>& ms,
+future<int> repair_start(seastar::sharded<repair_service>& repair,
         sstring keyspace, std::unordered_map<sstring, sstring> options) {
-    return db.invoke_on(0, [&db, &ms, keyspace = std::move(keyspace), options = std::move(options)] (database& localdb) {
-        return do_repair_start(db, ms, std::move(keyspace), std::move(options));
+    return repair.invoke_on(0, [keyspace = std::move(keyspace), options = std::move(options)] (repair_service& local_repair) {
+        return local_repair.do_repair_start(std::move(keyspace), std::move(options));
     });
 }
 
@@ -1317,8 +1316,7 @@ future<> repair_abort_all(seastar::sharded<database>& db) {
     });
 }
 
-static future<> sync_data_using_repair(seastar::sharded<database>& db,
-        seastar::sharded<netw::messaging_service>& ms,
+future<> repair_service::sync_data_using_repair(
         sstring keyspace,
         dht::token_range_vector ranges,
         std::unordered_map<dht::token_range, repair_neighbors> neighbors,
@@ -1327,61 +1325,73 @@ static future<> sync_data_using_repair(seastar::sharded<database>& db,
     if (ranges.empty()) {
         return make_ready_future<>();
     }
-    return smp::submit_to(0, [&db, &ms, keyspace = std::move(keyspace), ranges = std::move(ranges), neighbors = std::move(neighbors), reason, ops_uuid] () mutable {
-        repair_uniq_id id = repair_tracker().next_repair_command();
-        rlogger.info("repair id {} to sync data for keyspace={}, status=started", id, keyspace);
-        return repair_tracker().run(id, [id, &db, &ms, keyspace, ranges = std::move(ranges), neighbors = std::move(neighbors), reason, ops_uuid] () mutable {
-            auto cfs = list_column_families(db.local(), keyspace);
-            if (cfs.empty()) {
-                rlogger.warn("repair id {} to sync data for keyspace={}, no table in this keyspace", id, keyspace);
-                return;
-            }
-            auto table_ids = get_table_ids(db.local(), keyspace, cfs);
-            std::vector<future<>> repair_results;
-            repair_results.reserve(smp::count);
-            for (auto shard : boost::irange(unsigned(0), smp::count)) {
-                auto f = db.invoke_on(shard, [&db, &ms, keyspace, table_ids, id, ranges, neighbors, reason, ops_uuid] (database& localdb) mutable {
-                    auto data_centers = std::vector<sstring>();
-                    auto hosts = std::vector<sstring>();
-                    auto ignore_nodes = std::unordered_set<gms::inet_address>();
-                    auto ri = make_lw_shared<repair_info>(db, ms,
-                            std::move(keyspace), std::move(ranges), std::move(table_ids),
-                            id, std::move(data_centers), std::move(hosts), std::move(ignore_nodes), reason, ops_uuid);
-                    ri->neighbors = std::move(neighbors);
-                    return repair_ranges(ri);
-                });
-                repair_results.push_back(std::move(f));
-            }
-            when_all(repair_results.begin(), repair_results.end()).then([id, keyspace] (std::vector<future<>> results) mutable {
-                std::vector<sstring> errors;
-                for (unsigned shard = 0; shard < results.size(); shard++) {
-                    auto& f = results[shard];
-                    if (f.failed()) {
-                        auto ep = f.get_exception();
-                        errors.push_back(format("shard {}: {}", shard, ep));
-                    }
-                }
-                if (!errors.empty()) {
-                    return make_exception_future<>(std::runtime_error(format("{}", errors)));
-                }
-                return make_ready_future<>();
-            }).get();
-        }).then([id, keyspace] {
-            rlogger.info("repair id {} to sync data for keyspace={}, status=succeeded", id, keyspace);
-        }).handle_exception([&db, id, keyspace] (std::exception_ptr ep) {
-            if (!db.local().has_keyspace(keyspace)) {
-                rlogger.warn("repair id {} to sync data for keyspace={}, status=failed: keyspace does not exist any more, ignoring it, {}", id, keyspace, ep);
-                return make_ready_future<>();
-            }
-            rlogger.warn("repair id {} to sync data for keyspace={}, status=failed: {}", id, keyspace,  ep);
-            return make_exception_future<>(ep);
-        });
+    return container().invoke_on(0, [keyspace = std::move(keyspace), ranges = std::move(ranges), neighbors = std::move(neighbors), reason, ops_uuid] (repair_service& local_repair) mutable {
+        return local_repair.do_sync_data_using_repair(std::move(keyspace), std::move(ranges), std::move(neighbors), reason, ops_uuid);
     });
 }
 
-future<> bootstrap_with_repair(seastar::sharded<database>& db, seastar::sharded<netw::messaging_service>& ms, locator::token_metadata_ptr tmptr, std::unordered_set<dht::token> bootstrap_tokens) {
+future<> repair_service::do_sync_data_using_repair(
+        sstring keyspace,
+        dht::token_range_vector ranges,
+        std::unordered_map<dht::token_range, repair_neighbors> neighbors,
+        streaming::stream_reason reason,
+        std::optional<utils::UUID> ops_uuid) {
+    seastar::sharded<database>& db = get_db();
+
+    repair_uniq_id id = repair_tracker().next_repair_command();
+    rlogger.info("repair id {} to sync data for keyspace={}, status=started", id, keyspace);
+    return repair_tracker().run(id, [this, id, &db, keyspace, ranges = std::move(ranges), neighbors = std::move(neighbors), reason, ops_uuid] () mutable {
+        auto cfs = list_column_families(db.local(), keyspace);
+        if (cfs.empty()) {
+            rlogger.warn("repair id {} to sync data for keyspace={}, no table in this keyspace", id, keyspace);
+            return;
+        }
+        auto table_ids = get_table_ids(db.local(), keyspace, cfs);
+        std::vector<future<>> repair_results;
+        repair_results.reserve(smp::count);
+        for (auto shard : boost::irange(unsigned(0), smp::count)) {
+            auto f = container().invoke_on(shard, [keyspace, table_ids, id, ranges, neighbors, reason, ops_uuid] (repair_service& local_repair) mutable {
+                auto data_centers = std::vector<sstring>();
+                auto hosts = std::vector<sstring>();
+                auto ignore_nodes = std::unordered_set<gms::inet_address>();
+                auto ri = make_lw_shared<repair_info>(local_repair,
+                        std::move(keyspace), std::move(ranges), std::move(table_ids),
+                        id, std::move(data_centers), std::move(hosts), std::move(ignore_nodes), reason, ops_uuid);
+                ri->neighbors = std::move(neighbors);
+                return repair_ranges(ri);
+            });
+            repair_results.push_back(std::move(f));
+        }
+        when_all(repair_results.begin(), repair_results.end()).then([id, keyspace] (std::vector<future<>> results) mutable {
+            std::vector<sstring> errors;
+            for (unsigned shard = 0; shard < results.size(); shard++) {
+                auto& f = results[shard];
+                if (f.failed()) {
+                    auto ep = f.get_exception();
+                    errors.push_back(format("shard {}: {}", shard, ep));
+                }
+            }
+            if (!errors.empty()) {
+                return make_exception_future<>(std::runtime_error(format("{}", errors)));
+            }
+            return make_ready_future<>();
+        }).get();
+    }).then([id, keyspace] {
+        rlogger.info("repair id {} to sync data for keyspace={}, status=succeeded", id, keyspace);
+    }).handle_exception([&db, id, keyspace] (std::exception_ptr ep) {
+        if (!db.local().has_keyspace(keyspace)) {
+            rlogger.warn("repair id {} to sync data for keyspace={}, status=failed: keyspace does not exist any more, ignoring it, {}", id, keyspace, ep);
+            return make_ready_future<>();
+        }
+        rlogger.warn("repair id {} to sync data for keyspace={}, status=failed: {}", id, keyspace,  ep);
+        return make_exception_future<>(ep);
+    });
+}
+
+future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr, std::unordered_set<dht::token> bootstrap_tokens) {
     using inet_address = gms::inet_address;
-    return seastar::async([&db, &ms, tmptr = std::move(tmptr), tokens = std::move(bootstrap_tokens)] () mutable {
+    return seastar::async([this, tmptr = std::move(tmptr), tokens = std::move(bootstrap_tokens)] () mutable {
+        seastar::sharded<database>& db = get_db();
         auto keyspaces = db.local().get_non_system_keyspaces();
         auto myip = utils::fb_utilities::get_broadcast_address();
         auto reason = streaming::stream_reason::bootstrap;
@@ -1543,16 +1553,17 @@ future<> bootstrap_with_repair(seastar::sharded<database>& db, seastar::sharded<
                 }
             }
             auto nr_ranges = desired_ranges.size();
-            sync_data_using_repair(db, ms, keyspace_name, std::move(desired_ranges), std::move(range_sources), reason, {}).get();
+            sync_data_using_repair(keyspace_name, std::move(desired_ranges), std::move(range_sources), reason, {}).get();
             rlogger.info("bootstrap_with_repair: finished with keyspace={}, nr_ranges={}", keyspace_name, nr_ranges);
         }
         rlogger.info("bootstrap_with_repair: finished with keyspaces={}", keyspaces);
     });
 }
 
-static future<> do_decommission_removenode_with_repair(seastar::sharded<database>& db, seastar::sharded<netw::messaging_service>& ms, locator::token_metadata_ptr tmptr, gms::inet_address leaving_node, shared_ptr<node_ops_info> ops) {
+future<> repair_service::do_decommission_removenode_with_repair(locator::token_metadata_ptr tmptr, gms::inet_address leaving_node, shared_ptr<node_ops_info> ops) {
     using inet_address = gms::inet_address;
-    return seastar::async([&db, &ms, tmptr = std::move(tmptr), leaving_node = std::move(leaving_node), ops] () mutable {
+    return seastar::async([this, tmptr = std::move(tmptr), leaving_node = std::move(leaving_node), ops] () mutable {
+        seastar::sharded<database>& db = get_db();
         auto myip = utils::fb_utilities::get_broadcast_address();
         auto keyspaces = db.local().get_non_system_keyspaces();
         bool is_removenode = myip != leaving_node;
@@ -1736,7 +1747,7 @@ static future<> do_decommission_removenode_with_repair(seastar::sharded<database
             }
             auto nr_ranges_synced = ranges.size();
             std::optional<utils::UUID> opt_uuid = ops ? std::make_optional<utils::UUID>(ops->ops_uuid) : std::nullopt;
-            sync_data_using_repair(db, ms, keyspace_name, std::move(ranges), std::move(range_sources), reason, opt_uuid).get();
+            sync_data_using_repair(keyspace_name, std::move(ranges), std::move(range_sources), reason, opt_uuid).get();
             rlogger.info("{}: finished with keyspace={}, leaving_node={}, nr_ranges={}, nr_ranges_synced={}, nr_ranges_skipped={}",
                 op, keyspace_name, leaving_node, nr_ranges_total, nr_ranges_synced, nr_ranges_skipped);
         }
@@ -1744,13 +1755,14 @@ static future<> do_decommission_removenode_with_repair(seastar::sharded<database
     });
 }
 
-future<> decommission_with_repair(seastar::sharded<database>& db, seastar::sharded<netw::messaging_service>& ms, locator::token_metadata_ptr tmptr) {
-    return do_decommission_removenode_with_repair(db, ms, std::move(tmptr), utils::fb_utilities::get_broadcast_address(), {});
+future<> repair_service::decommission_with_repair(locator::token_metadata_ptr tmptr) {
+    return do_decommission_removenode_with_repair(std::move(tmptr), utils::fb_utilities::get_broadcast_address(), {});
 }
 
-future<> removenode_with_repair(seastar::sharded<database>& db, seastar::sharded<netw::messaging_service>& ms, locator::token_metadata_ptr tmptr, gms::inet_address leaving_node, shared_ptr<node_ops_info> ops) {
-    return do_decommission_removenode_with_repair(db, ms, std::move(tmptr), std::move(leaving_node), std::move(ops)).then([&db] {
+future<> repair_service::removenode_with_repair(locator::token_metadata_ptr tmptr, gms::inet_address leaving_node, shared_ptr<node_ops_info> ops) {
+    return do_decommission_removenode_with_repair(std::move(tmptr), std::move(leaving_node), std::move(ops)).then([this] {
         rlogger.debug("Triggering off-strategy compaction for all non-system tables on removenode completion");
+        seastar::sharded<database>& db = get_db();
         return db.invoke_on_all([](database &db) {
             for (auto& table : db.get_non_system_column_families()) {
                 table->trigger_offstrategy_compaction();
@@ -1765,8 +1777,9 @@ future<> abort_repair_node_ops(utils::UUID ops_uuid) {
     });
 }
 
-static future<> do_rebuild_replace_with_repair(seastar::sharded<database>& db, seastar::sharded<netw::messaging_service>& ms, locator::token_metadata_ptr tmptr, sstring op, sstring source_dc, streaming::stream_reason reason) {
-    return seastar::async([&db, &ms, tmptr = std::move(tmptr), source_dc = std::move(source_dc), op = std::move(op), reason] () mutable {
+future<> repair_service::do_rebuild_replace_with_repair(locator::token_metadata_ptr tmptr, sstring op, sstring source_dc, streaming::stream_reason reason) {
+    return seastar::async([this, tmptr = std::move(tmptr), source_dc = std::move(source_dc), op = std::move(op), reason] () mutable {
+        seastar::sharded<database>& db = get_db();
         auto keyspaces = db.local().get_non_system_keyspaces();
         auto myip = utils::fb_utilities::get_broadcast_address();
         size_t nr_ranges_total = 0;
@@ -1837,23 +1850,23 @@ static future<> do_rebuild_replace_with_repair(seastar::sharded<database>& db, s
                 }).get();
             }
             auto nr_ranges = ranges.size();
-            sync_data_using_repair(db, ms, keyspace_name, std::move(ranges), std::move(range_sources), reason, {}).get();
+            sync_data_using_repair(keyspace_name, std::move(ranges), std::move(range_sources), reason, {}).get();
             rlogger.info("{}: finished with keyspace={}, source_dc={}, nr_ranges={}", op, keyspace_name, source_dc, nr_ranges);
         }
         rlogger.info("{}: finished with keyspaces={}, source_dc={}", op, keyspaces, source_dc);
     });
 }
 
-future<> rebuild_with_repair(seastar::sharded<database>& db, seastar::sharded<netw::messaging_service>& ms, locator::token_metadata_ptr tmptr, sstring source_dc) {
+future<> repair_service::rebuild_with_repair(locator::token_metadata_ptr tmptr, sstring source_dc) {
     auto op = sstring("rebuild_with_repair");
     if (source_dc.empty()) {
         source_dc = get_local_dc();
     }
     auto reason = streaming::stream_reason::rebuild;
-    return do_rebuild_replace_with_repair(db, ms, std::move(tmptr), std::move(op), std::move(source_dc), reason);
+    return do_rebuild_replace_with_repair(std::move(tmptr), std::move(op), std::move(source_dc), reason);
 }
 
-future<> replace_with_repair(seastar::sharded<database>& db, seastar::sharded<netw::messaging_service>& ms, locator::token_metadata_ptr tmptr, std::unordered_set<dht::token> replacing_tokens) {
+future<> repair_service::replace_with_repair(locator::token_metadata_ptr tmptr, std::unordered_set<dht::token> replacing_tokens) {
     auto cloned_tm = co_await tmptr->clone_async();
     auto op = sstring("replace_with_repair");
     auto source_dc = get_local_dc();
@@ -1862,43 +1875,25 @@ future<> replace_with_repair(seastar::sharded<database>& db, seastar::sharded<ne
     // no need to set the original version
     auto cloned_tmptr = make_token_metadata_ptr(std::move(cloned_tm));
     co_await cloned_tmptr->update_normal_tokens(replacing_tokens, utils::fb_utilities::get_broadcast_address());
-    co_return co_await do_rebuild_replace_with_repair(db, ms, std::move(cloned_tmptr), std::move(op), std::move(source_dc), reason);
+    co_return co_await do_rebuild_replace_with_repair(std::move(cloned_tmptr), std::move(op), std::move(source_dc), reason);
 }
 
-static future<> init_messaging_service_handler(sharded<database>& db, sharded<netw::messaging_service>& messaging, sharded<service::migration_manager>& mm) {
-    _messaging = &messaging;
-    _migration_manager = &mm;
-    return messaging.invoke_on_all([&db] (auto& ms) {
-        ms.register_node_ops_cmd([] (const rpc::client_info& cinfo, node_ops_cmd_request req) {
-            auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
-            auto coordinator = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
-            return smp::submit_to(src_cpu_id % smp::count, [coordinator, req = std::move(req)] () mutable {
-                return service::get_local_storage_service().node_ops_cmd_handler(coordinator, std::move(req));
-            });
+future<> repair_service::init_ms_handlers() {
+    auto& ms = this->_messaging;
+
+    ms.register_node_ops_cmd([] (const rpc::client_info& cinfo, node_ops_cmd_request req) {
+        auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
+        auto coordinator = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
+        return smp::submit_to(src_cpu_id % smp::count, [coordinator, req = std::move(req)] () mutable {
+            return service::get_local_storage_service().node_ops_cmd_handler(coordinator, std::move(req));
         });
     });
+
+    return make_ready_future<>();
 }
 
-static future<> uninit_messaging_service_handler() {
-    return _messaging->invoke_on_all([] (auto& ms) {
-        return when_all_succeed(ms.unregister_node_ops_cmd()).discard_result();
-    });
-}
+future<> repair_service::uninit_ms_handlers() {
+    auto& ms = this->_messaging;
 
-future<> repair_init_messaging_service_handler(repair_service& rs,
-        distributed<db::system_distributed_keyspace>& sys_dist_ks,
-        distributed<db::view::view_update_generator>& view_update_generator,
-        sharded<database>& db, sharded<netw::messaging_service>& ms,
-        sharded<service::migration_manager>& mm) {
-    return when_all_succeed(
-            init_messaging_service_handler(db, ms, mm),
-            row_level_repair_init_messaging_service_handler(rs, sys_dist_ks, view_update_generator, ms, mm)
-    ).discard_result();
-}
-
-future<> repair_uninit_messaging_service_handler() {
-    return when_all_succeed(
-            uninit_messaging_service_handler(),
-            row_level_repair_uninit_messaging_service_handler()
-    ).discard_result();
+    return when_all_succeed(ms.unregister_node_ops_cmd()).discard_result();
 }

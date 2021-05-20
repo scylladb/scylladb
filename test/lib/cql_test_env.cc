@@ -66,6 +66,7 @@
 #include "db/system_keyspace.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "db/sstables-format-selector.hh"
+#include "repair/row_level.hh"
 #include "debug.hh"
 
 using namespace std::chrono_literals;
@@ -527,11 +528,12 @@ public:
 
             sharded<db::view::view_update_generator> view_update_generator;
             sharded<cdc::generation_service> cdc_generation_service;
+            sharded<repair_service> repair;
 
             auto& ss = service::get_storage_service();
             service::storage_service_config sscfg;
             sscfg.available_memory = memory::stats().total_memory();
-            ss.start(std::ref(abort_sources), std::ref(db), std::ref(gms::get_gossiper()), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(feature_service), sscfg, std::ref(mm), std::ref(token_metadata), std::ref(ms), std::ref(cdc_generation_service), true).get();
+            ss.start(std::ref(abort_sources), std::ref(db), std::ref(gms::get_gossiper()), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(feature_service), sscfg, std::ref(mm), std::ref(token_metadata), std::ref(ms), std::ref(cdc_generation_service), std::ref(repair), true).get();
             auto stop_storage_service = defer([&ss] { ss.stop().get(); });
 
             sharded<semaphore> sst_dir_semaphore;

@@ -72,6 +72,7 @@
 class node_ops_cmd_request;
 class node_ops_cmd_response;
 class node_ops_info;
+class repair_service;
 
 namespace cql_transport { class controller; }
 
@@ -171,6 +172,7 @@ private:
     gms::gossiper& _gossiper;
     sharded<netw::messaging_service>& _messaging;
     sharded<service::migration_manager>& _migration_manager;
+    sharded<repair_service>& _repair;
     // Note that this is obviously only valid for the current shard. Users of
     // this facility should elect a shard to be the coordinator based on any
     // given objective criteria
@@ -207,7 +209,7 @@ private:
     void node_ops_singal_abort(std::optional<utils::UUID> ops_uuid);
     future<> node_ops_abort_thread();
 public:
-    storage_service(abort_source& as, distributed<database>& db, gms::gossiper& gossiper, sharded<db::system_distributed_keyspace>&, sharded<db::view::view_update_generator>&, gms::feature_service& feature_service, storage_service_config config, sharded<service::migration_manager>& mm, locator::shared_token_metadata& stm, sharded<netw::messaging_service>& ms, sharded<cdc::generation_service>&, /* only for tests */ bool for_testing = false);
+    storage_service(abort_source& as, distributed<database>& db, gms::gossiper& gossiper, sharded<db::system_distributed_keyspace>&, sharded<db::view::view_update_generator>&, gms::feature_service& feature_service, storage_service_config config, sharded<service::migration_manager>& mm, locator::shared_token_metadata& stm, sharded<netw::messaging_service>& ms, sharded<cdc::generation_service>&, sharded<repair_service>& repair, /* only for tests */ bool for_testing = false);
 
     // Needed by distributed<>
     future<> stop();
@@ -897,7 +899,7 @@ future<> init_storage_service(sharded<abort_source>& abort_sources, distributed<
         sharded<db::view::view_update_generator>& view_update_generator, sharded<gms::feature_service>& feature_service,
         storage_service_config config,
         sharded<service::migration_manager>& mm, sharded<locator::shared_token_metadata>& stm,
-        sharded<netw::messaging_service>& ms, sharded<cdc::generation_service>&);
+        sharded<netw::messaging_service>& ms, sharded<cdc::generation_service>&, sharded<repair_service>& repair);
 future<> deinit_storage_service();
 
 }

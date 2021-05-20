@@ -30,6 +30,7 @@
 #include "gms/application_state.hh"
 #include "service/storage_service.hh"
 #include "utils/fb_utilities.hh"
+#include "repair/row_level.hh"
 #include "locator/snitch_base.hh"
 #include "log.hh"
 #include <seastar/core/thread.hh>
@@ -81,6 +82,7 @@ int main(int ac, char ** av) {
             sharded<netw::messaging_service> messaging;
             sharded<cdc::generation_service> cdc_generation_service;
             sharded<service::migration_manager> migration_manager;
+            sharded<repair_service> repair;
 
             abort_sources.start().get();
             auto stop_abort_source = defer([&] { abort_sources.stop().get(); });
@@ -90,7 +92,7 @@ int main(int ac, char ** av) {
             sscfg.available_memory = memory::stats().total_memory();
             messaging.start(listen).get();
             gms::get_gossiper().start(std::ref(abort_sources), std::ref(feature_service), std::ref(token_metadata), std::ref(messaging), std::ref(*cfg)).get();
-            service::init_storage_service(std::ref(abort_sources), db, gms::get_gossiper(), sys_dist_ks, view_update_generator, feature_service, sscfg, migration_manager, token_metadata, messaging, std::ref(cdc_generation_service)).get();
+            service::init_storage_service(std::ref(abort_sources), db, gms::get_gossiper(), sys_dist_ks, view_update_generator, feature_service, sscfg, migration_manager, token_metadata, messaging, std::ref(cdc_generation_service), std::ref(repair)).get();
             auto& server = messaging.local();
             auto port = server.port();
             auto msg_listen = server.listen_address();

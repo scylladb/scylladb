@@ -493,6 +493,7 @@ int main(int ac, char** av) {
     sharded<semaphore> sst_dir_semaphore;
     sharded<raft_services> raft_srvs;
     sharded<service::memory_limiter> service_memory_limiter;
+    sharded<repair_service> repair;
 
     return app.run(ac, av, [&] () -> future<int> {
 
@@ -521,7 +522,8 @@ int main(int ac, char** av) {
 
         return seastar::async([cfg, ext, &db, &qp, &proxy, &mm, &mm_notifier, &ctx, &opts, &dirs,
                 &prometheus_server, &cf_cache_hitrate_calculator, &load_meter, &feature_service,
-                &token_metadata, &snapshot_ctl, &messaging, &sst_dir_semaphore, &raft_srvs, &service_memory_limiter] {
+                &token_metadata, &snapshot_ctl, &messaging, &sst_dir_semaphore, &raft_srvs, &service_memory_limiter,
+                &repair] {
           try {
             // disable reactor stall detection during startup
             auto blocked_reactor_notify_ms = engine().get_blocked_reactor_notify_ms();
@@ -856,7 +858,7 @@ int main(int ac, char** av) {
             supervisor::notify("initializing storage service");
             service::storage_service_config sscfg;
             sscfg.available_memory = memory::stats().total_memory();
-            service::init_storage_service(stop_signal.as_sharded_abort_source(), db, gossiper, sys_dist_ks, view_update_generator, feature_service, sscfg, mm, token_metadata, messaging, cdc_generation_service).get();
+            service::init_storage_service(stop_signal.as_sharded_abort_source(), db, gossiper, sys_dist_ks, view_update_generator, feature_service, sscfg, mm, token_metadata, messaging, cdc_generation_service, repair).get();
             supervisor::notify("starting per-shard database core");
 
             sst_dir_semaphore.start(cfg->initial_sstable_loading_concurrency()).get();
@@ -1113,16 +1115,16 @@ int main(int ac, char** av) {
                 }).get();
             });
 
+            // ATTN -- sharded repair reference already sits on storage_service and if
+            // it calls repair.local() before this place it'll crash (now it doesn't do
+            // both)
             supervisor::notify("starting messaging service");
             auto max_memory_repair = db.local().get_available_memory() * 0.1;
-            repair_service rs(gossiper, max_memory_repair);
-            auto stop_repair_service = defer_verbose_shutdown("repair service", [&rs] {
-                rs.stop().get();
+            repair.start(std::ref(gossiper), std::ref(messaging), std::ref(db), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(mm), max_memory_repair).get();
+            auto stop_repair_service = defer_verbose_shutdown("repair service", [&repair] {
+                repair.stop().get();
             });
-            repair_init_messaging_service_handler(rs, sys_dist_ks, view_update_generator, db, messaging, mm).get();
-            auto stop_repair_messages = defer_verbose_shutdown("repair message handlers", [] {
-                repair_uninit_messaging_service_handler().get();
-            });
+            repair.invoke_on_all(&repair_service::start).get();
 
             supervisor::notify("starting CDC Generation Management service");
             /* This service uses the system distributed keyspace.
@@ -1162,7 +1164,7 @@ int main(int ac, char** av) {
                 api::unset_server_messaging_service(ctx).get();
             });
             api::set_server_storage_service(ctx).get();
-            api::set_server_repair(ctx, messaging).get();
+            api::set_server_repair(ctx, repair).get();
             auto stop_repair_api = defer_verbose_shutdown("repair API", [&ctx] {
                 api::unset_server_repair(ctx).get();
             });
