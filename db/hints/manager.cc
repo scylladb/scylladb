@@ -41,6 +41,7 @@
 #include "service_permit.hh"
 #include "utils/directories.hh"
 #include "utils/UUID_gen.hh"
+#include "utils/error_injection.hh"
 
 using namespace std::literals::chrono_literals;
 
@@ -849,6 +850,8 @@ future<> manager::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<s
             }
             return make_ready_future<>();
         }).finally([units = std::move(units), ctx_ptr] {});
+
+        return utils::get_local_injector().inject("hinted_handoff_slow_hint_replay", std::chrono::seconds(1));
     }).handle_exception([this, ctx_ptr, rp] (auto eptr) {
         manager_logger.trace("send_one_file(): Hmmm. Something bad had happend: {}", eptr);
         ctx_ptr->on_hint_send_failure(rp);
