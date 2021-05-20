@@ -572,6 +572,7 @@ public:
             streaming::stream_reason::replace,
             streaming::stream_reason::removenode,
             streaming::stream_reason::decommission,
+            streaming::stream_reason::repair,
         };
         return sstables::offstrategy(operations_supported.contains(reason));
     }
@@ -593,8 +594,9 @@ public:
                 auto& cs = t->get_compaction_strategy();
                 const auto adjusted_estimated_partitions = cs.adjust_partition_estimate(metadata, estimated_partitions);
                 sstables::offstrategy offstrategy = is_offstrategy_supported(reason);
+                bool auto_offstrategy_trigger = offstrategy && (reason == streaming::stream_reason::repair);
                 auto consumer = cs.make_interposer_consumer(metadata,
-                        [t = std::move(t), &view_update_gen, use_view_update_path, adjusted_estimated_partitions, offstrategy] (flat_mutation_reader reader) {
+                        [t = std::move(t), &view_update_gen, use_view_update_path, adjusted_estimated_partitions, offstrategy, auto_offstrategy_trigger] (flat_mutation_reader reader) {
                     sstables::shared_sstable sst = use_view_update_path ? t->make_streaming_staging_sstable() : t->make_streaming_sstable_for_write();
                     schema_ptr s = reader.schema();
                     auto& pc = service::get_local_streaming_priority();
@@ -602,7 +604,12 @@ public:
                                                  t->get_sstables_manager().configure_writer("repair"),
                                                  encoding_stats{}, pc).then([sst] {
                         return sst->open_data();
-                    }).then([t, sst, offstrategy] {
+                    }).then([t, sst, offstrategy, auto_offstrategy_trigger] {
+                        if (auto_offstrategy_trigger) {
+                            rlogger.debug("Enabled automatic off-strategy trigger for table {}.{}",
+                                    t->schema()->ks_name(), t->schema()->cf_name());
+                            t->enable_off_strategy_trigger();
+                        }
                         return t->add_sstable_and_update_cache(sst, offstrategy);
                     }).then([t, s, sst, use_view_update_path, &view_update_gen]() mutable -> future<> {
                         if (!use_view_update_path) {
@@ -1666,6 +1673,7 @@ public:
         // retransmission at messaging_service level, so no message will be retransmited.
         rlogger.trace("Calling get_combined_row_hash_handler");
         return with_gate(_gate, [this, common_sync_boundary = std::move(common_sync_boundary)] () mutable {
+            _cf.update_off_strategy_trigger();
             return request_row_hashes(common_sync_boundary);
         });
     }
@@ -1785,6 +1793,7 @@ public:
     future<get_sync_boundary_response>
     get_sync_boundary_handler(std::optional<repair_sync_boundary> skipped_sync_boundary) {
         return with_gate(_gate, [this, skipped_sync_boundary = std::move(skipped_sync_boundary)] () mutable {
+            _cf.update_off_strategy_trigger();
             return get_sync_boundary(std::move(skipped_sync_boundary));
         });
     }
@@ -2042,6 +2051,7 @@ public:
     // RPC handler
     future<> put_row_diff_handler(repair_rows_on_wire rows, gms::inet_address from) {
         return with_gate(_gate, [this, rows = std::move(rows)] () mutable {
+            _cf.update_off_strategy_trigger();
             return apply_rows_on_follower(std::move(rows));
         });
     }

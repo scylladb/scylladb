@@ -1045,6 +1045,14 @@ public:
     friend class column_family_test;
 
     friend class distributed_loader;
+
+private:
+    timer<> _off_strategy_trigger;
+    void do_update_off_strategy_trigger();
+
+public:
+    void update_off_strategy_trigger();
+    void enable_off_strategy_trigger();
 };
 
 class user_types_metadata;

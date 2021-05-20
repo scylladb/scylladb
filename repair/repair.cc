@@ -1232,19 +1232,50 @@ int repair_service::do_repair_start(sstring keyspace, std::unordered_map<sstring
     // Do it in the background.
     (void)repair_tracker().run(id, [this, &db, id, keyspace = std::move(keyspace),
             cfs = std::move(cfs), ranges = std::move(ranges), options = std::move(options), ignore_nodes = std::move(ignore_nodes)] () mutable {
+        auto participants = get_hosts_participating_in_repair(db.local(), keyspace, ranges, options.data_centers, options.hosts, ignore_nodes).get();
 
         if (db.local().get_config().wait_for_hint_replay_before_repair()) {
-            auto participants = get_hosts_participating_in_repair(db.local(), keyspace, ranges, options.data_centers, options.hosts, ignore_nodes).get();
             auto waiting_nodes = db.local().get_token_metadata().get_all_endpoints();
             std::erase_if(waiting_nodes, [&] (const auto& addr) {
                 return ignore_nodes.contains(addr);
             });
-            try_wait_for_hints_to_be_replayed(id, std::move(waiting_nodes), std::move(participants)).get();
+            try_wait_for_hints_to_be_replayed(id, std::move(waiting_nodes), participants).get();
         }
 
         std::vector<future<>> repair_results;
         repair_results.reserve(smp::count);
         auto table_ids = get_table_ids(db.local(), keyspace, cfs);
+        abort_source as;
+        auto uuid = id.uuid;
+        auto off_strategy_updater = seastar::async([this, uuid, &table_ids, &participants, &as] {
+            auto tables = std::list<utils::UUID>(table_ids.begin(), table_ids.end());
+            auto req = node_ops_cmd_request(node_ops_cmd::repair_updater, uuid, {}, {}, {}, {}, std::move(tables));
+            auto update_interval = std::chrono::seconds(30);
+            while (!as.abort_requested()) {
+                sleep_abortable(update_interval, as).get();
+                parallel_for_each(participants, [this, uuid, &req] (gms::inet_address node) {
+                    return _messaging.send_node_ops_cmd(netw::msg_addr(node), req).then([uuid, node] (node_ops_cmd_response resp) {
+                        rlogger.debug("repair[{}]: Got node_ops_cmd::repair_updater response from node={}", uuid, node);
+                    }).handle_exception([uuid, node] (std::exception_ptr ep) {
+                        rlogger.warn("repair[{}]: Failed to send node_ops_cmd::repair_updater to node={}", uuid, node);
+                    });
+                }).get();
+            }
+        });
+        auto stop_off_strategy_updater = defer([uuid, &off_strategy_updater, &as] () mutable {
+            try {
+                rlogger.info("repair[{}]: Started to shutdown off-strategy compaction updater", uuid);
+                if (!as.abort_requested()) {
+                    as.request_abort();
+                }
+                off_strategy_updater.get();
+            } catch (const seastar::sleep_aborted& ignored) {
+            } catch (...) {
+                rlogger.warn("repair[{}]: Found error in off-strategy compaction updater: {}", uuid, std::current_exception());
+            }
+            rlogger.info("repair[{}]: Finished to shutdown off-strategy compaction updater", uuid);
+        });
+
         for (auto shard : boost::irange(unsigned(0), smp::count)) {
             auto f = container().invoke_on(shard, [keyspace, table_ids, id, ranges,
                     data_centers = options.data_centers, hosts = options.hosts, ignore_nodes] (repair_service& local_repair) mutable {
