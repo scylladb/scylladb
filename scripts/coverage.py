@@ -38,8 +38,8 @@ def env(test_path):
     return {"LLVM_PROFILE_FILE": test_path + ".profraw"}
 
 
-def generate_coverage_report(path="build/coverage/test", name="tests"):
-    """Generate a html coverage report from all profiling data found at PATH
+def generate_coverage_report(path="build/coverage/test", name="tests", input_files=None):
+    """Generate a html coverage report from the given profiling data
 
     Arguments:
     * PATH - path to the directory where the raw profiling output as well as
@@ -58,17 +58,31 @@ def generate_coverage_report(path="build/coverage/test", name="tests"):
       directory containing the generated html report, as well as the name of any
       intermediate files generated in the process (with the appropriate
       extensions).
+    * INPUT_FILES (optional) - the list of raw profiling data to generate the
+      report from. When provided, this overrides the automatic search for
+      profiling data found in PATH and the profiling report will only include
+      the files provided herein.
+      If not provided, the input files are located with the automatic search
+      described in PATH instead.
+      Note that even if provided, PATH is still used to store intermediate
+      files, as well as the final result.
     """
-    profraw_files = []
-    test_executables = []
     profraw_extension = ".profraw"
     profraw_extension_len = len(profraw_extension)
+    test_executables = []
 
-    for root, dirs, files in os.walk(path):
-        for file in files:
-            if file.endswith(profraw_extension):
-                profraw_files.append(os.path.join(root, file))
-                test_executables.append(os.path.join(root, file[:-profraw_extension_len]))
+    if input_files:
+        profraw_files = input_files
+        for file in profraw_files:
+            dirname, basename = os.path.split(file)
+            test_executables.append(os.path.join(dirname, basename[:-profraw_extension_len]))
+    else:
+        profraw_files = []
+        for root, dirs, files in os.walk(path):
+            for file in files:
+                if file.endswith(profraw_extension):
+                    profraw_files.append(os.path.join(root, file))
+                    test_executables.append(os.path.join(root, file[:-profraw_extension_len]))
 
     profdata_path = os.path.join(path, f"{name}.profdata")
 
@@ -91,9 +105,10 @@ def main(argv):
     arg_parser = argparse.ArgumentParser(description=inspect.getdoc(generate_coverage_report), formatter_class=argparse.RawDescriptionHelpFormatter)
     arg_parser.add_argument("--path", dest="path", action="store", type=str, required=False, default="build/coverage/test", help="defaults to 'build/coverage/test'")
     arg_parser.add_argument("--name", dest="name", action="store", type=str, required=False, default="tests", help="defaults to 'tests'")
+    arg_parser.add_argument("--input-files", dest="input_files", nargs='+', action="extend", type=str, required=False)
     args = arg_parser.parse_args()
 
-    generate_coverage_report(args.path, args.name)
+    generate_coverage_report(args.path, args.name, args.input_files)
 
 
 if __name__ == "__main__":
