@@ -233,7 +233,6 @@ private:
     api::timestamp_type _column_timestamp;
     gc_clock::time_point _column_local_deletion_time;
     gc_clock::duration _column_ttl;
-    uint32_t _column_value_length;
     fragmented_temporary_buffer _column_value;
     temporary_buffer<char> _cell_path;
     uint64_t _ck_blocks_header;
