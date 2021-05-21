@@ -42,12 +42,19 @@ def env(test_path):
     return {"LLVM_PROFILE_FILE": __raw_profiling_filename(test_path)}
 
 
-def run(args):
+def run(args, executable=None):
     """Run the command, setting the required env variables
 
     In order to generate the profiling data in the right place. See env().
+    The `executable` can be used to override the executable used to setup the
+    env. This is useful for tests ran via a script, where args[0] is not the
+    executable itself, but said script. By default `args[0]` is used.
     """
-    subprocess.check_call(args, env=dict(os.environ, **env(args[0])))
+    if executable:
+        extra_env = env(executable)
+    else:
+        extra_env = env(args[0])
+    subprocess.check_call(args, env=dict(os.environ, **extra_env))
 
 
 def generate_coverage_report(path="build/coverage/test", name="tests", input_files=None, verbose=0):
@@ -179,6 +186,8 @@ def main(argv):
             help="run the specified executable and generate the coverage report, all command line arguments after --run are considered to be part of the to-be-run test")
     arg_parser.add_argument("--no-coverage-report", dest="no_coverage_report", action="store_true", required=False, default=False,
             help="modifier for --run: don't generate a coverage report after running the executable, ignored when --run is not used")
+    arg_parser.add_argument("--executable", dest="executable", action="store", required=False, default=None,
+            help="modifier for --run: the test executable, for tests that are started through a script, ignored when --run is not used")
 
     if '--run' in argv:
         pos = argv.index('--run')
@@ -191,10 +200,13 @@ def main(argv):
     args = arg_parser.parse_args(argv_head)
 
     if args.run:
-        run(argv_tail)
+        run(argv_tail, args.executable)
         if args.name.is_default:
             args.name.val = os.path.basename(argv_tail[0])
-        input_files = [__raw_profiling_filename(argv_tail[0])]
+        if args.executable:
+            input_files = [__raw_profiling_filename(args.executable)]
+        else:
+            input_files = [__raw_profiling_filename(argv_tail[0])]
     else:
         input_files = args.input_files
 
