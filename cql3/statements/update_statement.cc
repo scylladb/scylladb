@@ -360,6 +360,8 @@ insert_json_statement::insert_json_statement(cf_name name,
 insert_json_statement::prepare_internal(database& db, schema_ptr schema,
     variable_specifications& bound_names, std::unique_ptr<attributes> attrs, cql_stats& stats) const
 {
+    // FIXME: handle _if_not_exists. For now, mark it used to quiet the compiler. #8682
+    (void)_if_not_exists;
     assert(dynamic_pointer_cast<constants::literal>(_json_value) || dynamic_pointer_cast<abstract_marker::raw>(_json_value));
     auto json_column_placeholder = ::make_shared<column_identifier>("", true);
     auto prepared_json_value = _json_value->prepare(db, "", make_lw_shared<column_specification>("", "", json_column_placeholder, utf8_type));
