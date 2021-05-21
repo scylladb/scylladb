@@ -67,18 +67,16 @@ struct redis_server_config {
 };
 
 class redis_server : public generic_server::server {
-    seastar::sharded<service::storage_proxy>& _proxy;
     seastar::sharded<redis::query_processor>& _query_processor;
     redis_server_config _config;
     size_t _max_request_size;
     semaphore _memory_available;
     redis::stats _stats;
-    uint64_t _requests_blocked_memory = 0;
     auth::service& _auth_service;
     size_t _total_redis_db_count;
 
 public:
-    redis_server(seastar::sharded<service::storage_proxy>& proxy, seastar::sharded<redis::query_processor>& qp, auth::service& auth_service, redis_server_config config);
+    redis_server(seastar::sharded<redis::query_processor>& qp, auth::service& auth_service, redis_server_config config);
 
     struct result {
         result(redis::redis_message&& m) : _data(make_foreign(std::make_unique<redis::redis_message>(std::move(m)))) {}
