@@ -54,8 +54,6 @@ class send_info;
  */
 class stream_transfer_task : public stream_task {
 private:
-    int32_t sequence_number = 0;
-    bool aborted = false;
     // A stream_transfer_task always contains the same range to stream
     dht::token_range_vector _ranges;
     std::map<unsigned, dht::partition_range_vector> _shard_ranges;
