@@ -73,6 +73,9 @@ public:
     // otherwise throws conf_change_in_progress exception.
     virtual future<> set_configuration(server_address_set c_new) = 0;
 
+    // Return the currently known configuration
+    virtual raft::configuration get_configuration() const = 0;
+
     // Load persisted state and start background work that needs
     // to run for this Raft server to function; The object cannot
     // be used until the returned future is resolved.

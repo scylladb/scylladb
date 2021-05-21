@@ -65,6 +65,7 @@ public:
     future<> add_entry(command command, wait_type type);
     future<snapshot_reply> apply_snapshot(server_id from, install_snapshot snp) override;
     future<> set_configuration(server_address_set c_new) override;
+    raft::configuration get_configuration() const override;
     future<> start() override;
     future<> abort() override;
     term_t get_current_term() const override;
@@ -717,6 +718,11 @@ future<> server_impl::set_configuration(server_address_set c_new) {
     }
     _stats.add_config++;
     co_return co_await add_entry_internal(raft::configuration{std::move(c_new)}, wait_type::committed);
+}
+
+raft::configuration
+server_impl::get_configuration() const {
+    return _fsm->get_configuration();
 }
 
 void server_impl::register_metrics() {
