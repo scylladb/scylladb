@@ -2414,10 +2414,14 @@ static bytes concat_fields(const std::vector<bytes>& fields, const std::vector<i
 }
 
 size_t abstract_type::hash(bytes_view v) const {
+    return hash(managed_bytes_view(v));
+}
+
+size_t abstract_type::hash(managed_bytes_view v) const {
     struct visitor {
-        bytes_view v;
+        managed_bytes_view v;
         size_t operator()(const reversed_type_impl& t) { return t.underlying_type()->hash(v); }
-        size_t operator()(const abstract_type& t) { return std::hash<bytes_view>()(v); }
+        size_t operator()(const abstract_type& t) { return std::hash<managed_bytes_view>()(v); }
         size_t operator()(const tuple_type_impl& t) {
             auto apply_hash = [] (auto&& type_value) {
                 auto&& type = boost::get<0>(type_value);
@@ -2429,24 +2433,15 @@ size_t abstract_type::hash(bytes_view v) const {
                     0, std::bit_xor<>());
         }
         size_t operator()(const varint_type_impl& t) {
-            bytes b(v.begin(), v.end());
-            return std::hash<sstring>()(t.to_string(b));
+            return std::hash<sstring>()(with_linearized(v, [&] (bytes_view bv) { return t.to_string(bv); }));
         }
         size_t operator()(const decimal_type_impl& t) {
-            bytes b(v.begin(), v.end());
-            return std::hash<sstring>()(t.to_string(b));
+            return std::hash<sstring>()(with_linearized(v, [&] (bytes_view bv) { return t.to_string(bv); }));
         }
         size_t operator()(const counter_type_impl&) { fail(unimplemented::cause::COUNTERS); }
         size_t operator()(const empty_type_impl&) { return 0; }
     };
     return visit(*this, visitor{v});
-}
-
-size_t abstract_type::hash(managed_bytes_view v) const {
-    // FIXME: hash without linearization
-    return with_linearized(v, [&] (bytes_view v) {
-        return hash(v);
-    });
 }
 
 
