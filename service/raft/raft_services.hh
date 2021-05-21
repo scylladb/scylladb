@@ -53,7 +53,6 @@ class raft_services : public seastar::peering_sharded_service<raft_services> {
     using create_server_result = std::pair<std::unique_ptr<raft::server>, raft_rpc*>;
 
     netw::messaging_service& _ms;
-    gms::gossiper& _gossiper;
     cql3::query_processor& _qp;
     // Shard-local failure detector instance shared among all raft groups
     shared_ptr<raft_gossip_failure_detector> _fd;

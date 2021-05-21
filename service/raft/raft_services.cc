@@ -38,7 +38,7 @@
 logging::logger rslog("raft_services");
 
 raft_services::raft_services(netw::messaging_service& ms, gms::gossiper& gs, cql3::query_processor& qp)
-    : _ms(ms), _gossiper(gs), _qp(qp), _fd(make_shared<raft_gossip_failure_detector>(gs, *this))
+    : _ms(ms), _qp(qp), _fd(make_shared<raft_gossip_failure_detector>(gs, *this))
 {}
 
 void raft_services::init_rpc_verbs() {
