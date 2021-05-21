@@ -50,7 +50,7 @@ def run(args):
     subprocess.check_call(args, env=dict(os.environ, **env(args[0])))
 
 
-def generate_coverage_report(path="build/coverage/test", name="tests", input_files=None):
+def generate_coverage_report(path="build/coverage/test", name="tests", input_files=None, verbose=0):
     """Generate a html coverage report from the given profiling data
 
     Arguments:
@@ -78,37 +78,62 @@ def generate_coverage_report(path="build/coverage/test", name="tests", input_fil
       described in PATH instead.
       Note that even if provided, PATH is still used to store intermediate
       files, as well as the final result.
+    * VERBOSE (optional) - set verbosity level:
+        - 0 (False): no messages, except the one with the path to the generated
+          report;
+        - 1 (True): print a message at each stage of the report generation;
+        - 2: make subcommands verbose (those that support it);
+
+        Defaults to 0 (False).
     """
+    verbose = int(verbose)
     profraw_extension = ".profraw"
     profraw_extension_len = len(profraw_extension)
     test_executables = []
 
+    def maybe_print(msg):
+        if verbose:
+            print(msg)
+
     if input_files:
+        maybe_print(f"Using input_files as input for the report")
         profraw_files = input_files
         for file in profraw_files:
             dirname, basename = os.path.split(file)
             test_executables.append(os.path.join(dirname, basename[:-profraw_extension_len]))
     else:
+        maybe_print(f"Scanning {path} for input files matching *.{profraw_extension}")
         profraw_files = []
         for root, dirs, files in os.walk(path):
             for file in files:
                 if file.endswith(profraw_extension):
                     profraw_files.append(os.path.join(root, file))
                     test_executables.append(os.path.join(root, file[:-profraw_extension_len]))
+        maybe_print(f"Found {len(profraw_files)} input files")
 
     profdata_path = os.path.join(path, f"{name}.profdata")
 
+    maybe_print(f"Merging raw profiling data {profraw_files}")
+
     subprocess.check_call(['llvm-profdata', 'merge', '-sparse', f'-o={profdata_path}'] + profraw_files)
+
+    maybe_print(f"Profiling data merged to {profdata_path}")
 
     info_path = os.path.join(path, f"{name}.info")
 
     with open(info_path, "w") as f:
+        maybe_print(f"Exporting in lcov format to {info_path}")
         subprocess.check_call(["llvm-cov", "export", "-format=lcov", f"-instr-profile={profdata_path}"] + [f"-object={exe}" for exe in test_executables], stdout=f)
 
     html_report_path = os.path.join(path, f"{name}")
     html_report_url = os.path.abspath(os.path.join(html_report_path, "index.html"))
 
-    subprocess.check_call(["genhtml", "-q", "-o", html_report_path, info_path])
+    maybe_print(f"Generating html report in {html_report_path}")
+    if verbose > 1:
+        genhtml_cmd = ["genhtml"]
+    else:
+        genhtml_cmd = ["genhtml", "-q"]
+    subprocess.check_call(genhtml_cmd + ["-o", html_report_path, info_path])
 
     print(f"Coverage report written to {html_report_path}, url: file://{html_report_url}")
 
@@ -124,6 +149,7 @@ def main(argv):
     arg_parser.add_argument("--path", dest="path", action="store", type=str, required=False, default="build/coverage/test", help="defaults to 'build/coverage/test'")
     arg_parser.add_argument("--name", dest="name", action="store", type=Value, required=False, default=Value("tests", is_default=True), help="defaults to 'tests', with --run it defaults to the name of the provided executable")
     arg_parser.add_argument("--input-files", dest="input_files", nargs='+', action="extend", type=str, required=False)
+    arg_parser.add_argument("--verbose", "-v", dest="verbose", action="count", required=False, default=0, help="defaults to not verbose")
     arg_parser.add_argument("--run", dest="run", action="store_true", required=False,
             help="run the specified executable and generate the coverage report, all command line arguments after --run are considered to be part of the to-be-run test")
     arg_parser.add_argument("--no-coverage-report", dest="no_coverage_report", action="store_true", required=False, default=False,
@@ -153,7 +179,7 @@ def main(argv):
         else:
             print("Ignoring --no-coverage-report as --run was not provided")
 
-    generate_coverage_report(args.path, args.name.val, input_files)
+    generate_coverage_report(args.path, args.name.val, input_files, args.verbose)
 
 
 if __name__ == "__main__":
