@@ -139,12 +139,37 @@ def generate_coverage_report(path="build/coverage/test", name="tests", input_fil
 
 
 def main(argv):
+    """This script was intended to support the following use-cases:
+    * Generate a report from a recent test run with `test.py`:
+
+        $ ./coverage.py
+
+    * Generate a report from a subset of a recent test run with `test.py`:
+
+        $ ./coverage.py --input-files /path/to/file1 /path/to/file2 ...
+
+    * Run a test directly through `coverage.py` and generate a report immediately:
+
+        $ ./coverage.py --run /path/to/my_test --testarg1 --testarg2 ...
+
+    * Run several tests directly through `coverage.py` and generate a report at the end:
+
+        $ ./coverage.py --no-coverage-report --run /path/to/my_test1 --testarg1 --testarg2 ...
+        $ ./coverage.py --no-coverage-report --run /path/to/my_test1 --testarg1 --testarg2 ...
+        $ ./coverage.py --input-files /path/to/my_test1.profraw /path/to/my_test2.profraw
+
+      Alternatively, you can run `./coverage.py` without args to generate a report from all input files it can find.
+
+    Note that `--path`, `--name` and `--verbose` can always be provided.
+    """
+
     class Value(argparse.Action):
         def __init__(self, val, is_default=False):
             self.val = val
             self.is_default = is_default
 
-    arg_parser = argparse.ArgumentParser(description=inspect.getdoc(generate_coverage_report), formatter_class=argparse.RawDescriptionHelpFormatter)
+    arg_parser = argparse.ArgumentParser(description=inspect.getdoc(generate_coverage_report), formatter_class=argparse.RawDescriptionHelpFormatter,
+            epilog=inspect.getdoc(main))
 
     arg_parser.add_argument("--path", dest="path", action="store", type=str, required=False, default="build/coverage/test", help="defaults to 'build/coverage/test'")
     arg_parser.add_argument("--name", dest="name", action="store", type=Value, required=False, default=Value("tests", is_default=True), help="defaults to 'tests', with --run it defaults to the name of the provided executable")
