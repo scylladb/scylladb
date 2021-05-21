@@ -928,11 +928,9 @@ public:
 };
 
 class test_reclaimer: public region_group_reclaimer {
-    size_t _threshold;
     test_reclaimer *_result_accumulator;
     region_group _rg;
     std::vector<size_t> _reclaim_sizes;
-    bool _shutdown = false;
     shared_promise<> _unleash_reclaimer;
     seastar::gate _reclaimers_done;
     promise<> _unleashed;
