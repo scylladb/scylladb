@@ -475,17 +475,15 @@ public:
 // Handles all tasks related to sstable writing: permit management, compaction backlog updates, etc
 class database_sstable_write_monitor : public permit_monitor, public backlog_write_progress_manager {
     sstables::shared_sstable _sst;
-    compaction_manager& _compaction_manager;
     sstables::compaction_strategy& _compaction_strategy;
     const sstables::writer_offset_tracker* _tracker = nullptr;
     uint64_t _progress_seen = 0;
     api::timestamp_type _maximum_timestamp;
 public:
     database_sstable_write_monitor(lw_shared_ptr<sstable_write_permit> permit, sstables::shared_sstable sst,
-        compaction_manager& manager, sstables::compaction_strategy& strategy, api::timestamp_type max_timestamp)
+        sstables::compaction_strategy& strategy, api::timestamp_type max_timestamp)
             : permit_monitor(std::move(permit))
             , _sst(std::move(sst))
-            , _compaction_manager(manager)
             , _compaction_strategy(strategy)
             , _maximum_timestamp(max_timestamp)
     {}
@@ -611,7 +609,7 @@ table::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old, sstable_write_
             newtabs.push_back(newtab);
             tlogger.debug("Flushing to {}", newtab->get_filename());
 
-            auto monitor = database_sstable_write_monitor(permit, newtab, _compaction_manager, _compaction_strategy,
+            auto monitor = database_sstable_write_monitor(permit, newtab, _compaction_strategy,
                 old->get_max_timestamp());
 
             return do_with(std::move(monitor), [newtab, cfg = std::move(cfg), old, reader = std::move(reader), &priority] (auto& monitor) mutable {
