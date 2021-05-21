@@ -304,7 +304,6 @@ public:
 struct compaction_read_monitor_generator final : public read_monitor_generator {
     class compaction_read_monitor final : public  sstables::read_monitor, public backlog_read_progress_manager {
         sstables::shared_sstable _sst;
-        compaction_manager& _compaction_manager;
         column_family& _cf;
         const sstables::reader_position_tracker* _tracker = nullptr;
         uint64_t _last_position_seen = 0;
@@ -337,8 +336,8 @@ struct compaction_read_monitor_generator final : public read_monitor_generator {
             _sst = {};
         }
 
-        compaction_read_monitor(sstables::shared_sstable sst, compaction_manager& cm, column_family &cf)
-            : _sst(std::move(sst)), _compaction_manager(cm), _cf(cf) { }
+        compaction_read_monitor(sstables::shared_sstable sst, column_family &cf)
+            : _sst(std::move(sst)), _cf(cf) { }
 
         ~compaction_read_monitor() {
             // We failed to finish handling this SSTable, so we have to update the backlog_tracker
@@ -352,13 +351,12 @@ struct compaction_read_monitor_generator final : public read_monitor_generator {
     };
 
     virtual sstables::read_monitor& operator()(sstables::shared_sstable sst) override {
-        _generated_monitors.emplace_back(std::move(sst), _compaction_manager, _cf);
+        _generated_monitors.emplace_back(std::move(sst), _cf);
         return _generated_monitors.back();
     }
 
-    compaction_read_monitor_generator(compaction_manager& cm, column_family& cf)
-        : _compaction_manager(cm)
-        , _cf(cf) {}
+    explicit compaction_read_monitor_generator(column_family& cf)
+        : _cf(cf) {}
 
     void remove_sstables(bool is_tracking) {
         for (auto& rm : _generated_monitors) {
@@ -375,7 +373,6 @@ struct compaction_read_monitor_generator final : public read_monitor_generator {
         }
     }
 private:
-     compaction_manager& _compaction_manager;
      column_family& _cf;
      std::deque<compaction_read_monitor> _generated_monitors;
 };
@@ -922,7 +919,7 @@ class regular_compaction : public compaction {
 public:
     regular_compaction(column_family& cf, compaction_descriptor descriptor)
         : compaction(cf, std::move(descriptor))
-        , _monitor_generator(_cf.get_compaction_manager(), _cf)
+        , _monitor_generator(_cf)
     {
     }
 
