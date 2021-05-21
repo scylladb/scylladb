@@ -1414,8 +1414,6 @@ flat_mutation_reader make_scrubbing_reader(flat_mutation_reader rd, compaction_o
 }
 
 class resharding_compaction final : public compaction {
-    shard_id _shard; // shard of current sstable writer
-
     // Partition count estimation for a shard S:
     //
     // TE, the total estimated partition count for a shard S, is defined as
