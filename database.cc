@@ -354,7 +354,7 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
     , _user_sstables_manager(std::make_unique<sstables::sstables_manager>(*_large_data_handler, _cfg, feat))
     , _system_sstables_manager(std::make_unique<sstables::sstables_manager>(*_nop_large_data_handler, _cfg, feat))
     , _result_memory_limiter(dbcfg.available_memory / 10)
-    , _data_listeners(std::make_unique<db::data_listeners>(*this))
+    , _data_listeners(std::make_unique<db::data_listeners>())
     , _mnotifier(mn)
     , _feat(feat)
     , _shared_token_metadata(stm)
