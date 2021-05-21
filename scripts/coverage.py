@@ -29,13 +29,25 @@ import subprocess
 import sys
 
 
+def __raw_profiling_filename(test_path):
+    return test_path + ".profraw"
+
+
 def env(test_path):
     """Generate the env variables required by the test
 
     Such that the generated profiling data fulfills generate_coverage_report()'s
     requirements.
     """
-    return {"LLVM_PROFILE_FILE": test_path + ".profraw"}
+    return {"LLVM_PROFILE_FILE": __raw_profiling_filename(test_path)}
+
+
+def run(args):
+    """Run the command, setting the required env variables
+
+    In order to generate the profiling data in the right place. See env().
+    """
+    subprocess.check_call(args, env=dict(os.environ, **env(args[0])))
 
 
 def generate_coverage_report(path="build/coverage/test", name="tests", input_files=None):
@@ -102,13 +114,46 @@ def generate_coverage_report(path="build/coverage/test", name="tests", input_fil
 
 
 def main(argv):
-    arg_parser = argparse.ArgumentParser(description=inspect.getdoc(generate_coverage_report), formatter_class=argparse.RawDescriptionHelpFormatter)
-    arg_parser.add_argument("--path", dest="path", action="store", type=str, required=False, default="build/coverage/test", help="defaults to 'build/coverage/test'")
-    arg_parser.add_argument("--name", dest="name", action="store", type=str, required=False, default="tests", help="defaults to 'tests'")
-    arg_parser.add_argument("--input-files", dest="input_files", nargs='+', action="extend", type=str, required=False)
-    args = arg_parser.parse_args()
+    class Value(argparse.Action):
+        def __init__(self, val, is_default=False):
+            self.val = val
+            self.is_default = is_default
 
-    generate_coverage_report(args.path, args.name, args.input_files)
+    arg_parser = argparse.ArgumentParser(description=inspect.getdoc(generate_coverage_report), formatter_class=argparse.RawDescriptionHelpFormatter)
+
+    arg_parser.add_argument("--path", dest="path", action="store", type=str, required=False, default="build/coverage/test", help="defaults to 'build/coverage/test'")
+    arg_parser.add_argument("--name", dest="name", action="store", type=Value, required=False, default=Value("tests", is_default=True), help="defaults to 'tests', with --run it defaults to the name of the provided executable")
+    arg_parser.add_argument("--input-files", dest="input_files", nargs='+', action="extend", type=str, required=False)
+    arg_parser.add_argument("--run", dest="run", action="store_true", required=False,
+            help="run the specified executable and generate the coverage report, all command line arguments after --run are considered to be part of the to-be-run test")
+    arg_parser.add_argument("--no-coverage-report", dest="no_coverage_report", action="store_true", required=False, default=False,
+            help="modifier for --run: don't generate a coverage report after running the executable, ignored when --run is not used")
+
+    if '--run' in argv:
+        pos = argv.index('--run')
+        argv_head = argv[1:pos + 1]
+        argv_tail = argv[pos + 1:]
+    else:
+        argv_head = argv[1:]
+        argv_tail = []
+
+    args = arg_parser.parse_args(argv_head)
+
+    if args.run:
+        run(argv_tail)
+        if args.name.is_default:
+            args.name.val = os.path.basename(argv_tail[0])
+        input_files = [__raw_profiling_filename(argv_tail[0])]
+    else:
+        input_files = args.input_files
+
+    if args.no_coverage_report:
+        if args.run:
+            return
+        else:
+            print("Ignoring --no-coverage-report as --run was not provided")
+
+    generate_coverage_report(args.path, args.name.val, input_files)
 
 
 if __name__ == "__main__":
