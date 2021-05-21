@@ -373,8 +373,6 @@ Install dependencies:
     $ dnf install llvm # for llvm-profdata and llvm-cov
     $ dnf install lcov # for genhtml
 
-#### Automated way
-
 Instruct `configure.py` to generate build files for `coverage` mode:
 
     $ ./configure.py --mode=coverage
@@ -383,24 +381,11 @@ Build the tests you want to run, then run them via `test.py` (important!):
 
     $ ./test.py --mode=coverage [...]
 
-Open the link printed at the end. Be horrified. Go and write more tests.
-
-#### Manual way
-
-Build the tests you want to generate coverage for, as many as you want. Use the `coverage` build mode:
-
-    $ ./configure.py --mode=coverage
-
-Run the test(s) and also set `LLVM_PROFILE_FILE` such that its path and filename matches that of the test executable:
-
-    $ LLVM_PROFILE_FILE='build/coverage/test/boost/querier_cache_test_g.profraw' build/coverage/test/boost/querier_cache_test_g
-
-After having run all the tests of you heart's desire, produce the combined coverage report:
-
-    $ ./scripts/coverage.py
+Alternatively, you can run individual tests via `./scripts/coverage.py --run`.
 
 Open the link printed at the end. Be horrified. Go and write more tests.
 
+For more details see `./scripts/coverage.py --help`.
 
 ### Core dump debugging
 
