@@ -173,7 +173,7 @@ Wants={md_service}
 DefaultDependencies=no
 
 [Mount]
-What=UUID={uuid}
+What=/dev/disk/by-uuid/{uuid}
 Where={mount_at}
 Type=xfs
 Options=noatime
