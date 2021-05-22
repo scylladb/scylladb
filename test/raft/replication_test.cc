@@ -478,15 +478,15 @@ raft_cluster::raft_cluster(std::vector<initial_state> states, state_machine::app
 }
 
 future<> raft_cluster::start_all() {
-    for (auto& r: _servers) {
-        co_await r.server->start();
-    }
+    co_await parallel_for_each(_servers, [] (auto& r) {
+        return r.server->start();
+    });
 }
 
 future<> raft_cluster::stop_all() {
-    for (auto& r: _servers) {
-        co_await r.server->abort();
-    }
+    co_await parallel_for_each(_servers, [] (auto& r) {
+        return r.server->abort();
+    });
 }
 
 future<> raft_cluster::wait_all() {
