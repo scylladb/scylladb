@@ -430,12 +430,7 @@ template <typename T>
 struct float_type_traits {
     static constexpr size_t serialized_size = sizeof(typename int_of_size<T>::itype);
     static double read_nonempty(managed_bytes_view v) {
-        union {
-            T d;
-            typename int_of_size<T>::itype i;
-        } x;
-        x.i = read_simple_exactly<typename int_of_size<T>::itype>(v);
-        return x.d;
+        return bit_cast<T>(read_simple_exactly<typename int_of_size<T>::itype>(v));
     }
 };
 template<> struct simple_type_traits<float> : public float_type_traits<float> {};
