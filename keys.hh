@@ -166,6 +166,14 @@ protected:
     static inline const auto& get_compound_type(const schema& s) {
         return TopLevel::get_compound_type(s);
     }
+private:
+    static const data_type& get_singular_type(const schema& s) {
+        const auto& ct = get_compound_type(s);
+        if (!ct->is_singular()) {
+            throw std::invalid_argument("compound is not singular");
+        }
+        return ct->types()[0];
+    }
 public:
     struct with_schema_wrapper {
         with_schema_wrapper(const schema& s, const TopLevel& key) : s(s), key(key) {}
@@ -223,12 +231,13 @@ public:
     template <typename T>
     static
     TopLevel from_singular(const schema& s, const T& v) {
-        auto ct = get_compound_type(s);
-        if (!ct->is_singular()) {
-            throw std::invalid_argument("compound is not singular");
-        }
-        auto type = ct->types()[0];
+        const auto& type = get_singular_type(s);
         return from_single_value(s, type->decompose(v));
+    }
+
+    static TopLevel from_singular_bytes(const schema& s, const bytes& b) {
+        get_singular_type(s); // validation
+        return from_single_value(s, b);
     }
 
     TopLevelView view() const {

@@ -3344,7 +3344,7 @@ static dht::partition_range calculate_pk_bound(schema_ptr schema, const column_d
         throw api_error::validation(format("A single attribute is required for a hash key EQ restriction: {}", attrs));
     }
     bytes raw_value = get_key_from_typed_value(attrs[0], pk_cdef);
-    partition_key pk = partition_key::from_singular(*schema, pk_cdef.type->deserialize(raw_value));
+    partition_key pk = partition_key::from_singular_bytes(*schema, std::move(raw_value));
     auto decorated_key = dht::decorate_key(*schema, pk);
     return dht::partition_range(decorated_key);
 }
@@ -3648,7 +3648,7 @@ calculate_bounds_condition_expression(schema_ptr schema,
                             "KeyConditionExpression allows only one condition for each key");
                 }
                 bytes raw_value = get_constant_value(cond._values[!toplevel_ind], pk_cdef);
-                partition_key pk = partition_key::from_singular(*schema, pk_cdef.type->deserialize(raw_value));
+                partition_key pk = partition_key::from_singular_bytes(*schema, std::move(raw_value));
                 auto decorated_key = dht::decorate_key(*schema, pk);
                 partition_ranges.push_back(dht::partition_range(decorated_key));
             } else if (ck_cdef && sstring(key) == ck_cdef->name_as_text()) {
