@@ -220,12 +220,12 @@ public:
         return TopLevel::from_bytes(get_compound_type(s)->serialize_value_deep(v));
     }
 
-    static TopLevel from_single_value(const schema& s, bytes v) {
-        return TopLevel::from_bytes(get_compound_type(s)->serialize_single(std::move(v)));
+    static TopLevel from_single_value(const schema& s, const bytes& v) {
+        return TopLevel::from_bytes(get_compound_type(s)->serialize_single(v));
     }
 
-    static TopLevel from_single_value(const schema& s, managed_bytes v) {
-        return TopLevel::from_bytes(get_compound_type(s)->serialize_single(std::move(v)));
+    static TopLevel from_single_value(const schema& s, const managed_bytes& v) {
+        return TopLevel::from_bytes(get_compound_type(s)->serialize_single(v));
     }
 
     template <typename T>
