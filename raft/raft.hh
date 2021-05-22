@@ -71,6 +71,9 @@ struct server_address {
     bool operator==(const server_address& rhs) const {
         return id == rhs.id;
     }
+    bool operator<(const server_address& rhs) const {
+        return id < rhs.id;
+    }
 };
 
 } // end of namespace raft
