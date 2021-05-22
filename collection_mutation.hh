@@ -29,6 +29,7 @@
 #include "marshal_exception.hh"
 #include "utils/linearizing_input_stream.hh"
 #include <iosfwd>
+#include <forward_list>
 
 class abstract_type;
 class compaction_garbage_collector;
@@ -69,11 +70,21 @@ struct collection_mutation_view_description {
     collection_mutation serialize(const abstract_type&) const;
 };
 
-using collection_mutation_input_stream = utils::linearizing_input_stream<fragment_range<managed_bytes_view>, marshal_exception>;
+class collection_mutation_input_stream {
+    std::forward_list<bytes> _linearized;
+    managed_bytes_view _src;
+public:
+    collection_mutation_input_stream(const managed_bytes_view& src) : _src(src) {}
+    template <Trivial T>
+    T read_trivial() {
+        return ::read_simple<T>(_src);
+    }
+    bytes_view read_linearized(size_t n);
+    managed_bytes_view read_fragmented(size_t n);
+    bool empty() const;
+};
 
-// Given a linearized collection_mutation_view, returns an auxiliary struct allowing the inspection of each cell.
-// The struct is an observer of the data given by the collection_mutation_view and is only valid while the
-// passed in `collection_mutation_input_stream` is alive.
+// Given a collection_mutation_view, returns an auxiliary struct allowing the inspection of each cell.
 // The function needs to be given the type of stored data to reconstruct the structural information.
 collection_mutation_view_description deserialize_collection_mutation(const abstract_type&, collection_mutation_input_stream&);
 
@@ -96,7 +107,7 @@ public:
     // calls it on the corresponding description of `this`.
     template <typename F>
     inline decltype(auto) with_deserialized(const abstract_type& type, F f) const {
-        auto stream = collection_mutation_input_stream(fragment_range(data));
+        collection_mutation_input_stream stream(data);
         return f(deserialize_collection_mutation(type, stream));
     }
 
