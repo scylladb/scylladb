@@ -445,6 +445,9 @@ public:
     bytes linearize() const {
         return linearized(*this);
     }
+    bool is_linearized() {
+        return _current_fragment.size() == _size;
+    }
 
     // Allow casting mutable views to immutable views.
     friend class managed_bytes_basic_view<mutable_view::no>;
