@@ -47,7 +47,7 @@ public:
 
     compound_type(std::vector<data_type> types)
         : _types(std::move(types))
-        , _byte_order_equal(std::all_of(_types.begin(), _types.end(), [] (auto t) {
+        , _byte_order_equal(std::all_of(_types.begin(), _types.end(), [] (const auto& t) {
                 return t->is_byte_order_equal();
             }))
         , _byte_order_comparable(false)
