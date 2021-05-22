@@ -491,8 +491,8 @@ public:
     using prefix_view_type = prefix_view_on_full_compound<TopLevel, PrefixTopLevel>;
 
     bool is_prefixed_by(const schema& s, const PrefixTopLevel& prefix) const {
-        auto t = base::get_compound_type(s);
-        auto prefix_type = PrefixTopLevel::get_compound_type(s);
+        const auto& t = base::get_compound_type(s);
+        const auto& prefix_type = PrefixTopLevel::get_compound_type(s);
         return ::is_prefixed_by(t->types().begin(),
             t->begin(*this), t->end(*this),
             prefix_type->begin(prefix), prefix_type->end(prefix),
@@ -594,7 +594,7 @@ public:
     }
 
     bool is_prefixed_by(const schema& s, const TopLevel& prefix) const {
-        auto t = base::get_compound_type(s);
+        const auto& t = base::get_compound_type(s);
         return ::is_prefixed_by(t->types().begin(),
             t->begin(*this), t->end(*this),
             t->begin(prefix), t->end(prefix),
