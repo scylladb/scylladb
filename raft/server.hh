@@ -71,6 +71,14 @@ public:
     // Can be called on a leader only, otherwise throws not_a_leader.
     // Cannot be called until previous set_configuration() completes
     // otherwise throws conf_change_in_progress exception.
+    //
+    // Waits until configuration completes, i.e. the server left the joint
+    // configuration. The server will apply a dummy entry to
+    // make sure this happens.
+    //
+    // Note: committing a dummy entry extends the opportunity for
+    // uncertainty, thus commit_status_unknown exception may be
+    // returned even in case of a successful config change.
     virtual future<> set_configuration(server_address_set c_new) = 0;
 
     // Return the currently known configuration

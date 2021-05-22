@@ -717,7 +717,15 @@ future<> server_impl::set_configuration(server_address_set c_new) {
         co_return;
     }
     _stats.add_config++;
-    co_return co_await add_entry_internal(raft::configuration{std::move(c_new)}, wait_type::committed);
+    co_await add_entry_internal(raft::configuration{std::move(c_new)}, wait_type::committed);
+     // Above we co_wait that the joint configuration is committed.
+     // Immediately, without yield, once the FSM discovers
+     // this, it appends non-joint entry. Hence,
+     // at this point in execution, non-joint entry is in the log.
+     // By waiting for a follow up dummy to get committed, we
+     // automatically wait for the non-joint entry to get
+     // committed.
+    co_await add_entry_internal(log_entry::dummy(), wait_type::committed);
 }
 
 raft::configuration
