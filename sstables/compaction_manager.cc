@@ -662,6 +662,7 @@ void compaction_manager::submit_offstrategy(column_family* cf) {
                         f.get();
                         _stats.completed_tasks++;
                     } catch (sstables::compaction_stop_exception& e) {
+                        _stats.errors++;
                         cmlog.info("off-strategy compaction was abruptly stopped, reason: {}", e.what());
                         return put_task_to_sleep(task).then([] {
                             return make_ready_future<stop_iteration>(stop_iteration::no);
