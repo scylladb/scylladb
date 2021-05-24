@@ -1535,20 +1535,20 @@ def testSelectionOfEmptyCollections(cql, test_keyspace):
             assert_rows(execute(cql, table, "SELECT m['0'..'1'], s[0..1] FROM %s WHERE k = 0"), [None, None])
             assert_rows(execute(cql, table, "SELECT m['0'..'1']['3'..'5'], s[0..1][3..5] FROM %s WHERE k = 0"), [None, None])
 
-            assert_rows(execute(cql, table, "SELECT m, s FROM %s WHERE k = 1"), [dict(), {}])
+            assert_rows(execute(cql, table, "SELECT m, s FROM %s WHERE k = 1"), [dict(), set()])
             assert_rows(execute(cql, table, "SELECT m['0'], s[0] FROM %s WHERE k = 1"), [None, None])
-            assert_rows(execute(cql, table, "SELECT m['0'..'1'], s[0..1] FROM %s WHERE k = 1"), [dict(), {}])
-            assert_rows(execute(cql, table, "SELECT m['0'..'1']['3'..'5'], s[0..1][3..5] FROM %s WHERE k = 1"), [dict(), {}])
+            assert_rows(execute(cql, table, "SELECT m['0'..'1'], s[0..1] FROM %s WHERE k = 1"), [dict(), set()])
+            assert_rows(execute(cql, table, "SELECT m['0'..'1']['3'..'5'], s[0..1][3..5] FROM %s WHERE k = 1"), [dict(), set()])
 
-            assert_rows(execute(cql, table, "SELECT m, s FROM %s WHERE k = 2"), [dict(), {}])
+            assert_rows(execute(cql, table, "SELECT m, s FROM %s WHERE k = 2"), [dict(), set()])
             assert_rows(execute(cql, table, "SELECT m['0'], s[0] FROM %s WHERE k = 2"), [None, None])
-            assert_rows(execute(cql, table, "SELECT m['0'..'1'], s[0..1] FROM %s WHERE k = 2"), [dict(), {}])
-            assert_rows(execute(cql, table, "SELECT m['0'..'1']['3'..'5'], s[0..1][3..5] FROM %s WHERE k = 2"), [dict(), {}])
+            assert_rows(execute(cql, table, "SELECT m['0'..'1'], s[0..1] FROM %s WHERE k = 2"), [dict(), set()])
+            assert_rows(execute(cql, table, "SELECT m['0'..'1']['3'..'5'], s[0..1][3..5] FROM %s WHERE k = 2"), [dict(), set()])
 
             assert_rows(execute(cql, table, "SELECT m, s FROM %s WHERE k = 3"), [{"2": 2}, {2}])
             assert_rows(execute(cql, table, "SELECT m['0'], s[0] FROM %s WHERE k = 3"), [None, None])
-            assert_rows(execute(cql, table, "SELECT m['0'..'1'], s[0..1] FROM %s WHERE k = 3"), [dict(), {}])
-            assert_rows(execute(cql, table, "SELECT m['0'..'1']['3'..'5'], s[0..1][3..5] FROM %s WHERE k = 3"), [dict(), {}])
+            assert_rows(execute(cql, table, "SELECT m['0'..'1'], s[0..1] FROM %s WHERE k = 3"), [dict(), set()])
+            assert_rows(execute(cql, table, "SELECT m['0'..'1']['3'..'5'], s[0..1][3..5] FROM %s WHERE k = 3"), [dict(), set()])
 
     with create_table(cql, test_keyspace, "(k int PRIMARY KEY, m map<text, int>, s set<int>)") as table:
         execute(cql, table, "INSERT INTO %s(k) VALUES (0)")
