@@ -29,7 +29,6 @@
 #include "types.hh"
 #include "schema_builder.hh"
 #include "utils/div_ceil.hh"
-#include "repair/range_split.hh"
 
 #include "test/lib/simple_schema.hh"
 #include "test/lib/log.hh"
@@ -390,39 +389,6 @@ do_test_split_range_to_single_shard(const schema& s, const dht::partition_range&
 
 SEASTAR_THREAD_TEST_CASE(test_split_range_single_shard) {
     return test_something_with_some_interesting_ranges_and_sharder(do_test_split_range_to_single_shard);
-}
-
-// tests for range_split() utility function in repair/range_split.hh
-static int test_split(int N, int K) {
-    auto t1 = token_from_long(0x2000'0000'0000'0000);
-    auto t2 = token_from_long(0x5000'0000'0000'0000);
-    dht::token_range r{range_bound<dht::token>(t1), range_bound<dht::token>(t2)};
-    auto splitter = range_splitter(r, N, K);
-    int c = 0;
-    dht::token_range prev_range;
-    while (splitter.has_next()) {
-        auto range = splitter.next();
-        //std::cerr << range << "\n";
-        if (c == 0) {
-            BOOST_REQUIRE(range.start() == r.start());
-        } else {
-            std::optional<dht::token_range::bound> e({prev_range.end()->value(), !prev_range.end()->is_inclusive()});
-            BOOST_REQUIRE(range.start() == e);
-        }
-        prev_range = range;
-        c++;
-    }
-    if (c > 0) {
-        BOOST_REQUIRE(prev_range.end() == r.end());
-    }
-    return c;
-}
-
-SEASTAR_THREAD_TEST_CASE(test_split_1) {
-    BOOST_REQUIRE(test_split(128, 16) == 8);
-    // will make 7 binary splits: 500, 250, 125.5, 62.5, 31.25, 15.625,
-    // 7.8125, so expect 2^7 = 128 ranges:
-    BOOST_REQUIRE(test_split(1000, 11) == 128);
 }
 
 static
