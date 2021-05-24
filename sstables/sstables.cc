@@ -632,18 +632,25 @@ future<> parse(const schema& schema, sstable_version_types v, random_access_read
                     return parse<stats_metadata>(schema, v, in, s.contents[type]);
                 case metadata_type::Serialization:
                     if (v < sstable_version_types::mc) {
-                        throw std::runtime_error(
+                        throw malformed_sstable_exception(
                             "Statistics is malformed: SSTable is in 2.x format but contains serialization header.");
                     } else {
                         return parse<serialization_header>(schema, v, in, s.contents[type]);
                     }
                     return make_ready_future<>();
                 default:
-                    sstlog.warn("Invalid metadata type at Statistics file: {} ", int(type));
-                    return make_ready_future<>();
+                    throw malformed_sstable_exception(fmt::format("Invalid metadata type at Statistics file: {} ", int(type)));
                 }
             });
         });
+    }).handle_exception([] (std::exception_ptr ex) {
+        try {
+            std::rethrow_exception(ex);
+        } catch (const malformed_sstable_exception&) {
+            throw;
+        } catch (...) {
+            throw malformed_sstable_exception(fmt::format("Statistics file is malformed: {}", ex));
+        }
     });
 }
 
