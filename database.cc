@@ -1629,7 +1629,7 @@ future<> dirty_memory_manager::shutdown() {
     });
 }
 
-future<> memtable_list::request_flush() {
+future<> memtable_list::flush() {
     if (!may_flush()) {
         return make_ready_future<>();
     } else if (!_flush_coalescing) {
