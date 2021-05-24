@@ -37,6 +37,8 @@
 
 #include "test/raft/helpers.hh"
 
+using namespace raft;
+
 // TestProgressLeader
 // Checks a leader's own progress is updated correctly as entries are added.
 BOOST_AUTO_TEST_CASE(test_progress_leader) {

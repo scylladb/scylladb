@@ -63,3 +63,4 @@ bool eventually_true(noncopyable_function<bool ()> f) {
 }
 
 #define REQUIRE_EVENTUALLY_EQUAL(a, b) BOOST_REQUIRE(eventually_true([&] { return a == b; }))
+#define CHECK_EVENTUALLY_EQUAL(a, b) BOOST_CHECK(eventually_true([&] { return a == b; }))

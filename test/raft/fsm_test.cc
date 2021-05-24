@@ -21,6 +21,8 @@
 
 #include "test/raft/helpers.hh"
 
+using namespace raft;
+
 BOOST_AUTO_TEST_CASE(test_votes) {
     auto id1 = id();
 
