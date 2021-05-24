@@ -105,7 +105,11 @@ public:
     future<> finish_view_build(sstring ks_name, sstring view_name) const;
     future<> remove_view(sstring ks_name, sstring view_name) const;
 
+    // Precondition: "system_distributed.cdc_generation_descriptions" exists and it was created by Scylla.
+    // In practice this means that the table was created by a previous version from which the cluster was upgraded;
+    // the precondition says that this function should not be called in clusters that were freshly created in a new version.
     future<> insert_cdc_topology_description(cdc::generation_id_v1, const cdc::topology_description&, context);
+    // Precondition: same as above.
     future<std::optional<cdc::topology_description>> read_cdc_topology_description(cdc::generation_id_v1, context);
 
     future<> insert_cdc_generation(utils::UUID, const cdc::topology_description&, context);

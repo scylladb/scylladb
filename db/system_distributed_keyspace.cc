@@ -76,23 +76,6 @@ schema_ptr view_build_status() {
 }
 
 /* An internal table used by nodes to exchange CDC generation data. */
-schema_ptr cdc_generations() {
-    thread_local auto schema = [] {
-        auto id = generate_legacy_id(system_distributed_keyspace::NAME, system_distributed_keyspace::CDC_TOPOLOGY_DESCRIPTION);
-        return schema_builder(system_distributed_keyspace::NAME, system_distributed_keyspace::CDC_TOPOLOGY_DESCRIPTION, {id})
-                /* The timestamp of this CDC generation. */
-                .with_column("time", timestamp_type, column_kind::partition_key)
-                /* The description of this CDC generation (see `cdc::topology_description`). */
-                .with_column("description", cdc_generation_description_type)
-                /* Expiration time of this CDC generation (or null if not expired). */
-                .with_column("expired", timestamp_type)
-                .with_version(system_keyspace::generate_schema_version(id))
-                .build();
-    }();
-    return schema;
-}
-
-/* An internal table used by nodes to exchange CDC generation data. */
 schema_ptr cdc_generations_v2() {
     thread_local auto schema = [] {
         auto id = generate_legacy_id(system_distributed_keyspace::NAME_EVERYWHERE, system_distributed_keyspace::CDC_GENERATIONS_V2);
@@ -191,12 +174,18 @@ schema_ptr service_levels() {
 static std::vector<schema_ptr> ensured_tables() {
     return {
         view_build_status(),
-        cdc_generations(),
         cdc_generations_v2(),
         cdc_desc(),
         cdc_timestamps(),
         service_levels(),
     };
+}
+
+// Precondition: `ks_name` is either "system_distributed" or "system_distributed_everywhere".
+static void check_exists(std::string_view ks_name, std::string_view cf_name, const database& db) {
+    if (!db.has_schema(ks_name, cf_name)) {
+        on_internal_error(dlogger, format("expected {}.{} to exist but it doesn't", ks_name, cf_name));
+    }
 }
 
 bool system_distributed_keyspace::is_extra_durable(const sstring& cf_name) {
@@ -400,6 +389,7 @@ system_distributed_keyspace::insert_cdc_topology_description(
         cdc::generation_id_v1 gen_id,
         const cdc::topology_description& description,
         context ctx) {
+    check_exists(NAME, CDC_TOPOLOGY_DESCRIPTION, _qp.db());
     return _qp.execute_internal(
             format("INSERT INTO {}.{} (time, description) VALUES (?,?)", NAME, CDC_TOPOLOGY_DESCRIPTION),
             quorum_if_many(ctx.num_token_owners),
@@ -412,6 +402,7 @@ future<std::optional<cdc::topology_description>>
 system_distributed_keyspace::read_cdc_topology_description(
         cdc::generation_id_v1 gen_id,
         context ctx) {
+    check_exists(NAME, CDC_TOPOLOGY_DESCRIPTION, _qp.db());
     return _qp.execute_internal(
             format("SELECT description FROM {}.{} WHERE time = ?", NAME, CDC_TOPOLOGY_DESCRIPTION),
             quorum_if_many(ctx.num_token_owners),

@@ -257,12 +257,11 @@ SEASTAR_THREAD_TEST_CASE(test_permissions_of_cdc_description) {
             BOOST_REQUIRE_THROW(e.execute_cql(stmt).get(), exceptions::unauthorized_exception);
         };
 
-        const std::string generations = "system_distributed.cdc_generation_descriptions";
         const std::string generations_v2 = "system_distributed_everywhere.cdc_generation_descriptions_v2";
         const std::string streams = "system_distributed.cdc_streams_descriptions_v2";
         const std::string timestamps = "system_distributed.cdc_generation_timestamps";
 
-        for (auto& t : {generations, generations_v2, streams, timestamps}) {
+        for (auto& t : {generations_v2, streams, timestamps}) {
             e.require_table_exists(t).get();
 
             // Disallow DROP
@@ -273,22 +272,20 @@ SEASTAR_THREAD_TEST_CASE(test_permissions_of_cdc_description) {
         }
 
         // Disallow ALTER
-        for (auto& t : {generations, streams}) {
+        for (auto& t : {streams}) {
             assert_unauthorized(format("ALTER TABLE {} ALTER time TYPE blob", t));
         }
         assert_unauthorized(format("ALTER TABLE {} ALTER id TYPE blob", generations_v2));
         assert_unauthorized(format("ALTER TABLE {} ALTER key TYPE blob", timestamps));
 
         // Allow DELETE
-        for (auto& t : {generations, streams}) {
+        for (auto& t : {streams}) {
             e.execute_cql(format("DELETE FROM {} WHERE time = toTimeStamp(now())", t)).get();
         }
         e.execute_cql(format("DELETE FROM {} WHERE id = uuid()", generations_v2)).get();
         e.execute_cql(format("DELETE FROM {} WHERE key = 'timestamps'", timestamps)).get();
 
         // Allow UPDATE, INSERT
-        e.execute_cql(format("UPDATE {} SET expired = toTimeStamp(now()) WHERE time = toTimeStamp(now())", generations)).get();
-        e.execute_cql(format("INSERT INTO {} (time) VALUES (toTimeStamp(now()))", generations)).get();
         e.execute_cql(format("INSERT INTO {} (id, range_end) VALUES (uuid(), 0)", generations_v2)).get();
         e.execute_cql(format("INSERT INTO {} (time, range_end) VALUES (toTimeStamp(now()), 0)", streams)).get();
         e.execute_cql(format("UPDATE {} SET expired = toTimeStamp(now()) WHERE key = 'timestamps' AND time = toTimeStamp(now())", timestamps)).get();
