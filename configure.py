@@ -1285,7 +1285,6 @@ warnings = [
     '-Wno-pessimizing-move',
     '-Wno-redundant-move',
     '-Wno-gnu-designator',
-    '-Wno-instantiation-after-specialization',
     '-Wno-unsupported-friend',
     '-Wno-unused-variable',
     '-Wno-return-std-move',
