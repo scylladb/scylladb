@@ -639,9 +639,9 @@ void compaction_manager::submit_offstrategy(column_family* cf) {
     task->compacting_cf = cf;
     task->type = sstables::compaction_type::Reshape;
     _tasks.push_back(task);
-    _stats.pending_tasks++;
 
     task->compaction_done = repeat([this, task, cf] () mutable {
+        _stats.pending_tasks++;
         if (!can_proceed(task)) {
             _stats.pending_tasks--;
             return make_ready_future<stop_iteration>(stop_iteration::yes);
@@ -663,9 +663,11 @@ void compaction_manager::submit_offstrategy(column_family* cf) {
                         _stats.completed_tasks++;
                     } catch (sstables::compaction_stop_exception& e) {
                         cmlog.info("off-strategy compaction was abruptly stopped, reason: {}", e.what());
+                        return put_task_to_sleep(task).then([] {
+                            return make_ready_future<stop_iteration>(stop_iteration::no);
+                        });
                     } catch (...) {
                         _stats.errors++;
-                        _stats.pending_tasks++;
                         cmlog.error("off-strategy compaction failed due to {}, retrying...", std::current_exception());
                         return put_task_to_sleep(task).then([] {
                             return make_ready_future<stop_iteration>(stop_iteration::no);
