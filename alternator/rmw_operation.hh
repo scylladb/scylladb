@@ -23,7 +23,6 @@
 
 #include "seastarx.hh"
 #include "service/storage_proxy.hh"
-#include "service/storage_proxy.hh"
 #include "utils/rjson.hh"
 #include "executor.hh"
 

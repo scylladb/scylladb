@@ -56,6 +56,8 @@
 #include "test/lib/exception_utils.hh"
 #include "test/lib/reader_permit.hh"
 
+#include <boost/range/algorithm/sort.hpp>
+
 using namespace sstables;
 
 class sstable_assertions final {

@@ -41,13 +41,19 @@
 
 #pragma once
 
-#include "cql3/column_specification.hh"
-#include "cql3/column_identifier.hh"
+#include <seastar/core/shared_ptr.hh>
+#include "seastarx.hh"
 
 #include <optional>
 #include <vector>
+#include <stddef.h>
+
+class schema;
 
 namespace cql3 {
+
+class column_identifier;
+class column_specification;
 
 class variable_specifications final {
 private:

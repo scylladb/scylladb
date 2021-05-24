@@ -42,6 +42,9 @@
 #include <seastar/core/seastar.hh>
 #include "locator/gce_snitch.hh"
 
+#include <boost/algorithm/string/split.hpp>
+#include <boost/algorithm/string/classification.hpp>
+
 namespace locator {
 
 gce_snitch::gce_snitch(const sstring& fname, unsigned io_cpuid, const sstring& meta_server_url) : production_snitch_base(fname) {

@@ -48,6 +48,7 @@
 #include "schema.hh"
 #include "sstable_set.hh"
 #include <boost/range/algorithm/find.hpp>
+#include <boost/range/algorithm/remove_if.hpp>
 #include <boost/range/adaptors.hpp>
 #include <boost/algorithm/cxx11/any_of.hpp>
 #include "size_tiered_compaction_strategy.hh"
@@ -56,6 +57,7 @@
 #include "time_window_compaction_strategy.hh"
 #include "sstables/compaction_backlog_manager.hh"
 #include "sstables/size_tiered_backlog_tracker.hh"
+#include "sstables/leveled_manifest.hh"
 
 logging::logger date_tiered_manifest::logger = logging::logger("DateTieredCompactionStrategy");
 logging::logger leveled_manifest::logger("LeveledManifest");

@@ -21,7 +21,9 @@
 
 #pragma once
 
+#include <boost/range/iterator_range.hpp>
 #include <boost/range/algorithm/find_if.hpp>
+#include <boost/range/numeric.hpp>
 
 #include "atomic_cell_or_collection.hh"
 #include "types.hh"

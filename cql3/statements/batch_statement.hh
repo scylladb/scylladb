@@ -45,11 +45,6 @@
 #include "timestamp.hh"
 #include "log.hh"
 #include "to_string.hh"
-#include <boost/algorithm/cxx11/any_of.hpp>
-#include <boost/algorithm/cxx11/all_of.hpp>
-#include <boost/range/adaptor/transformed.hpp>
-#include <boost/range/adaptor/uniqued.hpp>
-#include <boost/iterator/counting_iterator.hpp>
 
 #pragma once
 

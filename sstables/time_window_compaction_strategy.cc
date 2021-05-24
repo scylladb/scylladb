@@ -20,8 +20,15 @@
  */
 
 #include "sstables/time_window_compaction_strategy.hh"
+#include "sstables/leveled_manifest.hh"
 #include "mutation_writer/timestamp_based_splitting_writer.hh"
 #include "mutation_source_metadata.hh"
+
+#include <boost/range/algorithm/find.hpp>
+#include <boost/range/algorithm/remove_if.hpp>
+#include <boost/range/algorithm/min_element.hpp>
+#include <boost/range/algorithm/partial_sort.hpp>
+#include <boost/range/adaptor/reversed.hpp>
 
 namespace sstables {
 

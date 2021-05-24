@@ -53,7 +53,6 @@
 #include "cql3/column_identifier.hh"
 #include "to_string.hh"
 #include <unordered_map>
-#include <boost/lexical_cast.hpp>
 
 namespace cql3 {
 

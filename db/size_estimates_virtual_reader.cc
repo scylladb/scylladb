@@ -25,6 +25,7 @@
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/algorithm/find_if.hpp>
+#include <boost/range/algorithm/sort.hpp>
 
 #include "clustering_bounds_comparator.hh"
 #include "database_fwd.hh"

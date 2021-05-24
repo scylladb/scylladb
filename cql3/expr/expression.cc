@@ -24,6 +24,9 @@
 #include <boost/algorithm/cxx11/all_of.hpp>
 #include <boost/algorithm/cxx11/any_of.hpp>
 #include <boost/range/adaptors.hpp>
+#include <boost/range/algorithm/set_algorithm.hpp>
+#include <boost/range/algorithm/unique.hpp>
+#include <boost/range/algorithm/sort.hpp>
 #include <fmt/ostream.h>
 #include <unordered_map>
 

@@ -31,6 +31,8 @@
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/util/closeable.hh>
 
+#include <boost/range/algorithm/sort.hpp>
+
 using namespace std::chrono_literals;
 
 class dummy_result_builder {

@@ -27,6 +27,7 @@
 #include "dht/murmur3_partitioner.hh"
 #include <boost/range/irange.hpp>
 #include <boost/range/adaptor/map.hpp>
+#include <boost/range/algorithm/sort.hpp>
 #include "test/lib/flat_mutation_reader_assertions.hh"
 #include "test/lib/reader_permit.hh"
 #include <seastar/core/reactor.hh>

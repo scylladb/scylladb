@@ -27,6 +27,8 @@
 #include "bytes_ostream.hh"
 #include "utils/fragmented_temporary_buffer.hh"
 
+#include <boost/range/algorithm/for_each.hpp>
+
 namespace utils {
 
 /// A reusable buffer, for temporary linearisation of bytes_ostream

@@ -49,6 +49,8 @@
 #include "gms/gossiper.hh"
 #include "db/config.hh"
 
+#include <boost/range/algorithm/remove_if.hpp>
+
 static logging::logger tlogger("table");
 static seastar::metrics::label column_family_label("cf");
 static seastar::metrics::label keyspace_label("ks");

@@ -21,9 +21,25 @@
 
 #pragma once
 
-#include "leveled_manifest.hh"
+#include <optional>
+#include <vector>
+#include <map>
+#include <memory>
+
+#include <seastar/core/sstring.hh>
+
+#include "compaction_strategy_type.hh"
+#include "database_fwd.hh"
+#include "sstables/size_tiered_compaction_strategy.hh"
+#include "sstables/compaction_strategy_impl.hh"
+#include "sstables/compaction_backlog_manager.hh"
+#include "sstables/shared_sstable.hh"
+
+class leveled_manifest;
 
 namespace sstables {
+
+class sstable_set_impl;
 
 class leveled_compaction_strategy : public compaction_strategy_impl {
     static constexpr int32_t DEFAULT_MAX_SSTABLE_SIZE_IN_MB = 160;

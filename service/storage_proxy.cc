@@ -77,6 +77,9 @@
 #include <boost/range/empty.hpp>
 #include <boost/range/algorithm/min_element.hpp>
 #include <boost/range/adaptor/transformed.hpp>
+#include <boost/range/combine.hpp>
+#include <boost/range/algorithm/transform.hpp>
+#include <boost/range/algorithm/partition.hpp>
 #include <boost/intrusive/list.hpp>
 #include "utils/latency.hh"
 #include "schema.hh"

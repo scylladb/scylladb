@@ -57,6 +57,7 @@
 #include <boost/range/algorithm_ext/push_back.hpp>
 #include <boost/range/algorithm/set_algorithm.hpp>
 #include <boost/range/algorithm_ext/is_sorted.hpp>
+#include <boost/range/algorithm/sort.hpp>
 #include <regex>
 #include <seastar/core/align.hh>
 #include "range_tombstone_list.hh"

@@ -50,6 +50,8 @@
 #include "test/lib/log.hh"
 #include "test/lib/reader_permit.hh"
 
+#include <boost/range/algorithm/sort.hpp>
+
 using namespace sstables;
 using namespace std::chrono_literals;
 

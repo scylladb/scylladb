@@ -48,8 +48,6 @@
 #include "version.hh"
 #include "cdc/generation_id.hh"
 #include <unordered_set>
-#include <vector>
-#include <boost/range/adaptor/transformed.hpp>
 
 namespace gms {
 

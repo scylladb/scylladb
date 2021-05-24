@@ -38,6 +38,8 @@
 #include "test/lib/reader_permit.hh"
 #include "test/lib/simple_schema.hh"
 
+#include <boost/range/algorithm/transform.hpp>
+
 // A StreamedMutationConsumer which distributes fragments randomly into several mutations.
 class fragment_scatterer {
     std::vector<mutation>& _mutations;

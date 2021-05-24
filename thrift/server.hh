@@ -31,11 +31,11 @@
 #include <memory>
 #include <cstdint>
 #include <boost/intrusive/list.hpp>
-#include "database.hh"
+#include "database_fwd.hh"
+#include "utils/updateable_value.hh"
 
 class thrift_server;
 class thrift_stats;
-class database;
 
 #ifdef THRIFT_USES_BOOST
 namespace thrift_std = boost;

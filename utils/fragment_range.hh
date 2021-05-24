@@ -23,7 +23,6 @@
 
 #include <concepts>
 #include <boost/range/algorithm/copy.hpp>
-#include <boost/range/algorithm/for_each.hpp>
 #include <seastar/net/byteorder.hh>
 #include <seastar/core/print.hh>
 #include <seastar/util/backtrace.hh>

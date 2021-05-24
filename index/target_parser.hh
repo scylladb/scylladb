@@ -43,8 +43,6 @@
 
 #include "cql3/statements/index_target.hh"
 
-#include <boost/algorithm/string/predicate.hpp>
-
 namespace secondary_index {
 
 struct target_parser {

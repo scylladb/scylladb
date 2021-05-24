@@ -19,12 +19,27 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 #pragma once
-#include "database_fwd.hh"
-#include "service/storage_proxy.hh"
-#include <seastar/http/httpd.hh>
 
-namespace service { class load_meter; }
-namespace locator { class shared_token_metadata; }
+#include <seastar/http/httpd.hh>
+#include <seastar/core/future.hh>
+
+#include "database_fwd.hh"
+#include "seastarx.hh"
+
+namespace service {
+
+class load_meter;
+class storage_proxy;
+
+} // namespace service
+
+namespace locator {
+
+class token_metadata;
+class shared_token_metadata;
+
+} // namespace locator
+
 namespace cql_transport { class controller; }
 class thrift_controller;
 namespace db { class snapshot_ctl; }

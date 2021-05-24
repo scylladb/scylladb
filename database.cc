@@ -36,6 +36,7 @@
 #include <seastar/util/defer.hh>
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/erase.hpp>
+#include <boost/algorithm/string/classification.hpp>
 #include "sstables/sstables.hh"
 #include "sstables/sstables_manager.hh"
 #include "sstables/compaction.hh"
@@ -43,6 +44,7 @@
 #include <boost/algorithm/cxx11/any_of.hpp>
 #include <boost/range/algorithm/find_if.hpp>
 #include <boost/range/algorithm/sort.hpp>
+#include <boost/range/algorithm/min_element.hpp>
 #include <boost/container/static_vector.hpp>
 #include "frozen_mutation.hh"
 #include <seastar/core/do_with.hh>

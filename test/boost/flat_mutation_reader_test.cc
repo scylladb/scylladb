@@ -42,6 +42,8 @@
 #include "test/lib/log.hh"
 #include "test/lib/reader_permit.hh"
 
+#include <boost/range/adaptor/map.hpp>
+
 struct mock_consumer {
     struct result {
         size_t _depth;

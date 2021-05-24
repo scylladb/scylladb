@@ -22,14 +22,7 @@
 #pragma once
 
 #include "cql3/statements/property_definitions.hh"
-
-#include <seastar/core/shared_ptr.hh>
-#include <seastar/core/sstring.hh>
-#include <optional>
-#include "timeout_config.hh"
 #include "service/qos/qos_common.hh"
-
-class keyspace_metadata;
 
 namespace cql3 {
 

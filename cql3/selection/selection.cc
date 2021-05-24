@@ -42,6 +42,7 @@
 #include <boost/range/adaptors.hpp>
 #include <boost/range/algorithm/equal.hpp>
 #include <boost/range/algorithm/transform.hpp>
+#include <boost/algorithm/cxx11/any_of.hpp>
 
 #include "cql3/selection/selection.hh"
 #include "cql3/selection/selector_factories.hh"

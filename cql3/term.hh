@@ -52,8 +52,6 @@ namespace cql3 {
 
 class terminal;
 
-class term;
-
 /**
  * A CQL3 term, i.e. a column value with or without bind variables.
  *

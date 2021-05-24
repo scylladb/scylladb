@@ -49,7 +49,6 @@
 #include "cql3/constants.hh"
 #include "cql3/lists.hh"
 #include "cql3/expr/expression.hh"
-#include <boost/algorithm/cxx11/any_of.hpp>
 
 namespace cql3 {
 

@@ -48,8 +48,6 @@
 #include "exceptions/exceptions.hh"
 #include "sstables/sstables.hh"
 #include "service/priority_manager.hh"
-#include <boost/range/algorithm/partial_sort.hpp>
-#include <boost/range/adaptors.hpp>
 
 namespace sstables {
 

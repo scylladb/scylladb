@@ -43,8 +43,6 @@
 
 #include "transport/messages_fwd.hh"
 #include "cql3/cql_statement.hh"
-#include "cql3/statements/raw/parsed_statement.hh"
-#include "prepared_statement.hh"
 
 namespace cql3 {
 

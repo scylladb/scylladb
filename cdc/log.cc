@@ -23,6 +23,7 @@
 #include <algorithm>
 
 #include <boost/range/irange.hpp>
+#include <boost/algorithm/string/predicate.hpp>
 #include <seastar/util/defer.hh>
 #include <seastar/core/thread.hh>
 #include <seastar/core/metrics.hh>

@@ -29,6 +29,8 @@
 #include <seastar/net/byteorder.hh>
 #include <seastar/core/byteorder.hh>
 
+#include <boost/range/algorithm/for_each.hpp>
+
 #if defined(__x86_64__) || defined(__i386__)
 #include <smmintrin.h>
 #elif defined(__aarch64__)

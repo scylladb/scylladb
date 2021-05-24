@@ -25,7 +25,6 @@
 #include <map>
 #include <boost/intrusive/set.hpp>
 #include <boost/range/iterator_range.hpp>
-#include <boost/range/adaptor/indexed.hpp>
 #include <boost/range/adaptor/filtered.hpp>
 #include <boost/intrusive/parent_from_member.hpp>
 

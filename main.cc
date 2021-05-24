@@ -92,6 +92,8 @@
 
 #include "service/raft/raft_services.hh"
 
+#include <boost/algorithm/string/join.hpp>
+
 namespace fs = std::filesystem;
 
 seastar::metrics::metric_groups app_metrics;

@@ -23,7 +23,6 @@
 #pragma once
 
 #include <vector>
-#include <boost/range/iterator_range_core.hpp>
 #include "range.hh"
 #include "dht/i_partitioner.hh"
 #include "query-request.hh"

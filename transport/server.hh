@@ -40,7 +40,6 @@
 #include <seastar/core/sharded.hh>
 #include <seastar/core/execution_stage.hh>
 #include "utils/updateable_value.hh"
-#include "service/qos/service_level_controller.hh"
 #include "generic_server.hh"
 
 namespace scollectd {
@@ -56,6 +55,10 @@ class memory_limiter;
 class database;
 enum class client_type;
 struct client_data;
+
+namespace qos {
+    class service_level_controller;
+} // namespace qos
 
 namespace cql_transport {
 

@@ -41,7 +41,6 @@
 #include <sstream>
 #include <string>
 #include <chrono>
-#include <boost/algorithm/string.hpp>
 #include <optional>
 #include "production_snitch_base.hh"
 #include "exceptions/exceptions.hh"

@@ -43,6 +43,8 @@
 #include "test/lib/reader_permit.hh"
 #include "test/lib/random_utils.hh"
 
+#include <boost/range/algorithm/min_element.hpp>
+
 using namespace std::chrono_literals;
 
 static schema_ptr make_schema() {

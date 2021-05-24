@@ -42,8 +42,6 @@
 #include "gms/heart_beat_state.hh"
 #include "gms/application_state.hh"
 #include "gms/versioned_value.hh"
-#include <boost/algorithm/string/split.hpp>
-#include <boost/algorithm/string/classification.hpp>
 #include <optional>
 #include <chrono>
 

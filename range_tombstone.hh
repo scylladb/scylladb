@@ -22,7 +22,6 @@
 #pragma once
 
 #include <boost/intrusive/set.hpp>
-#include <boost/range/algorithm.hpp>
 #include <optional>
 #include "hashing.hh"
 #include "keys.hh"
