@@ -55,8 +55,6 @@ private:
     int total_files;
     // total size of files to receive
     long total_size;
-    // true if task is done (either completed or aborted)
-    bool done = false;
 public:
     stream_receive_task(shared_ptr<stream_session> _session, UUID _cf_id, int _total_files, long _total_size);
     ~stream_receive_task();

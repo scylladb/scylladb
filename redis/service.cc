@@ -59,7 +59,7 @@ future<> redis_service::listen(seastar::sharded<auth::service>& auth_service, db
     redis_cfg._max_request_size = memory::stats().total_memory() / 10;
     redis_cfg._total_redis_db_count = cfg.redis_database_count();
     return gms::inet_address::lookup(addr, family, preferred).then([this, server, addr, &cfg, keepalive, ceo = std::move(ceo), redis_cfg, &auth_service] (seastar::net::inet_address ip) {
-        return server->start(std::ref(service::get_storage_proxy()), std::ref(_query_processor), std::ref(auth_service), redis_cfg).then([server, &cfg, addr, ip, ceo, keepalive]() {
+        return server->start(std::ref(_query_processor), std::ref(auth_service), redis_cfg).then([server, &cfg, addr, ip, ceo, keepalive]() {
             auto f = make_ready_future();
             struct listen_cfg {
                 socket_address addr;

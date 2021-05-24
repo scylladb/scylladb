@@ -529,7 +529,6 @@ class repair_writer : public enable_lw_shared_from_this<repair_writer> {
     schema_ptr _schema;
     reader_permit _permit;
     uint64_t _estimated_partitions;
-    size_t _nr_peer_nodes;
     std::optional<future<>> _writer_done;
     std::optional<queue_reader_handle> _mq;
     // Current partition written to disk
@@ -545,12 +544,10 @@ public:
             schema_ptr schema,
             reader_permit permit,
             uint64_t estimated_partitions,
-            size_t nr_peer_nodes,
             streaming::stream_reason reason)
             : _schema(std::move(schema))
             , _permit(std::move(permit))
             , _estimated_partitions(estimated_partitions)
-            , _nr_peer_nodes(nr_peer_nodes)
             , _reason(reason) {
     }
 
@@ -850,7 +847,7 @@ public:
                     _seed,
                     repair_reader::is_local_reader(_repair_master || _same_sharding_config)
               )
-            , _repair_writer(make_lw_shared<repair_writer>(_schema, _permit, _estimated_partitions, _nr_peer_nodes, _reason))
+            , _repair_writer(make_lw_shared<repair_writer>(_schema, _permit, _estimated_partitions, _reason))
             , _sink_source_for_get_full_row_hashes(_repair_meta_id, _nr_peer_nodes,
                     [&ms] (uint32_t repair_meta_id, netw::messaging_service::msg_addr addr) {
                         return ms.local().make_sink_and_source_for_repair_get_full_row_hashes_with_rpc_stream(repair_meta_id, addr);

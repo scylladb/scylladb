@@ -106,7 +106,6 @@ public:
 
 private:
     cache_type _cache;
-    logging::logger& _logger;
 
 public:
     // Choose the memory budget such that would allow us ~4K entries when a shard gets 1GB of RAM
@@ -115,7 +114,6 @@ public:
             _cache.remove(k);
             return make_ready_future<value_type>();
         })
-        , _logger(logger)
     {}
 
     future<> insert(auth::authenticated_user user, cql3::prepared_cache_key_type prep_cache_key, value_type v) noexcept {

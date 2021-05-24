@@ -38,11 +38,10 @@ extern thread_local cached_file::metrics index_page_cache_metrics;
 extern thread_local mc::cached_promoted_index::metrics promoted_index_cache_metrics;
 
 class index_consumer {
-    uint64_t max_quantity;
 public:
     index_list indexes;
 
-    index_consumer(uint64_t q) : max_quantity(q) {
+    index_consumer(uint64_t q) {
         indexes.reserve(q);
     }
 

@@ -75,7 +75,6 @@ public:
 
 private:
     // Expected value of the above counters, updated by this.
-    unsigned _expected_factory_invoked{};
     query::querier_cache::stats _expected_stats;
 
     simple_schema _s;

@@ -203,8 +203,6 @@ std::ostream& operator<<(std::ostream&, const role_resource_view&);
 /// A "service_level" view of \ref resource.
 ///
 class service_level_resource_view final {
-    const resource& _resource;
-
 public:
     ///
     /// \throws \ref resource_kind_mismatch if the argument is not a "service_level" resource.

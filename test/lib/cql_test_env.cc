@@ -140,14 +140,12 @@ public:
     static constexpr std::string_view ks_name = "ks";
     static std::atomic<bool> active;
 private:
-    sharded<gms::feature_service>& _feature_service;
     sharded<database>& _db;
     sharded<cql3::query_processor>& _qp;
     sharded<auth::service>& _auth_service;
     sharded<db::view::view_builder>& _view_builder;
     sharded<db::view::view_update_generator>& _view_update_generator;
     sharded<service::migration_notifier>& _mnotifier;
-    sharded<cdc::generation_service>& _cdc_generation_service;
     sharded<qos::service_level_controller>& _sl_controller;
     sharded<service::migration_manager>& _mm;
 private:
@@ -174,7 +172,6 @@ private:
     }
 public:
     single_node_cql_env(
-            sharded<gms::feature_service>& feature_service,
             sharded<database>& db,
             sharded<cql3::query_processor>& qp,
             sharded<auth::service>& auth_service,
@@ -182,16 +179,13 @@ public:
             sharded<db::view::view_update_generator>& view_update_generator,
             sharded<service::migration_notifier>& mnotifier,
             sharded<service::migration_manager>& mm,
-            sharded<cdc::generation_service>& cdc_generation_service,
             sharded<qos::service_level_controller> &sl_controller)
-            : _feature_service(feature_service)
-            , _db(db)
+            : _db(db)
             , _qp(qp)
             , _auth_service(auth_service)
             , _view_builder(view_builder)
             , _view_update_generator(view_update_generator)
             , _mnotifier(mnotifier)
-            , _cdc_generation_service(cdc_generation_service)
             , _sl_controller(sl_controller)
             , _mm(mm)
     { }
@@ -708,7 +702,7 @@ public:
                 // The default user may already exist if this `cql_test_env` is starting with previously populated data.
             }
 
-            single_node_cql_env env(feature_service, db, qp, auth_service, view_builder, view_update_generator, mm_notif, mm, cdc_generation_service, std::ref(sl_controller));
+            single_node_cql_env env(db, qp, auth_service, view_builder, view_update_generator, mm_notif, mm, std::ref(sl_controller));
             env.start().get();
             auto stop_env = defer([&env] { env.stop().get(); });
 

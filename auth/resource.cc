@@ -185,8 +185,7 @@ std::ostream& operator<<(std::ostream& os, const resource& r) {
     return os;
 }
 
-service_level_resource_view::service_level_resource_view(const resource &r) :
-    _resource(r) {
+service_level_resource_view::service_level_resource_view(const resource &r) {
     if (r._kind != resource_kind::service_level) {
         throw resource_kind_mismatch(resource_kind::service_level, r._kind);
     }

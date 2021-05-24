@@ -31,7 +31,6 @@
 #include "exceptions/exceptions.hh"
 #include "service/query_state.hh"
 #include "service/storage_service.hh"
-#include "service/storage_proxy.hh"
 
 #include <seastar/core/future-util.hh>
 #include <seastar/core/seastar.hh>
@@ -46,9 +45,8 @@ namespace redis_transport {
 
 static logging::logger logging("redis_server");
 
-redis_server::redis_server(seastar::sharded<service::storage_proxy>& proxy, seastar::sharded<redis::query_processor>& qp, auth::service& auth_service, redis_server_config config)
+redis_server::redis_server(seastar::sharded<redis::query_processor>& qp, auth::service& auth_service, redis_server_config config)
     : server("Redis", logging)
-    , _proxy(proxy)
     , _query_processor(qp)
     , _config(config)
     , _max_request_size(config._max_request_size)
