@@ -207,6 +207,7 @@ void compaction_manager::register_compacting_sstables(const std::vector<sstables
         _compacting_sstables.merge(sstables_to_merge);
     } catch (...) {
         cmlog.error("Unexpected error when registering compacting SSTables: {}. Ignored...", std::current_exception());
+        throw;
     }
 }
 
