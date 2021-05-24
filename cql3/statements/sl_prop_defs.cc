@@ -48,6 +48,9 @@ void sl_prop_defs::validate() {
         if (duration.nanoseconds % 1'000'000 != 0) {
             throw exceptions::invalid_request_exception("Timeout values must be expressed in millisecond granularity");
         }
+        if (duration.nanoseconds < 0) {
+            throw exceptions::invalid_request_exception("Timeout values must be nonnegative");
+        }
         return std::chrono::duration_cast<lowres_clock::duration>(std::chrono::nanoseconds(duration.nanoseconds));
     };
 
