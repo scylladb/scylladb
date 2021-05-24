@@ -694,7 +694,7 @@ table::stop() {
     }
     return _async_gate.close().then([this] {
         return await_pending_ops().finally([this] {
-            return _memtables->request_flush().finally([this] {
+            return _memtables->flush().finally([this] {
                 return _compaction_manager.remove(this).then([this] {
                     return _sstable_deletion_gate.close().then([this] {
                         return get_row_cache().invalidate(row_cache::external_updater([this] {
@@ -1492,7 +1492,7 @@ future<> table::flush(std::optional<db::replay_position> pos) {
         return make_ready_future<>();
     }
     auto op = _pending_flushes_phaser.start();
-    return _memtables->request_flush().then([this, op = std::move(op), fp = _highest_rp] {
+    return _memtables->flush().then([this, op = std::move(op), fp = _highest_rp] {
         _flush_rp = std::max(_flush_rp, fp);
     });
 }
