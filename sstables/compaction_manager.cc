@@ -396,6 +396,10 @@ void compaction_manager::register_metrics() {
                        sm::description("Holds the number of compaction tasks waiting for an opportunity to run.")),
         sm::make_gauge("backlog", [this] { return _last_backlog; },
                        sm::description("Holds the sum of compaction backlog for all tables in the system.")),
+        sm::make_gauge("errors", [this] { return _stats.errors; },
+                       sm::description("Holds the number of compaction tasks that failed.")),
+        sm::make_gauge("completed", [this] { return _stats.completed_tasks; },
+                       sm::description("Holds the number of compaction tasks that completed successfully.")),
     });
 }
 
