@@ -1,181 +1,83 @@
-#!/bin/bash
+#!/usr/bin/env python3
+# Use the run.py library from ../cql-pytest:
+import sys
+sys.path.insert(1, sys.path[0] + '/../cql-pytest')
+import run
 
-# Exit if any one of the commands below fails
-set -e
+import os
+import requests
+import time
+import cassandra.cluster
+import cassandra.auth
 
-script_path=$(dirname $(readlink -e $0))
-source_path=$script_path/../..
+# check_alternator() below uses verify=False to accept self-signed SSL
+# certificates but then we get scary warnings. This trick disables them:
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# By default, we take the latest build/*/scylla as the executable:
-SCYLLA=${SCYLLA-$(ls -t "$source_path/build/"*"/scylla" | head -1)}
-SCYLLA=$(readlink -f "$SCYLLA")
+print('Scylla is: ' + run.scylla + '.')
 
-# Below, we need to use python3 and the Cassandra drive to set up the
-# authentication credentials expected by some of the tests that check
-# authentication. If they are not installed there isn't much point of
-# even starting Scylla
-if ! python3 -c 'from cassandra.cluster import Cluster' >/dev/null 2>&1
-then
-    echo "Error: python3 and python3-cassandra-driver must be installed to configure Alternator authentication." >&2
-    exit 1
-fi
+# run_alternator_cmd runs the same as run_scylla_cmd with *additional*
+# parameters, so in particular both CQL and Alternator will be enabled.
+# This is useful for us because we need CQL to setup authentication.
+def run_alternator_cmd(pid, dir):
+    (cmd, env) = run.run_scylla_cmd(pid, dir)
+    ip = run.pid_to_ip(pid)
+    cmd += [
+        '--alternator-address', ip,
+        '--alternator-enforce-authorization', '1',
+        '--alternator-write-isolation', 'always_use_lwt',
+        '--alternator-streams-time-window-s', '0',
+        '--alternator-timeout-in-ms', '30000',
+    ]
+    if '--https' in sys.argv:
+        run.setup_ssl_certificate(dir)
+        cmd += ['--alternator-https-port', '8043',
+            '--alternator-encryption-options', f'keyfile={dir}/scylla.key',
+            '--alternator-encryption-options', f'certificate={dir}/scylla.crt',
+        ]
+    else:
+        cmd += ['--alternator-port', '8000']
 
-# Pick a loopback IP address for Scylla to run, in an attempt not to collide
-# other concurrent runs of Scylla. CCM uses 127.0.0.<nodenum>, so if we use
-# 127.1.*.* which cannot collide with it. Moreover, we'll take the last two
-# bytes of the address from the current process - so as to allow multiple
-# concurrent runs of this code to use a different address.
-SCYLLA_IP=127.1.$(($$ >> 8 & 255)).$(($$ & 255))
-echo "Running Scylla on $SCYLLA_IP"
+    return (cmd, env)
 
-tmp_dir="$(readlink -e ${TMPDIR-/tmp})"/alternator-test-$$
-mkdir "$tmp_dir"
+pid = run.run_with_temporary_dir(run_alternator_cmd)
+ip = run.pid_to_ip(pid)
 
-# We run the cleanup() function on exit for any reason - successful finish
-# of the script, an error (since we have "set -e"), or a signal.
-# It ensures that Scylla is killed and its temporary storage directory is
-# deleted. It also shows Scylla's output log.
-code=17
-summary=
-cleanup() {
-    kill -9 $SCYLLA_PROCESS 2>/dev/null || :
-    echo
-    echo "Scylla log:"
-    echo
-    # we want to cat "$tmp_dir/log", but this can take a long time,
-    # especially if stdout is piped, and be interrupted. We don't want
-    # the "rm" below to not happen, so we need to open the file later,
-    # and cat it later:
-    exec 3<"$tmp_dir/log"
-    rm -rf --preserve-root "$tmp_dir"
-    cat <&3
-    echo $summary
-    exit $code
-}
-trap 'cleanup' EXIT
+if '--https' in sys.argv:
+    alternator_url=f"https://{ip}:8043"
+else:
+    alternator_url=f"http://{ip}:8000"
 
-# Set up SSL certificates needed for "--alternator-https-port=8043"
-# to work. We only need to do this if the "--https" option was explicitly
-# passed - otherwise the test would not use HTTPS anyway.
-alternator_port_option="--alternator-port=8000"
-alternator_url="http://$SCYLLA_IP:8000"
-for i
-do
-    if [ "$i" = --https ]
-    then
-        openssl genrsa 2048 > "$tmp_dir/scylla.key"
-        openssl req -new -x509 -nodes -sha256 -days 365 -subj "/C=IL/ST=None/L=None/O=None/OU=None/CN=example.com" -key "$tmp_dir/scylla.key" -out "$tmp_dir/scylla.crt"
-        alternator_port_option="--alternator-https-port=8043"
-        alternator_url="https://$SCYLLA_IP:8043"
-    fi
-done
+# Wait for both CQL and Alternator APIs to become responsive. We obviously
+# need the Alternator API to test Alternator, but currently we also need
+# CQL for setting up authentication.
+def check_alternator(url):
+    try:
+        requests.get(url, verify=False)
+    except requests.ConnectionError:
+        raise run.NotYetUp
+    # Any other exception may indicate a problem, and is passed to the caller.
 
-# To make things easier for users of "killall", "top", and similar, we want
-# the Scylla executable which we run during the test to have a different name
-# from manul runs of Scylla. Unfortunately, using "exec -a" to change just
-# argv[0] isn't good enough - because killall inspects the actual executable
-# filename in /proc/<pid>/stat. So we need to name the executable differently.
-# Luckily, using a symbolic link is good enough.
-SCYLLA_LINK="$tmp_dir"/test_scylla
-ln -s "$SCYLLA" "$SCYLLA_LINK"
-
-"$SCYLLA_LINK" --options-file "$source_path/conf/scylla.yaml" \
-        --alternator-address $SCYLLA_IP \
-        $alternator_port_option \
-        --alternator-enforce-authorization=1 \
-        --alternator-write-isolation=always_use_lwt \
-        --alternator-streams-time-window-s=0 \
-        --alternator-timeout-in-ms 30000 \
-        --developer-mode=1 \
-        --experimental-features=alternator-streams \
-        --ring-delay-ms 0 --collectd 0 \
-        --smp 2 -m 1G \
-        --overprovisioned --unsafe-bypass-fsync 1 --kernel-page-cache 1 \
-        --api-address $SCYLLA_IP \
-        --rpc-address $SCYLLA_IP \
-        --listen-address $SCYLLA_IP \
-        --prometheus-address $SCYLLA_IP \
-        --seed-provider-parameters seeds=$SCYLLA_IP \
-        --workdir "$tmp_dir" \
-        --alternator-encryption-options keyfile="$tmp_dir/scylla.key" \
-        --alternator-encryption-options certificate="$tmp_dir/scylla.crt" \
-        --auto-snapshot 0 \
-        --skip-wait-for-gossip-to-settle 0 \
-        --logger-log-level compaction=warn \
-        --logger-log-level migration_manager=warn \
-        --num-tokens 16 \
-        >"$tmp_dir/log" 2>&1 &
-SCYLLA_PROCESS=$!
+run.wait_for_services(pid, [
+    lambda: run.check_cql(ip),
+    lambda: check_alternator(alternator_url),
+])
 
 # Set up the the proper authentication credentials needed by the Alternator
-# test. This requires connecting to Scylla with CQL - we'll wait up for
-# one minute for this to work:
-setup_authentication() {
-    python3 -c 'from cassandra.cluster import Cluster; Cluster(["'$SCYLLA_IP'"]).connect().execute("INSERT INTO system_auth.roles (role, salted_hash) VALUES ('\''alternator'\'', '\''secret_pass'\'')")'
-}
-# Test that Alternator is serving. Alternator starts after CQL, so we use
-# check_alternator() to verify that both are up.
-check_alternator() {
-    python3 -c 'import requests; requests.get("'$alternator_url'/")'
-}
-echo "Scylla is: $SCYLLA."
-echo -n "Booting Scylla..."
-ok=
-SECONDS=0
-while ((SECONDS < 200))
-do
-    sleep 1
-    echo -n .
-    if ! kill -0 $SCYLLA_PROCESS 2>/dev/null
-    then
-        summary="Error: Scylla failed to boot after $SECONDS seconds."
-        break
-    fi
-    case "`check_alternator 2>&1`" in
-    *"Connection refused"*)
-        # This may indicate that Scylla is still booting, or that it failed
-        # to boot and exited. Try again (and check again if Scylla exited).
-        continue;;
-    esac
-    err=`setup_authentication 2>&1` && ok=yes && break
-    case "$err" in
-    *NoHostAvailable:*)
-        # This is what we expect while Scylla is still booting.
-        ;;
-    *ImportError:*|*"command not found"*)
-        summary="Error: need python3 and python3-cassandra-driver to configure Alternator authentication."
-        echo
-        echo $summary
-        break;;
-    *)
-        summary="Unknown error trying to set authentication credentials: '$err'"
-        echo
-        echo $summary
-        break;;
-    esac
-done
-if test -n "$ok" && kill -0 $SCYLLA_PROCESS 2>/dev/null
-then
-    echo "Done ($SECONDS seconds)"
-else
-    echo
-    if test -z "$summary"
-    then
-        summary="Error: Scylla failed to boot after $SECONDS seconds."
-        echo $summary
-    fi
-    exit 1
-fi
+# test. Currently this can only be done through CQL, which is why above we
+# needed to make sure CQL is available.
+cluster = run.get_cql_cluster(ip)
+cluster.connect().execute("INSERT INTO system_auth.roles (role, salted_hash) VALUES ('alternator', 'secret_pass')")
+cluster.shutdown()
 
-cd "$script_path"
-set +e
-pytest --url $alternator_url -o junit_family=xunit2 "$@"
-code=$?
-case $code in
-0) summary="Alternator tests pass";;
-*) summary="Alternator tests failure";;
-esac
+# Finally run pytest:
+success = run.run_pytest(sys.path[0], ['--url', alternator_url] + sys.argv[1:])
 
-# Note that the cleanup() function runs now, just like on any exit from
-# any reason in this script. It will delete the temporary files and
-# announce the failure or success of the test.
+run.summary = 'Alternator tests pass' if success else 'Alternator tests failure'
+
+exit(0 if success else 1)
+
+# Note that the run.cleanup_all() function runs now, just like on any exit
+# for any reason in this script. It will delete the temporary files and
+# announce the failure or success of the test (printing run.summary).
