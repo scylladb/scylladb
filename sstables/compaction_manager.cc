@@ -745,18 +745,25 @@ future<> compaction_manager::rewrite_sstables(column_family* cf, sstables::compa
             }).then_wrapped([this, task, compacting] (future<> f) mutable {
                 task->compaction_running = false;
                 _stats.active_tasks--;
-                if (!can_proceed(task)) {
-                    maybe_stop_on_error(std::move(f), stop_iteration::yes);
-                    return make_ready_future<stop_iteration>(stop_iteration::yes);
-                }
-                if (maybe_stop_on_error(std::move(f))) {
+                try {
+                    f.get();
+                    _stats.completed_tasks++;
+                } catch (sstables::compaction_stop_exception& e) {
                     _stats.errors++;
+                    cmlog.info("{} compaction was abruptly stopped, reason: {}", compaction_name(task->type), e.what());
+                    return make_ready_future<stop_iteration>(stop_iteration::yes);
+                } catch (...) {
+                    _stats.errors++;
+                    if (!can_proceed(task)) {
+                        cmlog.error("{} compaction failed due to {}, stopping...", compaction_name(task->type), std::current_exception());
+                        throw;
+                    }
+                    cmlog.error("{} compaction failed due to {}, retrying...", compaction_name(task->type), std::current_exception());
                     _stats.pending_tasks++;
                     return put_task_to_sleep(task).then([] {
                         return make_ready_future<stop_iteration>(stop_iteration::no);
                     });
                 }
-                _stats.completed_tasks++;
                 reevaluate_postponed_compactions();
                 return make_ready_future<stop_iteration>(stop_iteration::yes);
             });
