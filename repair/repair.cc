@@ -21,7 +21,6 @@
 
 #include "repair.hh"
 #include "repair/row_level.hh"
-#include "range_split.hh"
 
 #include "atomic_cell_hash.hh"
 #include "dht/sharder.hh"
