@@ -276,9 +276,11 @@ future<> compaction_manager::submit_major_compaction(column_family* cf) {
         } catch (sstables::compaction_stop_exception& e) {
             cmlog.info("major compaction stopped, reason: {}", e.what());
             _stats.errors++;
+            throw;
         } catch (...) {
             cmlog.error("major compaction failed, reason: {}", std::current_exception());
             _stats.errors++;
+            throw;
         }
     });
     return task->compaction_done.get_future().then([task] {});
