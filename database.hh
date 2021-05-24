@@ -272,6 +272,7 @@ public:
     // dirty_memory_manager allows us to. We will not seal at this time since the flush itself
     // wouldn't happen anyway. Keeping the memtable in memory will potentially increase the time it
     // spends in memory allowing for more coalescing opportunities.
+    // The returned future<> resolves when any pending flushes are complete and the memtable is sealed.
     future<> request_flush();
 private:
     lw_shared_ptr<memtable> new_memtable();
