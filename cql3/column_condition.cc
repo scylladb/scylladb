@@ -262,7 +262,7 @@ bool column_condition::applies_to(const data_value* cell_value, const query_opti
         if (!lval) {
             throw exceptions::invalid_request_exception("Invalid null value for IN condition");
         }
-        for (const managed_bytes_opt& v : lval->get_elements()) {
+        for (const managed_bytes_opt& v : lval->copy_elements()) {
             if (v) {
                 in_values.push_back(to_bytes(*v));
             } else {

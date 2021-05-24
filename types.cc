@@ -1341,17 +1341,17 @@ set_type_impl::serialize_partially_deserialized_form_fragmented(
 }
 
 template <FragmentedView View>
-std::vector<managed_bytes> partially_deserialize_listlike(View in, cql_serialization_format sf) {
+utils::chunked_vector<managed_bytes> partially_deserialize_listlike(View in, cql_serialization_format sf) {
     auto nr = read_collection_size(in, sf);
-    std::vector<managed_bytes> elements;
+    utils::chunked_vector<managed_bytes> elements;
     elements.reserve(nr);
     for (int i = 0; i != nr; ++i) {
         elements.emplace_back(read_collection_value(in, sf));
     }
     return elements;
 }
-template std::vector<managed_bytes> partially_deserialize_listlike(managed_bytes_view in, cql_serialization_format sf);
-template std::vector<managed_bytes> partially_deserialize_listlike(fragmented_temporary_buffer::view in, cql_serialization_format sf);
+template utils::chunked_vector<managed_bytes> partially_deserialize_listlike(managed_bytes_view in, cql_serialization_format sf);
+template utils::chunked_vector<managed_bytes> partially_deserialize_listlike(fragmented_temporary_buffer::view in, cql_serialization_format sf);
 
 template <FragmentedView View>
 std::vector<std::pair<managed_bytes, managed_bytes>> partially_deserialize_map(View in, cql_serialization_format sf) {
