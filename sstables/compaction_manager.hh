@@ -144,11 +144,6 @@ private:
 
     inline future<> put_task_to_sleep(lw_shared_ptr<task>& task);
 
-    // Compaction manager stop itself if it finds an storage I/O error which results in
-    // stop of transportation services. It cannot make progress anyway.
-    // Returns true if error is judged not fatal, and compaction can be retried.
-    inline bool maybe_stop_on_error(future<> f, stop_iteration will_stop = stop_iteration::no);
-
     void postponed_compactions_reevaluation();
     void reevaluate_postponed_compactions();
     // Postpone compaction for a column family that couldn't be executed due to ongoing
