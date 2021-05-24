@@ -178,7 +178,17 @@ schema_ptr service_levels() {
     return schema;
 }
 
-static std::vector<schema_ptr> all_tables() {
+// This is the set of tables which this node ensures to exist in the cluster.
+// It does that by announcing the creation of these schemas on initialization
+// of the `system_distributed_keyspace` service (see `start()`), unless it first
+// detects that the table already exists.
+//
+// Note: this module (system distributed keyspace) may also provide schema definitions
+// and access functions for tables that are not listed here, i.e. tables which this node
+// does not ensure to exist. Such definitions exist most likely for backward compatibility
+// with previous versions of Scylla (needed during upgrades), but since they are not listed here,
+// they won't be created in new clusters.
+static std::vector<schema_ptr> ensured_tables() {
     return {
         view_build_status(),
         cdc_generations(),
@@ -256,7 +266,7 @@ future<> system_distributed_keyspace::start() {
         return _mm.announce_new_keyspace(ksm, api::min_timestamp);
     });
 
-    for (auto&& table : all_tables()) {
+    for (auto&& table : ensured_tables()) {
         co_await ignore_existing([this, table = std::move(table)] {
             return _mm.announce_new_column_family(std::move(table), api::min_timestamp);
         });
