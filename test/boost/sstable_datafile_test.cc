@@ -7100,6 +7100,7 @@ SEASTAR_TEST_CASE(stcs_reshape_test) {
         for (auto gen = 1; gen <= s->max_compaction_threshold(); gen++) {
             auto sst = env.make_sstable(s, "", gen);
             sstables::test(sst).set_data_file_size(1);
+            sstables::test(sst).set_values("first_key", "last_key", stats_metadata{});
             sstables.push_back(std::move(sst));
         }
 
@@ -7509,6 +7510,68 @@ SEASTAR_TEST_CASE(twcs_reshape_with_disjoint_set_test) {
             sstables.reserve(disjoint_sstable_count);
             for (auto i = 0; i < disjoint_sstable_count; i++) {
                 auto sst = make_sstable_containing(sst_gen, {make_row(0, std::chrono::hours(1))});
+                sstables.push_back(std::move(sst));
+            }
+
+            BOOST_REQUIRE(cs.get_reshaping_job(sstables, s, default_priority_class(), reshape_mode::strict).sstables.size() == s->max_compaction_threshold());
+        }
+    });
+}
+
+
+SEASTAR_TEST_CASE(stcs_reshape_overlapping_test) {
+    static constexpr unsigned disjoint_sstable_count = 256;
+
+    return test_env::do_with_async([] (test_env& env) {
+        auto builder = schema_builder("tests", "stcs_reshape_test")
+                .with_column("id", utf8_type, column_kind::partition_key)
+                .with_column("cl", ::timestamp_type, column_kind::clustering_key)
+                .with_column("value", int32_type);
+        builder.set_compaction_strategy(sstables::compaction_strategy_type::size_tiered);
+        auto s = builder.build();
+        std::map<sstring, sstring> opts;
+        auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::size_tiered, std::move(opts));
+
+        auto tokens = token_generation_for_shard(disjoint_sstable_count, this_shard_id(), test_db_config.murmur3_partitioner_ignore_msb_bits(), smp::count);
+
+        auto make_row = [&](unsigned token_idx) {
+            auto key_str = tokens[token_idx].first;
+            auto key = partition_key::from_exploded(*s, {to_bytes(key_str)});
+
+            mutation m(s, key);
+            auto value = 1;
+            auto next_ts = 1;
+            auto c_key = clustering_key::from_exploded(*s, {::timestamp_type->decompose(next_ts)});
+            m.set_clustered_cell(c_key, bytes("value"), data_value(int32_t(value)), next_ts);
+            return m;
+        };
+
+        auto tmp = tmpdir();
+
+        auto sst_gen = [&env, s, &tmp, gen = make_lw_shared<unsigned>(1)]() {
+            return env.make_sstable(s, tmp.path().string(), (*gen)++, sstables::sstable::version_types::md, big);
+        };
+
+        {
+            // create set of 256 disjoint ssts and expect that stcs reshape allows them all to be compacted at once
+
+            std::vector<sstables::shared_sstable> sstables;
+            sstables.reserve(disjoint_sstable_count);
+            for (auto i = 0; i < disjoint_sstable_count; i++) {
+                auto sst = make_sstable_containing(sst_gen, {make_row(i)});
+                sstables.push_back(std::move(sst));
+            }
+
+            BOOST_REQUIRE(cs.get_reshaping_job(sstables, s, default_priority_class(), reshape_mode::strict).sstables.size() == disjoint_sstable_count);
+        }
+
+        {
+            // create set of 256 overlapping ssts and expect that stcs reshape allows only 32 to be compacted at once
+
+            std::vector<sstables::shared_sstable> sstables;
+            sstables.reserve(disjoint_sstable_count);
+            for (auto i = 0; i < disjoint_sstable_count; i++) {
+                auto sst = make_sstable_containing(sst_gen, {make_row(0)});
                 sstables.push_back(std::move(sst));
             }
 
