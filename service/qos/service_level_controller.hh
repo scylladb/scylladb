@@ -134,29 +134,6 @@ public:
     future<> stop();
 
     /**
-     * this is an executor of a function with arguments under a service level
-     * that corresponds to a given user.
-     * @param usr - the user for determining the service level
-     * @param func - the function to be executed
-     * @return a future that is resolved when the function's operation is resolved
-     * (if it returns a future). or a ready future containing the returned value
-     * from the function/
-     */
-    template <typename Ret>
-    futurize_t<Ret> with_user_service_level(shared_ptr<auth::authenticated_user> usr, noncopyable_function<Ret()> func) {
-        if (usr) {
-            auth::service& ser = _auth_service.local();
-            return auth::get_roles(ser, *usr).then([this] (auth::role_set roles) {
-                return find_service_level(roles);
-            }).then([usr, this, func = std::move(func)] (sstring service_level_name) mutable {
-                return with_service_level(service_level_name, std::move(func));
-            });
-        } else {
-            return with_service_level(default_service_level_name, std::move(func));
-        }
-    }
-
-    /**
      * Chack the distributed data for changes in a constant interval and updates
      * the service_levels configuration in accordance (adds, removes, or updates
      * service levels as necessairy).
