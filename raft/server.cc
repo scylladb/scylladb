@@ -658,6 +658,11 @@ future<> server_impl::abort() {
     _fsm->stop();
     _apply_entries.abort(std::make_exception_ptr(stop_apply_fiber()));
 
+    // IO and applier fibers may update waiters and start new snapshot
+    // transfers, so abort() them first
+    co_await seastar::when_all_succeed(std::move(_io_status), std::move(_applier_status),
+                        _rpc->abort(), _state_machine->abort(), _persistence->abort()).discard_result();
+
     for (auto& ac: _awaited_commits) {
         ac.second.done.set_exception(stopped_error());
     }
@@ -675,9 +680,7 @@ future<> server_impl::abort() {
 
     auto snp_futures = _aborted_snapshot_transfers | boost::adaptors::map_values;
 
-    return seastar::when_all_succeed(std::move(_io_status), std::move(_applier_status),
-            _rpc->abort(), _state_machine->abort(), _persistence->abort(),
-            seastar::when_all_succeed(snp_futures.begin(), snp_futures.end())).discard_result();
+    co_await seastar::when_all_succeed(snp_futures.begin(), snp_futures.end());
 }
 
 future<> server_impl::set_configuration(server_address_set c_new) {
