@@ -20,7 +20,7 @@ from cassandra.query import SimpleStatement
 
 from util import new_test_table
 
-def test_cdc_log_entries_use_cdc_streams(cql, test_keyspace):
+def test_cdc_log_entries_use_cdc_streams(scylla_only, cql, test_keyspace):
     '''Test that the stream IDs chosen for CDC log entries come from the CDC generation
     whose streams are listed in the streams description table. Since this test is executed
     on a single-node cluster, there is only one generation.'''

@@ -158,7 +158,7 @@ good_utf8 = [
 # Note that currently, Scylla's UTF-8 parser is stricter than Cassandra's
 # (see comment above listing the relevant cases), so this test, as all tests
 # using the bad_utf8 array, will fail on Cassandra.
-def test_validation_utf8_as_blob(cql, table1):
+def test_validation_utf8_as_blob(scylla_only, cql, table1):
     cmd = "INSERT INTO {} (k, t) VALUES (1, blobAsText(0x{}))"
     for b in good_utf8:
         print(b)
@@ -181,7 +181,7 @@ def test_validation_utf8_as_blob(cql, table1):
 # Note that currently, Scylla's UTF-8 parser is stricter than Cassandra's
 # (see comment above listing the relevant cases), so this test, as all tests
 # using the bad_utf8 array, will fail on Cassandra.
-def test_validation_utf8_bound_column(cql, table1):
+def test_validation_utf8_bound_column(scylla_only, cql, table1):
     import cassandra.cqltypes
     orig_serialize = cassandra.cqltypes.UTF8Type.serialize
     def myserialize(ustr, protocol_version):
