@@ -1292,7 +1292,6 @@ warnings = [
     '-Wno-delete-non-abstract-non-virtual-dtor',
     '-Wno-unknown-attributes',
     '-Wno-braced-scalar-init',
-    '-Wno-range-loop-construct',
     '-Wno-unused-function',
     '-Wno-implicit-int-float-conversion',
     '-Wno-delete-abstract-non-virtual-dtor',

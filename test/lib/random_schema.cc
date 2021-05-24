@@ -798,7 +798,7 @@ std::unordered_set<const user_type_impl*> dump_udts(data_type type) {
 
 std::unordered_set<const user_type_impl*> dump_udts(const std::vector<data_type>& types) {
     std::unordered_set<const user_type_impl*> udts;
-    for (const auto dt : types) {
+    for (const auto& dt : types) {
         const auto* const type = dt.get();
         if (auto maybe_user_type = dynamic_cast<const user_type_impl*>(type)) {
             udts.insert(maybe_user_type);

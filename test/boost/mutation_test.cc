@@ -2826,7 +2826,7 @@ void check_row_summaries(const schema& schema, column_kind kind, const row_summa
     auto column_tri_cmp = [] (const std::pair<const column_id, value_summary>& a, const std::pair<const column_id, value_summary>& b) {
         return a.first - b.first;
     };
-    for (const auto [actual_column, expected_column] : iterate_over_in_ordered_lockstep(actual, expected, column_tri_cmp)) {
+    for (const auto& [actual_column, expected_column] : iterate_over_in_ordered_lockstep(actual, expected, column_tri_cmp)) {
         BOOST_REQUIRE(expected_column);
         const auto [expected_column_id, expected_cell_or_collection] = *expected_column;
         if (!actual_column) {
