@@ -1385,7 +1385,8 @@ void db::commitlog::segment_manager::flush_segments(uint64_t size_to_remove) {
 
     // Now get a set of used CF ids:
     std::unordered_set<cf_id_type> ids;
-    std::for_each(_segments.begin(), _segments.end() - 1, [&ids](sseg_ptr& s) {
+    auto e = std::find_if(_segments.begin(), _segments.end(), std::mem_fn(&segment::is_still_allocating));
+    std::for_each(_segments.begin(), e, [&ids](sseg_ptr& s) {
         for (auto& id : s->_cf_dirty | boost::adaptors::map_keys) {
             ids.insert(id);
         }
