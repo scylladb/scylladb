@@ -559,9 +559,9 @@ void compaction_manager::submit(column_family* cf) {
     auto task = make_lw_shared<compaction_manager::task>();
     task->compacting_cf = cf;
     _tasks.push_back(task);
-    _stats.pending_tasks++;
 
     task->compaction_done = repeat([this, task, cf] () mutable {
+        _stats.pending_tasks++;
         if (!can_proceed(task)) {
             _stats.pending_tasks--;
             return make_ready_future<stop_iteration>(stop_iteration::yes);
@@ -599,19 +599,30 @@ void compaction_manager::submit(column_family* cf) {
                 _stats.active_tasks--;
                 task->compaction_running = false;
 
-                if (!can_proceed(task)) {
-                    maybe_stop_on_error(std::move(f), stop_iteration::yes);
-                    return make_ready_future<stop_iteration>(stop_iteration::yes);
-                }
-                if (maybe_stop_on_error(std::move(f))) {
+                try {
+                    f.get();
+                    _stats.completed_tasks++;
+                } catch (sstables::compaction_stop_exception& e) {
+                    cmlog.info("compaction info: {}: stopping", e.what());
                     _stats.errors++;
-                    _stats.pending_tasks++;
-                    return put_task_to_sleep(task).then([] {
+                    // if regular compaction stopped on user's request, let's abort the task and allow next attempt to retry it.
+                    return make_ready_future<stop_iteration>(stop_iteration::yes);
+                } catch (storage_io_error& e) {
+                    cmlog.error("compaction failed due to storage io error: {}: stopping", e.what());
+                    _stats.errors++;
+                    do_stop();
+                    return make_ready_future<stop_iteration>(stop_iteration::yes);
+                } catch (...) {
+                    _stats.errors++;
+                    if (!can_proceed(task)) {
+                        cmlog.error("compaction failed {}: stopping", std::current_exception());
+                        return make_ready_future<stop_iteration>(stop_iteration::yes);
+                    }
+                    cmlog.error("compaction failed {}: retrying", std::current_exception());
+                    return put_task_to_sleep(task).then([this] {
                         return make_ready_future<stop_iteration>(stop_iteration::no);
                     });
                 }
-                _stats.pending_tasks++;
-                _stats.completed_tasks++;
                 task->compaction_retry.reset();
                 reevaluate_postponed_compactions();
                 return make_ready_future<stop_iteration>(stop_iteration::no);
