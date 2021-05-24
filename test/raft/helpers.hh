@@ -210,7 +210,7 @@ raft::server_id id() {
     return raft::server_id{utils::UUID(0, ++id)};
 }
 
-raft::server_address_set address_set(std::initializer_list<raft::server_id> ids) {
+raft::server_address_set address_set(std::vector<raft::server_id> ids) {
     raft::server_address_set set;
     for (auto id : ids) {
         set.emplace(raft::server_address{.id = id});
