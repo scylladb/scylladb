@@ -89,6 +89,7 @@ class view_update_generator;
 
 namespace dht {
 class boot_strapper;
+class range_streamer;
 }
 
 namespace gms {
@@ -126,6 +127,7 @@ class node_ops_meta_data {
     utils::UUID _ops_uuid;
     gms::inet_address _coordinator;
     std::function<future<> ()> _abort;
+    shared_ptr<abort_source> _abort_source;
     std::function<void ()> _signal;
     shared_ptr<node_ops_info> _ops;
     seastar::timer<lowres_clock> _watchdog;
@@ -139,6 +141,7 @@ public:
             std::function<future<> ()> abort_func,
             std::function<void ()> signal_func);
     shared_ptr<node_ops_info> get_ops_info();
+    shared_ptr<abort_source> get_abort_source();
     future<> abort();
     void update_watchdog();
     void cancel_watchdog();
@@ -692,6 +695,8 @@ private:
      * @param endpoint the node that left
      */
     future<> restore_replica_count(inet_address endpoint, inet_address notify_endpoint);
+    future<> removenode_with_stream(gms::inet_address leaving_node, shared_ptr<abort_source> as_ptr);
+    future<> removenode_add_ranges(lw_shared_ptr<dht::range_streamer> streamer, gms::inet_address leaving_node);
 
     // needs to be modified to accept either a keyspace or ARS.
     std::unordered_multimap<dht::token_range, inet_address> get_changed_ranges_for_leaving(sstring keyspace_name, inet_address endpoint);
