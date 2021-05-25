@@ -171,7 +171,7 @@ future<> raft_sys_table_storage::do_store_log_entries(const std::vector<raft::lo
 
         // don't include serialized "data" here since it will require to linearize the stream
         std::vector<cql3::raw_value> single_stmt_values = {
-            cql3::raw_value::make_value(long_type->decompose(_group_id.id)),
+            cql3::raw_value::make_value(timeuuid_type->decompose(_group_id.id)),
             cql3::raw_value::make_value(long_type->decompose(int64_t(eptr->term))),
             cql3::raw_value::make_value(long_type->decompose(int64_t(eptr->idx)))
         };

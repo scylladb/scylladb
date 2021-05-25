@@ -220,7 +220,7 @@ schema_ptr raft() {
     static thread_local auto schema = [] {
         auto id = generate_legacy_id(NAME, RAFT);
         return schema_builder(NAME, RAFT, std::optional(id))
-            .with_column("group_id", long_type, column_kind::partition_key)
+            .with_column("group_id", timeuuid_type, column_kind::partition_key)
             // raft log part
             .with_column("index", long_type, column_kind::clustering_key)
             .with_column("term", long_type)
@@ -246,7 +246,7 @@ schema_ptr raft_snapshots() {
     static thread_local auto schema = [] {
         auto id = generate_legacy_id(NAME, RAFT_SNAPSHOTS);
         return schema_builder(NAME, RAFT_SNAPSHOTS, std::optional(id))
-            .with_column("group_id", long_type, column_kind::partition_key)
+            .with_column("group_id", timeuuid_type, column_kind::partition_key)
             .with_column("id", uuid_type, column_kind::clustering_key)
             .with_column("idx", long_type)
             .with_column("term", long_type)
