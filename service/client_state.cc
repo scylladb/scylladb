@@ -65,7 +65,7 @@ future<> service::client_state::check_user_can_login() {
         return make_ready_future();
     }
 
-    const auto& role_manager = _auth_service->underlying_role_manager();
+    auto& role_manager = _auth_service->underlying_role_manager();
 
     return role_manager.exists(*_user->name).then([this](bool exists) mutable {
         if (!exists) {
@@ -274,7 +274,7 @@ future<> service::client_state::ensure_exists(const auth::resource& r) const {
 
 future<> service::client_state::maybe_update_per_service_level_params() {
     if (_sl_controller && _user && _user->name) {
-        const auto& role_manager = _auth_service->underlying_role_manager();
+        auto& role_manager = _auth_service->underlying_role_manager();
         auto role_set = co_await role_manager.query_granted(_user->name.value(), auth::recursive_role_query::yes);
         auto slo_opt = co_await _sl_controller->find_service_level(role_set);
         if (!slo_opt) {
