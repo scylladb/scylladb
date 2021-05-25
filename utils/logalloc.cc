@@ -46,6 +46,7 @@
 #include "utils/log_heap.hh"
 #include "utils/preempt.hh"
 #include "utils/vle.hh"
+#include "utils/coarse_clock.hh"
 
 #include <random>
 #include <chrono>
@@ -2116,33 +2117,94 @@ static void reclaim_from_evictable(region::impl& r, size_t target_mem_in_use, is
     }
 }
 
-struct reclaim_timer {
-    clock::time_point start;
-    bool enabled;
-    reclaim_timer() {
-        if (timing_logger.is_enabled(logging::log_level::debug)) {
-            start = clock::now();
-            enabled = true;
-        } else {
-            enabled = false;
+class reclaim_timer {
+    using clock = utils::coarse_clock;
+
+    const is_preemptible _preemptible;
+    const size_t _memory_to_release;
+    const size_t _reserve_segments;
+    tracker::impl& _tracker;
+
+    const bool _debug_enabled;
+    bool _stall_detected = false;
+
+    size_t _memory_released = 0;
+
+    clock::time_point _start;
+    clock::duration _duration;
+    occupancy_stats _old_region_occupancy;
+    segment_pool::stats _old_pool_stats;
+
+public:
+    reclaim_timer(is_preemptible preemptible, size_t memory_to_release, size_t reserve_segments, tracker::impl& tracker)
+        : _preemptible(preemptible)
+        , _memory_to_release(memory_to_release)
+        , _reserve_segments(reserve_segments)
+        , _tracker(tracker)
+        , _debug_enabled(timing_logger.is_enabled(logging::log_level::debug))
+    {
+        _start = clock::now();
+        if (_debug_enabled) {
+            _old_region_occupancy = tracker.region_occupancy();
         }
+        _old_pool_stats = shard_segment_pool.statistics();
     }
+
+    size_t set_result(size_t memory_released) noexcept {
+        return this->_memory_released = memory_released;
+    }
+
     ~reclaim_timer() {
-        if (enabled) {
-            auto duration = clock::now() - start;
-            timing_logger.debug("Reclamation cycle took {} us.",
-                std::chrono::duration_cast<std::chrono::duration<double, std::micro>>(duration).count());
+        _duration = clock::now() - _start;
+        _stall_detected = _duration >= engine().get_blocked_reactor_notify_ms();
+        if (_debug_enabled || _stall_detected) {
+            report();
         }
     }
-    void stop(size_t released) {
-        if (enabled) {
-            enabled = false;
-            auto duration = clock::now() - start;
-            auto bytes_per_second = static_cast<float>(released) / std::chrono::duration_cast<std::chrono::duration<float>>(duration).count();
-            timing_logger.debug("Reclamation cycle took {} us. Reclamation rate = {} MiB/s",
-                                std::chrono::duration_cast<std::chrono::duration<double, std::micro>>(duration).count(),
-                                format("{:.3f}", bytes_per_second / (1024*1024)));
+
+private:
+    template <typename T>
+    void log_if_changed(log_level level, const char* name, T before, T now) const noexcept {
+        if (now != before) {
+            timing_logger.log(level, "- {}: {:.3f} -> {:.3f}", name, before, now);
         }
+    }
+    template <typename T>
+    void log_if_any(log_level level, const char* name, T value) const noexcept {
+        if (value != 0) {
+            timing_logger.log(level, "- {}: {}", name, value);
+        }
+    }
+    template <typename T>
+    void log_if_any_mem(log_level level, const char* name, T value) const noexcept {
+        if (value != 0) {
+            timing_logger.log(level, "- {}: {:.3f} MiB", name, (float)value / (1024*1024));
+        }
+    }
+
+    void report() const noexcept {
+        auto time_level = _stall_detected ? log_level::warn : log_level::debug;
+        auto info_level = _stall_detected ? log_level::info : log_level::debug;
+        auto MiB = 1024*1024;
+
+        timing_logger.log(time_level, "Reclamation cycle took {} ms, trying to release {:.3f} MiB {}preemptibly",
+                          _duration.count(), (float)_memory_to_release / MiB, _preemptible ? "" : "non-");
+        log_if_any(info_level, "reserved segments", _reserve_segments);
+        if (_memory_released > 0) {
+            auto bytes_per_second =
+                static_cast<float>(_memory_released) / std::chrono::duration_cast<std::chrono::duration<float>>(_duration).count();
+            timing_logger.log(info_level, "- reclamation rate = {} MiB/s", format("{:.3f}", bytes_per_second / MiB));
+        }
+        if (_debug_enabled) {
+            log_if_changed(info_level, "occupancy of regions",
+                           _old_region_occupancy.used_fraction(), _tracker.region_occupancy().used_fraction());
+        }
+
+        auto pool_stats = shard_segment_pool.statistics();
+        log_if_any_mem(info_level, "evicted memory", pool_stats.memory_evicted - _old_pool_stats.memory_evicted);
+        log_if_any(info_level, "compacted segments", pool_stats.segments_compacted - _old_pool_stats.segments_compacted);
+        log_if_any_mem(info_level, "compacted memory", pool_stats.memory_compacted - _old_pool_stats.memory_compacted);
+        log_if_any_mem(info_level, "allocated memory", pool_stats.memory_allocated - _old_pool_stats.memory_allocated);
     }
 };
 
@@ -2185,8 +2247,8 @@ size_t tracker::impl::reclaim(size_t memory_to_release, is_preemptible preempt) 
         return 0;
     }
     reclaiming_lock rl(*this);
-    reclaim_timer timing_guard;
-    return reclaim_locked(memory_to_release, preempt);
+    reclaim_timer timing_guard(preempt, memory_to_release, 0, *this);
+    return timing_guard.set_result(reclaim_locked(memory_to_release, preempt));
 }
 
 size_t tracker::impl::reclaim_locked(size_t memory_to_release, is_preemptible preempt) {
@@ -2222,10 +2284,8 @@ size_t tracker::impl::compact_and_evict(size_t reserve_segments, size_t memory_t
         return 0;
     }
     reclaiming_lock rl(*this);
-    reclaim_timer timing_guard;
-    size_t released = compact_and_evict_locked(reserve_segments, memory_to_release, preempt);
-    timing_guard.stop(released);
-    return released;
+    reclaim_timer timing_guard(preempt, memory_to_release, reserve_segments, *this);
+    return timing_guard.set_result(compact_and_evict_locked(reserve_segments, memory_to_release, preempt));
 }
 
 size_t tracker::impl::compact_and_evict_locked(size_t reserve_segments, size_t memory_to_release, is_preemptible preempt) {
