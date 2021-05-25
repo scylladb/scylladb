@@ -509,6 +509,8 @@ public:
 private:
     // Like compact_and_evict() but assumes that reclaim_lock is held around the operation.
     size_t compact_and_evict_locked(size_t reserve_segments, size_t bytes, is_preemptible preempt);
+    // Like reclaim() but assumes that reclaim_lock is held around the operation.
+    size_t reclaim_locked(size_t bytes, is_preemptible p);
 };
 
 class tracker_reclaimer_lock {
@@ -2179,16 +2181,18 @@ idle_cpu_handler_result tracker::impl::compact_on_idle(work_waiting_on_reactor c
 }
 
 size_t tracker::impl::reclaim(size_t memory_to_release, is_preemptible preempt) {
-    // Reclamation steps:
-    // 1. Try to release free segments from segment pool and emergency reserve.
-    // 2. Compact used segments and/or evict data.
-
     if (!_reclaiming_enabled) {
         return 0;
     }
     reclaiming_lock rl(*this);
     reclaim_timer timing_guard;
+    return reclaim_locked(memory_to_release, preempt);
+}
 
+size_t tracker::impl::reclaim_locked(size_t memory_to_release, is_preemptible preempt) {
+    // Reclamation steps:
+    // 1. Try to release free segments from segment pool and emergency reserve.
+    // 2. Compact used segments and/or evict data.
     constexpr auto max_bytes = std::numeric_limits<size_t>::max() - segment::size;
     auto segments_to_release = align_up(std::min(max_bytes, memory_to_release), segment::size) >> segment::size_shift;
     auto nr_released = shard_segment_pool.reclaim_segments(segments_to_release, preempt);
