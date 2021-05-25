@@ -41,7 +41,6 @@
 #include "cache_temperature.hh"
 #include "service/paxos/prepare_response.hh"
 #include "raft/raft.hh"
-#include "service/raft/raft_services.hh"
 #include "db/hints/messages.hh"
 
 #include <list>
