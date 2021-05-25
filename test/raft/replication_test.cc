@@ -993,13 +993,17 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
     rafts.connect_all();
     co_await rafts.reconfigure_all();
 
-    BOOST_TEST_MESSAGE("Appending remaining values");
-    co_await rafts.add_remaining_entries();
+    if (test.total_values > 0) {
+        BOOST_TEST_MESSAGE("Appending remaining values");
+        co_await rafts.add_remaining_entries();
+        co_await rafts.wait_all();
+    }
 
-    co_await rafts.wait_all();
     co_await rafts.stop_all();
 
-    rafts.verify();
+    if (test.total_values > 0) {
+        rafts.verify();
+    }
 }
 
 void replication_test(struct test_case test, bool prevote, bool packet_drops) {
