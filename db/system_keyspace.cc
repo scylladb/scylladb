@@ -1315,27 +1315,18 @@ future<> setup(distributed<database>& db,
                distributed<gms::feature_service>& feat,
                sharded<netw::messaging_service>& ms) {
     const db::config& cfg = db.local().get_config();
-    return setup_version(feat, ms, cfg).then([&db] {
-        return update_schema_version(db.local().get_version());
-    }).then([] {
-        return init_local_cache();
-    }).then([] {
-        return build_dc_rack_info();
-    }).then([] {
-        return build_bootstrap_info();
-    }).then([&cfg] {
-        return check_health(cfg.cluster_name());
-    }).then([&qp] {
-        return db::schema_tables::save_system_keyspace_schema(qp.local());
-    }).then([&qp] {
-        // #2514 - make sure "system" is written to system_schema.keyspaces.
-        return db::schema_tables::save_system_schema(qp.local(), NAME);
-    }).then([&db] {
-        return cache_truncation_record(db);
-    }).then([&ms] {
-        return ms.invoke_on_all([] (auto& ms){
+    co_await setup_version(feat, ms, cfg);
+    co_await update_schema_version(db.local().get_version());
+    co_await init_local_cache();
+    co_await build_dc_rack_info();
+    co_await build_bootstrap_info();
+    co_await check_health(cfg.cluster_name());
+    co_await db::schema_tables::save_system_keyspace_schema(qp.local());
+    // #2514 - make sure "system" is written to system_schema.keyspaces.
+    co_await db::schema_tables::save_system_schema(qp.local(), NAME);
+    co_await cache_truncation_record(db);
+    co_await ms.invoke_on_all([] (auto& ms){
             return ms.init_local_preferred_ip_cache();
-        });
     });
 }
 
