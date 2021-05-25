@@ -568,10 +568,14 @@ table::seal_active_memtable(flush_permit&& permit) {
                 });
             });
         });
-    }).then([this, memtable_size, old, op = std::move(op), previous_flush = std::move(previous_flush)] () mutable {
+    }).then_wrapped([this, memtable_size, old, op = std::move(op), previous_flush = std::move(previous_flush)] (future<> f) mutable {
         _stats.pending_flushes--;
         _config.cf_stats->pending_memtables_flushes_count--;
         _config.cf_stats->pending_memtables_flushes_bytes -= memtable_size;
+
+        if (f.failed()) {
+            return std::move(f);
+        }
 
         if (_commitlog) {
             _commitlog->discard_completed_segments(_schema->id(), old->rp_set());
