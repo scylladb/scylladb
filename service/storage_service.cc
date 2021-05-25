@@ -2896,6 +2896,28 @@ void storage_service::unbootstrap() {
     leave_ring();
 }
 
+future<> storage_service::removenode_add_ranges(lw_shared_ptr<dht::range_streamer> streamer, gms::inet_address leaving_node) {
+    auto tmptr = get_token_metadata_ptr();
+    auto my_address = get_broadcast_address();
+    auto non_system_keyspaces = _db.local().get_non_system_keyspaces();
+    for (const auto& keyspace_name : non_system_keyspaces) {
+        std::unordered_multimap<dht::token_range, inet_address> changed_ranges = get_changed_ranges_for_leaving(keyspace_name, leaving_node);
+        dht::token_range_vector my_new_ranges;
+        for (auto& x : changed_ranges) {
+            if (x.second == my_address) {
+                my_new_ranges.emplace_back(x.first);
+            }
+        }
+        std::unordered_multimap<inet_address, dht::token_range> source_ranges = get_new_source_ranges(keyspace_name, my_new_ranges, *tmptr);
+        std::unordered_map<inet_address, dht::token_range_vector> ranges_per_endpoint;
+        for (auto& x : source_ranges) {
+            ranges_per_endpoint[x.first].emplace_back(x.second);
+        }
+        streamer->add_rx_ranges(keyspace_name, std::move(ranges_per_endpoint));
+    }
+    return make_ready_future<>();
+}
+
 future<> storage_service::removenode_with_stream(gms::inet_address leaving_node, shared_ptr<abort_source> as_ptr) {
     return seastar::async([this, leaving_node, as_ptr] {
         auto tmptr = get_token_metadata_ptr();
@@ -2914,23 +2936,7 @@ future<> storage_service::removenode_with_stream(gms::inet_address leaving_node,
             }
         });
         auto streamer = make_lw_shared<dht::range_streamer>(_db, tmptr, as, get_broadcast_address(), "Removenode", streaming::stream_reason::removenode);
-        auto my_address = get_broadcast_address();
-        auto non_system_keyspaces = _db.local().get_non_system_keyspaces();
-        for (const auto& keyspace_name : non_system_keyspaces) {
-            std::unordered_multimap<dht::token_range, inet_address> changed_ranges = get_changed_ranges_for_leaving(keyspace_name, leaving_node);
-            dht::token_range_vector my_new_ranges;
-            for (auto& x : changed_ranges) {
-                if (x.second == my_address) {
-                    my_new_ranges.emplace_back(x.first);
-                }
-            }
-            std::unordered_multimap<inet_address, dht::token_range> source_ranges = get_new_source_ranges(keyspace_name, my_new_ranges, *tmptr);
-            std::unordered_map<inet_address, dht::token_range_vector> ranges_per_endpoint;
-            for (auto& x : source_ranges) {
-                ranges_per_endpoint[x.first].emplace_back(x.second);
-            }
-            streamer->add_rx_ranges(keyspace_name, std::move(ranges_per_endpoint));
-        }
+        removenode_add_ranges(streamer, leaving_node).get();
         try {
             streamer->stream_async().get();
         } catch (...) {
@@ -2957,23 +2963,7 @@ future<> storage_service::restore_replica_count(inet_address endpoint, inet_addr
         }
     });
     auto streamer = make_lw_shared<dht::range_streamer>(_db, tmptr, as, get_broadcast_address(), "Restore_replica_count", streaming::stream_reason::removenode);
-    auto my_address = get_broadcast_address();
-    auto non_system_keyspaces = _db.local().get_non_system_keyspaces();
-    for (const auto& keyspace_name : non_system_keyspaces) {
-        std::unordered_multimap<dht::token_range, inet_address> changed_ranges = get_changed_ranges_for_leaving(keyspace_name, endpoint);
-        dht::token_range_vector my_new_ranges;
-        for (auto& x : changed_ranges) {
-            if (x.second == my_address) {
-                my_new_ranges.emplace_back(x.first);
-            }
-        }
-        std::unordered_multimap<inet_address, dht::token_range> source_ranges = get_new_source_ranges(keyspace_name, my_new_ranges, *tmptr);
-        std::unordered_map<inet_address, dht::token_range_vector> ranges_per_endpoint;
-        for (auto& x : source_ranges) {
-            ranges_per_endpoint[x.first].emplace_back(x.second);
-        }
-        streamer->add_rx_ranges(keyspace_name, std::move(ranges_per_endpoint));
-    }
+    removenode_add_ranges(streamer, endpoint).get();
     auto status_checker = seastar::async([this, endpoint, &as] {
         slogger.info("restore_replica_count: Started status checker for removing node {}", endpoint);
         while (!as.abort_requested()) {
