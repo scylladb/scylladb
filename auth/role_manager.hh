@@ -120,17 +120,17 @@ public:
     ///
     /// \returns an exceptional future with \ref role_already_exists for a role that has previously been created.
     ///
-    virtual future<> create(std::string_view role_name, const role_config&) const = 0;
+    virtual future<> create(std::string_view role_name, const role_config&) = 0;
 
     ///
     /// \returns an exceptional future with \ref nonexistant_role if the role does not exist.
     ///
-    virtual future<> drop(std::string_view role_name) const = 0;
+    virtual future<> drop(std::string_view role_name) = 0;
 
     ///
     /// \returns an exceptional future with \ref nonexistant_role if the role does not exist.
     ///
-    virtual future<> alter(std::string_view role_name, const role_config_update&) const = 0;
+    virtual future<> alter(std::string_view role_name, const role_config_update&) = 0;
 
     ///
     /// Grant `role_name` to `grantee_name`.
@@ -140,7 +140,7 @@ public:
     /// \returns an exceptional future with \ref role_already_included if granting the role would be redundant, or
     /// create a cycle.
     ///
-    virtual future<> grant(std::string_view grantee_name, std::string_view role_name) const = 0;
+    virtual future<> grant(std::string_view grantee_name, std::string_view role_name) = 0;
 
     ///
     /// Revoke `role_name` from `revokee_name`.
@@ -149,46 +149,46 @@ public:
     ///
     /// \returns an exceptional future with \ref revoke_ungranted_role if the role was not granted.
     ///
-    virtual future<> revoke(std::string_view revokee_name, std::string_view role_name) const = 0;
+    virtual future<> revoke(std::string_view revokee_name, std::string_view role_name) = 0;
 
     ///
     /// \returns an exceptional future with \ref nonexistant_role if the role does not exist.
     ///
-    virtual future<role_set> query_granted(std::string_view grantee, recursive_role_query) const = 0;
+    virtual future<role_set> query_granted(std::string_view grantee, recursive_role_query) = 0;
 
-    virtual future<role_set> query_all() const = 0;
+    virtual future<role_set> query_all() = 0;
 
-    virtual future<bool> exists(std::string_view role_name) const = 0;
-
-    ///
-    /// \returns an exceptional future with \ref nonexistant_role if the role does not exist.
-    ///
-    virtual future<bool> is_superuser(std::string_view role_name) const = 0;
+    virtual future<bool> exists(std::string_view role_name) = 0;
 
     ///
     /// \returns an exceptional future with \ref nonexistant_role if the role does not exist.
     ///
-    virtual future<bool> can_login(std::string_view role_name) const = 0;
+    virtual future<bool> is_superuser(std::string_view role_name) = 0;
+
+    ///
+    /// \returns an exceptional future with \ref nonexistant_role if the role does not exist.
+    ///
+    virtual future<bool> can_login(std::string_view role_name) = 0;
 
     ///
     /// \returns the value of the named attribute, if one is set.
     ///
-    virtual future<std::optional<sstring>> get_attribute(std::string_view role_name, std::string_view attribute_name) const = 0;
+    virtual future<std::optional<sstring>> get_attribute(std::string_view role_name, std::string_view attribute_name) = 0;
 
     ///
     /// \returns a mapping of each role's value for the named attribute, if one is set for the role.
     ///
-    virtual future<attribute_vals> query_attribute_for_all(std::string_view attribute_name) const = 0;
+    virtual future<attribute_vals> query_attribute_for_all(std::string_view attribute_name) = 0;
 
     /// Sets `attribute_name` with `attribute_value` for `role_name`.
     /// \returns an exceptional future with nonexistant_role if the role does not exist.
     ///
-    virtual future<> set_attribute(std::string_view role_name, std::string_view attribute_name, std::string_view attribute_value) const = 0;
+    virtual future<> set_attribute(std::string_view role_name, std::string_view attribute_name, std::string_view attribute_value) = 0;
 
     /// Removes `attribute_name` for `role_name`.
     /// \returns an exceptional future with nonexistant_role if the role does not exist.
     /// \note: This is a no-op if the role does not have the named attribute set.
     ///
-    virtual future<> remove_attribute(std::string_view role_name, std::string_view attribute_name) const = 0;
+    virtual future<> remove_attribute(std::string_view role_name, std::string_view attribute_name) = 0;
 };
 }

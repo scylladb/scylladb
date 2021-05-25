@@ -157,7 +157,7 @@ public:
         return *_authorizer;
     }
 
-    const role_manager& underlying_role_manager() const {
+    role_manager& underlying_role_manager() const {
         return *_role_manager;
     }
 

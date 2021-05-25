@@ -350,7 +350,7 @@ list_roles_statement::execute(query_processor&, service::query_state& state, con
                     make_column_spec("options", custom_options_type)});
 
     static const auto make_results = [](
-            const auth::role_manager& rm,
+            auth::role_manager& rm,
             const auth::authenticator& a,
             auth::role_set&& roles) -> future<result_message_ptr> {
         auto results = std::make_unique<result_set>(metadata);
@@ -397,7 +397,7 @@ list_roles_statement::execute(query_processor&, service::query_state& state, con
     const auto& as = *cs.get_auth_service();
 
     return auth::has_superuser(as, *cs.user()).then([this, &state, &cs, &as](bool super) {
-        const auto& rm = as.underlying_role_manager();
+        auto& rm = as.underlying_role_manager();
         const auto& a = as.underlying_authenticator();
         const auto query_mode = _recursive ? auth::recursive_role_query::yes : auth::recursive_role_query::no;
 
