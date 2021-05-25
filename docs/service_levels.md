@@ -27,20 +27,23 @@ one can run the following query:
 ### Service Level Configuration Table
 
 ```CREATE TABLE system_distributed.service_levels (
-    service_level text PRIMARY KEY);
+    service_level text PRIMARY KEY,
+    timeout duration,
+    workload_type text)
 ```
 
 The table is used to store and distribute the service levels configuration.
 The table column names meanings are:
 *service_level* - the name of the service level.
 *timeout* - timeout for operations performed by users under this service level
+*workload_type* - type of workload declared for this service level (unspecified, interactive or batch)
 
 ```
 select * from system_distributed.service_levels ;
 
- service_level | timeout 
----------------+---------
-            sl |    50ms
+ service_level | timeout | workload_type
+---------------+---------+---------------
+            sl |   500ms |   interactive
 
 ```
 
@@ -99,3 +102,31 @@ role2: `timeout = 10ms`
 role3: `timeout = 2s`
 role4: `timeout = 10ms`
 
+### Workload types
+
+It's possible to declare a workload type for a service level, currently out of three available values:
+ 1. unspecified - generic workload without any specific characteristics; default
+ 2. interactive - workload sensitive to latency, expected to have high/unbounded concurrency,
+    with dynamic characteristics, OLTP;
+    example: users clicking on a website and generating events with their clicks
+ 3. batch - workload for processing large amounts of data, not sensitive to latency, expected to have
+    fixed concurrency, OLAP, ETL;
+    example: processing billions of historical sales records to generate useful statistics
+
+Declaring a workload type provides more context for Scylla to decide how to handle the sessions.
+For instance, if a coordinator node receives requests with a rate higher than it can handle,
+it will make different decisions depending on the declared workload type:
+ - for batch workloads it makes sense to apply backpressure - the concurrency is assumed to be fixed,
+   so delaying a reply will likely also reduce the rate at which new requests are sent;
+ - for interactive workloads, backpressure would only waste resources - delaying a reply does not
+   decrease the rate of incoming requests, so it's reasonable for the coordinator to start shedding
+   surplus requests.
+
+If multiple workload types are applicable for a role, it makes sense if:
+ - all the applicable workload types are identical
+ - some of the service levels do not have any workload types specified
+
+Otherwise, e.g. if a role has multiple workload types declared,
+the conflicts are resolved as follows:
+ - `X` vs `unspecified` -> `X`
+ - `batch` vs `interactive` -> `batch` - under the assumption that `batch` is safer, because it would not trigger load shedding as eagerly as `interactive`
