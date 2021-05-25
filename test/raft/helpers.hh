@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, Arm Limited and affiliates. All rights reserved.
+ * Copyright (C) 2021-present ScyllaDB
  */
 
 /*
