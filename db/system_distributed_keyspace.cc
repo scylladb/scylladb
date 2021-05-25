@@ -607,7 +607,6 @@ future<qos::service_levels_info> system_distributed_keyspace::get_service_level(
         if (!result_set->empty()) {
             try {
                 auto &&row = result_set->one();
-                auto service_level_name = row.get_as<sstring>("service_level");
                 auto workload = qos::service_level_options::parse_workload_type(row.get_opt<sstring>("workload_type").value_or(""));
                 qos::service_level_options slo{
                     .timeout = get_duration(row, "timeout"),
