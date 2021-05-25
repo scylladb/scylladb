@@ -837,6 +837,7 @@ public:
 future<> prime_segment_pool(size_t available_memory, size_t min_free_memory);
 
 uint64_t memory_allocated();
+uint64_t memory_freed();
 uint64_t memory_compacted();
 
 occupancy_stats lsa_global_occupancy_stats();
