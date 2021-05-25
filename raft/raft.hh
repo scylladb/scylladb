@@ -223,6 +223,16 @@ struct config_error : public error {
     using error::error;
 };
 
+// True if a failure to execute a Raft operation can be re-tried,
+// perhaps with a different server.
+inline bool is_transient_error(const std::exception& e) {
+    return dynamic_cast<const not_a_leader*>(&e) ||
+           dynamic_cast<const commit_status_unknown*>(&e) ||
+           dynamic_cast<const dropped_entry*>(&e) ||
+           dynamic_cast<const conf_change_in_progress*>(&e) ||
+           dynamic_cast<const stopped_error*>(&e);
+}
+
 struct snapshot {
     // Index and term of last entry in the snapshot
     index_t idx = index_t(0);
