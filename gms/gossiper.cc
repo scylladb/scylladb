@@ -106,7 +106,8 @@ void gossiper::set_seeds(std::set<inet_address> seeds) {
 }
 
 std::chrono::milliseconds gossiper::quarantine_delay() const noexcept {
-    auto ring_delay = std::chrono::milliseconds(_cfg.ring_delay_ms());
+    auto delay = std::max(unsigned(30000), _cfg.ring_delay_ms());
+    auto ring_delay = std::chrono::milliseconds(delay);
     return ring_delay * 2;
 }
 
