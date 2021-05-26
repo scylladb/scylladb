@@ -125,6 +125,13 @@ struct leader {
 };
 using partition = std::vector<std::variant<leader,int>>;
 
+// Disconnect 2 servers both ways
+struct two_nodes {
+    size_t first;
+    size_t second;
+};
+struct disconnect : public two_nodes {};
+
 struct set_config_entry {
     size_t node_idx;
     bool can_vote;
@@ -139,7 +146,7 @@ struct tick {
     uint64_t ticks;
 };
 
-using update = std::variant<entries, new_leader, partition, set_config, tick>;
+using update = std::variant<entries, new_leader, partition, disconnect, set_config, tick>;
 
 struct log_entry {
     unsigned term;
@@ -523,6 +530,7 @@ public:
     future<> reconfigure_all();
     future<> partition(::partition p);
     future<> tick(::tick t);
+    void disconnect(::disconnect nodes);
     const std::unordered_set<size_t>& get_configuration() {
         return _in_configuration;   // Servers in current configuration
     }
@@ -918,6 +926,10 @@ future<> raft_cluster::tick(::tick t) {
     }
 }
 
+void raft_cluster::disconnect(::disconnect nodes) {
+    _connected->cut(to_raft_id(nodes.first), to_raft_id(nodes.second));
+}
+
 void raft_cluster::verify() {
     BOOST_TEST_MESSAGE("Verifying hashes match expected (snapshot and apply calls)");
     auto expected = hasher_int::hash_range(_apply_entries).finalize_uint64();
@@ -984,6 +996,8 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
             co_await rafts.add_entries(std::get<entries>(update).n);
         } else if (std::holds_alternative<new_leader>(update)) {
             co_await rafts.elect_new_leader(std::get<new_leader>(update).id);
+        } else if (std::holds_alternative<::disconnect>(update)) {
+            rafts.disconnect(std::get<::disconnect>(update));
         } else if (std::holds_alternative<partition>(update)) {
             co_await rafts.partition(std::get<partition>(update));
         } else if (std::holds_alternative<set_config>(update)) {
