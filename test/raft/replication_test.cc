@@ -75,6 +75,36 @@ lowres_clock::duration tick_delta = 1ms;
 
 auto dummy_command = std::numeric_limits<int>::min();
 
+class hasher_int : public xx_hasher {
+public:
+    using xx_hasher::xx_hasher;
+    void update(int val) noexcept {
+        xx_hasher::update(reinterpret_cast<const char *>(&val), sizeof(val));
+    }
+    static hasher_int hash_range(int max) {
+        hasher_int h;
+        for (int i = 0; i < max; ++i) {
+            h.update(i);
+        }
+        return h;
+    }
+};
+
+struct snapshot_value {
+    hasher_int hasher;
+    raft::index_t idx;
+};
+
+struct initial_state {
+    raft::server_address address;
+    raft::term_t term = raft::term_t(1);
+    raft::server_id vote;
+    std::vector<raft::log_entry> log;
+    raft::snapshot snapshot;
+    snapshot_value snp_value;
+    raft::server::configuration server_config = raft::server::configuration{.append_request_threshold = 200};
+};
+
 // Updates can be
 //  - Entries
 //  - Leader change
@@ -155,26 +185,6 @@ int rand() {
     return dist(gen);
 }
 
-class hasher_int : public xx_hasher {
-public:
-    using xx_hasher::xx_hasher;
-    void update(int val) noexcept {
-        xx_hasher::update(reinterpret_cast<const char *>(&val), sizeof(val));
-    }
-    static hasher_int hash_range(int max) {
-        hasher_int h;
-        for (int i = 0; i < max; ++i) {
-            h.update(i);
-        }
-        return h;
-    }
-};
-
-struct snapshot_value {
-    hasher_int hasher;
-    raft::index_t idx;
-};
-
 // Lets assume one snapshot per server
 using snapshots = std::unordered_map<raft::server_id, snapshot_value>;
 using persisted_snapshots = std::unordered_map<raft::server_id, std::pair<raft::snapshot, snapshot_value>>;
@@ -238,16 +248,6 @@ public:
     future<> done() {
         return _done.get_future();
     }
-};
-
-struct initial_state {
-    raft::server_address address;
-    raft::term_t term = raft::term_t(1);
-    raft::server_id vote;
-    std::vector<raft::log_entry> log;
-    raft::snapshot snapshot;
-    snapshot_value snp_value;
-    raft::server::configuration server_config = raft::server::configuration{.append_request_threshold = 200};
 };
 
 class persistence : public raft::persistence {
