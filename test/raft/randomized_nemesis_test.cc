@@ -513,24 +513,20 @@ public:
         co_return;
     }
 
-    virtual future<> send_append_entries_reply(raft::server_id dst, const raft::append_reply& m) override {
+    virtual void send_append_entries_reply(raft::server_id dst, const raft::append_reply& m) override {
         _send(dst, m);
-        co_return;
     }
 
-    virtual future<> send_vote_request(raft::server_id dst, const raft::vote_request& m) override {
+    virtual void send_vote_request(raft::server_id dst, const raft::vote_request& m) override {
         _send(dst, m);
-        co_return;
     }
 
-    virtual future<> send_vote_reply(raft::server_id dst, const raft::vote_reply& m) override {
+    virtual void send_vote_reply(raft::server_id dst, const raft::vote_reply& m) override {
         _send(dst, m);
-        co_return;
     }
 
-    virtual future<> send_timeout_now(raft::server_id dst, const raft::timeout_now& m) override {
+    virtual void send_timeout_now(raft::server_id dst, const raft::timeout_now& m) override {
         _send(dst, m);
-        co_return;
     }
 
     virtual void add_server(raft::server_id, raft::server_info) override {

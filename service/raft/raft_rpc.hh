@@ -20,11 +20,11 @@
  */
 #pragma once
 
+#include <seastar/core/gate.hh>
 #include "raft/raft.hh"
 #include "message/messaging_service_fwd.hh"
 #include "utils/UUID.hh"
-
-class raft_services;
+#include "service/raft/raft_services.hh"
 
 // Scylla-specific implementation of raft RPC module.
 //
@@ -35,16 +35,21 @@ class raft_rpc : public raft::rpc {
     raft::server_id _server_id;
     netw::messaging_service& _messaging;
     raft_services& _raft_services;
+    seastar::gate _shutdown_gate;
+
+    raft_services::ticker_type::time_point timeout() {
+        return raft_services::ticker_type::clock::now() + raft_services::tick_interval * (raft::ELECTION_TIMEOUT.count() / 2);
+    }
 
 public:
     explicit raft_rpc(netw::messaging_service& ms, raft_services& raft_srvs, raft::group_id gid, raft::server_id srv_id);
 
     future<raft::snapshot_reply> send_snapshot(raft::server_id server_id, const raft::install_snapshot& snap, seastar::abort_source& as) override;
     future<> send_append_entries(raft::server_id id, const raft::append_request& append_request) override;
-    future<> send_append_entries_reply(raft::server_id id, const raft::append_reply& reply) override;
-    future<> send_vote_request(raft::server_id id, const raft::vote_request& vote_request) override;
-    future<> send_vote_reply(raft::server_id id, const raft::vote_reply& vote_reply) override;
-    future<> send_timeout_now(raft::server_id id, const raft::timeout_now& timeout_now) override;
+    void send_append_entries_reply(raft::server_id id, const raft::append_reply& reply) override;
+    void send_vote_request(raft::server_id id, const raft::vote_request& vote_request) override;
+    void send_vote_reply(raft::server_id id, const raft::vote_reply& vote_reply) override;
+    void send_timeout_now(raft::server_id id, const raft::timeout_now& timeout_now) override;
     void add_server(raft::server_id id, raft::server_info info) override;
     void remove_server(raft::server_id id) override;
     future<> abort() override;

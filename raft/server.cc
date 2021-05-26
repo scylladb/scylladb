@@ -392,24 +392,23 @@ future<> server_impl::send_message(server_id id, Message m) {
         using T = std::decay_t<decltype(m)>;
         if constexpr (std::is_same_v<T, append_reply>) {
             _stats.append_entries_reply_sent++;
-            return _rpc->send_append_entries_reply(id, m);
+            _rpc->send_append_entries_reply(id, m);
         } else if constexpr (std::is_same_v<T, append_request>) {
             _stats.append_entries_sent++;
             return _rpc->send_append_entries(id, m);
         } else if constexpr (std::is_same_v<T, vote_request>) {
             _stats.vote_request_sent++;
-            return _rpc->send_vote_request(id, m);
+            _rpc->send_vote_request(id, m);
         } else if constexpr (std::is_same_v<T, vote_reply>) {
             _stats.vote_request_reply_sent++;
-            return _rpc->send_vote_reply(id, m);
+            _rpc->send_vote_reply(id, m);
         } else if constexpr (std::is_same_v<T, timeout_now>) {
             _stats.timeout_now_sent++;
-            return _rpc->send_timeout_now(id, m);
+            _rpc->send_timeout_now(id, m);
         } else if constexpr (std::is_same_v<T, install_snapshot>) {
             _stats.install_snapshot_sent++;
             // Send in the background.
             send_snapshot(id, std::move(m));
-            return make_ready_future<>();
         } else if constexpr (std::is_same_v<T, snapshot_reply>) {
             _stats.snapshot_reply_sent++;
             assert(_snapshot_application_done.contains(id));
@@ -417,12 +416,10 @@ future<> server_impl::send_message(server_id id, Message m) {
             // snapshot application is done.
             _snapshot_application_done[id].set_value(std::move(m));
             _snapshot_application_done.erase(id);
-            // ... and do not wait for it here.
-            return make_ready_future<>();
         } else {
             static_assert(!sizeof(T*), "not all message types are handled");
-            return make_ready_future<>();
         }
+        return make_ready_future<>();
     }, std::move(m));
 }
 

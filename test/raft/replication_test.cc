@@ -339,47 +339,43 @@ public:
         }
         return make_ready_future<>();
     }
-    virtual future<> send_append_entries_reply(raft::server_id id, const raft::append_reply& reply) {
+    virtual void send_append_entries_reply(raft::server_id id, const raft::append_reply& reply) {
         if (!net.count(id)) {
-            return make_exception_future(std::runtime_error("trying to send a message to an unknown node"));
+            return;
         }
         if (!(*_connected)(id, _id)) {
-            return make_exception_future<>(std::runtime_error("cannot send append reply since nodes are disconnected"));
+            return;
         }
         if (!_packet_drops || (rand() % 5)) {
             net[id]->_client->append_entries_reply(_id, std::move(reply));
         }
-        return make_ready_future<>();
     }
-    virtual future<> send_vote_request(raft::server_id id, const raft::vote_request& vote_request) {
+    virtual void send_vote_request(raft::server_id id, const raft::vote_request& vote_request) {
         if (!net.count(id)) {
-            return make_exception_future(std::runtime_error("trying to send a message to an unknown node"));
+            return;
         }
         if (!(*_connected)(id, _id)) {
-            return make_exception_future<>(std::runtime_error("cannot send vote request since nodes are disconnected"));
+            return;
         }
         net[id]->_client->request_vote(_id, std::move(vote_request));
-        return make_ready_future<>();
     }
-    virtual future<> send_vote_reply(raft::server_id id, const raft::vote_reply& vote_reply) {
+    virtual void send_vote_reply(raft::server_id id, const raft::vote_reply& vote_reply) {
         if (!net.count(id)) {
-            return make_exception_future(std::runtime_error("trying to send a message to an unknown node"));
+            return;
         }
         if (!(*_connected)(id, _id)) {
-            return make_exception_future<>(std::runtime_error("cannot send vote reply since nodes are disconnected"));
+            return;
         }
         net[id]->_client->request_vote_reply(_id, std::move(vote_reply));
-        return make_ready_future<>();
     }
-    virtual future<> send_timeout_now(raft::server_id id, const raft::timeout_now& timeout_now) {
+    virtual void send_timeout_now(raft::server_id id, const raft::timeout_now& timeout_now) {
         if (!net.count(id)) {
-            return make_exception_future(std::runtime_error("trying to send a message to an unknown node"));
+            return;
         }
         if (!(*_connected)(id, _id)) {
-            return make_exception_future<>(std::runtime_error("cannot send timeout now since nodes are disconnected"));
+            return;
         }
         net[id]->_client->timeout_now_request(_id, std::move(timeout_now));
-        return make_ready_future<>();
     }
     virtual void add_server(raft::server_id id, bytes node_info) {
         _known_peers.insert(raft::server_address{id});

@@ -50,6 +50,11 @@ class raft_gossip_failure_detector;
 // `peering_sharded_service` inheritance is used to forward requests
 // to the owning shard for a given raft group_id.
 class raft_services : public seastar::peering_sharded_service<raft_services> {
+public:
+    using ticker_type = seastar::timer<lowres_clock>;
+    // TODO: should be configurable.
+    static constexpr ticker_type::duration tick_interval = std::chrono::milliseconds(100);
+private:
     using create_server_result = std::pair<std::unique_ptr<raft::server>, raft_rpc*>;
 
     netw::messaging_service& _ms;
@@ -57,7 +62,6 @@ class raft_services : public seastar::peering_sharded_service<raft_services> {
     // Shard-local failure detector instance shared among all raft groups
     shared_ptr<raft_gossip_failure_detector> _fd;
 
-    using ticker_type = seastar::timer<lowres_clock>;
     struct servers_value_type {
         std::unique_ptr<raft::server> server;
         raft_rpc* rpc;

@@ -194,9 +194,6 @@ future<> raft_services::add_server(raft::server_id id, create_server_result srv)
         on_internal_error(rslog, std::current_exception());
     }
 
-    using namespace std::chrono_literals;
-    // TODO: should be configurable.
-    constexpr ticker_type::duration tick_interval = 100ms;
     ticker_from_map.arm_periodic(tick_interval);
 }
 

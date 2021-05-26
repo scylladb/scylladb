@@ -393,25 +393,17 @@ public:
     // message is sent. It does not mean it was received.
     virtual future<> send_append_entries(server_id id, const append_request& append_request) = 0;
 
-    // Send a reply to an append_request. The returned future
-    // resolves when message is sent. It does not mean it was
-    // received.
-    virtual future<> send_append_entries_reply(server_id id, const append_reply& reply) = 0;
+    // Send a reply to an append_request.
+    virtual void send_append_entries_reply(server_id id, const append_reply& reply) = 0;
 
-    // Send a vote request. The returned future
-    // resolves when message is sent. It does not mean it was
-    // received.
-    virtual future<> send_vote_request(server_id id, const vote_request& vote_request) = 0;
+    // Send a vote request.
+    virtual void send_vote_request(server_id id, const vote_request& vote_request) = 0;
 
-    // Sends a reply to a vote request. The returned future
-    // resolves when message is sent. It does not mean it was
-    // received.
-    virtual future<> send_vote_reply(server_id id, const vote_reply& vote_reply) = 0;
+    // Sends a reply to a vote request.
+    virtual void send_vote_reply(server_id id, const vote_reply& vote_reply) = 0;
 
-    // Send a request to start leader election immediately
-    // resolves when message is sent. It does not mean it was
-    // received.
-    virtual future<> send_timeout_now(server_id, const timeout_now& timeout_now) = 0;
+    // Send a request to start leader election.
+    virtual void send_timeout_now(server_id, const timeout_now& timeout_now) = 0;
 
     // When a new server is learn this function is called with the
     // info about the server.
