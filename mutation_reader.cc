@@ -1129,6 +1129,9 @@ public:
             do_pause(std::move(*_reader));
         }
     }
+    reader_permit permit() {
+        return _permit;
+    }
 };
 
 void evictable_reader::do_pause(flat_mutation_reader reader) {
@@ -1710,8 +1713,9 @@ future<> shard_reader::do_fill_buffer(db::timeout_clock::time_point timeout) {
             auto rreader = make_foreign(std::make_unique<evictable_reader>(evictable_reader::auto_pause::yes, std::move(ms),
                         s, _lifecycle_policy->semaphore().make_permit(s.get(), "shard-reader"), *_pr, _ps, _pc, _trace_state, _fwd_mr));
             tracing::trace(_trace_state, "Creating shard reader on shard: {}", this_shard_id());
+            reader_permit::used_guard ug{rreader->permit()};
             auto f = rreader->fill_buffer(timeout);
-            return f.then([rreader = std::move(rreader)] () mutable {
+            return f.then([rreader = std::move(rreader), ug = std::move(ug)] () mutable {
                 auto res = remote_fill_buffer_result(rreader->detach_buffer(), rreader->is_end_of_stream());
                 return make_ready_future<reader_and_buffer_fill_result>(reader_and_buffer_fill_result{std::move(rreader), std::move(res)});
             });
@@ -1721,7 +1725,8 @@ future<> shard_reader::do_fill_buffer(db::timeout_clock::time_point timeout) {
         });
     } else {
         fill_buf_fut = smp::submit_to(_shard, [this, timeout] () mutable {
-            return _reader->fill_buffer(timeout).then([this] {
+            reader_permit::used_guard ug{_reader->permit()};
+            return _reader->fill_buffer(timeout).then([this, ug = std::move(ug)] {
                 return remote_fill_buffer_result(_reader->detach_buffer(), _reader->is_end_of_stream());
             });
         });
