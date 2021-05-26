@@ -133,8 +133,8 @@ create_index_statement::validate(service::storage_proxy& proxy, const service::c
             const auto& ty = *cd->type;
 
             check_false(ty.is_collection(), "Secondary indexes are not supported on collections containing durations");
-            check_false(ty.is_tuple(), "Secondary indexes are not supported on tuples containing durations");
             check_false(ty.is_user_type(), "Secondary indexes are not supported on UDTs containing durations");
+            check_false(ty.is_tuple(), "Secondary indexes are not supported on tuples containing durations");
 
             // We're a duration.
             throw exceptions::invalid_request_exception("Secondary indexes are not supported on duration columns");
