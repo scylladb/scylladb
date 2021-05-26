@@ -26,14 +26,12 @@
 #include "test/lib/mutation_source_test.hh"
 #include "test/lib/mutation_assertions.hh"
 
-#include "test/lib/test_services.hh"
 #include <seastar/testing/test_case.hh>
 
 #include <seastar/core/thread.hh>
 
 SEASTAR_TEST_CASE(test_conversion_back_and_forth) {
     return seastar::async([] {
-        storage_service_for_tests ssft;
         for_each_mutation([] (const mutation& m) {
             canonical_mutation cm(m);
             assert_that(cm.to_mutation(m.schema())).is_equal_to(m);
@@ -43,7 +41,6 @@ SEASTAR_TEST_CASE(test_conversion_back_and_forth) {
 
 SEASTAR_TEST_CASE(test_reading_with_different_schemas) {
     return seastar::async([] {
-        storage_service_for_tests ssft;
         for_each_mutation_pair([] (const mutation& m1, const mutation& m2, are_equal eq) {
             if (m1.schema() == m2.schema()) {
                 return;

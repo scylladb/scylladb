@@ -39,7 +39,6 @@ static unsigned parallelism = 1;
 
 future<> test_write(distributed<perf_sstable_test_env>& dt) {
     return seastar::async([&dt] {
-        storage_service_for_tests ssft;
         dt.invoke_on_all([] (perf_sstable_test_env &t) {
             return t.fill_memtable();
         }).then([&dt] {
@@ -50,7 +49,6 @@ future<> test_write(distributed<perf_sstable_test_env>& dt) {
 
 future<> test_compaction(distributed<perf_sstable_test_env>& dt) {
     return seastar::async([&dt] {
-        storage_service_for_tests ssft;
         dt.invoke_on_all([] (perf_sstable_test_env &t) {
             return t.fill_memtable();
         }).then([&dt] {

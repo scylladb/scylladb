@@ -28,7 +28,6 @@
 #include "query-result-set.hh"
 #include "query-result-writer.hh"
 
-#include "test/lib/test_services.hh"
 #include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include "test/lib/mutation_assertions.hh"
@@ -98,7 +97,6 @@ static reconcilable_result mutation_query(schema_ptr s, const mutation_source& s
 
 SEASTAR_TEST_CASE(test_reading_from_single_partition) {
     return seastar::async([] {
-        storage_service_for_tests ssft;
         auto s = make_schema();
         auto now = gc_clock::now();
 
@@ -149,7 +147,6 @@ SEASTAR_TEST_CASE(test_reading_from_single_partition) {
 
 SEASTAR_TEST_CASE(test_cells_are_expired_according_to_query_timestamp) {
     return seastar::async([] {
-        storage_service_for_tests ssft;
         auto s = make_schema();
         auto now = gc_clock::now();
 
@@ -197,7 +194,6 @@ SEASTAR_TEST_CASE(test_cells_are_expired_according_to_query_timestamp) {
 
 SEASTAR_TEST_CASE(test_reverse_ordering_is_respected) {
     return seastar::async([] {
-        storage_service_for_tests ssft;
         auto s = make_schema();
         auto now = gc_clock::now();
 
@@ -385,7 +381,6 @@ SEASTAR_TEST_CASE(test_reverse_ordering_is_respected) {
 
 SEASTAR_TEST_CASE(test_query_when_partition_tombstone_covers_live_cells) {
     return seastar::async([] {
-        storage_service_for_tests ssft;
         auto s = make_schema();
         auto now = gc_clock::now();
 
@@ -406,7 +401,6 @@ SEASTAR_TEST_CASE(test_query_when_partition_tombstone_covers_live_cells) {
 
 SEASTAR_TEST_CASE(test_partitions_with_only_expired_tombstones_are_dropped) {
     return seastar::async([] {
-        storage_service_for_tests ssft;
         auto s = schema_builder("ks", "cf")
             .with_column("pk", bytes_type, column_kind::partition_key)
             .with_column("v", bytes_type, column_kind::regular_column)
@@ -456,7 +450,6 @@ SEASTAR_TEST_CASE(test_partitions_with_only_expired_tombstones_are_dropped) {
 
 SEASTAR_TEST_CASE(test_result_row_count) {
     return seastar::async([] {
-            storage_service_for_tests ssft;
             auto s = make_schema();
             auto now = gc_clock::now();
             auto slice = partition_slice_builder(*s).build();
@@ -494,7 +487,6 @@ SEASTAR_TEST_CASE(test_result_row_count) {
 
 SEASTAR_TEST_CASE(test_partition_limit) {
     return seastar::async([] {
-        storage_service_for_tests ssft;
         auto s = make_schema();
         auto now = gc_clock::now();
 

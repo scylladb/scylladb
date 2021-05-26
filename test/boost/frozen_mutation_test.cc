@@ -22,7 +22,6 @@
 
 #include <boost/test/unit_test.hpp>
 
-#include "test/lib/test_services.hh"
 #include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/util/closeable.hh>
@@ -49,7 +48,6 @@ static tombstone new_tombstone() {
 
 SEASTAR_TEST_CASE(test_writing_and_reading) {
     return seastar::async([] {
-        storage_service_for_tests ssft;
         for_each_mutation([](const mutation &m) {
             auto frozen = freeze(m);
             BOOST_REQUIRE_EQUAL(frozen.schema_version(), m.schema()->version());
@@ -62,7 +60,6 @@ SEASTAR_TEST_CASE(test_writing_and_reading) {
 SEASTAR_TEST_CASE(test_application_of_partition_view_has_the_same_effect_as_applying_regular_mutation) {
     return seastar::async([] {
         mutation_application_stats app_stats;
-        storage_service_for_tests ssft;
         schema_ptr s = new_table()
                 .with_column("pk_col", bytes_type, column_kind::partition_key)
                 .with_column("ck_1", bytes_type, column_kind::clustering_key)
@@ -104,7 +101,6 @@ SEASTAR_TEST_CASE(test_application_of_partition_view_has_the_same_effect_as_appl
 }
 
 SEASTAR_THREAD_TEST_CASE(test_frozen_mutation_fragment) {
-    storage_service_for_tests ssft;
     for_each_mutation([] (const mutation& m) {
         auto& s = *m.schema();
         std::vector<mutation_fragment> mfs;
@@ -126,7 +122,6 @@ SEASTAR_THREAD_TEST_CASE(test_frozen_mutation_fragment) {
 
 SEASTAR_TEST_CASE(test_deserialization_using_wrong_schema_throws) {
     return seastar::async([] {
-        storage_service_for_tests ssft;
         schema_ptr s1 = new_table()
             .with_column("pk_col", bytes_type, column_kind::partition_key)
             .with_column("reg_1", bytes_type)

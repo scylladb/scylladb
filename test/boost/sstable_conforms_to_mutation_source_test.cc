@@ -52,7 +52,6 @@ void test_mutation_source(sstables::test_env& env, sstable_writer_config cfg, ss
 
 SEASTAR_TEST_CASE(test_sstable_conforms_to_mutation_source) {
     return sstables::test_env::do_with_async([] (sstables::test_env& env) {
-        storage_service_for_tests ssft;
         for (auto version : all_sstable_versions) {
             for (auto index_block_size : {1, 128, 64*1024}) {
                 sstable_writer_config cfg = env.manager().configure_writer();

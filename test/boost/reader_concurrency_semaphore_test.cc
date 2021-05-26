@@ -433,7 +433,6 @@ SEASTAR_TEST_CASE(reader_restriction_file_tracking) {
 
 SEASTAR_TEST_CASE(reader_concurrency_semaphore_timeout) {
     return async([&] () {
-        storage_service_for_tests ssft;
         reader_concurrency_semaphore semaphore(2, new_reader_base_cost, get_name());
         auto stop_sem = deferred_stop(semaphore);
 

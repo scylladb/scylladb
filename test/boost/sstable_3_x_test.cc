@@ -39,7 +39,6 @@
 #include "schema_builder.hh"
 #include "test/boost/sstable_test.hh"
 #include "test/lib/flat_mutation_reader_assertions.hh"
-#include "test/lib/test_services.hh"
 #include "test/lib/tmpdir.hh"
 #include "test/lib/sstable_utils.hh"
 #include "test/lib/index_reader_assertions.hh"
@@ -3116,8 +3115,6 @@ static std::vector<sstables::shared_sstable> open_sstables(test_env& env, schema
 
 static flat_mutation_reader compacted_sstable_reader(test_env& env, schema_ptr s,
                      sstring table_name, std::vector<unsigned long> generations) {
-    storage_service_for_tests ssft;
-
     auto cm = make_lw_shared<compaction_manager>();
     auto cl_stats = make_lw_shared<cell_locker_stats>();
     auto tracker = make_lw_shared<cache_tracker>();
@@ -3316,7 +3313,6 @@ static void compare_sstables(const std::filesystem::path& result_path, sstring t
 }
 
 static tmpdir write_sstables(test_env& env, schema_ptr s, lw_shared_ptr<memtable> mt1, lw_shared_ptr<memtable> mt2, sstable_version_types version) {
-    storage_service_for_tests ssft;
     tmpdir tmp;
     auto sst = env.make_sstable(s, tmp.path().string(), 1, version, sstable::format_types::big, 4096);
 
@@ -3337,7 +3333,6 @@ static tmpdir write_and_compare_sstables(test_env& env, schema_ptr s, lw_shared_
 }
 
 static tmpdir write_sstables(test_env& env, schema_ptr s, lw_shared_ptr<memtable> mt, sstable_version_types version) {
-    storage_service_for_tests ssft;
     tmpdir tmp;
     auto sst = env.make_sstable(s, tmp.path().string(), 1, version, sstable::format_types::big, 4096);
     write_memtable_to_sstable_for_test(*mt, sst).get();
@@ -5175,7 +5170,6 @@ SEASTAR_THREAD_TEST_CASE(test_read_missing_summary) {
 SEASTAR_THREAD_TEST_CASE(test_sstable_reader_on_unknown_column) {
  test_env::do_with_async([] (test_env& env) {
     api::timestamp_type write_timestamp = 1525385507816568;
-    storage_service_for_tests ssft;
     auto get_builder = [&] (bool has_missing_column) {
         auto builder = schema_builder("ks", "cf")
             .with_column("pk", int32_type, column_kind::partition_key)
@@ -5308,7 +5302,6 @@ static void test_sstable_write_large_row_f(schema_ptr s, memtable& mt, const par
 }
 
 SEASTAR_THREAD_TEST_CASE(test_sstable_write_large_row) {
-    storage_service_for_tests ssft;
     simple_schema s;
     mutation partition = s.new_mutation("pv");
     const partition_key& pk = partition.key();
@@ -5360,8 +5353,6 @@ static void test_sstable_log_too_many_rows_f(int rows, uint64_t threshold, bool 
 }
 
 SEASTAR_THREAD_TEST_CASE(test_sstable_log_too_many_rows) {
-    storage_service_for_tests ssft;
-
     // Generates a pseudo-random number from 1 to 100
     uint64_t random = (rand() % 100 + 1);
 

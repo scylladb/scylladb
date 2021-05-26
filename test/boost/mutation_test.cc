@@ -51,7 +51,6 @@
 #include <seastar/testing/thread_test_case.hh>
 #include "test/lib/mutation_assertions.hh"
 #include "test/lib/result_set_assertions.hh"
-#include "test/lib/test_services.hh"
 #include "test/lib/failure_injecting_allocation_strategy.hh"
 #include "test/lib/sstable_utils.hh"
 #include "test/lib/random_schema.hh"
@@ -484,7 +483,6 @@ SEASTAR_THREAD_TEST_CASE(test_large_collection_serialization_exception_safety) {
 
 SEASTAR_TEST_CASE(test_multiple_memtables_one_partition) {
     return sstables::test_env::do_with_async([] (sstables::test_env& env) {
-    storage_service_for_tests ssft;
     auto s = make_shared_schema({}, some_keyspace, some_column_family,
         {{"p1", utf8_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type);
 
@@ -550,7 +548,6 @@ SEASTAR_TEST_CASE(test_flush_in_the_middle_of_a_scan) {
 
     return with_column_family(s, cfg, [s](column_family& cf) {
         return seastar::async([s, &cf] {
-            storage_service_for_tests ssft;
             // populate
             auto new_key = [&] {
                 static thread_local int next = 0;

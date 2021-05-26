@@ -16,7 +16,6 @@
 #include "sstables/compaction_manager.hh"
 #include "mutation_reader.hh"
 #include "test/boost/sstable_test.hh"
-#include "test/lib/test_services.hh"
 #include "test/lib/tmpdir.hh"
 #include "cell_locking.hh"
 #include "test/lib/flat_mutation_reader_assertions.hh"
@@ -45,7 +44,6 @@ void run_sstable_resharding_test() {
     auto close_env = defer([&] { env.stop().get(); });
     cache_tracker tracker;
   for (const auto version : all_sstable_versions) {
-    storage_service_for_tests ssft;
     auto tmp = tmpdir();
     auto s = get_schema();
     auto cm = make_lw_shared<compaction_manager>();
@@ -137,7 +135,6 @@ SEASTAR_TEST_CASE(sstable_resharding_test) {
 SEASTAR_TEST_CASE(sstable_is_shared_correctness) {
     return test_env::do_with_async([] (test_env& env) {
       for (const auto version : all_sstable_versions) {
-        storage_service_for_tests ssft;
         cell_locker_stats cl_stats;
 
         auto tmp = tmpdir();
