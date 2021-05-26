@@ -141,6 +141,12 @@ struct reset {
     initial_state state;
 };
 
+struct wait_log {
+    std::vector<size_t> local_ids;
+    wait_log(size_t local_id) : local_ids({local_id}) {}
+    wait_log(std::initializer_list<size_t> local_ids) : local_ids(local_ids) {}
+};
+
 struct set_config_entry {
     size_t node_idx;
     bool can_vote;
@@ -155,7 +161,7 @@ struct tick {
     uint64_t ticks;
 };
 
-using update = std::variant<entries, new_leader, partition, disconnect, stop, reset,
+using update = std::variant<entries, new_leader, partition, disconnect, stop, reset, wait_log,
       set_config, tick>;
 
 struct log_entry {
@@ -535,6 +541,7 @@ public:
     future<> add_entries(size_t n);
     future<> add_remaining_entries();
     future<> wait_log(size_t follower);
+    future<> wait_log(::wait_log followers);
     future<> wait_log_all();
     future<> change_configuration(set_config sc);
     future<> reconfigure_all();
@@ -743,6 +750,14 @@ future<> raft_cluster::wait_log(size_t follower) {
            _in_configuration.contains(_leader) && _in_configuration.contains(follower)) {
         auto leader_log_idx = _servers[_leader].server->log_last_idx();
         co_await _servers[follower].server->wait_log_idx(leader_log_idx);
+    }
+}
+
+// Wait for leader log to propagate to specified followers
+future<> raft_cluster::wait_log(::wait_log followers) {
+    auto leader_log_idx = _servers[_leader].server->log_last_idx();
+    for (auto s: followers.local_ids) {
+        co_await _servers[s].server->wait_log_idx(leader_log_idx);
     }
 }
 
@@ -1024,6 +1039,8 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
             co_await rafts.stop(std::get<stop>(update));
         } else if (std::holds_alternative<reset>(update)) {
             co_await rafts.reset(std::get<reset>(update));
+        } else if (std::holds_alternative<wait_log>(update)) {
+            co_await rafts.wait_log(std::get<wait_log>(update));
         } else if (std::holds_alternative<set_config>(update)) {
             co_await rafts.change_configuration(std::get<set_config>(update));
         } else if (std::holds_alternative<tick>(update)) {
