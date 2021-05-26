@@ -130,3 +130,57 @@ def test_create_named_index_when_its_name_is_taken(scylla_only, cql, test_keyspa
                 cql.execute(f"CREATE INDEX {index_name} ON {table}(v)")
         finally:
             cql.execute(f"DROP TABLE {test_keyspace}.{index_name}_index")
+
+# Tests for CREATE INDEX IF NOT EXISTS
+# Reproduces issue #8717.
+def test_create_index_if_not_exists(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int primary key, v int') as table:
+        cql.execute(f"CREATE INDEX ON {table}(v)")
+        # Can't create the same index again without "IF NOT EXISTS", but can
+        # do it with "IF NOT EXISTS":
+        with pytest.raises(InvalidRequest, match="duplicate"):
+            cql.execute(f"CREATE INDEX ON {table}(v)")
+        cql.execute(f"CREATE INDEX IF NOT EXISTS ON {table}(v)")
+        cql.execute(f"DROP INDEX {test_keyspace}.{table.split('.')[1]}_v_idx")
+
+        # Now test the same thing for named indexes. This is what broke in #8717:
+        cql.execute(f"CREATE INDEX xyz ON {table}(v)")
+        with pytest.raises(InvalidRequest, match="already exists"):
+            cql.execute(f"CREATE INDEX xyz ON {table}(v)")
+        cql.execute(f"CREATE INDEX IF NOT EXISTS xyz ON {table}(v)")
+        cql.execute(f"DROP INDEX {test_keyspace}.xyz")
+
+        # Exactly the same with non-lower case name.
+        cql.execute(f'CREATE INDEX "CamelCase" ON {table}(v)')
+        with pytest.raises(InvalidRequest, match="already exists"):
+            cql.execute(f'CREATE INDEX "CamelCase" ON {table}(v)')
+        cql.execute(f'CREATE INDEX IF NOT EXISTS "CamelCase" ON {table}(v)')
+        cql.execute(f'DROP INDEX {test_keyspace}."CamelCase"')
+
+        # Trying to create an index for an attribute that's already indexed,
+        # but with a different name. The "IF NOT EXISTS" appears to succeed
+        # in this case, but does not actually create the new index name -
+        # only the old one remains.
+        cql.execute(f"CREATE INDEX xyz ON {table}(v)")
+        with pytest.raises(InvalidRequest, match="duplicate"):
+            cql.execute(f"CREATE INDEX abc ON {table}(v)")
+        cql.execute(f"CREATE INDEX IF NOT EXISTS abc ON {table}(v)")
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"DROP INDEX {test_keyspace}.abc")
+        cql.execute(f"DROP INDEX {test_keyspace}.xyz")
+
+# Test that the paging state works properly for indexes on tables
+# with descending clustering order. There was a problem with indexes
+# created on clustering keys with DESC clustering order - they are represented
+# as "reverse" types internally and Scylla assertions failed that the base type
+# is different from the underlying view type, even though, from the perspective
+# of deserialization, they're equal. Issue #8666
+def test_paging_with_desc_clustering_order(cql, test_keyspace):
+    schema = 'p int, c int, primary key (p,c)'
+    extra = 'with clustering order by (c desc)'
+    with new_test_table(cql, test_keyspace, schema, extra) as table:
+        cql.execute(f"CREATE INDEX ON {table}(c)")
+        for i in range(3):
+            cql.execute(f"INSERT INTO {table}(p,c) VALUES ({i}, 42)")
+        stmt = SimpleStatement(f"SELECT * FROM {table} WHERE c = 42", fetch_size=1)
+        assert len([row for row in cql.execute(stmt)]) == 3
