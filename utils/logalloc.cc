@@ -2383,6 +2383,12 @@ tracker::impl::impl() {
 
         sm::make_derive("memory_allocated", [this] { return shard_segment_pool.statistics().memory_allocated; },
                         sm::description("Counts number of bytes which were requested from LSA allocator.")),
+
+        sm::make_derive("memory_evicted", [] { return shard_segment_pool.statistics().memory_evicted; },
+                        sm::description("Counts number of bytes which were evicted.")),
+
+        sm::make_derive("memory_freed", [] { return shard_segment_pool.statistics().memory_freed; },
+                        sm::description("Counts number of bytes which were requested to be freed in LSA.")),
     });
 }
 
