@@ -132,6 +132,15 @@ struct two_nodes {
 };
 struct disconnect : public two_nodes {};
 
+struct stop {
+    size_t id;
+};
+
+struct reset {
+    size_t id;
+    initial_state state;
+};
+
 struct set_config_entry {
     size_t node_idx;
     bool can_vote;
@@ -146,7 +155,8 @@ struct tick {
     uint64_t ticks;
 };
 
-using update = std::variant<entries, new_leader, partition, disconnect, set_config, tick>;
+using update = std::variant<entries, new_leader, partition, disconnect, stop, reset,
+      set_config, tick>;
 
 struct log_entry {
     unsigned term;
@@ -530,6 +540,8 @@ public:
     future<> reconfigure_all();
     future<> partition(::partition p);
     future<> tick(::tick t);
+    future<> stop(::stop server);
+    future<> reset(::reset server);
     void disconnect(::disconnect nodes);
     const std::unordered_set<size_t>& get_configuration() {
         return _in_configuration;   // Servers in current configuration
@@ -926,6 +938,14 @@ future<> raft_cluster::tick(::tick t) {
     }
 }
 
+future<> raft_cluster::stop(::stop server) {
+    co_await stop_server(server.id);
+}
+
+future<> raft_cluster::reset(::reset server) {
+    co_await reset_server(server.id, server.state);
+}
+
 void raft_cluster::disconnect(::disconnect nodes) {
     _connected->cut(to_raft_id(nodes.first), to_raft_id(nodes.second));
 }
@@ -1000,6 +1020,10 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
             rafts.disconnect(std::get<::disconnect>(update));
         } else if (std::holds_alternative<partition>(update)) {
             co_await rafts.partition(std::get<partition>(update));
+        } else if (std::holds_alternative<stop>(update)) {
+            co_await rafts.stop(std::get<stop>(update));
+        } else if (std::holds_alternative<reset>(update)) {
+            co_await rafts.reset(std::get<reset>(update));
         } else if (std::holds_alternative<set_config>(update)) {
             co_await rafts.change_configuration(std::get<set_config>(update));
         } else if (std::holds_alternative<tick>(update)) {
