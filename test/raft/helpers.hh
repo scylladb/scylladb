@@ -222,3 +222,18 @@ raft::fsm create_follower(raft::server_id id, raft::log log, raft::failure_detec
     return raft::fsm(id, raft::term_t{}, raft::server_id{}, std::move(log), fd, fsm_cfg);
 }
 
+
+// Raft uses UUID 0 as special case.
+// Convert local 0-based integer id to raft +1 UUID
+utils::UUID to_raft_uuid(size_t local_id) {
+    return utils::UUID{0, local_id + 1};
+}
+
+raft::server_id to_raft_id(size_t local_id) {
+    return raft::server_id{to_raft_uuid(local_id)};
+}
+
+// NOTE: can_vote = true
+raft::server_address to_server_address(size_t local_id) {
+    return raft::server_address{raft::server_id{to_raft_uuid(local_id)}};
+}
