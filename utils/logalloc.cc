@@ -2363,26 +2363,26 @@ tracker::impl::impl() {
         sm::make_gauge("small_objects_used_space_bytes", [this] { return region_occupancy().used_space() - shard_segment_pool.non_lsa_memory_in_use(); },
                        sm::description("Holds a current amount of used \"small objects\" memory in bytes.")),
 
-        sm::make_gauge("large_objects_total_space_bytes", [this] { return shard_segment_pool.non_lsa_memory_in_use(); },
+        sm::make_gauge("large_objects_total_space_bytes", [] { return shard_segment_pool.non_lsa_memory_in_use(); },
                        sm::description("Holds a current size of allocated non-LSA memory.")),
 
         sm::make_gauge("non_lsa_used_space_bytes", [this] { return non_lsa_used_space(); },
                        sm::description("Holds a current amount of used non-LSA memory.")),
 
-        sm::make_gauge("free_space", [this] { return shard_segment_pool.unreserved_free_segments() * segment_size; },
+        sm::make_gauge("free_space", [] { return shard_segment_pool.unreserved_free_segments() * segment_size; },
                        sm::description("Holds a current amount of free memory that is under lsa control.")),
 
         sm::make_gauge("occupancy", [this] { return region_occupancy().used_fraction() * 100; },
                        sm::description("Holds a current portion (in percents) of the used memory.")),
 
-        sm::make_derive("segments_compacted", [this] { return shard_segment_pool.statistics().segments_compacted; },
+        sm::make_derive("segments_compacted", [] { return shard_segment_pool.statistics().segments_compacted; },
                         sm::description("Counts a number of compacted segments.")),
 
-        sm::make_derive("memory_compacted", [this] { return shard_segment_pool.statistics().memory_compacted; },
+        sm::make_derive("memory_compacted", [] { return shard_segment_pool.statistics().memory_compacted; },
                         sm::description("Counts number of bytes which were copied as part of segment compaction.")),
 
-        sm::make_derive("memory_allocated", [this] { return shard_segment_pool.statistics().memory_allocated; },
-                        sm::description("Counts number of bytes which were requested from LSA allocator.")),
+        sm::make_derive("memory_allocated", [] { return shard_segment_pool.statistics().memory_allocated; },
+                        sm::description("Counts number of bytes which were requested from LSA.")),
 
         sm::make_derive("memory_evicted", [] { return shard_segment_pool.statistics().memory_evicted; },
                         sm::description("Counts number of bytes which were evicted.")),
