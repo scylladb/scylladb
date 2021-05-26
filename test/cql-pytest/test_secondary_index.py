@@ -147,3 +147,41 @@ def test_create_named_index_when_its_name_is_taken(scylla_only, cql, test_keyspa
                 cql.execute(f"CREATE INDEX {index_name} ON {table}(v)")
         finally:
             cql.execute(f"DROP TABLE {test_keyspace}.{index_name}_index")
+
+# Tests for CREATE INDEX IF NOT EXISTS
+# Reproduces issue #8717.
+def test_create_index_if_not_exists(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int primary key, v int') as table:
+        cql.execute(f"CREATE INDEX ON {table}(v)")
+        # Can't create the same index again without "IF NOT EXISTS", but can
+        # do it with "IF NOT EXISTS":
+        with pytest.raises(InvalidRequest, match="duplicate"):
+            cql.execute(f"CREATE INDEX ON {table}(v)")
+        cql.execute(f"CREATE INDEX IF NOT EXISTS ON {table}(v)")
+        cql.execute(f"DROP INDEX {test_keyspace}.{table.split('.')[1]}_v_idx")
+
+        # Now test the same thing for named indexes. This is what broke in #8717:
+        cql.execute(f"CREATE INDEX xyz ON {table}(v)")
+        with pytest.raises(InvalidRequest, match="already exists"):
+            cql.execute(f"CREATE INDEX xyz ON {table}(v)")
+        cql.execute(f"CREATE INDEX IF NOT EXISTS xyz ON {table}(v)")
+        cql.execute(f"DROP INDEX {test_keyspace}.xyz")
+
+        # Exactly the same with non-lower case name.
+        cql.execute(f'CREATE INDEX "CamelCase" ON {table}(v)')
+        with pytest.raises(InvalidRequest, match="already exists"):
+            cql.execute(f'CREATE INDEX "CamelCase" ON {table}(v)')
+        cql.execute(f'CREATE INDEX IF NOT EXISTS "CamelCase" ON {table}(v)')
+        cql.execute(f'DROP INDEX {test_keyspace}."CamelCase"')
+
+        # Trying to create an index for an attribute that's already indexed,
+        # but with a different name. The "IF NOT EXISTS" appears to succeed
+        # in this case, but does not actually create the new index name -
+        # only the old one remains.
+        cql.execute(f"CREATE INDEX xyz ON {table}(v)")
+        with pytest.raises(InvalidRequest, match="duplicate"):
+            cql.execute(f"CREATE INDEX abc ON {table}(v)")
+        cql.execute(f"CREATE INDEX IF NOT EXISTS abc ON {table}(v)")
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"DROP INDEX {test_keyspace}.abc")
+        cql.execute(f"DROP INDEX {test_keyspace}.xyz")
