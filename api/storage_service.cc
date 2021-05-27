@@ -1205,14 +1205,17 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
     });
 
     ss::take_snapshot.set(r, [&snap_ctl](std::unique_ptr<request> req) {
+        apilog.debug("take_snapshot: {}", req->query_parameters);
         auto tag = req->get_query_param("tag");
         auto column_families = split(req->get_query_param("cf"), ",");
+        auto sfopt = req->get_query_param("sf");
+        auto sf = db::snapshot_ctl::skip_flush(strcasecmp(sfopt.c_str(), "true") == 0);
 
         std::vector<sstring> keynames = split(req->get_query_param("kn"), ",");
 
         auto resp = make_ready_future<>();
         if (column_families.empty()) {
-            resp = snap_ctl.local().take_snapshot(tag, keynames);
+            resp = snap_ctl.local().take_snapshot(tag, keynames, sf);
         } else {
             if (keynames.empty()) {
                 throw httpd::bad_param_exception("The keyspace of column families must be specified");
@@ -1220,7 +1223,7 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
             if (keynames.size() > 1) {
                 throw httpd::bad_param_exception("Only one keyspace allowed when specifying a column family");
             }
-            resp = snap_ctl.local().take_column_family_snapshot(keynames[0], column_families, tag);
+            resp = snap_ctl.local().take_column_family_snapshot(keynames[0], column_families, tag, sf);
         }
         return resp.then([] {
             return make_ready_future<json::json_return_type>(json_void());
