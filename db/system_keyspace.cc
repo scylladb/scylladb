@@ -1665,7 +1665,7 @@ future<std::unordered_set<dht::token>> get_local_tokens() {
             slogger.error("{}", err);
             throw std::runtime_error(err);
         }
-        return tokens;
+        return std::move(tokens);
     });
 }
 

@@ -695,7 +695,7 @@ static std::vector<shared_sstable>
 filter_sstable_for_reader_by_pk(std::vector<shared_sstable>&& sstables, const schema& schema, const dht::ring_position& pos) {
     auto filter = [_filter = make_pk_filter(pos, schema)] (const shared_sstable& sst) { return !_filter(*sst); };
     sstables.erase(boost::remove_if(sstables, filter), sstables.end());
-    return sstables;
+    return std::move(sstables);
 }
 
 // Filter out sstables for reader using sstable metadata that keeps track
@@ -707,7 +707,7 @@ filter_sstable_for_reader_by_ck(std::vector<shared_sstable>&& sstables, column_f
     // compaction strategy thinks it will not benefit from such an optimization,
     // or the partition_slice includes static columns.
     if (!schema->clustering_key_size() || !cf.get_compaction_strategy().use_clustering_key_filter() || slice.static_columns.size()) {
-        return sstables;
+        return std::move(sstables);
     }
 
     ::cf_stats* stats = cf.cf_stats();
@@ -720,7 +720,7 @@ filter_sstable_for_reader_by_ck(std::vector<shared_sstable>&& sstables, column_f
     if (ck_filtering_all_ranges.size() == 1 && ck_filtering_all_ranges[0].is_full()) {
         stats->clustering_filter_fast_path_count++;
         stats->surviving_sstables_after_clustering_filter += sstables.size();
-        return sstables;
+        return std::move(sstables);
     }
 
     auto skipped = std::partition(sstables.begin(), sstables.end(), [&ranges = ck_filtering_all_ranges] (const shared_sstable& sst) {
@@ -729,7 +729,7 @@ filter_sstable_for_reader_by_ck(std::vector<shared_sstable>&& sstables, column_f
     sstables.erase(skipped, sstables.end());
     stats->surviving_sstables_after_clustering_filter += sstables.size();
 
-    return sstables;
+    return std::move(sstables);
 }
 
 std::vector<sstable_run>

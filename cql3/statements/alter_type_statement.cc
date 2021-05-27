@@ -219,7 +219,7 @@ user_type alter_type_statement::renames::make_updated_type(database& db, user_ty
         }
         new_names[*idx] = rename.second->name();
     }
-    auto&& updated = user_type_impl::get_instance(to_update->_keyspace, to_update->_name, std::move(new_names), to_update->field_types(), to_update->is_multi_cell());
+    auto updated = user_type_impl::get_instance(to_update->_keyspace, to_update->_name, std::move(new_names), to_update->field_types(), to_update->is_multi_cell());
     create_type_statement::check_for_duplicate_names(updated);
     return updated;
 }

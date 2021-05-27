@@ -71,7 +71,7 @@ T map_sum(T&& dest, const S& src) {
     for (auto i : src) {
         dest[i.first] += i.second;
     }
-    return dest;
+    return std::move(dest);
 }
 
 template <typename MAP>

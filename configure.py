@@ -1287,7 +1287,6 @@ warnings = [
     '-Wno-gnu-designator',
     '-Wno-unsupported-friend',
     '-Wno-unused-variable',
-    '-Wno-return-std-move',
     '-Wno-delete-non-abstract-non-virtual-dtor',
     '-Wno-unknown-attributes',
     '-Wno-braced-scalar-init',
