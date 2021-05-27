@@ -34,6 +34,7 @@
 #include <boost/range/adaptor/transformed.hpp>
 #include <seastar/util/defer.hh>
 #include "utils/exceptions.hh"
+#include "mutation_rebuilder.hh"
 #include <seastar/core/on_internal_error.hh>
 
 #include "clustering_key_filter.hh"
@@ -1268,6 +1269,10 @@ template future<bool> flat_mutation_reader_v2::impl::fill_buffer_from<flat_mutat
 
 void flat_mutation_reader_v2::do_upgrade_schema(const schema_ptr& s) {
     *this = transform(std::move(*this), schema_upgrader_v2(s));
+}
+
+future<mutation_opt> read_mutation_from_flat_mutation_reader(flat_mutation_reader_v2& r, db::timeout_clock::time_point timeout) {
+    return r.consume(mutation_rebuilder_v2(r.schema()), timeout);
 }
 
 void flat_mutation_reader_v2::on_close_error(std::unique_ptr<impl> i, std::exception_ptr ep) noexcept {

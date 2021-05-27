@@ -755,3 +755,6 @@ flat_mutation_reader downgrade_to_v1(flat_mutation_reader_v2);
 
 // Adapts a v1 reader to v2 reader
 flat_mutation_reader_v2 upgrade_to_v2(flat_mutation_reader);
+
+// Reads a single partition from a reader. Returns empty optional if there are no more partitions to be read.
+future<mutation_opt> read_mutation_from_flat_mutation_reader(flat_mutation_reader_v2&, db::timeout_clock::time_point timeout);
