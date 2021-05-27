@@ -464,17 +464,15 @@ public:
             tracing::trace_state_ptr trace_state,
             mutation_reader::forwarding fwd_mr) = 0;
 
-    /// Wait on the shard reader to stop then destroy it.
+    /// Destroy the shard reader.
     ///
     /// Will be called when the multishard reader is being destroyed. It will be
-    /// called for each of the shard readers. The future resolves when the
-    /// reader is stopped, that is it, finishes all background and/or pending
-    /// work.
+    /// called for each of the shard readers.
     /// This method is expected to do a proper cleanup, that is, leave any gates,
     /// release any locks or whatever is appropriate for the shard reader.
     ///
     /// This method will be called from a destructor so it cannot throw.
-    virtual future<> destroy_reader(shard_id shard, future<stopped_reader> reader) noexcept = 0;
+    virtual future<> destroy_reader(shard_id shard, stopped_reader reader) noexcept = 0;
 
     /// Get the relevant semaphore for this read.
     ///

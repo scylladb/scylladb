@@ -203,8 +203,6 @@ class read_context : public reader_lifecycle_policy {
     std::vector<reader_meta> _readers;
     std::vector<reader_concurrency_semaphore*> _semaphores;
 
-    gate _dismantling_gate;
-
     static std::string_view reader_state_to_string(reader_state rs);
 
     dismantle_buffer_stats dismantle_combined_buffer(flat_mutation_reader::tracked_buffer combined_buffer, const dht::decorated_key& pkey);
@@ -247,7 +245,7 @@ public:
             tracing::trace_state_ptr trace_state,
             mutation_reader::forwarding fwd_mr) override;
 
-    virtual future<> destroy_reader(shard_id shard, future<stopped_reader> reader_fut) noexcept override;
+    virtual future<> destroy_reader(shard_id shard, stopped_reader reader) noexcept override;
 
     virtual reader_concurrency_semaphore& semaphore() override {
         const auto shard = this_shard_id();
@@ -323,20 +321,9 @@ flat_mutation_reader read_context::create_reader(
             std::move(trace_state), streamed_mutation::forwarding::no, fwd_mr);
 }
 
-future<> read_context::destroy_reader(shard_id shard, future<stopped_reader> reader_fut) noexcept {
-    // Future is waited on indirectly in `stop()` (via `_dismantling_gate`).
-    return with_gate(_dismantling_gate, [this, shard, reader_fut = std::move(reader_fut)] () mutable {
-        return reader_fut.then_wrapped([this, shard] (future<stopped_reader>&& reader_fut) {
+future<> read_context::destroy_reader(shard_id shard, stopped_reader reader) noexcept {
             auto& rm = _readers[shard];
 
-            if (reader_fut.failed()) {
-                mmq_log.debug("Failed to stop reader on shard {}: {}", shard, reader_fut.get_exception());
-                ++_db.local().get_stats().multishard_query_failed_reader_stops;
-                rm.state = reader_state::inexistent;
-                return;
-            }
-
-            auto reader = reader_fut.get0();
             if (rm.state == reader_state::used) {
                 rm.state = reader_state::saving;
                 rm.handle = std::move(reader.handle);
@@ -348,13 +335,10 @@ future<> read_context::destroy_reader(shard_id shard, future<stopped_reader> rea
                         reader_state_to_string(rm.state),
                         shard);
             }
-        });
-    });
+    return make_ready_future<>();
 }
 
 future<> read_context::stop() {
-    auto gate_fut = _dismantling_gate.is_closed() ? make_ready_future<>() : _dismantling_gate.close();
-    return gate_fut.then([this] {
         return parallel_for_each(smp::all_cpus(), [this] (unsigned shard) {
             if (_readers[shard].rparts) {
                 return _db.invoke_on(shard, [rm = std::move(_readers[shard])] (database& db) mutable {
@@ -371,7 +355,6 @@ future<> read_context::stop() {
             }
             return make_ready_future<>();
         });
-    });
 }
 
 read_context::dismantle_buffer_stats read_context::dismantle_combined_buffer(flat_mutation_reader::tracked_buffer combined_buffer,
@@ -563,8 +546,6 @@ future<> read_context::save_readers(flat_mutation_reader::tracked_buffer unconsu
         return make_ready_future<>();
     }
 
-    return _dismantling_gate.close().then([this, unconsumed_buffer = std::move(unconsumed_buffer), compaction_state = std::move(compaction_state),
-          last_ckey = std::move(last_ckey)] () mutable {
         auto last_pkey = compaction_state.partition_start.key();
 
         // Ensure all readers have engaged reader_meta::buffer member.
@@ -591,7 +572,6 @@ future<> read_context::save_readers(flat_mutation_reader::tracked_buffer unconsu
                 return make_ready_future<>();
             });
         });
-    });
 }
 
 namespace {

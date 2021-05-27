@@ -143,9 +143,8 @@ public:
         _contexts[shard]->op = _operation_gate.enter();
         return _factory_function(std::move(schema), *_contexts[shard]->range, *_contexts[shard]->slice, pc, std::move(trace_state), fwd_mr);
     }
-    virtual future<> destroy_reader(shard_id shard, future<stopped_reader> reader) noexcept override {
+    virtual future<> destroy_reader(shard_id shard, stopped_reader reader) noexcept override {
         // waited via _operation_gate
-        return reader.then([shard, this] (stopped_reader&& reader) {
             return smp::submit_to(shard, [handle = std::move(reader.handle), ctx = &*_contexts[shard]] () mutable {
                 auto reader_opt = ctx->semaphore->unregister_inactive_read(std::move(*handle));
                 auto ret = reader_opt ? reader_opt->close() : make_ready_future<>();
@@ -160,7 +159,6 @@ public:
                 }
                 return std::move(ret);
             });
-        }).finally([zis = shared_from_this()] {});
     }
     virtual reader_concurrency_semaphore& semaphore() override {
         const auto shard = this_shard_id();

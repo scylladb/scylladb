@@ -1655,7 +1655,7 @@ future<> shard_reader::close() noexcept {
         for (const auto& mf : *remote_buffer) {
             buffer.emplace_back(*_schema, _permit, mf); // we are copying from the remote shard.
         }
-        co_await _lifecycle_policy->destroy_reader(_shard, make_ready_future<reader_lifecycle_policy::stopped_reader>(reader_lifecycle_policy::stopped_reader{std::move(irh), std::move(buffer)}));
+        co_await _lifecycle_policy->destroy_reader(_shard, reader_lifecycle_policy::stopped_reader{std::move(irh), std::move(buffer)});
     } catch (...) {
         mrlog.error("shard_reader::close(): failed to stop reader on shard {}: {}", _shard, std::current_exception());
     }
