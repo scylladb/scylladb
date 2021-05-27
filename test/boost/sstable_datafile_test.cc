@@ -6685,3 +6685,115 @@ SEASTAR_TEST_CASE(test_zero_estimated_partitions) {
         return make_ready_future<>();
     });
 }
+
+SEASTAR_TEST_CASE(max_ongoing_compaction_test) {
+    return test_env::do_with_async([] (test_env& env) {
+        BOOST_REQUIRE(smp::count == 1);
+
+        auto make_schema = [] (auto idx) {
+            auto builder = schema_builder("tests", std::to_string(idx))
+                .with_column("id", utf8_type, column_kind::partition_key)
+                .with_column("cl", int32_type, column_kind::clustering_key)
+                .with_column("value", int32_type);
+            builder.set_compaction_strategy(sstables::compaction_strategy_type::time_window);
+            std::map <sstring, sstring> opts = {
+                {time_window_compaction_strategy_options::COMPACTION_WINDOW_UNIT_KEY,                  "HOURS"},
+                {time_window_compaction_strategy_options::COMPACTION_WINDOW_SIZE_KEY,                  "1"},
+                {time_window_compaction_strategy_options::EXPIRED_SSTABLE_CHECK_FREQUENCY_SECONDS_KEY, "0"},
+            };
+            builder.set_compaction_strategy_options(std::move(opts));
+            builder.set_gc_grace_seconds(0);
+            return builder.build();
+        };
+
+        auto cm = make_lw_shared<compaction_manager>();
+        cm->enable();
+        auto stop_cm = defer([&cm] {
+            cm->stop().get();
+        });
+
+        auto tmp = tmpdir();
+        auto cl_stats = make_lw_shared<cell_locker_stats>();
+        auto tracker = make_lw_shared<cache_tracker>();
+        auto tokens = token_generation_for_shard(1, this_shard_id(), test_db_config.murmur3_partitioner_ignore_msb_bits(), smp::count);
+
+        auto next_timestamp = [] (auto step) {
+            using namespace std::chrono;
+            return (gc_clock::now().time_since_epoch() - duration_cast<microseconds>(step)).count();
+        };
+        auto make_expiring_cell = [&] (schema_ptr s, std::chrono::hours step) {
+            static thread_local int32_t value = 1;
+
+            auto key_str = tokens[0].first;
+            auto key = partition_key::from_exploded(*s, {to_bytes(key_str)});
+
+            mutation m(s, key);
+            auto c_key = clustering_key::from_exploded(*s, {int32_type->decompose(value++)});
+            m.set_clustered_cell(c_key, bytes("value"), data_value(int32_t(value)), next_timestamp(step), gc_clock::duration(step + 5s));
+            return m;
+        };
+
+        auto make_table_with_single_fully_expired_sstable = [&] (auto idx) {
+            auto s = make_schema(idx);
+            column_family::config cfg = column_family_test_config(env.manager());
+            cfg.datadir = tmp.path().string() + "/" + std::to_string(idx);
+            touch_directory(cfg.datadir).get();
+            cfg.enable_commitlog = false;
+            cfg.enable_incremental_backups = false;
+
+            auto sst_gen = [&env, s, dir = cfg.datadir, gen = make_lw_shared<unsigned>(1)] () mutable {
+                return env.make_sstable(s, dir, (*gen)++, sstables::sstable::version_types::md, big);
+            };
+
+            auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), *cm, *cl_stats, *tracker);
+            cf->start();
+            cf->mark_ready_for_writes();
+
+            auto muts = { make_expiring_cell(s, std::chrono::hours(1)) };
+            auto sst = make_sstable_containing(sst_gen, muts);
+            column_family_test(cf).add_sstable(sst);
+            return cf;
+        };
+
+        std::vector<lw_shared_ptr<column_family>> tables;
+        auto stop_tables = defer([&tables] {
+            for (auto& t : tables) {
+                t->stop().get();
+            }
+        });
+        for (auto i = 0; i < 100; i++) {
+            tables.push_back(make_table_with_single_fully_expired_sstable(i));
+        }
+
+        // Make sure everything is expired
+        forward_jump_clocks(std::chrono::hours(100));
+
+        for (auto& t : tables) {
+            BOOST_REQUIRE(t->sstables_count() == 1);
+            t->trigger_compaction();
+        }
+
+        BOOST_REQUIRE(cm->get_stats().pending_tasks >= 1 || cm->get_stats().active_tasks >= 1);
+
+        size_t max_ongoing_compaction = 0;
+
+        // wait for submitted jobs to finish.
+        auto end = [cm, &tables] {
+            return cm->get_stats().pending_tasks == 0 && cm->get_stats().active_tasks == 0
+                && boost::algorithm::all_of(tables, [] (auto& t) { return t->sstables_count() == 0; });
+        };
+        while (!end()) {
+            if (!cm->get_stats().pending_tasks && !cm->get_stats().active_tasks) {
+                for (auto& t : tables) {
+                    if (t->sstables_count()) {
+                        t->trigger_compaction();
+                    }
+                }
+            }
+            max_ongoing_compaction = std::max(cm->get_stats().active_tasks, max_ongoing_compaction);
+            later().get();
+        }
+        BOOST_REQUIRE(cm->get_stats().errors == 0);
+        BOOST_REQUIRE(max_ongoing_compaction == 1);
+    });
+}
