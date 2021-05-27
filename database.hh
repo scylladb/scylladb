@@ -22,7 +22,7 @@
 #ifndef DATABASE_HH_
 #define DATABASE_HH_
 
-#include "locator/abstract_replication_strategy.hh"
+#include "locator/token_metadata.hh"
 #include "index/secondary_index_manager.hh"
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/sstring.hh>
@@ -128,6 +128,12 @@ namespace system_keyspace {
 future<> make(database& db);
 }
 }
+
+namespace locator {
+
+class abstract_replication_strategy;
+
+} // namespace locator
 
 class mutation_reordered_with_truncate_exception : public std::exception {};
 

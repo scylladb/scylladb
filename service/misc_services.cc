@@ -47,6 +47,7 @@
 #include "service/storage_proxy.hh"
 #include "service/view_update_backlog_broker.hh"
 #include "database.hh"
+#include "locator/abstract_replication_strategy.hh"
 
 #include <cstdlib>
 

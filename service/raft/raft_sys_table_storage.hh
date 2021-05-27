@@ -22,8 +22,26 @@
 
 #include "raft/raft.hh"
 
-#include "cql3/query_processor.hh"
-#include "cql3/statements/modification_statement.hh"
+#include <vector>
+#include <functional>
+
+#include <seastar/core/shared_ptr.hh>
+#include <seastar/core/future.hh>
+
+#include "service/query_state.hh"
+#include "seastarx.hh"
+
+namespace cql3 {
+
+class query_processor;
+
+namespace statements {
+
+class modification_statement;
+
+} // namespace cql3::statements
+
+} // namespace cql3
 
 // Scylla-specific implementation of raft persistence module.
 //

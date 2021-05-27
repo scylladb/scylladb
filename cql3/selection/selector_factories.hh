@@ -44,6 +44,7 @@
 #include <vector>
 #include "cql3/selection/selector.hh"
 #include "cql3/selection/selectable.hh"
+#include "schema.hh"
 
 namespace cql3 {
 

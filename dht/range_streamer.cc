@@ -49,6 +49,7 @@
 #include "db/config.hh"
 #include <seastar/core/semaphore.hh>
 #include <boost/range/adaptors.hpp>
+#include "locator/abstract_replication_strategy.hh"
 
 namespace dht {
 

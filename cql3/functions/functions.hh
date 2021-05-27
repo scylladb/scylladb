@@ -52,6 +52,7 @@
 #include "cql3/cql3_type.hh"
 #include "cql3/column_identifier.hh"
 #include "to_string.hh"
+#include "log.hh"
 #include <unordered_map>
 
 namespace cql3 {

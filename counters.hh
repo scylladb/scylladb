@@ -25,12 +25,11 @@
 #include <boost/range/algorithm/find_if.hpp>
 #include <boost/range/numeric.hpp>
 
-#include "atomic_cell_or_collection.hh"
+#include "atomic_cell.hh"
 #include "types.hh"
 
 class mutation;
-
-class mutation;
+class atomic_cell_or_collection;
 
 class counter_id {
     int64_t _least_significant;

@@ -33,9 +33,6 @@
 #include <seastar/net/byteorder.hh>
 #include "db_clock.hh"
 #include "bytes.hh"
-#include "log.hh"
-#include "cql_serialization_format.hh"
-#include "tombstone.hh"
 #include "to_string.hh"
 #include "duration.hh"
 #include "marshal_exception.hh"
@@ -51,7 +48,7 @@
 
 class tuple_type_impl;
 class big_decimal;
-
+class cql_serialization_format;
 
 namespace utils {
 

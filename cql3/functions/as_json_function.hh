@@ -48,6 +48,7 @@
 
 #include "bytes_ostream.hh"
 #include "types.hh"
+#include "cql_serialization_format.hh"
 
 #include <boost/algorithm/cxx11/any_of.hpp>
 

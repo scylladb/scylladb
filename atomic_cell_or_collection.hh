@@ -24,7 +24,6 @@
 #include "atomic_cell.hh"
 #include "collection_mutation.hh"
 #include "schema.hh"
-#include "hashing.hh"
 
 // A variant type that can hold either an atomic_cell, or a serialized collection.
 // Which type is stored is determined by the schema.

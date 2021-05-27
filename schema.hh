@@ -41,6 +41,7 @@
 #include "compaction_strategy_type.hh"
 #include "caching_options.hh"
 #include "column_computation.hh"
+#include "timestamp.hh"
 
 namespace dht {
 

@@ -21,9 +21,9 @@
 
 #pragma once
 
-#include "query-result.hh"
 #include "schema_fwd.hh"
 #include "frozen_mutation.hh"
+#include "bytes.hh"
 
 namespace db {
 class schema_ctxt;

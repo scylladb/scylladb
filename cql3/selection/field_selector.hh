@@ -43,6 +43,7 @@
 #include "selector.hh"
 #include "types.hh"
 #include "types/user.hh"
+#include "cql_serialization_format.hh"
 
 namespace cql3 {
 

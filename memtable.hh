@@ -32,7 +32,6 @@
 #include "db/commitlog/replay_position.hh"
 #include "db/commitlog/rp_set.hh"
 #include "utils/extremum_tracking.hh"
-#include "partition_version.hh"
 #include "mutation_cleaner.hh"
 #include "sstables/types.hh"
 #include "utils/double-decker.hh"

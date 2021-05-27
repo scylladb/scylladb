@@ -41,6 +41,7 @@
 
 #include "abstract_function_selector.hh"
 #include "cql3/functions/scalar_function.hh"
+#include "cql_serialization_format.hh"
 
 namespace cql3 {
 

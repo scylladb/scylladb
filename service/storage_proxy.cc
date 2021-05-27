@@ -102,6 +102,7 @@
 #include "locator/token_metadata.hh"
 #include "seastar/core/coroutine.hh"
 #include "seastar/core/with_timeout.hh"
+#include "locator/abstract_replication_strategy.hh"
 
 namespace bi = boost::intrusive;
 

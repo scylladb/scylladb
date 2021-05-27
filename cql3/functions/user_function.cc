@@ -22,6 +22,7 @@
 #include "user_function.hh"
 #include "lua.hh"
 #include "log.hh"
+#include "cql_serialization_format.hh"
 
 #include <seastar/core/thread.hh>
 

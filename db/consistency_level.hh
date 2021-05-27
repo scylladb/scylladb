@@ -47,10 +47,12 @@
 #include "utils/fb_utilities.hh"
 #include "gms/inet_address.hh"
 #include "inet_address_vectors.hh"
-#include "database.hh"
+#include "log.hh"
+#include "database_fwd.hh"
 
 #include <iosfwd>
 #include <vector>
+#include <unordered_set>
 
 namespace db {
 

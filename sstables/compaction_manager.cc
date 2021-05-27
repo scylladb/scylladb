@@ -28,6 +28,7 @@
 #include "service/storage_service.hh"
 #include <seastar/core/metrics.hh>
 #include "exceptions.hh"
+#include "locator/abstract_replication_strategy.hh"
 #include <cmath>
 
 static logging::logger cmlog("compaction_manager");

@@ -44,7 +44,12 @@
 #include <seastar/core/abort_source.hh>
 
 #include "auth/authenticator.hh"
-#include "cql3/query_processor.hh"
+
+namespace cql3 {
+
+class query_processor;
+
+} // namespace cql3
 
 namespace service {
 class migration_manager;

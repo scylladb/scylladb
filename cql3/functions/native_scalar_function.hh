@@ -43,6 +43,8 @@
 
 #include "native_function.hh"
 #include "scalar_function.hh"
+#include "cql_serialization_format.hh"
+#include "log.hh"
 #include <seastar/core/shared_ptr.hh>
 
 namespace cql3 {

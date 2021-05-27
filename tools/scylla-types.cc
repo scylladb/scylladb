@@ -24,6 +24,7 @@
 
 #include "compound.hh"
 #include "db/marshal/type_parser.hh"
+#include "log.hh"
 
 using namespace seastar;
 

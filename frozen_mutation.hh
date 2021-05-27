@@ -22,12 +22,11 @@
 #pragma once
 
 #include "dht/i_partitioner.hh"
-#include "atomic_cell.hh"
 #include "database_fwd.hh"
-#include "mutation_partition_view.hh"
 #include "mutation_fragment.hh"
 
 class mutation;
+class mutation_partition_view;
 class flat_mutation_reader;
 
 namespace ser {

@@ -67,6 +67,8 @@
 #include <seastar/core/shared_ptr_incomplete.hh>
 #include <seastar/util/memory_diagnostics.hh>
 
+#include "locator/abstract_replication_strategy.hh"
+
 using namespace std::chrono_literals;
 using namespace db;
 

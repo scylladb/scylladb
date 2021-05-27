@@ -30,6 +30,7 @@
 #include "idl/raft.dist.impl.hh"
 
 #include "cql3/statements/batch_statement.hh"
+#include "cql3/query_processor.hh"
 
 #include <seastar/core/loop.hh>
 #include <seastar/core/coroutine.hh>

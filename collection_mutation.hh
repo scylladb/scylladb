@@ -25,9 +25,6 @@
 #include "schema_fwd.hh"
 #include "gc_clock.hh"
 #include "atomic_cell.hh"
-#include "cql_serialization_format.hh"
-#include "marshal_exception.hh"
-#include "utils/linearizing_input_stream.hh"
 #include <iosfwd>
 #include <forward_list>
 
@@ -36,6 +33,8 @@ class compaction_garbage_collector;
 class row_tombstone;
 
 class collection_mutation;
+
+class cql_serialization_format;
 
 // An auxiliary struct used to (de)construct collection_mutations.
 // Unlike collection_mutation which is a serialized blob, this struct allows to inspect logical units of information

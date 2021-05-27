@@ -22,6 +22,7 @@
 
 #include "serializer.hh"
 #include "schema.hh"
+#include "log.hh"
 
 extern logging::logger dblog;
 

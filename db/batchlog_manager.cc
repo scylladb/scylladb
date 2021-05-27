@@ -68,6 +68,7 @@
 #include "message/messaging_service.hh"
 #include "cql3/untyped_result_set.hh"
 #include "service_permit.hh"
+#include "cql3/query_processor.hh"
 
 static logging::logger blogger("batchlog_manager");
 

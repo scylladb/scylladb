@@ -62,6 +62,7 @@ extern "C" {
 #include "exceptions/exceptions.hh"
 #include "log.hh"
 #include "database.hh"
+#include "utils/class_registrator.hh"
 
 namespace auth {
 

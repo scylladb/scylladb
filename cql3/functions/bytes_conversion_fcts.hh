@@ -45,6 +45,7 @@
 #include "exceptions/exceptions.hh"
 #include <seastar/core/print.hh>
 #include "cql3/cql3_type.hh"
+#include "cql_serialization_format.hh"
 
 namespace cql3 {
 

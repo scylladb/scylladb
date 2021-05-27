@@ -55,6 +55,7 @@
 #include "query-result-reader.hh"
 #include "thrift/server.hh"
 #include "db/config.hh"
+#include "locator/abstract_replication_strategy.hh"
 
 #ifdef THRIFT_USES_BOOST
 namespace thrift_fn = tcxx;
