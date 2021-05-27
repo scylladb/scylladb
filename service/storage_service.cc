@@ -593,21 +593,18 @@ void storage_service::join_token_ring(int delay) {
     }
 
     if (!_cdc_gen_id) {
-        // If we didn't choose a CDC streams timestamp at this point, then either
+        // If we didn't observe any CDC generation at this point, then either
         // 1. we're replacing a node,
         // 2. we've already bootstrapped, but are upgrading from a non-CDC version,
-        // 3. we're starting for the first time, but we're skipping the streaming phase (seed node/auto_bootstrap=off)
-        //    and directly joining the token ring.
+        // 3. we're the first node, starting a fresh cluster.
 
-        // In the replacing case we won't propose any CDC generation: we're not introducing any new tokens,
+        // In the replacing case we won't create any CDC generation: we're not introducing any new tokens,
         // so the current generation used by the cluster is fine.
 
-        // In the case of an upgrading cluster, one of the nodes is responsible for proposing
+        // In the case of an upgrading cluster, one of the nodes is responsible for creating
         // the first CDC generation. We'll check if it's us.
 
-        // Finally, if we're simply a new node joining the ring but skipping bootstrapping
-        // (NEVER DO THAT except for the very first node),
-        // we'll propose a new generation just as normally bootstrapping nodes do.
+        // Finally, if we're the first node, we'll create the first generation.
 
         if (!db().local().is_replacing()
                 && (!db::system_keyspace::bootstrap_complete()
@@ -615,11 +612,13 @@ void storage_service::join_token_ring(int delay) {
             try {
                 _cdc_gen_id = cdc::make_new_cdc_generation(db().local().get_config(),
                         _bootstrap_tokens, get_token_metadata_ptr(), _gossiper,
-                        _sys_dist_ks.local(), get_ring_delay(), !_for_testing && !is_first_node()).get0();
+                        _sys_dist_ks.local(), get_ring_delay(),
+                        !_for_testing && !is_first_node() /* add_delay */,
+                        features().cluster_supports_cdc_generations_v2()).get0();
             } catch (...) {
                 cdc_log.warn(
-                    "Could not create a new CDC generation: {}. This may make it impossible to use CDC. Use nodetool checkAndRepairCdcStreams to fix CDC generation",
-                    std::current_exception());
+                    "Could not create a new CDC generation: {}. This may make it impossible to use CDC or cause performance problems."
+                    " Use nodetool checkAndRepairCdcStreams to fix CDC.", std::current_exception());
             }
         }
     }
@@ -697,7 +696,9 @@ void storage_service::bootstrap() {
 
         _cdc_gen_id = cdc::make_new_cdc_generation(db().local().get_config(),
                 _bootstrap_tokens, get_token_metadata_ptr(), _gossiper,
-                _sys_dist_ks.local(), get_ring_delay(), !_for_testing && !is_first_node()).get0();
+                _sys_dist_ks.local(), get_ring_delay(),
+                !_for_testing && !is_first_node() /* add_delay */,
+                features().cluster_supports_cdc_generations_v2()).get0();
 
       if (!is_repair_based_node_ops_enabled()) {
         // When is_repair_based_node_ops_enabled is true, the bootstrap node

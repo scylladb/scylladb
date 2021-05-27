@@ -60,6 +60,10 @@ public:
     /* Nodes use this table to communicate new CDC stream generations to other nodes. */
     static constexpr auto CDC_TOPOLOGY_DESCRIPTION = "cdc_generation_descriptions";
 
+    /* Nodes use this table to communicate new CDC stream generations to other nodes.
+     * Resides in system_distributed_everywhere. */
+    static constexpr auto CDC_GENERATIONS_V2 = "cdc_generation_descriptions_v2";
+
     /* This table is used by CDC clients to learn about available CDC streams. */
     static constexpr auto CDC_DESC_V2 = "cdc_streams_descriptions_v2";
 
@@ -101,8 +105,15 @@ public:
     future<> finish_view_build(sstring ks_name, sstring view_name) const;
     future<> remove_view(sstring ks_name, sstring view_name) const;
 
-    future<> insert_cdc_topology_description(cdc::generation_id, const cdc::topology_description&, context);
-    future<std::optional<cdc::topology_description>> read_cdc_topology_description(cdc::generation_id, context);
+    // Precondition: "system_distributed.cdc_generation_descriptions" exists and it was created by Scylla.
+    // In practice this means that the table was created by a previous version from which the cluster was upgraded;
+    // the precondition says that this function should not be called in clusters that were freshly created in a new version.
+    future<> insert_cdc_topology_description(cdc::generation_id_v1, const cdc::topology_description&, context);
+    // Precondition: same as above.
+    future<std::optional<cdc::topology_description>> read_cdc_topology_description(cdc::generation_id_v1, context);
+
+    future<> insert_cdc_generation(utils::UUID, const cdc::topology_description&, context);
+    future<std::optional<cdc::topology_description>> read_cdc_generation(utils::UUID);
 
     future<> create_cdc_desc(db_clock::time_point, const cdc::topology_description&, context);
     future<bool> cdc_desc_exists(db_clock::time_point, context);
