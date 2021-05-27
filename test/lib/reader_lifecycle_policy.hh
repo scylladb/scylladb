@@ -27,68 +27,6 @@
 class test_reader_lifecycle_policy
         : public reader_lifecycle_policy
         , public enable_shared_from_this<test_reader_lifecycle_policy> {
-public:
-    class operations_gate {
-    public:
-        class operation {
-            gate* _g = nullptr;
-
-        private:
-            void leave() {
-                if (_g) {
-                    _g->leave();
-                }
-            }
-
-        public:
-            operation() = default;
-            explicit operation(gate& g) : _g(&g) { _g->enter(); }
-            operation(const operation&) = delete;
-            operation(operation&& o) : _g(std::exchange(o._g, nullptr)) { }
-            ~operation() { leave(); }
-            operation& operator=(const operation&) = delete;
-            operation& operator=(operation&& o) {
-                leave();
-                _g = std::exchange(o._g, nullptr);
-                return *this;
-            }
-        };
-
-    private:
-        std::vector<gate> _gates;
-
-    public:
-        operations_gate()
-            : _gates(smp::count) {
-        }
-
-        operation enter() {
-            return operation(_gates[this_shard_id()]);
-        }
-
-        future<> close() {
-            return parallel_for_each(boost::irange(smp::count), [this] (shard_id shard) {
-                return smp::submit_to(shard, [this, shard] {
-                    return _gates[shard].close();
-                });
-            });
-        }
-    };
-
-    class semaphore_registry {
-        std::vector< // 1 per shard
-            std::list<reader_concurrency_semaphore>> _semaphores;
-    public:
-        semaphore_registry() : _semaphores(smp::count) { }
-        semaphore_registry(semaphore_registry&&) = delete;
-        semaphore_registry(const semaphore_registry&) = delete;
-        template <typename... Arg>
-        reader_concurrency_semaphore& create_semaphore(Arg&&... arg) {
-            return _semaphores[this_shard_id()].emplace_back(std::forward<Arg>(arg)...);
-        }
-    };
-
-private:
     using factory_function = std::function<flat_mutation_reader(
             schema_ptr,
             const dht::partition_range&,
@@ -98,8 +36,7 @@ private:
             mutation_reader::forwarding)>;
 
     struct reader_context {
-        reader_concurrency_semaphore* semaphore = nullptr;
-        operations_gate::operation op;
+        std::optional<reader_concurrency_semaphore> semaphore;
         std::optional<const dht::partition_range> range;
         std::optional<const query::partition_slice> slice;
 
@@ -109,17 +46,13 @@ private:
     };
 
     factory_function _factory_function;
-    operations_gate& _operation_gate;
-    semaphore_registry& _semaphore_registry;
     std::vector<foreign_ptr<std::unique_ptr<reader_context>>> _contexts;
     std::vector<future<>> _destroy_futures;
     bool _evict_paused_readers = false;
 
 public:
-    explicit test_reader_lifecycle_policy(factory_function f, operations_gate& g, semaphore_registry& semaphore_registry, bool evict_paused_readers = false)
+    explicit test_reader_lifecycle_policy(factory_function f, bool evict_paused_readers = false)
         : _factory_function(std::move(f))
-        , _operation_gate(g)
-        , _semaphore_registry(semaphore_registry)
         , _contexts(smp::count)
         , _evict_paused_readers(evict_paused_readers) {
     }
@@ -138,11 +71,9 @@ public:
         } else {
             _contexts[shard] = make_foreign(std::make_unique<reader_context>(range, slice));
         }
-        _contexts[shard]->op = _operation_gate.enter();
         return _factory_function(std::move(schema), *_contexts[shard]->range, *_contexts[shard]->slice, pc, std::move(trace_state), fwd_mr);
     }
     virtual future<> destroy_reader(stopped_reader reader) noexcept override {
-        // waited via _operation_gate
         auto ctx = &*_contexts[this_shard_id()];
         auto reader_opt = ctx->semaphore->unregister_inactive_read(std::move(reader.handle));
         auto ret = reader_opt ? reader_opt->close() : make_ready_future<>();
@@ -159,9 +90,9 @@ public:
         }
         if (_evict_paused_readers) {
             // Create with no memory, so all inactive reads are immediately evicted.
-            _contexts[shard]->semaphore = &_semaphore_registry.create_semaphore(1, 0, format("reader_concurrency_semaphore @shard_id={}", shard));
+            _contexts[shard]->semaphore.emplace(1, 0, format("reader_concurrency_semaphore @shard_id={}", shard));
         } else {
-            _contexts[shard]->semaphore = &_semaphore_registry.create_semaphore(reader_concurrency_semaphore::no_limits{});
+            _contexts[shard]->semaphore.emplace(reader_concurrency_semaphore::no_limits{});
         }
         return *_contexts[shard]->semaphore;
     }
