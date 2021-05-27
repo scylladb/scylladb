@@ -468,7 +468,6 @@ protected:
     mutation_source_metadata _ms_metadata = {};
     garbage_collected_sstable_writer::data _gc_sstable_writer_data;
     compaction_sstable_replacer_fn _replacer;
-    std::optional<compaction_weight_registration> _weight_registration;
     utils::UUID _run_identifier;
     ::io_priority_class _io_priority;
     // optional clone of sstable set to be used for expiration purposes, so it will be set if expiration is enabled.
@@ -487,7 +486,6 @@ protected:
         , _sstable_level(descriptor.level)
         , _gc_sstable_writer_data(*this)
         , _replacer(std::move(descriptor.replacer))
-        , _weight_registration(std::move(descriptor.weight_registration))
         , _run_identifier(descriptor.run_identifier)
         , _io_priority(descriptor.io_priority)
         , _sstable_set(std::move(descriptor.all_sstables_snapshot))
@@ -951,9 +949,6 @@ public:
     }
 
     virtual void on_end_of_compaction() override {
-        if (_weight_registration) {
-            _cf.get_compaction_manager().on_compaction_complete(*_weight_registration);
-        }
         replace_remaining_exhausted_sstables();
     }
 
