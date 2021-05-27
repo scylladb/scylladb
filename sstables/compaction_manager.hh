@@ -256,11 +256,6 @@ public:
     // Stops ongoing compaction of a given type.
     void stop_compaction(sstring type);
 
-    // Called by compaction procedure to release the weight lock assigned to it, such that
-    // another compaction waiting on same weight can start as soon as possible. That's usually
-    // called before compaction seals sstable and such and after all compaction work is done.
-    void on_compaction_complete(compaction_weight_registration& weight_registration);
-
     double backlog() {
         return _backlog_manager.backlog();
     }
