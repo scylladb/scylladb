@@ -101,7 +101,6 @@
 #include "service/paxos/proposal.hh"
 #include "locator/token_metadata.hh"
 #include "seastar/core/coroutine.hh"
-#include "seastar/core/with_timeout.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "service/paxos/cas_request.hh"
 #include "mutation_partition_view.hh"
@@ -5350,75 +5349,6 @@ future<bool> storage_proxy::check_hint_queue_sync_point(utils::UUID sync_point) 
     return container().invoke_on(0, [sync_point] (storage_proxy& sp) {
         return !sp._hint_queue_checkpoints.contains(sync_point);
     });
-}
-
-future<> storage_proxy::wait_for_hints_to_be_replayed(utils::UUID operation_id, std::vector<gms::inet_address> source_endpoints, std::vector<gms::inet_address> target_endpoints, seastar::abort_source& as) {
-    const auto deadline = lowres_clock::time_point::max();
-
-    slogger.debug("Coordinating a request to wait until all hints are sent on {} nodes", source_endpoints.size());
-
-    co_await parallel_for_each(source_endpoints, [this, operation_id, &target_endpoints_ = target_endpoints, deadline_ = deadline, &as] (gms::inet_address addr) -> future<> {
-        const auto deadline = deadline_;
-        const auto& target_endpoints = target_endpoints_;
-
-        const auto start_time = lowres_clock::now();
-        const std::chrono::seconds wait_duration{1};
-
-        // Step 1: Create a hint queue sync point
-        try {
-            db::hints::sync_point_create_request request;
-            request.sync_point_id = operation_id;
-            request.target_endpoints = target_endpoints;
-            request.mark_deadline = deadline;
-            co_await _messaging.send_hint_sync_point_create({ addr, 0 }, deadline, std::move(request));
-        } catch (...) {
-            slogger.debug("Failed to create a sync point for {}. I won't wait for hints to be replayed on this node");
-            throw;
-        }
-
-        // Step 2: Wait until hints are replayed
-        // Sleep 1 second between checks
-        bool reached_sync_point = false;
-        while (!reached_sync_point && !as.abort_requested() && lowres_clock::now() < deadline) {
-            // Check if the destination is alive
-            if (!gms::get_local_gossiper().is_alive(addr)) {
-                slogger.debug("Node {} is no longer alive, won't wait anymore for its hint sync point", addr);
-                break;
-            }
-
-            slogger.debug("Waiting for all hints from endpoint {} to be sent out; time spent so far: {}s, targets: {}",
-                    addr, std::chrono::duration_cast<std::chrono::seconds>(lowres_clock::now() - start_time).count(), target_endpoints);
-            try {
-                db::hints::sync_point_check_request request;
-                request.sync_point_id = operation_id;
-                const auto response = co_await _messaging.send_hint_sync_point_check({ addr, 0 }, deadline, std::move(request));
-                reached_sync_point = response.expired;
-                if (reached_sync_point) {
-                    break;
-                }
-            } catch (rpc::timeout_error&) {
-                slogger.debug("Caught a timeout error while sending hint queue query at {}", addr);
-                // RPC timeout should be set to the deadline, so we can assume here that the deadline is reached
-                break;
-            } catch (rpc::closed_error&) {
-                slogger.debug("Caught a connection closed error while sending hint queue query at {}", addr);
-            } catch (...) {
-                slogger.debug("Caught an unexpected error while sending hint queue query at {}: {}. Won't wait anymore", addr, std::current_exception());
-                throw;
-            }
-
-            co_await sleep_abortable(wait_duration, as);
-        }
-
-        if (reached_sync_point) {
-            slogger.debug("Finished waiting for all hints from endpoint {} to be sent out - all segments waited on were sent", addr);
-        } else {
-            slogger.debug("Finished waiting for all hints from endpoint {} to be sent out - stopped waiting before all segments were sent", addr);
-        }
-        co_return;
-    });
-
-    co_return;
 }
 
 void storage_proxy::on_join_cluster(const gms::inet_address& endpoint) {};
