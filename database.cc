@@ -2308,11 +2308,13 @@ flat_mutation_reader make_multishard_streaming_reader(distributed<database>& db,
 
             return cf.make_streaming_reader(std::move(schema), *_contexts[shard].range, slice, fwd_mr);
         }
-        virtual future<> destroy_reader(shard_id shard, stopped_reader reader) noexcept override {
-            return smp::submit_to(shard, [ctx = std::move(_contexts[shard]), handle = std::move(reader.handle)] () mutable {
-                auto reader_opt = ctx.semaphore->unregister_inactive_read(std::move(*handle));
-                return reader_opt ? reader_opt->close() : make_ready_future<>();
-            });
+        virtual future<> destroy_reader(stopped_reader reader) noexcept override {
+            auto ctx = std::move(_contexts[this_shard_id()]);
+            auto reader_opt = ctx.semaphore->unregister_inactive_read(std::move(reader.handle));
+            if  (!reader_opt) {
+                return make_ready_future<>();
+            }
+            return reader_opt->close().finally([ctx = std::move(ctx)] {});
         }
         virtual reader_concurrency_semaphore& semaphore() override {
             const auto shard = this_shard_id();

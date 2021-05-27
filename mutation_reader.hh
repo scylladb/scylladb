@@ -438,7 +438,7 @@ std::pair<flat_mutation_reader, evictable_reader_handle> make_manually_paused_ev
 class reader_lifecycle_policy {
 public:
     struct stopped_reader {
-        foreign_ptr<std::unique_ptr<reader_concurrency_semaphore::inactive_read_handle>> handle;
+        reader_concurrency_semaphore::inactive_read_handle handle;
         flat_mutation_reader::tracked_buffer unconsumed_fragments;
     };
 
@@ -471,8 +471,9 @@ public:
     /// This method is expected to do a proper cleanup, that is, leave any gates,
     /// release any locks or whatever is appropriate for the shard reader.
     ///
+    /// This method has to be called on the shard the reader lives on.
     /// This method will be called from a destructor so it cannot throw.
-    virtual future<> destroy_reader(shard_id shard, stopped_reader reader) noexcept = 0;
+    virtual future<> destroy_reader(stopped_reader reader) noexcept = 0;
 
     /// Get the relevant semaphore for this read.
     ///

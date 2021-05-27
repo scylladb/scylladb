@@ -105,33 +105,42 @@ class read_context : public reader_lifecycle_policy {
             std::unique_ptr<const dht::partition_range> range;
             std::unique_ptr<const query::partition_slice> slice;
             utils::phased_barrier::operation read_operation;
+            std::optional<reader_concurrency_semaphore::inactive_read_handle> handle;
+            std::optional<flat_mutation_reader::tracked_buffer> buffer;
 
             remote_parts(
                     reader_permit permit,
                     std::unique_ptr<const dht::partition_range> range = nullptr,
                     std::unique_ptr<const query::partition_slice> slice = nullptr,
-                    utils::phased_barrier::operation read_operation = {})
+                    utils::phased_barrier::operation read_operation = {},
+                    std::optional<reader_concurrency_semaphore::inactive_read_handle> handle = {})
                 : permit(std::move(permit))
                 , range(std::move(range))
                 , slice(std::move(slice))
-                , read_operation(std::move(read_operation)) {
+                , read_operation(std::move(read_operation))
+                , handle(std::move(handle)) {
             }
         };
 
         reader_state state = reader_state::inexistent;
         foreign_unique_ptr<remote_parts> rparts;
-        foreign_unique_ptr<reader_concurrency_semaphore::inactive_read_handle> handle;
-        std::optional<flat_mutation_reader::tracked_buffer> buffer;
+        std::optional<flat_mutation_reader::tracked_buffer> dismantled_buffer;
 
         reader_meta() = default;
 
         // Remote constructor.
-        reader_meta(reader_state s, std::optional<remote_parts> rp = {}, reader_concurrency_semaphore::inactive_read_handle h = {})
-            : state(s)
-            , handle(make_foreign(std::make_unique<reader_concurrency_semaphore::inactive_read_handle>(std::move(h)))) {
+        reader_meta(reader_state s, std::optional<remote_parts> rp = {})
+            : state(s) {
             if (rp) {
                 rparts = make_foreign(std::make_unique<remote_parts>(std::move(*rp)));
             }
+        }
+
+        flat_mutation_reader::tracked_buffer& get_dismantled_buffer(const reader_permit& permit) {
+            if (!dismantled_buffer) {
+                dismantled_buffer.emplace(permit);
+            }
+            return *dismantled_buffer;
         }
     };
 
@@ -245,7 +254,7 @@ public:
             tracing::trace_state_ptr trace_state,
             mutation_reader::forwarding fwd_mr) override;
 
-    virtual future<> destroy_reader(shard_id shard, stopped_reader reader) noexcept override;
+    virtual future<> destroy_reader(stopped_reader reader) noexcept override;
 
     virtual reader_concurrency_semaphore& semaphore() override {
         const auto shard = this_shard_id();
@@ -300,7 +309,7 @@ flat_mutation_reader read_context::create_reader(
 
     // The reader is either in inexistent or successful lookup state.
     if (rm.state == reader_state::successful_lookup) {
-        if (auto reader_opt = try_resume(std::move(*rm.handle))) {
+        if (auto reader_opt = try_resume(std::move(*rm.rparts->handle))) {
             rm.state = reader_state::used;
             return std::move(*reader_opt);
         }
@@ -321,19 +330,18 @@ flat_mutation_reader read_context::create_reader(
             std::move(trace_state), streamed_mutation::forwarding::no, fwd_mr);
 }
 
-future<> read_context::destroy_reader(shard_id shard, stopped_reader reader) noexcept {
-    auto& rm = _readers[shard];
+future<> read_context::destroy_reader(stopped_reader reader) noexcept {
+    auto& rm = _readers[this_shard_id()];
 
     if (rm.state == reader_state::used) {
         rm.state = reader_state::saving;
-        rm.handle = std::move(reader.handle);
-        rm.buffer = std::move(reader.unconsumed_fragments);
+        rm.rparts->handle = std::move(reader.handle);
+        rm.rparts->buffer = std::move(reader.unconsumed_fragments);
     } else {
         mmq_log.warn(
-                "Unexpected request to dismantle reader in state `{}` for shard {}."
+                "Unexpected request to dismantle reader in state `{}`."
                 " Reader was not created nor is in the process of being created.",
-                reader_state_to_string(rm.state),
-                shard);
+                reader_state_to_string(rm.state));
     }
     return make_ready_future<>();
 }
@@ -341,11 +349,10 @@ future<> read_context::destroy_reader(shard_id shard, stopped_reader reader) noe
 future<> read_context::stop() {
     return parallel_for_each(smp::all_cpus(), [this] (unsigned shard) {
         if (_readers[shard].rparts) {
-            return _db.invoke_on(shard, [rm = std::move(_readers[shard])] (database& db) mutable {
-                auto rparts = rm.rparts.release();
-                auto irh = rm.handle.release();
-                if (*irh) {
-                    auto reader_opt = rparts->permit.semaphore().unregister_inactive_read(std::move(*rm.handle));
+            return _db.invoke_on(shard, [&rparts_fptr = _readers[shard].rparts] (database& db) mutable {
+                auto rparts = rparts_fptr.release();
+                if (rparts->handle) {
+                    auto reader_opt = rparts->permit.semaphore().unregister_inactive_read(std::move(*rparts->handle));
                     if (reader_opt) {
                         return reader_opt->close().then([rparts = std::move(rparts)] { });
                     }
@@ -382,7 +389,7 @@ read_context::dismantle_buffer_stats read_context::dismantle_combined_buffer(fla
                 continue;
             }
 
-            auto& shard_buffer = *_readers[shard].buffer;
+            auto& shard_buffer = _readers[shard].get_dismantled_buffer(_permit);
             for (auto& smf : tmp_buffer) {
                 stats.add(smf);
                 shard_buffer.emplace_front(std::move(smf));
@@ -396,7 +403,7 @@ read_context::dismantle_buffer_stats read_context::dismantle_combined_buffer(fla
     }
 
     const auto shard = sharder.shard_of(pkey.token());
-    auto& shard_buffer = *_readers[shard].buffer;
+    auto& shard_buffer = _readers[shard].get_dismantled_buffer(_permit);
     for (auto& smf : tmp_buffer) {
         stats.add(smf);
         shard_buffer.emplace_front(std::move(smf));
@@ -424,7 +431,7 @@ read_context::dismantle_buffer_stats read_context::dismantle_compaction_state(de
         return stats;
     }
 
-    auto& shard_buffer = *_readers[shard].buffer;
+    auto& shard_buffer = _readers[shard].get_dismantled_buffer(_permit);
 
     for (auto& rt : compaction_state.range_tombstones | boost::adaptors::reversed) {
         stats.add(*_schema, rt);
@@ -448,23 +455,32 @@ future<> read_context::save_reader(shard_id shard, const dht::decorated_key& las
             &last_pkey, &last_ckey, gts = tracing::global_trace_state_ptr(_trace_state)] (database& db) mutable {
         try {
             auto rparts = rm.rparts.release(); // avoid another round-trip when destroying rparts
-            auto irh = rm.handle.release();
-            flat_mutation_reader_opt reader = rparts->permit.semaphore().unregister_inactive_read(std::move(*irh));
+            flat_mutation_reader_opt reader = rparts->permit.semaphore().unregister_inactive_read(std::move(*rparts->handle));
 
             if (!reader) {
                 return make_ready_future<>();
             }
 
-            auto& buffer = *rm.buffer;
-            const auto fragments = buffer.size();
+            size_t fragments = 0;
             const auto size_before = reader->buffer_size();
+            const auto& schema = *reader->schema();
 
-            auto rit = std::reverse_iterator(buffer.cend());
-            auto rend = std::reverse_iterator(buffer.cbegin());
-            auto& schema = *reader->schema();
-            for (;rit != rend; ++rit) {
-                // Copy the fragment, the buffer is on another shard.
-                reader->unpop_mutation_fragment(mutation_fragment(schema, rparts->permit, *rit));
+            if (rparts->buffer) {
+                fragments += rparts->buffer->size();
+                auto rit = std::reverse_iterator(rparts->buffer->end());
+                auto rend = std::reverse_iterator(rparts->buffer->begin());
+                for (; rit != rend; ++rit) {
+                    reader->unpop_mutation_fragment(std::move(*rit));
+                }
+            }
+            if (rm.dismantled_buffer) {
+                fragments += rm.dismantled_buffer->size();
+                auto rit = std::reverse_iterator(rm.dismantled_buffer->cend());
+                auto rend = std::reverse_iterator(rm.dismantled_buffer->cbegin());
+                for (; rit != rend; ++rit) {
+                    // Copy the fragment, the buffer is on another shard.
+                    reader->unpop_mutation_fragment(mutation_fragment(schema, rparts->permit, *rit));
+                }
             }
 
             const auto size_after = reader->buffer_size();
@@ -532,8 +548,8 @@ future<> read_context::lookup_readers() {
             auto handle = pause(semaphore, std::move(q).reader());
             return reader_meta(
                     reader_state::successful_lookup,
-                    reader_meta::remote_parts(q.permit(), std::move(q).reader_range(), std::move(q).reader_slice(), table.read_in_progress()),
-                    std::move(handle));
+                    reader_meta::remote_parts(q.permit(), std::move(q).reader_range(), std::move(q).reader_slice(), table.read_in_progress(),
+                            std::move(handle)));
         }).then([this, shard] (reader_meta rm) {
             _readers[shard] = std::move(rm);
         });
@@ -547,13 +563,6 @@ future<> read_context::save_readers(flat_mutation_reader::tracked_buffer unconsu
     }
 
     auto last_pkey = compaction_state.partition_start.key();
-
-    // Ensure all readers have engaged reader_meta::buffer member.
-    for (auto& rm : _readers) {
-        if (!rm.buffer) {
-            rm.buffer.emplace(_permit);
-        }
-    }
 
     const auto cb_stats = dismantle_combined_buffer(std::move(unconsumed_buffer), last_pkey);
     tracing::trace(_trace_state, "Dismantled combined buffer: {}", cb_stats);
