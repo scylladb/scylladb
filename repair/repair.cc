@@ -477,8 +477,10 @@ void tracker::abort_all_repairs() {
         auto& ri = x.second;
         ri->abort();
     }
-    _abort_all_as.request_abort();
-    _abort_all_as = seastar::abort_source();
+    if (this_shard_id() == 0) {
+        _abort_all_as.request_abort();
+        _abort_all_as = seastar::abort_source();
+    }
     rlogger.info0("Aborted {} repair job(s)", count);
 }
 
