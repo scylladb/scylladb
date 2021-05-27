@@ -44,6 +44,13 @@ class gossiper;
 class raft_rpc;
 class raft_gossip_failure_detector;
 
+struct raft_group_not_found: public raft::error {
+    raft::group_id gid;
+    raft_group_not_found(raft::group_id gid_arg)
+            : raft::error(format("Raft group {} not found", gid_arg)), gid(gid_arg)
+    {}
+};
+
 // This class is responsible for creating, storing and accessing raft servers.
 // It also manages the raft rpc verbs initialization.
 //
@@ -55,22 +62,21 @@ public:
     // TODO: should be configurable.
     static constexpr ticker_type::duration tick_interval = std::chrono::milliseconds(100);
 private:
-    using create_server_result = std::pair<std::unique_ptr<raft::server>, raft_rpc*>;
-
     netw::messaging_service& _ms;
     gms::gossiper& _gossiper;
     sharded<cql3::query_processor>& _qp;
     // Shard-local failure detector instance shared among all raft groups
     shared_ptr<raft_gossip_failure_detector> _fd;
 
-    struct servers_value_type {
+    struct server_for_group {
+        raft::group_id gid;
         std::unique_ptr<raft::server> server;
-        raft_rpc* rpc;
-        ticker_type ticker;
+        std::unique_ptr<ticker_type> ticker;
+        raft_rpc& rpc;
     };
     // Raft servers along with the corresponding timers to tick each instance.
     // Currently ticking every 100ms.
-    std::unordered_map<raft::server_id, servers_value_type> _servers;
+    std::unordered_map<raft::group_id, server_for_group> _servers;
     // inet_address:es for remote raft servers known to us
     raft_address_map<> _srv_address_mappings;
 
@@ -78,8 +84,9 @@ private:
     seastar::future<> uninit_rpc_verbs();
     seastar::future<> stop_servers();
 
-    create_server_result create_schema_server(raft::server_id id);
+    server_for_group create_server_for_group(raft::group_id id);
 
+    server_for_group& get_server_for_group(raft::group_id id);
 public:
 
     raft_services(netw::messaging_service& ms, gms::gossiper& gs, sharded<cql3::query_processor>& qp);
@@ -97,10 +104,15 @@ public:
     // Must be invoked explicitly on each shard to stop this service.
     seastar::future<> uninit();
 
-    raft_rpc& get_rpc(raft::server_id id);
+    raft_rpc& get_rpc(raft::group_id gid);
+
+    // Find server for group by group id. Throws exception if
+    // there is no such group.
+    raft::server& get_server(raft::group_id gid);
+
     // Start raft server instance, store in the map of raft servers and
-    // initialize the associated timer to tick the server.
-    future<> add_server(raft::server_id id, create_server_result srv);
+    // arm the associated timer to tick the server.
+    future<> start_server_for_group(server_for_group grp);
     unsigned shard_for_group(const raft::group_id& gid) const;
 
     // Map raft server_id to inet_address to be consumed by `messaging_service`

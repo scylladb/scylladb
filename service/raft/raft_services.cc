@@ -24,7 +24,6 @@
 #include "service/raft/schema_raft_state_machine.hh"
 #include "service/raft/raft_gossip_failure_detector.hh"
 
-#include "raft/raft.hh"
 #include "message/messaging_service.hh"
 #include "cql3/query_processor.hh"
 #include "gms/gossiper.hh"
@@ -48,10 +47,10 @@ void raft_services::init_rpc_verbs() {
             const rpc::client_info& cinfo,
             const raft::group_id& gid, raft::server_id from, raft::server_id dst, auto handler) {
         return container().invoke_on(shard_for_group(gid),
-                [addr = netw::messaging_service::get_source(cinfo).addr, from, dst, handler] (raft_services& self) mutable {
+                [addr = netw::messaging_service::get_source(cinfo).addr, from, dst, gid, handler] (raft_services& self) mutable {
             // Update the address mappings for the rpc module
             // in case the sender is encountered for the first time
-            auto& rpc = self.get_rpc(dst);
+            auto& rpc = self.get_rpc(gid);
             // The address learnt from a probably unknown server should
             // eventually expire
             self.update_address_mapping(from, std::move(addr), true);
@@ -132,20 +131,7 @@ seastar::future<> raft_services::init() {
     // Once a Raft server starts, it soon times out
     // and starts an election, so RPC must be ready by
     // then to send VoteRequest messages.
-    init_rpc_verbs();
-    // schema raft server instance always resides on shard 0
-    if (this_shard_id() != 0) {
-        co_return;
-    }
-    co_await [this] () -> future<> {
-        raft::server_id id = raft::server_id::create_random_id();
-        co_await add_server(id, create_schema_server(id));
-    }().handle_exception([this] (auto ep) -> future<> {
-        // co_await is not allowed inside catch (...), use
-        // handle_exception instead.
-        co_await uninit_rpc_verbs();
-        std::rethrow_exception(ep);
-    });
+    co_return init_rpc_verbs();
 }
 
 seastar::future<> raft_services::uninit() {
@@ -154,48 +140,56 @@ seastar::future<> raft_services::uninit() {
     });
 }
 
-raft_rpc& raft_services::get_rpc(raft::server_id id) {
-    auto it = _servers.find(id);
+raft_services::server_for_group& raft_services::get_server_for_group(raft::group_id gid) {
+    auto it = _servers.find(gid);
     if (it == _servers.end()) {
-        on_internal_error(rslog, format("No raft server found with id = {}", id));
+        throw raft_group_not_found(gid);
     }
-    return *it->second.rpc;
+    return it->second;
 }
 
-raft_services::create_server_result raft_services::create_schema_server(raft::server_id id) {
-    auto rpc = std::make_unique<raft_rpc>(_ms, *this, schema_raft_state_machine::gid, id);
+raft_rpc& raft_services::get_rpc(raft::group_id gid) {
+    return get_server_for_group(gid).rpc;
+}
+
+raft::server& raft_services::get_server(raft::group_id gid) {
+    return *(get_server_for_group(gid).server);
+}
+
+raft_services::server_for_group raft_services::create_server_for_group(raft::group_id gid) {
+
+    raft::server_id my_id = raft::server_id::create_random_id();
+    auto rpc = std::make_unique<raft_rpc>(_ms, *this, gid, my_id);
+    // Keep a reference to a specific RPC class.
     auto& rpc_ref = *rpc;
-    auto storage = std::make_unique<raft_sys_table_storage>(_qp.local(), schema_raft_state_machine::gid);
+    auto storage = std::make_unique<raft_sys_table_storage>(_qp.local(), gid);
     auto state_machine = std::make_unique<schema_raft_state_machine>();
+    auto server = raft::create_server(my_id, std::move(rpc), std::move(state_machine),
+            std::move(storage), _fd, raft::server::configuration());
 
-    return std::pair(raft::create_server(id,
-            std::move(rpc),
-            std::move(state_machine),
-            std::move(storage),
-            _fd,
-            raft::server::configuration()), // use default raft server configuration
-        &rpc_ref);
+    // initialize the corresponding timer to tick the raft server instance
+    auto ticker = std::make_unique<ticker_type>([srv = server.get()] { srv->tick(); });
+
+    return server_for_group{
+        .gid = std::move(gid),
+        .server = std::move(server),
+        .ticker = std::move(ticker),
+        .rpc = rpc_ref,
+    };
 }
 
-future<> raft_services::add_server(raft::server_id id, create_server_result srv) {
-    auto srv_ref = std::ref(*srv.first);
-    // initialize the corresponding timer to tick the raft server instance
-    ticker_type t([srv_ref] {
-        srv_ref.get().tick();
-    });
-    auto [it, inserted] = _servers.emplace(std::pair(id, servers_value_type{
-        .server = std::move(srv.first),
-        .rpc = srv.second,
-        .ticker = std::move(t)
-    }));
+future<> raft_services::start_server_for_group(server_for_group new_grp) {
+    auto gid = new_grp.gid;
+    auto [it, inserted] = _servers.emplace(std::move(gid), std::move(new_grp));
+
     if (!inserted) {
-        on_internal_error(rslog, format("Attempt to add the second instance of raft server with the same id={}", id));
+        on_internal_error(rslog, format("Attempt to add the second instance of raft server with the same gid={}", gid));
     }
-    ticker_type& ticker_from_map = it->second.ticker;
+    auto& grp = it->second;
     try {
         // start the server instance prior to arming the ticker timer.
         // By the time the tick() is executed the server should already be initialized.
-        co_await srv_ref.get().start();
+        co_await grp.server->start();
     } catch (...) {
         // remove server from the map to prevent calling `abort()` on a
         // non-started instance when `raft_services::uninit` is called.
@@ -203,15 +197,11 @@ future<> raft_services::add_server(raft::server_id id, create_server_result srv)
         on_internal_error(rslog, std::current_exception());
     }
 
-    ticker_from_map.arm_periodic(tick_interval);
+    grp.ticker->arm_periodic(tick_interval);
 }
 
 unsigned raft_services::shard_for_group(const raft::group_id& gid) const {
-    if (gid == schema_raft_state_machine::gid) {
-        return 0; // schema raft server is always owned by shard 0
-    }
-    // We haven't settled yet on how to organize and manage (group_id -> shard_id) mapping
-    on_internal_error(rslog, format("Could not map raft group id {} to a corresponding shard id", gid));
+    return 0; // schema raft server is always owned by shard 0
 }
 
 gms::inet_address raft_services::get_inet_address(raft::server_id id) const {
@@ -229,3 +219,4 @@ void raft_services::update_address_mapping(raft::server_id id, gms::inet_address
 void raft_services::remove_address_mapping(raft::server_id id) {
     _srv_address_mappings.erase(id);
 }
+

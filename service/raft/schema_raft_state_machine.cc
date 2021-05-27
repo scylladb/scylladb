@@ -20,8 +20,6 @@
  */
 #include "service/raft/schema_raft_state_machine.hh"
 
-raft::group_id schema_raft_state_machine::gid = raft::group_id{utils::UUID_gen::min_time_UUID()};
-
 future<> schema_raft_state_machine::apply(std::vector<raft::command_cref> command) {
     return make_ready_future<>();
 }
