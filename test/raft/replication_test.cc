@@ -825,7 +825,9 @@ future<> raft_cluster::partition(::partition p, size_t& leader,
     } else {
         // No leader specified, wait log for all connected servers, before disconnections
         for (auto s: partition_servers) {
-            co_await wait_log(leader, s);
+            if (_in_configuration.contains(s)) {
+                co_await wait_log(leader, s);
+            }
         }
     }
     pause_tickers(tickers);
