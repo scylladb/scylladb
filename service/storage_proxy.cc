@@ -5324,46 +5324,6 @@ const db::hints::host_filter& storage_proxy::get_hints_host_filter() const {
     return _hints_manager.get_host_filter();
 }
 
-future<> storage_proxy::create_hint_queue_sync_point(utils::UUID sync_point_id, std::vector<gms::inet_address> endpoints, clock_type::time_point deadline) {
-    return container().invoke_on(0, [sync_point_id, endpoints = std::move(endpoints), deadline] (storage_proxy& sp) mutable {
-        auto [it, was_inserted] = sp._hint_queue_checkpoints.emplace(sync_point_id);
-        if (!was_inserted) {
-            return make_exception_future<>(std::runtime_error(format("Hint sync point {} already exists", sync_point_id)));
-        }
-
-        // Waited indirectly by keeping a pointer to the storage_proxy.
-        // When drain_on_shutdown is triggered, hints manager will report an error
-        // and this future will resolve.
-        (void)sp.container().invoke_on_all([endpoints = std::move(endpoints), sync_point_id, deadline] (storage_proxy& sp) {
-            auto wait_for_hints_manager = [&endpoints, sync_point_id, deadline] (db::hints::manager& mgr, const char* mgr_name) {
-                return mgr.wait_until_hints_are_replayed(endpoints, deadline).then_wrapped([mgr_name, sync_point_id] (future<>&& f) {
-                    if (!f.failed()) {
-                        slogger.debug("Hint sync point {} for {} reached", sync_point_id, mgr_name);
-                        f.get();
-                    } else {
-                        slogger.debug("An error occured when waiting for hint sync point {} for {} to resolve: {}", sync_point_id, mgr_name, f.get_exception());
-                    }
-                });
-            };
-
-            return when_all(
-                wait_for_hints_manager(sp._hints_manager, "hints manager"),
-                wait_for_hints_manager(sp._hints_for_views_manager, "hints for view manager")
-            ).discard_result();
-        }).then([&sp, sync_point_id, guard = sp.shared_from_this()] {
-            sp._hint_queue_checkpoints.erase(sync_point_id);
-        });
-
-        return make_ready_future<>();
-    });
-}
-
-future<bool> storage_proxy::check_hint_queue_sync_point(utils::UUID sync_point) {
-    return container().invoke_on(0, [sync_point] (storage_proxy& sp) {
-        return !sp._hint_queue_checkpoints.contains(sync_point);
-    });
-}
-
 void storage_proxy::on_join_cluster(const gms::inet_address& endpoint) {};
 
 void storage_proxy::on_leave_cluster(const gms::inet_address& endpoint) {
