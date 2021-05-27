@@ -145,20 +145,20 @@ public:
     }
     virtual future<> destroy_reader(shard_id shard, stopped_reader reader) noexcept override {
         // waited via _operation_gate
-            return smp::submit_to(shard, [handle = std::move(reader.handle), ctx = &*_contexts[shard]] () mutable {
-                auto reader_opt = ctx->semaphore->unregister_inactive_read(std::move(*handle));
-                auto ret = reader_opt ? reader_opt->close() : make_ready_future<>();
-                ctx->semaphore->broken();
-                if (ctx->wait_future) {
-                  ret = ret.then([ctx = std::move(ctx)] () mutable {
-                    return ctx->wait_future->then_wrapped([ctx = std::move(ctx)] (future<reader_permit::resource_units> f) mutable {
-                        f.ignore_ready_future();
-                        ctx->permit.reset(); // make sure it's destroyed before the semaphore
-                    });
-                  });
-                }
-                return std::move(ret);
-            });
+        return smp::submit_to(shard, [handle = std::move(reader.handle), ctx = &*_contexts[shard]] () mutable {
+            auto reader_opt = ctx->semaphore->unregister_inactive_read(std::move(*handle));
+            auto ret = reader_opt ? reader_opt->close() : make_ready_future<>();
+            ctx->semaphore->broken();
+            if (ctx->wait_future) {
+              ret = ret.then([ctx = std::move(ctx)] () mutable {
+                return ctx->wait_future->then_wrapped([ctx = std::move(ctx)] (future<reader_permit::resource_units> f) mutable {
+                    f.ignore_ready_future();
+                    ctx->permit.reset(); // make sure it's destroyed before the semaphore
+                });
+              });
+            }
+            return std::move(ret);
+        });
     }
     virtual reader_concurrency_semaphore& semaphore() override {
         const auto shard = this_shard_id();
