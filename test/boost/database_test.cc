@@ -372,10 +372,10 @@ future<> do_with_some_data(std::function<future<> (cql_test_env& env)> func) {
     });
 }
 
-future<> take_snapshot(cql_test_env& e) {
-    return e.db().invoke_on_all([] (database& db) {
+future<> take_snapshot(cql_test_env& e, bool skip_flush = false) {
+    return e.db().invoke_on_all([skip_flush] (database& db) {
         auto& cf = db.find_column_family("ks", "cf");
-        return cf.snapshot(db, "test");
+        return cf.snapshot(db, "test", skip_flush);
     });
 }
 
@@ -394,6 +394,34 @@ SEASTAR_TEST_CASE(snapshot_works) {
         }).get();
         // snapshot triggered a flush and wrote the data down.
         BOOST_REQUIRE_GT(expected.size(), 1);
+
+        // all files were copied and manifest was generated
+        lister::scan_dir((fs::path(cf.dir()) / "snapshots" / "test"), { directory_entry_type::regular }, [&expected] (fs::path parent_dir, directory_entry de) {
+            expected.erase(de.name);
+            return make_ready_future<>();
+        }).get();
+
+        BOOST_REQUIRE_EQUAL(expected.size(), 0);
+        return make_ready_future<>();
+    });
+}
+
+SEASTAR_TEST_CASE(snapshot_skip_flush_works) {
+    return do_with_some_data([] (cql_test_env& e) {
+        take_snapshot(e, true /* skip_flush */).get();
+
+        std::set<sstring> expected = {
+            "manifest.json",
+        };
+
+        auto& cf = e.local_db().find_column_family("ks", "cf");
+        lister::scan_dir(fs::path(cf.dir()), { directory_entry_type::regular }, [&expected] (fs::path parent_dir, directory_entry de) {
+            expected.insert(de.name);
+            return make_ready_future<>();
+        }).get();
+        // Snapshot did not trigger a flush.
+        // Only "manifest.json" is expected.
+        BOOST_REQUIRE_EQUAL(expected.size(), 1);
 
         // all files were copied and manifest was generated
         lister::scan_dir((fs::path(cf.dir()) / "snapshots" / "test"), { directory_entry_type::regular }, [&expected] (fs::path parent_dir, directory_entry de) {
