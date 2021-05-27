@@ -40,7 +40,6 @@
 #include "database.hh"
 #include "service_permit.hh"
 #include "utils/directories.hh"
-#include "utils/UUID_gen.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "mutation_partition_view.hh"
 

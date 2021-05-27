@@ -313,8 +313,6 @@ private:
     cdc::cdc_service* _cdc = nullptr;
 
     cdc_stats _cdc_stats;
-
-    std::unordered_set<utils::UUID> _hint_queue_checkpoints;
 private:
     future<coordinator_query_result> query_singular(lw_shared_ptr<query::read_command> cmd,
             dht::partition_range_vector&& partition_ranges,
@@ -443,9 +441,6 @@ private:
     future<> mutate_counters(Range&& mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state, service_permit permit, clock_type::time_point timeout);
 
     void retire_view_response_handlers(noncopyable_function<bool(const abstract_write_response_handler&)> filter_fun);
-
-    future<> create_hint_queue_sync_point(utils::UUID sync_point_id, std::vector<gms::inet_address> endpoints, clock_type::time_point deadline);
-    future<bool> check_hint_queue_sync_point(utils::UUID sync_point);
 public:
     storage_proxy(distributed<database>& db, config cfg, db::view::node_update_backlog& max_view_update_backlog,
             scheduling_group_key stats_key, gms::feature_service& feat, const locator::shared_token_metadata& stm, netw::messaging_service& ms);
