@@ -58,7 +58,6 @@
 #include "db/config.hh"
 #include "db/batchlog_manager.hh"
 #include "db/hints/manager.hh"
-#include "db/hints/messages.hh"
 #include "db/system_keyspace.hh"
 #include "exceptions/exceptions.hh"
 #include <boost/range/algorithm_ext/push_back.hpp>
@@ -5209,16 +5208,6 @@ void storage_proxy::init_messaging_service(shared_ptr<migration_manager> mm) {
             });
         });
     });
-
-    ms.register_hint_sync_point_create([this] (db::hints::sync_point_create_request request) -> future<db::hints::sync_point_create_response> {
-        co_await create_hint_queue_sync_point(request.sync_point_id, std::move(request.target_endpoints), request.mark_deadline);
-        co_return db::hints::sync_point_create_response{};
-    });
-
-    ms.register_hint_sync_point_check([this] (db::hints::sync_point_check_request request) -> future<db::hints::sync_point_check_response> {
-        const bool expired = co_await check_hint_queue_sync_point(request.sync_point_id);
-        co_return db::hints::sync_point_check_response{expired};
-    });
 }
 
 future<> storage_proxy::uninit_messaging_service() {
@@ -5236,9 +5225,7 @@ future<> storage_proxy::uninit_messaging_service() {
         ms.unregister_paxos_prepare(),
         ms.unregister_paxos_accept(),
         ms.unregister_paxos_learn(),
-        ms.unregister_paxos_prune(),
-        ms.unregister_hint_sync_point_create(),
-        ms.unregister_hint_sync_point_check()
+        ms.unregister_paxos_prune()
     ).discard_result();
 
 }
