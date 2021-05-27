@@ -42,18 +42,101 @@ using seastar::future;
 class mutation_source;
 class position_in_partition;
 
-/*
- * Allows iteration on mutations using mutation_fragments.
- * It iterates over mutations one by one and for each mutation
- * it returns:
- *      1. partition_start mutation_fragment
- *      2. static_row mutation_fragment if one exists
- *      3. mutation_fragments for all clustering rows and range tombstones
- *         in clustering key order
- *      4. partition_end mutation_fragment
- * The best way to consume those mutation_fragments is to call
- * flat_mutation_reader::consume with a consumer that receives the fragments.
- */
+/// \brief Represents a stream of mutation fragments.
+///
+/// Mutation fragments represent writes to the database.
+///
+/// Each fragment has an implicit position in the database,
+/// which also determines its position in the stream relative to other fragments.
+/// The global position of a fragment is a tuple ordered lexicographically:
+///
+///    (ring_position of a partition key, position_in_partition)
+///
+/// The stream has a hierarchical form. All fragments which occur
+/// between partition_start and partition_end represent writes to the partition
+/// identified by the partition_start::key(). The partition key is not repeated
+/// with inner fragments.
+///
+/// The stream of mutation fragments conforms to the following form:
+///
+///   stream ::= partition*
+///   partition ::= partition_start static_row? clustered* partition_end
+///   clustered ::= clustering_row | range_tombstone
+///
+/// The range_tombstone fragments can have ranges which overlap with other
+/// clustered fragments.
+///
+/// Consecutive range_tombstone fragments can have the same position(), so they
+/// are weakly ordered. This makes merging two streams easier, and is
+/// relied upon by combined_mutation_reader.
+///
+/// \section Clustering restrictions
+///
+/// A stream may produce writes relevant to only some clustering ranges, for
+/// example by specifying clustering ranges in a partition_slice passed to
+/// mutation_source::make_reader(). This will make the stream return information
+/// for a subset of writes that it would normally return should the stream be
+/// unrestricted.
+///
+/// The restricted stream obeys the following rules:
+///
+///   0) The stream must contain fragments corresponding to all writes
+///      which are relevant to the requested ranges.
+///
+///   1) The stream _may_ contain fragments with information
+///      about _some_ of the writes which are relevant to clustering ranges
+///      outside of the requested ranges. For example, it may return
+///      some of the range tombstones relevant to the clustering ranges
+///      outside of the requested ranges, but this information may not
+///      be complete (e.g. there could be a more recent deletion).
+///
+///   2) The stream will not contain writes which are absent in the unrestricted stream,
+///      both for the requested clustering ranges and not requested ranges.
+///      This means that it's safe to populate cache with all the returned information.
+///      Even though it may be incomplete for non-requested ranges, it won't contain
+///      incorrect information.
+///
+///   3) All clustering_row fragments have position() which is within the requested
+///      ranges.
+///
+///   4) range_tombstone fragments can have position() outside of requested ranges.
+///
+/// \section Intra-partition fast-forwarding mode
+///
+/// The stream can operate in an alternative mode when streamed_mutation::forwarding::yes
+/// is passed to the stream constructor (see mutation_source).
+///
+/// In this mode, the original stream is not produced at once, but divided into sub-streams, where
+/// each is produced at a time, ending with the end-of-stream condition (is_end_of_stream()).
+/// The user needs to explicitly advance the stream to the next sub-stream by calling
+/// fast_forward_to() or next_partition().
+///
+/// The original stream is divided like this:
+///
+///    1) For every partition, the first sub-stream will contain
+///       partition_start and the static_row
+///
+///    2) Calling fast_forward_to() moves to the next sub-stream within the
+///       current partition. The stream will contain all fragments relevant to
+///       the position_range passed to fast_forward_to().
+///
+///    3) The position_range passed to fast_forward_to() is a clustering key restriction.
+///       Same rules apply as with clustering restrictions described above.
+///
+///    4) range_tombstones produced in earlier sub-stream which are also relevant
+///       for next sub-streams do not have to be repeated. They _may_ be repeated
+///       with a starting position trimmed.
+///
+///    5) partition_end is never emitted, the user needs to call next_partition()
+///       to move to the next partition in the original stream, which will open
+///       the initial sub-stream of the next partition.
+///       An empty sub-stream after next_partition() indicates global end-of-stream (no next partition).
+///
+/// \section Consuming
+///
+/// The best way to consume those mutation_fragments is to call
+/// flat_mutation_reader::consume with a consumer that receives the fragments.
+///
 class flat_mutation_reader final {
 public:
     using tracked_buffer = circular_buffer<mutation_fragment, tracking_allocator<mutation_fragment>>;
