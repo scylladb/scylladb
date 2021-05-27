@@ -158,6 +158,33 @@ public:
         return true;
     }
 
+    // Intersects the range of this tombstone with [start, end) and replaces
+    // the range of the tombstone if there is an overlap.
+    // Returns true if there is an overlap and false otherwise. When returns false, the tombstone
+    // is not modified.
+    //
+    // start and end must satisfy:
+    //   1) has_clustering_key() == true
+    //   2) is_clustering_row() == false
+    //
+    // Also: start <= end
+    bool trim(const schema& s, position_in_partition_view start, position_in_partition_view end) {
+        position_in_partition::less_compare less(s);
+        if (!less(start, end_position())) {
+            return false;
+        }
+        if (!less(position(), end)) {
+            return false;
+        }
+        if (less(position(), start)) {
+            set_start(start);
+        }
+        if (less(end, end_position())) {
+            set_end(s, end);
+        }
+        return true;
+    }
+
     // Assumes !pos.is_clustering_row(), because range_tombstone bounds can't represent such positions
     void set_start(position_in_partition_view pos) {
         bound_view new_start = pos.as_start_bound_view();
