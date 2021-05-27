@@ -45,8 +45,13 @@ struct service_level_options {
         bool operator!=(const delete_marker&) const { return false; };
     };
 
+    enum class workload_type {
+        unspecified, batch, interactive
+    };
+
     using timeout_type = std::variant<unset_marker, delete_marker, lowres_clock::duration>;
     timeout_type timeout = unset_marker{};
+    workload_type workload = workload_type::unspecified;
 
     service_level_options replace_defaults(const service_level_options& other) const;
     // Merges the values of two service level options. The semantics depends
@@ -55,7 +60,12 @@ struct service_level_options {
 
     bool operator==(const service_level_options& other) const = default;
     bool operator!=(const service_level_options& other) const = default;
+
+    static std::string_view to_string(const workload_type& wt);
+    static std::optional<workload_type> parse_workload_type(std::string_view sv);
 };
+
+std::ostream& operator<<(std::ostream& os, const service_level_options::workload_type&);
 
 using service_levels_info = std::map<sstring, service_level_options>;
 

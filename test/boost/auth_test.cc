@@ -288,7 +288,7 @@ SEASTAR_TEST_CASE(test_alter_with_timeouts) {
         //    user1
         //
         // which means that user1 should inherit timeouts from all other users
-        cquery_nofail(e, "GRANT user2 TO user1");
+        cquery_nofail(e, "GRANT user2 TO user1"); 
         cquery_nofail(e, "GRANT user3 TO user2");
         cquery_nofail(e, "GRANT user4 TO user2");
         e.refresh_client_state().get();
@@ -316,5 +316,71 @@ SEASTAR_TEST_CASE(test_alter_with_timeouts) {
         cquery_nofail(e, "SELECT * FROM t where id = 1 BYPASS CACHE");
         cquery_nofail(e, "SELECT * FROM t BYPASS CACHE");
         cquery_nofail(e, "INSERT INTO t (id, v) VALUES (1,2)");
+    }, cfg);
+}
+
+SEASTAR_TEST_CASE(test_alter_with_workload_type) {
+    auto cfg = make_shared<db::config>();
+    cfg->authenticator(sstring(auth::password_authenticator_name));
+
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auth::role_config config {
+            .can_login = true,
+        };
+        auth::authentication_options opts {
+            .password = "pass"
+        };
+        auth::create_role(e.local_auth_service(), "user1", config, opts).get();
+        auth::create_role(e.local_auth_service(), "user2", config, opts).get();
+        auth::create_role(e.local_auth_service(), "user3", config, opts).get();
+        auth::create_role(e.local_auth_service(), "user4", config, opts).get();
+        authenticate(e, "user1", "pass").get();
+
+        cquery_nofail(e, "CREATE SERVICE LEVEL sl");
+        cquery_nofail(e, "ATTACH SERVICE LEVEL sl TO user1");
+
+	    auto msg = cquery_nofail(e, "SELECT workload_type FROM system_distributed.service_levels");
+        assert_that(msg).is_rows().with_rows({{
+            utf8_type->decompose("unspecified")
+        }});
+
+        e.refresh_client_state().get();
+        // Default workload type is `unspecified`
+        BOOST_REQUIRE_EQUAL(e.local_client_state().get_workload_type(), service::client_state::workload_type::unspecified);
+
+        // When multiple per-role timeouts apply, the smallest value is always effective
+        cquery_nofail(e, "CREATE SERVICE LEVEL sl2 WITH workload_type = 'unspecified'");
+        cquery_nofail(e, "CREATE SERVICE LEVEL sl3 WITH workload_type = 'batch'");
+        cquery_nofail(e, "CREATE SERVICE LEVEL sl4 WITH workload_type = 'interactive'");
+        cquery_nofail(e, "ATTACH SERVICE LEVEL sl2 TO user2");
+        cquery_nofail(e, "ATTACH SERVICE LEVEL sl3 TO user3");
+        cquery_nofail(e, "ATTACH SERVICE LEVEL sl4 TO user4");
+        cquery_nofail(e, "ALTER SERVICE LEVEL sl WITH workload_type = 'interactive'");
+        // The roles are granted as follows:
+         //  user4  user3
+        //      \ /
+        //      user2
+        //      /
+        //    user1
+        //
+        // which means that user1 should inherit workload types from all other users
+        cquery_nofail(e, "GRANT user2 TO user1"); 
+        cquery_nofail(e, "GRANT user3 TO user2");
+        cquery_nofail(e, "GRANT user4 TO user2");
+        e.refresh_client_state().get();
+        // For user1, the effective workload type should be batch
+        BOOST_REQUIRE_EQUAL(e.local_client_state().get_workload_type(), service::client_state::workload_type::batch);
+        // after switching to user2, still batch
+        authenticate(e, "user2", "pass").get();
+        e.refresh_client_state().get();
+        BOOST_REQUIRE_EQUAL(e.local_client_state().get_workload_type(), service::client_state::workload_type::batch);
+        // after switching to user3, batch again
+        authenticate(e, "user3", "pass").get();
+        e.refresh_client_state().get();
+        BOOST_REQUIRE_EQUAL(e.local_client_state().get_workload_type(), service::client_state::workload_type::batch);
+        // after switching to user4, the workload is interactive
+        authenticate(e, "user4", "pass").get();
+        e.refresh_client_state().get();
+        BOOST_REQUIRE_EQUAL(e.local_client_state().get_workload_type(), service::client_state::workload_type::interactive);
     }, cfg);
 }

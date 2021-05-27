@@ -162,26 +162,28 @@ system_distributed_keyspace::system_distributed_keyspace(cql3::query_processor& 
 }
 
 static future<> add_new_columns_if_missing(database& db, ::service::migration_manager& mm) noexcept {
-    static std::string_view new_columns[] {
-        "timeout"
+    static thread_local std::pair<std::string_view, data_type> new_columns[] {
+        {"timeout", duration_type},
+        {"workload_type", utf8_type}
     };
     try {
         auto schema = db.find_schema(system_distributed_keyspace::NAME, system_distributed_keyspace::SERVICE_LEVELS);
         schema_builder b(schema);
         bool updated = false;
-        for (const std::string_view& col_name : new_columns) {
+        for (const auto& col : new_columns) {
+            auto& [col_name, col_type] = col;
             bytes options_name = to_bytes(col_name.data());
             if (schema->get_column_definition(options_name)) {
                 continue;
             }
             updated = true;
-            b.with_column(options_name, duration_type, column_kind::regular_column);
+            b.with_column(options_name, col_type, column_kind::regular_column);
         }
         if (!updated) {
             return make_ready_future<>();
         }
         schema_ptr table = b.build();
-        return mm.announce_column_family_update(table, false, {}, api::timestamp_type(0)).handle_exception([] (const std::exception_ptr&) {});
+        return mm.announce_column_family_update(table, false, {}, api::timestamp_type(1)).handle_exception([] (const std::exception_ptr&) {});
     } catch (...) {
         dlogger.warn("Failed to update options column in the role attributes table: {}", std::current_exception());
         return make_ready_future<>();
@@ -581,11 +583,17 @@ future<qos::service_levels_info> system_distributed_keyspace::get_service_levels
     return _qp.execute_internal(prepared_query, db::consistency_level::ONE, internal_distributed_query_state(), {}).then([] (shared_ptr<cql3::untyped_result_set> result_set) {
         qos::service_levels_info service_levels;
         for (auto &&row : *result_set) {
-            auto service_level_name = row.get_as<sstring>("service_level");
-            qos::service_level_options slo{
-                .timeout = get_duration(row, "timeout"),
-            };
-            service_levels.emplace(service_level_name, slo);
+            try {
+                auto service_level_name = row.get_as<sstring>("service_level");
+                auto workload = qos::service_level_options::parse_workload_type(row.get_opt<sstring>("workload_type").value_or(""));
+                qos::service_level_options slo{
+                    .timeout = get_duration(row, "timeout"),
+                    .workload = workload.value_or(qos::service_level_options::workload_type::unspecified),
+                };
+                service_levels.emplace(service_level_name, slo);
+            } catch (...) {
+                dlogger.warn("Failed to fetch data for service levels: {}", std::current_exception());
+            }
         }
         return service_levels;
     });
@@ -593,15 +601,21 @@ future<qos::service_levels_info> system_distributed_keyspace::get_service_levels
 
 future<qos::service_levels_info> system_distributed_keyspace::get_service_level(sstring service_level_name) const {
     static sstring prepared_query = format("SELECT * FROM {}.{} WHERE service_level = ?;", NAME, SERVICE_LEVELS);
-    return _qp.execute_internal(prepared_query, db::consistency_level::ONE, internal_distributed_query_state(), {service_level_name}).then([] (shared_ptr<cql3::untyped_result_set> result_set) {
+    return _qp.execute_internal(prepared_query, db::consistency_level::ONE, internal_distributed_query_state(), {service_level_name}).then(
+                [service_level_name = std::move(service_level_name)] (shared_ptr<cql3::untyped_result_set> result_set) {
         qos::service_levels_info service_levels;
         if (!result_set->empty()) {
-            auto &&row = result_set->one();
-            auto service_level_name = row.get_as<sstring>("service_level");
-            qos::service_level_options slo{
-                .timeout = get_duration(row, "timeout"),
-            };
-            service_levels.emplace(service_level_name, slo);
+            try {
+                auto &&row = result_set->one();
+                auto workload = qos::service_level_options::parse_workload_type(row.get_opt<sstring>("workload_type").value_or(""));
+                qos::service_level_options slo{
+                    .timeout = get_duration(row, "timeout"),
+                    .workload = workload.value_or(qos::service_level_options::workload_type::unspecified),
+                };
+                service_levels.emplace(service_level_name, slo);
+            } catch (...) {
+                dlogger.warn("Failed to fetch data for service level {}: {}", service_level_name, std::current_exception());
+            }
         }
         return service_levels;
     });
@@ -625,10 +639,12 @@ future<> system_distributed_keyspace::set_service_level(sstring service_level_na
             },
         }, tv);
     };
-    co_await _qp.execute_internal(format("UPDATE {}.{} SET timeout = ? WHERE service_level = ?;", NAME, SERVICE_LEVELS),
+    co_await _qp.execute_internal(format("UPDATE {}.{} SET timeout = ?, workload_type = ? WHERE service_level = ?;", NAME, SERVICE_LEVELS),
                 db::consistency_level::ONE,
                 internal_distributed_query_state(),
-                {to_data_value(slo.timeout), service_level_name});
+                {to_data_value(slo.timeout),
+                    data_value(qos::service_level_options::to_string(slo.workload)),
+                    service_level_name});
 }
 
 future<> system_distributed_keyspace::drop_service_level(sstring service_level_name) const {

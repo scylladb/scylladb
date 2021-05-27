@@ -184,6 +184,8 @@ private:
         cql_serialization_format _cql_serialization_format = cql_serialization_format::latest();
         service::client_state _client_state;
         std::unordered_map<uint16_t, cql_query_state> _query_states;
+        timer<lowres_clock> _shedding_timer;
+        bool _shed_incoming_requests = false;
         unsigned _request_cpu = 0;
 
         enum class tracing_request_type : uint8_t {

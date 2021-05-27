@@ -31,7 +31,7 @@ namespace statements {
 
 void sl_prop_defs::validate() {
     static std::set<sstring> timeout_props {
-        "timeout"
+        "timeout", "workload_type"
     };
     auto get_duration = [&] (const std::optional<sstring>& repr) -> qos::service_level_options::timeout_type {
         if (!repr) {
@@ -56,6 +56,14 @@ void sl_prop_defs::validate() {
 
     property_definitions::validate(timeout_props);
     _slo.timeout = get_duration(get_simple("timeout"));
+    auto workload_string_opt = get_simple("workload_type");
+    if (workload_string_opt) {
+        auto workload = qos::service_level_options::parse_workload_type(*workload_string_opt);
+        if (!workload) {
+            throw exceptions::invalid_request_exception(format("Invalid workload type: {}", *workload_string_opt));
+        }
+        _slo.workload = *workload;
+    }
 }
 
 qos::service_level_options sl_prop_defs::get_service_level_options() const {

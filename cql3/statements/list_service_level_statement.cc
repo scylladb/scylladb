@@ -61,6 +61,7 @@ list_service_level_statement::execute(query_processor& qp,
 
     static thread_local const std::vector<lw_shared_ptr<column_specification>> metadata({make_column("service_level", utf8_type),
         make_column("timeout", duration_type),
+        make_column("workload_type", utf8_type)
     });
 
     return make_ready_future().then([this, &state] () {
@@ -88,7 +89,9 @@ list_service_level_statement::execute(query_processor& qp,
                 auto rs = std::make_unique<result_set>(metadata);
                 for (auto &&[sl_name, slo] : sl_info) {
                     rs->add_row(std::vector<bytes_opt>{
-                            utf8_type->decompose(sl_name), d(slo.timeout)});
+                            utf8_type->decompose(sl_name),
+                            d(slo.timeout),
+                            utf8_type->decompose(qos::service_level_options::to_string(slo.workload))});
                 }
 
                 auto rows = ::make_shared<cql_transport::messages::result_message::rows>(result(std::move(std::move(rs))));
