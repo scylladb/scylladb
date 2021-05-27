@@ -338,10 +338,10 @@ private:
                     break;
                 }
             }
-            return candidates;
+            return std::move(candidates);
         }
 
-        return candidates;
+        return std::move(candidates);
     }
 public:
     size_t get_level_size(uint32_t level) {
