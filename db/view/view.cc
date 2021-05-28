@@ -101,7 +101,7 @@ cql3::statements::select_statement& view_info::select_statement() const {
         // FIXME(sarna): legacy code, should be removed after "computed_columns" feature is guaranteed
         // to be available on every node. Then, we won't need to check if this view is backing a secondary index.
         const column_definition* legacy_token_column = nullptr;
-        if (service::get_local_storage_service().db().local().find_column_family(base_id()).get_index_manager().is_global_index(_schema)) {
+        if (service::get_local_storage_proxy().local_db().find_column_family(base_id()).get_index_manager().is_global_index(_schema)) {
            if (!_schema.clustering_key_columns().empty()) {
                legacy_token_column = &_schema.clustering_key_columns().front();
            }
@@ -418,7 +418,7 @@ deletable_row& view_updates::get_view_row(const partition_key& base_key, const c
             if (!cdef.is_computed()) {
                 //FIXME(sarna): this legacy code is here for backward compatibility and should be removed
                 // once "computed_columns feature" is supported by every node
-                if (!service::get_local_storage_service().db().local().find_column_family(_base->id()).get_index_manager().is_index(*_view)) {
+                if (!service::get_local_storage_proxy().local_db().find_column_family(_base->id()).get_index_manager().is_index(*_view)) {
                     throw std::logic_error(format("Column {} doesn't exist in base and this view is not backing a secondary index", cdef.name_as_text()));
                 }
                 computed_value = legacy_token_column_computation().compute_value(*_base, base_key, update);
@@ -1133,7 +1133,7 @@ query::clustering_row_ranges calculate_affected_clustering_ranges(const schema& 
 static std::optional<gms::inet_address>
 get_view_natural_endpoint(const sstring& keyspace_name,
         const dht::token& base_token, const dht::token& view_token) {
-    auto &db = service::get_local_storage_service().db().local();
+    auto &db = service::get_local_storage_proxy().local_db();
     auto& rs = db.find_keyspace(keyspace_name).get_replication_strategy();
     auto my_address = utils::fb_utilities::get_broadcast_address();
     auto my_datacenter = locator::i_endpoint_snitch::get_local_snitch_ptr()->get_datacenter(my_address);
