@@ -234,6 +234,9 @@ def main(argv):
 
     args = arg_parser.parse_args(argv_head)
 
+    if not os.path.isdir(args.path):
+        arg_parser.exit(2, f"Error: invalid value for `--path`: path '{args.path}' doesn't exists or is not a directory\n")
+
     if args.run:
         run(argv_tail, args.executable, args.distinct_id)
         if args.name.is_default:
