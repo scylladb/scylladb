@@ -42,6 +42,7 @@
 #include "db/batchlog_manager.hh"
 #include "db/commitlog/commitlog.hh"
 #include "db/hints/manager.hh"
+#include "db/hints/sync_point_service.hh"
 #include "db/commitlog/commitlog_replayer.hh"
 #include "db/view/view_builder.hh"
 #include "utils/runtime.hh"
@@ -948,6 +949,14 @@ int main(int ac, char** av) {
             smp::invoke_on_all([blocked_reactor_notify_ms] {
                 engine().update_blocked_reactor_notify_ms(blocked_reactor_notify_ms);
             }).get();
+
+            static sharded<db::hints::sync_point_service> sync_point_svc;
+            supervisor::notify("starting hints sync point service");
+            sync_point_svc.start(std::ref(messaging), maintenance_scheduling_group).get();
+            auto stop_sync_point_service = defer_verbose_shutdown("sync hints point service", [] {
+                sync_point_svc.stop().get();
+            });
+            sync_point_svc.invoke_on_all(&db::hints::sync_point_service::start).get();
 
             supervisor::notify("starting storage proxy");
             service::storage_proxy::config spcfg {
