@@ -365,8 +365,8 @@ class azure_instance:
     EPHEMERAL = "ephemeral"
     ROOT = "root"
     GETTING_STARTED_URL = "http://www.scylladb.com/doc/getting-started-azure/"
-    META_DATA_BASE_URL = "http://169.254.169.254/1.0/meta-data/instance/"
     ENDPOINT_SNITCH = "GossipingPropertyFileSnitch"
+    META_DATA_BASE_URL = "http://169.254.169.254/metadata/instance"
 
     def __init__(self):
         self.__type = None
@@ -392,7 +392,7 @@ class azure_instance:
 
     def __instance_metadata(self, path):
         """query Azure metadata server"""
-        return curl(self.META_DATA_BASE_URL + path + self.API_VERSION + "&format=text")
+        return curl(self.META_DATA_BASE_URL + path + self.API_VERSION + "&format=text", headers = { "Metadata": "True" })
 
     def is_in_root_devs(self, x, root_devs):
         for root_dev in root_devs:
@@ -474,7 +474,7 @@ class azure_instance:
     def instancetype(self):
         """return the type of this instance, e.g. Standard_L8s_v2"""
         if self.__type is None:
-            self.__type = self.__instance_metadata("vmSize")
+            self.__type = self.__instance_metadata("/compute/vmSize")
         return self.__type
 
     @property
@@ -491,11 +491,6 @@ class azure_instance:
             self.__memoryGB = psutil.virtual_memory().total/1024/1024/1024
         return self.__memoryGB
 
-    def instance_version(self):
-        """Returns the size of the instance we are running in. i.e.: v2"""
-        instancetypesplit = self.instancetype.split("_")
-        return instancetypesplit[2] if len(instancetypesplit) > 2 else ""
-
     def instance_purpose(self):
         """Returns the class of the instance we are running in. i.e.: Standard"""
         return self.instancetype.split("_")[0]
@@ -504,11 +499,11 @@ class azure_instance:
         """Returns the purpose of the instance we are running in. i.e.: L8s"""
         return self.instancetype.split("_")[1]
 
-    def is_unsupported_instance(self):
+    def is_unsupported_instance_class(self):
         """Returns if this instance type belongs to unsupported ones for nvmes"""
         return False
 
-    def is_supported_instance(self):
+    def is_supported_instance_class(self):
         """Returns if this instance type belongs to supported ones for nvmes"""
         if self.instance_class() in list(self.instanceToDiskCount.keys()):
             return True
@@ -521,9 +516,20 @@ class azure_instance:
         return False
 
     def is_recommended_instance(self):
-        if self.is_recommended_instance_size() and not self.is_unsupported_instance() and self.is_supported_instance():
+        if self.is_unsupported_instance_class() and self.is_supported_instance_class():
             return True
         return False
+
+    def private_ipv4(self):
+        return self.__instance_metadata("/network/interface/0/ipv4/ipAddress/0/privateIpAddress")
+
+    @staticmethod
+    def check():
+        pass
+
+    @staticmethod
+    def io_setup():
+        return run('/opt/scylladb/scripts/scylla_io_setup', shell=True, check=True)
 
 class aws_instance:
     """Describe several aspects of the current AWS instance"""
@@ -727,19 +733,21 @@ def match_patterns_in_files(list_of_patterns_files):
 def is_ec2():
     return aws_instance.is_aws_instance()
 
-
 def is_gce():
     return gcp_instance.is_gce_instance()
 
+def is_azure():
+    return azure_instance.is_azure_instance()
 
 def get_cloud_instance():
     if is_ec2():
         return aws_instance()
     elif is_gce():
         return gcp_instance()
+    elif is_azure():
+        return azure_instance()
     else:
-        raise Exception("Unknown cloud provider! Only AWS/GCP supported.")
-
+        raise Exception("Unknown cloud provider! Only AWS/GCP/Azure supported.")
 
 def hex2list(hex_str):
     hex_str2 = hex_str.replace("0x", "").replace(",", "")
