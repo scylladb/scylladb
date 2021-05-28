@@ -258,9 +258,6 @@ public:
 
     future<> gossip_sharder();
 
-    gms::feature_service& features() { return _feature_service; }
-    const gms::feature_service& features() const { return _feature_service; }
-
     cdc::generation_service& get_cdc_generation_service() {
         if (!_cdc_gen_service.local_is_initialized()) {
             throw std::runtime_error("get_cdc_generation_service: not initialized yet");

@@ -606,7 +606,7 @@ void storage_service::join_token_ring(int delay) {
                         _bootstrap_tokens, get_token_metadata_ptr(), _gossiper,
                         _sys_dist_ks.local(), get_ring_delay(),
                         !_for_testing && !is_first_node() /* add_delay */,
-                        features().cluster_supports_cdc_generations_v2()).get0();
+                        _feature_service.cluster_supports_cdc_generations_v2()).get0();
             } catch (...) {
                 cdc_log.warn(
                     "Could not create a new CDC generation: {}. This may make it impossible to use CDC or cause performance problems."
@@ -690,7 +690,7 @@ void storage_service::bootstrap() {
                 _bootstrap_tokens, get_token_metadata_ptr(), _gossiper,
                 _sys_dist_ks.local(), get_ring_delay(),
                 !_for_testing && !is_first_node() /* add_delay */,
-                features().cluster_supports_cdc_generations_v2()).get0();
+                _feature_service.cluster_supports_cdc_generations_v2()).get0();
 
       if (!is_repair_based_node_ops_enabled()) {
         // When is_repair_based_node_ops_enabled is true, the bootstrap node
