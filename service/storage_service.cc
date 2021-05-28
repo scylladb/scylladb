@@ -185,10 +185,10 @@ bool storage_service::is_auto_bootstrap() const {
     return _db.local().get_config().auto_bootstrap();
 }
 
-std::unordered_set<token> get_replace_tokens() {
+std::unordered_set<token> storage_service::get_replace_tokens() {
     std::unordered_set<token> ret;
     std::unordered_set<sstring> tokens;
-    auto tokens_string = get_local_storage_service().db().local().get_config().replace_token();
+    auto tokens_string = _db.local().get_config().replace_token();
     try {
         boost::split(tokens, tokens_string, boost::is_any_of(sstring(",")));
     } catch (...) {
@@ -202,8 +202,8 @@ std::unordered_set<token> get_replace_tokens() {
     return ret;
 }
 
-std::optional<UUID> get_replace_node() {
-    auto replace_node = get_local_storage_service().db().local().get_config().replace_node();
+std::optional<UUID> storage_service::get_replace_node() {
+    auto replace_node = _db.local().get_config().replace_node();
     if (replace_node.empty()) {
         return std::nullopt;
     }
