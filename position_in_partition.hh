@@ -587,6 +587,8 @@ public:
         , _end(std::move(end))
     { }
 
+    void set_start(position_in_partition pos) { _start = std::move(pos); }
+    void set_end(position_in_partition pos) { _end = std::move(pos); }
     const position_in_partition& start() const& { return _start; }
     position_in_partition&& start() && { return std::move(_start); }
     const position_in_partition& end() const& { return _end; }

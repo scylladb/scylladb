@@ -385,7 +385,10 @@ public:
             ret = flush();
         }
         advance_to(rt);
-        _in_progress = mutation_fragment(*_schema, permit(), std::move(rt));
+        auto rt_opt = _ck_ranges_walker->split_tombstone(rt, _range_tombstones);
+        if (rt_opt) {
+            _in_progress = mutation_fragment(*_schema, permit(), std::move(*rt_opt));
+        }
         if (_out_of_range) {
             ret = push_ready_fragments_out_of_range();
         }
@@ -667,8 +670,8 @@ public:
                 }
                 // Workaround for #1203
                 if (!_first_row_encountered) {
-                    if (_ck_ranges_walker->contains_tombstone(rt_pos, rt.end_position())) {
-                        _range_tombstones.apply(std::move(rt));
+                    if (auto rt_opt = _ck_ranges_walker->split_tombstone(std::move(rt), _range_tombstones)) {
+                        _range_tombstones.apply(std::move(*rt_opt));
                     }
                     return proceed::yes;
                 }
@@ -751,6 +754,14 @@ public:
         sstlog.trace("mp_row_consumer_k_l {}: fast_forward_to({})", fmt::ptr(this), r);
         _out_of_range = _is_mutation_end;
         _fwd_end = std::move(r).end();
+
+        // range_tombstone::trim() requires !is_clustering_row().
+        if (r.start().is_clustering_row()) {
+            r.set_start(position_in_partition::before_key(r.start().key()));
+        }
+        if (r.end().is_clustering_row()) {
+            r.set_end(position_in_partition::before_key(r.end().key()));
+        }
 
         _range_tombstones.forward_to(r.start());
 
