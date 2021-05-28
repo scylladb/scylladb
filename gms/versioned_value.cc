@@ -37,6 +37,7 @@
  */
 #include "gms/versioned_value.hh"
 #include "message/messaging_service.hh"
+#include "release.hh"
 
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>
@@ -103,6 +104,10 @@ std::optional<cdc::generation_id> versioned_value::cdc_generation_id_from_string
         return {};
     }
     return cdc::generation_id{db_clock::time_point{db_clock::duration(std::stoll(s))}};
+}
+
+versioned_value versioned_value::release_version() {
+    return versioned_value(scylla_version());
 }
 
 }

@@ -1213,7 +1213,7 @@ static future<> setup_version(distributed<gms::feature_service>& feat, sharded<n
         auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
 
         return qctx->execute_cql(req, sstring(db::system_keyspace::LOCAL),
-                             version::release(),
+                             scylla_version(),
                              cql3::query_processor::CQL_VERSION,
                              ::cassandra::thrift_version,
                              to_sstring(cql_serialization_format::latest_version),

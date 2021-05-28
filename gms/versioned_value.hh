@@ -234,9 +234,7 @@ public:
         return versioned_value(format("{}", endpoint));
     }
 
-    static versioned_value release_version() {
-        return versioned_value(version::release());
-    }
+    static versioned_value release_version();
 
     static versioned_value network_version();
 
