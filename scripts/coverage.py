@@ -191,10 +191,14 @@ def main(argv):
     * Run several tests directly through `coverage.py` and generate a report at the end:
 
         $ ./coverage.py --no-coverage-report --run /path/to/my_test1 --testarg1 --testarg2 ...
-        $ ./coverage.py --no-coverage-report --run /path/to/my_test1 --testarg1 --testarg2 ...
+        $ ./coverage.py --no-coverage-report --run /path/to/my_test2 --testarg1 --testarg2 ...
         $ ./coverage.py --input-files /path/to/my_test1.profraw /path/to/my_test2.profraw
 
       Alternatively, you can run `./coverage.py` without args to generate a report from all input files it can find.
+
+    It is also possible to run tests via a script (`--executable`) or to run the
+    same test multiple times, with multiple inputs and generate a final report
+    across all runs (`--distinct-id`).
 
     Note that `--path`, `--name` and `--verbose` can always be provided.
     """
