@@ -852,7 +852,7 @@ void set_storage_service(http_context& ctx, routes& r) {
     ss::reset_local_schema.set(r, [](std::unique_ptr<request> req) {
         // FIXME: We should truncate schema tables if more than one node in the cluster.
         auto& sp = service::get_storage_proxy();
-        auto& fs = service::get_local_storage_service().features();
+        auto& fs = sp.local().features();
         return db::schema_tables::recalculate_schema_version(sp, fs).then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
