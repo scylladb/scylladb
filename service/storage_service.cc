@@ -911,8 +911,6 @@ void storage_service::handle_state_normal(inet_address endpoint) {
     if (tmptr->is_member(endpoint)) {
         slogger.info("Node {} state jump to normal", endpoint);
     }
-    update_peer_info(endpoint);
-
     std::unordered_set<inet_address> endpoints_to_remove;
 
     auto do_remove_node = [&] (gms::inet_address node) {
@@ -996,6 +994,7 @@ void storage_service::handle_state_normal(inet_address endpoint) {
     }
     slogger.debug("handle_state_normal: endpoint={} owned_tokens = {}", endpoint, owned_tokens);
     if (!owned_tokens.empty() && !endpoints_to_remove.count(endpoint)) {
+        update_peer_info(endpoint);
         db::system_keyspace::update_tokens(endpoint, owned_tokens).then_wrapped([endpoint] (auto&& f) {
             try {
                 f.get();
