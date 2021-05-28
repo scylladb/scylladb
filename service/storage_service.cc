@@ -217,7 +217,7 @@ std::optional<UUID> storage_service::get_replace_node() {
 }
 
 bool storage_service::is_first_node() {
-    if (db().local().is_replacing()) {
+    if (_db.local().is_replacing()) {
         return false;
     }
     auto seeds = _gossiper.get_seeds();
@@ -262,7 +262,7 @@ void storage_service::prepare_to_join(
         bind_messaging_port do_bind) {
     std::map<gms::application_state, gms::versioned_value> app_states;
     if (db::system_keyspace::was_decommissioned()) {
-        if (db().local().get_config().override_decommission()) {
+        if (_db.local().get_config().override_decommission()) {
             slogger.warn("This node was decommissioned, but overriding by operator request.");
             db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED).get();
         } else {
@@ -279,12 +279,12 @@ void storage_service::prepare_to_join(
     bool replacing_a_node_with_diff_ip = false;
     auto tmlock = std::make_unique<token_metadata_lock>(get_token_metadata_lock().get0());
     auto tmptr = get_mutable_token_metadata_ptr().get0();
-    if (db().local().is_replacing()) {
+    if (_db.local().is_replacing()) {
         if (db::system_keyspace::bootstrap_complete()) {
             throw std::runtime_error("Cannot replace address with a node that is already bootstrapped");
         }
         _bootstrap_tokens = prepare_replacement_info(initial_contact_nodes, loaded_peer_features, do_bind).get0();
-        auto replace_address = db().local().get_replace_address();
+        auto replace_address = _db.local().get_replace_address();
         replacing_a_node_with_same_ip = replace_address && *replace_address == get_broadcast_address();
         replacing_a_node_with_diff_ip = replace_address && *replace_address != get_broadcast_address();
 
@@ -308,7 +308,7 @@ void storage_service::prepare_to_join(
 
     // If this is a restarting node, we should update tokens before gossip starts
     auto my_tokens = db::system_keyspace::get_saved_tokens().get0();
-    bool restarting_normal_node = db::system_keyspace::bootstrap_complete() && !db().local().is_replacing() && !my_tokens.empty();
+    bool restarting_normal_node = db::system_keyspace::bootstrap_complete() && !_db.local().is_replacing() && !my_tokens.empty();
     if (restarting_normal_node) {
         slogger.info("Restarting a node in NORMAL status");
         // This node must know about its chosen tokens before other nodes do
@@ -489,7 +489,7 @@ void storage_service::join_token_ring(int delay) {
         }
         slogger.info("Checking bootstrapping/leaving nodes: ok");
 
-        if (!db().local().is_replacing()) {
+        if (!_db.local().is_replacing()) {
             if (tmptr->is_member(get_broadcast_address())) {
                 throw std::runtime_error("This node is already a member of the token ring; bootstrap aborted. (If replacing a dead node, remove the old one from the ring first.)");
             }
@@ -507,7 +507,7 @@ void storage_service::join_token_ring(int delay) {
                 slogger.info("Using newly generated tokens = {}", _bootstrap_tokens);
             }
         } else {
-            auto replace_addr = db().local().get_replace_address();
+            auto replace_addr = _db.local().get_replace_address();
             if (replace_addr && *replace_addr != get_broadcast_address()) {
                 // Sleep additionally to make sure that the server actually is not alive
                 // and giving it more time to gossip if alive.
@@ -598,11 +598,11 @@ void storage_service::join_token_ring(int delay) {
 
         // Finally, if we're the first node, we'll create the first generation.
 
-        if (!db().local().is_replacing()
+        if (!_db.local().is_replacing()
                 && (!db::system_keyspace::bootstrap_complete()
                     || cdc::should_propose_first_generation(get_broadcast_address(), _gossiper))) {
             try {
-                _cdc_gen_id = cdc::make_new_cdc_generation(db().local().get_config(),
+                _cdc_gen_id = cdc::make_new_cdc_generation(_db.local().get_config(),
                         _bootstrap_tokens, get_token_metadata_ptr(), _gossiper,
                         _sys_dist_ks.local(), get_ring_delay(),
                         !_for_testing && !is_first_node() /* add_delay */,
@@ -662,7 +662,7 @@ void storage_service::bootstrap() {
     _is_bootstrap_mode = true;
     auto x = seastar::defer([this] { _is_bootstrap_mode = false; });
 
-    if (!db().local().is_replacing()) {
+    if (!_db.local().is_replacing()) {
         // Wait until we know tokens of existing node before announcing join status.
         _gossiper.wait_for_range_setup().get();
 
@@ -686,7 +686,7 @@ void storage_service::bootstrap() {
         // We don't do any other generation switches (unless we crash before complecting bootstrap).
         assert(!_cdc_gen_id);
 
-        _cdc_gen_id = cdc::make_new_cdc_generation(db().local().get_config(),
+        _cdc_gen_id = cdc::make_new_cdc_generation(_db.local().get_config(),
                 _bootstrap_tokens, get_token_metadata_ptr(), _gossiper,
                 _sys_dist_ks.local(), get_ring_delay(),
                 !_for_testing && !is_first_node() /* add_delay */,
@@ -709,7 +709,7 @@ void storage_service::bootstrap() {
         // Wait until we know tokens of existing node before announcing replacing status.
         set_mode(mode::JOINING, sprint("Wait until local node knows tokens of peer nodes"), true);
         _gossiper.wait_for_range_setup().get();
-        auto replace_addr = db().local().get_replace_address();
+        auto replace_addr = _db.local().get_replace_address();
         if (replace_addr) {
             slogger.debug("Removing replaced endpoint {} from system.peers", *replace_addr);
             db::system_keyspace::remove_endpoint(*replace_addr).get();
@@ -724,14 +724,14 @@ void storage_service::bootstrap() {
 
     set_mode(mode::JOINING, "Starting to bootstrap...", true);
     if (is_repair_based_node_ops_enabled()) {
-        if (db().local().is_replacing()) {
+        if (_db.local().is_replacing()) {
             run_replace_ops();
         } else {
             run_bootstrap_ops();
         }
     } else {
         // Does the actual streaming of newly replicated token ranges.
-        if (db().local().is_replacing()) {
+        if (_db.local().is_replacing()) {
             run_replace_ops();
         } else {
             dht::boot_strapper bs(_db, _abort_source, get_broadcast_address(), _bootstrap_tokens, get_token_metadata_ptr());
@@ -836,7 +836,7 @@ void storage_service::handle_state_replacing(inet_address replacing_node) {
     auto tmlock = get_token_metadata_lock().get0();
     auto tmptr = get_mutable_token_metadata_ptr().get0();
     auto existing_node_opt = tmptr->get_endpoint_for_host_id(host_id);
-    auto replace_addr = db().local().get_replace_address();
+    auto replace_addr = _db.local().get_replace_address();
     if (replacing_node == get_broadcast_address() && replace_addr && *replace_addr == get_broadcast_address()) {
         existing_node_opt = replacing_node;
     }
@@ -1542,10 +1542,10 @@ void storage_service::remove_endpoint(inet_address endpoint) {
 
 future<storage_service::replacement_info>
 storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> initial_contact_nodes, const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features, bind_messaging_port do_bind) {
-    if (!db().local().get_replace_address()) {
+    if (!_db.local().get_replace_address()) {
         throw std::runtime_error(format("replace_address is empty"));
     }
-    auto replace_address = db().local().get_replace_address().value();
+    auto replace_address = _db.local().get_replace_address().value();
     slogger.info("Gathering node replacement information for {}", replace_address);
 
     // if (!MessagingService.instance().isListening())
@@ -1847,7 +1847,7 @@ future<> storage_service::decommission() {
         return seastar::async([&ss] {
             auto uuid = utils::make_random_uuid();
             auto tmptr = ss.get_token_metadata_ptr();
-            auto& db = ss.db().local();
+            auto& db = ss._db.local();
             auto endpoint = ss.get_broadcast_address();
             if (!tmptr->is_member(endpoint)) {
                 throw std::runtime_error("local node is not a member of the token ring yet");
@@ -2138,10 +2138,10 @@ void storage_service::run_bootstrap_ops() {
 
 // Runs inside seastar::async context
 void storage_service::run_replace_ops() {
-    if (!db().local().get_replace_address()) {
+    if (!_db.local().get_replace_address()) {
         throw std::runtime_error(format("replace_address is empty"));
     }
-    auto replace_address = db().local().get_replace_address().value();
+    auto replace_address = _db.local().get_replace_address().value();
     auto uuid = utils::make_random_uuid();
     // TODO: Specify ignore_nodes
     std::list<gms::inet_address> ignore_nodes;
@@ -2460,7 +2460,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
                 return resp;
             } else if (req.cmd == node_ops_cmd::repair_updater) {
                 slogger.debug("repair[{}]: Got repair_updater request from {}", ops_uuid, coordinator);
-                ss.db().invoke_on_all([coordinator, ops_uuid, tables = req.repair_tables] (database &db) {
+                ss._db.invoke_on_all([coordinator, ops_uuid, tables = req.repair_tables] (database &db) {
                     for (const auto& table_id : tables) {
                         auto& table = db.find_column_family(table_id);
                         table.update_off_strategy_trigger();
@@ -2554,7 +2554,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
             } else if (req.cmd == node_ops_cmd::decommission_done) {
                 slogger.info("decommission[{}]: Marked ops done from coordinator={}", req.ops_uuid, coordinator);
                 slogger.debug("Triggering off-strategy compaction for all non-system tables on decommission completion");
-                ss.db().invoke_on_all([](database &db) {
+                ss._db.invoke_on_all([](database &db) {
                     for (auto& table : db.get_non_system_column_families()) {
                         table->trigger_offstrategy_compaction();
                     }
@@ -2669,7 +2669,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
 // Runs inside seastar::async context
 void storage_service::flush_column_families() {
     container().invoke_on_all([] (auto& ss) {
-        auto& local_db = ss.db().local();
+        auto& local_db = ss._db.local();
         auto non_system_cfs = local_db.get_column_families() | boost::adaptors::filtered([] (auto& uuid_and_cf) {
             auto cf = uuid_and_cf.second;
             return !is_system_keyspace(cf->schema()->ks_name());
@@ -2689,7 +2689,7 @@ void storage_service::flush_column_families() {
     // flush the system ones after all the rest are done, just in case flushing modifies any system state
     // like CASSANDRA-5151. don't bother with progress tracking since system data is tiny.
     container().invoke_on_all([] (auto& ss) {
-        auto& local_db = ss.db().local();
+        auto& local_db = ss._db.local();
         auto system_cfs = local_db.get_column_families() | boost::adaptors::filtered([] (auto& uuid_and_cf) {
             auto cf = uuid_and_cf.second;
             return is_system_keyspace(cf->schema()->ks_name());
@@ -2724,7 +2724,7 @@ future<> storage_service::do_drain(bool on_shutdown) {
 
         if (!on_shutdown) {
             // Interrupt on going compaction and shutdown to prevent further compaction
-            db().invoke_on_all([] (auto& db) {
+            _db.invoke_on_all([] (auto& db) {
                 return db.get_compaction_manager().drain();
             }).get();
         }
@@ -2739,7 +2739,7 @@ future<> storage_service::do_drain(bool on_shutdown) {
         set_mode(mode::DRAINING, "shutting down migration manager", false);
         _migration_manager.invoke_on_all(&service::migration_manager::stop).get();
 
-        db().invoke_on_all([] (auto& db) {
+        _db.invoke_on_all([] (auto& db) {
             return db.commitlog()->shutdown();
         }).get();
     });

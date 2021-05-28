@@ -258,10 +258,6 @@ public:
 
     future<> gossip_sharder();
 
-    distributed<database>& db() {
-        return _db;
-    }
-
     gms::feature_service& features() { return _feature_service; }
     const gms::feature_service& features() const { return _feature_service; }
 
