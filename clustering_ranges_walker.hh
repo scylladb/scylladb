@@ -181,6 +181,40 @@ public:
         return false;
     }
 
+    // Intersects rt with query ranges. The first overlap is returned and the rest is applied to dst.
+    // If returns a disengaged optional, there is no overlap and nothing was applied to dst.
+    // No monotonicity restrictions on argument values across calls.
+    // Does not affect lower_bound().
+    std::optional<range_tombstone> split_tombstone(range_tombstone rt, range_tombstone_stream& dst) const {
+        position_in_partition::less_compare less(_schema);
+
+        if (_trim && !rt.trim_front(_schema, *_trim)) {
+            return std::nullopt;
+        }
+
+        std::optional<range_tombstone> first;
+
+        for (const auto& rng : _current_range) {
+            auto range_start = position_in_partition_view::for_range_start(rng);
+            auto range_end = position_in_partition_view::for_range_end(rng);
+            if (!less(rt.position(), range_start) && !less(range_end, rt.end_position())) {
+                // Fully enclosed by this range.
+                assert(!first);
+                return std::move(rt);
+            }
+            auto this_range_rt = rt;
+            if (this_range_rt.trim(_schema, range_start, range_end)) {
+                if (first) {
+                    dst.apply(std::move(this_range_rt));
+                } else {
+                    first = std::move(this_range_rt);
+                }
+            }
+        }
+
+        return first;
+    }
+
     // Returns true if advanced past all contained positions. Any later advance_to() until reset() will return false.
     bool out_of_range() const {
         return !_in_current && !_current_range;
