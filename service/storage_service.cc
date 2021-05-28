@@ -216,14 +216,6 @@ std::optional<UUID> get_replace_node() {
     }
 }
 
-bool get_property_rangemovement() {
-    return get_local_storage_service().db().local().get_config().consistent_rangemovement();
-}
-
-bool get_property_load_ring_state() {
-    return get_local_storage_service().db().local().get_config().load_ring_state();
-}
-
 bool storage_service::is_first_node() {
     if (db().local().is_replacing()) {
         return false;
@@ -472,7 +464,7 @@ void storage_service::join_token_ring(int delay) {
 
         auto t = gms::gossiper::clk::now();
         auto tmptr = get_token_metadata_ptr();
-        while (get_property_rangemovement() &&
+        while (_db.local().get_config().consistent_rangemovement() &&
             (!tmptr->get_bootstrap_tokens().empty() ||
              !tmptr->get_leaving_endpoints().empty())) {
             auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(gms::gossiper::clk::now() - t).count();
@@ -1375,7 +1367,7 @@ future<> storage_service::init_server(bind_messaging_port do_bind) {
         _initialized = true;
 
         std::unordered_set<inet_address> loaded_endpoints;
-        if (get_property_load_ring_state()) {
+        if (_db.local().get_config().load_ring_state()) {
             slogger.info("Loading persisted ring state");
             auto loaded_tokens = db::system_keyspace::load_tokens().get0();
             auto loaded_host_ids = db::system_keyspace::load_host_ids().get0();
