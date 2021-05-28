@@ -156,8 +156,16 @@ validate_partial_naive(const uint8_t *data, size_t len) {
     return partial_validation_results{};
 }
 
+} // namespace utf8
+
+} // namespace utils
+
 #if defined(__aarch64__)
 #include <arm_neon.h>
+
+namespace utils {
+
+namespace utf8 {
 
 // Map high nibble of "First Byte" to legal character length minus 1
 // 0x00 ~ 0xBF --> 0
@@ -352,8 +360,16 @@ internal::validate_partial(const uint8_t *data, size_t len) {
     return validate_partial_naive(data, len);
 }
 
+} // namespace utf8
+
+} // namespace utils
+
 #elif defined(__x86_64__)
 #include <smmintrin.h>
+
+namespace utils {
+
+namespace utf8 {
 
 // Map high nibble of "First Byte" to legal character length minus 1
 // 0x00 ~ 0xBF --> 0
@@ -537,7 +553,15 @@ internal::validate_partial(const uint8_t *data, size_t len) {
     return validate_partial_naive(data, len);
 }
 
+} // namespace utf8
+
+} // namespace utils
+
 #else
+
+namespace utils {
+
+namespace utf8 {
 
 namespace internal {
 
@@ -549,7 +573,15 @@ validate_partial(const uint8_t *data, size_t len) {
 
 }
 
+} // namespace utf8
+
+} // namespace utils
+
 #endif
+
+namespace utils {
+
+namespace utf8 {
 
 bool validate(const uint8_t* data, size_t len) {
     auto pvr = validate_partial(data, len);
