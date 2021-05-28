@@ -27,33 +27,53 @@ import inspect
 import os.path
 import subprocess
 import sys
+import re
 
 
-def __raw_profiling_filename(test_path):
-    return test_path + ".profraw"
+__DISTINCT_ID_RE = "[-_a-z0-9]+"
 
 
-def env(test_path):
+def __validate_distinct_id(distinct_id):
+    if not re.fullmatch(__DISTINCT_ID_RE, str(distinct_id)):
+        raise ValueError(f"Invalid distinct_id: {distinct_id}, a valid id contains only letters, numbers and '_' characters")
+
+
+def __raw_profiling_filename(test_path, distinct_id=None):
+    if distinct_id:
+        __validate_distinct_id(distinct_id)
+        return f"{test_path}.profraw.{distinct_id}"
+    else:
+        return f"{test_path}.profraw"
+
+
+def env(test_path, distinct_id=None):
     """Generate the env variables required by the test
 
     Such that the generated profiling data fulfills generate_coverage_report()'s
     requirements.
+    If the executable at `test_path` is not unique in a test run, meaning that
+    it is ran multiple times as part of different test suites, or test cases of
+    the same suite, `distinct_id` can be used to distinguish between these,
+    ensuring that the coverage report will include all these different runs,
+    instead of whatever happened to run last time (overriding previous results).
     """
-    return {"LLVM_PROFILE_FILE": __raw_profiling_filename(test_path)}
+    return {"LLVM_PROFILE_FILE": __raw_profiling_filename(test_path, distinct_id)}
 
 
-def run(args, executable=None):
+def run(args, executable=None, distinct_id=None):
     """Run the command, setting the required env variables
 
     In order to generate the profiling data in the right place. See env().
     The `executable` can be used to override the executable used to setup the
     env. This is useful for tests ran via a script, where args[0] is not the
     executable itself, but said script. By default `args[0]` is used.
+    To distinguish between multiple runs of the same executable, use
+    `distinct_id`, see `env()` for more details.
     """
     if executable:
-        extra_env = env(executable)
+        extra_env = env(executable, distinct_id)
     else:
-        extra_env = env(args[0])
+        extra_env = env(args[0], distinct_id)
     subprocess.check_call(args, env=dict(os.environ, **extra_env))
 
 
@@ -94,8 +114,8 @@ def generate_coverage_report(path="build/coverage/test", name="tests", input_fil
         Defaults to 0 (False).
     """
     verbose = int(verbose)
-    profraw_extension = ".profraw"
-    profraw_extension_len = len(profraw_extension)
+    input_file_re_str = f"(.+)\.profraw(\.{__DISTINCT_ID_RE})?"
+    input_file_re = re.compile(input_file_re_str)
     test_executables = []
 
     def maybe_print(msg):
@@ -107,16 +127,25 @@ def generate_coverage_report(path="build/coverage/test", name="tests", input_fil
         profraw_files = input_files
         for file in profraw_files:
             dirname, basename = os.path.split(file)
-            test_executables.append(os.path.join(dirname, basename[:-profraw_extension_len]))
+            match = re.fullmatch(input_file_re, basename)
+            if match is None:
+                print(f"Error: input file {input_file} doesn't match the expected input file naming pattern {input_file_re_str}, skipping it")
+
+            test_executables.append(os.path.join(dirname, match.group(1)))
     else:
-        maybe_print(f"Scanning {path} for input files matching *.{profraw_extension}")
+        maybe_print(f"Scanning {path} for input files matching {input_file_re_str}")
         profraw_files = []
         for root, dirs, files in os.walk(path):
             for file in files:
-                if file.endswith(profraw_extension):
+                match = re.fullmatch(input_file_re, file)
+                if not match is None:
                     profraw_files.append(os.path.join(root, file))
-                    test_executables.append(os.path.join(root, file[:-profraw_extension_len]))
+                    test_executables.append(os.path.join(root, match.group(1)))
         maybe_print(f"Found {len(profraw_files)} input files")
+
+    if not profraw_files:
+        print("Error: couldn't find any raw profiling data files, can't generate coverage report")
+        exit(1)
 
     profdata_path = os.path.join(path, f"{name}.profdata")
 
@@ -188,6 +217,8 @@ def main(argv):
             help="modifier for --run: don't generate a coverage report after running the executable, ignored when --run is not used")
     arg_parser.add_argument("--executable", dest="executable", action="store", required=False, default=None,
             help="modifier for --run: the test executable, for tests that are started through a script, ignored when --run is not used")
+    arg_parser.add_argument("--distinct-id", dest="distinct_id", action="store", required=False, default=None,
+            help="modifier for --run: a distinct id making this run distinct from another one with the same executable, allowing a summary report to be generated across all runs, ignored when --run is not used")
 
     if '--run' in argv:
         pos = argv.index('--run')
@@ -200,13 +231,13 @@ def main(argv):
     args = arg_parser.parse_args(argv_head)
 
     if args.run:
-        run(argv_tail, args.executable)
+        run(argv_tail, args.executable, args.distinct_id)
         if args.name.is_default:
             args.name.val = os.path.basename(argv_tail[0])
         if args.executable:
-            input_files = [__raw_profiling_filename(args.executable)]
+            input_files = [__raw_profiling_filename(args.executable, args.distinct_id)]
         else:
-            input_files = [__raw_profiling_filename(argv_tail[0])]
+            input_files = [__raw_profiling_filename(argv_tail[0], args.distinct_id)]
     else:
         input_files = args.input_files
 
