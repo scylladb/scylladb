@@ -26,6 +26,7 @@
 #include <seastar/core/loop.hh>
 #include <seastar/util/log.hh>
 #include <seastar/util/later.hh>
+#include <seastar/util/variant_utils.hh>
 #include <seastar/testing/random.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/testing/test_case.hh>
@@ -1125,34 +1126,51 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
 
     // Process all updates in order
     for (auto update: test.updates) {
-        if (std::holds_alternative<entries>(update)) {
-            co_await rafts.add_entries(std::get<entries>(update).n);
-        } else if (std::holds_alternative<new_leader>(update)) {
-            co_await rafts.elect_new_leader(std::get<new_leader>(update).id);
-        } else if (std::holds_alternative<::disconnect>(update)) {
-            rafts.disconnect(std::get<::disconnect>(update));
-        } else if (std::holds_alternative<partition>(update)) {
-            co_await rafts.partition(std::get<partition>(update));
-        } else if (std::holds_alternative<stop>(update)) {
-            co_await rafts.stop(std::get<stop>(update));
-        } else if (std::holds_alternative<reset>(update)) {
-            co_await rafts.reset(std::get<reset>(update));
-        } else if (std::holds_alternative<wait_log>(update)) {
-            co_await rafts.wait_log(std::get<wait_log>(update));
-        } else if (std::holds_alternative<set_config>(update)) {
-            co_await rafts.change_configuration(std::get<set_config>(update));
-        } else if (std::holds_alternative<check_rpc_config>(update)) {
-            co_await rafts.check_rpc_config(std::get<check_rpc_config>(update));
-        } else if (std::holds_alternative<check_rpc_added>(update)) {
-            rafts.check_rpc_added(std::get<check_rpc_added>(update));
-        } else if (std::holds_alternative<check_rpc_removed>(update)) {
-            rafts.check_rpc_removed(std::get<check_rpc_removed>(update));
-        } else if (std::holds_alternative<rpc_reset_counters>(update)) {
-            rafts.rpc_reset_counters(std::get<rpc_reset_counters>(update));
-        } else if (std::holds_alternative<tick>(update)) {
-            auto t = std::get<tick>(update);
-            co_await rafts.tick(t);
+        co_await std::visit(make_visitor(
+        [&rafts] (entries update) -> future<> {
+            co_await rafts.add_entries(update.n);
+        },
+        [&rafts] (new_leader update) -> future<> {
+            co_await rafts.elect_new_leader(update.id);
+        },
+        [&rafts] (disconnect update) -> future<> {
+            rafts.disconnect(update);
+            co_return;
+        },
+        [&rafts] (partition update) -> future<> {
+            co_await rafts.partition(update);
+        },
+        [&rafts] (stop update) -> future<> {
+            co_await rafts.stop(update);
+        },
+        [&rafts] (reset update) -> future<> {
+            co_await rafts.reset(update);
+        },
+        [&rafts] (wait_log update) -> future<> {
+            co_await rafts.wait_log(update);
+        },
+        [&rafts] (set_config update) -> future<> {
+            co_await rafts.change_configuration(update);
+        },
+        [&rafts] (check_rpc_config update) -> future<> {
+            co_await rafts.check_rpc_config(update);
+        },
+        [&rafts] (check_rpc_added update) -> future<> {
+            rafts.check_rpc_added(update);
+            co_return;
+        },
+        [&rafts] (check_rpc_removed update) -> future<> {
+            rafts.check_rpc_removed(update);
+            co_return;
+        },
+        [&rafts] (rpc_reset_counters update) -> future<> {
+            rafts.rpc_reset_counters(update);
+            co_return;
+        },
+        [&rafts] (tick update) -> future<> {
+            co_await rafts.tick(update);
         }
+        ), std::move(update));
     }
 
     // Reconnect and bring all nodes back into configuration, if needed
