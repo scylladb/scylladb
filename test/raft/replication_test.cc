@@ -544,13 +544,12 @@ public:
 
 std::unordered_map<raft::server_id, rpc*> rpc::net;
 
-struct test_server {
-    std::unique_ptr<raft::server> server;
-    state_machine* sm;
-    rpc* rpc;
-};
-
 class raft_cluster {
+    struct test_server {
+        std::unique_ptr<raft::server> server;
+        state_machine* sm;
+        rpc* rpc;
+    };
     std::vector<test_server> _servers;
     lw_shared_ptr<connected> _connected;
     lw_shared_ptr<snapshots> _snapshots;
@@ -572,9 +571,6 @@ public:
     future<> reset_server(size_t id, initial_state state); // Reset a stopped server
     size_t size() {
         return _servers.size();
-    }
-    test_server& operator [](size_t i) {
-        return _servers[i];
     }
     future<> start_all();
     future<> stop_all();
@@ -611,7 +607,7 @@ private:
     test_server create_server(size_t id, initial_state state);
 };
 
-test_server raft_cluster::create_server(size_t id, initial_state state) {
+raft_cluster::test_server raft_cluster::create_server(size_t id, initial_state state) {
 
     auto uuid = to_raft_id(id);
     auto sm = std::make_unique<state_machine>(uuid, _apply, _apply_entries, _snapshots);
