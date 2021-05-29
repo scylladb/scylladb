@@ -184,6 +184,18 @@ def run_scylla_cmd(pid, dir):
         '--logger-log-level', 'compaction=warn',
         '--logger-log-level', 'migration_manager=warn',
         '--num-tokens', '16',
+        # Significantly increase default timeouts to allow running tests
+        # on a very slow setup (but without network losses). Note that these
+        # are server-side timeouts: The client should also avoid timing out
+        # its own requests - for this reason we increase the CQL driver's
+        # client-side timeout in conftest.py.
+        '--range-request-timeout-in-ms', '300000',
+        '--read-request-timeout-in-ms', '300000',
+        '--counter-write-request-timeout-in-ms', '300000',
+        '--cas-contention-timeout-in-ms', '300000',
+        '--truncate-request-timeout-in-ms', '300000',
+        '--write-request-timeout-in-ms', '300000',
+        '--request-timeout-in-ms', '300000',
         # Allow testing experimental features
         '--experimental', '1', '--enable-user-defined-functions', '1',
         # Set up authentication in order to allow testing this module
