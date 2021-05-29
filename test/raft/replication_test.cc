@@ -561,9 +561,12 @@ class raft_cluster {
     std::unordered_set<size_t> _in_configuration;   // Servers in current configuration
     std::vector<seastar::timer<lowres_clock>> _tickers;
     size_t _leader;
+    std::vector<initial_state> get_states(test_case test, bool prevote);
 public:
-    raft_cluster(std::vector<initial_state> states, state_machine::apply_fn apply,
-            size_t apply_entries, size_t first_val, size_t first_leader, bool packet_drops);
+    raft_cluster(test_case test,
+            state_machine::apply_fn apply,
+            size_t apply_entries, size_t first_val, size_t first_leader,
+            bool prevote, bool packet_drops);
     // No copy
     raft_cluster(const raft_cluster&) = delete;
     raft_cluster(raft_cluster&&) = default;
@@ -629,9 +632,11 @@ raft_cluster::test_server raft_cluster::create_server(size_t id, initial_state s
     };
 }
 
-raft_cluster::raft_cluster(std::vector<initial_state> states, state_machine::apply_fn apply,
-        size_t apply_entries, size_t first_val, size_t first_leader, bool packet_drops) :
-            _connected(make_lw_shared<struct connected>(states.size())),
+raft_cluster::raft_cluster(test_case test,
+        state_machine::apply_fn apply,
+        size_t apply_entries, size_t first_val, size_t first_leader,
+        bool prevote, bool packet_drops) :
+            _connected(make_lw_shared<struct connected>(test.nodes)),
             _snapshots(make_lw_shared<snapshots>()),
             _persisted_snapshots(make_lw_shared<persisted_snapshots>()),
             _apply_entries(apply_entries),
@@ -640,6 +645,7 @@ raft_cluster::raft_cluster(std::vector<initial_state> states, state_machine::app
             _apply(apply),
             _leader(first_leader) {
 
+    auto states = get_states(test, prevote);
     for (size_t s = 0; s < states.size(); ++s) {
         _in_configuration.insert(s);
     }
@@ -1072,7 +1078,7 @@ void raft_cluster::verify() {
    }
 }
 
-std::vector<initial_state> get_states(test_case test, bool prevote) {
+std::vector<initial_state> raft_cluster::get_states(test_case test, bool prevote) {
     rpc::reset_network();
     std::vector<initial_state> states(test.nodes);       // Server initial states
 
@@ -1106,8 +1112,8 @@ std::vector<initial_state> get_states(test_case test, bool prevote) {
 
 future<> run_test(test_case test, bool prevote, bool packet_drops) {
 
-    raft_cluster rafts(get_states(test, prevote), apply_changes, test.total_values,
-            test.get_first_val(), test.initial_leader, packet_drops);
+    raft_cluster rafts(test, apply_changes, test.total_values,
+            test.get_first_val(), test.initial_leader, prevote, packet_drops);
     co_await rafts.start_all();
 
     BOOST_TEST_MESSAGE("Processing updates");
