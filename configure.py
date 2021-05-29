@@ -1284,7 +1284,6 @@ warnings = [
     '-Wno-redeclared-class-member',
     '-Wno-pessimizing-move',
     '-Wno-redundant-move',
-    '-Wno-gnu-designator',
     '-Wno-unsupported-friend',
     '-Wno-unused-variable',
     '-Wno-delete-non-abstract-non-virtual-dtor',
