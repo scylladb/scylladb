@@ -270,14 +270,14 @@ void set_repair(http_context& ctx, routes& r, sharded<repair_service>& repair) {
         });
     });
 
-    ss::force_terminate_all_repair_sessions.set(r, [](std::unique_ptr<request> req) {
-        return repair_abort_all(service::get_local_storage_service().db()).then([] {
+    ss::force_terminate_all_repair_sessions.set(r, [&ctx](std::unique_ptr<request> req) {
+        return repair_abort_all(ctx.db).then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
     });
 
-    ss::force_terminate_all_repair_sessions_new.set(r, [](std::unique_ptr<request> req) {
-        return repair_abort_all(service::get_local_storage_service().db()).then([] {
+    ss::force_terminate_all_repair_sessions_new.set(r, [&ctx](std::unique_ptr<request> req) {
+        return repair_abort_all(ctx.db).then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
     });
@@ -753,10 +753,10 @@ void set_storage_service(http_context& ctx, routes& r) {
         return make_ready_future<json::json_return_type>(json_void());
     });
 
-    ss::is_incremental_backups_enabled.set(r, [](std::unique_ptr<request> req) {
+    ss::is_incremental_backups_enabled.set(r, [&ctx](std::unique_ptr<request> req) {
         // If this is issued in parallel with an ongoing change, we may see values not agreeing.
         // Reissuing is asking for trouble, so we will just return true upon seeing any true value.
-        return service::get_local_storage_service().db().map_reduce(adder<bool>(), [] (database& db) {
+        return ctx.db.map_reduce(adder<bool>(), [] (database& db) {
             for (auto& pair: db.get_keyspaces()) {
                 auto& ks = pair.second;
                 if (ks.incremental_backups_enabled()) {
@@ -769,10 +769,10 @@ void set_storage_service(http_context& ctx, routes& r) {
         });
     });
 
-    ss::set_incremental_backups_enabled.set(r, [](std::unique_ptr<request> req) {
+    ss::set_incremental_backups_enabled.set(r, [&ctx](std::unique_ptr<request> req) {
         auto val_str = req->get_query_param("value");
         bool value = (val_str == "True") || (val_str == "true") || (val_str == "1");
-        return service::get_local_storage_service().db().invoke_on_all([value] (database& db) {
+        return ctx.db.invoke_on_all([value] (database& db) {
             db.set_enable_incremental_backups(value);
 
             // Change both KS and CF, so they are in sync
@@ -852,7 +852,7 @@ void set_storage_service(http_context& ctx, routes& r) {
     ss::reset_local_schema.set(r, [](std::unique_ptr<request> req) {
         // FIXME: We should truncate schema tables if more than one node in the cluster.
         auto& sp = service::get_storage_proxy();
-        auto& fs = service::get_local_storage_service().features();
+        auto& fs = sp.local().features();
         return db::schema_tables::recalculate_schema_version(sp, fs).then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
@@ -1047,7 +1047,7 @@ void set_storage_service(http_context& ctx, routes& r) {
         using table_sstables_list = std::vector<ss::table_sstables>;
 
         return do_with(table_sstables_list{}, [ks, cf, &ctx](table_sstables_list& dst) {
-            return service::get_local_storage_service().db().map_reduce([&dst](table_sstables_list&& res) {
+            return ctx.db.map_reduce([&dst](table_sstables_list&& res) {
                 for (auto&& t : res) {
                     auto i = std::find_if(dst.begin(), dst.end(), [&t](const ss::table_sstables& t2) {
                         return t.keyspace() == t2.keyspace() && t.table() == t2.table();

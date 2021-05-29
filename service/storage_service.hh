@@ -258,13 +258,6 @@ public:
 
     future<> gossip_sharder();
 
-    distributed<database>& db() {
-        return _db;
-    }
-
-    gms::feature_service& features() { return _feature_service; }
-    const gms::feature_service& features() const { return _feature_service; }
-
     cdc::generation_service& get_cdc_generation_service() {
         if (!_cdc_gen_service.local_is_initialized()) {
             throw std::runtime_error("get_cdc_generation_service: not initialized yet");
@@ -381,6 +374,9 @@ private:
 
     void run_replace_ops();
     void run_bootstrap_ops();
+
+    std::unordered_set<token> get_replace_tokens();
+    std::optional<utils::UUID> get_replace_node();
 
 public:
     future<bool> is_initialized();
