@@ -134,9 +134,7 @@ token token::from_bytes(bytes_view bytes) {
         throw runtime_exception(format("Invalid token. Should have size {:d}, has size {:d}\n", sizeof(int64_t), bytes.size()));
     }
 
-    int64_t v;
-    std::copy_n(bytes.begin(), sizeof(v), reinterpret_cast<int8_t *>(&v));
-    auto tok = net::ntoh(v);
+    auto tok = net::ntoh(read_unaligned<int64_t>(bytes.begin()));
     if (tok == std::numeric_limits<int64_t>::min()) {
         return minimum_token();
     } else {

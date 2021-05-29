@@ -65,8 +65,7 @@ public:
             if (b.size() != sizeof(_data)) {
                 throw std::runtime_error(fmt::format("Wrong token bytes size: expected {} but got {}", sizeof(_data), b.size()));
             }
-            std::copy_n(b.begin(), sizeof(_data), reinterpret_cast<int8_t *>(&_data));
-            _data = net::ntoh(_data);
+            _data = net::ntoh(read_unaligned<int64_t>(b.begin()));
         }
     }
 
@@ -77,8 +76,7 @@ public:
             if (b.size() != sizeof(_data)) {
                 throw std::runtime_error(fmt::format("Wrong token bytes size: expected {} but got {}", sizeof(_data), b.size()));
             }
-            std::copy_n(b.begin(), sizeof(_data), reinterpret_cast<int8_t *>(&_data));
-            _data = net::ntoh(_data);
+            _data = net::ntoh(read_unaligned<int64_t>(b.begin()));
         }
     }
 
@@ -99,9 +97,8 @@ public:
     }
 
     bytes data() const {
-        auto t = net::hton(_data);
         bytes b(bytes::initialized_later(), sizeof(_data));
-        std::copy_n(reinterpret_cast<int8_t*>(&t), sizeof(_data), b.begin());
+        write_unaligned<int64_t>(b.begin(), net::hton(_data));
         return b;
     }
 
