@@ -217,7 +217,7 @@ void create_index_statement::validate_for_frozen_collection(const index_target& 
 {
     if (target.type != index_target::target_type::full) {
         throw exceptions::invalid_request_exception(
-                format("Cannot create index on {} of frozen<map> column {}",
+                format("Cannot create index on {} of frozen collection column {}",
                         index_target::index_option(target.type),
                         target.as_string()));
     }
