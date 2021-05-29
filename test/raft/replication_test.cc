@@ -651,6 +651,8 @@ raft_cluster::raft_cluster(test_case test,
             _apply(apply),
             _leader(first_leader) {
 
+    rpc::reset_network();
+
     auto states = get_states(test, prevote);
     for (size_t s = 0; s < states.size(); ++s) {
         _in_configuration.insert(s);
@@ -1085,7 +1087,6 @@ void raft_cluster::verify() {
 }
 
 std::vector<initial_state> raft_cluster::get_states(test_case test, bool prevote) {
-    rpc::reset_network();
     std::vector<initial_state> states(test.nodes);       // Server initial states
 
     size_t leader = test.initial_leader;
