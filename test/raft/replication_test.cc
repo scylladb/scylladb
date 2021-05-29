@@ -279,8 +279,6 @@ class raft_cluster {
     using apply_fn = std::function<size_t(raft::server_id id, const std::vector<raft::command_cref>& commands, lw_shared_ptr<hasher_int> hasher)>;
     class state_machine;
     class persistence;
-    struct connection;
-    struct hash_connection;
     class connected;
     class failure_detector;
     class rpc;
@@ -437,21 +435,21 @@ public:
     virtual future<> abort() { return make_ready_future<>(); }
 };
 
-struct raft_cluster::connection {
-   raft::server_id from;
-   raft::server_id to;
-   bool operator==(const connection &o) const {
-       return from == o.from && to == o.to;
-   }
-};
-
-struct raft_cluster::hash_connection {
-    std::size_t operator() (const connection &c) const {
-        return std::hash<utils::UUID>()(c.from.id);
-    }
-};
-
 struct raft_cluster::connected {
+    struct connection {
+       raft::server_id from;
+       raft::server_id to;
+       bool operator==(const connection &o) const {
+           return from == o.from && to == o.to;
+       }
+    };
+
+    struct hash_connection {
+        std::size_t operator() (const connection &c) const {
+            return std::hash<utils::UUID>()(c.from.id);
+        }
+    };
+
     // Map of from->to disconnections
     std::unordered_set<connection, hash_connection> disconnected;
     size_t n;
