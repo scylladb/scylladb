@@ -65,6 +65,9 @@ static future<> with_udf_enabled(Func&& func) {
     auto db_cfg_ptr = make_shared<db::config>();
     auto& db_cfg = *db_cfg_ptr;
     db_cfg.enable_user_defined_functions({true}, db::config::config_source::CommandLine);
+    // Raise timeout to survive debug mode and contention, but keep in
+    // mind that some tests expect timeout.
+    db_cfg.user_defined_function_time_limit_ms(1000);
     db_cfg.experimental_features({db::experimental_features_t::UDF}, db::config::config_source::CommandLine);
     return do_with_cql_env_thread(std::forward<Func>(func), db_cfg_ptr);
 }
