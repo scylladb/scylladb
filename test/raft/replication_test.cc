@@ -518,6 +518,7 @@ public:
     future<> change_configuration(size_t total_values, set_config sc);
     future<> reconfigure_all();
     future<> partition(::partition p);
+    future<> tick(::tick t);
     const std::unordered_set<size_t>& get_configuration() {
         return _in_configuration;   // Servers in current configuration
     }
@@ -870,6 +871,15 @@ future<> raft_cluster::partition(::partition p) {
     restart_tickers();
 }
 
+future<> raft_cluster::tick(::tick t) {
+    for (uint64_t i = 0; i < t.ticks; i++) {
+        for (auto&& s: _servers) {
+            s.server->tick();
+        }
+        co_await later();
+    }
+}
+
 std::vector<initial_state> get_states(test_case test, bool prevote) {
     rpc::reset_network();
     std::vector<initial_state> states(test.nodes);       // Server initial states
@@ -933,12 +943,7 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
             co_await rafts.change_configuration(test.total_values, std::move(sc));
         } else if (std::holds_alternative<tick>(update)) {
             auto t = std::get<tick>(update);
-            for (uint64_t i = 0; i < t.ticks; i++) {
-                for (size_t s = 0; s < rafts.size(); ++s) {
-                    rafts[s].server->tick();
-                }
-                co_await later();
-            }
+            co_await rafts.tick(t);
         }
     }
 
