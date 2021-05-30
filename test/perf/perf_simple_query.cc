@@ -404,12 +404,14 @@ static std::vector<perf_result> do_cql_test(cql_test_env& env, test_config& cfg)
         if (cfg.counters) {
             return *make_counter_schema(ks_name);
         }
-        return schema({}, ks_name, "cf",
-                {{"KEY", bytes_type}},
-                {},
-                {{"C0", bytes_type}, {"C1", bytes_type}, {"C2", bytes_type}, {"C3", bytes_type}, {"C4", bytes_type}},
-                {},
-                utf8_type);
+        return *schema_builder(ks_name, "cf")
+                .with_column("KEY", bytes_type, column_kind::partition_key)
+                .with_column("C0", bytes_type)
+                .with_column("C1", bytes_type)
+                .with_column("C2", bytes_type)
+                .with_column("C3", bytes_type)
+                .with_column("C4", bytes_type)
+                .build();
     }).get();
 
     switch (cfg.mode) {

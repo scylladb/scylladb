@@ -645,30 +645,17 @@ schema_ptr aggregates() {
 
 schema_ptr scylla_table_schema_history() {
     static thread_local auto s = [] {
-        schema_builder builder(make_lw_shared(schema(
-            generate_legacy_id(db::system_keyspace::NAME, SCYLLA_TABLE_SCHEMA_HISTORY), db::system_keyspace::NAME, SCYLLA_TABLE_SCHEMA_HISTORY,
-            // partition key
-            {{"cf_id", uuid_type}},
-            // clustering key
-            {{"schema_version", uuid_type}, {"column_name", utf8_type}},
-            // regular columns
-            // mirrors the structure of the "columns" table which is essentially
-            // needed to represent a column mapping in serialized form
-            {
-                {"clustering_order", utf8_type},
-                {"column_name_bytes", bytes_type},
-                {"kind", utf8_type},
-                {"position", int32_type},
-                {"type", utf8_type},
-            },
-            // static columns
-            {},
-            // regular column name type
-            utf8_type,
-            // comment
-            "Scylla specific table to store a history of column mappings "
-            "for each table schema version upon an CREATE TABLE/ALTER TABLE operations"
-        )));
+        schema_builder builder(db::system_keyspace::NAME, SCYLLA_TABLE_SCHEMA_HISTORY, generate_legacy_id(db::system_keyspace::NAME, SCYLLA_TABLE_SCHEMA_HISTORY));
+        builder.with_column("cf_id", uuid_type, column_kind::partition_key);
+        builder.with_column("schema_version", uuid_type, column_kind::clustering_key);
+        builder.with_column("column_name", utf8_type, column_kind::clustering_key);
+        builder.with_column("clustering_order", utf8_type);
+        builder.with_column("column_name_bytes", bytes_type);
+        builder.with_column("kind", utf8_type);
+        builder.with_column("position", int32_type);
+        builder.with_column("type", utf8_type);
+        builder.set_comment("Scylla specific table to store a history of column mappings "
+            "for each table schema version upon an CREATE TABLE/ALTER TABLE operations");
         builder.with_version(generate_schema_version(builder.uuid()));
         builder.with_null_sharder();
         return builder.build(schema_builder::compact_storage::no);

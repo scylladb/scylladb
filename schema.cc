@@ -415,41 +415,6 @@ schema::schema(const raw_schema& raw, std::optional<raw_view_info> raw_view_info
     }
 }
 
-schema::schema(std::optional<utils::UUID> id,
-    std::string_view ks_name,
-    std::string_view cf_name,
-    std::vector<column> partition_key,
-    std::vector<column> clustering_key,
-    std::vector<column> regular_columns,
-    std::vector<column> static_columns,
-    data_type regular_column_name_type,
-    std::string_view comment)
-    : schema([&] {
-        raw_schema raw(id ? *id : utils::UUID_gen::get_time_UUID());
-
-        raw._comment = sstring(comment);
-        raw._ks_name = sstring(ks_name);
-        raw._cf_name = sstring(cf_name);
-        raw._regular_column_name_type = regular_column_name_type;
-
-        auto build_columns = [&raw](std::vector<column>& columns, column_kind kind) {
-            for (auto& sc : columns) {
-                if (sc.type->is_multi_cell()) {
-                    raw._collections.emplace(sc.name, sc.type);
-                }
-                raw._columns.emplace_back(std::move(sc.name), std::move(sc.type), kind);
-            }
-        };
-
-        build_columns(partition_key, column_kind::partition_key);
-        build_columns(clustering_key, column_kind::clustering_key);
-        build_columns(static_columns, column_kind::static_column);
-        build_columns(regular_columns, column_kind::regular_column);
-
-        return raw;
-    }(), std::nullopt)
-{}
-
 schema::schema(const schema& o)
     : _raw(o._raw)
     , _offsets(o._offsets)
@@ -463,13 +428,25 @@ schema::schema(const schema& o)
     }
 }
 
-lw_shared_ptr<schema> make_shared_schema(std::optional<utils::UUID> id, std::string_view ks_name,
+lw_shared_ptr<const schema> make_shared_schema(std::optional<utils::UUID> id, std::string_view ks_name,
     std::string_view cf_name, std::vector<schema::column> partition_key, std::vector<schema::column> clustering_key,
     std::vector<schema::column> regular_columns, std::vector<schema::column> static_columns,
-    data_type regular_column_name_type, std::string_view comment) {
-    return make_lw_shared<schema>(std::move(id), std::move(ks_name), std::move(cf_name), std::move(partition_key),
-        std::move(clustering_key), std::move(regular_columns), std::move(static_columns),
-        std::move(regular_column_name_type), std::move(comment));
+    data_type regular_column_name_type, sstring comment) {
+    schema_builder builder(std::move(ks_name), std::move(cf_name), std::move(id), std::move(regular_column_name_type));
+    for (auto&& column : partition_key) {
+        builder.with_column(std::move(column.name), std::move(column.type), column_kind::partition_key);
+    }
+    for (auto&& column : clustering_key) {
+        builder.with_column(std::move(column.name), std::move(column.type), column_kind::clustering_key);
+    }
+    for (auto&& column : regular_columns) {
+        builder.with_column(std::move(column.name), std::move(column.type));
+    }
+    for (auto&& column : static_columns) {
+        builder.with_column(std::move(column.name), std::move(column.type), column_kind::static_column);
+    }
+    builder.set_comment(comment);
+    return builder.build();
 }
 
 schema::~schema() {

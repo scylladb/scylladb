@@ -147,16 +147,12 @@ SEASTAR_TEST_CASE(test_insert_large_collection_values) {
             auto list_type = list_type_impl::get_instance(utf8_type, true);
             e.create_table([map_type, set_type, list_type] (std::string_view ks_name) {
                 // CQL: CREATE TABLE tbl (pk text PRIMARY KEY, m map<text, text>, s set<text>, l list<text>);
-                return schema({}, ks_name, "tbl",
-                    {{"pk", utf8_type}},
-                    {},
-                    {
-                        {"m", map_type},
-                        {"s", set_type},
-                        {"l", list_type}
-                    },
-                    {},
-                    utf8_type);
+                return *schema_builder(ks_name, "tbl")
+                        .with_column("pk", utf8_type, column_kind::partition_key)
+                        .with_column("m", map_type)
+                        .with_column("s", set_type)
+                        .with_column("l", list_type)
+                        .build();
             }).get();
             sstring long_value(std::numeric_limits<uint16_t>::max() + 10, 'x');
             e.execute_cql(format("INSERT INTO tbl (pk, l) VALUES ('Zamyatin', ['{}']);", long_value)).get();

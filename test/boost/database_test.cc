@@ -356,12 +356,12 @@ future<> do_with_some_data(std::function<future<> (cql_test_env& env)> func) {
         db_cfg_ptr->data_file_directories(std::vector<sstring>({ tmpdir_for_data.path().string() }));
         do_with_cql_env_thread([func = std::move(func)] (cql_test_env& e) {
             e.create_table([](std::string_view ks_name) {
-                return schema({}, ks_name, "cf",
-                              {{"p1", utf8_type}},
-                              {{"c1", int32_type}, {"c2", int32_type}},
-                              {{"r1", int32_type}},
-                              {},
-                              utf8_type);
+                return *schema_builder(ks_name, "cf")
+                        .with_column("p1", utf8_type, column_kind::partition_key)
+                        .with_column("c1", int32_type, column_kind::clustering_key)
+                        .with_column("c2", int32_type, column_kind::clustering_key)
+                        .with_column("r1", int32_type)
+                        .build();
             }).get();
             e.execute_cql("insert into cf (p1, c1, c2, r1) values ('key1', 1, 2, 3);").get();
             e.execute_cql("insert into cf (p1, c1, c2, r1) values ('key1', 2, 2, 3);").get();
