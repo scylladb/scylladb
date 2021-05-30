@@ -239,12 +239,24 @@ public:
 
 static
 void
-verify_rlimit(bool developer_mode) {
+adjust_and_verify_rlimit(bool developer_mode) {
     struct rlimit lim;
     int r = getrlimit(RLIMIT_NOFILE, &lim);
     if (r == -1) {
         throw std::system_error(errno, std::system_category());
     }
+
+    // First, try to increase the soft limit to the hard limit
+    // Ref: http://0pointer.net/blog/file-descriptor-limits.html
+
+    if (lim.rlim_cur < lim.rlim_max) {
+        lim.rlim_cur = lim.rlim_max;
+        r = setrlimit(RLIMIT_NOFILE, &lim);
+        if (r == -1) {
+            startlog.warn("adjusting RLIMIT_NOFILE failed with {}", std::system_error(errno, std::system_category()));
+        }
+    }
+
     auto recommended = 200'000U;
     auto min = 10'000U;
     if (lim.rlim_cur < min) {
@@ -566,7 +578,7 @@ int main(int ac, char** av) {
                 default_sg.set_shares(200);
             }).get();
 
-            verify_rlimit(cfg->developer_mode());
+            adjust_and_verify_rlimit(cfg->developer_mode());
             verify_adequate_memory_per_shard(cfg->developer_mode());
             if (cfg->partitioner() != "org.apache.cassandra.dht.Murmur3Partitioner") {
                 if (cfg->enable_deprecated_partitioners()) {
