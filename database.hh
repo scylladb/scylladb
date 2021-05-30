@@ -222,8 +222,17 @@ public:
     void erase(const shared_memtable& element) {
         _memtables.erase(boost::range::find(_memtables, element));
     }
-    void clear() {
+
+    // Clears the active memtable and adds a new, empty one.
+    // Exception safe.
+    void clear_and_add() {
+        auto mt = new_memtable();
         _memtables.clear();
+        // emplace_back might throw only if _memtables was empty
+        // on entry. Otherwise, we rely on clear() not to release
+        // the vector capacity (See https://en.cppreference.com/w/cpp/container/vector/clear)
+        // and lw_shared_ptr being nothrow move constructible.
+        _memtables.emplace_back(std::move(mt));
     }
 
     size_t size() const {
