@@ -429,7 +429,7 @@ void backlog_controller::update_controller(float shares) {
     if (!_inflight_update.available()) {
         return; // next timer will fix it
     }
-    _inflight_update = engine().update_shares_for_class(_io_priority, uint32_t(shares));
+    _inflight_update = _io_priority.update_shares(uint32_t(shares));
 }
 
 void
