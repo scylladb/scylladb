@@ -296,8 +296,8 @@ static void tcp_syncookies_sanity() {
     }
 }
 
-static future<>
-verify_seastar_io_scheduler(bool has_max_io_requests, bool has_properties, bool developer_mode) {
+static void
+verify_seastar_io_scheduler(const boost::program_options::variables_map& opts, bool developer_mode) {
     auto note_bad_conf = [developer_mode] (sstring cause) {
         sstring msg = "I/O Scheduler is not properly configured! This is a non-supported setup, and performance is expected to be unpredictably bad.\n Reason found: "
                     + cause + "\n"
@@ -312,18 +312,13 @@ verify_seastar_io_scheduler(bool has_max_io_requests, bool has_properties, bool 
         }
     };
 
-    if (!has_max_io_requests && !has_properties) {
+    if (!opts.contains("max-io-requests") && !(opts.contains("io-properties") || opts.contains("io-properties-file"))) {
         note_bad_conf("none of --max-io-requests, --io-properties and --io-properties-file are set.");
     }
-    return smp::invoke_on_all([developer_mode, note_bad_conf, has_max_io_requests] {
-        if (has_max_io_requests) {
-            auto capacity = engine().get_io_queue().capacity();
-            if (capacity < 4) {
-                auto cause = format("I/O Queue capacity for this shard is too low ({:d}, minimum 4 expected).", capacity);
-                note_bad_conf(cause);
-            }
-        }
-    });
+    if (opts.contains("max-io-requests") && opts["max_io_requests"].as<unsigned>() < 4) {
+        auto cause = format("I/O Queue capacity for this shard is too low ({:d}, minimum 4 expected).", opts["max_io_requests"].as<unsigned>());
+        note_bad_conf(cause);
+    }
 }
 
 static
@@ -909,8 +904,7 @@ int main(int ac, char** av) {
                 }).get();
             });
             api::set_server_config(ctx).get();
-            verify_seastar_io_scheduler(opts.contains("max-io-requests"), opts.contains("io-properties") || opts.contains("io-properties-file"),
-                                        cfg->developer_mode()).get();
+            verify_seastar_io_scheduler(opts, cfg->developer_mode());
 
             supervisor::notify("creating and verifying directories");
             utils::directories::set dir_set;
