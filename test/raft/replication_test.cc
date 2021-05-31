@@ -499,8 +499,12 @@ size_t apply_changes(raft::server_id id, const std::vector<raft::command_cref>& 
 //  - Entries
 //  - Leader change
 //  - Configuration change
-using entries = unsigned;
-using new_leader = int;
+struct entries {
+    size_t n;
+};
+struct new_leader {
+    size_t id;
+};
 struct leader {
     size_t id;
 };
@@ -773,14 +777,14 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
     size_t next_val = leader_snap_skipped + leader_initial_entries;
     for (auto update: test.updates) {
         if (std::holds_alternative<entries>(update)) {
-            auto n = std::get<entries>(update);
+            auto n = std::get<entries>(update).n;
             BOOST_CHECK_MESSAGE(in_configuration.contains(leader),
                     format("Current leader {} is not in configuration", leader));
             co_await add_entries(rafts, next_val, next_val + n, leader);
             next_val += n;
             co_await wait_log(rafts, connected, in_configuration, leader);
         } else if (std::holds_alternative<new_leader>(update)) {
-            unsigned next_leader = std::get<new_leader>(update);
+            unsigned next_leader = std::get<new_leader>(update).id;
             auto leader_log_idx = rafts[leader].server->log_last_idx();
             co_await rafts[next_leader].server->wait_log_idx(leader_log_idx);
             pause_tickers(tickers);
