@@ -1802,7 +1802,7 @@ future<> db::commitlog::segment_manager::delete_segments(std::vector<sstring> fi
             }
 
             // We allow reuse of the segment if the current disk size is less than shard max.
-            if (!_shutdown && cfg.reuse_segments) {
+            if (cfg.reuse_segments) {
                 auto usage = totals.total_size_on_disk;
                 auto recycle = usage <= max_disk_size;
 
