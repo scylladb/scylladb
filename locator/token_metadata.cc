@@ -1373,19 +1373,25 @@ dht::token_range_vector token_metadata_impl::get_primary_ranges_for(token right)
 
 boost::icl::interval<token>::interval_type
 token_metadata_impl::range_to_interval(range<dht::token> r) {
-    bool start_inclusive = false;
-    bool end_inclusive = false;
-    token start = dht::minimum_token();
-    token end = dht::maximum_token();
+    bool start_inclusive;
+    bool end_inclusive;
+    token start;
+    token end;
 
     if (r.start()) {
         start = r.start()->value();
         start_inclusive = r.start()->is_inclusive();
+    } else {
+        start = dht::minimum_token();
+        start_inclusive = false;
     }
 
     if (r.end()) {
         end = r.end()->value();
         end_inclusive = r.end()->is_inclusive();
+    } else {
+        end = dht::greatest_token();
+        end_inclusive = true;
     }
 
     if (start_inclusive == false && end_inclusive == false) {
