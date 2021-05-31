@@ -46,7 +46,7 @@ struct service_level_options {
     };
 
     enum class workload_type {
-        unspecified, batch, interactive
+        unspecified, batch, interactive, delete_marker
     };
 
     using timeout_type = std::variant<unset_marker, delete_marker, lowres_clock::duration>;

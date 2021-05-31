@@ -800,11 +800,14 @@ future<> system_distributed_keyspace::set_service_level(sstring service_level_na
             },
         }, tv);
     };
+    data_value workload = slo.workload == qos::service_level_options::workload_type::unspecified
+            ? data_value::make_null(utf8_type)
+            : data_value(qos::service_level_options::to_string(slo.workload));
     co_await _qp.execute_internal(format("UPDATE {}.{} SET timeout = ?, workload_type = ? WHERE service_level = ?;", NAME, SERVICE_LEVELS),
                 db::consistency_level::ONE,
                 internal_distributed_query_state(),
                 {to_data_value(slo.timeout),
-                    data_value(qos::service_level_options::to_string(slo.workload)),
+                    workload,
                     service_level_name});
 }
 

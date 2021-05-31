@@ -341,7 +341,7 @@ SEASTAR_TEST_CASE(test_alter_with_workload_type) {
 
 	    auto msg = cquery_nofail(e, "SELECT workload_type FROM system_distributed.service_levels");
         assert_that(msg).is_rows().with_rows({{
-            utf8_type->decompose("unspecified")
+            {}
         }});
 
         e.refresh_client_state().get();
@@ -349,7 +349,7 @@ SEASTAR_TEST_CASE(test_alter_with_workload_type) {
         BOOST_REQUIRE_EQUAL(e.local_client_state().get_workload_type(), service::client_state::workload_type::unspecified);
 
         // When multiple per-role timeouts apply, the smallest value is always effective
-        cquery_nofail(e, "CREATE SERVICE LEVEL sl2 WITH workload_type = 'unspecified'");
+        cquery_nofail(e, "CREATE SERVICE LEVEL sl2 WITH workload_type = null");
         cquery_nofail(e, "CREATE SERVICE LEVEL sl3 WITH workload_type = 'batch'");
         cquery_nofail(e, "CREATE SERVICE LEVEL sl4 WITH workload_type = 'interactive'");
         cquery_nofail(e, "ATTACH SERVICE LEVEL sl2 TO user2");

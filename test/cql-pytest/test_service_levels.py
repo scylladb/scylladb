@@ -73,16 +73,26 @@ def test_attached_service_level(scylla_only, cql):
 def test_set_workload_type(scylla_only, cql):
     with new_service_level(cql) as sl:
         res = cql.execute(f"LIST SERVICE LEVEL {sl}")
-        assert res.one().workload_type == 'unspecified'
-        for wt in ['interactive', 'batch', 'unspecified']:
+        assert not res.one().workload_type
+        for wt in ['interactive', 'batch']:
             cql.execute(f"ALTER SERVICE LEVEL {sl} WITH workload_type = '{wt}'")
             res = cql.execute(f"LIST SERVICE LEVEL {sl}")
             assert res.one().workload_type == wt
 
- # Test that workload type input is validated
+# Test that workload type input is validated
 def test_set_invalid_workload_types(scylla_only, cql):
     with new_service_level(cql) as sl:
-        for incorrect in ['', 'null', 'i', 'b', 'dog', 'x'*256]:
+        for incorrect in ['', 'i', 'b', 'dog', 'x'*256]:
             print(f"Checking {incorrect}")
             with pytest.raises(Exception):
                 cql.execute(f"ALTER SERVICE LEVEL {sl} WITH workload_type = '{incorrect}'")
+
+# Test that resetting an already set workload type by assigning NULL to it works fine
+def test_reset_workload_type(scylla_only, cql):
+    with new_service_level(cql) as sl:
+        cql.execute(f"ALTER SERVICE LEVEL {sl} WITH workload_type = 'interactive'")
+        res = cql.execute(f"LIST SERVICE LEVEL {sl}")
+        assert res.one().workload_type == 'interactive'
+        cql.execute(f"ALTER SERVICE LEVEL {sl} WITH workload_type = null")
+        res = cql.execute(f"LIST SERVICE LEVEL {sl}")
+        assert not res.one().workload_type

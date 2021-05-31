@@ -4889,14 +4889,14 @@ SEASTAR_TEST_CASE(test_user_based_sla_queries) {
         e.execute_cql("CREATE SERVICE_LEVEL sl_1;").get();
         auto msg = e.execute_cql("LIST SERVICE_LEVEL sl_1;").get0();
         assert_that(msg).is_rows().with_rows({
-            {utf8_type->decompose("sl_1"), {}, utf8_type->decompose("unspecified")},
+            {utf8_type->decompose("sl_1"), {}, {}},
         });
         e.execute_cql("CREATE SERVICE_LEVEL sl_2;").get();
         //drop service levels
         e.execute_cql("DROP SERVICE_LEVEL sl_1;").get();
         msg = e.execute_cql("LIST ALL SERVICE_LEVELS;").get0();
         assert_that(msg).is_rows().with_rows({
-            {utf8_type->decompose("sl_2"), {}, utf8_type->decompose("unspecified")},
+            {utf8_type->decompose("sl_2"), {}, {}},
         });
 
         // validate exceptions (illegal requests)

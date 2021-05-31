@@ -88,10 +88,13 @@ list_service_level_statement::execute(query_processor& qp,
                 };
                 auto rs = std::make_unique<result_set>(metadata);
                 for (auto &&[sl_name, slo] : sl_info) {
+                    bytes_opt workload = slo.workload == qos::service_level_options::workload_type::unspecified
+                            ? bytes_opt()
+                            : utf8_type->decompose(qos::service_level_options::to_string(slo.workload));
                     rs->add_row(std::vector<bytes_opt>{
                             utf8_type->decompose(sl_name),
                             d(slo.timeout),
-                            utf8_type->decompose(qos::service_level_options::to_string(slo.workload))});
+                            workload});
                 }
 
                 auto rows = ::make_shared<cql_transport::messages::result_message::rows>(result(std::move(std::move(rs))));
