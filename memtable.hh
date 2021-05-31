@@ -271,7 +271,13 @@ public:
     const db::replay_position& replay_position() const {
         return _replay_position;
     }
-    db::rp_set rp_set() {
+    /**
+     * Returns the current rp_set, and resets the
+     * stored one to empty. Only used for flushing
+     * purposes, to one-shot report discarded rp:s
+     * to commitlog
+     */
+    db::rp_set get_and_discard_rp_set() {
         return std::exchange(_rp_set, {});
     }
     friend class iterator_reader;
