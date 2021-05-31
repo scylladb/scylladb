@@ -70,22 +70,6 @@ mutation make_new_mutation(schema_ptr s, partition_key key) {
     return m;
 }
 
-static inline
-mutation make_new_large_mutation(schema_ptr s, partition_key key) {
-    mutation m(s, key);
-    static thread_local int next_value = 1;
-    static constexpr size_t blob_size = 64 * 1024;
-    std::vector<int> data;
-    data.reserve(blob_size);
-    for (unsigned i = 0; i < blob_size; i++) {
-        data.push_back(next_value);
-    }
-    next_value++;
-    bytes b(reinterpret_cast<int8_t*>(data.data()), data.size() * sizeof(int));
-    m.set_clustered_cell(clustering_key::make_empty(), "v", data_value(std::move(b)), next_timestamp++);
-    return m;
-}
-
 static
 partition_key new_key(schema_ptr s) {
     static thread_local int next = 0;
@@ -95,16 +79,6 @@ partition_key new_key(schema_ptr s) {
 static
 mutation make_new_mutation(schema_ptr s) {
     return make_new_mutation(s, new_key(s));
-}
-
-static inline
-mutation make_new_large_mutation(schema_ptr s, int key) {
-    return make_new_large_mutation(s, partition_key::from_single_value(*s, to_bytes(format("key{:d}", key))));
-}
-
-static inline
-mutation make_new_mutation(schema_ptr s, int key) {
-    return make_new_mutation(s, partition_key::from_single_value(*s, to_bytes(format("key{:d}", key))));
 }
 
 snapshot_source make_decorated_snapshot_source(snapshot_source src, std::function<mutation_source(mutation_source)> decorator) {
@@ -1128,6 +1102,33 @@ SEASTAR_TEST_CASE(test_update) {
 }
 
 #ifndef SEASTAR_DEFAULT_ALLOCATOR
+
+static inline
+mutation make_new_large_mutation(schema_ptr s, partition_key key) {
+    mutation m(s, key);
+    static thread_local int next_value = 1;
+    static constexpr size_t blob_size = 64 * 1024;
+    std::vector<int> data;
+    data.reserve(blob_size);
+    for (unsigned i = 0; i < blob_size; i++) {
+        data.push_back(next_value);
+    }
+    next_value++;
+    bytes b(reinterpret_cast<int8_t*>(data.data()), data.size() * sizeof(int));
+    m.set_clustered_cell(clustering_key::make_empty(), "v", data_value(std::move(b)), next_timestamp++);
+    return m;
+}
+
+static inline
+mutation make_new_large_mutation(schema_ptr s, int key) {
+    return make_new_large_mutation(s, partition_key::from_single_value(*s, to_bytes(format("key{:d}", key))));
+}
+
+static inline
+mutation make_new_mutation(schema_ptr s, int key) {
+    return make_new_mutation(s, partition_key::from_single_value(*s, to_bytes(format("key{:d}", key))));
+}
+
 SEASTAR_TEST_CASE(test_update_failure) {
     return seastar::async([] {
         auto s = make_schema();

@@ -677,12 +677,6 @@ future<> cql_server::connection::process_request() {
     });
 }
 
-static inline bytes_view to_bytes_view(temporary_buffer<char>& b)
-{
-    using byte = bytes_view::value_type;
-    return bytes_view(reinterpret_cast<const byte*>(b.get()), b.size());
-}
-
 namespace compression_buffers {
 
 // Reusable buffers for compression and decompression. Cleared every
