@@ -121,6 +121,10 @@ const config_type config_type_for<std::vector<enum_option<db::experimental_featu
         "experimental features", value_to_json<std::vector<sstring>>);
 
 template <>
+const config_type config_type_for<enum_option<db::tri_mode_restriction_t>> = config_type(
+        "restriction mode", value_to_json<sstring>);
+
+template <>
 const config_type config_type_for<db::config::hinted_handoff_enabled_type> = config_type("hinted handoff enabled", hinted_handoff_enabled_to_json);
 
 }
@@ -184,6 +188,23 @@ template <>
 class convert<enum_option<db::experimental_features_t>> {
 public:
     static bool decode(const Node& node, enum_option<db::experimental_features_t>& rhs) {
+        std::string name;
+        if (!convert<std::string>::decode(node, name)) {
+            return false;
+        }
+        try {
+            std::istringstream(name) >> rhs;
+        } catch (boost::program_options::invalid_option_value&) {
+            return false;
+        }
+        return true;
+    }
+};
+
+template <>
+class convert<enum_option<db::tri_mode_restriction_t>> {
+public:
+    static bool decode(const Node& node, enum_option<db::tri_mode_restriction_t>& rhs) {
         std::string name;
         if (!convert<std::string>::decode(node, name)) {
             return false;
@@ -964,6 +985,14 @@ std::unordered_map<sstring, db::experimental_features_t::feature> db::experiment
 
 std::vector<enum_option<db::experimental_features_t>> db::experimental_features_t::all() {
     return {UDF, ALTERNATOR_STREAMS};
+}
+
+std::unordered_map<sstring, db::tri_mode_restriction_t::mode> db::tri_mode_restriction_t::map() {
+    return {{"true", db::tri_mode_restriction_t::mode::TRUE},
+            {"1", db::tri_mode_restriction_t::mode::TRUE},
+            {"false", db::tri_mode_restriction_t::mode::FALSE},
+            {"0", db::tri_mode_restriction_t::mode::FALSE},
+            {"warn", db::tri_mode_restriction_t::mode::WARN}};
 }
 
 template struct utils::config_file::named_value<seastar::log_level>;
