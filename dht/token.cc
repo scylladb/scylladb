@@ -42,6 +42,7 @@ inline int64_t long_token(const token& t) {
 
 static const token min_token{ token::kind::before_all_keys, 0 };
 static const token max_token{ token::kind::after_all_keys, 0 };
+static const token greatest_token_static{ token::kind::key, std::numeric_limits<int64_t>::max() };
 
 const token&
 minimum_token() noexcept {
@@ -51,6 +52,10 @@ minimum_token() noexcept {
 const token&
 maximum_token() noexcept {
     return max_token;
+}
+
+const token& greatest_token() noexcept {
+    return greatest_token_static;
 }
 
 std::strong_ordering tri_compare(const token& t1, const token& t2) {

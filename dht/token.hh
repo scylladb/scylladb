@@ -221,6 +221,7 @@ struct raw_token_less_comparator {
 
 const token& minimum_token() noexcept;
 const token& maximum_token() noexcept;
+const token& greatest_token() noexcept;
 std::strong_ordering tri_compare(const token& t1, const token& t2);
 inline bool operator==(const token& t1, const token& t2) { return tri_compare(t1, t2) == 0; }
 inline bool operator<(const token& t1, const token& t2) { return tri_compare(t1, t2) < 0; }
