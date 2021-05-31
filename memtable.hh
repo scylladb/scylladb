@@ -272,8 +272,8 @@ public:
     const db::replay_position& replay_position() const {
         return _replay_position;
     }
-    const db::rp_set& rp_set() const {
-        return _rp_set;
+    db::rp_set rp_set() {
+        return std::exchange(_rp_set, {});
     }
     friend class iterator_reader;
 
