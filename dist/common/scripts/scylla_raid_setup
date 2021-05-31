@@ -161,15 +161,15 @@ if __name__ == '__main__':
     os.makedirs(mount_at, exist_ok=True)
 
     uuid = run(f'blkid -s UUID -o value {fsdev}', shell=True, check=True, capture_output=True, encoding='utf-8').stdout.strip()
-    after = 'local-fs.target'
+    after = ''
     if raid:
-        after += f' {md_service}'
+        after += f'After={md_service}'
     unit_data = f'''
 [Unit]
 Description=Scylla data directory
-Before=scylla-server.service
-After={after}
 Wants={md_service}
+Before=local-fs.target scylla-server.service
+{after}
 
 [Mount]
 What=/dev/disk/by-uuid/{uuid}
