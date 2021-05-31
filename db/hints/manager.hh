@@ -172,14 +172,6 @@ public:
         public:
             sender(end_point_hints_manager& parent, service::storage_proxy& local_storage_proxy, database& local_db, gms::gossiper& local_gossiper) noexcept;
 
-            /// \brief A constructor that should be called from the copy/move-constructor of end_point_hints_manager.
-            ///
-            /// Make sure to properly reassign the references - especially to the \param parent and its internals.
-            ///
-            /// \param other the "sender" instance to copy from
-            /// \param parent the parent object for this "sender" instance
-            sender(const sender& other, end_point_hints_manager& parent) noexcept;
-
             /// \brief Start sending hints.
             ///
             /// Flush hints aggregated to far to the storage every hints_flush_period.
@@ -350,7 +342,7 @@ public:
 
     public:
         end_point_hints_manager(const key_type& key, manager& shard_manager);
-        end_point_hints_manager(end_point_hints_manager&&);
+        end_point_hints_manager(end_point_hints_manager&&) = delete;
         ~end_point_hints_manager();
 
         const key_type& end_point_key() const noexcept {

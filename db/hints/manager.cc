@@ -259,16 +259,6 @@ manager::end_point_hints_manager::end_point_hints_manager(const key_type& key, m
     , _sender(*this, _shard_manager.local_storage_proxy(), _shard_manager.local_db(), _shard_manager.local_gossiper())
 {}
 
-manager::end_point_hints_manager::end_point_hints_manager(end_point_hints_manager&& other)
-    : _key(other._key)
-    , _shard_manager(other._shard_manager)
-    , _file_update_mutex_ptr(std::move(other._file_update_mutex_ptr))
-    , _file_update_mutex(*_file_update_mutex_ptr)
-    , _state(other._state)
-    , _hints_dir(std::move(other._hints_dir))
-    , _sender(other._sender, *this)
-{}
-
 manager::end_point_hints_manager::~end_point_hints_manager() {
     assert(stopped());
 }
@@ -290,7 +280,7 @@ manager::end_point_hints_manager& manager::get_ep_manager(ep_key_type ep) {
     auto it = find_ep_manager(ep);
     if (it == ep_managers_end()) {
         manager_logger.trace("Creating an ep_manager for {}", ep);
-        manager::end_point_hints_manager& ep_man = _ep_managers.emplace(ep, end_point_hints_manager(ep, *this)).first->second;
+        manager::end_point_hints_manager& ep_man = _ep_managers.try_emplace(ep, ep, *this).first->second;
         ep_man.start();
         return ep_man;
     }
@@ -633,19 +623,6 @@ manager::end_point_hints_manager::sender::sender(end_point_hints_manager& parent
     , _db(local_db)
     , _hints_cpu_sched_group(_db.get_streaming_scheduling_group())
     , _gossiper(local_gossiper)
-    , _file_update_mutex(_ep_manager.file_update_mutex())
-{}
-
-manager::end_point_hints_manager::sender::sender(const sender& other, end_point_hints_manager& parent) noexcept
-    : _stopped(make_ready_future<>())
-    , _ep_key(parent.end_point_key())
-    , _ep_manager(parent)
-    , _shard_manager(_ep_manager._shard_manager)
-    , _resource_manager(_shard_manager._resource_manager)
-    , _proxy(other._proxy)
-    , _db(other._db)
-    , _hints_cpu_sched_group(other._hints_cpu_sched_group)
-    , _gossiper(other._gossiper)
     , _file_update_mutex(_ep_manager.file_update_mutex())
 {}
 
