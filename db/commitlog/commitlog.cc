@@ -1732,14 +1732,20 @@ future<> db::commitlog::segment_manager::shutdown() {
             return std::move(block_new_requests).then([this] (auto permits) {
                 _timer.cancel(); // no more timer calls
                 _shutdown = true; // no re-arm, no create new segments.
+
+                // do a discard + delete sweep to force 
+                // gate holder (i.e. replenish) to wake up
+                discard_unused_segments();
+                auto f = do_pending_deletes();
+
                 // Now first wait for periodic task to finish, then sync and close all
                 // segments, flushing out any remaining data.
-                return _gate.close().finally([this, permits = std::move(permits)] () mutable {
-                    return shutdown_all_segments().handle_exception([permits = std::move(permits)] (std::exception_ptr ex) {
+                return _gate.close().then([this, f = std::move(f)]() mutable {
+                    return std::move(f).then(std::bind(&segment_manager::shutdown_all_segments, this)).handle_exception([](std::exception_ptr ex) {
                         clogger.error("Shutting down all segments failed during shutdown: {}. Aborting.", ex);
                         abort();
                     });
-                });
+                }).finally([permits = std::move(permits)] { });
             });
         }).finally([this] {
             discard_unused_segments();
