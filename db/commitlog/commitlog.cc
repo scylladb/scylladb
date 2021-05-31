@@ -542,6 +542,9 @@ class db::commitlog::segment : public enable_shared_from_this<segment>, public c
 
     void end_flush() {
         _segment_manager->end_flush();
+        if (can_delete()) {
+            _segment_manager->discard_unused_segments();
+        }
     }
 
 public:
