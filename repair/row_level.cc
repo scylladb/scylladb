@@ -23,7 +23,6 @@
 #include "message/messaging_service.hh"
 #include "sstables/sstables.hh"
 #include "sstables/sstables_manager.hh"
-#include "sstables/sstable_set.hh"
 #include "mutation_fragment.hh"
 #include "mutation_writer/multishard_writer.hh"
 #include "dht/i_partitioner.hh"
@@ -33,7 +32,6 @@
 #include "utils/UUID.hh"
 #include "utils/hash.hh"
 #include "service/priority_manager.hh"
-#include "db/view/view_update_checks.hh"
 #include "database.hh"
 #include <seastar/util/bool_class.hh>
 #include <seastar/core/metrics_registration.hh>
@@ -44,13 +42,13 @@
 #include <optional>
 #include <boost/range/adaptors.hpp>
 #include <boost/intrusive/list.hpp>
-#include "../db/view/view_update_generator.hh"
 #include "gms/i_endpoint_state_change_subscriber.hh"
 #include "gms/gossiper.hh"
 #include "repair/row_level.hh"
 #include "mutation_source_metadata.hh"
 #include "utils/stall_free.hh"
 #include "service/migration_manager.hh"
+#include "streaming/consumer.hh"
 
 extern logging::logger rlogger;
 
@@ -586,41 +584,7 @@ public:
         _mq = std::move(queue_handle);
         auto writer = shared_from_this();
         _writer_done = mutation_writer::distribute_reader_and_consume_on_shards(_schema, std::move(queue_reader),
-                [&db, &sys_dist_ks, &view_update_gen, reason = this->_reason, estimated_partitions = this->_estimated_partitions] (flat_mutation_reader reader) {
-            auto& t = db.local().find_column_family(reader.schema());
-            return db::view::check_needs_view_update_path(sys_dist_ks.local(), t, reason).then([t = t.shared_from_this(), estimated_partitions, reader = std::move(reader), reason, &view_update_gen] (bool use_view_update_path) mutable {
-                //FIXME: for better estimations this should be transmitted from remote
-                auto metadata = mutation_source_metadata{};
-                auto& cs = t->get_compaction_strategy();
-                const auto adjusted_estimated_partitions = cs.adjust_partition_estimate(metadata, estimated_partitions);
-                sstables::offstrategy offstrategy = is_offstrategy_supported(reason);
-                bool auto_offstrategy_trigger = offstrategy && (reason == streaming::stream_reason::repair);
-                auto consumer = cs.make_interposer_consumer(metadata,
-                        [t = std::move(t), &view_update_gen, use_view_update_path, adjusted_estimated_partitions, offstrategy, auto_offstrategy_trigger] (flat_mutation_reader reader) {
-                    sstables::shared_sstable sst = use_view_update_path ? t->make_streaming_staging_sstable() : t->make_streaming_sstable_for_write();
-                    schema_ptr s = reader.schema();
-                    auto& pc = service::get_local_streaming_priority();
-                    return sst->write_components(std::move(reader), adjusted_estimated_partitions, s,
-                                                 t->get_sstables_manager().configure_writer("repair"),
-                                                 encoding_stats{}, pc).then([sst] {
-                        return sst->open_data();
-                    }).then([t, sst, offstrategy, auto_offstrategy_trigger] {
-                        if (auto_offstrategy_trigger) {
-                            rlogger.debug("Enabled automatic off-strategy trigger for table {}.{}",
-                                    t->schema()->ks_name(), t->schema()->cf_name());
-                            t->enable_off_strategy_trigger();
-                        }
-                        return t->add_sstable_and_update_cache(sst, offstrategy);
-                    }).then([t, s, sst, use_view_update_path, &view_update_gen]() mutable -> future<> {
-                        if (!use_view_update_path) {
-                            return make_ready_future<>();
-                        }
-                        return view_update_gen.local().register_staging_sstable(sst, std::move(t));
-                    });
-                });
-                return consumer(std::move(reader));
-            });
-        },
+                streaming::make_streaming_consumer("repair", db, sys_dist_ks, view_update_gen, _estimated_partitions, _reason, is_offstrategy_supported(_reason)),
         t.stream_in_progress()).then([writer] (uint64_t partitions) {
             rlogger.debug("repair_writer: keyspace={}, table={}, managed to write partitions={} to sstable",
                 writer->_schema->ks_name(), writer->_schema->cf_name(), partitions);
