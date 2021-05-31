@@ -281,13 +281,17 @@ class UnitTest(Test):
         super().__init__(test_no, shortname, suite, mode, options)
         self.path = os.path.join("build", self.mode, "test", self.name)
         self.args = shlex.split(args) + UnitTest.standard_args
+        if self.mode == "coverage":
+            self.env = coverage.env(self.path)
+        else:
+            self.env = dict()
 
     def print_summary(self):
         print("Output of {} {}:".format(self.path, " ".join(self.args)))
         print(read_log(self.log_filename))
 
     async def run(self, options):
-        self.success = await run_test(self, options)
+        self.success = await run_test(self, options, env=self.env)
         logging.info("Test #%d %s", self.id, "succeeded" if self.success else "failed ")
         return self
 
@@ -330,9 +334,14 @@ class CqlTest(Test):
         self.is_new = False
         self.is_equal_result = None
         self.summary = "not run"
+        if self.mode == "coverage":
+            self.env = coverage.env(self.path, distinct_id=self.id)
+        else:
+            self.env = dict()
 
     async def run(self, options):
-        self.is_executed_ok = await run_test(self, options)
+        self.is_executed_ok = await run_test(self, options, env=self.env)
+
         self.success = False
         self.summary = "failed"
 
@@ -380,7 +389,13 @@ class RunTest(Test):
         self.path = os.path.join(suite.path, shortname)
         self.xmlout = os.path.join(options.tmpdir, self.mode, "xml", self.uname + ".xunit.xml")
         self.args = ["--junit-xml={}".format(self.xmlout)]
-        self.env = { 'SCYLLA': os.path.join("build", self.mode, "scylla") }
+        self.scylla_path = os.path.join("build", self.mode, "scylla")
+
+        if self.mode == "coverage":
+            self.env = coverage.env(self.scylla_path, distinct_id=self.suite.name)
+        else:
+            self.env = dict()
+        self.env['SCYLLA'] = self.scylla_path
 
     def print_summary(self):
         print("Output of {} {}:".format(self.path, " ".join(self.args)))
@@ -481,7 +496,6 @@ async def run_test(test, options, gentle_kill=False, env=dict()):
                          # TMPDIR env variable is used by any seastar/scylla
                          # test for directory to store test temporary data.
                          TMPDIR=os.path.join(options.tmpdir, test.mode),
-                         **coverage.env(test.path),
                          **env,
                          ),
                 preexec_fn=os.setsid,
@@ -795,7 +809,7 @@ async def main():
         write_junit_report(options.tmpdir, mode)
 
     if 'coverage' in options.modes:
-        coverage.generate_coverage_report("build/coverage/test", "tests")
+        coverage.generate_coverage_report("build/coverage", "tests")
 
     # Note: failure codes must be in the ranges 0-124, 126-127,
     #       to cooperate with git bisect's expectations
