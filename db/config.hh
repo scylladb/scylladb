@@ -353,6 +353,11 @@ public:
     named_value<uint16_t> redis_database_count;
     named_value<string_map> redis_keyspace_replication_strategy_options;
 
+    // Options to restrict (forbid, warn or somehow limit) certain operations
+    // or options which non-expert users are more likely to regret than to
+    // enjoy:
+    named_value<tri_mode_restriction> restrict_replication_simplestrategy;
+
     seastar::logging_settings logging_settings(const boost::program_options::variables_map&) const;
 
     const db::extensions& extensions() const;
