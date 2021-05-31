@@ -63,6 +63,9 @@ public:
         : _kind(std::move(k))
         , _data(normalize(d)) { }
 
+    // This constructor seems redundant with the bytes_view constructor, but
+    // it's necessary for IDL, which passes a deserialized_bytes_proxy here.
+    // (deserialized_bytes_proxy is convertible to bytes&&, but not bytes_view.)
     token(kind k, const bytes& b) : _kind(std::move(k)) {
         if (_kind != kind::key) {
             _data = 0;
