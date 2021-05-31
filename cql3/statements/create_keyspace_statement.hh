@@ -97,6 +97,11 @@ public:
     execute(query_processor& qp, service::query_state& state, const query_options& options) const override;
 };
 
+std::optional<sstring> check_restricted_replication_strategy(
+    service::storage_proxy& proxy,
+    const sstring& keyspace,
+    const ks_prop_defs& attrs);
+
 }
 
 }
