@@ -39,8 +39,16 @@ service_level_options service_level_options::replace_defaults(const service_leve
             // leave the value as is
         },
     }, ret.timeout);
-    if (ret.workload == workload_type::unspecified) {
+    switch (ret.workload) {
+    case workload_type::unspecified:
         ret.workload = default_values.workload;
+        break;
+    case workload_type::delete_marker:
+        ret.workload = workload_type::unspecified;
+        break;
+    default:
+        // no-op
+        break;
     }
     return ret;
 }
@@ -74,6 +82,7 @@ std::string_view service_level_options::to_string(const workload_type& wt) {
     case workload_type::unspecified: return "unspecified";
     case workload_type::batch: return "batch";
     case workload_type::interactive: return "interactive";
+    case workload_type::delete_marker: return "delete_marker";
     }
     abort();
 }
@@ -83,7 +92,7 @@ std::ostream& operator<<(std::ostream& os, const service_level_options::workload
 }
 
 std::optional<service_level_options::workload_type> service_level_options::parse_workload_type(std::string_view sv) {
-    if (sv == "unspecified") {
+    if (sv == "null") {
         return workload_type::unspecified;
     } else if (sv == "interactive") {
         return workload_type::interactive;
