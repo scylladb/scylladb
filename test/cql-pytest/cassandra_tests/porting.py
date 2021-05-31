@@ -25,6 +25,7 @@ import pytest
 import re
 import collections
 import struct
+import time
 from util import unique_name
 from contextlib import contextmanager
 from cassandra.protocol import SyntaxException, InvalidRequest
@@ -213,3 +214,24 @@ def before_and_after_flush(cql, table):
 # Python to do this more easily (maybe I'm missing something?)
 def to_float(num):
     return struct.unpack('f', struct.pack('f', num))[0]
+
+# Index creation is asynchronous, this method searches in the system table
+# IndexInfo for the specified index and returns true if it finds it, which
+# indicates the index was built on the pre-existing data.
+# If we haven't found it after 30 seconds we give-up.
+def wait_for_index(cql, table, index):
+    keyspace = table.split('.')[0]
+    start_time = time.time()
+    while time.time() < start_time + 30:
+        # Implementation 1: a full partition scan. This is the code which
+        # Cassandra's unit test had originally.
+        #for row in cql.execute(f"SELECT index_name FROM system.\"IndexInfo\" WHERE table_name = '{keyspace}'"):
+        #    if row.index_name == index:
+        #        return True
+        # Implementation 2 (the most efficient): Directly read the specific
+        # clustering key we want. Needs clustering key slices to work
+        # correctly in the virtual reader. (issue #8600)
+        if list(cql.execute(f"SELECT index_name FROM system.\"IndexInfo\" WHERE table_name = '{keyspace}' and index_name = '{index}'")):
+            return True
+        time.sleep(0.1)
+    return False
