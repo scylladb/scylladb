@@ -170,7 +170,6 @@ Description=Scylla data directory
 Before=scylla-server.service
 After={after}
 Wants={md_service}
-DefaultDependencies=no
 
 [Mount]
 What=/dev/disk/by-uuid/{uuid}
