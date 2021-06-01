@@ -874,3 +874,22 @@ BOOST_AUTO_TEST_CASE(test_leader_transfer_ignore_proposal) {
     // Nonetheless, the leader itself hasn't yet stepped down.
     BOOST_CHECK(A.is_leader());
 }
+
+// TestTransferNonMember
+BOOST_AUTO_TEST_CASE(test_transfer_non_member) {
+    /// Test that a node outside configuration, that receives `timeout_now`
+    /// message, doesn't disrupt operation of the rest of the cluster.
+    ///
+    /// That is, `timeout_now` has no effect and the outsider stays in
+    /// the follower state without promoting to the candidate.
+
+    raft::server_id A_id = id(), B_id = id(), C_id = id(), D_id = id();
+    raft::log log(raft::snapshot{.idx = raft::index_t{0},
+        .config = raft::configuration({B_id, C_id, D_id})});
+    auto A = create_follower(A_id, log);
+
+    A.step(B_id, timeout_now{A.get_current_term()});
+    // Check that a node outside of configuration doesn't even get a chance
+    // to transition to the candidate state.
+    BOOST_CHECK(!A.is_candidate());
+}
