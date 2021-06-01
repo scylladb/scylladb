@@ -57,7 +57,7 @@ namespace cql3 {
 
 namespace statements {
 
-logging::logger create_keyspace_statement::_logger("create_keyspace");
+static logging::logger mylogger("create_keyspace");
 
 create_keyspace_statement::create_keyspace_statement(const sstring& name, shared_ptr<ks_prop_defs> attrs, bool if_not_exists)
     : _name{name}
@@ -209,7 +209,7 @@ create_keyspace_statement::execute(query_processor& qp, service::query_state& st
     return schema_altering_statement::execute(qp, state, options).then([this, warning = std::move(warning)] (::shared_ptr<messages::result_message> msg) {
         if (warning) {
             msg->add_warning(*warning);
-            _logger.warn("{}", *warning);
+            mylogger.warn("{}", *warning);
         }
         return msg;
     });
