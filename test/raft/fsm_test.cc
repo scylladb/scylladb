@@ -1965,3 +1965,89 @@ BOOST_AUTO_TEST_CASE(test_leader_transfer_lost_timeout_now) {
     communicate(B, C);
     BOOST_CHECK(B.is_leader());
 }
+
+BOOST_AUTO_TEST_CASE(test_leader_transfer_lost_force_vote_request) {
+    /// 3-node cluster (A, B, C). A is initially elected a leader.
+    /// The leader adds a new configuration entry, that removes it from the
+    /// cluster (B, C).
+    ///
+    /// Wait up until the former leader commits the new configuration and starts
+    /// leader transfer procedure, sending out the `timeout_now` message to
+    /// one of the remaining nodes. But at that point it haven't received it yet.
+    ///
+    /// Deliver the `timeout_now` message to the target but lose all the
+    /// `vote_request(force)` messages it attempts to send.
+    /// This should halt the election process.
+    /// Then wait for election timeout so that candidate node starts another
+    /// normal election (without `force` flag for vote requests).
+    ///
+    /// Check that this candidate further makes progress and is elected a
+    /// leader.
+
+    raft::server_id A_id = id(), B_id = id(), C_id = id();
+    raft::log log(raft::snapshot{.idx = raft::index_t{0},
+        .config = raft::configuration({A_id, B_id, C_id})});
+    auto A = create_follower(A_id, log);
+    auto B = create_follower(B_id, log);
+    auto C = create_follower(C_id, log);
+
+    raft_routing_map map;
+    map.emplace(A_id, &A);
+    map.emplace(B_id, &B);
+    map.emplace(C_id, &C);
+
+    // A becomes leader
+    election_timeout(A);
+    communicate(A, B, C);
+    BOOST_CHECK(A.is_leader());
+
+    // Add a cfg entry on leader that removes it from the cluster ({B_id, C_id})
+    raft::configuration newcfg({B_id, C_id});
+    A.add_entry(newcfg);
+
+    // Commit new config and stop communicating right after A steps down due to
+    // starting leadership transfer.
+    communicate_until([&A] { return !A.is_leader(); }, A, B, C);
+    map.erase(A_id);
+
+    // We don't really care on which node `timeout_now` message arrives so adapt
+    // in a dynamic fashion.
+    //
+    // Check that A has sent the `timeout_now` message and determine to whom it was sent
+    auto output = A.get_output();
+    BOOST_CHECK_EQUAL(output.messages.size(), 1);
+    BOOST_CHECK(std::holds_alternative<raft::timeout_now>(output.messages.back().second));
+    auto timeout_now_target_id = output.messages.back().first;
+    auto timeout_now_msg = std::get<raft::timeout_now>(output.messages.back().second);
+
+    // Accept the message on the node selected by A to be eligible for leadership transfer.
+    auto& timeout_now_target = *map[timeout_now_target_id];
+    timeout_now_target.step(A_id, std::move(timeout_now_msg));
+    // New candidate should've sent a vote_request with force flag set
+    output = timeout_now_target.get_output();
+    BOOST_CHECK_EQUAL(output.messages.size(), 1);
+    BOOST_CHECK(std::holds_alternative<raft::vote_request>(output.messages.front().second));
+    auto vote_req1 = std::get<raft::vote_request>(output.messages.front().second);
+    BOOST_CHECK(vote_req1.force);
+
+    // Lose the forced vote request so that the candidates' election is halted.
+    // After election timeout has passed it should become a regular candidate and
+    // then proceed with non-force vote requests to elect itself a leader through
+    // the normal election process.
+    election_timeout(timeout_now_target);
+    output = timeout_now_target.get_output();
+    BOOST_CHECK_EQUAL(output.messages.size(), 1);
+    BOOST_CHECK(std::holds_alternative<raft::vote_request>(output.messages.front().second));
+    // These requests will be sent after election threshold passes for other remaining nodes.
+    auto vote_req1_regular = std::get<raft::vote_request>(output.messages.front().second);
+    auto vote_req1_regular_target = output.messages.front().first;
+    BOOST_CHECK(!vote_req1_regular.force);
+
+    // Pass election threshold for remaining node and send pending regular vote request
+    election_threshold(*map[vote_req1_regular_target]);
+    map[vote_req1_regular_target]->step(timeout_now_target_id, std::move(vote_req1_regular));
+
+    communicate(B, C);
+    auto final_leader = select_leader(B, C);
+    BOOST_CHECK(final_leader->id() == timeout_now_target_id);
+}
