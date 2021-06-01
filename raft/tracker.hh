@@ -22,7 +22,6 @@
 
 #include <seastar/core/condition-variable.hh>
 #include "raft.hh"
-#include "logical_clock.hh"
 
 namespace raft {
 

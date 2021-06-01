@@ -31,6 +31,7 @@
 #include "bytes_ostream.hh"
 #include "utils/UUID.hh"
 #include "internal.hh"
+#include "logical_clock.hh"
 
 namespace raft {
 // Keeps user defined command. A user is responsible to serialize
@@ -309,6 +310,13 @@ using rpc_message = std::variant<append_request, append_reply, vote_request, vot
 // we need something that can be truncated form both sides.
 // std::deque move constructor is not nothrow hence cannot be used
 using log_entries = boost::container::deque<log_entry_ptr>;
+
+// 3.4 Leader election
+// If a follower receives no communication over a period of
+// time called the election timeout, then it assumes there is
+// no viable leader and begins an election to choose a new
+// leader.
+static constexpr logical_clock::duration ELECTION_TIMEOUT = logical_clock::duration{10};
 
 // rpc, persistence and state_machine classes will have to be implemented by the
 // raft user to provide network, persistency and busyness logic support

@@ -63,13 +63,6 @@ struct fsm_config {
     bool enable_prevoting;
 };
 
-// 3.4 Leader election
-// If a follower receives no communication over a period of
-// time called the election timeout, then it assumes there is
-// no viable leader and begins an election to choose a new
-// leader.
-static constexpr logical_clock::duration ELECTION_TIMEOUT = logical_clock::duration{10};
-
 class fsm;
 
 // 3.3 Raft Basics
