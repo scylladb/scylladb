@@ -1818,3 +1818,95 @@ BOOST_AUTO_TEST_CASE(test_non_voter_can_vote) {
     BOOST_CHECK_EQUAL(B.get_current_term(), C.get_current_term());
     BOOST_CHECK_EQUAL(B.log_last_idx(), C.log_last_idx());
 }
+
+BOOST_AUTO_TEST_CASE(test_leader_transferee_dies_upon_receiving_timeout_now) {
+    /// 4-node cluster (A, B, C, D). A is initially elected a leader.
+    /// The leader adds a new configuration entry, that removes it from the
+    /// cluster (B, C, D).
+    /// Communicate the cluster up to the point where A starts to resign
+    /// its leadership (calls `transfer_leadership()`).
+    /// At this point, A should send a `timeout_now` message to one
+    /// the remaining nodes (B, C or D) and the new configuration should be
+    /// committed. But no nodes actually have received the `timeout_now` message
+    /// yet.
+    ///
+    /// Determine on which node the message should arrive, accept the
+    /// `timeout_now` message and disconnect the target from the rest of the
+    /// group.
+    ///
+    /// Check that after that the cluster, which has only two live members,
+    /// could progress and elect a new leader through a normal election process.
+
+    discrete_failure_detector fd;
+
+    raft::server_id A_id = id(), B_id = id(), C_id = id(), D_id = id();
+    raft::log log(raft::snapshot{.idx = raft::index_t{0},
+        .config = raft::configuration({A_id, B_id, C_id, D_id})});
+    auto A = create_follower(A_id, log, fd);
+    auto B = create_follower(B_id, log, fd);
+    auto C = create_follower(C_id, log, fd);
+    auto D = create_follower(D_id, log, fd);
+
+    raft_routing_map map;
+    map.emplace(A_id, &A);
+    map.emplace(B_id, &B);
+    map.emplace(C_id, &C);
+    map.emplace(D_id, &D);
+
+    // A becomes leader
+    election_timeout(A);
+    communicate(A, B, C, D);
+    BOOST_CHECK(A.is_leader());
+
+    // Add a cfg entry on leader that removes it from the cluster ({B_id, C_id, D_id})
+    raft::configuration newcfg({B_id, C_id, D_id});
+    A.add_entry(newcfg);
+
+    // Commit new config and stop communicating right after A steps down due to
+    // starting leadership transfer.
+    communicate_until([&A] { return !A.is_leader(); }, A, B, C, D);
+
+    // At this point A should have a `timeout_now` message in its message queue.
+    BOOST_CHECK(A.is_follower());
+    // We cannot assume which node will be selected as the target for
+    // `timeout_now` message, because the order in which A should test each
+    // follower whether it's an eligible target for `timeout_now` is
+    // unspecified. Let's call it X. X can be either B, C, or D.
+    //
+    // Maintain the routing map state since it will be used later to
+    // determine which two nodes will remain in the cluster after partitioning
+    // `timeout_now` target node (X) away.
+    map.erase(A_id);
+
+    // We don't really care on which node `timeout_now` message arrives so adapt
+    // in a dynamic fashion.
+    //
+    // Check that A has sent the `timeout_now` message and determine to whom it was sent
+    auto output = A.get_output();
+    BOOST_CHECK_EQUAL(output.messages.size(), 1);
+    BOOST_CHECK(std::holds_alternative<raft::timeout_now>(output.messages.back().second));
+    auto timeout_now_target_id = output.messages.back().first;
+    auto timeout_now_msg = std::get<raft::timeout_now>(output.messages.back().second);
+
+    // Accept the message on target node...
+    map[timeout_now_target_id]->step(A_id, std::move(timeout_now_msg));
+
+    // ...and immediately cut it from the rest of the cluster so that others think it's dead.
+    fd.mark_dead(timeout_now_target_id);
+    map.erase(timeout_now_target_id);
+
+    // Two more nodes should remain in the cluster.
+    // Again, we don't care which node from these two would like to become a leader,
+    // so just select the first one in the list of remaining nodes.
+    //
+    // Wait for standard election_timeout() on the first node, and for election_threshold()
+    // on the second.
+    // Then, check, that the new leader is elected among these two remaining nodes.
+    auto first_fsm = map.begin();
+    auto second_fsm = ++map.begin();
+    election_timeout(*first_fsm->second);
+    election_threshold(*second_fsm->second);
+    communicate(B, C, D);
+    auto final_leader = select_leader(B, C, D);
+    BOOST_CHECK(final_leader->id() == first_fsm->first || final_leader->id() == second_fsm->first);
+}
