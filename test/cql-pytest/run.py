@@ -236,8 +236,7 @@ def wait_for_cql(pid, ip):
     print(f'Boot successful ({duration}).')
     sys.stdout.flush()
 
-def run_cql_pytest(ip, additional_parameters):
-    cql_pytest_dir = os.path.join(source_path, 'test/cql-pytest')
+def run_pytest(pytest_dir, additional_parameters):
     sys.stdout.flush()
     sys.stderr.flush()
     pid = os.fork()
@@ -245,9 +244,9 @@ def run_cql_pytest(ip, additional_parameters):
         # child:
         global run_with_temporary_dir_pids
         run_with_temporary_dir_pids = set() # no children to clean up on child
-        os.chdir(cql_pytest_dir)
+        os.chdir(pytest_dir)
         os.execvp('pytest', ['pytest',
-            '--host', ip, '-o', 'junit_family=xunit2'] + additional_parameters)
+            '-o', 'junit_family=xunit2'] + additional_parameters)
         exit(1)
     # parent:
     if os.waitpid(pid, 0)[1]:
