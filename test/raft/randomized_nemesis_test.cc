@@ -661,6 +661,14 @@ public:
         deliver();
     }
 
+    void add_grudge(raft::server_id src, raft::server_id dst) {
+        _grudges[dst].insert(src);
+    }
+
+    void remove_grudge(raft::server_id src, raft::server_id dst) {
+        _grudges[dst].erase(src);
+    }
+
 private:
     void deliver() {
         // Deliver every message whose time has come.
