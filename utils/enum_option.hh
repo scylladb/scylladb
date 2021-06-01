@@ -87,8 +87,12 @@ class enum_option {
         return _value == that._value;
     }
 
+    // For comparison with enum values using if or switch:
     bool operator==(typename map_t::mapped_type value) const {
         return _value == value;
+    }
+    operator typename map_t::mapped_type() const {
+        return _value;
     }
 
     // For program_options parser:
