@@ -252,6 +252,7 @@ public:
         bool has_dead_endpoints;
     };
 
+    gms::feature_service& features() noexcept { return _features; }
     const gms::feature_service& features() const { return _features; }
 
     locator::token_metadata_ptr get_token_metadata_ptr() const noexcept;

@@ -1419,13 +1419,12 @@ int main(int ac, char** av) {
                 }
                 bool alternator_enforce_authorization = cfg->alternator_enforce_authorization();
                 with_scheduling_group(dbcfg.statement_scheduling_group,
-                        [addr, alternator_port, alternator_https_port, creds = std::move(creds), alternator_enforce_authorization, cfg, &service_memory_limiter] () mutable {
+                        [addr, alternator_port, alternator_https_port, creds = std::move(creds), alternator_enforce_authorization, cfg, &service_memory_limiter, &db] () mutable {
                     return alternator_server.invoke_on_all(
-                            [addr, alternator_port, alternator_https_port, creds = std::move(creds), alternator_enforce_authorization, cfg, &service_memory_limiter] (alternator::server& server) mutable {
-                        auto& ss = service::get_local_storage_service();
+                            [addr, alternator_port, alternator_https_port, creds = std::move(creds), alternator_enforce_authorization, cfg, &service_memory_limiter, &db] (alternator::server& server) mutable {
                         return server.init(addr, alternator_port, alternator_https_port, creds, alternator_enforce_authorization,
                                 &service_memory_limiter.local().get_semaphore(),
-                                ss.db().local().get_config().max_concurrent_requests_per_shard);
+                                db.local().get_config().max_concurrent_requests_per_shard);
                     }).then([addr, alternator_port, alternator_https_port] {
                         startlog.info("Alternator server listening on {}, HTTP port {}, HTTPS port {}",
                                 addr, alternator_port ? std::to_string(*alternator_port) : "OFF", alternator_https_port ? std::to_string(*alternator_https_port) : "OFF");
@@ -1452,8 +1451,8 @@ int main(int ac, char** av) {
             supervisor::notify("serving");
             // Register at_exit last, so that storage_service::drain_on_shutdown will be called first
 
-            auto stop_repair = defer_verbose_shutdown("repair", [] {
-                repair_shutdown(service::get_local_storage_service().db()).get();
+            auto stop_repair = defer_verbose_shutdown("repair", [&db] {
+                repair_shutdown(db).get();
             });
 
             auto stop_sl_controller = defer_verbose_shutdown("service level controller", [] {

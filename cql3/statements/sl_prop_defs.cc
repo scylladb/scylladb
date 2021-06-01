@@ -63,6 +63,11 @@ void sl_prop_defs::validate() {
             throw exceptions::invalid_request_exception(format("Invalid workload type: {}", *workload_string_opt));
         }
         _slo.workload = *workload;
+        // Explicitly setting a workload type to 'unspecified' should result in resetting
+        // the previous value to 'unspecified, not just keeping it as is
+        if (_slo.workload == qos::service_level_options::workload_type::unspecified) {
+            _slo.workload = qos::service_level_options::workload_type::delete_marker;
+        }
     }
 }
 

@@ -33,7 +33,13 @@
 #include "idl/keys.dist.impl.hh"
 
 BOOST_AUTO_TEST_CASE(test_key_is_prefixed_by) {
-    schema s({}, "", "", {{"c1", bytes_type}}, {{"c2", bytes_type}, {"c3", bytes_type}, {"c4", bytes_type}}, {}, {}, utf8_type);
+    auto s_ptr = schema_builder("", "")
+            .with_column("c1", bytes_type, column_kind::partition_key)
+            .with_column("c2", bytes_type, column_kind::clustering_key)
+            .with_column("c3", bytes_type, column_kind::clustering_key)
+            .with_column("c4", bytes_type, column_kind::clustering_key)
+            .build();
+    const schema& s = *s_ptr;
 
     auto key = clustering_key::from_exploded(s, {bytes("a"), bytes("b"), bytes("c")});
 
@@ -49,13 +55,13 @@ BOOST_AUTO_TEST_CASE(test_key_is_prefixed_by) {
 }
 
 BOOST_AUTO_TEST_CASE(test_key_component_iterator) {
-    schema s({}, "", "",
-        {
-            {"c1", bytes_type}
-        }, {
-            {"c2", bytes_type}, {"c3", bytes_type}, {"c4", bytes_type}
-        },
-        {}, {}, utf8_type);
+    auto s_ptr = schema_builder("", "")
+            .with_column("c1", bytes_type, column_kind::partition_key)
+            .with_column("c2", bytes_type, column_kind::clustering_key)
+            .with_column("c3", bytes_type, column_kind::clustering_key)
+            .with_column("c4", bytes_type, column_kind::clustering_key)
+            .build();
+    const schema& s = *s_ptr;
 
     auto key = clustering_key::from_exploded(s, {bytes("a"), bytes("b"), bytes("c")});
 
@@ -78,7 +84,10 @@ BOOST_AUTO_TEST_CASE(test_key_component_iterator) {
 }
 
 BOOST_AUTO_TEST_CASE(test_legacy_ordering_for_non_composite_key) {
-    schema s({}, "", "", {{"c1", bytes_type}}, {}, {}, {}, utf8_type);
+    auto s_ptr = schema_builder("", "")
+            .with_column("c1", bytes_type, column_kind::partition_key)
+            .build();
+    const schema& s = *s_ptr;
 
     auto to_key = [&s] (sstring value) {
         return partition_key::from_single_value(s, to_bytes(value));
@@ -96,7 +105,11 @@ BOOST_AUTO_TEST_CASE(test_legacy_ordering_for_non_composite_key) {
 }
 
 BOOST_AUTO_TEST_CASE(test_legacy_ordering_for_composite_keys) {
-    schema s({}, "", "", {{"c1", bytes_type}, {"c2", bytes_type}}, {}, {}, {}, utf8_type);
+    auto s_ptr = schema_builder("", "")
+            .with_column("c1", bytes_type, column_kind::partition_key)
+            .with_column("c2", bytes_type, column_kind::partition_key)
+            .build();
+    const schema& s = *s_ptr;
 
     auto to_key = [&s] (sstring v1, sstring v2) {
         return partition_key::from_exploded(s, std::vector<bytes>{to_bytes(v1), to_bytes(v2)});
@@ -120,7 +133,10 @@ BOOST_AUTO_TEST_CASE(test_legacy_ordering_for_composite_keys) {
 }
 
 BOOST_AUTO_TEST_CASE(test_conversions_between_view_and_wrapper) {
-    schema s({}, "", "", {{"c1", bytes_type}}, {}, {}, {}, utf8_type);
+    auto s_ptr = schema_builder("", "")
+            .with_column("c1", bytes_type, column_kind::partition_key)
+            .build();
+    const schema& s = *s_ptr;
 
     auto key = partition_key::from_deeply_exploded(s, {data_value(bytes("value"))});
     partition_key_view key_view = key;
@@ -158,14 +174,12 @@ BOOST_AUTO_TEST_CASE(test_serialization) {
 
 
 BOOST_AUTO_TEST_CASE(test_from_nodetool_style_string) {
-    auto s1 = make_lw_shared<schema>(
-    schema({}, "", "",
-        {
-            {"c1", utf8_type}
-        }, {
-            {"c2", bytes_type}, {"c3", bytes_type}, {"c4", bytes_type}
-        },
-        {}, {}, utf8_type));
+    auto s1 = schema_builder("", "")
+            .with_column("c1", utf8_type, column_kind::partition_key)
+            .with_column("c2", bytes_type, column_kind::clustering_key)
+            .with_column("c3", bytes_type, column_kind::clustering_key)
+            .with_column("c4", bytes_type, column_kind::clustering_key)
+            .build();
 
     auto pk_value = bytes("value");
     partition_key key1(std::vector<bytes>({pk_value}));
@@ -173,14 +187,12 @@ BOOST_AUTO_TEST_CASE(test_from_nodetool_style_string) {
     auto key2 = partition_key::from_nodetool_style_string(s1, "value");
     BOOST_REQUIRE(key1.equal(*s1, key2));
 
-    auto s2 = make_lw_shared<schema>(
-    schema({}, "", "",
-        {
-            {"c1", utf8_type}, {"c2", utf8_type}
-        }, {
-            {"c3", bytes_type}, {"c4", bytes_type}
-        },
-        {}, {}, utf8_type));
+    auto s2 = schema_builder("", "")
+            .with_column("c1", utf8_type, column_kind::partition_key)
+            .with_column("c2", utf8_type, column_kind::partition_key)
+            .with_column("c3", bytes_type, column_kind::clustering_key)
+            .with_column("c4", bytes_type, column_kind::clustering_key)
+            .build();
 
     auto pk_value1 = bytes("value1");
     auto pk_value2 = bytes("value2");

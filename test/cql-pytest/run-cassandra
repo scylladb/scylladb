@@ -39,6 +39,7 @@ def run_cassandra_cmd(pid, dir):
               'seed_provider:\n    - class_name: org.apache.cassandra.locator.SimpleSeedProvider\n      parameters:\n          - seeds: "' + ip + '"\n' +
               'listen_address: ' + ip + '\n' +
               'auto_snapshot: false\n' +
+              'enable_sasi_indexes: true\n' +
               'enable_user_defined_functions: true\n' +
               'authenticator: PasswordAuthenticator\n' +
               'enable_materialized_views: true\n', file=f)
