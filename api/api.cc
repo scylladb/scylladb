@@ -168,6 +168,17 @@ future<> set_server_cache(http_context& ctx) {
             "The cache service API", set_cache_service);
 }
 
+future<> set_hinted_handoff(http_context& ctx) {
+    return register_api(ctx, "hinted_handoff",
+                "The hinted handoff API", [] (http_context& ctx, routes& r) {
+                    set_hinted_handoff(ctx, r);
+                });
+}
+
+future<> unset_hinted_handoff(http_context& ctx) {
+    return ctx.http_server.set_routes([&ctx] (routes& r) { unset_hinted_handoff(ctx, r); });
+}
+
 future<> set_server_gossip_settle(http_context& ctx) {
     auto rb = std::make_shared < api_registry_builder > (ctx.api_doc);
 
@@ -191,9 +202,6 @@ future<> set_server_done(http_context& ctx) {
         rb->register_function(r, "commitlog",
                 "The commit log API");
         set_commitlog(ctx,r);
-        rb->register_function(r, "hinted_handoff",
-                "The hinted handoff API");
-        set_hinted_handoff(ctx, r);
         rb->register_function(r, "collectd",
                 "The collectd API");
         set_collectd(ctx, r);

@@ -71,5 +71,13 @@ void set_hinted_handoff(http_context& ctx, routes& r) {
     });
 }
 
+void unset_hinted_handoff(http_context& ctx, routes& r) {
+    hh::list_endpoints_pending_hints.unset(r);
+    hh::truncate_all_hints.unset(r);
+    hh::schedule_hint_delivery.unset(r);
+    hh::pause_hints_delivery.unset(r);
+    hh::get_create_hint_count.unset(r);
+    hh::get_not_stored_hints_count.unset(r);
 }
 
+}
