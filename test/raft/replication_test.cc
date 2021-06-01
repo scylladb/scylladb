@@ -766,7 +766,6 @@ future<> run_test(test_case test, bool prevote, bool packet_drops) {
                     format("Current leader {} is not in configuration", leader));
             co_await add_entries(rafts, next_val, next_val + n, leader);
             next_val += n;
-            co_await wait_log(rafts, connected, in_configuration, leader);
         } else if (std::holds_alternative<new_leader>(update)) {
             unsigned next_leader = std::get<new_leader>(update).id;
             auto leader_log_idx = rafts[leader].server->log_last_idx();
