@@ -851,3 +851,26 @@ BOOST_AUTO_TEST_CASE(test_proposal_5) {
 
 // TestProposalByProxy
 // TBD when we support add_entry() on follower
+
+// TestLeaderTransferIgnoreProposal
+BOOST_AUTO_TEST_CASE(test_leader_transfer_ignore_proposal) {
+    /// Test that a leader which has entered leader stepdown mode rejects
+    /// new append requests.
+
+    raft::server_id A_id = id();
+    raft::log log(raft::snapshot{.idx = raft::index_t{0},
+        .config = raft::configuration({A_id})});
+    auto A = create_follower(A_id, log);
+
+    // Elect A leader.
+    election_timeout(A);
+    BOOST_CHECK(A.is_leader());
+
+    // Move A to "stepdown" state.
+    A.transfer_leadership();
+
+    // At this point it should reject calls to `add_entry` by throwing `not_a_leader` exception.
+    BOOST_CHECK_THROW(A.add_entry(raft::log_entry::dummy()), raft::not_a_leader);
+    // Nonetheless, the leader itself hasn't yet stepped down.
+    BOOST_CHECK(A.is_leader());
+}
