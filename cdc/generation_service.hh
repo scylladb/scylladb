@@ -34,6 +34,7 @@ class config;
 
 namespace gms {
 class gossiper;
+class feature_service;
 }
 
 namespace seastar {
