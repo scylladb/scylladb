@@ -168,10 +168,10 @@ future<> set_server_cache(http_context& ctx) {
             "The cache service API", set_cache_service);
 }
 
-future<> set_hinted_handoff(http_context& ctx) {
+future<> set_hinted_handoff(http_context& ctx, sharded<db::hints::sync_point_service>& svc) {
     return register_api(ctx, "hinted_handoff",
-                "The hinted handoff API", [] (http_context& ctx, routes& r) {
-                    set_hinted_handoff(ctx, r);
+                "The hinted handoff API", [&svc] (http_context& ctx, routes& r) {
+                    set_hinted_handoff(ctx, r, svc);
                 });
 }
 

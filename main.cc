@@ -1320,7 +1320,7 @@ int main(int ac, char** av) {
                 local_proxy.allow_replaying_hints();
             }).get();
 
-            api::set_hinted_handoff(ctx).get();
+            api::set_hinted_handoff(ctx, sync_point_svc).get();
             auto stop_hinted_handoff_api = defer_verbose_shutdown("hinted handoff API", [&ctx] {
                 api::unset_hinted_handoff(ctx).get();
             });

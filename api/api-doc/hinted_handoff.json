@@ -8,6 +8,89 @@
    ],
    "apis":[
       {
+         "path":"/hinted_handoff/waiting_point",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Creates a hints waiting point. It can be used to wait until hints between given nodes are replayed. A waiting point waits only for hints accumulated at the moment of its creation - it won't wait for hints generated later.",
+               "type":"string",
+               "nickname":"create_hints_waiting_point",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"source_hosts",
+                     "description":"A list of nodes whose hints should be waited on. Multiple hosts can be listed by separating them with commas. If not provided or empty, the point will resolve when all nodes in the cluster send their hints.",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"target_hosts",
+                     "description":"A list of nodes towards which hints should be replayed. Multiple hosts can be listed by separating them with commas. If not provided or empty, the point will resolve when current hints towards all nodes in the cluster are sent.",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
+               ]
+            },
+            {
+               "method":"GET",
+               "summary":"Get the status of a hints waiting point, possibly waiting for it to be reached.",
+               "type":"string",
+               "enum":[
+                  "DONE",
+                  "IN_PROGRESS",
+                  "FAILED"
+               ],
+               "nickname":"get_hints_waiting_point",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"id",
+                     "description":"The ID of the hint waiting point which should be checked or waited on",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"timeout",
+                     "description":"Timeout in seconds after which the query returns even if hints are still being replayed. No value or 0 will cause the query to return immediately. A negative value will cause the query to wait until the sync point is reached",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"long",
+                     "paramType":"query"
+                  }
+               ]
+            },
+            {
+               "method":"DELETE",
+               "summary":"Deletes a hints waiting point.",
+               "type":"void",
+               "nickname":"delete_hints_waiting_point",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"id",
+                     "description":"The ID of the hint waiting point which should be deleted",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
          "path":"/hinted_handoff/hints",
          "operations":[
             {

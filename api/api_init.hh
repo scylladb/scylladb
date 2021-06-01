@@ -46,6 +46,14 @@ namespace db { class snapshot_ctl; }
 namespace netw { class messaging_service; }
 class repair_service;
 
+namespace db {
+namespace hints {
+
+class sync_point_service;
+
+} // namespace hints
+}
+
 namespace api {
 
 struct http_context {
@@ -84,7 +92,7 @@ future<> set_server_messaging_service(http_context& ctx, sharded<netw::messaging
 future<> unset_server_messaging_service(http_context& ctx);
 future<> set_server_storage_proxy(http_context& ctx);
 future<> set_server_stream_manager(http_context& ctx);
-future<> set_hinted_handoff(http_context& ctx);
+future<> set_hinted_handoff(http_context& ctx, sharded<db::hints::sync_point_service>& svc);
 future<> unset_hinted_handoff(http_context& ctx);
 future<> set_server_gossip_settle(http_context& ctx);
 future<> set_server_cache(http_context& ctx);

@@ -23,9 +23,11 @@
 
 #include "api.hh"
 
+namespace db::hints { class sync_point_service; }
+
 namespace api {
 
-void set_hinted_handoff(http_context& ctx, routes& r);
+void set_hinted_handoff(http_context& ctx, routes& r, sharded<db::hints::sync_point_service>& svc);
 void unset_hinted_handoff(http_context& ctx, routes& r);
 
 }
