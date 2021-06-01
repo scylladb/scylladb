@@ -85,6 +85,8 @@ future<> set_server_messaging_service(http_context& ctx, sharded<netw::messaging
 future<> unset_server_messaging_service(http_context& ctx);
 future<> set_server_storage_proxy(http_context& ctx, sharded<service::storage_service>& ss);
 future<> set_server_stream_manager(http_context& ctx);
+future<> set_hinted_handoff(http_context& ctx);
+future<> unset_hinted_handoff(http_context& ctx);
 future<> set_server_gossip_settle(http_context& ctx);
 future<> set_server_cache(http_context& ctx);
 future<> set_server_compaction_manager(http_context& ctx);
