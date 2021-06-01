@@ -24,6 +24,8 @@
 #include "database.hh"
 #include <seastar/core/coroutine.hh>
 
+#include "service/storage_proxy.hh"
+
 future<> alternator_test_env::start(std::string_view isolation_level) {
     smp_service_group_config c;
     c.max_nonlocal_requests = 5000;

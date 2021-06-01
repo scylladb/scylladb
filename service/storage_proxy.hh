@@ -138,20 +138,6 @@ public:
     bool empty() const;
 };
 
-// An instance of this class is passed as an argument to storage_proxy::cas().
-// The apply() method, which must be defined by the implementation. It can
-// either return a mutation that will be used as a value for paxos 'propose'
-// stage or it can return an empty option in which case an empty mutation will
-// be used
-class cas_request {
-public:
-    virtual ~cas_request() = default;
-    // it is safe to dereference and use the qr foreign pointer, the result was
-    // created by a foreign shard but no longer used by it.
-    virtual std::optional<mutation> apply(foreign_ptr<lw_shared_ptr<query::result>> qr,
-            const query::partition_slice& slice, api::timestamp_type ts) = 0;
-};
-
 struct storage_proxy_coordinator_query_result {
     foreign_ptr<lw_shared_ptr<query::result>> query_result;
     replicas_per_token_range last_replicas;
@@ -165,6 +151,8 @@ struct storage_proxy_coordinator_query_result {
         , read_repair_decision(std::move(read_repair_decision)) {
     }
 };
+
+class cas_request;
 
 class storage_proxy : public seastar::async_sharded_service<storage_proxy>, public peering_sharded_service<storage_proxy>, public service::endpoint_lifecycle_subscriber  {
 public:

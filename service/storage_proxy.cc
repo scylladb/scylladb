@@ -103,6 +103,7 @@
 #include "seastar/core/coroutine.hh"
 #include "seastar/core/with_timeout.hh"
 #include "locator/abstract_replication_strategy.hh"
+#include "service/paxos/cas_request.hh"
 
 namespace bi = boost::intrusive;
 

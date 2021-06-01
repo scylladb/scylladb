@@ -38,8 +38,14 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 #pragma once
-#include "service/storage_proxy.hh"
+#include "service/paxos/cas_request.hh"
 #include "cql3/statements/modification_statement.hh"
+
+namespace service {
+
+class storage_proxy;
+
+} // namespace service
 
 namespace cql3::statements {
 

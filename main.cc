@@ -89,6 +89,7 @@
 #include "alternator/rmw_operation.hh"
 #include "db/paxos_grace_seconds_extension.hh"
 #include "service/qos/standard_service_level_distributed_data_accessor.hh"
+#include "service/storage_proxy.hh"
 
 #include "service/raft/raft_services.hh"
 

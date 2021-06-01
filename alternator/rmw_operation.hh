@@ -22,7 +22,7 @@
 #pragma once
 
 #include "seastarx.hh"
-#include "service/storage_proxy.hh"
+#include "service/paxos/cas_request.hh"
 #include "utils/rjson.hh"
 #include "executor.hh"
 

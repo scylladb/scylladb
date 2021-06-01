@@ -46,6 +46,7 @@
 #include <seastar/core/execution_stage.hh>
 #include "cas_request.hh"
 #include "cql3/query_processor.hh"
+#include "service/storage_proxy.hh"
 
 #include <boost/algorithm/cxx11/any_of.hpp>
 #include <boost/algorithm/cxx11/all_of.hpp>

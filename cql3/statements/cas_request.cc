@@ -45,6 +45,7 @@
 #include "cql3/result_set.hh"
 #include "transport/messages/result_message.hh"
 #include "types/map.hh"
+#include "service/storage_proxy.hh"
 
 namespace cql3::statements {
 

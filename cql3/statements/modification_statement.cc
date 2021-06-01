@@ -59,6 +59,7 @@
 #include "partition_slice_builder.hh"
 #include "cas_request.hh"
 #include "cql3/query_processor.hh"
+#include "service/storage_proxy.hh"
 
 bool is_system_keyspace(std::string_view name);
 
