@@ -3480,11 +3480,11 @@ storage_service::describe_ring(const sstring& keyspace, bool include_only_local_
         }
         for (auto endpoint : addresses) {
             endpoint_details details;
-            details._host = boost::lexical_cast<std::string>(endpoint);
+            details._host = endpoint;
             details._datacenter = locator::i_endpoint_snitch::get_local_snitch_ptr()->get_datacenter(endpoint);
             details._rack = locator::i_endpoint_snitch::get_local_snitch_ptr()->get_rack(endpoint);
             tr._rpc_endpoints.push_back(get_rpc_address(endpoint));
-            tr._endpoints.push_back(details._host);
+            tr._endpoints.push_back(boost::lexical_cast<std::string>(details._host));
             tr._endpoint_details.push_back(details);
         }
         ranges.push_back(tr);
