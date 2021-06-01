@@ -1910,3 +1910,58 @@ BOOST_AUTO_TEST_CASE(test_leader_transferee_dies_upon_receiving_timeout_now) {
     auto final_leader = select_leader(B, C, D);
     BOOST_CHECK(final_leader->id() == first_fsm->first || final_leader->id() == second_fsm->first);
 }
+
+BOOST_AUTO_TEST_CASE(test_leader_transfer_lost_timeout_now) {
+    /// 3-node cluster (A, B, C). A is initially elected a leader.
+    /// The leader adds a new configuration entry, that removes it from the
+    /// cluster (B, C).
+    ///
+    /// Wait up until the former leader commits the new configuration and starts
+    /// leader transfer procedure, sending out the `timeout_now` message to
+    /// one of the remaining nodes. But at that point it haven't received it yet.
+    ///
+    /// Lose this message and verify that the rest of the cluster (B, C)
+    /// can make progress and elect a new leader.
+
+    raft::server_id A_id = id(), B_id = id(), C_id = id();
+    raft::log log(raft::snapshot{.idx = raft::index_t{0},
+        .config = raft::configuration({A_id, B_id, C_id})});
+    auto A = create_follower(A_id, log);
+    auto B = create_follower(B_id, log);
+    auto C = create_follower(C_id, log);
+
+    // A becomes leader
+    election_timeout(A);
+    communicate(A, B, C);
+    BOOST_CHECK(A.is_leader());
+
+    // Add a cfg entry on leader that removes it from the cluster ({B_id, C_id})
+    raft::configuration newcfg({B_id, C_id});
+    A.add_entry(newcfg);
+
+    // Commit new config and stop communicating right after A steps down due to
+    // starting leadership transfer.
+    communicate_until([&A] { return !A.is_leader(); }, A, B, C);
+
+    // We don't really care on which node `timeout_now` message should arrive,
+    // since it'll be lost, anyway.
+    //
+    // Check that the `timeout_now` message was sent...
+    auto output = A.get_output();
+    BOOST_CHECK_EQUAL(output.messages.size(), 1);
+    BOOST_CHECK(std::holds_alternative<raft::timeout_now>(output.messages.back().second));
+    auto timeout_now_msg = std::get<raft::timeout_now>(output.messages.back().second);
+    // ... and lose it.
+
+    // By now, B and C should both remain in the follower state.
+    // Check that and attept to go forward with a normal election process to see
+    // that the cluster operates normally after `timeout_now` has been lost.
+    BOOST_CHECK(B.is_follower());
+    BOOST_CHECK(C.is_follower());
+
+    // Elect B a leader and check that normal election proceeds as expected.
+    election_timeout(B);
+    election_threshold(C);
+    communicate(B, C);
+    BOOST_CHECK(B.is_leader());
+}
