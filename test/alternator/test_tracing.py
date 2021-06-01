@@ -263,8 +263,8 @@ def test_slow_query_log(with_slow_query_logging, test_table_s, dynamodb):
     # Verify that the operations got logged. Each operation taking more than 0 microseconds is logged,
     # which effectively logs all requests as slow.
     slow_query_table = dynamodb.Table('.scylla.alternator.system_traces.node_slow_log')
-    delay = 0.2
-    while delay < 30:
+    start_time = time.time()
+    while time.time() < start_time + 60:
         results = full_scan(slow_query_table, ConsistentRead=False)
         put_item_found = any("PutItem" in result['parameters'] and p in result['parameters']
                 and result['username'] == "alternator" for result in results)
@@ -273,6 +273,5 @@ def test_slow_query_log(with_slow_query_logging, test_table_s, dynamodb):
         if put_item_found and delete_item_found:
             return
         else:
-            time.sleep(delay)
-            delay += 1
+            time.sleep(0.5)
     pytest.fail("Slow query entries not found")
