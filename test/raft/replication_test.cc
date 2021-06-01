@@ -284,11 +284,11 @@ private:
     size_t _apply_entries;
     size_t _seen = 0;
     promise<> _done;
-    lw_shared_ptr<snapshots> _snapshots;
+    snapshots* _snapshots;
 public:
     lw_shared_ptr<hasher_int> hasher;
     state_machine(raft::server_id id, apply_fn apply, size_t apply_entries,
-            lw_shared_ptr<snapshots> snapshots):
+            snapshots* snapshots):
         _id(id), _apply(std::move(apply)), _apply_entries(apply_entries), _snapshots(snapshots),
         hasher(make_lw_shared<hasher_int>()) {}
     future<> apply(const std::vector<raft::command_cref> commands) override {
@@ -333,11 +333,11 @@ public:
 class persistence : public raft::persistence {
     raft::server_id _id;
     initial_state _conf;
-    lw_shared_ptr<snapshots> _snapshots;
-    lw_shared_ptr<persisted_snapshots> _persisted_snapshots;
+    snapshots* _snapshots;
+    persisted_snapshots* _persisted_snapshots;
 public:
-    persistence(raft::server_id id, initial_state conf, lw_shared_ptr<snapshots> snapshots,
-            lw_shared_ptr<persisted_snapshots> persisted_snapshots) : _id(id),
+    persistence(raft::server_id id, initial_state conf, snapshots* snapshots,
+            persisted_snapshots* persisted_snapshots) : _id(id),
             _conf(std::move(conf)), _snapshots(snapshots),
             _persisted_snapshots(persisted_snapshots) {}
     persistence() {}
@@ -422,9 +422,9 @@ struct connected {
 
 class failure_detector : public raft::failure_detector {
     raft::server_id _id;
-    lw_shared_ptr<connected> _connected;
+    connected* _connected;
 public:
-    failure_detector(raft::server_id id, lw_shared_ptr<connected> connected) : _id(id), _connected(connected) {}
+    failure_detector(raft::server_id id, connected* connected) : _id(id), _connected(connected) {}
     bool is_alive(raft::server_id server) override {
         return (*_connected)(server, _id);
     }
@@ -433,14 +433,14 @@ public:
 class rpc : public raft::rpc {
     static std::unordered_map<raft::server_id, rpc*> net;
     raft::server_id _id;
-    lw_shared_ptr<connected> _connected;
-    lw_shared_ptr<snapshots> _snapshots;
+    connected* _connected;
+    snapshots* _snapshots;
     bool _packet_drops;
     raft::server_address_set _known_peers;
     uint32_t _servers_added = 0;
     uint32_t _servers_removed = 0;
 public:
-    rpc(raft::server_id id, lw_shared_ptr<connected> connected, lw_shared_ptr<snapshots> snapshots,
+    rpc(raft::server_id id, connected* connected, snapshots* snapshots,
             bool packet_drops) : _id(id), _connected(connected), _snapshots(snapshots),
             _packet_drops(packet_drops) {
         net[_id] = this;
@@ -551,9 +551,9 @@ class raft_cluster {
         rpc* rpc;
     };
     std::vector<test_server> _servers;
-    lw_shared_ptr<connected> _connected;
-    lw_shared_ptr<snapshots> _snapshots;
-    lw_shared_ptr<persisted_snapshots> _persisted_snapshots;
+    std::unique_ptr<connected> _connected;
+    std::unique_ptr<snapshots> _snapshots;
+    std::unique_ptr<persisted_snapshots> _persisted_snapshots;
     size_t _apply_entries;
     size_t _next_val;
     bool _packet_drops;
@@ -613,14 +613,16 @@ private:
 raft_cluster::test_server raft_cluster::create_server(size_t id, initial_state state) {
 
     auto uuid = to_raft_id(id);
-    auto sm = std::make_unique<state_machine>(uuid, _apply, _apply_entries, _snapshots);
+    auto sm = std::make_unique<state_machine>(uuid, _apply, _apply_entries, _snapshots.get());
     auto& rsm = *sm;
 
-    auto mrpc = std::make_unique<rpc>(uuid, _connected, _snapshots, _packet_drops);
+    auto mrpc = std::make_unique<rpc>(uuid, _connected.get(), _snapshots.get(),
+            _packet_drops);
     auto& rpc_ref = *mrpc;
 
-    auto mpersistence = std::make_unique<persistence>(uuid, state, _snapshots, _persisted_snapshots);
-    auto fd = seastar::make_shared<failure_detector>(uuid, _connected);
+    auto mpersistence = std::make_unique<persistence>(uuid, state,
+            _snapshots.get(), _persisted_snapshots.get());
+    auto fd = seastar::make_shared<failure_detector>(uuid, _connected.get());
 
     auto raft = raft::create_server(uuid, std::move(mrpc), std::move(sm), std::move(mpersistence),
         std::move(fd), state.server_config);
@@ -636,9 +638,9 @@ raft_cluster::raft_cluster(test_case test,
         state_machine::apply_fn apply,
         size_t apply_entries, size_t first_val, size_t first_leader,
         bool prevote, bool packet_drops) :
-            _connected(make_lw_shared<struct connected>(test.nodes)),
-            _snapshots(make_lw_shared<snapshots>()),
-            _persisted_snapshots(make_lw_shared<persisted_snapshots>()),
+            _connected(std::make_unique<struct connected>(test.nodes)),
+            _snapshots(std::make_unique<snapshots>()),
+            _persisted_snapshots(std::make_unique<persisted_snapshots>()),
             _apply_entries(apply_entries),
             _next_val(first_val),
             _packet_drops(packet_drops),
