@@ -259,7 +259,7 @@ public:
                 }
             }
             auto descriptor = get_descriptor_for_level(i, last_compacted_keys, compaction_counter);
-            if (descriptor.sstables.size() > 0) {
+            if (!descriptor.sstables.empty()) {
                 return descriptor;
             }
         }
@@ -284,7 +284,7 @@ public:
                 continue;
             }
             auto descriptor = get_descriptor_for_level(i-1, last_compacted_keys, compaction_counter);
-            if (descriptor.sstables.size() > 0) {
+            if (!descriptor.sstables.empty()) {
                 return descriptor;
             }
         }

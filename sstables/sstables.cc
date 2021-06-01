@@ -687,7 +687,7 @@ future<> parse(const schema& s, sstable_version_types v, random_access_reader& i
                 return do_until([&eh, length] { return eh.buckets.size() == length; }, [&eh, &j, &buf] () mutable {
                     auto offset = net::ntoh(read_unaligned<uint64_t>(buf.get() + (j++) * sizeof(uint64_t)));
                     auto bucket = net::ntoh(read_unaligned<uint64_t>(buf.get() + (j++) * sizeof(uint64_t)));
-                    if (eh.buckets.size() > 0) {
+                    if (!eh.buckets.empty()) {
                         eh.bucket_offsets.push_back(offset);
                     }
                     eh.buckets.push_back(bucket);
