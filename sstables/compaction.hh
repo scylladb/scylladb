@@ -75,8 +75,8 @@ namespace sstables {
         };
         std::vector<replacement> pending_replacements;
 
-        bool is_stop_requested() const {
-            return stop_requested.size() > 0;
+        bool is_stop_requested() const noexcept {
+            return !stop_requested.empty();
         }
 
         void stop(sstring reason) {
