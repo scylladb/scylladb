@@ -36,24 +36,24 @@
 #include "sstables/sstables.hh"
 #include "cdc/cdc_extension.hh"
 #include "db/paxos_grace_seconds_extension.hh"
-
 #include "transport/messages/result_message.hh"
+#include "utils/overloaded_functor.hh"
+
+class dummy_ext : public schema_extension {
+public:
+    dummy_ext(bytes b) : _bytes(b) {}
+    dummy_ext(const std::map<sstring, sstring>& map) : _bytes(ser::serialize_to_buffer<bytes>(map)) {}
+    dummy_ext(const sstring&) {
+        throw std::runtime_error("should not reach");
+    }
+    bytes serialize() const override {
+        return _bytes;
+    }
+private:
+    bytes _bytes;
+};
 
 SEASTAR_TEST_CASE(simple_schema_extension) {
-    class dummy_ext : public schema_extension {
-    public:
-        dummy_ext(bytes b) : _bytes(b) {}
-        dummy_ext(const std::map<sstring, sstring>& map) : _bytes(ser::serialize_to_buffer<bytes>(map)) {}
-        dummy_ext(const sstring&) {
-            throw std::runtime_error("should not reach");
-        }
-        bytes serialize() const override {
-            return _bytes;
-        }
-    private:
-        bytes _bytes;
-    };
-
     auto ext = std::make_shared<db::extensions>();
     ext->add_schema_extension<dummy_ext>("los_lobos");
 
@@ -173,4 +173,50 @@ SEASTAR_TEST_CASE(paxos_grace_seconds_extension) {
 
         return f;
     }, cfg);
+}
+
+SEASTAR_TEST_CASE(test_extension_remove) {
+    auto ext = std::make_shared<db::extensions>();
+    ext->add_schema_extension("knas", [](db::extensions::schema_ext_config args) {
+        return std::visit(overloaded_functor {
+            [](const std::map<sstring, sstring>& map) -> shared_ptr<schema_extension> {
+                if (map.at("krakel") == "none") {
+                    return {};
+                }
+                return ::make_shared<dummy_ext>(map);
+            },
+            [](const sstring&) -> shared_ptr<schema_extension> {
+                throw std::runtime_error("should not reach");
+            },
+            [](const bytes& b) -> shared_ptr<schema_extension> {
+                return ::make_shared<dummy_ext>(b);
+            }
+        }, args);
+    });
+
+    /**
+     * Ensure we can create a table with the extension, and that it (and its data) is preserved
+     * by the schema creation (which serializes and deserializes mutations)
+     */
+    return do_with_cql_env([] (cql_test_env& e) {
+        return e.execute_cql("create table cf (id int primary key, value int) with knas = { 'krakel' : 'spektakel', 'ninja' : 'mission' };").discard_result().then([&e] {
+            auto& db = e.local_db();
+            auto& cf = db.find_column_family("ks", "cf");
+            auto s = cf.schema();
+            auto& ext = s->extensions().at("knas");
+
+            BOOST_REQUIRE(!ext->is_placeholder());
+            BOOST_CHECK_EQUAL(ext->serialize(), dummy_ext(std::map<sstring, sstring>{{"krakel", "spektakel"},{"ninja", "mission"}}).serialize());
+
+            // now remove it
+            return e.execute_cql("alter table cf with knas = { 'krakel' : 'none' };").discard_result().then([&e] {
+                auto& db = e.local_db();
+                auto& cf = db.find_column_family("ks", "cf");
+                auto s = cf.schema();
+                auto i = s->extensions().find("knas");
+                // should be gone.
+                BOOST_REQUIRE(i == s->extensions().end());
+            });
+        });
+    }, ::make_shared<db::config>(ext));
 }
