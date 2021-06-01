@@ -690,7 +690,7 @@ void manager::end_point_hints_manager::sender::update_segment_list(std::vector<s
     }
 }
 
-future<> manager::end_point_hints_manager::sender::wait_until_hints_are_replayed(time_point_type timeout, seastar::semaphore& flush_limiter) {
+future<> manager::end_point_hints_manager::sender::wait_until_hints_are_replayed(abort_source& as, seastar::semaphore& flush_limiter) {
     if (stopping()) {
         throw std::runtime_error("hints manager is stopped");
     }
@@ -709,19 +709,29 @@ future<> manager::end_point_hints_manager::sender::wait_until_hints_are_replayed
 
     const uint64_t replayed_segment_count_target = _total_replayed_segments_count + segments_to_replay_count;
     segment_waiter sw{replayed_segment_count_target};
-    future<> f = sw.pr.get_future();
-    _segment_waiters.push_back(std::move(sw), timeout);
+    future<> f = sw.get_future();
+    _segment_waiters.push_back(sw);
 
     manager_logger.debug("Waiting for hints towards {}: {} segments were replayed so far, waiting until we replay up to segment #{}",
             end_point_key(), _total_replayed_segments_count, replayed_segment_count_target);
 
     try {
+        as.check();
+        auto sub = as.subscribe([&sw] () noexcept {
+            sw.set_exception(std::make_exception_ptr(abort_requested_exception()));
+        });
+
         co_await std::move(f);
         manager_logger.debug("Successfully replayed hints towards {} up to segment #{}",
             end_point_key(), replayed_segment_count_target);
     } catch (...) {
         manager_logger.debug("Failed to replay hints towards {} up to segment #{}: {}",
             end_point_key(), replayed_segment_count_target, std::current_exception());
+
+        if (!as.abort_requested()) {
+            as.request_abort();
+        }
+
         throw;
     }
     co_return;
@@ -739,15 +749,15 @@ manager::end_point_hints_manager::sender::clock::duration manager::end_point_hin
 }
 
 void manager::end_point_hints_manager::sender::notify_segment_waiters() {
-    while (!_segment_waiters.empty() && _segment_waiters.front().target_segment_count <= _total_replayed_segments_count) {
-        _segment_waiters.front().pr.set_value();
+    while (!_segment_waiters.empty() && _segment_waiters.front().get_target_segment_count() <= _total_replayed_segments_count) {
+        _segment_waiters.front().set_done();
         _segment_waiters.pop_front();
     }
 }
 
 void manager::end_point_hints_manager::sender::dismiss_all_segment_waiters(std::exception_ptr ep) {
     while (!_segment_waiters.empty()) {
-        _segment_waiters.front().pr.set_exception(ep);
+        _segment_waiters.front().set_exception(ep);
         _segment_waiters.pop_front();
     }
 }
@@ -1116,12 +1126,12 @@ future<> manager::rebalance(sstring hints_directory) {
     });
 }
 
-future<> manager::wait_until_hints_are_replayed(const std::vector<gms::inet_address>& endpoints, time_point_type timeout) {
+future<> manager::wait_until_hints_are_replayed(abort_source& as, const std::vector<gms::inet_address>& endpoints) {
     const std::unordered_set<gms::inet_address> endpoints_set(endpoints.begin(), endpoints.end());
     seastar::semaphore flush_limiter{1};
     co_return co_await parallel_for_each(_ep_managers, [&] (auto& pair) {
         if (endpoints_set.contains(pair.first)) {
-            return pair.second.wait_until_hints_are_replayed(timeout, flush_limiter);
+            return pair.second.wait_until_hints_are_replayed(as, flush_limiter);
         }
         return make_ready_future<>();
     });

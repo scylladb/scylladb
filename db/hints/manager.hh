@@ -33,6 +33,8 @@
 #include <seastar/core/lowres_clock.hh>
 #include <seastar/core/shared_mutex.hh>
 #include <seastar/core/expiring_fifo.hh>
+#include <seastar/core/abort_source.hh>
+#include <boost/intrusive/list.hpp>
 #include "gms/gossiper.hh"
 #include "locator/snitch_base.hh"
 #include "inet_address_vectors.hh"
@@ -153,21 +155,47 @@ public:
             seastar::shared_mutex& _file_update_mutex;
             uint64_t _total_replayed_segments_count = 0;
 
-            struct segment_waiter {
-                const uint64_t target_segment_count;
-                promise<> pr;
+            struct segment_waiter : public boost::intrusive::list_base_hook<boost::intrusive::link_mode<boost::intrusive::auto_unlink>> {
+            private:
+                const uint64_t _target_segment_count;
+                std::optional<promise<>> _pr;
 
-                segment_waiter(uint64_t segment_count) : target_segment_count(segment_count) {}
+            public:
+                segment_waiter(uint64_t segment_count)
+                        : _target_segment_count(segment_count)
+                        , _pr(promise<>())
+                {}
+                // Not movable, not copyable
+                segment_waiter(segment_waiter&&) = delete;
+                segment_waiter(const segment_waiter&) = delete;
+                segment_waiter& operator=(segment_waiter&&) = delete;
+                segment_waiter& operator=(const segment_waiter&) = delete;
 
-                struct expirer {
-                    inline void operator()(segment_waiter& sw) const {
-                        sw.pr.set_exception(seastar::timed_out_error{});
+                uint64_t get_target_segment_count() const {
+                    return _target_segment_count;
+                }
+
+                future<> get_future() {
+                    return _pr->get_future();
+                }
+
+                void set_done() {
+                    if (_pr) {
+                        _pr->set_value();
+                        _pr.reset();
                     }
-                };
+                }
+
+                void set_exception(std::exception_ptr ep) {
+                    if (_pr) {
+                        _pr->set_exception(std::move(ep));
+                        _pr.reset();
+                    }
+                }
             };
 
             // A queue of promises which wait until a particular number of segments is replayed
-            seastar::expiring_fifo<segment_waiter, segment_waiter::expirer, timer_clock_type> _segment_waiters;
+            boost::intrusive::list<segment_waiter, boost::intrusive::constant_time_size<false>> _segment_waiters;
 
         public:
             sender(end_point_hints_manager& parent, service::storage_proxy& local_storage_proxy, database& local_db, gms::gossiper& local_gossiper) noexcept;
@@ -200,7 +228,9 @@ public:
             bool have_segments() const noexcept { return !_segments_to_replay.empty(); };
 
             /// \brief Waits until all current hints on disk for this endpoints are replayed, timeout is reached or hint replay becomes stuck.
-            future<> wait_until_hints_are_replayed(time_point_type timeout, seastar::semaphore& flush_limiter);
+            ///
+            /// Waiting can be aborted through provided abort_source.
+            future<> wait_until_hints_are_replayed(abort_source& as, seastar::semaphore& flush_limiter);
 
         private:
             /// \brief Send hints collected so far.
@@ -444,8 +474,8 @@ public:
         }
 
         /// \brief Waits until all current hints on disk for this endpoints are replayed or the timeout is reached.
-        future<> wait_until_hints_are_replayed(time_point_type timeout, seastar::semaphore& flush_limiter) {
-            return _sender.wait_until_hints_are_replayed(timeout, flush_limiter);
+        future<> wait_until_hints_are_replayed(abort_source& as, seastar::semaphore& flush_limiter) {
+            return _sender.wait_until_hints_are_replayed(as, flush_limiter);
         }
 
     private:
@@ -651,7 +681,7 @@ public:
     /// \brief Waits until all current hints on disk for given endpoints are replayed or the timeout is reached.
     /// \param endpoints list of endpoints whose hints need to be waited on
     /// \param timeout if hints are not replayed until the timeout, the function will return with an exception
-    future<> wait_until_hints_are_replayed(const std::vector<gms::inet_address>& endpoints, time_point_type timeout = time_point_type::max());
+    future<> wait_until_hints_are_replayed(abort_source& as, const std::vector<gms::inet_address>& endpoints);
 
 private:
     future<> compute_hints_dir_device_id();
