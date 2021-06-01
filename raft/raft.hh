@@ -53,8 +53,6 @@ using term_t = internal::tagged_uint64<struct term_tag>;
 // This type represensts the index into the raft log
 using index_t = internal::tagged_uint64<struct index_tag>;
 
-using clock_type = lowres_clock;
-
 // Opaque connection properties. May contain ip:port pair for instance.
 // This value is disseminated between cluster member
 // through regular log replication as part of a configuration
