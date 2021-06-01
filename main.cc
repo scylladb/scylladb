@@ -981,7 +981,8 @@ int main(int ac, char** av) {
             };
             proxy.start(std::ref(db), spcfg, std::ref(node_backlog),
                     scheduling_group_key_create(storage_proxy_stats_cfg).get0(),
-                    std::ref(feature_service), std::ref(token_metadata), std::ref(messaging)).get();
+                    std::ref(feature_service), std::ref(token_metadata), std::ref(messaging),
+                    std::ref(sync_point_svc)).get();
             // #293 - do not stop anything
             // engine().at_exit([&proxy] { return proxy.stop(); });
             supervisor::notify("starting migration manager");

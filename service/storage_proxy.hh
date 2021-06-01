@@ -90,6 +90,10 @@ namespace cdc {
     class cdc_service;    
 }
 
+namespace db::hints {
+    class sync_point_service;
+}
+
 namespace service {
 
 namespace paxos {
@@ -269,6 +273,7 @@ private:
     db::hints::manager _hints_manager;
     db::hints::directory_initializer _hints_directory_initializer;
     db::hints::manager _hints_for_views_manager;
+    db::hints::sync_point_service& _hints_sync_point_service;
     scheduling_group_key _stats_key;
     storage_proxy_stats::global_stats _global_stats;
     gms::feature_service& _features;
@@ -443,7 +448,8 @@ private:
     void retire_view_response_handlers(noncopyable_function<bool(const abstract_write_response_handler&)> filter_fun);
 public:
     storage_proxy(distributed<database>& db, config cfg, db::view::node_update_backlog& max_view_update_backlog,
-            scheduling_group_key stats_key, gms::feature_service& feat, const locator::shared_token_metadata& stm, netw::messaging_service& ms);
+            scheduling_group_key stats_key, gms::feature_service& feat, const locator::shared_token_metadata& stm, netw::messaging_service& ms,
+            db::hints::sync_point_service& hints_sync_point_service);
     ~storage_proxy();
     const distributed<database>& get_db() const {
         return _db;

@@ -58,6 +58,7 @@
 #include "db/config.hh"
 #include "db/batchlog_manager.hh"
 #include "db/hints/manager.hh"
+#include "db/hints/sync_point_service.hh"
 #include "db/system_keyspace.hh"
 #include "exceptions/exceptions.hh"
 #include <boost/range/algorithm_ext/push_back.hpp>
@@ -1788,7 +1789,8 @@ using namespace std::literals::chrono_literals;
 
 storage_proxy::~storage_proxy() {}
 storage_proxy::storage_proxy(distributed<database>& db, storage_proxy::config cfg, db::view::node_update_backlog& max_view_update_backlog,
-        scheduling_group_key stats_key, gms::feature_service& feat, const locator::shared_token_metadata& stm, netw::messaging_service& ms)
+        scheduling_group_key stats_key, gms::feature_service& feat, const locator::shared_token_metadata& stm, netw::messaging_service& ms,
+        db::hints::sync_point_service& hints_sync_point_service)
     : _db(db)
     , _shared_token_metadata(stm)
     , _read_smp_service_group(cfg.read_smp_service_group)
@@ -1800,6 +1802,7 @@ storage_proxy::storage_proxy(distributed<database>& db, storage_proxy::config cf
     , _hints_manager(_db.local().get_config().hints_directory(), cfg.hinted_handoff_enabled, _db.local().get_config().max_hint_window_in_ms(), _hints_resource_manager, _db)
     , _hints_directory_initializer(std::move(cfg.hints_directory_initializer))
     , _hints_for_views_manager(_db.local().get_config().view_hints_directory(), {}, _db.local().get_config().max_hint_window_in_ms(), _hints_resource_manager, _db)
+    , _hints_sync_point_service(hints_sync_point_service)
     , _stats_key(stats_key)
     , _features(feat)
     , _messaging(ms)
@@ -5266,9 +5269,11 @@ storage_proxy::query_nonsingular_data_locally(schema_ptr s, lw_shared_ptr<query:
 future<> storage_proxy::start_hints_manager(shared_ptr<gms::gossiper> gossiper_ptr) {
     future<> f = make_ready_future<>();
     if (!_hints_manager.is_disabled_for_all()) {
+        _hints_sync_point_service.register_manager(_hints_manager);
         f = _hints_resource_manager.register_manager(_hints_manager);
     }
     return f.then([this] {
+        _hints_sync_point_service.register_manager(_hints_for_views_manager);
         return _hints_resource_manager.register_manager(_hints_for_views_manager);
     }).then([this, gossiper_ptr] {
         return _hints_resource_manager.start(shared_from_this(), gossiper_ptr);
@@ -5287,7 +5292,8 @@ future<> storage_proxy::change_hints_host_filter(db::hints::host_filter new_filt
     return _hints_directory_initializer.ensure_created_and_verified().then([this] {
         return _hints_directory_initializer.ensure_rebalanced();
     }).then([this] {
-        // This function is idempotent
+        // These functions are idempotent
+        _hints_sync_point_service.register_manager(_hints_manager);
         return _hints_resource_manager.register_manager(_hints_manager);
     }).then([this, new_filter = std::move(new_filter)] () mutable {
         return _hints_manager.change_host_filter(std::move(new_filter));
@@ -5336,6 +5342,8 @@ future<> storage_proxy::drain_on_shutdown() {
     return async([this] {
         retire_view_response_handlers([] (const abstract_write_response_handler&) { return true; });
         _hints_resource_manager.stop().get();
+        _hints_sync_point_service.unregister_manager(_hints_manager);
+        _hints_sync_point_service.unregister_manager(_hints_for_views_manager);
     });
 }
 
