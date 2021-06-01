@@ -844,6 +844,28 @@ future<> gossiper::failure_detector_loop() {
                     return g.failure_detector_loop_for_node(node, generation_number, live_endpoints_version);
                 });
             });
+            for (;;) {
+                auto version =  _live_endpoints_version;
+                utils::chunked_vector<inet_address> nodes_down;
+                std::sort(nodes.begin(), nodes.end());
+                std::sort(_live_endpoints.begin(), _live_endpoints.end());
+                std::set_difference(nodes.begin(), nodes.end(), _live_endpoints.begin(), _live_endpoints.end(), std::back_inserter(nodes_down));
+                if (!nodes_down.empty()) {
+                    logger.debug("failure_detector_loop: previous_live_nodes={}, current_live_nodes={}, nodes_down={}",
+                            nodes, _live_endpoints, nodes_down);
+                    co_await seastar::async([this, &nodes_down] {
+                        for (const auto& node : nodes_down) {
+                            convict(node);
+                        }
+                    });
+                }
+                // Make sure _live_endpoints do not change when nodes_down are being convicted above. This guarantees no down nodes will miss the convict.
+                logger.debug("failure_detector_loop: previous_live_nodes={}, current_live_nodes={}, nodes_down={}, version_before={}, version_after={}",
+                        nodes, _live_endpoints, nodes_down, version, _live_endpoints_version);
+                if (version == _live_endpoints_version) {
+                    break;
+                }
+            }
         } catch (...) {
             logger.warn("failure_detector_loop: Got error in the loop, live_nodes={}: {}",
                     _live_endpoints, std::current_exception());
