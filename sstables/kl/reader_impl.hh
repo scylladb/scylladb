@@ -388,6 +388,7 @@ private:
             }
         case state::RANGE_TOMBSTONE_4:
         {
+            _sst->get_stats().on_range_tombstone_read();
             deletion_time del;
             del.local_deletion_time = _u32;
             del.marked_for_delete_at = _u64;

@@ -2881,6 +2881,8 @@ future<> init_metrics() {
             sm::description("Number of tombstones written")),
         sm::make_derive("range_tombstone_writes", [] { return sstables_stats::get_shard_stats().range_tombstone_writes; },
             sm::description("Number of range tombstones written")),
+        sm::make_derive("range_tombstone_reads", [] { return sstables_stats::get_shard_stats().range_tombstone_reads; },
+            sm::description("Number of range tombstones read")),
         sm::make_derive("cell_tombstone_writes", [] { return sstables_stats::get_shard_stats().cell_tombstone_writes; },
             sm::description("Number of cell tombstones written")),
         sm::make_derive("single_partition_reads", [] { return sstables_stats::get_shard_stats().single_partition_reads; },

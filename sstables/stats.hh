@@ -32,6 +32,7 @@ class sstables_stats {
         uint64_t row_writes = 0;
         uint64_t tombstone_writes = 0;
         uint64_t range_tombstone_writes = 0;
+        uint64_t range_tombstone_reads = 0;
         uint64_t cell_writes = 0;
         uint64_t cell_tombstone_writes = 0;
         uint64_t single_partition_reads = 0;
@@ -73,6 +74,10 @@ public:
 
     inline void on_range_tombstone_write() noexcept {
         ++_stats.range_tombstone_writes;
+    }
+
+    inline void on_range_tombstone_read() noexcept {
+        ++_stats.range_tombstone_reads;
     }
 
     inline void on_cell_write() noexcept {

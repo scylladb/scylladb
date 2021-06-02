@@ -864,6 +864,7 @@ private:
                     throw sstables::malformed_sstable_exception(
                         format("Corrupted range tombstone: invalid boundary type {}", _range_tombstone_kind));
                 }
+                _sst->get_stats().on_range_tombstone_read();
                 if (_consumer.consume_range_tombstone(_row_key,
                                                       to_bound_kind(_range_tombstone_kind),
                                                       _left_range_tombstone) == consumer_m::proceed::no) {
@@ -885,6 +886,7 @@ private:
                 break;
             }
         case state::RANGE_TOMBSTONE_BODY_LOCAL_DELTIME2:
+            _sst->get_stats().on_range_tombstone_read();
             _right_range_tombstone.deletion_time = parse_expiry(_header, _u64);
             if (_consumer.consume_range_tombstone(_row_key,
                                                   _range_tombstone_kind,
