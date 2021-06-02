@@ -16,6 +16,7 @@
 # along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
 
 import configparser
+import glob
 import io
 import json
 import logging
@@ -156,22 +157,13 @@ class gcp_instance:
         return curl(self.META_DATA_BASE_URL + path + "?recursive=%s" % str(recursive).lower(),
                     headers={"Metadata-Flavor": "Google"})
 
-    def is_in_root_devs(self, x, root_devs):
-        for root_dev in root_devs:
-            if root_dev.startswith(os.path.join("/dev/", x)):
-                return True
-        return False
-
     def _non_root_nvmes(self):
-        """get list of nvme disks from os, filter away if one of them is root"""
-        nvme_re = re.compile(r"nvme\d+n\d+$")
-
+        """get list of nvme disks from os, filter away all that are root"""
+        nvme_re = re.compile(r"/dev/nvme\d+n\d+$")
         root_dev_candidates = [x for x in psutil.disk_partitions() if x.mountpoint == "/"]
-
         root_devs = [x.device for x in root_dev_candidates]
-
-        nvmes_present = list(filter(nvme_re.match, os.listdir("/dev")))
-        return {self.ROOT: root_devs, self.EPHEMERAL: [x for x in nvmes_present if not self.is_in_root_devs(x, root_devs)]}
+        nvmes_present = list(filter(nvme_re.match, glob.glob("/dev/nvme*")))
+        return {self.ROOT: root_devs, self.EPHEMERAL: [x for x in nvmes_present if not x in root_devs]}
 
     @property
     def os_disks(self):
