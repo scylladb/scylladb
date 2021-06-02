@@ -804,7 +804,7 @@ public:
 
     db::replay_position set_low_replay_position_mark();
 
-    future<> snapshot(database& db, sstring name);
+    future<> snapshot(database& db, sstring name, bool skip_flush = false);
     future<std::unordered_map<sstring, snapshot_details>> get_snapshot_details();
 
     /*!
