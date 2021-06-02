@@ -200,7 +200,7 @@ mutation_partition::mutation_partition(mutation_partition&& x, const schema& sch
     , _static_row(std::move(x._static_row))
     , _static_row_continuous(x._static_row_continuous)
     , _rows(std::move(x._rows))
-    , _row_tombstones(std::move(x._row_tombstones))
+    , _row_tombstones(schema)
 #ifdef SEASTAR_DEBUG
     , _schema_version(schema.version())
 #endif
@@ -220,16 +220,14 @@ mutation_partition::mutation_partition(mutation_partition&& x, const schema& sch
     {
         range_tombstone_list::const_iterator it = _row_tombstones.begin();
         for (auto&& range : ck_ranges.ranges()) {
-            auto rt_range = _row_tombstones.slice(schema, range);
-            // upper bound for previous range may be after lower bound for the next range
-            // if both ranges are connected through a range tombstone. In this case the
-            // erase range would be invalid.
-            if (rt_range.begin() == _row_tombstones.end() || std::next(rt_range.begin()) != it) {
-                _row_tombstones.erase(it, rt_range.begin());
+            for (auto&& x_rt : x._row_tombstones.slice(schema, range)) {
+                auto rt = x_rt;
+                rt.trim(schema,
+                        position_in_partition_view::for_range_start(range),
+                        position_in_partition_view::for_range_end(range));
+                _row_tombstones.apply(schema, std::move(rt));
             }
-            it = rt_range.end();
         }
-        _row_tombstones.erase(it, _row_tombstones.end());
     }
 }
 
