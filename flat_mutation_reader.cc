@@ -35,6 +35,7 @@
 #include <seastar/util/defer.hh>
 #include "utils/exceptions.hh"
 #include "mutation_rebuilder.hh"
+#include "range_tombstone_splitter.hh"
 #include <seastar/core/on_internal_error.hh>
 
 #include "clustering_key_filter.hh"
@@ -934,31 +935,40 @@ flat_mutation_reader
 make_flat_mutation_reader_from_fragments(schema_ptr schema, reader_permit permit, std::deque<mutation_fragment> fragments,
         const dht::partition_range& pr, const query::partition_slice& slice) {
     std::optional<clustering_ranges_walker> ranges_walker;
-    for (auto it = fragments.begin(); it != fragments.end();) {
-        switch (it->mutation_fragment_kind()) {
+    std::optional<range_tombstone_splitter> splitter;
+    std::deque<mutation_fragment> filtered;
+    for (auto&& mf : fragments) {
+        switch (mf.mutation_fragment_kind()) {
             case mutation_fragment::kind::partition_start:
-                ranges_walker.emplace(*schema, slice.row_ranges(*schema, it->as_partition_start().key().key()), false);
-            case mutation_fragment::kind::static_row: // fall-through
-            case mutation_fragment::kind::partition_end: // fall-through
-                ++it;
+                ranges_walker.emplace(*schema, slice.row_ranges(*schema, mf.as_partition_start().key().key()), false);
+                splitter.emplace(*schema, permit, *ranges_walker);
+                filtered.emplace_back(std::move(mf));
+                break;
+            case mutation_fragment::kind::static_row:
+                filtered.push_back(std::move(mf));
+                break;
+            case mutation_fragment::kind::partition_end:
+                splitter->flush(position_in_partition::after_all_clustered_rows(), [&] (mutation_fragment mf) {
+                    filtered.emplace_back(std::move(mf));
+                });
+                filtered.push_back(std::move(mf));
                 break;
             case mutation_fragment::kind::clustering_row:
-                if (ranges_walker->advance_to(it->position())) {
-                    ++it;
-                } else {
-                    it = fragments.erase(it);
+                splitter->flush(mf.position(), [&] (mutation_fragment mf) {
+                    filtered.emplace_back(std::move(mf));
+                });
+                if (ranges_walker->advance_to(mf.position())) {
+                    filtered.push_back(std::move(mf));
                 }
                 break;
             case mutation_fragment::kind::range_tombstone:
-                if (ranges_walker->advance_to(it->as_range_tombstone().position(), it->as_range_tombstone().end_position())) {
-                    ++it;
-                } else {
-                    it = fragments.erase(it);
-                }
+                splitter->consume(std::move(mf).as_range_tombstone(), [&] (mutation_fragment mf) {
+                    filtered.emplace_back(std::move(mf));
+                });
                 break;
         }
     }
-    return make_flat_mutation_reader_from_fragments(std::move(schema), std::move(permit), std::move(fragments), pr);
+    return make_flat_mutation_reader_from_fragments(std::move(schema), std::move(permit), std::move(filtered), pr);
 }
 
 /*
