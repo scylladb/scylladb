@@ -584,6 +584,8 @@ raft_cluster::raft_cluster(std::vector<initial_state> states, state_machine::app
 future<> raft_cluster::stop_server(size_t id) {
     cancel_ticker(id);
     co_await _servers[id].server->abort();
+    _snapshots->erase(to_raft_id(id));
+    _persisted_snapshots->erase(to_raft_id(id));
 }
 
 // Reset previously stopped server
