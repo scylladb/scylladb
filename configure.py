@@ -1138,7 +1138,6 @@ pure_boost_tests = set([
     'test/boost/cartesian_product_test',
     'test/boost/checksum_utils_test',
     'test/boost/chunked_vector_test',
-    'test/boost/compound_test',
     'test/boost/compress_test',
     'test/boost/cql_auth_syntax_test',
     'test/boost/crc_test',
