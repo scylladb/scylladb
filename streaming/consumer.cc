@@ -39,6 +39,8 @@ std::function<future<> (flat_mutation_reader)> make_streaming_consumer(sstring o
         stream_reason reason,
         sstables::offstrategy offstrategy) {
     return [&db, &sys_dist_ks, &vug, estimated_partitions, reason, offstrategy, origin = std::move(origin)] (flat_mutation_reader reader) -> future<> {
+        std::exception_ptr ex;
+        try {
             auto cf = db.local().find_column_family(reader.schema()).shared_from_this();
             auto use_view_update_path = co_await db::view::check_needs_view_update_path(sys_dist_ks.local(), *cf, reason);
             //FIXME: for better estimations this should be transmitted from remote
@@ -47,7 +49,14 @@ std::function<future<> (flat_mutation_reader)> make_streaming_consumer(sstring o
             const auto adjusted_estimated_partitions = cs.adjust_partition_estimate(metadata, estimated_partitions);
             auto consumer = cs.make_interposer_consumer(metadata,
                     [cf = std::move(cf), adjusted_estimated_partitions, use_view_update_path, &vug, origin = std::move(origin), offstrategy, reason] (flat_mutation_reader reader) {
-                sstables::shared_sstable sst = use_view_update_path ? cf->make_streaming_staging_sstable() : cf->make_streaming_sstable_for_write();
+                sstables::shared_sstable sst;
+                try {
+                    sst = use_view_update_path ? cf->make_streaming_staging_sstable() : cf->make_streaming_sstable_for_write();
+                } catch (...) {
+                    return current_exception_as_future().finally([reader = std::move(reader)] () mutable {
+                        return reader.close();
+                    });
+                }
                 schema_ptr s = reader.schema();
                 auto& pc = service::get_local_streaming_priority();
 
@@ -70,6 +79,13 @@ std::function<future<> (flat_mutation_reader)> make_streaming_consumer(sstring o
                 });
             });
             co_return co_await consumer(std::move(reader));
+        } catch (...) {
+            ex = std::current_exception();
+        }
+        if (ex) {
+            co_await reader.close();
+            std::rethrow_exception(std::move(ex));
+        }
     };
 }
 
