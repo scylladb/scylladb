@@ -114,6 +114,11 @@ private:
         return removenode_total_ranges == 0 ? 1 : float(removenode_finished_ranges) / float(removenode_total_ranges);
     }
     float repair_finished_percentage();
+public:
+    void init() {
+        // Dummy function to call during startup to initialize the thread local
+        // variable node_ops_metrics _node_ops_metrics below.
+    }
 };
 
 static thread_local node_ops_metrics _node_ops_metrics;
@@ -1910,8 +1915,14 @@ future<> repair_service::replace_with_repair(locator::token_metadata_ptr tmptr, 
     co_return co_await do_rebuild_replace_with_repair(std::move(cloned_tmptr), std::move(op), std::move(source_dc), reason);
 }
 
+future<> repair_service::init_metrics() {
+    _node_ops_metrics.init();
+    return make_ready_future<>();
+}
+
 future<> repair_service::init_ms_handlers() {
     auto& ms = this->_messaging;
+
 
     ms.register_node_ops_cmd([] (const rpc::client_info& cinfo, node_ops_cmd_request req) {
         auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");

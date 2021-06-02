@@ -59,6 +59,8 @@ class repair_service : public seastar::peering_sharded_service<repair_service> {
     future<> init_row_level_ms_handlers();
     future<> uninit_row_level_ms_handlers();
 
+    future<> init_metrics();
+
 public:
     repair_service(distributed<gms::gossiper>& gossiper,
             netw::messaging_service& ms,
