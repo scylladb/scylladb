@@ -3447,7 +3447,7 @@ public:
         return _used_targets;
     }
 
-protected:
+private:
     future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>> make_mutation_data_request(lw_shared_ptr<query::read_command> cmd, gms::inet_address ep, clock_type::time_point timeout) {
         ++_proxy->get_stats().mutation_data_read_attempts.get_ep_stat(ep);
         if (fbu::is_me(ep)) {
@@ -3496,6 +3496,8 @@ protected:
             });
         }
     }
+
+protected:
     future<> make_mutation_data_requests(lw_shared_ptr<query::read_command> cmd, data_resolver_ptr resolver, targets_iterator begin, targets_iterator end, clock_type::time_point timeout) {
         return parallel_for_each(begin, end, [this, &cmd, resolver = std::move(resolver), timeout] (gms::inet_address ep) {
             return make_mutation_data_request(cmd, ep, timeout).then_wrapped([this, resolver, ep] (future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>> f) {
