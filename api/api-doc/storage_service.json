@@ -637,6 +637,14 @@
                      "allowMultiple":false,
                      "type":"string",
                      "paramType":"query"
+                  },
+                  {
+                     "name":"sf",
+                     "description":"Skip flush. When set to \"true\", do not flush memtables before snapshotting (snapshot will not contain unflushed data)",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"boolean",
+                     "paramType":"query"
                   }
                ]
             },
