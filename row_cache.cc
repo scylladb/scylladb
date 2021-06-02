@@ -135,6 +135,8 @@ cache_tracker::setup_metrics() {
             sm::description("total number of rows in memtables which were dropped during cache update on memtable flush")),
         sm::make_derive("rows_merged_from_memtable", _stats.rows_merged_from_memtable,
             sm::description("total number of rows in memtables which were merged with existing rows during cache update on memtable flush")),
+        sm::make_derive("range_tombstone_reads", _stats.range_tombstone_reads,
+            sm::description("total amount of range tombstones processed during read")),
     });
 }
 
