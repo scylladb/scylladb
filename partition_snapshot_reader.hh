@@ -251,8 +251,11 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
                 position_in_partition::less_compare rt_less(_schema);
                 while (has_more_range_tombstones() && !rt_less(pos, peek_range_tombstone().position())) {
                     range_tombstone rt = pop_range_tombstone();
-                    rt.trim_front(_schema, position_in_partition_view::for_range_start(ck_range));
-                    _rt_stream.apply(std::move(rt));
+                    if (rt.trim(_schema,
+                                position_in_partition_view::for_range_start(ck_range),
+                                position_in_partition_view::for_range_end(ck_range))) {
+                        _rt_stream.apply(std::move(rt));
+                    }
                 }
 
                 return _rt_stream.get_next(std::move(pos));
