@@ -310,6 +310,7 @@ future<> gossiper::handle_ack_msg(msg_addr id, gossip_digest_ack ack_msg) {
 
     auto f = make_ready_future<>();
     if (ep_state_map.size() > 0) {
+        update_timestamp_for_nodes(ep_state_map);
         f = this->apply_state_locally(std::move(ep_state_map));
     }
 
@@ -401,6 +402,7 @@ future<> gossiper::handle_ack2_msg(msg_addr from, gossip_digest_ack2 msg) {
     msg_proc_guard mp(*this);
 
     auto& remote_ep_state_map = msg.get_endpoint_state_map();
+    update_timestamp_for_nodes(remote_ep_state_map);
     return apply_state_locally(std::move(remote_ep_state_map)).finally([mp = std::move(mp)] {});
 }
 
@@ -1460,6 +1462,32 @@ int gossiper::compare_endpoint_startup(inet_address addr1, inet_address addr2) {
         throw std::runtime_error(err);
     }
     return ep1->get_heart_beat_state().get_generation() - ep2->get_heart_beat_state().get_generation();
+}
+
+void gossiper::update_timestamp_for_nodes(const std::map<inet_address, endpoint_state>& map) {
+    for (const auto& x : map) {
+        const gms::inet_address& endpoint = x.first;
+        const endpoint_state& remote_endpoint_state = x.second;
+        auto* local_endpoint_state = get_endpoint_state_for_endpoint_ptr(endpoint);
+        if (local_endpoint_state) {
+            bool update = false;
+            int local_generation = local_endpoint_state->get_heart_beat_state().get_generation();
+            int remote_generation = remote_endpoint_state.get_heart_beat_state().get_generation();
+            if (remote_generation > local_generation) {
+                update = true;
+            } else if (remote_generation == local_generation) {
+                int local_version = get_max_endpoint_state_version(*local_endpoint_state);
+                int remote_version = remote_endpoint_state.get_heart_beat_state().get_heart_beat_version();
+                if (remote_version > local_version) {
+                    update = true;
+                }
+            }
+            if (update) {
+                logger.trace("Updated timestamp for node {}", endpoint);
+                local_endpoint_state->update_timestamp();
+            }
+        }
+    }
 }
 
 // Runs inside seastar::async context
