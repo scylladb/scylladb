@@ -3787,7 +3787,10 @@ class scylla_smp_queues(gdb.Command):
         self.queues = set()
 
     def _init(self):
-        qs = std_unique_ptr(gdb.parse_and_eval('seastar::smp::_qs')).get()
+        qs = gdb.parse_and_eval('seastar::smp::_qs')
+        if qs.type.code != gdb.TYPE_CODE_PTR:
+            # older Seastar use std::unique_ptr for this variable
+            qs = std_unique_ptr(qs).get()
         for i in range(cpus()):
             for j in range(cpus()):
                 self.queues.add(int(qs[i][j].address))
