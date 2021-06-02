@@ -3012,6 +3012,7 @@ repair_service::repair_service(distributed<gms::gossiper>& gossiper,
 
 future<> repair_service::start() {
     return when_all_succeed(
+            init_metrics(),
             init_ms_handlers(),
             init_row_level_ms_handlers()
     ).discard_result();
