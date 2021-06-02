@@ -7066,10 +7066,11 @@ SEASTAR_TEST_CASE(stcs_reshape_test) {
         auto s = ss.schema();
         std::vector<shared_sstable> sstables;
         sstables.reserve(s->max_compaction_threshold());
+        auto key_and_token_pair = token_generation_for_current_shard(s->max_compaction_threshold() + 2);
         for (auto gen = 1; gen <= s->max_compaction_threshold(); gen++) {
             auto sst = env.make_sstable(s, "", gen);
             sstables::test(sst).set_data_file_size(1);
-            sstables::test(sst).set_values("first_key", "last_key", stats_metadata{});
+            sstables::test(sst).set_values(key_and_token_pair[gen - 1].first, key_and_token_pair[gen + 1].first, stats_metadata{});
             sstables.push_back(std::move(sst));
         }
 
