@@ -162,8 +162,8 @@ public:
         return t;
     }
 
-    range_tombstone delete_range(mutation& m, const query::clustering_range& range) {
-        auto rt = make_range_tombstone(range);
+    range_tombstone delete_range(mutation& m, const query::clustering_range& range, tombstone t = {}) {
+        auto rt = make_range_tombstone(range, t);
         m.partition().apply_delete(*_s, rt);
         return rt;
     }
