@@ -501,19 +501,23 @@ Unable to access thread-local variables. Example:
 The first step in finding out why thread debugging doesn't work is enabling
 additional information about why thread debugging is not working:
 
-    (gdb) set debug libthread 1
+    (gdb) set debug libthread-db 1
 
 This has to be done right after starting GDB, *before* the core and the
-executable are loaded.
+executable are loaded. You can do this by adding
+`-iex "set debug libthread-db 1"` to your gdb command line.
 
 The usual cause is that GDB failed to find some libraries or that the library
 versions of those libraries GDB loaded don't match those the core was generated
 with.
 
 Of special note is the `libthread_db.so` library, which is crucial for
-thread debugging to work. This library will not appear in any library listing
-(see below) and GDB requires the path it can be found at to be declared safe to
-load from. You might see a message like this:
+thread debugging to work. Common causes of failing to find or load this library
+are discussed below.
+
+##### Loading denied by auto-load safe-path
+
+You might see a message like this:
 
     warning: File "/opt/scylladb/libreloc/libthread_db.so.1" auto-loading has been declined by your `auto-load safe-path' set to "$debugdir:$datadir/auto-load"
     thread_db_load_search returning 0
@@ -527,6 +531,26 @@ as the path to declare your entire file-system as safe to load stuff from.
 Note that `libthread_db.so` is packaged together with `libc`. So if you have the
 build-id appropriate `libc` package, you can be sure you have the correct
 `libthread_db.so` too.
+
+##### Missing debug symbols for glibc
+
+If you see a message like this:
+
+    warning: Expected absolute pathname for libpthread in the inferior, but got .gnu_debugdata for /lib64/libpthread.so.0.
+    Trying host libthread_db library: /lib64/libthread_db.so.1.
+    td_ta_new failed: application not linked with libthread
+    thread_db_load_search returning 0
+
+Installing debug symbols for glibc might solve this. This issue was seen on
+Fedora 34, for more details see the
+[bug report](https://bugzilla.redhat.com/show_bug.cgi?id=1960867).
+Debug symbols can be installed with:
+
+    sudo dnf debuginfo-install glibc-2.32-6.fc33.x86_64
+
+Adjust for the exact version you have installed.
+
+##### Missing critical shared libraries
 
 If you ensured `libthread_db.so` is present and is successfully loaded by GDB
 but thread debugging still doesn't work, inspect the other libraries loaded by
