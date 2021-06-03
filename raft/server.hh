@@ -123,8 +123,8 @@ public:
     // Ad hoc functions for testing
     virtual void wait_until_candidate() = 0;
     virtual future<> wait_election_done() = 0;
-    virtual future<> wait_log_idx(index_t) = 0;
-    virtual index_t log_last_idx() = 0;
+    virtual future<> wait_log_idx_term(std::pair<index_t, term_t> idx_log) = 0;
+    virtual std::pair<index_t, term_t> log_last_idx_term() = 0;
     virtual void elapse_election() = 0;
     virtual bool is_leader() = 0;
     virtual void tick() = 0;

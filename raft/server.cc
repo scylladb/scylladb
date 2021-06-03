@@ -69,8 +69,8 @@ public:
     future<> read_barrier() override;
     void wait_until_candidate() override;
     future<> wait_election_done() override;
-    future<> wait_log_idx(index_t) override;
-    index_t log_last_idx();
+    future<> wait_log_idx_term(std::pair<index_t, term_t> idx_log) override;
+    std::pair<index_t, term_t> log_last_idx_term();
     void elapse_election() override;
     bool is_leader() override;
     void tick() override;
@@ -771,14 +771,14 @@ future<> server_impl::wait_election_done() {
     };
 }
 
-future<> server_impl::wait_log_idx(index_t idx) {
-    while (_fsm->log_last_idx() < idx) {
+future<> server_impl::wait_log_idx_term(std::pair<index_t, term_t> idx_log) {
+    while (_fsm->log_last_term() < idx_log.second || _fsm->log_last_idx() < idx_log.first) {
         co_await seastar::sleep(5us);
     }
 }
 
-index_t server_impl::log_last_idx() {
-    return _fsm->log_last_idx();
+std::pair<index_t, term_t> server_impl::log_last_idx_term() {
+    return {_fsm->log_last_idx(), _fsm->log_last_term()};
 }
 
 bool server_impl::is_leader() {

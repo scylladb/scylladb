@@ -817,26 +817,26 @@ size_t apply_changes(raft::server_id id, const std::vector<raft::command_cref>& 
 future<> raft_cluster::wait_log(size_t follower) {
     if ((*_connected)(to_raft_id(_leader), to_raft_id(follower)) &&
            _in_configuration.contains(_leader) && _in_configuration.contains(follower)) {
-        auto leader_log_idx = _servers[_leader].server->log_last_idx();
-        co_await _servers[follower].server->wait_log_idx(leader_log_idx);
+        auto leader_log_idx_term = _servers[_leader].server->log_last_idx_term();
+        co_await _servers[follower].server->wait_log_idx_term(leader_log_idx_term);
     }
 }
 
 // Wait for leader log to propagate to specified followers
 future<> raft_cluster::wait_log(::wait_log followers) {
-    auto leader_log_idx = _servers[_leader].server->log_last_idx();
+    auto leader_log_idx_term = _servers[_leader].server->log_last_idx_term();
     for (auto s: followers.local_ids) {
-        co_await _servers[s].server->wait_log_idx(leader_log_idx);
+        co_await _servers[s].server->wait_log_idx_term(leader_log_idx_term);
     }
 }
 
 // Wait for all connected followers to catch up
 future<> raft_cluster::wait_log_all() {
-    auto leader_log_idx = _servers[_leader].server->log_last_idx();
+    auto leader_log_idx_term = _servers[_leader].server->log_last_idx_term();
     for (size_t s = 0; s < _servers.size(); ++s) {
         if (s != _leader && (*_connected)(to_raft_id(s), to_raft_id(_leader)) &&
                 _in_configuration.contains(s)) {
-            co_await _servers[s].server->wait_log_idx(leader_log_idx);
+            co_await _servers[s].server->wait_log_idx_term(leader_log_idx_term);
         }
     }
 }
