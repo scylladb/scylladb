@@ -309,7 +309,7 @@ flat_mutation_reader read_context::create_reader(
 
     // The reader is either in inexistent or successful lookup state.
     if (rm.state == reader_state::successful_lookup) {
-        if (auto reader_opt = try_resume(std::move(*rm.rparts->handle))) {
+        if (auto reader_opt = semaphore().unregister_inactive_read(std::move(*rm.rparts->handle))) {
             rm.state = reader_state::used;
             return std::move(*reader_opt);
         }
@@ -545,7 +545,7 @@ future<> read_context::lookup_readers() {
                         reinterpret_cast<uintptr_t>(&semaphore)));
             }
 
-            auto handle = pause(semaphore, std::move(q).reader());
+            auto handle = semaphore.register_inactive_read(std::move(q).reader());
             return reader_meta(
                     reader_state::successful_lookup,
                     reader_meta::remote_parts(q.permit(), std::move(q).reader_range(), std::move(q).reader_slice(), table.read_in_progress(),

@@ -1967,21 +1967,6 @@ future<> multishard_combining_reader::close() noexcept {
     });
 }
 
-reader_concurrency_semaphore::inactive_read_handle
-reader_lifecycle_policy::pause(reader_concurrency_semaphore& sem, flat_mutation_reader reader) {
-    return sem.register_inactive_read(std::move(reader));
-}
-
-reader_concurrency_semaphore::inactive_read_handle
-reader_lifecycle_policy::pause(flat_mutation_reader reader) {
-    return pause(semaphore(), std::move(reader));
-}
-
-flat_mutation_reader_opt
-reader_lifecycle_policy::try_resume(reader_concurrency_semaphore::inactive_read_handle irh) {
-    return semaphore().unregister_inactive_read(std::move(irh));
-}
-
 flat_mutation_reader make_multishard_combining_reader(
         shared_ptr<reader_lifecycle_policy> lifecycle_policy,
         schema_ptr schema,

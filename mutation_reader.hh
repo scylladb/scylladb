@@ -442,11 +442,6 @@ public:
         flat_mutation_reader::tracked_buffer unconsumed_fragments;
     };
 
-protected:
-    // Helpers for implementations, who might wish to provide the semaphore in
-    // other ways than through the official `semaphore()` override.
-    static reader_concurrency_semaphore::inactive_read_handle pause(reader_concurrency_semaphore& sem, flat_mutation_reader reader);
-
 public:
     /// Create an appropriate reader on the shard it is called on.
     ///
@@ -486,26 +481,6 @@ public:
     ///
     /// This method will be called on the shard where the relevant reader lives.
     virtual reader_concurrency_semaphore& semaphore() = 0;
-
-    /// Pause the reader.
-    ///
-    /// The purpose of pausing a reader is making it evictable while it is
-    /// otherwise inactive. This allows freeing up resources that are in-demand
-    /// by evicting these paused readers. Most notably, this allows freeing up
-    /// reader permits when the node is overloaded with reads.
-    /// This is just a helper method, it uses the semaphore returned by
-    /// `semaphore()` for the actual pausing.
-    /// \see semaphore()
-    reader_concurrency_semaphore::inactive_read_handle pause(flat_mutation_reader reader);
-
-    /// Try to resume the reader.
-    ///
-    /// The optional returned will be disengaged when resuming fails. This can
-    /// happen if the reader was evicted while paused.
-    /// This is just a helper method, it uses the semaphore returned by
-    /// `semaphore()` for the actual pausing.
-    /// \see semaphore()
-    flat_mutation_reader_opt try_resume(reader_concurrency_semaphore::inactive_read_handle irh);
 };
 
 /// Make a multishard_combining_reader.
