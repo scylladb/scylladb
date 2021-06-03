@@ -818,7 +818,7 @@ bool has_supporting_index(
         const secondary_index::secondary_index_manager& index_manager,
         allow_local_index allow_local) {
     const auto indexes = index_manager.list_indexes();
-    const auto support = std::bind(is_supported_by, expr, std::placeholders::_1);
+    const auto support = std::bind(is_supported_by, std::ref(expr), std::placeholders::_1);
     return allow_local ? boost::algorithm::any_of(indexes, support)
             : boost::algorithm::any_of(
                     indexes | filtered([] (const secondary_index::index& i) { return !i.metadata().local(); }),
