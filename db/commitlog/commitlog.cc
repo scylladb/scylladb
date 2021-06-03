@@ -1469,6 +1469,8 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
                 }
             }
         }
+
+        f = make_checked_file(commit_error_handler, std::move(f));
     } catch (...) {
         ep = std::current_exception();
         commit_error_handler(ep);
@@ -1698,13 +1700,22 @@ future<> db::commitlog::segment_manager::shutdown() {
         // Wait for all pending requests to finish. Need to sync first because segments that are
         // alive may be holding semaphore permits.
         auto block_new_requests = get_units(_request_controller, max_request_controller_units());
-        return sync_all_segments().then([this, block_new_requests = std::move(block_new_requests)] () mutable {
+        return sync_all_segments().then_wrapped([this, block_new_requests = std::move(block_new_requests)] (future<> f) mutable {
+            if (f.failed()) {
+                clogger.error("Syncing all segments failed during shutdown: {}. Aborting.", f.get_exception());
+                abort();
+            }
             return std::move(block_new_requests).then([this] (auto permits) {
                 _timer.cancel(); // no more timer calls
                 _shutdown = true; // no re-arm, no create new segments.
                 // Now first wait for periodic task to finish, then sync and close all
                 // segments, flushing out any remaining data.
-                return _gate.close().then(std::bind(&segment_manager::shutdown_all_segments, this)).finally([permits = std::move(permits)] { });
+                return _gate.close().finally([this, permits = std::move(permits)] () mutable {
+                    return shutdown_all_segments().handle_exception([permits = std::move(permits)] (std::exception_ptr ex) {
+                        clogger.error("Shutting down all segments failed during shutdown: {}. Aborting.", ex);
+                        abort();
+                    });
+                });
             });
         }).finally([this] {
             discard_unused_segments();
