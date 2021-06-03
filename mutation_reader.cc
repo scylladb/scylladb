@@ -1571,7 +1571,7 @@ namespace {
 // Although it implements the flat_mutation_reader:impl interface it cannot be
 // wrapped into a flat_mutation_reader, as it needs to be managed by a shared
 // pointer.
-class shard_reader : public enable_lw_shared_from_this<shard_reader>, public flat_mutation_reader::impl {
+class shard_reader : public flat_mutation_reader::impl {
 private:
     shared_ptr<reader_lifecycle_policy> _lifecycle_policy;
     const unsigned _shard;
@@ -1707,7 +1707,7 @@ future<> shard_reader::do_fill_buffer(db::timeout_clock::time_point timeout) {
         });
     }
 
-    return fill_buf_fut.then([this, zis = shared_from_this()] (remote_fill_buffer_result res) mutable {
+    return fill_buf_fut.then([this] (remote_fill_buffer_result res) mutable {
         _end_of_stream = res.end_of_stream;
         for (const auto& mf : *res.buffer) {
             push_mutation_fragment(mutation_fragment(*_schema, _permit, mf));
@@ -1788,7 +1788,7 @@ class multishard_combining_reader : public flat_mutation_reader::impl {
     };
 
     const dht::sharder& _sharder;
-    std::vector<lw_shared_ptr<shard_reader>> _shard_readers;
+    std::vector<std::unique_ptr<shard_reader>> _shard_readers;
     // Contains the position of each shard with token granularity, organized
     // into a min-heap. Used to select the shard with the smallest token each
     // time a shard reader produces a new partition.
@@ -1917,7 +1917,7 @@ multishard_combining_reader::multishard_combining_reader(
 
     _shard_readers.reserve(_sharder.shard_count());
     for (unsigned i = 0; i < _sharder.shard_count(); ++i) {
-        _shard_readers.emplace_back(make_lw_shared<shard_reader>(_schema, _permit, lifecycle_policy, i, pr, ps, pc, trace_state, fwd_mr));
+        _shard_readers.emplace_back(std::make_unique<shard_reader>(_schema, _permit, lifecycle_policy, i, pr, ps, pc, trace_state, fwd_mr));
     }
 }
 
@@ -1952,7 +1952,7 @@ future<> multishard_combining_reader::fast_forward_to(const dht::partition_range
     clear_buffer();
     _end_of_stream = false;
     on_partition_range_change(pr);
-    return parallel_for_each(_shard_readers, [&pr, timeout] (lw_shared_ptr<shard_reader>& sr) {
+    return parallel_for_each(_shard_readers, [&pr, timeout] (std::unique_ptr<shard_reader>& sr) {
         return sr->fast_forward_to(pr, timeout);
     });
 }
@@ -1962,7 +1962,7 @@ future<> multishard_combining_reader::fast_forward_to(position_range pr, db::tim
 }
 
 future<> multishard_combining_reader::close() noexcept {
-    return parallel_for_each(_shard_readers, [] (lw_shared_ptr<shard_reader>& sr) {
+    return parallel_for_each(_shard_readers, [] (std::unique_ptr<shard_reader>& sr) {
         return sr->close();
     });
 }
