@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 #
-# Copyright (C) 2017 ScyllaDB
+# Copyright (C) 2017-present ScyllaDB
 #
 
 #
@@ -126,7 +126,7 @@ def all_n_values():
 
 file_str = """
 /*
- * Copyright (C) 2017 ScyllaDB
+ * Copyright (C) 2017-present ScyllaDB
  */
 
 /*

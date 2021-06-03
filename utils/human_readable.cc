@@ -16,7 +16,7 @@
  */
 
 /*
- * Copyright (C) 2020 ScyllaDB
+ * Copyright (C) 2020-present ScyllaDB
  */
 
 #include "utils/human_readable.hh"

@@ -1,6 +1,6 @@
 #!/bin/bash -e
 #
-# Copyright (C) 2020 ScyllaDB
+# Copyright (C) 2020-present ScyllaDB
 #
 
 #

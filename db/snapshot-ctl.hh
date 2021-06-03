@@ -16,7 +16,7 @@
  * limitations under the License.
  *
  * Modified by ScyllaDB
- * Copyright (C) 2020 ScyllaDB
+ * Copyright (C) 2020-present ScyllaDB
  */
 
 /*
@@ -35,7 +35,7 @@
  * You should have received a copy of the GNU General Public License
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  *
- * Copyright (C) 2020 ScyllaDB
+ * Copyright (C) 2020-present ScyllaDB
  */
 
 #pragma once

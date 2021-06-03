@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Copyright 2019 ScyllaDB
+# Copyright 2019-present ScyllaDB
 #
 # This file is part of Scylla.
 #

@@ -1,6 +1,6 @@
 
 /*
- * Copyright (C) 2016 ScyllaDB
+ * Copyright (C) 2016-present ScyllaDB
  */
 
 /*

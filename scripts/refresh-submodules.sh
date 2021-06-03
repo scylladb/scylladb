@@ -4,7 +4,7 @@
 # master branch of their respective repositories and committing the
 # update with a default commit message of "git submodule summary".
 #
-# Copyright (C) 2020 ScyllaDB
+# Copyright (C) 2020-present ScyllaDB
 #
 # This file is part of Scylla.
 #

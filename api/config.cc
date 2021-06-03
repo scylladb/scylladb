@@ -1,5 +1,5 @@
 /*
- * Copyright 2018 ScyllaDB
+ * Copyright 2018-present ScyllaDB
  */
 
 /*

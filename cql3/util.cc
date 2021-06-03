@@ -15,7 +15,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-/* Copyright 2020 ScyllaDB */
+/* Copyright 2020-present ScyllaDB */
 
 #include "util.hh"
 

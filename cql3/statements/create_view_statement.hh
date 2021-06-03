@@ -1,6 +1,6 @@
 /*
  * This file is part of Scylla.
- * Copyright (C) 2016 ScyllaDB
+ * Copyright (C) 2016-present ScyllaDB
  *
  *
  * Scylla is free software: you can redistribute it and/or modify

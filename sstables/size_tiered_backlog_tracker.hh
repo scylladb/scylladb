@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018 ScyllaDB
+ * Copyright (C) 2018-present ScyllaDB
  */
 /*
  * This file is part of Scylla.

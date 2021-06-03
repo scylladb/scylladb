@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 #
-# Copyright 2016 ScyllaDB
+# Copyright 2016-present ScyllaDB
 #
 
 #
@@ -55,7 +55,7 @@ def fprintln(f, *args):
 def print_cw(f):
     fprintln(f, """
 /*
- * Copyright 2016 ScyllaDB
+ * Copyright 2016-present ScyllaDB
  */
 
 /*

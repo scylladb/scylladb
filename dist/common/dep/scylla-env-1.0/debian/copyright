@@ -4,11 +4,11 @@ Upstream-Contact: http://www.scylladb.com/
 Source: https://github.com/scylladb/scylla
 
 Files: *
-Copyright: Copyright (c) 2016 ScyllaDB
+Copyright: Copyright (c) 2016-present ScyllaDB
 License: AGPL-3.0
 
 Files: debian/*
-Copyright: Copyright (c) 2016 ScyllaDB
+Copyright: Copyright (c) 2016-present ScyllaDB
 License: AGPL-3.0
 
 License: AGPL-3.0

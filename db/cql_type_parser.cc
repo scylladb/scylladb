@@ -18,7 +18,7 @@
 
 /*
  * Modified by ScyllaDB
- * Copyright (C) 2017 ScyllaDB
+ * Copyright (C) 2017-present ScyllaDB
  */
 
 /*

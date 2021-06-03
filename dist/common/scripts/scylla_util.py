@@ -1,4 +1,4 @@
-#  Copyright (C) 2017 ScyllaDB
+#  Copyright (C) 2017-present ScyllaDB
 
 # This file is part of Scylla.
 #

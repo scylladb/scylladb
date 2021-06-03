@@ -15,7 +15,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  *
- * Copyright (C) 2021 ScyllaDB
+ * Copyright (C) 2021-present ScyllaDB
  *
  */
 
