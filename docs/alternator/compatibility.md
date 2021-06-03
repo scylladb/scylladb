@@ -153,6 +153,12 @@ they should be easy to detect. Here is a list of these unimplemented features:
     https://github.com/scylladb/scylla/issues/6930
     https://github.com/scylladb/scylla/issues/6918
 
+* Recently DynamoDB added support, in addition to the DynamoDB Streams API,
+  also for the similar Kinesis Streams. Alternator doesn't support this yet,
+  and the related operations DescribeKinesisStreamingDestination,
+  DisableKinesisStreamingDestination, and EnableKinesisStreamingDestination.
+  https://github.com/scylladb/scylla/issues/8786
+
 * The on-demand backup APIs are not supported: CreateBackup, DescribeBackup,
   DeleteBackup, ListBackups, RestoreTableFromBackup.
   For now, users can use Scylla's existing backup solutions such as snapshots
@@ -186,3 +192,22 @@ they should be easy to detect. Here is a list of these unimplemented features:
   https://github.com/scylladb/scylla/issues/5026
   https://github.com/scylladb/scylla/issues/7550
   https://github.com/scylladb/scylla/issues/7551 
+
+* The recently-added PartiQL syntax (SQL-like SELECT/UPDATE/INSERT/DELETE
+  expressions) and the new operations ExecuteStatement, BatchExecuteStatement
+  and ExecuteTransaction is not yet supported.
+  A user that is interested in an SQL-like syntax can consider using Scylla's
+  CQL protocol instead.
+  https://github.com/scylladb/scylla/issues/8787
+
+* As mentioned above, Alternator has its own powerful monitoring framework,
+  which is different from AWS's. In particular, the operations
+  DescribeContributorInsights, ListContributorInsights and
+  UpdateContributorInsights that configure Amazon's "CloudWatch Contributor
+  Insights" are not yet supported. Scylla has different ways to retrieve the
+  same information, such as which items were accessed most often.
+  https://github.com/scylladb/scylla/issues/8788
+
+* Alternator does not support the new DynamoDB feature "export to S3",
+  and its operations DescribeExport, ExportTableToPointInTime, ListExports.
+  https://github.com/scylladb/scylla/issues/8789
