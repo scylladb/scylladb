@@ -17,7 +17,7 @@
  */
 
 /*
- * Copyright (C) 2016-present Cloudius Systems, Ltd.
+ * Copyright (C) 2016-present ScyllaDB
  */
 
 #pragma once
