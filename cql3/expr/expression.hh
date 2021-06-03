@@ -54,9 +54,12 @@ using allow_local_index = bool_class<allow_local_index_tag>;
 
 class binary_operator;
 class conjunction;
+struct column_value;
+struct column_value_tuple;
+struct token;
 
 /// A restriction expression -- union of all possible restriction types.  bool means a Boolean constant.
-using expression = std::variant<bool, conjunction, binary_operator>;
+using expression = std::variant<bool, conjunction, binary_operator, column_value, column_value_tuple, token>;
 
 /// A column, optionally subscripted by a term (eg, c1 or c2['abc']).
 struct column_value {
@@ -95,10 +98,17 @@ enum class comparison_order : char {
 
 /// Operator restriction: LHS op RHS.
 struct binary_operator {
-    std::variant<column_value, column_value_tuple, token> lhs;
+    std::unique_ptr<expression> lhs;
     oper_t op;
     ::shared_ptr<term> rhs;
-    comparison_order order = comparison_order::cql;
+    comparison_order order;
+
+    binary_operator(expression lhs, oper_t op, ::shared_ptr<term> rhs, comparison_order order = comparison_order::cql);
+
+    binary_operator(const binary_operator& x);
+    binary_operator& operator=(const binary_operator&);
+    binary_operator(binary_operator&& x) = default;
+    binary_operator& operator=(binary_operator&& x) = default;
 };
 
 /// A conjunction of restrictions.
@@ -184,6 +194,9 @@ const binary_operator* find_atom(const expression& e, Fn f) {
                 }
                 return nullptr;
             },
+            [] (const column_value&) -> const binary_operator* { return nullptr; },
+            [] (const column_value_tuple&) -> const binary_operator* { return nullptr; },
+            [] (const token&) -> const binary_operator* { return nullptr; },
         }, e);
 }
 
@@ -198,6 +211,9 @@ size_t count_if(const expression& e, Fn f) {
                                        [&] (size_t acc, const expression& c) { return acc + count_if(c, f); });
             },
             [] (bool) -> size_t { return 0; },
+            [] (const column_value&) -> size_t { return 0; },
+            [] (const column_value_tuple&) -> size_t { return 0; },
+            [] (const token&) -> size_t { return 0; },
         }, e);
 }
 
@@ -237,11 +253,11 @@ inline bool is_compare(oper_t op) {
 }
 
 inline bool is_multi_column(const binary_operator& op) {
-    return holds_alternative<column_value_tuple>(op.lhs);
+    return holds_alternative<column_value_tuple>(*op.lhs);
 }
 
 inline bool has_token(const expression& e) {
-    return find_atom(e, [] (const binary_operator& o) { return std::holds_alternative<token>(o.lhs); });
+    return find_atom(e, [] (const binary_operator& o) { return std::holds_alternative<token>(*o.lhs); });
 }
 
 inline bool has_slice_or_needs_filtering(const expression& e) {

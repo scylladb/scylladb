@@ -21,6 +21,8 @@
 
 #include "expression.hh"
 
+#include <seastar/core/on_internal_error.hh>
+
 #include <boost/algorithm/cxx11/all_of.hpp>
 #include <boost/algorithm/cxx11/any_of.hpp>
 #include <boost/range/adaptors.hpp>
@@ -43,8 +45,30 @@
 namespace cql3 {
 namespace expr {
 
+static logging::logger expr_logger("cql_expression");
+
 using boost::adaptors::filtered;
 using boost::adaptors::transformed;
+
+
+binary_operator::binary_operator(expression lhs, oper_t op, ::shared_ptr<term> rhs, comparison_order order)
+            : lhs(std::make_unique<expression>(std::move(lhs)))
+            , op(op)
+            , rhs(std::move(rhs))
+            , order(order) {
+}
+
+binary_operator::binary_operator(const binary_operator& x) : binary_operator(*x.lhs, x.op, x.rhs, x.order) {
+}
+
+binary_operator&
+binary_operator::operator=(const binary_operator& x) {
+    *lhs = *x.lhs;
+    op = x.op;
+    rhs = x.rhs;
+    order = x.order;
+    return *this;
+}
 
 namespace {
 
@@ -540,7 +564,16 @@ bool is_satisfied_by(const binary_operator& opr, const column_value_eval_bag& ba
                 // token range.  It is impossible for any fetched row not to match now.
                 return true;
             },
-        }, opr.lhs);
+            [] (bool) -> bool {
+                on_internal_error(expr_logger, "is_satisfied_by: A constant cannot serve as the LHS of a binary expression");
+            },
+            [] (const conjunction&) -> bool {
+                on_internal_error(expr_logger, "is_satisfied_by: a conjunction cannot serve as the LHS of a binary expression");
+            },
+            [] (const binary_operator&) -> bool {
+                on_internal_error(expr_logger, "is_satisfied_by: binary operators cannot be nested");
+            },
+        }, *opr.lhs);
 }
 
 bool is_satisfied_by(const expression& restr, const column_value_eval_bag& bag) {
@@ -552,6 +585,15 @@ bool is_satisfied_by(const expression& restr, const column_value_eval_bag& bag) 
                 });
             },
             [&] (const binary_operator& opr) { return is_satisfied_by(opr, bag); },
+            [] (const column_value&) -> bool {
+                on_internal_error(expr_logger, "is_satisfied_by: a column cannot serve as a restriction by itself");
+            },
+            [] (const column_value_tuple&) -> bool {
+                on_internal_error(expr_logger, "is_satisfied_by: a column tuple cannot serve as a restriction by itself");
+            },
+            [] (const token&) -> bool {
+                on_internal_error(expr_logger, "is_satisfied_by: the token function cannot serve as a restriction by itself");
+            },
         }, restr);
 }
 
@@ -771,7 +813,25 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
                             }
                             throw std::logic_error(format("get_token_interval invalid operator {}", oper.op));
                         },
-                    }, oper.lhs);
+                        [&] (const binary_operator&) -> value_set {
+                            on_internal_error(expr_logger, "possible_lhs_values: nested binary operators are not supported");
+                        },
+                        [&] (const conjunction&) -> value_set {
+                            on_internal_error(expr_logger, "possible_lhs_values: conjunctions are not supported as the LHS of a binary expression");
+                        },
+                        [&] (bool) -> value_set {
+                            on_internal_error(expr_logger, "possible_lhs_values: constants are not supported as the LHS of a binary expression");
+                        },
+                    }, *oper.lhs);
+            },
+            [] (const column_value&) -> value_set {
+                on_internal_error(expr_logger, "possible_lhs_values: a column cannot serve as a restriction by itself");
+            },
+            [] (const column_value_tuple&) -> value_set {
+                on_internal_error(expr_logger, "possible_lhs_values: a column tuple cannot serve as a restriction by itself");
+            },
+            [] (const token&) -> value_set {
+                on_internal_error(expr_logger, "possible_lhs_values: the token function cannot serve as a restriction by itself");
             },
         }, expr);
 }
@@ -807,7 +867,16 @@ bool is_supported_by(const expression& expr, const secondary_index::index& idx) 
                             return false;
                         },
                         [&] (const token&) { return false; },
-                    }, oper.lhs);
+                        [&] (const binary_operator&) -> bool {
+                            on_internal_error(expr_logger, "is_supported_by: nested binary operators are not supported");
+                        },
+                        [&] (const conjunction&) -> bool {
+                            on_internal_error(expr_logger, "is_supported_by: conjunctions are not supported as the LHS of a binary expression");
+                        },
+                        [&] (bool) -> bool {
+                            on_internal_error(expr_logger, "is_supported_by: constants are not supported as the LHS of a binary expression");
+                        },
+                    }, *oper.lhs);
             },
             [] (const auto& default_case) { return false; }
         }, expr);
@@ -838,16 +907,14 @@ std::ostream& operator<<(std::ostream& os, const expression& expr) {
             [&] (bool b) { os << (b ? "TRUE" : "FALSE"); },
             [&] (const conjunction& conj) { fmt::print(os, "({})", fmt::join(conj.children, ") AND (")); },
             [&] (const binary_operator& opr) {
-                std::visit(overloaded_functor{
-                        [&] (const token& t) { os << "TOKEN"; },
-                        [&] (const column_value& col) {
-                            fmt::print(os, "{}", col);
-                        },
-                        [&] (const column_value_tuple& tuple) {
-                            fmt::print(os, "({})", fmt::join(tuple.elements, ","));
-                        },
-                    }, opr.lhs);
-                os << ' ' << opr.op << ' ' << *opr.rhs;
+                os << "(" << *opr.lhs << ") " << opr.op << ' ' << *opr.rhs;
+            },
+            [&] (const token& t) { os << "TOKEN"; },
+            [&] (const column_value& col) {
+                fmt::print(os, "{}", col);
+            },
+            [&] (const column_value_tuple& tuple) {
+                fmt::print(os, "({})", fmt::join(tuple.elements, ","));
             },
         }, expr);
     return os;
@@ -861,7 +928,7 @@ bool is_on_collection(const binary_operator& b) {
     if (b.op == oper_t::CONTAINS || b.op == oper_t::CONTAINS_KEY) {
         return true;
     }
-    if (auto tuple = std::get_if<column_value_tuple>(&b.lhs)) {
+    if (auto tuple = std::get_if<column_value_tuple>(b.lhs.get())) {
         return boost::algorithm::any_of(tuple->elements, [] (const column_value& v) { return v.sub; });
     }
     return false;
@@ -876,16 +943,15 @@ expression replace_column_def(const expression& expr, const column_definition* n
                 return expression(conjunction{std::vector(applied.begin(), applied.end())});
             },
             [&] (const binary_operator& oper) {
-                return std::visit(overloaded_functor{
-                        [&] (const column_value& col) {
-                            return expression(binary_operator{column_value{new_cdef}, oper.op, oper.rhs});
-                        },
-                        [&] (const column_value_tuple& tuple) -> expression {
-                            throw std::logic_error(format("replace_column_def invalid LHS: {}", to_string(oper)));
-                        },
-                        [&] (const token&) { return expr; },
-                    }, oper.lhs);
+                return expression(binary_operator(replace_column_def(*oper.lhs, new_cdef), oper.op, oper.rhs));
             },
+            [&] (const column_value& col) {
+                return expression(column_value{new_cdef});
+            },
+            [&] (const column_value_tuple& tuple) -> expression {
+                throw std::logic_error(format("replace_column_def invalid with column tuple: {}", to_string(expr)));
+            },
+            [&] (const token&) { return expr; },
         }, expr);
 }
 
