@@ -272,8 +272,6 @@ void database::setup_scylla_memory_diagnostics_producer() {
 
         writeln("  Execution Stages:\n");
         const std::pair<const char*, inheriting_execution_stage::stats> execution_stage_summaries[] = {
-                {"data query stage", _data_query_stage.get_stats()},
-                {"mutation query stage", _mutation_query_stage.get_stats()},
                 {"apply stage", _apply_stage.get_stats()},
         };
         for (const auto& [name, exec_stage_summary] : execution_stage_summaries) {
@@ -354,8 +352,6 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
             max_memory_system_concurrent_reads(),
             "_system_read_concurrency_sem")
     , _row_cache_tracker(cache_tracker::register_metrics::yes)
-    , _data_query_stage("data_query", &column_family::query)
-    , _mutation_query_stage("mutation_query", &column_family::mutation_query)
     , _apply_stage("db_apply", &database::do_apply)
     , _version(empty_version)
     , _compaction_manager(make_compaction_manager(_cfg, dbcfg, as))
