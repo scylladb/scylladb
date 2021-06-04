@@ -80,7 +80,7 @@ public:
     bytes_opt value_for(const column_definition& cdef, const query_options& options) const override {
         return {};
     }
-    std::vector<bounds_range_type> bounds_ranges(const query_options&) const override {
+    virtual std::vector<bounds_range_type> bounds_ranges(const query_options&) const {
         // throw? should not reach?
         return {};
     }

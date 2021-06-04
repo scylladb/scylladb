@@ -307,7 +307,12 @@ private:
     }
 
 public:
-    std::vector<bounds_range_type> bounds_ranges(const query_options& options) const override;
+    // When ValueType is clustering_key_prefix, this overrides a method of clustering_key_restrictions.
+    // When ValueType is partition_key, this method is unused. That's why we can't add `override`
+    // to the declaration.
+    // It would be great if we could conditionally implement this method only when
+    // ValueType is clustering_key_prefix, but this seems to be impossible in C++.
+    virtual std::vector<bounds_range_type> bounds_ranges(const query_options& options) const;
 
     std::vector<bytes_opt> values(const query_options& options) const {
         auto src = values_as_keys(options);
@@ -355,22 +360,12 @@ public:
     virtual unsigned int num_prefix_columns_that_need_not_be_filtered() const override;
 };
 
+// FIXME: This code is dead, but we can't just remove it, because
+// single_column_primary_key_restrictions<clustering_key_prefix>::bounds_ranges() is not dead.
 template<>
 inline dht::partition_range_vector
 single_column_primary_key_restrictions<partition_key>::bounds_ranges(const query_options& options) const {
-    dht::partition_range_vector ranges;
-    ranges.reserve(size());
-    for (query::range<partition_key>& r : compute_bounds(options)) {
-        if (!r.is_singular()) {
-            throw exceptions::invalid_request_exception("Range queries on partition key values not supported.");
-        }
-        ranges.emplace_back(std::move(r).transform(
-            [this] (partition_key&& k) -> query::ring_position {
-                auto token = dht::get_token(*_schema, k);
-                return { std::move(token), std::move(k) };
-            }));
-    }
-    return ranges;
+    throw std::runtime_error("Unexpected call to single_column_primary_key_restrictions<partition_key>::bounds_ranges");
 }
 
 template<>

@@ -76,8 +76,6 @@ public:
         return this->shared_from_this();
     }
 
-    virtual std::vector<bounds_range_type> bounds_ranges(const query_options& options) const = 0;
-
     using restrictions::has_supporting_index;
 
     bool empty() const override {
