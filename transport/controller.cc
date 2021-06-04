@@ -61,8 +61,7 @@ future<> controller::do_start_server() {
     }
 
     return seastar::async([this] {
-        _server = std::make_unique<distributed<cql_transport::cql_server>>();
-        auto cserver = &*_server;
+        auto cserver = std::make_unique<distributed<cql_transport::cql_server>>();
 
         auto& cfg = _db.local().get_config();
         auto addr = cfg.rpc_address();
@@ -161,6 +160,7 @@ future<> controller::do_start_server() {
         }).get();
 
         on_error.cancel();
+        _server = std::move(cserver);
 
         set_cql_ready(true).get();
     });
