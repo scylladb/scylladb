@@ -194,7 +194,6 @@ public:
     const std::unordered_set<inet_address>& get_leaving_endpoints() const;
     const std::unordered_map<token, inet_address>& get_bootstrap_tokens() const;
     void update_topology(inet_address ep);
-    tokens_iterator tokens_end() const;
     /**
      * Creates an iterable range of the sorted tokens starting at the token next
      * after the given one.

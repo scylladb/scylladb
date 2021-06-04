@@ -115,8 +115,6 @@ public:
         _topology.update_endpoint(ep);
     }
 
-    tokens_iterator tokens_end() const;
-
     /**
      * Creates an iterable range of the sorted tokens starting at the token next
      * after the given one.
@@ -939,16 +937,10 @@ private:
 };
 
 inline
-token_metadata_impl::tokens_iterator
-token_metadata_impl::tokens_end() const {
-    return tokens_iterator(sorted_tokens().end(), sorted_tokens().size());
-}
-
-inline
 boost::iterator_range<token_metadata_impl::tokens_iterator>
 token_metadata_impl::ring_range(const token& start) const {
     auto begin = tokens_iterator(start, this);
-    auto end = tokens_end();
+    auto end = tokens_iterator(sorted_tokens().end(), sorted_tokens().size());
     return boost::make_iterator_range(begin, end);
 }
 
@@ -1827,11 +1819,6 @@ token_metadata::get_bootstrap_tokens() const {
 void
 token_metadata::update_topology(inet_address ep) {
     _impl->update_topology(ep);
-}
-
-token_metadata::tokens_iterator
-token_metadata::tokens_end() const {
-    return tokens_iterator(_impl->tokens_end());
 }
 
 boost::iterator_range<token_metadata::tokens_iterator>
