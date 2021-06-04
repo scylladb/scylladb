@@ -25,6 +25,7 @@ def pid_to_dir(pid):
 
 def run_with_temporary_dir(run_cmd_generator):
     global run_with_temporary_dir_pids
+    global run_pytest_pids
     # Below, there is a small time window, after we fork and the child
     # started running but before we save this child's process id in
     # run_with_temporary_dir_pids. In that small time window, a signal may
@@ -38,6 +39,7 @@ def run_with_temporary_dir(run_cmd_generator):
     if pid == 0:
         # Child
         run_with_temporary_dir_pids = set() # no children to clean up on child
+        run_pytest_pids = set()
         pid = os.getpid()
         dir = pid_to_dir(pid)
         os.mkdir(dir)
@@ -56,7 +58,7 @@ def run_with_temporary_dir(run_cmd_generator):
         # will eventually deliver a SIGKILL as part of cleanup_all().
         os.setsid()
         os.execve(cmd[0], cmd, dict(os.environ, **env))
-        # execvp will not return. If it cannot run the program, it will raise
+        # execve will not return. If it cannot run the program, it will raise
         # an exception.
     # Parent
     run_with_temporary_dir_pids.add(pid)
@@ -96,10 +98,21 @@ def abort_run_with_temporary_dir(pid):
     return f
 
 summary=''
+run_pytest_pids = set()
 
 def cleanup_all():
     global summary
     global run_with_temporary_dir_pids
+    global run_pytest_pids
+    # Kill pytest first, before killing the tested server, so we don't
+    # continue to get a barrage of errors when the test runs with the
+    # server killed.
+    for pid in run_pytest_pids:
+        try:
+            os.kill(pid, 9)
+            os.waitpid(pid, 0) # don't leave an annoying zombie
+        except ProcessLookupError:
+            pass
     for pid in run_with_temporary_dir_pids:
         f = abort_run_with_temporary_dir(pid)
         print('\nSubprocess output:\n')
@@ -203,54 +216,100 @@ def run_scylla_cmd(pid, dir):
         '--authenticator', 'PasswordAuthenticator',
         ], {})
 
-## Test that CQL is serving.
-def check_cql(ip):
+# Get a Cluster object to connect to CQL at the given IP address (and with
+# the appropriate username and password). It's important to shutdown() this
+# Cluster object when done with it, otherwise we can get errors at the end
+# of the run when background tasks continue to spawn futures after exit.
+def get_cql_cluster(ip):
     auth_provider = cassandra.auth.PlainTextAuthProvider(username='cassandra', password='cassandra')
-    cassandra.cluster.Cluster([ip], auth_provider=auth_provider).connect()
+    return cassandra.cluster.Cluster([ip], auth_provider=auth_provider)
 
-# Wait for scylla to finish booting successfully. Raises an exception if
-# we know it did not.
-def wait_for_cql(pid, ip):
+## Test that CQL is serving, for wait_for_services() below.
+def check_cql(ip):
+    try:
+        cluster = get_cql_cluster(ip)
+        cluster.connect()
+        cluster.shutdown()
+    except cassandra.cluster.NoHostAvailable:
+        raise NotYetUp
+    # Any other exception may indicate a problem, and is passed to the caller.
+
+# wait_for_services() waits for scylla to finish booting successfully and
+# listen to services checked by the given "checkers". Raises an exception
+# if we know Scylla did not boot properly (as soon as we know - not waiting
+# for a timeout).
+#
+# Each checker is a function which returns successfully if the service it
+# checks is up, or throws an exception if it is not. If the service is not
+# *yet* up, it should throw the NotYetUp exception, indicating that
+# wait_for_services() should continue to retry. Any other exceptions means
+# an unrecoverable error was detected, and retry would be hopeless.
+#
+# wait_for_services has a hard-coded timeout of 200 seconds.
+class NotYetUp(Exception):
+    pass
+def wait_for_services(pid, checkers):
     start_time = time.time()
-    cql_ready = False
+    ready = False
     while time.time() < start_time + 200:
         time.sleep(0.1)
         # To check if Scylla died already (i.e., failed to boot), we need
         # to first get rid of the zombie (if it exists) with waitpid, and
         # then check if the process still exists, with kill.
-        os.waitpid(pid, os.P_NOWAIT)
-        os.kill(pid, 0)
         try:
-            check_cql(ip)
-            # if check_cql did not raise an exception, we're done:
-            cql_ready = True
+            os.waitpid(pid, os.P_NOWAIT)
+            os.kill(pid, 0)
+        except (ProcessLookupError, ChildProcessError):
+            # Scylla is dead, we cannot recover
             break
-        except cassandra.cluster.NoHostAvailable:
+        try:
+            for checker in checkers:
+                checker()
+            # If all checkers passed, we're finally done
+            ready = True
+            break
+        except NotYetUp:
             pass
     duration = str(round(time.time() - start_time, 1)) + ' seconds'
-    if not cql_ready:
-        print(f'Boot did not complete in {duration}.')
-        check_cql(ip) # this will fail, and show why
-    os.waitpid(pid, os.P_NOWAIT)
-    os.kill(pid, 0)
+    if not ready:
+        print(f'Boot failed after {duration}.')
+        # Run the checkers again, not catching NotYetUp, to show exception
+        # traces of which of the checks failed and how.
+        os.waitpid(pid, os.P_NOWAIT)
+        os.kill(pid, 0)
+        for checker in checkers:
+            checker()
     print(f'Boot successful ({duration}).')
     sys.stdout.flush()
 
-def run_cql_pytest(ip, additional_parameters):
-    cql_pytest_dir = os.path.join(source_path, 'test/cql-pytest')
+def wait_for_cql(pid, ip):
+    wait_for_services(pid, [lambda: check_cql(ip)])
+
+def run_pytest(pytest_dir, additional_parameters):
+    global run_with_temporary_dir_pids
+    global run_pytest_pids
     sys.stdout.flush()
     sys.stderr.flush()
     pid = os.fork()
     if pid == 0:
         # child:
-        global run_with_temporary_dir_pids
         run_with_temporary_dir_pids = set() # no children to clean up on child
-        os.chdir(cql_pytest_dir)
+        run_pytest_pids = set()
+        os.chdir(pytest_dir)
         os.execvp('pytest', ['pytest',
-            '--host', ip, '-o', 'junit_family=xunit2'] + additional_parameters)
+            '-o', 'junit_family=xunit2'] + additional_parameters)
         exit(1)
     # parent:
+    run_pytest_pids.add(pid)
     if os.waitpid(pid, 0)[1]:
         return False
     else:
         return True
+
+# Set up self-signed SSL certificate in dir/scylla.key, dir/scylla.crt.
+# These can be used for setting up an HTTPS server for Alternator, or for
+# any other part of Scylla which needs SSL.
+def setup_ssl_certificate(dir):
+    # FIXME: error checking (if "openssl" isn't found, for example)
+    os.system(f'openssl genrsa 2048 > "{dir}/scylla.key"')
+    os.system(f'openssl req -new -x509 -nodes -sha256 -days 365 -subj "/C=IL/ST=None/L=None/O=None/OU=None/CN=example.com" -key "{dir}/scylla.key" -out "{dir}/scylla.crt"')
