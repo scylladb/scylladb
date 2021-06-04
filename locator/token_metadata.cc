@@ -888,22 +888,16 @@ public:
     using difference_type = std::ptrdiff_t;
     using pointer = token*;
     using reference = token&;
-private:
-    tokens_iterator_impl(std::vector<token>::const_iterator it, size_t pos)
-    : _cur_it(it), _ring_pos(pos) {}
-
 public:
+    tokens_iterator_impl() = default;
     tokens_iterator_impl(const token& start, const token_metadata_impl* token_metadata)
     : _token_metadata(token_metadata) {
         _cur_it = _token_metadata->sorted_tokens().begin() + _token_metadata->first_token_index(start);
+        _remaining = _token_metadata->sorted_tokens().size();
     }
 
     bool operator==(const tokens_iterator_impl& it) const {
-        return _cur_it == it._cur_it;
-    }
-
-    bool operator!=(const tokens_iterator_impl& it) const {
-        return _cur_it != it._cur_it;
+        return _remaining == it._remaining;
     }
 
     const token& operator*() {
@@ -911,26 +905,17 @@ public:
     }
 
     tokens_iterator_impl& operator++() {
-        if (_ring_pos >= _token_metadata->sorted_tokens().size()) {
-            _cur_it = _token_metadata->sorted_tokens().end();
-        } else {
-            ++_cur_it;
-            ++_ring_pos;
-
-            if (_cur_it == _token_metadata->sorted_tokens().end()) {
-                _cur_it = _token_metadata->sorted_tokens().begin();
-            }
+        ++_cur_it;
+        if (_cur_it == _token_metadata->sorted_tokens().end()) {
+            _cur_it = _token_metadata->sorted_tokens().begin();
         }
+        --_remaining;
         return *this;
     }
 
 private:
     std::vector<token>::const_iterator _cur_it;
-    //
-    // position on the token ring starting from token corresponding to
-    // "start"
-    //
-    size_t _ring_pos = 0;
+    size_t _remaining = 0;
     const token_metadata_impl* _token_metadata = nullptr;
 
     friend class token_metadata_impl;
@@ -940,7 +925,7 @@ inline
 boost::iterator_range<token_metadata_impl::tokens_iterator>
 token_metadata_impl::ring_range(const token& start) const {
     auto begin = tokens_iterator(start, this);
-    auto end = tokens_iterator(sorted_tokens().end(), sorted_tokens().size());
+    auto end = tokens_iterator();
     return boost::make_iterator_range(begin, end);
 }
 
