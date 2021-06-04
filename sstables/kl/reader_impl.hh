@@ -135,15 +135,8 @@ class data_consume_rows_context : public data_consumer::continuous_data_consumer
 private:
     enum class state {
         ROW_START,
-        DELETION_TIME_2,
-        DELETION_TIME_3,
         ATOM_START,
-        ATOM_START_2,
-        ATOM_MASK_2,
-        COUNTER_CELL_2,
-        EXPIRING_CELL_3,
-        CELL_VALUE_BYTES_2,
-        RANGE_TOMBSTONE_4,
+        NOT_CLOSING,
     } _state = state::ROW_START;
 
     row_consumer& _consumer;
@@ -164,14 +157,9 @@ private:
     temporary_buffer<char>* _processing_data;
 public:
     using consumer = row_consumer;
+     // assumes !primitive_consumer::active()
     bool non_consuming() const {
-        return (((_state == state::DELETION_TIME_3)
-                || (_state == state::CELL_VALUE_BYTES_2)
-                || (_state == state::ATOM_START_2)
-                || (_state == state::ATOM_MASK_2)
-                || (_state == state::COUNTER_CELL_2)
-                || (_state == state::RANGE_TOMBSTONE_4)
-                || (_state == state::EXPIRING_CELL_3)));
+        return false;
     }
 
     // process() feeds the given data into the state machine.
@@ -205,15 +193,14 @@ private:
     processing_result_generator do_process_state() {
         while (true) {
             if (_state == state::ROW_START) {
+                _state = state::NOT_CLOSING;
                 if (read_short_length_bytes(*_processing_data, _key) != read_status::ready) {
                     co_yield row_consumer::proceed::yes;
                 }
                 if (read_32(*_processing_data) != read_status::ready) {
-                    _state = state::DELETION_TIME_2;
                     co_yield row_consumer::proceed::yes;
                 }
                 if (read_64(*_processing_data) != read_status::ready) {
-                    _state = state::DELETION_TIME_3;
                     co_yield row_consumer::proceed::yes;
                 }
                 deletion_time del;
@@ -231,7 +218,6 @@ private:
             }
             while (true) {
                 if (read_short_length_bytes(*_processing_data, _key) != read_status::ready) {
-                    _state = state::ATOM_START_2;
                     co_yield row_consumer::proceed::yes;
                 }
                 if (_u16 == 0) {
@@ -240,8 +226,8 @@ private:
                     co_yield _consumer.consume_row_end();
                     break;
                 }
+                _state = state::NOT_CLOSING;
                 if (read_8(*_processing_data) != read_status::ready) {
-                    _state = state::ATOM_MASK_2;
                     co_yield row_consumer::proceed::yes;
                 }
                 auto const mask = column_mask(_u8);
@@ -255,7 +241,6 @@ private:
                         co_yield row_consumer::proceed::yes;
                     }
                     if (read_64(*_processing_data) != read_status::ready) {
-                        _state = state::RANGE_TOMBSTONE_4;
                         co_yield row_consumer::proceed::yes;
                     }
                     _sst->get_stats().on_range_tombstone_read();
@@ -274,7 +259,6 @@ private:
                     _deleted = false;
                     _counter = true;
                     if (read_64(*_processing_data) != read_status::ready) {
-                        _state = state::COUNTER_CELL_2;
                         co_yield row_consumer::proceed::yes;
                     }
                     // _timestamp_of_last_deletion = _u64;
@@ -286,7 +270,6 @@ private:
                     }
                     _ttl = _u32;
                     if (read_32(*_processing_data) != read_status::ready) {
-                        _state = state::EXPIRING_CELL_3;
                         co_yield row_consumer::proceed::yes;
                     }
                     _expiration = _u32;
@@ -306,7 +289,6 @@ private:
                     co_yield row_consumer::proceed::yes;
                 }
                 if (read_bytes(*_processing_data, _u32, _val_fragmented) != read_status::ready) {
-                    _state = state::CELL_VALUE_BYTES_2;
                     co_yield row_consumer::proceed::yes;
                 }
                 row_consumer::proceed ret;
@@ -352,10 +334,10 @@ public:
 
     void verify_end_state() {
         // If reading a partial row (i.e., when we have a clustering row
-        // filter and using a promoted index), we may be in ATOM_START or ATOM_START_2
+        // filter and using a promoted index), we may be in ATOM_START
         // state instead of ROW_START. In that case we did not read the
         // end-of-row marker and consume_row_end() was never called.
-        if (_state == state::ATOM_START || _state == state::ATOM_START_2) {
+        if (_state == state::ATOM_START) {
             _consumer.consume_row_end();
             return;
         }
