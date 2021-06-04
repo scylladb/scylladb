@@ -692,6 +692,10 @@ void fsm::request_vote_reply(server_id from, vote_reply&& reply) {
     logger.trace("{} received a {} vote from {}", _my_id, reply.vote_granted ? "yes" : "no", from);
 
     auto& state = std::get<candidate>(_state);
+    // Should not register a reply to prevote as a real vote
+    if (state.is_prevote != reply.is_prevote) {
+        return;
+    }
     state.votes.register_vote(from, reply.vote_granted);
 
     switch (state.votes.tally_votes()) {
