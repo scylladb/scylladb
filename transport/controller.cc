@@ -150,20 +150,18 @@ future<> controller::do_start_server() {
         }
 
         cserver->start(std::ref(_qp), std::ref(_auth_service), std::ref(_mnotifier), std::ref(_db), std::ref(_mem_limiter), cql_server_config, std::ref(_sl_controller)).get();
+        auto on_error = defer([&cserver] { cserver->stop().get(); });
 
-        try {
-            parallel_for_each(configs, [cserver, keepalive](const listen_cfg & cfg) {
-                return cserver->invoke_on_all(&cql_transport::cql_server::listen, cfg.addr, cfg.cred, cfg.is_shard_aware, keepalive).then([cfg] {
-                    logger.info("Starting listening for CQL clients on {} ({}, {})"
-                            , cfg.addr, cfg.cred ? "encrypted" : "unencrypted", cfg.is_shard_aware ? "shard-aware" : "non-shard-aware"
-                    );
-                });
-            }).get();
-        } catch (...) {
-            cserver->stop().get();
-            throw;
-        }
-        
+        parallel_for_each(configs, [&cserver, keepalive](const listen_cfg & cfg) {
+            return cserver->invoke_on_all(&cql_transport::cql_server::listen, cfg.addr, cfg.cred, cfg.is_shard_aware, keepalive).then([cfg] {
+                logger.info("Starting listening for CQL clients on {} ({}, {})"
+                        , cfg.addr, cfg.cred ? "encrypted" : "unencrypted", cfg.is_shard_aware ? "shard-aware" : "non-shard-aware"
+                );
+            });
+        }).get();
+
+        on_error.cancel();
+
         set_cql_ready(true).get();
     });
 }
