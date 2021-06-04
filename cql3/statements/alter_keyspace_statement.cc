@@ -46,6 +46,7 @@
 #include "db/system_keyspace.hh"
 #include "database.hh"
 #include "cql3/query_processor.hh"
+#include "cql3/statements/ks_prop_defs.hh"
 
 bool is_system_keyspace(std::string_view keyspace);
 

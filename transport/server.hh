@@ -41,6 +41,8 @@
 #include <seastar/core/execution_stage.hh>
 #include "utils/updateable_value.hh"
 #include "generic_server.hh"
+#include "service/query_state.hh"
+#include "cql3/query_options.hh"
 
 namespace scollectd {
 

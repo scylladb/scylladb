@@ -42,11 +42,13 @@
 #pragma once
 
 #include "cql3/statements/modification_statement.hh"
-#include "cql3/term.hh"
+#include "cql3/attributes.hh"
 
 #include "database_fwd.hh"
 
 namespace cql3 {
+
+class term;
 
 namespace statements {
 

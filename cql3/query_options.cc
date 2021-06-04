@@ -43,6 +43,7 @@
 #include "query_options.hh"
 #include "version.hh"
 #include "db/consistency_level_type.hh"
+#include "cql3/column_identifier.hh"
 
 namespace cql3 {
 

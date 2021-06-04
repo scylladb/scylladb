@@ -41,6 +41,7 @@
 
 #include "term.hh"
 #include "cql3_type.hh"
+#include "cql3/column_identifier.hh"
 
 namespace cql3 {
 

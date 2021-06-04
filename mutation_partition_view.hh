@@ -24,6 +24,7 @@
 #include "database_fwd.hh"
 #include "mutation_partition_visitor.hh"
 #include "utils/input_stream.hh"
+#include "atomic_cell.hh"
 
 namespace ser {
 class mutation_partition_view;

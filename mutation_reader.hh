@@ -23,7 +23,6 @@
 
 #include <vector>
 
-#include "clustering_key_filter.hh"
 #include <seastar/core/future.hh>
 #include <seastar/core/future-util.hh>
 #include <seastar/core/do_with.hh>

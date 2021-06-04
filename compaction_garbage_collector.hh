@@ -21,10 +21,11 @@
 
 #pragma once
 
-#include "collection_mutation.hh"
+#include "schema_fwd.hh"
 
 class atomic_cell;
 class row_marker;
+struct collection_mutation_description;
 
 class compaction_garbage_collector {
 public:

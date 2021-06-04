@@ -25,12 +25,11 @@
 #include "row_cache.hh"
 #include "mutation_reader.hh"
 #include "mutation_fragment.hh"
-#include "partition_version.hh"
-#include "utils/logalloc.hh"
 #include "query-request.hh"
 #include "partition_snapshot_row_cursor.hh"
 #include "read_context.hh"
 #include "flat_mutation_reader.hh"
+#include "clustering_key_filter.hh"
 
 namespace cache {
 

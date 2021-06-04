@@ -61,6 +61,7 @@
 #include "db/extensions.hh"
 #include "utils/fragmented_temporary_buffer.hh"
 #include "validation.hh"
+#include "mutation_partition_view.hh"
 
 static logging::logger rlogger("commitlog_replayer");
 

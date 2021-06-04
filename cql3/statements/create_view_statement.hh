@@ -20,15 +20,8 @@
 #pragma once
 
 #include "cql3/statements/schema_altering_statement.hh"
-#include "cql3/statements/cf_prop_defs.hh"
 #include "cql3/statements/cf_properties.hh"
-#include "cql3/cql3_type.hh"
-#include "cql3/selection/raw_selector.hh"
-#include "cql3/relation.hh"
 #include "cql3/cf_name.hh"
-
-#include "service/migration_manager.hh"
-#include "schema.hh"
 
 #include <seastar/core/shared_ptr.hh>
 
@@ -39,6 +32,11 @@
 namespace cql3 {
 
 class query_processor;
+class relation;
+
+namespace selection {
+    class raw_selector;
+} // namespace selection
 
 namespace statements {
 

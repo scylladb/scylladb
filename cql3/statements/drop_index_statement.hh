@@ -42,16 +42,17 @@
 #pragma once
 
 #include "cql3/statements/schema_altering_statement.hh"
-#include "cql3/index_name.hh"
 
-#include <seastar/core/distributed.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <optional>
 #include <memory>
 
+#include "schema_fwd.hh"
+
 namespace cql3 {
 
 class query_processor;
+class index_name;
 
 namespace statements {
 

@@ -33,16 +33,16 @@
 #include <seastar/core/lowres_clock.hh>
 #include <seastar/core/shared_mutex.hh>
 #include <seastar/core/expiring_fifo.hh>
-#include "lister.hh"
 #include "gms/gossiper.hh"
 #include "locator/snitch_base.hh"
 #include "inet_address_vectors.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include "db/commitlog/commitlog.hh"
 #include "utils/loading_shared_values.hh"
-#include "utils/fragmented_temporary_buffer.hh"
 #include "db/hints/resource_manager.hh"
 #include "db/hints/host_filter.hh"
+
+class fragmented_temporary_buffer;
 
 namespace service {
 class storage_service;

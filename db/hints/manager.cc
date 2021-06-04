@@ -42,6 +42,7 @@
 #include "utils/directories.hh"
 #include "utils/UUID_gen.hh"
 #include "locator/abstract_replication_strategy.hh"
+#include "mutation_partition_view.hh"
 
 using namespace std::literals::chrono_literals;
 

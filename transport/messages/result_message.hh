@@ -24,6 +24,7 @@
 
 #include "cql3/result_set.hh"
 #include "cql3/statements/prepared_statement.hh"
+#include "cql3/cql_statement.hh"
 
 #include "transport/messages/result_message_base.hh"
 #include "transport/event.hh"

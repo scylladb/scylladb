@@ -23,16 +23,14 @@
 
 #include "query-request.hh"
 #include "query-result.hh"
-#include "mutation_reader.hh"
 #include "frozen_mutation.hh"
 #include "db/timeout_clock.hh"
-#include "querier.hh"
+#include "mutation.hh"
 #include "utils/chunked_vector.hh"
-#include "query_class_config.hh"
-#include <seastar/core/execution_stage.hh>
 
 class reconcilable_result;
 class frozen_reconcilable_result;
+class mutation_source;
 
 // Can be read by other cores after publishing.
 struct partition {

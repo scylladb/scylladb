@@ -52,22 +52,22 @@ namespace statements {
 
 class use_statement : public cql_statement_no_metadata {
 private:
-    const sstring _keyspace;
+    const seastar::sstring _keyspace;
 
 public:
-    use_statement(sstring keyspace);
+    use_statement(seastar::sstring keyspace);
 
     virtual uint32_t get_bound_terms() const override;
 
-    virtual bool depends_on_keyspace(const sstring& ks_name) const override;
+    virtual bool depends_on_keyspace(const seastar::sstring& ks_name) const override;
 
-    virtual bool depends_on_column_family(const sstring& cf_name) const override;
+    virtual bool depends_on_column_family(const seastar::sstring& cf_name) const override;
 
-    virtual future<> check_access(service::storage_proxy& proxy, const service::client_state& state) const override;
+    virtual seastar::future<> check_access(service::storage_proxy& proxy, const service::client_state& state) const override;
 
     virtual void validate(service::storage_proxy&, const service::client_state& state) const override;
 
-    virtual future<::shared_ptr<cql_transport::messages::result_message>>
+    virtual seastar::future<seastar::shared_ptr<cql_transport::messages::result_message>>
     execute(query_processor& qp, service::query_state& state, const query_options& options) const override;
 };
 

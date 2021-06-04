@@ -21,6 +21,8 @@
 
 #include "canonical_mutation.hh"
 #include "mutation.hh"
+#include "mutation_partition_view.hh"
+#include "mutation_partition_visitor.hh"
 #include "mutation_partition_serializer.hh"
 #include "counters.hh"
 #include "converting_mutation_partition_applier.hh"

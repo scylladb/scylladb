@@ -24,9 +24,12 @@
 #include "bytes.hh"
 #include "schema_fwd.hh"
 #include "database_fwd.hh"
-#include "mutation_partition_visitor.hh"
-#include "mutation_partition_serializer.hh"
+#include "bytes_ostream.hh"
 #include <iosfwd>
+
+namespace utils {
+    class UUID;
+} // namespace utils
 
 // Immutable mutation form which can be read using any schema version of the same table.
 // Safe to access from other shards via const&.

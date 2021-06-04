@@ -35,6 +35,7 @@
 #include "row_cache.hh"
 #include "test/lib/tmpdir.hh"
 #include "repair/repair.hh"
+#include "mutation_partition_view.hh"
 
 #include "test/lib/simple_schema.hh"
 #include "test/lib/flat_mutation_reader_assertions.hh"

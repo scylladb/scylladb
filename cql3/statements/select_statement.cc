@@ -47,7 +47,10 @@
 #include "cql3/selection/selection.hh"
 #include "cql3/util.hh"
 #include "cql3/restrictions/single_column_primary_key_restrictions.hh"
+#include "cql3/restrictions/statement_restrictions.hh"
 #include "cql3/selection/selector_factories.hh"
+#include "validation.hh"
+#include "exceptions/unrecognized_entity_exception.hh"
 #include <seastar/core/shared_ptr.hh>
 #include "query-result-reader.hh"
 #include "query_result_merger.hh"

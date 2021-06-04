@@ -21,6 +21,7 @@
 
 #include "row_locking.hh"
 #include "log.hh"
+#include "utils/latency.hh"
 
 #include <seastar/core/when_all.hh>
 

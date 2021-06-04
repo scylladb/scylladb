@@ -44,7 +44,6 @@
 #include "db/consistency_level_type.hh"
 #include "db/read_repair_decision.hh"
 #include "exceptions/exceptions.hh"
-#include "utils/fb_utilities.hh"
 #include "gms/inet_address.hh"
 #include "inet_address_vectors.hh"
 #include "log.hh"

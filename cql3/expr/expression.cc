@@ -34,11 +34,13 @@
 #include "cql3/lists.hh"
 #include "cql3/statements/request_validations.hh"
 #include "cql3/tuples.hh"
+#include "cql3/selection/selection.hh"
 #include "index/secondary_index_manager.hh"
 #include "types/list.hh"
 #include "types/map.hh"
 #include "types/set.hh"
 #include "utils/like_matcher.hh"
+#include "query-result-reader.hh"
 
 namespace cql3 {
 namespace expr {

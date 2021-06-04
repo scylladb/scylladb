@@ -40,6 +40,7 @@
  */
 
 #include "cql3/statements/create_keyspace_statement.hh"
+#include "cql3/statements/ks_prop_defs.hh"
 #include "prepared_statement.hh"
 #include "database.hh"
 #include "service/migration_manager.hh"

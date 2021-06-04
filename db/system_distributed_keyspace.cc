@@ -33,6 +33,7 @@
 #include "cdc/generation.hh"
 #include "cql3/query_processor.hh"
 #include "service/storage_proxy.hh"
+#include "service/migration_manager.hh"
 
 #include <seastar/core/seastar.hh>
 #include <seastar/core/shared_ptr.hh>

@@ -47,6 +47,7 @@
 #include "database.hh"
 #include "gms/feature_service.hh"
 #include "cql3/query_processor.hh"
+#include "cql3/index_name.hh"
 
 namespace cql3 {
 

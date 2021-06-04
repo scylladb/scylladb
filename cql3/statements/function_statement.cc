@@ -21,6 +21,7 @@
 
 #include "cql3/statements/function_statement.hh"
 #include "cql3/functions/functions.hh"
+#include "cql3/functions/user_function.hh"
 #include "db/config.hh"
 #include "database.hh"
 #include "gms/feature_service.hh"

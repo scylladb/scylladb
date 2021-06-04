@@ -57,6 +57,7 @@
 #include "database.hh"
 #include "types/user.hh"
 #include "gms/feature_service.hh"
+#include "service/migration_manager.hh"
 
 namespace cql3 {
 

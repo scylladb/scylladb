@@ -22,9 +22,15 @@
 #pragma once
 
 #include "cql3/statements/schema_altering_statement.hh"
-#include "cql3/functions/user_function.hh"
+#include "cql3/functions/function_name.hh"
+#include "cql3/cql3_type.hh"
 
 namespace cql3 {
+
+namespace functions {
+    class function;
+} // namespace functions
+
 namespace statements {
 
 class function_statement : public schema_altering_statement {

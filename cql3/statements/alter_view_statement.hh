@@ -46,11 +46,11 @@
 #include "database_fwd.hh"
 #include "cql3/statements/cf_prop_defs.hh"
 #include "cql3/statements/schema_altering_statement.hh"
-#include "cql3/cf_name.hh"
 
 namespace cql3 {
 
 class query_processor;
+class cf_name;
 
 namespace statements {
 

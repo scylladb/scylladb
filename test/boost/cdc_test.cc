@@ -40,6 +40,8 @@
 #include "types/set.hh"
 #include "types/user.hh"
 
+#include "utils/UUID_gen.hh"
+
 using namespace std::string_literals;
 
 namespace cdc {

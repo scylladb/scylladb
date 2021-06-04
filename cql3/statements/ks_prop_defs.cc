@@ -41,6 +41,7 @@
 
 #include "cql3/statements/ks_prop_defs.hh"
 #include "database.hh"
+#include "locator/token_metadata.hh"
 
 namespace cql3 {
 

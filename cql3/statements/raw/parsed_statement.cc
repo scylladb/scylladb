@@ -42,6 +42,7 @@
 #include "parsed_statement.hh"
 
 #include "cql3/statements/prepared_statement.hh"
+#include "cql3/column_specification.hh"
 
 namespace cql3 {
 

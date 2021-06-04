@@ -22,11 +22,8 @@
 #pragma once
 
 #include "dht/i_partitioner.hh"
-#include "keys.hh"
 #include "query-request.hh"
 #include "service/migration_listener.hh"
-#include "service/migration_manager.hh"
-#include "utils/exponential_backoff_retry.hh"
 #include "utils/serialized_action.hh"
 #include "utils/UUID.hh"
 #include "database.hh"
@@ -56,7 +53,12 @@ class view_build_progress;
 
 }
 
+namespace service {
+    class migration_manager;
+} // namespace service
+
 class database;
+class exponential_backoff_retry;
 
 namespace db::view {
 

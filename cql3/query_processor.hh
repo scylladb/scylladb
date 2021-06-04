@@ -50,16 +50,16 @@
 
 #include "cql3/prepared_statements_cache.hh"
 #include "cql3/authorized_prepared_statements_cache.hh"
-#include "cql3/query_options.hh"
 #include "cql3/statements/prepared_statement.hh"
 #include "exceptions/exceptions.hh"
-#include "log.hh"
 #include "service/migration_listener.hh"
-#include "service/query_state.hh"
 #include "transport/messages/result_message.hh"
+#include "service/qos/service_level_controller.hh"
+#include "service/client_state.hh"
 
 namespace service {
 class migration_manager;
+class query_state;
 }
 
 namespace cql3 {
@@ -105,6 +105,8 @@ public:
 };
 
 class cql_config;
+class query_options;
+class cql_statement;
 
 class query_processor {
 public:

@@ -29,12 +29,12 @@ static const char scylla_build_mode_str[] = SCYLLA_BUILD_MODE;
 
 std::string scylla_version()
 {
-    return format("{}-{}", scylla_version_str, scylla_release_str);
+    return seastar::format("{}-{}", scylla_version_str, scylla_release_str);
 }
 
 std::string scylla_build_mode()
 {
-    return format("{}", scylla_build_mode_str);
+    return seastar::format("{}", scylla_build_mode_str);
 }
 
 // get the version number into writeable memory, so we can grep for it if we get a core dump

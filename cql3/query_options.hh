@@ -47,8 +47,6 @@
 #include "db/consistency_level_type.hh"
 #include "service/query_state.hh"
 #include "service/pager/paging_state.hh"
-#include "cql3/column_specification.hh"
-#include "cql3/column_identifier.hh"
 #include "cql3/values.hh"
 #include "cql_serialization_format.hh"
 
@@ -56,6 +54,8 @@ namespace cql3 {
 
 class cql_config;
 extern const cql_config default_cql_config;
+
+class column_specification;
 
 /**
  * Options for a query.

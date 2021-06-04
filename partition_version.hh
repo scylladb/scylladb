@@ -22,7 +22,6 @@
 #pragma once
 
 #include "mutation_partition.hh"
-#include "mutation_fragment.hh"
 #include "utils/anchorless_list.hh"
 #include "utils/logalloc.hh"
 #include "utils/coroutine.hh"
@@ -30,6 +29,8 @@
 
 #include <boost/intrusive/parent_from_member.hpp>
 #include <boost/intrusive/slist.hpp>
+
+class static_row;
 
 // This is MVCC implementation for mutation_partitions.
 //

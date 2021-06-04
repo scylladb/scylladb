@@ -42,15 +42,9 @@
 #pragma once
 
 #include "schema_altering_statement.hh"
-#include "index_prop_defs.hh"
 #include "index_target.hh"
-#include "raw/cf_statement.hh"
 
-#include "cql3/index_name.hh"
-#include "cql3/cql3_type.hh"
-
-#include "service/migration_manager.hh"
-#include "schema.hh"
+#include "schema_fwd.hh"
 
 #include <seastar/core/shared_ptr.hh>
 
@@ -63,8 +57,11 @@
 namespace cql3 {
 
 class query_processor;
+class index_name;
 
 namespace statements {
+
+class index_prop_defs;
 
 /** A <code>CREATE INDEX</code> statement parsed from a CQL query. */
 class create_index_statement : public schema_altering_statement {

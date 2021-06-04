@@ -21,6 +21,7 @@
 
 #include "cql3/statements/drop_function_statement.hh"
 #include "cql3/functions/functions.hh"
+#include "cql3/functions/user_function.hh"
 #include "prepared_statement.hh"
 #include "service/migration_manager.hh"
 #include "cql3/query_processor.hh"

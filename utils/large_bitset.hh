@@ -24,12 +24,7 @@
 
 #pragma once
 
-#include <memory>
-#include <vector>
 #include <limits>
-#include <iterator>
-#include <algorithm>
-#include <seastar/core/thread.hh>
 #include <seastar/core/preempt.hh>
 #include "utils/chunked_vector.hh"
 

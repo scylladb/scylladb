@@ -37,18 +37,20 @@
 #include "position_in_partition.hh"
 #include "atomic_cell_or_collection.hh"
 #include "query-result.hh"
-#include "mutation_partition_view.hh"
-#include "mutation_partition_visitor.hh"
-#include "utils/managed_vector.hh"
 #include "hashing_partition_visitor.hh"
 #include "range_tombstone_list.hh"
-#include "clustering_key_filter.hh"
 #include "utils/intrusive_btree.hh"
 #include "utils/preempt.hh"
 #include "utils/managed_ref.hh"
 #include "utils/compact-radix-tree.hh"
 
 class mutation_fragment;
+class mutation_partition_view;
+class mutation_partition_visitor;
+
+namespace query {
+    class clustering_key_filter_ranges;
+} // namespace query
 
 struct cell_hash {
     using size_type = uint64_t;

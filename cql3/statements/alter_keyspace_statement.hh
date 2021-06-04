@@ -44,13 +44,14 @@
 #include <memory>
 
 #include "cql3/statements/schema_altering_statement.hh"
-#include "cql3/statements/ks_prop_defs.hh"
 
 namespace cql3 {
 
 class query_processor;
 
 namespace statements {
+
+class ks_prop_defs;
 
 class alter_keyspace_statement : public schema_altering_statement {
     sstring _name;

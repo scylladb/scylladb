@@ -44,6 +44,7 @@
 #include "types/tuple.hh"
 #include "types/collection.hh"
 #include "utils/chunked_vector.hh"
+#include "cql3/column_identifier.hh"
 
 class list_type_impl;
 

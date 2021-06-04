@@ -45,6 +45,7 @@
 #include "scalar_function.hh"
 #include "cql3/term.hh"
 #include "exceptions/exceptions.hh"
+#include "cql3/functions/function_name.hh"
 
 namespace cql3 {
 namespace functions {
