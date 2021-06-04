@@ -159,10 +159,10 @@ future<> controller::do_start_server() {
             });
         }).get();
 
+        set_cql_ready(true).get();
+
         on_error.cancel();
         _server = std::move(cserver);
-
-        set_cql_ready(true).get();
     });
 }
 
