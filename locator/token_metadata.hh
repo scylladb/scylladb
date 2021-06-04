@@ -141,7 +141,6 @@ private:
 };
 
 class token_metadata_impl;
-class tokens_iterator_impl;
 
 class token_metadata final {
     std::unique_ptr<token_metadata_impl> _impl;
@@ -156,20 +155,18 @@ private:
         using difference_type = std::ptrdiff_t;
         using pointer = token*;
         using reference = token&;
-    private:
-        using impl_type = tokens_iterator_impl;
-        std::unique_ptr<impl_type> _impl;
     public:
-        explicit tokens_iterator(tokens_iterator_impl);
-        tokens_iterator(const tokens_iterator&);
-        tokens_iterator(tokens_iterator&&) = default;
-        tokens_iterator& operator=(const tokens_iterator&);
-        tokens_iterator& operator=(tokens_iterator&&) = default;
-        ~tokens_iterator();
+        tokens_iterator() = default;
+        tokens_iterator(const token& start, const token_metadata_impl* token_metadata);
         bool operator==(const tokens_iterator& it) const;
-        bool operator!=(const tokens_iterator& it) const;
-        const token& operator*();
+        const token& operator*() const;
         tokens_iterator& operator++();
+    private:
+        std::vector<token>::const_iterator _cur_it;
+        size_t _remaining = 0;
+        const token_metadata_impl* _token_metadata = nullptr;
+
+        friend class token_metadata_impl;
     };
     token_metadata(std::unordered_map<token, inet_address> token_to_endpoint_map, std::unordered_map<inet_address, utils::UUID> endpoints_map, topology topology);
 public:

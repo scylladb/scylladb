@@ -82,8 +82,6 @@ private:
 
     void sort_tokens();
 
-    using tokens_iterator = tokens_iterator_impl;
-
 public:
     token_metadata_impl(std::unordered_map<token, inet_address> token_to_endpoint_map, std::unordered_map<inet_address, utils::UUID> endpoints_map, topology topology);
     token_metadata_impl() noexcept {};
@@ -123,9 +121,9 @@ public:
      *
      * @return The requested range (see the description above)
      */
-    boost::iterator_range<tokens_iterator> ring_range(const token& start) const;
+    boost::iterator_range<token_metadata::tokens_iterator> ring_range(const token& start) const;
 
-    boost::iterator_range<tokens_iterator> ring_range(
+    boost::iterator_range<token_metadata::tokens_iterator> ring_range(
         const std::optional<dht::partition_range::bound>& start) const;
 
     topology& get_topology() {
@@ -881,51 +879,34 @@ public:
     friend class token_metadata;
 };
 
-class tokens_iterator_impl {
-public:
-    using iterator_category = std::input_iterator_tag;
-    using value_type = token;
-    using difference_type = std::ptrdiff_t;
-    using pointer = token*;
-    using reference = token&;
-public:
-    tokens_iterator_impl() = default;
-    tokens_iterator_impl(const token& start, const token_metadata_impl* token_metadata)
+token_metadata::tokens_iterator::tokens_iterator(const token& start, const token_metadata_impl* token_metadata)
     : _token_metadata(token_metadata) {
-        _cur_it = _token_metadata->sorted_tokens().begin() + _token_metadata->first_token_index(start);
-        _remaining = _token_metadata->sorted_tokens().size();
+    _cur_it = _token_metadata->sorted_tokens().begin() + _token_metadata->first_token_index(start);
+    _remaining = _token_metadata->sorted_tokens().size();
+}
+
+bool token_metadata::tokens_iterator::operator==(const tokens_iterator& it) const {
+    return _remaining == it._remaining;
+}
+
+const token& token_metadata::tokens_iterator::operator*() const {
+    return *_cur_it;
+}
+
+token_metadata::tokens_iterator& token_metadata::tokens_iterator::operator++() {
+    ++_cur_it;
+    if (_cur_it == _token_metadata->sorted_tokens().end()) {
+        _cur_it = _token_metadata->sorted_tokens().begin();
     }
-
-    bool operator==(const tokens_iterator_impl& it) const {
-        return _remaining == it._remaining;
-    }
-
-    const token& operator*() {
-        return *_cur_it;
-    }
-
-    tokens_iterator_impl& operator++() {
-        ++_cur_it;
-        if (_cur_it == _token_metadata->sorted_tokens().end()) {
-            _cur_it = _token_metadata->sorted_tokens().begin();
-        }
-        --_remaining;
-        return *this;
-    }
-
-private:
-    std::vector<token>::const_iterator _cur_it;
-    size_t _remaining = 0;
-    const token_metadata_impl* _token_metadata = nullptr;
-
-    friend class token_metadata_impl;
-};
+    --_remaining;
+    return *this;
+}
 
 inline
-boost::iterator_range<token_metadata_impl::tokens_iterator>
+boost::iterator_range<token_metadata::tokens_iterator>
 token_metadata_impl::ring_range(const token& start) const {
-    auto begin = tokens_iterator(start, this);
-    auto end = tokens_iterator();
+    auto begin = token_metadata::tokens_iterator(start, this);
+    auto end = token_metadata::tokens_iterator();
     return boost::make_iterator_range(begin, end);
 }
 
@@ -1278,7 +1259,7 @@ void token_metadata_impl::add_bootstrap_token(token t, inet_address endpoint) {
     add_bootstrap_tokens(tokens, endpoint);
 }
 
-boost::iterator_range<token_metadata_impl::tokens_iterator>
+boost::iterator_range<token_metadata::tokens_iterator>
 token_metadata_impl::ring_range(const std::optional<dht::partition_range::bound>& start) const {
     auto r = ring_range(start ? start->value().token() : dht::minimum_token());
 
@@ -1670,43 +1651,6 @@ std::multimap<inet_address, token> token_metadata_impl::get_endpoint_to_token_ma
     return cloned;
 }
 
-token_metadata::tokens_iterator::tokens_iterator(token_metadata_impl::tokens_iterator i)
-        : _impl(std::make_unique<impl_type>(std::move(i))) {
-}
-
-token_metadata::tokens_iterator::tokens_iterator(const tokens_iterator& x)
-        : _impl(std::make_unique<impl_type>(*x._impl)) {
-}
-
-token_metadata::tokens_iterator&
-token_metadata::tokens_iterator::operator=(const tokens_iterator& that) {
-    *this = tokens_iterator(that);
-    return *this;
-}
-
-token_metadata::tokens_iterator::~tokens_iterator() = default;
-
-bool
-token_metadata::tokens_iterator::operator==(const tokens_iterator& it) const {
-    return *_impl == *it._impl;
-}
-
-bool
-token_metadata::tokens_iterator::operator!=(const tokens_iterator& it) const {
-    return *_impl != *it._impl;
-}
-
-const token&
-token_metadata::tokens_iterator::operator*() {
-    return **_impl;
-}
-
-token_metadata::tokens_iterator&
-token_metadata::tokens_iterator::operator++() {
-    ++*_impl;
-    return *this;
-}
-
 token_metadata::token_metadata(std::unique_ptr<token_metadata_impl> impl)
     : _impl(std::move(impl)) {
 }
@@ -1808,18 +1752,12 @@ token_metadata::update_topology(inet_address ep) {
 
 boost::iterator_range<token_metadata::tokens_iterator>
 token_metadata::ring_range(const token& start) const {
-    auto impl_range = _impl->ring_range(start);
-    return boost::make_iterator_range(
-            tokens_iterator(std::move(impl_range.begin())),
-            tokens_iterator(std::move(impl_range.end())));
+    return _impl->ring_range(start);
 }
 
 boost::iterator_range<token_metadata::tokens_iterator>
 token_metadata::ring_range(const std::optional<dht::partition_range::bound>& start) const {
-    auto impl_range = _impl->ring_range(start);
-    return boost::make_iterator_range(
-            tokens_iterator(std::move(impl_range.begin())),
-            tokens_iterator(std::move(impl_range.end())));
+    return _impl->ring_range(start);
 }
 
 topology&
