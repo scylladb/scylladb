@@ -210,7 +210,7 @@ raft::server_id id() {
     return raft::server_id{utils::UUID(0, ++id)};
 }
 
-raft::server_address_set address_set(std::initializer_list<raft::server_id> ids) {
+raft::server_address_set address_set(std::vector<raft::server_id> ids) {
     raft::server_address_set set;
     for (auto id : ids) {
         set.emplace(raft::server_address{.id = id});
@@ -222,3 +222,22 @@ raft::fsm create_follower(raft::server_id id, raft::log log, raft::failure_detec
     return raft::fsm(id, raft::term_t{}, raft::server_id{}, std::move(log), fd, fsm_cfg);
 }
 
+
+// Raft uses UUID 0 as special case.
+// Convert local 0-based integer id to raft +1 UUID
+utils::UUID to_raft_uuid(size_t local_id) {
+    return utils::UUID{0, local_id + 1};
+}
+
+raft::server_id to_raft_id(size_t local_id) {
+    return raft::server_id{to_raft_uuid(local_id)};
+}
+
+// NOTE: can_vote = true
+raft::server_address to_server_address(size_t local_id) {
+    return raft::server_address{raft::server_id{to_raft_uuid(local_id)}};
+}
+
+size_t to_local_id(utils::UUID uuid) {
+    return uuid.get_least_significant_bits() - 1;
+}
