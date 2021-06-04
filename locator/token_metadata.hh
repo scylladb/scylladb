@@ -203,9 +203,9 @@ public:
      *
      * @return The requested range (see the description above)
      */
-    boost::iterator_range<tokens_iterator> ring_range(const token& start, bool include_min = false) const;
+    boost::iterator_range<tokens_iterator> ring_range(const token& start) const;
     boost::iterator_range<tokens_iterator> ring_range(
-        const std::optional<dht::partition_range::bound>& start, bool include_min = false) const;
+        const std::optional<dht::partition_range::bound>& start) const;
 
     topology& get_topology();
     const topology& get_topology() const;

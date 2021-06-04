@@ -125,10 +125,10 @@ public:
      *
      * @return The requested range (see the description above)
      */
-    boost::iterator_range<tokens_iterator> ring_range(const token& start, bool include_min = false) const;
+    boost::iterator_range<tokens_iterator> ring_range(const token& start) const;
 
     boost::iterator_range<tokens_iterator> ring_range(
-        const std::optional<dht::partition_range::bound>& start, bool include_min = false) const;
+        const std::optional<dht::partition_range::bound>& start) const;
 
     topology& get_topology() {
         return _topology;
@@ -962,8 +962,8 @@ token_metadata_impl::tokens_end() const {
 
 inline
 boost::iterator_range<token_metadata_impl::tokens_iterator>
-token_metadata_impl::ring_range(const token& start, bool include_min) const {
-    auto begin = tokens_iterator(start, this, include_min);
+token_metadata_impl::ring_range(const token& start) const {
+    auto begin = tokens_iterator(start, this);
     auto end = tokens_end();
     return boost::make_iterator_range(begin, end);
 }
@@ -1318,11 +1318,8 @@ void token_metadata_impl::add_bootstrap_token(token t, inet_address endpoint) {
 }
 
 boost::iterator_range<token_metadata_impl::tokens_iterator>
-token_metadata_impl::ring_range(
-    const std::optional<dht::partition_range::bound>& start,
-    bool include_min) const
-{
-    auto r = ring_range(start ? start->value().token() : dht::minimum_token(), include_min);
+token_metadata_impl::ring_range(const std::optional<dht::partition_range::bound>& start) const {
+    auto r = ring_range(start ? start->value().token() : dht::minimum_token());
 
     if (!r.empty()) {
         // We should skip the first token if it's excluded by the range.
@@ -1854,17 +1851,16 @@ token_metadata::tokens_end() const {
 }
 
 boost::iterator_range<token_metadata::tokens_iterator>
-token_metadata::ring_range(const token& start, bool include_min) const {
-    auto impl_range = _impl->ring_range(start, include_min);
+token_metadata::ring_range(const token& start) const {
+    auto impl_range = _impl->ring_range(start);
     return boost::make_iterator_range(
             tokens_iterator(std::move(impl_range.begin())),
             tokens_iterator(std::move(impl_range.end())));
 }
 
 boost::iterator_range<token_metadata::tokens_iterator>
-token_metadata::ring_range(
-        const std::optional<dht::partition_range::bound>& start, bool include_min) const {
-    auto impl_range = _impl->ring_range(start, include_min);
+token_metadata::ring_range(const std::optional<dht::partition_range::bound>& start) const {
+    auto impl_range = _impl->ring_range(start);
     return boost::make_iterator_range(
             tokens_iterator(std::move(impl_range.begin())),
             tokens_iterator(std::move(impl_range.end())));
