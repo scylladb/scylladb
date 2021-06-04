@@ -41,25 +41,16 @@
 
 #pragma once
 
-#include "cql3/restrictions/restriction.hh"
-#include "cql3/statements/raw/cf_statement.hh"
-#include "cql3/statements/bound.hh"
+#include "cql3/stats.hh"
 #include "cql3/column_identifier.hh"
 #include "cql3/update_parameters.hh"
 #include "cql3/column_condition.hh"
 #include "cql3/cql_statement.hh"
-#include "cql3/attributes.hh"
-#include "cql3/operation.hh"
 #include "cql3/relation.hh"
 #include "cql3/restrictions/statement_restrictions.hh"
-#include "cql3/single_column_relation.hh"
 #include "cql3/statements/statement_type.hh"
 
 #include <seastar/core/shared_ptr.hh>
-#include <seastar/core/future-util.hh>
-
-#include "unimplemented.hh"
-#include "validation.hh"
 
 #include <memory>
 #include <optional>
@@ -67,6 +58,8 @@
 namespace cql3 {
 
 class query_processor;
+class attributes;
+class operation;
 
 namespace statements {
 

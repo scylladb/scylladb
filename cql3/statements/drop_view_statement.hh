@@ -44,13 +44,13 @@
 #include <seastar/core/shared_ptr.hh>
 
 #include "cql3/statements/schema_altering_statement.hh"
-#include "cql3/cf_name.hh"
 
 #include "database_fwd.hh"
 
 namespace cql3 {
 
 class query_processor;
+class cf_name;
 
 namespace statements {
 

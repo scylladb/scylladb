@@ -23,6 +23,7 @@
 #include "view_update_generator.hh"
 #include "service/priority_manager.hh"
 #include "utils/error_injection.hh"
+#include "db/view/view_updating_consumer.hh"
 
 static logging::logger vug_logger("view_update_generator");
 

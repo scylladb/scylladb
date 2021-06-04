@@ -41,21 +41,13 @@
 
 #pragma once
 
-#include "cql3/restrictions/restriction.hh"
 #include "cql3/statements/raw/cf_statement.hh"
 #include "cql3/column_identifier.hh"
-#include "cql3/update_parameters.hh"
 #include "cql3/column_condition.hh"
-#include "cql3/cql_statement.hh"
 #include "cql3/attributes.hh"
-#include "cql3/operation.hh"
-#include "cql3/relation.hh"
 
 #include <seastar/core/shared_ptr.hh>
-#include <seastar/core/future-util.hh>
 
-#include "unimplemented.hh"
-#include "validation.hh"
 
 #include <memory>
 

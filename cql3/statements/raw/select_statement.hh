@@ -43,19 +43,20 @@
 
 #include "cql3/statements/raw/cf_statement.hh"
 #include "cql3/statements/prepared_statement.hh"
-#include "cql3/cql_statement.hh"
-#include "cql3/selection/selection.hh"
-#include "cql3/selection/raw_selector.hh"
-#include "cql3/restrictions/statement_restrictions.hh"
-#include "cql3/result_set.hh"
+#include "cql3/relation.hh"
 #include "cql3/attributes.hh"
-#include "exceptions/unrecognized_entity_exception.hh"
-#include "service/client_state.hh"
 #include <seastar/core/shared_ptr.hh>
-#include <seastar/core/distributed.hh>
-#include "validation.hh"
 
 namespace cql3 {
+
+namespace selection {
+    class selection;
+    class raw_selector;
+} // namespace selection
+
+namespace restrictions {
+    class statement_restrictions;
+} // namespace restrictions
 
 namespace statements {
 

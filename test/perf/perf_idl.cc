@@ -25,6 +25,7 @@
 #include "test/lib/simple_schema.hh"
 
 #include "frozen_mutation.hh"
+#include "mutation_partition_view.hh"
 
 namespace tests {
 

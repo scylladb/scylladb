@@ -25,11 +25,9 @@
 #include <seastar/core/future.hh>
 
 #include "dht/i_partitioner.hh"
-#include "position_in_partition.hh"
 #include "mutation_fragment.hh"
 #include "tracing/trace_state.hh"
 #include "mutation.hh"
-#include "query_class_config.hh"
 #include "mutation_consumer_concepts.hh"
 
 #include <seastar/core/thread.hh>
@@ -42,6 +40,7 @@
 using seastar::future;
 
 class mutation_source;
+class position_in_partition;
 
 /*
  * Allows iteration on mutations using mutation_fragments.

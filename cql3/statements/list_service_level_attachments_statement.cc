@@ -23,6 +23,8 @@
 #include "cql3/statements/list_service_level_attachments_statement.hh"
 #include "service/qos/service_level_controller.hh"
 #include "transport/messages/result_message.hh"
+#include "service/client_state.hh"
+#include "service/query_state.hh"
 
 namespace cql3 {
 

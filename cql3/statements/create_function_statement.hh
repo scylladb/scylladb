@@ -22,11 +22,18 @@
 #pragma once
 
 #include "cql3/statements/function_statement.hh"
-#include "cql3/functions/user_function.hh"
+#include "cql3/cql3_type.hh"
 
 namespace cql3 {
+
 class query_processor;
+
+namespace functions {
+    class user_function;
+}
+
 namespace statements {
+
 class create_function_statement final : public create_function_statement_base {
     virtual std::unique_ptr<prepared_statement> prepare(database& db, cql_stats& stats) override;
     virtual future<shared_ptr<cql_transport::event::schema_change>> announce_migration(

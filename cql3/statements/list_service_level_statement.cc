@@ -24,6 +24,8 @@
 #include "service/qos/service_level_controller.hh"
 #include "transport/messages/result_message.hh"
 #include "utils/overloaded_functor.hh"
+#include "service/client_state.hh"
+#include "service/query_state.hh"
 
 namespace cql3 {
 

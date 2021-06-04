@@ -25,14 +25,13 @@
 #include <optional>
 #include <seastar/core/seastar.hh>
 
-#include "commitlog.hh"
-
 namespace db {
     class commitlog_file_extension {
     public:
         virtual ~commitlog_file_extension() {}
-        virtual future<file> wrap_file(const sstring& filename, file, open_flags flags) = 0;
-        virtual future<> before_delete(const sstring& filename) = 0;
+        virtual seastar::future<seastar::file> wrap_file(const seastar::sstring& filename,
+            seastar::file, seastar::open_flags flags) = 0;
+        virtual seastar::future<> before_delete(const seastar::sstring& filename) = 0;
     };
 }
 

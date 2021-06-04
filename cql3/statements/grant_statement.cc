@@ -41,6 +41,8 @@
 
 #include "grant_statement.hh"
 #include "auth/authorizer.hh"
+#include "cql3/statements/prepared_statement.hh"
+#include "service/query_state.hh"
 
 std::unique_ptr<cql3::statements::prepared_statement> cql3::statements::grant_statement::prepare(
                 database& db, cql_stats& stats) {

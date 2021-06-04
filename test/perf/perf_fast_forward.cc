@@ -53,6 +53,10 @@ using namespace seastar;
 namespace fs = std::filesystem;
 using int_range = nonwrapping_range<int>;
 
+namespace sstables {
+    extern bool use_binary_search_in_promoted_index;
+} // namespace sstables
+
 reactor::io_stats s;
 
 static bool errors_found = false;

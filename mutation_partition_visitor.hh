@@ -21,27 +21,30 @@
 
 #pragma once
 
-#include "atomic_cell.hh"
-#include "collection_mutation.hh"
-#include "tombstone.hh"
-#include "range_tombstone.hh"
-#include "keys.hh"
+#include <seastar/util/bool_class.hh>
 
+#include "schema_fwd.hh"
+
+class atomic_cell_view;
+class collection_mutation_view;
 class row_marker;
 class row_tombstone;
+class range_tombstone;
+class tombstone;
+class position_in_partition_view;
 
 // When used on an entry, marks the range between this entry and the previous
 // one as continuous or discontinuous, excluding the keys of both entries.
 // This information doesn't apply to continuity of the entries themselves,
 // that is specified by is_dummy flag.
 // See class doc of mutation_partition.
-using is_continuous = bool_class<class continuous_tag>;
+using is_continuous = seastar::bool_class<class continuous_tag>;
 
 // Dummy entry is an entry which is incomplete.
 // Typically used for marking bounds of continuity range.
 // See class doc of mutation_partition.
 class dummy_tag {};
-using is_dummy = bool_class<dummy_tag>;
+using is_dummy = seastar::bool_class<dummy_tag>;
 
 // Guarantees:
 //

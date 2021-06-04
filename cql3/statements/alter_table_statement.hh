@@ -44,6 +44,7 @@
 #include "cql3/statements/schema_altering_statement.hh"
 #include "cql3/statements/cf_prop_defs.hh"
 #include "cql3/cql3_type.hh"
+#include "cql3/column_identifier.hh"
 #include "database_fwd.hh"
 
 namespace cql3 {

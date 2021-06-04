@@ -26,7 +26,6 @@
 #include "tombstone.hh"
 #include "gc_clock.hh"
 #include "utils/managed_bytes.hh"
-#include "utils/fragment_range.hh"
 #include <seastar/net//byteorder.hh>
 #include <seastar/util/bool_class.hh>
 #include <cstdint>

@@ -66,6 +66,7 @@
 #include "database.hh"
 #include "gms/feature_service.hh"
 #include "db/view/view.hh"
+#include "service/migration_manager.hh"
 
 namespace cql3 {
 

@@ -41,23 +41,29 @@
 
 #pragma once
 
-#include "cql3/statements/raw/cf_statement.hh"
 #include "cql3/statements/raw/select_statement.hh"
 #include "cql3/cql_statement.hh"
-#include "cql3/selection/selection.hh"
-#include "cql3/selection/raw_selector.hh"
-#include "cql3/restrictions/statement_restrictions.hh"
-#include "cql3/result_set.hh"
-#include "exceptions/unrecognized_entity_exception.hh"
-#include "service/client_state.hh"
+#include "cql3/stats.hh"
 #include <seastar/core/shared_ptr.hh>
-#include <seastar/core/distributed.hh>
-#include "validation.hh"
 #include "transport/messages/result_message.hh"
+#include "index/secondary_index_manager.hh"
+
+namespace service {
+    class client_state;
+} // namespace service
 
 namespace cql3 {
 
 class query_processor;
+
+namespace selection {
+    class selection;
+} // namespace selection
+
+namespace restrictions {
+    class restrictions;
+    class statement_restrictions;
+} // namespace restrictions
 
 namespace statements {
 

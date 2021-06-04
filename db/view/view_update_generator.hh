@@ -22,8 +22,7 @@
 #pragma once
 
 #include "database.hh"
-#include "sstables/sstables.hh"
-#include "db/view/view_updating_consumer.hh"
+#include "sstables/shared_sstable.hh"
 
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/condition-variable.hh>

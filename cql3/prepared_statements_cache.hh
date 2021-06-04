@@ -24,7 +24,9 @@
 #pragma once
 
 #include "utils/loading_cache.hh"
+#include "utils/hash.hh"
 #include "cql3/statements/prepared_statement.hh"
+#include "cql3/column_specification.hh"
 
 namespace cql3 {
 

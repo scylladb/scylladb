@@ -31,6 +31,7 @@
 #include "cql3/query_processor.hh"
 #include "cql3/query_options.hh"
 #include "cql3/statements/batch_statement.hh"
+#include "cql3/statements/modification_statement.hh"
 #include "cql3/cql_config.hh"
 #include <seastar/core/distributed.hh>
 #include <seastar/core/abort_source.hh>

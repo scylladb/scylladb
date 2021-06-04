@@ -29,7 +29,6 @@
 #include <seastar/core/future.hh>
 #include "seastarx.hh"
 #include <unordered_set>
-#include "gms/gossiper.hh"
 #include "utils/small_vector.hh"
 #include "lister.hh"
 #include "enum_set.hh"
@@ -38,6 +37,11 @@ namespace service {
 class storage_proxy;
 class storage_service;
 }
+
+namespace gms {
+    class gossiper;
+    class inet_address;
+} // namespace gms
 
 namespace db {
 namespace hints {

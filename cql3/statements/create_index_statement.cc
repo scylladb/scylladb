@@ -51,6 +51,8 @@
 #include "index/target_parser.hh"
 #include "gms/feature_service.hh"
 #include "cql3/query_processor.hh"
+#include "cql3/index_name.hh"
+#include "cql3/statements/index_prop_defs.hh"
 
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/algorithm/string/join.hpp>

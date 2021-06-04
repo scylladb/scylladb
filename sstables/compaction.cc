@@ -71,6 +71,7 @@
 #include "mutation_writer/partition_based_splitting_writer.hh"
 #include "mutation_source_metadata.hh"
 #include "mutation_fragment_stream_validator.hh"
+#include "utils/UUID_gen.hh"
 
 namespace sstables {
 

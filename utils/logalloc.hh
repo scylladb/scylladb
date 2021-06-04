@@ -23,14 +23,10 @@
 
 #include <memory>
 #include <seastar/core/memory.hh>
-#include <seastar/core/idle_cpu_handler.hh>
 #include <seastar/core/condition-variable.hh>
 #include <seastar/core/smp.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/shared_future.hh>
-#include <seastar/core/gate.hh>
-#include <seastar/core/future-util.hh>
-#include <seastar/core/circular_buffer.hh>
 #include <seastar/core/expiring_fifo.hh>
 #include "allocation_strategy.hh"
 #include <boost/heap/binomial_heap.hpp>

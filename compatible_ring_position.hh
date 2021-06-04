@@ -22,7 +22,7 @@
 
 #pragma once
 
-#include "query-request.hh"
+#include "dht/i_partitioner.hh"
 #include <optional>
 #include <variant>
 

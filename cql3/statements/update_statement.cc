@@ -47,6 +47,7 @@
 
 #include "cql3/operation_impl.hh"
 #include "cql3/type_json.hh"
+#include "cql3/single_column_relation.hh"
 #include "types/map.hh"
 #include "types/set.hh"
 #include "types/list.hh"

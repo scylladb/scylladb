@@ -23,7 +23,6 @@
 
 #include "bytes.hh"
 #include "schema_fwd.hh"
-#include "service/migration_manager.hh"
 #include "service/qos/qos_common.hh"
 #include "utils/UUID.hh"
 #include "cdc/generation_id.hh"
@@ -45,6 +44,7 @@ namespace cdc {
 
 namespace service {
     class storage_proxy;
+    class migration_manager;
 }
 
 namespace db {

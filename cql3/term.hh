@@ -41,16 +41,14 @@
 
 #pragma once
 
-#include <optional>
-#include "variable_specifications.hh"
 #include "cql3/assignment_testable.hh"
 #include "cql3/query_options.hh"
 #include "cql3/values.hh"
-#include "types.hh"
 
 namespace cql3 {
 
 class terminal;
+class variable_specifications;
 
 /**
  * A CQL3 term, i.e. a column value with or without bind variables.

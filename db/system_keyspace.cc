@@ -84,6 +84,7 @@
 #include "db/virtual_table.hh"
 #include "service/storage_service.hh"
 #include "gms/gossiper.hh"
+#include "service/paxos/paxos_state.hh"
 
 #include "idl/frozen_mutation.dist.hh"
 #include "serializer_impl.hh"

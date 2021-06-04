@@ -23,8 +23,7 @@
 #pragma once
 
 #include "cql3/statements/prepared_statement.hh"
-#include "service/migration_manager.hh"
-
+#include "service/query_state.hh"
 
 namespace cql3 {
 class query_processor;

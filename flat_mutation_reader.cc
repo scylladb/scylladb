@@ -33,6 +33,8 @@
 #include "utils/exceptions.hh"
 #include <seastar/core/on_internal_error.hh>
 
+#include "clustering_key_filter.hh"
+
 logging::logger fmr_logger("flat_mutation_reader");
 
 flat_mutation_reader& flat_mutation_reader::operator=(flat_mutation_reader&& o) noexcept {

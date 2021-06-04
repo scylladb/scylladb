@@ -21,15 +21,11 @@
 
 #pragma once
 
-#include "view_stats.hh"
 #include "dht/i_partitioner.hh"
 #include "gc_clock.hh"
 #include "query-request.hh"
 #include "schema_fwd.hh"
-#include "mutation_fragment.hh"
 #include "flat_mutation_reader.hh"
-
-#include <seastar/core/semaphore.hh>
 
 class frozen_mutation_and_schema;
 struct cf_stats;
@@ -42,6 +38,8 @@ using allow_hints = bool_class<allow_hints_tag>;
 namespace db {
 
 namespace view {
+
+class stats;
 
 // Part of the view description which depends on the base schema version.
 //

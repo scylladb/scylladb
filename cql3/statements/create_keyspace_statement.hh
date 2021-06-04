@@ -42,7 +42,6 @@
 #pragma once
 
 #include "cql3/statements/schema_altering_statement.hh"
-#include "cql3/statements/ks_prop_defs.hh"
 #include "transport/event.hh"
 #include "log.hh"
 
@@ -53,6 +52,8 @@ namespace cql3 {
 class query_processor;
 
 namespace statements {
+
+class ks_prop_defs;
 
 /** A <code>CREATE KEYSPACE</code> statement parsed from a CQL query. */
 class create_keyspace_statement : public schema_altering_statement {

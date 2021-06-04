@@ -41,13 +41,14 @@
 
 #pragma once
 
-#include "function_name.hh"
 #include "types.hh"
 #include <vector>
 #include <optional>
 
 namespace cql3 {
 namespace functions {
+
+class function_name;
 
 class function {
 public:

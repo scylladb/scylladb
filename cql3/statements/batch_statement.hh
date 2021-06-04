@@ -36,23 +36,24 @@
  * You should have received a copy of the GNU General Public License
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
+#pragma once
 
 #include "cql3/cql_statement.hh"
-#include "modification_statement.hh"
-#include "raw/modification_statement.hh"
 #include "raw/batch_statement.hh"
-#include "transport/messages/result_message.hh"
 #include "timestamp.hh"
 #include "log.hh"
-#include "to_string.hh"
 
-#pragma once
+namespace cql_transport::messages {
+    class result_message;
+}
 
 namespace cql3 {
 
 class query_processor;
 
 namespace statements {
+
+class modification_statement;
 
 /**
  * A <code>BATCH</code> statement parsed from a CQL query.

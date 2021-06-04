@@ -25,6 +25,7 @@
 #include "cql3/statements/create_table_statement.hh"
 #include "cql3/statements/modification_statement.hh"
 #include "database.hh"
+#include "service/migration_manager.hh"
 
 future<> table_helper::setup_table(cql3::query_processor& qp) const {
     auto& db = qp.db();

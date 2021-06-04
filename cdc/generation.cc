@@ -38,6 +38,7 @@
 #include "gms/inet_address.hh"
 #include "gms/gossiper.hh"
 #include "gms/feature_service.hh"
+#include "utils/UUID_gen.hh"
 
 #include "cdc/generation.hh"
 #include "cdc/cdc_options.hh"

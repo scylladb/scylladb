@@ -26,6 +26,7 @@
 #include "frozen_mutation.hh"
 #include "partition_snapshot_reader.hh"
 #include "partition_builder.hh"
+#include "mutation_partition_view.hh"
 
 namespace {
 

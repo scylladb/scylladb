@@ -27,6 +27,7 @@
 #include "atomic_cell_hash.hh"
 #include "keys.hh"
 #include "counters.hh"
+#include "position_in_partition.hh"
 
 // Calculates a hash of a mutation_partition which is consistent with
 // mutation equality. For any equal mutations, no matter which schema

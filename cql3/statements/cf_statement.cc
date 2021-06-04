@@ -41,6 +41,7 @@
 
 #include "raw/cf_statement.hh"
 #include "service/client_state.hh"
+#include "cql3/column_specification.hh"
 
 namespace cql3 {
 

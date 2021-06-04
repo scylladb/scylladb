@@ -46,6 +46,7 @@
 #include "database_fwd.hh"
 #include "term.hh"
 #include "update_parameters.hh"
+#include "cql3/column_identifier.hh"
 
 #include <optional>
 

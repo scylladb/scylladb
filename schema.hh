@@ -35,7 +35,6 @@
 #include "types.hh"
 #include "compound.hh"
 #include "gc_clock.hh"
-#include "unimplemented.hh"
 #include "utils/UUID.hh"
 #include "compress.hh"
 #include "compaction_strategy_type.hh"

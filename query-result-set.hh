@@ -23,9 +23,8 @@
 
 
 #include <seastar/core/shared_ptr.hh>
-#include "query-request.hh"
-#include "query-result.hh"
-#include "schema_fwd.hh"
+#include "types.hh"
+#include "schema.hh"
 
 #include <optional>
 #include <stdexcept>
@@ -33,6 +32,8 @@
 class mutation;
 
 namespace query {
+
+class result;
 
 class no_value : public std::runtime_error {
 public:
