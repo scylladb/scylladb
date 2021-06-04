@@ -407,4 +407,8 @@ public:
     /// Use max-lines to cap the number of (permit) lines in the report.
     /// Use 0 for unlimited.
     std::string dump_diagnostics(unsigned max_lines = 0) const;
+
+    void set_max_queue_length(size_t size) {
+        _max_queue_length = size;
+    }
 };
