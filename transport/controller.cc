@@ -194,7 +194,7 @@ future<> controller::do_stop_server() {
     return do_with(std::move(_server), [this] (std::unique_ptr<distributed<cql_transport::cql_server>>& cserver) {
         if (cserver) {
             // FIXME: cql_server::stop() doesn't kill existing connections and wait for them
-            return set_cql_ready(false).then([&cserver] {
+            return set_cql_ready(false).finally([&cserver] {
                 return cserver->stop().then([] {
                     logger.info("CQL server stopped");
                 });
