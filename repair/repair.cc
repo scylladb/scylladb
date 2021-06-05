@@ -202,7 +202,7 @@ static std::vector<gms::inet_address> get_neighbors(database& db,
     keyspace& ks = db.find_keyspace(ksname);
     auto& rs = ks.get_replication_strategy();
 
-    dht::token tok = range.end() ? range.end()->value() : dht::maximum_token();
+    dht::token tok = range.end() ? range.end()->value() : dht::minimum_token();
     auto ret = rs.get_natural_endpoints(tok);
     remove_item(ret, utils::fb_utilities::get_broadcast_address());
 
@@ -1643,8 +1643,8 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
             std::unordered_map<dht::token_range, inet_address_vector_replica_set> current_replica_endpoints;
             // Find (for each range) all nodes that store replicas for these ranges as well
             for (auto& r : ranges) {
-                auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
-                auto eps = strat.calculate_natural_endpoints(end_token, *tmptr, utils::can_yield::yes);
+                auto search_token = r.end() ? r.end()->value() : dht::minimum_token();
+                auto eps = strat.calculate_natural_endpoints(search_token, *tmptr, utils::can_yield::yes);
                 current_replica_endpoints.emplace(r, std::move(eps));
             }
             auto temp = tmptr->clone_after_all_left().get0();
@@ -1662,8 +1662,8 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
                 if (ops) {
                     ops->check_abort();
                 }
-                auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
-                const inet_address_vector_replica_set new_eps = ks.get_replication_strategy().calculate_natural_endpoints(end_token, temp, utils::can_yield::yes);
+                auto search_token = r.end() ? r.end()->value() : dht::minimum_token();
+                const inet_address_vector_replica_set new_eps = ks.get_replication_strategy().calculate_natural_endpoints(search_token, temp, utils::can_yield::yes);
                 const inet_address_vector_replica_set& current_eps = current_replica_endpoints[r];
                 std::unordered_set<inet_address> neighbors_set(new_eps.begin(), new_eps.end());
                 bool skip_this_range = false;
@@ -1857,9 +1857,9 @@ future<> repair_service::do_rebuild_replace_with_repair(locator::token_metadata_
             for (auto it = ranges.begin(); it != ranges.end();) {
                 auto& r = *it;
                 seastar::thread::maybe_yield();
-                auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
+                auto search_token = r.end() ? r.end()->value() : dht::minimum_token();
                 auto& snitch_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
-                auto neighbors = boost::copy_range<std::vector<gms::inet_address>>(strat.calculate_natural_endpoints(end_token, *tmptr, utils::can_yield::yes) |
+                auto neighbors = boost::copy_range<std::vector<gms::inet_address>>(strat.calculate_natural_endpoints(search_token, *tmptr, utils::can_yield::yes) |
                     boost::adaptors::filtered([myip, &source_dc, &snitch_ptr] (const gms::inet_address& node) {
                         if (node == myip) {
                             return false;
