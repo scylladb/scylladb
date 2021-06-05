@@ -1486,7 +1486,7 @@ void token_metadata_impl::calculate_pending_ranges_for_leaving(
     auto affected_ranges_size = affected_ranges.size();
     tlogger.debug("In calculate_pending_ranges: affected_ranges.size={} stars", affected_ranges_size);
     for (const auto& r : affected_ranges) {
-        auto t = r.end() ? r.end()->value() : dht::maximum_token();
+        auto t = r.end() ? r.end()->value() : dht::minimum_token();
         auto current_endpoints = strategy.calculate_natural_endpoints(t, metadata, can_yield::yes);
         auto new_endpoints = strategy.calculate_natural_endpoints(t, *all_left_metadata, can_yield::yes);
         std::vector<inet_address> diff;
