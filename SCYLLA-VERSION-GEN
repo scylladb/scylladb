@@ -79,14 +79,20 @@ then
 	SCYLLA_VERSION=$(cat version | awk -F'-' '{print $1}')
 	SCYLLA_RELEASE=$(cat version | awk -F'-' '{print $2}')
 else
-	GIT_COMMIT=$(git -C "$SCRIPT_DIR" log --pretty=format:'%h' -n 1 --abbrev=12)
 	SCYLLA_VERSION=$VERSION
-	# For custom package builds, replace "0" with "counter.your_name",
-	# where counter starts at 1 and increments for successive versions.
-	# This ensures that the package manager will select your custom
-	# package over the standard release.
-	SCYLLA_BUILD=0
-	SCYLLA_RELEASE=$SCYLLA_BUILD.$DATE.$GIT_COMMIT
+	if [ -z "$SCYLLA_RELEASE" ]; then
+		DATE=$(date --utc +%Y%m%d)
+		GIT_COMMIT=$(git -C "$SCRIPT_DIR" log --pretty=format:'%h' -n 1 --abbrev=12)
+		# For custom package builds, replace "0" with "counter.your_name",
+		# where counter starts at 1 and increments for successive versions.
+		# This ensures that the package manager will select your custom
+		# package over the standard release.
+		SCYLLA_BUILD=0
+		SCYLLA_RELEASE=$SCYLLA_BUILD.$DATE.$GIT_COMMIT
+	elif [ -f "$OUTPUT_DIR/SCYLLA-RELEASE-FILE" ]; then
+		echo "setting SCYLLA_RELEASE only makes sense in clean builds" 1>&2
+		exit 1
+	fi
 fi
 
 if [ -f "$OUTPUT_DIR/SCYLLA-RELEASE-FILE" ]; then
