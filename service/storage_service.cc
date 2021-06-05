@@ -3720,7 +3720,7 @@ storage_service::get_splits(const sstring& ks_name, const sstring& cf_name, rang
         std::sort(range_tokens.begin(), range_tokens.end());
         std::move(range_tokens.begin(), range_tokens.end(), std::back_inserter(tokens));
     }
-    tokens.push_back(std::move(unwrapped[unwrapped.size() - 1].end().value_or(range_type::bound(dht::maximum_token()))).value());
+    tokens.push_back(std::move(unwrapped[unwrapped.size() - 1].end().value_or(range_type::bound(dht::greatest_token()))).value());
 
     // split_count should be much smaller than number of key samples, to avoid huge sampling error
     constexpr uint32_t min_samples_per_split = 4;
