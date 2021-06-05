@@ -2767,8 +2767,8 @@ std::unordered_multimap<dht::token_range, inet_address> storage_service::get_cha
     auto tmptr = get_token_metadata_ptr();
     for (auto& r : ranges) {
         auto& ks = _db.local().find_keyspace(keyspace_name);
-        auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
-        auto eps = ks.get_replication_strategy().calculate_natural_endpoints(end_token, *tmptr, utils::can_yield::yes);
+        auto search_token = r.end() ? r.end()->value() : dht::minimum_token();
+        auto eps = ks.get_replication_strategy().calculate_natural_endpoints(search_token, *tmptr, utils::can_yield::yes);
         current_replica_endpoints.emplace(r, std::move(eps));
     }
 
@@ -2794,8 +2794,8 @@ std::unordered_multimap<dht::token_range, inet_address> storage_service::get_cha
     // range.
     for (auto& r : ranges) {
         auto& ks = _db.local().find_keyspace(keyspace_name);
-        auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
-        auto new_replica_endpoints = ks.get_replication_strategy().calculate_natural_endpoints(end_token, temp, utils::can_yield::yes);
+        auto search_token = r.end() ? r.end()->value() : dht::minimum_token();
+        auto new_replica_endpoints = ks.get_replication_strategy().calculate_natural_endpoints(search_token, temp, utils::can_yield::yes);
 
         auto rg = current_replica_endpoints.equal_range(r);
         for (auto it = rg.first; it != rg.second; it++) {
@@ -3493,7 +3493,7 @@ storage_service::construct_range_to_endpoint_map(
     std::unordered_map<dht::token_range, inet_address_vector_replica_set> res;
     for (auto r : ranges) {
         res[r] = _db.local().find_keyspace(keyspace).get_replication_strategy().get_natural_endpoints(
-                r.end() ? r.end()->value() : dht::maximum_token());
+                r.end() ? r.end()->value() : dht::minimum_token());
     }
     return res;
 }
