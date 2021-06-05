@@ -143,15 +143,19 @@ query::digest_algorithm digest_algorithm(service::storage_proxy& proxy) {
 }
 
 static inline
-const dht::token& start_token(const dht::partition_range& r) {
-    static const dht::token min_token = dht::minimum_token();
-    return r.start() ? r.start()->value().token() : min_token;
+const std::optional<dht::token> start_token(const dht::partition_range& r) {
+    if (auto bound = r.start()) {
+        return bound->value().token();
+    }
+    return std::nullopt;
 }
 
 static inline
-const dht::token& end_token(const dht::partition_range& r) {
-    static const dht::token max_token = dht::maximum_token();
-    return r.end() ? r.end()->value().token() : max_token;
+const std::optional<dht::token> end_token(const dht::partition_range& r) {
+    if (auto bound = r.end()) {
+        return bound->value().token();
+    }
+    return std::nullopt;
 }
 
 static inline
@@ -4091,7 +4095,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
 
     while (i != ranges.end()) {
         dht::partition_range& range = *i;
-        inet_address_vector_replica_set live_endpoints = get_live_sorted_endpoints(ks, end_token(range));
+        inet_address_vector_replica_set live_endpoints = get_live_sorted_endpoints(ks, end_token(range).value_or(dht::minimum_token()));
         inet_address_vector_replica_set merged_preferred_replicas = preferred_replicas_for_range(*i);
         inet_address_vector_replica_set filtered_endpoints = filter_for_query(cl, ks, live_endpoints, merged_preferred_replicas, pcf);
         std::vector<dht::token_range> merged_ranges{to_token_range(range)};
@@ -4104,7 +4108,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
         {
             const auto current_range_preferred_replicas = preferred_replicas_for_range(*i);
             dht::partition_range& next_range = *i;
-            inet_address_vector_replica_set next_endpoints = get_live_sorted_endpoints(ks, end_token(next_range));
+            inet_address_vector_replica_set next_endpoints = get_live_sorted_endpoints(ks, end_token(next_range).value_or(dht::minimum_token()));
             inet_address_vector_replica_set next_filtered_endpoints = filter_for_query(cl, ks, next_endpoints, current_range_preferred_replicas, pcf);
 
             // Origin has this to say here:
@@ -4114,7 +4118,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
             // *  the range if necessary and deal with it. However, we can't start sending wrapped range without breaking
             // *  wire compatibility, so It's likely easier not to bother;
             // It obviously not apply for us(?), but lets follow origin for now
-            if (end_token(range) == dht::maximum_token()) {
+            if (!end_token(range) || end_token(range)->is_maximum()) {
                 break;
             }
 
@@ -4703,12 +4707,25 @@ void query_ranges_to_vnodes_generator::process_one_range(size_t n, dht::partitio
         return;
     }
 
+    auto is_empty_range = [] (const std::optional<dht::token> s, const std::optional<dht::token> e) -> bool {
+        bool case_1 = e && e->is_minimum();
+        bool case_2 = s && s->is_maximum();
+        return case_1 || case_2;
+    };
+    auto is_singular_range = [] (const std::optional<dht::token> s, const std::optional<dht::token> e) -> bool {
+        return s && e && *s == *e;
+    };
+
+    std::optional<dht::token> start = start_token(cr);
+    std::optional<dht::token> end = end_token(cr);
+
+    if (is_empty_range(start, end)) {
+        _i++; // empty range? Move to the next one
+        return;
+    }
+
     // special case for bounds containing exactly 1 token
-    if (start_token(cr) == end_token(cr)) {
-        if (start_token(cr).is_minimum()) {
-            _i++; // empty range? Move to the next one
-            return;
-        }
+    if (is_singular_range(start, end)) {
         add_range(get_remainder());
         return;
     }
@@ -4735,7 +4752,7 @@ void query_ranges_to_vnodes_generator::process_one_range(size_t n, dht::partitio
 
         // We shouldn't attempt to split on upper bound, because it may result in
         // an ambiguous range of the form (x; x]
-        if (end_token(cr) == upper_bound_token) {
+        if (end && *end == upper_bound_token) {
             break;
         }
 
