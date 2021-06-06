@@ -19,6 +19,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <seastar/core/reactor.hh>
 #include <seastar/testing/test_case.hh>
 #include <seastar/core/timed_out_error.hh>
 #include <seastar/core/coroutine.hh>
@@ -1189,6 +1190,7 @@ public:
 class ticker {
     bool _stop = false;
     std::optional<future<>> _ticker;
+    std::optional<promise<>> _promise;
 
 public:
     ticker() = default;
@@ -1202,12 +1204,19 @@ public:
     void start(noncopyable_function<void()> on_tick, uint64_t limit = std::numeric_limits<uint64_t>::max()) {
         assert(!_ticker);
         _ticker = tick(std::move(on_tick), limit);
+        engine().set_idle_cpu_handler([this] (reactor::work_waiting_on_reactor check_for_work) {
+            if (_promise) {
+                std::exchange(_promise, std::nullopt)->set_value();
+            }
+            return idle_cpu_handler_result::no_more_work;
+        });
     }
 
     future<> abort() {
         if (_ticker) {
             _stop = true;
             co_await *std::exchange(_ticker, std::nullopt);
+            engine().set_idle_cpu_handler([] (work_waiting_on_reactor) {return idle_cpu_handler_result::no_more_work;});
         }
     }
 
@@ -1219,7 +1228,9 @@ private:
                 co_return;
             }
             on_tick();
-            co_await seastar::later();
+            assert(!bool(_promise));
+            _promise = promise<>();
+            co_await _promise->get_future();
         }
 
         tlogger.error("ticker: limit reached");
@@ -1316,7 +1327,7 @@ SEASTAR_TEST_CASE(basic_test) {
                 if (env.get_server(leader_id).is_leader()) {
                     co_return;
                 }
-                co_await seastar::later();
+                co_await timer.sleep(1_t);
             }
         })());
 
