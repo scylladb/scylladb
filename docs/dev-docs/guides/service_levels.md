@@ -5,12 +5,13 @@ There are two system tables that are used to facilitate the service level featur
 
 ### Service Level Attachment Table
 
-```CREATE TABLE system_auth.role_attributes (
+```
+CREATE TABLE system_auth.role_attributes (
     role text,
     attribute_name text,
     attribute_value text,
     PRIMARY KEY (role, attribute_name))
-```
+````
 The table was created with generality in mind, but its purpose is to record
 information about roles. The table columns meaning are:
 *role* - the name of the role that the attribute belongs to.
@@ -21,12 +22,14 @@ For the service level, the relevant attribute name is `service_level`.
 So for example in order to find out which `service_level` is attached to role `r`
 one can run the following query:
 
-```SELECT * FROM  system_auth.role_attributes WHERE role='r' and attribute_name='service_level'
+```
+SELECT * FROM  system_auth.role_attributes WHERE role='r' and attribute_name='service_level'
 ```
 
 ### Service Level Configuration Table
 
-```CREATE TABLE system_distributed.service_levels (
+```
+CREATE TABLE system_distributed.service_levels (
     service_level text PRIMARY KEY,
     timeout duration,
     workload_type text)

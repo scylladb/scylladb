@@ -42,7 +42,7 @@ For further information, please see:
 * [Docker image build documentation] for information on how to build Docker images.
 
 [developer documentation]: HACKING.md
-[build documentation]: docs/guides/building.md
+[build documentation]: docs/dev-docs/guides/building.md
 [docker image build documentation]: dist/docker/redhat/README.md
 
 ## Running Scylla
@@ -65,7 +65,7 @@ $ ./tools/toolchain/dbuild ./build/release/scylla --help
 
 ## Testing
 
-See [test.py manual](docs/guides/testing.md).
+See [test.py manual](docs/dev-docs/guides/testing.md).
 
 ## Scylla APIs and compatibility
 By default, Scylla is compatible with Apache Cassandra and its APIs - CQL and

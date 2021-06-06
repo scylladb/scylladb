@@ -11,7 +11,7 @@ seeking an exception.
 ## Code style
 
 Code should conform to the project's coding style, see
-[coding-style.md](./coding-style.md).
+[coding-style.md](https://github.com/scylladb/seastar/blob/master/coding-style.md).
 
 ## Naming
 

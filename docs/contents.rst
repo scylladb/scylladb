@@ -4,6 +4,6 @@
     
     index
     alternator/alternator
-    design-notes/index
-    guides/index
+    /dev-docs/design-notes/index
+    /dev-docs/guides/index
     contribute/index

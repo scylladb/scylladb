@@ -194,7 +194,7 @@ HTTP (unencrypted) or HTTPS (encrypted) protocol. Support for this protocol
 is not turned on by default, and must be turned on manually by setting
 the `alternator_port` and/or `alternator_https_port` configuration options.
 "Alternator" is the codename of Scylla's DynamoDB API support, and is
-documented in more detail in [alternator.md](../alternator/alternator.md).
+documented in more detail in [alternator.md](../../alternator/alternator.md).
 
 The standard ports that DynamoDB uses are the standard HTTP and HTTPS
 ports (80 and 443, respectively), but in tests we usually use the
